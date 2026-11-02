@@ -14,7 +14,7 @@
 
 package installer
 
-// The Google-track install shape (docs/design/cli-run-location.md, "Host
+// The Google-track install shape (design/design/cli-run-location.design.md, "Host
 // CLIs through grain hostd"): the daemon in the release container, and
 // agy -- and a `run: host` capability server -- on the bare machine
 // through grain hostd, as the installing user. Host mode is gone (task
@@ -451,7 +451,7 @@ func TestGoogleTrackRunsAgyThroughHostdAndMigratesFromHostMode(t *testing.T) {
 	})
 
 	// 6b'. A detached claude -- the image's claude through hostd's
-	// container-equivalent entry (docs/non-disruptive-upgrade.md, "Which
+	// container-equivalent entry (design/design/non-disruptive-upgrade.design.md, "Which
 	// substrate carries which CLI") -- outlives a daemon upgrade the same
 	// way: the same process, one attempt, every line of its stream once.
 	// It runs on the host with the container's HOME. The extracted claude

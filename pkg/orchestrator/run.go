@@ -1440,7 +1440,7 @@ func sandboxToolingSection(hasTarget, grainCI bool) string {
 }
 
 // grainCLISection is the short reference to the `grain` CLI every run with
-// a sandbox has (docs/design/sandbox-first-agent-surface.md §4): the MCP
+// a sandbox has (design/design/sandbox-first-agent-surface.design.md §4): the MCP
 // roster is the control set alone, so this is the only place the rest of
 // what grain offers a run -- the namespace, CI, the pull request, the
 // collaboration helpers -- is named at all. `grain help` and `grain <cmd>
@@ -2404,7 +2404,7 @@ func previousAttempts(ctx context.Context, store *model.Store, taskID string, at
 
 // suspensionNoteSection is the line a prompt opens with when the run
 // before this one was suspended (model.SuspensionNote,
-// docs/design/durable-tasks.md#DT-2), followed by the blank line that
+// design/design/durable-tasks.design.md#DT-2), followed by the blank line that
 // separates it from the rest, and "" otherwise. Only the most recent
 // attempt is read: a suspension further back has been followed by a run
 // that was not one, and that run's ending is what the attempts section
@@ -3051,7 +3051,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	}
 	// Each capability grant's prompt_section, as a block naming the grant,
 	// its attempt_id and its MCP server, and saying a capability server
-	// wrote it rather than the task's author (docs/capabilities-spec.md
+	// wrote it rather than the task's author (design/spec/capabilities/capabilities.spec.md
 	// §5.4.2).
 	if section := cfg.capabilityPromptSections; section != "" && prompt != "" {
 		prompt += "\n\n" + section
@@ -5007,7 +5007,7 @@ func recordRunEnd(ctx, finishCtx context.Context, store *model.Store, cfg Config
 			resumableSession = recordedEarly
 		}
 		// A suspension is not an ending: the next run joins this one's
-		// conversation (docs/design/durable-tasks.md#DT-2, Continuity),
+		// conversation (design/design/durable-tasks.design.md#DT-2, Continuity),
 		// so a suspended run whose framework named no session of its own
 		// leaves the one it was in -- what its stream named, or failing
 		// that the one it was resumed from -- rather than clearing it.

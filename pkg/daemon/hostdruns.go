@@ -26,7 +26,7 @@ import (
 )
 
 // newHostdRuns is what a run's host CLI goes through where host CLIs run
-// through grain hostd (docs/design/cli-run-location.md, "Upgrades and
+// through grain hostd (design/design/cli-run-location.design.md, "Upgrades and
 // host runs"): started detached with the run's id, task and deadline, its
 // stdout cursor persisted (model.Store.SetHostdCursor) for the next
 // daemon to re-attach from, and left running when this daemon stops

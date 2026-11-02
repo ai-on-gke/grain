@@ -32,7 +32,7 @@ import CLIRunLocations from "./CLIRunLocations.jsx";
 import ModelDefaults from "./ModelDefaults.jsx";
 import SettingsCard, { SettingsReadOnlyContext } from "./SettingsCard.jsx";
 
-// ModelsSection is Settings → Models (docs/design/settings-panel.md
+// ModelsSection is Settings → Models (design/design/settings-panel.design.md
 // §3.2): the deployment's provider connections, then the default model
 // and per-model settings (ModelDefaults). A connection is
 // PUT/DELETE /api/deployment/agent-backends/{id}; the default model and
@@ -592,7 +592,7 @@ export default function ModelsSection({ config, onSaved, showError }) {
           {/* The config pull request suite refuses this state
               (staterepo.CheckDispatchLiveness); a direct write here is
               the escape hatch and is not refused, so it is said here
-              (docs/design/config-repo-settings.md, section 2.2). */}
+              (design/design/config-repo-settings.design.md, section 2.2). */}
           {agentBackends.length > 0 &&
             agentBackends.every((backend) => backend.disabled) && (
               <Alert severity="warning" data-testid="all-connections-disabled">

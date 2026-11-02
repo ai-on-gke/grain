@@ -88,7 +88,7 @@
 #
 #   rc [vX.Y.0-rc.N]
 #           publish a release candidate the way `promote` publishes a
-#           release (docs/design/release-from-trunk.md, RFT-4): the guest
+#           release (design/design/release-from-trunk.design.md, RFT-4): the guest
 #           and k8s-sandbox `sha-<short>` images retagged, grain rebuilt
 #           from the same commit with RELEASE=vX.Y.0-rc.N, and all three
 #           published as `:vX.Y.0-rc.N`, `:candidate` and `:rc` -- the two
@@ -103,7 +103,7 @@
 #
 #   pending <vX.Y.0>
 #           stage a release whose soak passed, for a person to approve
-#           (docs/design/release-from-trunk.md, §4): exactly `promote`'s
+#           (design/design/release-from-trunk.design.md, §4): exactly `promote`'s
 #           publishing of the commit the git tag vX.Y.0-pending names --
 #           guest and k8s-sandbox retagged, grain rebuilt with
 #           RELEASE=vX.Y.0 -- but published under `:vX.Y.0-pending`

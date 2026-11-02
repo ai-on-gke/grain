@@ -287,7 +287,7 @@ test.describe("on a phone", () => {
   // does not see: a panel's "Open" is an anchor rather than a button and
   // the page it is on is not one of the two measured there. The hand run
   // of 2026-09-07 measured "Open" at 31x19px at both phone widths
-  // (docs/hand-runs, section 6), which is why there is a rule for it in
+  // (that hand run's section 6), which is why there is a rule for it in
   // style.css and a test for it here.
   //
   // "Keep" is the same word at the same size beside it, offered on a
@@ -625,7 +625,7 @@ test.describe("on a phone", () => {
       expect(box.y).toBeGreaterThanOrEqual(0);
       expect(box.y + box.height).toBeLessThanOrEqual(SHORT_PHONE.height);
     }
-    // grain has no users (docs/design/settings-panel.md §6).
+    // grain has no users (design/design/settings-panel.design.md §6).
     await expect(drawer.getByTestId("user-tile")).toHaveCount(0);
   });
 

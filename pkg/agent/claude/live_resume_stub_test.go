@@ -59,7 +59,7 @@ package claude
 //	GRAIN_LIVE_AGENT_TEST=1 go test ./pkg/agent/claude/ \
 //	  -run 'TestLiveClaudeResume|TestLiveClaudeRefuses' -count=1 -v
 //
-// docs/hand-runs/2026-09-08-claude-resume.md is the run these were
+// the 2026-09-08 claude-resume hand run is the run these were
 // written from, against claude-code 2.1.197.
 
 import (
@@ -173,7 +173,7 @@ func TestLiveClaudeResumesASessionTheProviderRefused(t *testing.T) {
 	// CLAUDE_CODE_MAX_RETRIES=0 on top of the usual stub environment.
 	// claude retries a 529 ten times by itself, backing off to about
 	// three minutes in total before it reports the failure grain reads
-	// (measured: docs/hand-runs/2026-09-08-claude-resume.md), and what is
+	// (measured: the 2026-09-08 claude-resume hand run), and what is
 	// under test here is the session it leaves behind, not its backoff.
 	env := append(stubClaudeEnv(t, api.URL), "CLAUDE_CODE_MAX_RETRIES=0")
 	configPath := liveMCPConfig(t)
@@ -245,7 +245,7 @@ func TestLiveClaudeRetryResumesTheRunAfterARefusal(t *testing.T) {
 	// store have to be said. CLAUDE_CODE_MAX_RETRIES=0 is the one entry
 	// that is here for the test's sake rather than the stub's: claude
 	// retries a 529 ten times on its own, with a backoff that runs to
-	// about three minutes (docs/hand-runs/2026-09-08-claude-resume.md),
+	// about three minutes (the 2026-09-08 claude-resume hand run),
 	// and what is under test is what grain does *after* claude has given
 	// up.
 	for _, kv := range append(stubClaudeEnv(t, api.URL), "CLAUDE_CODE_MAX_RETRIES=0") {

@@ -146,7 +146,7 @@ repeated here, because it would have ended the walkthrough's session.
   directly: configuration is managed in this deployment's config
   repository grain/config (main) … Commit this change to
   tables/grain_config.json instead: diff …"). This is
-  `docs/design/config-repo-settings.md` §4.1.1, as designed: the UI's
+  `design/design/config-repo-settings.design.md` §4.1.1, as designed: the UI's
   editors stay until Slice 4.
 - **Switching to external** (Repository URL
   `file:///var/tmp/rd/external.git` → Use external config repository):

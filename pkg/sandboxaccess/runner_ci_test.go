@@ -27,7 +27,7 @@ import (
 // A CI job's shape -- files placed in one batch, then a run of steps that
 // build on each other's workspace, streamed -- goes green over the fake
 // wrapper's dial-out channel, including across a channel dropped between
-// two steps (docs/design/grain-on-gke.md#GKE-3).
+// two steps (design/design/grain-on-gke.design.md#GKE-3).
 func TestRunnerRunsACIJobGreenOverTheFakeWrapper(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

@@ -17,7 +17,7 @@ package ui
 // pipeline_changes.go is GET /api/pipeline/changes: one compact entry per
 // thing that changed in the pipeline since a cursor, for a judgement agent
 // that has to wake, see what moved, and go back to sleep inside a bounded
-// context (docs/design/durable-tasks.md#DT-13).
+// context (design/design/durable-tasks.design.md#DT-13).
 //
 // It stores nothing of its own. Every entry is read off a record grain
 // already keeps for another reason -- a task's own timestamps, the merge

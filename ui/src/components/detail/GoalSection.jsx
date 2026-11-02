@@ -19,7 +19,7 @@ import { useTimeZone } from "../../TimeZoneContext.jsx";
 import { formatDateTime } from "../../time.js";
 
 // GoalSection is this task's goal (model.TaskGoal,
-// docs/design/durable-tasks.md#DT-4): what grain checks every cycle to
+// design/design/durable-tasks.design.md#DT-4): what grain checks every cycle to
 // close the task, or put it to rest, rather than waiting for its agent
 // to say it is done -- with the live check, the progress grain has seen
 // towards it, and its limits. It edits the goal too (PUT and DELETE

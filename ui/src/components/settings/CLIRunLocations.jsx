@@ -40,7 +40,7 @@ const LOCATIONS = [
   { value: "container", label: "Container" },
   // The image's CLI with the deployment's login, as a container run, but
   // started detached through grain hostd so a daemon upgrade does not
-  // interrupt it (docs/non-disruptive-upgrade.md). Only offered where the
+  // interrupt it (design/design/non-disruptive-upgrade.design.md). Only offered where the
   // daemon says so: claude, behind hostd.
   { value: "detached", label: "Detached in grain hostd" },
 ];
@@ -487,7 +487,7 @@ export default function CLIRunLocations({
               {r?.upgradeInterrupts && (
                 // Where this CLI runs now, a daemon upgrade finishes its
                 // runs as interrupted rather than carrying them across
-                // the restart (docs/non-disruptive-upgrade.md). Said
+                // the restart (design/design/non-disruptive-upgrade.design.md). Said
                 // here rather than discovered on the upgrade pane.
                 // A standing fact rather than news, so a note and not an
                 // alert: nothing for a screen reader to interrupt with.

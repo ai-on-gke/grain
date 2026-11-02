@@ -108,7 +108,7 @@ servers. This run concentrated on what changed since the 2026-10-30 run
 
 - **What it lists:**
   - the host-mode install notice (setup.sh command, "claude: no host
-    binary …", Migration docs to `docs/design/cli-run-location.md`);
+    binary …", Migration docs to `design/design/cli-run-location.design.md`);
   - the GitHub API budget with its per-caller table;
   - the seeded notifications (Approve/Reject/Acknowledge/Investigate);
   - the connection pause ("Usage limit reached (antigravity)", connection

@@ -6,7 +6,7 @@ auto-merge: true
 # through POST /api/tasks/from-template when a release candidate passes its
 # staging soak and is staged as vX.Y.0-pending -- before a person approves it,
 # so the notes are on main by the time anybody decides
-# (docs/design/release-from-trunk.md, RFT-6 and RFT-8).
+# (design/design/release-from-trunk.design.md, RFT-6 and RFT-8).
 fields:
   - name: version
     label: Release (vX.Y.0)

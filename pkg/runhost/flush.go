@@ -58,7 +58,7 @@ func (t *tails) track(run string) (<-chan struct{}, func()) {
 	}
 }
 
-// Flush is step 3 of the upgrade protocol (docs/non-disruptive-upgrade.md,
+// Flush is step 3 of the upgrade protocol (design/design/non-disruptive-upgrade.design.md,
 // piece 6): it stops tailing every run this Host is tailing, has each
 // write its spool cursor where it stands, and waits until every one of
 // them has handed back ErrDetached -- after which nothing of theirs

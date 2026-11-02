@@ -28,7 +28,7 @@ import (
 
 // ciBuilders are the files outside this package allowed to name
 // *ci.Service: the code that builds one. Everything else takes ci.Runner
-// (docs/design/grit-split.md#GS-1), which is what lets the service move
+// (design/design/grit-split.design.md#GS-1), which is what lets the service move
 // out of the process (grit.Client) without its callers changing.
 var ciBuilders = map[string]string{
 	// The daemon's wiring: BuildCIService, the grant admission it hangs

@@ -1039,7 +1039,7 @@ describe("App", () => {
   // a re-render of everything holding it and a miss in every memo keyed
   // on its identity, which on a store of 929 tasks was six dashboard
   // panels re-sorting and re-filtering all of them for nothing
-  // (docs/hand-runs/2026-09-07-panel-dashboard.md, section 5). A poll
+  // (the 2026-09-07 panel-dashboard hand run, section 5). A poll
   // keeps what it already holds when the new answer says the same thing
   // (poll.js), and this is what pins it.
   //
@@ -1583,7 +1583,7 @@ describe("App", () => {
     },
   );
 
-  // grain has no users (docs/design/settings-panel.md §6): a first visit
+  // grain has no users (design/design/settings-panel.design.md §6): a first visit
   // is asked for no name, and the app is what it opens on.
   it("asks a first visit for no username", async () => {
     setupApi();

@@ -34,7 +34,7 @@
 // store looks like, and it holds no GitHub credential -- it never calls
 // GitHub, only receives from it. That is what makes running it somewhere
 // other than the daemon a deployment decision rather than a refactor.
-// See pkg/checkpost's own doc comment, and docs/three-pieces.md.
+// See pkg/checkpost's own doc comment, and design/design/architecture.design.md.
 package main
 
 import (

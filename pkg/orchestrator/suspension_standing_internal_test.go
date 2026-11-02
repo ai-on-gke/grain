@@ -31,7 +31,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// The dispatch-standing invariant (docs/design/durable-tasks.md#DT-3): a
+// The dispatch-standing invariant (design/design/durable-tasks.design.md#DT-3): a
 // task re-queued after a suspension has exactly the dispatch standing it
 // had when the suspended run started, and is started ahead of the queue
 // on the next cycle it is eligible for.

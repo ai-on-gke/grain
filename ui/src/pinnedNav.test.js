@@ -180,7 +180,7 @@ describe("pinnedNav", () => {
     });
   });
 
-  // docs/design/settings-panel.md §5.6, stage a: Sandboxes and Caches are
+  // design/design/settings-panel.design.md §5.6, stage a: Sandboxes and Caches are
   // System tabs and Memory a Settings section, so a pin of one of the old
   // views is rewritten to its new place on load, once.
   describe("moved views", () => {
@@ -318,7 +318,7 @@ describe("pinnedNav", () => {
     });
   });
 
-  // docs/design/settings-panel.md §5.6: Schedules, Templates and Suites
+  // design/design/settings-panel.design.md §5.6: Schedules, Templates and Suites
   // were three pinnable views; they are one Processes view now.
   describe("the Processes migration", () => {
     const key = PINNED_STORAGE_KEY;

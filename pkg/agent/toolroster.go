@@ -187,7 +187,7 @@ func dedupeToolNames(names []string) []string {
 }
 
 // The two surfaces of a run with a sandbox
-// (docs/design/sandbox-first-agent-surface.md §4-§6).
+// (design/design/sandbox-first-agent-surface.design.md §4-§6).
 //
 // `grain mcpserver` serves the model only its control set: the four
 // sandbox tools, the tools that end, park or escalate a run, and the

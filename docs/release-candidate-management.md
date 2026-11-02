@@ -1,9 +1,9 @@
 # Releasing grain from trunk
 
-This document describes how `bwsalmon/grain` is released: from `main`, by a
+This document describes how this repository (`ai-on-gke/grain`) is released: from `main`, by a
 daily release train, after a staging soak, with a person's approval as the
 last step. The design and the reasons for it are in
-`docs/design/release-from-trunk.md`. This document is the operating manual.
+`design/design/release-from-trunk.design.md`. This document is the operating manual.
 
 There is no stabilization branch. Nothing is merged into `candidate`, nothing
 is back-merged from it, and no fix is ported between branches. Every release
@@ -37,7 +37,7 @@ Reject  ──▶ the failed-soak path; the next run cuts vX.Y.0-rc.(N+1)
 
 | Piece | What it does |
 | --- | --- |
-| `.grain/workflows/release-train.yml` | Runs the train daily at 04:15 UTC (and on `workflow_dispatch`). Holds `repo-write:bwsalmon/grain`, `release-gate-read` and `package-publish`, and optionally `image-signing`. Never pushes `vX.Y.0` and never moves `latest`. |
+| `.grain/workflows/release-train.yml` | Runs the train daily at 04:15 UTC (and on `workflow_dispatch`). Holds `repo-write:ai-on-gke/grain`, `release-gate-read` and `package-publish`, and optionally `image-signing`. Never pushes `vX.Y.0` and never moves `latest`. |
 | `scripts/release-from-trunk.sh` | The train: Phase 1 (judge the soaking rc) and Phase 2 (cut the next rc). Also has `approve` and `reject` modes, which only `promote-release.yml` runs, for a person. |
 | `scripts/candidate-gate.sh` | `select-lkg` (which `main` commit is known-good) and `check-soak` (is the rc on staging healthy). |
 | `scripts/release-images.sh` | `rc`, `discard-rc`, `pending`, `discard-pending` and `promote`: what each step publishes to GHCR. |
@@ -49,7 +49,7 @@ Each train run is idempotent. A run that finds nothing to do does nothing, so
 running it again by hand is always safe:
 
 ```
-grain ci run -repo bwsalmon/grain -branch main -event workflow_dispatch \
+grain ci run -repo ai-on-gke/grain -branch main -event workflow_dispatch \
   -job .grain/workflows/release-train.yml:train -watch
 ```
 
@@ -90,7 +90,7 @@ release just staged or promoted, so a new rc is always newer than the last.
   regression. Grain re-runs `infra` verdicts of `main`'s gates on its own
   (up to two uncached re-runs) before filing a failure review, and trunk
   release gates run at `PriorityReleaseGate`, ahead of the merge queue for
-  sandbox capacity (`docs/design/release-from-trunk.md`, RFT-2).
+  sandbox capacity (`design/design/release-from-trunk.design.md`, RFT-2).
 
 If no commit after the floor qualifies, the run cuts nothing. A `main` that
 stays red for a week ships nothing, and `latest` stays where it is.
@@ -176,7 +176,7 @@ for the commit before it is cut (section 2).
 ## 5. The `vX.Y.0-pending` stage and a person's approval
 
 **The pipeline does everything up to the final tag, and a person makes the
-release official** (task 1236, `docs/design/release-from-trunk.md` RFT-8).
+release official** (task 1236, `design/design/release-from-trunk.design.md` RFT-8).
 
 1. **The soak passes, so the release is staged, not promoted.** When
    `vX.Y.0-rc.N` passes its soak, the train:
@@ -298,10 +298,9 @@ only re-stamp the daemon images with the release name and retag.
 
 - **Two daemon images** share the `guest` and `k8s-sandbox` images.
   `ghcr.io/bwsalmon/grain/grain` is the core build (`./cmd/grain`, the
-  `oss` install track). `ghcr.io/bwsalmon/grain/google-grain` is the Google
-  build (`./google/cmd/grain`, the `google` track; `pkg/installtrack`).
-  Both get the same tags. A Google-track deployment that still names
-  `grain/grain` upgrades onto `google-grain`.
+  `oss` install track). A wrapper distribution's
+  build is published beside it under its own image name and install track
+  (`pkg/installtrack`), with the same tags.
 - **What the tags mean:** `latest` is the last promoted release and never
   `main`'s head. `main` is the head of `main`. `candidate`/`rc` is the
   current rc. `vX.Y.Z` is one release, kept forever by the GHCR pruner.
@@ -311,9 +310,9 @@ only re-stamp the daemon images with the release name and retag.
   of `main`, after each release-train run, and as the last job of an
   approval. When nothing changed it costs a few manifest copies. It fails,
   moving nothing, if any `sha-<short>` image it needs is missing.
-- **By hand** (to republish): `grain ci run -repo bwsalmon/grain -branch main
+- **By hand** (to republish): `grain ci run -repo ai-on-gke/grain -branch main
   -event workflow_dispatch -job .grain/workflows/promote.yml:latest -watch`,
-  or, as a repository admin, `POST /api/repos/bwsalmon/grain/release-runs`
+  or, as a repository admin, `POST /api/repos/ai-on-gke/grain/release-runs`
   with `{"branch":"main","jobs":[".grain/workflows/promote.yml:latest"]}`.
   Both republish whatever the git `latest` tag names. Moving `latest` to
   another release is a person's act, through Approve or a patch release
@@ -321,7 +320,7 @@ only re-stamp the daemon images with the release name and retag.
 
 ### What the release workflows may push
 
-`repo-write:bwsalmon/grain`, held by a CI job of this repository, lets grain's
+`repo-write:ai-on-gke/grain`, held by a CI job of this repository, lets grain's
 git proxy (`pkg/gitproxy/ciref.go`) take any tag or branch update except a
 rewrite of trunk. `refs/heads/main` may only be fast-forwarded and never
 deleted. These are the refs the release workflows push:
@@ -369,7 +368,7 @@ fixes.
    `release` on `release/v*`. It builds both daemon images, runs
    `tests/container` and `tests/installer` against them, and publishes
    `sha-<short>`. A repository admin starts it:
-   `POST /api/repos/bwsalmon/grain/release-runs` with
+   `POST /api/repos/ai-on-gke/grain/release-runs` with
    `{"branch":"release/vX.Y.Z","jobs":[".grain/workflows/release.yml:images"]}`.
    Don't tag until this is green.
 6. **Tag and promote.** Tag the release commit `vX.Y.Z` and push the tag.
@@ -406,7 +405,7 @@ release from trunk. `v2.5.0` is an annotated placeholder tag on `main`, a
 version number and not a release: nothing is published for it, and
 `RELEASE_NEVER_PROMOTE` names it so the train writes the next release's notes
 from `v2.4.0`. Because of it, `main` builds `v2.6.0-dev`, and the first
-release from trunk is `v2.6.0` (`docs/design/release-from-trunk.md`, "Version
+release from trunk is `v2.6.0` (`design/design/release-from-trunk.design.md`, "Version
 Numbering Rules").
 
 Semver orders these correctly:
@@ -511,7 +510,7 @@ schedules are gone.
 **Before approving** a pending release, check the soak summary in the
 notification, merge the release-notes pull request, and look at the newest
 `post-reset-e2e` run. `docs/test-plans/2026-10-20-post-reset-e2e.md` lists
-the manual rows a sandbox cannot do (Cloudtop install, depot, real
+the manual rows a sandbox cannot do (Workstation install, depot, real
 github.com, a real upgrade through the Upgrade pane, live agents). Do these
 after any change to the installers or the git-host code.
 

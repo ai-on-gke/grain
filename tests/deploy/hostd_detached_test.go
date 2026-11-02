@@ -33,7 +33,7 @@ var detachedEnv = []string{"GRAIN_INSTALL_TRACK=oss", "HOSTD_AGY_PATH=", "GRAIN_
 
 // The allowlist offers claude-detached: the image's claude, extracted
 // beside hostd's grain, with the container's HOME and exactly the
-// variables pkg/agent/claude sends (docs/non-disruptive-upgrade.md,
+// variables pkg/agent/claude sends (design/design/non-disruptive-upgrade.design.md,
 // "Which substrate carries which CLI"). hostd accepts a run's request
 // for it, and refuses one that would move HOME or carry anything else.
 func TestTheAllowlistOffersAContainerEquivalentClaude(t *testing.T) {

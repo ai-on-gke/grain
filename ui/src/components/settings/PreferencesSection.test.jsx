@@ -25,7 +25,7 @@ vi.mock("../../api.js", () => ({ default: vi.fn() }));
 
 // Settings → Preferences is this browser's own: what it chooses is kept
 // in localStorage and applies at once, and nothing is sent to the
-// deployment's settings (docs/design/settings-panel.md §3.2).
+// deployment's settings (design/design/settings-panel.design.md §3.2).
 const section = (props = {}) => (
   <PreferencesProvider>
     <ThemeModeProvider>

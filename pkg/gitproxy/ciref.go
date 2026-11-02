@@ -17,7 +17,7 @@ package gitproxy
 // Which refs a CI job holding repo-write may update.
 //
 // A release workflow (.grain/workflows/release-train.yml,
-// docs/design/release-from-trunk.md §6) pushes three kinds of ref: a
+// design/design/release-from-trunk.design.md §6) pushes three kinds of ref: a
 // release or release-candidate tag, refs/tags/v*, created once; the
 // `latest` tag, moved on every promotion; and refs/heads/candidate, the
 // staging pointer, force-moved onto each cut. All three are allowed, the

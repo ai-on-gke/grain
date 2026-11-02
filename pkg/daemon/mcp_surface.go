@@ -22,7 +22,7 @@ import (
 )
 
 // The two rosters `grain mcpserver` can serve (-mcp-surface;
-// docs/design/sandbox-first-agent-surface.md §6).
+// design/design/sandbox-first-agent-surface.design.md §6).
 const (
 	// MCPSurfaceControl is the sandbox tools, the tools that end, park or
 	// escalate a run, and the tools of the grants a sandbox process must

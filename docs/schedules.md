@@ -357,7 +357,7 @@ with no per-template `GET` for the same reason schedules have none.
 **Frontend**: templates are a kind of row on the Processes page
 (`ProcessesList.jsx`, `/processes`), the one table of schedules,
 workflow schedules, templates, suites and triggers that replaced the
-separate Schedules and Templates panes (docs/design/settings-panel.md
+separate Schedules and Templates panes (design/design/settings-panel.design.md
 §5). "+ New" there, or a click on an existing template row, opens
 `TemplateOverlay.jsx` -- the same fields a schedule carries, minus any
 cadence, since a template has none of its own. `ScheduleOverlay.jsx`,

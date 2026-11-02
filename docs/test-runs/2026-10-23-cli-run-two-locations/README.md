@@ -2,7 +2,7 @@
 
 Settings -> Models' "Where each agent CLI runs" card after the per-run
 docker launcher and the `auto` run location were removed
-(`docs/design/cli-run-location.md`, "Run locations").
+(`design/design/cli-run-location.design.md`, "Run locations").
 
 ## How it was run
 

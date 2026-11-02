@@ -45,9 +45,9 @@ runs the selected agent with a constrained tool set. Grain records the run,
 collects its result, and manages the resulting pull request. Sandboxes do not
 receive the deployment's long-lived GitHub or model-provider credentials.
 
-For a 25-minute end-to-end tour of how all the pieces fit together—task states,
-the sandbox boundary, the merge queue, where state lives on disk and in Git,
-and how to debug a stuck task—read **[docs/architecture.md](docs/architecture.md)**.
+For how all the pieces fit together—the control plane, the sandbox boundary,
+CI and the merge queue, and where state lives on disk and in Git—read
+**[the architecture design](design/design/architecture.design.md)**.
 
 Grain is single-tenant (see
 [docs/local-policy.md](docs/local-policy.md#single-tenant-mode)): a grain
@@ -221,7 +221,7 @@ exit codes, what each step does, and what to do when one is left manual.
 > the container, nothing runs as you on the machine, and "host" is not offered
 > as a run location, as on Kubernetes. The readiness report and Settings →
 > Models say which of the two an install is. See
-> [docs/design/cli-run-location.md](docs/design/cli-run-location.md), "Trust
+> [design/design/cli-run-location.design.md](design/design/cli-run-location.design.md), "Trust
 > levels", for what each shape trusts grain with.
 
 > **Host mode is gone.** `GRAIN_INSTALL_MODE=host` (the daemon as a plain
@@ -233,7 +233,7 @@ exit codes, what each step does, and what to do when one is left manual.
 > until that re-run, and says so: a `level=warning` line at start and a banner
 > in the UI naming the agent CLIs that cannot run until then
 > ([docs/releases/v2.4.0.md](docs/releases/v2.4.0.md),
-> [docs/design/cli-run-location.md](docs/design/cli-run-location.md#migrating-a-host-mode-install)). Going back to host
+> [design/design/cli-run-location.design.md](design/design/cli-run-location.design.md#migrating-a-host-mode-install)). Going back to host
 > mode means re-running an older release's own `scripts/setup.sh`, which
 > replaces `/usr/local/bin/grain` but leaves `grain-hostd.service` in place:
 > the unit then skips its start, since that binary has no `hostd`, and
@@ -364,7 +364,7 @@ temporary bundle export removes that path from every commit.
 
 ## Remote Model Executors
 
-Remote executors allow Grain to dispatch agent model CLI invocations (`agy`, `claude`, `codex`) to dedicated remote machines (such as workstations, GPU instances, or cloudtops with corp/ambient logins), while tunneling MCP tools and sandboxes back to the Grain daemon.
+Remote executors allow Grain to dispatch agent model CLI invocations (`agy`, `claude`, `codex`) to dedicated remote machines (such as workstations, GPU instances, or cloud VMs with corp/ambient logins), while tunneling MCP tools and sandboxes back to the Grain daemon.
 
 ### Single-Command Bootstrap
 
@@ -400,10 +400,12 @@ skipped unless `--allow-unverified-binary` is given.
 
 ## Documentation
 
-- **[Architecture](docs/architecture.md)** is the end-to-end introduction for
-  new Grain users and operators: the three pieces, the life of a task from
-  filing through CI and the merge queue, where state lives, agents/models,
-  capabilities, schedules, releases, and a troubleshooting guide.
+- **[Architecture](design/design/architecture.design.md)** describes the
+  current design end to end: the control plane, sandboxes, `grain hostd`,
+  agents, capabilities, CI and the merge queue, where state lives, and the
+  security boundaries. Component designs live beside it in
+  [`design/design/`](design/design), and specifications in
+  [`design/spec/`](design/spec).
 - [`grain init`](docs/grain-init.md) documents bringing up a deployment from
   a source checkout: prerequisites, what it installs versus only demands,
   exit codes and re-running it.
@@ -411,9 +413,6 @@ skipped unless `--allow-unverified-binary` is given.
   half: bringing up a GCE instance with nested virtualization to run it on
   -- sizing, verifying acceleration actually works, suspend/resume, and
   reaching its loopback-bound UI.
-- [Implementation notes](docs/implementation-notes.md) preserve the detailed
-  architecture, design decisions, operating notes, and project history that
-  previously lived in this README.
 - [Data model](docs/data-model.md) describes tasks, runs, capabilities, leases,
   and their lifecycle.
 - [Composition](docs/composition.md) explains how Grain's components fit
@@ -433,7 +432,7 @@ skipped unless `--allow-unverified-binary` is given.
 - [Key user journeys](docs/user-journeys.md) catalogues the main journeys
   through grain, from install to merge, with their step counts and friction
   today, as the basis for a nightly simplification review.
-- [Upgrading without stopping the work](docs/non-disruptive-upgrade.md) is a
+- [Upgrading without stopping the work](design/design/non-disruptive-upgrade.design.md) is a
   proposal for upgrading a deployment without discarding the agent runs and CI
   jobs it has in flight.
 - [Declarations](docs/declarations.md) covers the templates, suites and
@@ -444,15 +443,6 @@ skipped unless `--allow-unverified-binary` is given.
 - [Repo Controllers & Dynamic Environments](docs/repo-controllers-and-environments.md)
   specifies the Granule-based per-repository controller architecture for dynamic
   infrastructure provisioning and repository state machines.
-- [Shibu](docs/shibu.md) is a design for a namespace and allocator layer
-  that lets agents delegate permissions and build infrastructure, tested
-  against a full software-factory walk-through, with its findings, open
-  questions and how it relates to grain.
-- [The Shibu API specification](docs/shibu-spec/README.md) derives
-  Shibu's APIs from that design: the kernel's control API, the web
-  proxy and caller assertion, agents and the harness contract, and the
-  contracts for allocators, backend drivers, secret backends and every
-  standard-distribution component.
 
 ## Development
 
@@ -464,9 +454,9 @@ make test
 ```
 
 The frontend requires Node.js and npm; the backend requires the Go version
-declared in [`go.mod`](go.mod). See the [implementation
-notes](docs/implementation-notes.md) for package-level detail and design
-rationale.
+declared in [`go.mod`](go.mod). See the
+[architecture design](design/design/architecture.design.md) for package-level
+detail and design rationale.
 
 ## Contributing
 

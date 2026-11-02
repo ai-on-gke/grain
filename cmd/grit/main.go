@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Command grit is grain's CI engine as a binary of its own
-// (docs/design/grit-split.md). Its subcommands:
+// (design/design/grit-split.design.md). Its subcommands:
 //
 //	grit act [flags]     run one GitHub Actions job in a disposable Granule VM
 //	grit verify [flags]  check a run attestation against a public key

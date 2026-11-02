@@ -461,7 +461,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	relayedInProcess := takeInProcessRelayed(store, runID)
 	keepRunning := taskKeepRunning(ctx, store, task)
 
-	// A goal task (model.TaskGoal, docs/design/durable-tasks.md#DT-4) is
+	// A goal task (model.TaskGoal, design/design/durable-tasks.design.md#DT-4) is
 	// never completed or closed on its agent's word: a closing comment,
 	// a plain finish or nothing_needed ("nothing to do now") rests it on
 	// its goal or a message instead (restOnGoal). Its words are relayed as
@@ -3679,7 +3679,7 @@ func emptyBranchDetail(empty *noCommitsError) string {
 }
 
 // requestedSuspension is the agent's own exit a run took, if it took one
-// (docs/design/durable-tasks.md#DT-9): a wait_for_task park on tasks
+// (design/design/durable-tasks.design.md#DT-9): a wait_for_task park on tasks
 // (parkedOn), a timed one (parkedUntil), or a resume_later call
 // (mcp.ResumeLaterTaken) -- the last that the daemon took, since a later
 // call replaces what an earlier one asked for. Its detail keeps the

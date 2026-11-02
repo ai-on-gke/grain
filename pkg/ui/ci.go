@@ -36,7 +36,7 @@ import (
 )
 
 // Config.CI is grain CI as these routes take it: ci.Runner, the whole of
-// what the CI service answers (docs/design/grit-split.md#GS-1) --
+// what the CI service answers (design/design/grit-split.design.md#GS-1) --
 // cmd/grain's ciGate in a real deployment.
 //
 // An interface so a test can drive these routes with no sandbox

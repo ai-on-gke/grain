@@ -18,13 +18,13 @@ import ConfigRepoLink, { useStateRepoFiles } from "./ConfigRepoLink.jsx";
 
 // CAPABILITIES_FILE is the config repo file default and CI grants live
 // in once a deployment has adopted the capability catalogue
-// (docs/design/config-repo-settings.md §3).
+// (design/design/config-repo-settings.design.md §3).
 export const CAPABILITIES_FILE = "settings/capabilities.yml";
 
 // ReadOnlyGrants is a list of default grants as chips, with an optional
 // link to settings/capabilities.yml when that file exists: what
 // Settings → Tasks and a repository's page show where they used to offer
-// a GrantsPicker (docs/design/config-repo-settings.md §7.4). Settings →
+// a GrantsPicker (design/design/config-repo-settings.design.md §7.4). Settings →
 // Tasks suppresses the per-card link (`showLink={false}`) because the
 // section's ConfigManagedNotice already links its config-repo files.
 export default function ReadOnlyGrants({

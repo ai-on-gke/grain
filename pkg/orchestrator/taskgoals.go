@@ -14,7 +14,7 @@
 
 package orchestrator
 
-// Goal-based completion (docs/design/durable-tasks.md#DT-4).
+// Goal-based completion (design/design/durable-tasks.design.md#DT-4).
 //
 // reconcileTaskGoals checks every open task's goal (model.TaskGoal) each
 // cycle. A goal met with on_met close closes its task with outcome

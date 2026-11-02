@@ -143,7 +143,7 @@ describe("parsePath", () => {
     });
   });
 
-  // docs/design/settings-panel.md §2.3: the repo page's tab is in its
+  // design/design/settings-panel.design.md §2.3: the repo page's tab is in its
   // path, so Settings → Repositories can link to one.
   it("parses and builds a repo page's tab", () => {
     for (const tab of [
@@ -375,7 +375,7 @@ describe("parsePath", () => {
     });
   });
 
-  // The pages Processes replaced (docs/design/settings-panel.md §5.4):
+  // The pages Processes replaced (design/design/settings-panel.design.md §5.4):
   // each old path parses to where it is now, by a prefix swap.
   it("redirects /schedules, /templates and /suites into Processes", () => {
     const cases = [
@@ -579,7 +579,7 @@ describe("parsePath", () => {
     });
   });
 
-  // docs/design/settings-panel.md §3.5: every old path parses to where
+  // design/design/settings-panel.design.md §3.5: every old path parses to where
   // it went, and buildPath writes the new path for it.
   it.each([
     ["/admin", "/settings/general"],
@@ -632,7 +632,7 @@ describe("parsePath", () => {
     expect(buildPath(parsePath(old))).toBe(now);
   });
 
-  // The Config Repo Browser (docs/design/config-repo-settings.md §2.3)
+  // The Config Repo Browser (design/design/config-repo-settings.design.md §2.3)
   // is Settings → Config repo, with the open file as its item.
   it("parses /config?path= to the Config Repo Browser with that file open", () => {
     expect(parsePath("/config", "?path=settings%2Fcapabilities.yml")).toEqual({

@@ -229,7 +229,7 @@ was gone after reload.
 
 - **Reproduction:** `grain demo -sensitive-hold`, open
   `/processes?kind=trigger`. The `payments.yml` row has no `.declared-chip`,
-  unlike every other declared row (`docs/design/settings-panel.md` §5.1:
+  unlike every other declared row (`design/design/settings-panel.design.md` §5.1:
   "Every row also shows the existing `DeclaredChip` when `declaredIn` is
   set"). Click it: `/repos/acme/widgets/settings/advanced` says "1
   trigger(s)" and never names `.grain/triggers/payments.yml`.

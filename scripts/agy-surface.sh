@@ -124,7 +124,7 @@ CLI_SETTINGS_REL='.gemini/antigravity-cli/settings.json'
 # capture -- making a document that names one release out of two
 # different binaries. Measured on 1.1.27, which became 1.2.5 seven
 # seconds after one such exec where the file was writable:
-# docs/hand-runs/2026-09-17-agy-self-update.md.
+# the 2026-09-17 agy-self-update hand run.
 #
 # .grain/workflows/agy-surface.yml unpacks the release as root and runs
 # this as the runner's own user, so the captures committed so far were

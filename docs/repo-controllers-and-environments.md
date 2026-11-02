@@ -6,9 +6,6 @@
 > Repo Controllers run inside Grain's **Long-Running (Standing) Sandboxes** and communicate with the
 > Grain daemon over the network via authenticated gRPC/HTTP/2, designed for production deployments
 > in Kubernetes and Google Kubernetes Engine (GKE) clusters.
->
-> *Note:* For autonomous agent-driven repository governance and two-sandbox provisioner models,
-> see also [docs/repo-managers-and-environments.md](repo-managers-and-environments.md).
 
 ---
 
@@ -535,7 +532,7 @@ Repositories often require custom policies that do not belong in generic orchest
 
 ## 7. Comparison with Earlier Architecture
 
-| Architectural Dimension | Earlier Draft (`docs/staging-environments.md`) | Networked Repo Controllers (`docs/repo-controllers-and-environments.md`) |
+| Architectural Dimension | Earlier staging-environments draft | Networked Repo Controllers (`docs/repo-controllers-and-environments.md`) |
 |---|---|---|
 | **Hosting Substrate** | In-process daemon goroutines | Grain Long-Running (Standing) Sandboxes (`StandingSandbox`) |
 | **Communication** | Central daemon internal method calls | Network gRPC over TCP / HTTP/2 with mTLS & Workload Identity |

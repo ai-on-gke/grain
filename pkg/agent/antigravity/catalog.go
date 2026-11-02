@@ -187,7 +187,7 @@ func catalog(ctx context.Context, host agent.Host, p probe, apiKey string) (Mode
 	// updater switched off -- which this listing needs as much as a run
 	// does. `agy models` replaces a writable binary in place, measured on
 	// 1.1.27 even when it *refuses* the listing for want of a credential
-	// (docs/hand-runs/2026-09-17-agy-self-update.md); `agy --help`, the
+	// (the 2026-09-17 agy-self-update hand run); `agy --help`, the
 	// other exec below, does not. Without the switch, an operator opening
 	// the model list in Settings is enough to change which agy this
 	// deployment runs (selfupdate.go).

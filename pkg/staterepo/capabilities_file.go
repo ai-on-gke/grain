@@ -15,7 +15,7 @@
 package staterepo
 
 // settings/capabilities.yml: the capability catalogue
-// (docs/design/config-repo-settings.md §3), one file standing for what
+// (design/design/config-repo-settings.design.md §3), one file standing for what
 // is otherwise five places -- grain_config.mcp_servers,
 // grain_config.capability_policy, grain_config.default_capabilities,
 // api_scope_set, and repo_config.{default_capabilities,ci_capabilities}.
@@ -684,7 +684,7 @@ func capabilitiesDocumentFor(ctx context.Context, db querier) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-const capabilitiesHeader = `# grain's capability catalogue (docs/design/config-repo-settings.md §3):
+const capabilitiesHeader = `# grain's capability catalogue (design/design/config-repo-settings.design.md §3):
 # every capability server, in-process capability and agent API preset a
 # run may hold, who may hold it, and what runs hold by default. It is the
 # source of grain_config.mcp_servers, capability_policy and

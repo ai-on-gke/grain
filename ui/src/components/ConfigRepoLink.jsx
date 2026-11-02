@@ -37,7 +37,7 @@ export function openInApp(evt, href) {
 }
 
 // ConfigRepoLink is "View in config repo → <path>", opening path in the
-// Config Repo Browser (docs/design/config-repo-settings.md §2.3).
+// Config Repo Browser (design/design/config-repo-settings.design.md §2.3).
 export default function ConfigRepoLink({
   path,
   label = "View in config repo",

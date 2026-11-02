@@ -16,7 +16,7 @@
 // /usr/local/bin/grain (Granulefile.guest-base, Granulefile and
 // Dockerfile.k8s-sandbox): only the subcommands that run inside a
 // sandbox. That is `grain host-script` (pkg/hostscriptcli) and the
-// sandbox CLI of docs/design/sandbox-first-agent-surface.md §4 -- `grain
+// sandbox CLI of design/design/sandbox-first-agent-surface.design.md §4 -- `grain
 // ls`, `read`, `grep`, `ci`, `pr`, `task`, `log`, `metrics` and the rest
 // (pkg/sandboxcli), which answer over the sandbox's own scoped proxy. The
 // full grain binary answers every one of them the same way, through the

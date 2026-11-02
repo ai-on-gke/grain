@@ -2830,7 +2830,7 @@ describe("RepoPage", () => {
     );
   });
 
-  // docs/design/config-repo-settings.md §2.1, §7.4: when the API sends
+  // design/design/config-repo-settings.design.md §2.1, §7.4: when the API sends
   // a repo's settings to the config repo (configRepoOnly), even an admin
   // sees them read-only, with the files to change them in, and the
   // default and CI grants as chips; the operational actions stay theirs.

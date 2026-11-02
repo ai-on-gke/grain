@@ -284,7 +284,7 @@ test.describe("Responsive Navigation Matrix & Shell Behavior", () => {
     await page.locator(".overlay-pane-back button").click();
     await expect(page).toHaveURL(/\/processes(\?kind=suite)?$/);
 
-    // 11. Settings: a view behind the gear (docs/design/settings-panel.md)
+    // 11. Settings: a view behind the gear (design/design/settings-panel.design.md)
     await page.getByTestId("top-bar-settings").click();
     await expect(page).toHaveURL(/\/settings\/models$/);
     await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
@@ -451,7 +451,7 @@ test.describe("Responsive Navigation Matrix & Shell Behavior", () => {
     expect(isScrollable).toBe(true);
 
     // Scroll rail to bottom to view build stamp, the rail's foot now the
-    // user tile is gone (docs/design/settings-panel.md §4.3)
+    // user tile is gone (design/design/settings-panel.design.md §4.3)
     const buildStamp = aside.getByTestId("build-stamp");
     await buildStamp.scrollIntoViewIfNeeded();
     await expect(buildStamp).toBeVisible();
@@ -677,7 +677,7 @@ test("Overlay action rows keep every control on a 320px phone", async ({
       controls: ["Delete", "Pause", "Run now", "Cancel", "Save"],
     },
     // Settings and System are views, not overlay panes
-    // (docs/design/settings-panel.md §3.1): their rows are in the main
+    // (design/design/settings-panel.design.md §3.1): their rows are in the main
     // landmark.
     { path: "/settings/access", controls: ["Log out"], view: true },
     { path: "/system/logs", controls: ["Refresh"], view: true },
@@ -1752,7 +1752,7 @@ test("Every pane the shell opens is named, and the rail says which page is open"
     await expect(page.getByRole("dialog")).toHaveCount(0);
 
     // Settings and System are views rather than dialogs now
-    // (docs/design/settings-panel.md §3.1): each has one main landmark,
+    // (design/design/settings-panel.design.md §3.1): each has one main landmark,
     // named by its heading, and the button that opened it says so.
     for (const { open, name } of [
       {

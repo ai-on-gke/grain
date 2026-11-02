@@ -137,7 +137,7 @@ func Main() {
 	gitrefs.Pin()
 	args := os.Args[1:]
 	// Inside an agent's sandbox, the read commands of
-	// docs/design/sandbox-first-agent-surface.md answer over the
+	// design/design/sandbox-first-agent-surface.design.md answer over the
 	// sandbox's own proxy (pkg/sandboxcli); anything else runs as it
 	// always has.
 	if code, handled := sandboxcli.Main(args, os.Stdout, os.Stderr); handled {

@@ -821,7 +821,7 @@ type Config struct {
 	// all happens -- measured at 29.6-29.9s of a 29.9s exchange on the
 	// shipped 30s interval, against 0.04-0.44s for everything grain does
 	// between that decision and the agent's first turn
-	// (docs/hand-runs/2026-09-08-director-latency.md).
+	// (the 2026-09-08 director-latency hand run).
 	//
 	// A hint, never a guarantee, and deliberately so: the loop coalesces
 	// wakes and spaces them out, and the periodic tick is still what

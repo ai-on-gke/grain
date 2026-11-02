@@ -1,6 +1,6 @@
 # Authentication: IAP as a first-class sign-in
 
-A grain controller on GKE sits behind Google Cloud Identity-Aware Proxy (`docs/design/grain-on-gke.md`, *UI and API ingress*). IAP already knows who every caller is. Grain does not use that. This doc proposes that a verified IAP assertion authenticates the caller on its own, as a named principal, for the browser, the `grain` CLI, external agents and `grain hostd`. The access code stays for deployments without IAP.
+A grain controller on GKE sits behind Google Cloud Identity-Aware Proxy (`design/design/grain-on-gke.design.md`, *UI and API ingress*). IAP already knows who every caller is. Grain does not use that. This doc proposes that a verified IAP assertion authenticates the caller on its own, as a named principal, for the browser, the `grain` CLI, external agents and `grain hostd`. The access code stays for deployments without IAP.
 
 ## What exists today
 
@@ -68,7 +68,7 @@ An external agent can do the same with its own service account. It can also pres
 
 ### `grain hostd`
 
-hostd dials `/api/hostd/connect` through the Gateway with an ID token from its service account (Workload Identity or a key on the cloudtop) or from the user's login. It uses the token sources above, through `IAPTokenProvider`, as it does now. The hello frame still carries the hostd token. That token names which hostd this is, and it is what GKE-5 makes per hostd.
+hostd dials `/api/hostd/connect` through the Gateway with an ID token from its service account (Workload Identity or a key on the workstation) or from the user's login. It uses the token sources above, through `IAPTokenProvider`, as it does now. The hello frame still carries the hostd token. That token names which hostd this is, and it is what GKE-5 makes per hostd.
 
 What changes is that the verified IAP principal is recorded as the connection's principal and checked against the allowlist. A **remote** hostd (one that dials `/api/hostd/connect` through the IAP Gateway or another verifier's proxy) must present a verified identity equal to its hostd row's `owner`, so a stolen hostd token is useless without its owner's Google identity. Service accounts may be owners. A hostd reached locally (over its socket, with no proxy and no assertion) is unchanged and keeps using its token. The executor bootstrap routes (`executorBootstrapRoute`) stay open, as `docs/access-code.md` describes.
 

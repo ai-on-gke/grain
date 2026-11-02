@@ -14,7 +14,7 @@
 # limitations under the License.
 
 # The release train: release grain from main after a staging soak
-# (docs/design/release-from-trunk.md, §§2-5). It replaces the legacy
+# (design/design/release-from-trunk.design.md, §§2-5). It replaces the legacy
 # candidate cut (scripts/release-candidate-cut.sh): there is no
 # stabilization branch, no back-merge and no port; every tag it makes is
 # on a main commit, and refs/heads/candidate is only ever a pointer it
@@ -25,7 +25,7 @@
 #
 # It does everything up to the release itself and stops there: a soak
 # that passes stages the release as vX.Y.0-pending, and a person makes it
-# official (docs/design/release-from-trunk.md, §4). The person's two
+# official (design/design/release-from-trunk.design.md, §4). The person's two
 # answers are the other two modes, which .grain/workflows/promote-release.yml
 # runs and nothing else should:
 #

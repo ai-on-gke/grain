@@ -26,7 +26,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
-// A nightly on trunk is a release gate (docs/design/release-from-trunk.md,
+// A nightly on trunk is a release gate (design/design/release-from-trunk.design.md,
 // RFT-2): its run asks for PriorityReleaseGate, and a night that ends
 // without a verdict about the tree is re-run before anybody reviews it.
 

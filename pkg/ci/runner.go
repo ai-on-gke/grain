@@ -24,7 +24,7 @@ import (
 
 // Runner is grain CI as everything outside this package asks it: the
 // whole of Service's exported method set, and nothing else
-// (docs/design/grit-split.md#GS-1).
+// (design/design/grit-split.design.md#GS-1).
 //
 // Callers take a Runner rather than a *Service so that the service can
 // move out of the process -- grit.Local in process, grit.Client over its

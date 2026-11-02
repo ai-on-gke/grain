@@ -22,7 +22,7 @@ import (
 )
 
 // The workflow parser and planner moved to pkg/workflows, the neutral
-// library grain and grit both link (docs/design/grit-split.md, GS-2).
+// library grain and grit both link (design/design/grit-split.design.md, GS-2).
 // These aliases keep this package's own callers and its importers
 // compiling while they move over in their own time.
 

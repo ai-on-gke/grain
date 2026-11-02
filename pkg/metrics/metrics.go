@@ -926,7 +926,7 @@ type Report struct {
 	// sampler to ask.
 	Host Host
 	// Agents groups wake telemetry and steward report checks by template
-	// (agents.go, docs/design/durable-tasks.md#DT-14).
+	// (agents.go, design/design/durable-tasks.design.md#DT-14).
 	Agents Agents
 }
 

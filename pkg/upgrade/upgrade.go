@@ -306,7 +306,7 @@ type Config struct {
 	// not ask for a pause, and refusing to upgrade because a gate would
 	// not close is the worse failure.
 	Hold func(branch string) (release func(), err error)
-	// Flush, when set, is step 3 of docs/non-disruptive-upgrade.md's
+	// Flush, when set, is step 3 of design/design/non-disruptive-upgrade.design.md's
 	// upgrade protocol: called once the new build is staged and just
 	// before RestartCmd, it stops this daemon tailing the runs it drives
 	// in run hosts, persists each one's spool cursor and stops writing

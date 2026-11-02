@@ -55,7 +55,7 @@ type ToolAnnotations struct {
 	MCPDelivery string `json:"mcpDelivery,omitempty"`
 }
 
-// The delivery modes of a capability tool (docs/capabilities-spec.md
+// The delivery modes of a capability tool (design/spec/capabilities/capabilities.spec.md
 // §5.2.6): reachable from the sandbox through grain cap, or only from the
 // model's own MCP channel.
 const (

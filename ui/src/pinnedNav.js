@@ -40,7 +40,7 @@ const TAB_GLYPHS = { sandboxes: "sandboxes", caches: "cache" };
 const SECTION_GLYPHS = { memory: "memory" };
 
 // MOVED_VIEWS are the views that became a System tab or a Settings
-// section (docs/design/settings-panel.md §5.6, stage a). migratePinnedViews
+// section (design/design/settings-panel.design.md §5.6, stage a). migratePinnedViews
 // rewrites a pin of one to that tab or section, keeping its colour and
 // icon.
 const MOVED_VIEWS = {
@@ -176,7 +176,7 @@ export const PINNED_COLOR_OPTIONS = [
 
 // PINNED_STORAGE_KEY is where this browser keeps its pinned list: one
 // list for the deployment, with no user or team segment
-// (docs/design/settings-panel.md §6.3). localStorage is per origin, so
+// (design/design/settings-panel.design.md §6.3). localStorage is per origin, so
 // that is one list per deployment. storageMigration.js moved the old
 // grain.pinnedNav.<user>.<team> lists here.
 export const PINNED_STORAGE_KEY = "grain.pinned";
@@ -204,7 +204,7 @@ export function cleanPinnedItem(item) {
 }
 
 // PROCESS_VIEW_IDS are the pinned views Processes replaced
-// (docs/design/settings-panel.md §5.6). A list that pinned any of them
+// (design/design/settings-panel.design.md §5.6). A list that pinned any of them
 // pins Processes once instead, where the first of them was, with that
 // first pin's own colour and icon; the rest are dropped. The mapping is
 // idempotent: a list that already pins Processes keeps that pin where it

@@ -15,7 +15,7 @@
 package mcp
 
 // Tests for the compact pipeline tools a judgement agent works from
-// (docs/design/durable-tasks.md#DT-13): read_pipeline_changes, the
+// (design/design/durable-tasks.design.md#DT-13): read_pipeline_changes, the
 // summary and conversation views of read_grain_task, list_grain_tasks'
 // filters, list_ci_runs' summary default, query_merge_queue's compact
 // default and the per-run tool budget -- and the measurement that a

@@ -311,18 +311,18 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	defaultTargetRepo := fs.String("default-target-repo", "", "owner/name a task created through the UI/API with no repo of its own targets")
 	policyFile := fs.String("policy", "", "local policy file (grain_policy.yml) every task must fit before it gets a sandbox; empty enforces none (docs/local-policy.md)")
 	// The tunnel gateway and rendezvous relay these named are gone
-	// (grain/task-2099, docs/relay-removed.md). They stay defined only so
+	// (grain/task-2099). They stay defined only so
 	// a unit file still passing them stops the daemon with a clear
 	// message (removedTunnelGatewaySettings, removedRelaySettings), rather
 	// than being ignored as unknown and leaving the UI unreachable.
 	fs.String("tunnel-gateway-url", "", "removed: the tunnel gateway is gone. The daemon refuses to start with this set")
 	fs.String("tunnel-token", "", "removed: the tunnel gateway is gone. The daemon refuses to start with this set")
-	fs.String("relay-url", "", "removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set")
-	fs.String("relay-auth-token-file", "", "removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set")
-	fs.String("relay-token", "", "removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set")
-	fs.String("relay-audience", "", "removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set")
-	fs.String("relay-iap-jwt-audience", "", "removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set")
-	fs.String("relay-session-lifetime", "", "removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set")
+	fs.String("relay-url", "", "removed: the rendezvous relay is gone. The daemon refuses to start with this set")
+	fs.String("relay-auth-token-file", "", "removed: the rendezvous relay is gone. The daemon refuses to start with this set")
+	fs.String("relay-token", "", "removed: the rendezvous relay is gone. The daemon refuses to start with this set")
+	fs.String("relay-audience", "", "removed: the rendezvous relay is gone. The daemon refuses to start with this set")
+	fs.String("relay-iap-jwt-audience", "", "removed: the rendezvous relay is gone. The daemon refuses to start with this set")
+	fs.String("relay-session-lifetime", "", "removed: the rendezvous relay is gone. The daemon refuses to start with this set")
 	local := localFlags(fs)
 
 	geminiAPIKeyFile := fs.String("gemini-api-key-file", "", "file holding the Gemini API key the agent runs as. "+
@@ -768,7 +768,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			"orchestrator.VMNamePrefix")
 	runHostImage := fs.String("run-host-image", "",
 		"drive each claude run in a run host of this image: a container that is a sibling of the daemon, "+
-			"not a child of it, writing to a spool the daemon tails (pkg/runhost, docs/non-disruptive-upgrade.md). "+
+			"not a child of it, writing to a spool the daemon tails (pkg/runhost, design/design/non-disruptive-upgrade.design.md). "+
 			"Normally the deployment image itself (\"self\" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes: a run host cannot reach a container sandbox")
 	runHostCredentialDir := fs.String("run-host-credential-dir", "",
 		"the shared credential directory every run host mounts read-write, as a directory and at the same path "+
@@ -1001,14 +1001,14 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	sandboxAccessAddr := fs.String("sandbox-access-addr", "",
 		"k8s-granule only: address to run the sandbox-access acceptor on (\":4244\"), which every sandbox pod's "+
 			"wrapper then dials out to over mTLS with its own certificate and token (pkg/sandboxaccess, "+
-			"docs/design/grain-on-gke.md \"Sandbox access\"); empty leaves it off and builds pods as before")
+			"design/design/grain-on-gke.design.md \"Sandbox access\"); empty leaves it off and builds pods as before")
 	sandboxAccessDial := fs.String("sandbox-access-dial", "",
 		"the address sandbox wrappers dial the acceptor at; empty is grain-access.<-k8s-namespace>.svc:4244, "+
 			"the Service deploy/kubernetes/grain-granule.yaml creates")
 	sandboxAccessCASecret := fs.String("sandbox-access-ca-secret", "",
 		"Secret Manager secret (projects/<p>/secrets/<s>) holding the sandbox-access CA, read through Workload "+
 			"Identity and generated into it on first start; empty keeps the CA in <data-dir>/sandbox-access-ca.pem")
-	k8sGranuleAccess := fs.String("k8s-granule-access", orchestrator.K8sGranuleAccessKubectl, "k8s-granule only: how grain runs steps in a sandbox's guest -- \"kubectl\" (granule exec over kubectl exec) or \"dialout\" (the wrapper's channel to -sandbox-access-addr's acceptor; refused unless grain runs in-cluster). docs/design/grain-on-gke.md#GKE-3")
+	k8sGranuleAccess := fs.String("k8s-granule-access", orchestrator.K8sGranuleAccessKubectl, "k8s-granule only: how grain runs steps in a sandbox's guest -- \"kubectl\" (granule exec over kubectl exec) or \"dialout\" (the wrapper's channel to -sandbox-access-addr's acceptor; refused unless grain runs in-cluster). design/design/grain-on-gke.design.md#GKE-3")
 	k8sGranuleReattachTimeout := fs.Duration("k8s-granule-reattach-timeout", orchestrator.DefaultK8sGranuleReattachTimeout, "k8s-granule dialout only: how long a step waits for a dropped channel to reconnect before the sandbox is lost (a CI job errors with \"infra: sandbox channel lost\" and is re-run; an agent's tool call fails and its sandbox is rebuilt)")
 	sandboxCPUs := fs.Int("sandbox-cpus", 0,
 		"deployment-wide default vCPU count for a granule-managed sandbox VM, passed as `granule vm create`'s "+

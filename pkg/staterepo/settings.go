@@ -41,7 +41,7 @@ type Settings struct {
 	// DirectConfigWrites lets the HTTP API write non-bootstrap
 	// configuration straight into the database in internal mode, as it did
 	// before grain/config became the only write path for it
-	// (docs/design/config-repo-settings.md, section 4.1.1). It is a
+	// (design/design/config-repo-settings.design.md, section 4.1.1). It is a
 	// host-local escape hatch for an operator mid-migration and for test
 	// harnesses that configure a real daemon through its API; it has no
 	// effect in external mode, which always refuses.

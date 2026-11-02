@@ -46,7 +46,7 @@ $secret:<name>, or bind them with bind-secret, which can store the value
 read from stdin as it binds it. A value is never printed back.`
 
 // cmdCapabilityServers is `grain capability-servers`: the deployment's
-// mcpServers (docs/capabilities-spec.md §3.1), through
+// mcpServers (design/spec/capabilities/capabilities.spec.md §3.1), through
 // /api/capability-servers.
 func cmdCapabilityServers(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	if len(args) == 0 {

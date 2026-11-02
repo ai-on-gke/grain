@@ -16,7 +16,7 @@ import { fuzzyScore } from "./fuzzy.js";
 import { isConfigRepoSection } from "./settingsSections.js";
 
 // settingsIndex is what the Settings filter searches
-// (docs/design/settings-panel.md §3.3): one entry per field and per
+// (design/design/settings-panel.design.md §3.3): one entry per field and per
 // card. A field entry's id is the field's data-setting-id, which is its
 // /api/settings key (or, for Models' default model, its /api/deployment
 // one); a card entry ("card": true) names a card whose

@@ -26,7 +26,7 @@ import {
   validateValue,
 } from "../capabilityArgs.js";
 
-// FIXTURE uses every keyword the form renders (docs/capabilities-spec.md
+// FIXTURE uses every keyword the form renders (design/spec/capabilities/capabilities.spec.md
 // §4.2.1): enum, const, boolean, a string with pattern/minLength/
 // maxLength, bounded integer and number, an array with items/minItems/
 // maxItems/uniqueItems, a nested object through $ref/$defs, oneOf and

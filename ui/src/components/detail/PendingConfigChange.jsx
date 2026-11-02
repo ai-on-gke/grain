@@ -27,7 +27,7 @@ import DiffView from "../DiffView.jsx";
 
 // PendingConfigChange is what a session's propose_config_change call
 // turns into for the person sitting with it
-// (docs/design/config-repo-settings.md, section 4.3): the change it
+// (design/design/config-repo-settings.design.md, section 4.3): the change it
 // pushed to a branch of grain/config, the files it touches, what the
 // pre-review validation said, the whole diff, and the two answers.
 //

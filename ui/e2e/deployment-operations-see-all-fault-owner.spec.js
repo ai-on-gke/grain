@@ -19,7 +19,7 @@ import { test, expect } from "./fixtures.js";
 // the real demo server and built frontend:
 //
 //   - the alerts bell's popover had no "see all" to System → Health,
-//     which docs/design/settings-panel.md §4.1 says it has;
+//     which design/design/settings-panel.design.md §4.1 says it has;
 //   - the CI page dropped a shared fault's ownerTaskId, so nothing said
 //     which task was assigned to fix the failure every branch was hitting.
 test.use({ demoArgs: ["-observability"] });

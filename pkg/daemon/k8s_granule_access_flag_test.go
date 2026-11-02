@@ -21,7 +21,7 @@ import (
 
 // -k8s-granule-access=dialout is refused off-cluster and without the
 // acceptor; there is no fallback to kubectl exec
-// (docs/design/grain-on-gke.md#GKE-3).
+// (design/design/grain-on-gke.design.md#GKE-3).
 func TestValidateK8sGranuleAccess(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

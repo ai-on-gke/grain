@@ -189,7 +189,7 @@ type Command struct {
 	// id and output cursor through it as the step runs, and when its
 	// ExecID is set the sandbox reattaches to that exec -- started by a
 	// grain that has since restarted -- instead of running Script again
-	// (docs/design/grain-on-gke.md#GKE-4). A sandbox with no channel
+	// (design/design/grain-on-gke.design.md#GKE-4). A sandbox with no channel
 	// ignores the reporting and refuses a reattach.
 	Attach *sandboxaccess.Attachment
 }

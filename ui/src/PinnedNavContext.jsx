@@ -24,7 +24,7 @@ import {
 const PinnedNavContext = createContext(null);
 
 // The pinned items are this browser's, one list for the deployment
-// (pinnedNav.js's PINNED_STORAGE_KEY, docs/design/settings-panel.md §6.3).
+// (pinnedNav.js's PINNED_STORAGE_KEY, design/design/settings-panel.design.md §6.3).
 export function PinnedNavProvider({ children }) {
   const [pinnedItems, setPinnedItemsState] = useState(loadPinnedItems);
 

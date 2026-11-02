@@ -32,7 +32,7 @@ import (
 // own (Daemon.runOnce), announces it in its hello, and carries every
 // connection to it back to grain as a StreamTypeCapabilityMCP stream;
 // grain serves HTTP on that stream with this connection's capability
-// routes (docs/capabilities-spec.md §5.2.4, last paragraph).
+// routes (design/spec/capabilities/capabilities.spec.md §5.2.4, last paragraph).
 //
 // Each route is a random path naming one run's server, registered by
 // RemoteHost.CarryCapabilityServers for as long as that run holds it, and

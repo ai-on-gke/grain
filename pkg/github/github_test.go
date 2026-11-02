@@ -2779,7 +2779,7 @@ func TestIsPermissionDeniedUnwraps(t *testing.T) {
 // They were captured by hand on 2026-09-07, from the two endpoints the
 // settings-reset notice calls, and are quoted whole -- the CRLFs, the
 // documentation_url, the status field GitHub repeats as a string -- in
-// docs/hand-runs/2026-09-07-settings-reset-notice.md, which is also where
+// the 2026-09-07 settings-reset-notice hand run, which is also where
 // the ones that are still missing are named. None of the three is a
 // permission this credential can never hold: 401 is a credential to
 // replace and 404 is access to restore, and reading either as a

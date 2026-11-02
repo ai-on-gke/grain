@@ -14,7 +14,7 @@
 
 package orchestrator
 
-// Capability changes mid-task (docs/design/durable-tasks.md#DT-2).
+// Capability changes mid-task (design/design/durable-tasks.design.md#DT-2).
 //
 // A grant added to or removed from a task with a live run used to reach
 // only its next run. Now the run is told -- an addendum, which is how a

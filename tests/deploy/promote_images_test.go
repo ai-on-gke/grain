@@ -529,7 +529,7 @@ func pendingAnswers(t *testing.T, short, revision string) string {
 	return path
 }
 
-// Approving a pending release (docs/design/release-from-trunk.md §4) is a
+// Approving a pending release (design/design/release-from-trunk.design.md §4) is a
 // retag: promote finds grain:v1.5.0-pending stamped v1.5.0 from the
 // release's own commit and publishes it as v1.5.0 and latest, rebuilding
 // nothing.

@@ -35,7 +35,7 @@ import "strings"
 // all.
 //
 // So the split lives here, in the package that already holds "what is
-// true about this branch" and cannot see a task (docs/three-pieces.md).
+// true about this branch" and cannot see a task (design/design/architecture.design.md).
 // What is on the other side of the boundary is where the conclusion comes
 // from -- a GitHub read of what the repository has been running lately,
 // or an operator's declaration about a check that never passes here --

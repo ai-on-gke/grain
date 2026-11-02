@@ -31,7 +31,7 @@ import { invalidateCapabilityMethods } from "./capabilityMethods.js";
 import { UsageList } from "./CapabilityServersPanel.jsx";
 
 // CapabilityPolicyEditor is grain_config.capability_policy
-// (model.CapabilityPolicy, docs/capabilities-spec.md §4.2.2): rules that
+// (model.CapabilityPolicy, design/spec/capabilities/capabilities.spec.md §4.2.2): rules that
 // say which runs may hold a <capability_id>#<method>, or a pattern of
 // one. A reference no allow rule names may be held by any trusted run;
 // one that some allow rule names only by a run one of them admits; a

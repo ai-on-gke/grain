@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package treeid names a tree by its content alone, as grain and grit
-// both compute it (docs/design/grit-split.md, "Tree identity"):
+// both compute it (design/design/grit-split.design.md, "Tree identity"):
 //
 //   - GitTree, the git tree object id, in the repository's own object
 //     format; and

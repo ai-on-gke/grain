@@ -15,7 +15,7 @@
 package ui_test
 
 // Operator notifications and message_task through the client
-// (docs/design/durable-tasks.md DT-5, DT-10): an agent's raise is
+// (design/design/durable-tasks.design.md DT-5, DT-10): an agent's raise is
 // namespaced and bounded, it never parks the sender, and a note reaches
 // another task's run without changing that task's state.
 

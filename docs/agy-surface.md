@@ -950,11 +950,11 @@ Choose the right customization type based on your goal:
 
 Type            | Config File/Folder           | Scope                     | Best For                                                                                | Learn More
 :-------------- | :--------------------------- | :------------------------ | :-------------------------------------------------------------------------------------- | :---------
-**Rules**       | `GEMINI.md`, `AGENTS.md`     | Contextual / Hierarchical | Enforcing coding styles, API restrictions, and local guidelines.                        | [Rules Guide](./docs/rules.md)
-**Skills**      | `skills/<name>/SKILL.md`     | On-Demand (Progressive)   | Teaching the agent multi-step procedures, runbooks, and tool workflows.                 | [Skills Guide](./docs/skills.md)
-**Plugins**     | `plugins/<name>/plugin.json` | Bundle                    | Packaging related skills, rules, and MCP configs into a single unit.                    | [Plugins Guide](./docs/plugins.md)
-**Hooks**       | `hooks.json`                 | Lifecycle Event           | Running scripts/commands at specific agent lifecycle points (e.g., pre-tool execution). | [Hooks Guide](./docs/hooks.md)
-**MCP Servers** | `mcp_config.json`            | Tool Integration          | Connecting the agent to external services and custom tool providers.                    | [MCP Guide](./docs/mcp_servers.md)
+**Rules**       | `GEMINI.md`, `AGENTS.md`     | Contextual / Hierarchical | Enforcing coding styles, API restrictions, and local guidelines.                        | [Rules Guide](docs/rules.md)
+**Skills**      | `skills/<name>/SKILL.md`     | On-Demand (Progressive)   | Teaching the agent multi-step procedures, runbooks, and tool workflows.                 | [Skills Guide](docs/skills.md)
+**Plugins**     | `plugins/<name>/plugin.json` | Bundle                    | Packaging related skills, rules, and MCP configs into a single unit.                    | [Plugins Guide](docs/plugins.md)
+**Hooks**       | `hooks.json`                 | Lifecycle Event           | Running scripts/commands at specific agent lifecycle points (e.g., pre-tool execution). | [Hooks Guide](docs/hooks.md)
+**MCP Servers** | `mcp_config.json`            | Tool Integration          | Connecting the agent to external services and custom tool providers.                    | [MCP Guide](docs/mcp_servers.md)
 
 --------------------------------------------------------------------------------
 
@@ -1031,7 +1031,7 @@ and `plugins.json` to explicitly register them and inherit from shared
 configurations.
 
 *   Learn how to configure these in the
-    [JSON Configurations Guide](./docs/json_configs.md).
+    [JSON Configurations Guide](docs/json_configs.md).
 ``````
 
 #### `.gemini/antigravity-cli/builtin/skills/agy-customizations/docs/hooks.md`
@@ -1738,7 +1738,7 @@ When a plugin is discovered and enabled:
 Plugins can be discovered automatically if placed in standard customization
 roots, or they can be explicitly registered using `plugins.json`.
 
-*   See the [JSON Configurations Guide](./json_configs.md) for details on how to
+*   See the [JSON Configurations Guide](json_configs.md) for details on how to
     use `plugins.json` to enable specific plugins or inherit them from shared
     paths.
 
@@ -1859,7 +1859,7 @@ Provide clear, step-by-step instructions for the agent here.
 ## Steps
 
 1.  Run the preparation script:
-    [prepare.sh](./scripts/prepare.sh)
+    [prepare.sh](scripts/prepare.sh)
 2.  Execute the test command:
     `npm test`
 3.  Analyze the results in the log file.

@@ -89,7 +89,7 @@ import (
 //
 // It has now been taken, by hand, against the codex the image actually
 // carries (codex-cli 0.153.0, the Dockerfile's CODEX_CLI_VERSION pin).
-// docs/hand-runs/2026-09-07-codex-resume.md is the transcript; the five
+// the 2026-09-07 codex-resume hand run is the transcript; the five
 // facts this file rests on are:
 //
 //   - `codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]` is a real
@@ -210,7 +210,7 @@ import (
 // read as a hung run -- barely applies here, because 25 seconds does
 // not. The numbers are written down anyway, in agent/retry.go beside the
 // retry budget they sit under and in
-// docs/hand-runs/2026-09-08-codex-retry.md, which is also where the one
+// the 2026-09-08 codex-retry hand run, which is also where the one
 // thing that measurement found that *was* worth acting on lives: codex
 // 0.153 collapses every 429 into "exceeded retry limit, last status: 429
 // Too Many Requests", retrying it not at all and dropping the body, so

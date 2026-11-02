@@ -21,7 +21,7 @@ const MARK_SIZE = 120;
 // access code is grain's one credential (docs/access-code.md), so the
 // screen points at its sign-in page -- which is what the daemon serves
 // for any page loaded without a session -- rather than asking for a name
-// (docs/design/settings-panel.md §6.1). refusal and identityNotAccepted
+// (design/design/settings-panel.design.md §6.1). refusal and identityNotAccepted
 // are /api/config's own reasons, when it gives them.
 export default function AccessDenied({
   user,

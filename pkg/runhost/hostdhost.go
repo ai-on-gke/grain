@@ -30,7 +30,7 @@ import (
 )
 
 // Hostd drives each run's host CLI through grain hostd the way Host
-// drives one in a run host (docs/design/cli-run-location.md, "Upgrades
+// drives one in a run host (design/design/cli-run-location.design.md, "Upgrades
 // and host runs"): a Host.Run call naming a run (RunFrom) starts the CLI
 // detached, with the run's id, task and deadline (its budget plus
 // Allowance), so it outlives a daemon upgrade; its stdout cursor is

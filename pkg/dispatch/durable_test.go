@@ -14,7 +14,7 @@
 
 package dispatch_test
 
-// Durable tasks (model.DurableCapability, docs/design/durable-tasks.md#DT-1):
+// Durable tasks (model.DurableCapability, design/design/durable-tasks.design.md#DT-1):
 // admitted with priority, outside max_workers, but held to their own
 // ceiling (model.Limits.Durable); and a setup suspension holds its task
 // for the 2-minute backoff with no strike to back off from.

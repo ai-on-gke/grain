@@ -24,7 +24,7 @@ import (
 
 // channelLostJob is a job the engine concluded errored because its
 // sandbox's dial-out channel stayed down past the reattach timeout
-// (docs/design/grain-on-gke.md#GKE-3).
+// (design/design/grain-on-gke.design.md#GKE-3).
 func channelLostJob() ci.JobRun {
 	return ci.JobRun{
 		Workflow: "checks", WorkflowPath: ".grain/workflows/checks.yml", JobID: "test", Name: "test",

@@ -32,7 +32,7 @@ import (
 )
 
 // Deps.CI is grain's own CI as this package takes it: ci.Runner, the
-// whole of what the CI service answers (docs/design/grit-split.md#GS-1),
+// whole of what the CI service answers (design/design/grit-split.design.md#GS-1),
 // rather than *ci.Service, so the service can move out of the process
 // without this package changing. cmd/grain hands in its own ciGate.
 //

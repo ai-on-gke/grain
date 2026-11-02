@@ -4677,7 +4677,7 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 			mayReadAllCI = true
 			mayReadSrc = true
 			// What self-debug opens and no more
-			// (docs/design/sandbox-first-agent-surface.md, and the
+			// (design/design/sandbox-first-agent-surface.design.md, and the
 			// tools pkg/mcp/toolnames.go gates on it): memory,
 			// issues and SQL each keep a grant of their own, as their
 			// MCP tools do. Health comes with its api:self-debug

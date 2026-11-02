@@ -3,7 +3,7 @@
 The built-in `gchat` capability server (`https://grain.dev/capabilities/gchat`, [docs/capabilities.md](capabilities.md#google-chat-gchatpost)) lets a task post messages to Google Chat spaces you allowlist. It is one way: agents cannot read a space, and replies never reach grain. This page covers setting it up. Two terms describe where a credential comes from (spec §4.5.8):
 
 - **configured**: a credential you store in grain's secret store (a webhook URL, a service-account key, a workload-identity config);
-- **ambient**: nothing is stored. The server uses the identity its own process already has where it runs. In the container that is the container's Application Default Credentials (ADC) or metadata identity. On a Cloudtop where the server runs on the host through grain hostd (`run: host`), it is your own corp identity.
+- **ambient**: nothing is stored. The server uses the identity its own process already has where it runs. In the container that is the container's Application Default Credentials (ADC) or metadata identity. On a workstation where the server runs on the host through grain hostd (`run: host`), it is your own corp identity.
 
 Open **Settings → Capability servers → gchat → Configure**. Every field below is in that form. The secret fields (`webhook_urls`, `app_credentials`, `dataPlaneToken`) are write-only: they are kept in the secret store, never exported to grain/config, and never shown back.
 
@@ -41,7 +41,7 @@ The server runs as `grain capability gchat` in the daemon's container and uses t
 
 ### Ambient on the host (Google-internal Chat)
 
-On a Cloudtop, run the server on the host so it posts with your own identity. `scripts/setup.sh` (and `google/scripts/cloudtop-install.sh`) writes the hostd allowlist entry `grain-gchat`, with `extra_args: true` so the entry can pass `-listen`. In Settings, edit the gchat entry and set **Run** to `host`, **Command** to `grain-gchat`, and **Args** to `-listen 127.0.0.1:4251`. Make sure your ADC is in place (`gcloud auth application-default login`), then use `credential_source: ambient`. Test reports the identity it found.
+On a workstation, run the server on the host so it posts with your own identity. `scripts/setup.sh` (and a wrapper distribution's own installer) writes the hostd allowlist entry `grain-gchat`, with `extra_args: true` so the entry can pass `-listen`. In Settings, edit the gchat entry and set **Run** to `host`, **Command** to `grain-gchat`, and **Args** to `-listen 127.0.0.1:4251`. Make sure your ADC is in place (`gcloud auth application-default login`), then use `credential_source: ambient`. Test reports the identity it found.
 
 ## Side by side
 

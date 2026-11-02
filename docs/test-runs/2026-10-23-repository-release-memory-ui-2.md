@@ -15,7 +15,7 @@ use. Task 4673's six observations are rechecked below.
 - **Platform**: Linux x86_64 sandbox, Go 1.26, Node.js 20.19.0, Playwright
   driving headless Chromium from `/var/cache/playwright`.
 - **Build**: `cd ui && npm ci && npm run build`, then
-  `go build -tags grain_e2e -o /var/tmp/grain ./google/cmd/grain`. That
+  `go build -tags grain_e2e -o /var/tmp/grain a wrapper distribution's `cmd/grain`. That
   binary embeds the frontend built from this tree.
 - **Server**, over a throwaway embedded store in `/tmp/grain-demo-*`:
 

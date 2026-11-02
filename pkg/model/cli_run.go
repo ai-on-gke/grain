@@ -22,7 +22,7 @@ import (
 	"strings"
 )
 
-// Where an agent CLI runs (docs/design/cli-run-location.md).
+// Where an agent CLI runs (design/design/cli-run-location.design.md).
 const (
 	// CLIRunHost runs the CLI on the machine: through grain hostd for a
 	// daemon in the release container, or as the daemon's own child for
@@ -35,7 +35,7 @@ const (
 	// grain hostd, detached, from its container-equivalent allowlist
 	// entry ("claude-detached"): the deployment's login and the
 	// container's HOME, so it is a container run that outlives a daemon
-	// upgrade (docs/non-disruptive-upgrade.md, "Which substrate carries
+	// upgrade (design/design/non-disruptive-upgrade.design.md, "Which substrate carries
 	// which CLI"). Only a daemon in the release container with grain
 	// hostd has it, and only for a CLI whose runs can be adopted.
 	CLIRunDetached = "detached"

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # The release train: release grain from main after a staging soak
-# (docs/design/release-from-trunk.md, RFT-6; docs/release-candidate-management.md).
+# (design/design/release-from-trunk.design.md, RFT-6; docs/release-candidate-management.md).
 #
 # Once a day it runs scripts/release-from-trunk.sh, which does two
 # idempotent things and stops:

@@ -138,7 +138,7 @@ accepts it.
 | Team repo config (`team_repo_config`) | Folded into `repo_config` | Repositories are configured once |
 | Team pipeline pause | Gone; `pipeline_pause` remains | There is one queue |
 | `Task.Team` | Removed (task 4844) | It was kept as inert metadata only while Silo's attestation signed it. Task 4826 removed the Silo hub connection, so the field, its readers and writers, `CreateTaskRequest.Team`, `UpdateTaskRequest.Team`, `POST /api/tasks/{id}/move` and `grain create -team` are gone. The `task.team` column, left unread and unwritten, went with the other team columns at 6-ii-b5 (task 4864) |
-| `/api/config`'s `teams` and `tenancy`; `team` on schedule and suite requests | Removed (task 4924) | `/api/config` carries the deployment as one `deployment` object, the shape `GET /api/deployment` answers, and the frontend reads that instead of `teams[0]`. `tenancy` had no value but "single"; `/api/auth/user` still sends it for the cloudtop installer. Create and update requests for schedules and suites that still name `team` are refused with a 400 naming the field. The deployment's `name` is its `EnvironmentName` (empty when unnamed), not the default team's "admin". `adminAccounts`/`isAdmin` stay: they are the deployment's admins |
+| `/api/config`'s `teams` and `tenancy`; `team` on schedule and suite requests | Removed (task 4924) | `/api/config` carries the deployment as one `deployment` object, the shape `GET /api/deployment` answers, and the frontend reads that instead of `teams[0]`. `tenancy` had no value but "single"; `/api/auth/user` still sends it for the workstation installer. Create and update requests for schedules and suites that still name `team` are refused with a 400 naming the field. The deployment's `name` is its `EnvironmentName` (empty when unnamed), not the default team's "admin". `adminAccounts`/`isAdmin` stay: they are the deployment's admins |
 | Team-scoped residue in errors and tools | Removed (task 4932) | The connection checks (`AgentBackend.BelongsTo`, `TeamID`, `TeamAgentBackends`, `requireTeamAgentBackend` and Settings' cross-team borrow refusal), the dead config-repo submit check, the team-scoped metrics report (`MetricsRequest.Team` / `?team=`, `MetricsScope.Team`, `metrics.Scope.Teams`, `mcp.NewTeamMetricsTools`, `MetricsDeploymentWideSections`) and the broadcast's team (`mcp.TaskScope`, `grain mcpserver -caller-team`, the tool's `team` argument, `BroadcastTeamResponse.Team`) are gone. The tool keeps the name `broadcast_team_message` and the grant `team-broadcast`, which the tool allowlists name. Git-connection, target-repo and approver errors name the deployment. New git connections' credentials are `grain-git-c-<hex>`; names minted before (`grain-team-<base64 team>-c-<hex>`) are stored selectors and stay as they are, both read as the deployment's (`model.DeploymentOwnsGitCredential`). A secret's team restriction went with task 4933 (next row) |
 | A secret's team restriction (`PUT /api/secrets/{secret}/teams`) | Removed (task 4933) | The caller's team is always `default`, so a secret restricted to any other team could be resolved by nothing. The route, the list's `?team=` filter, the `teams` field on `PUT /api/secrets/{secret}/{key}` and `SecretInfo.Teams` are gone, and so are `secrets.SetTeams`, `SetWithTeams`, `Teams`, `ListForTeam`, `ResolveForTeam`, `CopyCredentials`, `WithTeam`/`TeamFromContext`, `ErrSecretRestricted` and `AuditEntry.TeamID`, which nothing has read since schema 25 dropped the audit's team column. A secrets file that already carries `teams` is read and the field ignored, so every secret resolves; the next write leaves it out |
 | `Task.Creator`, `Task.Approval` | Unchanged pass-through | Grain is the PEP and trusts Silo's claims about who asked and who approved |
@@ -372,8 +372,8 @@ starts before the one it builds on has merged.
        deployment and no team: `grain git-ambient`, `grain
        git-connections`, `grain default-model` and `grain gcp-key`
        (`pkg/cli/deployment.go`), which still reach the default team's
-       row through `/api/teams/default/...` until 3e-iv. The cloudtop
-       installer calls them and `GRAIN_CLOUDTOP_TEAM` is gone; its
+       row through `/api/teams/default/...` until 3e-iv. The workstation
+       installer calls them and `GRAIN_WRAPPER_TEAM` is gone; its
        seeded model is filed on `default`.
      - **3e-ii: the multi-tenant UI (task 4777, landed).** The
        frontend names no team. Gone: `TeamContext.jsx` (`useTeam`,
@@ -558,7 +558,7 @@ starts before the one it builds on has merged.
            passing `-tenancy` gets it named among the flags the daemon
            ignores; `grain init -tenancy` is accepted and ignored. hostinit's
            tenancy step goes and its admin steps are always skipped;
-           `scripts/setup.sh` and `cloudtop-install.sh` lose
+           `scripts/setup.sh` and `wrapper-installer` lose
            `GRAIN_TENANCY` (setup.sh still sets up a v1.9.0 image, which
            predates the single-tenant engine, as multi-tenant), and the
            Kubernetes manifests their `-tenancy=multi`. The Playwright
@@ -597,7 +597,7 @@ starts before the one it builds on has merged.
            admin steps and the `.grain/templates` text that c5 was also
            filed for are split off: hostinit's `ensureAdminAccount` /
            `ensureAdminUser`, `-admin-account` / `-admin-user` and
-           cloudtop-install.sh's `make_admin` as 3e-iii-c6, and the two
+           wrapper-installer's `make_admin` as 3e-iii-c6, and the two
            install-walkthrough templates' `GRAIN_TENANCY` as 3e-iii-c7
            (an edit under `.grain/`, so it waits for a human's Submit).
          - **3e-iii-c6 (task 4820, landed):** hostinit's admin steps are gone:
@@ -610,7 +610,7 @@ starts before the one it builds on has merged.
            rewrite; it just no longer retargets `-admin-account`. `grain
            init -admin-account` / `-admin-user` are accepted and ignored,
            and `defaultAdminAccount` / `defaultAdminUser` go.
-           `cloudtop-install.sh` loses `make_admin` and its summary's
+           `wrapper-installer` loses `make_admin` and its summary's
            Admin line; `--no-admin` and `GRAIN_MAKE_ADMIN` are accepted
            and ignored (and the latter is still kept out of setup.sh's
            environment). `scripts/setup.sh`'s `ensure_admin_user` stays
@@ -796,8 +796,7 @@ starts before the one it builds on has merged.
              - **3e-iv-b2c-ii (task 4840, landed):** the two places
                membership still decided anything. The hub's check that a
                hub task's submitter and approver are on the team it files
-               into went with the hub itself (commit 6f5d809e4,
-               [hub-removed.md](hub-removed.md)), which landed first.
+               into went with the hub itself (commit 6f5d809e4), which landed first.
                `Store.IsApprover` reads a `team:` or `team-admins:` token
                as the deployment's admin accounts (`system-admins`), so
                the default approver of a sensitive trigger with no

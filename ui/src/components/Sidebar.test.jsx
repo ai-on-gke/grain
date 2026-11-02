@@ -216,7 +216,7 @@ describe("Sidebar", () => {
     );
 
     // The bordered "team-scoped section" is gone with the teams
-    // (docs/design/settings-panel.md §4.2); its entries are the list.
+    // (design/design/settings-panel.design.md §4.2); its entries are the list.
     expect(screen.queryByTestId("team-section")).toBeNull();
     expect(screen.queryByTestId("team-selector")).toBeNull();
     for (const name of [
@@ -364,7 +364,7 @@ describe("Sidebar", () => {
     expect(screen.getByRole("button", { name: "Caches" })).toBeInTheDocument();
   });
 
-  // docs/design/settings-panel.md §5.6: a pinned System tab or Settings
+  // design/design/settings-panel.design.md §5.6: a pinned System tab or Settings
   // section is selected only while that tab or section is open.
   it("selects a pinned tab or section only while it is the open one", () => {
     const pins = [
@@ -892,7 +892,7 @@ describe("Sidebar", () => {
     expect(screen.getByRole("button", { name: /^Boards/ })).toBeInTheDocument();
   });
 
-  // docs/design/settings-panel.md §4.2: one Processes entry where
+  // design/design/settings-panel.design.md §4.2: one Processes entry where
   // Schedules, Templates and Suites were, counting every row the page
   // lists.
   it("switches to Processes and counts every process when clicked", async () => {
@@ -1329,7 +1329,7 @@ describe("Sidebar", () => {
     expect(onSetView).toHaveBeenCalledWith("boards");
   });
 
-  // grain has no users (docs/design/settings-panel.md §6): the rail
+  // grain has no users (design/design/settings-panel.design.md §6): the rail
   // names nobody, neither a browser-chosen name nor the server's actor.
   it("has no user tile, and names no user or actor", () => {
     localStorage.setItem("grain.username", "alice");

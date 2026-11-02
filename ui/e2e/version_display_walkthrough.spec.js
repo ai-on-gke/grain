@@ -56,7 +56,7 @@ test.describe("Settings version display walkthrough", () => {
     await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
 
     // The version is Settings → General → About now
-    // (docs/design/settings-panel.md §3.2), behind the gear.
+    // (design/design/settings-panel.design.md §3.2), behind the gear.
     await page.getByTestId("top-bar-settings").click();
     await expect(
       page.getByRole("heading", { name: "Settings", exact: true }),

@@ -1420,7 +1420,7 @@ export const NO_CAPABILITIES_HINT =
 
 // LEGACY_CAPABILITIES_HINT sits under every in-process capability
 // checklist: those ids are being converted to capability server methods
-// or api scopes (docs/design/unified-grants.md), so new access belongs
+// or api scopes (design/design/unified-grants.design.md), so new access belongs
 // under Grants rather than here.
 export const LEGACY_CAPABILITIES_HINT =
   "Legacy in-process capabilities, each being converted to a server method or API scope. Add new access under Grants.";

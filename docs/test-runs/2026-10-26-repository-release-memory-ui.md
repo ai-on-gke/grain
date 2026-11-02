@@ -10,7 +10,7 @@ A walkthrough of the repository-centric operator workflow in a real headless Chr
   ```bash
   find pkg/ui/static -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' -not -name 'placeholder.html' -delete
   cd ui && npm run build
-  cd .. && go build -o /var/tmp/grain ./google/cmd/grain
+  cd .. && go build -o /var/tmp/grain a wrapper distribution's `cmd/grain`
   ```
 - **Server**:
   ```bash

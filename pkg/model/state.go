@@ -101,7 +101,7 @@ const EnvironmentOutcome = "environment"
 // reported an OOM kill, a container exited with docker's OOMKilled set,
 // or a pod's container status reads OOMKilled
 // (orchestrator.SandboxOOMReporter). Under memory overcommit
-// (docs/design/auto-overcommit.md) that is a risk grain takes on
+// (design/design/auto-overcommit.design.md) that is a risk grain takes on
 // purpose, trading a few killed sandboxes for more concurrent work, so
 // like InterruptedOutcome it is evidence about the deployment and none
 // about the task: computeStreakForTask and Store.FailureStreak skip it,

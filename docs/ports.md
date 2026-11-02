@@ -75,7 +75,7 @@ Class:
 
 | Port | Class | Owner | Where |
 |------|-------|-------|-------|
-| 4242 | operator | daemon UI/API | `grain daemon -ui-addr` default `0.0.0.0:4242` (`pkg/cli/daemon.go`), the CLI's `http://127.0.0.1:4242` (`pkg/cli/main.go`), `hostinit.DefaultUIAddr`, `scripts/setup.sh` and `google/scripts/cloudtop-install.sh` `GRAIN_UI_ADDR`, `scripts/client.sh`, `ui/vite.config.js` dev proxy |
+| 4242 | operator | daemon UI/API | `grain daemon -ui-addr` default `0.0.0.0:4242` (`pkg/cli/daemon.go`), the CLI's `http://127.0.0.1:4242` (`pkg/cli/main.go`), `hostinit.DefaultUIAddr`, `scripts/setup.sh` and a wrapper distribution's own installer `GRAIN_UI_ADDR`, `scripts/client.sh`, `ui/vite.config.js` dev proxy |
 | 4243 | operator | remote-executor listener (suggested) | `-executor-addr` is off by default; its help suggests `:4243` |
 | 4244 | operator | sandbox-access acceptor: k8s-granule sandbox pods' wrappers dial out to it over mTLS | `ports.SandboxAccess`, `sandboxaccess.DefaultPort`; `-sandbox-access-addr=:4244` and the `grain-access` Service in `deploy/kubernetes/grain-granule.yaml` |
 | 4280 | operator | the staging grain persistent sandbox | a persistent sandbox's `host_port` (grain/config `tables/persistent_sandbox.json`); see [below](#persistent-sandboxes) |
@@ -138,9 +138,9 @@ operator decides otherwise.
 | Ports | Owner |
 |-------|-------|
 | `:0` / ephemeral | test servers, `grain demo -addr 127.0.0.1:0` in e2e, the daemon with `-sandbox-port-base=0` |
-| per attempt | capability `ports` grants' `host_port` (`docs/capabilities-spec.md` §5.3) |
+| per attempt | capability `ports` grants' `host_port` (`design/spec/capabilities/capabilities.spec.md` §5.3) |
 | `-granule-base-port` | ignored, and to be removed; it used to forward 12000-12255 |
-| test-only literals | `_test.go` files, `tests/`, `docs/test-runs/` and `docs/hand-runs/` (8421, 8430, 18080, 18420 and the like) are what one run happened to pick, not defaults |
+| test-only literals | `_test.go` files, `tests/`, `docs/test-runs/` (8421, 8430, 18080, 18420 and the like) are what one run happened to pick, not defaults |
 
 ## Persistent sandboxes
 

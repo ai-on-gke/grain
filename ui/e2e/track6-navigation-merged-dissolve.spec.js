@@ -42,7 +42,7 @@ test.afterEach(async ({ page }) => {
 });
 
 test.describe("Track 6: UI Navigation Redesign, Bottom User Profile & Merged Task Dissolve", () => {
-  // The user tile is gone (docs/design/settings-panel.md §6): the foot
+  // The user tile is gone (design/design/settings-panel.design.md §6): the foot
   // of the rail is the build stamp, under System on a phone (§4.3).
   test("1. The rail's foot is the build stamp, with no user tile, across Desktop and Mobile", async ({
     page,

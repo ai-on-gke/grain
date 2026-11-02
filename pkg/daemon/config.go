@@ -422,7 +422,7 @@ type Config struct {
 	GritClientToken string
 	// GritExperimental is -grit-experimental: the opt-in -grit-url is
 	// refused without, because the remote grit path runs no workflows
-	// yet (docs/design/grit-split.md, GS-3 to GS-5 deferred).
+	// yet (design/design/grit-split.design.md, GS-3 to GS-5 deferred).
 	GritExperimental bool
 
 	// ciCacheMaxAge, ciCacheMaxBytes, ciCacheMaxEntries and
@@ -796,7 +796,7 @@ type Config struct {
 	// channel, which needs SandboxAccessAddr and an in-cluster daemon).
 	// K8sGranuleReattachTimeout is how long a step waits for a dropped
 	// channel to come back (DefaultK8sGranuleReattachTimeout when zero).
-	// docs/design/grain-on-gke.md#GKE-3. Startup-only.
+	// design/design/grain-on-gke.design.md#GKE-3. Startup-only.
 	K8sGranuleAccess          string
 	K8sGranuleReattachTimeout time.Duration
 

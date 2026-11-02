@@ -15,7 +15,7 @@
 package ui
 
 // The person-only last step of a trunk release
-// (docs/design/release-from-trunk.md, §4): the release train stops a
+// (design/design/release-from-trunk.design.md, §4): the release train stops a
 // release whose soak passed at vX.Y.0-pending, and a person approves or
 // rejects it here. Approving runs .grain/workflows/promote-release.yml's
 // `promote` job (which needs `approve`), rejecting its `reject` job; both

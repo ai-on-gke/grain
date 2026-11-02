@@ -15,7 +15,7 @@
 // Package attest is grit's proof of work: the in-toto Statement and run
 // predicate grit signs when a run concludes, the DSSE envelope it is
 // carried in, and the signing and verification both grain and
-// `grit verify` use (docs/design/grit-split.md, "Attestations").
+// `grit verify` use (design/design/grit-split.design.md, "Attestations").
 //
 // It is a neutral package: it imports nothing of grain's, so grit and
 // any third party verifying a release's tests can use it alone.

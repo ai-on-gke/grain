@@ -23,7 +23,7 @@ package modelproxy
 // restarted daemon has already lost (orchestrator.RecoverOrphanedRuns),
 // so the registry's lifetime and a run's lifetime ended together anyway.
 // That stops being true once a restarted daemon adopts the runs it finds
-// still going (docs/non-disruptive-upgrade.md, piece 5): an adopted run
+// still going (design/design/non-disruptive-upgrade.design.md, piece 5): an adopted run
 // authenticates with the token the previous daemon minted, so a registry
 // that died with that daemon would refuse every model call the run makes
 // for the rest of its life. A Tokens given a file (PersistTo) writes

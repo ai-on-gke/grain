@@ -152,7 +152,7 @@ describe("listOrder", () => {
     });
   });
 
-  // docs/design/settings-panel.md §5.6.
+  // design/design/settings-panel.design.md §5.6.
   describe("migrateProcessOrder", () => {
     it("merges the three old orders into Processes, schedules first, and removes them", () => {
       saveOrder("suites", ["suite-2", "suite-1"]);

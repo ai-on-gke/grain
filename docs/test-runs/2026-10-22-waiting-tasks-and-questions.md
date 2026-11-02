@@ -7,7 +7,7 @@
   - Debian GNU/Linux 12 (bookworm), kernel `6.1.0-54-amd64`, `linux/amd64`
   - Go `go1.26.9`, Node.js `v20.19.0`, npm `10.8.2`
   - Playwright `1.62.1`, headless Chromium (`chromium-1234`), tested at both desktop (`1280x800`) and phone (`390x844`) viewports
-  - Server: real `./google/cmd/grain` built with `-tags grain_e2e` (`orchestrator.NewHostSandboxes`) and started as `grain daemon -data-dir <dir> -sandbox-dir <dir> -ui-addr 127.0.0.1:0 -sandbox-port-base=0 -poll-interval 100ms -max-workers 2 -max-mergers 0` serving the production Vite bundle (`make frontend`, embedded from `pkg/ui/static`) over a real on-disk SQLite store.
+  - Server: real a wrapper distribution's `cmd/grain` built with `-tags grain_e2e` (`orchestrator.NewHostSandboxes`) and started as `grain daemon -data-dir <dir> -sandbox-dir <dir> -ui-addr 127.0.0.1:0 -sandbox-port-base=0 -poll-interval 100ms -max-workers 2 -max-mergers 0` serving the production Vite bundle (`make frontend`, embedded from `pkg/ui/static`) over a real on-disk SQLite store.
 
 ## Summary of Results
 

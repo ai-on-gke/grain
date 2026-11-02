@@ -286,7 +286,7 @@ func (h RunCIHabit) Empty() bool {
 }
 
 // RunAPICallRetention is how long task_run_api_call rows are kept locally
-// before being pruned (docs/design/durable-tasks.md#DT-14).
+// before being pruned (design/design/durable-tasks.design.md#DT-14).
 const RunAPICallRetention = 30 * 24 * time.Hour
 
 // RunAPICall is one row of task_run_api_call: one agent-API or grain tool
@@ -303,7 +303,7 @@ type RunAPICall struct {
 
 // RunReportCheck is one row of task_run_report_check: the steward report
 // checker's (or the weekly sampled judgement audit's) counts over one wake's
-// closing report (docs/design/durable-tasks.md#DT-14).
+// closing report (design/design/durable-tasks.design.md#DT-14).
 type RunReportCheck struct {
 	RunID      string
 	Claims     int

@@ -15,7 +15,7 @@
 package sandboxcli
 
 // sandboxcli_actions.go is the acting half of the sandbox CLI
-// (docs/design/sandbox-first-agent-surface.md, Stage 2): grain ci wait,
+// (design/design/sandbox-first-agent-surface.design.md, Stage 2): grain ci wait,
 // run-job and retrigger, grain pr open, reply, resolve and
 // review-comment, which POST to the sandbox proxy's /cli/ routes
 // (pkg/gitproxy's cli_actions.go), and grain git revert, which asks the

@@ -85,7 +85,7 @@ test.describe("Sidebar Navigation Restructuring & Foldable Controls", () => {
     await expect(customizePinnedBtn).toBeVisible();
 
     // 4. The destinations, flat: the bordered team-scoped box went with
-    // the teams (docs/design/settings-panel.md §4.2).
+    // the teams (design/design/settings-panel.design.md §4.2).
     await expect(aside.getByTestId("team-section")).toHaveCount(0);
     await expect(page.getByTestId("team-selector")).toHaveCount(0);
 
@@ -127,7 +127,7 @@ test.describe("Sidebar Navigation Restructuring & Foldable Controls", () => {
     await expect(page.getByTestId("top-bar-settings")).toBeVisible();
 
     // 6. No user tile: the build stamp alone is the foot, a link to
-    // Settings -> Upgrade (docs/design/settings-panel.md §4.3).
+    // Settings -> Upgrade (design/design/settings-panel.design.md §4.3).
     await expect(aside.getByTestId("user-tile")).toHaveCount(0);
     const stamp = aside.getByTestId("build-stamp");
     await expect(stamp).toBeVisible();
@@ -177,7 +177,7 @@ test.describe("Sidebar Navigation Restructuring & Foldable Controls", () => {
     await page.getByRole("button", { name: "Pin item" }).click();
 
     // A System tab can be pinned on its own
-    // (docs/design/settings-panel.md §5.6).
+    // (design/design/settings-panel.design.md §5.6).
     await itemSelect.click();
     await page.getByRole("option", { name: "System → Caches" }).click();
     await page.getByRole("button", { name: "Pin item" }).click();

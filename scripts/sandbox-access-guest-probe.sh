@@ -15,7 +15,7 @@
 
 # sandbox-access-guest-probe.sh -- verify that a guest in
 # CHV_NET_MODE=inline cannot reach grain's sandbox-access acceptor while
-# its wrapper's dial-out to it works (docs/design/grain-on-gke.md,
+# its wrapper's dial-out to it works (design/design/grain-on-gke.design.md,
 # Security 2; GKE-2).
 #
 #   scripts/sandbox-access-guest-probe.sh

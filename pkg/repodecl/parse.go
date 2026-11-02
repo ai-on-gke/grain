@@ -404,7 +404,7 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 			}
 			target, write = r, true
 		case model.IsCapabilityRef(c):
-			// A capability reference (docs/capabilities-spec.md §2.2):
+			// A capability reference (design/spec/capabilities/capabilities.spec.md §2.2):
 			// its grammar is checked here; its with: arguments against
 			// its server's schema when a task is filed from it, and
 			// again at admission.

@@ -5,7 +5,7 @@
 > daemon's hub registration, `grain hub`, the Silo claims in the local
 > policy and the hub UI are gone, and the code paths named below no
 > longer exist. The local policy (`pkg/policy`) and its audit log stay.
-> [docs/hub-removed.md](../../hub-removed.md) says how to restore the hub
+> The hub-removal notice in git history says how to restore the hub
 > from git history. The findings are kept as written.
 
 - **Date:** 2026-10-16

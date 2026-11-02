@@ -821,7 +821,7 @@ func defaultLocalJobRunner(ctx context.Context, env JobExecEnv) (JobExecResult, 
 		}, nil
 	}
 	// Nothing here can run the job: grit serve's local executor does not
-	// read .grain/workflows (that is GS-3, deferred -- docs/design/grit-split.md),
+	// read .grain/workflows (that is GS-3, deferred -- design/design/grit-split.design.md),
 	// so a tree without .grain/grit-job.sh has no command to execute. Reporting
 	// that as success signed a green attestation for work that never ran, and
 	// `grain daemon -grit-url` recorded it as a passing verdict for every

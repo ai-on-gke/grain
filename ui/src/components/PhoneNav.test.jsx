@@ -280,7 +280,7 @@ describe("PhoneNav", () => {
     );
   });
 
-  // docs/design/settings-panel.md §4.1: the gear sits on the bar,
+  // design/design/settings-panel.design.md §4.1: the gear sits on the bar,
   // between the bell and "+", and opens Settings without the drawer.
   it("puts the gear on the bar between the bell and New task", () => {
     const onOpenSettings = vi.fn();

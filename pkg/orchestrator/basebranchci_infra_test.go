@@ -24,7 +24,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
-// Trunk's post-merge suite is a release gate (docs/design/release-from-trunk.md,
+// Trunk's post-merge suite is a release gate (design/design/release-from-trunk.design.md,
 // RFT-2): it is ranked as one at the job gate, and a run of it that said
 // nothing about the tree is re-run -- the jobs it had not passed, uncached
 // -- rather than replayed in full from the cache.

@@ -1529,7 +1529,7 @@ func TestParseResultReadsAnAdoptedHostRunsStream(t *testing.T) {
 
 // TestHookLetsPlanModeEndAndExplainsTheTimers: agy's exit_plan_mode is a
 // plan-mode handoff rather than a host tool, so denying it trapped a run
-// in plan mode (docs/design/sandbox-first-agent-surface.md §5);
+// in plan mode (design/design/sandbox-first-agent-surface.design.md §5);
 // enter_plan_mode and schedule are refused with a reason that says what
 // to do instead.
 func TestHookLetsPlanModeEndAndExplainsTheTimers(t *testing.T) {

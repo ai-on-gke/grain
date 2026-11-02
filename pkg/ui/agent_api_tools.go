@@ -642,7 +642,7 @@ func (r APIRoute) inputSchema() map[string]any {
 // takesExpect reports whether the route changes one task by its id -- the
 // task-admin writes a judgement agent acts through -- and so takes an
 // expect argument checked against that task before the call is made
-// (docs/design/durable-tasks.md#DT-13).
+// (design/design/durable-tasks.design.md#DT-13).
 func (r APIRoute) takesExpect() bool {
 	return r.Method != http.MethodGet && strings.HasPrefix(r.Path, "/api/tasks/{id}") && slices.Contains(r.Params, "id")
 }

@@ -22,7 +22,7 @@ import (
 // TestTheKubernetesManifestsKeepAgentSessionsOnTheDataClaim: a durable
 // run the daemon does not adopt across a restart is resumed on the next
 // daemon's first cycle into the conversation it was in
-// (docs/design/durable-tasks.md#DT-1, case 2), and that conversation is
+// (design/design/durable-tasks.design.md#DT-1, case 2), and that conversation is
 // only there if the session stores outlived the pod. agy's and codex's
 // live under -data-dir (pkg/agent/sessionstore, daemon.agentSessionsDir)
 // and claude's in $HOME/.claude, so both manifests have to put -data-dir

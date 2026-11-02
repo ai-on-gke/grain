@@ -697,7 +697,7 @@ var repoKeyColumns = [][2]string{
 // nobody adds to the list is left in the old spelling by -apply, is
 // never mentioned in the report, and a second run then tells the
 // operator their store is clean while it is not (grain/task-314, and
-// docs/hand-runs/2026-09-07-repo-case.md for the six tables that were in
+// the 2026-09-07 repo-case hand run for the six tables that were in
 // exactly that state). Nothing about writing a new table reminds anybody
 // to come here, so the schema has to do the reminding.
 //

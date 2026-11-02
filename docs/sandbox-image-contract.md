@@ -189,7 +189,7 @@ same list for the running build of grain.
 | `curl` | Reaches the in-sandbox namespace and git proxy at `127.0.0.1:9728`. |
 | `ca-certificates` (`/etc/ssl/certs/ca-certificates.crt`) | TLS to registries, package mirrors and model APIs. |
 | `python3-minimal` (`os`, `socket`, `sys`, `threading`) | `GuestForwarder`, the capability port forwarder. |
-| `/usr/local/bin/grain` (`cmd/grain-sandbox`) offering `grain ls`, `read`, `grep`, `ci`, `pr`, `task`, `api` and `host-script` | The sandbox CLI agents reach their deployment, CI and pull request through (`docs/design/sandbox-first-agent-surface.md`); the orchestrator no longer offers those as MCP tools. `grain sandbox-image check -probe` runs `GRAIN_SANDBOX_CLI=0 /usr/local/bin/grain help` and fails an image whose `grain` does not list them. |
+| `/usr/local/bin/grain` (`cmd/grain-sandbox`) offering `grain ls`, `read`, `grep`, `ci`, `pr`, `task`, `api` and `host-script` | The sandbox CLI agents reach their deployment, CI and pull request through (`design/design/sandbox-first-agent-surface.design.md`); the orchestrator no longer offers those as MCP tools. `grain sandbox-image check -probe` runs `GRAIN_SANDBOX_CLI=0 /usr/local/bin/grain help` and fails an image whose `grain` does not list them. |
 | `dev.grain.sandbox.contract` label and `/etc/grain/sandbox-contract` | The contract version grain checks the image against. |
 
 ### Granule microVM backends only (`guest-base`)

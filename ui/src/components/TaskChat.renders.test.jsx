@@ -21,7 +21,7 @@
 // re-ran the markdown pipeline over the whole conversation. On a
 // 41-message chat that was 112ms of script between one character and the
 // next, and it grew with the conversation: 200ms at 81 messages
-// (docs/hand-runs/2026-09-17-chat-keystroke.md).
+// (the 2026-09-17 chat-keystroke hand run).
 //
 // A stopwatch would be the wrong test for it -- what broke was not a
 // constant, it was that the constant depended on N -- so what is

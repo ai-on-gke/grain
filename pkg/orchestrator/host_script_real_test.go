@@ -365,7 +365,7 @@ const hostScriptContainerImageEnv = "GRAIN_HOST_SCRIPT_CONTAINER_IMAGE"
 // image named in GRAIN_HOST_SCRIPT_CONTAINER_IMAGE.
 //
 // The image has to hold the sandbox contract capability materialization
-// assumes (docs/capabilities-spec.md §5.1, §5.3): a sandbox user debian
+// assumes (design/spec/capabilities/capabilities.spec.md §5.1, §5.3): a sandbox user debian
 // who owns /home/debian, and python3 for grain's guest forwarder. The
 // stock container sandbox image, the k8s-sandbox image the
 // -container-sandbox-image flag defaults to, holds it, and tests.yml's

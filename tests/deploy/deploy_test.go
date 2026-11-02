@@ -3174,7 +3174,7 @@ func TestSandboxBaseImagesAreMinimalAndCarryTheVersionedContract(t *testing.T) {
 // and claude through their vendors' install.sh, each of which serves the
 // current release, so two builds of the same grain commit could carry
 // two different CLIs (agy 1.1.27 in the daemon's image against the 1.2.5
-// install.sh was serving on 2026-09-17 -- docs/hand-runs/2026-09-17-agy-self-update.md,
+// install.sh was serving on 2026-09-17 -- the 2026-09-17 agy-self-update hand run,
 // whose "Still owed" left this open). Disabling the self-updater stopped
 // that binary changing under a *running* task; it said nothing about
 // which binary the image started with.

@@ -41,7 +41,7 @@ test.describe("a host-mode install", () => {
       );
       await expect(banner.getByTestId("install-notice-docs")).toHaveAttribute(
         "href",
-        /cli-run-location\.md/,
+        /cli-run-location\.design\.md/,
       );
 
       // The full width of the page, at its top, and nothing of it

@@ -24,7 +24,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// A release workflow's refs (docs/design/release-from-trunk.md §6):
+// A release workflow's refs (design/design/release-from-trunk.design.md §6):
 // release tags created, `latest` and `candidate` force-moved, and main
 // never rewritten.
 func TestCIRepoWriteAllowsReleaseRefsAndRefusesRewritingMain(t *testing.T) {

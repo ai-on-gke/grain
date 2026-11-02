@@ -22,7 +22,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// The kind tags a task can carry (docs/design/durable-tasks.md#DT-13):
+// The kind tags a task can carry (design/design/durable-tasks.design.md#DT-13):
 // the small fixed vocabulary a judgement agent describes a task by, and
 // the one a mutating call's expect is checked against. Each is read off a
 // field the record already has, so an agent saying "port" about a task

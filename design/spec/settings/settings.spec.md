@@ -503,7 +503,7 @@ This file is re-read per request and never exported (`pkg/staterepo/settings.go`
 - Policy: `-policy` (`grain_policy.yml`; see [`docs/local-policy.md`](../../../docs/local-policy.md)), `-local-scripts`, `-local-scripts-env-file`
 - Deprecated or removed: `-max-mergers` and `-max-ci-jobs` are ignored. `-cli-image`, `-cli-image-file` and `-cli-container-engine` are ignored. `-tunnel-*` and `-relay-*` refuse to start.
 
-`docs/grain-options.md` records the design options considered for the executor control channel. It is not a flag reference: `-flag-names` and each flag's help text are authoritative.
+`-flag-names` and each flag's help text are the authoritative flag reference.
 
 ## 11. Browser-local preferences (This browser → Preferences, `/settings/preferences`)
 

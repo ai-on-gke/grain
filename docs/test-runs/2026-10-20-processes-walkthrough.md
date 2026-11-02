@@ -1,6 +1,6 @@
 # 2026-10-20: Processes walkthrough, SET-2 test pass
 
-This is the test task for stage (b) of `docs/design/settings-panel.md`
+This is the test task for stage (b) of `design/design/settings-panel.design.md`
 (SET-2, at e4761b5). It checks `ui/e2e/processes-walkthrough.spec.js`
 and the stage's unit tests against the bullets the doc lists, fills the
 gaps, and records the run. The first run of the spec, made with the

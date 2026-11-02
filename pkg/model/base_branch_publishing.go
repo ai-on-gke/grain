@@ -141,7 +141,7 @@ type BaseBranchPublishing struct {
 // stopped publishing from, as of now: the finding the deployment health
 // response (and through it read_deployment_health) shows, and the one the
 // orchestrator raises `pipeline.not-publishing` notifications from
-// (docs/design/durable-tasks.md, DT-5), so the two cannot disagree.
+// (design/design/durable-tasks.design.md, DT-5), so the two cannot disagree.
 func (s *Store) BaseBranchPublishingFindings(ctx context.Context, now time.Time) ([]BaseBranchPublishing, error) {
 	rows, err := s.ListBaseBranchRelease(ctx)
 	if err != nil {

@@ -30,7 +30,7 @@ import (
 )
 
 // This file is CI's half of capability-reference minting
-// (docs/capabilities-spec.md §4.2.2-§4.2.4, §4.4.1); the agent task's
+// (design/spec/capabilities/capabilities.spec.md §4.2.2-§4.2.4, §4.4.1); the agent task's
 // half is pkg/orchestrator/capability_pass.go. A job whose capabilities
 // name references has them resolved against the attached capability
 // servers, checked against the deployment's capability policy as a CI
@@ -69,7 +69,7 @@ type ciHeldPass struct {
 // WithCICapabilityPorts gives service's grant admission the daemon's
 // capability port relay and the URL a sandbox reaches it at, which a
 // job's grants' ports and mcp_endpoints are carried into its sandbox
-// over (docs/capabilities-spec.md §5.2.4, §5.3).
+// over (design/spec/capabilities/capabilities.spec.md §5.2.4, §5.3).
 func WithCICapabilityPorts(service *ci.Service, relay *portforward.Relay, relayURL string) {
 	if service == nil || service.Engine == nil {
 		return

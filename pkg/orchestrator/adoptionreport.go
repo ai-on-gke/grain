@@ -27,7 +27,7 @@ import (
 // AdoptionReport is what this daemon's startup adoption pass did with the
 // runs a previous daemon left in run hosts (RecoverRunHosts): which it
 // adopted and which it lost, and why. The post-upgrade check reports it
-// beside the restart gap (docs/non-disruptive-upgrade.md, piece 6 step 6),
+// beside the restart gap (design/design/non-disruptive-upgrade.design.md, piece 6 step 6),
 // since the upgrade that caused the restart is the one that asks whether
 // the work came through it.
 type AdoptionReport struct {
@@ -330,7 +330,7 @@ func (r *AdoptionReport) describe() string {
 			which = "Any other lost run"
 		}
 		b.WriteString("\n" + which + " is a regression: a CLI whose run location carries it across a " +
-			"restart should have been adopted (docs/non-disruptive-upgrade.md, \"Which substrate carries which CLI\"). " +
+			"restart should have been adopted (design/design/non-disruptive-upgrade.design.md, \"Which substrate carries which CLI\"). " +
 			"Say which frameworks lost runs, and whether each lost run's task was re-queued.\n")
 	}
 	if len(r.Adopted) > 0 {

@@ -374,7 +374,7 @@ func isUnconfined(h agent.Host) bool {
 // to, exactly as an omitted one is.
 //
 // Each capability MCP server's tools are admitted too, spelled
-// mcp__<name>__<tool> (docs/capabilities-spec.md §5.2.4).
+// mcp__<name>__<tool> (design/spec/capabilities/capabilities.spec.md §5.2.4).
 func allowedTools(servers ...agent.CapabilityMCPServer) []string {
 	names := agent.PublishedToolNames()
 	for i, name := range names {
@@ -524,7 +524,7 @@ func disableAutoMemory() []string {
 // ANTHROPIC_BASE_URL, HTTPS_PROXY and the like describe the daemon's
 // network rather than the container's, so a deployment that wants them
 // in a run host sets them in its run-host image
-// (docs/non-disruptive-upgrade.md, "Run hosts").
+// (design/design/non-disruptive-upgrade.design.md, "Run hosts").
 var operatorVars = []string{
 	mcpToolTimeoutVar, mcpToolIdleTimeoutVar, autoMemoryVar, maxRetriesVar,
 }
@@ -968,7 +968,7 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 // ParseResult implements agent.ResultParser: the Result and error Run
 // would have returned for a run whose stream is stdout and which ended
 // with runErr, for a daemon adopting a run another daemon started in a
-// run host (docs/non-disruptive-upgrade.md, Stage 2). stdout is one
+// run host (design/design/non-disruptive-upgrade.design.md, Stage 2). stdout is one
 // exec's stream -- a run host holds one -- so it is its own last attempt,
 // and the session it names is the one the run leaves resumable.
 func (f *Framework) ParseResult(stdout string, runErr error) (*agent.Result, error) {

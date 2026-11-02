@@ -29,7 +29,7 @@ import (
 // A step whose sandbox channel stays down past the reattach timeout ends
 // the job errored with an "infra: sandbox channel lost" fault -- not a
 // failure charged to the tree -- and the steps after it do not run
-// (docs/design/grain-on-gke.md#GKE-3).
+// (design/design/grain-on-gke.design.md#GKE-3).
 func TestAStepThatLosesItsSandboxChannelConcludesTheJobErroredWithAnInfraFault(t *testing.T) {
 	var laterRan atomic.Bool
 	sb := &fakeSandboxes{

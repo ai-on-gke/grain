@@ -87,7 +87,7 @@ absent key and hands the job the whole set, as before.
 
 The providers on this page are the in-process ones in `pkg/capability/`, and
 CI keeps using them until runs are moved over to capability servers
-([docs/capabilities-spec.md](capabilities-spec.md)). Their capability-server
+([design/spec/capabilities/capabilities.spec.md](../design/spec/capabilities/capabilities.spec.md)). Their capability-server
 equivalents are already in the binary, served by `grain capability <name>`:
 `gcp` (`#gcp-key`, for `gcp-key` and `gcp-key:<name>`), `model-proxy`
 (`#model-proxy`, for the `<vendor>-proxy` capabilities), `git`
@@ -419,7 +419,7 @@ against grain's CI API listener, held to the routes of the scopes the job
 holds and to the job's own repository.
 
 `release-gate-read` gives a release workflow
-(`.grain/workflows/release-train.yml`, docs/design/release-from-trunk.md
+(`.grain/workflows/release-train.yml`, design/design/release-from-trunk.design.md
 §6) the deployment state it needs to choose a commit and judge a soak.
 It is the built-in preset `api:release-gate-read` (`ci:read`,
 `tasks:read`, `sandboxes:read`, and `tasks:from-template` limited to
@@ -435,7 +435,7 @@ It is the built-in preset `api:release-gate-read` (`ci:read`,
 
 No request it allows approves a release: that is
 `POST /api/repos/{owner}/{name}/pending-releases/{version}/approve`, which
-only a person may call (docs/design/release-from-trunk.md §4).
+only a person may call (design/design/release-from-trunk.design.md §4).
 
 The job finds the listener in `/home/debian/.grain-api/`:
 

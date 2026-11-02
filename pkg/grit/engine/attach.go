@@ -25,14 +25,14 @@ import (
 )
 
 // DefaultAttachmentCheckpoint is how often a running step's output cursor
-// is written back while it moves (docs/design/grain-on-gke.md#GKE-4: at
+// is written back while it moves (design/design/grain-on-gke.design.md#GKE-4: at
 // least every 10 s, and at step end).
 const DefaultAttachmentCheckpoint = 10 * time.Second
 
 // StepAttachment is where one running step's command stands in its
 // sandbox: the exec the sandbox's wrapper runs it as and how much of its
 // output has been read. It is what a restarted grain reattaches the step
-// by (docs/design/grain-on-gke.md, "Restart: reattach rather than
+// by (design/design/grain-on-gke.design.md, "Restart: reattach rather than
 // interrupt").
 type StepAttachment struct {
 	RunID string

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package grainserver is the in-process https://grain.dev/capabilities/grain
-// capability server (docs/design/unified-grants.md §1, §4): the host- and
+// capability server (design/design/unified-grants.design.md §1, §4): the host- and
 // controller-side diagnostic and database grants answered by grain itself
 // rather than by an external MCP server subprocess.
 package grainserver

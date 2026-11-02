@@ -20,7 +20,7 @@ prompt-extension: |
   - If a page cannot be rendered in your sandbox, stop and say so in the closing note. Do not claim the change works.
 
 # No port-branches or port-types: releases are cut from main
-# (docs/design/release-from-trunk.md), so main and candidate are no longer
+# (design/design/release-from-trunk.design.md), so main and candidate are no longer
 # paired and nothing is ported between them. candidate is a pointer grain's
 # release moves to the current release candidate, never the base of a pull
 # request: every change lands on main.

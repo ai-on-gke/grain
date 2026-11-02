@@ -30,7 +30,7 @@ import (
 // the same on every deployment, so a grant naming
 // https://grain.dev/capabilities/gcp#gcp-key carries across deployments,
 // templates and repos. Like any capability_id it is a name only: nothing
-// ever fetches it (docs/capabilities-spec.md §3.2).
+// ever fetches it (design/spec/capabilities/capabilities.spec.md §3.2).
 const CanonicalIDPrefix = "https://grain.dev/capabilities/"
 
 // CanonicalID is the canonical capability_id of the in-tree server called
