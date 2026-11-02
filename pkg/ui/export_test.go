@@ -17,6 +17,8 @@ package ui
 import (
 	"context"
 	"net"
+	"testing"
+	"time"
 )
 
 // What the external tests in this directory need to see of the inside.
@@ -59,4 +61,12 @@ func SetAccessCodeForTest(s *Server, code string) {
 // on ctx would get it in external mode.
 func RefuseConfigWriteForTest(c *Client, ctx context.Context, tables ...string) error {
 	return c.checkSettingsWritableUnrehearsed(ctx, tables...)
+}
+
+// SetCloudIdentityTimeoutForTest shortens the default group checker's
+// per-call timeout for the rest of t.
+func SetCloudIdentityTimeoutForTest(t *testing.T, d time.Duration) {
+	prev := cloudIdentityTimeout
+	cloudIdentityTimeout = d
+	t.Cleanup(func() { cloudIdentityTimeout = prev })
 }

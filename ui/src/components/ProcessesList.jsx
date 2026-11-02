@@ -524,7 +524,20 @@ export default function ProcessesList({
           onSaved={() =>
             Promise.all([onRefreshTemplates?.(), onRefreshSchedules?.()])
           }
-          onNewTask={onNewTaskFromTemplate}
+          // New Task has nowhere to fill a template's input fields, so
+          // one that declares them was opened on a form whose filing
+          // could only be refused ('field "Who" is required', 2026-11-02
+          // walkthrough). It goes through Use…, which asks for them, as
+          // the Template picker's own filter already says.
+          onNewTask={
+            onNewTaskFromTemplate &&
+            ((t) => {
+              if ((t?.fields || []).length === 0)
+                return onNewTaskFromTemplate(t);
+              onOpenTemplate(null);
+              setUsing(t.id);
+            })
+          }
           showError={showError}
         />
       )}

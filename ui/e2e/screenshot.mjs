@@ -44,6 +44,10 @@
 //                    loaded, before the shot -- to open a menu or expand
 //                    a collapsed group. Repeat it to click several in
 //                    order; one that matches nothing fails the run.
+//   --header HEADER  "Name: value" sent on every request the page makes
+//                    (Playwright's extraHTTPHeaders); repeat it for more.
+//                    For shooting a daemon as an identity-aware proxy's
+//                    caller: --header "X-Goog-IAP-JWT-Assertion: <jwt>".
 //   --look[=Q] LOOK  send the screenshots to Gemini and print what it sees:
 //                    for an agent whose file reader shows a PNG as bytes.
 //                    Needs GEMINI_API_KEY or ~/.gemini-api-key; Q replaces
@@ -93,6 +97,7 @@ function parseArgs(argv) {
     fullPage: false,
     look: process.env.LOOK ? DEFAULT_LOOK : null,
     click: process.env.CLICK ? [process.env.CLICK] : [],
+    headers: process.env.HEADER ? [process.env.HEADER] : [],
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -106,6 +111,10 @@ function parseArgs(argv) {
     }
     if (arg === "--click" || arg.startsWith("--click=")) {
       opts.click.push(arg.startsWith("--click=") ? arg.slice(8) : argv[++i]);
+      continue;
+    }
+    if (arg === "--header" || arg.startsWith("--header=")) {
+      opts.headers.push(arg.startsWith("--header=") ? arg.slice(9) : argv[++i]);
       continue;
     }
     const m = arg.match(
@@ -133,6 +142,12 @@ function parseArgs(argv) {
   }
   opts.demoArgs = (opts.demoArgs || "").split(/\s+/).filter(Boolean);
   if (opts.url && !opts.code) throw new Error("--url needs --code");
+  opts.extraHTTPHeaders = {};
+  for (const h of opts.headers) {
+    const at = h.indexOf(":");
+    if (at <= 0) throw new Error(`--header ${h}: want "Name: value"`);
+    opts.extraHTTPHeaders[h.slice(0, at).trim()] = h.slice(at + 1).trim();
+  }
   return opts;
 }
 
@@ -288,6 +303,7 @@ async function main() {
               colorScheme: theme,
               isMobile: width === "phone",
               hasTouch: width !== "desktop",
+              extraHTTPHeaders: opts.extraHTTPHeaders,
             });
             await context.addCookies(cookies);
             await context.addInitScript(

@@ -15,6 +15,7 @@
 package ui
 
 import (
+	"errors"
 	"log"
 	"strings"
 	"sync"
@@ -35,8 +36,9 @@ var (
 	refusedAssertionsLogged = map[string]bool{}
 )
 
-// logRefusedAssertion logs, once per issuer and audience, an assertion
-// this daemon refused and the issuer and audience it carried. Those are
+// logRefusedAssertion logs, once per issuer, audience and kind of
+// refusal (refusalKind), an assertion this daemon refused and the
+// issuer and audience it carried. Those are
 // read without verifying anything, and only to say what the operator
 // would have to configure if the proxy that sent it is theirs: it is
 // how a deployment behind a BeyondCorp tunnel or a new IAP backend
@@ -48,7 +50,10 @@ func logRefusedAssertion(tokenStr string, err error) {
 	if perr == nil {
 		iss, aud = claims.Issuer, strings.Join(claims.Audience, ",")
 	}
-	key := iss + "\x00" + aud
+	// The kind is part of the key so that a forged or tampered assertion
+	// (bad signature, unknown kid) for this deployment's own audience is
+	// still logged after an expired one for that audience was.
+	key := iss + "\x00" + aud + "\x00" + refusalKind(err)
 	refusedAssertionsMu.Lock()
 	seen := refusedAssertionsLogged[key]
 	if !seen && len(refusedAssertionsLogged) < 64 {
@@ -65,4 +70,28 @@ func logRefusedAssertion(tokenStr string, err error) {
 	log.Printf("ui: refused an %s (issuer %q, audience %q): %v -- if the proxy that sent it is this deployment's own, "+
 		"set -ui-iap-audience (GRAIN_IAP_AUDIENCE) and, for a proxy other than IAP, -ui-iap-issuer and -ui-iap-keys-url to match",
 		IAPAssertionHeader, iss, aud, err)
+}
+
+// refusalKind sorts a validator's error into one of a fixed handful of
+// kinds, so logRefusedAssertion's key stays bounded however the error's
+// own text varies (a kid, an expiry time).
+func refusalKind(err error) string {
+	for _, k := range []struct {
+		err  error
+		kind string
+	}{
+		{jwt.ErrTokenMalformed, "malformed"},
+		{jwt.ErrTokenSignatureInvalid, "signature"},
+		{jwt.ErrTokenUnverifiable, "unverifiable"},
+		{jwt.ErrTokenExpired, "expired"},
+		{jwt.ErrTokenNotValidYet, "not-yet-valid"},
+		{jwt.ErrTokenUsedBeforeIssued, "issued-in-future"},
+		{jwt.ErrTokenInvalidIssuer, "issuer"},
+		{jwt.ErrTokenRequiredClaimMissing, "claim-missing"},
+	} {
+		if errors.Is(err, k.err) {
+			return k.kind
+		}
+	}
+	return "other"
 }
