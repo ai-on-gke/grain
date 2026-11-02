@@ -75,7 +75,10 @@ test.describe("phone drawer signed-in row", () => {
     const email = row.getByTestId("phone-signed-in-email");
     await expect(email).toHaveText(LONG_EMAIL);
 
-    // Inside the drawer, below System, and not wider than it.
+    // Inside the drawer, below System, and not wider than it -- measured
+    // once the drawer has finished sliding in, so every box below is
+    // taken against the same position.
+    await expect.poll(async () => (await drawer.boundingBox())?.x).toBe(0);
     const drawerBox = await drawer.boundingBox();
     const rowBox = await row.boundingBox();
     const systemBox = await drawer
