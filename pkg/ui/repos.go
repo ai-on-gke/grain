@@ -1649,7 +1649,11 @@ func (c *Client) cleanRepoCICapabilities(ids []string) ([]string, error) {
 	clean := []string{}
 	for _, id := range ids {
 		canonicalID := id
-		if model.IsCapabilityRef(id) {
+		if target, ok := model.RepoReadTarget(id); ok {
+			canonicalID = model.RepoReadCapability(target)
+		} else if target, ok := model.RepoWriteTarget(id); ok {
+			canonicalID = model.RepoWriteCapability(target)
+		} else if model.IsCapabilityRef(id) {
 			// A capability server method, with its with: arguments: a
 			// CI job's grant admission mints it through its server
 			// (daemon.CiGrantReservations), so the repo may grant it
@@ -1663,10 +1667,6 @@ func (c *Client) cleanRepoCICapabilities(ids []string) ([]string, error) {
 				return nil, validationErrorf("ciCapabilities: %s", capabilityRefusal(normalized))
 			}
 			canonicalID = normalized
-		} else if target, ok := model.RepoReadTarget(id); ok {
-			canonicalID = model.RepoReadCapability(target)
-		} else if target, ok := model.RepoWriteTarget(id); ok {
-			canonicalID = model.RepoWriteCapability(target)
 		} else if !slices.Contains(allowed, id) {
 			return nil, validationErrorf("ciCapabilities: capability %q is not supported for CI", id)
 		}

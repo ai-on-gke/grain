@@ -1214,8 +1214,16 @@ export default function CapabilityServersPanel({
   // with no status at all is one no registry here reports (grain demo's
   // built-ins, say), which more reads will not change: it is read again
   // only a few times after loading or saving, not forever.
+  // A server just disabled is in the same position: the answer to
+  // Disable still carries the state it had before the daemon let go of
+  // it (attached, or pending), so it is read again until it says
+  // disabled rather than showing that state until a reload.
   const live = (servers || []).filter((s) => !s.config.disabled);
-  const pending = live.some((s) => s.status?.state === "pending");
+  const pending =
+    live.some((s) => s.status?.state === "pending") ||
+    (servers || []).some(
+      (s) => s.config.disabled && s.status && s.status.state !== "disabled",
+    );
   const unreported = live.some((s) => !s.status);
   const unreportedReads = useRef(0);
   const settling = unreported && unreportedReads.current < unreportedReadLimit;

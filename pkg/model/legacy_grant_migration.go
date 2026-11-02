@@ -216,3 +216,72 @@ func rewriteConsoleSessionGrantsMulti(ctx context.Context, tx *sql.Tx, renames m
 	}
 	return nil
 }
+
+// legacyRepoAccessRenames is migration 88's renames: every retired
+// repo-read:<repo> and repo-write:<repo> stored anywhere a retirement
+// rewrites, each to the repo#read / repo#write grant naming that
+// repository (RepoReadGrant, RepoWriteGrant). The names are parameterized,
+// so unlike every earlier retirement the table is read off the store
+// rather than written out. A name whose repository does not parse is left
+// alone, as it granted nothing before either.
+func legacyRepoAccessRenames(ctx context.Context, tx *sql.Tx) (map[string][]string, error) {
+	renames := map[string][]string{}
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if !strings.HasPrefix(name, RepoReadCapabilityPrefix) && !strings.HasPrefix(name, RepoWriteCapabilityPrefix) {
+			return
+		}
+		if repo, ok := RepoReadTarget(name); ok {
+			renames[name] = []string{RepoReadGrant(repo)}
+		} else if repo, ok := RepoWriteTarget(name); ok {
+			renames[name] = []string{RepoWriteGrant(repo)}
+		}
+	}
+	scan := func(query string, each func(string)) error {
+		rows, err := tx.QueryContext(ctx, query)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var v sql.NullString
+			if err := rows.Scan(&v); err != nil {
+				return err
+			}
+			each(v.String)
+		}
+		return rows.Err()
+	}
+	list := func(stored string) {
+		for _, name := range splitCapabilities(stored) {
+			add(name)
+		}
+	}
+	for _, q := range []struct {
+		query string
+		each  func(string)
+	}{
+		{"SELECT DISTINCT `capability` FROM `task_grant`", add},
+		{"SELECT DISTINCT `capability` FROM `template_grant`", add},
+		{"SELECT DISTINCT `capability` FROM `schedule_grant`", add},
+		{"SELECT `default_capabilities` FROM `grain_config`", list},
+		{"SELECT `default_capabilities` FROM `repo_config`", list},
+		{"SELECT `ci_capabilities` FROM `repo_config`", list},
+		{"SELECT `console_sessions` FROM `grain_config`", func(stored string) {
+			var sessions []struct{ Capabilities []string }
+			if json.Unmarshal([]byte(stored), &sessions) != nil {
+				return
+			}
+			for _, s := range sessions {
+				for _, name := range s.Capabilities {
+					add(name)
+				}
+			}
+		}},
+	} {
+		if err := scan(q.query, q.each); err != nil {
+			return nil, fmt.Errorf("finding retired repository access grants: %w", err)
+		}
+	}
+	return renames, nil
+}

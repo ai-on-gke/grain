@@ -3006,6 +3006,15 @@ func writeBodyError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Errorf("request body exceeds %d bytes", tooLarge.Limit))
 		return
 	}
+	// A task priority that is not a whole number an int holds (1.5,
+	// 1e3, "8", 1e20) is refused in the words a 0 is, rather than as
+	// Go's "cannot unmarshal number 1.5 into Go struct field
+	// CreateTaskRequest.priority of type int" (2026-11-02 walkthrough).
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) && typeErr.Field == "priority" && typeErr.Struct == "CreateTaskRequest" {
+		writeError(w, http.StatusBadRequest, errors.New(errPriorityNotPositive))
+		return
+	}
 	writeError(w, http.StatusBadRequest, err)
 }
 

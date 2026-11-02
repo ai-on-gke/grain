@@ -573,8 +573,15 @@ samp,
   flex: 1;
 }
 
+/* The chat fills what the body has left, but never less than a working
+   window: on a short screen -- a 320x568 phone, or a phone turned on its
+   side -- New chat's name field and Create button left it 2px tall, the
+   composer clipped inside it and impossible to tap. The window's floor
+   makes the chat's own basis (flex: 1 0 auto) tall enough, and the body
+   scrolls to it instead. The window's basis is 0px, not 0%, so a long
+   conversation still scrolls the message list rather than growing it. */
 .console-session-body .task-chat {
-  flex: 1;
+  flex: 1 0 auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -585,7 +592,8 @@ samp,
 
 .console-session-body .task-chat-window {
   height: auto;
-  flex: 1;
+  flex: 1 1 0px;
+  min-height: 14rem;
 }
 
 .console-session-capabilities {
@@ -4049,6 +4057,12 @@ fieldset legend {
   color: var(--text-tertiary);
   font-size: 0.8rem;
 }
+/* Who closed or reopened a task and why (model.TaskEvent): the reason is
+   whatever they typed, often a URL or a branch name, and an unbroken one
+   ran out of a phone's timeline item instead of wrapping inside it. */
+.timeline-transition-by {
+  overflow-wrap: anywhere;
+}
 /* The model an attempt ran on, on its meta line: a model id is one
    word to the reader, so a narrow line wraps before it, not inside it
    or inside the timestamp ahead of it. */
@@ -4573,6 +4587,14 @@ fieldset legend {
 }
 .task-chat-window .cs-message-list .cs-typing-indicator__text {
   color: var(--text-tertiary);
+}
+/* The kit's three bouncing dots loop for as long as a reply is awaited;
+   held still, the "is typing" text beside them says the same thing
+   (2026-11-02 responsive walkthrough). */
+@media (prefers-reduced-motion: reduce) {
+  .task-chat-window .cs-typing-indicator__dot {
+    animation: none;
+  }
 }
 /* The message list's own scroll bar (perfect-scrollbar, which the kit
    bundles and styles from the same palette -- its thumb was the "blue

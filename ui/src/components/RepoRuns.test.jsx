@@ -77,7 +77,9 @@ describe("RepoRuns", () => {
     // No column repeating the page's own subject in every row -- so the
     // branch is what opens the run.
     expect(screen.queryByRole("columnheader", { name: "Repo" })).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: "grain/task-1" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /^grain\/task-1, / }),
+    );
     expect(onOpenRun).toHaveBeenCalledWith("9f2c1a", "acme/widgets");
   });
 

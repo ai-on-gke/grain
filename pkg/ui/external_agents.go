@@ -138,9 +138,21 @@ func (c *Client) ListExternalAgentTokens(ctx context.Context) ([]ExternalAgentTo
 	return out, nil
 }
 
+func (c *Client) canIssuePersonExternalAgentToken(ctx context.Context, actor model.Principal) bool {
+	switch actor.Kind {
+	case model.PrincipalHuman:
+		return true
+	case model.PrincipalService:
+		return c.isExplicitlyAllowedServiceAccount(ctx, actor.ID)
+	default:
+		return false
+	}
+}
+
 // CreateExternalAgentToken issues a new scoped external agent credential.
 // Issuing a credential that includes any dangerous scope or a requires_person
-// scope set requires a human principal.
+// scope set requires a human principal or a service account the operator listed
+// explicitly in -ui-allowed-principals.
 func (c *Client) CreateExternalAgentToken(ctx context.Context, req CreateExternalAgentTokenRequest) (IssuedExternalAgentToken, error) {
 	name, err := model.ValidateExternalAgentName(req.Name)
 	if err != nil {
@@ -151,7 +163,13 @@ func (c *Client) CreateExternalAgentToken(ctx context.Context, req CreateExterna
 		return IssuedExternalAgentToken{}, validationErrorf("%v", err)
 	}
 	actor := c.actor(ctx)
-	if needsPerson && actor.Kind != model.PrincipalHuman && actor.Kind != model.PrincipalService {
+	if needsPerson && !c.canIssuePersonExternalAgentToken(ctx, actor) {
+		if actor.Kind == model.PrincipalService {
+			return IssuedExternalAgentToken{}, forbiddenErrorf(
+				"external agent credential %q includes a dangerous scope or a requires_person scope set: a service account may issue it only when listed explicitly in -ui-allowed-principals",
+				name,
+			)
+		}
 		return IssuedExternalAgentToken{}, forbiddenErrorf(
 			"external agent credential %q includes a dangerous scope or a requires_person scope set: only a person may issue it",
 			name,
@@ -237,7 +255,13 @@ func (c *Client) RotateExternalAgentToken(ctx context.Context, id string) (Issue
 		return IssuedExternalAgentToken{}, validationErrorf("%v", err)
 	}
 	actor := c.actor(ctx)
-	if needsPerson && actor.Kind != model.PrincipalHuman && actor.Kind != model.PrincipalService {
+	if needsPerson && !c.canIssuePersonExternalAgentToken(ctx, actor) {
+		if actor.Kind == model.PrincipalService {
+			return IssuedExternalAgentToken{}, forbiddenErrorf(
+				"external agent credential %q includes a dangerous scope or a requires_person scope set: a service account may rotate it only when listed explicitly in -ui-allowed-principals",
+				existing.Name,
+			)
+		}
 		return IssuedExternalAgentToken{}, forbiddenErrorf(
 			"external agent credential %q includes a dangerous scope or a requires_person scope set: only a person may rotate it",
 			existing.Name,

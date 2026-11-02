@@ -49,6 +49,9 @@ type CapabilitySyntax struct {
 	// IsRepoAccess reports whether a name is `repo-read:` or
 	// `repo-write:` repository access (ci.IsRepoAccessCapability).
 	IsRepoAccess func(id string) bool
+	// IsRepoRead reports whether a name is read-only repository access
+	// (`repo-read:` or `repo#read`, ci.IsRepoReadCapability).
+	IsRepoRead func(id string) bool
 	// DeclaredOnly reports whether a job's declaring id is what grants
 	// it, subject to an authority other than the repository's CI
 	// capabilities list (pkg/ci's declaredOnly): repository access,
@@ -73,11 +76,18 @@ var Capabilities = CapabilitySyntax{
 		return list, nil
 	},
 	IsRepoAccess: isRepoAccess,
+	IsRepoRead:   isRepoRead,
 	DeclaredOnly: func(id string) bool { return isRepoAccess(id) || IsCapabilityRef(id) },
 }
 
+func isRepoRead(id string) bool {
+	return strings.HasPrefix(id, "repo-read:") ||
+		strings.HasPrefix(id, "https://grain.dev/capabilities/repo#read=")
+}
+
 func isRepoAccess(id string) bool {
-	return strings.HasPrefix(id, "repo-read:") || strings.HasPrefix(id, "repo-write:")
+	return isRepoRead(id) || strings.HasPrefix(id, "repo-write:") ||
+		(strings.HasPrefix(id, "https://grain.dev/capabilities/repo#write=") && strings.Contains(id, `"repo":`))
 }
 
 // IsCapabilityRef is model.IsCapabilityRef: a capability reference rather

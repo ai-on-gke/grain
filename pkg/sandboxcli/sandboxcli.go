@@ -374,7 +374,10 @@ func (c *sandboxCLI) run(args []string) error {
 		}
 		cmd += " " + rest[0]
 		rest = rest[1:]
-		if cmd == "memory doc" && len(rest) > 0 && rest[0] == "write" {
+		if cmd == "memory doc" {
+			if len(rest) == 0 || rest[0] != "write" {
+				return usageError{fmt.Sprintf("grain memory doc: the command is 'grain memory doc write' (or doc-write)\n\n%s", sandboxCommandHelp["memory"])}
+			}
 			cmd = "memory doc-write"
 			rest = rest[1:]
 		}
@@ -389,6 +392,7 @@ func (c *sandboxCLI) run(args []string) error {
 		return usageError{fmt.Sprintf("grain %s: unknown command\n\n%s", cmd, sandboxCommandHelp[strings.Fields(cmd)[0]])}
 	}
 	p, parseErr := parseSandboxArgs(rest)
+	p.cmd = cmd
 	// A flag the command does not take is the error to report, even when
 	// it is the last argument and so has no value either.
 	if err := p.only(cmd, allowed...); err != nil {
@@ -415,6 +419,11 @@ func (c *sandboxCLI) run(args []string) error {
 		uri, err := p.arg(0, "uri")
 		if err != nil {
 			return err
+		}
+		if n, err := strconv.Atoi(p.get("page")); p.has("page") && err == nil && n == 0 {
+			// The namespace refuses an empty page too, but only once the
+			// proxy has been asked, and with exit status 1.
+			return usageError{fmt.Sprintf("grain read: --page %q is not a page size: it takes a positive integer\n", p.get("page"))}
 		}
 		if !isPipelineChangesURI(uri) {
 			for _, name := range pipelineChangesFlags {
@@ -545,9 +554,6 @@ func (c *sandboxCLI) run(args []string) error {
 	case "quarantine":
 		return c.quarantine(p)
 	case "metrics":
-		if err := p.only("metrics", "window", "since", "until", "repo", "author"); err != nil {
-			return err
-		}
 		if section := p.optArg(0); section != "" {
 			return c.fs("deploy://metrics/"+section, metricsQuery(p))
 		}
@@ -555,8 +561,12 @@ func (c *sandboxCLI) run(args []string) error {
 	case "health":
 		return c.fs("deploy://health", nil)
 	case "log":
-		if err := p.only("log", "source", "since", "until", "priority", "min-priority", "contains", "max-lines", "lines", "tail"); err != nil {
-			return err
+		for _, name := range []string{"max-lines", "lines", "n"} {
+			if n, err := strconv.Atoi(p.get(name)); p.has(name) && err == nil && n == 0 {
+				// read_grain_log refuses no entries too, but only once the
+				// proxy has been asked, and with exit status 1.
+				return usageError{fmt.Sprintf("grain log: %s %q is not a count of entries: it takes a positive integer\n", flagName(name), p.get(name))}
+			}
 		}
 		uri := "deploy://grain.log"
 		if source := grainLogSource(p); source != "" {
@@ -839,6 +849,9 @@ func (c *sandboxCLI) ciArtifact(p sandboxArgs) error {
 // sandboxArgs is a command's arguments: flags anywhere among positionals,
 // as --name value, --name=value, -n value, or a bare boolean (-i).
 type sandboxArgs struct {
+	// cmd is the command they are for ("ls", "ci log"), which a usage
+	// error names.
+	cmd        string
 	positional []string
 	flags      map[string]string
 	multiFlags map[string][]string
@@ -888,9 +901,20 @@ func parseSandboxArgs(args []string) (sandboxArgs, error) {
 
 func (p sandboxArgs) arg(i int, name string) (string, error) {
 	if i >= len(p.positional) {
-		return "", fmt.Errorf("missing <%s>: run with --help for usage", name)
+		return "", p.missing("<" + name + ">")
 	}
 	return p.positional[i], nil
+}
+
+// missing is the usage error for a command line without what, a
+// positional argument the command cannot run without: exit status 2,
+// like an unknown flag, before the proxy is asked.
+func (p sandboxArgs) missing(what string) error {
+	cmd := p.cmd
+	if cmd == "" {
+		cmd = "<command>"
+	}
+	return usageError{fmt.Sprintf("grain %s: missing %s; run 'grain %s --help' for usage\n", cmd, what, cmd)}
 }
 
 func (p sandboxArgs) optArg(i int) string {

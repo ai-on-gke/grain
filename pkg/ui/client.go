@@ -404,6 +404,13 @@ func (c *Client) capabilityByID(id string) (Capability, bool) {
 			return Capability{}, false
 		}
 		ref := model.CapabilityGrantRef(id)
+		// repo#read and repo#write {repo} are CI-only repository access
+		// grants; only repo#write {refs, force} (git-push-any-ref) is a
+		// task/template grant.
+		if ref == model.RepoReadRef || model.IsRepoAccessGrant(id) ||
+			(ref == model.RepoWriteRef && !model.IsGitPushAnyRefGrant(id)) {
+			return Capability{}, false
+		}
 		return Capability{ID: id, Name: ref, Description: "Granted by the capability server " + ref}, true
 	}
 	for _, capability := range c.Config.Capabilities {
@@ -4069,7 +4076,9 @@ func (r *UpdateTaskRequest) UnmarshalJSON(data []byte) error {
 		} else {
 			var n int
 			if err := json.Unmarshal(aux.RawPriority, &n); err != nil {
-				return err
+				// 1.5, 1e3, a string, a number past int: the priority
+				// wording rather than Go's own decoding error.
+				return errors.New(errPriorityNotPositive)
 			}
 			r.Priority = &n
 		}
@@ -5536,7 +5545,10 @@ func (c *Client) commentWithAuthor(ctx context.Context, id, body string, uploads
 		return err
 	}
 	actor := c.actor(ctx)
-	if trimmed := strings.TrimSpace(author); trimmed != "" {
+	// An author naming the request's own principal keeps its kind: a
+	// verified *.gserviceaccount.com caller is a service principal, as it
+	// is on the tasks it files and closes, not a human.
+	if trimmed := strings.TrimSpace(author); trimmed != "" && trimmed != actor.ID {
 		actor = model.Principal{Kind: model.PrincipalHuman, ID: trimmed}
 	}
 	return c.addAttributedComment(ctx, id, body, attachments, model.Attribution{Actor: actor}, now, reopenAck)
@@ -6669,7 +6681,12 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
 		changed = (o.ClosedAt == nil) == closed
 		if closed {
-			o.ClosedAt = &now
+			// A task already closed keeps the stamp it has: moving it
+			// would leave the recorded close standing beside a second,
+			// unattributed closed step at the new stamp.
+			if o.ClosedAt == nil {
+				o.ClosedAt = &now
+			}
 			obs = o
 			return
 		}

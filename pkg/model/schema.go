@@ -402,11 +402,18 @@ import "strconv"
 // importer passes over a table this build lacks, so a dump carrying
 // either imports without it.
 //
-// 88 rebuilds `merge_batch` with `task_id` in its primary key, so one
+// 88 rewrites stored `repo-read:<repo>` and `repo-write:<repo>` grants,
+// `repo_config`.`ci_capabilities` included, to
+// `https://grain.dev/capabilities/repo#read={"repo":"<repo>"}` and
+// `#write={"repo":"<repo>"}`: the in-process reporead and repowrite
+// providers are retired for the repo server's methods, whose grant carries
+// the CI-only rule and write's event gate itself.
+//
+// 89 rebuilds `merge_batch` with `task_id` in its primary key, so one
 // branch can hold an overlap re-check for each of several changes at once
 // (grain/task-2390). The rows are carried across with an empty task_id,
 // which the queue still reads, re-validates and cleans up as before.
-const SchemaVersion = 88
+const SchemaVersion = 89
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the
@@ -4011,7 +4018,7 @@ const apiScopeSetTable = `CREATE TABLE IF NOT EXISTS ` + "`api_scope_set`" + ` (
   PRIMARY KEY (` + "`name`" + `)
 )`
 
-// mergeBatchTable is merge_batch's definition, named so that migration 88
+// mergeBatchTable is merge_batch's definition, named so that migration 89
 // (Migrations) can create the table it rebuilds from the very statement
 // a fresh store is created with. task_id joined the primary key there:
 // one row per change rather than per branch (grain/task-2390).

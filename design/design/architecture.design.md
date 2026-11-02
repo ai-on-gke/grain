@@ -8,7 +8,7 @@ Each section links to the specifications and reference documents that define ind
 
 - **Settings and configuration:** [`settings.design.md`](settings.design.md) and [`design/spec/settings/`](../spec/settings/)
 - **Authentication and operator attribution:** [`authentication.design.md`](authentication.design.md), [`operator-attribution.design.md`](operator-attribution.design.md), and [`design/spec/operator-attribution/`](../spec/operator-attribution/)
-- **Contributions and contributor attribution:** [`contributions.design.md`](contributions.design.md) and [`attribution.design.md`](attribution.design.md)
+- **Contributions and contributor attribution:** [`contributions.playbook.md`](../playbook/contributions.playbook.md) and [`attribution.design.md`](attribution.design.md)
 - **Standing director sessions and external CLIs:** [`director.design.md`](director.design.md), [`design/spec/director/`](../spec/director/), and [`external-cli.design.md`](external-cli.design.md)
 - **Task priorities:** [`task-priorities.design.md`](task-priorities.design.md)
 - **Capabilities, sandboxes, and agent API contracts:** [`design/spec/capabilities/capabilities.spec.md`](../spec/capabilities/capabilities.spec.md), [`docs/sandbox-image-contract.md`](../../docs/sandbox-image-contract.md), [`docs/agent-api.md`](../../docs/agent-api.md), and [`design/design/non-disruptive-upgrade.design.md`](non-disruptive-upgrade.design.md)
@@ -259,7 +259,7 @@ sequenceDiagram
 
 ### A task's lifecycle
 
-Tasks enter from several sources: the UI and REST API, `propose_task` proposals from running agents, schedules and path triggers, adopted external pull requests, or forge issues. For how design-driven work enters a repository and how contributors are credited, see [`contributions.design.md`](contributions.design.md) and [`attribution.design.md`](attribution.design.md).
+Tasks enter from several sources: the UI and REST API, `propose_task` proposals from running agents, schedules and path triggers, adopted external pull requests, or forge issues. For how design-driven work enters a repository and how contributors are credited, see [`contributions.playbook.md`](../playbook/contributions.playbook.md) and [`attribution.design.md`](attribution.design.md).
 
 ```mermaid
 flowchart TD
