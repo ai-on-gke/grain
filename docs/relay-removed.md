@@ -23,7 +23,7 @@ from grain completely. That removed:
   `cloudrun-relay` bootstrap playbook, and the `relay image` CI job that
   built `Dockerfile.relay`.
 
-Remote executors still connect directly to the daemon over TCP/TLS
+Remote executors have since been removed too ([executors-removed.md](executors-removed.md)). Until then they connected directly to the daemon over TCP/TLS
 (`-executor-addr`) or HTTP upgrade on `/_grain/executor`,
 `/api/executors/connect`, and `/api/executors/stream`. On GCP
 (`deploy/terraform/gcp`), reach the daemon over

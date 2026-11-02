@@ -374,7 +374,9 @@ grain hostd -server https://<grain-host> -token-file /etc/grain/hostd.token
 ```
 
 The remote model executors (`grain executor` / `grain model-server`,
-`scripts/run-remote-executor.sh`) were removed.
+`scripts/run-remote-executor.sh`) were removed; see
+[docs/executors-removed.md](docs/executors-removed.md) for what a remote
+hostd does and does not do yet.
 
 ## Documentation
 
