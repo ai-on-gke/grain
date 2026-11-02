@@ -97,7 +97,7 @@ func TestWalkthroughPushDuringRecheckIsNotMergedOnThatRecheck(t *testing.T) {
 	if mergedBranch(fix.sim, branch) {
 		t.Fatalf("the head pushed after the queue cleared %s merged on the re-check of %s", branch, cleared)
 	}
-	if again, err := store.GetMergeBatch(ctx, fix.repo, "main"); err != nil {
+	if again, err := recheckOn(ctx, store, fix.repo, "main"); err != nil {
 		t.Fatal(err)
 	} else if again != nil && again.Members[0].HeadSHA != cleared {
 		t.Fatalf("the queue re-checked the uncleared head %s", again.Members[0].HeadSHA)

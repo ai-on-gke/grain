@@ -1045,8 +1045,8 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	// column filled, for the reason above -- and with several members, so
 	// the JSON column carries more than one element on the round trip.
 	if err := store.PutMergeBatch(ctx, model.MergeBatch{
-		Repo: model.RepoRef{Owner: "owner", Name: "payments-api"}, Branch: "main",
-		Ref:        model.MergeBatchRef("eu", "main"),
+		Repo: model.RepoRef{Owner: "owner", Name: "payments-api"}, Branch: "main", TaskID: "a1b2",
+		Ref:        model.MergeRecheckRef("eu", "a1b2", "main"),
 		BaseCommit: "0123456789abcdef0123456789abcdef01234567",
 		Commit:     "89abcdef0123456789abcdef0123456789abcdef",
 		Members: []model.MergeBatchMember{

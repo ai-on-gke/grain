@@ -20,10 +20,13 @@ import "time"
 // ref holding a base branch with several queued changes merged into it,
 // and grain CI's verdict about that one tree (grain/task-294).
 //
-// One row per (repo, branch), because a branch has at most one batch in
-// flight: the members are held out of the ordinary one-at-a-time merge
-// while it runs, and a second batch against the same base would be
-// testing a tree the first one is about to move.
+// One row per (repo, branch, task). It was one per (repo, branch) while a
+// batch of several changes was what the row described: a second batch
+// against the same base would have been testing a tree the first was
+// about to move. Batching is retired (grain/task-1023), and a row is now
+// one change's overlap re-check, which is re-validated against the live
+// tip when it concludes (orchestrator.advanceMergeRecheck), so re-checks
+// of different changes no longer wait on each other (grain/task-2390).
 //
 // # What it buys
 //
@@ -65,6 +68,13 @@ import "time"
 type MergeBatch struct {
 	Repo   RepoRef
 	Branch string
+	// TaskID is the change an overlap re-check is about, and the third
+	// part of the row's key (grain/task-2390): batching is retired, every
+	// row the queue writes now is one change's re-check, and two
+	// overlapping changes on one branch are re-checked side by side, each
+	// on a ref of its own (MergeRecheckRef). "" is a row written before
+	// the key had a task in it.
+	TaskID string
 	// Ref is the throwaway branch the batch was built on --
 	// MergeBatchRef, one per base branch, force-reset to the base each
 	// time a batch forms. Nobody's pull request points at it and nothing
@@ -326,6 +336,24 @@ func MergeBatchRef(deploymentID, branch string) string {
 		return "grain-merge-queue/" + branch
 	}
 	return "grain-merge-queue/" + deploymentID + "/" + branch
+}
+
+// MergeRecheckRef is the throwaway ref one change's overlap re-check is
+// built on: branch's tip with taskID's pull request merged into it. One
+// per change rather than one per branch (MergeBatchRef), so overlapping
+// changes on one branch are re-checked side by side (grain/task-2390).
+//
+// It keeps MergeBatchRef's prefix, which is how a person or an agent finds
+// the queue's own runs (`grain ci list -ref grain-merge-queue/`), with a
+// `recheck` segment after the deployment. Git cannot hold a ref and a ref
+// beneath it at once, so the per-change refs sit under a segment of their
+// own rather than under MergeBatchRef's grain-merge-queue/<deployment>/main,
+// which a deployment upgrading across this may still hold. Only a
+// base branch literally named `recheck` could collide, and only with a
+// branch-wide ref left over from before. The task id comes before the
+// branch because a branch name may contain slashes and a task id does not.
+func MergeRecheckRef(deploymentID, taskID, branch string) string {
+	return MergeBatchRef(deploymentID, "recheck/"+taskID+"/"+branch)
 }
 
 // DefaultMergeBatchSize is how many queued changes grain will speculate

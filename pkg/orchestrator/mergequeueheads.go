@@ -22,33 +22,40 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// MergeQueueHeads reports the branches at the front of each repository's
-// merge queues, keyed by "owner/name" -- one per lane (mergelane.go: each
-// base branch of a repository is a queue of its own), and the same queues,
-// in the same order, SyncPullRequests itself acts on (queueOrder,
-// mergeWalk). A repository merging into `main` and `candidate` at once
-// has two heads, and both verdicts unblock somebody.
+// MergeQueueHeads reports the branches whose CI verdict is the last thing
+// standing between them and a merge, keyed by "owner/name" and then by
+// branch: every member of every lane (mergelane.go) that is otherwise
+// ready to merge, plus the base repairs and fault owners the queue is
+// waiting on.
 //
-// It reads the store and nothing else: membership and position are both
-// derived facts (isQueueMember over auto-merge, fix-task and blocked-at
-// state, and Task.OrderKey, which is the backlog's own order), so
+// It used to name only the front of each lane. That was the queue's own
+// order when a lane merged one change at a time and every member behind
+// the front waited on it. Members no longer wait on each other
+// (mergeWalk, grain/task-2346): each merges the moment the predicate
+// admits it, so any one of them going green unblocks a merge, and none
+// unblocks anyone else's. Naming one of them would rank its CI above
+// changes that merge just as soon and help nobody behind it. So every
+// member that is otherwise ready (readyButForCI) ranks the same. A
+// member something else is still holding does not: its verdict merges
+// nothing until a person approves it or its repair finishes.
+//
+// It reads the store and nothing else: membership is a derived fact
+// (isQueueMember over auto-merge, fix-task and blocked-at state), so
 // answering this needs no GitHub round trip and no cycle to have run
 // recently. That is what makes it something another part of the daemon can
 // ask on its own schedule.
 //
-// grain CI is the caller (cmd/grain's ciMergeQueuePriority). The change at
-// the front of a queue is the one whose verdict unblocks everything behind
-// it, so when the deployment's sandboxes are short, its jobs are the ones
-// worth spending them on first -- CI time converted into merges rather
-// than into progress on four branches at once (ci.PriorityMergeHead,
-// grain/task-316).
+// grain CI is the caller (cmd/grain's ciMergeQueuePriority). When the
+// deployment's sandboxes are short, the jobs of a change that merges on
+// its verdict are the ones worth spending them on first -- CI time
+// converted into merges rather than into progress on branches that cannot
+// merge yet (ci.PriorityMergeHead, grain/task-316).
 //
 // A repository with nothing queued is absent rather than empty. A link
 // whose ref will not parse is skipped and reported, exactly as the
 // reconciler treats one: nothing can ever be done with a pull request
-// whose repo and number are unreadable, and it can never be anybody's
-// head, so one malformed row must not cost every other repository its
-// answer.
+// whose repo and number are unreadable, so one malformed row must not
+// cost every other repository its answer.
 func MergeQueueHeads(ctx context.Context, store *model.Store) (map[string]map[string]bool, error) {
 	links, err := store.OpenPullRequestLinks(ctx)
 	if err != nil {
@@ -83,11 +90,14 @@ func MergeQueueHeads(ctx context.Context, store *model.Store) (map[string]map[st
 		}
 		heads[repo][branch] = true
 	}
-	for lane, e := range laneHeads(queueOrder(entries)) {
+	for _, e := range queueOrder(entries) {
+		if !readyButForCI(e) {
+			continue
+		}
 		// The repo the change is queued against, and the branch it is on:
 		// the two halves of what identifies a CI run (ci.Request's Repo
 		// and Ref).
-		addHead(laneRepo(lane), e.task.BranchName())
+		addHead(laneRepo(laneOf(e)), e.task.BranchName())
 	}
 	// Grant merge-head CI priority to active base-repair / FixesBaseBranch
 	// tasks and to any fault-owner task that another entry in the queue is
@@ -135,17 +145,14 @@ func MergeQueueHeads(ctx context.Context, store *model.Store) (map[string]map[st
 	return heads, nil
 }
 
-// laneHeads is the first entry of each lane in members, by the lane each
-// task declares (laneOf with nothing read). It is reconcileSync's own
-// heads (mergeWalk.claimHead) for every task that names its base; a task
-// that does not is laned as its repository's default branch.
-func laneHeads(members []queueEntry) map[string]queueEntry {
-	heads := map[string]queueEntry{}
-	for _, e := range members {
-		lane := laneOf(e)
-		if _, ok := heads[lane]; !ok {
-			heads[lane] = e
-		}
+// readyButForCI is whether a queue member's own CI verdict is what it is
+// waiting on, as far as the store can say: no approval is outstanding and
+// no repair the queue asked for is still being worked on its branch. A
+// member held by either merges nothing when its CI goes green, so its jobs
+// are not worth putting ahead of one that does.
+func readyButForCI(e queueEntry) bool {
+	if len(model.PendingApprovals(e.task)) > 0 {
+		return false
 	}
-	return heads
+	return e.obs == nil || !e.obs.RepairInFlight()
 }

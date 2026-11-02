@@ -1704,11 +1704,15 @@ func TestSyncPullRequestsGivesUpOnAQueueHeadWhoseChecksNeverFinish(t *testing.T)
 	}
 }
 
-// The clock runs per pull request, not per queue position. Every entry's
-// checks are timed on every cycle, head or not, so a repo whose CI is
-// wedged for everything in it clears in one deadline rather than in one
-// deadline per queued task -- which is what timing only the head would
-// have cost, on exactly the outage that produces the most queued tasks.
+// The clock runs per pull request, not per queue position, and so does
+// the escalation. Every entry's checks are timed on every cycle, and a
+// stall is about that one pull request's own checks, so every member
+// whose deadline has passed is handed to a person on the same cycle
+// (grain/task-2390) -- not only the member the walk read first. Members
+// merge independently of each other (grain/task-2346), so a later
+// member's stall used to stay hidden for as long as an earlier member
+// kept being read first; and a repo whose CI is wedged for everything in
+// it clears in one deadline rather than in one deadline per queued task.
 func TestSyncPullRequestsTimesStalledChecksBehindTheQueueHeadToo(t *testing.T) {
 	deadline := 2 * time.Hour
 	defer orchestrator.SetCheckStallDeadline(deadline)()
@@ -1731,34 +1735,17 @@ func TestSyncPullRequestsTimesStalledChecksBehindTheQueueHeadToo(t *testing.T) {
 		t.Fatalf("SyncPullRequests once the deadline elapsed: %v", err)
 	}
 
-	obs, err := store.GetObservation(ctx, first.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if obs == nil || obs.MergeQueueBlockedAt == nil {
-		t.Fatal("the queue head was not given up on")
-	}
-	// The second task was never the head, so nothing has been said about
-	// it yet -- but its own clock has been running since the same cycle
-	// the head's was, so the very next cycle, with no further waiting,
-	// gives up on it too.
-	obs, err = store.GetObservation(ctx, second.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if obs != nil && obs.MergeQueueBlockedAt != nil {
-		t.Fatal("gave up on a task that was not the queue head")
-	}
-
-	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(deadline)); err != nil {
-		t.Fatalf("SyncPullRequests on the cycle the second task became head: %v", err)
-	}
-	obs, err = store.GetObservation(ctx, second.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if obs == nil || obs.MergeQueueBlockedAt == nil {
-		t.Fatal("the second task waited out a second deadline of its own after being promoted")
+	for _, task := range []model.Task{first, second} {
+		obs, err := store.GetObservation(ctx, task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if obs == nil || obs.MergeQueueBlockedAt == nil {
+			t.Errorf("%s's checks stalled past the deadline, and it was not handed to a person", task.ID)
+		}
+		if bodies := commentBodies(t, ctx, store, task.ID); len(bodies) != 1 {
+			t.Errorf("%s: want one stall comment, got %q", task.ID, bodies)
+		}
 	}
 }
 
