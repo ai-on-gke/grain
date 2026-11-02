@@ -17,6 +17,8 @@ package ui
 import (
 	"context"
 	"net"
+	"testing"
+	"time"
 )
 
 // What the external tests in this directory need to see of the inside.
@@ -68,3 +70,11 @@ func RefuseConfigWriteForTest(c *Client, ctx context.Context, tables ...string) 
 // FindGrainBinary is findGrainBinary, for tests that check what the
 // executor binary endpoints serve.
 var FindGrainBinary = findGrainBinary
+
+// SetCloudIdentityTimeoutForTest shortens the default group checker's
+// per-call timeout for the rest of t.
+func SetCloudIdentityTimeoutForTest(t *testing.T, d time.Duration) {
+	prev := cloudIdentityTimeout
+	cloudIdentityTimeout = d
+	t.Cleanup(func() { cloudIdentityTimeout = prev })
+}
