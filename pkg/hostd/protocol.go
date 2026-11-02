@@ -95,6 +95,11 @@ type Hello struct {
 	Running      string `json:"running,omitempty"`
 	Current      string `json:"current,omitempty"`
 	CurrentBuild string `json:"current_build,omitempty"`
+	// Capacity and Labels are the allowlist's capacity: and labels:, for
+	// the daemon routing host work to this hostd and holding it to its
+	// capacity. Set by hostd alone.
+	Capacity int               `json:"capacity,omitempty"`
+	Labels   map[string]string `json:"labels,omitempty"`
 }
 
 // ThisHello is this build's Hello; build is its version string.

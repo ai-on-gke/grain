@@ -166,3 +166,18 @@ func TestOnlyTheSameHostdReplacesItsSession(t *testing.T) {
 		t.Errorf("ws-b after ws-a reconnected = %+v, want its session untouched (%+v)", after, before)
 	}
 }
+
+// A hostd's hello carries its allowlist's capacity and labels, which is
+// how the daemon learns them.
+func TestHelloCarriesTheAllowlistsCapacityAndLabels(t *testing.T) {
+	ts := startServer(t, "capacity: 2\nlabels:\n  os: linux\n", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	h, err := ts.client.Hello(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Capacity != 2 || h.Labels["os"] != "linux" {
+		t.Errorf("hello = %+v, want capacity 2 and os=linux", h)
+	}
+}
