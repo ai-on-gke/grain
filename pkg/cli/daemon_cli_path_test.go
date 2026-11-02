@@ -34,7 +34,7 @@ import (
 func codexStubIn(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "codex")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\necho 'codex-cli "+codex.ReviewedCLIVersion+"'\n"), 0o700); err != nil {
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+`if [ "$1 $2" = "debug models" ]; then echo '{"models":[{"slug":"gpt-test"}]}'; exit 0; fi`+"\necho 'codex-cli "+codex.ReviewedCLIVersion+"'\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return path

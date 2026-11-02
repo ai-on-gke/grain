@@ -590,10 +590,10 @@ func TestBuildCodexFrameworkDetachedSharesAuthFileAndDefersMCPServer(t *testing.
 		t.Fatal(err)
 	}
 	fakeCodex := filepath.Join(t.TempDir(), "codex")
-	if err := os.WriteFile(fakeCodex, []byte("#!/bin/sh\necho 'codex-cli "+codex.ReviewedCLIVersion+"'\n"), 0o755); err != nil {
+	if err := os.WriteFile(fakeCodex, []byte("#!/bin/sh\n"+`if [ "$1 $2" = "debug models" ]; then echo '{"models":[{"slug":"gpt-test"}]}'; exit 0; fi`+"\necho 'codex-cli "+codex.ReviewedCLIVersion+"'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	allowlist := fmt.Sprintf("clis:\n  codex-detached:\n    path: %s\n    paths_under: [%%[2]s, %s]\n    cwd_under: [%%[2]s, %s]\n# %%[1]s\n", fakeCodex, dataDir, os.TempDir())
+	allowlist := fmt.Sprintf("clis:\n  codex-detached:\n    path: %s\n    env: [CODEX_HOME, CODEX_EXEC_SERVER_URL, OPENAI_API_KEY]\n    paths_under: [%%[2]s, %s, %s]\n    cwd_under: [%%[2]s, %s]\n# %%[1]s\n", fakeCodex, dataDir, os.TempDir(), os.TempDir())
 	socket := startTestHostd(t, allowlist)
 	t.Setenv("TMPDIR", t.TempDir())
 	cfg := withExecutor(Config{DataDir: dataDir, HostdSocket: socket}, inContainer, nil)
