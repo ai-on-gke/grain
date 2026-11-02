@@ -8,7 +8,7 @@ Attribution and task ownership are defined in [`attribution.design.md`](attribut
 
 **Agents own code** Agents own the actual code. Humans may direct agents to write code a specific way, or review code from agents where appropriate, but agents can change code without needing human input. However, they are required to maintain compliance with the designs and specs. All code written by agents is passed through at least one additional agent review to ensure it remains compliant with the repos goals, processes and standards.
 
-**Processes are as important as code** As with normal software projects, the processes and rules of the repository are even more important than the code itself. Review processes, qualification suites, testing procedures, etc are all designs that humans must curate and approve. The implementation of these processes, as with standard human development, is the way we enforce quality on top of stochastic programming.
+**Processes are even more important than code** As with normal software projects, the processes and rules of the repository are even more important than the code itself. Review processes, qualification suites, testing procedures, etc are all designs that humans must curate and approve. The implementation of these processes, as with standard human development, is the way we enforce quality on top of stochastic programming.
 
 ## The design folder
 
