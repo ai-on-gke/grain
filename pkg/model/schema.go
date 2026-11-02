@@ -414,13 +414,18 @@ import "strconv"
 // (grain/task-2390). The rows are carried across with an empty task_id,
 // which the queue still reads, re-validates and cleans up as before.
 //
-// 90 adds a `<p>_source` column beside every `<p>_kind`/`<p>_id` principal
+// 90 changes no table: it folds retired 1-to-1 preset capability entries in
+// `grain_config`.`capability_policy`'s catalogue from `inProcess[<retired>]`
+// into `apiScopes.presets[<preset>]`, merging restrictions conservatively when
+// both exist, and rewrites retired task defaults in `catalogue.defaults`.
+//
+// 91 adds a `<p>_source` column beside every `<p>_kind`/`<p>_id` principal
 // pair (task, task_comment, task_pause, pipeline_pause, scheduled_upgrade,
 // memory, memory_document, release_note and task_event, which also gains
 // behalf_kind/behalf_id/behalf_source), and the config_audit table
 // (operator-attribution spec §1.3, §4.4, §7.1). No row is rewritten: a row
 // written before reads back with an empty Principal.Source.
-const SchemaVersion = 90
+const SchemaVersion = 91
 
 // configAuditTable is the `config_audit` table: one row per change to the
 // deployment's configuration somebody made (model.ConfigAuditEntry,

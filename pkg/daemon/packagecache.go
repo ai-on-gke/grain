@@ -297,6 +297,18 @@ func packageCacheDir(cfg Config) string {
 	return filepath.Join(cfg.DataDir, "cache", "packages")
 }
 
+// packageCacheCAPath is where this deployment keeps the package cache's
+// Root CA bundle across daemon restarts (<data-dir>/package-cache-ca.pem,
+// beside sandbox-access-ca.pem), so sandboxes adopted across a restart
+// continue trusting leaf certificates signed by the restarted daemon.
+// Empty when no data directory was configured, which keeps the CA in memory.
+func packageCacheCAPath(cfg Config) string {
+	if cfg.DataDir == "" {
+		return ""
+	}
+	return filepath.Join(cfg.DataDir, "package-cache-ca.pem")
+}
+
 // startPackageCache opens the package cache and binds its listeners,
 // fetching from wherever this deployment's -package-cache-* flags say --
 // the public archives unless it named a mirror of its own -- and
@@ -347,8 +359,19 @@ func startPackageCacheFrom(cfg Config, fabric Fabric, upstreams packageCacheUpst
 			"registry itself, and this service is what goes to the mirror", mirrors)
 	}
 
-	ca, err := pkgcache.NewCA()
-	if err != nil {
+	caPath := packageCacheCAPath(cfg)
+	ca, err := pkgcache.LoadOrCreateCA(caPath)
+	if err != nil && caPath != "" {
+		log.Printf("grain daemon: loading package cache internal CA from %s: %v -- generating a new CA", caPath, err)
+		if fresh, ferr := pkgcache.NewCA(); ferr != nil {
+			log.Printf("grain daemon: generating package cache internal CA: %v", ferr)
+		} else {
+			ca = fresh
+			if serr := pkgcache.SaveCA(caPath, ca); serr != nil {
+				log.Printf("grain daemon: saving regenerated package cache internal CA to %s: %v", caPath, serr)
+			}
+		}
+	} else if err != nil {
 		log.Printf("grain daemon: generating package cache internal CA: %v", err)
 	}
 

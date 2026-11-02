@@ -34,20 +34,20 @@ until the surface is regenerated and reviewed.
 
 ``````console
 $ claude --version
-2.1.286 (Claude Code)
+2.1.316 (Claude Code)
 ``````
 
 ``````console
-path   /opt/claude/.local/share/claude/versions/2.1.286
-size   241667256 bytes
-sha256 fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f
+path   /opt/claude/.local/share/claude/versions/2.1.316
+size   328262000 bytes
+sha256 fd13c70000fec3f2116dfbcbb6121210b4a29328bf0e46210a59dd594a67d824
 ``````
 
 How the image gets its claude, against the claude that answered here:
 
 ``````console
-installed by the Dockerfile   pinned: ARG CLAUDE_CLI_VERSION=2.1.286
-captured here                 2.1.286 (Claude Code)
+installed by the Dockerfile   pinned: ARG CLAUDE_CLI_VERSION=2.1.316
+captured here                 2.1.316 (Claude Code)
 ``````
 
 ## Commands and flags
@@ -117,12 +117,6 @@ Options:
   --brief                               Enable SendUserMessage tool for
                                         agent-to-user communication
   --chrome                              Enable Claude in Chrome integration
-  --client-data-url <url>               URL for a signed configuration document.
-                                        Claude Code exits if it cannot load it
-                                        or it does not cover the selected model.
-                                        Setting CLAUDE_CODE_CLIENT_DATA_URL
-                                        instead keeps the URL out of the process
-                                        list
   --cloud [description|session_id|url]  Create a cloud session with the given
                                         description, or attach to an existing
                                         one by session ID or claude.ai/code URL
@@ -132,14 +126,14 @@ Options:
                                         Recommended only for sandboxes with no
                                         internet access.
   -d, --debug [filter]                  Enable debug mode with optional category
-                                        filtering (e.g., "api,hooks" or
-                                        "!1p,!file")
+                                        filtering (e.g., --debug=hooks,mcp or
+                                        --debug='!hooks,!mcp')
   --debug-file <path>                   Write debug logs to a specific file path
                                         (implicitly enables debug mode)
   --desktop                             Open in the Claude Desktop app instead
                                         of the terminal (with --continue or
                                         --resume <id> to pick the session)
-  --disable-slash-commands              Disable all skills
+  --disable-slash-commands              Disable all skills and commands
   --disallowedTools, --disallowed-tools <tools...>
       Comma or space-separated list of tool names to deny (e.g. "Bash(git *)
       Edit")
@@ -187,7 +181,8 @@ Options:
                                         (realtime streaming input) (choices:
                                         "text", "stream-json")
   --json-schema <schema>                JSON Schema for structured output
-                                        validation. Example:
+                                        validation (only works with --print).
+                                        Example:
                                         {"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}
   --max-budget-usd <amount>             Maximum dollar amount to spend on API
                                         calls (only works with --print)
@@ -255,22 +250,22 @@ Options:
                                         --output-format=stream-json)
   --restricted                          Restricted mode: removes the built-in
                                         tools that run commands or code (Bash,
-                                        PowerShell, REPL and the other
-                                        code-running tools) and WebFetch unless
-                                        --tools names them, and ignores user,
-                                        project and local settings files
-                                        (managed settings and --settings still
-                                        apply; add --strict-mcp-config to skip
-                                        MCP servers too). Also confines the file
-                                        tools to the working directories
-                                        (--add-dir included), refuses
-                                        bypassPermissions, and lets only a
-                                        person or the configured permission
-                                        handler approve writes to settings, git
-                                        and tool-configuration files.
-  -r, --resume [value]                  Resume a conversation by session ID, or
-                                        open interactive picker with optional
-                                        search term
+                                        PowerShell and the other code-running
+                                        tools) and WebFetch unless --tools names
+                                        them, and ignores user, project and
+                                        local settings files (managed settings
+                                        and --settings still apply; add
+                                        --strict-mcp-config to skip MCP servers
+                                        too). Also confines the file tools to
+                                        the working directories (--add-dir
+                                        included), refuses bypassPermissions,
+                                        and lets only a person or the configured
+                                        permission handler approve writes to
+                                        settings, git and tool-configuration
+                                        files.
+  -r, --resume [value]                  Resume a conversation by session ID or
+                                        name, or open interactive picker with
+                                        optional search term
   --safe-mode                           Start with all customizations
                                         (CLAUDE.md, skills, installed plugins,
                                         hooks, MCP servers, custom commands and
@@ -294,9 +289,10 @@ Options:
   --system-prompt-snapshot <on|off>     Record the system prompt once per
                                         conversation and reuse it verbatim on
                                         every request and resume. on (the
-                                        default): the prompt is rendered on the
-                                        conversation's first request — a
-                                        --system-prompt or
+                                        default, except under --bare outside
+                                        cloud and background sessions): the
+                                        prompt is rendered on the conversation's
+                                        first request — a --system-prompt or
                                         --append-system-prompt included — sent,
                                         and recorded; every later request and
                                         resume sends the record as-is, even when
@@ -304,9 +300,8 @@ Options:
                                         until the conversation is compacted.
                                         off: never record; the prompt is
                                         rendered fresh every request (for
-                                        iterating on prompt text). No effect
-                                        where system-prompt recording is not yet
-                                        enabled. (choices: "on", "off")
+                                        iterating on prompt text). (choices:
+                                        "on", "off")
   --teleport [session]                  Resume a teleport session, optionally
                                         specify session ID
   --tmux                                Create a tmux session for the worktree
@@ -315,8 +310,8 @@ Options:
                                         --tmux=classic for traditional tmux.
   --tools <tools...>                    Specify the list of available tools from
                                         the built-in set. Use "" to disable all
-                                        tools, "default" to use all tools, or
-                                        specify tool names (e.g.
+                                        tools, "default" to use the default set,
+                                        or specify tool names (e.g.
                                         "Bash,Edit,Read").
   --verbose                             Override verbose mode setting from
                                         config
@@ -326,13 +321,13 @@ Options:
 
 Commands:
   agents [options]                      Manage background agents
-  attach <id>                           Open a background session in this
+  attach <id|name>                      Open a background session in this
                                         terminal. <id> is the short id that
                                         `claude --bg` prints and `claude agents`
-                                        lists
+                                        lists. Part of the session name works
+                                        too
   auth                                  Manage authentication
-  auto-mode                             Inspect or reset auto mode classifier
-                                        configuration
+  auto-mode                             Inspect or reset auto mode configuration
   doctor                                Check the health of your Claude Code
                                         installation. Reads settings files in
                                         the current directory without a trust
@@ -345,11 +340,14 @@ Commands:
   install [options] [target]            Install Claude Code native build. Use
                                         [target] to specify version (stable,
                                         latest, or specific version)
-  logs <id>                             Print a background session's recent
+  logs <id|name>                        Print a background session's recent
                                         terminal output
   mcp                                   Configure and manage MCP servers
   plugin|plugins                        Manage Claude Code plugins
-  project                               Manage Claude Code project state
+  purge [options] [path]                Delete a project's Claude Code data
+                                        (transcripts, tasks, file history, and
+                                        its entry in ~/.claude.json) from this
+                                        computer only
   respawn [options] [id]                Restart a background session, or all of
                                         them with --all, so it runs the current
                                         Claude Code version
@@ -367,7 +365,8 @@ Commands:
                                         number / base branch) and print the
                                         findings
   update|upgrade                        Check for updates and install if
-                                        available
+                                        available; package-manager installs
+                                        update through the package manager
 ``````
 
 ### `claude agents`
@@ -424,9 +423,9 @@ Options:
 
 ``````console
 $ claude attach --help
-Usage: claude attach <id>
+Usage: claude attach <id|name>
 
-  Open the background session in this terminal. ← returns to agent view, Ctrl+Z drops back to your shell. The session keeps running either way.
+  Open the background session in this terminal. ← returns to agent view, Ctrl+Z drops back to your shell. The session keeps running either way. Part of the session name works in place of the id. Put a name with spaces in quotes.
 ``````
 
 ### `claude auth`
@@ -490,7 +489,7 @@ Options:
 $ claude auto-mode --help
 Usage: claude auto-mode [options] [command]
 
-Inspect or reset auto mode classifier configuration
+Inspect or reset auto mode configuration
 
 Options:
   -h, --help          Display help for command
@@ -602,9 +601,9 @@ Options:
 
 ``````console
 $ claude logs --help
-Usage: claude logs <id>
+Usage: claude logs <id|name>
 
-  Print the background session's recent terminal output.
+  Print the background session's recent terminal output. Part of the session name works in place of the id. Put a name with spaces in quotes.
 ``````
 
 ### `claude mcp`
@@ -935,83 +934,90 @@ passing is not a security vetting. The first run in an untrusted plugin
 directory asks you to confirm (--trust-plugin answers for CI)
 
 Options:
-  --ablation <mode>         Run a no-plugin baseline arm and report the score
-                            delta (none | with-without; default: with-without
-                            whenever a plugin resolves — by name, or from the
-                            target path — and none when nothing does; under
-                            with-without, graders marked with-only, incl.
-                            `tool_used: Skill`, are a plugin-fired indicator
-                            rather than part of the score)
-  --allow-real-servers      With --mocks record: also start the plugin's REAL
-                            MCP server processes for servers that have no mock
-                            (they run as you, outside the OS sandbox that
-                            confines shell tools; use only on plugins you trust)
-  --allow-tools <tools...>  Operator grant for gated tools (Bash, Write, Edit,
-                            WebFetch, mcp__*). Supports Tool(pattern:*) syntax
-  --case <glob>             Filter cases by name glob
-  -j, --concurrency <n>     Run up to <n> agent runs at once (1-8; default 1).
-                            Each run is a full claude child on your own
-                            credential, so they share one rate limit; results
-                            and the report keep case order
-  --eval-dir <dir>          Directory name (below the plugin) that holds the
-                            eval cases; results go to <plugin>/<dir>/results/ —
-                            for an installed-plugin target, ./<dir>/results/
-                            with this flag, else ./evals/results/ (default dir:
-                            the manifest's experimental.evals value, else
-                            evals/)
-  -h, --help                Display help for command
-  --json [path]             Print the full run result (prompts, graders, per-run
-                            scores) as JSON to stdout, or write it to this .json
-                            file
-  --judge-model <model>     Override LLM-grader model (default: haiku)
-  --keep-temp               Preserve scaffold dirs for debugging
-  --max-cost-usd <usd>      Optional hard cost ceiling; abort and report partial
-                            results if hit (exit 2). The ceiling is checked
-                            before each run launches, so overrun is bounded to
-                            the runs in flight (one, or up to --concurrency) —
-                            when a run breaches, paid graders (llm/baseline) are
-                            skipped while free graders still score it. Runs are
-                            already bounded by max_turns and timeout_seconds —
-                            only set this when you need a strict budget
-  --mocks <mode>            Mock stand-ins for MCP servers, from <eval
-                            dir>/mocks/ (record | off; default: record). record:
-                            a plugin server with no mock is NOT started (see
-                            --allow-real-servers); off: no stand-ins, every real
-                            server starts (as you, outside the OS sandbox), its
-                            tools gated by --allow-tools
-  --model <model>           Override model for all cases
-  --no-publish              Keep the HTML report local only; skip publishing it
-                            to claude.ai
-  --no-scaffold             Explicitly skip scaffold_script
-  --output-dir <dir>        Directory for aggregate-result.json (default:
-                            ./<eval dir>/results/<timestamp>/)
-  --publish-report          Also require publishing the report to claude.ai
-                            (already the default when your account supports it);
-                            explains why if unavailable
-  --report <path>           Write the self-contained HTML report (scores,
-                            prompts, grader verdicts) to <path> instead of the
-                            results dir
-  --runs <n>                Override per-case runs (default: case.runs ?? 3)
-  --scaffold                Run each case's scaffold_script (runs
-                            author-supplied bash as you; off by default — only
-                            use on case files you authored)
-  --tag <tag...>            Filter cases by tag (repeatable)
-  --threshold <0..1>        Exit 1 if any case score is below this threshold
-                            (default: 1.0)
-  --trust-plugin            Assert that you trust this plugin's code and eval
-                            suite, and skip the first-run trust prompt (for CI;
-                            like --dangerously-skip-permissions, only pass it
-                            for plugins you would run yourself). Does not imply
-                            --scaffold, --allow-tools or --mocks off
-  --verbose                 Log per-message trace events to the debug log (use
-                            --debug-file to read them)
+  --ablation <mode>            Run a no-plugin baseline arm and report the score
+                               delta (none | with-without; default: with-without
+                               whenever a plugin resolves — by name, or from the
+                               target path — and none when nothing does; under
+                               with-without, graders marked with-only, incl.
+                               `tool_used: Skill`, are a plugin-fired indicator
+                               rather than part of the score)
+  --allow-real-servers         With --mocks record: also start the plugin's REAL
+                               MCP server processes for servers that have no
+                               mock (they run as you, outside the OS sandbox
+                               that confines shell tools; use only on plugins
+                               you trust)
+  --allow-tools <tools...>     Operator grant for gated tools (Bash, Write,
+                               Edit, WebFetch, mcp__*). Supports Tool(pattern:*)
+                               syntax
+  --case <glob>                Filter cases by name glob
+  -j, --concurrency <n>        Run up to <n> agent runs at once (1-8; default
+                               1). Each run is a full claude child on your own
+                               credential, so they share one rate limit; results
+                               and the report keep case order
+  --disallow-tools <tools...>  Built-in tools to keep from Claude in every case,
+                               even if granted (e.g. Agent TaskStop)
+  --eval-dir <dir>             Directory name (below the plugin) that holds the
+                               eval cases; results go to <plugin>/<dir>/results/
+                               — for an installed-plugin target,
+                               ./<dir>/results/ with this flag, else
+                               ./evals/results/ (default dir: the manifest's
+                               experimental.evals value, else evals/)
+  -h, --help                   Display help for command
+  --json [path]                Print the full run result (prompts, graders,
+                               per-run scores) as JSON to stdout, or write it to
+                               this .json file
+  --judge-model <model>        Override LLM-grader model (default: haiku)
+  --keep-temp                  Preserve scaffold dirs for debugging
+  --max-cost-usd <usd>         Optional hard cost ceiling; abort and report
+                               partial results if hit (exit 2). The ceiling is
+                               checked before each run launches, so overrun is
+                               bounded to the runs in flight (one, or up to
+                               --concurrency) — when a run breaches, paid
+                               graders (llm/baseline) are skipped while free
+                               graders still score it. Runs are already bounded
+                               by max_turns and timeout_seconds — only set this
+                               when you need a strict budget
+  --mocks <mode>               Mock stand-ins for MCP servers, from <eval
+                               dir>/mocks/ (record | off; default: record).
+                               record: a plugin server with no mock is NOT
+                               started (see --allow-real-servers); off: no
+                               stand-ins, every real server starts (as you,
+                               outside the OS sandbox), its tools gated by
+                               --allow-tools
+  --model <model>              Override model for all cases
+  --no-publish                 Keep the HTML report local only; skip publishing
+                               it to claude.ai
+  --no-scaffold                Explicitly skip scaffold_script
+  --output-dir <dir>           Directory for aggregate-result.json (default:
+                               ./<eval dir>/results/<timestamp>/)
+  --publish-report             Also require publishing the report to claude.ai
+                               (already the default when your account supports
+                               it); explains why if unavailable
+  --report <path>              Write the self-contained HTML report (scores,
+                               prompts, grader verdicts) to <path> instead of
+                               the results dir
+  --runs <n>                   Override per-case runs (default: case.runs ?? 3)
+  --scaffold                   Run each case's scaffold_script (runs
+                               author-supplied bash as you; off by default —
+                               only use on case files you authored)
+  --tag <tag...>               Filter cases by tag (repeatable)
+  --threshold <0..1>           Exit 1 if any case score is below this threshold
+                               (default: 1.0)
+  --trust-plugin               Assert that you trust this plugin's code and eval
+                               suite, and skip the first-run trust prompt (for
+                               CI; like --dangerously-skip-permissions, only
+                               pass it for plugins you would run yourself). Does
+                               not imply --scaffold, --allow-tools or --mocks
+                               off
+  --verbose                    Log per-message trace events to the debug log
+                               (use --debug-file to read them)
 
 Commands:
-  init [options] [name]     Author an eval suite under the eval dir (evals/
-                            unless --eval-dir or the manifest says otherwise)
-                            via an interview that sources inputs and designs
-                            graders. Use --bare <name> for a blank single-case
-                            template.
+  init [options] [name]        Author an eval suite under the eval dir (evals/
+                               unless --eval-dir or the manifest says otherwise)
+                               via an interview that sources inputs and designs
+                               graders. Use --bare <name> for a blank
+                               single-case template.
 ``````
 
 ``````console
@@ -1060,6 +1066,11 @@ Options:
                              instead of the human message (same exit codes; a
                              marketplace-declared command is still shown and
                              must be confirmed — pass -y when not interactive)
+  --marketplace <source>     Install <plugin> (its bare name) from the
+                             marketplace at this source: owner/repo, a git or
+                             https URL, or a path. A marketplace not added yet
+                             is added first, in user settings, under the same
+                             checks as 'plugin marketplace add'
   --registry <url>           For a <package>@npm install: resolve and download
                              from this npm registry instead of the one your npm
                              configuration selects
@@ -1210,36 +1221,30 @@ Validate a plugin or marketplace manifest, or the skills, agents, and commands
 in a directory
 
 Options:
-  -h, --help  Display help for command
-  --json      Output the validation report as JSON (same exit codes)
-  --strict    Treat warnings as errors (exit 1). Use in CI to fail on
-              unrecognized fields, missing metadata, and other issues that the
-              runtime tolerates.
+  -h, --help        Display help for command
+  --json            Output the validation report as JSON (same exit codes)
+  --profile <name>  Also exit 1 when the plugin directory (the catalog that
+                    plugins are submitted to) would refuse a submission of the
+                    plugin on a check this command runs, such as a missing
+                    README, or when such a check could not be made: plugin.json
+                    lists more than 16 files for MCP servers or for hooks (16 of
+                    each are checked), or an MCP or hooks file is one these
+                    checks cannot use, such as one that is not valid JSON. With
+                    --strict, also fail on its warnings. The directory runs more
+                    checks. (choices: "directory")
+  --strict          Treat warnings as errors (exit 1). Use in CI to fail on
+                    unrecognized fields, missing metadata, and other issues that
+                    the runtime tolerates.
 ``````
 
-### `claude project`
+### `claude purge`
 
 ``````console
-$ claude project --help
-Usage: claude project [options] [command]
+$ claude purge --help
+Usage: claude purge [options] [path]
 
-Manage Claude Code project state
-
-Options:
-  -h, --help              Display help for command
-
-Commands:
-  help [command]          display help for command
-  purge [options] [path]  Delete all Claude Code state for a project
-                          (transcripts, tasks, file history, config entry)
-``````
-
-``````console
-$ claude project purge --help
-Usage: claude project purge [options] [path]
-
-Delete all Claude Code state for a project (transcripts, tasks, file history,
-config entry)
+Delete a project's Claude Code data (transcripts, tasks, file history, and its
+entry in ~/.claude.json) from this computer only
 
 Options:
   --all              Purge state for every project (mutually exclusive with
@@ -1295,7 +1300,7 @@ Usage: claude stop <id>
 
 ``````console
 $ claude ultrareview --help
-Usage: claude ultrareview [options] [target]
+Usage: claude ultrareview [target] [options]
 
 Run a cloud-hosted multi-agent code review of the current branch (or a PR number
 / base branch) and print the findings
@@ -1311,6 +1316,11 @@ Options:
                        targets only; one plain comment, not a review)
   --timeout <minutes>  Maximum minutes to wait for the review to finish
                        (default: 45)
+  --trust-workspace    Trust the current folder for this run only, without
+                       asking (for scripts and CI). Takes no value: put a PR
+                       number or base branch before it. Use it only on folders
+                       you trust: the folder's git configuration and Claude Code
+                       project settings can run programs
 ``````
 
 ## Where each flag lives
@@ -1335,7 +1345,6 @@ $ the long flags claude --help lists
 --bg
 --brief
 --chrome
---client-data-url
 --cloud
 --continue
 --dangerously-skip-permissions
@@ -1430,6 +1439,7 @@ accepted  print    --verbose              Error: Input must be provided either t
 accepted  print    --model                Error: Input must be provided either through stdin or as a prompt argument when using --print
 accepted  print    --max-turns            Error: Input must be provided either through stdin or as a prompt argument when using --print
 accepted  print    --resume               No conversation found with session ID: $UUID
+accepted  print    --settings             Error: Input must be provided either through stdin or as a prompt argument when using --print
 accepted  session  --tools                Error: Input must be provided either through stdin or as a prompt argument when using --print
 accepted  session  --mcp-config           Error: Input must be provided either through stdin or as a prompt argument when using --print
 accepted  session  --strict-mcp-config    Error: Input must be provided either through stdin or as a prompt argument when using --print
@@ -1439,6 +1449,7 @@ accepted  session  --verbose              Error: Input must be provided either t
 accepted  session  --model                Error: Input must be provided either through stdin or as a prompt argument when using --print
 accepted  session  --max-turns            Error: Input must be provided either through stdin or as a prompt argument when using --print
 accepted  session  --resume               No conversation found with session ID: $UUID
+accepted  session  --settings             Error: Input must be provided either through stdin or as a prompt argument when using --print
 ``````
 
 And the argv whole, since a flag set that parses one flag at a time can still be refused together -- which matters more here than it did for codex, because three of these options are variadic (`--tools <tools...>`, `--mcp-config <configs...>`, `--allowedTools <tools...>`) and a variadic option swallows everything after it that does not start with a dash.
@@ -1581,6 +1592,6 @@ And what claude itself will say about the roster `--tools` empties, which is the
 
 ``````console
 $ strings -n 4 claude | grep -aoE '.{0,60}disable all tools.{0,60}'
-he list of available tools from the built-in set. Use "" to disable all tools, "default" to use all tools, or specify tool names (e.g. "B
+he list of available tools from the built-in set. Use "" to disable all tools, "default" to use the default set, or specify tool names (e
 ``````
 

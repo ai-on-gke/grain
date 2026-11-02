@@ -575,20 +575,51 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     90,
+		Description: "fold retired in-process catalogue entries into api_scopes.presets in grain_config.capability_policy",
+		Up: foldRetiredCatalogueInProcess(
+			map[string]string{
+				"team-broadcast":   "team-broadcast",
+				"dispatch-control": "dispatch-control",
+				"pipeline-control": "pipeline-control",
+				"memory":           "memory",
+				"release-notes":    "release-notes",
+				"self-upgrade":     "self-upgrade",
+				"test-quarantine":  "test-quarantine",
+			},
+			map[string][]string{
+				"team-broadcast":        {"api:team-broadcast"},
+				"dispatch-control":      {"api:dispatch-control"},
+				"pipeline-control":      {"api:pipeline-control"},
+				"memory":                {"api:memory"},
+				"release-notes":         {"api:release-notes"},
+				"self-upgrade":          {"api:self-upgrade"},
+				"test-quarantine":       {"api:test-quarantine"},
+				"grain-log":             {GrainJournalGrant},
+				"deployment-health":     {"api:deployment:read", GrainHealthGrant},
+				"db-read":               {GrainSQLReadGrant},
+				"db-write":              {GrainSQLWriteGrant},
+				"self-repair":           {GrainHostExecGrant},
+				GitPushAnyRefCapability: {GitPushAnyRefGrant},
+				"corp-research":         {CorpResearchGrant},
+			},
+		),
+	},
+	{
+		Version:     91,
 		Description: "add a *_source column beside every principal's *_kind/*_id pair, task_event's on-behalf-of, and config_audit (operator-attribution spec §1.3, §7.1)",
 		Statements: append([]string{
 			// task_pause and task_event postdate the 2.0 baseline and
 			// Init's CREATE TABLE IF NOT EXISTS made them in place, so a
 			// store this old may not have them yet: create them in the
-			// shape schema 89 knew first, so that the ALTERs below meet
+			// shape schema 90 knew first, so that the ALTERs below meet
 			// the same table whichever store they run on.
-			schema89TaskPauseTable,
-			schema89TaskEventTable,
+			schema90TaskPauseTable,
+			schema90TaskEventTable,
 		}, principalSourceColumns()...),
 	},
 }
 
-// principalSourceColumns are migration 90's ALTERs: `<p>_source` beside
+// principalSourceColumns are migration 91's ALTERs: `<p>_source` beside
 // every stored principal, `”` for every row already there.
 func principalSourceColumns() []string {
 	cols := []struct{ table, column string }{
@@ -616,9 +647,9 @@ func principalSourceColumns() []string {
 	return out
 }
 
-// schema89TaskPauseTable and schema89TaskEventTable are task_pause and
-// task_event as schema 89 created them, frozen for migration 90.
-const schema89TaskPauseTable = `CREATE TABLE IF NOT EXISTS ` + "`task_pause`" + ` (
+// schema90TaskPauseTable and schema90TaskEventTable are task_pause and
+// task_event as schema 90 created them, frozen for migration 91.
+const schema90TaskPauseTable = `CREATE TABLE IF NOT EXISTS ` + "`task_pause`" + ` (
   ` + "`task_id`" + `           TEXT     NOT NULL,
   ` + "`paused_at`" + `         DATETIME NOT NULL,
   ` + "`paused_by_kind`" + `    TEXT     NOT NULL,
@@ -630,7 +661,7 @@ const schema89TaskPauseTable = `CREATE TABLE IF NOT EXISTS ` + "`task_pause`" + 
   PRIMARY KEY (` + "`task_id`" + `)
 )`
 
-const schema89TaskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
+const schema90TaskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
   ` + "`id`" + `         INTEGER PRIMARY KEY AUTOINCREMENT,
   ` + "`task_id`" + `    TEXT     NOT NULL,
   ` + "`kind`" + `       TEXT     NOT NULL,

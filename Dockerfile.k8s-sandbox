@@ -201,9 +201,9 @@ RUN printf 'Acquire::ForceIPv4 "true";\nAcquire::Retries "3";\nAcquire::http::Ti
 # checked, not through claude.ai/install.sh -- which always runs the
 # *latest* release before installing the one asked for -- for the reason
 # the main Dockerfile's block gives at length.
-ARG CLAUDE_CLI_VERSION=2.1.286
-ARG CLAUDE_CLI_SHA256_AMD64=fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f
-ARG CLAUDE_CLI_SHA256_ARM64=0292fa22ac2fd43e16be9d0e511ddd8347280d6e0ebaca744ef5b27e05d8d0f8
+ARG CLAUDE_CLI_VERSION=2.1.316
+ARG CLAUDE_CLI_SHA256_AMD64=fd13c70000fec3f2116dfbcbb6121210b4a29328bf0e46210a59dd594a67d824
+ARG CLAUDE_CLI_SHA256_ARM64=55cdb8e162d190432696ea54010e0fca2e18d06fa7a7127fd563b9ffd4f22624
 ARG INSTALL_CLAUDE_CLI=1
 RUN if [ "$INSTALL_CLAUDE_CLI" = "1" ]; then \
         set -eu; mkdir -p /opt/claude; arch="$(uname -m)"; \
@@ -247,10 +247,10 @@ ENV AGY_CLI_DISABLE_AUTO_UPDATE=true
 # build happens to run on: install.sh served amd64 and arm64 users alike,
 # and the published default image is built for both.
 ARG INSTALL_AGY_CLI=1
-ARG AGY_CLI_VERSION=1.4.9
-ARG AGY_CLI_BUILD=4962164969177088
-ARG AGY_CLI_SHA256_AMD64=3d84e3a461b9cbf9ffc9deede155a01921380e964f51a82c0bc505db80ae8525
-ARG AGY_CLI_SHA256_ARM64=0e75190d5aa48b0f7623b201cfef542cd36a1279b3d28afa7fa099983a073493
+ARG AGY_CLI_VERSION=1.4.12
+ARG AGY_CLI_BUILD=4768735748292608
+ARG AGY_CLI_SHA256_AMD64=3368d1923fc869f21ec8fce83252a8c96c89283aac9393958ac91fbf7a3949e4
+ARG AGY_CLI_SHA256_ARM64=30dd61ebe1f0a8829057ea2de29dad08c710dd972ce4c02949f51e632135a86b
 RUN if [ "$INSTALL_AGY_CLI" = "1" ]; then \
         set -eu; mkdir -p /opt/antigravity; arch="$(uname -m)"; \
         case "$arch" in \
