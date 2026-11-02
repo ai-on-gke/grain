@@ -1915,15 +1915,17 @@ func stepTimeout(ctx context.Context, step workflows.Step) time.Duration {
 // the bottom, then the workflow's, the job's and the step's, each
 // layering over the last -- GitHub's own precedence -- except for the
 // caller-identity variables (GRAIN_CI_REQUESTED_BY_KIND,
-// GRAIN_CI_REQUESTED_BY and GRAIN_CI_RELEASE_VERSION), which a
-// person-only release workflow reads to verify that a person started it
-// and which a workflow file's own env: may neither set nor replace.
+// GRAIN_CI_REQUESTED_BY, GRAIN_CI_RELEASE_VERSION and
+// GRAIN_CI_RELEASE_SHORT_SOAK_OK), which a person-only release workflow
+// reads to verify that a person started it, and what they decided, and
+// which a workflow file's own env: may neither set nor replace.
 func StepEnv(plan workflows.Plan, pj workflows.PlannedJob, step workflows.Step) map[string]string {
 	env := workflows.RunEnv(plan.Request, pj.Workflow, pj.Job.ID)
 	for _, layer := range []map[string]string{pj.WorkflowEnv, pj.Job.Env, step.Env} {
 		for k, v := range layer {
 			switch k {
-			case workflows.RequestedByKindEnv, workflows.RequestedByEnv, workflows.ReleaseVersionEnv:
+			case workflows.RequestedByKindEnv, workflows.RequestedByEnv, workflows.ReleaseVersionEnv,
+				workflows.ReleaseShortSoakOKEnv:
 				continue
 			}
 			env[k] = v

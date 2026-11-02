@@ -131,7 +131,10 @@
 #   RELEASE_SHORT_SOAK_OK    approve only: true promotes a -pending release
 #                            whose recorded soak is under RELEASE_SOAK_HOURS
 #                            less the slack (promote-release.yml's
-#                            short_soak_ok input), and says so on vX.Y.0
+#                            short_soak_ok input, or on grain's own path
+#                            GRAIN_CI_RELEASE_SHORT_SOAK_OK from
+#                            `grain release approve -short-soak-ok`), and
+#                            says so on vX.Y.0
 #   RELEASE_SOAK_HOURS, RELEASE_INTERVAL_SLACK_HOURS
 #                            24 and 2: a daily 04:15 run never misses the
 #                            boundary by a minute of jitter
@@ -294,6 +297,12 @@ recorded_soak() {
     [ -z "$cut" ] || [ -z "$staged" ] || s=$((staged - cut))
   fi
   printf '%s' "$s"
+}
+
+# recorded_forced <release>: the Soak-Forced the train wrote on
+# <release>-pending (true when FORCE skipped the soak wait), or nothing.
+recorded_forced() {
+  git for-each-ref --format='%(contents)' "refs/tags/$1-pending" | sed -nE 's/^Soak-Forced: (true|false)$/\1/p' | tail -n 1
 }
 
 push() { # push <git push args...>
@@ -532,12 +541,13 @@ if [ -n "$pending" ]; then
   pending_rc="$(git tag --points-at "$pending_sha" -l "$pending-rc.*" | sort -t. -k4,4n | tail -n 1 || true)"
   say "$pending (${pending_sha:0:12}, from ${pending_rc:-?}) is pending a person's approval; this run neither promotes nor supersedes it"
   pending_soaked="$(recorded_soak "$pending" "$pending_rc")"
+  pending_note="${pending_soaked:+soaked $(soak_duration "$pending_soaked") of ${soak_hours}h}"
+  [ -z "$pending_note" ] || [ "$(recorded_forced "$pending")" != true ] || pending_note="$pending_note (FORCE=true)"
   pending_warning=""
   if [ -z "$pending_soaked" ] || [ "$pending_soaked" -lt $(((soak_hours - slack_hours) * 3600)) ]; then
     pending_warning="SHORT SOAK: under the $((soak_hours - slack_hours))h minimum; approving it needs short_soak_ok: true."
   fi
-  raise_pending "$pending" "$pending_rc" "$(pending_body "$pending" "$pending_rc" "" "" \
-    "${pending_soaked:+soaked $(soak_duration "$pending_soaked") of ${soak_hours}h}" "$pending_warning")"
+  raise_pending "$pending" "$pending_rc" "$(pending_body "$pending" "$pending_rc" "" "" "$pending_note" "$pending_warning")"
 fi
 
 # --- Phase 1 ---

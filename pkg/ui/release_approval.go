@@ -29,6 +29,12 @@ package ui
 // the scope -- a run's token, an executor, a pipeline steward -- is
 // refused before anything is started, and so is a schedule, which acts
 // as no person at all.
+//
+// An approval may carry short_soak_ok: the person's explicit acceptance
+// that the release soaked under the minimum, which
+// scripts/release-from-trunk.sh approve otherwise refuses. It reaches the
+// run as GRAIN_CI_RELEASE_SHORT_SOAK_OK, another variable no API caller
+// and no workflow env: can set, and only from a person on this route.
 
 import (
 	"context"
@@ -54,18 +60,30 @@ var pendingReleasePattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.0$`)
 // ReleaseDecision is what approving or rejecting a pending release
 // answers: the CI run carrying it out.
 type ReleaseDecision struct {
-	Version string `json:"version"`
-	Approve bool   `json:"approve"`
-	Run     ci.Run `json:"run"`
+	Version     string `json:"version"`
+	Approve     bool   `json:"approve"`
+	ShortSoakOK bool   `json:"shortSoakOk,omitempty"`
+	Run         ci.Run `json:"run"`
+}
+
+// ReleaseApproval is the optional body of POST
+// .../pending-releases/{version}/approve (and of reject, which refuses
+// short_soak_ok).
+type ReleaseApproval struct {
+	// ShortSoakOK accepts a release whose recorded staging soak is under
+	// the minimum (the -pending tag's Soak-Seconds; the notification says
+	// SHORT SOAK). Without it the approve job refuses such a release.
+	ShortSoakOK bool `json:"short_soak_ok,omitempty"`
 }
 
 // DecideRelease starts the promote-release run that approves (approve)
-// or rejects version, a pending release of repo. Only a person may: any
+// or rejects version, a pending release of repo; shortSoakOK, for an
+// approval only, accepts a soak under the minimum. Only a person may: any
 // other caller is refused with a ForbiddenError and nothing is started.
 // On a run started, the release's "ready to promote" notification is
 // cleared -- the run is what to watch now, and a run that fails leaves
 // the -pending tag, which the next daily train run raises again.
-func (c *Client) DecideRelease(ctx context.Context, repo, version string, approve bool) (ReleaseDecision, error) {
+func (c *Client) DecideRelease(ctx context.Context, repo, version string, approve, shortSoakOK bool) (ReleaseDecision, error) {
 	verb := "reject"
 	if approve {
 		verb = "approve"
@@ -75,6 +93,9 @@ func (c *Client) DecideRelease(ctx context.Context, repo, version string, approv
 	if actor.Kind != model.PrincipalHuman || actor.ID == "" {
 		return ReleaseDecision{}, forbiddenErrorf("only a person may %s a release: %q is a %s, and a release "+
 			"is made official by a person, never by an agent or a schedule", verb, actor.ID, kindName(actor.Kind))
+	}
+	if shortSoakOK && !approve {
+		return ReleaseDecision{}, validationErrorf("short_soak_ok is an approval's answer: rejecting %s needs no soak", version)
 	}
 	if c.Config.CI == nil {
 		return ReleaseDecision{}, fmt.Errorf("this deployment has no grain CI wired")
@@ -101,6 +122,7 @@ func (c *Client) DecideRelease(ctx context.Context, repo, version string, approv
 		Repo: parsed.String(), Ref: releaseTrunk,
 		Event: ci.EventManual, Workflow: PromoteReleaseWorkflow, Jobs: []string{job},
 		RequestedBy: actor.ID, RequestedByKind: string(model.PrincipalHuman), ReleaseVersion: version,
+		ReleaseShortSoakOK: shortSoakOK,
 	})
 	if err != nil {
 		return ReleaseDecision{}, &ValidationError{err: err}
@@ -111,7 +133,7 @@ func (c *Client) DecideRelease(ctx context.Context, repo, version string, approv
 			log.Printf("grain: clearing %s after %s's %s: %v", subject, actor.ID, verb, err)
 		}
 	}
-	return ReleaseDecision{Version: version, Approve: approve, Run: run}, nil
+	return ReleaseDecision{Version: version, Approve: approve, ShortSoakOK: shortSoakOK, Run: run}, nil
 }
 
 func kindName(k model.PrincipalKind) string {
@@ -130,8 +152,12 @@ func (s *Server) handleRejectRelease(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) decideRelease(w http.ResponseWriter, r *http.Request, approve bool) {
+	var req ReleaseApproval
+	if !readOptionalJSON(w, r, &req) {
+		return
+	}
 	out, err := s.tasks.DecideRelease(r.Context(), r.PathValue("owner")+"/"+r.PathValue("name"),
-		r.PathValue("version"), approve)
+		r.PathValue("version"), approve, req.ShortSoakOK)
 	if err != nil {
 		writeClientError(w, err)
 		return
