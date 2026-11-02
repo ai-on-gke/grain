@@ -105,7 +105,9 @@ type IAPConfig struct {
 	// IAP's PEM map or a JWK set. Empty means $GRAIN_IAP_KEYS_URL, and
 	// then GoogleIAPCertURL.
 	KeysURL string
-	Mode    bool
+	// RequireIAP is Config.RequireIAP (-ui-require-iap): the access code
+	// counts only where accessCodeAccepted says so.
+	RequireIAP bool
 	// LocalAPIToken is Config.LocalAPIToken: the secret this host's own
 	// CLI presents (presentsLocalAPIToken).
 	LocalAPIToken string
