@@ -131,6 +131,7 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/tasks/{id}/pause":                                    trusted,
 	"POST /api/tasks/{id}/resume":                                   trusted,
 	"PUT /api/tasks/{id}/goal":                                      trusted,
+	"PUT /api/tasks/{id}/hostd":                                     trusted,
 	"DELETE /api/tasks/{id}/goal":                                   trusted,
 	"POST /api/tasks/{id}/reopen":                                   trusted,
 	"POST /api/tasks/{id}/retry":                                    trusted,
