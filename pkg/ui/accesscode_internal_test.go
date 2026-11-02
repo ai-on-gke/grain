@@ -277,3 +277,48 @@ func TestHostdConnectRoute(t *testing.T) {
 		}
 	}
 }
+
+func TestAccessCodeHeaderFallbackAndRateLimit(t *testing.T) {
+	code := "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567"
+	cfg := IAPConfig{LocalAPIToken: code}
+
+	// Fallback works even when Authorization holds an upstream proxy's OIDC JWT.
+	req := httptest.NewRequest(http.MethodPost, "http://grain.example/api/mcp", nil)
+	req.RemoteAddr = "203.0.113.10:12345"
+	req.Header.Set("Authorization", "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln")
+	req.Header.Set(AccessCodeHeader, code)
+	if !presentsAccessCode(req, cfg) {
+		t.Fatal("X-Grain-Access-Code fallback was refused alongside an OIDC Authorization header")
+	}
+
+	// Wrong X-Grain-Access-Code values are rate-limited by singleTenantGate.
+	srv := &Server{}
+	for i := 0; i < accessSourceBurst; i++ {
+		bad := httptest.NewRequest(http.MethodPost, "http://grain.example/api/mcp", nil)
+		bad.RemoteAddr = "203.0.113.10:12345"
+		bad.Header.Set("Authorization", "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln")
+		bad.Header.Set(AccessCodeHeader, "WRNG-WRNG-WRNG-WRNG-WRNG-WRNG-WRNG-WRNG")
+		bad = bad.WithContext(WithIAPConfig(bad.Context(), cfg))
+		rec := httptest.NewRecorder()
+		if srv.singleTenantGate(rec, bad, cfg) {
+			t.Fatalf("wrong X-Grain-Access-Code admitted on attempt %d", i+1)
+		}
+		want := http.StatusUnauthorized
+		if i == accessSourceBurst-1 {
+			want = http.StatusTooManyRequests
+		}
+		if rec.Code != want {
+			t.Fatalf("attempt %d: status %d, want %d", i+1, rec.Code, want)
+		}
+	}
+
+	// Once rate-limited, even a valid X-Grain-Access-Code from that source is 429.
+	good := httptest.NewRequest(http.MethodPost, "http://grain.example/api/mcp", nil)
+	good.RemoteAddr = "203.0.113.10:12345"
+	good.Header.Set(AccessCodeHeader, code)
+	good = good.WithContext(WithIAPConfig(good.Context(), cfg))
+	rec := httptest.NewRecorder()
+	if srv.singleTenantGate(rec, good, cfg) || rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("rate-limited source got %d, want 429", rec.Code)
+	}
+}

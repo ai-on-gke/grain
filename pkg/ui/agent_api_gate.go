@@ -194,6 +194,10 @@ func handlerName(h http.HandlerFunc) string {
 func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.HandlerFunc {
 	scope := routeScopes[pattern]
 	return func(w http.ResponseWriter, r *http.Request) {
+		if pattern == "POST /api/mcp" {
+			next(w, r)
+			return
+		}
 		if pattern != "POST /mcp" {
 			if tok := externalTokenFromContext(r.Context()); tok != nil {
 				call, err := s.authorizeExternalAgentCall(r, pattern, scope, tok)

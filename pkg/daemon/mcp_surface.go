@@ -18,7 +18,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/mcp"
-	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // The two rosters `grain mcpserver` can serve (-mcp-surface;
@@ -83,9 +82,6 @@ func controlRoster(sandbox, local []mcp.Tool, grants GrantNames, changelist bool
 		}
 	}
 	for _, name := range agent.ModelOnlyGrantToolNames() {
-		keep[name] = true
-	}
-	for _, name := range ui.ModelOnlyAgentAPIToolNames(grants) {
 		keep[name] = true
 	}
 	if changelist || !grants.Has(grainci.CapabilityName) {

@@ -306,6 +306,7 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/external-agents/tokens/{id}/revoke": trusted,
 	"DELETE /api/external-agents/tokens/{id}":      trusted,
 	"POST /api/external-agents/tokens/revoke-all":  trusted,
+	"POST /api/mcp":                          trusted,
 	"POST /mcp":                              trusted,
 	"GET /api/agent-keys":                    trusted,
 	"PUT /api/agent-keys/{framework}":        trusted,

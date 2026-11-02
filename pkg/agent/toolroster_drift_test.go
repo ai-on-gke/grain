@@ -85,10 +85,8 @@ func TestPublishedToolNamesCallsEveryConstructorTheServerRegisters(t *testing.T)
 
 // publishedByRegistration are the constructors whose names reach
 // PublishedToolNames through RegisterPublishedToolNames rather than a
-// call in toolroster.go, because their package imports this one: the
-// agent API's generated tools, whose package checks the names are
-// published (pkg/ui's TestGeneratedToolsMatchTheRouteTable).
-var publishedByRegistration = []string{"ui.AgentAPITools"}
+// call in toolroster.go, because their package imports this one.
+var publishedByRegistration []string
 
 // toolConstructorsIn is every "pkg.SomethingTools(...)" call in one Go
 // file, sorted and deduplicated, spelled the way the source spells it.

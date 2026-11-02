@@ -68,11 +68,13 @@ type Server struct {
 	// access is the single-tenant access gate's rate limiter, and
 	// accessCode the token file it checks codes against
 	// (localAPITokenNow) -- both accesscode.go's.
-	access            accessLimiter
-	accessCode        atomic.Pointer[accessCodeFile]
-	externalLimiter   *externalAgentLimiter
-	defaultGroupsOnce sync.Once
-	defaultGroups     *CloudIdentityGroupChecker
+	access               accessLimiter
+	accessCode           atomic.Pointer[accessCodeFile]
+	externalLimiter      *externalAgentLimiter
+	defaultGroupsOnce    sync.Once
+	defaultGroups        *CloudIdentityGroupChecker
+	controllerMCPOnce    sync.Once
+	controllerMCPHandler http.Handler
 }
 
 // NewServer builds a Server over a store.
@@ -627,6 +629,10 @@ func (s *Server) routes() {
 
 	// A grain hostd on another machine dialing in (hostd -server).
 	s.route("GET /api/hostd/connect", s.handleHostdConnect)
+
+	// Controller MCP server (mcp_endpoint.go) shared by external BYO
+	// harnesses and built-in sessions/tasks holding api:* grants.
+	s.route("POST /api/mcp", s.handleControllerMCP)
 
 	static, err := fs.Sub(staticFS, "static")
 	if err != nil {

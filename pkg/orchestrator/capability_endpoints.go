@@ -247,6 +247,61 @@ func (m *passMaterialization) closeEndpoints() {
 	m.endpoints = nil
 }
 
+// wireControllerMCP returns cfg.capabilityMCPServers with "grain-controller"
+// (POST /api/mcp) appended beside grain-sandbox when cfg.ControllerMCP is set
+// and task holds at least one api:* grant.
+func wireControllerMCP(ctx context.Context, cfg Config, store *model.Store, task model.Task) ([]agent.CapabilityMCPServer, *protocol.Endpoint, error) {
+	if cfg.ControllerMCP == nil {
+		return cfg.capabilityMCPServers, nil, nil
+	}
+	names := make([]string, 0, len(task.Grants))
+	for _, g := range task.Grants {
+		names = append(names, g.Capability)
+	}
+	if model.APIGrantsOf(names).Empty() {
+		return cfg.capabilityMCPServers, nil, nil
+	}
+	for _, existing := range cfg.capabilityMCPServers {
+		if existing.Name == "grain-controller" {
+			return cfg.capabilityMCPServers, nil, nil
+		}
+	}
+	proxy, err := cfg.ControllerMCP(task.ID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("building grain-controller proxy: %w", err)
+	}
+	if proxy == nil {
+		return cfg.capabilityMCPServers, nil, nil
+	}
+	ep, err := protocol.ServeEndpoint(proxy)
+	if err != nil {
+		return nil, nil, fmt.Errorf("serving grain-controller proxy: %w", err)
+	}
+	hctx, cancel := context.WithTimeout(ctx, capabilityHandshakeTimeout)
+	roster, err := protocol.Handshake(hctx, ep.URL)
+	cancel()
+	if err != nil {
+		_ = ep.Close()
+		return nil, nil, fmt.Errorf("grain-controller failed its MCP handshake: %w", err)
+	}
+	serverName := roster.ServerName
+	if serverName == "" {
+		serverName = "grain-controller"
+	}
+	if store != nil {
+		narrator := mcp.NewCapabilityNarrator(taskActivityReporter{store: store, taskID: task.ID, now: cfg.now})
+		proxy.ObserveToolCalls(narrator.Observer(serverName, serverName, roster.Labels))
+	}
+	servers := append(append([]agent.CapabilityMCPServer(nil), cfg.capabilityMCPServers...),
+		agent.CapabilityMCPServer{
+			Name:    serverName,
+			URL:     ep.URL,
+			Tools:   roster.Tools,
+			Handler: ep.Handler(),
+		})
+	return servers, ep, nil
+}
+
 // taskActivityReporter is mcp.StatusReporter straight onto a task's live
 // run in the store: how the daemon, which serves a run's capability
 // proxies, narrates the calls made through them, where the run's own MCP

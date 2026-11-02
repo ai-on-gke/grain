@@ -346,5 +346,6 @@ var routeScopes = map[string]APIScope{
 	"DELETE /api/external-agents/tokens/{id}":                              "capabilities:admin",
 	"POST /api/external-agents/tokens/revoke-all":                          "capabilities:admin",
 	"GET /api/hostd/connect":                                               "internal",
+	"POST /api/mcp":                                                        "internal",
 	"POST /mcp":                                                            "internal",
 }

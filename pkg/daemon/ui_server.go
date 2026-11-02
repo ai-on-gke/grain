@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -728,4 +729,50 @@ func restartAdoption(report *orchestrator.AdoptionReport) *ui.RestartAdoption {
 		return out
 	}
 	return &ui.RestartAdoption{At: report.At, Adopted: notes(report.Adopted), Lost: notes(report.Lost), Freed: report.Freed}
+}
+
+type controllerMCPTransport struct {
+	dataDir string
+	network bool
+}
+
+func (t controllerMCPTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	out := req.Clone(req.Context())
+	if t.dataDir != "" {
+		if raw, err := os.ReadFile(ui.LocalAPITokenPath(t.dataDir)); err == nil {
+			if tok := strings.TrimSpace(string(raw)); tok != "" {
+				out.Header.Set(ui.AccessCodeHeader, tok)
+			}
+		}
+	}
+	if t.network {
+		return http.DefaultTransport.RoundTrip(out)
+	}
+	return LiveAPI.LoopbackRoundTrip(out)
+}
+
+// controllerMCPProxy returns orchestrator.Config.ControllerMCP for this daemon:
+// a host-side capability proxy targeting POST /api/mcp with daemon auth
+// (X-Grain-Access-Code) and X-Grain-Acting-Task: <taskID> injected.
+func controllerMCPProxy(cfg Config) func(taskID string) (*protocol.Proxy, error) {
+	server := daemonServerURL(cfg.UiAddr)
+	targetURL := "http://127.0.0.1/api/mcp"
+	network := false
+	if server != "" {
+		targetURL = strings.TrimRight(server, "/") + "/api/mcp"
+		network = true
+	}
+	client := &http.Client{
+		Transport: controllerMCPTransport{
+			dataDir: cfg.DataDir,
+			network: network,
+		},
+	}
+	return func(taskID string) (*protocol.Proxy, error) {
+		headers := map[string]string{}
+		if strings.TrimSpace(taskID) != "" {
+			headers[ui.ActingTaskHeader] = strings.TrimSpace(taskID)
+		}
+		return protocol.NewEndpointProxy(targetURL, headers, client)
+	}
 }

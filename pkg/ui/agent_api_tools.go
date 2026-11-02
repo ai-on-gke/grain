@@ -29,7 +29,6 @@ import (
 	"sync"
 	"unicode"
 
-	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -990,11 +989,6 @@ func getTaskAsExternal(ctx context.Context, s *Server, tok *model.ExternalAgentT
 		return TaskDetail{}, fmt.Errorf("reading task %s: %w", id, err)
 	}
 	return detail, nil
-}
-
-func init() {
-	agent.RegisterPublishedToolNames(AgentAPIToolNames)
-	agent.RegisterPublishedControlToolNames(ModelOnlyAgentAPIRouteToolNames)
 }
 
 // ModelOnlyAgentAPIRouteToolNames is every generated tool that stays on
