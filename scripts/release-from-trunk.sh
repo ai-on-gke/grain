@@ -37,7 +37,10 @@
 # agent nor a schedule can promote a release. approve tags vX.Y.0 and
 # force-moves `latest` onto the pending commit, retags the staged
 # :vX.Y.0-pending images as :vX.Y.0 and :latest (release-images.sh
-# promote) and deletes the vX.Y.0-pending tag. reject takes the failed-soak
+# promote) and deletes the vX.Y.0-pending tag. It refuses a -pending tag
+# whose recorded soak is under 24h less the slack unless the person passed
+# short_soak_ok: true (RELEASE_SHORT_SOAK_OK), which the vX.Y.0 tag
+# message then says. reject takes the failed-soak
 # path: the rc the release came from is tagged -discarded and its images
 # marked (discard-rc), the staged images are marked rejected
 # (discard-pending), any rc of the next minor cut on top of it is dropped
@@ -53,7 +56,10 @@
 # main's builds by). Its newest rc, vM.Y.0-rc.N, soaks unless it carries
 # a vM.Y.0-rc.N-discarded tag:
 #   - younger than 24h less RELEASE_INTERVAL_SLACK_HOURS (2): still
-#     soaking; the run stops here (FORCE=true skips the wait);
+#     soaking; the run stops here (FORCE=true skips the wait, but the
+#     gate below still holds a soak under that minimum PENDING unless
+#     RELEASE_ALLOW_SHORT_SOAK=true, and the -pending tag records how long
+#     the rc soaked and whether FORCE was used);
 #   - otherwise scripts/candidate-gate.sh check-soak judges it:
 #       PENDING  the run stops here, and the next one asks again;
 #       PASS     it is staged for a person to approve: vM.Y.0-pending is
@@ -113,7 +119,19 @@
 # Settings (environment):
 #   RELEASE_REMOTE           the remote (origin)
 #   RELEASE_NOW              the time, in seconds (now)
-#   FORCE                    true promotes or drops an rc younger than the soak
+#   FORCE                    true asks the soak gate about an rc younger than
+#                            the soak instead of waiting: it may drop it, but
+#                            the gate holds it PENDING (soak-age) until it has
+#                            been on staging the minimum. The -pending tag
+#                            records how long it soaked and whether FORCE
+#                            was used
+#   RELEASE_ALLOW_SHORT_SOAK true lets the gate pass a soak under the minimum
+#                            (check-soak --allow-short-soak); approving it
+#                            still needs RELEASE_SHORT_SOAK_OK
+#   RELEASE_SHORT_SOAK_OK    approve only: true promotes a -pending release
+#                            whose recorded soak is under RELEASE_SOAK_HOURS
+#                            less the slack (promote-release.yml's
+#                            short_soak_ok input), and says so on vX.Y.0
 #   RELEASE_SOAK_HOURS, RELEASE_INTERVAL_SLACK_HOURS
 #                            24 and 2: a daily 04:15 run never misses the
 #                            boundary by a minute of jitter
@@ -155,6 +173,9 @@ scripts_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 remote="${RELEASE_REMOTE:-origin}"
 now="${RELEASE_NOW:-$(date +%s)}"
 FORCE="${FORCE:-false}"
+allow_short_soak=""
+[ "${RELEASE_ALLOW_SHORT_SOAK:-}" != true ] || allow_short_soak=yes
+short_soak_ok="${RELEASE_SHORT_SOAK_OK:-false}"
 DRY_RUN="${DRY_RUN:-false}"
 soak_hours="${RELEASE_SOAK_HOURS:-24}"
 slack_hours="${RELEASE_INTERVAL_SLACK_HOURS:-2}"
@@ -257,6 +278,23 @@ target_release() {
 }
 
 commit_of() { git rev-parse --verify -q "refs/tags/$1^{commit}"; }
+
+soak_duration() { printf '%dh%02dm' "$(($1 / 3600))" "$(($1 % 3600 / 60))"; } # soak_duration <seconds>
+
+# recorded_soak <release> <rc>: how long the rc behind <release>-pending
+# soaked, in seconds -- the Soak-Seconds the train wrote on the tag, or
+# for a -pending tag from before it did, the time from the rc's tag to
+# the -pending one; nothing if neither says.
+recorded_soak() {
+  local s cut staged
+  s="$(git for-each-ref --format='%(contents)' "refs/tags/$1-pending" | sed -nE 's/^Soak-Seconds: ([0-9]+)$/\1/p' | tail -n 1)"
+  if [ -z "$s" ] && [ -n "$2" ]; then
+    cut="$(git for-each-ref --format='%(taggerdate:unix)' "refs/tags/$2")"
+    staged="$(git for-each-ref --format='%(taggerdate:unix)' "refs/tags/$1-pending")"
+    [ -z "$cut" ] || [ -z "$staged" ] || s=$((staged - cut))
+  fi
+  printf '%s' "$s"
+}
 
 push() { # push <git push args...>
   if [ "$DRY_RUN" = true ]; then
@@ -412,12 +450,13 @@ raise_pending() { # raise_pending <release> <rc> <body>
   fi
 }
 
-# pending_body <release> <rc> <soak summary> <notes task>: what the
-# notification says.
+# pending_body <release> <rc> <soak summary> <notes task> <soak note>
+# <short-soak warning>: what the notification says.
 pending_body() {
   printf '%s passed its %sh staging soak and is staged as %s-pending: images built and published as :%s-pending, nothing left to build or test.\n\n' \
     "$2" "$soak_hours" "$1" "$1"
-  printf 'Soak: %s\n' "${3:-PASS}"
+  [ -z "${6:-}" ] || printf '%s\n\n' "$6"
+  printf 'Soak: %s%s\n' "${5:+$5: }" "${3:-PASS}"
   printf 'Release notes: %s\n\n' "${4:-the release-notes task for $1 (docs/releases/$1.md); merge it before approving}"
   printf 'Approve tags %s and moves latest onto it; Reject drops %s and the next run cuts its next rc. ' "$1" "$2"
   printf 'Meanwhile the daily train may cut and soak the next minor'"'"'s rc, but it never promotes or supersedes %s: it waits for your answer.\n' "$1"
@@ -439,8 +478,19 @@ if [ "$mode" != train ]; then
   from_rc="$(git tag --points-at "$pending_sha" -l "$version-rc.*" | grep -E "^${version//./\\.}-rc\\.[0-9]+$" | sort -t. -k4,4n | tail -n 1 || true)"
   if [ "$mode" = approve ]; then
     prev="$(promoted | tail -n 1)"
-    say "approve: $by approved $version (${from_rc:-?}, ${pending_sha:0:12}); promoting it to $version and latest"
-    git tag -a "$version" "$pending_sha" -m "Release $version" -m "Promoted from ${from_rc:-$version-pending}, approved by $by"
+    min_soak=$(((soak_hours - slack_hours) * 3600))
+    soaked="$(recorded_soak "$version" "$from_rc")"
+    soak_said="${soaked:+soaked $(soak_duration "$soaked") of ${soak_hours}h}"
+    override=""
+    if [ -z "$soaked" ] || [ "$soaked" -lt "$min_soak" ]; then
+      if [ "$short_soak_ok" != true ]; then
+        die "$version ${soak_said:-has no recorded soak}, under the $((soak_hours - slack_hours))h minimum: approve it with short_soak_ok: true if that is meant, or reject it; nothing was done"
+      fi
+      override="; short soak (${soak_said:-no recorded soak}, under the $((soak_hours - slack_hours))h minimum) accepted with short_soak_ok: true"
+      say "approve: $version ${soak_said:-has no recorded soak}, under the $((soak_hours - slack_hours))h minimum; $by passed short_soak_ok: true"
+    fi
+    say "approve: $by approved $version (${from_rc:-?}, ${pending_sha:0:12}${soak_said:+, $soak_said}); promoting it to $version and latest"
+    git tag -a "$version" "$pending_sha" -m "Release $version" -m "Promoted from ${from_rc:-$version-pending}, approved by $by$override"
     git tag -fa latest "$pending_sha" -m "Latest release $version"
     push "refs/tags/$version" || die "could not push $version; latest was not moved and $version-pending stands"
     push --force "refs/tags/latest" || die "pushed $version, but could not move latest onto it"
@@ -481,7 +531,13 @@ if [ -n "$pending" ]; then
   pending_sha="$(commit_of "$pending-pending")"
   pending_rc="$(git tag --points-at "$pending_sha" -l "$pending-rc.*" | sort -t. -k4,4n | tail -n 1 || true)"
   say "$pending (${pending_sha:0:12}, from ${pending_rc:-?}) is pending a person's approval; this run neither promotes nor supersedes it"
-  raise_pending "$pending" "$pending_rc" "$(pending_body "$pending" "$pending_rc" "" "")"
+  pending_soaked="$(recorded_soak "$pending" "$pending_rc")"
+  pending_warning=""
+  if [ -z "$pending_soaked" ] || [ "$pending_soaked" -lt $(((soak_hours - slack_hours) * 3600)) ]; then
+    pending_warning="SHORT SOAK: under the $((soak_hours - slack_hours))h minimum; approving it needs short_soak_ok: true."
+  fi
+  raise_pending "$pending" "$pending_rc" "$(pending_body "$pending" "$pending_rc" "" "" \
+    "${pending_soaked:+soaked $(soak_duration "$pending_soaked") of ${soak_hours}h}" "$pending_warning")"
 fi
 
 # --- Phase 1 ---
@@ -517,13 +573,23 @@ if [ -n "$rc" ]; then
       say "phase 1: $rc (${rc_sha:0:12}) soak in progress ($((age / 3600))h / ${soak_hours}h); nothing to cut while it soaks"
       exit 0
     fi
-    say "phase 1: $rc (${rc_sha:0:12}) has soaked $((age / 3600))h; asking the soak gate"
+    # What the soak was, recorded on the -pending tag, in its notification
+    # and in the output, so the person approving it sees a short one and
+    # approve refuses it without short_soak_ok.
+    soak_note="soaked $(soak_duration "$age") of ${soak_hours}h"
+    [ "$FORCE" != true ] || soak_note="$soak_note (FORCE=true)"
+    short_soak=false
+    [ "$age" -ge "$min_age" ] || short_soak=true
+    say "phase 1: $rc (${rc_sha:0:12}) has $soak_note; asking the soak gate"
     gate_json RELEASE_SANDBOXES_JSON "/api/persistent-sandboxes" "$work/sandboxes.json"
     fetch_tasks
     soak_status=0
+    # FORCE only skips the wait above: the gate still holds a soak shorter
+    # than the minimum PENDING unless RELEASE_ALLOW_SHORT_SOAK says otherwise.
     soak_out="$(bash "$scripts_dir/candidate-gate.sh" check-soak --rc-tag "$rc" --rc-sha "$rc_sha" \
       --sandbox-json "$work/sandboxes.json" --tasks-json "$tasks_json" --staging-url "$staging_url" \
-      --deployed-at "${RELEASE_DEPLOYED_AT:-}" 2>&1)" || soak_status=$?
+      --deployed-at "${RELEASE_DEPLOYED_AT:-}" --now "$now" --min-soak-hours "$((soak_hours - slack_hours))" \
+      ${allow_short_soak:+--allow-short-soak} 2>&1)" || soak_status=$?
     printf '%s\n' "$soak_out" | sed 's/^/  /'
     case "$soak_status" in
       0)
@@ -534,15 +600,24 @@ if [ -n "$rc" ]; then
         prev="$notes_from"
         verdict="$(printf '%s\n' "$soak_out" | sed -n 's/^PASS //p' | paste -sd';' - | sed 's/;/; /g')"
         say "phase 1: $rc passed its soak; staging $target-pending for a person to approve ($target and latest are not touched)"
+        short_warning=""
+        if [ "$short_soak" = true ]; then
+          short_warning="SHORT SOAK: under the $((soak_hours - slack_hours))h minimum; approving it needs short_soak_ok: true."
+        fi
         git tag -a "$target-pending" "$rc_sha" -m "Release $target pending approval" \
-          -m "From $rc, whose ${soak_hours}h staging soak passed: ${verdict:-PASS}" \
-          -m "A person approves it (grain release approve $target) or rejects it (grain release reject $target)."
+          -m "From $rc, $soak_note: ${verdict:-PASS}" \
+          ${short_warning:+-m "$short_warning"} \
+          -m "A person approves it (grain release approve $target) or rejects it (grain release reject $target)." \
+          -m "Soak-Seconds: $age
+Soak-Forced: $FORCE"
         push "refs/tags/$target-pending" || die "could not push $target-pending"
         emit pending_version "$target"
+        emit pending_soak "From $rc, $soak_note"
+        [ -z "$short_warning" ] || say "phase 1: $short_warning"
         images pending "$target" || die "tagged $target-pending, but could not stage its images: run \`release-images.sh pending $target\`"
         notes_task=""
         file_release_notes "$target" "$prev"
-        raise_pending "$target" "$rc" "$(pending_body "$target" "$rc" "${verdict:-PASS}" "$notes_task")"
+        raise_pending "$target" "$rc" "$(pending_body "$target" "$rc" "${verdict:-PASS}" "$notes_task" "$soak_note" "$short_warning")"
         floor="$rc_sha"
         next_n=1
         target_release

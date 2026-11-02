@@ -134,6 +134,58 @@ func granuleDockerRealTestPrereqs(t *testing.T) {
 	// build failure naming it says far more than a silent skip would.
 }
 
+const (
+	realVMCPUsEnv     = "GRAIN_REAL_VM_CPUS"
+	realVMMemoryMBEnv = "GRAIN_REAL_VM_MEMORY_MB"
+)
+
+// realVMDefaultCPUs and realVMDefaultMemoryMB read optional GRAIN_REAL_VM_CPUS
+// and GRAIN_REAL_VM_MEMORY_MB overrides so CI runners (such as 4-vCPU / 16-GiB
+// GitHub-hosted ubuntu-latest runners) can size test microVMs without forking
+// the suite. When unset, they return 0 so GranuleConfig keeps DefaultShape().
+func realVMDefaultCPUs(t *testing.T) int {
+	t.Helper()
+	return parseOptionalPositiveIntEnv(t, realVMCPUsEnv)
+}
+
+func realVMDefaultMemoryMB(t *testing.T) int {
+	t.Helper()
+	return parseOptionalPositiveIntEnv(t, realVMMemoryMBEnv)
+}
+
+func parseOptionalPositiveIntEnv(t *testing.T, key string) int {
+	t.Helper()
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		t.Fatalf("%s=%q: want a positive integer", key, raw)
+	}
+	return n
+}
+
+func TestRealVMDefaultShapeEnvOverrides(t *testing.T) {
+	t.Setenv(realVMCPUsEnv, "")
+	t.Setenv(realVMMemoryMBEnv, "")
+	if got := realVMDefaultCPUs(t); got != 0 {
+		t.Fatalf("unset %s = %d, want 0", realVMCPUsEnv, got)
+	}
+	if got := realVMDefaultMemoryMB(t); got != 0 {
+		t.Fatalf("unset %s = %d, want 0", realVMMemoryMBEnv, got)
+	}
+
+	t.Setenv(realVMCPUsEnv, "2")
+	t.Setenv(realVMMemoryMBEnv, "2048")
+	if got := realVMDefaultCPUs(t); got != 2 {
+		t.Fatalf("%s=2 -> %d, want 2", realVMCPUsEnv, got)
+	}
+	if got := realVMDefaultMemoryMB(t); got != 2048 {
+		t.Fatalf("%s=2048 -> %d, want 2048", realVMMemoryMBEnv, got)
+	}
+}
+
 // buildGranule builds bwsalmon/granule's own operator-facing CLI from the
 // vendored copy this repo carries (third_party/granule/VENDORED.md) into a
 // fresh temp directory, and returns that directory so the caller can put
@@ -303,6 +355,8 @@ func TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently(t *testing.T) {
 		Workspace:         "/home/debian",
 		ReadyTimeout:      3 * time.Minute,
 		ReadyPollInterval: time.Second,
+		DefaultCPUs:       realVMDefaultCPUs(t),
+		DefaultMemoryMB:   realVMDefaultMemoryMB(t),
 		// No IP/Port: this runs in flat mode (the default), where
 		// createArgs drops both because the container runtime assigns the
 		// address. They were set here to keep this test's VMs off the
@@ -508,6 +562,8 @@ func TestGranuleSandboxesAgainstARealDockerBackedVM(t *testing.T) {
 		Workspace:         "/home/debian",
 		ReadyTimeout:      3 * time.Minute,
 		ReadyPollInterval: time.Second,
+		DefaultCPUs:       realVMDefaultCPUs(t),
+		DefaultMemoryMB:   realVMDefaultMemoryMB(t),
 	})
 
 	name, err := k.VMNameFor("e1-1")
@@ -1005,6 +1061,8 @@ func TestGranuleSandboxGuestNetworkIsolationAndBootLatency(t *testing.T) {
 		Workspace:         "/home/debian",
 		ReadyTimeout:      3 * time.Minute,
 		ReadyPollInterval: time.Second,
+		DefaultCPUs:       realVMDefaultCPUs(t),
+		DefaultMemoryMB:   realVMDefaultMemoryMB(t),
 	})
 
 	name, err := k.VMNameFor("e2e-net")
@@ -1302,6 +1360,8 @@ func TestGranuleSandboxNetworkNoneIsolationOutsideGuestVM(t *testing.T) {
 		Workspace:         "/home/debian",
 		ReadyTimeout:      3 * time.Minute,
 		ReadyPollInterval: time.Second,
+		DefaultCPUs:       realVMDefaultCPUs(t),
+		DefaultMemoryMB:   realVMDefaultMemoryMB(t),
 		SandboxServicePorts: func() []orchestrator.SandboxServicePort {
 			return []orchestrator.SandboxServicePort{{Proto: "tcp", Port: service}}
 		},

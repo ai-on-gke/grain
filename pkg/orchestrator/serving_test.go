@@ -263,9 +263,7 @@ func TestServeArgsStartTheUnitAsRootAndTheCommandAsTheExecUser(t *testing.T) {
 		"systemd-run": "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\n",
 		"sudo":        "#!/bin/sh\n[ \"$1\" = -n ] || exit 9\nshift\necho SUDO\nexec \"$@\"\n",
 	} {
-		if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		writeExecutableStub(t, filepath.Join(bin, name), script)
 	}
 	args := serveArgs(ServeSpec{Command: "serve --flag 'x y'", Env: map[string]string{"NOTE": "a b"}}, "u")
 	cmd := exec.Command(args[0], args[1:]...)

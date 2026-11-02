@@ -220,9 +220,7 @@ func TestWriteAsRootScriptActuallyWritesTheFile(t *testing.T) {
 	dir := t.TempDir()
 	// A `sudo` of our own on PATH, so the non-root branch is exercised by
 	// a test that is not root and the root branch by one that is.
-	if err := os.WriteFile(filepath.Join(dir, "sudo"), []byte("#!/bin/sh\n[ \"$1\" = -n ] && shift\nexec \"$@\"\n"), 0o755); err != nil {
-		t.Fatalf("writing a sudo stub: %v", err)
-	}
+	writePATHStub(t, dir, "sudo", "#!/bin/sh\n[ \"$1\" = -n ] && shift\nexec \"$@\"\n")
 	// And, on a host whose userland is not a sandbox's, an `install` of our
 	// own too -- see gnuInstallStub.
 	if runtime.GOOS != "linux" {
@@ -318,9 +316,7 @@ chmod "$mode" "$2" || exit 1
 // write that replaced the file is not.
 func TestTheResolvConfWriteReplacesTheContentsAndNotTheFile(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "sudo"), []byte("#!/bin/sh\n[ \"$1\" = -n ] && shift\nexec \"$@\"\n"), 0o755); err != nil {
-		t.Fatalf("writing a sudo stub: %v", err)
-	}
+	writePATHStub(t, dir, "sudo", "#!/bin/sh\n[ \"$1\" = -n ] && shift\nexec \"$@\"\n")
 	target := filepath.Join(dir, "resolv.conf")
 	if err := os.WriteFile(target, []byte("nameserver 8.8.8.8\n"), 0o644); err != nil {
 		t.Fatalf("writing the sandbox's own resolv.conf: %v", err)
@@ -355,9 +351,7 @@ func TestTheResolvConfWriteReplacesTheContentsAndNotTheFile(t *testing.T) {
 // since that is the common case.
 func TestReadAsRootScriptPrintsAFileOrNothing(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "sudo"), []byte("#!/bin/sh\n[ \"$1\" = -n ] && shift\nexec \"$@\"\n"), 0o755); err != nil {
-		t.Fatalf("writing a sudo stub: %v", err)
-	}
+	writePATHStub(t, dir, "sudo", "#!/bin/sh\n[ \"$1\" = -n ] && shift\nexec \"$@\"\n")
 	run := func(path string) (string, error) {
 		cmd := exec.Command("sh", "-c", readAsRootScript, "sh", path)
 		cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))

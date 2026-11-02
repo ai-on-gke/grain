@@ -784,20 +784,9 @@ func linkTool(t *testing.T, dir, name string) {
 }
 
 // writePATHStub drops an executable of its own on a directory meant for PATH.
-//
-// It is written beside its path and installed into place rather than
-// written there directly: a parallel test's fork can inherit the open
-// write descriptor, and exec of a file still open for writing fails
-// with "text file busy" (writeSweepKubectl does the same).
 func writePATHStub(t *testing.T, dir, name, script string) {
 	t.Helper()
-	src := dir + "/" + name + ".src"
-	if err := os.WriteFile(src, []byte(script), 0o644); err != nil {
-		t.Fatalf("writing a %s stub: %v", name, err)
-	}
-	if out, err := exec.Command("install", "-m", "0755", src, dir+"/"+name).CombinedOutput(); err != nil {
-		t.Fatalf("installing a %s stub: %v: %s", name, err, out)
-	}
+	writeExecutableStub(t, filepath.Join(dir, name), script)
 }
 
 // requireRealDockerSandbox is the gate: opt in, and then every piece this

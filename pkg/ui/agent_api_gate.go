@@ -405,8 +405,7 @@ func tasksAdminTaskPatchBodyAllowed(body []byte) error {
 		if json.Unmarshal(raw, &on) == nil {
 			return errors.New("api:tasks:admin without api:tasks:write may only edit numeric priority on PATCH /api/tasks/{id}")
 		}
-		var n int
-		if json.Unmarshal(raw, &n) != nil || strings.TrimSpace(string(raw)) == "null" {
+		if _, err := decodeTaskPriority(raw); err != nil || strings.TrimSpace(string(raw)) == "null" {
 			return errors.New("api:tasks:admin without api:tasks:write requires a numeric priority on PATCH /api/tasks/{id}")
 		}
 	}

@@ -56,7 +56,8 @@
 #
 #   candidate-gate.sh check-soak --rc-tag TAG --rc-sha SHA
 #       --sandbox-json FILE --tasks-json FILE [--staging-url URL]
-#       [--sandbox NAME] [--deployed-at EPOCH]
+#       [--sandbox NAME] [--deployed-at EPOCH] [--now EPOCH]
+#       [--min-soak-hours H] [--allow-short-soak]
 #
 #     The four soak signals of the candidate on staging, plus the
 #     operator's veto:
@@ -80,7 +81,13 @@
 #                    carrying TAG or "rc-blocker" in its title, since the
 #                    deployment is still open;
 #       never        TAG, and the release it would become, are not in
-#                    RELEASE_NEVER_PROMOTE (scripts/release.conf).
+#                    RELEASE_NEVER_PROMOTE (scripts/release.conf);
+#       soak-age     SHA has been deployed at least H hours (default 22,
+#                    RELEASE_SOAK_HOURS less RELEASE_INTERVAL_SLACK_HOURS)
+#                    by --now (default the time); a shorter soak is
+#                    PENDING, so FORCE=true on the train never turns a
+#                    near-zero soak into a PASS, unless --allow-short-soak
+#                    is given, which passes it and says so.
 #     SHA was deployed when the sandbox last refreshed onto it, or failing
 #     that when TAG was made (--deployed-at overrides both).
 #
@@ -102,7 +109,7 @@ NIGHTLY_WINDOW_SECONDS="${NIGHTLY_WINDOW_SECONDS:-86400}"
 usage() {
   cat >&2 <<'EOF'
 usage: candidate-gate.sh select-lkg --runs-json FILE [--floor-sha SHA] [--ref REF] [--tasks-json FILE] [--now EPOCH] [--max-commits N]
-       candidate-gate.sh check-soak --rc-tag TAG --rc-sha SHA --sandbox-json FILE --tasks-json FILE [--staging-url URL] [--sandbox NAME] [--deployed-at EPOCH]
+       candidate-gate.sh check-soak --rc-tag TAG --rc-sha SHA --sandbox-json FILE --tasks-json FILE [--staging-url URL] [--sandbox NAME] [--deployed-at EPOCH] [--now EPOCH] [--min-soak-hours H] [--allow-short-soak]
 EOF
   exit 64
 }
@@ -340,6 +347,7 @@ select_lkg() {
 
 check_soak() {
   local tag="" rc="" sandboxes="" tasks="" url="http://127.0.0.1:4280" name="grain-candidate" deployed=""
+  local now="" min_hours="$(( ${RELEASE_SOAK_HOURS:-24} - ${RELEASE_INTERVAL_SLACK_HOURS:-2} ))" allow_short=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --rc-tag) tag="${2:-}"; shift 2 ;;
@@ -349,6 +357,9 @@ check_soak() {
       --staging-url) url="${2:-}"; shift 2 ;;
       --sandbox) name="${2:-}"; shift 2 ;;
       --deployed-at) deployed="${2:-}"; shift 2 ;;
+      --now) now="${2:-}"; shift 2 ;;
+      --min-soak-hours) min_hours="${2:-}"; shift 2 ;;
+      --allow-short-soak) allow_short=yes; shift ;;
       *) usage ;;
     esac
   done
@@ -360,6 +371,9 @@ check_soak() {
   [ -f "$sandboxes" ] || die "--sandbox-json $sandboxes is not a file"
   [ -f "$tasks" ] || die "--tasks-json $tasks is not a file"
   [ -z "$deployed" ] || [[ "$deployed" =~ ^[0-9]+$ ]] || die "--deployed-at $deployed is not seconds since the epoch"
+  [ -z "$now" ] || [[ "$now" =~ ^[0-9]+$ ]] || die "--now $now is not seconds since the epoch"
+  [[ "$min_hours" =~ ^[0-9]+$ ]] || die "--min-soak-hours $min_hours is not a whole number of hours"
+  now="${now:-$(date +%s)}"
   url="${url%/}"
   rc="${rc,,}"
 
@@ -484,6 +498,18 @@ check_soak() {
     fail never "RELEASE_NEVER_PROMOTE ($never) names $(listed "$tag" "$never" && echo "$tag" || echo "$release")"
   else
     pass never "RELEASE_NEVER_PROMOTE does not name $tag or $release"
+  fi
+
+  # 6. how long it has soaked
+  local soaked=$((now - deployed)) min=$((min_hours * 3600)) took
+  [ "$soaked" -ge 0 ] || soaked=0
+  took="$(printf '%dh%02dm' $((soaked / 3600)) $((soaked % 3600 / 60)))"
+  if [ "$soaked" -ge "$min" ]; then
+    pass soak-age "${rc:0:12} has soaked $took on staging (minimum ${min_hours}h)"
+  elif [ -n "$allow_short" ]; then
+    pass soak-age "${rc:0:12} has soaked only $took on staging, under the ${min_hours}h minimum; --allow-short-soak passes it"
+  else
+    wait_for soak-age "${rc:0:12} has soaked $took on staging, under the ${min_hours}h minimum"
   fi
 
   if [ "${#failed[@]}" -gt 0 ]; then

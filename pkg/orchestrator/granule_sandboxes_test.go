@@ -109,9 +109,7 @@ if [ "$1" = "vm" ] && { [ "$2" = "create" ] || [ "$2" = "delete" ]; }; then
 fi
 `, argvLog, port)
 	path := filepath.Join(dir, "granule")
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	orchestrator.WriteExecutableStub(t, path, script)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
@@ -1234,9 +1232,7 @@ inspect)
 esac
 `, argvLog, execBody, fakeGuestConsoleLine, status, filepath.Join(dir, "network-created"), guestBin)
 	path := filepath.Join(dir, "docker")
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	orchestrator.WriteExecutableStub(t, path, script)
 	warmUpFakeDocker(t, path)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
@@ -1258,9 +1254,7 @@ func fakeGuestBin(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	sudo := "#!/bin/sh\necho \"fake guest: sudo is refused, so a guest's root maintenance never runs on the test host: $*\" >&2\nexit 1\n"
-	if err := os.WriteFile(filepath.Join(dir, "sudo"), []byte(sudo), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	orchestrator.WriteExecutableStub(t, filepath.Join(dir, "sudo"), sudo)
 	return dir
 }
 
@@ -1771,9 +1765,7 @@ if [ "$1" = "vm" ] && [ "$2" = "delete" ]; then
 fi
 `, stateDir, stateDir)
 	path := filepath.Join(dir, "granule")
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	orchestrator.WriteExecutableStub(t, path, script)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	k := orchestrator.NewGranuleSandboxes(granuleTestConfig(stateDir))
@@ -1932,6 +1924,7 @@ func TestGranuleSandboxesGivesEachVMItsAllocatedAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(orchestrator.StubHostFirewallAddresses(pool.Addr))
 	k := orchestrator.NewGranuleSandboxes(orchestrator.GranuleConfig{
 		StateDir: stateDir, SSHUser: "debian", ExecKeyPath: "/images/key",
 		Workspace: "/workspace", ReadyPollInterval: time.Millisecond,
@@ -1988,6 +1981,7 @@ func TestReleasingAGranuleSandboxGivesBackItsAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(orchestrator.StubHostFirewallAddresses(pool.Addr))
 	k := orchestrator.NewGranuleSandboxes(orchestrator.GranuleConfig{
 		StateDir: stateDir, SSHUser: "debian", ExecKeyPath: "/images/key",
 		Workspace: "/workspace", ReadyPollInterval: time.Millisecond,
@@ -2046,6 +2040,7 @@ func TestAGranuleAcquireRecreatesARemovedSandboxNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(orchestrator.StubHostFirewallAddresses(pool.Addr))
 	k := orchestrator.NewGranuleSandboxes(orchestrator.GranuleConfig{
 		StateDir: stateDir, SSHUser: "debian", ExecKeyPath: "/images/key",
 		Workspace: "/workspace", ReadyPollInterval: time.Millisecond,
@@ -2083,9 +2078,7 @@ func TestAFailedAcquireDoesNotLeakAnAddress(t *testing.T) {
 	// A granule that refuses to create: Acquire fails before any guest.
 	dir := t.TempDir()
 	script := filepath.Join(dir, "granule")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'create refused' >&2\nexit 1\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	orchestrator.WriteExecutableStub(t, script, "#!/bin/sh\necho 'create refused' >&2\nexit 1\n")
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	pool, err := sandboxaddr.NewPool("10.128.0.0/16")

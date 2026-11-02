@@ -53,8 +53,8 @@ import (
 // tools (grantTools, for orchestrator.Config.GrantTools), but those
 // reach no agent at all -- no Framework left can consume in-process
 // tools, see that field's own doc comment -- so they are deliberately
-// unpublished, and run_host_command is not a name any roster should
-// carry.
+// unpublished. run_host_command is published because mcpserver.go now
+// serves it itself (selfrepair.ConfirmedHostCommandTools).
 //
 // Adding a tool means adding its constructor to both files, which is two
 // appended lines in two places and no shared number or sentence to edit.

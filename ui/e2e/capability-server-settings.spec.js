@@ -340,10 +340,16 @@ test("lists the built-in capability servers first, full width, badged and disabl
     await page.getByTestId("capability-servers-back").click();
   }
 
-  // The operator's own servers follow the built-ins.
+  // The operator's own servers follow the built-ins (configured, then
+  // in-process: capability-in-process-servers.spec.js).
   const allRows = await rows.all();
   const builtinFlags = await Promise.all(
-    allRows.map(async (r) => Boolean(await r.getAttribute("data-builtin-row"))),
+    allRows.map(async (r) =>
+      Boolean(
+        (await r.getAttribute("data-builtin-row")) ||
+        (await r.getAttribute("data-in-process-row")),
+      ),
+    ),
   );
   const firstCustomIdx = builtinFlags.indexOf(false);
   expect(firstCustomIdx).toBeGreaterThan(0);

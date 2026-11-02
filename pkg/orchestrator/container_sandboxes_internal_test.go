@@ -75,9 +75,7 @@ func TestContainerAcquireRemovesContainerOnFailedCreate(t *testing.T) {
 	logPath := filepath.Join(dir, "calls")
 	docker := filepath.Join(dir, "docker")
 	script := "#!/bin/sh\necho \"$*\" >> " + logPath + "\n[ \"$1\" = run ] && exit 1\nexit 0\n"
-	if err := os.WriteFile(docker, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutableStub(t, docker, script)
 	c := NewContainerSandboxes(ContainerConfig{Docker: docker, Image: "img", Workspace: "/w", Network: "mine"})
 	if _, err := c.Acquire(t.Context(), "1-1", Shape{}); err == nil {
 		t.Fatal("Acquire succeeded though docker run failed")

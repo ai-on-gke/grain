@@ -39,6 +39,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
+	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -1438,6 +1439,7 @@ var servedGrants = []string{
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
+	selfrepair.CapabilityName, grainserver.HostExecRef, grainserver.HostExecGrant,
 }
 
 func warnUnknownGrants(grants GrantNames) {
@@ -2339,6 +2341,18 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 			registry.Register(mcp.NewChatTools(daemonChat{client: client, taskID: *taskID, writeFile: writeFile,
 				delivered: delivered}, mcp.SandboxFileReaderOf(tools))...)
 			liveFiler = proposals
+			// run_host_command waits on the same person chat does, for
+			// each command it is asked to run, and so is gated the same
+			// way: a background run is given no tool rather than one
+			// whose every call would time out unanswered.
+			if grainserver.HasHostExec(grants) {
+				registry.Register(selfrepair.ConfirmedHostCommandTools(daemonHostExecConfirm{client: client, taskID: *taskID,
+					timeout: selfrepair.DefaultConfirmTimeout, delivered: delivered}.Confirm)...)
+			}
+		}
+		if grainserver.HasHostExec(grants) && !*interactive {
+			fmt.Fprintln(os.Stderr, "grain mcpserver: run_host_command is not served to this run: "+
+				"grain#host-exec confirms every command with a person in the task's chat, and this run is not -interactive")
 		}
 		registry.Register(mcp.NewLiveProposalTools(escapeSink, proposeRepoList.Nameable(), *taskID,
 			liveFiler)...)

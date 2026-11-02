@@ -45,7 +45,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
-	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -271,12 +270,17 @@ func sourceDir(flagged string) string {
 	return flagged
 }
 
-// grantTools wires selfdebug/selfrepair's own tool-building functions
+// grantTools wires grainlog/bootstrap's own tool-building functions
 // into orchestrator.Config.GrantTools -- see that field's own doc
 // comment for why this indirection exists instead of a method on
 // model.CapabilityProvider. srcDir is whatever sourceDir resolved: the
 // image's baked-in copy of grain's own source, or the checkout
 // -upgrade-src-dir names on a deployment that has no such image.
+//
+// grain#host-exec's run_host_command is not here: it is served by the
+// run's forked mcpserver, which confirms each command over the daemon
+// (daemonHostExecConfirm), and an entry here would only build a second
+// copy no framework reads.
 func grantTools(srcDir, secretsDir string) map[string]func(store *model.Store, taskID string) []mcp.Tool {
 	return map[string]func(store *model.Store, taskID string) []mcp.Tool{
 		// Built per run rather than once here, so that a secret set
@@ -293,12 +297,6 @@ func grantTools(srcDir, secretsDir string) map[string]func(store *model.Store, t
 				TaskID:   taskID,
 				Redactor: grainLogRedactor(secretsDir),
 			})
-		},
-		selfrepair.CapabilityName: func(store *model.Store, taskID string) []mcp.Tool {
-			return selfrepair.HostCommandTools(store, taskID, 0, 0)
-		},
-		grainserver.HostExecGrant: func(store *model.Store, taskID string) []mcp.Tool {
-			return selfrepair.HostCommandTools(store, taskID, 0, 0)
 		},
 		bootstrap.CapabilityName: func(*model.Store, string) []mcp.Tool {
 			return bootstrap.PlaybookTools()

@@ -16,7 +16,6 @@ package orchestrator
 
 import (
 	"context"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -39,9 +38,7 @@ func fastPersistentRefresh(t *testing.T, debounce time.Duration) {
 func persistentCommit(t *testing.T, repo string, files map[string]string) string {
 	t.Helper()
 	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(repo, name), []byte(content), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		writeExecutableStub(t, filepath.Join(repo, name), content)
 	}
 	for _, args := range [][]string{
 		{"add", "."},
