@@ -284,6 +284,10 @@ func printBacklog(w io.Writer, backlog ui.MetricsBacklog) {
 	}
 	sort.Strings(states)
 	fmt.Fprintf(w, "  %s\n", strings.Join(states, "  "))
+	if backlog.StoppedByOperator > 0 {
+		fmt.Fprintf(w, "  stopped by operator: %d (waiting on a reply or Retry, not a worker)\n",
+			backlog.StoppedByOperator)
+	}
 	if backlog.OldestQueuedTaskID != "" {
 		fmt.Fprintf(w, "  oldest queued: task %s, waiting %s\n",
 			backlog.OldestQueuedTaskID, Seconds(backlog.OldestQueuedSeconds))

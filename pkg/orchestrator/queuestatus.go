@@ -355,6 +355,9 @@ func statusOf(e queueEntry, isMergeHead, blocked bool, review reviewState, heads
 		if e.running {
 			return queueStatus{state: mergeStateRepairing, note: repairingNote(e)}
 		}
+		if e.turnStopped {
+			return queueStatus{state: mergeStateRepairQueued, note: stoppedRepairNote}
+		}
 		return queueStatus{state: mergeStateRepairQueued, note: repairQueuedNote(e)}
 	}
 	switch health {
