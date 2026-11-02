@@ -265,6 +265,12 @@ type configWriteRehearsal struct {
 	// so configRefusalWriter can export the updated tables immediately to
 	// grain/config once the handler succeeds.
 	wroteSettings bool
+	// writerCtx is the context the first permitted write was guarded
+	// under: the handler's own, which carries the principal the agent
+	// API gate attached where ServeHTTP's request does not. It is who
+	// the write is recorded as made by (recordConfigWrite,
+	// writeCommitNote).
+	writerCtx context.Context
 }
 
 // pending is the refusal an armed request still owes its caller: armed,
@@ -343,10 +349,24 @@ func (r *configWriteRehearsal) markRefused() {
 	r.mu.Unlock()
 }
 
-func (r *configWriteRehearsal) markWroteSettings() {
+func (r *configWriteRehearsal) markWroteSettings(ctx context.Context) {
 	r.mu.Lock()
 	r.wroteSettings = true
+	if r.writerCtx == nil {
+		r.writerCtx = ctx
+	}
 	r.mu.Unlock()
+}
+
+// writer is the context the write was guarded under, or fallback where
+// no write was.
+func (r *configWriteRehearsal) writer(fallback context.Context) context.Context {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.writerCtx == nil {
+		return fallback
+	}
+	return r.writerCtx
 }
 
 func (r *configWriteRehearsal) didWriteSettings() bool {
@@ -507,12 +527,24 @@ func (c *Client) directConfigWrites() bool {
 	return err == nil && s.DirectConfigWrites
 }
 
+// noteConfigWrite marks ctx's request as having changed configuration
+// by a write guardConfigWrite did not guard -- an open console
+// session's settings, which are written to its task -- so that it is
+// audited (recordConfigWrite) and exported like any other.
+func noteConfigWrite(ctx context.Context) {
+	if r, ok := model.WriteRehearsalFrom(ctx); ok {
+		if cr, ok := r.(*configWriteRehearsal); ok {
+			cr.markWroteSettings(ctx)
+		}
+	}
+}
+
 func (c *Client) guardConfigWrite(ctx context.Context, rehearse, bootstrap bool, tables []string) error {
 	remote, branch, managed := c.configRepoFor(ctx, bootstrap)
 	if !managed {
 		if r, ok := model.WriteRehearsalFrom(ctx); ok {
 			if cr, ok := r.(*configWriteRehearsal); ok {
-				cr.markWroteSettings()
+				cr.markWroteSettings(ctx)
 			}
 		}
 		return nil

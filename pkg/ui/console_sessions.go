@@ -746,6 +746,12 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 			return nil, err
 		}
 	}
+	// An open session's edit went to its task without the settings guard
+	// above, and is a change to the session all the same: audited as one
+	// (operator-attribution spec §3.5).
+	if openTask != nil {
+		noteConfigWrite(ctx)
+	}
 	return c.ListConsoleSessions(ctx)
 }
 

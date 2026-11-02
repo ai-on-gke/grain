@@ -186,7 +186,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		ResponseWriter: w,
 		rehearsal:      rehearsal,
 		onSuccess: func() {
-			s.tasks.syncStateRepoAfterWrite(r.Context())
+			// Who made the write is who it was guarded as made by: an
+			// agent's principal is on the handler's context alone.
+			by := rehearsal.writer(r.Context())
+			s.tasks.recordConfigWrite(by, r)
+			s.tasks.syncStateRepoAfterWrite(by)
 		},
 	}
 	s.mux.ServeHTTP(rw, r)
