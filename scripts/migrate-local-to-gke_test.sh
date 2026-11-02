@@ -385,10 +385,16 @@ check "--recopy over a running controller is refused" 1 "--recopy while Deployme
 
 fresh
 migrate --server-url https://grain.example.com/
-check "a --server-url migration completes" 0 "Done."
+check "a --server-url migration needs the identity hostd connects as" 1 "--server-url needs --hostd-owner"
+
+fresh
+migrate --server-url https://grain.example.com/ --hostd-owner Hostd@Proj.iam.gserviceaccount.com --iap-audience iap-client.apps.example.com
+check "a --server-url migration completes" 0 "Done." "hostd owner: hostd@proj.iam.gserviceaccount.com"
 lacks "and sets up no model server" "$out" "model-server"
 truth "a --server-url needs no forward" test ! -e "$sysd/grain-gke-forward.service"
 holds "hostd dials the URL" "$(cat "$sysd/grain-hostd.service.d/gke.conf")" "-server https://grain.example.com -token-file"
+holds "hostd gets an IAP token" "$(cat "$sysd/grain-hostd.service.d/gke.conf")" "-iap-audience iap-client.apps.example.com"
+holds "the controller records the owner" "$(cat "$work"/stub/cluster/applied-*.yaml)" "- -hostd-token-owner=hostd@proj.iam.gserviceaccount.com"
 
 fresh
 STUB_CAPS='[{"id":"gcp","status":{"state":"failed","run":"host"}}]' migrate --verify-timeout 0

@@ -22,6 +22,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net/url"
 	"os"
 	"os/signal"
@@ -147,6 +148,9 @@ func hostdCmd(args []string) {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
+	if remote != nil && remote.IDToken != nil {
+		go logHostdIdentity(ctx, remote)
+	}
 	srv := &hostd.Server{
 		Socket:          *socket,
 		Allowlist:       *allowlist,
@@ -188,6 +192,22 @@ func hostdSelf() string {
 		return ""
 	}
 	return resolved
+}
+
+// logHostdIdentity logs the identity d's ID token names: the one a
+// controller behind IAP verifies this hostd as, which must be its hostd
+// row's owner there.
+func logHostdIdentity(ctx context.Context, d *hostd.Dialer) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	tok, err := d.IDToken(ctx)
+	if err != nil {
+		return // the dial says why
+	}
+	if email := hostd.IDTokenEmail(tok); email != "" {
+		log.Printf("grain hostd: dialing in to %s as %s through IAP: the controller admits this hostd only if its registry owner is %s (grain hostds set-owner <name> %s)",
+			d.Server, email, email, email)
+	}
 }
 
 // hostdDialer is -server's way out to the daemon: the hostd's token from

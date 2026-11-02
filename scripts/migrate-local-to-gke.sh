@@ -63,6 +63,8 @@ NODE_SELECTOR=""
 MANIFEST="${REPO_ROOT}/deploy/kubernetes/grain-granule.yaml"
 TRANSFER_IMAGE="${GRAIN_MIGRATE_TRANSFER_IMAGE:-}"
 SERVER_URL=""
+HOSTD_OWNER=""
+IAP_AUDIENCE=""
 FORWARD_PORT=4280
 TOKEN_FILE=""
 API_TOKEN_FILE=""
@@ -132,6 +134,14 @@ This host:
                             (a Gateway/IAP URL). Default: a local
                             grain-gke-forward.service running kubectl
                             port-forward to http://127.0.0.1:<forward-port>
+  --hostd-owner <email>     With --server-url: the identity hostd dials in
+                            through IAP as -- its service account (Workload
+                            Identity or a key) or the login it runs with.
+                            Recorded as its owner (-hostd-token-owner); the
+                            controller refuses a remote hostd that is not
+                            verified as its owner. Required with --server-url
+  --iap-audience <id>       With --server-url: the IAP OAuth client ID hostd
+                            gets its ID token for (grain hostd -iap-audience)
   --forward-port <port>     Local port of that forward (default: 4280)
   --token-file <path>       Shared hostd token (default:
                             /etc/grain/hostd.token; created when missing)
@@ -229,6 +239,10 @@ parse_args() {
       --data-dir=*) DATA_DIR="${1#*=}" ;;
       --server-url) SERVER_URL="$2"; shift ;;
       --server-url=*) SERVER_URL="${1#*=}" ;;
+      --hostd-owner) HOSTD_OWNER="$2"; shift ;;
+      --hostd-owner=*) HOSTD_OWNER="${1#*=}" ;;
+      --iap-audience) IAP_AUDIENCE="$2"; shift ;;
+      --iap-audience=*) IAP_AUDIENCE="${1#*=}" ;;
       --forward-port) FORWARD_PORT="$2"; shift ;;
       --forward-port=*) FORWARD_PORT="${1#*=}" ;;
       --token-file) TOKEN_FILE="$2"; shift ;;
@@ -252,6 +266,13 @@ parse_args() {
   [[ "${DRAIN_WAIT}" =~ ^[0-9]+$ ]] || die "--drain-wait takes whole seconds, not ${DRAIN_WAIT}"
   [[ "${VERIFY_TIMEOUT}" =~ ^[0-9]+$ ]] || die "--verify-timeout takes whole seconds, not ${VERIFY_TIMEOUT}"
   [[ "${FORWARD_PORT}" =~ ^[0-9]+$ ]] || die "--forward-port takes a port number, not ${FORWARD_PORT}"
+  HOSTD_OWNER="$(printf '%s' "${HOSTD_OWNER}" | tr '[:upper:]' '[:lower:]')"
+  if [[ -n "${HOSTD_OWNER}" && ! "${HOSTD_OWNER}" =~ ^[^@[:space:],]+@[^@[:space:],]+$ ]]; then
+    die "--hostd-owner takes a full email address or service account, not ${HOSTD_OWNER}"
+  fi
+  if [[ -n "${SERVER_URL}" && -z "${HOSTD_OWNER}" && "${PRINT_MANIFEST}" != "true" && "${ROLLBACK}" != "true" ]]; then
+    die "--server-url needs --hostd-owner <email>: the identity hostd dials in through IAP as (its service account, or the login it runs with); the controller refuses a remote hostd that is not verified as its owner"
+  fi
   TOKEN_FILE="${TOKEN_FILE:-${GRAIN_ETC_DIR}/hostd.token}"
 }
 
@@ -509,7 +530,7 @@ render_manifest() {
   local replicas="$1"
   awk -v image="${IMAGE}" -v sandbox="${SANDBOX_IMAGE}" -v repo="${TARGET_REPO}" \
     -v selector="${NODE_SELECTOR}" -v replicas="${replicas}" -v secret="${SECRET_NAME}" \
-    -v mount="${SECRET_MOUNT}" '
+    -v mount="${SECRET_MOUNT}" -v owner="${HOSTD_OWNER}" '
     /^  replicas: [0-9]+$/ { print "  replicas: " replicas; next }
     /^          image: ghcr\.io\/.*\/grain:/ { sub(/image: .*/, "image: " image) }
     /^            - -k8s-granule-image=CHANGEME$/ { sub(/CHANGEME/, sandbox) }
@@ -523,6 +544,10 @@ render_manifest() {
       print "            # Added by scripts/migrate-local-to-gke.sh: the shared token this"
       print "            # host'"'"'s grain hostd dials in with."
       print "            - -hostd-token-file=" mount "/hostd-token"
+      if (owner != "") {
+        print "            # The identity that hostd dials in through IAP as."
+        print "            - -hostd-token-owner=" owner
+      }
     }
     in_containers && /^              mountPath: \/data$/ {
       print "            - name: migration"
@@ -788,6 +813,7 @@ configure_hostd() {
   url="$(controller_url)"
   dropin="${SYSTEMD_DIR}/${HOSTD_UNIT}.d/gke.conf"
   log "  ${HOSTD_UNIT}: dial out to ${url}"
+  [[ -z "${HOSTD_OWNER}" ]] || log "  hostd owner: ${HOSTD_OWNER} (the identity it dials in through IAP as)"
   run chown "${user}" "${TOKEN_FILE}"
   run chmod 0600 "${TOKEN_FILE}"
   if [[ -z "${SERVER_URL}" ]]; then
@@ -803,7 +829,7 @@ ${after}
 
 [Service]
 ExecStart=
-ExecStart=${exec} -server ${url} -token-file ${TOKEN_FILE}
+ExecStart=${exec} -server ${url} -token-file ${TOKEN_FILE}${IAP_AUDIENCE:+ -iap-audience ${IAP_AUDIENCE}}
 EOF
   run systemctl daemon-reload
   run systemctl restart "${HOSTD_UNIT}"

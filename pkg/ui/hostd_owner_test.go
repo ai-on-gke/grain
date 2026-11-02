@@ -40,7 +40,7 @@ type hostdOwnerFixture struct {
 	remote *hostd.Remote
 	store  *model.Store
 	url    string
-	mu sync.Mutex
+	mu     sync.Mutex
 	// assert is the identity the proxy vouches for on the next dial, ""
 	// for none; proxied adds X-Forwarded-For whether or not it vouches.
 	assert  string
