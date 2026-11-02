@@ -150,6 +150,12 @@ func (g *loadGitHub) ListCheckRuns(owner, repo, ref string) ([]github.CheckRun, 
 func (g *loadGitHub) ListWorkflowRuns(owner, repo, headSHA string) ([]github.CheckRun, error) {
 	return nil, g.unsupported("ListWorkflowRuns")
 }
+func (g *loadGitHub) RerequestCheckSuite(owner, repo string, checkSuiteID int64) error {
+	return g.unsupported("RerequestCheckSuite")
+}
+func (g *loadGitHub) RerequestCheckRun(owner, repo string, checkRunID int64) error {
+	return g.unsupported("RerequestCheckRun")
+}
 func (g *loadGitHub) FailedJobLogs(owner, repo, headSHA string) ([]github.JobLog, error) {
 	return nil, g.unsupported("FailedJobLogs")
 }
