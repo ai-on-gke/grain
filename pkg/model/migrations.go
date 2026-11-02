@@ -617,6 +617,15 @@ var Migrations = []Migration{
 			schema90TaskEventTable,
 		}, principalSourceColumns()...),
 	},
+	{
+		Version:     92,
+		Description: "add the hostd registry (hostd, hostd_token), with the co-located hostd as local",
+		Statements: []string{
+			hostdTable,
+			hostdTokenTable,
+		},
+		Up: ensureLocalHostd,
+	},
 }
 
 // principalSourceColumns are migration 91's ALTERs: `<p>_source` beside

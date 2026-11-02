@@ -330,6 +330,11 @@ type Config struct {
 	// host CLIs and run: host capability servers start where the daemon
 	// has no hostd socket of its own -- on Kubernetes, say.
 	HostdRemote *hostd.Remote
+	// HostdHub takes every grain hostd that dials in: the registry's,
+	// each named by its own token (model.Hostd), and HostdRemote's shared
+	// token's when that is set, which is then the same Remote. Built once
+	// the store is open (newHostdHub); nil before.
+	HostdHub *hostd.Remote
 
 	// modelProxyUnrestricted is -model-proxy-unrestricted: the model
 	// proxies forward every vendor path rather than only the
