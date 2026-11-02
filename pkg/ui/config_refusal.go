@@ -357,9 +357,11 @@ func (r *configWriteRehearsal) didWriteSettings() bool {
 
 // StateRepoWriteSyncer is what a StateRepoManager implements when it can
 // export a direct UI/API settings write immediately to grain/config
-// (pkg/daemon's StateManager does).
+// (pkg/daemon's StateManager does). note is the whole commit message
+// that export is to carry -- naming who made the write
+// (writeCommitNote) -- or "" for the plain one.
 type StateRepoWriteSyncer interface {
-	SyncAfterWrite(ctx context.Context) error
+	SyncAfterWrite(ctx context.Context, note string) error
 }
 
 func (c *Client) syncStateRepoAfterWrite(ctx context.Context) {
@@ -367,7 +369,7 @@ func (c *Client) syncStateRepoAfterWrite(ctx context.Context) {
 		return
 	}
 	if syncer, ok := c.Config.StateRepo.(StateRepoWriteSyncer); ok {
-		if err := syncer.SyncAfterWrite(ctx); err != nil {
+		if err := syncer.SyncAfterWrite(ctx, writeCommitNote(ctx)); err != nil {
 			log.Printf("grain api: syncing config repository after settings write: %v", err)
 		}
 	}
