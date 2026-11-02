@@ -340,13 +340,13 @@ func TestASingleTenantDaemonNeverLimitsTheRightCodeFromLoopback(t *testing.T) {
 	}
 }
 
-// A bearer token that cannot be the access code -- a JWT, an external
-// agent's token -- is some other credential sent to the wrong place, not a guess:
+// A bearer token that cannot be the access code -- a JWT, a GitHub
+// token -- is some other credential sent to the wrong place, not a guess:
 // it is refused, and never counted towards anybody's limit.
 func TestASingleTenantDaemonDoesNotCountOtherCredentialsAsGuesses(t *testing.T) {
 	srv := singleTenantFixture(t)
 	for _, tok := range []string{
-		"gma_0123456789abcdef0123456789abcdef",
+		"ghp_0123456789abcdef0123456789abcdef",
 		"eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl",
 		"not-an-access-code",
 	} {
