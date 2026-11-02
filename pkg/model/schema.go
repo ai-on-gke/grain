@@ -379,12 +379,17 @@ import "strconv"
 // repository's CI list to be handed to its jobs and refused (or, for one
 // with no provider, waited on) when a job starts.
 //
-// 84 drops `executor_token` and `executor_token_sequence`: remote
+// 84 rewrites stored `self-repair` grants, `repo_config`.`ci_capabilities`
+// included, to `https://grain.dev/capabilities/grain#host-exec={}`: the
+// in-process `self-repair` provider is retired for the `grain#host-exec`
+// method.
+//
+// 85 drops `executor_token` and `executor_token_sequence`: remote
 // executors are retired, and grain hostd (which authenticates with its
 // own -hostd-token-file) is grain's only host agent. A pure drop: the
 // importer passes over a table this build lacks, so a dump carrying
 // either imports without it.
-const SchemaVersion = 84
+const SchemaVersion = 85
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the

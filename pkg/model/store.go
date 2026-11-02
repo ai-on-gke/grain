@@ -1421,6 +1421,24 @@ func (s *Store) TurnsStopped(ctx context.Context) (map[string]bool, error) {
 	return out, err
 }
 
+// TurnStopped is TurnsStopped for one task: whether it is open and
+// parked on the comment a person posts when they stop its turn.
+func (s *Store) TurnStopped(ctx context.Context, taskID string) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx,
+		"SELECT 1 FROM `task_observation` `o` JOIN `task_comment` `c` "+
+			"ON `c`.`id` = `o`.`pending_question_comment_id` "+
+			"WHERE `o`.`task_id` = ? AND `o`.`closed_at` IS NULL AND `c`.`body` = ?",
+		taskID, TurnStoppedComment).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // PendingQuestionSummaries is the one-line summary of the question every
 // open task is parked on (Comment.Summary), keyed by task -- one query for
 // a whole list, as TurnsStopped is, so a row can say what it was asked

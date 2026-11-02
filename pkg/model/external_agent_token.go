@@ -31,7 +31,7 @@ import (
 const (
 	// ExternalAgentTokenPrefix prefixes every minted external-agent bearer
 	// token, so it is distinguishable in logs and never mistaken for an
-	// executor join token (gxt_) or an access code.
+	// access code.
 	ExternalAgentTokenPrefix = "gma_"
 
 	// ExternalAgentPrincipalPrefix is the prefix before the credential's

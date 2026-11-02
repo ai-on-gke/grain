@@ -66,7 +66,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/reporead"
 	"github.com/ai-on-gke/grain/pkg/capability/repowrite"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
-	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -90,7 +89,7 @@ import (
 func loadHarnessRegistry(extra ...model.CapabilityProvider) *model.CapabilityRegistry {
 	providers := append([]model.CapabilityProvider{}, extra...)
 	providers = append(providers,
-		selfdebug.New(), selfrepair.New(),
+		selfdebug.New(),
 		bootstrap.New(), grainci.New(), registrypush.New(),
 		consolecap.New(), readissues.New(),
 		prioritydispatch.New(), durable.New())

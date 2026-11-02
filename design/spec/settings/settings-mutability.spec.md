@@ -189,7 +189,7 @@ Columns:
 
 ### 3.3 Executors (removed; external agent tokens)
 
-Settings → Executors and its executor tokens were removed with remote executors (schema 84 dropped `executor_token`). The external agent tokens below were never on that page and stay API-only.
+Settings → Executors and its executor tokens were removed with remote executors (schema 85 dropped `executor_token`). The external agent tokens below were never on that page and stay API-only.
 
 | Setting / entity | UI (unlocked) | Config repo | Locked: server / UI | External | Notes |
 | --- | --- | --- | --- | --- | --- |

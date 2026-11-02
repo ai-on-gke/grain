@@ -1081,17 +1081,17 @@ func TestADumpBefore78UpgradesUnsluggedTaskBranchTemplate(t *testing.T) {
 	}
 }
 
-// A dump at schema 83 can carry executor_token and its sequence, which
-// schema 84 dropped with remote executors. Those tables are not in this
+// A dump at schema 84 can carry executor_token and its sequence, which
+// schema 85 dropped with remote executors. Those tables are not in this
 // build's schema, so the import passes over them and brings in the rest.
-func TestADumpAt83WithExecutorTokensStillImports(t *testing.T) {
+func TestADumpAt84WithExecutorTokensStillImports(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "dump")
 	if err := os.CopyFS(dir, os.DirFS(goldenDump(t))); err != nil {
 		t.Fatal(err)
 	}
-	if err := staterepo.WriteSchemaVersion(dir, 83); err != nil {
+	if err := staterepo.WriteSchemaVersion(dir, 84); err != nil {
 		t.Fatal(err)
 	}
 	writeTable(t, dir, "executor_token", []map[string]any{{
@@ -1102,7 +1102,7 @@ func TestADumpAt83WithExecutorTokensStillImports(t *testing.T) {
 
 	store, db := openRealDB(t)
 	if _, err := staterepo.CheckMigration(ctx, db, dir, t.TempDir(), model.SchemaVersion); err != nil {
-		t.Fatalf("CheckMigration of a dump at 83 holding executor tokens: %v", err)
+		t.Fatalf("CheckMigration of a dump at 84 holding executor tokens: %v", err)
 	}
 	cfg, err := store.GetConfig(ctx)
 	if err != nil || cfg == nil {
@@ -1113,6 +1113,6 @@ func TestADumpAt83WithExecutorTokensStillImports(t *testing.T) {
 	}
 	var n int
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM `executor_token`").Scan(&n); err == nil {
-		t.Errorf("executor_token exists after the import (%d rows); schema 84 dropped it", n)
+		t.Errorf("executor_token exists after the import (%d rows); schema 85 dropped it", n)
 	}
 }
