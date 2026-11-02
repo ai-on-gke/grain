@@ -79,7 +79,6 @@ describe("SettingsPage", () => {
     expect(labels).toEqual([
       "Models",
       "Sandboxes",
-      "Executors",
       "Legacy capabilities",
       "Access",
       "Preferences",
@@ -438,8 +437,6 @@ describe("SettingsPage", () => {
         if (path === "/api/settings") return Promise.resolve(external);
         if (path === "/api/deployment")
           return Promise.resolve({ id: "default", modelSettings: [] });
-        if (path === "/api/executors" || path === "/api/executors/tokens")
-          return Promise.resolve([]);
         return Promise.resolve({});
       });
       render(
@@ -493,19 +490,6 @@ describe("SettingsPage", () => {
       expect(
         screen.getByRole("button", { name: "Clear credential" }),
       ).toBeEnabled();
-    });
-
-    it("keeps executor join tokens usable", async () => {
-      renderSection("executors");
-      await screen.findByTestId("external-config-repo-banner");
-      expect(
-        await screen.findByRole("button", { name: "Issue Token" }),
-      ).toBeEnabled();
-      expect(
-        screen
-          .getByRole("region", { name: "Executor join tokens" })
-          .querySelector("[data-settings-readonly]"),
-      ).toBeNull();
     });
   });
 

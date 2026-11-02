@@ -1170,18 +1170,13 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	// out is a row, and a dump that lost them would hand the same id out
 	// twice after a restore.
 	for _, allocate := range []func(context.Context) (string, error){
-		store.NewTaskID, store.NewScheduleID, store.NewTemplateID, store.NewSuiteID, store.NewExecutorTokenID,
+		store.NewTaskID, store.NewScheduleID, store.NewTemplateID, store.NewSuiteID,
 	} {
 		if _, err := allocate(ctx); err != nil {
 			t.Fatalf("allocating an id: %v", err)
 		}
 	}
 
-	if _, err := store.CreateExecutorToken(ctx, model.ExecutorToken{
-		ID: "gxt-1", Name: awkward, TokenHash: "abcdef", Prefix: "gxt_1234", CreatedAt: sub,
-	}); err != nil {
-		t.Fatalf("creating an executor token: %v", err)
-	}
 	if _, err := store.CreateExternalAgentToken(ctx, model.ExternalAgentToken{
 		Name: "ops-laptop", TokenHash: "fedcba9876543210", Prefix: "gma_1234",
 		ScopeSet: "grain/task-admin", Scopes: []string{"tasks:read"}, Repos: []string{"owner/payments-api"},
