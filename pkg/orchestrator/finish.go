@@ -2132,6 +2132,13 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		} else if asked && !proposal.AutoMerge && len(ungranted) == 0 {
 			proposal.Body += otherBranchAutoMergeNote(task, proposal)
 		}
+		// An explicit auto_merge: false is the run's own "this deserves
+		// a review", which nothing grain does later may overturn
+		// (model.DeclineAutoMerge) -- the same as the identical call
+		// filed live (ui.CreateTaskRequest.DeclineAutoMerge).
+		if said, ok := p["auto_merge"].(bool); ok && !said {
+			model.DeclineAutoMerge(&proposal, model.PrincipalString(model.Principal{Kind: model.PrincipalAgent, ID: task.ID}))
+		}
 		if err := store.PutTask(ctx, proposal); err != nil {
 			return fmt.Errorf("orchestrator: filing proposed task %q: %w", title, err)
 		}

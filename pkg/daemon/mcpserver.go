@@ -1713,7 +1713,8 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 	}
 	created, err := f.client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: p.Title, Description: p.Body, Repo: repo, NoRepo: p.NoRepo, ChangeTarget: p.ChangeTarget, Base: base, Priority: priority, AutoMerge: auto,
-		TemplateID: p.TemplateID, Fields: p.TemplateFields, AtFront: p.AtFront,
+		DeclineAutoMerge: p.AutoMerge != nil && !*p.AutoMerge,
+		TemplateID:       p.TemplateID, Fields: p.TemplateFields, AtFront: p.AtFront,
 		DependsOn: deps, CustomFields: fields, Supersedes: supersedes,
 		Reads: p.Reads, Writes: writes, ReviewTemplateID: p.ReviewTemplateID,
 		ProposedBy: f.parent, ProposalKey: key, Capabilities: caps,
