@@ -42,6 +42,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/demo"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ports"
+	"github.com/ai-on-gke/grain/pkg/ui"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
@@ -100,6 +101,12 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	var upgradeVerifyCmd stringSliceFlag
 	fs.Var(&upgradeVerifyCmd, "upgrade-verify-cmd", "one argument of the command that verifies an -upgrade-image image's signature, repeated for every argument, as on grain daemon")
 	accessCodeFile := fs.String("access-code-file", "", "keep the demo's access code, which every caller, loopback included, signs in with, in this file -- written there if it is not already -- rather than beside its throwaway store, where it is logged")
+	uiIAPAudience := fs.String("ui-iap-audience", "", "as on grain daemon: the audience a signed X-Goog-IAP-JWT-Assertion must carry for the demo to sign its caller in from it")
+	uiIAPIssuer := fs.String("ui-iap-issuer", "", "as on grain daemon: the issuer a signed assertion must carry (default "+ui.GoogleIAPIssuer+")")
+	uiIAPKeysURL := fs.String("ui-iap-keys-url", "", "as on grain daemon: where the assertions' signing keys are published (default "+ui.GoogleIAPCertURL+")")
+	uiRequireIAP := fs.Bool("ui-require-iap", false, "as on grain daemon: accept the access code only from loopback with no forwarding headers; needs -ui-iap-audience")
+	uiAllowedPrincipals := fs.String("ui-allowed-principals", "", ui.AllowedPrincipalsUsage)
+	uiCloudIdentityEndpoint := fs.String("ui-cloud-identity-endpoint", "", "resolve -ui-allowed-principals' group: entries against this Cloud Identity API base URL (a test stand-in) rather than "+ui.DefaultCloudIdentityEndpoint)
 	githubWebhookURL, githubWebhookAddr := githubWebhookFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return demo.Options{}, err
@@ -143,7 +150,20 @@ func parseDemoFlags(args []string) (demo.Options, error) {
 	if err != nil {
 		return demo.Options{}, fmt.Errorf("-default-target-repo: %w", err)
 	}
+	iapCfg := daemon.Config{UiIAPAudience: *uiIAPAudience, UiRequireIAP: *uiRequireIAP, UiAllowedPrincipals: ui.SplitAllowedPrincipals(*uiAllowedPrincipals)}
+	if err := daemon.CheckUIAllowedPrincipals(iapCfg); err != nil {
+		return demo.Options{}, err
+	}
+	if err := daemon.CheckUIRequireIAP(iapCfg); err != nil {
+		return demo.Options{}, err
+	}
 	return demo.Options{
+		IAPAudience:            *uiIAPAudience,
+		IAPIssuer:              *uiIAPIssuer,
+		IAPKeysURL:             *uiIAPKeysURL,
+		RequireIAP:             *uiRequireIAP,
+		AllowedPrincipals:      iapCfg.UiAllowedPrincipals,
+		CloudIdentityEndpoint:  *uiCloudIdentityEndpoint,
 		AccessCodeFile:         *accessCodeFile,
 		Addr:                   *addr,
 		Actor:                  *actor,

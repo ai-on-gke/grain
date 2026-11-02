@@ -43,8 +43,12 @@ export default function EngineSection({ s }) {
           disabled={locked}
           data-setting-id="pollInterval"
           label="Poll interval"
-          helperText={unrunnableHint("pollInterval", "Go duration, e.g. 10s")}
+          helperText={unrunnableHint(
+            "pollInterval",
+            "Go duration, e.g. 10s. Blank uses grain's default",
+          )}
           defaultValue={settings.pollInterval || ""}
+          placeholder={settings.pollIntervalDefault || undefined}
           onBlur={onTextBlur("pollInterval")}
           onKeyDown={onEnterKey}
           autoComplete="off"
