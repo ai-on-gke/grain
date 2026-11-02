@@ -2533,6 +2533,26 @@ html[data-phone="true"] .gantt-body {
   flex: none;
   padding-right: 1.75rem;
 }
+/* A pending release's soak beside its Approve (InboxPage's ReleaseSoak),
+   with the SHORT SOAK warning when it was under the minimum. */
+.inbox-release-soak {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+.inbox-release-short-soak {
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  background: var(--danger-subtle);
+  color: var(--danger);
+  font-weight: 600;
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+}
 /* The one row on this page that is not a task (InboxPage's
    base_branch_gate group): a base branch nothing is judging. It stands
    in .task-row's place inside .inbox-line, so it takes the same width
@@ -4348,6 +4368,12 @@ fieldset legend {
    across the screen from it. */
 :root[data-phone="true"] .inbox-line {
   flex-wrap: wrap;
+}
+/* A pending release's soak takes a line of its own above the answers,
+   so Approve, Reject and Acknowledge stay on one row under the thumb. */
+:root[data-phone="true"] .inbox-release-soak {
+  flex: 1 1 100%;
+  justify-content: flex-end;
 }
 :root[data-phone="true"] .inbox-actions {
   flex: 1 1 100%;

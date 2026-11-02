@@ -233,13 +233,16 @@ func validateRequirementName(kind, name string) error {
 // the running deployment in, comma-separated (Request.DeployedImages).
 const DeployedImagesEnv = "GRAIN_DEPLOYED_IMAGES"
 
-// RequestedByKindEnv, RequestedByEnv and ReleaseVersionEnv are the
-// variables a job started by a person-only route finds who asked, and
-// for which release, in (Request.RequestedByKind, Request.ReleaseVersion).
+// RequestedByKindEnv, RequestedByEnv, ReleaseVersionEnv and
+// ReleaseShortSoakOKEnv are the variables a job started by a person-only
+// route finds who asked, for which release, and whether they accepted a
+// short soak, in (Request.RequestedByKind, Request.ReleaseVersion,
+// Request.ReleaseShortSoakOK).
 const (
-	RequestedByKindEnv = "GRAIN_CI_REQUESTED_BY_KIND"
-	RequestedByEnv     = "GRAIN_CI_REQUESTED_BY"
-	ReleaseVersionEnv  = "GRAIN_CI_RELEASE_VERSION"
+	RequestedByKindEnv    = "GRAIN_CI_REQUESTED_BY_KIND"
+	RequestedByEnv        = "GRAIN_CI_REQUESTED_BY"
+	ReleaseVersionEnv     = "GRAIN_CI_RELEASE_VERSION"
+	ReleaseShortSoakOKEnv = "GRAIN_CI_RELEASE_SHORT_SOAK_OK"
 )
 
 // RunEnv is what grain tells every step about the run it is part of --
@@ -289,6 +292,9 @@ func RunEnv(req Request, workflow, jobID string) map[string]string {
 	}
 	if req.ReleaseVersion != "" {
 		env[ReleaseVersionEnv] = req.ReleaseVersion
+	}
+	if req.ReleaseShortSoakOK {
+		env[ReleaseShortSoakOKEnv] = "true"
 	}
 	return env
 }
