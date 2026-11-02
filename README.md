@@ -364,7 +364,7 @@ temporary bundle export removes that path from every commit.
 
 ## Remote Model Executors
 
-Remote executors allow Grain to dispatch agent model CLI invocations (`agy`, `claude`, `codex`) to dedicated remote machines (such as workstations, GPU instances, or workstations with corp/ambient logins), while tunneling MCP tools and sandboxes back to the Grain daemon.
+Remote executors allow Grain to dispatch agent model CLI invocations (`agy`, `claude`, `codex`) to dedicated remote machines (such as workstations, GPU instances, or cloud VMs with corp/ambient logins), while tunneling MCP tools and sandboxes back to the Grain daemon.
 
 ### Single-Command Bootstrap
 
