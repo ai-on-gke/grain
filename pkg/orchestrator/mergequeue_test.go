@@ -394,6 +394,84 @@ func TestSyncPullRequestsGivesUpOnAQueueHeadWhoseRepairNeverFinishes(t *testing.
 	}
 }
 
+// A repair whose turn an operator stopped (ui.Client.Stop) is parked on
+// that stop: no worker will pick it up until somebody replies or presses
+// Retry. Task 2345 found two such heads holding ai-on-gke/grain's queue
+// for eight hours, the row saying it was waiting for a worker. The queue
+// names the stop and moves on to the next entry at once, without waiting
+// out RepairDeadline.
+func TestSyncPullRequestsMovesPastAQueueHeadWhoseRepairWasStopped(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	stopped, stoppedBranch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t1", repo)
+	behind, _ := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t2", repo)
+
+	setMergeable(sim, true)
+	setBranchMergeable(sim, stoppedBranch, false)
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err != nil {
+		t.Fatalf("SyncPullRequests asking for the repair: %v", err)
+	}
+	if !repairInFlightNow(t, ctx, store, stopped.ID) {
+		t.Fatal("expected a repair to have been asked of the conflicted head")
+	}
+
+	// The operator stops the repair's turn: what ui.Client.Stop writes.
+	stopAt := baseTime.Add(time.Minute)
+	commentID, err := store.AddComment(ctx, model.Comment{
+		TaskID: stopped.ID, Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "op"}},
+		Body: model.TurnStoppedComment, CreatedAt: stopAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ObserveField(ctx, stopped.ID, stopAt, func(o *model.Observation) {
+		o.PendingQuestionCommentID = &commentID
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Well inside RepairDeadline, the queue says who it is waiting on and
+	// gives up the head position.
+	if err := orchestrator.SyncPullRequests(ctx, store, client, stopAt.Add(time.Minute)); err != nil {
+		t.Fatalf("SyncPullRequests after the stop: %v", err)
+	}
+	obs, err := store.GetObservation(ctx, stopped.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obs == nil || obs.MergeQueueBlockedAt == nil {
+		t.Fatal("the queue kept holding the head of a repair an operator stopped")
+	}
+	if !strings.Contains(obs.MergeQueueNote, "stopped by an operator -- reply or press Retry to resume") {
+		t.Errorf("merge-queue note = %q, want it to name the operator's stop", obs.MergeQueueNote)
+	}
+	if strings.Contains(obs.MergeQueueNote, "waiting for a worker") || strings.Contains(obs.MergeQueueNote, "never finished") {
+		t.Errorf("merge-queue note = %q, still blames a worker or an unfinished repair", obs.MergeQueueNote)
+	}
+	bodies := commentBodies(t, ctx, store, stopped.ID)
+	if last := bodies[len(bodies)-1]; !strings.Contains(last, "stopped by an operator") {
+		t.Errorf("the escalation does not say the repair was stopped:\n%s", last)
+	}
+
+	// And the next entry for the repository proceeds.
+	if err := orchestrator.SyncPullRequests(ctx, store, client, stopAt.Add(2*time.Minute)); err != nil {
+		t.Fatalf("SyncPullRequests after the queue moved on: %v", err)
+	}
+	st, err := store.State(ctx, behind.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st != model.StateClosed {
+		t.Fatalf("state of the task behind the stopped one = %q, want closed: the queue never moved on", st)
+	}
+	// The stopped task itself is left exactly as the operator left it.
+	if st, err := store.State(ctx, stopped.ID); err != nil || st != model.StateAwaitingReply {
+		t.Fatalf("state of the stopped task = %q (err %v), want awaiting_reply", st, err)
+	}
+}
+
 // TestSyncPullRequestsOnlyActsOnTheQueueHeadNotLaterEntries pins the
 // property that merges occur in queue order: only the task in front of its
 // repo's queue is merged on a cycle, even when multiple entries are ready.
@@ -1547,16 +1625,21 @@ func TestSyncPullRequestsGivesUpOnAQueueHeadWhoseChecksNeverFinish(t *testing.T)
 	sim.CheckRuns[stuckBranch] = []github.CheckRun{{Name: "deploy approval", Status: "queued"}}
 
 	// Well inside the deadline: still waiting, still nothing said. This is
-	// the same cycle a slow-but-honest CI run gets.
+	// the same cycle a slow-but-honest CI run gets. The head is never
+	// merged while PENDING -- but a check that has not so much as started
+	// in all that time no longer holds the change behind it, which merges
+	// past it (pendingStalled).
 	for _, at := range []time.Time{baseTime, baseTime.Add(deadline / 2)} {
 		if err := orchestrator.SyncPullRequests(ctx, store, client, at); err != nil {
 			t.Fatalf("SyncPullRequests inside the deadline: %v", err)
 		}
 	}
-	for _, pr := range sim.PullRequests {
-		if pr.Merged {
-			t.Fatal("something merged while the queue head's checks were still unfinished")
-		}
+	if mergedBranch(sim, stuckBranch) {
+		t.Fatal("the queue head merged while its checks were still unfinished")
+	}
+	if st, err := store.State(ctx, behind.ID); err != nil || st != model.StateClosed {
+		t.Fatalf("state of the task behind the stalled head = %q (%v), want closed: "+
+			"a check that never started held it for an hour", st, err)
 	}
 	if bodies := commentBodies(t, ctx, store, stuck.ID); len(bodies) != 0 {
 		t.Fatalf("expected no comments while inside the deadline, got %q", bodies)
@@ -1593,17 +1676,8 @@ func TestSyncPullRequestsGivesUpOnAQueueHeadWhoseChecksNeverFinish(t *testing.T)
 		t.Errorf("the comment does not name the check that never finished:\n%s", bodies[0])
 	}
 
-	// And the queue has moved on: the task behind the stuck one is head
-	// now, and merges.
 	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(deadline+time.Minute)); err != nil {
-		t.Fatalf("SyncPullRequests after the queue moved on: %v", err)
-	}
-	st, err := store.State(ctx, behind.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st != model.StateClosed {
-		t.Fatalf("state of the task behind the stuck one = %q, want closed: the queue never moved on", st)
+		t.Fatalf("SyncPullRequests after the queue gave up: %v", err)
 	}
 
 	// Giving up is not abandoning. The checks finally report, green, and
@@ -1615,7 +1689,7 @@ func TestSyncPullRequestsGivesUpOnAQueueHeadWhoseChecksNeverFinish(t *testing.T)
 	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(deadline+2*time.Minute)); err != nil {
 		t.Fatalf("SyncPullRequests once the stuck checks finished: %v", err)
 	}
-	st, err = store.State(ctx, stuck.ID)
+	st, err := store.State(ctx, stuck.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2035,37 +2109,5 @@ func TestSyncPullRequestsKeepsMergingWhileTheHeadIsRepaired(t *testing.T) {
 	}
 	if mergedBranch(sim, headBranch) {
 		t.Fatal("the head merged while it was still conflicted")
-	}
-}
-
-// The exception is only for a head that has stopped deciding. A head
-// whose checks are still running is about to answer on its own, usually
-// within a cycle or two, and merging past it would put a later change in
-// front of an earlier one for no better reason than being quicker to
-// test -- which is the ordering a queue exists to provide.
-func TestSyncPullRequestsDoesNotMergePastAHeadWhoseChecksAreRunning(t *testing.T) {
-	t.Parallel()
-	store, ctx := openStore(t)
-	sim, client := newSim(t, "acme", "widgets", "main")
-	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
-	_, headBranch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t1", repo)
-	behind, behindBranch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t2", repo)
-
-	setMergeable(sim, true)
-	sim.CheckRuns[headBranch] = []github.CheckRun{{Name: "tests", Status: "in_progress"}}
-	sim.CheckRuns[behindBranch] = greenCheck
-
-	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err != nil {
-		t.Fatalf("SyncPullRequests: %v", err)
-	}
-	if mergedBranch(sim, behindBranch) {
-		t.Fatal("merged past a head whose own tests had not reported yet")
-	}
-	st, err := store.State(ctx, behind.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st != model.StateCompleted {
-		t.Fatalf("state = %q, want still completed: it is waiting its turn", st)
 	}
 }

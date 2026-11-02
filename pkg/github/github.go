@@ -99,6 +99,14 @@ type RealTransport struct {
 	// github.com (APIHost) and a test server serving the API at its root.
 	PathPrefix string
 
+	// GraphQLPath is where this transport's host serves GraphQL, as a
+	// path on Host taken whole rather than put under PathPrefix: the
+	// request a RESTClient makes to "/graphql" goes there. Empty works it
+	// out from PathPrefix (graphqlPath), which is right for github.com
+	// and for a GitHub Enterprise Server; a layer whose forge serves it
+	// somewhere else sets it.
+	GraphQLPath string
+
 	// Conditional has GETs revalidate against the ETag of the answer
 	// this transport last got for the same request, so an unchanged
 	// resource comes back 304 and costs nothing against the rate limit.
@@ -207,6 +215,27 @@ func (t *RealTransport) Request(method, path string, headers map[string]string, 
 	}
 }
 
+// graphqlRequestPath is the path a RESTClient hands its Transport for a
+// GraphQL request: the endpoint by name rather than by where any one host
+// serves it, which is the transport's business (graphqlPath). A Transport
+// that is not a RealTransport maps it to its own host's endpoint itself.
+const graphqlRequestPath = "/graphql"
+
+// graphqlPath is the path on Host GraphQL is posted to: GraphQLPath when
+// set, and otherwise beside the REST API rather than under it --
+// /graphql for api.github.com (no prefix), /api/graphql for a GitHub
+// Enterprise Server whose REST API is under /api/v3. A REST prefix that
+// is not a /v3 one has GraphQL put under it, as every other path is.
+func (t *RealTransport) graphqlPath() string {
+	if t.GraphQLPath != "" {
+		return t.GraphQLPath
+	}
+	if base, ok := strings.CutSuffix(t.PathPrefix, "/v3"); ok {
+		return base + graphqlRequestPath
+	}
+	return t.PathPrefix + graphqlRequestPath
+}
+
 // sendOnce is one attempt at a call: the gate, the conditional request,
 // the round trip and the bookkeeping that follows it. Everything in here
 // is per-attempt on purpose -- a retry re-asks the gate, so a throttle
@@ -235,7 +264,10 @@ func (t *RealTransport) sendOnce(method, path string, headers map[string]string,
 		bodyReader = bytes.NewReader(body)
 	}
 	fullPath := t.PathPrefix + path
-	if t.PathPrefix != "" && (path == t.PathPrefix || strings.HasPrefix(path, t.PathPrefix+"/")) {
+	switch {
+	case path == graphqlRequestPath:
+		fullPath = t.graphqlPath()
+	case t.PathPrefix != "" && (path == t.PathPrefix || strings.HasPrefix(path, t.PathPrefix+"/")):
 		fullPath = path
 	}
 	req, err := http.NewRequest(method, scheme+"://"+t.Host+fullPath, bodyReader)
@@ -411,6 +443,10 @@ type Error struct {
 	// URL is ApiResponse.URL: the method and URL that were refused, or
 	// empty when the transport does not say.
 	URL string
+	// Note is grain's own sentence about the refusal, when it knows more
+	// than GitHub said (graphql: which endpoint refused, and whether REST
+	// on the same connection still answers). Both renderings end with it.
+	Note string
 }
 
 func (e *Error) Error() string {
@@ -418,10 +454,16 @@ func (e *Error) Error() string {
 	if len(body) > 200 {
 		body = body[:200]
 	}
+	var out string
 	if e.URL != "" {
-		return fmt.Sprintf("GitHub API error %d from %s: %q", e.Status, e.URL, body)
+		out = fmt.Sprintf("GitHub API error %d from %s: %q", e.Status, e.URL, body)
+	} else {
+		out = fmt.Sprintf("GitHub API error %d: %q", e.Status, body)
 	}
-	return fmt.Sprintf("GitHub API error %d: %q", e.Status, body)
+	if e.Note != "" {
+		out += " (" + e.Note + ")"
+	}
+	return out
 }
 
 // Message is the same refusal written for somebody to read: the status
@@ -468,6 +510,9 @@ func Message(err error) string {
 		return err.Error()
 	}
 	if said := errorMessage(e.Body); said != "" {
+		if e.Note != "" {
+			return fmt.Sprintf("GitHub answered %d: %s (%s)", e.Status, said, e.Note)
+		}
 		return fmt.Sprintf("GitHub answered %d: %s", e.Status, said)
 	}
 	return e.Error()
@@ -4090,25 +4135,53 @@ func (c *RESTClient) ReplyToReviewComment(owner, repo string, pullNumber, commen
 	return data.ID, nil
 }
 
+// graphqlRefusal is the Note on a 401 or 404 from the GraphQL endpoint:
+// which endpoint refused, and whether the REST API on the same transport
+// and credential answers for the same repository. "Bad credentials" alone
+// sends whoever reads it after the token, when a token that REST takes
+// and GraphQL refuses says the GraphQL request went somewhere it should
+// not have, or that this host's GraphQL wants something REST does not.
+func (c *RESTClient) graphqlRefusal(owner, repo, refused string) string {
+	endpoint := "the GraphQL endpoint"
+	if refused != "" {
+		endpoint += " (" + refused + ")"
+	}
+	note := endpoint + " refused the request"
+	if owner == "" || repo == "" {
+		return note
+	}
+	probe, err := c.get(owner, repo, fmt.Sprintf("/repos/%s/%s", owner, repo))
+	if err == nil && probe.Status == http.StatusOK {
+		note += fmt.Sprintf(", though the REST API on the same connection answers for %s/%s", owner, repo)
+	}
+	return note
+}
+
 // graphql posts one GraphQL document and decodes its data into out.
 // GitHub answers a GraphQL request it could not carry out with a 200 and
 // an "errors" array rather than a status, so those are turned into an
 // error here instead of leaving every caller to look.
 //
-// The path is /graphql, which is where api.github.com serves it. A GitHub
-// Enterprise Server transport with a /api/v3 PathPrefix would need
-// /api/graphql instead; nothing here reaches one today.
+// Every GraphQL call here comes through this one function, and it hands
+// the transport "/graphql" (graphqlRequestPath): where that is on the
+// host -- /graphql on api.github.com, /api/graphql beside a GitHub
+// Enterprise Server's /api/v3 -- is the transport's to say
+// (RealTransport.graphqlPath).
 func (c *RESTClient) graphql(owner, repo, query string, variables map[string]any, out any) error {
 	payload, err := json.Marshal(map[string]any{"query": query, "variables": variables})
 	if err != nil {
 		return err
 	}
-	resp, err := c.request("POST", "/graphql", c.headers(owner, repo, true), payload)
+	resp, err := c.request("POST", graphqlRequestPath, c.headers(owner, repo, true), payload)
 	if err != nil {
 		return err
 	}
 	if resp.Status != http.StatusOK {
-		return &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+		e := &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+		if resp.Status == http.StatusUnauthorized || resp.Status == http.StatusNotFound {
+			e.Note = c.graphqlRefusal(owner, repo, resp.URL)
+		}
+		return e
 	}
 	var envelope struct {
 		Data   json.RawMessage `json:"data"`
