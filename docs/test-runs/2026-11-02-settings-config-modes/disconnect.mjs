@@ -26,7 +26,9 @@ import { execSync } from "node:child_process";
 const [BASE, TOK, PATTERN, START, ...paths] = process.argv.slice(2);
 const answers = async () => {
   try {
-    const r = await fetch(`${BASE}/api/config`, { headers: { Authorization: `Bearer ${TOK}` } });
+    const r = await fetch(`${BASE}/api/config`, {
+      headers: { Authorization: `Bearer ${TOK}` },
+    });
     return r.ok;
   } catch {
     return false;
@@ -45,7 +47,9 @@ for (const path of paths.length ? paths : ["/"]) {
   const banner = page.getByTestId("disconnected-banner");
   const before = await banner.isVisible();
   const killedAt = Date.now();
-  execSync(`pkill -${process.env.SIGNAL || "TERM"} -f '${PATTERN}'; while pgrep -f '${PATTERN}' >/dev/null; do sleep 0.1; done`);
+  execSync(
+    `pkill -${process.env.SIGNAL || "TERM"} -f '${PATTERN}'; while pgrep -f '${PATTERN}' >/dev/null; do sleep 0.1; done`,
+  );
   const killWait = Date.now() - killedAt;
   await banner.waitFor({ state: "visible", timeout: 120000 });
   const appearedMs = Date.now() - killedAt;
@@ -57,7 +61,14 @@ for (const path of paths.length ? paths : ["/"]) {
   await banner.waitFor({ state: "hidden", timeout: 120000 });
   const clearedMs = Date.now() - answeredAt;
   console.log(
-    JSON.stringify({ path, bannerBefore: before, killWaitMs: killWait, appearedMs, bannerText, clearedAfterAnswerMs: clearedMs }),
+    JSON.stringify({
+      path,
+      bannerBefore: before,
+      killWaitMs: killWait,
+      appearedMs,
+      bannerText,
+      clearedAfterAnswerMs: clearedMs,
+    }),
   );
   await page.close();
 }

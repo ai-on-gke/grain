@@ -25,9 +25,24 @@ import fs from "node:fs";
 
 const [mode, BASE, TOK, OUT] = process.argv.slice(2);
 const SECTIONS = [
-  "models", "sandboxes", "executors", "credentials", "access", "preferences",
-  "upgrade", "caches", "engine", "config-repo", "general", "git",
-  "repositories", "tasks", "agents", "capabilities", "ci", "memory",
+  "models",
+  "sandboxes",
+  "executors",
+  "credentials",
+  "access",
+  "preferences",
+  "upgrade",
+  "caches",
+  "engine",
+  "config-repo",
+  "general",
+  "git",
+  "repositories",
+  "tasks",
+  "agents",
+  "capabilities",
+  "ci",
+  "memory",
 ];
 
 const browser = await chromium.launch();
@@ -47,8 +62,11 @@ for (const sec of SECTIONS) {
   await page.waitForTimeout(1000);
   table.sections[sec] = await page.evaluate(() => {
     const root = document.querySelector('[data-testid="settings-page"]');
-    const sectionEl = document.querySelector('[data-testid="settings-section"]');
-    const text = (el) => (el?.innerText || el?.textContent || "").replace(/\s+/g, " ").trim();
+    const sectionEl = document.querySelector(
+      '[data-testid="settings-section"]',
+    );
+    const text = (el) =>
+      (el?.innerText || el?.textContent || "").replace(/\s+/g, " ").trim();
     const labelOf = (el) => {
       if (el.getAttribute("aria-label")) return el.getAttribute("aria-label");
       if (el.id) {
@@ -56,10 +74,19 @@ for (const sec of SECTIONS) {
         if (l) return text(l);
       }
       const lb = el.getAttribute("aria-labelledby");
-      if (lb) return lb.split(" ").map((id) => text(document.getElementById(id))).join(" ");
+      if (lb)
+        return lb
+          .split(" ")
+          .map((id) => text(document.getElementById(id)))
+          .join(" ");
       const wrap = el.closest("label");
       if (wrap) return text(wrap);
-      return text(el) || el.getAttribute("name") || el.getAttribute("data-setting-id") || "";
+      return (
+        text(el) ||
+        el.getAttribute("name") ||
+        el.getAttribute("data-setting-id") ||
+        ""
+      );
     };
     const fields = [];
     for (const el of sectionEl.querySelectorAll(
@@ -75,7 +102,9 @@ for (const sec of SECTIONS) {
       fields.push({
         kind: el.tagName.toLowerCase() + (el.type ? `:${el.type}` : ""),
         label: labelOf(el).slice(0, 80),
-        settingId: el.closest("[data-setting-id]")?.getAttribute("data-setting-id") || "",
+        settingId:
+          el.closest("[data-setting-id]")?.getAttribute("data-setting-id") ||
+          "",
         disabled,
       });
     }
@@ -84,14 +113,19 @@ for (const sec of SECTIONS) {
       '[data-testid*="notice"], [data-testid*="banner"], [data-testid*="refusal"], .MuiAlert-root',
     )) {
       const t = text(el);
-      if (t) notices.push({ id: el.getAttribute("data-testid") || "alert", text: t.slice(0, 240) });
+      if (t)
+        notices.push({
+          id: el.getAttribute("data-testid") || "alert",
+          text: t.slice(0, 240),
+        });
     }
     const links = [...sectionEl.querySelectorAll("a[href]")].map((a) => ({
       text: text(a).slice(0, 60),
       href: a.getAttribute("href"),
     }));
     return {
-      readonlyFieldsets: sectionEl.querySelectorAll("[data-settings-readonly]").length,
+      readonlyFieldsets: sectionEl.querySelectorAll("[data-settings-readonly]")
+        .length,
       fields,
       notices,
       links,

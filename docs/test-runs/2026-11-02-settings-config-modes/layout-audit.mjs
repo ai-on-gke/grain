@@ -43,27 +43,48 @@ for (const [width, height] of [
     const page = await ctx.newPage();
     for (const path of paths) {
       await page.goto(BASE + path);
-      await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
+      await page
+        .waitForLoadState("networkidle", { timeout: 5000 })
+        .catch(() => {});
       await page.waitForTimeout(1200);
       const found = await page.evaluate(() => {
         const vw = document.documentElement.clientWidth;
         const out = [];
         const name = (el) =>
-          `${el.tagName.toLowerCase()}${el.getAttribute("data-testid") ? `[${el.getAttribute("data-testid")}]` : ""}${el.className && typeof el.className === "string" ? `.${el.className.split(" ").filter((c) => !c.startsWith("css-")).slice(0, 2).join(".")}` : ""} "${(el.innerText || "").trim().slice(0, 40)}"`;
+          `${el.tagName.toLowerCase()}${el.getAttribute("data-testid") ? `[${el.getAttribute("data-testid")}]` : ""}${
+            el.className && typeof el.className === "string"
+              ? `.${el.className
+                  .split(" ")
+                  .filter((c) => !c.startsWith("css-"))
+                  .slice(0, 2)
+                  .join(".")}`
+              : ""
+          } "${(el.innerText || "").trim().slice(0, 40)}"`;
         if (document.documentElement.scrollWidth > vw + 1) {
-          out.push({ kind: "page-scrolls-sideways", detail: `${document.documentElement.scrollWidth} > ${vw}` });
+          out.push({
+            kind: "page-scrolls-sideways",
+            detail: `${document.documentElement.scrollWidth} > ${vw}`,
+          });
         }
         const scrollsX = (el) => {
           for (let p = el.parentElement; p; p = p.parentElement) {
             const s = getComputedStyle(p);
-            if (/(auto|scroll|hidden)/.test(s.overflowX) && p !== document.body && p !== document.documentElement) return true;
+            if (
+              /(auto|scroll|hidden)/.test(s.overflowX) &&
+              p !== document.body &&
+              p !== document.documentElement
+            )
+              return true;
           }
           return false;
         };
         const parse = (c) => {
           const m = c.match(/rgba?\(([^)]+)\)/);
           if (!m) return null;
-          const [r, g, b, a = 1] = m[1].split(/[ ,/]+/).filter(Boolean).map(Number);
+          const [r, g, b, a = 1] = m[1]
+            .split(/[ ,/]+/)
+            .filter(Boolean)
+            .map(Number);
           return { r, g, b, a };
         };
         const lum = ({ r, g, b }) => {
@@ -78,18 +99,38 @@ for (const [width, height] of [
             const c = parse(getComputedStyle(p).backgroundColor);
             if (c && c.a > 0.9) return c;
           }
-          return parse(getComputedStyle(document.body).backgroundColor) || { r: 255, g: 255, b: 255 };
+          return (
+            parse(getComputedStyle(document.body).backgroundColor) || {
+              r: 255,
+              g: 255,
+              b: 255,
+            }
+          );
         };
         for (const el of document.querySelectorAll("body *")) {
           const r = el.getBoundingClientRect();
           if (r.width === 0 || r.height === 0) continue;
           const s = getComputedStyle(el);
-          if (s.visibility === "hidden" || s.position === "fixed" && r.left >= vw) continue;
-          if (el.closest("[aria-hidden=true], .MuiTooltip-popper, .MuiPopover-root")) continue;
+          if (
+            s.visibility === "hidden" ||
+            (s.position === "fixed" && r.left >= vw)
+          )
+            continue;
+          if (
+            el.closest(
+              "[aria-hidden=true], .MuiTooltip-popper, .MuiPopover-root",
+            )
+          )
+            continue;
           if (r.right > vw + 1 && r.left < vw && !scrollsX(el)) {
-            out.push({ kind: "off-right-edge", detail: `${name(el)} right=${Math.round(r.right)}` });
+            out.push({
+              kind: "off-right-edge",
+              detail: `${name(el)} right=${Math.round(r.right)}`,
+            });
           }
-          const ownText = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+          const ownText = [...el.childNodes].some(
+            (n) => n.nodeType === 3 && n.textContent.trim(),
+          );
           if (!ownText) continue;
           if (
             s.overflowX === "hidden" &&
@@ -97,14 +138,26 @@ for (const [width, height] of [
             s.textOverflow !== "ellipsis" &&
             s.whiteSpace === "nowrap"
           ) {
-            out.push({ kind: "clipped-text", detail: `${name(el)} ${el.scrollWidth}>${el.clientWidth}` });
+            out.push({
+              kind: "clipped-text",
+              detail: `${name(el)} ${el.scrollWidth}>${el.clientWidth}`,
+            });
           }
           const fg = parse(s.color);
-          if (fg && fg.a > 0.5 && s.opacity !== "0" && !el.closest(":disabled, .Mui-disabled, [aria-disabled=true]")) {
+          if (
+            fg &&
+            fg.a > 0.5 &&
+            s.opacity !== "0" &&
+            !el.closest(":disabled, .Mui-disabled, [aria-disabled=true]")
+          ) {
             const bg = bgOf(el);
             const [l1, l2] = [lum(fg), lum(bg)].sort((a, b) => b - a);
             const ratio = (l1 + 0.05) / (l2 + 0.05);
-            if (ratio < 3) out.push({ kind: "low-contrast", detail: `${name(el)} ${ratio.toFixed(2)}:1` });
+            if (ratio < 3)
+              out.push({
+                kind: "low-contrast",
+                detail: `${name(el)} ${ratio.toFixed(2)}:1`,
+              });
           }
         }
         return out;

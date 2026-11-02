@@ -78,45 +78,85 @@ for (const width of WIDTHS) {
       // page's main heading.
       const target = new URL(BASE + link.href);
       const hash = decodeURIComponent(target.hash.slice(1));
-      const file = target.pathname === "/config" ? (target.searchParams.get("path") || "").split("/").pop() : "";
-      row.check = await p.evaluate(([hash, file]) => {
-        const vh = window.innerHeight;
-        const vw = window.innerWidth;
-        const onScreen = (el) => {
-          if (!el) return false;
-          const r = el.getBoundingClientRect();
-          return r.height > 0 && r.top < vh && r.bottom > 0 && r.left < vw && r.right > 0;
-        };
-        if (hash) {
-          const el =
-            document.getElementById(hash) ||
-            document.querySelector(`[data-setting-id="${CSS.escape(hash)}"]`);
-          return { target: `#${hash}`, found: Boolean(el), visible: onScreen(el), top: el ? Math.round(el.getBoundingClientRect().top) : null };
-        }
-        if (file) {
-          const els = [...document.querySelectorAll('[role="main"] *')].filter(
-            (e) => !e.children.length && (e.innerText || "").includes(file),
+      const file =
+        target.pathname === "/config"
+          ? (target.searchParams.get("path") || "").split("/").pop()
+          : "";
+      row.check = await p.evaluate(
+        ([hash, file]) => {
+          const vh = window.innerHeight;
+          const vw = window.innerWidth;
+          const onScreen = (el) => {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            return (
+              r.height > 0 &&
+              r.top < vh &&
+              r.bottom > 0 &&
+              r.left < vw &&
+              r.right > 0
+            );
+          };
+          if (hash) {
+            const el =
+              document.getElementById(hash) ||
+              document.querySelector(`[data-setting-id="${CSS.escape(hash)}"]`);
+            return {
+              target: `#${hash}`,
+              found: Boolean(el),
+              visible: onScreen(el),
+              top: el ? Math.round(el.getBoundingClientRect().top) : null,
+            };
+          }
+          if (file) {
+            const els = [
+              ...document.querySelectorAll('[role="main"] *'),
+            ].filter(
+              (e) => !e.children.length && (e.innerText || "").includes(file),
+            );
+            return {
+              target: file,
+              found: els.length > 0,
+              visible: els.some(onScreen),
+            };
+          }
+          const notFound = /not found|no such|unknown (page|route)/i.test(
+            document.body.innerText.slice(0, 2000),
           );
-          return { target: file, found: els.length > 0, visible: els.some(onScreen) };
-        }
-        const notFound = /not found|no such|unknown (page|route)/i.test(document.body.innerText.slice(0, 2000));
-        const h = [
-          '[data-testid="settings-section"] h2',
-          '[role="main"] h2',
-          '[role="main"] h1',
-          "h1",
-        ]
-          .map((sel) => document.querySelector(sel))
-          .find(Boolean);
-        return { target: h ? h.innerText.trim().slice(0, 60) : "(no heading)", found: Boolean(h), visible: onScreen(h), notFound };
-      }, [hash, file]);
-      row.result = row.check.found && row.check.visible && !row.check.notFound ? "ok" : "FAIL";
+          const h = [
+            '[data-testid="settings-section"] h2',
+            '[role="main"] h2',
+            '[role="main"] h1',
+            "h1",
+          ]
+            .map((sel) => document.querySelector(sel))
+            .find(Boolean);
+          return {
+            target: h ? h.innerText.trim().slice(0, 60) : "(no heading)",
+            found: Boolean(h),
+            visible: onScreen(h),
+            notFound,
+          };
+        },
+        [hash, file],
+      );
+      row.result =
+        row.check.found && row.check.visible && !row.check.notFound
+          ? "ok"
+          : "FAIL";
       rows.push(row);
       await p.context().close();
-      console.log(`${row.result} ${mode} ${width} ${from} -> ${link.href} (${link.text}) => ${row.landed} ${JSON.stringify(row.check)}`);
+      console.log(
+        `${row.result} ${mode} ${width} ${from} -> ${link.href} (${link.text}) => ${row.landed} ${JSON.stringify(row.check)}`,
+      );
     }
   }
 }
 await browser.close();
 fs.writeFileSync(OUT, JSON.stringify(rows, null, 1) + "\n");
-console.log("FAILS:", rows.filter((r) => r.result === "FAIL").length, "of", rows.length);
+console.log(
+  "FAILS:",
+  rows.filter((r) => r.result === "FAIL").length,
+  "of",
+  rows.length,
+);
