@@ -1,0 +1,11 @@
+# grep across the union and core, narrowed below the 2000-entry walk cap
+grep 'maxWalkFiles = ' src://pkg --glob 'namespace/*.go'
+grep 'maxWalkFiles = ' src://pkg/namespace
+grep 'func CoreSource' src://core/pkg/namespace
+grep 'func CoreSource' src://core/pkg --glob 'namespace/*.go'
+grep LAYERMARK src://pkg --glob 'namespace/*.go'
+grep LAYERMARK src://core/pkg --glob 'namespace/*.go'
+grep -i layermark src://pkg/layeronly
+grep LAYERMARK src://playbooks
+grep CoreSource src://pkg --glob '**/coresrc*.go'
+grep CoreSource src://core/pkg --glob '**/coresrc*.go'
