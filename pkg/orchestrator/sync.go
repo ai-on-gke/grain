@@ -315,6 +315,13 @@ type queueEntry struct {
 	// being written to is what actually matters to it, and who asked for
 	// that is not.
 	running bool
+	// turnStopped says a person stopped this task's last turn
+	// (ui.Client.Stop) and it is parked on that stop, waiting for them
+	// to reply or press Retry -- not for a worker. A repair in that state
+	// is not going to finish on its own, so the queue says who it is
+	// waiting on and stops holding its place for it
+	// (escalateStoppedRepair).
+	turnStopped bool
 	// recheckingHead is the commit SHA of this task's pull request when
 	// grain CI is currently running an overlap re-check for it on the
 	// merge-queue ref (mergerecheck.go).
@@ -1138,6 +1145,13 @@ func SyncPullRequestsGuarding(ctx context.Context, store *model.Store, client gi
 	for _, r := range live {
 		running[r.TaskID] = true
 	}
+	// Who is parked on an operator's Stop rather than on anything an
+	// agent or grain is doing (model.Store.TurnsStopped), read once for
+	// the cycle the same way. See queueEntry.turnStopped.
+	stopped, err := store.TurnsStopped(ctx)
+	if err != nil {
+		return fmt.Errorf("orchestrator: reading stopped turns: %w", err)
+	}
 
 	entries := make([]queueEntry, 0, len(links))
 	var errs []error
@@ -1243,7 +1257,7 @@ func SyncPullRequestsGuarding(ctx context.Context, store *model.Store, client gi
 			rules:  mergeRules[ref.Repo],
 			runner: gate.CI,
 			task:   *task, obs: obs, ref: ref, requiredCheck: gate.requiredCheckFor(ref),
-			verdicts: verdicts, running: running[link.TaskID],
+			verdicts: verdicts, running: running[link.TaskID], turnStopped: stopped[link.TaskID],
 			requireUpToDate:         upToDate[ref.Repo],
 			mergeOnGreen:            onGreen[ref.Repo],
 			gateIsGrainCI:           grainCIGate[ref.Repo],
@@ -1915,6 +1929,19 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			}
 		}
 		gate.merged(ref)
+
+	case isHead && !stacked && !blocked && repairing && e.turnStopped && !working:
+		// The repair the queue asked for was stopped by a person, and the
+		// task is parked on that stop: no worker will pick it up until
+		// somebody replies or presses Retry, so waiting out
+		// defaultRepairDeadline would only hold this repository's head
+		// position -- and its CI priority (MergeQueueHeads) -- for hours
+		// on a run nobody is going to start. Handed over now, the same
+		// way escalateUnfinishedRepair hands over a repair that is late,
+		// and the queue moves on to the next entry.
+		if err := escalateStoppedRepair(ctx, store, task, ref, health, now); err != nil {
+			return err
+		}
 
 	case !stacked && !blocked && (health == model.PrFailing || health == model.PrConflicted):
 		// Both standalone CI failure and base branch merge conflicts trigger
@@ -4175,6 +4202,38 @@ func escalateUnfinishedRepair(ctx context.Context, store *model.Store,
 		"the repair never finished -- this task was sent back to an agent more than %s ago "+
 			"and has not run to completion", humanDuration(defaultRepairDeadline))
 	return blockMergeQueue(ctx, store, task.ID, comment, reason, now)
+}
+
+// stoppedRepairNote is the row's sentence for a repair whose turn a
+// person stopped: who it is waiting on, and the two things that resume
+// it. Shared by the row (statusOf) and the escalation, so the queue says
+// the same thing before and after it gives up the position.
+const stoppedRepairNote = "stopped by an operator -- reply or press Retry to resume"
+
+// escalateStoppedRepair gives up the queue position of a task whose
+// repair turn a person stopped (queueEntry.turnStopped). Like
+// escalateUnfinishedRepair it leaves the task exactly as it is -- parked
+// on the stop, for whoever stopped it -- and gives up only the position:
+// once the turn is resumed and its push reads clean, the pull request
+// still merges the moment it does, as every blocked one does.
+func escalateStoppedRepair(ctx context.Context, store *model.Store,
+	task model.Task, ref model.PullRequestRef, health model.PrHealth, now time.Time) error {
+
+	var state string
+	switch health {
+	case model.PrFailing, model.PrConflicted:
+		state = ", and " + healthReasonSuffix(health)
+	case model.PrPending:
+		state = ", with its checks still to report"
+	}
+	comment := fmt.Sprintf(
+		"The automatic repair of %s was stopped by an operator%s -- so it waits on a "+
+			"person rather than a worker. Reply on this task or press Retry to resume the "+
+			"turn; %s merges as soon as it reads clean. The queue has moved on to the next "+
+			"task in %s.",
+		ref, state, ref, ref.Repo,
+	)
+	return blockMergeQueue(ctx, store, task.ID, comment, stoppedRepairNote, now)
 }
 
 // escalateStalledChecks gives up on task for the third reason: its checks

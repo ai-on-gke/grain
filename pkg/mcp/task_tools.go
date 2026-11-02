@@ -104,6 +104,11 @@ type TaskSummary struct {
 	// or one whose record cannot say when it began -- so empty is the
 	// ordinary reading and never means nothing was checked.
 	Stall string
+	// TurnStopped is a task parked on an operator's Stop (ui.Task.
+	// TurnStopped): it waits on a person -- a reply, or Retry -- and on
+	// nothing grain or a worker is doing, so a list says "stopped by
+	// operator" for it rather than "stalled".
+	TurnStopped bool
 	// Kinds is the task's kind tags (ui.TaskKindTags: port, repair,
 	// session, proposal, durable, imported) -- the fixed vocabulary a report about
 	// the task is held to, so a reader never has to infer "this is a port"
@@ -450,6 +455,9 @@ func (f taskListFilter) describe() string {
 // taskStalled is whether either lane has flagged the task: its own state
 // outliving its patience, or the merge queue stalled or blocked on it.
 func taskStalled(t TaskSummary) bool {
+	if t.TurnStopped {
+		return false
+	}
 	if t.Stall != "" {
 		return true
 	}
@@ -607,7 +615,9 @@ func renderFilteredTaskList(tasks []TaskSummary, filter taskListFilter, limit in
 		// read_grain_task is for. A reader scanning for "why is nothing
 		// happening" needs to see which rows to open, on rows that are
 		// otherwise one line each.
-		if t.Stall != "" {
+		if t.TurnStopped {
+			b.WriteString("  (stopped by operator)")
+		} else if t.Stall != "" {
 			b.WriteString("  (stalled)")
 		}
 		fmt.Fprintf(&b, "\n    %s\n", singleLine(t.Title))

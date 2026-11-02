@@ -266,7 +266,7 @@ func (d DaemonMetrics) Metrics(ctx context.Context, q mcp.MetricsQuery) (string,
 // judgement agent reads and the expect its writes are checked against
 // agree by construction.
 func taskSummary(t ui.Task) mcp.TaskSummary {
-	return mcp.TaskSummary{ID: t.ID, Title: t.Title, State: string(t.State), Repo: t.Repo, Priority: t.Priority, Interactive: t.Interactive, CreatedAt: t.CreatedAt, BlockedBy: t.BlockedBy, Stall: t.Stall, MergeQueue: mcp.TaskMergeQueue{State: t.MergeQueueState, Note: t.MergeQueueNote, At: t.MergeQueueStateAt, StalledAt: t.MergeQueueStalledAt, BlockedAt: t.MergeQueueBlockedAt},
+	return mcp.TaskSummary{ID: t.ID, Title: t.Title, State: string(t.State), Repo: t.Repo, Priority: t.Priority, Interactive: t.Interactive, CreatedAt: t.CreatedAt, BlockedBy: t.BlockedBy, Stall: t.Stall, TurnStopped: t.TurnStopped, MergeQueue: mcp.TaskMergeQueue{State: t.MergeQueueState, Note: t.MergeQueueNote, At: t.MergeQueueStateAt, StalledAt: t.MergeQueueStalledAt, BlockedAt: t.MergeQueueBlockedAt},
 		Kinds: ui.TaskKindTags(t), DependsOn: t.DependsOn, ChangedAt: taskChangedAt(t)}
 }
 

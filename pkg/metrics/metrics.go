@@ -125,10 +125,14 @@ const maxBuckets = 200
 // caller that has neither still gets every throughput and latency number,
 // and gets a Backlog and a Utilization of zero.
 type Input struct {
-	Window        Window
-	Tasks         []model.TaskTiming
-	Runs          []model.RunTiming
-	States        map[string]model.State
+	Window Window
+	Tasks  []model.TaskTiming
+	Runs   []model.RunTiming
+	States map[string]model.State
+	// TurnsStopped is every open task parked on an operator's Stop
+	// (model.Store.TurnsStopped), counted apart in Backlog. Optional like
+	// States: a caller with none counts none.
+	TurnsStopped  map[string]bool
 	MaxConcurrent int
 	Buckets       int
 	// Cycles is what the daemon's own reconcile loop measured about
@@ -746,6 +750,12 @@ type Backlog struct {
 	// ByState gives, so read a deep queue beside an idle deployment as a
 	// question rather than as a verdict.
 	Queued int
+	// StoppedByOperator is how many of the tasks counted above are parked
+	// on an operator's Stop (Input.TurnsStopped): waiting on that person
+	// to reply or press Retry, and on no worker. Counted apart from
+	// Queued so a backlog that is really a handful of stopped turns does
+	// not read as work grain is failing to dispatch.
+	StoppedByOperator int
 	// OldestQueuedWait is how long the longest-queued task has been
 	// waiting at Until, and OldestQueuedTaskID is which one it is. A
 	// percentile over what finished cannot see a task that has never
@@ -1116,7 +1126,7 @@ func Compute(in Input) Report {
 
 	// --- backlog ------------------------------------------------------
 	if in.States != nil {
-		rep.Backlog = backlogOf(in.Tasks, in.States, w.Until)
+		rep.Backlog = backlogOf(in.Tasks, in.States, in.TurnsStopped, w.Until)
 	}
 
 	// --- the inside of a run ------------------------------------------
@@ -1261,7 +1271,7 @@ func runsByTask(runs []model.RunTiming) map[string][]model.RunTiming {
 
 // backlogOf counts what was still in the system at until, by task_state's
 // own vocabulary, and finds the queued task that has been waiting longest.
-func backlogOf(tasks []model.TaskTiming, states map[string]model.State, until time.Time) Backlog {
+func backlogOf(tasks []model.TaskTiming, states map[string]model.State, stopped map[string]bool, until time.Time) Backlog {
 	b := Backlog{ByState: map[model.State]int{}}
 	for _, t := range tasks {
 		state, ok := states[t.TaskID]
@@ -1271,6 +1281,9 @@ func backlogOf(tasks []model.TaskTiming, states map[string]model.State, until ti
 			continue
 		}
 		b.ByState[state]++
+		if stopped[t.TaskID] {
+			b.StoppedByOperator++
+		}
 		if state != model.StateQueued {
 			continue
 		}
