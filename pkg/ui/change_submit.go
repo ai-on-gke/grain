@@ -89,7 +89,7 @@ func changeSubmit(task model.Task, state model.State) *ChangeSubmit {
 // personActor is ctx's caller when it is a person, or a refusal: Submit
 // and Sync are a person's, never an agent's or an API token's.
 func (c *Client) personActor(ctx context.Context, what string) (model.Principal, error) {
-	by := c.actor(ctx)
+	by := c.requestActor(ctx).Actor
 	if by.Kind != model.PrincipalHuman || strings.TrimSpace(by.ID) == "" {
 		return model.Principal{}, forbiddenErrorf("only a person may %s a CL; %s %q may not", what, by.Kind, by.ID)
 	}

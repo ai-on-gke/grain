@@ -1107,7 +1107,7 @@ func (s *Server) handleStartCIRun(w http.ResponseWriter, r *http.Request) {
 		Ref:                    strings.TrimSpace(ref),
 		Commit:                 strings.TrimSpace(req.Commit),
 		Event:                  event,
-		RequestedBy:            s.tasks.actor(r.Context()).ID,
+		RequestedBy:            s.tasks.requestActor(r.Context()).Actor.ID,
 		Workflow:               strings.TrimSpace(req.Workflow),
 		Jobs:                   req.Jobs,
 		Recheck:                req.Recheck,
@@ -1152,7 +1152,7 @@ func (c *Client) withholdReleaseSecrets(ctx context.Context, repo model.RepoRef,
 	if event != ci.EventManual && event != ci.EventRelease {
 		return "", nil
 	}
-	if c.actor(ctx).Kind == model.PrincipalHuman {
+	if c.requestActor(ctx).Actor.Kind == model.PrincipalHuman {
 		return "", nil
 	}
 	return fmt.Sprintf("a %s run of %s started by a caller that is not a person places no capabilities or release secrets",

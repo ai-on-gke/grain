@@ -200,7 +200,7 @@ func (c *Client) PublishReplies(ctx context.Context, id, by string) (change.Publ
 	}
 	change.RememberPublish(task.ID, res)
 	// Like Sync, the press is the person's, so it is in the conversation.
-	if _, err := c.Store.AddComment(ctx, model.Comment{TaskID: task.ID, Author: model.Attribution{Actor: c.actor(ctx)},
+	if _, err := c.Store.AddComment(ctx, model.Comment{TaskID: task.ID, Author: model.Attribution{Actor: c.requestActor(ctx).Actor},
 		Body: publishedNote(res), CreatedAt: c.now()}); err != nil {
 		return change.PublishResult{}, err
 	}
@@ -285,7 +285,7 @@ func (c *Client) MailChange(ctx context.Context, id, by string, req MailChangeRe
 	if res.Message != "" {
 		body += " " + res.Message
 	}
-	if _, err := c.Store.AddComment(ctx, model.Comment{TaskID: task.ID, Author: model.Attribution{Actor: c.actor(ctx)},
+	if _, err := c.Store.AddComment(ctx, model.Comment{TaskID: task.ID, Author: model.Attribution{Actor: c.requestActor(ctx).Actor},
 		Body: body, CreatedAt: c.now()}); err != nil {
 		return change.Result{}, err
 	}
@@ -364,7 +364,7 @@ func (s *Server) handleChangeReview(w http.ResponseWriter, r *http.Request) {
 // handlePublishReplies answers POST /api/tasks/{id}/change-publish.
 func (s *Server) handlePublishReplies(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := s.tasks.PublishReplies(r.Context(), id, actingUser(r, "")); err != nil {
+	if _, err := s.tasks.PublishReplies(r.Context(), id, requestPerson(r.Context())); err != nil {
 		if errors.Is(err, errNoChangeReview) {
 			writeError(w, http.StatusNotFound, err)
 			return
@@ -382,7 +382,7 @@ func (s *Server) handleMailChange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	if _, err := s.tasks.MailChange(r.Context(), id, actingUser(r, ""), req); err != nil {
+	if _, err := s.tasks.MailChange(r.Context(), id, requestPerson(r.Context()), req); err != nil {
 		if errors.Is(err, errNoChangeReview) {
 			writeError(w, http.StatusNotFound, err)
 			return

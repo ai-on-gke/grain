@@ -1914,7 +1914,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
-	actor := s.tasks.actor(r.Context())
+	actor := s.tasks.requestActor(r.Context()).Actor
 	_, authenticated := PrincipalFromContext(r.Context())
 	// /api/config is served to callers nobody has vouched for, since it
 	// is what the sign-in page reads. Only a trusted source runs as the
@@ -2288,10 +2288,7 @@ func (s *Server) handleGetTaskPrompt(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
-	user := requestUser(r)
-	if user == "" && s.tasks.Config.Actor.Kind == model.PrincipalHuman {
-		user = strings.TrimSpace(s.tasks.Config.Actor.ID)
-	}
+	user := s.tasks.requestPersonOrOperator(r.Context())
 	if user == "" {
 		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
 		return
@@ -2311,7 +2308,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	// A requester the body names (CreateTaskRequest.Author) is the
 	// operator's word about who asked, and only the operator's: a
 	// signed-in person may name nobody but themselves.
-	if author := strings.TrimSpace(req.Author); author != "" && requestUser(r) != "" && !strings.EqualFold(author, user) {
+	if author := strings.TrimSpace(req.Author); author != "" && requestPerson(r.Context()) != "" && !strings.EqualFold(author, user) {
 		writeError(w, http.StatusForbidden, fmt.Errorf("a signed-in user files tasks as themselves, not as %q", author))
 		return
 	}
@@ -2545,7 +2542,7 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	if !readAttachmentJSON(w, r, &req, func(req *addCommentRequest) []AttachmentUpload { return req.Attachments }) {
 		return
 	}
-	req.Author = actingUser(r, req.Author)
+	req.Author = requestPerson(r.Context())
 	id := r.PathValue("id")
 	if req.Reviewers != nil {
 		if _, err := s.tasks.UpdateTask(r.Context(), id, UpdateTaskRequest{Reviewers: req.Reviewers}); err != nil {

@@ -118,7 +118,7 @@ func (c *Client) catalogueEditRefusal(ctx context.Context, task model.Task, gran
 	if err != nil {
 		return validationErrorf("%v", err)
 	}
-	if len(verdict.RequiresPerson) > 0 && c.actor(ctx).Kind == model.PrincipalAgent {
+	if len(verdict.RequiresPerson) > 0 && c.requestActor(ctx).Actor.Kind == model.PrincipalAgent {
 		return forbiddenErrorf("capability %s requires human approval (settings/capabilities.yml marks it requires_person)", grant)
 	}
 	return nil
@@ -133,7 +133,7 @@ func (c *Client) catalogueEditRefusal(ctx context.Context, task model.Task, gran
 // A grant the catalogue refuses outright is not this check's business:
 // dispatch holds that task whoever approves it (orchestrator.catalogueHold).
 func (c *Client) catalogueApprovalRefusal(ctx context.Context, task model.Task) error {
-	if c.actor(ctx).Kind != model.PrincipalAgent {
+	if c.requestActor(ctx).Actor.Kind != model.PrincipalAgent {
 		return nil
 	}
 	cat, err := c.capabilityCatalogue(ctx)

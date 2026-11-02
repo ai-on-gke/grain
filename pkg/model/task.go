@@ -72,9 +72,64 @@ func (k PrincipalKind) Valid() bool {
 // for an agent, the deployment name for automation — opaque here on
 // purpose, since this model records which principal acted and never
 // resolves one to an account.
+//
+// Source is how ID was established (operator-attribution spec §1.1): the
+// verifier that vouched for a person, the access code an operator
+// presented, the session or sandbox an agent called from. It is "" on
+// rows written before the column existed, which render as §1.2.2 says.
 type Principal struct {
-	Kind PrincipalKind
-	ID   string
+	Kind   PrincipalKind
+	ID     string
+	Source AuthSource
+}
+
+// Same reports whether p and o name the same actor, whatever each says
+// about how it was established: a row written before Source existed
+// names the same operator as one written after.
+func (p Principal) Same(o Principal) bool {
+	return p.Kind == o.Kind && p.ID == o.ID
+}
+
+// AuthSource is how a Principal's ID was established
+// (operator-attribution spec §1.1.3). A registered IdentityVerifier's
+// Name() is a valid source too.
+type AuthSource string
+
+const (
+	SourceIAP           AuthSource = "iap"            // a verified IAP assertion
+	SourceToken         AuthSource = "token"          // a per-user API token (future)
+	SourceAccessCode    AuthSource = "access-code"    // the shared access code or its session
+	SourceLoopback      AuthSource = "loopback"       // break-glass over loopback
+	SourceInProcess     AuthSource = "in-process"     // a caller with no RemoteAddr
+	SourceSession       AuthSource = "session"        // a console session's grants
+	SourceSandbox       AuthSource = "sandbox"        // a dispatched run's API grants
+	SourceExternalToken AuthSource = "external-token" // an external agent token (gma_…)
+	SourceInternal      AuthSource = "internal"       // grain itself
+)
+
+// unverifiedSources are the sources that establish nobody in particular:
+// the operator fallback and the agent and automation sources.
+var unverifiedSources = map[AuthSource]bool{
+	"":                  true,
+	SourceAccessCode:    true,
+	SourceLoopback:      true,
+	SourceInProcess:     true,
+	SourceSession:       true,
+	SourceSandbox:       true,
+	SourceExternalToken: true,
+	SourceInternal:      true,
+}
+
+// Verified reports whether p is a person or service account a verifier
+// vouched for (§1.1.4): only one of those may be shown as a person or
+// written into a Requested-by: / Approved-by: trailer. Any source that is
+// not one of the fallback, agent or automation sources is a verifier's
+// name, iap and token included.
+func (p Principal) Verified() bool {
+	if p.Kind != PrincipalHuman && p.Kind != PrincipalService {
+		return false
+	}
+	return !unverifiedSources[p.Source]
 }
 
 // Attribution is who performed an action and whose output they relayed.

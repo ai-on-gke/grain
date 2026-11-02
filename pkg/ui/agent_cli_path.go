@@ -77,7 +77,7 @@ func (c *Client) auditCLIPathChanges(ctx context.Context, before, after []model.
 		return
 	}
 	if user = strings.TrimSpace(user); user == "" {
-		user = c.actor(ctx).ID
+		user = c.requestActor(ctx).Actor.ID
 	}
 	for _, b := range after {
 		was := storedCLIPath(before, b.ID)

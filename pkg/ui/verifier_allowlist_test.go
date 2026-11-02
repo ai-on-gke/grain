@@ -402,7 +402,7 @@ func TestIAPPrincipalsNormalizationClockSkewAndServiceAccounts(t *testing.T) {
 	reqCheck := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
 	reqCheck.Header.Set(ui.IAPAssertionHeader, humanTok)
 	p, ok := ui.ExtractPrincipal(reqCheck)
-	if !ok || p != (model.Principal{Kind: model.PrincipalHuman, ID: "alice.smith@example.com"}) {
+	if !ok || p != (model.Principal{Kind: model.PrincipalHuman, ID: "alice.smith@example.com", Source: model.SourceIAP}) {
 		t.Fatalf("ExtractPrincipal(human) = %+v, %v; want {human alice.smith@example.com}", p, ok)
 	}
 
@@ -411,7 +411,7 @@ func TestIAPPrincipalsNormalizationClockSkewAndServiceAccounts(t *testing.T) {
 	reqSA := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
 	reqSA.Header.Set(ui.IAPAssertionHeader, saTok)
 	pSA, ok := ui.ExtractPrincipal(reqSA)
-	if !ok || pSA != (model.Principal{Kind: model.PrincipalService, ID: "hostd-runner@my-proj.iam.gserviceaccount.com"}) {
+	if !ok || pSA != (model.Principal{Kind: model.PrincipalService, ID: "hostd-runner@my-proj.iam.gserviceaccount.com", Source: model.SourceIAP}) {
 		t.Fatalf("ExtractPrincipal(serviceAccount) = %+v, %v; want {service hostd-runner@my-proj.iam.gserviceaccount.com}", pSA, ok)
 	}
 	if !pSA.Kind.Valid() {

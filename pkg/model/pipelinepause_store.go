@@ -31,19 +31,19 @@ import (
 // key by anything else.
 func (s *Store) GetPipelinePause(ctx context.Context) (*PipelinePause, error) {
 	row := s.db.QueryRowContext(ctx,
-		"SELECT `paused_at`,`reason`,`actor_kind`,`actor_id`,`until_task_id` "+
+		"SELECT `paused_at`,`reason`,`actor_kind`,`actor_id`,`until_task_id`,`actor_source` "+
 			"FROM `pipeline_pause` WHERE `id` = 1")
 	var p PipelinePause
 	var pausedAt time.Time
-	var kind string
-	if err := row.Scan(&pausedAt, &p.Reason, &kind, &p.By.ID, &p.UntilTaskID); err != nil {
+	var kind, source string
+	if err := row.Scan(&pausedAt, &p.Reason, &kind, &p.By.ID, &p.UntilTaskID, &source); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("reading the pipeline pause: %w", err)
 	}
 	p.PausedAt = pausedAt.UTC()
-	p.By.Kind = PrincipalKind(kind)
+	p.By.Kind, p.By.Source = PrincipalKind(kind), AuthSource(source)
 	return &p, nil
 }
 
@@ -56,9 +56,9 @@ func (s *Store) SetPipelinePause(ctx context.Context, p PipelinePause) error {
 	return s.write(ctx, "pause the pipeline", func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
 			"REPLACE INTO `pipeline_pause` "+
-				"(`id`,`paused_at`,`reason`,`actor_kind`,`actor_id`,`until_task_id`) "+
-				"VALUES (1,?,?,?,?,?)",
-			p.PausedAt.UTC(), p.Reason, string(p.By.Kind), p.By.ID, p.UntilTaskID)
+				"(`id`,`paused_at`,`reason`,`actor_kind`,`actor_id`,`until_task_id`,`actor_source`) "+
+				"VALUES (1,?,?,?,?,?,?)",
+			p.PausedAt.UTC(), p.Reason, string(p.By.Kind), p.By.ID, p.UntilTaskID, string(p.By.Source))
 		return err
 	})
 }

@@ -143,7 +143,7 @@ func (s *Server) defaultAllowedPrincipalEntries(ctx context.Context) []AllowedPr
 	}
 
 	if s.tasks != nil {
-		if actorID := strings.TrimSpace(s.tasks.Config.Actor.ID); actorID != "" {
+		if actorID := s.tasks.operatorID(); actorID != "" {
 			addPrincipal(actorID)
 		}
 		for _, sa := range s.tasks.Config.ProvisionedServiceAccounts {

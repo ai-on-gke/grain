@@ -1318,7 +1318,7 @@ func repoPortDirections(rc model.RepoConfig) []RepoPortDirection {
 // no settings row yet refuses nobody. A refusal is a ForbiddenError, so
 // it reaches the API as a 403 rather than as a malformed request.
 func (c *Client) checkRepoPerson(ctx context.Context, repo model.RepoRef) error {
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
 	if actor.ID == "" || c.Store == nil {
 		return forbiddenErrorf("user %q does not have permission to modify repository %s", actor.ID, repo)
 	}
