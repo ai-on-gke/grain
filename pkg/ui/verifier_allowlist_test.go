@@ -529,8 +529,6 @@ func TestAllowedPrincipalsDefaultsAndCloudIdentityGroups(t *testing.T) {
 			"owner@example.com",
 			"extra-sa@my-proj.iam.gserviceaccount.com",
 			"grain-daemon@my-proj.iam.gserviceaccount.com",
-			"grain-agent-0@my-proj.iam.gserviceaccount.com",
-			"grain-agent-1@my-proj.iam.gserviceaccount.com",
 		} {
 			rec := serveFrom(srv, "203.0.113.9:443", http.MethodGet, "/api/tasks", "", map[string]string{
 				ui.IAPAssertionHeader: mint(admitted),
@@ -542,6 +540,9 @@ func TestAllowedPrincipalsDefaultsAndCloudIdentityGroups(t *testing.T) {
 
 		for _, denied := range []string{
 			"stranger@example.com",
+			"grain-agent@my-proj.iam.gserviceaccount.com",
+			"grain-agent-0@my-proj.iam.gserviceaccount.com",
+			"grain-agent-1@my-proj.iam.gserviceaccount.com",
 			"grain-agent-2@my-proj.iam.gserviceaccount.com",
 		} {
 			rec := serveFrom(srv, "203.0.113.9:443", http.MethodGet, "/api/tasks", "", map[string]string{
@@ -836,6 +837,154 @@ func TestVerifiedIdentityCSRFLogoutAndUnchangedNoIAPPath(t *testing.T) {
 		})
 		if recLogout.Code != http.StatusFound || recLogout.Header().Get("Location") != "/" {
 			t.Fatalf("no-IAP GET /api/auth/logout: got %d Location=%q, want 302 /", recLogout.Code, recLogout.Header().Get("Location"))
+		}
+	})
+}
+
+func TestGCPKeyPoolAccountsAreNotAdmittedByDefault(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+	t.Setenv("GRAIN_ALLOWED_PRINCIPALS", "")
+
+	priv, pemStr := generateECDSATestKey(t)
+	assertionKeys(t, priv, pemStr, false)
+	ui.SetIAPAudience(tunnelAudience)
+
+	mint := func(email string) string {
+		return signIAPToken(t, priv, tunnelKid, tunnelAudience, email, "sub", ui.GoogleIAPIssuer, time.Now().Add(10*time.Minute))
+	}
+
+	const dangerousTokenBody = `{"name":"minted-cred","scopes":["tasks:admin","settings:write","secrets:write","capabilities:admin","merge:force","deployment:upgrade","deployment:reboot"]}`
+
+	t.Run("numbered and single gcp-key pool accounts get 403 while owner gets 200", func(t *testing.T) {
+		for _, tc := range []struct {
+			name   string
+			count  int
+			denied []string
+		}{
+			{
+				name:  "numbered pool",
+				count: 2,
+				denied: []string{
+					"grain-agent@my-proj.iam.gserviceaccount.com",
+					"grain-agent-0@my-proj.iam.gserviceaccount.com",
+					"grain-agent-1@my-proj.iam.gserviceaccount.com",
+				},
+			},
+			{
+				name:   "single account",
+				count:  1,
+				denied: []string{"grain-agent@my-proj.iam.gserviceaccount.com"},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				srv, client := testServer(t)
+				client.Config.Actor = ui.DefaultActor("owner@example.com")
+				storeSettingsRow(t, client)
+				ctx := context.Background()
+				mc, err := client.Store.GetConfig(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				mc.GCPProject = "my-proj"
+				mc.GCPServiceAccountEmail = "grain-agent@my-proj.iam.gserviceaccount.com"
+				mc.GCPServiceAccountCount = tc.count
+				mc.ExternalAgentAPI = true
+				if err := client.Store.PutConfig(ctx, *mc); err != nil {
+					t.Fatal(err)
+				}
+
+				for _, sa := range tc.denied {
+					recTasks := serveFrom(srv, "203.0.113.50:443", http.MethodGet, "/api/tasks", "", map[string]string{
+						ui.IAPAssertionHeader: mint(sa),
+					})
+					if recTasks.Code != http.StatusForbidden {
+						t.Errorf("GET /api/tasks for %q: got %d, want 403: %s", sa, recTasks.Code, recTasks.Body)
+					}
+					recMint := serveFrom(srv, "203.0.113.50:443", http.MethodPost, "/api/external-agents/tokens", dangerousTokenBody, map[string]string{
+						ui.IAPAssertionHeader: mint(sa),
+						"Content-Type":        "application/json",
+					})
+					if recMint.Code != http.StatusForbidden {
+						t.Errorf("POST /api/external-agents/tokens for %q: got %d, want 403: %s", sa, recMint.Code, recMint.Body)
+					}
+				}
+
+				// Owner still gets 200 on /api/tasks and 201 on /api/external-agents/tokens.
+				recOwner := serveFrom(srv, "203.0.113.50:443", http.MethodGet, "/api/tasks", "", map[string]string{
+					ui.IAPAssertionHeader: mint("owner@example.com"),
+				})
+				if recOwner.Code != http.StatusOK {
+					t.Fatalf("owner GET /api/tasks: got %d, want 200: %s", recOwner.Code, recOwner.Body)
+				}
+				recOwnerMint := serveFrom(srv, "203.0.113.50:443", http.MethodPost, "/api/external-agents/tokens", dangerousTokenBody, map[string]string{
+					ui.IAPAssertionHeader: mint("owner@example.com"),
+					"Content-Type":        "application/json",
+				})
+				if recOwnerMint.Code != http.StatusCreated {
+					t.Fatalf("owner POST /api/external-agents/tokens: got %d, want 201: %s", recOwnerMint.Code, recOwnerMint.Body)
+				}
+
+				// Default-admitted daemon service account gets 200 on /api/tasks,
+				// but 403 on dangerous external-agent token minting because it was
+				// not listed explicitly by the operator.
+				recDaemonTasks := serveFrom(srv, "203.0.113.50:443", http.MethodGet, "/api/tasks", "", map[string]string{
+					ui.IAPAssertionHeader: mint("grain-daemon@my-proj.iam.gserviceaccount.com"),
+				})
+				if recDaemonTasks.Code != http.StatusOK {
+					t.Fatalf("grain-daemon GET /api/tasks: got %d, want 200: %s", recDaemonTasks.Code, recDaemonTasks.Body)
+				}
+				recDaemonMint := serveFrom(srv, "203.0.113.50:443", http.MethodPost, "/api/external-agents/tokens",
+					`{"name":"daemon-mint","scopes":["settings:write"]}`, map[string]string{
+						ui.IAPAssertionHeader: mint("grain-daemon@my-proj.iam.gserviceaccount.com"),
+						"Content-Type":        "application/json",
+					})
+				if recDaemonMint.Code != http.StatusForbidden {
+					t.Fatalf("grain-daemon POST /api/external-agents/tokens (dangerous): got %d, want 403: %s", recDaemonMint.Code, recDaemonMint.Body)
+				}
+			})
+		}
+	})
+
+	t.Run("explicit serviceAccount entry naming gcp-key pool is rejected and explicit non-pool SA can mint", func(t *testing.T) {
+		pool := ui.GCPKeyPoolEmails("grain-agent@my-proj.iam.gserviceaccount.com", 2, "my-proj")
+		for _, bad := range []string{
+			"serviceAccount:grain-agent@my-proj.iam.gserviceaccount.com",
+			"serviceAccount:grain-agent-0@my-proj.iam.gserviceaccount.com",
+			"serviceAccount:GRAIN-AGENT-1@my-proj.iam.gserviceaccount.com",
+		} {
+			_, err := ui.ValidateAllowedPrincipals([]string{"user:owner@example.com", bad}, pool)
+			if err == nil || !strings.Contains(err.Error(), "gcp-key") {
+				t.Errorf("ValidateAllowedPrincipals(%q) = %v, want error naming gcp-key", bad, err)
+			}
+		}
+
+		srv, client := testServer(t)
+		client.Config.AllowedPrincipals = []string{
+			"user:owner@example.com",
+			"serviceAccount:deployer@my-proj.iam.gserviceaccount.com",
+		}
+		storeSettingsRow(t, client)
+		ctx := context.Background()
+		mc, err := client.Store.GetConfig(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mc.GCPProject = "my-proj"
+		mc.GCPServiceAccountEmail = "grain-agent@my-proj.iam.gserviceaccount.com"
+		mc.GCPServiceAccountCount = 2
+		mc.ExternalAgentAPI = true
+		if err := client.Store.PutConfig(ctx, *mc); err != nil {
+			t.Fatal(err)
+		}
+
+		// Explicitly listed non-pool service account can issue a dangerous external-agent token.
+		recDeployer := serveFrom(srv, "203.0.113.51:443", http.MethodPost, "/api/external-agents/tokens", dangerousTokenBody, map[string]string{
+			ui.IAPAssertionHeader: mint("deployer@my-proj.iam.gserviceaccount.com"),
+			"Content-Type":        "application/json",
+		})
+		if recDeployer.Code != http.StatusCreated {
+			t.Fatalf("explicitly allowed SA POST /api/external-agents/tokens: got %d, want 201: %s", recDeployer.Code, recDeployer.Body)
 		}
 	})
 }
