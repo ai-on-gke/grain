@@ -34,6 +34,7 @@ import { DISCARD_PROMPT } from "./Overlay.jsx";
 import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
 import GeneralSection from "./settings/GeneralSection.jsx";
 import AccessSection from "./settings/AccessSection.jsx";
+import HostdsSection from "./settings/HostdsSection.jsx";
 import ConfigRepoSection from "./settings/ConfigRepoSection.jsx";
 import ModelsSection from "./settings/ModelsSection.jsx";
 import AgentsSection from "./settings/AgentsSection.jsx";
@@ -78,7 +79,13 @@ export { SETTINGS_SECTIONS, SETTINGS_GROUPS };
 // never lock the operator out), and Upgrade, which is an action -- so they
 // are never read-only under an external config repo. Upgrade has no save
 // state either, so its header leaves the "All changes saved" line off.
-const NOT_CONFIG = new Set(["config-repo", "preferences", "upgrade", "access"]);
+const NOT_CONFIG = new Set([
+  "config-repo",
+  "preferences",
+  "upgrade",
+  "access",
+  "hostds",
+]);
 const NO_SAVE_STATE = new Set(["upgrade"]);
 
 // Sections that read GET /api/settings, and so wait for it.
@@ -542,6 +549,9 @@ export default function SettingsPage({
         break;
       case "access":
         body = <AccessSection s={s} {...common} onLogout={onLogout} />;
+        break;
+      case "hostds":
+        body = <HostdsSection {...common} />;
         break;
       case "config-repo":
         body = (

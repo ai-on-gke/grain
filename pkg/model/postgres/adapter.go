@@ -141,6 +141,8 @@ var tablePrimaryKeys = map[string][]string{
 	"standing_sandbox_env":           {"sandbox_name", "name"},
 	"persistent_sandbox":             {"name"},
 	"external_agent_token":           {"id"},
+	"hostd":                          {"name"},
+	"hostd_token":                    {"token_hash"},
 	"external_agent_token_sequence":  {"id"},
 	"gcp_key":                        {"name"},
 	"secret_resolution_audit":        {"id"},

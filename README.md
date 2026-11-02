@@ -365,13 +365,23 @@ temporary bundle export removes that path from every commit.
 ## Remote hosts
 
 `grain hostd` is grain's only host agent. On the daemon's own machine it
-listens on `/run/grain-hostd/hostd.sock`; on another machine it dials in
-to the daemon instead, with the shared token the daemon was started with
-(`grain daemon -hostd-token-file`):
+listens on `/run/grain-hostd/hostd.sock` and is the registry's `local`
+hostd. Any number of others dial in to the daemon alongside it, each
+registered in **Settings → Hostds** (or `POST /api/hostds`) with a name,
+an owner and labels, and given a token of its own there, shown once:
 
 ```bash
-grain hostd -server https://<grain-host> -token-file /etc/grain/hostd.token
+grain hostd -server https://<grain-host> -token-file /etc/grain/hostd.token -name <name>
 ```
+
+The daemon names a connection from its token alone; `-name` is optional
+and, when given, must be that token's hostd. Rotating a hostd's token
+takes effect on its next connection; revoking the hostd disconnects it
+at once. The single
+shared token of `grain daemon -hostd-token-file` still works for this
+release, as one hostd named by `-hostd-token-name` (default `remote`),
+and is removed in the next. A hostd's allowlist (`/etc/grain/hostd.yaml`)
+may set `capacity:` and `labels:`, which it reports to the daemon.
 
 The remote model executors (`grain executor` / `grain model-server`,
 `scripts/run-remote-executor.sh`) were removed; see

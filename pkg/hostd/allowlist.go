@@ -105,6 +105,13 @@ type Allowlist struct {
 	// still running (Server.Drain); DefaultDrainCap when unset. At the cap
 	// they are cancelled.
 	DrainCap time.Duration `yaml:"drain_cap"`
+	// Capacity is how many agent CLI runs at once this hostd takes host
+	// work for; 0 is no limit of its own. The daemon holds runs past it
+	// rather than starting them (Hello.Capacity).
+	Capacity int `yaml:"capacity"`
+	// Labels describe this hostd to the daemon, beside the registry's own
+	// labels for it, for host work that selects a hostd by label.
+	Labels map[string]string `yaml:"labels"`
 }
 
 // DefaultDrainCap is the allowlist's drain_cap when it sets none.
@@ -185,6 +192,14 @@ func ParseAllowlist(data []byte) (*Allowlist, error) {
 	// An empty file is an empty allowlist, which refuses everything.
 	if err := dec.Decode(&a); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("hostd allowlist: %w", err)
+	}
+	if a.Capacity < 0 {
+		return nil, fmt.Errorf("hostd allowlist: capacity %d is negative; 0 is no limit", a.Capacity)
+	}
+	for k, v := range a.Labels {
+		if k == "" || strings.ContainsAny(k+v, ",= ") {
+			return nil, fmt.Errorf("hostd allowlist: label %q=%q: keys and values may not be empty or hold ',', '=' or spaces", k, v)
+		}
 	}
 	for name, e := range a.CLIs {
 		if err := e.validate(KindCLI, name); err != nil {
