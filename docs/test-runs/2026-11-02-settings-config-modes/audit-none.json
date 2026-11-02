@@ -1,0 +1,296 @@
+[
+ {
+  "path": "/settings/sandboxes",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.hint \"takes effect when the daemon restarts, u\" 2.99:1"
+ },
+ {
+  "path": "/settings/credentials",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.hint \"for a test or mock github only; never fo\" 2.99:1"
+ },
+ {
+  "path": "/settings/credentials",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.hint \"takes effect when the daemon restarts, u\" 2.99:1"
+ },
+ {
+  "path": "/settings/caches",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.hint \"on (default): each new sandbox has its a\" 2.99:1"
+ },
+ {
+  "path": "/settings/caches",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.hint \"on (default): each ci job is handed a gi\" 2.99:1"
+ },
+ {
+  "path": "/settings/caches",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "code \"cache-from: type=gha\" 2.99:1"
+ },
+ {
+  "path": "/settings/caches",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "code \"actions/cache\" 2.99:1"
+ },
+ {
+  "path": "/settings/general",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.hint \"off (default): a task list opens narrowe\" 2.99:1"
+ },
+ {
+  "path": "/settings/general",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.hint \"off (default): the check runs at the hea\" 2.99:1"
+ },
+ {
+  "path": "/settings/tasks",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.hint \"on (default): a new task's own \"queue im\" 2.99:1"
+ },
+ {
+  "path": "/settings/tasks",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.hint \"on (default): a new task's own \"auto-mer\" 2.99:1"
+ },
+ {
+  "path": "/settings/tasks",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.hint \"the list runs top-to-bottom in the order\" 2.99:1"
+ },
+ {
+  "path": "/repos",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.count \"1\" 2.99:1"
+ },
+ {
+  "path": "/repos",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "clipped-text",
+  "detail": "h2.MuiTypography-root.MuiTypography-h6 \"repos\" 44>1"
+ },
+ {
+  "path": "/boards/board-1",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.count \"16\" 2.99:1"
+ },
+ {
+  "path": "/boards/board-1",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "clipped-text",
+  "detail": "h2.MuiTypography-root.MuiTypography-h6 \"board\" 44>1"
+ },
+ {
+  "path": "/boards/board-1",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.task-number \"1\" 2.99:1"
+ },
+ {
+  "path": "/boards/board-1",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.chip-field-name \"priority\" 2.99:1"
+ },
+ {
+  "path": "/boards/board-1",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "p.board-column-empty \"Nothing here.\" 2.76:1"
+ },
+ {
+  "path": "/boards/board-1",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.task-activity-by \"grain\" 2.99:1"
+ },
+ {
+  "path": "/boards/board-1",
+  "width": 1440,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.task-activity-age \"13m ago\" 2.99:1"
+ },
+ {
+  "path": "/repos",
+  "width": 1440,
+  "scheme": "dark",
+  "kind": "clipped-text",
+  "detail": "h2.MuiTypography-root.MuiTypography-h6 \"repos\" 44>1"
+ },
+ {
+  "path": "/boards/board-1",
+  "width": 1440,
+  "scheme": "dark",
+  "kind": "clipped-text",
+  "detail": "h2.MuiTypography-root.MuiTypography-h6 \"board\" 44>1"
+ },
+ {
+  "path": "/settings/sandboxes",
+  "width": 390,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.hint \"takes effect when the daemon restarts, u\" 2.99:1"
+ },
+ {
+  "path": "/settings/credentials",
+  "width": 390,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.hint \"for a test or mock github only; never fo\" 2.99:1"
+ },
+ {
+  "path": "/settings/credentials",
+  "width": 390,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.hint \"takes effect when the daemon restarts, u\" 2.99:1"
+ },
+ {
+  "path": "/settings/caches",
+  "width": 390,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.hint \"on (default): each new sandbox has its a\" 2.99:1"
+ },
+ {
+  "path": "/settings/caches",
+  "width": 390,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.hint \"on (default): each ci job is handed a gi\" 2.99:1"
+ },
+ {
+  "path": "/settings/caches",
+  "width": 390,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "code \"cache-from: type=gha\" 2.99:1"
+ },
+ {
+  "path": "/settings/caches",
+  "width": 390,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "code \"actions/cache\" 2.99:1"
+ },
+ {
+  "path": "/settings/general",
+  "width": 390,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.hint \"off (default): a task list opens narrowe\" 2.99:1"
+ },
+ {
+  "path": "/settings/general",
+  "width": 390,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.hint \"off (default): the check runs at the hea\" 2.99:1"
+ },
+ {
+  "path": "/settings/tasks",
+  "width": 390,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.hint \"on (default): a new task's own \"queue im\" 2.99:1"
+ },
+ {
+  "path": "/settings/tasks",
+  "width": 390,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.hint \"on (default): a new task's own \"auto-mer\" 2.99:1"
+ },
+ {
+  "path": "/settings/tasks",
+  "width": 390,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.hint \"the list runs top-to-bottom in the order\" 2.99:1"
+ },
+ {
+  "path": "/repos",
+  "width": 390,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.count \"1\" 2.76:1"
+ },
+ {
+  "path": "/boards/board-1",
+  "width": 390,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.count \"16\" 2.76:1"
+ },
+ {
+  "path": "/boards/board-1",
+  "width": 390,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.task-number \"1\" 2.99:1"
+ },
+ {
+  "path": "/boards/board-1",
+  "width": 390,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.chip-field-name \"priority\" 2.99:1"
+ },
+ {
+  "path": "/boards/board-1",
+  "width": 390,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "p.board-column-empty \"Nothing here.\" 2.76:1"
+ },
+ {
+  "path": "/boards/board-1",
+  "width": 390,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.task-activity-by \"grain\" 2.99:1"
+ },
+ {
+  "path": "/boards/board-1",
+  "width": 390,
+  "scheme": "light",
+  "kind": "low-contrast",
+  "detail": "span.task-activity-age \"15m ago\" 2.99:1"
+ }
+]
