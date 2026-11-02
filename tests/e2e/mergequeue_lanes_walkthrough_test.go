@@ -175,10 +175,13 @@ func TestMergeQueueLanesContentionWalkthrough(t *testing.T) {
 	if got := w.sync(); got == nil || got.LastError != "" {
 		t.Fatalf("the merge rules did not sync: %+v", got)
 	}
-	// max_merges_per_repo is the default, 1: one merge (or batch) per lane
-	// a cycle.
-	if cfg, err := w.store.GetConfig(w.ctx); err != nil || (cfg != nil && cfg.MaxMergesPerRepo > 1) {
-		t.Fatalf("config: %+v, %v; want max merges per repo branch 1", cfg, err)
+	// max_merges_per_repo set to 1, the default before schema 84: one
+	// merge (or batch) per lane a cycle.
+	if err := w.store.UpdateConfig(w.ctx, func(c *model.Config) error {
+		c.MaxMergesPerRepo = 1
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 	if !w.ticks(10, func() bool { r := w.baseRow(); return r != nil && r.Conclusion == string(ci.ConclusionSuccess) }) {
 		t.Fatalf("main was never judged green: %+v", w.baseRow())

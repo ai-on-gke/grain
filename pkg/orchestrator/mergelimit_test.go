@@ -107,9 +107,17 @@ type mergeMovesBase struct {
 	*github.RESTClient
 	sim          *githubsim.Sim
 	afterMerging map[string]func()
+	// refuse is the branches GitHub refuses to merge, as it does a pull
+	// request whose clean read was about a base that has since moved.
+	refuse map[string]bool
 }
 
 func (c *mergeMovesBase) MergePullRequest(owner, repo string, number int, headSHA string) error {
+	for _, pr := range c.sim.PullRequests {
+		if pr.Number == number && c.refuse[pr.Head] {
+			return &github.Error{Status: 405, Body: []byte(`{"message":"Pull Request is not mergeable"}`)}
+		}
+	}
 	if err := c.RESTClient.MergePullRequest(owner, repo, number, headSHA); err != nil {
 		return err
 	}
@@ -168,5 +176,49 @@ func TestEachMergeInACycleIsJudgedAgainstTheBaseThePreviousMergeLeft(t *testing.
 		if st, err := store.State(ctx, task.ID); err != nil || st != model.StateCompleted {
 			t.Errorf("%s is %q (%v), want still completed: it is judged again next cycle", task.ID, st, err)
 		}
+	}
+}
+
+// GitHub re-judges a pull request against a moved base in the background,
+// so the read the walk takes straight after a merge can still be the
+// answer about the base before it, and the merge it asks for is refused.
+// That is the base moving, not the change failing: the cycle reports no
+// error, nothing behind it merges, and the change merges next cycle with
+// no refusal held against it.
+func TestARefusalStraightAfterAMergeInTheLaneWaitsForTheNextCycle(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, rest := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	_, firstBranch := queuedTaskWithPullRequest(t, ctx, store, sim, rest, "t1", repo)
+	second, secondBranch := queuedTaskWithPullRequest(t, ctx, store, sim, rest, "t2", repo)
+	_, thirdBranch := queuedTaskWithPullRequest(t, ctx, store, sim, rest, "t3", repo)
+	setMergeable(sim, true)
+	for _, b := range []string{firstBranch, secondBranch, thirdBranch} {
+		sim.CheckRuns[b] = greenCheck
+	}
+	client := &mergeMovesBase{RESTClient: rest, sim: sim, refuse: map[string]bool{secondBranch: true}}
+
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err != nil {
+		t.Fatalf("SyncPullRequests: %v", err)
+	}
+	if !mergedBranch(sim, firstBranch) {
+		t.Fatal("the first clean member did not merge")
+	}
+	if mergedBranch(sim, secondBranch) || mergedBranch(sim, thirdBranch) {
+		t.Fatalf("merged past a refusal in the same cycle: second=%v third=%v",
+			mergedBranch(sim, secondBranch), mergedBranch(sim, thirdBranch))
+	}
+	if st, err := store.State(ctx, second.ID); err != nil || st != model.StateCompleted {
+		t.Fatalf("t2 is %q (%v), want still completed", st, err)
+	}
+
+	client.refuse = nil
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(time.Minute)); err != nil {
+		t.Fatalf("second SyncPullRequests: %v", err)
+	}
+	if !mergedBranch(sim, secondBranch) || !mergedBranch(sim, thirdBranch) {
+		t.Fatalf("the next cycle did not merge what was left: second=%v third=%v",
+			mergedBranch(sim, secondBranch), mergedBranch(sim, thirdBranch))
 	}
 }

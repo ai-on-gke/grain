@@ -787,6 +787,13 @@ func (w *mergeWalk) mayMerge(lane string) bool {
 	return w.used[lane] < w.limitOrDefault()
 }
 
+// mergedBefore reports whether something already merged into lane this
+// cycle, so that the base an entry was read against may have moved since
+// GitHub last judged it.
+func (w *mergeWalk) mergedBefore(lane string) bool {
+	return w.used[lane] > 0
+}
+
 // merged spends one of lane's merges.
 func (w *mergeWalk) merged(lane string) {
 	if w.used == nil {
@@ -1866,6 +1873,24 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			}
 			break
 		} else if err != nil {
+			// A refusal GitHub gives no reason for, straight after an
+			// earlier merge in this lane moved the base, is most likely
+			// that move: GitHub had not yet re-judged this pull request
+			// against it, and the clean read was its answer about the
+			// base before. Nothing is charged to the change for that.
+			// The lane closes and the next cycle reads it fresh.
+			if member && !forcing && walk.mergedBefore(lane) &&
+				github.ClassifyMergeRefusal(err) == github.RefusalTransient {
+				log.Printf("orchestrator: %s was refused a merge right after another merge into %s this cycle; "+
+					"judging it again next cycle against the base as it now stands: %v", ref, detail.BaseRef, err)
+				walk.close(lane)
+				if err := setMergeQueueState(ctx, store, e.obs, task.ID,
+					queueStatus{state: mergeStateWaitingQueue,
+						note: "another change just merged into " + detail.BaseRef + "; judged again next cycle"}, now); err != nil {
+					return err
+				}
+				break
+			}
 			// A merge GitHub will not do is the one dead end the queue
 			// used to retry forever in silence, with the row left saying
 			// "Merging" -- refusedMerge is what gives it words and an end.
