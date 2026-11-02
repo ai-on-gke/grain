@@ -162,7 +162,7 @@ func (c *Client) CreateExternalAgentToken(ctx context.Context, req CreateExterna
 	if err != nil {
 		return IssuedExternalAgentToken{}, validationErrorf("%v", err)
 	}
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
 	if needsPerson && !c.canIssuePersonExternalAgentToken(ctx, actor) {
 		if actor.Kind == model.PrincipalService {
 			return IssuedExternalAgentToken{}, forbiddenErrorf(
@@ -254,7 +254,7 @@ func (c *Client) RotateExternalAgentToken(ctx context.Context, id string) (Issue
 	if err != nil {
 		return IssuedExternalAgentToken{}, validationErrorf("%v", err)
 	}
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
 	if needsPerson && !c.canIssuePersonExternalAgentToken(ctx, actor) {
 		if actor.Kind == model.PrincipalService {
 			return IssuedExternalAgentToken{}, forbiddenErrorf(

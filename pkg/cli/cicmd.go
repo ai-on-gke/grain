@@ -296,8 +296,8 @@ func cmdCIList(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 // ciListFlagValues are `grain ci list`'s narrowing flags, held between
 // being registered on the flag set and being read into one ci.RunFilter.
 type ciListFlagValues struct {
-	repo, ref, job, since, until, sort, order *string
-	conclusions                               stringList
+	repo, ref, job, workflow, since, until, sort, order *string
+	conclusions                                         stringList
 }
 
 // ciListFilterFlags puts the whole run-filter vocabulary on `grain ci
@@ -321,6 +321,8 @@ func ciListFilterFlags(fs *flag.FlagSet) *ciListFlagValues {
 		strings.Join(ci.RunStates, ", ")+" (repeatable, or comma-separated, for several)")
 	f.job = fs.String("job", "",
 		"only runs that have this job, by name or id -- whatever the job did")
+	f.workflow = fs.String("workflow", "",
+		"only runs of this workflow, by file name (e.g. nightly.yml), stem, path, or display name")
 	f.since = fs.String("since", "",
 		"only runs started since then: a span back from now (24h, 7d, 90m) or a date (2026-09-17, or an RFC 3339 timestamp)")
 	f.until = fs.String("until", "",
@@ -343,6 +345,7 @@ func (f *ciListFlagValues) filter(now time.Time) (ci.RunFilter, error) {
 		Repo:       strings.TrimSpace(*f.repo),
 		Ref:        strings.TrimSpace(*f.ref),
 		Job:        strings.TrimSpace(*f.job),
+		Workflow:   strings.TrimSpace(*f.workflow),
 		Descending: true,
 	}
 	for _, value := range f.conclusions {

@@ -552,8 +552,15 @@ func (d daemonConfigChanges) ProposeConfigChange(ctx context.Context, p mcp.Conf
 	})
 }
 
-// writesConfigRepo reports whether t may push grain/config.
+// writesConfigRepo reports whether t may push grain/config from the
+// grain-state checkout propose_config_change's script starts in. That
+// checkout is made only for a task with no repo of its own
+// (orchestrator.wantsStateCheckout): one with a Repo is checked out into
+// that repo instead, so it is not offered a tool that could only fail.
 func writesConfigRepo(t ui.Task) bool {
+	if t.Repo != "" {
+		return false
+	}
 	for _, w := range t.Writes {
 		if ref, err := model.ParseRepo(w.Repo); err == nil && model.IsConfigRepo(ref) {
 			return true
@@ -2138,8 +2145,8 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 		// task), and this gate is so an ordinary run is not shown a
 		// tool that could only ever refuse.
 		// propose_config_change is a grain/config writer's: the director,
-		// as grain_config.console_sessions declares it, or any task
-		// somebody granted grain/config as a write target.
+		// as grain_config.console_sessions declares it, or any repo-less
+		// task somebody granted grain/config as a write target.
 		if writesConfigRepo(taskDetail.Task) {
 			registry.Register(mcp.NewProposeConfigChangeTools(
 				daemonConfigChanges{client: client, taskID: *taskID}, *taskID, tools)...)

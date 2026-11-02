@@ -71,7 +71,7 @@ func (c *Client) DecideRelease(ctx context.Context, repo, version string, approv
 		verb = "approve"
 	}
 	// Who first, before anything about the release is looked at.
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
 	if actor.Kind != model.PrincipalHuman || actor.ID == "" {
 		return ReleaseDecision{}, forbiddenErrorf("only a person may %s a release: %q is a %s, and a release "+
 			"is made official by a person, never by an agent or a schedule", verb, actor.ID, kindName(actor.Kind))

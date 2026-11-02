@@ -331,10 +331,17 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	}
 	if _, err := store.RecordTaskEvent(ctx, model.TaskEvent{
 		TaskID: "a1b2", Kind: model.TaskEventClosed, At: sub, Reason: awkward,
-		By:     model.Principal{Kind: model.PrincipalHuman, ID: "bwsalmon"},
-		Detail: "cancelled run a1b2-1 (attempt 1)",
+		By:         model.Principal{Kind: model.PrincipalHuman, ID: "bwsalmon", Source: model.SourceIAP},
+		OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: "alice", Source: "example-proxy"},
+		Detail:     "cancelled run a1b2-1 (attempt 1)",
 	}); err != nil {
 		t.Fatalf("recording a close: %v", err)
+	}
+	if _, err := store.RecordConfigAudit(ctx, model.ConfigAuditEntry{
+		At: sub, By: model.Principal{Kind: model.PrincipalHuman, ID: "operator", Source: model.SourceAccessCode},
+		Surface: "settings", Summary: awkward,
+	}); err != nil {
+		t.Fatalf("recording a config change: %v", err)
 	}
 	// One attachment on the task itself (a NULL comment_id) and one on
 	// the comment (an integer one).
