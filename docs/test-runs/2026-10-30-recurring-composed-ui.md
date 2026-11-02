@@ -98,7 +98,7 @@ are not committed. Neither are the screenshots.
    schedule's next run. After **Run now** it also shows the last run,
    with no reload. A suite shows the next run of its suite schedule, and
    its last run is its newest run. Rows nothing fires read "on demand";
-   the trigger reads "on change". Per `docs/design/settings-panel.md`
+   the trigger reads "on change". Per `design/design/settings-panel.design.md`
    §5.1, a template counts only schedules whose `templateId` is that
    template. So `walk-inline`, which reaches a schedule only through a
    suite, stays "on demand". That is by design.

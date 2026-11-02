@@ -14,7 +14,7 @@
 
 package model
 
-// The New Task form's configuration (docs/design/config-repo-settings.md
+// The New Task form's configuration (design/design/config-repo-settings.design.md
 // §6): which fields the form shows, in what order, under what labels,
 // with what defaults, deployment-wide and per board, repository and
 // template. settings/new-task-form.yml is where it is written

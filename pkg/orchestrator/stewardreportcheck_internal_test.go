@@ -27,7 +27,7 @@ import (
 )
 
 // Replay fixture from steward task 768's wake-1 report (2026-10-25) and the
-// records of 832, 833, 834, and 836 (docs/design/durable-tasks.md#DT-14).
+// records of 832, 833, 834, and 836 (design/design/durable-tasks.design.md#DT-14).
 const task768Wake1ReportFixture = `### Pipeline Steward Wake 1 Report
 
 - Checked base branch status on ` + "`bwsalmon/grain`" + ` (` + "`main`" + ` and ` + "`candidate`" + `) [task 768].

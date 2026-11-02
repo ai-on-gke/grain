@@ -224,8 +224,7 @@ also antigravity's own per-result default, and `agy` is the default
 framework — which is what settles one cap rather than one per tool, a
 framework's limit being per result. It is still a `var`: one
 deployment's distribution is not two deployments disagreeing. The
-numbers are quoted under "No single answer may eat the run's context" in
-docs/implementation-notes.md and in `pkg/mcp/result_size.go`.
+numbers are quoted in `pkg/mcp/result_size.go`'s doc comment.
 
 **Extended** (grain/task-155) to every tool rather than the two. Nothing
 else had been capped here on the reading that the other big answers bound
@@ -240,7 +239,7 @@ whatever its own server said. `Registry.handleCall` now elides every
 answer at `maxResultTextBytes`, a quarter above the per-tool cap so a
 tool that caps itself is not cut twice, and `Tool.ElisionAdvice` is how
 each tool names the call that returns less. See "No single answer may eat
-the run's context" in docs/implementation-notes.md.
+the run's context" (`pkg/mcp/result_size.go`).
 
 **Measured** (grain/task-181). Both of the moves above were argued from
 the size percentiles, and the cap they set censors them: every recorded

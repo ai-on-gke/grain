@@ -65,9 +65,15 @@ func AmbientSource() gitproxy.AmbientCommandSource {
 		Args:      []string{"auth", "token"},
 		Env:       []string{"GH_HOST={host}", "GH_PROMPT_DISABLED=1", "GH_NO_UPDATE_NOTIFIER=1"},
 		LoginFix:  "GH_HOST={host} forgecli auth login",
-		ScopeFix:  "GH_HOST={host} forgecli auth refresh --scopes repo",
+		ScopeFix:  "GH_HOST={host} forgecli auth refresh --scopes repo,workflow",
 		Hosts:     []string{"*." + Domain},
 		OnlyHosts: true,
+		PushRefusedHint: func(host, message string) string {
+			if !gitproxy.WorkflowScopeRefused(message) {
+				return ""
+			}
+			return "run `GH_HOST=" + host + " forgecli auth refresh --scopes repo,workflow` as the daemon's account"
+		},
 		ForgeViaCommand: &gitproxy.CommandForge{
 			GitAuthorization: GitBasicAuth,
 			LoginPage: func(text string) (string, bool) {

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The release train's two gates (docs/design/release-from-trunk.md, §§2-4):
+# The release train's two gates (design/design/release-from-trunk.design.md, §§2-4):
 # which main commit is known-good enough to cut as the next release
 # candidate, and whether the candidate soaking on staging may be promoted.
 # scripts/release-from-trunk.sh calls both; each reads JSON the train

@@ -287,7 +287,7 @@ func runGcloud(ctx context.Context, args ...string) (string, error) {
 // RetryPolicy is how long HTTPClient keeps trying a daemon that is not
 // answering, and how often, before it gives up and says so.
 //
-// It exists for the restart gap (docs/non-disruptive-upgrade.md, Stage
+// It exists for the restart gap (design/design/non-disruptive-upgrade.design.md, Stage
 // 1): while an upgrade restarts the daemon, its API refuses connections
 // -- or the reverse proxy in front of it answers 502/503 -- for as long
 // as the new build takes to come up, and every `grain mcpserver` call an

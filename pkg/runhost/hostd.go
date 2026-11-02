@@ -23,7 +23,7 @@ import (
 )
 
 // grain hostd's detached processes take part in the adoption pass as run
-// hosts do (docs/design/cli-run-location.md, "Upgrades and host runs"):
+// hosts do (design/design/cli-run-location.design.md, "Upgrades and host runs"):
 // a host CLI started through hostd with Detach outlives the daemon until
 // its own deadline, spools its output the way a run host does, and is
 // listed by hostd with the run and task that claim it. DecideHostd maps

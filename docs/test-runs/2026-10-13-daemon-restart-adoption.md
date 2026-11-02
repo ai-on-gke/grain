@@ -1,7 +1,7 @@
 # A daemon restart adopts the run, which opens its pull request (2026-10-13)
 
 Task 3282, stage 2c of
-[`non-disruptive-upgrade.md`](../non-disruptive-upgrade.md): the upgrade
+[`non-disruptive-upgrade.md`](../../design/design/non-disruptive-upgrade.design.md): the upgrade
 protocol's flush and adopt (piece 6), and the acceptance test. This
 records what was run in the task's sandbox, and what was not.
 

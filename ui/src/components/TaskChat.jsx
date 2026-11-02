@@ -292,7 +292,7 @@ export default function TaskChat({
   // answers in it, that was 112ms of script *between one character and
   // the next*, growing linearly with the conversation, which is what an
   // operator reported as "typing is very very slow"
-  // (docs/hand-runs/2026-09-17-chat-keystroke.md has the numbers, before
+  // (the 2026-09-17 chat-keystroke hand run has the numbers, before
   // and after). Nothing is sent to the daemon until Enter, so all of it
   // was main-thread work for a keystroke that changed one contenteditable.
   //

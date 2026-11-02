@@ -17,7 +17,7 @@ import { test, expect } from "./fixtures.js";
 // A config pull request disabling every connection is refused as
 // locking dispatch (staterepo.CheckDispatchLiveness); the same change
 // made from Settings → Models is a bootstrap write and is written
-// (docs/design/config-repo-settings.md, section 4.1.1), so the page
+// (design/design/config-repo-settings.design.md, section 4.1.1), so the page
 // warns while it lasts. Found by the 2026-10-31 config-repo write-path
 // test run.
 for (const viewport of [

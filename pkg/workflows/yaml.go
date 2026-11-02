@@ -495,7 +495,7 @@ func (s *rawStrings) UnmarshalYAML(node *yaml.Node) error {
 
 // rawCapabilities is a job's capabilities: a name, or a list of names,
 // capability references and {capability, with} grant objects
-// (docs/capabilities-spec.md §2.2.1), each read as its grant string.
+// (design/spec/capabilities/capabilities.spec.md §2.2.1), each read as its grant string.
 type rawCapabilities []string
 
 func (s *rawCapabilities) UnmarshalYAML(node *yaml.Node) error {

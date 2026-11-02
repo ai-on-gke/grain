@@ -254,7 +254,7 @@ func replacementOf(t *testing.T, store *model.Store, closed string) model.Task {
 // the last one's runs wrote. Everything else stays on the closed task,
 // which is the whole of the bargain -- carrying more would be carrying
 // exactly what the conversation bound exists to stop carrying
-// (docs/implementation-notes.md, "A chat that never ends is not split
+// (grain's former implementation notes, "A chat that never ends is not split
 // for you").
 func TestAClosedSessionsReplacementCarriesItsHandoverAndNothingElse(t *testing.T) {
 	t.Parallel()

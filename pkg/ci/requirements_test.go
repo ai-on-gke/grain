@@ -273,7 +273,7 @@ func TestRequirementNamesAreCheckedForShapeOnly(t *testing.T) {
 
 // A capability reference a job declares is its declaration's to ask for
 // and the deployment's capability policy's to decide when the job's
-// grants are minted (docs/capabilities-spec.md §4.2.2), so the
+// grants are minted (design/spec/capabilities/capabilities.spec.md §4.2.2), so the
 // repository's CI capabilities list neither has to name it nor hands
 // one it names to a job that did not ask. The request names the job's
 // run and its place in it, which the pass's attempt_ids are made of.

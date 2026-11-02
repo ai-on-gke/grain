@@ -47,7 +47,7 @@ func servesCapability(args []string) bool {
 
 // capabilityServeCmd is `grain capability <name> [flags]`: serve one
 // in-tree capability server's control plane on stdin/stdout, the stdio
-// transport an mcpServers entry spawns it over (docs/capabilities-spec.md
+// transport an mcpServers entry spawns it over (design/spec/capabilities/capabilities.spec.md
 // §3.1.1). Root credentials come from the environment alone; diagnostics
 // go to stderr, since stdout is the protocol.
 func capabilityServeCmd(args []string) {

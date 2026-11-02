@@ -1,6 +1,6 @@
 # 2026-10-20: no user tile, no browser-chosen username (settings-panel stage c)
 
-Stage (c) of `docs/design/settings-panel.md` (§6, and the rest of §4.2
+Stage (c) of `design/design/settings-panel.design.md` (§6, and the rest of §4.2
 and §4.3): the sidebar's user tile and the browser-chosen username are
 gone, and this browser's per-user localStorage keys become
 deployment-wide ones. This is the run of

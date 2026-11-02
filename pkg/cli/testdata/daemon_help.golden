@@ -150,7 +150,7 @@ Usage of grain daemon:
   -grit-experimental
     	allow -grit-url, knowing it runs no repository's workflows, takes grit's attestation key from grit itself, and has no reverse-tunnel mode: for developing the grit split, not for a deployment's CI
   -grit-url url
-    	EXPERIMENTAL, refused without -grit-experimental: remote grit server base url (e.g. http://127.0.0.1:4244); when unset, CI runs in-process. It runs none of a repository's workflows yet (docs/design/grit-split.md, GS-3 to GS-5 deferred)
+    	EXPERIMENTAL, refused without -grit-experimental: remote grit server base url (e.g. http://127.0.0.1:4244); when unset, CI runs in-process. It runs none of a repository's workflows yet (design/design/grit-split.design.md, GS-3 to GS-5 deferred)
   -host-sandbox-env value
     	NAME or NAME=VALUE, repeatable, only with -host-sandboxes: an environment variable every host-sandbox run of this machine's own tasks (not anybody else's) gets on top of the default allowlist -- NAME alone passes this daemon's own value, NAME=VALUE sets that one. For ambient workstation credentials a run should use as you: SSH_AUTH_SOCK, HTTPS_PROXY/HTTP_PROXY/NO_PROXY, CLOUDSDK_CONFIG=$HOME/.config/gcloud. Every run then acts with that identity. HOME cannot be set (it stays pinned to the run's directory, which keeps its git credentials its own). Values reach runs through a 0600 file and are redacted from what run_command returns, but a NAME=VALUE entry sits on this daemon's own command line, so one with credentials in a URL (user:pass@) is refused: export it and pass NAME alone
   -host-sandboxes
@@ -170,7 +170,7 @@ Usage of grain daemon:
   -k8s-git-proxy-host string
     	address (no port) this daemon's git proxy and model proxies are reachable at from inside a sandbox pod, in place of the loopback address the proxy binds to by default -- required with -k8s-sandboxes, the same way -granule-git-proxy-host is required with -granule-sandboxes and for the same reason: a pod's 127.0.0.1 is its own. In-cluster this is grain's own pod IP, which every other pod can route to directly, so it defaults to $GRAIN_POD_IP when that is set -- deploy/kubernetes/deployment.yaml fills it from the downward API (status.podIP); see -k8s-sandbox-service (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
   -k8s-granule-access string
-    	k8s-granule only: how grain runs steps in a sandbox's guest -- "kubectl" (granule exec over kubectl exec) or "dialout" (the wrapper's channel to -sandbox-access-addr's acceptor; refused unless grain runs in-cluster). docs/design/grain-on-gke.md#GKE-3 (default "kubectl")
+    	k8s-granule only: how grain runs steps in a sandbox's guest -- "kubectl" (granule exec over kubectl exec) or "dialout" (the wrapper's channel to -sandbox-access-addr's acceptor; refused unless grain runs in-cluster). design/design/grain-on-gke.design.md#GKE-3 (default "kubectl")
   -k8s-granule-image string
     	the packed guest image every pod this backend creates runs: a self-contained image with its own guest disk and kernel already baked in -- the shape Granulefile's own build produces, not the thin exec target -k8s-sandbox-image names and, just as importantly, not "granule:vendored" either (grain init's own -granule-runtime-image default, what scripts/granule/build-granule-image.sh produces, which has no guest disk and cannot boot at all -- confirmed against a real cluster, where a pod running it exits immediately). Required with -k8s-granule-sandboxes; no context-free default to pick, since nothing publishes a packed guest image under a stable tag yet -- docs/k8s-granule-design.md §4 (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default "ghcr.io/bwsalmon/grain/guest:latest")
   -k8s-granule-reattach-timeout duration
@@ -290,17 +290,17 @@ Usage of grain daemon:
   -reboot-cmd sudo systemctl reboot
     	one argument of the command the UI's reboot-host button runs -- repeat for every argument. Defaults to sudo systemctl reboot.
   -relay-audience string
-    	removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set
+    	removed: the rendezvous relay is gone. The daemon refuses to start with this set
   -relay-auth-token-file string
-    	removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set
+    	removed: the rendezvous relay is gone. The daemon refuses to start with this set
   -relay-iap-jwt-audience string
-    	removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set
+    	removed: the rendezvous relay is gone. The daemon refuses to start with this set
   -relay-session-lifetime string
-    	removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set
+    	removed: the rendezvous relay is gone. The daemon refuses to start with this set
   -relay-token string
-    	removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set
+    	removed: the rendezvous relay is gone. The daemon refuses to start with this set
   -relay-url string
-    	removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set
+    	removed: the rendezvous relay is gone. The daemon refuses to start with this set
   -repair-reserve-sandboxes int
     	how many standard agent sandboxes' worth of that budget is kept for base-branch repairs -- tasks marked fixes_base_branch and the CI confirming their branch green -- so a red base branch's repair starts on a saturated deployment instead of queueing behind the work it blocks. 0 reserves nothing; a repair the reserve cannot hold may still pre-empt work blocked on the same base (model.Budget.RepairReserve) (default 1)
   -repo value
@@ -314,9 +314,9 @@ Usage of grain daemon:
   -run-host-dir string
     	where run hosts' spools and staging live, seen at the same path by the daemon and every run host (default <data-dir>/runhosts; under -k8s-run-host-rwx, on that volume)
   -run-host-image string
-    	drive each claude run in a run host of this image: a container that is a sibling of the daemon, not a child of it, writing to a spool the daemon tails (pkg/runhost, docs/non-disruptive-upgrade.md). Normally the deployment image itself ("self" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes: a run host cannot reach a container sandbox
+    	drive each claude run in a run host of this image: a container that is a sibling of the daemon, not a child of it, writing to a spool the daemon tails (pkg/runhost, design/design/non-disruptive-upgrade.design.md). Normally the deployment image itself ("self" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes: a run host cannot reach a container sandbox
   -sandbox-access-addr string
-    	k8s-granule only: address to run the sandbox-access acceptor on (":4244"), which every sandbox pod's wrapper then dials out to over mTLS with its own certificate and token (pkg/sandboxaccess, docs/design/grain-on-gke.md "Sandbox access"); empty leaves it off and builds pods as before
+    	k8s-granule only: address to run the sandbox-access acceptor on (":4244"), which every sandbox pod's wrapper then dials out to over mTLS with its own certificate and token (pkg/sandboxaccess, design/design/grain-on-gke.design.md "Sandbox access"); empty leaves it off and builds pods as before
   -sandbox-access-ca-secret string
     	Secret Manager secret (projects/<p>/secrets/<s>) holding the sandbox-access CA, read through Workload Identity and generated into it on first start; empty keeps the CA in <data-dir>/sandbox-access-ca.pem
   -sandbox-access-dial string

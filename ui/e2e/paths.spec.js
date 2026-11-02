@@ -75,7 +75,7 @@ test("loads directly into each sidebar sub-page from its URL", async ({
   await expect(page.locator(".task-row").first()).toBeVisible();
 
   // The old System overlay's settings tabs are Settings sections now,
-  // and /admin is Settings → General (docs/design/settings-panel.md §3.5).
+  // and /admin is Settings → General (design/design/settings-panel.design.md §3.5).
   await page.goto("/admin");
   await expect(
     page.getByRole("heading", { name: "General", level: 1 }),

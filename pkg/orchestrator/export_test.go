@@ -176,7 +176,7 @@ const CIMaximumAttempts = ciMaximumAttempts
 
 // BaseCIMaximumAttempts is the same bound for one commit of a base
 // branch, whose verdicts about nothing get maxInfraRetries re-runs
-// (docs/design/release-from-trunk.md, RFT-2).
+// (design/design/release-from-trunk.design.md, RFT-2).
 const BaseCIMaximumAttempts = baseCIMaximumAttempts
 
 // MaxInfraRetries is how many automatic re-runs an `infra` verdict on a

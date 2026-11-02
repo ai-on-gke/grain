@@ -24,7 +24,7 @@ import (
 )
 
 // reconcileNotifications is the per-cycle half of operator notifications
-// (docs/design/durable-tasks.md, DT-5): every open notification with a
+// (design/design/durable-tasks.design.md, DT-5): every open notification with a
 // clears_when is checked, and cleared ("condition") once it holds --
 // a task closed or merged, a base branch's latest grain CI verdict
 // green, or its ttl passed.

@@ -48,7 +48,7 @@ network listener takes depends on two settings:
 
 `-ui-require-iap` governs IAP only. A wrapper build's own
 `IdentityVerifier` that declares the access code wins over it
-(`AccessCodeWins()`, as the Google layer's ÜberProxy verifier does) keeps
+(`AccessCodeWins()`, as a verifier behind an identity-aware proxy may) keeps
 taking the code over its proxy, so break-glass through that proxy still
 works with the flag set.
 

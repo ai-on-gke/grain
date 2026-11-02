@@ -569,7 +569,7 @@ function panelLines(board, mark = -1) {
 // verbatim: a row saying `1d` was listed as a one-day panel beside a
 // seven-day one, which is precisely the reading that has already misled
 // a person measuring the real thing
-// (docs/hand-runs/2026-09-07-panel-dashboard.md, section 5). An agent
+// (the 2026-09-07 panel-dashboard hand run, section 5). An agent
 // asked to add a panel "like the others" would go on to write the same
 // word again, and an agent asked to fix the range would have no reason
 // to think this one was broken.

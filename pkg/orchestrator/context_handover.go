@@ -44,7 +44,7 @@ const contextHandoverPrompt = "[grain] This conversation has run out of context 
 
 // lastTurnForHandover gives a run whose context was exhausted one last
 // turn, in the session it was in, to write its handover
-// (docs/design/durable-tasks.md#DT-2, Continuity), and relays what it
+// (design/design/durable-tasks.design.md#DT-2, Continuity), and relays what it
 // wrote. Best effort by design: a session too full to take even this, or
 // a framework that keeps no session, leaves the handover whatever the
 // run wrote last, and nothing here can fail the run being stopped.

@@ -681,7 +681,7 @@ are now closed:
    (`Recheck`), and a failure whose every failing job failed on a
    capability, credential, quota or registry limit is treated the same
    way -- held for nothing -- until those re-runs are spent
-   (docs/design/release-from-trunk.md, RFT-2). A *cancelled*
+   (design/design/release-from-trunk.design.md, RFT-2). A *cancelled*
    run is retried the same way, whoever cancelled it: an operator who
    stops a wedged or duplicate run is stopping that run, and leaving the
    tip unjudged for good because of it was a dead end (task 285).

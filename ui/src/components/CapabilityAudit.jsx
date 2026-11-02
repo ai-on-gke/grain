@@ -36,7 +36,7 @@ function recordFields(record) {
 
 // CapabilityAudit lists what an attempt's capability grants did for it,
 // as their servers reported it when the attempt released them
-// (ui.AttemptCapabilityAudit, docs/capabilities-spec.md §4.4.4):
+// (ui.AttemptCapabilityAudit, design/spec/capabilities/capabilities.spec.md §4.4.4):
 // host-script's record of every call it ran or refused, above all.
 // Everything shown is the capability server's own record, untrusted,
 // argv exactly as the sandbox passed it; a note is grain's own word about
