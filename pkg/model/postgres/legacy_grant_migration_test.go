@@ -62,7 +62,7 @@ func sameGrantMeaning(t *testing.T, what string, before, after []string) {
 		t.Errorf("%s: dangerous %v before the migration and %v after", what, b, a)
 	}
 	for _, name := range before {
-		to := model.CanonicalLegacyGrants(name)
+		to := retiredAs(name)
 		retired := len(to) != 1 || to[0] != name
 		if !retired && !slices.Contains(after, name) {
 			t.Errorf("%s: %q, which is not retired, was lost (%v -> %v)", what, name, before, after)
@@ -147,6 +147,19 @@ var retiredGrants = []struct {
 	{85, "git-push-any-ref", []string{model.GitPushAnyRefGrant}},
 	{88, "repo-read:acme/tools", []string{model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
 	{88, "repo-write:acme/tools", []string{model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
+}
+
+// retiredAs is what a store migration rewrote name to: retiredGrants'
+// entry for it, which covers the parameterized names (repo-read:<repo>,
+// repo-write:<repo>) no fixed alias table holds, or else
+// model.CanonicalLegacyGrants.
+func retiredAs(name string) []string {
+	for _, r := range retiredGrants {
+		if r.legacy == name {
+			return r.to
+		}
+	}
+	return model.CanonicalLegacyGrants(name)
 }
 
 func TestMigrationRewritesRetiredGrants(t *testing.T) {
