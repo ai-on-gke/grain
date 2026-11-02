@@ -77,8 +77,10 @@ type Server struct {
 	// reconnects to Remote: 1s and defaultRemoteMaxBackoff (5s) when zero.
 	RemoteMinBackoff, RemoteMaxBackoff time.Duration
 	// StageRoot is where OpStage may write on this machine, for a run a
-	// daemon reaches over Remote: "~/.grain" under hostd's home when
-	// empty (stageRoot).
+	// daemon reaches over Remote: "~/.grain/hostd-stage" under hostd's
+	// home when empty (stageRoot). It should be a directory nothing else
+	// keeps files in: that daemon may read, write and remove anything
+	// under it, and every CLI entry may be handed paths there.
 	StageRoot string
 	// Builtins are this build's own capabilities entries
 	// (intree.HostdBuiltins). Each one the allowlist has no entry of that

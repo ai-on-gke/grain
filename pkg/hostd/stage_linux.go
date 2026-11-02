@@ -44,8 +44,15 @@ func sessionMux(ctx context.Context) *mux.Mux {
 	return m
 }
 
-// stageRoot is StageRoot, or ~/.grain, resolved through any symlink in
-// it and created if it is not there.
+// defaultStageDir is StageRoot's default under hostd's home: a
+// directory of its own, not ~/.grain itself, which on a workstation is
+// the local daemon's data directory (grain init workstation) -- its
+// database and keys, which a daemon on another machine must not be able
+// to read, overwrite or remove, nor hand a CLI as a path.
+const defaultStageDir = ".grain/hostd-stage"
+
+// stageRoot is StageRoot, or ~/.grain/hostd-stage, resolved through any
+// symlink in it and created if it is not there.
 func (s *Server) stageRoot() string {
 	root := s.StageRoot
 	if root == "" {
@@ -53,7 +60,7 @@ func (s *Server) stageRoot() string {
 		if err != nil {
 			return ""
 		}
-		root = filepath.Join(home, ".grain")
+		root = filepath.Join(home, filepath.FromSlash(defaultStageDir))
 	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return ""
@@ -128,7 +135,7 @@ func (s *Server) stage(op *StageOp) StageReply {
 	perm := fs.FileMode(op.Perm) & fs.ModePerm
 	switch op.Op {
 	case StageMkdirTemp:
-		dir := filepath.Join(root, "hostd-stage")
+		dir := filepath.Join(root, "tmp")
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fail(err)
 		}
@@ -164,7 +171,7 @@ func (s *Server) stage(op *StageOp) StageReply {
 		}
 		return StageReply{Path: path}
 	case StageCreateTemp:
-		dir, err := confined(root, op.Dir)
+		dir, err := confinedDir(root, op.Dir)
 		if err != nil {
 			return fail(err)
 		}
@@ -185,10 +192,14 @@ func (s *Server) stage(op *StageOp) StageReply {
 		if err != nil {
 			return fail(err)
 		}
-		if op.Target == "" {
-			return StageReply{Error: "stage: a symlink needs a target"}
+		// The one link a run stages is to this machine's codex login;
+		// any other target would be a path outside the staging root
+		// that the CLI it is handed to reads as staged configuration.
+		target := filepath.Clean(expandHome(op.Target))
+		if login := codexLogin(); op.Target == "" || login == "" || target != filepath.Clean(login) {
+			return StageReply{Error: "stage: a symlink may only name this machine's codex login"}
 		}
-		if err := os.Symlink(expandHome(op.Target), link); err != nil {
+		if err := os.Symlink(target, link); err != nil {
 			return fail(err)
 		}
 		return StageReply{Path: link}
@@ -219,7 +230,7 @@ func (s *Server) stage(op *StageOp) StageReply {
 		}
 		return StageReply{Path: path}
 	case StagePrune:
-		path, err := confined(root, op.Path)
+		path, err := confinedDir(root, op.Path)
 		if err != nil {
 			return fail(err)
 		}
@@ -310,6 +321,25 @@ func confined(root, path string) (string, error) {
 		if info.Mode()&fs.ModeSymlink != 0 {
 			return "", fmt.Errorf("stage: %s passes through the symlink %s", path, cur)
 		}
+	}
+	return path, nil
+}
+
+// confinedDir is confined for an operation that follows path itself --
+// creating a file in it, pruning what is in it -- so path may not be a
+// symlink either: one staged to the codex login, or planted by a CLI,
+// would otherwise take the operation outside the staging root.
+func confinedDir(root, path string) (string, error) {
+	path, err := confined(root, path)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&fs.ModeSymlink != 0 {
+		return "", fmt.Errorf("stage: %s is a symlink", path)
 	}
 	return path, nil
 }
