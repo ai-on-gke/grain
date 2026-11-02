@@ -87,6 +87,10 @@ type HostExecutor struct {
 	// so for the UI.
 	Remote      *hostd.Remote `json:"-"`
 	RemoteHostd bool          `json:"remote,omitempty"`
+	// Hostd is the registry name of the hostd this executor reaches over
+	// Remote (model.Hostd); "" is Remote's default (the deprecated shared
+	// token's hostd).
+	Hostd string `json:"hostd,omitempty"`
 }
 
 // remoteHostExecutor is HostExecutorHostd through the hostd dialing in
@@ -101,6 +105,9 @@ func (e HostExecutor) hostdClient() hostd.Client {
 	c := hostd.Client{Socket: e.Socket, Build: daemonBuild()}
 	if e.Remote != nil {
 		c.Dial = e.Remote.Dial
+		if e.Hostd != "" {
+			c.Dial = e.Remote.Dialer(e.Hostd)
+		}
 	}
 	return c
 }
@@ -569,6 +576,7 @@ type hostdOffersCacheKey struct{}
 type hostdCacheTarget struct {
 	socket string
 	remote *hostd.Remote
+	name   string
 }
 
 type hostdSocketEntry struct {
@@ -606,7 +614,7 @@ func hostdOffersCLI(ctx context.Context, exec HostExecutor, entry string) (path,
 // hostdOffers is hostdOffersCLI for an entry of any kind.
 func hostdOffers(ctx context.Context, exec HostExecutor, kind hostd.Kind, entry string) (path, why string) {
 	if cache, ok := ctx.Value(hostdOffersCacheKey{}).(*hostdOffersCache); ok && cache != nil {
-		target := hostdCacheTarget{socket: exec.Socket, remote: exec.Remote}
+		target := hostdCacheTarget{socket: exec.Socket, remote: exec.Remote, name: exec.Hostd}
 		cache.mu.Lock()
 		se, ok := cache.sockets[target]
 		if !ok {

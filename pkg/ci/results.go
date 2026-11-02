@@ -93,6 +93,7 @@ const (
 
 var (
 	BuildOf               = workflows.BuildOf
+	CancelByPrincipal     = workflows.CancelByPrincipal
 	DefaultStorageBounds  = workflows.DefaultStorageBounds
 	FilterRuns            = workflows.FilterRuns
 	JobStateOf            = workflows.JobStateOf

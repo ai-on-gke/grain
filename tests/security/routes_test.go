@@ -302,6 +302,11 @@ var routeAuthorization = map[string]authLevel{
 	// tokens, secrets.
 	"GET /api/external-agents/tokens":              trusted,
 	"POST /api/external-agents/tokens":             trusted,
+	"GET /api/hostds":                              trusted,
+	"POST /api/hostds":                             trusted,
+	"PATCH /api/hostds/{name}":                     trusted,
+	"POST /api/hostds/{name}/rotate":               trusted,
+	"POST /api/hostds/{name}/revoke":               trusted,
 	"POST /api/external-agents/tokens/{id}/rotate": trusted,
 	"POST /api/external-agents/tokens/{id}/revoke": trusted,
 	"DELETE /api/external-agents/tokens/{id}":      trusted,

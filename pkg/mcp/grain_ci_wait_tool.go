@@ -1000,7 +1000,7 @@ func renderGrainCIRun(run ci.Run, waited time.Duration, timedOut bool, faults []
 	// A reason grain wrote itself -- a supersede, a closed task -- is said
 	// as grain's, so the agent does not take it for a person's decision.
 	if reason := strings.TrimSpace(run.CancelReason); reason != "" {
-		if run.CancelledBy == ci.CancelByOperator {
+		if run.CancelledBy.ByHand() {
 			fmt.Fprintf(&b, "\n\nThis run was cancelled by hand. The reason given: %s", reason)
 		} else {
 			fmt.Fprintf(&b, "\n\nGrain cancelled this run itself: %s", reason)

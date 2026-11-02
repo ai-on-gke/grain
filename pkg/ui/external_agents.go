@@ -302,6 +302,7 @@ func (c *Client) RevokeExternalAgentToken(ctx context.Context, id string) error 
 		}
 		return err
 	}
+	noteConfigWrite(ctx)
 	return nil
 }
 
@@ -314,6 +315,7 @@ func (c *Client) DeleteExternalAgentToken(ctx context.Context, id string) error 
 		}
 		return err
 	}
+	noteConfigWrite(ctx)
 	return nil
 }
 
@@ -321,7 +323,11 @@ func (c *Client) DeleteExternalAgentToken(ctx context.Context, id string) error 
 // external agent credential immediately and returns the number revoked.
 func (c *Client) RevokeAllExternalAgentTokens(ctx context.Context) (int, error) {
 	n, err := c.Store.RevokeAllExternalAgentTokens(ctx)
-	return int(n), err
+	if err != nil {
+		return 0, err
+	}
+	noteConfigWrite(ctx)
+	return int(n), nil
 }
 
 // externalAgentLimiter enforces per-credential token-bucket rate limits and
