@@ -56,7 +56,7 @@ var staticRules = []staticRule{
 		why: "a JWT read without checking its signature says whatever its author wrote; only a " +
 			"token grain itself just obtained may be read that way, and only for its own bookkeeping",
 		allow: map[string]string{
-			"pkg/modelexec/iap_auth.go": "reads the exp of an access token grain just fetched from Google, " +
+			"pkg/hostd/iap_auth.go": "reads the exp of an access token grain just fetched from Google, " +
 				"to schedule its refresh; nothing is authorized on it",
 			"pkg/ui/assertion_diagnostics.go": "logs the issuer and audience an assertion grain refused carried, " +
 				"so an operator can see what to configure; nothing is authorized on it",

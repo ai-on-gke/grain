@@ -206,40 +206,6 @@ describe("SystemPage", () => {
     expect(onOpenSettings).toHaveBeenCalledWith("config-repo");
   });
 
-  it("points ConnectedExecutors on Sandboxes to Settings → Executors and surfaces a load error instead of a false empty state", async () => {
-    api.mockImplementation((path) => {
-      if (path === "/api/executors") {
-        return Promise.reject(new Error("executor registry offline"));
-      }
-      return Promise.resolve({
-        enabled: true,
-        sandboxes: [],
-        host: null,
-      });
-    });
-    render(
-      <SystemPage
-        config={{}}
-        tab="sandboxes"
-        onTab={() => {}}
-        showError={vi.fn()}
-      />,
-    );
-    expect(
-      await screen.findByText(
-        /The tokens they connect with are on Settings → Executors\./,
-      ),
-    ).toBeInTheDocument();
-    expect(
-      await screen.findByText(
-        /Model servers could not be read \(executor registry offline\)\./,
-      ),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText("No model servers connected."),
-    ).not.toBeInTheDocument();
-  });
-
   // Upgrade moved into Settings (/settings/upgrade): System no longer
   // offers it, on the tab strip or a phone's list of tabs.
   it("leaves Upgrade to Settings", () => {

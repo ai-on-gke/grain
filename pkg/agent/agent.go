@@ -494,14 +494,14 @@ type CapabilityMCPServer struct {
 
 // CapabilityServerCarrier is a Host whose CLI cannot reach grain's
 // loopback, but which can host a listener of its own and carry what
-// arrives there back to grain (§5.2.4, last paragraph): a remote
-// executor, over its authenticated stream.
+// arrives there back to grain (§5.2.4, last paragraph), over a stream of
+// its own.
 //
 // CarryCapabilityServers returns servers with each URL replaced by one
 // the CLI reaches on its own machine, whose requests grain serves with
 // that server's Handler, and release, which stops carrying them. The
 // rules of §5.2.2 are the Handler's, applied on grain's side, so nothing
-// the executor does to a request can widen them.
+// the far end does to a request can widen them.
 type CapabilityServerCarrier interface {
 	CarryCapabilityServers(servers []CapabilityMCPServer) (carried []CapabilityMCPServer, release func(), err error)
 }

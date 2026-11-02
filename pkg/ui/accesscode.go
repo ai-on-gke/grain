@@ -500,8 +500,8 @@ func accessLimitExempt(r *http.Request) bool {
 // couldBeAccessCode reports whether got could be code at all, and so
 // counts as a guess at it when it is wrong. A bearer token of another
 // length once case, dashes and whitespace are set aside, or with a
-// character no access code has (the dots of a JWT, an executor token's
-// "gxt_"), is somebody's other credential sent to the wrong place, not
+// character no access code has (the dots of a JWT, the underscore of a
+// "gma_" token), is somebody's other credential sent to the wrong place, not
 // a guess: it can never match, so it is refused without being counted.
 // An access code's length and alphabet are not secret: every generated
 // code has the same ones.
@@ -545,8 +545,8 @@ func clearAccessCookie(w http.ResponseWriter, r *http.Request) {
 }
 
 // The routes a single-tenant daemon serves to a caller without the code:
-// the login page's own, logging out, and remote execution's
-// (executorBootstrapRoute), which authenticates in its own protocol.
+// the login page's own, logging out, and a grain hostd dialing in
+// (hostdConnectRoute), which authenticates in its own protocol.
 const (
 	accessCodePath       = "/api/auth/access-code"
 	accessCodeScriptPath = "/api/auth/access-code/login.js"
@@ -557,7 +557,7 @@ func singleTenantOpenRoute(r *http.Request) bool {
 	case accessCodePath, accessCodeScriptPath, "/api/auth/logout":
 		return true
 	}
-	return executorBootstrapRoute(r)
+	return hostdConnectRoute(r)
 }
 
 const errAccessCodeNeeded = "this daemon is single-tenant and every caller shows its access code: " +

@@ -34,7 +34,7 @@ func TestMCPServerK8sPodTransportFlags(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out bytes.Buffer
-			err := ServeMCPServerPinned(strings.NewReader(""), &out, tc.args, nil)
+			err := ServeMCPServer(strings.NewReader(""), &out, tc.args)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("mcpserver %q = %v, want an error containing %q", tc.args, err, tc.want)
 			}

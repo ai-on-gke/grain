@@ -190,9 +190,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 // requiresAccess reports whether r is an API request that needs an
 // allowed caller. The frontend's static files, /api/config (what the
 // sign-in page reads) and /api/auth/* (signing in itself) are the only
-// things served to a caller nobody has vouched for. Remote execution's
-// routes under /api/executors/ authenticate in their own protocol
-// (executorBootstrapRoute), as their twins outside /api/ always have.
+// things served to a caller nobody has vouched for. A grain hostd dialing
+// in to /api/hostd/connect authenticates in its own protocol
+// (hostdConnectRoute).
 //
 // A persistent sandbox's staging environment under /staging/ is held to
 // the same gate as the API: it is somebody's running service, not a page
@@ -204,7 +204,7 @@ func requiresAccess(r *http.Request) bool {
 	return strings.HasPrefix(r.URL.Path, "/api/") &&
 		!(r.URL.Path == "/api/config" && (r.Method == http.MethodGet || r.Method == http.MethodHead)) &&
 		!strings.HasPrefix(r.URL.Path, "/api/auth/") &&
-		!executorBootstrapRoute(r)
+		!hostdConnectRoute(r)
 }
 
 func (s *Server) routes() {
@@ -450,12 +450,6 @@ func (s *Server) routes() {
 
 	s.route("GET /api/agent-models", s.handleListAgentModels)
 
-	s.route("GET /api/executors/tokens", s.handleListExecutorTokens)
-	s.route("POST /api/executors/tokens", s.handleCreateExecutorToken)
-	s.route("POST /api/executors/tokens/{id}/revoke", s.handleRevokeExecutorToken)
-	s.route("DELETE /api/executors/tokens/{id}", s.handleRevokeExecutorToken)
-	s.route("DELETE /api/executors/tokens/{id}/revoke", s.handleRevokeExecutorToken)
-
 	s.route("GET /api/external-agents/tokens", s.handleListExternalAgentTokens)
 	s.route("POST /api/external-agents/tokens", s.handleCreateExternalAgentToken)
 	s.route("POST /api/external-agents/tokens/{id}/rotate", s.handleRotateExternalAgentToken)
@@ -630,18 +624,6 @@ func (s *Server) routes() {
 	s.route("POST /api/pipeline-pause", s.handlePausePipeline)
 	s.route("DELETE /api/pipeline-pause", s.handleResumePipeline)
 
-	// Remote executors / model servers API and bootstrap scripts.
-	s.route("GET /api/executors", s.handleListExecutors)
-	s.route("GET /api/model-servers/install.sh", s.handleExecutorInstallScript)
-	s.route("GET /api/executors/install.sh", s.handleExecutorInstallScript)
-	s.route("GET /install-executor.sh", s.handleExecutorInstallScript)
-	s.route("GET /api/executors/bin/{binary}", s.handleExecutorBinary)
-	s.route("GET /install/{os}/{arch}", s.handleExecutorBinaryByArch)
-
-	// Remote executor inbound connections over HTTP Upgrade / Cloud Run reverse tunnel.
-	s.route("GET /_grain/executor", s.handleExecutorConnect)
-	s.route("GET /api/executors/connect", s.handleExecutorConnect)
-	s.route("GET /api/executors/stream", s.handleExecutorConnect)
 	// A grain hostd on another machine dialing in (hostd -server).
 	s.route("GET /api/hostd/connect", s.handleHostdConnect)
 

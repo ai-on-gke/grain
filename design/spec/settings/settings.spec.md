@@ -15,7 +15,7 @@ This document lists every setting a Grain deployment has. That covers the deploy
 3. Deployment settings by Settings section
    - 3.1 Models & sandboxes → Models
    - 3.2 Models & sandboxes → Sandboxes
-   - 3.3 Models & sandboxes → Executors
+   - 3.3 Models & sandboxes → Executors (removed)
    - 3.4 Secrets & access → Legacy capabilities
    - 3.5 Secrets & access → Access
    - 3.6 System / Operations → Upgrade
@@ -171,13 +171,9 @@ These apply to the `kubernetes` and `kubernetes-granule` backends. Every field e
 | Kubernetes container | `k8sContainer` | `k8s_container` | `grain` | restart |
 | PriorityClass (interactive / agent / CI) | `k8sPriorityClassInteractive`, `k8sPriorityClassAgent`, `k8sPriorityClassCi` | `k8s_priority_class_interactive`, `k8s_priority_class_agent`, `k8s_priority_class_ci` | `grain-interactive` / `grain-agent` / `grain-ci`. An empty string means **no** priority class, not the default. Must be a valid PriorityClass name. | restart (they are in `restartOnlySettings`) |
 
-### 3.3 Models & sandboxes → Executors (`/settings/executors#executors`)
+### 3.3 Models & sandboxes → Executors (removed)
 
-Component: `ExecutorsSection.jsx` → `ExecutorsPanel`. Card: *Executor join tokens*.
-
-| Setting | API | Store | Notes | Applies |
-| --- | --- | --- | --- | --- |
-| Executor join tokens | `GET`/`POST /api/executors/tokens`, `POST /api/executors/tokens/{id}/revoke`, `DELETE /api/executors/tokens/{id}` | `executor_token` (a **runtime** table, not exported) | A token a remote executor host joins with. The secret is shown once at creation. The listener itself is the startup flag `-executor-addr` (§10). | immediate |
+Removed with remote executors: `grain hostd` is grain's only host agent, and a remote one dials in with the daemon's `-hostd-token-file` token (a startup flag, §10), set up under Models → *Where each agent CLI runs*. `/settings/executors` and its old `/admin` and `/system` links open Models. Schema 85 dropped `executor_token`.
 
 ### 3.4 Secrets & access → Legacy capabilities (`/settings/credentials#credentials`)
 
@@ -444,7 +440,7 @@ These are all config-managed and exported through `staterepo.SettingsTables`, ex
 | 8.7 | GCP keys | `GET`/`POST /api/gcp-keys`, `GET`/`PUT`/`DELETE /api/gcp-keys/{name}` | `tables/gcp_key.json` | `Name`, `ProjectID`, `ServiceAccountEmail`, `ServiceAccountCount`, `MinterCredential` (a credential reference, not material), `MaxKeyAge`, `Description` |
 | 8.8 | Standing and persistent sandboxes | System → Sandboxes | `tables/standing_sandbox*.json`, `tables/persistent_sandbox.json` | Standing: `Name`, `Image`, `Command`, `Dir`, `Env`, `Secrets` (references), `CPUs`, `MemoryMB`, `DiskGB`, `NetworkAccess`, `Enabled`. Persistent: also `Repo`, `Ref`, `AutoUpdate`, `Capabilities`, `SandboxPort`, `HostPort`, `UISubpath`, `StripPrefix`, `Refresh`, `RollbackOnCrash`. |
 | 8.9 | External agent tokens | `GET`/`POST /api/external-agents/tokens`, `POST …/{id}/rotate`, `POST …/{id}/revoke`, `DELETE …/{id}` | **not exported** (runtime, hash only) | `id`, `name`, `prefix`, `scopeSet`, `scopes`, `repos`, `rateLimit` (default 60), `maxConcurrent` (default 8), `expiresAt`, `revokedAt`. The secret is shown once. Needs `externalAgentApi`. |
-| 8.10 | Executor tokens | §3.3 | **not exported** | — |
+| 8.10 | Executor tokens (removed) | §3.3 | — (schema 85 dropped `executor_token`) | — |
 | 8.11 | Console sessions | §3.14 | `grain_config.console_sessions` | §3.14 |
 | 8.12 | Git connections | §3.11 | `grain_config.git_connections` | §3.11 |
 | 8.13 | Config policy and the new-task form | — | `settings/config-policy.yml` (checked by `statecheck`), `settings/new-task-form.yml` | Review policy for config PRs, and the new-task form layout |
@@ -492,7 +488,7 @@ This file is re-read per request and never exported (`pkg/staterepo/settings.go`
 
 **10.3 Startup-only flags.** These have no stored equivalent, because the process needs them before the store, secret store or listener opens, or because they name secret material or host plumbing:
 - Store and paths: `-data-dir` (required; `$GRAIN_DATA_DIR`), `-db-driver` (`sqlite` or `postgres`; `$GRAIN_DB_DRIVER`), `-db-dsn` (`$GRAIN_DB_DSN`), `-postgres-url` (`$GRAIN_POSTGRES_URL`), `-sandbox-dir`, `-docker-root-dir`, `-grain-state-dir`, `-grain-secrets-dir`, `-grain-src-dir`
-- Listeners and sign-in: `-ui-addr` (default `0.0.0.0:4242`), `-ui-allowed-hosts`, `-ui-iap-audience` / `-ui-iap-issuer` / `-ui-iap-keys-url` (with the `$GRAIN_IAP_*` fallbacks), `-ui-access-session-lifetime`, `-ui-open`, `-as`, `-sandbox-port-base` (the git proxy, model proxies and caches bind from here; use `0` inside a sandbox), `-executor-addr` / `-executor-token-file` / `-executor-cert-file` / `-executor-key-file` / `-executor-wait` (each also under a legacy `-model-exec-*` name), `-hostd-socket`, `-hostd-token-file`
+- Listeners and sign-in: `-ui-addr` (default `0.0.0.0:4242`), `-ui-allowed-hosts`, `-ui-iap-audience` / `-ui-iap-issuer` / `-ui-iap-keys-url` (with the `$GRAIN_IAP_*` fallbacks), `-ui-access-session-lifetime`, `-ui-open`, `-as`, `-sandbox-port-base` (the git proxy, model proxies and caches bind from here; use `0` inside a sandbox), `-hostd-socket`, `-hostd-token-file`
 - Credentials by file: `-gemini-api-key-file`, `-claude-oauth-token-file`, `-openai-api-key-file`, `-codex-auth-file`. Each is optional, because the same credential can be set from Settings → Models into the secret store.
 - Agent CLIs: `-agy-path`, `-claude-path`, `-codex-path`, `-model-backend`, `-mcp-surface`, `-model-proxy-unrestricted`, `-model-proxy-max-concurrent`, `-model-proxy-slot-wait`, `-recorded-tools`, `-tool-budget`
 - Sandbox plumbing: the `-granule-*` flags (each also under a legacy `-kontur-*` name), `-container-git-proxy-host`, `-container-sandbox-network`, `-container-sandbox-cap-add`, `-k8s-kubeconfig`, `-k8s-granule-access`, `-k8s-granule-reattach-timeout`, `-sandbox-access-addr` / `-dial` / `-ca-secret`, `-run-host-image`, `-run-host-credential-dir`, `-run-host-dir`, `-run-host-daemon-url`, `-k8s-run-host-rwx`, `-k8s-run-host-service-account`, `-k8s-run-host-volume`, `-sandbox-env`, `-sandbox-env-file`, `-host-sandbox-env`, `-allow-unisolated-host-sandboxes`, `-native-sandboxes` / `-disable-native-sandboxes`, `-repair-reserve-sandboxes`
@@ -503,7 +499,7 @@ This file is re-read per request and never exported (`pkg/staterepo/settings.go`
 - Policy: `-policy` (`grain_policy.yml`; see [`docs/local-policy.md`](../../../docs/local-policy.md)), `-local-scripts`, `-local-scripts-env-file`
 - Deprecated or removed: `-max-mergers` and `-max-ci-jobs` are ignored. `-cli-image`, `-cli-image-file` and `-cli-container-engine` are ignored. `-tunnel-*` and `-relay-*` refuse to start.
 
-`docs/grain-options.md` records the design options considered for the executor control channel. It is not a flag reference: `-flag-names` and each flag's help text are authoritative.
+`docs/grain-options.md` records the design options considered for the retired executor control channel. It is not a flag reference: `-flag-names` and each flag's help text are authoritative.
 
 ## 11. Browser-local preferences (This browser → Preferences, `/settings/preferences`)
 

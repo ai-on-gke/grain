@@ -39,7 +39,6 @@ export const SETTINGS_GROUPS = [
     sections: [
       { id: "models", label: "Models" },
       { id: "sandboxes", label: "Sandboxes" },
-      { id: "executors", label: "Executors" },
     ],
   },
   {
@@ -174,7 +173,9 @@ const OLD_SETTINGS_TABS = {
   accounts: "access",
   engine: "engine",
   sandbox: "sandboxes",
-  executors: "executors",
+  // Executors were retired with remote executors; grain hostd, which
+  // replaced them, is set up under Models ("Where each agent CLI runs").
+  executors: "models",
   integrations: "credentials",
   state: "config-repo",
   // Upgrade was a System tab (/system/upgrade) until it moved into

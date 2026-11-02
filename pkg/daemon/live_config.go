@@ -26,7 +26,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/k8s"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/modelexec"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
@@ -152,8 +151,6 @@ type LiveConfig struct {
 	// reads. Nil where nothing attaches them (tests, `grain demo`).
 	capabilityServers *servers.Registry
 
-	executorServer *modelexec.Server
-
 	Mu      sync.Mutex
 	Applied Config
 }
@@ -213,24 +210,6 @@ func (l *LiveConfig) withPackageCache(c *PackageCache) *LiveConfig {
 func (l *LiveConfig) withActionsCache(c *ActionsCache) *LiveConfig {
 	l.actionsCache = c
 	return l
-}
-
-func (l *LiveConfig) SetExecutorServer(srv *modelexec.Server) {
-	if l == nil {
-		return
-	}
-	l.Mu.Lock()
-	defer l.Mu.Unlock()
-	l.executorServer = srv
-}
-
-func (l *LiveConfig) GetExecutorServer() *modelexec.Server {
-	if l == nil {
-		return nil
-	}
-	l.Mu.Lock()
-	defer l.Mu.Unlock()
-	return l.executorServer
 }
 
 // actionsCacheUsable is the stored switch as the grant reads it: may

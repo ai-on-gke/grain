@@ -27,7 +27,7 @@ const connectionCard = (page, name) =>
     );
 
 test.describe("Walkthrough: Provider Connection Lifecycle, Key Verification and Agent Runtime Health", () => {
-  test("exercises AI provider connection management, model selection, live connection test diagnostics, and fallback executor routing", async ({
+  test("exercises AI provider connection management, model selection, and live connection test diagnostics", async ({
     page,
   }) => {
     // Monitor console errors and 5xx responses
@@ -472,135 +472,6 @@ test.describe("Walkthrough: Provider Connection Lifecycle, Key Verification and 
       const task = await filedResponse.json();
       expect(task.model).toBe("gemini-2.5-flash");
       expect(task.agentBackendId).toBe(sent.agentBackendId);
-
-      // -----------------------------------------------------------------------
-      // STEP 5: Fallback Executor Routing & Agent Runtime Health
-      // -----------------------------------------------------------------------
-      // GET /api/executors is the real handler. The demo wires a fixed
-      // snapshot of two connected executors, runner-infra-worker-01 and
-      // runner-frontend-worker-01, in place of modelexec.Server's live
-      // connections (demoExecutors in pkg/demo/demo_scenarios.go).
-
-      // 5.1 Navigate to System → Sandboxes, where the connected remote
-      // executors are monitored now (docs/design/settings-panel.md §2.1:
-      // connected executors are status; their join tokens are a setting).
-      await page.goto("/system/sandboxes");
-
-      // Verify the Model servers header
-      await expect(
-        page.getByRole("heading", { name: "Model servers" }),
-      ).toBeVisible();
-      await expect(
-        page.getByText(/Model servers .* connected now, providing agent/),
-      ).toBeVisible();
-
-      // Verify Connected Executor Hostnames and Details
-      const infraCard = page
-        .locator(".MuiBox-root", {
-          hasText: "runner-infra-worker-01",
-        })
-        .filter({ hasNotText: "runner-frontend-worker-01" })
-        .first();
-      await expect(infraCard).toBeVisible();
-      await expect(infraCard.getByText("10.240.1.15:41234")).toBeVisible();
-      await expect(infraCard.getByText("Antigravity (agy)")).toBeVisible();
-      await expect(infraCard.getByText("Claude")).toBeVisible();
-      await expect(infraCard.getByText(/2 \/ 4/)).toBeVisible();
-      await expect(infraCard.getByText(/Uptime:/i)).toBeVisible();
-
-      await expect(page.getByText("runner-frontend-worker-01")).toBeVisible();
-
-      // 5.3 Executor Token Generation & Revocation Lifecycle
-      // Open Admin overlay to test executor token lifecycle
-      await page.goto("/admin");
-      await expect(
-        page.getByRole("heading", { name: "Settings", exact: true }),
-      ).toBeVisible();
-      await page.getByTestId("settings-nav-executors").click();
-
-      await expect(
-        page.getByText(
-          /Manage authentication credentials for remote model server worker daemons/,
-        ),
-      ).toBeVisible();
-
-      // Issue new remote executor token
-      await page.getByRole("button", { name: "Issue Token" }).click();
-      const issueDialog = page.locator(".MuiDialog-root", {
-        hasText: "Issue Executor Token",
-      });
-      await expect(issueDialog).toBeVisible();
-
-      await issueDialog
-        .getByLabel("Token Name / Description")
-        .fill("dedicated-k8s-infra-pool");
-      // A token serves the whole deployment: there is no team to pick.
-      await expect(
-        issueDialog.getByRole("combobox", { name: "Team Scope" }),
-      ).toHaveCount(0);
-
-      await issueDialog.getByRole("button", { name: "Generate Token" }).click();
-
-      // Verify One-Time Token Created Dialog & Bootstrap Command Snippet
-      const createdDialog = page.locator(".MuiDialog-root", {
-        hasText: "Executor Token Generated",
-      });
-      await expect(createdDialog).toBeVisible();
-      await expect(
-        createdDialog.getByText(
-          /Run the grain model-server daemon on your remote machine/i,
-        ),
-      ).toBeVisible();
-
-      // Verify Copy Snippet Button
-      const copyTokenSnippetBtn = createdDialog.getByRole("button", {
-        name: "Copy",
-      });
-      await expect(copyTokenSnippetBtn).toBeVisible();
-      await copyTokenSnippetBtn.click();
-      await expect(
-        createdDialog.getByRole("button", { name: "Copied" }),
-      ).toBeVisible();
-
-      // Read clipboard text
-      const clipboardText = await page.evaluate(() =>
-        navigator.clipboard.readText(),
-      );
-      expect(clipboardText).toMatch(/^gxt_/);
-      await expect(
-        createdDialog.getByText(/grain model-server --token gxt_/),
-      ).toBeVisible();
-
-      // Close token dialog
-      await createdDialog.getByRole("button", { name: "Done" }).click();
-
-      // Verify token card appears in token list
-      const tokenCard = page.locator(".MuiCard-root", {
-        hasText: "dedicated-k8s-infra-pool",
-      });
-      await expect(tokenCard).toBeVisible();
-      await expect(tokenCard.getByText("Active")).toBeVisible();
-
-      // Revoke Token
-      const revokeBtn = tokenCard.getByRole("button", {
-        name: "Revoke",
-        exact: true,
-      });
-      await expect(revokeBtn).toBeVisible();
-      await revokeBtn.click();
-
-      // Confirm revocation in dialog
-      const revokeDialog = page.locator(".MuiDialog-root", {
-        hasText: "Revoke Executor Token",
-      });
-      await expect(revokeDialog).toBeVisible();
-      await revokeDialog.getByRole("button", { name: "Revoke Token" }).click();
-
-      // Verify token card shows Revoked chip
-      await expect(
-        tokenCard.getByText("Revoked", { exact: true }),
-      ).toBeVisible();
-      await expect(tokenCard.getByText(/Revoked:/)).toBeVisible();
 
       // Reset back to main root page
       await page.goto("/");

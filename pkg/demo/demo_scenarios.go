@@ -21,17 +21,15 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/modelexec"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // The pieces of `grain demo` that stand in for something outside grain:
 // an agent provider's usage limit, the far end of a capability's
-// credential, remote executors dialled in over the network. Each is
-// wired into the real ui.Config field a daemon wires, so everything from
-// the handler to the pane is the real thing, and ui/e2e asserts on the
-// server's own answers instead of fulfilling grain's endpoints from
+// credential. Each is wired into the real ui.Config field a daemon
+// wires, so everything from the handler to the pane is the real thing,
+// and ui/e2e asserts on the server's own answers instead of fulfilling grain's endpoints from
 // fixtures (docs/test-runs/2026-10-02-e2e-own-api-stubs.md).
 
 // unconfigureDemo turns the demo into a fresh install: no agent model
@@ -103,43 +101,4 @@ type demoCapabilityChecks struct{}
 
 func (demoCapabilityChecks) CheckCapability(_ context.Context, id string) (ui.CapabilityCheckResult, error) {
 	return ui.CapabilityCheckResult{}, fmt.Errorf("grain demo holds no %s credential to test: nothing here is real", id)
-}
-
-// demoExecutors is a fixed snapshot of two remote executors, one on each
-// of two teams, in place of modelexec.Server's registry of real
-// connections. The connection times are fixed at startup, so the uptime
-// the Models & connections tab shows keeps counting.
-type demoExecutors struct {
-	started time.Time
-}
-
-func (d demoExecutors) Connected() []modelexec.Status {
-	return []modelexec.Status{
-		{
-			ID:   "exec-infra-01",
-			Host: "runner-infra-worker-01",
-			Addr: "10.240.1.15:41234",
-			Binaries: map[string]string{
-				"agy":    "/usr/local/bin/agy",
-				"claude": "/usr/local/bin/claude",
-			},
-			ServerURL:   "https://grain.corp.internal",
-			Since:       d.started.Add(-2 * time.Hour),
-			Running:     2,
-			Concurrency: 4,
-		},
-		{
-			ID:   "exec-frontend-01",
-			Host: "runner-frontend-worker-01",
-			Addr: "10.240.2.20:41234",
-			Binaries: map[string]string{
-				"agy":   "/usr/local/bin/agy",
-				"codex": "/usr/local/bin/codex",
-			},
-			ServerURL:   "https://grain.corp.internal",
-			Since:       d.started.Add(-time.Hour),
-			Running:     0,
-			Concurrency: 2,
-		},
-	}
 }

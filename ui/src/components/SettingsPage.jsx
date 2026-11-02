@@ -43,7 +43,6 @@ import RepositoriesSection from "./settings/RepositoriesSection.jsx";
 import GitSection from "./settings/GitSection.jsx";
 import CapabilitiesSection from "./settings/CapabilitiesSection.jsx";
 import CredentialsSection from "./settings/CredentialsSection.jsx";
-import ExecutorsSection from "./settings/ExecutorsSection.jsx";
 import EngineSection from "./settings/EngineSection.jsx";
 import CISection from "./settings/CISection.jsx";
 import SandboxesSection from "./settings/SandboxesSection.jsx";
@@ -605,11 +604,6 @@ export default function SettingsPage({
               ),
             ]}
           />
-        );
-        break;
-      case "executors":
-        body = (
-          <ExecutorsSection showError={showError} onOpenSystem={onOpenSystem} />
         );
         break;
       case "engine":

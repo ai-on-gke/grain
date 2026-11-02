@@ -24,7 +24,7 @@ package ui
 // is added here; there is nothing else to write.
 //
 // Reads take an "<area>:read" scope. "internal" is grain's own plumbing
-// (login, executor bootstrap, the endpoints the mcpserver's built-in
+// (login, a grain hostd dialing in, the endpoints the mcpserver's built-in
 // tools already call) and is never granted.
 var routeScopes = map[string]APIScope{
 	"GET /api/deployment":                                                  "settings:read",
@@ -224,11 +224,6 @@ var routeScopes = map[string]APIScope{
 	"DELETE /api/boards/{id}":                                              "boards:write",
 	"GET /api/git-ambient-sources":                                         "repos:read",
 	"GET /api/agent-models":                                                "settings:read",
-	"GET /api/executors/tokens":                                            "secrets:read",
-	"POST /api/executors/tokens":                                           "secrets:write",
-	"POST /api/executors/tokens/{id}/revoke":                               "secrets:write",
-	"DELETE /api/executors/tokens/{id}":                                    "secrets:write",
-	"DELETE /api/executors/tokens/{id}/revoke":                             "secrets:write",
 	"GET /api/agent-keys":                                                  "secrets:read",
 	"PUT /api/agent-keys/{framework}":                                      "secrets:write",
 	"DELETE /api/agent-keys/{framework}":                                   "secrets:write",
@@ -349,15 +344,6 @@ var routeScopes = map[string]APIScope{
 	"POST /api/external-agents/tokens/{id}/revoke":                         "capabilities:admin",
 	"DELETE /api/external-agents/tokens/{id}":                              "capabilities:admin",
 	"POST /api/external-agents/tokens/revoke-all":                          "capabilities:admin",
-	"GET /api/executors":                                                   "deployment:read",
-	"GET /api/model-servers/install.sh":                                    "internal",
-	"GET /api/executors/install.sh":                                        "internal",
-	"GET /install-executor.sh":                                             "internal",
-	"GET /api/executors/bin/{binary}":                                      "internal",
-	"GET /install/{os}/{arch}":                                             "internal",
-	"GET /_grain/executor":                                                 "internal",
-	"GET /api/executors/connect":                                           "internal",
-	"GET /api/executors/stream":                                            "internal",
 	"GET /api/hostd/connect":                                               "internal",
 	"POST /mcp":                                                            "internal",
 }

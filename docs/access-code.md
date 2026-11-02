@@ -79,8 +79,8 @@ out:
   source that hasn't sent a wrong code is never affected.
 - **Which attempts count:** codes typed into the login form, and bearer
   tokens that could be the code. A bearer of a different length, or
-  containing characters no code has (a JWT, a session, an executor's
-  `gxt_` token), isn't a guess. It is refused with a `401` and not
+  containing characters no code has (a JWT, a session, a GitHub
+  token), isn't a guess. It is refused with a `401` and not
   counted. The length and alphabet aren't secret, since every generated
   code shares them.
 
@@ -105,29 +105,15 @@ any remote source.
 Codes are compared in constant time (hashed first). A wrong code gets the
 same answer as any other wrong code.
 
-### Remote executors
+### A grain hostd dialing in
 
-The daemon accepts remote executors on routes served without the access
-code:
-
-- `GET /_grain/executor`, `/api/executors/connect` and
-  `/api/executors/stream`;
-- the bootstrap: `/install-executor.sh`, `/api/executors/install.sh`,
-  `/api/executors/bin/{binary}` and `/install/{os}/{arch}`.
-
-They carry their own authentication. A connection is admitted only for a
-valid, unrevoked executor token (or the `-executor-token-file` token) in
-the executor's hello frame, whatever its HTTP headers say. The script and
-binaries are grain's own, the same bytes `/install-executor.sh` and
-`/install/{os}/{arch}` have always served to anybody. Opening these
-routes therefore exposes nothing the access code protects, and a
-`-executor-addr` listener exposes the same protocol anyway. A bearer
-token on these routes (`pkg/modelexec` sends the executor token or an
-IAP token) is never counted as an access-code guess. The `/api/executors/`
-twins are open too, so the UI's `curl …/api/executors/install.sh`
-command works from the executor's host.
-Every other `/api/executors/` route, such as listing executors or minting
-and revoking tokens, still needs the access code.
+The daemon serves `GET /api/hostd/connect` without the access code: a
+`grain hostd -server` on another machine upgrades it, and is admitted
+only for the hostd token it presents (`-hostd-token-file`), whatever
+else the request carries (`hostd.Remote`). A bearer on that route (the
+hostd token, or an IAP token) is never counted as an access-code guess.
+The remote executor routes that were open the same way were removed with
+remote executors ([executors-removed.md](executors-removed.md)).
 
 ## The CLI and the processes grain starts
 

@@ -16,6 +16,8 @@ package cli
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -31,7 +33,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/hostd"
-	"github.com/ai-on-gke/grain/pkg/modelexec"
+
 	"github.com/ai-on-gke/grain/pkg/version"
 )
 
@@ -188,7 +190,7 @@ func hostdSelf() string {
 
 // hostdDialer is -server's way out to the daemon: the shared token from
 // -token-file or the environment, IAP's OIDC token when -iap-audience
-// names one, and TLS as grain executor's flags set it.
+// names one, and TLS from -tls, -ca-file and -server-name (hostdClientTLS).
 func hostdDialer(server, tokenFile, iapAudience string, useTLS bool, caFile, serverName string) (*hostd.Dialer, error) {
 	var token string
 	if tokenFile != "" {
@@ -209,14 +211,14 @@ func hostdDialer(server, tokenFile, iapAudience string, useTLS bool, caFile, ser
 	host, _ := os.Hostname()
 	d := &hostd.Dialer{Server: server, Token: token, Host: host, Build: version.Get().Release}
 	if useTLS || caFile != "" || serverName != "" {
-		cfg, err := executorClientTLS(caFile, serverName)
+		cfg, err := hostdClientTLS(caFile, serverName)
 		if err != nil {
 			return nil, err
 		}
 		d.TLS = cfg
 	}
 	if iapAudience != "" {
-		d.IDToken = modelexec.NewIAPTokenProvider(iapAudience).Token
+		d.IDToken = hostd.NewIAPTokenProvider(iapAudience).Token
 	}
 	if _, err := url.Parse(server); err != nil || !strings.Contains(server, "://") {
 		return nil, fmt.Errorf("-server %q is not a URL like https://grain.example.com", server)
@@ -319,4 +321,24 @@ func formatHostdStatus(socket string, hello hostd.Hello, offers []hostd.Offer) s
 		each = append(each, fmt.Sprintf("%s %s (%s)", o.Kind, o.Name, o.Path))
 	}
 	return line + ", offering " + strings.Join(each, ", ")
+}
+
+// hostdClientTLS is the TLS hostd -server dials the daemon with: the
+// system roots, or only -ca-file's when it names one, and serverName in
+// place of the URL's host when it is set.
+func hostdClientTLS(caFile, serverName string) (*tls.Config, error) {
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: serverName}
+	if caFile == "" {
+		return cfg, nil
+	}
+	pem, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("reading -ca-file: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("-ca-file %s holds no PEM certificate", caFile)
+	}
+	cfg.RootCAs = pool
+	return cfg, nil
 }

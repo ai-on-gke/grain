@@ -121,7 +121,6 @@ func TestLoopbackWithoutTheLocalAPITokenIsRefused(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	for _, tc := range []struct{ method, path string }{
-		{http.MethodGet, "/api/executors"},
 		{http.MethodPost, "/api/sandbox-probe"},
 	} {
 		req, _ := http.NewRequest(tc.method, srv.URL+tc.path, strings.NewReader(`{"id":"x","argv":["true"]}`))

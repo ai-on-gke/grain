@@ -653,7 +653,7 @@ jobs:
             ./pkg/granule/... ./pkg/grit/... ./pkg/gritapi/... ./pkg/hostd/... ./pkg/hostinit/... ./pkg/hostscriptcli/... ./pkg/whererun/... ./pkg/workflows/... \
             ./pkg/hosttop/... ./pkg/iapreconciler/... ./pkg/installtrack/... ./pkg/jwks/... \
             ./pkg/k8s/... ./pkg/kubectlgate/... ./pkg/lifecycle/... ./pkg/localexec/... ./pkg/mcp/... \
-            ./pkg/metrics/... ./pkg/modelexec/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/pkgcache/... \
+            ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/pkgcache/... \
             ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/registryauth/... \
             ./pkg/releasenotes/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
             ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \

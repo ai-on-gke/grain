@@ -27,7 +27,6 @@ import {
 import api from "../api.js";
 import LogsPage from "./LogsPage.jsx";
 import SandboxHealthPage from "./SandboxHealthPage.jsx";
-import ConnectedExecutors from "./ConnectedExecutors.jsx";
 import CachesPage from "./CachesPage.jsx";
 import TopPage from "./TopPage.jsx";
 import PipelineControl from "./PipelineControl.jsx";
@@ -224,15 +223,10 @@ export default function SystemPage({
       break;
     case "sandboxes":
       body = (
-        <>
-          <SandboxHealthPage
-            showError={showError}
-            onOpenSession={onOpenSession}
-          />
-          <Box sx={{ mt: 3 }}>
-            <ConnectedExecutors />
-          </Box>
-        </>
+        <SandboxHealthPage
+          showError={showError}
+          onOpenSession={onOpenSession}
+        />
       );
       break;
     case "caches":

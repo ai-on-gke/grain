@@ -40,7 +40,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/modelexec"
 )
 
 // HTTPClient is Client's method surface (bwsalmon/agents#363) spoken over
@@ -2045,15 +2044,6 @@ func (c *HTTPClient) SetGCPKey(ctx context.Context, req SetGCPKeyRequest) (model
 // DeleteGCPKey is DELETE /api/gcp-keys/{name}.
 func (c *HTTPClient) DeleteGCPKey(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodDelete, "/api/gcp-keys/"+url.PathEscape(name), nil, nil)
-}
-
-// ListExecutors returns the connected remote executors snapshot from GET /api/executors.
-func (c *HTTPClient) ListExecutors(ctx context.Context) ([]modelexec.Status, error) {
-	var out []modelexec.Status
-	if err := c.do(ctx, http.MethodGet, "/api/executors", nil, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 // RequestLocalScriptApproval is the run's mcpserver asking for a person

@@ -37,7 +37,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent/custom"
 	"github.com/ai-on-gke/grain/pkg/agent/sessionstore"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/modelexec"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -68,8 +67,8 @@ func backendUnavailableKey(b model.AgentBackend) string {
 }
 
 // teamHasAgentBackend is orchestrator.Deps.TeamHasAgentBackend for this
-// deployment: whether a team has a connection of its own, stored or
-// offered by one of its remote executors, that is not disabled -- the
+// deployment: whether a team has a connection of its own that is not
+// disabled -- the
 // same pool agentFrameworks picks from, read the same way.
 func teamHasAgentBackend(cfg Config, store *model.Store) func(context.Context, string) bool {
 	return func(ctx context.Context, team string) bool {
@@ -1243,13 +1242,7 @@ func DispatchConfig(ctx context.Context, store *model.Store, cfg Config) Config 
 	if store != nil {
 		if stored, err := store.GetConfig(ctx); err == nil && stored != nil {
 			live = cfg.withLiveModelConfig(*stored)
-			if cfg.executorServer != nil {
-				cfg.executorServer.SetLimits(stored.AgentBackends)
-			}
 		}
-	}
-	if cfg.executorServer != nil {
-		live.AgentBackends = append(slices.Clone(live.AgentBackends), cfg.executorServer.AgentBackends()...)
 	}
 	return live
 }
@@ -1263,20 +1256,6 @@ func (c Config) DefaultAgentFramework() string {
 	return model.NormalizeAgentFramework(c.AgentFramework)
 }
 
-func findExecutorHost(cfg Config, binary string) (*modelexec.RemoteHost, error) {
-	if cfg.executorServer == nil {
-		return nil, nil
-	}
-	if strings.HasPrefix(cfg.AgentBackendID, "executor-") {
-		host := cfg.executorServer.ConnectedHost(binary)
-		if host == nil {
-			return nil, fmt.Errorf("remote executor for backend %q offering %q is not connected", cfg.AgentBackendID, binary)
-		}
-		return host, nil
-	}
-	return nil, nil
-}
-
 // buildAntigravityFramework builds the framework a run driven by
 // agent/antigravity uses: Google's Antigravity CLI (agy) as a subprocess,
 // authenticating with the same Gemini API key the in-process runtime it
@@ -1285,37 +1264,28 @@ func findExecutorHost(cfg Config, binary string) (*modelexec.RemoteHost, error) 
 // resolve the credential, fail with something an operator can act on if
 // either is missing.
 func BuildAntigravityFramework(ctx context.Context, cfg Config, secretStore *secrets.Store) (agent.Framework, error) {
-	remoteHost, err := findExecutorHost(cfg, "agy")
-	if err != nil {
-		return nil, err
-	}
+	var err error
 	agyPath := cfg.AgyPath
 	var hostdHost agent.Host
-	if remoteHost == nil {
-		if r := cfg.ResolveCLIRun(ctx, model.AgentFrameworkAntigravity); r.Via == ViaHostd {
-			// agy forks grain's mcpserver and hook commands by this binary's
-			// own path, so on the bare machine that path has to hold a grain
-			// of this daemon's version too -- the installer's to put there
-			// (docs/design/cli-run-location.md).
-			if hostdHost, err = cfg.cliHostdHost(r); err != nil {
-				return nil, err
-			}
-			agyPath = r.HostPath
-			if agyPath == "" {
-				agyPath = "agy"
-			}
+	if r := cfg.ResolveCLIRun(ctx, model.AgentFrameworkAntigravity); r.Via == ViaHostd {
+		// agy forks grain's mcpserver and hook commands by this binary's
+		// own path, so on the bare machine that path has to hold a grain
+		// of this daemon's version too -- the installer's to put there
+		// (docs/design/cli-run-location.md).
+		if hostdHost, err = cfg.cliHostdHost(r); err != nil {
+			return nil, err
+		}
+		agyPath = r.HostPath
+		if agyPath == "" {
+			agyPath = "agy"
 		}
 	}
-	if remoteHost == nil && hostdHost == nil {
+	if hostdHost == nil {
 		if err := checkConnectionCLI(cfg); err != nil {
 			return nil, err
 		}
 	}
-	if remoteHost != nil {
-		if path, err := remoteHost.BinaryPath("agy"); err == nil {
-			agyPath = path
-		}
-	} else if agyPath == "" {
+	if agyPath == "" {
 		resolved, err := exec.LookPath("agy")
 		if err != nil {
 			// Named as an install, not as a lookup failure, for the same
@@ -1336,33 +1306,23 @@ func BuildAntigravityFramework(ctx context.Context, cfg Config, secretStore *sec
 	// later with a message that says nothing about where grain reads
 	// credentials from.
 	var apiKey string
-	if cfg.AgentAuthMode != model.AntigravityAuthAmbient && remoteHost == nil {
+	if cfg.AgentAuthMode != model.AntigravityAuthAmbient {
 		var err error
 		apiKey, err = backendCredential(ctx, cfg, secretStore, secrets.GeminiAPIKeySecret, cfg.GeminiAPIKeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("reading the Gemini API key: %w", err)
 		}
 	}
-	if apiKey == "" && cfg.AgentAuthMode != model.AntigravityAuthAmbient && remoteHost == nil {
+	if apiKey == "" && cfg.AgentAuthMode != model.AntigravityAuthAmbient {
 		if cfg.AgentBackendID != "" {
 			return nil, errors.New("this connection has no Gemini API key of its own: set one on it in Settings -> Models (/settings/models)")
 		}
 		return nil, errors.New("no Gemini API key is configured: set one in the UI " +
 			"(Settings -> Models), or point -gemini-api-key-file at a file holding one")
 	}
-	var grainBinaryPath string
-	if remoteHost != nil {
-		if p, err := remoteHost.BinaryPath("grain"); err == nil {
-			grainBinaryPath = p
-		} else {
-			grainBinaryPath = "grain"
-		}
-	} else {
-		resolved, err := os.Executable()
-		if err != nil {
-			return nil, fmt.Errorf("resolving this binary's own path, for agy's MCP settings: %w", err)
-		}
-		grainBinaryPath = resolved
+	grainBinaryPath, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("resolving this binary's own path, for agy's MCP settings: %w", err)
 	}
 	// Resolved again inside the Run rather than closing over the key just
 	// read, exactly as buildClaudeFramework does with its token: a key
@@ -1381,12 +1341,10 @@ func BuildAntigravityFramework(ctx context.Context, cfg Config, secretStore *sec
 		// sets none (turndeadline.go).
 		antigravity.WithTurnLimits(cfg.agyTurnTimeout, cfg.agyRetryCutoff, cfg.agyConnection),
 	}
-	if remoteHost != nil {
-		opts = append(opts, antigravity.WithHost(remoteHost))
-	} else if hostdHost != nil {
+	if hostdHost != nil {
 		opts = append(opts, antigravity.WithHost(hostdHost))
 	}
-	if cfg.AgentAuthMode != model.AntigravityAuthAmbient && remoteHost == nil {
+	if cfg.AgentAuthMode != model.AntigravityAuthAmbient {
 		opts = append(opts, antigravity.WithAPIKeyFunc(func(ctx context.Context) (string, error) {
 			return backendCredential(ctx, cfg, secretStore, secrets.GeminiAPIKeySecret, cfg.GeminiAPIKeyFile)
 		}))
@@ -1413,10 +1371,7 @@ func BuildAntigravityFramework(ctx context.Context, cfg Config, secretStore *sec
 }
 
 func BuildClaudeFramework(ctx context.Context, cfg Config, secretStore *secrets.Store) (agent.Framework, error) {
-	remoteHost, err := findExecutorHost(cfg, "claude")
-	if err != nil {
-		return nil, err
-	}
+	var err error
 	claudePath := cfg.ClaudePath
 	// A CLI set to run on the host from a daemon in a container runs
 	// through grain hostd (hostexec.go, clirun.go), which decides the
@@ -1430,7 +1385,7 @@ func BuildClaudeFramework(ctx context.Context, cfg Config, secretStore *secrets.
 	// outlives it (docs/non-disruptive-upgrade.md).
 	var container agent.Host
 	detached := false
-	if remoteHost == nil && cfg.RunHost == nil {
+	if cfg.RunHost == nil {
 		if r := cfg.ResolveCLIRun(ctx, model.AgentFrameworkClaude); r.Via == ViaHostd {
 			if container, err = cfg.cliHostdHost(r); err != nil {
 				return nil, err
@@ -1444,18 +1399,14 @@ func BuildClaudeFramework(ctx context.Context, cfg Config, secretStore *secrets.
 			}
 		}
 	}
-	if remoteHost == nil && cfg.RunHost == nil && container == nil {
+	if cfg.RunHost == nil && container == nil {
 		// Not under a run host: the run pod, not this one, is where
 		// the path has to exist, exactly as for -claude-path.
 		if err := checkConnectionCLI(cfg); err != nil {
 			return nil, err
 		}
 	}
-	if remoteHost != nil {
-		if path, err := remoteHost.BinaryPath("claude"); err == nil {
-			claudePath = path
-		}
-	} else if claudePath == "" {
+	if claudePath == "" {
 		resolved, err := exec.LookPath("claude")
 		if err != nil {
 			// Named as an install, not as a lookup failure. Both agent
@@ -1480,7 +1431,7 @@ func BuildClaudeFramework(ctx context.Context, cfg Config, secretStore *secrets.
 	// several minutes later with a message about credentials that says
 	// nothing about where grain reads them from.
 	isVertex := cfg.ClaudeAuthMode == model.ClaudeAuthVertex || cfg.AgentAuthMode == model.ClaudeAuthVertex || os.Getenv("CLAUDE_CODE_USE_VERTEX") == "1"
-	if !isVertex && cfg.ClaudeAuthMode != model.AntigravityAuthAmbient && remoteHost == nil {
+	if !isVertex && cfg.ClaudeAuthMode != model.AntigravityAuthAmbient {
 		token, err := backendCredential(ctx, cfg, secretStore, secrets.ClaudeOAuthTokenSecret, cfg.ClaudeOAuthTokenFile)
 		if err != nil {
 			return nil, fmt.Errorf("reading the Claude Code OAuth token: %w", err)
@@ -1494,13 +1445,7 @@ func BuildClaudeFramework(ctx context.Context, cfg Config, secretStore *secrets.
 		}
 	}
 	var grainBinaryPath string
-	if remoteHost != nil {
-		if p, err := remoteHost.BinaryPath("grain"); err == nil {
-			grainBinaryPath = p
-		} else {
-			grainBinaryPath = "grain"
-		}
-	} else if cfg.RunHost != nil {
+	if cfg.RunHost != nil {
 		// The CLI, and the mcpserver its --mcp-config starts, run in the
 		// run host's image, not beside this process: this binary's own
 		// path is that image's grain only on a deployment that happens
@@ -1525,9 +1470,7 @@ func BuildClaudeFramework(ctx context.Context, cfg Config, secretStore *secrets.
 		// identical line in buildAntigravityFramework.
 		claude.WithGitHubAccess(cfg.DataDir, cfg.GithubHost, cfg.GithubInsecureHTTP),
 	}
-	if remoteHost != nil {
-		opts = append(opts, claude.WithHost(remoteHost))
-	} else if cfg.RunHost != nil {
+	if cfg.RunHost != nil {
 		// Only claude for now: its recommended login is a long-lived
 		// setup-token that never refreshes, so run hosts of any number
 		// and any generation can hold it at once. codex refreshes its
@@ -1553,7 +1496,7 @@ func BuildClaudeFramework(ctx context.Context, cfg Config, secretStore *secrets.
 	if isVertex {
 		opts = append(opts, claude.WithVertex(true))
 	}
-	if cfg.ClaudeAuthMode != model.AntigravityAuthAmbient && remoteHost == nil {
+	if cfg.ClaudeAuthMode != model.AntigravityAuthAmbient {
 		opts = append(opts, claude.WithOAuthTokenFunc(func(ctx context.Context) (string, error) {
 			return backendCredential(ctx, cfg, secretStore, secrets.ClaudeOAuthTokenSecret, cfg.ClaudeOAuthTokenFile)
 		}))
@@ -1567,7 +1510,7 @@ func BuildClaudeFramework(ctx context.Context, cfg Config, secretStore *secrets.
 		opts = append(opts, claude.WithGranuleSSH(cfg.GranuleSSHUser, cfg.GranuleExecKey, cfg.GranuleWorkspace))
 	}
 	if url := daemonServerURL(cfg.UiAddr); url != "" {
-		if cfg.RunHost != nil && remoteHost == nil && cfg.RunHostDaemonURL != "" {
+		if cfg.RunHost != nil && cfg.RunHostDaemonURL != "" {
 			// A run pod is not this pod: its mcpserver reaches the
 			// daemon at the Service, which outlives this process.
 			url = cfg.RunHostDaemonURL
@@ -1630,10 +1573,7 @@ func configuredCodexAuthFile(cfg Config) string {
 }
 
 func buildCodexFramework(ctx context.Context, cfg Config, secretStore *secrets.Store) (agent.Framework, error) {
-	remoteHost, err := findExecutorHost(cfg, "codex")
-	if err != nil {
-		return nil, err
-	}
+	var err error
 	codexPath := cfg.CodexPath
 	// See BuildClaudeFramework. A detached codex runs through hostd's
 	// container-equivalent entry ("codex-detached"), whose wrapper starts
@@ -1641,30 +1581,24 @@ func buildCodexFramework(ctx context.Context, cfg Config, secretStore *secrets.S
 	// the endpoint outlives a daemon upgrade too.
 	var container agent.Host
 	detached := false
-	if remoteHost == nil {
-		if r := cfg.ResolveCLIRun(ctx, model.AgentFrameworkCodex); r.Via == ViaHostd {
-			if container, err = cfg.cliHostdHost(r); err != nil {
-				return nil, err
-			}
-			codexPath = "codex"
-			if r.Location == model.CLIRunDetached {
-				detached = true
-				if r.HostPath != "" {
-					codexPath = r.HostPath
-				}
+	if r := cfg.ResolveCLIRun(ctx, model.AgentFrameworkCodex); r.Via == ViaHostd {
+		if container, err = cfg.cliHostdHost(r); err != nil {
+			return nil, err
+		}
+		codexPath = "codex"
+		if r.Location == model.CLIRunDetached {
+			detached = true
+			if r.HostPath != "" {
+				codexPath = r.HostPath
 			}
 		}
 	}
-	if remoteHost == nil && container == nil {
+	if container == nil {
 		if err := checkConnectionCLI(cfg); err != nil {
 			return nil, err
 		}
 	}
-	if remoteHost != nil {
-		if path, err := remoteHost.BinaryPath("codex"); err == nil {
-			codexPath = path
-		}
-	} else if codexPath == "" {
+	if codexPath == "" {
 		resolved, err := exec.LookPath("codex")
 		if err != nil {
 			// Named as an install, not as a lookup failure -- see
@@ -1688,7 +1622,7 @@ func buildCodexFramework(ctx context.Context, cfg Config, secretStore *secrets.S
 	if cfg.codexAuthMode != "" && cfg.codexAuthMode != model.CodexAuthAPIKey && cfg.codexAuthMode != model.CodexAuthSubscription && cfg.codexAuthMode != model.AntigravityAuthAmbient {
 		return nil, fmt.Errorf("unknown Codex authentication mode %q", cfg.codexAuthMode)
 	}
-	if cfg.codexAuthMode != model.CodexAuthSubscription && cfg.codexAuthMode != model.AntigravityAuthAmbient && remoteHost == nil {
+	if cfg.codexAuthMode != model.CodexAuthSubscription && cfg.codexAuthMode != model.AntigravityAuthAmbient {
 		var err error
 		apiKey, err = backendCredential(ctx, cfg, secretStore, secrets.OpenAIAPIKeySecret, cfg.OpenAIAPIKeyFile)
 		if err != nil {
@@ -1702,7 +1636,7 @@ func buildCodexFramework(ctx context.Context, cfg Config, secretStore *secrets.S
 	// place whenever its OAuth tokens rotate, which is why a run links
 	// to it rather than copying it.
 	authFile := configuredCodexAuthFile(cfg)
-	if apiKey == "" && cfg.codexAuthMode != model.AntigravityAuthAmbient && remoteHost == nil {
+	if apiKey == "" && cfg.codexAuthMode != model.AntigravityAuthAmbient {
 		if authFile == "" && cfg.AgentBackendID != "" {
 			return nil, errors.New("this connection has no Codex credential of its own: upload auth.json " +
 				"or set an OpenAI API key on it in Settings -> Models (/settings/models)")
@@ -1718,19 +1652,9 @@ func buildCodexFramework(ctx context.Context, cfg Config, secretStore *secrets.S
 	}
 	// The mcpserver behind codex's endpoint is grain's own child, so
 	// this is the binary that forks it.
-	var grainBinaryPath string
-	if remoteHost != nil {
-		if p, err := remoteHost.BinaryPath("grain"); err == nil {
-			grainBinaryPath = p
-		} else {
-			grainBinaryPath = "grain"
-		}
-	} else {
-		resolved, err := os.Executable()
-		if err != nil {
-			return nil, fmt.Errorf("resolving this binary's own path, for codex's MCP config: %w", err)
-		}
-		grainBinaryPath = resolved
+	grainBinaryPath, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("resolving this binary's own path, for codex's MCP config: %w", err)
 	}
 	// Resolved again inside the Run rather than closing over the key
 	// just read, exactly as the two frameworks above do: a key replaced
@@ -1750,12 +1674,7 @@ func buildCodexFramework(ctx context.Context, cfg Config, secretStore *secrets.S
 			opts = append(opts, codex.WithDetachedMCP())
 		}
 	}
-	if remoteHost != nil {
-		opts = append(opts, codex.WithHost(remoteHost))
-		if remoteHost.CodexAuthFile() != "" {
-			opts = append(opts, codex.WithAuthFile(remoteHost.CodexAuthFile()))
-		}
-	} else if apiKey != "" {
+	if apiKey != "" {
 		opts = append(opts, codex.WithAPIKeyFunc(func(ctx context.Context) (string, error) {
 			return backendCredential(ctx, cfg, secretStore, secrets.OpenAIAPIKeySecret, cfg.OpenAIAPIKeyFile)
 		}))
@@ -1995,9 +1914,7 @@ func backendCredential(ctx context.Context, cfg Config, secretStore *secrets.Sto
 // withConnectionCLIPath points cfg at backend's own CLI, when it names
 // one (model.AgentBackend.CLIPath): the precedence is the connection's
 // path, then the deployment's -claude-path / -codex-path / -agy-path,
-// then the daemon's PATH, and this is the first step of it. A remote
-// executor still runs the binary it offers (findExecutorHost): the path
-// is one on the daemon's machine, not on the executor's.
+// then the daemon's PATH, and this is the first step of it.
 func withConnectionCLIPath(cfg Config, backend model.AgentBackend) Config {
 	path := strings.TrimSpace(backend.CLIPath)
 	if path == "" {

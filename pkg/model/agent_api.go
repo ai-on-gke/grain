@@ -36,8 +36,8 @@ type APIScope string
 const APIGrantPrefix = "api:"
 
 // APIScopeInternal marks a route that is grain's own plumbing rather than
-// something a person does in the UI -- the access-code login, the
-// executor bootstrap, the endpoints the mcpserver's own built-in tools
+// something a person does in the UI -- the access-code login, a grain
+// hostd dialing in, the endpoints the mcpserver's own built-in tools
 // call. It is in the route table so the table stays total, and it is
 // never grantable, so no generated tool ever reaches one.
 const APIScopeInternal APIScope = "internal"

@@ -26,9 +26,9 @@ import (
 // Schema 25 dropped schedule.team and suite.team, and their requests
 // dropped `team` with them: a body still carrying it is refused with a
 // 400 that names the field, on create and on patch, rather than
-// accepted with the field silently ignored (task 4924). Templates,
-// suite runs and executor tokens keep no team either, and their
-// requests refuse it the same way (task 4927).
+// accepted with the field silently ignored (task 4924). Templates and
+// suite runs keep no team either, and their requests refuse it the same
+// way (task 4927).
 func TestRequestsRefuseTheRetiredTeamField(t *testing.T) {
 	t.Parallel()
 	srv, _ := testServer(t)
@@ -59,7 +59,6 @@ func TestRequestsRefuseTheRetiredTeamField(t *testing.T) {
 		{http.MethodPost, "/api/templates", `{"name":"u","title":"u","team":"default"}`},
 		{http.MethodPatch, "/api/templates/" + tmpl.ID, `{"team":"eng"}`},
 		{http.MethodPost, "/api/suite-runs", `{"suiteId":"` + suite.ID + `","repo":"acme/widgets","base":"main","team":"default"}`},
-		{http.MethodPost, "/api/executors/tokens", `{"name":"worker","team":"default"}`},
 	} {
 		rec := do(t, srv, tc.method, tc.path, tc.body)
 		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `\"team\" field`) {

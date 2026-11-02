@@ -383,7 +383,13 @@ import "strconv"
 // included, to `https://grain.dev/capabilities/grain#host-exec={}`: the
 // in-process `self-repair` provider is retired for the `grain#host-exec`
 // method.
-const SchemaVersion = 84
+//
+// 85 drops `executor_token` and `executor_token_sequence`: remote
+// executors are retired, and grain hostd (which authenticates with its
+// own -hostd-token-file) is grain's only host agent. A pure drop: the
+// importer passes over a table this build lacks, so a dump carrying
+// either imports without it.
+const SchemaVersion = 85
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the
@@ -3740,23 +3746,6 @@ var Tables = []string{
   ` + "`refresh`" + `          TEXT    NOT NULL DEFAULT '',
   ` + "`rollback_on_crash`" + ` INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`name`" + `)
-)`,
-
-	`CREATE TABLE IF NOT EXISTS ` + "`executor_token`" + ` (
-  ` + "`id`" + `                TEXT     NOT NULL,
-  ` + "`name`" + `              TEXT     NOT NULL,
-  ` + "`token_hash`" + `        TEXT     NOT NULL,
-  ` + "`prefix`" + `            TEXT     NOT NULL,
-  ` + "`created_at`" + `        DATETIME NOT NULL,
-  ` + "`revoked_at`" + `        DATETIME NULL,
-  ` + "`last_connected_at`" + ` DATETIME NULL,
-  PRIMARY KEY (` + "`id`" + `),
-  UNIQUE (` + "`token_hash`" + `)
-)`,
-
-	`CREATE TABLE IF NOT EXISTS ` + "`executor_token_sequence`" + ` (
-  ` + "`id`" + `        INTEGER PRIMARY KEY AUTOINCREMENT,
-  ` + "`issued_at`" + ` DATETIME NOT NULL
 )`,
 
 	externalAgentTokenTable,

@@ -34,10 +34,10 @@ import (
 // mcp_endpoint proxied, handshaken and named (§5.2), and every grant's
 // prompt_section rendered as an attributed block (§5.4). Each proxy is a
 // loopback listener on grain's own host, where the agent CLI runs, aimed
-// at the capability server rather than at the sandbox -- a CLI on a
-// remote executor is given one on the executor instead, whose requests
-// its stream carries back to the same proxy (agent.CarryCapabilityServers,
-// modelexec's capability routes) -- so a
+// at the capability server rather than at the sandbox -- a CLI on a Host
+// that carries capability servers is given one on its own machine
+// instead, whose requests are carried back to the same proxy
+// (agent.CarryCapabilityServers) -- so a
 // recreate_sandbox leaves it pointing where it did: rebuilding the VM
 // only checks every endpoint still answers (§5.2.5).
 

@@ -44,9 +44,6 @@ func (c *Client) PutTeamAgentBackend(ctx context.Context, id, backendID string, 
 	if backendID == "" || strings.ContainsAny(backendID, " /\\") {
 		return model.AgentBackend{}, validationErrorf("invalid connection id %q", backendID)
 	}
-	if strings.HasPrefix(backendID, "executor-") {
-		return model.AgentBackend{}, validationErrorf("connection ids starting with \"executor-\" are reserved for remote executors")
-	}
 	backend.ID = backendID
 	cfg, err := c.Store.GetConfig(ctx)
 	if err != nil {
