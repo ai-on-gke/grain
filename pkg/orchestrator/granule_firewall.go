@@ -459,7 +459,8 @@ var (
 	hostNetnsPorts                  = netnsBridgePorts
 )
 
-// nftTable is the table every NetworkNone VM's chain lives in.
+// nftTable is the table every granule VM's chain lives in -- open-network
+// VMs' too, under the name it had before they had one.
 const nftTable = "grain_network_none"
 
 // nftBase is one base chain a NetworkNone VM's chain is jumped to from:
