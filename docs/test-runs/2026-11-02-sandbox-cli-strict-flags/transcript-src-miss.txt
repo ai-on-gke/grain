@@ -1,0 +1,24 @@
+# src:// on a layer whose core source did not ship (no replace, version not in the module cache)
+$ grain ls src://
+  exit=0 proxy=[GET /fs/src?list;]
+  | go.mod
+  | pkg/
+  | playbooks/
+$ grain ls src://pkg
+  exit=0 proxy=[GET /fs/src/pkg?list;]
+  | own/
+$ grain ls src://pkg/own
+  exit=0 proxy=[GET /fs/src/pkg/own?list;]
+  | own.go
+$ grain ls src://core
+  exit=1 proxy=[GET /fs/src/core?list;]
+  | grain: not found: src://core -- src:// serves this daemon's own module, which builds on github.com/ai-on-gke/grain@v0.0.0-20990101000000-abcdefabcdef, and that source did not ship with this daemon. To read core: `go mod download -json github.com/ai-on-gke/grain@v0.0.0-20990101000000-abcdefabcdef` in grain-src/ (or any checkout of this module) and read the Dir it prints, or clone ai-on-gke/grain if your task reads it
+$ grain read src://core/pkg/namespace/coresrc.go
+  exit=1 proxy=[GET /fs/src/core/pkg/namespace/coresrc.go;]
+  | grain: not found: src://core/pkg/namespace/coresrc.go -- src:// serves this daemon's own module, which builds on github.com/ai-on-gke/grain@v0.0.0-20990101000000-abcdefabcdef, and that source did not ship with this daemon. To read core: `go mod download -json github.com/ai-on-gke/grain@v0.0.0-20990101000000-abcdefabcdef` in grain-src/ (or any checkout of this module) and read the Dir it prints, or clone ai-on-gke/grain if your task reads it
+$ grain grep CoreSource src://pkg
+  exit=0 proxy=[GET /fs/src/pkg?grep=CoreSource&n=1;]
+  | 
+$ grain grep x src://pkg/nosuch
+  exit=1 proxy=[GET /fs/src/pkg/nosuch?grep=x&n=1;]
+  | grain: not found: src://pkg/nosuch -- src:// serves this daemon's own module, which builds on github.com/ai-on-gke/grain@v0.0.0-20990101000000-abcdefabcdef, and that source did not ship with this daemon. To read core: `go mod download -json github.com/ai-on-gke/grain@v0.0.0-20990101000000-abcdefabcdef` in grain-src/ (or any checkout of this module) and read the Dir it prints, or clone ai-on-gke/grain if your task reads it
