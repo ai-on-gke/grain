@@ -198,6 +198,12 @@ func inspectGuestPorts(ctx context.Context, container string) ([]string, error) 
 	if err != nil {
 		return nil, fmt.Errorf("docker inspect %s: network count %q: %w", container, strings.TrimSpace(string(countOut)), err)
 	}
+	if networks == 0 {
+		// No network, no port to find. Nothing is left unfiltered by
+		// that: a container on no network has no address either, and
+		// inspectGuestNetworks refuses it before a rule is written.
+		return nil, nil
+	}
 	// The kernel's answer first: it does not depend on anything inside
 	// the container, which for a granule VM is the guest (see
 	// netnsBridgePorts). Only when it cannot be had -- not Linux, or a
