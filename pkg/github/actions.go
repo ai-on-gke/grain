@@ -47,15 +47,15 @@ type ActionsRunsQuery struct {
 // ActionsRunJob is one job of a workflow run with its steps, as
 // GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs gives it.
 type ActionsRunJob struct {
-	ID          int64         `json:"id"`
-	RunID       int64         `json:"runId"`
-	RunAttempt  int           `json:"runAttempt,omitempty"`
-	Name        string        `json:"name"`
-	Status      string        `json:"status"`
-	Conclusion  string        `json:"conclusion,omitempty"`
-	StartedAt   *time.Time    `json:"startedAt,omitempty"`
-	CompletedAt *time.Time    `json:"completedAt,omitempty"`
-	HTMLURL     string        `json:"htmlUrl,omitempty"`
+	ID          int64            `json:"id"`
+	RunID       int64            `json:"runId"`
+	RunAttempt  int              `json:"runAttempt,omitempty"`
+	Name        string           `json:"name"`
+	Status      string           `json:"status"`
+	Conclusion  string           `json:"conclusion,omitempty"`
+	StartedAt   *time.Time       `json:"startedAt,omitempty"`
+	CompletedAt *time.Time       `json:"completedAt,omitempty"`
+	HTMLURL     string           `json:"htmlUrl,omitempty"`
 	Steps       []ActionsRunStep `json:"steps,omitempty"`
 }
 
