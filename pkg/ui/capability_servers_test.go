@@ -389,3 +389,55 @@ func TestBindingASecretWhileLockedStoresNothing(t *testing.T) {
 		t.Errorf("a refused binding was written: %v", env)
 	}
 }
+
+// The same binding on a deployment managed by an external config
+// repository is refused with the same edit -- the mcp_servers entry
+// carrying the $secret: reference -- rather than with no change at all,
+// and with a note that the value, which nothing stored, has to be set
+// as a secret separately.
+func TestBindingASecretUnderAnExternalConfigRepoGivesTheEdit(t *testing.T) {
+	t.Parallel()
+	_, client := testServer(t)
+	storeSettingsRow(t, client)
+	store := secrets.New(t.TempDir())
+	client.Config.Secrets = store
+	srv := ui.NewServerWithClient(client)
+	const id = "https://github.com/bwsalmon/grain/capabilities/gcp"
+	if rec := do(t, srv, http.MethodPut, "/api/capability-servers", `{"id":"`+id+`","config":{"command":"gcp-cap"}}`); rec.Code >= 300 {
+		t.Fatalf("adding the server: %d %s", rec.Code, rec.Body)
+	}
+	client.Config.StateRepo = &fakeStateRepo{status: ui.StateRepoStatus{Remote: "https://github.com/example/grain-config", Branch: "main"}}
+
+	rec := do(t, srv, http.MethodPost, "/api/capability-servers/bind-secret",
+		`{"id":"`+id+`","kind":"env","name":"GCP_MINTER_KEY","secret":"gcp-minter","value":"super-secret-key-material"}`)
+	var refusal configRefusalBody
+	if rec.Code != http.StatusConflict || json.Unmarshal(rec.Body.Bytes(), &refusal) != nil || refusal.Code != ui.ConfigManagedExternallyCode {
+		t.Fatalf("binding under an external config repository: %d %s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "super-secret") {
+		t.Errorf("the refusal carries the secret value: %s", rec.Body)
+	}
+	if len(refusal.Change) == 0 {
+		t.Fatalf("the refusal carries no change: %s", rec.Body)
+	}
+	var patch strings.Builder
+	for _, c := range refusal.Change {
+		patch.WriteString(c.Patch)
+	}
+	if !strings.Contains(patch.String(), "$secret:gcp-minter") || !strings.Contains(patch.String(), "GCP_MINTER_KEY") {
+		t.Errorf("the refusal's change does not bind the reference: %+v", refusal.Change)
+	}
+	if !strings.Contains(refusal.Description, "gcp-minter") || !strings.Contains(refusal.Description, "separately") {
+		t.Errorf("the refusal does not say to set the value as a secret: %q", refusal.Description)
+	}
+	if v, err := store.Resolve(context.Background(), "gcp-minter"); err == nil && v != "" {
+		t.Errorf("a refused binding stored its value %q", v)
+	}
+	cfg, err := client.Store.GetConfig(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env := cfg.MCPServers[id].Env; env["GCP_MINTER_KEY"] != "" {
+		t.Errorf("a refused binding was written: %v", env)
+	}
+}

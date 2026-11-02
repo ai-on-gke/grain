@@ -159,6 +159,26 @@ describe("TaskBoard", () => {
       ).toBeNull();
     });
 
+    // A task that never ends on its own says so on its card, as on a
+    // row (KeepRunningChip.jsx), and one that does carries nothing.
+    it("marks a keep_running task's card", () => {
+      renderBoard({
+        tasks: tasks.map((task) =>
+          task.id === 1 ? { ...task, keepRunning: true } : task,
+        ),
+      });
+      expect(
+        cardFor("Fix the thing").querySelector(
+          '[data-testid="task-keep-running-badge"]',
+        ),
+      ).toHaveTextContent("keeps running");
+      expect(
+        cardFor("Ship the other thing").querySelector(
+          '[data-testid="task-keep-running-badge"]',
+        ),
+      ).toBeNull();
+    });
+
     // Sessions live in the Sessions pane (SessionsPage.jsx), so an
     // interactive task is never a card, live or not.
     it("leaves an interactive task off the board", () => {

@@ -497,6 +497,30 @@ export function matchesFilters(t, conditions, q, config, searchIn = null) {
   );
 }
 
+// unknownValues is the values a condition names that its attribute's
+// closed vocabulary (`closed`: the states) does not have. Such a value
+// matches nothing, and without saying so its chip reads like a real one:
+// `state:any:waiting` -- a board query written from the label "Waiting"
+// rather than the state `queued` -- was worded "State is any of waiting",
+// exactly as `state:any:queued` is, over an empty list. A value is read
+// through `expand` first, so "asked" -- both asked states, as the menu
+// offers them -- is known.
+//
+// Only an attribute that says its `order` is the whole vocabulary is
+// checked. An enum custom field's options can move on under values
+// tasks still carry (its "is a legacy value" comparison), and an
+// attribute's `order` is otherwise only how it sorts.
+export function unknownValues(attr, cond) {
+  if (!attr?.closed || OPERATORS[cond?.op]?.input !== "choices") return [];
+  return (cond.values || []).filter(
+    (v) =>
+      v !== NONE &&
+      !(attr.expand ? attr.expand(v) : [v]).every((x) =>
+        attr.order.includes(x),
+      ),
+  );
+}
+
 // describeCondition is one condition as a sentence, for the chip a
 // closed editor leaves behind: "Repo is any of acme/widgets, acme/
 // gadgets". A condition with no value yet says what it is waiting for
@@ -506,14 +530,18 @@ export function describeCondition(attr, cond, config) {
   const label = `${attr.label} ${op ? op.label : cond.op}`;
   if (!op || op.input === "none") return label;
   if (cond.values.length === 0) return `${label}…`;
-  if (op.input === "choices")
+  if (op.input === "choices") {
+    const unknown = new Set(unknownValues(attr, cond));
     return `${label} ${cond.values
       .map((v) =>
         v === NONE
           ? attr.noneLabel || NONE_LABEL_FALLBACK
-          : valueLabel(attr, v, config),
+          : unknown.has(v)
+            ? `“${v}” (unknown)`
+            : valueLabel(attr, v, config),
       )
       .join(", ")}`;
+  }
   if (op.input === "days")
     return `${label} ${cond.values[0]} day${cond.values[0] === "1" ? "" : "s"}`;
   if (op.input === "hours")
