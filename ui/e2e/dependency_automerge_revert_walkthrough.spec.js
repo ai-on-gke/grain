@@ -288,7 +288,9 @@ test.describe("Multi-Task Dependency Chains, Auto-Merge Lifecycle and Revert Wor
       ),
     ).toBeLessThanOrEqual(4);
     await expect(
-      batchPanel.getByText(/grain-merge-queue\/[a-z0-9-]+\/main/i),
+      batchPanel.getByText(
+        /grain-merge-queue\/[a-z0-9-]+\/recheck\/[^/\s]+\/main/i,
+      ),
     ).toBeVisible();
     await expect(
       batchPanel.getByText("Rotate the Gemini signing key"),
