@@ -420,6 +420,11 @@ func (c *sandboxCLI) run(args []string) error {
 		if err != nil {
 			return err
 		}
+		if n, err := strconv.Atoi(p.get("page")); p.has("page") && err == nil && n == 0 {
+			// The namespace refuses an empty page too, but only once the
+			// proxy has been asked, and with exit status 1.
+			return usageError{fmt.Sprintf("grain read: --page %q is not a page size: it takes a positive integer\n", p.get("page"))}
+		}
 		if !isPipelineChangesURI(uri) {
 			for _, name := range pipelineChangesFlags {
 				if p.has(name) {
