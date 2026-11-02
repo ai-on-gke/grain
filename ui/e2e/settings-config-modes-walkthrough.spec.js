@@ -33,8 +33,17 @@ async function withConfig(page, extra) {
   for (const glob of ["**/api/settings", "**/api/config"]) {
     await page.route(glob, async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
-      const response = await route.fetch();
-      const body = await response.json();
+      // The page polls both, so a GET can still be here when a navigation
+      // or the test's end drops it; its response is disposed under us then,
+      // and there is nobody left to answer.
+      let response, body;
+      try {
+        response = await route.fetch();
+        body = await response.json();
+      } catch (err) {
+        if (/disposed|closed/i.test(String(err))) return;
+        throw err;
+      }
       await route.fulfill({ response, json: { ...body, ...extra } });
     });
   }

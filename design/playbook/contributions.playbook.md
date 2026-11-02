@@ -1,6 +1,8 @@
 # Grain contribution processes
 
-Attribution and task ownership are defined in [`attribution.design.md`](attribution.design.md).
+**Owner:** @bwsalmon
+
+Attribution and task ownership are defined in [`attribution.design.md`](../design/attribution.design.md).
 
 ## Principles
 
@@ -14,12 +16,28 @@ Attribution and task ownership are defined in [`attribution.design.md`](attribut
 
 Each repository has a `design/` folder with six classes of material:
 
-1. **Design documents (`design/design/*.design.md`)** — High-level "1-pager" designs for a specific topic, written in interactive sessions between PMs, engineers, and coding agents, and reviewed by humans. Designs may reference documents in other repositories.
-2. **Specifications (`design/spec/...`)** — Detailed normative specifications of design documents, generally one file or folder per design. Specifications are started by a person (with a personal agent or a grain task) and reviewed and edited by humans. They cover APIs, schemas, requirement IDs, and UI mockups.
+1. **Design documents (`design/design/**/*.design.md`)** — High-level "1-pager" designs for a specific topic, written in interactive sessions between PMs, engineers, and coding agents, and reviewed by humans. Designs may reference documents in other repositories.
+2. **Specifications (`design/spec/<name>/**`)** — Detailed normative specifications of design documents, generally one file or folder per design. Specifications are started by a person (with a personal agent or a grain task) and reviewed and edited by humans. They cover APIs, schemas, requirement IDs, and UI mockups.
 3. **Tasks (`**/*.task.grain.md`)** — High-level task definitions. They are drafted when a person starts task generation, audited and merged by humans, and named `.task.grain.md` so grain imports them automatically once merged.
-4. **Playbook designs** — High-level designs for background processes such as releases, qualification, and nightly testing. High-level "1-pager" designs for a specific process, written in interactive sessions between PMs, engineers, and coding agents, and reviewed by humans. Designs may reference documents in other repositories.
-5. **Playbooks (`**/*.process.grain.md`, `.grain/`)** — Concrete definitions of standing tasks, triggers, and schedules in grain's declarative formats, generally one file or folder per playbook design. These are imported and run by grain.
+4. **Playbook designs (`design/playbook/*.playbook.md`)** — High-level designs for background processes such as releases, qualification, and nightly testing. High-level "1-pager" designs for a specific process, written in interactive sessions between PMs, engineers, and coding agents, and reviewed by humans. Designs may reference documents in other repositories.
+5. **Playbooks (`**/*.process.grain.md`, `.grain/**`)** — Concrete definitions of standing tasks, triggers, and schedules in grain's declarative formats, generally one file or folder per playbook design. These are imported and run by grain.
 6. **Agent designs** Designs, rules and principles decided upon by the agents. As with other code this requires at least 2 agents to review each change. Agent principles and designs *must* conform to the human designs; when they conflict the human designs are authoritative. However, agents are free to expand agent designs and rules as they see fit.
+
+Each class of material is exactly one glob:
+
+| Material | Path |
+| --- | --- |
+| Designs | `design/design/**/*.design.md` |
+| Specs | `design/spec/<name>/**` |
+| Playbook designs | `design/playbook/*.playbook.md` |
+| Tasks | `**/*.task.grain.md` |
+| Playbooks (executable) | `**/*.process.grain.md` and `.grain/**` |
+| GitHub enforcement | `.github/**` |
+| Code | everything else |
+
+`.grain/` and `.github/` stay at the repository root, because that is where grain and GitHub read them. They hold the files that **enforce** this playbook: the contributions spec maps each rule here to the file that enforces it.
+
+Spec: `design/spec/contributions/contributions.spec.md` (to be written).
 
 Alternatively, all design material can live in a separate repository rather than in each code repository; both layouts follow the same rules.
 
@@ -51,7 +69,7 @@ PMs and engineers write or update a design document on a branch with the most ap
 
 ### Specification
 
-A person starts specification generation explicitly, either by hand, with an external agent or through a grain task. The spec PR goes through the *Reviews* rules above (including checking against the design), and the agent that opened it listens to and answers review comments until humans approve and merge it. Whoever starts the step owns the resulting spec PR (for a grain task, that task's owner; see [`attribution.design.md`](attribution.design.md)).
+A person starts specification generation explicitly, either by hand, with an external agent or through a grain task. The spec PR goes through the *Reviews* rules above (including checking against the design), and the agent that opened it listens to and answers review comments until humans approve and merge it. Whoever starts the step owns the resulting spec PR (for a grain task, that task's owner; see [`attribution.design.md`](../design/attribution.design.md)).
 
 ### Implementation
 
@@ -65,7 +83,7 @@ Implementation code reaches the repository by one of two paths:
 
 A person creates a set of tasks explicitly—with their personal agent (or by hand) or by filing a grain task—to open a PR adding `.task.grain.md` grainfiles with task descriptions, dependencies, and initial permissions.
   
-The tasks PR goes through the same *Reviews* rules, with the opening agent listening to and answering review comments until humans audit, approve, and merge it. Whoever starts the tasks step owns the tasks PR (for a grain task, that task's owner). Per [`attribution.design.md`](attribution.design.md), the tasks' author (the owner of the tasks PR) owns every task imported from its grainfiles and is the author on every implementation PR grain opens from them, together with any `Contributors:` listed on the tasks PR.
+The tasks PR goes through the same *Reviews* rules, with the opening agent listening to and answering review comments until humans audit, approve, and merge it. Whoever starts the tasks step owns the tasks PR (for a grain task, that task's owner). Per [`attribution.design.md`](../design/attribution.design.md), the tasks' author (the owner of the tasks PR) owns every task imported from its grainfiles and is the author on every implementation PR grain opens from them, together with any `Contributors:` listed on the tasks PR.
 
 Grain automatically imports merged task grainfiles into its backlog, watched by the grain on-call. Agents decompose tasks into child tasks as needed while staying within their initial grants (`grainfiles.design.md`) and inheriting their parent's owner (`attribution.design.md`). No human is in the loop during routine implementation and merging: a second agent reviews each PR, and grain merges it once it is clean and green, unless a trust-boundary rule or escalation requires a human. Design ambiguities are raised as clarification PRs against `design/` for humans to review and merge; execution or test blockers go to the grain inbox. Once merged, the grainfile task is marked complete with the task URL as the index into grain's database.
 

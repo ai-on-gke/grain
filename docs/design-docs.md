@@ -29,8 +29,8 @@ triggers (`.grain/triggers`, `docs/declarations.md`):
 ## Not declared in this repository
 
 This repository does not declare the trigger, so a merge that touches its
-design folder (`design/design/` and `design/spec/`, described in
-[`contributions.design.md`](../design/design/contributions.design.md#the-design-folder))
+design folder (`design/design/`, `design/playbook/` and `design/spec/`, described in
+[`contributions.playbook.md`](../design/playbook/contributions.playbook.md#the-design-folder))
 files no planner task. Trigger files have no
 `enabled:` flag (`docs/declarations.md`), so it is left out by not shipping
 `.grain/triggers/design-docs.yml`. Its body is kept in
