@@ -44,7 +44,7 @@ With no state repository (`Config.StateRepo == nil`, e.g. `grain demo`) and `set
 
 2.2.1. Every guard class allows the write. UI and REST writes commit to the store and, when the request's guard ran (`markWroteSettings`) and its status is < 300, `configRefusalWriter` calls `StateManager.SyncAfterWrite`, which exports the database to `grain/config` immediately and advances the loaded-commit marker so the next reconcile tick does not import the older file over it (`TestInternalModeEditsSyncToStateRepoAndPersistAcrossReconcileCycles`).
 
-2.2.2. A merged commit or PR on `grain/config` is imported by `staterepo.Apply` on the next tick, **only** for `SettingsTables` and `memoryTables` (`pkg/staterepo/bind.go`). Runtime tables (`task`, `task_run`, `executor_token`, …) are never imported live.
+2.2.2. A merged commit or PR on `grain/config` is imported by `staterepo.Apply` on the next tick, **only** for `SettingsTables` and `memoryTables` (`pkg/staterepo/bind.go`). Runtime tables (`task`, `task_run`, `external_agent_token`, …) are never imported live.
 
 2.2.3. Writes through unguarded routes (class —; memory, release notes, secrets, tokens) do not call `markWroteSettings` and so do not trigger `SyncAfterWrite`; the ones that live in exported tables (memory, release notes) reach `grain/config` on the next background export.
 
@@ -189,11 +189,12 @@ Columns:
 | Standing / persistent sandboxes (image, env, bound secret keys) | Action only — System → Sandboxes; `POST /api/persistent-sandboxes/{name}/{action}` (stop/start/restart/rebuild) | Yes — `tables/standing_sandbox.json`, `standing_sandbox_secret.json`, `standing_sandbox_env.json`, `persistent_sandbox.json` | Unlocked (Action) | No | Declarations are config-repo only; never auto-merge. |
 | Sandbox probe | Action — `POST /api/sandbox-probe` | No — action | Unlocked (Action) | No | |
 
-### 3.3 Executors (`/settings/executors`)
+### 3.3 Executors (removed; external agent tokens)
+
+Settings → Executors and its executor tokens were removed with remote executors (schema 84 dropped `executor_token`). The external agent tokens below were never on that page and stay API-only.
 
 | Setting / entity | UI (unlocked) | Config repo | Locked: server / UI | External | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Remote executor tokens | Write-only — Executors; `POST /api/executors/tokens`, `POST …/{id}/revoke`, `DELETE …/{id}` | No — runtime credential (`executor_token`, runtime table) | Unlocked (Secret; —) / editable | No | `secrets:write`; token shown once. Stays editable in external mode (D-9, fixed). |
 | External agent tokens | Write-only — `POST /api/external-agents/tokens`, `…/{id}/rotate`, `…/{id}/revoke`, `…/revoke-all`, `DELETE …/{id}` | No — runtime credential | Unlocked (Secret; —) | No | `capabilities:admin`. |
 | External agent API on/off `externalAgentApi` | No — API only (`PUT /api/settings`) | Yes — `tables/grain_config.json` | Locked (G) / — | Yes | |
 
@@ -358,7 +359,7 @@ Every per-repo setter goes through `putRepoConfig` (class **S** on `repo_config`
 
 | Setting / entity | UI | Config repo | Locked | External | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `-data-dir`, `-db-driver` / `-db-dsn`, `-addr` and listener/TLS flags, `-executor-addr` / `-executor-cert-file` / `-executor-key-file`, `-sandbox-port-base`, `-granule-*`, `-container-*`, `-iap-audience`, `-access-code-file`, `-external-config-repo` / `-external-config-branch`, backup flags | No | No — startup flag: they open the store, secret store and listeners the config repo is read through | n/a | n/a | Some (e.g. `-github-host`, `-environment-name`, `-deployment-id`, `-ci-*`, `-default-capabilities`) only **seed** a missing or `ConnectionsOnly` `grain_config` row; afterwards the row (and so `grain/config`) wins. |
+| `-data-dir`, `-db-driver` / `-db-dsn`, `-addr` and listener/TLS flags, `-sandbox-port-base`, `-granule-*`, `-container-*`, `-iap-audience`, `-access-code-file`, `-external-config-repo` / `-external-config-branch`, backup flags | No | No — startup flag: they open the store, secret store and listeners the config repo is read through | n/a | n/a | Some (e.g. `-github-host`, `-environment-name`, `-deployment-id`, `-ci-*`, `-default-capabilities`) only **seed** a missing or `ConnectionsOnly` `grain_config` row; afterwards the row (and so `grain/config`) wins. |
 
 ## 4. Discrepancy callouts
 
@@ -406,7 +407,7 @@ The rule of §2.3.4 keeps secret material writable under the lock, but `SetRepoR
 
 ### D-9: External mode blocks secret and executor entry in the UI that the API accepts
 
-*Fixed 2026-11-01 (task 2232; confirmed open in `docs/test-runs/2026-11-01-settings-bootstrap-operations-verification.md`). The Models → Provider connections cards and the Executors → Executor join tokens card opt out of the read-only fieldset with `allowInExternalMode`. In external mode a connection's credential (and Codex login) can be set, cleared and tested from its editor, while New connection, Enable/Disable, Remove, a pause's Resume and the connection's agent type, authentication method and Connection form stay read-only (`ModelBackendPage`'s `configReadOnly`, which draws them in the same `ReadOnlyFieldset` as a read-only card). Model defaults and CLI run locations stay read-only. Git is unchanged: its read-only note points to Legacy capabilities, where tokens can be entered (`SettingsPage.test.jsx` "under an external config repo", `ExecutorsSection.test.jsx`).*
+*Fixed 2026-11-01 (task 2232; confirmed open in `docs/test-runs/2026-11-01-settings-bootstrap-operations-verification.md`). The Models → Provider connections cards (and, until remote executors were removed, the Executors → Executor join tokens card) opt out of the read-only fieldset with `allowInExternalMode`. In external mode a connection's credential (and Codex login) can be set, cleared and tested from its editor, while New connection, Enable/Disable, Remove, a pause's Resume and the connection's agent type, authentication method and Connection form stay read-only (`ModelBackendPage`'s `configReadOnly`, which draws them in the same `ReadOnlyFieldset` as a read-only card). Model defaults and CLI run locations stay read-only. Git is unchanged: its read-only note points to Legacy capabilities, where tokens can be entered (`SettingsPage.test.jsx` "under an external config repo", `ExecutorsSection.test.jsx`).*
 
 In external mode every Settings section except Config repo, Preferences and Upgrade is read-only, including Models (model-connection credentials), Executors (tokens) and Git (whose note points to Credentials). The corresponding routes are unguarded and still accept writes. Only the Legacy capabilities and Capability servers cards opt out with `allowInExternalMode`. Secrets entry is the one thing external mode is meant to leave in the UI.
 

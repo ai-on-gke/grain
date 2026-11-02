@@ -362,41 +362,19 @@ tags, and history. It does not contain `data-dir/secrets`, Google credential
 files, Git remote configuration, or any historical `secrets.enc` object; the
 temporary bundle export removes that path from every commit.
 
-## Remote Model Executors
+## Remote hosts
 
-Remote executors allow Grain to dispatch agent model CLI invocations (`agy`, `claude`, `codex`) to dedicated remote machines (such as workstations, GPU instances, or cloudtops with corp/ambient logins), while tunneling MCP tools and sandboxes back to the Grain daemon.
-
-### Single-Command Bootstrap
-
-On the remote machine, run the bootstrap installer to automatically detect OS/arch, download the matching `grain` binary, discover installed agent CLIs, and connect to the Grain daemon:
+`grain hostd` is grain's only host agent. On the daemon's own machine it
+listens on `/run/grain-hostd/hostd.sock`; on another machine it dials in
+to the daemon instead, with the shared token the daemon was started with
+(`grain daemon -hostd-token-file`):
 
 ```bash
-# Direct single command via curl. Keep the token in a file (mode 600) rather
-# than passing --token, which would land in shell history and ps output.
-curl -fsSL https://<grain-host>:4242/api/executors/install.sh | bash -s -- \
-  --server <grain-host>:8422 \
-  --token-file ~/.grain/token \
-  --team default
-
-# Or using the repository runner script
-./scripts/run-remote-executor.sh \
-  --server <grain-host>:8422 \
-  --token-file ~/.grain/token \
-  --team infrastructure
-
-# Install and enable as a persistent background service (systemd or macOS launchd)
-./scripts/run-remote-executor.sh \
-  --server <grain-host>:8422 \
-  --token-file ~/.grain/token \
-  --service
+grain hostd -server https://<grain-host> -token-file /etc/grain/hostd.token
 ```
 
-A downloaded `grain` binary is only installed once its SHA-256 matches: either
-the digest passed with `--sha256` (or `GRAIN_BINARY_SHA256`), or the one the
-download source publishes beside it at `<url>.sha256` -- which the daemon's own
-`/api/executors/bin/<binary>.sha256` and `/install/<os>/<arch>.sha256`
-endpoints serve. A mismatch aborts the install; a source with no checksum is
-skipped unless `--allow-unverified-binary` is given.
+The remote model executors (`grain executor` / `grain model-server`,
+`scripts/run-remote-executor.sh`) were removed.
 
 ## Documentation
 

@@ -37,7 +37,7 @@ flowchart LR
       api[UI / REST / SSE]
       acc["sandbox-access acceptor<br/>pkg/sandboxaccess :4244"]
       gsvc["guest services (:9728 block)<br/>git proxy · /fs · /cli · /api · /cap<br/>model proxy · package cache"]
-      hacc["hostd & executor acceptors<br/>unix socket · /api/hostd/connect"]
+      hacc["hostd acceptors<br/>unix socket · /api/hostd/connect"]
       mcpc["grain mcpserver<br/>for container-run CLIs"]
     end
     hostd["grain hostd (local or remote)<br/>allowlist /etc/grain/hostd.yaml"]
@@ -98,7 +98,7 @@ The relational database is the live source of truth read on every reconcile tick
 
 - **Sandbox-access acceptor** (`pkg/sandboxaccess`, port `4244` by default when `-k8s-sandbox-access-listen` is set), accepting outbound mTLS connections from `kubernetes-granule` pod wrappers.
 - **Guest-facing services** on the `-sandbox-port-base` port block (`9728` by default, `pkg/ports`): the git and sandbox HTTP proxy (`9728`), model inference proxies (`pkg/modelproxy`), the `host-script` data plane (`9733`), the GitHub Actions cache service (`pkg/actionscache`), and the package cache's DNS (`53`) and HTTP/TLS (`80`/`443`) interception listeners (`pkg/pkgcache`).
-- **`hostd` and remote executor acceptors**: `/run/grain-hostd/hostd.sock` on the local host, `/api/hostd/connect` for a remote `grain hostd` dialling out (`pkg/hostd`), and `/api/executors/connect` for remote model executors (`pkg/modelexec`).
+- **`hostd` acceptors**: `/run/grain-hostd/hostd.sock` on the local host, and `/api/hostd/connect` for a remote `grain hostd` dialling out (`pkg/hostd`). `grain hostd` is grain's only host agent; the remote model executors (`grain executor`, `pkg/modelexec`) were removed.
 - **Capability broker** (`pkg/capability`, `pkg/daemon/capabilities.go`), attaching to in-process, container, and `hostd`-pinned capability servers to mint and release per-attempt passes and proxy MCP tool calls ([`docs/capabilities-spec.md`](../../docs/capabilities-spec.md) §4–§5).
 
 **Package boundaries.** Inside the controller binary, packages follow strict downward dependencies: orchestration and task state (`pkg/orchestrator`, `pkg/model`) sit above forge integration (`pkg/forge`, `pkg/github`, `pkg/change`) and sandbox runtimes (`pkg/granule`, `pkg/sandboxaccess`, `pkg/k8s`). `pkg/granule` and `pkg/sandboxaccess` import nothing from `pkg/model`. The CI workflow engine under `pkg/grit/...` imports no grain-core packages (`pkg/grit/independence_test.go`), keeping CI isolated as a package boundary inside the controller process without a separate CI service.
@@ -178,7 +178,7 @@ Long-polling waits are bounded by the controller. `grain ci wait` and `grain ci 
 
 **Local socket and remote dial-out.** On the controller machine, `grain daemon` connects to `/run/grain-hostd/hostd.sock`. On a remote workstation (`grain hostd -server <url>`), `hostd` dials out to `/api/hostd/connect` (`pkg/hostd/dialout.go`, `pkg/hostd/remote.go`), upgrading HTTPS with WebSocket handshake headers (`pkg/tunnel/wsupgrade`) so reverse proxies and IAP pass the stream with no inbound ports on the host. Behind IAP, `hostd` sends an OIDC ID token in `Authorization: Bearer` and its `hostd` token in `X-Grain-Hostd-Token`, then runs a multiplexed `pkg/tunnel/mux` session.
 
-In the target multi-`hostd` design (see *Where each piece stands* for what is implemented versus in progress), each `hostd` is registered in Settings with a name, an owner, labels, and a unique token; work routes by an explicit pin (such as `hostd: build-box-1`) or label selector, and model connection concurrency leases key by `(connection, hostd)` so a rate-limit pause on one user's login pauses only that host. Alongside `hostd`, `pkg/modelexec` (`/api/executors/connect`) supports named remote model executors with per-executor tokens (`executor_token`), remote workspace staging, and multiplexed MCP and capability tunnel streams.
+In the target multi-`hostd` design (see *Where each piece stands* for what is implemented versus in progress), each `hostd` is registered in Settings with a name, an owner, labels, and a unique token; work routes by an explicit pin (such as `hostd: build-box-1`) or label selector, and model connection concurrency leases key by `(connection, hostd)` so a rate-limit pause on one user's login pauses only that host.
 
 **What runs on `hostd`.**
 
@@ -220,7 +220,7 @@ If `hostd` is unreachable or lacks the detached entry, `detached` falls back to 
 - **`codex`:** served by a per-run stateless Streamable HTTP loopback adapter with a 256-bit bearer token, rejecting unexpected `Host` headers, browser `Origin` headers, and other runs' tokens, with tools snapshotted at startup. When detached, `grain codex-detached` hosts that adapter beside `codex.bin` on the host ([`docs/codex-isolation.md`](../../docs/codex-isolation.md)).
 - **`agy`:** forks `grain mcpserver` and its `PreToolUse` confinement hook from `/usr/local/bin/grain` on the host.
 
-Over a remote executor connection, `mcpserver` calls travel on an MCP tunnel stream admitted only for `argv` grants issued to active runs on that connection (`pkg/modelexec/mcpgrants.go`). `mcpserver` retries controller restarts for up to two minutes.
+`mcpserver` retries controller restarts for up to two minutes.
 
 **Splitting the agent surface.** Runs with a sandbox default to `-mcp-surface=control`, dividing tools by what may safely be called from inside the untrusted guest ([`docs/agent-api.md`](../../docs/agent-api.md)):
 
@@ -371,7 +371,7 @@ As of this writing, implementation status on `main` is:
 | Declarative settings, `grain/config` sync, and sealed `secrets.enc` | Implemented | [`settings.design.md`](settings.design.md), [`design/spec/settings/`](../spec/settings/) |
 | Sandbox-access mTLS channel, acceptor, and CI step cursor reattach | Implemented (in-cluster `kubernetes-granule` wrappers dial out; off-cluster pools use `kubectl exec` and `granule forward`) | [§2 Sandboxes](#2-sandboxes), [`docs/sandbox-image-contract.md`](../../docs/sandbox-image-contract.md) |
 | `hostd` allowlist, protocol 3 detached runs, spool cursors, drain, and versioned upgrade | Implemented | [§3 `grain hostd`](#3-grain-hostd), [`docs/non-disruptive-upgrade.md`](../../docs/non-disruptive-upgrade.md) |
-| `hostd` remote dial-in, multi-`hostd` registry, and placement selectors | In progress — single remote `hostd` dial-in (`pkg/hostd/dialout.go`, `pkg/hostd/remote.go`) and multi-node model executors (`pkg/modelexec`) are implemented; unifying them into one multi-`hostd` registry with label/pin placement and disconnect holds remains | [§3 `grain hostd`](#3-grain-hostd) |
+| `hostd` remote dial-in, multi-`hostd` registry, and placement selectors | In progress — single remote `hostd` dial-in (`pkg/hostd/dialout.go`, `pkg/hostd/remote.go`) is implemented; a multi-`hostd` registry (named remote `hostd`s, each with its own token and owner) with label/pin placement and disconnect holds remains. The remote model executors (`pkg/modelexec`) that once covered several remote hosts were removed | [§3 `grain hostd`](#3-grain-hostd) |
 | `/fs/` virtual namespace (`ci://`, `src://`, `task://`, `config://`, `memory://`, `deploy://`) | Implemented | [§2 Sandboxes](#2-sandboxes) (`pkg/namespace`) |
 | In-sandbox `grain` CLI (`/cli/`, `/cap/`) and shrunken MCP control set | Implemented | [`docs/agent-api.md`](../../docs/agent-api.md), [`docs/capabilities-spec.md`](../../docs/capabilities-spec.md) |
 | Durable tasks, suspensions (`resume_later`), goals, and operator notifications | Implemented | [§A task's lifecycle](#a-tasks-lifecycle) (`pkg/model`, `pkg/orchestrator`) |
