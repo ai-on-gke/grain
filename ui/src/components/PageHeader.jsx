@@ -334,30 +334,39 @@ export default function PageHeader({
     // The slot clips with overflow, which a browser still scrolls to
     // show what is focused in it: Tab onto an action wrapped behind
     // "more" scrolled the rail to that row and left it there, the
-    // search box and count gone from it until a reload. Closed, the slot
-    // only ever shows its first line; a keyboard stop on a later one
-    // opens the menu instead, with focus left where it landed.
-    const onScroll = () => {
-      if (!node.classList.contains("page-header-slot-expanded")) {
-        node.scrollTop = 0;
-      }
+    // search box and count gone from it until a reload. A keyboard stop
+    // on a wrapped row opens the menu instead, with focus left where it
+    // landed, and the slot is back on its first line when it closes. A
+    // pointer cannot reach a clipped row, so only a Tab counts.
+    let tabbed = false;
+    const onKeyDown = (event) => {
+      tabbed = event.key === "Tab";
+    };
+    const onPointerDown = () => {
+      tabbed = false;
     };
     const onFocusIn = (event) => {
       if (node.classList.contains("page-header-slot-expanded")) return;
+      if (!tabbed) return;
       const top =
         event.target.getBoundingClientRect().top -
         node.getBoundingClientRect().top +
         node.scrollTop;
-      node.scrollTop = 0;
-      if (top >= node.clientHeight) setExpanded(true);
+      if (top >= node.clientHeight) {
+        node.scrollTop = 0;
+        setExpanded(true);
+      }
     };
-    node.addEventListener("scroll", onScroll);
     node.addEventListener("focusin", onFocusIn);
+    document.addEventListener("keydown", onKeyDown, true);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    const stopFocus = () => {
+      node.removeEventListener("focusin", onFocusIn);
+      document.removeEventListener("keydown", onKeyDown, true);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+    };
     if (typeof ResizeObserver === "undefined") {
-      return () => {
-        node.removeEventListener("scroll", onScroll);
-        node.removeEventListener("focusin", onFocusIn);
-      };
+      return stopFocus;
     }
     const observer = new ResizeObserver(measure);
     observer.observe(node);
@@ -368,8 +377,7 @@ export default function PageHeader({
     watchChildren.observe(node, { childList: true, subtree: true });
     for (const child of node.children) observer.observe(child);
     return () => {
-      node.removeEventListener("scroll", onScroll);
-      node.removeEventListener("focusin", onFocusIn);
+      stopFocus();
       observer.disconnect();
       watchChildren.disconnect();
     };
