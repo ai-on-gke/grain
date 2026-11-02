@@ -554,20 +554,41 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     89,
+		Description: "rebuild merge_batch keyed by task as well as branch: one overlap re-check per change",
+		// Neither engine changes a primary key in place. The rows are
+		// copied out to a table with no constraints at all (CREATE TABLE
+		// ... AS, so that no constraint name is left behind to collide
+		// with the new table's on Postgres), and back into merge_batch
+		// created afresh from the statement a new store uses.
+		Statements: []string{
+			"CREATE TABLE `merge_batch_v88` AS SELECT * FROM `merge_batch`",
+			"DROP TABLE `merge_batch`",
+			mergeBatchTable,
+			"INSERT INTO `merge_batch` (`owner`,`name`,`branch`,`task_id`,`ref`,`base_commit`,`commit`," +
+				"`members`,`run_id`,`started_at`,`finished_at`,`conclusion`,`detail`,`splits`,`queued`," +
+				"`recheck_of`,`recheck_detail`,`recheck_at`) " +
+				"SELECT `owner`,`name`,`branch`,'',`ref`,`base_commit`,`commit`," +
+				"`members`,`run_id`,`started_at`,`finished_at`,`conclusion`,`detail`,`splits`,`queued`," +
+				"`recheck_of`,`recheck_detail`,`recheck_at` FROM `merge_batch_v88`",
+			"DROP TABLE `merge_batch_v88`",
+		},
+	},
+	{
+		Version:     90,
 		Description: "add a *_source column beside every principal's *_kind/*_id pair, task_event's on-behalf-of, and config_audit (operator-attribution spec §1.3, §7.1)",
 		Statements: append([]string{
 			// task_pause and task_event postdate the 2.0 baseline and
 			// Init's CREATE TABLE IF NOT EXISTS made them in place, so a
 			// store this old may not have them yet: create them in the
-			// shape schema 88 knew first, so that the ALTERs below meet
+			// shape schema 89 knew first, so that the ALTERs below meet
 			// the same table whichever store they run on.
-			schema88TaskPauseTable,
-			schema88TaskEventTable,
+			schema89TaskPauseTable,
+			schema89TaskEventTable,
 		}, principalSourceColumns()...),
 	},
 }
 
-// principalSourceColumns are migration 89's ALTERs: `<p>_source` beside
+// principalSourceColumns are migration 90's ALTERs: `<p>_source` beside
 // every stored principal, `”` for every row already there.
 func principalSourceColumns() []string {
 	cols := []struct{ table, column string }{
@@ -595,9 +616,9 @@ func principalSourceColumns() []string {
 	return out
 }
 
-// schema88TaskPauseTable and schema88TaskEventTable are task_pause and
-// task_event as schema 88 created them, frozen for migration 89.
-const schema88TaskPauseTable = `CREATE TABLE IF NOT EXISTS ` + "`task_pause`" + ` (
+// schema89TaskPauseTable and schema89TaskEventTable are task_pause and
+// task_event as schema 89 created them, frozen for migration 90.
+const schema89TaskPauseTable = `CREATE TABLE IF NOT EXISTS ` + "`task_pause`" + ` (
   ` + "`task_id`" + `           TEXT     NOT NULL,
   ` + "`paused_at`" + `         DATETIME NOT NULL,
   ` + "`paused_by_kind`" + `    TEXT     NOT NULL,
@@ -609,7 +630,7 @@ const schema88TaskPauseTable = `CREATE TABLE IF NOT EXISTS ` + "`task_pause`" + 
   PRIMARY KEY (` + "`task_id`" + `)
 )`
 
-const schema88TaskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
+const schema89TaskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
   ` + "`id`" + `         INTEGER PRIMARY KEY AUTOINCREMENT,
   ` + "`task_id`" + `    TEXT     NOT NULL,
   ` + "`kind`" + `       TEXT     NOT NULL,

@@ -25,11 +25,11 @@ import (
 )
 
 // operator is the {human, operator} every write recorded before
-// migration 89, with no source.
+// migration 90, with no source.
 var operator = model.Principal{Kind: model.PrincipalHuman, ID: "operator"}
 
 // seedPrincipalRows writes one row with operator, given source, in it to
-// every table migration 89 gives a source column.
+// every table migration 90 gives a source column.
 func seedPrincipalRows(t *testing.T, ctx context.Context, store *model.Store, source model.AuthSource) {
 	t.Helper()
 	operator := operator
@@ -135,17 +135,17 @@ func checkPrincipalRows(t *testing.T, ctx context.Context, store *model.Store, w
 	}
 }
 
-// TestMigration89AddsPrincipalSourcesWithoutRewritingRows is
-// operator-attribution spec §7.1: a schema-88 store gains every *_source
+// TestMigration90AddsPrincipalSourcesWithoutRewritingRows is
+// operator-attribution spec §7.1: a schema-89 store gains every *_source
 // column and config_audit, every row it held reads back with an empty
 // source, and a row written afterwards keeps the source it was given.
-func TestMigration89AddsPrincipalSourcesWithoutRewritingRows(t *testing.T) {
+func TestMigration90AddsPrincipalSourcesWithoutRewritingRows(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 	seedPrincipalRows(t, ctx, store, "")
-	rewindToSchema88(t, ctx, db)
+	rewindToSchema89(t, ctx, db)
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-88 store: %v", err)
+		t.Fatalf("migrating a version-89 store: %v", err)
 	}
 	checkPrincipalRows(t, ctx, store, "")
 
@@ -169,9 +169,9 @@ func TestMigration89AddsPrincipalSourcesWithoutRewritingRows(t *testing.T) {
 	}
 }
 
-// rewindToSchema88 makes a migrated store look like one schema 88 wrote:
-// no views, none of migration 89's columns, no config_audit, stamped 88.
-func rewindToSchema88(t *testing.T, ctx context.Context, db *sql.DB) {
+// rewindToSchema89 makes a migrated store look like one schema 89 wrote:
+// no views, none of migration 90's columns, no config_audit, stamped 89.
+func rewindToSchema89(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
 	rows, err := db.QueryContext(ctx, "SELECT `name` FROM `sqlite_master` WHERE `type` = 'view'")
 	if err != nil {
@@ -193,8 +193,8 @@ func rewindToSchema88(t *testing.T, ctx context.Context, db *sql.DB) {
 		}
 	}
 	m := model.Migrations[len(model.Migrations)-1]
-	if m.Version != 89 {
-		t.Fatalf("the last migration is %d, not 89: rewind from the right one", m.Version)
+	if m.Version != 90 {
+		t.Fatalf("the last migration is %d, not 90: rewind from the right one", m.Version)
 	}
 	for _, stmt := range m.Statements {
 		table, after, ok := strings.Cut(strings.TrimPrefix(stmt, "ALTER TABLE `"), "` ADD COLUMN `")
@@ -209,7 +209,7 @@ func rewindToSchema88(t *testing.T, ctx context.Context, db *sql.DB) {
 	if _, err := db.ExecContext(ctx, "DROP TABLE `config_audit`"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 88 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 89 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 }

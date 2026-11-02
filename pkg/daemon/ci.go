@@ -2195,13 +2195,14 @@ func ciDeclaredSource(store *model.Store) ci.Source {
 const ciQueueHeadsTTL = 5 * time.Second
 
 // ciMergeQueuePriority is how this deployment ranks one CI run against
-// another at the job gate: the change at the front of its repository's
-// merge queue for its base branch goes first, because its verdict is the
-// one that unblocks everything queued behind it (ci.PriorityMergeHead,
-// grain/task-316).
+// another at the job gate: a change in a merge queue that merges as soon
+// as its CI passes goes first, because its verdict is the one that turns
+// into a merge (ci.PriorityMergeHead, grain/task-316). Every such member
+// of a lane ranks the same: members merge independently of each other,
+// so no one of them is the front the rest wait on.
 //
 // The heads come from orchestrator.MergeQueueHeads, so this is grain's own
-// queue order rather than a second opinion about it. Everything else --
+// reading of the queue rather than a second opinion about it. Everything else --
 // what the number means, how age eventually beats it, what happens to a
 // job that does not fit -- is pkg/ci's, which is told a number and nothing
 // about merge queues.
