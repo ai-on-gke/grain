@@ -1,0 +1,54 @@
+# after the fixes (this branch's grain-sandbox)
+$ grain log -n 1
+  exit=1 proxy=[GET /fs/deploy/grain.log?max_lines=1;]
+  | grain: forbidden: deploy://grain.log: that tool belongs to the "grain-log" capability, and this run does not hold it (this run does not hold the "grain-log" capability). Nothing you can do from inside this run will add it -- a human attaches it to the task.
+$ grain log -n x
+  exit=2 proxy=[none]
+  | grain log: -n "x" is not a count: it takes a non-negative integer
+$ grain ls
+  exit=2 proxy=[none]
+  | grain ls: missing <uri>; run 'grain ls --help' for usage
+$ grain read
+  exit=2 proxy=[none]
+  | grain read: missing <uri>; run 'grain read --help' for usage
+$ grain grep x
+  exit=2 proxy=[none]
+  | grain grep: missing <uri>; run 'grain grep --help' for usage
+$ grain ci show
+  exit=2 proxy=[none]
+  | grain ci show: missing <run-id>; run 'grain ci show --help' for usage
+$ grain task prompt
+  exit=2 proxy=[none]
+  | grain task prompt: missing <id>; run 'grain task prompt --help' for usage
+$ grain task wait
+  exit=2 proxy=[none]
+  | grain task wait: missing <id>...: name at least one task to wait on; run 'grain task wait --help' for usage
+$ grain quarantine
+  exit=2 proxy=[none]
+  | grain quarantine: missing <test-name>; run 'grain quarantine --help' for usage
+$ grain status
+  exit=2 proxy=[none]
+  | grain status: missing <one-line-note> (or --file); run 'grain status --help' for usage
+$ grain memory doc
+  exit=2 proxy=[none]
+  | grain memory doc: the command is 'grain memory doc write' (or doc-write)
+  | 
+  | grain memory (list | read <path> | write [--repo o/n] <text|--file f> | doc-write <name> <body|--file f>)
+$ grain ci frob
+  exit=2 proxy=[none]
+  | grain ci: unknown command "frob"
+  | 
+  | grain ci (list | show | log | test-history | artifact | wait | run-job | retrigger) ...
+  | 
+$ grain read deploy://pipeline-changes --page 0
+  exit=2 proxy=[none]
+  | grain read: --page "0" is not a page size: it takes a positive integer
+$ grain read deploy://pipeline-changes --page 00
+  exit=2 proxy=[none]
+  | grain read: --page "00" is not a page size: it takes a positive integer
+$ grain read deploy://pipeline-changes --page 2
+  exit=0 proxy=[GET /fs/deploy/pipeline-changes?page=2;]
+  | task 15 task filed→awaiting_submit 2026-11-01T06:25:29Z
+  | task 16 task →filed 2026-11-01T06:55:29Z
+  | (more changes follow: read again with this cursor)
+  | next: grain read deploy://pipeline-changes --cursor 2026-11-01T06:55:29.705586094Z~0 --page 2

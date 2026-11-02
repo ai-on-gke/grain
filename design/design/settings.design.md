@@ -46,15 +46,15 @@ Write routing is enforced centrally in `pkg/ui/config_refusal.go` (`configRepoFo
 | Category | Mode 2: Internal Unlocked | Mode 3: Internal Locked | Mode 4: External Repo | Stored in `grain/config`? |
 | --- | --- | --- | --- | --- |
 | **Bootstrap (`Models`, `Sandboxes`)** | UI/API + config PR (`SyncAfterWrite`) | **UI/API** (lock-exempt; `SyncAfterWrite`) + config PR | External config PR (`409` on API) | **Yes** (`tables/grain_config.json`, without secrets) |
-| **Bootstrap host-local (`Executors`, model credentials)** | UI/API | **UI/API** (lock-exempt) | **UI/API** (host-local) | **Never** (`executor_token`, `<data-dir>/secrets`) |
+| **Bootstrap host-local (model credentials)** | UI/API | **UI/API** (lock-exempt) | **UI/API** (host-local) | **Never** (`<data-dir>/secrets`) |
 | **Config-managed (`General`, `Git`, `Repositories`, `Tasks`, `Agents`, `Capabilities`, `CI`, `Memory`, `Caches`, `Engine`, `Boards`, `Processes`)** | UI/API + config PR (`SyncAfterWrite`) | `grain/config` PR only (`409` on API) | External config PR only (`409` on API) | **Yes** (`settings/*.yml`, `tables/*.json`, `memory/**`, `scripts/**`, `workflows/**`) |
 | **Write-only secrets (`Legacy capabilities`, git tokens/keys, capability secrets)** | UI / `request_secret` | **UI / `request_secret`** | **UI / `request_secret`** | **Never** (`<data-dir>/secrets`; `$secret:<name>` refs only) |
 | **Access & Browser preferences (`Access`, `Preferences`)** | Local UI/API or `localStorage` | **Local** UI/API or `localStorage` | **Local** UI/API or `localStorage` | **Never** |
 | **Repository-declared (`.grain/` in target repo)** | Target-repo PR overrides | Target-repo PR overrides | Target-repo PR overrides | Derived cache only; target repo's default branch wins |
 
-### Bootstrap settings (`Models`, `Sandboxes`, `Executors` — `SETTINGS_GROUPS` `"bootstrap"`)
+### Bootstrap settings (`Models`, `Sandboxes` — `SETTINGS_GROUPS` `"bootstrap"`)
 
-A deployment must be able to bring up model connections/defaults (`agent_backends`, `default_model`, `model_settings`, `judgement_model`), sandbox infrastructure/capacity/images/network/CLI run locations (`sandbox_*`, `k8s_*`, `cli_run`, `network_access`, `max_workers`), and remote executors (`Executors`) before it can run tasks or fix `grain/config`. Non-secret `Models` and `Sandboxes` fields (`clearBootstrap` in `pkg/ui/config_bootstrap.go`, guarded by `checkBootstrapWritable`) stay UI/API-writable when `settings_locked: true` and export to `tables/grain_config.json` (moving to external-repo PRs only in Mode 4). Model credentials (`PUT /api/agent-backends/{id}/credential` → `<data-dir>/secrets`) and dynamic `Executors` join tokens (`executor_token`, excluded from `SettingsTables`) never export to Git and stay UI-mutable in all modes, even when an external config repo is unreachable.
+A deployment must be able to bring up model connections/defaults (`agent_backends`, `default_model`, `model_settings`, `judgement_model`), sandbox infrastructure/capacity/images/network/CLI run locations (`sandbox_*`, `k8s_*`, `cli_run`, `network_access`, `max_workers`) before it can run tasks or fix `grain/config`. Non-secret `Models` and `Sandboxes` fields (`clearBootstrap` in `pkg/ui/config_bootstrap.go`, guarded by `checkBootstrapWritable`) stay UI/API-writable when `settings_locked: true` and export to `tables/grain_config.json` (moving to external-repo PRs only in Mode 4). Model credentials (`PUT /api/agent-backends/{id}/credential` → `<data-dir>/secrets`) and dynamic `Executors` join tokens (`executor_token`, excluded from `SettingsTables`) never export to Git and stay UI-mutable in all modes, even when an external config repo is unreachable.
 
 ### Config-managed deployment, repo, and composed settings
 

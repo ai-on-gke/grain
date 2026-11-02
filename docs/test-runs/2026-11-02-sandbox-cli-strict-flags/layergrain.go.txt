@@ -1,0 +1,7 @@
+// layergrain is a layer-like build: a module of its own that requires
+// grain core and runs core's CLI.
+package main
+
+import "github.com/ai-on-gke/grain/pkg/cli"
+
+func main() { cli.Main() }

@@ -33,7 +33,7 @@ import (
 // director and steward among them. Migrations 67-82 left
 // repo_config.ci_capabilities alone, and migration 83 rewrites past
 // retirements there via rewriteCapabilityListColumnMulti (a retirement
-// after it, such as migration 84's self-repair, rewrites that column
+// after it, such as migration 84's self-repair or 86's corp-research, rewrites that column
 // itself); earlier
 // migrations do not change, since stores already past them will not
 // re-run them.
@@ -217,7 +217,7 @@ func rewriteConsoleSessionGrantsMulti(ctx context.Context, tx *sql.Tx, renames m
 	return nil
 }
 
-// foldRetiredCatalogueInProcess is migration 86's Up: it moves retired 1-to-1
+// foldRetiredCatalogueInProcess is migration 88's Up: it moves retired 1-to-1
 // preset capability entries in grain_config.capability_policy's catalogue from
 // inProcess[<retired>] into apiScopes.presets[<preset>], merging restrictions
 // conservatively when both exist, and rewrites retired task defaults in the

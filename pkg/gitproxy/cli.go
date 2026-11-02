@@ -185,7 +185,7 @@ func (p *GitProxy) serveCLIRoute(w http.ResponseWriter, r *http.Request, scope n
 		p.serveIssues(w, r, scope, strings.TrimPrefix(strings.TrimPrefix(route, "issues"), "/"))
 	case route == "db/query":
 		if !scope.MayReadDB {
-			cliError(w, namespace.RefuseCapability("grain db query", "db-read"))
+			cliError(w, namespace.RefuseCapability("grain db query", "https://grain.dev/capabilities/grain#sql"))
 			return
 		}
 		p.serveDBQuery(w, r, scope)

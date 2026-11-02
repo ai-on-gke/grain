@@ -169,6 +169,7 @@ What each mint returns:
 
 - **`host-script`** is described in its own section below.
 - An edition linked into grain may register built-in servers of its own (`intree.Register`), documented with that edition; a host-only one runs through grain hostd from the start.
+- An edition may also ship a hostd allowlist entry that is not a capability server's: one that runs some other grain subcommand on the host. It registers it from its own `init()` with `intree.RegisterHostdEntry(hostd.BuiltinEntry{Name: ..., Args: [...], MaxDuration: time.Minute})`. `BuiltinEntry` can also set `Env` (names the daemon may set) and `PassEnv` (replacing the default corp proxy variables), and an unset `MaxDuration` leaves hostd's default. The entry then becomes one of `intree.HostdBuiltins`, so `grain hostd -ensure-builtins` adds it on the next hostd start or upgrade, with the same rules as grain's other entries: it is added only when the allowlist has no entry of that name, and an operator's edit is kept, with the drift logged. Settings and Health offer its text when it is missing. Registering a name twice, or the name of a capability server's entry (`host-git`, `grain-<name>`), panics. The edition's installer must still write the entry for a fresh install. Its tests should call `hostd.CheckInstallerEntries(installerText, command, intree.HostdBuiltins())`, as core's `tests/deploy` does for `scripts/setup.sh`, so the installer and the registration cannot disagree. Do not rely on `setup.sh` alone: an in-place upgrade never re-runs it.
 
 ### Host scripts (`grain capability host-script`)
 
@@ -199,6 +200,27 @@ What each mint returns:
 - **Release** revokes the token, kills calls still running, waits up to 10 seconds for them to record how they ended, and removes the grant's directory. The command then exits 125, saying the grant was released.
 
 A grant's ports are forwarded into the sandbox through the deployment's capability port relay (§5.3), and a mint returning ports is refused where there is none. The servers can also be exercised directly over stdio, or with `protocol.Attach`.
+
+## In-process methods contributed by a build (`capability.Register`)
+
+Some grants are answered inside grain itself rather than by an MCP server subprocess: core's own `https://grain.dev/capabilities/grain` server (`grain#journal`, `grain#health`, `grain#sql`, `grain#host-exec`) is one. A build that imports core, such as a wrapper distribution, can add methods of its own in-process server through [`capability.Register`](../pkg/capability/methods.go), from `init()`, without core naming it:
+
+```go
+capability.Register(capability.Method{
+	Server:    "https://grain.dev/capabilities/corp",
+	Spec:      protocol.MethodSpec{Name: "research", Description: "...", Mint: mint},
+	Name:      "Corp research",
+	RunGrant:  true,                      // forward the grant to the run (agent.RunConfig.Grants)
+	DefaultOn: true,                      // seed it into a fresh deployment's defaults and the director's
+	Aliases:   []string{"corp-research"}, // retired bare names CanonicalLegacyGrant rewrites to the grant
+})
+```
+
+- **Resolved and listed like `…/grain`.** `grainserver.Lookup` builds the server from every method registered on its ID, so admission normalizes and mints a grant of it with no `mcpServers` entry. `grainserver.IsInProcessGrant` treats it as in-process: it opens no listener, so it needs no isolated sandbox. `GET /api/capability-methods` lists it beside `…/grain`, so the picker offers it.
+- **The grant.** A method is granted as `<server>#<method>={}`. `RunGrant` forwards that grant, its bare reference and its aliases to the run, and `grain mcpserver` takes it without a warning. `DefaultOn` seeds the grant into `NewDeploymentConfig` and the shipped director session, exactly as `Registration.DefaultOn` does for a provider.
+- **Aliases.** Each alias is registered with `model.RegisterLegacyGrantAlias`, so `CanonicalLegacyGrant(s)` rewrites it wherever a grant is recorded, and a `settings/capabilities.yml` entry naming it binds the method too. The bare name keeps working wherever nothing rewrote it, such as a repository's `.grain` or an older grain/config. Rewriting the rows a store already holds is a migration in core's list (`pkg/model/migrations.go`; migration 86 does it for `corp-research`).
+- **Host tools.** An antigravity `HostToolGrant` is held by a run holding its method under any spelling: recorded, bare, or a registered alias. Its `Capability` may be the method grant or the retired bare name.
+- **What it cannot do.** A build cannot add methods to core's own `…/grain` or `…/repo` servers, and an alias cannot shadow one of core's retired names. `Register` panics on either.
 
 ## Google Chat (`gchat#post`)
 

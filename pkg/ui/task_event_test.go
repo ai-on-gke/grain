@@ -202,3 +202,45 @@ func TestAgentCloseAndReopenRecordActingReasonHeader(t *testing.T) {
 		t.Fatalf("events = %+v, want close and reopen carrying ActingReasonHeader", events)
 	}
 }
+
+// Closing a task that is already closed records nothing, and leaves the
+// closure where it was: a no-op close used to re-stamp ClosedAt, so the
+// timeline showed the recorded close and, beside it, a second closed
+// step with nobody on it (found walking docs/test-plans/2026-11-02.md §5).
+func TestClosingAClosedTaskLeavesItsOneAttributedClose(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := testClient(t)
+	task := create(t, client, ctx)
+
+	closedAt := baseTime.Add(10 * time.Minute)
+	client.Now = func() time.Time { return closedAt }
+	bob := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "bob@example.com"})
+	if err := client.Close(bob, task.ID, ui.CloseOptions{Reason: "cycling in-flight tasks"}); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	client.Now = func() time.Time { return closedAt.Add(time.Minute) }
+	if err := client.Close(ctx, task.ID, ui.CloseOptions{Reason: "closing again"}); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	events, err := store.TaskEvents(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %+v, want bob's one close", events)
+	}
+	detail, err := client.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var closed []ui.Transition
+	for _, tr := range detail.Transitions {
+		if tr.State == model.StateClosed {
+			closed = append(closed, tr)
+		}
+	}
+	if len(closed) != 1 || closed[0].By != "human bob@example.com" || !closed[0].At.Equal(closedAt) {
+		t.Fatalf("closed steps = %+v, want bob's one close at %s", closed, closedAt)
+	}
+}

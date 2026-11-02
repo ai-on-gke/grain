@@ -663,7 +663,6 @@ func (f *Framework) mcpServerArgs(ctx context.Context, cfg agent.RunConfig) ([]s
 	args = append(args, agent.InteractiveArgs(cfg)...)
 	args = append(args, agent.AddendaArgs(cfg)...)
 	args = append(args, agent.RunDeadlineArgs(ctx, cfg)...)
-	agent.AuthorizeMCPArgs(f.host, args)
 	return args, nil
 }
 
@@ -792,7 +791,14 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 			return nil, fmt.Errorf("claude: starting the MCP endpoint: %w", err)
 		}
 		defer endpoint.Close()
-		configPath, err = writeMCPConfigJSON(ctx, f.host, httpMCPConfigJSON(endpoint.URL, endpoint.Token, servers...))
+		// A CLI on another machine reaches it carried to its own
+		// loopback (agent.CarryMCPEndpoint); any other, where it is.
+		mcpURL, releaseMCP, err := agent.CarryMCPEndpoint(f.host, endpoint.URL, endpoint.Token)
+		if err != nil {
+			return nil, fmt.Errorf("claude: %w", err)
+		}
+		defer releaseMCP()
+		configPath, err = writeMCPConfigJSON(ctx, f.host, httpMCPConfigJSON(mcpURL, endpoint.Token, servers...))
 		if err != nil {
 			return nil, err
 		}
@@ -866,7 +872,8 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 	if err != nil {
 		stopRecord = ""
 	}
-	stopSettings, err := writeStopSettings(ctx, f.host, f.grainBinaryPath, cfg.Interactive, stopRecord)
+	// The hook is forked by claude, on claude's machine.
+	stopSettings, err := writeStopSettings(ctx, f.host, agent.HookBinary(f.host, f.grainBinaryPath), cfg.Interactive, stopRecord)
 	if err != nil {
 		stopSettings = ""
 	} else {

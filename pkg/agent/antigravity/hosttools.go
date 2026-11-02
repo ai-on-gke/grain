@@ -18,7 +18,10 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
+
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // HostToolGrant is a capability grant that admits a fixed, read-only
@@ -32,8 +35,13 @@ import (
 // package outside core registers one from init()
 // (RegisterHostToolGrant); core antigravity knows none by name.
 type HostToolGrant struct {
-	// Capability is the grant name a run must hold
-	// (agent.RunConfig.Grants), which the hook's own command carries.
+	// Capability is the grant a run must hold (agent.RunConfig.Grants),
+	// which the hook's own command carries. A capability server method's
+	// reference or grant (https://grain.dev/capabilities/corp#research={})
+	// is held by a grant of that method whatever its arguments, and by any
+	// retired bare name model.CanonicalLegacyGrant rewrites to one; a bare
+	// name is held by itself and by what it was retired to
+	// (heldHostToolGrants).
 	Capability string
 	// Tools is the whole allowlist, spelled as agy names its native
 	// tools in a pre-tool hook payload. Nothing a task, a template or a
@@ -93,15 +101,33 @@ func registeredHostToolGrants() []HostToolGrant {
 	return out
 }
 
-// heldHostToolGrants is the registered grants among grants.
+// heldHostToolGrants is the registered grants among grants, each
+// matched by what it grants rather than by its spelling (hostToolGrantKey).
 func heldHostToolGrants(grants []string) []HostToolGrant {
+	keys := make([]string, 0, len(grants))
+	for _, grant := range grants {
+		keys = append(keys, hostToolGrantKey(grant))
+	}
 	var held []HostToolGrant
 	for _, g := range registeredHostToolGrants() {
-		if slices.Contains(grants, g.Capability) {
+		if slices.Contains(grants, g.Capability) || slices.Contains(keys, hostToolGrantKey(g.Capability)) {
 			held = append(held, g)
 		}
 	}
 	return held
+}
+
+// hostToolGrantKey is what grant opens a host-tool grant by: a retired bare
+// name as what it became (model.CanonicalLegacyGrant), and a capability
+// server method's grant as its reference alone, its arguments dropped. So
+// bare corp-research, a recorded corp#research={} and a bare corp#research
+// all have one key once corp-research is a registered alias of the method.
+func hostToolGrantKey(grant string) string {
+	canonical := strings.TrimSpace(model.CanonicalLegacyGrant(grant))
+	if model.IsCapabilityRef(canonical) {
+		return model.CapabilityGrantRef(canonical)
+	}
+	return canonical
 }
 
 // hostToolGrantFor is the registered grant whose allowlist names tool.

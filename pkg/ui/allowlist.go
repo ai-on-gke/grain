@@ -29,6 +29,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
 
@@ -44,6 +45,14 @@ const (
 	// membership results are cached.
 	DefaultGroupMembershipCacheTTL = 5 * time.Minute
 )
+
+// cloudIdentityTimeout bounds each call the default group checker makes,
+// the token fetch included. Without it the ADC client is
+// http.DefaultClient underneath, and a token endpoint or Cloud Identity
+// that accepts the connection and never answers held every caller that
+// depends on a group: entry -- and every later one queued behind the token
+// source's lock -- indefinitely, rather than refusing them.
+var cloudIdentityTimeout = 10 * time.Second
 
 // GroupMemberChecker resolves whether memberEmail belongs to groupEmail.
 type GroupMemberChecker interface {
@@ -106,18 +115,183 @@ func ParseAllowedPrincipals(entries []string) ([]AllowedPrincipalEntry, error) {
 	return out, nil
 }
 
+// GCPKeyPoolEmails returns the normalized service-account emails belonging to
+// a gcp-key agent account pool: both the configured base address and every
+// numbered pool account gcpkey.PoolEmails derives from it. Keys for these
+// accounts are materialized into task sandboxes, so they must never be admitted
+// as verified UI/API principals.
+func GCPKeyPoolEmails(email string, count int, projectID string) []string {
+	email = strings.TrimSpace(email)
+	projectID = strings.TrimSpace(projectID)
+	if email == "" {
+		return nil
+	}
+	qualify := func(addr string) string {
+		addr = normalizeIdentityEmail(addr)
+		addr = strings.TrimPrefix(addr, "serviceaccount:")
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			return ""
+		}
+		if !strings.Contains(addr, "@") && projectID != "" {
+			addr = addr + "@" + strings.ToLower(projectID) + ".iam.gserviceaccount.com"
+		}
+		return addr
+	}
+	var out []string
+	seen := map[string]bool{}
+	add := func(addr string) {
+		q := qualify(addr)
+		if q == "" || seen[q] {
+			return
+		}
+		seen[q] = true
+		out = append(out, q)
+	}
+	add(email)
+	for _, sa := range gcpkey.PoolEmails(email, count, projectID) {
+		add(sa)
+	}
+	return out
+}
+
+// RejectGCPKeyPoolAllowedPrincipals refuses any explicit serviceAccount: entry
+// in entries that names one of gcpPoolEmails.
+func RejectGCPKeyPoolAllowedPrincipals(entries []AllowedPrincipalEntry, gcpPoolEmails []string) error {
+	if len(entries) == 0 || len(gcpPoolEmails) == 0 {
+		return nil
+	}
+	pool := make(map[string]bool, len(gcpPoolEmails))
+	for _, sa := range gcpPoolEmails {
+		norm := normalizeIdentityEmail(sa)
+		norm = strings.TrimPrefix(norm, "serviceaccount:")
+		norm = strings.TrimSpace(norm)
+		if norm != "" {
+			pool[norm] = true
+		}
+	}
+	for _, e := range entries {
+		if e.Prefix == "serviceAccount" && pool[e.Value] {
+			return fmt.Errorf(
+				"invalid allowed principal %q: %s is a gcp-key agent service account whose key is materialized into task sandboxes and cannot be admitted as an operator",
+				e.Prefix+":"+e.Value, e.Value,
+			)
+		}
+	}
+	return nil
+}
+
+// ValidateAllowedPrincipals parses entries with ParseAllowedPrincipals and
+// refuses any serviceAccount: entry naming an account in gcpPoolEmails.
+func ValidateAllowedPrincipals(entries []string, gcpPoolEmails []string) ([]AllowedPrincipalEntry, error) {
+	parsed, err := ParseAllowedPrincipals(entries)
+	if err != nil {
+		return nil, err
+	}
+	if err := RejectGCPKeyPoolAllowedPrincipals(parsed, gcpPoolEmails); err != nil {
+		return nil, err
+	}
+	return parsed, nil
+}
+
+func (c *Client) gcpKeyPoolEmailList(ctx context.Context) []string {
+	if c == nil {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	addAll := func(emails []string) {
+		for _, sa := range emails {
+			norm := normalizeIdentityEmail(sa)
+			norm = strings.TrimPrefix(norm, "serviceaccount:")
+			norm = strings.TrimSpace(norm)
+			if norm == "" || seen[norm] {
+				continue
+			}
+			seen[norm] = true
+			out = append(out, norm)
+		}
+	}
+	addAll(c.Config.GCPKeyServiceAccounts)
+	if c.Store != nil {
+		if mc, err := c.Store.GetConfig(ctx); err == nil && mc != nil {
+			addAll(GCPKeyPoolEmails(mc.GCPServiceAccountEmail, mc.GCPServiceAccountCount, mc.GCPProject))
+		}
+	}
+	return out
+}
+
+func (c *Client) gcpKeyPoolSet(ctx context.Context) map[string]bool {
+	list := c.gcpKeyPoolEmailList(ctx)
+	if len(list) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(list))
+	for _, sa := range list {
+		set[sa] = true
+	}
+	return set
+}
+
+// explicitAllowedPrincipalsRaw returns the raw explicit allowlist configured on
+// c or in $GRAIN_ALLOWED_PRINCIPALS, or nil when the default allowlist is in use.
+func (c *Client) explicitAllowedPrincipalsRaw() []string {
+	if c != nil && len(c.Config.AllowedPrincipals) > 0 {
+		return c.Config.AllowedPrincipals
+	}
+	if env := strings.TrimSpace(os.Getenv("GRAIN_ALLOWED_PRINCIPALS")); env != "" {
+		return SplitAllowedPrincipals(env)
+	}
+	return nil
+}
+
+// isExplicitlyAllowedServiceAccount reports whether email is listed explicitly
+// as a serviceAccount: entry in -ui-allowed-principals (or
+// $GRAIN_ALLOWED_PRINCIPALS) and is not a gcp-key agent pool account.
+// Service accounts admitted only by the default allowlist return false.
+func (c *Client) isExplicitlyAllowedServiceAccount(ctx context.Context, email string) bool {
+	raw := c.explicitAllowedPrincipalsRaw()
+	if len(raw) == 0 {
+		return false
+	}
+	norm := normalizeIdentityEmail(email)
+	norm = strings.TrimPrefix(norm, "serviceaccount:")
+	norm = strings.TrimSpace(norm)
+	if norm == "" {
+		return false
+	}
+	entries, err := ValidateAllowedPrincipals(raw, c.gcpKeyPoolEmailList(ctx))
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.Prefix == "serviceAccount" && e.Value == norm {
+			return true
+		}
+	}
+	return false
+}
+
 // defaultAllowedPrincipalEntries builds the default allowlist when neither
 // Config.AllowedPrincipals nor $GRAIN_ALLOWED_PRINCIPALS is set: the
-// deployment owner (Config.Actor) plus the service accounts grain provisions.
+// deployment owner (Config.Actor) plus daemon-owned service accounts whose
+// credentials never enter a sandbox (never the gcp-key agent pool).
 func (s *Server) defaultAllowedPrincipalEntries(ctx context.Context) []AllowedPrincipalEntry {
 	var out []AllowedPrincipalEntry
 	seen := map[string]bool{}
+	var pool map[string]bool
+	if s.tasks != nil {
+		pool = s.tasks.gcpKeyPoolSet(ctx)
+	}
 	add := func(prefix, val string) {
 		val = normalizeIdentityEmail(val)
 		val = strings.TrimPrefix(val, "user:")
 		val = strings.TrimPrefix(val, "serviceaccount:")
 		val = strings.TrimSpace(val)
 		if val == "" {
+			return
+		}
+		if prefix == "serviceAccount" && pool[val] {
 			return
 		}
 		key := prefix + ":" + val
@@ -151,9 +325,6 @@ func (s *Server) defaultAllowedPrincipalEntries(ctx context.Context) []AllowedPr
 		}
 		if s.tasks.Store != nil {
 			if mc, err := s.tasks.Store.GetConfig(ctx); err == nil && mc != nil {
-				for _, sa := range gcpkey.PoolEmails(mc.GCPServiceAccountEmail, mc.GCPServiceAccountCount, mc.GCPProject) {
-					add("serviceAccount", sa)
-				}
 				if proj := strings.TrimSpace(mc.GCPProject); proj != "" {
 					add("serviceAccount", "grain-daemon@"+proj+".iam.gserviceaccount.com")
 				}
@@ -165,19 +336,21 @@ func (s *Server) defaultAllowedPrincipalEntries(ctx context.Context) []AllowedPr
 
 func (s *Server) effectiveAllowedPrincipals(ctx context.Context) ([]AllowedPrincipalEntry, error) {
 	var raw []string
-	if s.tasks != nil && len(s.tasks.Config.AllowedPrincipals) > 0 {
-		raw = s.tasks.Config.AllowedPrincipals
+	var poolEmails []string
+	if s.tasks != nil {
+		raw = s.tasks.explicitAllowedPrincipalsRaw()
+		poolEmails = s.tasks.gcpKeyPoolEmailList(ctx)
 	} else if env := strings.TrimSpace(os.Getenv("GRAIN_ALLOWED_PRINCIPALS")); env != "" {
 		raw = SplitAllowedPrincipals(env)
 	}
 	if len(raw) > 0 {
-		return ParseAllowedPrincipals(raw)
+		return ValidateAllowedPrincipals(raw, poolEmails)
 	}
 	return s.defaultAllowedPrincipalEntries(ctx), nil
 }
 
 // checkAllowedPrincipal verifies that id is admitted by -ui-allowed-principals
-// (or the default owner + provisioned SAs allowlist).
+// (or the default owner + daemon SA allowlist).
 //
 // Direct entries (user:, serviceAccount:, domain:) are checked first. Cloud
 // Identity is called only if at least one group: entry is configured and no
@@ -185,11 +358,17 @@ func (s *Server) effectiveAllowedPrincipals(ctx context.Context) ([]AllowedPrinc
 // Cloud Identity and a failed group lookup refuses only callers that depend on
 // a group: entry to be admitted.
 func (s *Server) checkAllowedPrincipal(ctx context.Context, id VerifiedIdentity) error {
+	email := normalizeIdentityEmail(id.Email)
+	if id.Kind == model.PrincipalService && s.tasks != nil && s.tasks.gcpKeyPoolSet(ctx)[email] {
+		return fmt.Errorf(
+			"principal %q is a gcp-key agent service account whose key is materialized into task sandboxes and cannot be admitted by -ui-allowed-principals",
+			id.Email,
+		)
+	}
 	entries, err := s.effectiveAllowedPrincipals(ctx)
 	if err != nil {
 		return fmt.Errorf("principal %q cannot be authorized: %w", id.Email, err)
 	}
-	email := normalizeIdentityEmail(id.Email)
 	var groups []string
 	for _, e := range entries {
 		switch e.Prefix {
@@ -337,7 +516,17 @@ func (c *CloudIdentityGroupChecker) httpClient(ctx context.Context) (*http.Clien
 	if c.client != nil {
 		return c.client, nil
 	}
-	hc, err := google.DefaultClient(ctx, CloudIdentityGroupsReadonlyScope)
+	// The token source keeps the context it is made with for its own
+	// fetches, so it gets one that outlives this request and carries a
+	// client that gives up on a silent server, not the first caller's.
+	// The bound is on the transport rather than http.Client.Timeout,
+	// which oauth2.NewClient would copy onto the outer client, whose
+	// oauth2.Transport logs a deprecation on every timeout; IsMember's
+	// context bounds the Cloud Identity calls themselves.
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.ResponseHeaderTimeout = cloudIdentityTimeout
+	base := &http.Client{Transport: tr}
+	hc, err := google.DefaultClient(context.WithValue(context.Background(), oauth2.HTTPClient, base), CloudIdentityGroupsReadonlyScope)
 	if err != nil {
 		return nil, fmt.Errorf("cloud identity credentials: %w", err)
 	}
@@ -365,6 +554,8 @@ func (c *CloudIdentityGroupChecker) IsMember(ctx context.Context, groupEmail, me
 	}
 	c.cacheMu.RUnlock()
 
+	ctx, cancel := context.WithTimeout(ctx, cloudIdentityTimeout)
+	defer cancel()
 	hc, err := c.httpClient(ctx)
 	if err != nil {
 		return false, err

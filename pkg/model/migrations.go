@@ -520,6 +520,26 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     86,
+		Description: "rewrite stored corp-research grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/corp#research={} (a wrapper distribution's in-process capability is retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames := map[string]string{"corp-research": CorpResearchGrant}
+			if err := rewriteLegacyGrants(renames)(ctx, tx); err != nil {
+				return err
+			}
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities",
+				map[string][]string{"corp-research": {CorpResearchGrant}})
+		},
+	},
+	{
+		Version:     87,
+		Description: "drop executor_token and executor_token_sequence (remote executors are retired)",
+		Statements: []string{
+			"DROP TABLE IF EXISTS `executor_token`",
+			"DROP TABLE IF EXISTS `executor_token_sequence`",
+		},
+	},
+	{
+		Version:     88,
 		Description: "fold retired in-process catalogue entries into api_scopes.presets in grain_config.capability_policy",
 		Up: foldRetiredCatalogueInProcess(
 			map[string]string{
@@ -545,10 +565,20 @@ var Migrations = []Migration{
 				"db-write":              {GrainSQLWriteGrant},
 				"self-repair":           {GrainHostExecGrant},
 				GitPushAnyRefCapability: {GitPushAnyRefGrant},
+				"corp-research":         {CorpResearchGrant},
 			},
 		),
 	},
 }
+
+// CorpResearchGrant is what migration 86 rewrote stored corp-research grants
+// to: the method a wrapper distribution's build registers (capability.Register) in place
+// of its in-process corp-research provider, and makes corp-research an alias
+// of. Core serves no such method; it names the grant only because the
+// migration list is core's, and a store migrated by a build without the
+// method holds a grant nothing there resolves, as the bare corp-research it
+// replaced resolved to no provider there either.
+const CorpResearchGrant = "https://grain.dev/capabilities/corp#research={}"
 
 // ApplyDataMigrations runs the row rewrites (Up) of every migration past
 // from, inside tx, on tables already at SchemaVersion's shape. It is for
@@ -634,12 +664,7 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 	for v := from + 1; v <= SchemaVersion; v++ {
 		m, _ := migrationFor(v)
 		for _, stmt := range m.Statements {
-			if _, err := tx.ExecContext(ctx, stmt); err != nil {
-				if strings.Contains(strings.ToUpper(stmt), " ADD COLUMN ") &&
-					(strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") ||
-						strings.Contains(strings.ToLower(err.Error()), "already exists")) {
-					continue
-				}
+			if err := execMigrationStatement(ctx, tx, stmt); err != nil {
 				return fmt.Errorf("migrating schema to %d (%s): %w", v, m.Description, err)
 			}
 		}
@@ -659,6 +684,32 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 		return fmt.Errorf("migrating schema %d to %d: restamping: %w", from, SchemaVersion, err)
 	}
 	return tx.Commit()
+}
+
+// execMigrationStatement runs one of a migration's Statements, passing over
+// an ADD COLUMN whose column the store already has. That statement runs
+// under a savepoint: Postgres aborts the whole transaction on any failed
+// statement (SQLSTATE 25P02 on everything after it), so without rolling
+// back to the savepoint the error it passes over would fail the next
+// statement instead, under that statement's name.
+func execMigrationStatement(ctx context.Context, tx *sql.Tx, stmt string) error {
+	if !strings.Contains(strings.ToUpper(stmt), " ADD COLUMN ") {
+		_, err := tx.ExecContext(ctx, stmt)
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "SAVEPOINT grain_add_column"); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, stmt); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") &&
+			!strings.Contains(strings.ToLower(err.Error()), "already exists") {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT grain_add_column")
+		return err
+	}
+	_, err := tx.ExecContext(ctx, "RELEASE SAVEPOINT grain_add_column")
+	return err
 }
 
 // storeViews names the views the store holds, whichever build made

@@ -1,0 +1,41 @@
+# grain task list from task 150, holding only api:tasks:read@acme/widgets
+$ grain task list --limit 3
+  exit=0 proxy=[GET /cli/tasks?limit=3;]
+  | 148  proposed  acme/widgets  paging filler 129
+  | 149  proposed  acme/widgets  paging filler 130
+  | 150  running  acme/widgets  sibling reader
+  | 3 task(s) shown of 144 matching, oldest first. 141 older matching tasks are not shown -- raise --limit to see them.
+$ grain task list --repo acme/gadgets
+  exit=0 proxy=[GET /cli/tasks?repo=acme%2Fgadgets;]
+  | No tasks in acme/gadgets.
+$ grain task list --search OTHER-REPO
+  exit=0 proxy=[GET /cli/tasks?search=OTHER-REPO;]
+  | No tasks with "OTHER-REPO" in the title.
+$ grain task list --search 'sibling reader'
+  exit=0 proxy=[GET /cli/tasks?search=sibling+reader;]
+  | 150  running  acme/widgets  sibling reader
+  | 1 task(s) shown of 1 matching, oldest first.
+$ grain task list --json --limit 2
+  exit=0 proxy=[GET /cli/tasks?format=json&limit=2;]
+  | {"matched":144,"shown":2,"tasks":[{"id":"149","state":"proposed","repo":"acme/widgets","title":"paging filler 130","priority":5,"kinds":["proposal"],"createdAt":"2026-11-02T06:02:05.796755809Z","changedAt":"2026-11-02T06:02:05.796755809Z"},{"id":"150","state":"running","repo":"acme/widgets","title":"sibling reader","priority":5,"createdAt":"2026-11-02T06:15:11.22989244Z","changedAt":"2026-11-02T06:15:18.980026927Z"}]}
+$ grain read task://151/record.md
+  exit=1 proxy=[GET /fs/task/151/record.md;]
+  | grain: forbidden: task://151/record.md: another task's record needs the "self-debug" capability or an "api:tasks:read@<owner/repo>" grant naming its repository, and this run holds neither. Nothing you can do from inside this run will add one -- a human attaches it to the task.
+$ grain read task://5/record.md --lines 2
+  exit=0 proxy=[GET /fs/task/5/record.md;]
+  | 
+  | Conversation (0):
+$ grain ls task:// --glob '15*'
+  exit=0 proxy=[GET /fs/task?glob=15%2A&list;]
+  | 150/
+$ grain task read 151
+  exit=1 proxy=[GET /fs/task/151/record.md;]
+  | grain: forbidden: task://151/record.md: another task's record needs the "self-debug" capability or an "api:tasks:read@<owner/repo>" grant naming its repository, and this run holds neither. Nothing you can do from inside this run will add one -- a human attaches it to the task.
+$ grain task read 2
+  exit=0 proxy=[GET /fs/task/2/record.md;]
+  | Task 2: Fix flaky retry test
+  | State: running
+  | Priority: 5
+  | Filed by: debian (human)
+  | Filed at: 2026-11-02T02:55:29Z
+  | Repo: acme/widgets

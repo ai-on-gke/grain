@@ -125,7 +125,7 @@ func ValidateReadOnlyQuery(query string) error {
 	case "PRAGMA":
 		return validatePragma(toks[1:])
 	default:
-		return errors.New("only read-only queries (SELECT, WITH, EXPLAIN, PRAGMA) are permitted with db-read capability")
+		return errors.New("only read-only queries (SELECT, WITH, EXPLAIN, PRAGMA) are permitted without https://grain.dev/capabilities/grain#sql={\"write\":true}")
 	}
 
 	for i, t := range toks {

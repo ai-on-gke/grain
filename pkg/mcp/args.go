@@ -19,6 +19,7 @@ package mcp
 // float64, nothing as json.Number, since Handle unmarshals into `any`.
 
 import (
+	"math"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -68,6 +69,34 @@ func argInt(args map[string]any, key string) (int, bool) {
 		return int(n), true
 	default:
 		return 0, false
+	}
+}
+
+// argWholeInt is argInt for an argument that must be a whole number. A
+// JSON number arrives as float64, and argInt's conversion read 1.5 as 1
+// and a number past what a float64 holds exactly as some other number,
+// while a "8" that is not a number at all was dropped as if never given
+// (2026-11-02 walkthrough: propose_task priority 1.5 filed priority 1).
+// present says the key was given; whole that it held a whole number, no
+// larger in magnitude than 2^53, that n is.
+func argWholeInt(args map[string]any, key string) (n int, present, whole bool) {
+	v, ok := args[key]
+	if !ok || v == nil {
+		return 0, false, false
+	}
+	const exact = 1 << 53
+	switch x := v.(type) {
+	case int:
+		return x, true, true
+	case int64:
+		return int(x), true, x >= -exact && x <= exact
+	case float64:
+		if x != math.Trunc(x) || math.Abs(x) > exact {
+			return 0, true, false
+		}
+		return int(x), true, true
+	default:
+		return 0, true, false
 	}
 }
 

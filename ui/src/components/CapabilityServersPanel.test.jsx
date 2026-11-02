@@ -582,6 +582,50 @@ describe("CapabilityServersPanel", () => {
     }
   });
 
+  // 2026-11-02 walkthrough: Disable answered with the state the daemon
+  // had not yet let go of, and the page showed it -- pending -- until a
+  // reload, because only an enabled server was read again.
+  it("reads a server just disabled again until it says disabled", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const status = (state) => ({ id: gcp, state, transport: "stdio" });
+      const attached = { ...failed, secrets: [], status: status("attached") };
+      const disabled = {
+        ...attached,
+        config: { ...attached.config, disabled: true },
+      };
+      serve({
+        ...base,
+        "GET /api/capability-servers": queue(
+          [attached],
+          [{ ...disabled, status: status("pending") }],
+          [{ ...disabled, status: status("disabled") }],
+        ),
+        "POST /api/capability-servers/disable": [
+          { ...disabled, status: status("pending") },
+        ],
+      });
+      render(<CapabilityServersPanel showError={() => {}} />);
+      const c = await card(gcp);
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      await user.click(within(c).getByRole("button", { name: "Disable" }));
+      expect(
+        await within(c).findByRole("button", { name: "Enable" }),
+      ).toBeInTheDocument();
+      for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(2000);
+      expect(
+        within(c).getByTestId("capability-server-state"),
+      ).toHaveTextContent("disabled");
+      const reads = () =>
+        api.mock.calls.filter(([p]) => p === "/api/capability-servers").length;
+      const settled = reads();
+      await vi.advanceTimersByTimeAsync(20000);
+      expect(reads()).toBe(settled);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("binds an env entry to a secret, sending the value only in the bind call", async () => {
     serve({
       ...base,

@@ -428,7 +428,7 @@ func retiredInProcessNames(g string) []string {
 		grant = APIGrantPrefix + canonicalPresetKey(what)
 	}
 	var out []string
-	for legacy, to := range legacyGrantReplacements {
+	for legacy, to := range allLegacyGrantReplacements() {
 		if to == grant {
 			out = append(out, legacy)
 		}

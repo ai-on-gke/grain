@@ -390,11 +390,23 @@ import "strconv"
 // repo server's `#write` method. It rewrites `repo_config`.`ci_capabilities`
 // as well as the grant tables and capability lists.
 //
-// 86 changes no table: it folds retired 1-to-1 preset capability entries in
+// 86 rewrites stored `corp-research` grants, `repo_config`.`ci_capabilities`
+// included, to `https://grain.dev/capabilities/corp#research={}`: the Google
+// build retires its in-process `corp-research` provider for a
+// `corp#research` method it registers through capability.Register, with
+// `corp-research` as that method's alias.
+//
+// 87 drops `executor_token` and `executor_token_sequence`: remote
+// executors are retired, and grain hostd (which authenticates with its
+// own -hostd-token-file) is grain's only host agent. A pure drop: the
+// importer passes over a table this build lacks, so a dump carrying
+// either imports without it.
+//
+// 88 changes no table: it folds retired 1-to-1 preset capability entries in
 // `grain_config`.`capability_policy`'s catalogue from `inProcess[<retired>]`
 // into `apiScopes.presets[<preset>]`, merging restrictions conservatively when
 // both exist, and rewrites retired task defaults in `catalogue.defaults`.
-const SchemaVersion = 86
+const SchemaVersion = 88
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the
@@ -3751,23 +3763,6 @@ var Tables = []string{
   ` + "`refresh`" + `          TEXT    NOT NULL DEFAULT '',
   ` + "`rollback_on_crash`" + ` INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`name`" + `)
-)`,
-
-	`CREATE TABLE IF NOT EXISTS ` + "`executor_token`" + ` (
-  ` + "`id`" + `                TEXT     NOT NULL,
-  ` + "`name`" + `              TEXT     NOT NULL,
-  ` + "`token_hash`" + `        TEXT     NOT NULL,
-  ` + "`prefix`" + `            TEXT     NOT NULL,
-  ` + "`created_at`" + `        DATETIME NOT NULL,
-  ` + "`revoked_at`" + `        DATETIME NULL,
-  ` + "`last_connected_at`" + ` DATETIME NULL,
-  PRIMARY KEY (` + "`id`" + `),
-  UNIQUE (` + "`token_hash`" + `)
-)`,
-
-	`CREATE TABLE IF NOT EXISTS ` + "`executor_token_sequence`" + ` (
-  ` + "`id`" + `        INTEGER PRIMARY KEY AUTOINCREMENT,
-  ` + "`issued_at`" + ` DATETIME NOT NULL
 )`,
 
 	externalAgentTokenTable,

@@ -1470,13 +1470,6 @@ type configResponse struct {
 	// Config.Sandboxes counts its live set without the per-guest probes
 	// GET /api/sandboxes performs for the health pane.
 	SandboxCount int `json:"sandboxCount"`
-	// ExecutorAddr is where this deployment's remote executor listener
-	// accepts workers (Config.ExecutorAddr), with a wildcard host left
-	// off (":8422") since only the browser knows which name reaches this
-	// machine. Absent when remote execution is off, and from anybody who
-	// has not signed in. ExecutorTLS says the listener wants --tls.
-	ExecutorAddr string `json:"executorAddr,omitempty"`
-	ExecutorTLS  bool   `json:"executorTLS,omitempty"`
 	// PackageCacheEntries is how many packages this deployment's proxy
 	// cache is holding, across every ecosystem. It rides here for the
 	// reason SandboxCount above does: the sidebar shows it beside its
@@ -1955,10 +1948,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.tasks.Config.Sandboxes != nil {
 		resp.SandboxCount = s.tasks.Config.Sandboxes.SandboxCount()
-	}
-	if actor.ID != "" {
-		resp.ExecutorAddr = executorDialAddr(s.tasks.Config.ExecutorAddr)
-		resp.ExecutorTLS = resp.ExecutorAddr != "" && s.tasks.Config.ExecutorTLS
 	}
 	if s.tasks.Config.PackageCache != nil {
 		entries := s.tasks.Config.PackageCache.PackageCacheEntryCount()
@@ -3015,6 +3004,15 @@ func writeBodyError(w http.ResponseWriter, err error) {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Errorf("request body exceeds %d bytes", tooLarge.Limit))
+		return
+	}
+	// A task priority that is not a whole number an int holds (1.5,
+	// 1e3, "8", 1e20) is refused in the words a 0 is, rather than as
+	// Go's "cannot unmarshal number 1.5 into Go struct field
+	// CreateTaskRequest.priority of type int" (2026-11-02 walkthrough).
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) && typeErr.Field == "priority" && typeErr.Struct == "CreateTaskRequest" {
+		writeError(w, http.StatusBadRequest, errors.New(errPriorityNotPositive))
 		return
 	}
 	writeError(w, http.StatusBadRequest, err)

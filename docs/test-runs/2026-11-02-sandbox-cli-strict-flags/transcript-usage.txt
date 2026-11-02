@@ -1,0 +1,315 @@
+# unknown flag on every command in sandboxCommandFlags
+$ grain ls task:// --bogus x
+  exit=2 proxy=[none]
+  | grain ls: unknown flag --bogus (flags: --glob); run 'grain ls --help' for usage
+$ grain read task://2/record.md --bogus x
+  exit=2 proxy=[none]
+  | grain read: unknown flag --bogus (flags: --cursor, --limit, --lines, -n, --offset, --page, --since, --tail); run 'grain read --help' for usage
+$ grain grep foo task://2 --bogus x
+  exit=2 proxy=[none]
+  | grain grep: unknown flag --bogus (flags: -C, --glob, -i, --max); run 'grain grep --help' for usage
+$ grain ci list --bogus x
+  exit=2 proxy=[none]
+  | grain ci list: unknown flag --bogus (flags: --conclusion, --job, --limit, --provider, --ref, --repo, --since, --task); run 'grain ci list --help' for usage
+$ grain ci show r1 --bogus x
+  exit=2 proxy=[none]
+  | grain ci show: unknown flag --bogus (it takes none); run 'grain ci show --help' for usage
+$ grain ci test-history T --bogus x
+  exit=2 proxy=[none]
+  | grain ci test-history: unknown flag --bogus (flags: --limit, --repo); run 'grain ci test-history --help' for usage
+$ grain ci log --bogus x
+  exit=2 proxy=[none]
+  | grain ci log: unknown flag --bogus (flags: --attempt, --job, --limit, --lines, -n, --offset, --repo, --step, --tail, --task); run 'grain ci log --help' for usage
+$ grain ci artifact a --bogus x
+  exit=2 proxy=[none]
+  | grain ci artifact: unknown flag --bogus (flags: -o, --repo, --run, --task); run 'grain ci artifact --help' for usage
+$ grain ci wait --bogus x
+  exit=2 proxy=[none]
+  | grain ci wait: unknown flag --bogus (flags: --jobs, --resume, --timeout); run 'grain ci wait --help' for usage
+$ grain ci run-job test --bogus x
+  exit=2 proxy=[none]
+  | grain ci run-job: unknown flag --bogus (flags: --resume, --timeout); run 'grain ci run-job --help' for usage
+$ grain ci retrigger --bogus x
+  exit=2 proxy=[none]
+  | grain ci retrigger: unknown flag --bogus (flags: --all, --commit, --jobs, --workflow); run 'grain ci retrigger --help' for usage
+$ grain pr status --bogus x
+  exit=2 proxy=[none]
+  | grain pr status: unknown flag --bogus (flags: --ref, --repo, --task); run 'grain pr status --help' for usage
+$ grain pr base-status --bogus x
+  exit=2 proxy=[none]
+  | grain pr base-status: unknown flag --bogus (it takes none); run 'grain pr base-status --help' for usage
+$ grain pr open --bogus x
+  exit=2 proxy=[none]
+  | grain pr open: unknown flag --bogus (it takes none); run 'grain pr open --help' for usage
+$ grain pr reply hi --bogus x
+  exit=2 proxy=[none]
+  | grain pr reply: unknown flag --bogus (flags: --comment-id, --file); run 'grain pr reply --help' for usage
+$ grain pr resolve --bogus x
+  exit=2 proxy=[none]
+  | grain pr resolve: unknown flag --bogus (flags: --comment-id, --thread-id); run 'grain pr resolve --help' for usage
+$ grain pr review-comment hi --bogus x
+  exit=2 proxy=[none]
+  | grain pr review-comment: unknown flag --bogus (flags: --file, --line, --path); run 'grain pr review-comment --help' for usage
+$ grain git revert --bogus x
+  exit=2 proxy=[none]
+  | grain git revert: unknown flag --bogus (flags: -C, --commit, --reason, --task); run 'grain git revert --help' for usage
+$ grain merge-queue --bogus x
+  exit=2 proxy=[none]
+  | grain merge-queue: unknown flag --bogus (it takes none); run 'grain merge-queue --help' for usage
+$ grain status hi --bogus x
+  exit=2 proxy=[none]
+  | grain status: unknown flag --bogus (flags: --file); run 'grain status --help' for usage
+$ grain handover write --bogus x
+  exit=2 proxy=[none]
+  | grain handover write: unknown flag --bogus (flags: --file); run 'grain handover write --help' for usage
+$ grain notify --bogus x
+  exit=2 proxy=[none]
+  | grain notify: unknown flag --bogus (flags: --body, --clears-when, --file, --json, --severity, --subject, --task, --title); run 'grain notify --help' for usage
+$ grain task list --bogus x
+  exit=2 proxy=[none]
+  | grain task list: unknown flag --bogus (flags: --changed-since, --json, --kind, --limit, --repo, --search, --stalled, --state); run 'grain task list --help' for usage
+$ grain task read 2 --bogus x
+  exit=2 proxy=[none]
+  | grain task read: unknown flag --bogus (it takes none); run 'grain task read --help' for usage
+$ grain task prompt 2 --bogus x
+  exit=2 proxy=[none]
+  | grain task prompt: unknown flag --bogus (flags: --attempt, --limit, --lines, -n, --offset, --tail); run 'grain task prompt --help' for usage
+$ grain task transcript 2 --bogus x
+  exit=2 proxy=[none]
+  | grain task transcript: unknown flag --bogus (flags: --attempt, --limit, --lines, -n, --offset, --tail); run 'grain task transcript --help' for usage
+$ grain task wait 3 --bogus x
+  exit=2 proxy=[none]
+  | grain task wait: unknown flag --bogus (flags: --json, --park, --resume-at, --timeout, --until); run 'grain task wait --help' for usage
+$ grain task message 3 hi --bogus x
+  exit=2 proxy=[none]
+  | grain task message: unknown flag --bogus (flags: --body, --file); run 'grain task message --help' for usage
+$ grain task propose --bogus x
+  exit=2 proxy=[none]
+  | grain task propose: unknown flag --bogus (flags: --auto-merge, --body, --branch, --capability, --custom-field, --depends-on, --file, --fixes-base-branch, --hold-for-approval, --id, --json, --keep-running, --no-port, --no-repo, --not-before, --origin, --priority, --read, --repo, --supersedes, --title); run 'grain task propose --help' for usage
+$ grain api GET /api/tasks --bogus x
+  exit=2 proxy=[none]
+  | grain api: unknown flag --bogus (flags: --body, --field, --file, --json, --reason, --scope); run 'grain api --help' for usage
+$ grain memory list --bogus x
+  exit=2 proxy=[none]
+  | grain memory list: unknown flag --bogus (it takes none); run 'grain memory list --help' for usage
+$ grain memory read x --bogus x
+  exit=2 proxy=[none]
+  | grain memory read: unknown flag --bogus (it takes none); run 'grain memory read --help' for usage
+$ grain memory write x --bogus x
+  exit=2 proxy=[none]
+  | grain memory write: unknown flag --bogus (flags: --file, --reason, --repo); run 'grain memory write --help' for usage
+$ grain memory doc-write x --bogus x
+  exit=2 proxy=[none]
+  | grain memory doc-write: unknown flag --bogus (flags: --file, --reason, --repo, --summary); run 'grain memory doc-write --help' for usage
+$ grain memory doc write x --bogus x
+  exit=2 proxy=[none]
+  | grain memory doc-write: unknown flag --bogus (flags: --file, --reason, --repo, --summary); run 'grain memory doc-write --help' for usage
+$ grain release-notes stats --bogus x
+  exit=2 proxy=[none]
+  | grain release-notes stats: unknown flag --bogus (flags: --period); run 'grain release-notes stats --help' for usage
+$ grain release-notes publish --bogus x
+  exit=2 proxy=[none]
+  | grain release-notes publish: unknown flag --bogus (flags: --file, --period, --reason, --title, --version); run 'grain release-notes publish --help' for usage
+$ grain quarantine T --bogus x
+  exit=2 proxy=[none]
+  | grain quarantine: unknown flag --bogus (flags: -C, --no-follow-up, --reason, --ttl); run 'grain quarantine --help' for usage
+$ grain metrics --bogus x
+  exit=2 proxy=[none]
+  | grain metrics: unknown flag --bogus (flags: --author, --repo, --since, --until, --window); run 'grain metrics --help' for usage
+$ grain health --bogus x
+  exit=2 proxy=[none]
+  | grain health: unknown flag --bogus (it takes none); run 'grain health --help' for usage
+$ grain log --bogus x
+  exit=2 proxy=[none]
+  | grain log: unknown flag --bogus (flags: --contains, --lines, --max-lines, --min-priority, -n, --priority, --since, --source, --tail, --until); run 'grain log --help' for usage
+$ grain playbooks --bogus x
+  exit=2 proxy=[none]
+  | grain playbooks: unknown flag --bogus (it takes none); run 'grain playbooks --help' for usage
+$ grain issue list --bogus x
+  exit=2 proxy=[none]
+  | grain issue list: unknown flag --bogus (flags: --label, --limit, --repo); run 'grain issue list --help' for usage
+$ grain issue read 1 --bogus x
+  exit=2 proxy=[none]
+  | grain issue read: unknown flag --bogus (flags: --comments, --repo); run 'grain issue read --help' for usage
+$ grain db query 'select 1' --bogus x
+  exit=2 proxy=[none]
+  | grain db query: unknown flag --bogus (it takes none); run 'grain db query --help' for usage
+# a flag with no value (last argument)
+$ grain read task://2/record.md --tail
+  exit=2 proxy=[none]
+  | grain read: flag --tail needs a value
+$ grain ls task:// --glob
+  exit=2 proxy=[none]
+  | grain ls: flag --glob needs a value
+$ grain log --since
+  exit=2 proxy=[none]
+  | grain log: flag --since needs a value
+# bad counts
+$ grain read task://2/record.md --tail abc
+  exit=2 proxy=[none]
+  | grain read: --tail "abc" is not a count: it takes a non-negative integer
+$ grain read task://2/record.md --tail -1
+  exit=2 proxy=[none]
+  | grain read: --tail "-1" is not a count: it takes a non-negative integer
+$ grain read task://2/record.md --lines 1.5
+  exit=2 proxy=[none]
+  | grain read: --lines "1.5" is not a count: it takes a non-negative integer
+$ grain read task://2/record.md -n x
+  exit=2 proxy=[none]
+  | grain read: -n "x" is not a count: it takes a non-negative integer
+$ grain read task://2/record.md --offset=-3
+  exit=2 proxy=[none]
+  | grain read: --offset "-3" is not a count: it takes a non-negative integer
+$ grain read task://2/record.md --limit ten
+  exit=2 proxy=[none]
+  | grain read: --limit "ten" is not a count: it takes a non-negative integer
+$ grain read deploy://pipeline-changes --page zero
+  exit=2 proxy=[none]
+  | grain read: --page "zero" is not a count: it takes a non-negative integer
+$ grain ci log --tail x
+  exit=2 proxy=[none]
+  | grain ci log: --tail "x" is not a count: it takes a non-negative integer
+$ grain ci log --lines -2
+  exit=2 proxy=[none]
+  | grain ci log: --lines "-2" is not a count: it takes a non-negative integer
+$ grain ci log -n abc
+  exit=2 proxy=[none]
+  | grain ci log: -n "abc" is not a count: it takes a non-negative integer
+$ grain ci log --attempt first
+  exit=2 proxy=[none]
+  | grain ci log: --attempt "first" is not a count: it takes a non-negative integer
+$ grain ci list --limit lots
+  exit=2 proxy=[none]
+  | grain ci list: --limit "lots" is not a count: it takes a non-negative integer
+$ grain ci test-history T --limit x
+  exit=2 proxy=[none]
+  | grain ci test-history: --limit "x" is not a count: it takes a non-negative integer
+$ grain task prompt 2 --lines x
+  exit=2 proxy=[none]
+  | grain task prompt: --lines "x" is not a count: it takes a non-negative integer
+$ grain task transcript 2 --attempt one
+  exit=2 proxy=[none]
+  | grain task transcript: --attempt "one" is not a count: it takes a non-negative integer
+$ grain task list --limit x
+  exit=2 proxy=[none]
+  | grain task list: --limit "x" is not a count: it takes a non-negative integer
+$ grain grep foo task://2 --max x
+  exit=2 proxy=[none]
+  | grain grep: --max "x" is not a count: it takes a non-negative integer
+$ grain grep foo task://2 -C x
+  exit=2 proxy=[none]
+  | grain grep: -C "x" is not a count: it takes a non-negative integer
+$ grain log --max-lines x
+  exit=2 proxy=[none]
+  | grain log: --max-lines "x" is not a count: it takes a non-negative integer
+$ grain log --tail x
+  exit=2 proxy=[none]
+  | grain log: --tail "x" is not a count: it takes a non-negative integer
+$ grain log -n x
+  exit=2 proxy=[none]
+  | grain log: -n "x" is not a count: it takes a non-negative integer
+$ grain log --lines -1
+  exit=2 proxy=[none]
+  | grain log: --lines "-1" is not a count: it takes a non-negative integer
+$ grain issue list --limit x
+  exit=2 proxy=[none]
+  | grain issue list: --limit "x" is not a count: it takes a non-negative integer
+# unknown subcommands and commands
+$ grain ci frob
+  exit=2 proxy=[none]
+  | grain ci: unknown command "frob"
+  | 
+  | grain ci (list | log | test-history | artifact | wait | run-job | retrigger) ...
+  | 
+  | Run 'grain ci <command> --help' for each.
+$ grain pr frob
+  exit=2 proxy=[none]
+  | grain pr: unknown command "frob"
+  | 
+  | grain pr (status | base-status | open | reply | resolve | review-comment)
+$ grain git frob
+  exit=2 proxy=[none]
+  | grain git: unknown command "frob"
+  | 
+  | grain git revert (--task <id> | --commit <sha>) --reason <why>
+$ grain handover frob
+  exit=2 proxy=[none]
+  | grain handover: unknown command "frob"
+  | 
+  | grain handover write (<text> | --file <f>)
+  | 
+  | Write or replace this task's standing handover summary for future runs on this task.
+$ grain task frob
+  exit=2 proxy=[none]
+  | grain task: unknown command "frob"
+  | 
+  | grain task (list | read | prompt | transcript | wait | message | propose) ...
+$ grain memory frob
+  exit=2 proxy=[none]
+  | grain memory: unknown command "frob"
+  | 
+  | grain memory (list | read <path> | write [--repo o/n] <text|--file f> | doc-write <name> <body|--file f>)
+$ grain memory doc
+  exit=2 proxy=[none]
+  | grain memory doc: unknown command
+  | 
+  | grain memory (list | read <path> | write [--repo o/n] <text|--file f> | doc-write <name> <body|--file f>)
+$ grain release-notes frob
+  exit=2 proxy=[none]
+  | grain release-notes: unknown command "frob"
+  | 
+  | grain release-notes (stats | publish --version <v> <body|--file f>)
+$ grain issue frob
+  exit=2 proxy=[none]
+  | grain issue: unknown command "frob"
+  | 
+  | grain issue (list | read) ...
+$ grain db frob
+  exit=2 proxy=[none]
+  | grain db: unknown command "frob"
+  | 
+  | grain db query <sql>
+$ grain frob
+  exit=2 proxy=[none]
+  | grain: unknown command "frob"
+  | 
+  | grain -- sandbox CLI for this grain deployment (proxy: http://127.0.0.1:9800)
+  | 
+  | NAMESPACE & FILES (no size cap; pipe to grep, jq, head, or redirect to files):
+  |   grain ls <uri> [--glob <pat>]          List a directory in ci://, src://, task://, config://, memory://, deploy://
+$ grain ls
+  exit=1 proxy=[none]
+  | grain: missing <uri>: run with --help for usage
+# --cursor / --since / --page on another URI
+$ grain read task://2/record.md --cursor abc
+  exit=2 proxy=[none]
+  | grain read: --cursor pages deploy://pipeline-changes, not task://2/record.md
+  | 
+  | grain read <uri> [--tail N] [--offset N --limit N] [--lines N]
+  | grain read deploy://pipeline-changes [--cursor <c>] [--page N]
+  | 
+  | Print a namespace file to stdout, whole: there is no size cap.
+$ grain read task://2/record.md --since abc
+  exit=2 proxy=[none]
+  | grain read: --since pages deploy://pipeline-changes, not task://2/record.md
+  | 
+  | grain read <uri> [--tail N] [--offset N --limit N] [--lines N]
+  | grain read deploy://pipeline-changes [--cursor <c>] [--page N]
+  | 
+  | Print a namespace file to stdout, whole: there is no size cap.
+$ grain read task://2/record.md --page 5
+  exit=2 proxy=[none]
+  | grain read: --page pages deploy://pipeline-changes, not task://2/record.md
+  | 
+  | grain read <uri> [--tail N] [--offset N --limit N] [--lines N]
+  | grain read deploy://pipeline-changes [--cursor <c>] [--page N]
+  | 
+  | Print a namespace file to stdout, whole: there is no size cap.
+$ grain read deploy://health --page 2
+  exit=2 proxy=[none]
+  | grain read: --page pages deploy://pipeline-changes, not deploy://health
+  | 
+  | grain read <uri> [--tail N] [--offset N --limit N] [--lines N]
+  | grain read deploy://pipeline-changes [--cursor <c>] [--page N]
+  | 
+  | Print a namespace file to stdout, whole: there is no size cap.
