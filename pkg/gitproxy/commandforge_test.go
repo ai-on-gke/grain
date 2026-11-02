@@ -375,6 +375,63 @@ func TestGGHHostNeedsNoProxy(t *testing.T) {
 	}
 }
 
+func TestGGHGHECheckRunsMergeBranchAndRerequestRoundTrip(t *testing.T) {
+	state := fakeGGHAPI(t)
+	c := gghDepotSet(t, "")
+	transport, err := c.ForgeTransport("depot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := github.NewClient(transport, nil)
+
+	// 1. ListCheckRuns decodes app.slug and check_suite.id over GHE's forgecli transport.
+	writeRaw(t, state, "api-response-1", gghResponse("200 OK",
+		map[string]string{"Content-Type": "application/json"},
+		`{"total_count":1,"check_runs":[{"id":91,"head_sha":"abc1234","name":"cla/google","status":"queued","app":{"slug":"google-cla"},"check_suite":{"id":777}}]}`))
+	// 2. MergeBranch sends POST repos/o/r/merges with JSON body via --input -.
+	writeRaw(t, state, "api-response-2", gghResponse("204 No Content", nil, ""))
+	// 3. RerequestCheckSuite sends POST repos/o/r/check-suites/777/rerequest with no body.
+	writeRaw(t, state, "api-response-3", gghResponse("201 Created",
+		map[string]string{"Content-Type": "application/json"}, `{}`))
+	// 4. RerequestCheckRun sends POST repos/o/r/check-runs/91/rerequest with no body.
+	writeRaw(t, state, "api-response-4", gghResponse("201 Created",
+		map[string]string{"Content-Type": "application/json"}, `{}`))
+
+	runs, err := client.ListCheckRuns("o", "r", "abc1234")
+	if err != nil {
+		t.Fatalf("ListCheckRuns: %v", err)
+	}
+	if len(runs) != 1 || runs[0].App != "google-cla" || runs[0].CheckSuiteID != 777 || runs[0].ID != 91 {
+		t.Fatalf("ListCheckRuns = %+v, want google-cla suite 777 id 91", runs)
+	}
+	res, err := client.MergeBranch("o", "r", "feat", "main", "Merge main into feat")
+	if err != nil || res.Merged {
+		t.Fatalf("MergeBranch = (%+v, %v), want up-to-date 204", res, err)
+	}
+	if err := client.RerequestCheckSuite("o", "r", 777); err != nil {
+		t.Fatalf("RerequestCheckSuite: %v", err)
+	}
+	if err := client.RerequestCheckRun("o", "r", 91); err != nil {
+		t.Fatalf("RerequestCheckRun: %v", err)
+	}
+
+	argv := apiRuns(t, state)
+	if len(argv) != 4 {
+		t.Fatalf("forgecli api calls = %d, want 4: %q", len(argv), argv)
+	}
+	if got := strings.Join(argv[1], " "); !strings.Contains(got, "--method POST") || !strings.Contains(got, "--input - repos/o/r/merges") {
+		t.Fatalf("MergeBranch argv = %q", got)
+	}
+	if got := strings.Join(argv[2], " "); !strings.Contains(got, "--method POST") ||
+		strings.Contains(got, "--input") || !strings.HasSuffix(got, " repos/o/r/check-suites/777/rerequest") {
+		t.Fatalf("RerequestCheckSuite argv = %q", got)
+	}
+	if got := strings.Join(argv[3], " "); !strings.Contains(got, "--method POST") ||
+		strings.Contains(got, "--input") || !strings.HasSuffix(got, " repos/o/r/check-runs/91/rerequest") {
+		t.Fatalf("RerequestCheckRun argv = %q", got)
+	}
+}
+
 func mustURL(t *testing.T, raw string) *url.URL {
 	t.Helper()
 	u, err := url.Parse(raw)

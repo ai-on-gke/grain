@@ -70,8 +70,11 @@ func observePending(key github.PollKey, e queueEntry, now time.Time) time.Durati
 }
 
 func observeWait(clocks *sync.Map, key github.PollKey, waiting bool, head, fingerprint string, now time.Time) time.Duration {
+	// Only clocks of key's own store are pruned: another store's clock
+	// runs on that store's own idea of now, which this cycle's now says
+	// nothing about.
 	defer clocks.Range(func(k, v any) bool {
-		if now.Sub(v.(waitSeen).touched) > time.Hour {
+		if k.(github.PollKey).Scope == key.Scope && now.Sub(v.(waitSeen).touched) > time.Hour {
 			clocks.Delete(k)
 		}
 		return true
