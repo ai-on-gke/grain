@@ -1,0 +1,23 @@
+# src:// on the layer build (cwd = scratch module requiring core, replace => checkout)
+ls src://
+ls src://playbooks
+ls src://pkg
+ls src://pkg --glob 'name*'
+ls src://core
+ls src://core/pkg --glob 'name*'
+ls src://pkg/namespace --glob 'coresrc*'
+ls src://core/pkg/namespace --glob 'coresrc*'
+read src://pkg/namespace/coresrc.go
+read src://core/pkg/namespace/coresrc.go --lines 3
+read src://pkg/layeronly/x.go
+read src://core/pkg/layeronly/x.go
+read src://core/go.mod --lines 1
+grep LAYERMARK src://
+grep LAYERMARK src://pkg
+grep LAYERMARK src://core
+grep 'func CoreSource' src://pkg
+grep 'func CoreSource' src://core/pkg
+grep 'func CoreSource' src://
+read src://pkg/nosuch.go
+read src://core/pkg/nosuch.go
+ls src://core/nosuch

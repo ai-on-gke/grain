@@ -107,6 +107,24 @@ func TestSandboxCIWaitReportsEachVerdict(t *testing.T) {
 		t.Errorf("resume not sent: %v", proxy.bodies["POST /cli/ci/wait"])
 	}
 
+	// A run grain cancelled for a newer commit's says so, and names the
+	// commit whose verdict is the branch's (§7's two-push walk).
+	set("/cli/ci/wait", `{"status":"failed","run_id":"ci-4","commit":"0123456789abcdef","conclusion":"cancelled",
+		"cancel_reason":"superseded by run ci-5, started for the same task",
+		"superseded_by":"ci-5","superseded_by_commit":"fedcba9876543210",
+		"jobs":[{"name":"go","conclusion":"cancelled"}]}`)
+	out, _, code = runActionCLI(t, srv, nil, "ci", "wait")
+	if code != 1 || !strings.Contains(out, "Grain cancelled this run itself: superseded by run ci-5, started for the same task\n") ||
+		!strings.Contains(out, "That run is on fedcba987654, a newer commit on this branch, and its verdict is the branch's: run 'grain ci wait' again for it.") {
+		t.Errorf("superseded by a newer commit: %d\n%s", code, out)
+	}
+	set("/cli/ci/wait", `{"status":"failed","run_id":"ci-6","commit":"0123456789abcdef","conclusion":"cancelled",
+		"cancel_reason":"wrong base","cancelled_by_hand":true,"jobs":[{"name":"go","conclusion":"cancelled"}]}`)
+	out, _, _ = runActionCLI(t, srv, nil, "ci", "wait")
+	if !strings.Contains(out, "This run was cancelled by hand. The reason given: wrong base\n") || strings.Contains(out, "newer commit") {
+		t.Errorf("cancelled by hand:\n%s", out)
+	}
+
 	set("/cli/ci/run-job", `{"status":"passed","run_id":"ci-3","selective":true,"jobs":[{"name":"go","conclusion":"success"}]}`)
 	out, _, code = runActionCLI(t, srv, nil, "ci", "run-job", "go")
 	if code != 0 || !strings.Contains(out, "grain CI passed") || !strings.Contains(out, "never satisfies the full-suite gate") {
