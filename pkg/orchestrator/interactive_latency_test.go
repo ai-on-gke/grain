@@ -310,9 +310,7 @@ func TestInteractiveSubsequentTurnLatencyAndWarmReuse(t *testing.T) {
 		director := sessionTasks(t, store)[0]
 
 		fakeGrainBin := filepath.Join(t.TempDir(), "grain-sandbox")
-		if err := os.WriteFile(fakeGrainBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		orchestrator.WriteExecutableStub(t, fakeGrainBin, "#!/bin/sh\nexit 0\n")
 
 		sbx := &packageCacheRecordingSandboxes{inner: orchestrator.NewHostSandboxes(t.TempDir())}
 		var turnStartAt time.Time

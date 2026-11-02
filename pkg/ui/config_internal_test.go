@@ -399,7 +399,7 @@ type realSyncStateRepo struct {
 	syncs  int
 }
 
-func (r *realSyncStateRepo) SyncAfterWrite(ctx context.Context) error {
+func (r *realSyncStateRepo) SyncAfterWrite(ctx context.Context, _ string) error {
 	r.syncs++
 	if _, err := staterepo.Apply(ctx, r.repo, r.client.Store.DB(), model.SchemaVersion); err != nil {
 		return err

@@ -1171,7 +1171,7 @@ func TestObservabilityDemoPreservesStoredConfig(t *testing.T) {
 	storedCfg.GitHubInsecureHTTP = true
 	capabilityServers, err := configureCapabilityServerDemo(ctx, &storedCfg, func(string) (string, bool) {
 		return "", false
-	}, store)
+	}, store, nil)
 	if err != nil {
 		t.Fatalf("configureCapabilityServerDemo: %v", err)
 	}

@@ -323,17 +323,31 @@ export function reportScope(narrowing, attributes) {
 }
 
 // stateNarrowing is the task list a count in the report's backlog stands
-// for: the report's own repo and author scope, plus the one display state
-// the count is of -- both asked states for "asked", the grouping the
-// dashboard's state counts link with too. Not the report's window: the
-// backlog is what is unfinished right now, whenever it was created.
+// for: the report's own repo and author scope, plus the unfinished state
+// the count is of.
+//
+// For "asked" (and raw "awaiting_reply"), metrics.backlogOf counts only
+// unfinished awaiting_reply tasks (CompletedAt == nil) -- leaving out both
+// awaiting_submit and finished awaiting_reply tasks (investigations waiting
+// to be read), which already crossed completion. Pairing state:any:awaiting_reply
+// with completed:empty: opens the exact rows that count came from.
+//
+// Not the report's window: the backlog is what is unfinished right now,
+// whenever it was created.
 export function stateNarrowing(scope, state) {
   const filters = [];
   if (scope?.repos?.length)
     filters.push({ attr: "repo", op: "any", values: [...scope.repos] });
   if (scope?.authors?.length)
     filters.push({ attr: "author", op: "any", values: [...scope.authors] });
-  filters.push({ attr: "state", op: "any", values: statesOf(state) });
+  if (state === "asked" || state === "awaiting_reply") {
+    filters.push(
+      { attr: "state", op: "any", values: ["awaiting_reply"] },
+      { attr: "completed", op: "empty", values: [] },
+    );
+  } else {
+    filters.push({ attr: "state", op: "any", values: statesOf(state) });
+  }
   return { ...NO_NARROWING, filters };
 }
 

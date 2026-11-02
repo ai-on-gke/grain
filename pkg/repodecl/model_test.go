@@ -58,7 +58,7 @@ func TestASuiteScheduleCannotChooseAModel(t *testing.T) {
 	msg := loadErr(t, map[string]string{
 		".grain/templates/smoke.yml": "title: Smoke tests\n",
 		".grain/suites/smoke.yml":    "templates: [smoke]\n",
-		".grain/schedules/smoke.yml": "suite: smoke\nmodel: claude-opus-5-5\nevery:\n  hours: 1\n",
+		".grain/schedules/smoke.yml": "suite: smoke\nbase: main\nmodel: claude-opus-5-5\nevery:\n  hours: 1\n",
 	})
 	if !strings.Contains(msg, "cannot choose a model") {
 		t.Fatalf("error = %q", msg)

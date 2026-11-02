@@ -17,6 +17,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -1565,6 +1566,15 @@ func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) 
 	}
 	if err := c.Store.PutConfig(ctx, cfg); err != nil {
 		return Settings{}, err
+	}
+	// Who saved what, named here because nothing downstream can: the
+	// daemon applies the change from the stored row on its own tick
+	// (pkg/daemon's live config), long after the request has gone. A
+	// rehearsal wrote nothing, so it is not reported as a save.
+	if r, ok := model.WriteRehearsalFrom(ctx); !ok || !r.Rehearsing() {
+		if changed := changedConfigFields(current, cfg); len(changed) > 0 {
+			log.Printf("grain ui: settings saved by %s: changed %s", writerName(ctx), strings.Join(changed, ", "))
+		}
 	}
 	c.triggerIAPSync()
 	if req.AgentBackends != nil {
