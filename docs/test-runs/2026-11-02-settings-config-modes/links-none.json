@@ -1,0 +1,32 @@
+[
+ {
+  "mode": "none",
+  "width": 1440,
+  "from": "/settings/agents",
+  "text": "Settings → Git",
+  "href": "/settings/git",
+  "landed": "/settings/git",
+  "check": {
+   "target": "settings",
+   "found": true,
+   "visible": true,
+   "notFound": false
+  },
+  "result": "ok"
+ },
+ {
+  "mode": "none",
+  "width": 390,
+  "from": "/settings/agents",
+  "text": "Settings → Git",
+  "href": "/settings/git",
+  "landed": "/settings/git",
+  "check": {
+   "target": "git",
+   "found": true,
+   "visible": true,
+   "notFound": false
+  },
+  "result": "ok"
+ }
+]
