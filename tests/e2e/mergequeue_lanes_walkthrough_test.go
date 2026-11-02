@@ -175,7 +175,7 @@ func TestMergeQueueLanesContentionWalkthrough(t *testing.T) {
 	if got := w.sync(); got == nil || got.LastError != "" {
 		t.Fatalf("the merge rules did not sync: %+v", got)
 	}
-	// max_merges_per_repo set to 1, the default before schema 84: one
+	// max_merges_per_repo set to 1, the default before schema 85: one
 	// merge (or batch) per lane a cycle.
 	if err := w.store.UpdateConfig(w.ctx, func(c *model.Config) error {
 		c.MaxMergesPerRepo = 1

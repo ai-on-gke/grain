@@ -141,7 +141,7 @@ func Run(t *testing.T, e Engine) {
 		if diff := diffSchema(ctx, t, db, fresh); diff != "" {
 			t.Errorf("the 2.0.0 store, migrated, is not the schema this build creates fresh:\n%s", diff)
 		}
-		// Migration 84: a row written without the column takes grain's
+		// Migration 85: a row written without the column takes grain's
 		// default, as one in a fresh store does.
 		for name, d := range map[string]*sql.DB{"migrated": db, "fresh": fresh} {
 			if got := columnDefault(ctx, t, d, "grain_config", "max_merges_per_repo"); got != "5" {
@@ -308,7 +308,7 @@ func CheckDeployment(ctx context.Context, t *testing.T, store *model.Store) {
 	} else if cfg.TaskBranchTemplate != model.DefaultTaskBranchTemplate {
 		t.Errorf("the deployment's task branch template survived as %q, want %q", cfg.TaskBranchTemplate, model.DefaultTaskBranchTemplate)
 	} else if cfg.MaxMergesPerRepo != 1 {
-		// 2.0.0 stored the then-default 1, and migration 84 raised only the
+		// 2.0.0 stored the then-default 1, and migration 85 raised only the
 		// column default: nothing can say that 1 was not chosen.
 		t.Errorf("the deployment's max merges per repo survived as %d, want the 1 it stored", cfg.MaxMergesPerRepo)
 	}

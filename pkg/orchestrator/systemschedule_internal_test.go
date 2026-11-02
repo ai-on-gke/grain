@@ -607,7 +607,7 @@ func TestSystemSchedulesSeedsTheInfraReviewNightly(t *testing.T) {
 	// And nothing that can change anything. self-repair is the exact
 	// counterpart capability, and a job whose whole value is that a
 	// person sees the reasoning first must not hold it.
-	if granted["self-repair"] {
+	if granted["self-repair"] || granted[model.GrainHostExecGrant] {
 		t.Error("the infrastructure review holds self-repair: the one job that exists to " +
 			"suggest changes to this deployment must not be able to make one")
 	}

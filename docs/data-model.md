@@ -3065,7 +3065,7 @@ and merging past it would put a later change in front of an earlier one
 for no better reason than being quicker to test. Only an entry whose next
 move is a whole agent run, or a person, is worth reordering around. And a
 lane takes at most `max_merges_per_repo` merges a cycle — 5 by default,
-1 before schema 84 (a deployment that stored 1 keeps it). Several merges in
+1 before schema 85 (a deployment that stored 1 keeps it). Several merges in
 one cycle are each judged on their own: the walk reads an entry's pull
 request when it reaches it, so the entry behind one that merged is read
 after that merge moved the base, and GitHub's answer about it is about the

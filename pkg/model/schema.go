@@ -379,11 +379,16 @@ import "strconv"
 // repository's CI list to be handed to its jobs and refused (or, for one
 // with no provider, waited on) when a job starts.
 //
-// 84 raises `grain_config`.`max_merges_per_repo`'s column default from 1
+// 84 rewrites stored `self-repair` grants, `repo_config`.`ci_capabilities`
+// included, to `https://grain.dev/capabilities/grain#host-exec={}`: the
+// in-process `self-repair` provider is retired for the `grain#host-exec`
+// method.
+//
+// 85 raises `grain_config`.`max_merges_per_repo`'s column default from 1
 // to 5 (model.DefaultMaxMergesPerRepo). Stored values are left alone: the
 // row is always written whole, so a 1 written because it was the default
 // cannot be told from a 1 somebody chose, and both keep it.
-const SchemaVersion = 84
+const SchemaVersion = 85
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the

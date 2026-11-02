@@ -496,20 +496,32 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     84,
+		Description: "rewrite stored self-repair grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/grain#host-exec={} (the in-process capability is retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames := map[string]string{"self-repair": GrainHostExecGrant}
+			if err := rewriteLegacyGrants(renames)(ctx, tx); err != nil {
+				return err
+			}
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities",
+				map[string][]string{"self-repair": {GrainHostExecGrant}})
+		},
+	},
+	{
+		Version:     85,
 		Description: "raise grain_config.max_merges_per_repo's column default from 1 to 5 (stored values are kept)",
 		Up:          raiseMaxMergesPerRepoDefault,
 	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as
-// schemas before 84 wrote it, with the default captured for replacing.
+// schemas before 85 wrote it, with the default captured for replacing.
 var maxMergesPerRepoDefault1 = regexp.MustCompile("(`max_merges_per_repo`\\s+INTEGER\\s+NOT\\s+NULL\\s+DEFAULT\\s+)1\\b")
 
 // grainConfigTableName is the table name at the head of grain_config's
 // stored CREATE statement, however it was quoted.
 var grainConfigTableName = regexp.MustCompile("^(\\s*CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?)[`\"]?grain_config[`\"]?")
 
-// raiseMaxMergesPerRepoDefault is migration 84. Only the column default
+// raiseMaxMergesPerRepoDefault is migration 85. Only the column default
 // changes, never a row: a deployment whose row holds 1 keeps 1, because the
 // row is written whole on every save and so cannot say whether that 1 was
 // chosen.
@@ -536,13 +548,13 @@ func raiseMaxMergesPerRepoDefault(ctx context.Context, tx *sql.Tx) error {
 	if !grainConfigTableName.MatchString(raised) {
 		return fmt.Errorf("grain_config's stored definition does not start as a CREATE TABLE: %.60q", ddl)
 	}
-	raised = grainConfigTableName.ReplaceAllString(raised, "${1}`grain_config_84`")
+	raised = grainConfigTableName.ReplaceAllString(raised, "${1}`grain_config_85`")
 	for _, stmt := range []string{
-		"DROP TABLE IF EXISTS `grain_config_84`",
+		"DROP TABLE IF EXISTS `grain_config_85`",
 		raised,
-		"INSERT INTO `grain_config_84` SELECT * FROM `grain_config`",
+		"INSERT INTO `grain_config_85` SELECT * FROM `grain_config`",
 		"DROP TABLE `grain_config`",
-		"ALTER TABLE `grain_config_84` RENAME TO `grain_config`",
+		"ALTER TABLE `grain_config_85` RENAME TO `grain_config`",
 	} {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return err

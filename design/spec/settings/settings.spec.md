@@ -228,7 +228,7 @@ Component: `EngineSection.jsx`.
 | --- | --- | --- | --- | --- |
 | Poll interval (`#polling`) | `pollInterval` | `poll_interval_ms` | Duration > 0. Default 10 s. Required on first save. | live: retimes the running loop |
 | Max worker agents (`#polling`) | `maxWorkers` | `max_workers` | ≥ 1. Default 10. **Bootstrap.** | live (tick) |
-| Max merges per repo branch (`#merge-queue`) | `maxMergesPerRepo` | `max_merges_per_repo` | ≥ 1. Default 5 (1 before schema 84; a stored value is kept). Ready PRs landed per cycle per lane when the overlap re-check is not enforced. | live (cycle) |
+| Max merges per repo branch (`#merge-queue`) | `maxMergesPerRepo` | `max_merges_per_repo` | ≥ 1. Default 5 (1 before schema 85; a stored value is kept). Ready PRs landed per cycle per lane when the overlap re-check is not enforced. | live (cycle) |
 | Merge batch size (`#merge-queue`) | `mergeBatchSize` | `merge_batch_size` | 0 (default 3) or 1–20 (`MaxMergeBatchSize`); `1` turns batching off. **Retired (grain/task-1023):** validated and stored, but ignored. The response's `mergeBatching` / `mergeBatchSizeChosen` say what is in force. | n/a (ignored) |
 | Merge gather window (`#merge-queue`) | `mergeGatherWindow` | `merge_gather_window_ms` | Duration ≤ 30 min. Blank means 5 min. Negative means no wait. Under 1 ms is refused. **Retired**, like batch size. | n/a (ignored) |
 

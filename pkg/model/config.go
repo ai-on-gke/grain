@@ -1193,7 +1193,7 @@ const DefaultTaskFilters = "f=state:none:deferred|closed&f=kind:none:interactive
 
 // DefaultMaxMergesPerRepo is how many queue members may land in one lane
 // per cycle where nobody chose. It was 1, the merge queue's original
-// behavior, until schema 84; each merge is still judged on its own read of
+// behavior, until schema 85; each merge is still judged on its own read of
 // the pull request, taken after the merge before it moved the base.
 const DefaultMaxMergesPerRepo = 5
 
