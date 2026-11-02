@@ -265,8 +265,10 @@ func UnmetRequirements(job Job, req Request) []string {
 		for _, id := range job.Capabilities {
 			// A reference is the capability policy's to refuse, which
 			// denies it to an untrusted run unless a rule opts it in
-			// (SandboxRequest.Untrusted).
-			if IsCapabilityRef(id) {
+			// (SandboxRequest.Untrusted). Repository access (repo#read,
+			// repo#write {repo}) mints no pass and is widened directly on
+			// the git proxy, so an untrusted commit never holds it.
+			if IsCapabilityRef(id) && (Capabilities.IsRepoAccess == nil || !Capabilities.IsRepoAccess(id)) {
 				continue
 			}
 			out = append(out, fmt.Sprintf("this job requires the capability %q, and %s", id, req.UntrustedCommit()))
@@ -278,7 +280,9 @@ func UnmetRequirements(job Job, req Request) []string {
 	}
 	for _, id := range job.Capabilities {
 		if req.WithholdEventGated {
-			if IsCapabilityRef(id) || strings.HasPrefix(id, "repo-read:") {
+			isRepoRead := (Capabilities.IsRepoRead != nil && Capabilities.IsRepoRead(id)) || strings.HasPrefix(id, "repo-read:")
+			isNonRepoRef := IsCapabilityRef(id) && (Capabilities.IsRepoAccess == nil || !Capabilities.IsRepoAccess(id))
+			if isRepoRead || isNonRepoRef {
 				continue
 			}
 			if !slices.Contains(req.Capabilities, id) {

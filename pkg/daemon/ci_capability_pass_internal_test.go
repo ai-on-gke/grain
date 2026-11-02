@@ -409,3 +409,30 @@ func TestReadoptGrantsOnlyTheWriteScopesTheEventAdmits(t *testing.T) {
 		})
 	}
 }
+
+func TestCIAdmissionEnforcesPolicyAndUntrustedOnRepoAccessGrants(t *testing.T) {
+	h := newCIPassHarness(t)
+	target := model.RepoRef{Owner: "acme", Name: "deploy"}
+	for _, grant := range []string{model.RepoReadGrant(target), "repo-read:" + target.String()} {
+		untrusted := ci.SandboxRequest{
+			Name: "c0123abcd-1", Repo: "acme/widgets", Event: ci.EventPullRequest,
+			Capabilities: []string{grant}, Untrusted: true,
+		}
+		if _, err := h.acquire(untrusted); err == nil || !strings.Contains(err.Error(), "untrusted input") {
+			t.Fatalf("untrusted %q: err = %v, want untrusted denial", grant, err)
+		}
+	}
+
+	h.config.CapabilityPolicy = model.CapabilityPolicy{Rules: []model.CapabilityPolicyRule{{
+		Capability: model.RepoWriteRef, RunKinds: []string{model.CapabilityRunCI}, Deny: true,
+	}}}
+	for _, grant := range []string{model.RepoWriteGrant(target), "repo-write:" + target.String()} {
+		req := ci.SandboxRequest{
+			Name: "c0123abcd-1", Repo: "acme/widgets", Event: ci.EventRelease,
+			Capabilities: []string{grant},
+		}
+		if _, err := h.acquire(req); err == nil || !strings.Contains(err.Error(), "capability policy denies") {
+			t.Fatalf("policy-denied %q: err = %v, want policy denial", grant, err)
+		}
+	}
+}

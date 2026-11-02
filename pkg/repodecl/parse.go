@@ -422,6 +422,12 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 				errs = append(errs, fmt.Errorf("%s: capabilities: %v", f.path, err))
 				continue
 			}
+			ref := model.CapabilityGrantRef(c)
+			if ref == model.RepoReadRef || (ref == model.RepoWriteRef && !model.IsGitPushAnyRefGrant(c)) {
+				errs = append(errs, fmt.Errorf("%s: capabilities: %q does not name a repository -- "+
+					"pass repo: <owner>/<repo> (or refs/force for branch push)", f.path, c))
+				continue
+			}
 			if !seenGrants[c] {
 				seenGrants[c] = true
 				grants = append(grants, model.Grant{Capability: c, Via: model.GrantSource(f.path)})

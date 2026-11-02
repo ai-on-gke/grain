@@ -905,7 +905,7 @@ const (
 // repo-write:<owner>/<repo>. They are read as RepoReadGrant and
 // RepoWriteGrant everywhere -- indefinitely, since a repository's own
 // .grain/workflows job `capabilities:` lives in somebody else's
-// repository and nothing here rewrites it -- and schema migration 87
+// repository and nothing here rewrites it -- and schema migration 88
 // rewrote the stored rows.
 const (
 	RepoReadCapabilityPrefix  = "repo-read:"

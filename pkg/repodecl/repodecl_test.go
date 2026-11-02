@@ -678,3 +678,28 @@ func TestDeclaredIssueImportIsRefusedAsAuthority(t *testing.T) {
 		}
 	}
 }
+
+func TestDeclaredRepoCapabilityRejectsMissingRepoAndScheduleAccess(t *testing.T) {
+	for _, bad := range []string{
+		"https://grain.dev/capabilities/repo#read",
+		`https://grain.dev/capabilities/repo#read={"repo":"not-a-repo"}`,
+		"https://grain.dev/capabilities/repo#write",
+		`https://grain.dev/capabilities/repo#write={"repo":"not-a-repo"}`,
+	} {
+		err := loadErr(t, map[string]string{
+			".grain/templates/triage.yml": "title: Triage\ncapabilities:\n  - '" + bad + "'\n",
+		})
+		if !strings.Contains(err, "does not name a repository") {
+			t.Errorf("template capability %q: got %q, want 'does not name a repository'", bad, err)
+		}
+	}
+
+	schedErr := loadErr(t, map[string]string{
+		".grain/templates/triage.yml": "title: Triage\n",
+		".grain/schedules/nightly.yml": "template: triage\nevery:\n  hours: 6\ncapabilities:\n" +
+			"  - capability: https://grain.dev/capabilities/repo#write\n    with:\n      repo: acme/widgets\n",
+	})
+	if !strings.Contains(schedErr, "repository access belongs on the template it fires") {
+		t.Errorf("schedule with repo#write {repo}: got %q, want template-only refusal", schedErr)
+	}
+}

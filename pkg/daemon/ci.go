@@ -638,6 +638,13 @@ func (s CiSandboxes) Acquire(ctx context.Context, req ci.SandboxRequest) (ci.San
 	if err := ciPolicyRefusal(s.Policy, req, s.Log); err != nil {
 		return nil, err
 	}
+	var configFn func(context.Context) (*model.Config, error)
+	if s.Grants != nil {
+		configFn = s.Grants.Config
+	}
+	if err := ciCatalogueRefusal(ctx, configFn, req, s.Log); err != nil {
+		return nil, err
+	}
 
 	shape := s.jobShape(req)
 	// Waiting rather than failing while a Kubernetes cluster has no node
