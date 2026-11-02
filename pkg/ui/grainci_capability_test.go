@@ -125,3 +125,60 @@ func TestLegacyGrainCIInADefaultSetIsIgnored(t *testing.T) {
 		t.Errorf("capabilities = %v: a legacy default turned grain CI on for a github-mode repo", task.Capabilities)
 	}
 }
+
+// A standing console session has no target repository and cannot attach
+// grain#ci by hand, yet its proposals against a grain-CI repository
+// receive grain#ci by default; that default must not hold the proposal
+// unapproved or block an agent's RunNow approval.
+func TestSessionQueuesProposalAgainstGrainCIRepoWithoutHoldingGrainCI(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo, CIMode: model.CIModeGrain}); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := c.CreateConsoleSession(ctx, ui.CreateConsoleSessionRequest{
+		ID:            "ops-chat",
+		Title:         "Ops Chat",
+		TasksApproved: true,
+		Writes:        []ui.WriteTarget{{Repo: repo.String()}},
+	})
+	if err != nil {
+		t.Fatalf("CreateConsoleSession: %v", err)
+	}
+	var sessionTaskID string
+	for _, s := range sessions {
+		if s.ID == "ops-chat" {
+			sessionTaskID = s.TaskID
+		}
+	}
+	if sessionTaskID == "" {
+		t.Fatalf("created session missing taskId in %+v", sessions)
+	}
+
+	filed, err := c.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "follow-up on grain CI repo", Description: "d",
+		Repo: repo.String(), ProposedBy: sessionTaskID,
+	})
+	if err != nil {
+		t.Fatalf("CreateTask from session: %v", err)
+	}
+	if filed.State != model.StateQueued {
+		t.Errorf("proposal state = %s, want %s (body: %q)", filed.State, model.StateQueued, filed.Description)
+	}
+	if !slices.Contains(filed.Capabilities, grainci.Grant) {
+		t.Errorf("proposal capabilities = %v, want %s", filed.Capabilities, grainci.Grant)
+	}
+
+	unapproved, err := c.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "held on grain CI repo", Description: "d",
+		Repo: repo.String(), ProposedBy: sessionTaskID, HoldForApproval: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateTask held: %v", err)
+	}
+	asSession := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: sessionTaskID})
+	if err := c.RunNow(asSession, unapproved.ID); err != nil {
+		t.Errorf("RunNow by session on grain-CI task failed: %v", err)
+	}
+}

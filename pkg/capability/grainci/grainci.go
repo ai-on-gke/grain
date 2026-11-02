@@ -18,7 +18,7 @@
 // holds when grain's own CI (pkg/ci) judges the branches it pushes.
 //
 // The grant itself is a method of the in-process grain capability
-// server (pkg/capability/grainserver, docs/design/unified-grants.md §4):
+// server (pkg/capability/grainserver, design/design/unified-grants.design.md §4):
 // it mints nothing and places nothing. What it grants is not material
 // in a sandbox: it is that grain will run this repository's
 // `.grain/workflows` for the branch a task pushes, and -- since

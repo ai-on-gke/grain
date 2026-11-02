@@ -741,8 +741,10 @@ func recordedCapabilityGrant(s string) (protocol.Grant, bool) {
 func UncoveredCapabilityRefs(child, parent []Grant) []string {
 	var held []protocol.Grant
 	for _, g := range parent {
-		if pg, ok := recordedCapabilityGrant(g.Capability); ok {
-			held = append(held, pg)
+		for _, c := range CanonicalLegacyGrants(g.Capability) {
+			if pg, ok := recordedCapabilityGrant(c); ok {
+				held = append(held, pg)
+			}
 		}
 	}
 	var asked []protocol.Grant

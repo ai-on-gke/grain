@@ -27,13 +27,18 @@ import (
 // catalogue keeps off that repository is refused before it is minted,
 // and grain-ci, which every job carries, is never judged.
 func TestCheckCIJobCatalogue(t *testing.T) {
-	cat := &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
-		"registry-push": {Restrictions: &model.CapabilityRestrictions{
-			Repos: model.Patterns{"acme/app"}, Kinds: model.Patterns{"ci"}, CIOnly: true,
-		}},
-		grainci.Grant: {Enabled: new(bool)},
-	}}
-	ok := ci.SandboxRequest{Repo: "acme/app", Capabilities: []string{grainci.Grant, "registry-push"}}
+	cat := &model.CapabilityCatalogue{
+		Servers: []model.CatalogueServer{
+			{ID: model.GrainCapabilityServerID, Enabled: new(bool)},
+		},
+		InProcess: map[string]model.CatalogueInProcess{
+			"registry-push": {Restrictions: &model.CapabilityRestrictions{
+				Repos: model.Patterns{"acme/app"}, Kinds: model.Patterns{"ci"}, CIOnly: true,
+			}},
+			grainci.LegacyName: {Enabled: new(bool)},
+		},
+	}
+	ok := ci.SandboxRequest{Repo: "acme/app", Capabilities: []string{grainci.Grant, grainci.LegacyName, "registry-push"}}
 	if err := daemon.CheckCIJobCatalogue(cat, ok); err != nil {
 		t.Fatalf("admitted job refused: %v", err)
 	}

@@ -6599,7 +6599,14 @@ func agentEscalatedCapabilities(task, requester model.Task) []string {
 		held[g.Capability] = true
 		out = append(out, g.Capability)
 	}
-	return append(out, model.UncoveredCapabilityRefs(task.Grants, requester.Grants)...)
+	childRefs := make([]model.Grant, 0, len(task.Grants))
+	for _, g := range task.Grants {
+		if g.Via == model.GrantByDefault && model.IsGrainCIGrant(g.Capability) {
+			continue
+		}
+		childRefs = append(childRefs, g)
+	}
+	return append(out, model.UncoveredCapabilityRefs(childRefs, requester.Grants)...)
 }
 
 // runNowComment is what a run-now leaves on the task's own thread. It

@@ -41,3 +41,36 @@ func TestGrainCIGrantReplacesBareGrainCI(t *testing.T) {
 		t.Error("HasGrainCI does not read a list of grants the way IsGrainCIGrant reads one")
 	}
 }
+
+// A repository's CI Mode attaches grain#ci with GrantByDefault, while a
+// standing session or a task on a GitHub-mode repository cannot hold
+// grain#ci at all: that default must not count as an uncovered parent
+// escalation, while a parent holding the retired bare grain-ci still covers
+// a child's canonical grain#ci grant.
+func TestDefaultGrainCIGrantIsNotAParentEscalation(t *testing.T) {
+	director := model.Task{ID: "9", Grants: []model.Grant{{Capability: "self-debug", Via: model.GrantByGrain}}}
+	child := model.Task{Grants: []model.Grant{
+		{Capability: model.GrainCIGrant, Via: model.GrantByDefault},
+	}}
+	if got := model.EscalatedCapabilities(child, director); len(got) != 0 {
+		t.Errorf("EscalatedCapabilities with default grain#ci = %v, want none", got)
+	}
+	if refusal := model.AutoApprovalRefusal(child, director, true); refusal != "" {
+		t.Errorf("AutoApprovalRefusal with default grain#ci = %q, want none", refusal)
+	}
+
+	labeled := model.Task{Grants: []model.Grant{
+		{Capability: model.GrainCIGrant, Via: model.GrantByLabel},
+	}}
+	if got := model.EscalatedCapabilities(labeled, director); len(got) != 1 || got[0] != model.GrainCIGrant {
+		t.Errorf("EscalatedCapabilities with labeled grain#ci and bare parent = %v, want [%s]", got, model.GrainCIGrant)
+	}
+
+	legacyParent := model.Task{ID: "10", Grants: []model.Grant{{Capability: "grain-ci", Via: model.GrantByDefault}}}
+	if !model.GrantsSubsetOf(child.Grants, legacyParent.Grants) {
+		t.Error("GrantsSubsetOf did not treat retired bare grain-ci on parent as covering canonical grain#ci")
+	}
+	if got := model.EscalatedCapabilities(labeled, legacyParent); len(got) != 0 {
+		t.Errorf("EscalatedCapabilities against parent holding retired grain-ci = %v, want none", got)
+	}
+}
