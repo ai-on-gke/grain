@@ -213,6 +213,9 @@ var notSettings = []string{
 	// would race the daemon writing new ones.
 	"task_comment",
 	"task_attachment",
+	// Who closed or reopened a task (model.TaskEvent): grain's record of
+	// what somebody did, written in the same breath as the closure.
+	"task_event",
 	// Runs, as against the settings they were run from. A qualification
 	// plan and a suite are settings (they are on SettingsTables); a run
 	// of one is grain's record of having run it.

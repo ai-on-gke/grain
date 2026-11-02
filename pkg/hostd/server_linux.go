@@ -214,6 +214,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		go func() {
 			<-ctx.Done()
 			ln.Close()
+			_ = os.Remove(s.Socket)
 		}()
 	}
 	go s.sweepExited(ctx)
@@ -468,15 +469,31 @@ func (s *Server) listen() (*net.UnixListener, error) {
 		}
 		_ = os.Remove(s.Socket)
 	}
-	// The socket is created under a umask that leaves nobody but its
-	// owner any access, so there is no window in which it is wider.
-	old := syscall.Umask(0o177)
-	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: s.Socket, Net: "unix"})
-	syscall.Umask(old)
+	// The socket is bound inside a fresh directory only its owner can
+	// enter, narrowed to 0600 there and only then renamed into place, so
+	// there is no window in which anyone else can reach it. Not by
+	// setting the umask around the bind: the umask is the whole
+	// process's, and a file or directory anything else in the process
+	// created in that window (a test running beside an in-process hostd)
+	// came out 0600 -- a directory nobody could create anything in.
+	private, err := os.MkdirTemp(dir, ".h")
 	if err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(s.Socket, 0o600); err != nil {
+	defer os.RemoveAll(private)
+	staged := filepath.Join(private, "s")
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: staged, Net: "unix"})
+	if err != nil {
+		return nil, err
+	}
+	// Close removes the socket by the name it now has, not the staged
+	// one (unixListener's own unlink would aim at the staged name).
+	ln.SetUnlinkOnClose(false)
+	if err := os.Chmod(staged, 0o600); err != nil {
+		ln.Close()
+		return nil, err
+	}
+	if err := os.Rename(staged, s.Socket); err != nil {
 		ln.Close()
 		return nil, err
 	}

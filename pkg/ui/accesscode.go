@@ -567,12 +567,59 @@ const errAccessCodeNeeded = "this daemon is single-tenant and every caller shows
 const errAccessCodeLimited = "too many wrong access codes: wait a minute and try again"
 
 // singleTenantGate is a single-tenant daemon's access gate, ahead of
-// everything else serveHTTP does: a caller with the access code (or an
-// in-process one, singleTenantTrusted) goes on, with its access session
-// renewed when it is due; anybody else gets the "Enter access code" page
-// or, for the API, a 401 -- never the app. It reports whether serveHTTP
+// everything else serveHTTP does: a caller authenticated by an
+// IdentityVerifier (IAP or a wrapper's proxy) and admitted by the allowlist,
+// or a caller with the access code (or an in-process one, singleTenantTrusted),
+// goes on; anybody else gets a 401/403 or, for the browser UI without an
+// assertion, the "Enter access code" page. It reports whether serveHTTP
 // should go on.
 func (s *Server) singleTenantGate(w http.ResponseWriter, r *http.Request, cfg IAPConfig) bool {
+	cv := cachedOrVerifyCaller(r)
+	if cv.present {
+		if cv.err != nil {
+			writeError(w, http.StatusUnauthorized, fmt.Errorf("identity assertion was not accepted: %w", cv.err))
+			return false
+		}
+		if cv.accessCodeWins {
+			if externalTokenFromContext(r.Context()) != nil {
+				return true
+			}
+			if tok, ok := bearerToken(r); ok && couldBeAccessCode(tok, cfg.LocalAPIToken) {
+				source := accessSource(r)
+				if !accessLimitExempt(r) && s.access.sourceLimited(source, time.Now()) {
+					writeError(w, http.StatusTooManyRequests, errors.New(errAccessCodeLimited))
+					return false
+				}
+				if !presentsAccessCode(r, cfg) {
+					if s.access.failed(source, time.Now()) {
+						writeError(w, http.StatusTooManyRequests, errors.New(errAccessCodeLimited))
+						return false
+					}
+					writeError(w, http.StatusUnauthorized, errors.New(errAccessCodeNeeded))
+					return false
+				}
+				return true
+			}
+			if issued, ok := accessSessionIssued(r, cfg); ok {
+				if time.Since(issued) > accessSessionRenewAfter {
+					setAccessCookie(w, r, cfg.LocalAPIToken, accessLifetime(cfg))
+				}
+				return true
+			}
+		}
+		if singleTenantOpenRoute(r) {
+			return true
+		}
+		if err := s.checkAllowedPrincipal(r.Context(), cv.id); err != nil {
+			writeError(w, http.StatusForbidden, err)
+			return false
+		}
+		if !checkVerifiedIdentityCSRF(w, r) {
+			return false
+		}
+		return true
+	}
+
 	if singleTenantOpenRoute(r) {
 		return true
 	}

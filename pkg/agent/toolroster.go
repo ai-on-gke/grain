@@ -92,6 +92,7 @@ func PublishedToolNames() []string {
 	// named here too.
 	add(mcp.NewPullRequestTools(nil, nil, mcp.PullRequestScope{}))
 	add(mcp.NewGrainCIWaitTools(nil, mcp.CIRepoScope{}))
+	add(mcp.NewGrainCIReadTools(nil, mcp.CIRepoScope{}))
 	add(mcp.NewRunCIJobTools(nil, mcp.CIRepoScope{}))
 	add(mcp.NewGrainCIArtifactTools(nil, mcp.CIRepoScope{}, ""))
 	add(mcp.NewNamespaceTools(mcp.NamespaceToolsConfig{}))

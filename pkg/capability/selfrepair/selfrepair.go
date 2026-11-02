@@ -52,7 +52,7 @@ import (
 // CapabilityName is the retired bare grant name this package's tool
 // was once offered under. It is kept so that a run still naming it
 // (model.CanonicalLegacyGrant reads it as model.GrainHostExecGrant) is
-// given the same tool; schema migration 83 rewrote every stored one.
+// given the same tool; schema migration 84 rewrote every stored one.
 const CapabilityName = "self-repair"
 
 // DefaultPollInterval is how often Confirm re-reads a task's comments

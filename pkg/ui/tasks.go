@@ -297,6 +297,13 @@ type Task struct {
 	// (mcp.FiledProposal).
 	SupersedeMoved []string             `json:"supersedeMoved,omitempty"`
 	SupersedeKept  []SupersedeKeptEntry `json:"supersedeKept,omitempty"`
+	// DroppedDefaults is the deployment and repository default grants
+	// the capability policy kept off this task when it was filed, each
+	// with the policy's reason -- the same thing the note on its thread
+	// says, for a caller filing over the API that reads no thread.
+	// Filled in only on the answer to the CreateTask call that dropped
+	// them, like SupersedeMoved.
+	DroppedDefaults []DroppedDefault `json:"droppedDefaults,omitempty"`
 	// Reverts is the ID of the task this one was filed to revert, and
 	// RevertedBy the ID of the task that reverted this one --
 	// model.LinkReverts and model.LinkRevertedBy.
@@ -856,14 +863,26 @@ type PullRequestEvent struct {
 // model.Transition. Inferred is model.Transition.Inferred: At is the
 // earliest the state can have begun, not a recorded moment, and the
 // timeline says so rather than showing it as precise.
+//
+// A close or reopen somebody asked for (model.TaskEvent) carries By --
+// who, as "<kind> <id>" (principalLabel) -- and the Reason they gave and
+// the Detail of what it cancelled. Its state is "closed", or "reopened"
+// (model.TransitionReopened) for the step that undid one.
 type Transition struct {
 	State    model.State `json:"state"`
 	At       time.Time   `json:"at"`
 	Inferred bool        `json:"inferred,omitempty"`
+	By       string      `json:"by,omitempty"`
+	Reason   string      `json:"reason,omitempty"`
+	Detail   string      `json:"detail,omitempty"`
 }
 
 func transitionFrom(t model.Transition) Transition {
-	return Transition{State: t.State, At: t.At, Inferred: t.Inferred}
+	out := Transition{State: t.State, At: t.At, Inferred: t.Inferred, Reason: t.Reason, Detail: t.Detail}
+	if t.By != nil {
+		out.By = principalLabel(*t.By)
+	}
+	return out
 }
 
 // Attempt is one of a task's runs, projected from model.Run.
@@ -2611,10 +2630,16 @@ func attachmentServingHeaders(stored string) (contentType, disposition string) {
 }
 
 // closeRequest is the body of POST /api/tasks/{id}/close: the choice
-// made at the moment of closing, and nothing else. See CloseOptions,
-// whose one field this is.
+// made at the moment of closing, and the reason given for it. See
+// CloseOptions, whose fields these are.
 type closeRequest struct {
-	ClosePullRequest bool `json:"close_pull_request"`
+	ClosePullRequest bool   `json:"close_pull_request"`
+	Reason           string `json:"reason,omitempty"`
+}
+
+// reopenRequest is the optional body of POST /api/tasks/{id}/reopen.
+type reopenRequest struct {
+	Reason string `json:"reason,omitempty"`
 }
 
 // handleClose closes a task, and closes its pull request too if -- and
@@ -2632,7 +2657,7 @@ func (s *Server) handleClose(w http.ResponseWriter, r *http.Request) {
 	if !readOptionalJSON(w, r, &req) {
 		return
 	}
-	if err := s.tasks.Close(r.Context(), id, CloseOptions{ClosePullRequest: req.ClosePullRequest}); err != nil {
+	if err := s.tasks.Close(r.Context(), id, CloseOptions{ClosePullRequest: req.ClosePullRequest, Reason: req.Reason}); err != nil {
 		writeClientError(w, err)
 		return
 	}
@@ -2652,7 +2677,11 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleReopen(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := s.tasks.Reopen(r.Context(), id); err != nil {
+	var req reopenRequest
+	if !readOptionalJSON(w, r, &req) {
+		return
+	}
+	if err := s.tasks.ReopenBecause(r.Context(), id, req.Reason); err != nil {
 		writeClientError(w, err)
 		return
 	}

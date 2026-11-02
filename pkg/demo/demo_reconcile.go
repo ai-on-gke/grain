@@ -61,7 +61,8 @@ func runDemoReconcile(ctx context.Context, store *model.Store, releases github.C
 	}
 }
 
-// demoReconcileCycle is one cycle of runDemoReconcile: "releases" then
+// demoReconcileCycle is one cycle of runDemoReconcile: "declarations",
+// "github-events", "github-ci-tails", "releases", "issue-imports", then
 // "suites", in the order orchestrator.Reconcilers runs them, each error
 // named after its reconciler as orchestrator.RunCycle names it.
 func demoReconcileCycle(ctx context.Context, store *model.Store, releases github.Client, now time.Time) error {
@@ -69,13 +70,32 @@ func demoReconcileCycle(ctx context.Context, store *model.Store, releases github
 	if releases != nil {
 		if v, ok := demoSimClients.Load(releases); ok {
 			if st, _ := v.(*demoSimState); st != nil {
+				if st.declarations != nil {
+					if err := runDemoReconcilers(ctx, orchestrator.Deps{
+						Store:        store,
+						Client:       releases,
+						Declarations: st.declarations,
+					}, now, "declarations"); err != nil {
+						errs = append(errs, err)
+					}
+				}
+				if st.simEvents != nil {
+					if err := processDemoGitHubWebhooks(ctx, store, st.simEvents, releases, st.calls, now); err != nil {
+						errs = append(errs, err)
+					}
+				}
 				if st.events != nil {
-					processDemoGitHubWebhooks(ctx, store, st.events, st.calls, now)
+					if err := processDemoGitHubWebhooks(ctx, store, st.events, releases, st.calls, now); err != nil {
+						errs = append(errs, err)
+					}
 				}
 				if st.calls != nil {
 					st.calls.pollDemoPullRequests(ctx, store)
 				}
 			}
+		}
+		if err := runDemoReconcilers(ctx, orchestrator.Deps{Store: store, Client: releases}, now, "github-ci-tails"); err != nil {
+			errs = append(errs, err)
 		}
 		if err := orchestrator.SyncReleases(ctx, store, releases, now); err != nil {
 			errs = append(errs, fmt.Errorf("releases: %w", err))
