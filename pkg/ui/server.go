@@ -135,7 +135,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	cv := verifyCallerNow(r)
 	r = r.WithContext(withCallerVerification(r.Context(), &cv))
 	if cv.present && cv.err != nil {
-		writeError(w, http.StatusUnauthorized, fmt.Errorf("identity assertion was not accepted: %w", cv.err))
+		writeAssertionRefused(w, r, cv.err)
 		return
 	}
 	if externalTokenFromContext(r.Context()) == nil && presentsExternalAgentToken(r) {

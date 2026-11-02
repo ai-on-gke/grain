@@ -114,8 +114,9 @@ type RemoteStatus struct {
 }
 
 type remoteSession struct {
-	m    *mux.Mux
-	peer RemotePeer
+	m       *mux.Mux
+	peer    RemotePeer
+	carries carryRegistry
 }
 
 func (r *Remote) sharedName() string {
@@ -202,6 +203,7 @@ func (r *Remote) Serve(ctx context.Context, conn net.Conn, peer RemotePeer) {
 		_ = prev.m.Close()
 	}
 	r.logf("grain daemon: grain hostd %s on %s (build %s) connected from %s", peer.Name, peer.Host, peer.Build, peer.Addr)
+	go sess.acceptCarries()
 	if r.OnChange != nil {
 		r.OnChange(peer.Name, true)
 	}
@@ -235,17 +237,24 @@ func (r *Remote) Dial(ctx context.Context) (net.Conn, error) {
 // DialHostd is Dial to the hostd named name. Another hostd being
 // connected is no answer: there is no fallback from one to another.
 func (r *Remote) DialHostd(ctx context.Context, name string) (net.Conn, error) {
+	_, st, err := r.dialSession(ctx, name)
+	return st, err
+}
+
+// dialSession opens a stream to the hostd named name, with the session
+// it went over.
+func (r *Remote) dialSession(ctx context.Context, name string) (*remoteSession, net.Conn, error) {
 	r.mu.Lock()
 	sess := r.cur[name]
 	r.mu.Unlock()
 	if sess == nil {
-		return nil, ErrRemoteNotConnected
+		return nil, nil, ErrRemoteNotConnected
 	}
 	st, err := sess.m.OpenStream(ctx)
 	if err != nil {
-		return nil, ErrRemoteNotConnected
+		return nil, nil, ErrRemoteNotConnected
 	}
-	return st, nil
+	return sess, st, nil
 }
 
 // Dialer is DialHostd for name, in Client.Dial's shape.

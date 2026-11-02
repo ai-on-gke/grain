@@ -43,6 +43,8 @@ type configRefusalBody struct {
 	Change []fileChange `json:"change"`
 	Docs   string       `json:"docs"`
 	URL    string       `json:"url"`
+	// Description is the note a refusal carries besides its edit.
+	Description string `json:"description"`
 }
 
 func seedID(t *testing.T, rec interface{ Result() *http.Response }, body string) string {

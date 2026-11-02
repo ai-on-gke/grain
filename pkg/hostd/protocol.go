@@ -57,6 +57,9 @@ const (
 
 	// Protocol 3.
 	frameSocketOwner byte = 'W' // JSON SocketOwner: the answer to OpSocketOwner
+
+	frameStaged    byte = 'Y' // JSON StageReply: the answer to OpStage
+	frameListening byte = 'N' // JSON Listening: the answer to OpListen
 )
 
 // ProtocolVersion is the hostd protocol this build speaks, and
@@ -71,7 +74,7 @@ const (
 // apart keep re-attaching to what is already running (the upgrade order
 // is never guaranteed: either side may be the newer one).
 const (
-	ProtocolVersion = 3
+	ProtocolVersion = 4
 	MinCompatible   = 1
 )
 
@@ -100,6 +103,26 @@ type Hello struct {
 	// capacity. Set by hostd alone.
 	Capacity int               `json:"capacity,omitempty"`
 	Labels   map[string]string `json:"labels,omitempty"`
+
+	// Remote is set by a hostd answering over the session it dialed out
+	// to the controller on (grain hostd -server): a machine that shares
+	// neither the daemon's filesystem nor its loopback, so a run's files
+	// are staged there with OpStage and grain's endpoints reach it with
+	// OpListen (carry.go). The three below are said only then.
+	Remote bool `json:"remote,omitempty"`
+	// Grain is the grain binary on hostd's machine, for the hooks a
+	// CLI there forks: the installer's current link when hostd was
+	// started through one, else hostd's own executable.
+	Grain string `json:"grain,omitempty"`
+	// StageRoot is the directory OpStage confines itself to, which
+	// every CLI entry's paths_under and cwd_under take on as well for a
+	// start over the session.
+	StageRoot string `json:"stage_root,omitempty"`
+	// CodexAuth is the codex login on hostd's machine
+	// ($CODEX_HOME/auth.json, else ~/.codex/auth.json), when there is
+	// one: what a codex run there links to in place of a login the
+	// daemon holds.
+	CodexAuth string `json:"codex_auth,omitempty"`
 }
 
 // ThisHello is this build's Hello; build is its version string.
@@ -141,6 +164,10 @@ func (h Hello) SupportsAttach() bool { return h.Protocol >= 2 }
 // SupportsSocketOwner reports whether a hostd that said h serves
 // OpSocketOwner.
 func (h Hello) SupportsSocketOwner() bool { return h.Protocol >= 3 }
+
+// SupportsCarry reports whether a hostd that said h serves OpStage and
+// OpListen, and opens OpCarry streams back to the daemon.
+func (h Hello) SupportsCarry() bool { return h.Protocol >= 4 }
 
 // WaitDelay bounds how long hostd waits for a process's stdout and stderr
 // to close once the process itself has exited or been killed -- the same
@@ -188,6 +215,21 @@ const (
 	// OpSocketOwner asks which process in a tree hostd started holds a
 	// socket inode open (portforward.Relay.InodeOwner).
 	OpSocketOwner Op = "socket_owner"
+
+	// OpStage is one filesystem operation on hostd's machine, confined
+	// to Hello.StageRoot (Request.Stage): how a run's files are staged
+	// where its CLI runs, when that is not where the daemon is. Served
+	// only over a session hostd dialed out on.
+	OpStage Op = "stage"
+	// OpListen asks hostd to listen on its own loopback and carry every
+	// connection made there back to the daemon, as a stream hostd opens
+	// over the session, beginning with an OpCarry request naming ID. It
+	// is answered with frameListening, and the listener lives until the
+	// daemon closes the request's stream. Served only over a session.
+	OpListen Op = "listen"
+	// OpCarry is the first frame of a stream hostd opens to the daemon:
+	// a connection made to the OpListen listener whose ID it names.
+	OpCarry Op = "carry"
 )
 
 // Request is the daemon's first frame.
@@ -222,6 +264,8 @@ type Request struct {
 	Idle bool `json:"idle,omitempty"`
 	// Inode is the socket inode OpSocketOwner asks about.
 	Inode uint64 `json:"inode,omitempty"`
+	// Stage is OpStage's operation.
+	Stage *StageOp `json:"stage,omitempty"`
 }
 
 // SocketOwner is the answer to OpSocketOwner: the pid holding Request.Inode

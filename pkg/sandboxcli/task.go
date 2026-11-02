@@ -253,6 +253,13 @@ func (c *sandboxCLI) taskPropose(p sandboxArgs) error {
 	if res.ApprovalNote != "" {
 		fmt.Fprintln(c.out, res.ApprovalNote)
 	}
+	// The capability policy's own account of a default it kept off the
+	// proposal: nobody asked for a default, so nothing else tells the run
+	// that the task it filed starts without one.
+	for _, d := range res.DroppedDefaults {
+		fmt.Fprintf(c.out, "Default grant %s was not attached to it: %s.\n",
+			d.Grant, strings.TrimSuffix(strings.TrimSpace(d.Reason), "."))
+	}
 	return nil
 }
 

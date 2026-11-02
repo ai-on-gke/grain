@@ -26,7 +26,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -36,14 +35,19 @@ import (
 )
 
 // CheckUIAllowedPrincipals validates -ui-allowed-principals (or
-// $GRAIN_ALLOWED_PRINCIPALS when the flag is unset).
+// $GRAIN_ALLOWED_PRINCIPALS when the flag is unset), including refusing any
+// serviceAccount: entry that names a gcp-key agent pool account.
 func CheckUIAllowedPrincipals(cfg Config) error {
+	return checkUIAllowedPrincipalsWithPool(cfg, ui.GCPKeyPoolEmails(cfg.GcpServiceAccountEmail, cfg.GcpServiceAccountCount, cfg.GcpProject))
+}
+
+func checkUIAllowedPrincipalsWithPool(cfg Config, gcpPoolEmails []string) error {
 	if len(cfg.UiAllowedPrincipals) > 0 {
-		_, err := ui.ParseAllowedPrincipals(cfg.UiAllowedPrincipals)
+		_, err := ui.ValidateAllowedPrincipals(cfg.UiAllowedPrincipals, gcpPoolEmails)
 		return err
 	}
 	if env := strings.TrimSpace(os.Getenv("GRAIN_ALLOWED_PRINCIPALS")); env != "" {
-		_, err := ui.ParseAllowedPrincipals(ui.SplitAllowedPrincipals(env))
+		_, err := ui.ValidateAllowedPrincipals(ui.SplitAllowedPrincipals(env), gcpPoolEmails)
 		return err
 	}
 	return nil
@@ -133,9 +137,29 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	if reader, ok := stateRepo.(ui.SettingsHistoryReader); ok {
 		settingsHistory = reader
 	}
-	provisionedSAs := gcpkey.PoolEmails(cfg.GcpServiceAccountEmail, cfg.GcpServiceAccountCount, cfg.GcpProject)
+	gcpPoolSAs := ui.GCPKeyPoolEmails(cfg.GcpServiceAccountEmail, cfg.GcpServiceAccountCount, cfg.GcpProject)
+	combinedPoolSAs := append([]string(nil), gcpPoolSAs...)
+	if store != nil {
+		if mc, err := store.GetConfig(context.Background()); err == nil && mc != nil {
+			combinedPoolSAs = append(combinedPoolSAs, ui.GCPKeyPoolEmails(mc.GCPServiceAccountEmail, mc.GCPServiceAccountCount, mc.GCPProject)...)
+		}
+	}
+	if err := checkUIAllowedPrincipalsWithPool(cfg, combinedPoolSAs); err != nil {
+		return nil, err
+	}
+	var provisionedSAs []string
 	if proj := strings.TrimSpace(cfg.GcpProject); proj != "" {
-		provisionedSAs = append(provisionedSAs, "grain-daemon@"+proj+".iam.gserviceaccount.com")
+		daemonSA := "grain-daemon@" + strings.ToLower(proj) + ".iam.gserviceaccount.com"
+		inPool := false
+		for _, sa := range combinedPoolSAs {
+			if strings.EqualFold(sa, daemonSA) {
+				inPool = true
+				break
+			}
+		}
+		if !inPool {
+			provisionedSAs = append(provisionedSAs, daemonSA)
+		}
 	}
 	uiCfg := ui.Config{
 		Actor:                      ui.DefaultActor(ActorID(cfg.Actor)),
@@ -148,6 +172,7 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		RequireIAP:                 cfg.UiRequireIAP,
 		AllowedPrincipals:          cfg.UiAllowedPrincipals,
 		ProvisionedServiceAccounts: provisionedSAs,
+		GCPKeyServiceAccounts:      gcpPoolSAs,
 		DBDriver:                   cfg.DbDriver,
 		DBDSN:                      cfg.DbDSN,
 		DataDir:                    cfg.DataDir,
