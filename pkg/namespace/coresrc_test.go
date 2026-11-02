@@ -17,6 +17,7 @@ package namespace
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -235,4 +236,66 @@ func TestCoreSource(t *testing.T) {
 			t.Errorf("CoreSource = %q, %q", dir, m)
 		}
 	})
+}
+
+// src://pkg is bigger than maxWalkFiles -- core's pkg/ alone is over 3000
+// files -- and a grep of it has to reach the packages that sort last,
+// core's beneath a layer's included, or an agent reads a symbol that is
+// there as one that is not. node_modules/ is passed over unless named.
+func TestGrepOfSrcReachesPastTheDefaultWalkCap(t *testing.T) {
+	layer, core := t.TempDir(), t.TempDir()
+	layerFiles := map[string]string{"go.mod": layerGoMod}
+	for i := 0; i < maxWalkFiles+500; i++ {
+		layerFiles[fmt.Sprintf("pkg/aaa/f%04d.go", i)] = "package aaa\n"
+	}
+	writeTree(t, layer, layerFiles)
+	writeTree(t, core, map[string]string{
+		"go.mod":                       "module github.com/ai-on-gke/grain\n",
+		"pkg/namespace/coresrc.go":     "package namespace\n\nfunc CoreSource() {}\n",
+		"pkg/ui/node_modules/x/x.js":   "func CoreSource() {}\n",
+		"pkg/ui/node_modules/y/y.go":   "func CoreSource() {}\n",
+		"pkg/zzz/node_modules_note.go": "// not a node_modules/ dir\n",
+	})
+	s := &Server{SrcDir: layer, CoreSrcDir: core, CoreModule: CoreModulePath + "@v0.0.0-20261030003551-7e1761c2dc31"}
+	scope := Scope{MayReadSrc: true}
+	ctx := context.Background()
+
+	for _, root := range []string{"pkg", "", "core/pkg"} {
+		res, err := s.Grep(ctx, scope, "src", root, GrepOptions{Pattern: "func CoreSource"})
+		if err != nil {
+			t.Fatalf("grep src://%s: %v", root, err)
+		}
+		// src:// itself holds core twice: beneath the layer, and as core/.
+		if res.WalkTruncated || res.Truncated || res.Matches == 0 || strings.Contains(res.Output, "node_modules") ||
+			!strings.Contains(res.Output, "namespace/coresrc.go:3:func CoreSource") {
+			t.Errorf("grep src://%s = %+v, want core's coresrc.go, untruncated", root, res)
+		}
+	}
+	res, err := s.Grep(ctx, scope, "src", "pkg", GrepOptions{Pattern: "func CoreSource", GlobFilter: "**/node_modules/**"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Matches != 2 {
+		t.Errorf("grep src://pkg --glob '**/node_modules/**' = %q, want both node_modules files", res.Output)
+	}
+	matches, err := s.Glob(ctx, scope, "src", "pkg", "**/*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(matches, ","); !strings.Contains(got, "namespace/coresrc.go") || strings.Contains(got, "node_modules/") || len(matches) != maxWalkFiles+502 {
+		t.Errorf("glob src://pkg **/*.go = %d matches, want %d with core's and no node_modules/", len(matches), maxWalkFiles+502)
+	}
+}
+
+// The higher cap is src://'s alone: every other scheme still stops at
+// maxWalkFiles.
+func TestWalkCapIsHigherForSrcOnly(t *testing.T) {
+	if walkCap("src") != maxSrcWalkFiles || maxSrcWalkFiles <= maxWalkFiles {
+		t.Errorf("walkCap(src) = %d, want %d (> %d)", walkCap("src"), maxSrcWalkFiles, maxWalkFiles)
+	}
+	for _, scheme := range []string{"ci", "task", "config", "memory", "deploy"} {
+		if walkCap(scheme) != maxWalkFiles {
+			t.Errorf("walkCap(%s) = %d, want %d", scheme, walkCap(scheme), maxWalkFiles)
+		}
+	}
 }
