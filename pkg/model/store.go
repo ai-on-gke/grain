@@ -3854,6 +3854,15 @@ func (s *Store) OrderKeyForNewTask(ctx context.Context, atFront bool) (float64, 
 // rather than rejected. ids keep their relative order among themselves,
 // so dragging a multi-selection reorders it as a block rather than by id.
 //
+// The list sorts by priority and base-branch repair ahead of OrderKey
+// (taskQueueOrderSQL), and Reorder never changes either, so each moved
+// task is placed only against neighbours in its own slice of that order
+// (reorderBounds): a neighbour from another slice stands for "the head"
+// or "the tail" of this one, and a drop among another slice's tasks
+// takes the moved task as far that way as its own slice goes. Comparing
+// keys across slices is what used to invert the bounds at a priority
+// boundary and land the task on the wrong side (grain/task-2339).
+//
 // A neighbour named by afterID or beforeID that does not exist is an
 // error: both are read fresh from the store inside this call's own
 // transaction, so this can only mean the caller's own view was already
@@ -3875,26 +3884,227 @@ func (s *Store) Reorder(ctx context.Context, ids []string, afterID, beforeID *st
 		if err != nil {
 			return err
 		}
-		lower, upper, err := orderKeyBounds(ctx, tx, afterID, beforeID)
+		groups, err := groupByQueueSlice(ctx, tx, ordered)
 		if err != nil {
 			return err
 		}
-		if !orderKeysFitBetween(lower, upper, len(ordered)) {
+		bounds, fit, err := reorderBounds(ctx, tx, groups, afterID, beforeID)
+		if err != nil {
+			return err
+		}
+		if !fit {
 			if err := rebalanceOrderKeys(ctx, tx); err != nil {
 				return err
 			}
-			if lower, upper, err = orderKeyBounds(ctx, tx, afterID, beforeID); err != nil {
+			if bounds, _, err = reorderBounds(ctx, tx, groups, afterID, beforeID); err != nil {
 				return err
 			}
 		}
-		for i, key := range splitOrderKeys(lower, upper, len(ordered)) {
-			if _, err := tx.ExecContext(ctx,
-				"UPDATE `task` SET `order_key` = ? WHERE `id` = ?", key, ordered[i]); err != nil {
-				return err
+		for i, g := range groups {
+			if bounds[i].skip {
+				continue
+			}
+			for j, key := range splitOrderKeys(bounds[i].lower, bounds[i].upper, len(g.ids)) {
+				if _, err := tx.ExecContext(ctx,
+					"UPDATE `task` SET `order_key` = ? WHERE `id` = ?", key, g.ids[j]); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
 	})
+}
+
+// queueSlice is the part of taskQueueOrderSQL that sorts ahead of
+// order_key: a task's numeric priority and whether it fixes a base
+// branch. OrderKey only orders tasks within one slice -- a P5 task with
+// a smaller key than a P9 one still lists below it -- so Reorder has to
+// place each moved task against neighbours in its own slice, never
+// against the keys of tasks from another one (grain/task-2339).
+type queueSlice struct {
+	priority int
+	fixes    bool
+}
+
+// ahead reports whether slice a lists ahead of slice b in
+// taskQueueOrderSQL.
+func (a queueSlice) ahead(b queueSlice) bool {
+	if a.priority != b.priority {
+		return a.priority > b.priority
+	}
+	return a.fixes && !b.fixes
+}
+
+// sliceGroup is the moved ids that share one queueSlice, in their own
+// current OrderKey order.
+type sliceGroup struct {
+	slice queueSlice
+	ids   []string
+}
+
+// sliceBounds is where one sliceGroup lands: strictly between lower and
+// upper (either may be nil), or nowhere at all when skip says the drop
+// gives that slice no position to take.
+type sliceBounds struct {
+	lower, upper *float64
+	skip         bool
+}
+
+func queueSliceOf(ctx context.Context, tx querier, taskID string) (queueSlice, float64, error) {
+	var s queueSlice
+	var k float64
+	var fixesOrder int
+	err := tx.QueryRowContext(ctx,
+		"SELECT `t`.`priority`, "+fixesBaseBranchOrderSQL+", `t`.`order_key` FROM `task` AS `t` WHERE `t`.`id` = ?",
+		taskID).Scan(&s.priority, &fixesOrder, &k)
+	if errors.Is(err, sql.ErrNoRows) {
+		return s, 0, fmt.Errorf("reordering: no such task %s", taskID)
+	}
+	s.fixes = fixesOrder == 0
+	return s, k, err
+}
+
+// groupByQueueSlice splits ordered (already in OrderKey order) by
+// queueSlice, keeping that order within each group.
+func groupByQueueSlice(ctx context.Context, tx querier, ordered []string) ([]sliceGroup, error) {
+	var groups []sliceGroup
+	for _, id := range ordered {
+		s, _, err := queueSliceOf(ctx, tx, id)
+		if err != nil {
+			return nil, err
+		}
+		found := false
+		for i := range groups {
+			if groups[i].slice == s {
+				groups[i].ids = append(groups[i].ids, id)
+				found = true
+				break
+			}
+		}
+		if !found {
+			groups = append(groups, sliceGroup{slice: s, ids: []string{id}})
+		}
+	}
+	return groups, nil
+}
+
+// reorderBounds resolves afterID/beforeID into each group's own bounds,
+// read inside Reorder's own transaction, never trusted from an earlier
+// read -- the same "re-read, never pin" discipline IsBlocked's own doc
+// comment argues for. fit is false when any group's bounds are too
+// close together (or, from a tie, not ordered at all) to split, which is
+// Reorder's signal to rebalance first.
+func reorderBounds(ctx context.Context, tx querier, groups []sliceGroup, afterID, beforeID *string) ([]sliceBounds, bool, error) {
+	type neighbour struct {
+		slice queueSlice
+		key   float64
+	}
+	var after, before *neighbour
+	if afterID != nil {
+		s, k, err := queueSliceOf(ctx, tx, *afterID)
+		if err != nil {
+			return nil, false, err
+		}
+		after = &neighbour{s, k}
+	}
+	if beforeID != nil {
+		s, k, err := queueSliceOf(ctx, tx, *beforeID)
+		if err != nil {
+			return nil, false, err
+		}
+		before = &neighbour{s, k}
+	}
+	moved := map[string]bool{}
+	for _, g := range groups {
+		for _, id := range g.ids {
+			moved[id] = true
+		}
+	}
+	bounds := make([]sliceBounds, len(groups))
+	fit := true
+	for i, g := range groups {
+		afterIn := after != nil && after.slice == g.slice
+		beforeIn := before != nil && before.slice == g.slice
+		var b sliceBounds
+		var err error
+		switch {
+		case afterIn && beforeIn:
+			b.lower, b.upper = &after.key, &before.key
+		case afterIn:
+			// The next task in this slice is in another one, so the drop
+			// is at the tail of this slice's visible run: just after
+			// afterID, and still ahead of any later task of this slice a
+			// filter is hiding.
+			b.lower = &after.key
+			b.upper, err = sliceKeyBeyond(ctx, tx, g.slice, moved, after.key, true)
+		case beforeIn:
+			// Dropped at the head of this slice's visible run, below a
+			// task from a slice listed ahead of it: just before beforeID.
+			b.upper = &before.key
+			b.lower, err = sliceKeyBeyond(ctx, tx, g.slice, moved, before.key, false)
+		case after == nil && before == nil:
+			// An empty list: nothing to place against.
+		case before != nil && before.slice.ahead(g.slice):
+			// Dropped among tasks this slice lists below: Reorder never
+			// changes a task's priority, so as far up as it can go.
+			b.upper, err = sliceExtreme(ctx, tx, g.slice, moved, "MIN")
+		case after != nil && g.slice.ahead(after.slice):
+			// Dropped among tasks this slice lists ahead of: as far down
+			// as it can go.
+			b.lower, err = sliceExtreme(ctx, tx, g.slice, moved, "MAX")
+		default:
+			// Dropped between the slices around this one, where it already
+			// sits: there is nothing in its own slice to move it past.
+			b.skip = true
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		if !b.skip && !orderKeysFitBetween(b.lower, b.upper, len(g.ids)) {
+			fit = false
+		}
+		bounds[i] = b
+	}
+	return bounds, fit, nil
+}
+
+// sliceKeyBeyond is the OrderKey of the nearest task in slice s (other
+// than the ones being moved) past key -- above it when up, below it
+// otherwise -- or nil when there is none.
+func sliceKeyBeyond(ctx context.Context, tx querier, s queueSlice, moved map[string]bool, key float64, up bool) (*float64, error) {
+	agg, cmp := "MIN", ">"
+	if !up {
+		agg, cmp = "MAX", "<"
+	}
+	return sliceAggregate(ctx, tx, s, moved, agg, "`t`.`order_key` "+cmp+" ?", key)
+}
+
+// sliceExtreme is the smallest ("MIN") or largest ("MAX") OrderKey in
+// slice s among the tasks not being moved, or nil when there are none.
+func sliceExtreme(ctx context.Context, tx querier, s queueSlice, moved map[string]bool, agg string) (*float64, error) {
+	return sliceAggregate(ctx, tx, s, moved, agg, "1 = 1")
+}
+
+func sliceAggregate(ctx context.Context, tx querier, s queueSlice, moved map[string]bool, agg, cond string, args ...any) (*float64, error) {
+	fixesOrder := 1
+	if s.fixes {
+		fixesOrder = 0
+	}
+	q := "SELECT " + agg + "(`t`.`order_key`) FROM `task` AS `t` WHERE `t`.`priority` = ? AND " +
+		fixesBaseBranchOrderSQL + " = ? AND " + cond
+	all := append([]any{s.priority, fixesOrder}, args...)
+	for id := range moved {
+		q += " AND `t`.`id` <> ?"
+		all = append(all, id)
+	}
+	var k sql.NullFloat64
+	if err := tx.QueryRowContext(ctx, q, all...).Scan(&k); err != nil {
+		return nil, err
+	}
+	if !k.Valid {
+		return nil, nil
+	}
+	return &k.Float64, nil
 }
 
 // MoveToFrontOfBacklog places ids at the front of the backlog: ahead of
@@ -4072,28 +4282,6 @@ func sortByOrderKey(ctx context.Context, tx querier, ids []string) ([]string, ma
 	return ordered, keys, nil
 }
 
-// orderKeyBounds resolves Reorder's afterID/beforeID to the OrderKey
-// values already in the store -- read inside Reorder's own transaction,
-// never trusted from an earlier read, the same "re-read, never pin"
-// discipline IsBlocked's own doc comment argues for.
-func orderKeyBounds(ctx context.Context, tx querier, afterID, beforeID *string) (lower, upper *float64, err error) {
-	if afterID != nil {
-		k, err := orderKeyOf(ctx, tx, *afterID)
-		if err != nil {
-			return nil, nil, err
-		}
-		lower = &k
-	}
-	if beforeID != nil {
-		k, err := orderKeyOf(ctx, tx, *beforeID)
-		if err != nil {
-			return nil, nil, err
-		}
-		upper = &k
-	}
-	return lower, upper, nil
-}
-
 func orderKeyOf(ctx context.Context, tx querier, taskID string) (float64, error) {
 	var k float64
 	err := tx.QueryRowContext(ctx, "SELECT `order_key` FROM `task` WHERE `id` = ?", taskID).Scan(&k)
@@ -4114,6 +4302,9 @@ func orderKeysFitBetween(lower, upper *float64, n int) bool {
 	if lower == nil || upper == nil {
 		return true
 	}
+	// An inverted or tied pair -- neighbours whose keys disagree with the
+	// order they list in -- leaves no room at all; the queue-ordered
+	// rebalance puts them back in line.
 	return (*upper-*lower)/float64(n+1) >= minOrderKeyGap
 }
 
@@ -4146,14 +4337,16 @@ func splitOrderKeys(lower, upper *float64, n int) []float64 {
 }
 
 // rebalanceOrderKeys renumbers every task's OrderKey, ascending and
-// spaced by orderKeySpacing, without changing their relative order --
+// spaced by orderKeySpacing, in taskQueueOrderSQL's own order -- so the
+// list keeps exactly the order it shows, and afterwards OrderKey agrees
+// with it across priority slices too, not only within one --
 // Reorder's own backstop against minOrderKeyGap, restoring room to split
 // between two neighbours that repeated drops have crowded together. It
 // runs inside Reorder's own transaction, so the renumbering and the move
 // that triggered it land together or not at all.
 func rebalanceOrderKeys(ctx context.Context, tx *sql.Tx) error {
 	var ids []string
-	if err := each(ctx, tx, "SELECT `id` FROM `task` ORDER BY `order_key`, `id`", nil,
+	if err := each(ctx, tx, "SELECT `t`.`id` FROM `task` AS `t` ORDER BY "+taskQueueOrderSQL, nil,
 		func(rows *sql.Rows) error {
 			var id string
 			if err := rows.Scan(&id); err != nil {
