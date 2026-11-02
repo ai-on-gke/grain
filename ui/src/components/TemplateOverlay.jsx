@@ -50,6 +50,7 @@ import {
 } from "./TemplateFields.jsx";
 import BranchField from "./BranchField.jsx";
 import RepoField from "./RepoField.jsx";
+import { wholeNumber } from "../wholeNumber.js";
 import WriteReposField from "./WriteReposField.jsx";
 import {
   configuredCapabilities,
@@ -170,6 +171,9 @@ function TemplateOverlay({
   const [stale, setStale] = useState(null);
   // Held from when the pane opened, ScheduleOverlay's openedRevision.
   const [openedRevision] = useState(template?.revision);
+  // Whether the last Save was refused for a priority that is not a whole
+  // number from 1 up; cleared as soon as the box is edited again.
+  const [priorityInvalid, setPriorityInvalid] = useState(false);
 
   const submit = async (evt) => {
     evt.preventDefault();
@@ -219,8 +223,20 @@ function TemplateOverlay({
     // (ui.CreateTemplateRequest.Priority). Blank leaves it on the
     // default; on an edit that is said as 0, which clears a saved one
     // (ui.UpdateTemplateRequest.Priority).
-    const priority = parseInt(String(data.get("priority") || "").trim(), 10);
-    if (!Number.isNaN(priority)) payload.priority = priority;
+    //
+    // A whole number from 1 up, as on the task pane's own form
+    // (EditTaskForm's priorityValid). Not parseInt, which read "1e2" as
+    // 1 and "2.5" as 2 without a word; and the box's own min and step
+    // let "1e2" through, so they are checked here as well.
+    const priorityText = String(data.get("priority") || "").trim();
+    if (
+      priorityText !== "" &&
+      !(/^\d+$/.test(priorityText) && wholeNumber(priorityText) >= 1)
+    ) {
+      setPriorityInvalid(true);
+      return;
+    }
+    if (priorityText !== "") payload.priority = wholeNumber(priorityText);
     else if (!isNew) payload.priority = 0;
     try {
       const saved = isNew
@@ -390,7 +406,13 @@ function TemplateOverlay({
             type="number"
             defaultValue={template?.priority ?? ""}
             placeholder="5"
-            helperText="optional -- every task this template files starts at this priority; default 5, higher numbers run first"
+            onChange={() => setPriorityInvalid(false)}
+            error={priorityInvalid}
+            helperText={
+              priorityInvalid
+                ? "a whole number, 1 or more; default 5, higher numbers run first"
+                : "optional -- every task this template files starts at this priority; default 5, higher numbers run first"
+            }
             inputProps={{ min: 1, step: 1 }}
             autoComplete="off"
             fullWidth
