@@ -320,8 +320,10 @@ func closeInTx(ctx context.Context, tx *sql.Tx, taskID string, now time.Time, by
 	var before time.Time
 	if obs.ClosedAt != nil {
 		before = *obs.ClosedAt
+	} else {
+		// A standing closure keeps its stamp, as in ObserveClose.
+		obs.ClosedAt = &now
 	}
-	obs.ClosedAt = &now
 	obs.ObservedAt = &now
 	if err := observe(ctx, tx, *obs); err != nil {
 		return err
