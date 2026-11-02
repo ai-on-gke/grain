@@ -137,7 +137,11 @@ func resumeLater(ctx context.Context, waiter TaskWaiter, unpushed UnpushedWorkRe
 		return Result{Text: "Not stopped: " + err.Error(), IsError: true}
 	}
 	encoded, _ := json.Marshal(taken)
-	return Result{Text: parkedMarker + " This task is queued again once " + taken.Describe() +
+	queued := "once " + taken.Describe()
+	if taken.Empty() {
+		queued = "on the next cycle"
+	}
+	return Result{Text: parkedMarker + " This task is queued again " + queued +
 		"; the next run's prompt says this one was suspended, and why. This ends your run: stop " +
 		"here and take no further actions.\n\n" + resumeLaterTakenPrefix + string(encoded)}
 }
@@ -181,16 +185,24 @@ func ResumeLaterWhen(args map[string]any, now time.Time) (model.ResumeOn, error)
 
 // ResumeLaterTaken is the condition a successful resume_later call's
 // result says the daemon took, or false for any other text.
+//
+// The result a run sees is not only the tool's own: the registry appends
+// grain's notices after it (the deadline, the tool budget, a person's
+// words posted mid-run), so only the one JSON value after the first
+// resumeLaterTakenPrefix is read, and whatever follows it is left alone.
+// The first, not the last: a person's message relayed in a notice could
+// quote the prefix itself.
 func ResumeLaterTaken(text string) (model.ResumeOn, bool) {
 	if !strings.HasPrefix(text, parkedMarker) {
 		return model.ResumeOn{}, false
 	}
-	i := strings.LastIndex(text, "\n"+resumeLaterTakenPrefix)
+	i := strings.Index(text, "\n"+resumeLaterTakenPrefix)
 	if i < 0 {
 		return model.ResumeOn{}, false
 	}
 	var when model.ResumeOn
-	if err := json.Unmarshal([]byte(strings.TrimSpace(text[i+1+len(resumeLaterTakenPrefix):])), &when); err != nil {
+	dec := json.NewDecoder(strings.NewReader(text[i+1+len(resumeLaterTakenPrefix):]))
+	if err := dec.Decode(&when); err != nil {
 		return model.ResumeOn{}, false
 	}
 	return when, true
