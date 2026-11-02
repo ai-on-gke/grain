@@ -2,7 +2,7 @@
 
 **Owner:** @bwsalmon
 
-Grain is a single-tenant control plane that drives coding agents against git repositories, verifies their changes with built-in or forge CI, and lands approved pull requests through a batching merge queue. This document describes the architecture of the system: the runtime planes, how a task moves from filing to a merged commit, how each plane upgrades without interrupting active work, and where the security boundaries sit.
+Grain is a single-tenant control plane that drives coding agents against git repositories, verifies their changes with built-in or forge CI, and lands approved pull requests through a merge queue that merges each change on its own, re-checking it against the current branch tip when it overlaps changes that landed after it forked. This document describes the architecture of the system: the runtime planes, how a task moves from filing to a merged commit, how each plane upgrades without interrupting active work, and where the security boundaries sit.
 
 Each section links to the specifications and reference documents that define individual subsystems in detail:
 
@@ -75,17 +75,19 @@ Grain runs as one controller process (`grain daemon`). On a machine install (`sc
 **Reconcilers.** All orchestration is level-triggered (`pkg/orchestrator`). On each cycle, reconcilers read the store and forge state and advance each record one step:
 
 - **Dispatch** (`reconcileDispatch`, `pkg/dispatch`). Admits queued tasks in priority order ([`task-priorities.design.md`](task-priorities.design.md)) once dependencies close, the target repository is reachable, a model connection has capacity, the shared CPU, memory, and disk budget fits, and every grant can be prepared.
-- **CI** (`reconcileCI`, `pkg/ci`, `pkg/daemon/ci.go`). Plans `.grain/workflows` DAGs and runs jobs in sandboxes, caching verdicts by content fingerprint. Repositories can run grain's built-in CI, external forge checks such as GitHub Actions (`ci_mode: github`), or both.
-- **Merge queue** (`reconcileSync`, `reconcileMergeBatches`, `pkg/forge`, `pkg/orchestrator/mergepredicate.go`). Enforces the merge predicate, tests and lands ready pull requests in batches, and schedules repair runs on conflicts or failures.
-- **Schedules, triggers, and goals** (`reconcileSchedules`, `reconcileSystemSchedules`, `reconcilePathTriggers`, `reconcileTaskGoals`, `reconcileConsoleSessions`). Fires recurring templates, suites, path triggers, standing sessions, and goal checks.
-- **State repo sync** (`pkg/staterepo`). Exports configuration tables and YAML projections to `grain/config` (or an external config repository) and applies merged configuration pull requests back into the live database ([`settings.design.md`](settings.design.md)).
+- **CI** (`reconcileCI`, `pkg/ci`, `pkg/daemon/ci.go`). Plans `.grain/workflows` DAGs and runs jobs in sandboxes, caching verdicts by content fingerprint. Each repository has one CI mode (`model.CIMode`): `grain` gates on grain's built-in CI and ignores forge check runs, `github` gates on external forge checks such as GitHub Actions, and `none` skips CI verification. Forge checks are recorded beside grain CI runs from webhooks and the pull request sync (`pkg/orchestrator/githubci.go`, `reconcileGitHubCITails`, [`docs/github-ci.md`](../../docs/github-ci.md)).
+- **Merge queue** (`reconcileSync` → `SyncPullRequestsGuarding` in `pkg/orchestrator/sync.go`, `pkg/forge`, `pkg/orchestrator/mergepredicate.go`, `mergerecheck.go`). Merges each pull request on its own once it satisfies the merge predicate, re-checks a change on the merge-queue ref when it overlaps what has landed since it forked, and schedules repair runs on conflicts or failures. There is no batching ([`docs/merge-queue-behind.md`](../../docs/merge-queue-behind.md)).
+- **Base-branch CI and repair** (`reconcileBaseBranchCI`, `reconcileBaseBranchDispatch`, `pkg/dispatch/repair.go`). Runs CI on each new base-branch tip after merges. A red base branch earns a repair task (`FixesBaseBranch`), which dispatch admits from a reserved slice of the sandbox budget, pre-empting lower-priority work if it must. A red base does not hold the merge queue.
+- **Schedules, triggers, wakes, and goals** (`reconcileSchedule`, `reconcileSystemSchedules`, `reconcileScheduledWorkflows`, `reconcilePathTriggers`, `reconcileWake`, `reconcileTaskGoals`, `reconcileConsoleSessions`). Fires recurring templates, suites, scheduled workflows, path triggers, and standing sessions, wakes suspended tasks whose condition has fired, and runs goal checks.
+- **Reviews, holds, and upgrades** (`reconcileReviews`, `reconcileSecurityHolds`, `reconcilePipelinePause`, `reconcileAutoUpgrade`, `reconcileScheduledUpgrade`, `reconcileUpgradeCheck`, `reconcileSandboxes`). Drives second-agent and security reviews, honours pipeline pauses (including the upgrade hold), starts and checks controller upgrades, and reaps sandboxes no live run claims. The full ordered list is `orchestrator.Reconcilers` in `pkg/orchestrator/cycle.go`.
+- **State repo sync** (`pkg/staterepo`, driven by `daemon.StateManager` in `pkg/daemon/statemanager.go` beside the reconcile loop). Exports configuration tables and YAML projections to `grain/config` (or an external config repository) and applies merged configuration pull requests back into the live database ([`settings.design.md`](settings.design.md)).
 - **Liveness** (`pkg/orchestrator/liveness.go`). Classifies every non-terminal task state as driven by a named reconciler, awaiting a person's action, or awaiting an external answer under a deadline, escalating driven states that exceed their patience threshold.
 
 **State.** Operational data, reviewable configuration, secrets, and workspace artifacts live in four stores ([`settings.design.md`](settings.design.md)):
 
 | Store | Holds | Where |
 | --- | --- | --- |
-| Database | Tasks, observations, runs, comments, links, CI runs, merge batches, sandbox claims, spool cursors, notifications | SQLite at `<data-dir>/store/grain.db` by default, or PostgreSQL via `<data-dir>/db-config.json` or `-postgres-url` |
+| Database | Tasks, observations, runs, comments, links, CI runs, merge-queue re-check rows (`merge_batch`), sandbox claims, spool cursors, notifications | SQLite at `<data-dir>/store/grain.db` by default, or PostgreSQL via `<data-dir>/db-config.json` or `-postgres-url` |
 | `grain/config` state repo | Exported settings tables (scrubbed of secrets), `settings/*.yml` projections, memory docs, release notes, repo setup scripts, workflows | Local git repo under `<data-dir>/state-repo` or an external git remote (`pkg/staterepo`) |
 | Secrets | Model API keys, GitHub App keys, capability server credentials, values supplied via `request_secret` | `<data-dir>/secrets/secrets.enc` (`pkg/secrets`, X25519 + HKDF-SHA256 + AES-256-GCM hiding names and values), sealed to `0600` `<data-dir>/secrets/secrets.key`, optionally mirrored as ciphertext via `pkg/secretsrepo` |
 | Data volume | Bare repo caches, agent `HOME` directories and session stores, transcripts, run spools, CI cache and artifacts, package cache objects | `/var/lib/grain` on the controller host, or the `grain-data` ReadWriteOnce PVC on Kubernetes installs |
@@ -96,12 +98,12 @@ The relational database is the live source of truth read on every reconcile tick
 
 **Services the controller terminates for other planes:**
 
-- **Sandbox-access acceptor** (`pkg/sandboxaccess`, port `4244` by default when `-k8s-sandbox-access-listen` is set), accepting outbound mTLS connections from `kubernetes-granule` pod wrappers.
+- **Sandbox-access acceptor** (`pkg/sandboxaccess`, listening on `-sandbox-access-addr`, conventionally `:4244`), accepting outbound mTLS connections from `kubernetes-granule` pod wrappers when `-k8s-granule-access=dialout`. The default, `kubectl`, runs guest commands over `kubectl exec` instead.
 - **Guest-facing services** on the `-sandbox-port-base` port block (`9728` by default, `pkg/ports`): the git and sandbox HTTP proxy (`9728`), model inference proxies (`pkg/modelproxy`), the `host-script` data plane (`9733`), the GitHub Actions cache service (`pkg/actionscache`), and the package cache's DNS (`53`) and HTTP/TLS (`80`/`443`) interception listeners (`pkg/pkgcache`).
 - **`hostd` and remote executor acceptors**: `/run/grain-hostd/hostd.sock` on the local host, `/api/hostd/connect` for a remote `grain hostd` dialling out (`pkg/hostd`), and `/api/executors/connect` for remote model executors (`pkg/modelexec`).
 - **Capability broker** (`pkg/capability`, `pkg/daemon/capabilities.go`), attaching to in-process, container, and `hostd`-pinned capability servers to mint and release per-attempt passes and proxy MCP tool calls ([`docs/capabilities-spec.md`](../../docs/capabilities-spec.md) §4–§5).
 
-**Package boundaries.** Inside the controller binary, packages follow strict downward dependencies: orchestration and task state (`pkg/orchestrator`, `pkg/model`) sit above forge integration (`pkg/forge`, `pkg/github`, `pkg/change`) and sandbox runtimes (`pkg/granule`, `pkg/sandboxaccess`, `pkg/k8s`). `pkg/granule` and `pkg/sandboxaccess` import nothing from `pkg/model`. The CI workflow engine under `pkg/grit/...` imports no grain-core packages (`pkg/grit/independence_test.go`), keeping CI isolated as a package boundary inside the controller process without a separate CI service.
+**Package boundaries.** Inside the controller binary, packages follow strict downward dependencies: orchestration and task state (`pkg/orchestrator`, `pkg/model`) sit above forge integration (`pkg/forge`, `pkg/github`, `pkg/change`) and sandbox runtimes (`pkg/granule`, `pkg/sandboxaccess`, `pkg/k8s`). `pkg/granule` and `pkg/sandboxaccess` import nothing from `pkg/model`. The CI workflow engine under `pkg/grit/...` (and `cmd/grit`) links only an allowlist of neutral packages (`pkg/workflows`, `pkg/granule`, `pkg/sandboxaccess`, `pkg/gritapi`, leaf utilities), never grain-core packages (`pkg/grit/independence_test.go`). CI therefore stays a package boundary inside the controller process, with no separate CI service. A remote `grit serve` backend (`-grit-url`) exists only as experimental plumbing. The daemon refuses it without `-grit-experimental` because it runs no repository's workflows yet (`daemon.CheckGritURL`, [`docs/design/grit-split.md`](../../docs/design/grit-split.md)).
 
 ### 2. Sandboxes
 
@@ -178,7 +180,7 @@ Long-polling waits are bounded by the controller. `grain ci wait` and `grain ci 
 
 **Local socket and remote dial-out.** On the controller machine, `grain daemon` connects to `/run/grain-hostd/hostd.sock`. On a remote workstation (`grain hostd -server <url>`), `hostd` dials out to `/api/hostd/connect` (`pkg/hostd/dialout.go`, `pkg/hostd/remote.go`), upgrading HTTPS with WebSocket handshake headers (`pkg/tunnel/wsupgrade`) so reverse proxies and IAP pass the stream with no inbound ports on the host. Behind IAP, `hostd` sends an OIDC ID token in `Authorization: Bearer` and its `hostd` token in `X-Grain-Hostd-Token`, then runs a multiplexed `pkg/tunnel/mux` session.
 
-In the target multi-`hostd` design (see *Where each piece stands* for what is implemented versus in progress), each `hostd` is registered in Settings with a name, an owner, labels, and a unique token; work routes by an explicit pin (such as `hostd: build-box-1`) or label selector, and model connection concurrency leases key by `(connection, hostd)` so a rate-limit pause on one user's login pauses only that host. Alongside `hostd`, `pkg/modelexec` (`/api/executors/connect`) supports named remote model executors with per-executor tokens (`executor_token`), remote workspace staging, and multiplexed MCP and capability tunnel streams.
+In the target multi-`hostd` design (see *Where each piece stands* for what is implemented versus in progress), each `hostd` is registered in Settings with a name, an owner, labels, and a unique token; work routes by an explicit pin (such as `hostd: build-box-1`) or label selector, and model connection concurrency leases key by `(connection, hostd)` so a rate-limit pause on one user's login pauses only that host. Alongside `hostd`, `pkg/modelexec` (`/api/executors/connect`) supports named remote model executors with per-executor tokens (`executor_token`), remote workspace staging, and multiplexed MCP, git-proxy, and capability MCP tunnel streams (`pkg/modelexec/protocol.go`).
 
 **What runs on `hostd`.**
 
@@ -270,9 +272,9 @@ flowchart TD
   R -->|"resume_later / wait_for_task park"| Q
   R -->|"pushed commits"| PR[pull request]
   PR --> RV["second-agent review<br/>+ security review on trust-boundary paths"]
-  RV --> CI["CI checks<br/>(grain CI and/or forge checks)"]
+  RV --> CI["CI checks<br/>(grain CI or forge checks, per repo)"]
   CI -->|red or merge conflict| RP[repair run] --> CI
-  CI -->|green| MQ["merge queue<br/>merge predicate & batching"]
+  CI -->|green| MQ["merge queue<br/>merge predicate & overlap re-check"]
   MQ --> M["merged & task closed"]
 ```
 
@@ -286,7 +288,7 @@ flowchart TD
    - `resume_later` and `wait_for_task` (`park: true`) record a requested suspension (`model.SuspensionKind`) and re-queue the task until its wake condition fires, without spending dispatch standing or counting a strike.
    - Rate limits, capacity shortages, expired host credentials, and controller restarts are likewise recorded as suspensions rather than strikes (`pkg/model/suspension.go`).
 5. **Agent and security review.** Every code change is reviewed by a second agent before landing. Changes touching trust-boundary paths (`pkg/trustboundary`: `scripts/setup.sh`, `pkg/runhost/*`, `pkg/staterepo/*`, `pkg/mcp/managed_http.go`, `.github/workflows/*`, `.grain/*`, and related paths) are held for `system:security-review` (and human sign-off on release-promotion or `grain/config` privilege paths). If reviewer fixes touch trust-boundary paths, the new head is reviewed again. Unresolved findings become review comments or wait for human approval.
-6. **CI and the merge queue.** Configured checks (`.grain/workflows` in grain CI, GitHub Actions checks, or both) run on the pull request head. Failures matching the same job across multiple active branches are classified as shared faults (`pkg/cifault`) rather than blamed on the branch; branch-specific failures or merge conflicts queue a repair run. The merge queue lands a change once it merges cleanly and satisfies `pkg/orchestrator/mergepredicate.go` (passing alone when no batch is in flight, or sitting at the green frontier of a batch).
+6. **CI and the merge queue.** The repository's configured checks (`.grain/workflows` in grain CI or forge checks such as GitHub Actions, by `ci_mode`) run on the pull request head. Failures matching the same job across multiple active branches are classified as shared faults (`pkg/cifault`) rather than blamed on the branch. Branch-specific failures or merge conflicts queue a repair run. The merge queue lands a change once it satisfies `pkg/orchestrator/mergepredicate.go`. The change must merge cleanly and be green on its own head, or carry an operator's force merge pinned to the reviewed head commit. A change whose files, Go packages, or global build inputs overlap what has landed since it forked is first re-checked on the merge-queue ref (`mergerecheck.go`). A red re-check takes the normal repair path: one automatic repair (sometimes a second), then `merge_failed` to the inbox. After each merge, base-branch CI judges the new tip, and a red tip files a base-branch repair.
 7. **Durable tasks, goals, and notifications.** Standing tasks—such as the pipeline steward and interactive director sessions ([`director.design.md`](director.design.md))—use idle watchdogs and `resume_later` suspensions instead of fixed one-shot deadlines. Tasks with a `TaskGoal` (`pkg/orchestrator/taskgoals.go`) stay open across runs until the controller observes the goal met. Issues needing attention without parking a run raise structured `Notification` records (`grain notify`, `pkg/orchestrator/notifications.go`).
 
 ### Non-disruptive upgrades
@@ -295,19 +297,19 @@ Each plane upgrades on its own schedule across at least one protocol generation 
 
 **Controller upgrade:**
 
-1. Stage and health-check the new controller build and run additive database schema migrations.
-2. Enable `UpgradeHold` so dispatch starts no new runs.
-3. Flush live spool cursors (`task_run_spool_cursor`) and stop database writes.
+1. Take the upgrade hold (`orchestrator.UpgradeHold`, a pipeline pause passed in as `upgrade.Config.Hold`) so dispatch starts no new runs. No hold is taken if someone else has already paused the pipeline.
+2. Stage the new build (`pkg/upgrade`: check out and build, or pull an image), health-check it, and write the schema step for the incoming build (`pkg/daemon/schemaupgrade.go`).
+3. Flush (`upgrade.Config.Flush`, `pkg/daemon/runhostupgrade.go`): stop tailing every run in a run pod or `hostd` and persist each spool cursor (`task_run_spool_cursor`). Rows stay live, leases stay held, and sandboxes keep running for the next build to adopt.
 4. Restart only `grain-daemon.service` (or roll the controller pod). Running sandboxes, `hostd`, and detached CLIs are untouched.
-5. On startup, the new controller readopts live sandboxes from database claims, reattaches CI step execs from persisted `(run, job, step, sandbox, exec_id, cursor)` rows as wrappers redial, adopts detached `hostd` processes and run pods from their spool cursors, and credits the restart gap as wait time. Runs whose substrate vanished during the gap finish with an explicit reason (`pkg/model/upgrade_losses_store.go`).
-6. Clear `UpgradeHold` and record the adoption summary.
+5. On startup, the new controller adopts detached `hostd` processes and run pods from their spool cursors (`RecoverRunHosts`, `ResumeAdoptedRun` in `pkg/orchestrator/adopt.go`). It reclaims those runs' sandboxes before the startup reap removes the rest (`ReadoptSandbox`). It reattaches CI step execs from persisted `ci_step_attachment` rows `(run, job, step, sandbox, exec_id, cursor)` as wrappers redial. The restart gap is credited as wait time. Runs whose substrate vanished during the gap finish as interrupted with an explicit reason, which the post-upgrade check reports (`InterruptedRunsSince` in `pkg/model/upgrade_losses_store.go`).
+6. Release the upgrade hold (`orchestrator.ReleaseUpgradeHold`, before the first cycle dispatches) and record the adoption summary (`orchestrator.AdoptionReport`).
 
 Authentication survives the restart because no active run credential lives only in controller memory: sandbox `gpx_` tokens are stored encrypted, model-proxy and sandbox-access tokens are stored by ID and hash, wrapper mTLS keys live in pod-owned Secrets, and `grain mcpserver` and the `grain` CLI retry disconnects for up to two minutes.
 
 **`grain hostd` upgrade:**
 
-1. The installer extracts each release's binaries into `/usr/local/lib/grain/hostd/<version>/` and updates the `current` symlink atomically without overwriting running binaries.
-2. Systemd watcher units trigger cutover/drain (`pkg/hostd/server_linux.go`): `hostd` exits immediately when idle, or drains—refusing new starts with `ErrHostdDraining` (treated by dispatch as a hold, not a failure) while letting active children run up to `drain_cap` (`1h` default in `pkg/hostd/allowlist.go`).
+1. The installer extracts each release's binaries into `/usr/local/lib/grain/hostd/<image-id>/` and updates the `current` symlink atomically without overwriting running binaries.
+2. `grain-hostd-upgrade.path` sees the link change and triggers a cutover (`Server.Cutover` in `pkg/hostd/server_linux.go`). `hostd` keeps taking new starts and exits at the first moment no run's process is running. If no such moment comes within `drain_cap` (`1h` by default, `pkg/hostd/allowlist.go`), the cutover becomes a drain (`Server.Drain`). A drain refuses new CLI starts with `ErrHostdDraining`, which dispatch treats as a hold rather than a failure (`pkg/daemon/hostd_drain_hold.go`). Running children get up to `drain_cap` again, and any still running at the cap are cancelled.
 3. Once runs finish, `hostd` stops child capability servers and exits; systemd starts the new binary and the controller reattaches capability servers within a minute. Adopted runs finish on the CLI binary version they started with.
 4. On connect, peers exchange `{protocol_version, min_compatible, build}` in `OpHello` (`pkg/hostd/protocol.go`). Compatible peers reattach; incompatible peers start nothing new and finish matched runs with a clear mismatch reason.
 
@@ -369,7 +371,7 @@ As of this writing, implementation status on `main` is:
 | Piece | Status | Detail |
 | --- | --- | --- |
 | Declarative settings, `grain/config` sync, and sealed `secrets.enc` | Implemented | [`settings.design.md`](settings.design.md), [`design/spec/settings/`](../spec/settings/) |
-| Sandbox-access mTLS channel, acceptor, and CI step cursor reattach | Implemented (in-cluster `kubernetes-granule` wrappers dial out; off-cluster pools use `kubectl exec` and `granule forward`) | [§2 Sandboxes](#2-sandboxes), [`docs/sandbox-image-contract.md`](../../docs/sandbox-image-contract.md) |
+| Sandbox-access mTLS channel, acceptor, and CI step cursor reattach | Implemented (in-cluster `kubernetes-granule` wrappers dial out with `-k8s-granule-access=dialout`; the default and off-cluster pools use `kubectl exec` and `granule forward`) | [§2 Sandboxes](#2-sandboxes), [`docs/sandbox-image-contract.md`](../../docs/sandbox-image-contract.md) |
 | `hostd` allowlist, protocol 3 detached runs, spool cursors, drain, and versioned upgrade | Implemented | [§3 `grain hostd`](#3-grain-hostd), [`docs/non-disruptive-upgrade.md`](../../docs/non-disruptive-upgrade.md) |
 | `hostd` remote dial-in, multi-`hostd` registry, and placement selectors | In progress — single remote `hostd` dial-in (`pkg/hostd/dialout.go`, `pkg/hostd/remote.go`) and multi-node model executors (`pkg/modelexec`) are implemented; unifying them into one multi-`hostd` registry with label/pin placement and disconnect holds remains | [§3 `grain hostd`](#3-grain-hostd) |
 | `/fs/` virtual namespace (`ci://`, `src://`, `task://`, `config://`, `memory://`, `deploy://`) | Implemented | [§2 Sandboxes](#2-sandboxes) (`pkg/namespace`) |
@@ -378,3 +380,6 @@ As of this writing, implementation status on `main` is:
 | Standing director sessions and external interactive CLIs | Implemented | [`director.design.md`](director.design.md), [`design/spec/director/`](../spec/director/), [`external-cli.design.md`](external-cli.design.md) |
 | Unified grants | In progress — unified Grants UI picker is implemented; canonical backend grant storage, migrating legacy in-process capability flags, and unifying repository read/write grants remain | [`docs/capabilities-spec.md`](../../docs/capabilities-spec.md) |
 | Verified proxy authentication (`IdentityVerifier` and direct IAP sign-in) | Design — IAP JWT refusal checks and programmatic OIDC dialing exist; authenticating callers directly via `IdentityVerifier` and per-principal attribution remain | [`authentication.design.md`](authentication.design.md), [`operator-attribution.design.md`](operator-attribution.design.md), [`design/spec/operator-attribution/`](../spec/operator-attribution/) |
+| Merge queue: per-change merge predicate, overlap re-check, base-branch CI and repair | Implemented. Merge batching (gather window, batch lock, bisection) has been removed | [§A task's lifecycle](#a-tasks-lifecycle), [`docs/merge-queue-behind.md`](../../docs/merge-queue-behind.md) (`pkg/orchestrator/mergepredicate.go`, `mergerecheck.go`, `basebranchci.go`) |
+| CI as an in-process package boundary (`pkg/grit` import lint) | Implemented | [§1 The controller](#1-the-controller) (`pkg/grit/independence_test.go`) |
+| grit as a separate CI service (`grit serve`, `-grit-url`) | In progress: `grit act`, `grit verify`, and experimental `serve`/`client` plumbing exist. The daemon refuses `-grit-url` without `-grit-experimental` because a remote grit runs no repository's workflows yet | [`docs/design/grit-split.md`](../../docs/design/grit-split.md) |
