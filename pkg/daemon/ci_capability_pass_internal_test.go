@@ -393,9 +393,9 @@ func TestReadoptGrantsOnlyTheWriteScopesTheEventAdmits(t *testing.T) {
 	} {
 		t.Run(string(tc.event), func(t *testing.T) {
 			owner := CiSandboxes{
-				Scopes:      gitproxy.NewReadScopes(),
-				WriteScopes: gitproxy.NewWriteScopes(),
-				Teams:       gitproxy.NewSandboxTeams(),
+				Scopes:       gitproxy.NewReadScopes(),
+				WriteScopes:  gitproxy.NewWriteScopes(),
+				Teams:        gitproxy.NewSandboxTeams(),
 				Capabilities: func() *model.CapabilityRegistry { return model.NewCapabilityRegistry() },
 			}
 			sb := &CiSandbox{Owner: owner, Backing: &ciToolSandbox{}, SandboxName: "c0123abcd-2"}

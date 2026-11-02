@@ -145,6 +145,8 @@ var retiredGrants = []struct {
 	{82, "db-read", []string{model.GrainSQLReadGrant}},
 	{82, "db-write", []string{model.GrainSQLWriteGrant}},
 	{85, "git-push-any-ref", []string{model.GitPushAnyRefGrant}},
+	{88, "repo-read:acme/tools", []string{model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
+	{88, "repo-write:acme/tools", []string{model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
 }
 
 func TestMigrationRewritesRetiredGrants(t *testing.T) {
@@ -257,7 +259,7 @@ func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 
 		if err := store.PutRepoConfig(ctx, model.RepoConfig{
 			Repo:           widgets,
-			CICapabilities: []string{"package-publish", r.legacy, "repo-read:acme/tools"},
+			CICapabilities: []string{"package-publish", r.legacy, "release-gate-read"},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -291,12 +293,12 @@ func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 		dedup := model.RepoRef{Owner: "dedup", Name: r.legacy}
 		jsonEncoded := model.RepoRef{Owner: "json", Name: r.legacy}
 
-		beforeWidgets := []string{"package-publish", r.legacy, "repo-read:acme/tools"}
+		beforeWidgets := []string{"package-publish", r.legacy, "release-gate-read"}
 		gotWidgets, err := store.GetRepoConfig(ctx, widgets)
 		if err != nil || gotWidgets == nil {
 			t.Fatalf("%s widgets: %v, %+v", r.legacy, err, gotWidgets)
 		}
-		wantWidgets := append(append([]string{"package-publish"}, r.to...), "repo-read:acme/tools")
+		wantWidgets := append(append([]string{"package-publish"}, r.to...), "release-gate-read")
 		if !slices.Equal(gotWidgets.CICapabilities, wantWidgets) {
 			t.Errorf("%s: widgets CI capabilities = %v, want %v", r.legacy, gotWidgets.CICapabilities, wantWidgets)
 		}

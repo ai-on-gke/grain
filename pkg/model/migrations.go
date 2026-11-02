@@ -538,6 +538,20 @@ var Migrations = []Migration{
 			"DROP TABLE IF EXISTS `executor_token_sequence`",
 		},
 	},
+	{
+		Version:     88,
+		Description: "rewrite stored repo-read:<repo> and repo-write:<repo> grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/repo#read / #write {repo} (the in-process providers are retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames, err := legacyRepoAccessRenames(ctx, tx)
+			if err != nil || len(renames) == 0 {
+				return err
+			}
+			if err := rewriteLegacyGrantsMulti(renames)(ctx, tx); err != nil {
+				return err
+			}
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", renames)
+		},
+	},
 }
 
 // CorpResearchGrant is what migration 86 rewrote stored corp-research grants
