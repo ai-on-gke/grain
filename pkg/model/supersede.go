@@ -281,12 +281,14 @@ func (s *Store) Supersede(ctx context.Context, oldID string, replacement Task, p
 		if err := putTask(ctx, tx, linked); err != nil {
 			return err
 		}
-		if err := closeInTx(ctx, tx, oldID, now); err != nil {
-			return err
-		}
-		author := Attribution{Actor: Principal{Kind: PrincipalAutomation, ID: "grain"}}
+		author := Attribution{Actor: GrainPrincipal}
+		reason := "superseded by task " + replacement.ID
 		if proposerID != "" {
 			author.OnBehalfOf = &Principal{Kind: PrincipalAgent, ID: proposerID}
+			reason += ", proposed by task " + proposerID
+		}
+		if err := closeInTx(ctx, tx, oldID, now, author.Actor, reason); err != nil {
+			return err
 		}
 		// After the close, the way ui.Client.setClosed leaves its own
 		// note: a comment saying the task is closed, in front of a close
@@ -304,9 +306,10 @@ func (s *Store) Supersede(ctx context.Context, oldID string, replacement Task, p
 	return result, err
 }
 
-// closeInTx stamps Observation.ClosedAt on taskID inside tx, the way
-// ObserveField does on a transaction of its own.
-func closeInTx(ctx context.Context, tx *sql.Tx, taskID string, now time.Time) error {
+// closeInTx stamps Observation.ClosedAt on taskID inside tx and records
+// who closed it and why, the way ObserveClose does on a transaction of
+// its own.
+func closeInTx(ctx context.Context, tx *sql.Tx, taskID string, now time.Time, by Principal, reason string) error {
 	obs, err := getObservation(ctx, tx, taskID)
 	if err != nil {
 		return fmt.Errorf("reading observation for %s: %w", taskID, err)
@@ -314,9 +317,16 @@ func closeInTx(ctx context.Context, tx *sql.Tx, taskID string, now time.Time) er
 	if obs == nil {
 		obs = &Observation{TaskID: taskID}
 	}
+	var before time.Time
+	if obs.ClosedAt != nil {
+		before = *obs.ClosedAt
+	}
 	obs.ClosedAt = &now
 	obs.ObservedAt = &now
-	return observe(ctx, tx, *obs)
+	if err := observe(ctx, tx, *obs); err != nil {
+		return err
+	}
+	return recordCloseInTx(ctx, tx, taskID, before, obs.ClosedAt, by, reason)
 }
 
 // retargetDependents is Store.Supersede's second half: every open task

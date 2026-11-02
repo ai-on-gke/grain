@@ -295,6 +295,11 @@ func reconcileSandboxes(ctx context.Context, deps Deps, now time.Time) error {
 	}
 
 	liveRunIDs := map[string]bool{}
+	// sandboxRun names the run using a sandbox under a name other than its
+	// own run ID -- a session sandbox a later run reuses -- so step 4 reads
+	// that run's ledger charge as the sandbox's rather than charging the
+	// sandbox a second time.
+	sandboxRun := map[string]string{}
 	haveLiveRuns := false
 	if deps.Store != nil {
 		if runs, err := deps.Store.LiveRuns(ctx); err == nil {
@@ -303,6 +308,9 @@ func reconcileSandboxes(ctx context.Context, deps Deps, now time.Time) error {
 				liveRunIDs[r.ID] = true
 				if r.Sandbox != "" {
 					liveRunIDs[r.Sandbox] = true
+					if r.Sandbox != r.ID {
+						sandboxRun[r.Sandbox] = r.ID
+					}
 				}
 			}
 		}
@@ -321,6 +329,11 @@ func reconcileSandboxes(ctx context.Context, deps Deps, now time.Time) error {
 	if haveLiveRuns {
 		for id := range sessionSandboxesInUse(deps.Store) {
 			liveRunIDs[id] = true
+		}
+		for id, runID := range sessionSandboxHolds(deps.Store) {
+			if _, ok := sandboxRun[id]; !ok && id != runID {
+				sandboxRun[id] = runID
+			}
 		}
 	}
 
@@ -463,6 +476,15 @@ func reconcileSandboxes(ctx context.Context, deps Deps, now time.Time) error {
 				if !exists && sb.Pool == model.PoolCI && unmatchedGenericCI > 0 {
 					unmatchedGenericCI--
 					continue
+				}
+				if !exists && sb.Pool == model.PoolAgent {
+					runID, ok := sandboxRun[sb.ID]
+					if !ok {
+						runID, ok = sandboxRun[sb.Holder]
+					}
+					if _, charged := holderMap[poolHolderKey(model.PoolAgent, runID)]; ok && charged {
+						continue
+					}
 				}
 				if !exists {
 					deps.Ledger.Charge(sb.Pool, sb.Holder, want)

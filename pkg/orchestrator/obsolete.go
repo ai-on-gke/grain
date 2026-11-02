@@ -90,7 +90,7 @@ func supersedeSecurityReview(ctx context.Context, store *model.Store, prevID str
 	}); err != nil {
 		return fmt.Errorf("orchestrator: linking security review %s to %s: %w", prevID, review.ID, err)
 	}
-	if err := observeField(ctx, store, prevID, now, func(o *model.Observation) {
+	if err := closeTask(ctx, store, prevID, now, "superseded by security review "+review.ID, func(o *model.Observation) {
 		o.ClosedAt = &now
 	}); err != nil {
 		return fmt.Errorf("orchestrator: closing security review %s: %w", prevID, err)
@@ -172,7 +172,7 @@ func closeObsoleteReviews(ctx context.Context, store *model.Store, now time.Time
 				continue
 			}
 		}
-		if err := observeField(ctx, store, r.ReviewID, now, func(o *model.Observation) {
+		if err := closeTask(ctx, store, r.ReviewID, now, fmt.Sprintf("task %s it reviews is closed", r.ReviewedID), func(o *model.Observation) {
 			o.ClosedAt = &now
 		}); err != nil {
 			errs = append(errs, fmt.Errorf("orchestrator: closing review %s: %w", r.ReviewID, err))
@@ -246,7 +246,8 @@ func stopOnMissingBase(ctx context.Context, store *model.Store, task model.Task,
 				}
 			}
 		}
-		if err := observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+		reason := fmt.Sprintf("its base %q is gone from %s", gone.Base, gone.Repo)
+		if err := closeTask(ctx, store, task.ID, now, reason, func(o *model.Observation) {
 			o.ClosedAt = &now
 		}); err != nil {
 			return fmt.Errorf("orchestrator: closing review %s over its missing base: %w", task.ID, err)

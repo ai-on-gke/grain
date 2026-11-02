@@ -197,8 +197,6 @@ func OfferedCapabilities() []Capability {
 		offered = append(offered, Capability{ID: r.ID, Name: r.Name, Description: r.Description})
 	}
 	offered = append(offered, []Capability{
-		{ID: "self-repair", Name: "Self repair",
-			Description: "Let this task run commands on grain's own host -- restart services, edit config, call the grain CLI -- each one needing a live reply in the task's chat before it runs"},
 		{ID: prioritydispatch.CapabilityName, Name: "Priority dispatch",
 			Description: prioritydispatch.Description},
 		{ID: durable.CapabilityName, Name: "Durable",

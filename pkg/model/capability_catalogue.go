@@ -279,10 +279,15 @@ func (c *CapabilityCatalogue) judge(g string, gc GrantContext) (bool, error) {
 }
 
 func (c *CapabilityCatalogue) judgeRef(g string, gc GrantContext) (bool, error) {
-	retiredPerson, err := c.judgeRetiredInProcess(g, gc)
+	retired, err := c.judgeRetiredInProcess(g, gc)
 	if err != nil {
 		return false, err
 	}
+	person, err := c.judgeServerRef(g, gc)
+	return retired || person, err
+}
+
+func (c *CapabilityCatalogue) judgeServerRef(g string, gc GrantContext) (bool, error) {
 	var with map[string]any
 	ref := CapabilityGrantRef(g)
 	if spec, err := CapabilityGrantSpec(g); err == nil {
@@ -291,7 +296,7 @@ func (c *CapabilityCatalogue) judgeRef(g string, gc GrantContext) (bool, error) 
 	id, method, _ := strings.Cut(ref, "#")
 	srv, ok := c.server(id)
 	if !ok {
-		return retiredPerson, nil
+		return false, nil
 	}
 	if srv.Enabled != nil && !*srv.Enabled {
 		return false, fmt.Errorf("capability %s: server %s is disabled in settings/capabilities.yml", ref, srv.ID)
@@ -323,8 +328,7 @@ func (c *CapabilityCatalogue) judgeRef(g string, gc GrantContext) (bool, error) 
 			}
 		}
 	}
-	p, err := r.judge(ref, gc, with)
-	return retiredPerson || p, err
+	return r.judge(ref, gc, with)
 }
 
 func (c *CapabilityCatalogue) judgeAPI(g string, gc GrantContext) (bool, error) {
@@ -338,8 +342,8 @@ func (c *CapabilityCatalogue) judgeAPI(g string, gc GrantContext) (bool, error) 
 
 // judgeRetiredInProcess applies the in_process entries a catalogue still
 // keeps under the bare name of a retired capability (memory,
-// release-notes, test-quarantine, ...) to the api: preset that replaced
-// it. A catalogue written before the retirement -- an upgraded store's
+// release-notes, test-quarantine, self-repair, ...) to the api: preset
+// or capability-server grant that replaced it. A catalogue written before the retirement -- an upgraded store's
 // capability_policy, or a grain/config settings/capabilities.yml nobody
 // has edited since -- disabled or restricted the capability under that
 // name, and the migrations that rewrote stored grants to the preset do
@@ -409,29 +413,20 @@ func RetiredInProcessPreset(name string) (string, bool) {
 }
 
 // retiredInProcessNames are the retired bare capabilities whose
-// replacement is the canonical grant g (any @repo limit aside), sorted.
+// replacement is g: an api: grant (any @repo limit aside), or a recorded
+// capability-server grant such as grain#host-exec={}. Sorted.
 func retiredInProcessNames(g string) []string {
-	if IsCapabilityRef(g) {
-		switch {
-		case IsGrainJournalGrant(g):
-			return []string{"grain-log"}
-		case IsGrainHealthGrant(g):
-			return []string{"deployment-health"}
+	grant := strings.TrimSpace(g)
+	if IsCapabilityRef(grant) {
+		// Compare in recorded form, so a bare grain#host-exec or one
+		// spelled with other JSON spacing is bound all the same.
+		if pg, ok := recordedCapabilityGrant(grant); ok {
+			grant = RecordedCapabilityGrant(pg)
 		}
-		if ok, write := ParseGrainSQLGrant(g); ok {
-			if write {
-				return []string{"db-write"}
-			}
-			return []string{"db-read"}
-		}
-		return nil
+	} else {
+		what, _, _ := strings.Cut(strings.TrimPrefix(grant, APIGrantPrefix), "@")
+		grant = APIGrantPrefix + canonicalPresetKey(what)
 	}
-	if !strings.HasPrefix(g, APIGrantPrefix) {
-		return nil
-	}
-	what, _, _ := strings.Cut(strings.TrimPrefix(g, APIGrantPrefix), "@")
-	what = canonicalPresetKey(what)
-	grant := APIGrantPrefix + what
 	var out []string
 	for legacy, to := range legacyGrantReplacements {
 		if to == grant {

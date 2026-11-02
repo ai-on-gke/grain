@@ -27,7 +27,13 @@
 #     origin/main), strictly after --floor-sha, whose required suites are
 #     green: .grain/workflows/tests.yml, release.yml and nightly.yml
 #     (CANDIDATE_GATE_REQUIRED). FILE is GET /api/ci/runs' answer (or a
-#     bare array of its runs). A suite's verdict at a commit is the latest
+#     bare array of its runs), or -- for a repository whose gate is
+#     GitHub Actions (ci_mode: github) -- GitHub's answer to GET
+#     /repos/{owner}/{repo}/actions/runs (an object with workflow_runs),
+#     each workflow run of which counts as one job of the workflow its
+#     path names (.github/workflows/tests.yml is tests); only push,
+#     schedule and workflow_dispatch runs of the repository itself count,
+#     never a pull request's. A suite's verdict at a commit is the latest
 #     result of each of its jobs across every run at that commit -- the
 #     same combination the merge gate reads, so a recheck that turned one
 #     job green turns the suite green -- and is success (every job passed
@@ -121,6 +127,26 @@ JQ_EPOCH='def epoch:
       end
   end;'
 
+# GitHub Actions' workflow runs in the shape GET /api/ci/runs gives them.
+# Each run is one job: GitHub re-runs a run's jobs in place, so the run's
+# conclusion is already the latest of each of its jobs. A run in progress
+# is pending; cancelled, stale, timed-out and never-started runs are
+# infra; anything else that is not a pass is a failure.
+# shellcheck disable=SC2016 # jq, not shell
+JQ_GITHUB_RUNS='def github_runs:
+  if type == "object" and has("workflow_runs") then
+    {runs: [ .workflow_runs[]
+      | select(.event == "push" or .event == "schedule" or .event == "workflow_dispatch")
+      | select((.head_repository.full_name // .repository.full_name // "") == (.repository.full_name // ""))
+      | (if .status == "completed" then .updated_at else null end) as $done
+      | {commit: (.head_sha // ""), ref: .head_branch, startedAt: (.run_started_at // .created_at), finishedAt: $done,
+         jobs: [{workflowPath: ((.path // "") | sub("@.*$"; "")), jobId: "run", finishedAt: $done,
+                 conclusion: (if .status != "completed" then ""
+                   else ({success: "success", skipped: "skipped", neutral: "success",
+                          cancelled: "cancelled", stale: "cancelled",
+                          timed_out: "errored", startup_failure: "errored"}[.conclusion // ""] // "failure") end)}]} ]}
+  else . end;'
+
 listed() { # listed <word> <space-separated globs>
   local glob
   for glob in $2; do
@@ -165,10 +191,11 @@ select_lkg() {
   # One line per (commit, workflow): commit, workflow, verdict, and when
   # the newest of its jobs finished.
   local table
-  table="$(jq -r "$JQ_EPOCH"'
+  table="$(jq -r "$JQ_EPOCH$JQ_GITHUB_RUNS"'
     def wf: ((.workflowPath // "") | split("/") | last | sub("\\.ya?ml$"; "")) as $p
       | if $p != "" then $p else (.workflow // "") end;
-    (if type == "array" then . else (.runs // []) end)
+    github_runs
+    | (if type == "array" then . else (.runs // []) end)
     | [ .[] | select((.commit // "") != "") | . as $r | ($r.startedAt | epoch) as $t
         | ($r.jobs // [])[]
         | {commit: $r.commit, wf: wf, job: (.jobId // .name // ""), c: (.conclusion // ""),

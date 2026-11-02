@@ -539,6 +539,22 @@ func sessionSandboxesInUse(store *model.Store) map[string]bool {
 	return out
 }
 
+// sessionSandboxHolds returns the run holding each held session sandbox
+// (holdSessionSandbox), by sandbox name.
+func sessionSandboxHolds(store *model.Store) map[string]string {
+	if store == nil {
+		return nil
+	}
+	p := getSessionPool(store)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make(map[string]string, len(p.held))
+	for id, runID := range p.held {
+		out[id] = runID
+	}
+	return out
+}
+
 func warmSessionSandboxIDs(store *model.Store) map[string]model.Commitment {
 	if store == nil {
 		return nil

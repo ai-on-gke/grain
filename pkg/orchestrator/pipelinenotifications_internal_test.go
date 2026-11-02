@@ -281,8 +281,12 @@ func TestRequestSubjectsClearOnTheirConditions(t *testing.T) {
 			bare.Notification.ClearsWhen)
 	}
 
-	if err := closeSupersededTasks(ctx, store, []string{"12"}, baseCIRepairer, "done", now); err != nil {
+	if err := closeSupersededTasks(ctx, store, []string{"12"}, baseCIRepairer, "base green", "done", now); err != nil {
 		t.Fatal(err)
+	}
+	if events, err := store.TaskEvents(ctx, "12"); err != nil || len(events) != 1 ||
+		events[0].By != baseCIRepairer || events[0].Reason != "base green" {
+		t.Errorf("task 12's events = %+v (%v), want its close recorded as the merge queue's", events, err)
 	}
 	if err := reconcileNotifications(ctx, Deps{Store: store}, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)

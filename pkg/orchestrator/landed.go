@@ -506,7 +506,7 @@ func finishAlreadyLanded(ctx context.Context, store *model.Store, task model.Tas
 		"\n\ngrain has marked this task done rather than opening a duplicate pull request.", now); err != nil {
 		return err
 	}
-	return observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+	return closeTask(ctx, store, task.ID, now, "its branch already landed", func(o *model.Observation) {
 		o.CompletedAt = &now
 		o.ClosedAt = &now
 		o.RetryRequestedAt = nil
