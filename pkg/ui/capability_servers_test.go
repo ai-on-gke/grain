@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
@@ -37,11 +38,12 @@ type fixedStatuses []servers.Status
 func (f fixedStatuses) Statuses() []servers.Status { return f }
 
 // own is list without the built-ins grain registers itself
-// (intree.EnsureBuiltins), which every listing carries.
+// (intree.EnsureBuiltins) and the in-process servers
+// (grainserver.Statuses), which every listing carries.
 func own(list []ui.CapabilityServer) []ui.CapabilityServer {
 	var out []ui.CapabilityServer
 	for _, s := range list {
-		if s.Builtin == nil {
+		if s.Builtin == nil && s.InProcess == nil {
 			out = append(out, s)
 		}
 	}
@@ -298,8 +300,14 @@ func TestBuiltinCapabilityServersAreListedDisableOnlyAndGrantNothing(t *testing.
 		t.Fatal(err)
 	}
 	builtins := intree.Builtins()
-	if len(list) != len(builtins)+1 || list[len(list)-1].ID != "https://example.com/caps/own" {
-		t.Fatalf("list = %+v, want every built-in first, then the operator's own", list)
+	inProcess := len(grainserver.Statuses())
+	if len(list) != len(builtins)+inProcess+1 || list[len(list)-1].ID != "https://example.com/caps/own" {
+		t.Fatalf("list = %+v, want every built-in first, then the in-process servers, then the operator's own", list)
+	}
+	for _, s := range list[len(builtins) : len(builtins)+inProcess] {
+		if s.InProcess == nil {
+			t.Errorf("row %s = %+v, want an in-process server", s.ID, s)
+		}
 	}
 	for i, b := range builtins {
 		if list[i].ID != b.ID || list[i].Builtin == nil || list[i].Builtin.Name != b.Name {

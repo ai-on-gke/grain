@@ -37,9 +37,7 @@ func fakeDocker(t *testing.T) (docker, calls string) {
 	calls = filepath.Join(dir, "calls")
 	docker = filepath.Join(dir, "docker")
 	script := "#!/bin/sh\necho \"$*\" >> " + calls + "\ncat >/dev/null\nexit 0\n"
-	if err := os.WriteFile(docker, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutableStub(t, docker, script)
 	return docker, calls
 }
 

@@ -140,9 +140,7 @@ exec*) printf 'eth0 2 2\neth1 3 3\nlo 1 1\n' ;;
 *) echo "unexpected docker $*" >&2; exit 1 ;;
 esac
 `
-	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutableStub(t, filepath.Join(dir, "docker"), script)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return argvLog
 }

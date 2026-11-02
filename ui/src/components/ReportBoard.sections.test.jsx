@@ -142,7 +142,6 @@ function report(over = {}) {
         running: 2,
         proposed: 1,
         awaiting_reply: 1,
-        awaiting_submit: 2,
       },
       queued: 4,
       oldestQueuedSeconds: 8040,
@@ -998,8 +997,8 @@ describe("the whole report, as the Metrics pane draws it", () => {
       screen.getByText(/right now, not over the window/i),
     ).toBeInTheDocument();
     expect(screen.getByText("Waiting 4")).toBeInTheDocument();
-    // Both asked states are one "Asked" chip, with their sum.
-    expect(screen.getByText("Asked 3")).toBeInTheDocument();
+    // Unfinished awaiting_reply renders under the "Asked" display label.
+    expect(screen.getByText("Asked 1")).toBeInTheDocument();
   });
 
   it("links the oldest queued task through to its own page", async () => {
@@ -1038,11 +1037,12 @@ describe("the whole report, as the Metrics pane draws it", () => {
       "href",
       "/?f=repo:any:acme/widgets&f=author:any:ada&f=state:any:queued",
     );
-    // "Asked" counts both asked states, and opens both.
-    const asked = screen.getByRole("link", { name: /Asked 3/ });
+    // "Asked" in the backlog counts unfinished awaiting_reply tasks, and opens
+    // only those (completed:empty:).
+    const asked = screen.getByRole("link", { name: /Asked 1/ });
     expect(asked).toHaveAttribute(
       "href",
-      "/?f=repo:any:acme/widgets&f=author:any:ada&f=state:any:awaiting_reply|awaiting_submit",
+      "/?f=repo:any:acme/widgets&f=author:any:ada&f=state:any:awaiting_reply&f=completed:empty:",
     );
     await user.click(asked);
     expect(onOpen).toHaveBeenCalledWith({
@@ -1051,11 +1051,8 @@ describe("the whole report, as the Metrics pane draws it", () => {
         filters: [
           { attr: "repo", op: "any", values: ["acme/widgets"] },
           { attr: "author", op: "any", values: ["ada"] },
-          {
-            attr: "state",
-            op: "any",
-            values: ["awaiting_reply", "awaiting_submit"],
-          },
+          { attr: "state", op: "any", values: ["awaiting_reply"] },
+          { attr: "completed", op: "empty", values: [] },
         ],
       }),
     });

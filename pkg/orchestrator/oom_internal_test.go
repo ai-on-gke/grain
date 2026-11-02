@@ -17,7 +17,6 @@ package orchestrator
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -273,9 +272,7 @@ func TestContainerOOMDetection(t *testing.T) {
 		dir := t.TempDir()
 		docker := filepath.Join(dir, "docker")
 		script := "#!/bin/sh\n[ \"$1\" = inspect ] && echo '" + tc.inspect + "' && exit 0\nexit 1\n"
-		if err := os.WriteFile(docker, []byte(script), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		writeExecutableStub(t, docker, script)
 		c := NewContainerSandboxes(ContainerConfig{Docker: docker})
 		sb := &containerSandbox{owner: c, name: "r1", container: "grain-sandbox-r1"}
 		how, killed := sb.SandboxOOM(context.Background())
@@ -302,9 +299,7 @@ func TestK8sOOMDetection(t *testing.T) {
 		dir := t.TempDir()
 		kubectl := filepath.Join(dir, "kubectl")
 		script := "#!/bin/sh\nprintf '%s' '" + tc.statuses + "'\n"
-		if err := os.WriteFile(kubectl, []byte(script), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		writeExecutableStub(t, kubectl, script)
 		k := NewK8sSandboxes(K8sConfig{Kubectl: kubectl})
 		sb := &k8sSandbox{owner: k, name: "r1", podName: "grain-sandbox-r1"}
 		how, killed := sb.SandboxOOM(context.Background())
