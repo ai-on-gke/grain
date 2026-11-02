@@ -8,7 +8,9 @@ daemon's own machine, and a hostd on another machine dials in to
 `/api/hostd/connect` with a token of its own from the hostd registry
 (Settings → Hostds; `grain hostd -server <url> -token-file`), or, for one
 more release, with the shared token the daemon was started with
-(`grain daemon -hostd-token-file`).
+(`grain daemon -hostd-token-file`). `GET /api/hostd/install.sh`, which
+Settings → Hostds offers beside a new token, installs such a hostd as
+`grain-hostd.service`, where the executor install scripts used to.
 
 The removal took out:
 

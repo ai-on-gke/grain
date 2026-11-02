@@ -175,6 +175,13 @@ The daemon serves `GET /api/hostd/connect` without the access code: a
 only for the hostd token it presents (`-hostd-token-file`), whatever
 else the request carries (`hostd.Remote`). A bearer on that route (the
 hostd token, or an IAP token) is never counted as an access-code guess.
+
+`GET /api/hostd/install.sh`, the script that sets such a hostd up
+(Settings → Hostds shows the command when it issues a token), is served
+without the access code too: the machine fetching it holds no credential
+yet, and the script carries none. It holds the daemon's URL as the
+request reached it, its release and its image, and reads the hostd token
+on the machine itself, from stdin or `$GRAIN_HOSTD_TOKEN`.
 The remote executor routes that were open the same way were removed with
 remote executors ([executors-removed.md](executors-removed.md)).
 
