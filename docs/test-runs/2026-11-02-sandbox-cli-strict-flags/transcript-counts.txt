@@ -1,0 +1,74 @@
+# --lines / -n / --tail on read, task prompt/transcript, log
+$ grain read task://5/record.md
+  exit=0 proxy=[GET /fs/task/5/record.md;]
+  | Task 5: Rotate the Gemini signing key
+  | State: completed
+  | Priority: 5
+  | Filed by: debian (human)
+  | Filed at: 2026-10-31T23:55:29Z
+  | Repo: acme/widgets
+  | Capabilities: gcp-key, gemini-key, self-debug
+  | Pull request: acme/widgets#101
+  | Merge queue: Waiting for CI (waiting_ci), since 2026-11-02T05:50:29Z (6m ago)
+  |   Note: grain CI is re-checking this change on top of main before it merges, on `grain-merge-queue/7639464a/main` at abcdef012345: what it changes overlaps what has landed on main since the commit its own run tested, and it merges if this passes
+  | 
+  | Description:
+$ grain read task://5/record.md --tail 20
+  exit=0 proxy=[GET /fs/task/5/record.md?tail=20;]
+  | 
+  | 
+  | Conversation (0):
+$ grain read task://5/record.md --lines 2
+  exit=0 proxy=[GET /fs/task/5/record.md;]
+  | 
+  | Conversation (0):
+$ grain read task://5/record.md -n 1
+  exit=0 proxy=[GET /fs/task/5/record.md;]
+  | Conversation (0):
+$ grain read task://5/record.md --lines 0
+  exit=0 proxy=[GET /fs/task/5/record.md;]
+  | 
+$ grain read task://5/record.md -n=3
+  exit=0 proxy=[GET /fs/task/5/record.md;]
+  |   2026-11-01T00:55:29Z  completed
+  | 
+  | Conversation (0):
+$ grain read task://5/record.md --tail 40 --lines 1
+  exit=0 proxy=[GET /fs/task/5/record.md?tail=40;]
+  | Conversation (0):
+$ grain read task://5/record.md --offset 0 --limit 12
+  exit=0 proxy=[GET /fs/task/5/record.md?limit=12&offset=0;]
+  | Task 5: Rota
+$ grain task prompt 5 --lines 2
+  exit=0 proxy=[GET /fs/task/5/prompt.md;]
+  | 
+$ grain task prompt 5 --tail 30
+  exit=0 proxy=[GET /fs/task/5/prompt.md?tail=30;]
+  | 
+$ grain task transcript 5 --lines 2
+  exit=0 proxy=[GET /fs/task/5/transcript.md;]
+  | grain: task://5/transcript.md is 0 bytes; --tail, --offset and --limit take bytes, --lines N the last N lines
+$ grain task transcript 5 --tail 30
+  exit=0 proxy=[GET /fs/task/5/transcript.md?tail=30;]
+  | grain: task://5/transcript.md is 0 bytes; --tail, --offset and --limit take bytes, --lines N the last N lines
+$ grain task transcript 5 --attempt 1 -n 1
+  exit=1 proxy=[GET /fs/task/5/attempts/1/transcript.md;]
+  | grain: not found: task://5/attempts/1/transcript.md
+$ grain log
+  exit=1 proxy=[GET /fs/deploy/grain.log;]
+  | grain: forbidden: deploy://grain.log: that tool belongs to the "grain-log" capability, and this run does not hold it (this run does not hold the "grain-log" capability). Nothing you can do from inside this run will add it -- a human attaches it to the task.
+$ grain log --tail 10
+  exit=1 proxy=[GET /fs/deploy/grain.log?tail=10;]
+  | grain: forbidden: deploy://grain.log: that tool belongs to the "grain-log" capability, and this run does not hold it (this run does not hold the "grain-log" capability). Nothing you can do from inside this run will add it -- a human attaches it to the task.
+$ grain log --lines 1
+  exit=1 proxy=[GET /fs/deploy/grain.log?max_lines=1;]
+  | grain: forbidden: deploy://grain.log: that tool belongs to the "grain-log" capability, and this run does not hold it (this run does not hold the "grain-log" capability). Nothing you can do from inside this run will add it -- a human attaches it to the task.
+$ grain log -n 1
+  exit=2 proxy=[none]
+  | grain log: unknown flag -n (flags: --contains, --lines, --max-lines, --min-priority, --priority, --since, --source, --tail, --until); run 'grain log --help' for usage
+$ grain log --max-lines 1
+  exit=1 proxy=[GET /fs/deploy/grain.log?max_lines=1;]
+  | grain: forbidden: deploy://grain.log: that tool belongs to the "grain-log" capability, and this run does not hold it (this run does not hold the "grain-log" capability). Nothing you can do from inside this run will add it -- a human attaches it to the task.
+$ grain log --tail 0
+  exit=1 proxy=[GET /fs/deploy/grain.log?tail=0;]
+  | grain: forbidden: deploy://grain.log: that tool belongs to the "grain-log" capability, and this run does not hold it (this run does not hold the "grain-log" capability). Nothing you can do from inside this run will add it -- a human attaches it to the task.

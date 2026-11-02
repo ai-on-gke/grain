@@ -1,0 +1,1405 @@
+{
+ "mode": "external",
+ "base": "http://127.0.0.1:18703",
+ "sections": {
+  "models": {
+   "readonlyFieldsets": 2,
+   "fields": [
+    {
+     "kind": "button:button",
+     "label": "new connection",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "button:button",
+     "label": "test connection",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "edit",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "disable",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "button:button",
+     "label": "remove",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "default model",
+     "settingId": "defaultModel",
+     "disabled": true
+    },
+    {
+     "kind": "button:button",
+     "label": "Open",
+     "settingId": "defaultModel",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "add fallback model",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "button:button",
+     "label": "Open",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "div",
+     "label": "reasoning effort",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "div",
+     "label": "reasoning effort",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "div",
+     "label": "claude run location",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "div",
+     "label": "codex run location",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "div",
+     "label": "agy (Antigravity) run location",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "div",
+     "label": "custom commands run location",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "save run locations",
+     "settingId": "",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "external-config-repo-banner",
+     "text": "Configuration is read-only and managed in https://github.com/acme/grain-config (main). Switch to the internal config repository in Config Repo settings to edit settings in the UI. Edit tables/grain_config.json in acme/grain-config (main), t"
+    },
+    {
+     "id": "config-refusal-where",
+     "text": "Edit tables/grain_config.json in acme/grain-config (main), then open a pull request there; grain applies it on its next sync."
+    },
+    {
+     "id": "alert",
+     "text": "The deployment's provider connections. Its tasks run only on these, and wait until it has one. They are managed in the config repository; their credentials can still be set here, under Edit."
+    },
+    {
+     "id": "cli-run-claude-warning",
+     "text": "set to container, but a daemon on the bare machine has no container of its own to run it in. It runs on the host until this is set to host or default"
+    }
+   ],
+   "links": [
+    {
+     "text": "tables/grain_config.json",
+     "href": "https://github.com/acme/grain-config/blob/main/tables/grain_config.json"
+    }
+   ]
+  },
+  "sandboxes": {
+   "readonlyFieldsets": 4,
+   "fields": [
+    {
+     "kind": "select:select-one",
+     "label": "sandbox backend",
+     "settingId": "sandboxBackend",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "sandbox vcpus",
+     "settingId": "sandboxCpus",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "sandbox memory (mib)",
+     "settingId": "sandboxMemoryMb",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "sandbox disk (gib)",
+     "settingId": "sandboxDiskGb",
+     "disabled": true
+    },
+    {
+     "kind": "select:select-one",
+     "label": "sandbox network",
+     "settingId": "networkAccess",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "session sandbox idle ttl",
+     "settingId": "sessionSandboxIdleTtl",
+     "disabled": true
+    },
+    {
+     "kind": "select:select-one",
+     "label": "overcommit mode",
+     "settingId": "sandboxOvercommit",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "cpu overcommit",
+     "settingId": "sandboxCpuOvercommit",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "memory overcommit",
+     "settingId": "sandboxMemoryOvercommit",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "disk overcommit",
+     "settingId": "sandboxDiskOvercommit",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "auto cpu minimum",
+     "settingId": "sandboxOvercommitCpuMin",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "auto cpu maximum",
+     "settingId": "sandboxOvercommitCpuMax",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "auto memory minimum",
+     "settingId": "sandboxOvercommitMemoryMin",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "auto memory maximum",
+     "settingId": "sandboxOvercommitMemoryMax",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "cpu pressure target (%)",
+     "settingId": "sandboxOvercommitCpuPressureTarget",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "memory pressure target (%)",
+     "settingId": "sandboxOvercommitMemoryPressureTarget",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "host memory reserve (mib)",
+     "settingId": "sandboxMemoryReserveMb",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "disk floor (share of each volume)",
+     "settingId": "sandboxDiskFloorShare",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "disk floor minimum (mib)",
+     "settingId": "sandboxDiskFloorMinMb",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "kubernetes namespace",
+     "settingId": "k8sNamespace",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "kubernetes sandbox pod image",
+     "settingId": "k8sSandboxImage",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "kubernetes granule vm pod image",
+     "settingId": "k8sGranuleImage",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "kubernetes workspace directory",
+     "settingId": "k8sWorkspace",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "kubernetes git & model proxy host",
+     "settingId": "k8sGitProxyHost",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "kubernetes sandbox service",
+     "settingId": "k8sSandboxService",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "kubernetes node selector",
+     "settingId": "k8sNodeSelector",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "kubernetes sandbox serviceaccount",
+     "settingId": "k8sServiceAccount",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "priority class for interactive sessions",
+     "settingId": "k8sPriorityClassInteractive",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "priority class for agent runs",
+     "settingId": "k8sPriorityClassAgent",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "priority class for ci jobs",
+     "settingId": "k8sPriorityClassCi",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "kubernetes deployment",
+     "settingId": "k8sDeployment",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "kubernetes container",
+     "settingId": "k8sContainer",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "kubectl binary",
+     "settingId": "k8sKubectl",
+     "disabled": true
+    },
+    {
+     "kind": "input:checkbox",
+     "label": "run kubernetes sandbox containers privileged needs restart takes effect when the",
+     "settingId": "k8sPrivileged",
+     "disabled": true
+    },
+    {
+     "kind": "input:checkbox",
+     "label": "cluster cni enforces networkpolicy for network: none runs needs restart takes ef",
+     "settingId": "k8sNetworkPolicy",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "custom sandbox image (oci reference)",
+     "settingId": "sandboxImage",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "external-config-repo-banner",
+     "text": "Configuration is read-only and managed in https://github.com/acme/grain-config (main). Switch to the internal config repository in Config Repo settings to edit settings in the UI. Edit tables/grain_config.json in acme/grain-config (main), t"
+    },
+    {
+     "id": "config-refusal-where",
+     "text": "Edit tables/grain_config.json in acme/grain-config (main), then open a pull request there; grain applies it on its next sync."
+    }
+   ],
+   "links": [
+    {
+     "text": "tables/grain_config.json",
+     "href": "https://github.com/acme/grain-config/blob/main/tables/grain_config.json"
+    },
+    {
+     "text": "docs/sandbox-image-contract.md",
+     "href": "https://github.com/ai-on-gke/grain/blob/main/docs/sandbox-image-contract.md"
+    }
+   ]
+  },
+  "executors": {
+   "readonlyFieldsets": 0,
+   "fields": [
+    {
+     "kind": "button:button",
+     "label": "see system → sandboxes",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "issue token",
+     "settingId": "",
+     "disabled": false
+    }
+   ],
+   "notices": [
+    {
+     "id": "external-config-repo-banner",
+     "text": "Configuration is read-only and managed in https://github.com/acme/grain-config (main). Switch to the internal config repository in Config Repo settings to edit settings in the UI. Edit tables/grain_config.json in acme/grain-config (main), t"
+    },
+    {
+     "id": "config-refusal-where",
+     "text": "Edit tables/grain_config.json in acme/grain-config (main), then open a pull request there; grain applies it on its next sync."
+    }
+   ],
+   "links": [
+    {
+     "text": "tables/grain_config.json",
+     "href": "https://github.com/acme/grain-config/blob/main/tables/grain_config.json"
+    }
+   ]
+  },
+  "credentials": {
+   "readonlyFieldsets": 0,
+   "fields": [
+    {
+     "kind": "button:button",
+     "label": "GCP key, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Gemini key, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "GitHub sandbox, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Self debug, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Bootstrap playbooks, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Registry push, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Package publish, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Image signing, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Interactive console, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Read issues, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Priority dispatch, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Durable, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Claude proxy, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "OpenAI proxy, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "Gemini proxy, configured",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "github host",
+     "settingId": "githubHost",
+     "disabled": true
+    },
+    {
+     "kind": "input:checkbox",
+     "label": "speak plain http to github host for a test or mock github only; never for a real",
+     "settingId": "githubInsecureHttp",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "gcp project",
+     "settingId": "gcpProject",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "gcp service account email",
+     "settingId": "gcpServiceAccountEmail",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "gcp service account count",
+     "settingId": "gcpServiceAccountCount",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "external-config-repo-banner",
+     "text": "Configuration is read-only and managed in https://github.com/acme/grain-config (main). Switch to the internal config repository in Config Repo settings to edit settings in the UI. Edit tables/grain_config.json in acme/grain-config (main), t"
+    },
+    {
+     "id": "config-refusal-where",
+     "text": "Edit tables/grain_config.json in acme/grain-config (main), then open a pull request there; grain applies it on its next sync."
+    },
+    {
+     "id": "legacy-capabilities-vs-servers",
+     "text": "Not what you are looking for? Capabilities granted as <capability ID>#<method> come from capability servers, which are on Settings → Capabilities. The agent frameworks' keys are on the Models tab. How the two tabs differ"
+    },
+    {
+     "id": "alert",
+     "text": "Sandboxes clone and push with the deployment's git connections, set in Settings, Git connections. No GitHub credential here is a fallback for that work: the ones on this page are grain's own -- for pull requests, the merge queue, webhooks a"
+    },
+    {
+     "id": "alert",
+     "text": "Not available: this UI was not started with a local secrets directory to write to (see -server-data-dir), which only works when the UI runs on the same host as the server (bwsalmon/agents#357). You can only set and delete secrets here, neve"
+    }
+   ],
+   "links": [
+    {
+     "text": "tables/grain_config.json",
+     "href": "https://github.com/acme/grain-config/blob/main/tables/grain_config.json"
+    },
+    {
+     "text": "Settings → Capabilities",
+     "href": "/settings/capabilities"
+    },
+    {
+     "text": "How the two tabs differ",
+     "href": "https://github.com/ai-on-gke/grain/blob/main/docs/capability-servers-ui.md#legacy-capabilities"
+    },
+    {
+     "text": "Settings → Capabilities",
+     "href": "/settings/capabilities"
+    }
+   ]
+  },
+  "access": {
+   "readonlyFieldsets": 1,
+   "fields": [
+    {
+     "kind": "button:button",
+     "label": "log out",
+     "settingId": "",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "external-config-repo-banner",
+     "text": "Configuration is read-only and managed in https://github.com/acme/grain-config (main). Switch to the internal config repository in Config Repo settings to edit settings in the UI. Edit tables/grain_config.json in acme/grain-config (main), t"
+    },
+    {
+     "id": "config-refusal-where",
+     "text": "Edit tables/grain_config.json in acme/grain-config (main), then open a pull request there; grain applies it on its next sync."
+    }
+   ],
+   "links": [
+    {
+     "text": "tables/grain_config.json",
+     "href": "https://github.com/acme/grain-config/blob/main/tables/grain_config.json"
+    }
+   ]
+  },
+  "preferences": {
+   "readonlyFieldsets": 0,
+   "fields": [
+    {
+     "kind": "input:radio",
+     "label": "auto",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:radio",
+     "label": "light",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:radio",
+     "label": "dark",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "select:select-one",
+     "label": "time zone",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:radio",
+     "label": "newest first",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:radio",
+     "label": "oldest first",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "customize sidebar",
+     "settingId": "",
+     "disabled": false
+    }
+   ],
+   "notices": [],
+   "links": []
+  },
+  "upgrade": {
+   "readonlyFieldsets": 0,
+   "fields": [
+    {
+     "kind": "button:button",
+     "label": "settings → general → updates",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "postgresql dsn / connection url",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:checkbox",
+     "label": "migrate existing sqlite data (tasks, runs, settings, and secrets)",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "test connection",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:submit",
+     "label": "migrate database to postgresql",
+     "settingId": "",
+     "disabled": false
+    }
+   ],
+   "notices": [
+    {
+     "id": "alert",
+     "text": "Not available: this deployment was started with neither -upgrade-image nor -upgrade-src-dir configured (bwsalmon/agents#396, #645), so there is nothing here that can cut it over to another branch."
+    }
+   ],
+   "links": []
+  },
+  "caches": {
+   "readonlyFieldsets": 2,
+   "fields": [
+    {
+     "kind": "input:checkbox",
+     "label": "cache apt, pip, docker hub, npm and go module downloads for every sandbox on (de",
+     "settingId": "packageCacheEnabled",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "proxy cache max size (gib)",
+     "settingId": "packageCacheSizeGb",
+     "disabled": true
+    },
+    {
+     "kind": "input:checkbox",
+     "label": "keep what ci jobs cache on the controller, so builds are warm across runs on (de",
+     "settingId": "actionsCacheEnabled",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "actions cache max size (gib)",
+     "settingId": "actionsCacheSizeGb",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "external-config-repo-banner",
+     "text": "Configuration is read-only and managed in https://github.com/acme/grain-config (main). Switch to the internal config repository in Config Repo settings to edit settings in the UI. Edit tables/grain_config.json in acme/grain-config (main), t"
+    },
+    {
+     "id": "config-refusal-where",
+     "text": "Edit tables/grain_config.json in acme/grain-config (main), then open a pull request there; grain applies it on its next sync."
+    }
+   ],
+   "links": [
+    {
+     "text": "tables/grain_config.json",
+     "href": "https://github.com/acme/grain-config/blob/main/tables/grain_config.json"
+    }
+   ]
+  },
+  "engine": {
+   "readonlyFieldsets": 2,
+   "fields": [
+    {
+     "kind": "input:text",
+     "label": "poll interval",
+     "settingId": "pollInterval",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "max worker agents",
+     "settingId": "maxWorkers",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "max merges per repo branch",
+     "settingId": "maxMergesPerRepo",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "merge batch size",
+     "settingId": "mergeBatchSize",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "merge gather window",
+     "settingId": "mergeGatherWindow",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "external-config-repo-banner",
+     "text": "Configuration is read-only and managed in https://github.com/acme/grain-config (main). Switch to the internal config repository in Config Repo settings to edit settings in the UI. Edit tables/grain_config.json in acme/grain-config (main), t"
+    },
+    {
+     "id": "config-refusal-where",
+     "text": "Edit tables/grain_config.json in acme/grain-config (main), then open a pull request there; grain applies it on its next sync."
+    }
+   ],
+   "links": [
+    {
+     "text": "tables/grain_config.json",
+     "href": "https://github.com/acme/grain-config/blob/main/tables/grain_config.json"
+    }
+   ]
+  },
+  "config-repo": {
+   "readonlyFieldsets": 0,
+   "fields": [
+    {
+     "kind": "button:button",
+     "label": "pull now",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "repository url",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "branch",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:password",
+     "label": "personal access token (optional)",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "use external config repository",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "switch to internal config repository",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "show files",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "secrets repository url",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:text",
+     "label": "secrets repository branch",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "input:password",
+     "label": "credential to push with (optional)",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "back up secrets here",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "input:password",
+     "label": "import a private key",
+     "settingId": "",
+     "disabled": false
+    },
+    {
+     "kind": "button:button",
+     "label": "import key",
+     "settingId": "",
+     "disabled": true
+    }
+   ],
+   "notices": [],
+   "links": []
+  },
+  "general": {
+   "readonlyFieldsets": 4,
+   "fields": [
+    {
+     "kind": "input:text",
+     "label": "environment name",
+     "settingId": "environmentName",
+     "disabled": true
+    },
+    {
+     "kind": "input:checkbox",
+     "label": "show closed tasks by default off (default): a task list opens narrowed by \"state",
+     "settingId": "showClosedByDefault",
+     "disabled": true
+    },
+    {
+     "kind": "input:checkbox",
+     "label": "lock settings in ui (require config repo prs) off (default): settings are editab",
+     "settingId": "settingsLocked",
+     "disabled": true
+    },
+    {
+     "kind": "div",
+     "label": "check the upgrade",
+     "settingId": "upgradeCheckMode",
+     "disabled": false
+    },
+    {
+     "kind": "input:checkbox",
+     "label": "hold the queue until the check is done off (default): the check runs at the head",
+     "settingId": "upgradeCheckPausesPipeline",
+     "disabled": true
+    },
+    {
+     "kind": "div",
+     "label": "channel",
+     "settingId": "autoUpgradeChannel",
+     "disabled": false
+    },
+    {
+     "kind": "input:time",
+     "label": "time of day",
+     "settingId": "autoUpgradeTime",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "external-config-repo-banner",
+     "text": "Configuration is read-only and managed in https://github.com/acme/grain-config (main). Switch to the internal config repository in Config Repo settings to edit settings in the UI. Edit tables/grain_config.json in acme/grain-config (main), t"
+    },
+    {
+     "id": "config-refusal-where",
+     "text": "Edit tables/grain_config.json in acme/grain-config (main), then open a pull request there; grain applies it on its next sync."
+    }
+   ],
+   "links": [
+    {
+     "text": "tables/grain_config.json",
+     "href": "https://github.com/acme/grain-config/blob/main/tables/grain_config.json"
+    }
+   ]
+  },
+  "git": {
+   "readonlyFieldsets": 1,
+   "fields": [
+    {
+     "kind": "div",
+     "label": "connection",
+     "settingId": "",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "external-config-repo-banner",
+     "text": "Configuration is read-only and managed in https://github.com/acme/grain-config (main). Switch to the internal config repository in Config Repo settings to edit settings in the UI. Edit tables/grain_config.json in acme/grain-config (main), t"
+    },
+    {
+     "id": "config-refusal-where",
+     "text": "Edit tables/grain_config.json in acme/grain-config (main), then open a pull request there; grain applies it on its next sync."
+    }
+   ],
+   "links": [
+    {
+     "text": "tables/grain_config.json",
+     "href": "https://github.com/acme/grain-config/blob/main/tables/grain_config.json"
+    },
+    {
+     "text": "Settings → Legacy capabilities",
+     "href": "/settings/credentials"
+    }
+   ]
+  },
+  "repositories": {
+   "readonlyFieldsets": 1,
+   "fields": [
+    {
+     "kind": "input:checkbox",
+     "label": "acme/widgets: Base-branch repair PRs may merge without a human when their CI is ",
+     "settingId": "",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "external-config-repo-banner",
+     "text": "Configuration is read-only and managed in https://github.com/acme/grain-config (main). Switch to the internal config repository in Config Repo settings to edit settings in the UI. Edit tables/repo_config.json in acme/grain-config (main), th"
+    },
+    {
+     "id": "config-refusal-where",
+     "text": "Edit tables/repo_config.json in acme/grain-config (main), then open a pull request there; grain applies it on its next sync."
+    }
+   ],
+   "links": [
+    {
+     "text": "tables/repo_config.json",
+     "href": "https://github.com/acme/grain-config/blob/main/tables/repo_config.json"
+    },
+    {
+     "text": "acme/widgets",
+     "href": "/repos/acme/widgets"
+    },
+    {
+     "text": "main",
+     "href": "/repos/acme/widgets/settings/releases"
+    },
+    {
+     "text": "Not read",
+     "href": "/repos/acme/widgets/settings/advanced"
+    },
+    {
+     "text": "GitHub CI",
+     "href": "/repos/acme/widgets/settings/ci"
+    },
+    {
+     "text": "Not listed",
+     "href": "/settings/git"
+    },
+    {
+     "text": "merge queue",
+     "href": "/repos/acme/widgets/settings/merge-queue"
+    }
+   ]
+  },
+  "tasks": {
+   "readonlyFieldsets": 2,
+   "fields": [
+    {
+     "kind": "input:checkbox",
+     "label": "queue new tasks immediately by default on (default): a new task's own \"queue imm",
+     "settingId": "approvedByDefault",
+     "disabled": true
+    },
+    {
+     "kind": "input:checkbox",
+     "label": "auto-merge new tasks by default on (default): a new task's own \"auto-merge once ",
+     "settingId": "autoMergeByDefault",
+     "disabled": true
+    },
+    {
+     "kind": "div",
+     "label": "default legacy capabilities",
+     "settingId": "defaultCapabilities",
+     "disabled": false
+    },
+    {
+     "kind": "input:checkbox",
+     "label": "work through the backlog newest-first the list runs top-to-bottom in the order t",
+     "settingId": "newestFirst",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "max unreviewed follow-up depth",
+     "settingId": "maxAutoSubmitDepth",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "max unreviewed follow-up per task",
+     "settingId": "maxAutoSubmitFanOut",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "external-config-repo-banner",
+     "text": "Configuration is read-only and managed in https://github.com/acme/grain-config (main). Switch to the internal config repository in Config Repo settings to edit settings in the UI. Edit tables/grain_config.json in acme/grain-config (main), t"
+    },
+    {
+     "id": "config-refusal-where",
+     "text": "Edit tables/grain_config.json in acme/grain-config (main), then open a pull request there; grain applies it on its next sync."
+    }
+   ],
+   "links": [
+    {
+     "text": "tables/grain_config.json",
+     "href": "https://github.com/acme/grain-config/blob/main/tables/grain_config.json"
+    }
+   ]
+  },
+  "agents": {
+   "readonlyFieldsets": 4,
+   "fields": [
+    {
+     "kind": "input:number",
+     "label": "max agent turns",
+     "settingId": "maxAgentTurns",
+     "disabled": true
+    },
+    {
+     "kind": "textarea:textarea",
+     "label": "standing instructions for every run",
+     "settingId": "promptExtension",
+     "disabled": true
+    },
+    {
+     "kind": "button:button",
+     "label": "use it",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "branch name template",
+     "settingId": "taskBranchTemplate",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "deployment id",
+     "settingId": "deploymentId",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "external-config-repo-banner",
+     "text": "Configuration is read-only and managed in https://github.com/acme/grain-config (main). Switch to the internal config repository in Config Repo settings to edit settings in the UI. Edit tables/grain_config.json in acme/grain-config (main), t"
+    },
+    {
+     "id": "config-refusal-where",
+     "text": "Edit tables/grain_config.json in acme/grain-config (main), then open a pull request there; grain applies it on its next sync."
+    },
+    {
+     "id": "task-branch-suggestion",
+     "text": "New tasks here go on grain/task-{id}, which any other grain on the same repository uses too. Switch to grain/{deployment}/task-{id}-{slug} to put this deployment's ID in each new branch; existing tasks keep theirs. use it"
+    }
+   ],
+   "links": [
+    {
+     "text": "tables/grain_config.json",
+     "href": "https://github.com/acme/grain-config/blob/main/tables/grain_config.json"
+    },
+    {
+     "text": "Settings → Git",
+     "href": "/settings/git"
+    }
+   ]
+  },
+  "capabilities": {
+   "readonlyFieldsets": 2,
+   "fields": [
+    {
+     "kind": "button:button",
+     "label": "+ add server",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "button:button",
+     "label": "add rule",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "button:button",
+     "label": "save policy",
+     "settingId": "",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "external-config-repo-banner",
+     "text": "Configuration is read-only and managed in https://github.com/acme/grain-config (main). Switch to the internal config repository in Config Repo settings to edit settings in the UI. Edit tables/grain_config.json in acme/grain-config (main), t"
+    },
+    {
+     "id": "config-refusal-where",
+     "text": "Edit tables/grain_config.json in acme/grain-config (main), then open a pull request there; grain applies it on its next sync."
+    },
+    {
+     "id": "capability-servers-vs-legacy",
+     "text": "This is grain's current capability system. The older capabilities built into grain itself, granted by a bare name such as gcp-key, and their credentials are on Legacy capabilities."
+    }
+   ],
+   "links": [
+    {
+     "text": "tables/grain_config.json",
+     "href": "https://github.com/acme/grain-config/blob/main/tables/grain_config.json"
+    },
+    {
+     "text": "Guide to this page",
+     "href": "https://github.com/ai-on-gke/grain/blob/main/docs/capability-servers-ui.md"
+    },
+    {
+     "text": "Legacy capabilities",
+     "href": "/settings/credentials"
+    },
+    {
+     "text": "config-map configurable files and secrets placed in the sand",
+     "href": "/settings/capabilities/https%3A%2F%2Fgrain.dev%2Fcapabilities%2Fconfig-map"
+    },
+    {
+     "text": "gchat post to allowlisted google chat spaces as a bot, one w",
+     "href": "/settings/capabilities/https%3A%2F%2Fgrain.dev%2Fcapabilities%2Fgchat"
+    },
+    {
+     "text": "gcp per-attempt keys for gcp permission sets' service accoun",
+     "href": "/settings/capabilities/https%3A%2F%2Fgrain.dev%2Fcapabilities%2Fgcp"
+    },
+    {
+     "text": "git repositories cloned through a per-attempt git proxy toke",
+     "href": "/settings/capabilities/https%3A%2F%2Fgrain.dev%2Fcapabilities%2Fgit"
+    },
+    {
+     "text": "host-script operator-defined bash scripts, which a sandbox r",
+     "href": "/settings/capabilities/https%3A%2F%2Fgrain.dev%2Fcapabilities%2Fhost-script"
+    },
+    {
+     "text": "model-proxy per-attempt tokens on a model vendor's inference",
+     "href": "/settings/capabilities/https%3A%2F%2Fgrain.dev%2Fcapabilities%2Fmodel-proxy"
+    },
+    {
+     "text": "capabilities.demo.grain.example/cloud gives tasks: #cloud-ke",
+     "href": "/settings/capabilities/https%3A%2F%2Fcapabilities.demo.grain.example%2Fcloud"
+    },
+    {
+     "text": "capabilities.demo.grain.example/gcp gives tasks: #gcp-key cu",
+     "href": "/settings/capabilities/https%3A%2F%2Fcapabilities.demo.grain.example%2Fgcp"
+    }
+   ]
+  },
+  "ci": {
+   "readonlyFieldsets": 4,
+   "fields": [
+    {
+     "kind": "input:number",
+     "label": "ci jobs per run",
+     "settingId": "ciJobsPerRun",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "ci queue age boost",
+     "settingId": "ciAgeBoost",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "ci capacity reserved after",
+     "settingId": "ciReserveAfter",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "ci runs kept",
+     "settingId": "ciRunHistory",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "ci step output kept (mib)",
+     "settingId": "ciStepOutputMb",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "ci step output age (days)",
+     "settingId": "ciStepOutputDays",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "ci output per run (kib)",
+     "settingId": "ciRunOutputKb",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "ci job cache size (mib)",
+     "settingId": "ciCacheMb",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "ci job cache entries",
+     "settingId": "ciCacheEntries",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "ci job cache age (days)",
+     "settingId": "ciCacheDays",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "ci artifacts kept (mib)",
+     "settingId": "ciArtifactMb",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "ci artifacts age (days)",
+     "settingId": "ciArtifactDays",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "ci artifacts per run (mib)",
+     "settingId": "ciArtifactRunMb",
+     "disabled": true
+    },
+    {
+     "kind": "input:number",
+     "label": "largest ci artifact (mib)",
+     "settingId": "ciArtifactFileMb",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "external-config-repo-banner",
+     "text": "Configuration is read-only and managed in https://github.com/acme/grain-config (main). Switch to the internal config repository in Config Repo settings to edit settings in the UI. Edit tables/grain_config.json in acme/grain-config (main), t"
+    },
+    {
+     "id": "config-refusal-where",
+     "text": "Edit tables/grain_config.json in acme/grain-config (main), then open a pull request there; grain applies it on its next sync."
+    }
+   ],
+   "links": [
+    {
+     "text": "tables/grain_config.json",
+     "href": "https://github.com/acme/grain-config/blob/main/tables/grain_config.json"
+    }
+   ]
+  },
+  "memory": {
+   "readonlyFieldsets": 1,
+   "fields": [
+    {
+     "kind": "textarea:textarea",
+     "label": "memory carried by every run",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "button:button",
+     "label": "Revert this deployment's memory",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "button:button",
+     "label": "Save this deployment's memory",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "button:button",
+     "label": "Open release-checklist (this deployment)",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "button:button",
+     "label": "Delete release-checklist (this deployment)",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "textarea:textarea",
+     "label": "memory about acme/widgets",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "button:button",
+     "label": "Revert acme/widgets memory",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "button:button",
+     "label": "Save acme/widgets memory",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "button:button",
+     "label": "Open flaky-e2e (acme/widgets)",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "button:button",
+     "label": "Delete flaky-e2e (acme/widgets)",
+     "settingId": "",
+     "disabled": true
+    },
+    {
+     "kind": "input:text",
+     "label": "Add a repo to write a memory for",
+     "settingId": "",
+     "disabled": true
+    }
+   ],
+   "notices": [
+    {
+     "id": "external-config-repo-banner",
+     "text": "Configuration is read-only and managed in https://github.com/acme/grain-config (main). Switch to the internal config repository in Config Repo settings to edit settings in the UI. Edit memory/ in acme/grain-config (main), then open a pull r"
+    },
+    {
+     "id": "config-refusal-where",
+     "text": "Edit memory/ in acme/grain-config (main), then open a pull request there; grain applies it on its next sync."
+    }
+   ],
+   "links": [
+    {
+     "text": "memory/",
+     "href": "https://github.com/acme/grain-config/blob/main/memory/"
+    }
+   ]
+  }
+ }
+}

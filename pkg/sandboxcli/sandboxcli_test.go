@@ -535,7 +535,7 @@ func TestSandboxCLIOnANoRepoTask(t *testing.T) {
 	}
 	out, errOut, code := run("ci", "list")
 	if code != 0 || !strings.Contains(out, "across all readable repos") ||
-		!strings.Contains(out, "acme/widgets run-w main") || !strings.Contains(out, "acme/library run-l grain/dep/task-7") {
+		!strings.Contains(out, "acme/widgets run-w grain main") || !strings.Contains(out, "acme/library run-l grain grain/dep/task-7") {
 		t.Errorf("ci list on a no-repo task: %d %q %s", code, out, errOut)
 	}
 	if out, errOut, code := run("ci", "list", "--repo", "acme/widgets"); code != 0 || !strings.Contains(out, "in acme/widgets") || strings.Contains(out, "acme/widgets run-w") {
@@ -613,6 +613,7 @@ func TestSandboxLogAndMetricsRefuseUnknownFlags(t *testing.T) {
 		{"log", "daemon", "--since", "2026-10-29T00:00:00Z", "--until", "2026-10-29T06:00:00Z", "--priority", "err",
 			"--min-priority", "err", "--contains", "x", "--max-lines", "5", "--lines", "5", "--tail", "40"},
 		{"log", "--source", "dmesg"},
+		{"log", "-n", "5"},
 		{"metrics", "summary", "--window", "7d", "--repo", "acme/a", "--author", "task"},
 		{"metrics", "--since", "2026-10-28", "--until", "2026-10-29"},
 	} {

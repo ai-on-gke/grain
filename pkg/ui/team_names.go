@@ -32,8 +32,8 @@ func teamOrDefault(team string) string {
 	return team
 }
 
-// retiredTeamField is the `team` a schedule, suite, suite-run, template
-// or executor-token request used to carry. Schema 25 dropped
+// retiredTeamField is the `team` a schedule, suite, suite-run or
+// template request used to carry. Schema 25 dropped
 // schedule.team and suite.team, and the requests dropped the field with
 // them; a client still sending it is told so rather than having it
 // ignored.

@@ -344,6 +344,51 @@ describe("DetailOverlay timeline", () => {
     ).toBeInTheDocument();
   });
 
+  // A change to the task's auto-merge (model.TaskEventAutoMergeOn/Off/
+  // KeptOff) is a step of its own, saying who made it and which writer it
+  // was -- and, being a note about one setting, never the task's current
+  // state.
+  it("shows who turned auto-merge on or off, and a write that was kept off", () => {
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          transitions: [
+            { state: "queued", at: "2026-08-28T09:00:00Z" },
+            {
+              state: "auto_merge_on",
+              at: "2026-08-28T10:00:00Z",
+              by: "human bob@example.com",
+              reason: "edited",
+            },
+            {
+              state: "auto_merge_kept_off",
+              at: "2026-08-28T11:00:00Z",
+              by: "automation grain",
+              detail: "orchestrator.settleSecurityHold (securityhold.go:548)",
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Auto-merge turned on")).toBeInTheDocument();
+    expect(screen.getByText("Auto-merge kept off")).toBeInTheDocument();
+    expect(
+      screen.getByText("by human bob@example.com · edited"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "by automation grain · orchestrator.settleSecurityHold (securityhold.go:548)",
+      ),
+    ).toBeInTheDocument();
+  });
+
   // bwsalmon/agents#503: a pull request re-linked to a reopened task keeps
   // its own original open time, which can predate this lifecycle's first
   // transition -- it should not sort ahead of everything else. Under the

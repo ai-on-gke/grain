@@ -88,8 +88,8 @@ func renderedMigrationManifest(t *testing.T) ([]k8sObject, []*yaml.Node) {
 }
 
 // The manifest the migration applies is grain-granule.yaml with its
-// CHANGEMEs filled in and the shared hostd/model-server token wired to
-// the flags that take it -- and still the same objects, so nothing the
+// CHANGEMEs filled in and the shared hostd token wired to the flag
+// that takes it -- and still the same objects, so nothing the
 // manifest's own tests hold it to is lost in the rendering.
 func TestMigrateLocalToGKERendersAControllerHostdCanDialInTo(t *testing.T) {
 	objects, nodes := renderedMigrationManifest(t)
@@ -114,8 +114,6 @@ func TestMigrateLocalToGKERendersAControllerHostdCanDialInTo(t *testing.T) {
 		"default-target-repo": "ai-on-gke/grain",
 		"k8s-node-selector":   "cloud.google.com/gke-nodepool=granule",
 		"hostd-token-file":    "/etc/grain-secrets/hostd-token",
-		"executor-addr":       ":4243",
-		"executor-token-file": "/etc/grain-secrets/hostd-token",
 	} {
 		if got := flags[name]; got != want {
 			t.Errorf("-%s=%q, want %q", name, got, want)
@@ -180,7 +178,7 @@ func TestMigrateLocalToGKERendersAControllerHostdCanDialInTo(t *testing.T) {
 // takes: a misspelled one is a pod that exits at start.
 func TestMigrateLocalToGKEPassesFlagsTheDaemonTakes(t *testing.T) {
 	help := read(t, "pkg", "cli", "testdata", "daemon_help.golden")
-	for _, flag := range []string{"-hostd-token-file", "-executor-addr", "-executor-token-file", "-k8s-granule-image",
+	for _, flag := range []string{"-hostd-token-file", "-k8s-granule-image",
 		"-default-target-repo", "-k8s-node-selector"} {
 		if !strings.Contains(help, "  "+flag+" ") && !strings.Contains(help, "  "+flag+"\n") {
 			t.Errorf("grain daemon -h lists no %s", flag)

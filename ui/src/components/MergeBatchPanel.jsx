@@ -305,7 +305,7 @@ export default function MergeBatchPanel({
     return (
       <Box sx={{ mb: 2 }}>
         <Typography variant="overline" color="text.secondary">
-          Merge batch
+          Merge re-check
         </Typography>
         {batches.map((b) => (
           <MergeBatchCard
@@ -325,18 +325,18 @@ export default function MergeBatchPanel({
   return (
     <Box>
       <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-        Merge batches
+        Merge re-checks
       </Typography>
       {data === null ? (
         <Typography variant="caption" color="text.secondary">
-          Loading merge batches…
+          Loading merge re-checks…
         </Typography>
       ) : batches.length === 0 ? (
         <Typography variant="caption" color="text.secondary">
-          No batch is in flight. When a finished change overlaps what has landed
-          on its base branch since the commit its own run tested, grain merges
-          it onto a throwaway ref and re-checks it before it lands. What appears
-          here is that re-check while it is running.
+          No re-check is running. When a finished change overlaps what has
+          landed on its base branch since the commit its own run tested, grain
+          merges it onto a throwaway ref and re-checks it before it lands. What
+          appears here is that re-check while it is running.
         </Typography>
       ) : (
         batches.map((b) => (

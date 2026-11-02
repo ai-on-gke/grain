@@ -340,13 +340,13 @@ func TestASingleTenantDaemonNeverLimitsTheRightCodeFromLoopback(t *testing.T) {
 	}
 }
 
-// A bearer token that cannot be the access code -- a JWT, an executor
+// A bearer token that cannot be the access code -- a JWT, a GitHub
 // token -- is some other credential sent to the wrong place, not a guess:
 // it is refused, and never counted towards anybody's limit.
 func TestASingleTenantDaemonDoesNotCountOtherCredentialsAsGuesses(t *testing.T) {
 	srv := singleTenantFixture(t)
 	for _, tok := range []string{
-		"gxt_0123456789abcdef0123456789abcdef",
+		"ghp_0123456789abcdef0123456789abcdef",
 		"eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl",
 		"not-an-access-code",
 	} {
@@ -361,28 +361,32 @@ func TestASingleTenantDaemonDoesNotCountOtherCredentialsAsGuesses(t *testing.T) 
 	}
 }
 
-// fakeExecutorServer stands in for modelexec.Server: it takes each
-// connection the daemon hands it, and says so on it.
-type fakeExecutorServer struct{ conns chan struct{} }
+// fakeHostdRemote stands in for hostd.Remote: it takes each upgrade the
+// daemon hands it, and switches protocols on it.
+type fakeHostdRemote struct{ conns chan struct{} }
 
-func (f *fakeExecutorServer) HandleConn(ctx context.Context, conn net.Conn) {
+func (f *fakeHostdRemote) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	conn, _, err := http.NewResponseController(w).Hijack()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close()
 	f.conns <- struct{}{}
-	_, _ = conn.Write([]byte("executor-hello"))
+	_, _ = conn.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: grain-hostd\r\n\r\n"))
 }
 
-func (f *fakeExecutorServer) RevokeToken(string) {}
-
-// A single-tenant daemon accepts remote executors as a multi-tenant one
-// does: an executor connects from anywhere without the access code --
-// it authenticates with its executor token in its own protocol -- and
-// the executor (or IAP) token pkg/modelexec sends as a bearer is not a
+// A single-tenant daemon accepts a grain hostd dialing in as a
+// multi-tenant one does: a hostd connects from anywhere without the
+// access code -- it authenticates with the hostd token in its own
+// protocol (hostd.Remote) -- and the token it sends as a bearer is not a
 // guess at the code.
-func TestASingleTenantDaemonAcceptsRemoteExecutors(t *testing.T) {
-	exec := &fakeExecutorServer{conns: make(chan struct{}, 64)}
+func TestASingleTenantDaemonAcceptsARemoteHostd(t *testing.T) {
+	remoteHostd := &fakeHostdRemote{conns: make(chan struct{}, 64)}
 	srv, _ := loopbackFixture(t, ui.Config{
-		Actor:          ui.DefaultActor("operator"),
-		LocalAPIToken:  testAccessCode,
-		ExecutorServer: exec,
+		Actor:         ui.DefaultActor("operator"),
+		LocalAPIToken: testAccessCode,
+		HostdRemote:   remoteHostd,
 	})
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.RemoteAddr = publicAddr
@@ -391,39 +395,30 @@ func TestASingleTenantDaemonAcceptsRemoteExecutors(t *testing.T) {
 	t.Cleanup(remote.Close)
 
 	for i := 0; i < 2*12; i++ {
-		path := []string{"/_grain/executor", "/api/executors/connect", "/api/executors/stream"}[i%3]
 		conn, err := net.Dial("tcp", remote.Listener.Addr().String())
 		if err != nil {
 			t.Fatal(err)
 		}
-		fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: grain.example\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n"+
-			"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n"+
-			"Authorization: Bearer gxt_0123456789abcdef0123456789abcdef\r\nX-Grain-Executor-Token: gxt_0123456789abcdef0123456789abcdef\r\n\r\n", path)
+		fmt.Fprintf(conn, "GET /api/hostd/connect HTTP/1.1\r\nHost: grain.example\r\nConnection: Upgrade\r\nUpgrade: grain-hostd\r\n"+
+			"Authorization: Bearer %s\r\n\r\n", hostdBearer)
 		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 		conn.Close()
 		if err != nil {
-			t.Fatalf("connecting an executor to %s: %v", path, err)
+			t.Fatalf("connecting a hostd: %v", err)
 		}
 		if resp.StatusCode != http.StatusSwitchingProtocols {
-			t.Fatalf("connecting an executor to %s from %s without the access code: %d, want 101", path, publicAddr, resp.StatusCode)
+			t.Fatalf("connecting a hostd from %s without the access code: %d, want 101", publicAddr, resp.StatusCode)
 		}
 		select {
-		case <-exec.conns:
+		case <-remoteHostd.conns:
 		case <-time.After(5 * time.Second):
-			t.Fatalf("connecting an executor to %s: the executor server was never handed the connection", path)
+			t.Fatalf("connecting a hostd: hostd.Remote was never handed the connection")
 		}
 	}
 	// None of those bearers was counted against publicAddr.
 	if rec := serveFrom(srv, publicAddr, http.MethodGet, "/api/tasks", "", accessHeader(testAccessCode)); rec.Code != http.StatusOK {
-		t.Errorf("the right code from a source that connected executors: %d, want 200: %s", rec.Code, rec.Body.String())
-	}
-	// And the bootstrap: the install script, from any of its paths.
-	for _, target := range []string{"/install-executor.sh", "/api/executors/install.sh", "/api/model-servers/install.sh"} {
-		if rec := serveFrom(srv, publicAddr, http.MethodGet, target, "", accessHeader("gxt_0123456789abcdef0123456789abcdef")); rec.Code != http.StatusOK ||
-			!strings.HasPrefix(rec.Body.String(), "#!") {
-			t.Errorf("GET %s from %s without the access code: %d, want 200 and the script", target, publicAddr, rec.Code)
-		}
+		t.Errorf("the right code from a source that connected a hostd: %d, want 200: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -574,8 +569,8 @@ func TestASingleTenantDaemonsHandlersSeeTheCallerItsGateLetIn(t *testing.T) {
 				}
 			}
 			// Nor does anything outside get in, session or not -- but
-			// remote execution's own routes, which authenticate in their
-			// own protocol (TestASingleTenantDaemonAcceptsRemoteExecutors).
+			// a hostd dialing in, which authenticates in its own
+			// protocol (TestASingleTenantDaemonAcceptsARemoteHostd).
 			if _, path, _ := strings.Cut(pattern, " "); strings.HasPrefix(path, "/api/") && path != "/api/config" && !strings.HasPrefix(path, "/api/auth/") &&
 				singleTenantOpenRoutes[pattern] == "" {
 				outside := *shared
@@ -663,8 +658,8 @@ var singleTenantStateRefusals = map[string]string{
 
 // singleTenantOpenRoutes are the public routes a single-tenant daemon
 // serves without its access code, and why: the "Enter access code"
-// page's own, logging out, and remote execution's, which authenticate
-// in their own protocol (pkg/ui singleTenantOpenRoute). Every other
+// page's own, logging out, and a grain hostd dialing in, which
+// authenticates in its own protocol (pkg/ui singleTenantOpenRoute). Every other
 // public route is in singleTenantGatedPublicRoutes.
 // TestRouteAuthorizationSingleTenant holds every public route to one of
 // the two, so a gate change cannot
@@ -675,14 +670,6 @@ var singleTenantOpenRoutes = map[string]string{
 	"GET /api/auth/access-code/login.js": "the login page's script",
 	"POST /api/auth/logout":              "signing out",
 	"GET /api/auth/logout":               "signing out",
-	"GET /api/model-servers/install.sh":  "remote execution",
-	"GET /api/executors/install.sh":      "remote execution",
-	"GET /install-executor.sh":           "remote execution",
-	"GET /api/executors/bin/{binary}":    "remote execution",
-	"GET /install/{os}/{arch}":           "remote execution",
-	"GET /_grain/executor":               "remote execution",
-	"GET /api/executors/connect":         "remote execution",
-	"GET /api/executors/stream":          "remote execution",
 	"GET /api/hostd/connect":             "a grain hostd dialing in, with the hostd token",
 }
 
@@ -697,9 +684,9 @@ var singleTenantGatedPublicRoutes = map[string]bool{
 	"GET /api/auth/status": true,
 }
 
-// executorBearer is the bearer pkg/modelexec sends on an executor's
-// connection: its executor token.
-const executorBearer = "gxt_0123456789abcdef0123456789abcdef"
+// hostdBearer is the bearer a grain hostd sends on its connection: the
+// hostd token.
+const hostdBearer = "0123456789abcdef0123456789abcdef0123456789abcdef"
 
 // TestRouteAuthorizationSingleTenant sweeps routeAuthorization against a
 // single-tenant server (newRouteFixtureFor),
@@ -780,14 +767,14 @@ func TestRouteAuthorizationSingleTenant(t *testing.T) {
 			}
 			// An open route answers anybody without the code, the gate
 			// letting it through to its handler, and counts no bearer on
-			// it as a guess at the code: an executor's own, or one shaped
+			// it as a guess at the code: a hostd's own, or one shaped
 			// like the code, sent past the limit, is never refused 429.
 			if open {
 				// A fresh server each, so no limit is shared with
 				// another route's probes.
 				fresh := newRouteFixtureFor(t, true)
 				f := &routeFixture{server: fresh.server, taskID: fresh.taskID, from: otherAddr}
-				for _, bearer := range []string{"", executorBearer, wrongAccessCode} {
+				for _, bearer := range []string{"", hostdBearer, wrongAccessCode} {
 					for i := 0; i < 15; i++ {
 						header := http.Header{}
 						if bearer != "" {

@@ -79,7 +79,6 @@ describe("SettingsPage", () => {
     expect(labels).toEqual([
       "Models",
       "Sandboxes",
-      "Executors",
       "Legacy capabilities",
       "Access",
       "Preferences",
@@ -438,8 +437,6 @@ describe("SettingsPage", () => {
         if (path === "/api/settings") return Promise.resolve(external);
         if (path === "/api/deployment")
           return Promise.resolve({ id: "default", modelSettings: [] });
-        if (path === "/api/executors" || path === "/api/executors/tokens")
-          return Promise.resolve([]);
         return Promise.resolve({});
       });
       render(
@@ -493,19 +490,6 @@ describe("SettingsPage", () => {
       expect(
         screen.getByRole("button", { name: "Clear credential" }),
       ).toBeEnabled();
-    });
-
-    it("keeps executor join tokens usable", async () => {
-      renderSection("executors");
-      await screen.findByTestId("external-config-repo-banner");
-      expect(
-        await screen.findByRole("button", { name: "Issue Token" }),
-      ).toBeEnabled();
-      expect(
-        screen
-          .getByRole("region", { name: "Executor join tokens" })
-          .querySelector("[data-settings-readonly]"),
-      ).toBeNull();
     });
   });
 
@@ -1051,8 +1035,6 @@ describe("SettingsPage", () => {
       expect(
         screen.getByLabelText("Max merges per repo branch"),
       ).toBeDisabled();
-      expect(screen.getByLabelText("Merge batch size")).toBeDisabled();
-      expect(screen.getByLabelText("Merge gather window")).toBeDisabled();
       expect(screen.getByLabelText("Max worker agents")).toBeEnabled();
       expect(screen.getByTestId("config-managed-notice")).toBeInTheDocument();
     });
@@ -1083,7 +1065,7 @@ describe("SettingsPage", () => {
     it("leaves Engine editable when settings are unlocked", async () => {
       setup({ section: "engine", config: { settingsLocked: false } });
       expect(await screen.findByLabelText("Poll interval")).toBeEnabled();
-      expect(screen.getByLabelText("Merge batch size")).toBeEnabled();
+      expect(screen.getByLabelText("Max merges per repo branch")).toBeEnabled();
       expect(screen.queryByTestId("config-managed-notice")).toBeNull();
     });
 

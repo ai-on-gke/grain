@@ -124,20 +124,6 @@ export const SETTINGS_INDEX = [
     keywords: [],
   },
   {
-    id: "mergeBatchSize",
-    section: "engine",
-    anchor: "merge-queue",
-    label: "Merge batch size",
-    keywords: [],
-  },
-  {
-    id: "mergeGatherWindow",
-    section: "engine",
-    anchor: "merge-queue",
-    label: "Merge gather window",
-    keywords: [],
-  },
-  {
     id: "ciJobsPerRun",
     section: "ci",
     anchor: "ci-queue",
@@ -737,14 +723,6 @@ export const SETTINGS_INDEX = [
     anchor: "api-scope-sets",
     label: "API scope sets",
     keywords: ["api", "scope set", "preset", "scopes", "requires person"],
-    card: true,
-  },
-  {
-    id: "card:executors:executors",
-    section: "executors",
-    anchor: "executors",
-    label: "Executor join tokens",
-    keywords: ["remote executor", "join token"],
     card: true,
   },
   {

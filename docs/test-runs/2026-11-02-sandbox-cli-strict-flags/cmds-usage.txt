@@ -1,0 +1,92 @@
+# unknown flag on every command in sandboxCommandFlags
+ls task:// --bogus x
+read task://2/record.md --bogus x
+grep foo task://2 --bogus x
+ci list --bogus x
+ci show r1 --bogus x
+ci test-history T --bogus x
+ci log --bogus x
+ci artifact a --bogus x
+ci wait --bogus x
+ci run-job test --bogus x
+ci retrigger --bogus x
+pr status --bogus x
+pr base-status --bogus x
+pr open --bogus x
+pr reply hi --bogus x
+pr resolve --bogus x
+pr review-comment hi --bogus x
+git revert --bogus x
+merge-queue --bogus x
+status hi --bogus x
+handover write --bogus x
+notify --bogus x
+task list --bogus x
+task read 2 --bogus x
+task prompt 2 --bogus x
+task transcript 2 --bogus x
+task wait 3 --bogus x
+task message 3 hi --bogus x
+task propose --bogus x
+api GET /api/tasks --bogus x
+memory list --bogus x
+memory read x --bogus x
+memory write x --bogus x
+memory doc-write x --bogus x
+memory doc write x --bogus x
+release-notes stats --bogus x
+release-notes publish --bogus x
+quarantine T --bogus x
+metrics --bogus x
+health --bogus x
+log --bogus x
+playbooks --bogus x
+issue list --bogus x
+issue read 1 --bogus x
+db query 'select 1' --bogus x
+# a flag with no value (last argument)
+read task://2/record.md --tail
+ls task:// --glob
+log --since
+# bad counts
+read task://2/record.md --tail abc
+read task://2/record.md --tail -1
+read task://2/record.md --lines 1.5
+read task://2/record.md -n x
+read task://2/record.md --offset=-3
+read task://2/record.md --limit ten
+read deploy://pipeline-changes --page zero
+ci log --tail x
+ci log --lines -2
+ci log -n abc
+ci log --attempt first
+ci list --limit lots
+ci test-history T --limit x
+task prompt 2 --lines x
+task transcript 2 --attempt one
+task list --limit x
+grep foo task://2 --max x
+grep foo task://2 -C x
+log --max-lines x
+log --tail x
+log -n x
+log --lines -1
+issue list --limit x
+# unknown subcommands and commands
+ci frob
+pr frob
+git frob
+handover frob
+task frob
+memory frob
+memory doc
+release-notes frob
+issue frob
+db frob
+frob
+ls
+# --cursor / --since / --page on another URI
+read task://2/record.md --cursor abc
+read task://2/record.md --since abc
+read task://2/record.md --page 5
+read deploy://health --page 2

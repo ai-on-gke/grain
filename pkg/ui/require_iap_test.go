@@ -127,9 +127,10 @@ func TestRequireIAPRefusesTheAccessCodeOverTheNetwork(t *testing.T) {
 		t.Errorf("GET /api/auth/access-code over the network = %s (%v), want requireIAP and not accessCodeAccepted", rec.Body, err)
 	}
 
-	// Executor bootstrap routes stay open.
-	if rec := serveFrom(srv, networkAddr, http.MethodGet, "/install-executor.sh", "", nil); rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
-		t.Errorf("GET /install-executor.sh over the network: code %d, want it open", rec.Code)
+	// A grain hostd dialing in authenticates with its own token, so its
+	// route stays open (this server takes no hostd, so it answers 503).
+	if rec := serveFrom(srv, networkAddr, http.MethodGet, "/api/hostd/connect", "", nil); rec.Code == http.StatusUnauthorized || rec.Code == http.StatusForbidden {
+		t.Errorf("GET /api/hostd/connect over the network: code %d, want it open", rec.Code)
 	}
 }
 

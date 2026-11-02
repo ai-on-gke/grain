@@ -1,0 +1,45 @@
+# grep across the union and core, narrowed below the 2000-entry walk cap
+$ grain grep 'maxWalkFiles = ' src://pkg --glob 'namespace/*.go'
+  exit=0 proxy=[GET /fs/src/pkg?glob=namespace%2F%2A.go&grep=maxWalkFiles+%3D+&n=1;]
+  | namespace/namespace.go:67:	maxWalkFiles = 2000
+$ grain grep 'maxWalkFiles = ' src://pkg/namespace
+  exit=0 proxy=[GET /fs/src/pkg/namespace?grep=maxWalkFiles+%3D+&n=1;]
+  | namespace.go:67:	maxWalkFiles = 2000
+$ grain grep 'func CoreSource' src://core/pkg/namespace
+  exit=0 proxy=[GET /fs/src/core/pkg/namespace?grep=func+CoreSource&n=1;]
+  | coresrc.go:41:func CoreSource(srcDir string, candidates ...string) (dir, mod string) {
+$ grain grep 'func CoreSource' src://core/pkg --glob 'namespace/*.go'
+  exit=0 proxy=[GET /fs/src/core/pkg?glob=namespace%2F%2A.go&grep=func+CoreSource&n=1;]
+  | namespace/coresrc.go:41:func CoreSource(srcDir string, candidates ...string) (dir, mod string) {
+$ grain grep LAYERMARK src://pkg --glob 'namespace/*.go'
+  exit=0 proxy=[GET /fs/src/pkg?glob=namespace%2F%2A.go&grep=LAYERMARK&n=1;]
+  | namespace/coresrc.go:3:// LAYERMARK the layer shadows core here.
+$ grain grep LAYERMARK src://core/pkg --glob 'namespace/*.go'
+  exit=0 proxy=[GET /fs/src/core/pkg?glob=namespace%2F%2A.go&grep=LAYERMARK&n=1;]
+  | 
+$ grain grep -i layermark src://pkg/layeronly
+  exit=0 proxy=[GET /fs/src/pkg/layeronly?grep=layermark&i=1&n=1;]
+  | x.go:3:// LAYERMARK only the layer has this file.
+$ grain grep LAYERMARK src://playbooks
+  exit=0 proxy=[GET /fs/src/playbooks?grep=LAYERMARK&n=1;]
+  | 
+$ grain grep CoreSource src://pkg --glob '**/coresrc*.go'
+  exit=0 proxy=[GET /fs/src/pkg?glob=%2A%2A%2Fcoresrc%2A.go&grep=CoreSource&n=1;]
+  | namespace/coresrc_test.go:185:func TestCoreSource(t *testing.T) {
+  | namespace/coresrc_test.go:192:		if dir, m := CoreSource(src, t.TempDir()); dir != "" || m != "" {
+  | namespace/coresrc_test.go:193:			t.Errorf("CoreSource(core) = %q, %q", dir, m)
+  | namespace/coresrc_test.go:197:		if dir, m := CoreSource(t.TempDir()); dir != "" || m != "" {
+  | namespace/coresrc_test.go:198:			t.Errorf("CoreSource = %q, %q", dir, m)
+  | namespace/coresrc_test.go:204:		dir, m := CoreSource(src, filepath.Join(t.TempDir(), "missing"), shipped)
+  | namespace/coresrc_test.go:206:			t.Errorf("CoreSource = %q, %q", dir, m)
+  | namespace/coresrc_test.go:215:		dir, m := CoreSource(src)
+$ grain grep CoreSource src://core/pkg --glob '**/coresrc*.go'
+  exit=0 proxy=[GET /fs/src/core/pkg?glob=%2A%2A%2Fcoresrc%2A.go&grep=CoreSource&n=1;]
+  | namespace/coresrc.go:30:// CoreSource finds core's source for a daemon whose src:// tree, srcDir,
+  | namespace/coresrc.go:41:func CoreSource(srcDir string, candidates ...string) (dir, mod string) {
+  | namespace/coresrc_test.go:185:func TestCoreSource(t *testing.T) {
+  | namespace/coresrc_test.go:192:		if dir, m := CoreSource(src, t.TempDir()); dir != "" || m != "" {
+  | namespace/coresrc_test.go:193:			t.Errorf("CoreSource(core) = %q, %q", dir, m)
+  | namespace/coresrc_test.go:197:		if dir, m := CoreSource(t.TempDir()); dir != "" || m != "" {
+  | namespace/coresrc_test.go:198:			t.Errorf("CoreSource = %q, %q", dir, m)
+  | namespace/coresrc_test.go:204:		dir, m := CoreSource(src, filepath.Join(t.TempDir(), "missing"), shipped)
