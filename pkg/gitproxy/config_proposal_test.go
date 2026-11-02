@@ -16,6 +16,7 @@ package gitproxy
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -59,6 +60,21 @@ func TestAuthorizeRefUpdatesAllowsConfigProposalBranchesButNeverMain(t *testing.
 		if reason, err := a.AuthorizeRefUpdates(ctx, "sandbox-0", "grain", "config", refused); err != nil || reason == "" {
 			t.Errorf("%v: allowed (%q, %v), want refused", refused, reason, err)
 		}
+	}
+	// The refusal says what this run may push to grain/config instead,
+	// not the template push: sets that do not apply to it
+	// (docs/test-runs/2026-11-02-director-config-change.md, F1).
+	reason, err := a.AuthorizeRefUpdates(ctx, "sandbox-0", "grain", "config", []RefUpdate{{oidA, oidB, "refs/heads/main"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"refs/heads/grain/config/7/<name>", "propose_config_change"} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("refusal %q does not name %q", reason, want)
+		}
+	}
+	if strings.Contains(reason, model.TemplateDeclarationDir) {
+		t.Errorf("refusal %q points a config proposer at template push sets", reason)
 	}
 	// The prefix is a grain/config grant: the same ref in another
 	// repository the run may push is still not its own branch.
