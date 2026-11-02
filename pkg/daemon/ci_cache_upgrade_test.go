@@ -1058,20 +1058,19 @@ func (s *trustRootSandbox) RunInSandbox(ctx context.Context, argv []string, stdi
 	if s.owner.failCAUpdate != nil && s.owner.failCAUpdate.Load() {
 		failFlag = "1"
 	}
-	env := make([]string, 0, len(os.Environ())+5)
-	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "HOME=") || strings.HasPrefix(kv, "PATH=") || strings.HasPrefix(kv, "GOENV=") {
-			continue
-		}
-		env = append(env, kv)
-	}
-	env = append(env,
-		"HOME="+s.home,
-		"PATH="+s.owner.fakeBinDir+":"+os.Getenv("PATH"),
-		"GRAIN_TEST_ROOTFS="+rootfs,
-		"GRAIN_TEST_FAIL_CA_UPDATE="+failFlag,
+	env := []string{
+		"HOME=" + s.home,
+		"PATH=" + s.owner.fakeBinDir + ":" + os.Getenv("PATH"),
+		"TMPDIR=" + os.TempDir(),
+		"GRAIN_TEST_ROOTFS=" + rootfs,
+		"GRAIN_TEST_FAIL_CA_UPDATE=" + failFlag,
 		"GRAIN_SKIP_GOCACHEPROG_BUILD=1",
-	)
+	}
+	for _, key := range []string{"LANG", "LC_ALL", "USER", "LOGNAME"} {
+		if val, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+val)
+		}
+	}
 	cmd.Env = env
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
