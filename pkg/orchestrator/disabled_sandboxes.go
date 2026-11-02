@@ -19,20 +19,29 @@ import (
 	"errors"
 )
 
-// DisabledSandboxes is an orchestrator.Sandboxes implementation used when
-// native sandboxes are disabled on this deployment. Any attempt to acquire a
-// native sandbox returns an error indicating that native sandboxes are disabled
-// and only remote execution sandboxes can exist.
+// ErrNoSandboxBackend is what every sandbox acquisition fails with on a
+// deployment whose sandbox backend is "none": the run's failure reason, so
+// it is written for the person reading why their task did not run.
+var ErrNoSandboxBackend = errors.New(`this deployment's sandbox backend is "none" ` +
+	`(-disable-native-sandboxes): it runs grain's control plane only and creates no sandboxes, ` +
+	`so no task can run here. Choose a sandbox backend in Settings -> Sandboxes, or restart the daemon ` +
+	`with -container-sandboxes, -granule-sandboxes, -k8s-sandboxes, -k8s-granule-sandboxes or -host-sandboxes`)
+
+// DisabledSandboxes is the Sandboxes of a deployment whose sandbox backend
+// is "none" (-disable-native-sandboxes): a control-plane-only daemon, such
+// as one a walkthrough or an end-to-end test starts to exercise settings,
+// the inbox and the config repository with no agent ever running. It
+// creates nothing; every Acquire fails with ErrNoSandboxBackend.
 type DisabledSandboxes struct{}
 
-// NewDisabledSandboxes constructs a Sandboxes backend that refuses to build native sandboxes.
+// NewDisabledSandboxes constructs a Sandboxes backend that refuses to build any sandbox.
 func NewDisabledSandboxes() *DisabledSandboxes {
 	return &DisabledSandboxes{}
 }
 
 // Acquire implements Sandboxes.
 func (d *DisabledSandboxes) Acquire(ctx context.Context, name string, shape Shape) (Sandbox, error) {
-	return nil, errors.New("native sandboxes are disabled on this deployment; only remote execution sandboxes can exist")
+	return nil, ErrNoSandboxBackend
 }
 
 // IsolatesNetwork implements NetworkIsolator.

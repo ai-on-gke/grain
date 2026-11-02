@@ -16,6 +16,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -24,11 +25,19 @@ func TestDisabledSandboxesAcquireFails(t *testing.T) {
 	t.Parallel()
 	sb := NewDisabledSandboxes()
 	_, err := sb.Acquire(context.Background(), "test-run", Shape{})
-	if err == nil {
-		t.Fatal("Acquire = nil, want error when native sandboxes are disabled")
+	if !errors.Is(err, ErrNoSandboxBackend) {
+		t.Fatalf("Acquire error = %v, want ErrNoSandboxBackend", err)
 	}
-	if !strings.Contains(err.Error(), "native sandboxes are disabled") {
-		t.Fatalf("Acquire error = %q, want it to mention native sandboxes are disabled", err)
+	// The reason a run's failure shows: it names the backend, says
+	// nothing runs here and how to change that -- not the remote
+	// executors this mode was once for, which no longer exist.
+	for _, want := range []string{`sandbox backend is "none"`, "no task can run here", "Settings -> Sandboxes"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Acquire error = %q, want it to mention %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "remote") {
+		t.Errorf("Acquire error = %q still mentions remote execution", err)
 	}
 }
 
