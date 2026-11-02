@@ -129,6 +129,20 @@ test.describe("under prefers-reduced-motion: reduce", () => {
     ).toBe("none");
   });
 
+  // A session awaiting its reply shows the chat kit's typing dots, which
+  // bounced on an endless loop whatever the preference (2026-11-02
+  // responsive walkthrough).
+  test("a session's typing indicator holds still", async ({ page }) => {
+    await page.goto("/session/director");
+    const dots = page.locator(".task-chat-window .cs-typing-indicator__dot");
+    await expect(dots.first()).toBeVisible();
+    for (const name of await dots.evaluateAll((els) =>
+      els.map((el) => getComputedStyle(el).animationName),
+    )) {
+      expect(name).toBe("none");
+    }
+  });
+
   // The preference is read live: turning it off mid-session brings the
   // transitions back without a reload, as the OS setting would.
   test("follows the preference when it changes", async ({ page }) => {
