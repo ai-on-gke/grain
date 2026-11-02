@@ -1390,13 +1390,16 @@ jobs:
           echo "=== Disk and memory before cleanup ==="
           df -h /
           free -m
-          sudo rm -rf \
+          for dir in \
             /usr/share/dotnet \
             /usr/local/lib/android \
             /opt/ghc \
             /opt/hostedtoolcache/CodeQL \
             /usr/local/share/boost \
-            /opt/az || true
+            /opt/az; do
+            sudo rm -rf "$dir" &
+          done
+          wait || true
           echo "=== Disk after cleanup ==="
           df -h /
 
