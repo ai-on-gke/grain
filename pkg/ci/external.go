@@ -14,7 +14,11 @@
 
 package ci
 
-import "context"
+import (
+	"context"
+	"strconv"
+	"strings"
+)
 
 // ExternalRuns is CI some other provider ran, read the way grain's own
 // RunStore is: what the sandbox namespace (ci://) and the sandbox CLI
@@ -37,4 +41,33 @@ type ExternalRuns interface {
 	// ExternalJobLog is one job's log, by name or id ("" for the first
 	// that failed).
 	ExternalJobLog(ctx context.Context, id, job string) (string, error)
+}
+
+// ActionsRunIDPrefix starts every GitHub Actions run id ci:read serves.
+const ActionsRunIDPrefix = "gha:"
+
+// ParseActionsRunID reads a GitHub Actions run id
+// ("gha:<owner>:<name>:<run id>") back into its repository and GitHub
+// run id. The repository may be written with its slashes
+// ("gha:owner/name:42") as well as with colons. It is what a reader's
+// repository scope is checked against before anything is asked of the
+// forge for that run.
+func ParseActionsRunID(id string) (repo string, runID int64, ok bool) {
+	rest, found := strings.CutPrefix(strings.TrimSpace(id), ActionsRunIDPrefix)
+	if !found {
+		return "", 0, false
+	}
+	at := strings.LastIndexByte(rest, ':')
+	if at <= 0 {
+		return "", 0, false
+	}
+	n, err := strconv.ParseInt(rest[at+1:], 10, 64)
+	if err != nil || n <= 0 {
+		return "", 0, false
+	}
+	repo = strings.ReplaceAll(rest[:at], ":", "/")
+	if strings.Count(repo, "/") < 1 {
+		return "", 0, false
+	}
+	return repo, n, true
 }

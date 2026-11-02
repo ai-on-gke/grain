@@ -317,6 +317,46 @@ func TestCIReadOfActionsRunsKeepsToTheTasksReadScope(t *testing.T) {
 	}
 }
 
+// TestCIReadOfActionsRunsKeepsToTheDeploymentsRepos is the bound on a
+// grant for every repository, and on a person: the repository of a gha:
+// id is text the caller wrote, and the forge is read with the daemon's
+// own credential, so a repository this deployment does not work in is
+// refused before the forge is asked anything about it.
+func TestCIReadOfActionsRunsKeepsToTheDeploymentsRepos(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	forge := newFakeActions(now)
+	srv, client, store := actionsServer(t, forge, now)
+	if err := store.SetTargetRepos(context.Background(), []string{"acme/widgets"}); err != nil {
+		t.Fatal(err)
+	}
+	seedAPITask(t, client, "everywhere", "acme/widgets", "api:ci:read")
+	paths := []string{
+		"/api/ci/runs/gha:elsewhere:secrets:42",
+		"/api/ci/runs/gha:elsewhere:secrets:42/log",
+		"/api/ci/runs/gha:elsewhere:secrets:42/artifacts",
+	}
+	for _, path := range paths {
+		if code, body := asAgent(t, srv, "everywhere", http.MethodGet, path, "", ""); code == http.StatusOK {
+			t.Errorf("a task granted ci:read everywhere read %s of a repository off the deployment's list: %s", path, body)
+		}
+		if rec := do(t, srv, http.MethodGet, path, ""); rec.Code == http.StatusOK {
+			t.Errorf("a person read %s of a repository off the deployment's list: %s", path, rec.Body.String())
+		}
+	}
+	code, body := asAgent(t, srv, "everywhere", http.MethodGet, "/api/ci/runs?repo=elsewhere/secrets&provider=github-actions", "", "")
+	if runs := decodeString[ui.CIRunsResponse](t, body).Runs; code != http.StatusOK || len(runs) != 0 {
+		t.Errorf("listing a repository off the deployment's list = %d %s, want no runs", code, body)
+	}
+	if n := forge.count("runs") + forge.count("run") + forge.count("jobs") + forge.count("log") + forge.count("artifacts"); n != 0 {
+		t.Errorf("the forge was asked %d times about a repository this deployment does not work in", n)
+	}
+	// The deployment's own repository still reads.
+	if code, body := asAgent(t, srv, "everywhere", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42", "", ""); code != http.StatusOK {
+		t.Errorf("show of acme/widgets: %d %s", code, body)
+	}
+}
+
 func TestCIRunsListFallsBackToGrainsRecordOfActions(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC().Truncate(time.Second)

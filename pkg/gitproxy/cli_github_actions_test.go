@@ -32,8 +32,12 @@ import (
 	"github.com/ai-on-gke/grain/pkg/redact"
 )
 
-// fakeExternalCI is one GitHub Actions run of acme/widgets.
-type fakeExternalCI struct{ run ci.Run }
+// fakeExternalCI is one GitHub Actions run of acme/widgets. asked, when
+// set, records the id of every run read from it.
+type fakeExternalCI struct {
+	run   ci.Run
+	asked *[]string
+}
 
 func (f fakeExternalCI) FindExternalRuns(_ context.Context, filter ci.RunFilter, _ int) ([]ci.Run, string) {
 	if !strings.EqualFold(filter.Repo, f.run.Repo) || (filter.Provider != "" && filter.Provider != ci.ProviderGitHubActions) {
@@ -43,6 +47,9 @@ func (f fakeExternalCI) FindExternalRuns(_ context.Context, filter ci.RunFilter,
 }
 
 func (f fakeExternalCI) ExternalRun(_ context.Context, id string) (ci.Run, bool, error) {
+	if f.asked != nil {
+		*f.asked = append(*f.asked, id)
+	}
 	return f.run, id == f.run.ID, nil
 }
 
@@ -121,5 +128,59 @@ func TestCLIListsAndReadsGitHubActionsRuns(t *testing.T) {
 	}
 	if rec := get("tok-ci", "/fs/ci/acme/widgets?list"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "gha:acme:widgets:42") {
 		t.Errorf("ci://acme/widgets listing = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// TestCLIRefusesAnOutOfScopeActionsRunBeforeReadingIt: the daemon reads
+// an Actions run from the forge with its own credential, so a run id
+// naming a repository outside the sandbox's scope -- or, under ci://,
+// one other than the path's -- is refused without that read.
+func TestCLIRefusesAnOutOfScopeActionsRunBeforeReadingIt(t *testing.T) {
+	store := ci.NewRunStore(10)
+	gha := ci.Run{ID: "gha:acme:widgets:42", Provider: ci.ProviderGitHubActions, Repo: "acme/widgets",
+		Jobs: []ci.JobRun{{JobID: "701", Name: "publish", Conclusion: ci.ConclusionFailure}}}
+	var asked []string
+	tokenFile := filepath.Join(t.TempDir(), "sandbox-tokens.json")
+	raw, _ := json.Marshal(map[string]string{"sb-ci": "tok-ci", "sb-other": "tok-other"})
+	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := &gitproxy.GitProxy{
+		Tokens:    tokens,
+		Namespace: &namespace.Server{CIStore: store, ExternalCI: fakeExternalCI{run: gha, asked: &asked}, Redactor: redact.New(nil)},
+		NamespaceScopes: fakeNamespaceScopes{scopes: map[string]model.NamespaceScope{
+			"sb-ci": {TaskID: "7", RunID: "run-a", TaskRepo: "acme/widgets", MayReadCI: true,
+				AllowedRepos: map[string]bool{"acme/widgets": true}},
+			"sb-other": {TaskID: "8", RunID: "run-b", TaskRepo: "acme/other", MayReadCI: true,
+				AllowedRepos: map[string]bool{"acme/other": true}},
+		}},
+		Activity: &fakeActivity{},
+	}
+	h := gitproxy.NewHandler(proxy)
+	get := func(token, path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", basicAuthHeader(token))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	for _, path := range []string{"/cli/ci/run?id=gha:acme:widgets:42", "/cli/ci/show?id=gha:acme:widgets:42"} {
+		if rec := get("tok-other", path); rec.Code != http.StatusNotFound {
+			t.Errorf("a sandbox outside acme/widgets: %s = %d %s", path, rec.Code, rec.Body)
+		}
+	}
+	// acme/other's path is in scope; the id in it names acme/widgets.
+	if rec := get("tok-other", "/fs/ci/acme/other/gha:acme:widgets:42/publish/job.log"); rec.Code == http.StatusOK {
+		t.Errorf("a sandbox read acme/widgets' Actions log under acme/other's path: %s", rec.Body)
+	}
+	if len(asked) != 0 {
+		t.Errorf("out-of-scope runs were read from the forge: %v", asked)
+	}
+	if rec := get("tok-ci", "/cli/ci/show?id=gha:acme:widgets:42"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "job publish") {
+		t.Errorf("an in-scope show = %d %s", rec.Code, rec.Body)
 	}
 }

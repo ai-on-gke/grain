@@ -422,7 +422,11 @@ daemon's own forge connection, so no credential reaches a sandbox: the
 GitHub App or token for github.com, and the host's own tool
 (`ForgeViaCommand`) for a GitHub Enterprise host, whose REST API is
 under `/api/v3`. The rules for which
-repositories a task may read are the same as for grain CI runs.
+repositories a task may read are the same as for grain CI runs, and
+only repositories this deployment works in (its target repos, or every
+repository while that list is empty) are read at all: a grant for every
+repository, or a person, reading a `gha:` id of any other gets a 404,
+and the forge is not asked.
 
 | Route | Answers |
 |---|---|

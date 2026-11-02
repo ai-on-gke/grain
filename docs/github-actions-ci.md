@@ -280,5 +280,9 @@ How the reads behave:
   there is no forge connection, when the hour's API budget is low, or
   when the forge read fails, and the answer's `actionsNote` says which.
 - Artifacts are listed, not downloaded.
+- Only the repositories this deployment works in (its target repos, or
+  every repository while that list is empty) are read, whatever a
+  caller's grant covers: the daemon's credential may reach others, and
+  a `gha:` id names whichever repository its caller wrote.
 - `grain ci wait` on a task's branch waits on the GitHub checks that
   gate it.

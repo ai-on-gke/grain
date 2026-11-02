@@ -700,6 +700,12 @@ const externalJobLog = "job.log"
 // resolveExternalCI is ci://<repo>/<run>/... for an ExternalCI run: the
 // run is its jobs, and each job is its job.log.
 func (s *Server) resolveExternalCI(ctx context.Context, repo, relPath, runID string, rest []string) (*ResolvedNode, error) {
+	// The id names its own repository: one other than the path's, which
+	// is the repository the scope was checked against, is not asked of
+	// the forge at all.
+	if idRepo, _, ok := ci.ParseActionsRunID(runID); !ok || !strings.EqualFold(idRepo, repo) {
+		return nil, fmt.Errorf("%w: ci://%s/%s", ErrNotFound, repo, runID)
+	}
 	run, ok, err := s.ExternalCI.ExternalRun(ctx, runID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: ci://%s/%s: %v", ErrNotFound, repo, runID, err)

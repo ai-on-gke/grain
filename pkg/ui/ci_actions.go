@@ -52,7 +52,7 @@ import (
 )
 
 // ActionsRunIDPrefix starts every GitHub Actions run id ci:read serves.
-const ActionsRunIDPrefix = "gha:"
+const ActionsRunIDPrefix = ci.ActionsRunIDPrefix
 
 // ciActionsCaller is the budget ledger's label for these reads.
 const ciActionsCaller = "ci-read"
@@ -68,26 +68,9 @@ func ActionsRunID(repo string, runID int64) string {
 }
 
 // ParseActionsRunID reads an id ActionsRunID made back into its
-// repository and GitHub run id. The repository may be written with its
-// slashes ("gha:owner/name:42") as well as with colons.
+// repository and GitHub run id (ci.ParseActionsRunID).
 func ParseActionsRunID(id string) (repo string, runID int64, ok bool) {
-	rest, found := strings.CutPrefix(strings.TrimSpace(id), ActionsRunIDPrefix)
-	if !found {
-		return "", 0, false
-	}
-	at := strings.LastIndexByte(rest, ':')
-	if at <= 0 {
-		return "", 0, false
-	}
-	n, err := strconv.ParseInt(rest[at+1:], 10, 64)
-	if err != nil || n <= 0 {
-		return "", 0, false
-	}
-	repo = strings.ReplaceAll(rest[:at], ":", "/")
-	if strings.Count(repo, "/") < 1 {
-		return "", 0, false
-	}
-	return repo, n, true
+	return ci.ParseActionsRunID(id)
 }
 
 // IsActionsRunID reports whether id names a GitHub Actions run.
@@ -127,7 +110,7 @@ func (c *Client) actionsReader() github.ActionsReader {
 // not ignored. The config repository grain CI always runs, and a repo on
 // grain CI or none, are not.
 func (c *Client) actionsListedFor(ctx context.Context, repo model.RepoRef) bool {
-	if c.Store == nil || grainci.RequiredFor(repo) {
+	if c.Store == nil || grainci.RequiredFor(repo) || c.actionsRepoServed(ctx, repo) != nil {
 		return false
 	}
 	eff, err := c.Store.EffectiveRepoConfig(ctx, repo)
@@ -139,6 +122,21 @@ func (c *Client) actionsListedFor(ctx context.Context, repo model.RepoRef) bool 
 		return false
 	}
 	return true
+}
+
+// actionsRepoServed refuses repo unless this deployment works in it
+// (Config.TargetRepos; every repository while that list is empty). The
+// reads go through the daemon's own forge credential, which may reach
+// repositories grain was never pointed at, and the repository of a gha:
+// id is whatever its caller wrote -- so a reader whose grant covers
+// "every repository" still means every repository grain serves, as it
+// does for grain's own runs, and not every one the credential can see.
+func (c *Client) actionsRepoServed(ctx context.Context, repo model.RepoRef) error {
+	if targetAllowed(c.teamTargetRepos(ctx, ""), repo) {
+		return nil
+	}
+	return &NotFoundError{ID: repo.String(),
+		message: fmt.Sprintf("%s is not a repository this deployment works in, so grain reads none of its GitHub Actions runs", repo)}
 }
 
 // actionsCache holds what the forge answered for a little while, so an
@@ -463,6 +461,9 @@ func sortRunsNewestFirst(runs []ci.Run) {
 // actionsRunDetail is one Actions run with its jobs and their steps, from
 // the forge, or from grain's record of it when the forge cannot say.
 func (c *Client) actionsRunDetail(ctx context.Context, repo model.RepoRef, runID int64) (ci.Run, []github.ActionsRunJob, error) {
+	if err := c.actionsRepoServed(ctx, repo); err != nil {
+		return ci.Run{}, nil, err
+	}
 	reader := c.actionsReader()
 	var forgeErr error
 	if reader != nil {
@@ -763,6 +764,10 @@ func (s *Server) handleListActionsArtifacts(w http.ResponseWriter, r *http.Reque
 	}
 	repo, err := s.tasks.parseRepo(repoText)
 	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	if err := s.tasks.actionsRepoServed(r.Context(), repo); err != nil {
 		writeClientError(w, err)
 		return
 	}

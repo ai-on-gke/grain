@@ -496,7 +496,7 @@ func (p *GitProxy) serveCIRunRepo(w http.ResponseWriter, q url.Values, scope nam
 		return
 	}
 	run, ok := p.Namespace.CIStore.Get(id)
-	if !ok && p.Namespace.ExternalCI != nil {
+	if !ok && p.Namespace.ExternalCI != nil && externalRunPermitted(scope, id) {
 		run, ok, _ = p.Namespace.ExternalCI.ExternalRun(context.Background(), id)
 	}
 	if !ok || run.Repo == "" || !scope.PermitsCI(run.Repo) {
@@ -526,7 +526,7 @@ func (p *GitProxy) serveCIShow(w http.ResponseWriter, r *http.Request, scope nam
 		return
 	}
 	run, ok := p.Namespace.CIStore.Get(id)
-	if !ok && p.Namespace.ExternalCI != nil {
+	if !ok && p.Namespace.ExternalCI != nil && externalRunPermitted(scope, id) {
 		var err error
 		if run, ok, err = p.Namespace.ExternalCI.ExternalRun(r.Context(), id); err != nil {
 			ok = false
@@ -561,6 +561,16 @@ func (p *GitProxy) serveCIShow(w http.ResponseWriter, r *http.Request, scope nam
 			fmt.Fprintf(w, "  %d. %s: %s\n", i+1, step.Name, verdict)
 		}
 	}
+}
+
+// externalRunPermitted reports whether scope may read the repository a
+// GitHub Actions run id names. It is asked before the run is read: the
+// daemon reads it from the forge with its own credential, so an id for
+// a repository outside the scope is refused without that read, not after
+// it.
+func externalRunPermitted(scope namespace.Scope, id string) bool {
+	repo, _, ok := ci.ParseActionsRunID(id)
+	return ok && scope.PermitsCI(repo)
 }
 
 func formatCIRunLine(run ci.Run) string {
