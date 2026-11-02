@@ -233,12 +233,26 @@ func TestInteractiveMultiTurnConversationMixingChatAndPlainTextExits(t *testing.
 		Runs:       runs,
 		MaxWorkers: 2,
 		Config: orchestrator.Config{
-			Now:                   currentNow,
-			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          model.NewCapabilityRegistry(durable.New()),
-			SessionSandboxIdleTTL: 300 * time.Millisecond,
-			CancelPollInterval:    10 * time.Millisecond,
+			Now:          currentNow,
+			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
+			Capabilities: model.NewCapabilityRegistry(durable.New()),
+			// SessionSandboxIdleTTL is left unset so run 1 reads the stored
+			// setting (30m above) and follows it live while it idles: the
+			// wait between Turn 1 and Turn 2 must not race a short timer
+			// under -race load, and Step 4 shortens the setting once Turn 2
+			// has relayed so run 1 then exits promptly.
+			CancelPollInterval: 10 * time.Millisecond,
 		},
+	}
+	waitFor := func(what string, ch <-chan struct{}) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			t.Fatalf("waiting for %s: %v", what, ctx.Err())
+		case <-time.After(30 * time.Second):
+			t.Fatalf("timed out waiting for %s", what)
+		}
 	}
 
 	// Step 1: User sends "msg-1" and RunCycle dispatches run 1.
@@ -248,7 +262,7 @@ func TestInteractiveMultiTurnConversationMixingChatAndPlainTextExits(t *testing.
 	}
 
 	// Step 2: Wait for Turn 1's chat("chat-reply-1") to park, then send "msg-2".
-	<-turn1ChatPosted
+	waitFor("turn 1's chat to post", turn1ChatPosted)
 	sendUser("msg-2")
 
 	// Step 3: Turn 1 exits with plain text "plain-reply-2". Wait until continueSessionTurns
@@ -274,10 +288,21 @@ func TestInteractiveMultiTurnConversationMixingChatAndPlainTextExits(t *testing.
 	}
 	sendUser("msg-3")
 
-	// Step 4: Wait for Turn 2 ("plain-reply-3") to relay, then let the short idle TTL (300ms)
-	// expire so run 1 exits cleanly and parks the session sandbox warm.
-	<-turn2Relayed
-	runs.Wait(ctx)
+	// Step 4: Wait for Turn 2 ("plain-reply-3") to relay, then shorten the stored idle TTL
+	// so run 1's in-process wait (which follows the stored setting live) expires and the
+	// run exits cleanly, parking the session sandbox warm.
+	waitFor("turn 2 to relay", turn2Relayed)
+	mc, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mc.SessionSandboxIdleTTL = 300 * time.Millisecond
+	if err := store.PutConfig(ctx, *mc); err != nil {
+		t.Fatalf("shortening session idle TTL: %v", err)
+	}
+	runsDone := make(chan struct{})
+	go func() { runs.Wait(ctx); close(runsDone) }()
+	waitFor("run 1 to exit", runsDone)
 
 	// Run reconcileConsoleSessions so the session rests on its opening/resting state between runs.
 	if err := orchestrator.RunCycle(ctx, deps, advance(time.Second)); err != nil {
@@ -301,9 +326,11 @@ func TestInteractiveMultiTurnConversationMixingChatAndPlainTextExits(t *testing.
 	if err := orchestrator.RunCycle(ctx, deps, advance(time.Millisecond)); err != nil {
 		t.Fatalf("cycle 2: %v", err)
 	}
-	<-turn4ChatPosted
+	waitFor("turn 4's chat to post", turn4ChatPosted)
 	sendUser("msg-5")
-	runs.Wait(ctx)
+	runs2Done := make(chan struct{})
+	go func() { runs.Wait(ctx); close(runs2Done) }()
+	waitFor("run 2 to exit", runs2Done)
 
 	// Verify all 5 user messages and all 5 agent replies are in the conversation in order!
 	comments, err := store.Comments(ctx, director.ID)
