@@ -655,3 +655,57 @@ func TestReconcileSandboxesKeepsSessionSandboxThroughClaimAndPark(t *testing.T) 
 		t.Fatal("sandbox 2-1 held by nothing should have been reaped")
 	}
 }
+
+// A run reusing a session sandbox is charged under its own run ID while
+// the sandbox keeps the name of the run that built it: the reconciler
+// must count that sandbox as the run's charge, not charge it a second
+// time as "missing from ledger" -- neither between the claim and
+// SetRunSandbox nor once the run's row names it.
+func TestReconcileSandboxesDoesNotDoubleChargeReusedSessionSandbox(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStoreForOrchestrator(t)
+	now := time.Now().UTC()
+	shape := model.Commitment{CPUs: 2, MemoryMB: 3072}
+
+	if err := st.PutTask(ctx, makeTestTask("2", true)); err != nil {
+		t.Fatal(err)
+	}
+	limits := model.Limits{Workers: 10}
+	backend := newFakeSizedBackend()
+	if _, err := backend.Acquire(ctx, "2-1", Shape{CPUs: 2, MemoryMB: 3072}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.StartRun(ctx, model.Run{ID: "2-50", TaskID: "2", Attempt: 50, StartedAt: now}, limits); err != nil {
+		t.Fatal(err)
+	}
+	ledger := &model.Ledger{}
+	ledger.Charge(model.PoolAgent, "2-50", shape)
+	deps := Deps{Store: st, Sandboxes: backend, Ledger: ledger, AgentShape: shape}
+	t.Cleanup(func() { unholdSessionSandbox(st, "2-1", "2-50") })
+
+	check := func(step string) {
+		t.Helper()
+		for i := 0; i < 2; i++ {
+			if err := ReconcileSandboxes(ctx, deps, now.Add(model.LedgerSyncGrace+time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			if got := ledger.LiveIn(model.PoolAgent); got != shape {
+				t.Fatalf("%s, pass %d: LiveIn(PoolAgent) = %s, want %s (one sandbox, charged once)", step, i, got, shape)
+			}
+			rec, _ := LatestSandboxReconciliation(ledger)
+			for _, d := range rec.Discrepancies {
+				if strings.Contains(d, "missing from ledger") {
+					t.Fatalf("%s, pass %d: unexpected discrepancy %q", step, i, d)
+				}
+			}
+		}
+	}
+
+	holdSessionSandbox(st, "2-1", "2-50")
+	check("claimed by run 2-50 before SetRunSandbox")
+
+	if err := st.SetRunSandbox(ctx, "2-50", "2-1", nil); err != nil {
+		t.Fatal(err)
+	}
+	check("recorded as run 2-50's sandbox")
+}
