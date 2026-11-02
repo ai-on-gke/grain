@@ -20,7 +20,7 @@
 
 ## Stubs
 
-Everything ran against the real server, store, built frontend, browser and `grain mcpserver`. The only boundary replaced is the one the brief names: the Critique/TAP edition is not in this repository, so the demo's in-process change provider (`pkg/demo`'s `demoChangelists`) stands in for it. On the base commit that stand-in answered only Observe, Submit and Sync (finding F1). On this branch it also answers Checks, Reply/Resolve, Publish and Mail from its remembered observations. Nothing leaves the process.
+Everything ran against the real server, store, built frontend, browser and `grain mcpserver`. The only boundary replaced is the one the brief names: the code review/TAP edition is not in this repository, so the demo's in-process change provider (`pkg/demo`'s `demoChangelists`) stands in for it. On the base commit that stand-in answered only Observe, Submit and Sync (finding F1). On this branch it also answers Checks, Reply/Resolve, Publish and Mail from its remembered observations. Nothing leaves the process.
 
 Credential expiry (gap 4) cannot be triggered in the demo: its provider has no credentials to expire, and the demo does not run `change.Watch`. It is exercised by a Go test over real components instead (step 12).
 
@@ -96,7 +96,7 @@ Credential expiry (gap 4) cannot be triggered in the demo: its provider has no c
 
 **Repro (base):** `grain mcpserver -sandbox-root <dir> -server <demo> -task 13`, then `tools/list`. It has no `open_pull_request`, `reply_to_pull_request_comment` or `resolve_review_thread`. The control roster (`pkg/daemon/mcp_surface.go`) drops them because `grain pr open/reply/resolve` stand in for them, but those cannot serve a CL: `grain pr open` posts no summary or body, and `grain pr reply`/`resolve` take an integer GitHub comment ID (`pkg/gitproxy/cli_actions.go`), never `cl/<n>:<id>`. The CL thread wake (`pkg/orchestrator/reviewthreads.go`) names all three tools.
 
-**Fix:** the control roster keeps the three for changelist tasks only. `docs/design/sandbox-first-agent-surface.md` §6 says so, and `TestControlRosterKeepsAChangelistTasksReviewTools` pins both the CL and the grain-ci pull-request rosters.
+**Fix:** the control roster keeps the three for changelist tasks only. `design/design/sandbox-first-agent-surface.design.md` §6 says so, and `TestControlRosterKeepsAChangelistTasksReviewTools` pins both the CL and the grain-ci pull-request rosters.
 
 ### Observations (not changed)
 

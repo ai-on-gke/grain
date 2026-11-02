@@ -4668,6 +4668,131 @@ func TestReorderRebalancesWhenNeighboursAreCrowded(t *testing.T) {
 	}
 }
 
+// putPrioritized files each task at the priority and OrderKey given, so a
+// test can lay out a backlog whose OrderKey order disagrees with the
+// order it lists in.
+func putPrioritized(t *testing.T, store *model.Store, ctx context.Context, tasks map[string][2]float64) {
+	t.Helper()
+	for id, pk := range tasks {
+		tk := task(id, true)
+		tk.Priority = int(pk[0])
+		tk.OrderKey = pk[1]
+		if err := store.PutTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestReorderAtAPriorityBoundary is grain/task-2339's own case: a P9 task
+// filed between two P5 ones lists first, so dragging the later P5 task
+// to the head of the P5 tasks names a P9 neighbour whose OrderKey is
+// larger than the P5 one it lands above. It has to land above it anyway.
+func TestReorderAtAPriorityBoundary(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	putPrioritized(t, store, ctx, map[string][2]float64{"a": {5, 10}, "b": {9, 20}, "c": {5, 30}})
+	if got := listedIDs(t, store, ctx); !reflect.DeepEqual(got, []string{"b", "a", "c"}) {
+		t.Fatalf("starting backlog = %v, want [b a c]", got)
+	}
+	if err := store.Reorder(ctx, []string{"c"}, ptr("b"), ptr("a")); err != nil {
+		t.Fatal(err)
+	}
+	if got := listedIDs(t, store, ctx); !reflect.DeepEqual(got, []string{"b", "c", "a"}) {
+		t.Fatalf("after dropping c between b and a: %v, want [b c a]", got)
+	}
+
+	// And back to the tail of the P5 tasks, the list's own bottom.
+	if err := store.Reorder(ctx, []string{"c"}, ptr("a"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := listedIDs(t, store, ctx); !reflect.DeepEqual(got, []string{"b", "a", "c"}) {
+		t.Fatalf("after dropping c at the tail: %v, want [b a c]", got)
+	}
+}
+
+// TestReorderMultiSelectAtAPriorityBoundary is the same drop with two
+// tasks dragged as a block: they land at the head of their own priority
+// and keep their own relative order rather than coming out reversed.
+func TestReorderMultiSelectAtAPriorityBoundary(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	putPrioritized(t, store, ctx, map[string][2]float64{
+		"a": {5, 10}, "b": {9, 20}, "c": {5, 30}, "d": {5, 40},
+	})
+	if err := store.Reorder(ctx, []string{"d", "c"}, ptr("b"), ptr("a")); err != nil {
+		t.Fatal(err)
+	}
+	if got := listedIDs(t, store, ctx); !reflect.DeepEqual(got, []string{"b", "c", "d", "a"}) {
+		t.Fatalf("after dropping c and d between b and a: %v, want [b c d a]", got)
+	}
+}
+
+// TestReorderAcrossPrioritiesStaysInItsOwnPriority drops tasks among
+// tasks of another priority. Reorder never changes a task's priority, so
+// a P5 task dropped among P9 ones goes to the head of the P5 tasks, and a
+// P9 task dropped among P5 ones to the tail of the P9 tasks -- as far as
+// the drop asked, rather than at whatever its key lands next to.
+func TestReorderAcrossPrioritiesStaysInItsOwnPriority(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	putPrioritized(t, store, ctx, map[string][2]float64{
+		"hi1": {9, 10}, "lo1": {5, 20}, "hi2": {9, 30}, "lo2": {5, 40},
+	})
+	if got := listedIDs(t, store, ctx); !reflect.DeepEqual(got, []string{"hi1", "hi2", "lo1", "lo2"}) {
+		t.Fatalf("starting backlog = %v, want [hi1 hi2 lo1 lo2]", got)
+	}
+
+	// lo2 dropped between the two P9 tasks.
+	if err := store.Reorder(ctx, []string{"lo2"}, ptr("hi1"), ptr("hi2")); err != nil {
+		t.Fatal(err)
+	}
+	if got := listedIDs(t, store, ctx); !reflect.DeepEqual(got, []string{"hi1", "hi2", "lo2", "lo1"}) {
+		t.Fatalf("after dropping lo2 among the P9 tasks: %v, want [hi1 hi2 lo2 lo1]", got)
+	}
+
+	// hi1 dropped between the two P5 tasks.
+	if err := store.Reorder(ctx, []string{"hi1"}, ptr("lo2"), ptr("lo1")); err != nil {
+		t.Fatal(err)
+	}
+	if got := listedIDs(t, store, ctx); !reflect.DeepEqual(got, []string{"hi2", "hi1", "lo2", "lo1"}) {
+		t.Fatalf("after dropping hi1 among the P5 tasks: %v, want [hi2 hi1 lo2 lo1]", got)
+	}
+
+	// A block spanning both priorities dropped at the very head: each
+	// goes to the head of its own priority.
+	if err := store.Reorder(ctx, []string{"hi1", "lo1"}, nil, ptr("hi2")); err != nil {
+		t.Fatal(err)
+	}
+	if got := listedIDs(t, store, ctx); !reflect.DeepEqual(got, []string{"hi1", "hi2", "lo1", "lo2"}) {
+		t.Fatalf("after dropping hi1 and lo1 at the head: %v, want [hi1 hi2 lo1 lo2]", got)
+	}
+}
+
+// TestReorderRebalanceKeepsTheListedOrder crowds two P5 neighbours so
+// the drop has to rebalance, in a backlog whose OrderKey order disagrees
+// with its listed one across priorities. The rebalance renumbers in the
+// listed order, so nothing but the dropped task moves.
+func TestReorderRebalanceKeepsTheListedOrder(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+	putPrioritized(t, store, ctx, map[string][2]float64{
+		"a": {5, 10}, "b": {5, 11}, "hi": {9, 50}, "c": {5, 60},
+	})
+	if _, err := db.ExecContext(ctx, "UPDATE `task` SET `order_key` = 10.0000001 WHERE `id` = 'b'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Reorder(ctx, []string{"c"}, ptr("a"), ptr("b")); err != nil {
+		t.Fatal(err)
+	}
+	if got := listedIDs(t, store, ctx); !reflect.DeepEqual(got, []string{"hi", "a", "c", "b"}) {
+		t.Fatalf("after dropping c into a crowded gap: %v, want [hi a c b]", got)
+	}
+	keys := orderKeys(t, store, ctx)
+	if !(keys["hi"] < keys["a"] && keys["a"] < keys["c"] && keys["c"] < keys["b"]) {
+		t.Fatalf("OrderKeys after rebalance = %v, want ascending in listed order", keys)
+	}
+}
+
 func ptr[T any](v T) *T { return &v }
 
 // --- the merge queue at the front of the backlog -------------------------

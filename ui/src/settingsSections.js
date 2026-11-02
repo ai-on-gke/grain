@@ -14,7 +14,7 @@
 
 // The sections of the Settings view and the tabs of the System view, and
 // the redirects from every path that used to open one of them
-// (docs/design/settings-panel.md §3.2, §2.1, §3.5).
+// (design/design/settings-panel.design.md §3.2, §2.1, §3.5).
 //
 // Pure data and pure functions, kept out of SettingsPage.jsx and
 // SystemPage.jsx so paths.js can read them without importing React
@@ -27,7 +27,7 @@
 // The Settings UI edits what a deployment needs before it can read its
 // config repo at all -- Models and Sandboxes -- plus the write-only
 // secret store, sign-in, this browser's preferences and the operational
-// controls (docs/design/config-repo-settings.md §2.1, §2.3). Everything
+// controls (design/design/config-repo-settings.design.md §2.1, §2.3). Everything
 // else lives in the config repo: those sections are under "Managed in
 // config repo", drawn read-only with a link to the file that holds them
 // (CONFIG_REPO_SECTION_PATHS) whenever the API sends their writes there

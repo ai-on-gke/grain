@@ -65,7 +65,7 @@ func TestEveryAgyGrainStartsHasTheUpdaterDisabled(t *testing.T) {
 // replaced itself exactly as it does with the variable unset, so agy
 // compares the value against a string rather than parsing it as a
 // boolean, and "the obvious tidy-up" is a silent regression
-// (docs/hand-runs/2026-09-17-agy-self-update.md).
+// (the 2026-09-17 agy-self-update hand run).
 func wantDisabledUpdater(t *testing.T, env []string) {
 	t.Helper()
 	if !slices.Contains(env, "AGY_CLI_DISABLE_AUTO_UPDATE=true") {

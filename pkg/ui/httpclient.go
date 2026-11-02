@@ -286,7 +286,7 @@ func runGcloud(ctx context.Context, args ...string) (string, error) {
 // RetryPolicy is how long HTTPClient keeps trying a daemon that is not
 // answering, and how often, before it gives up and says so.
 //
-// It exists for the restart gap (docs/non-disruptive-upgrade.md, Stage
+// It exists for the restart gap (design/design/non-disruptive-upgrade.design.md, Stage
 // 1): while an upgrade restarts the daemon, its API refuses connections
 // -- or the reverse proxy in front of it answers 502/503 -- for as long
 // as the new build takes to come up, and every `grain mcpserver` call an
@@ -1819,6 +1819,9 @@ func ciRunsPath(f ci.RunFilter, limit int, view string) string {
 	if job := strings.TrimSpace(f.Job); job != "" {
 		query.Set("job", job)
 	}
+	if provider := strings.TrimSpace(f.Provider); provider != "" {
+		query.Set("provider", provider)
+	}
 	for _, state := range f.States {
 		query.Add("conclusion", state)
 	}
@@ -1864,6 +1867,20 @@ func (c *HTTPClient) CIRun(ctx context.Context, id string) (ci.Run, error) {
 		return ci.Run{}, err
 	}
 	return run, nil
+}
+
+// CIRunLog is one GitHub Actions job's log -- GET /api/ci/runs/{id}/log,
+// job by name or id ("" for the first that failed).
+func (c *HTTPClient) CIRunLog(ctx context.Context, id, job string) (CIRunLogResponse, error) {
+	path := "/api/ci/runs/" + url.PathEscape(id) + "/log"
+	if job = strings.TrimSpace(job); job != "" {
+		path += "?job=" + url.QueryEscape(job)
+	}
+	var resp CIRunLogResponse
+	if err := c.do(ctx, http.MethodGet, path, nil, &resp); err != nil {
+		return CIRunLogResponse{}, err
+	}
+	return resp, nil
 }
 
 // CIRunArtifacts is what one run left behind -- GET

@@ -304,24 +304,27 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	uiIAPIssuer := fs.String("ui-iap-issuer", "", "the issuer a signed assertion must carry; defaults to $GRAIN_IAP_ISSUER, then "+ui.GoogleIAPIssuer)
 	uiIAPKeysURL := fs.String("ui-iap-keys-url", "", "where the signing keys for those assertions are published (IAP's PEM map or a JWK set); "+
 		"defaults to $GRAIN_IAP_KEYS_URL, then "+ui.GoogleIAPCertURL)
+	uiRequireIAP := fs.Bool("ui-require-iap", false, "accept the access code (bearer or grain_access cookie) only from loopback with no forwarding "+
+		"or proxy headers, and serve no \"Enter access code\" page, so network callers sign in through IAP alone (docs/access-code.md); "+
+		"needs -ui-iap-audience or $GRAIN_IAP_AUDIENCE. Defaults to $GRAIN_REQUIRE_IAP")
 	uiAllowedPrincipals := fs.String("ui-allowed-principals", "", ui.AllowedPrincipalsUsage)
 	uiOpen := fs.Bool("ui-open", false, "open the UI in the system's default browser once it's listening")
 	actor := fs.String("as", "", "principal the UI/API attributes tasks and comments it creates to (defaults to the OS user)")
 	defaultTargetRepo := fs.String("default-target-repo", "", "owner/name a task created through the UI/API with no repo of its own targets")
 	policyFile := fs.String("policy", "", "local policy file (grain_policy.yml) every task must fit before it gets a sandbox; empty enforces none (docs/local-policy.md)")
 	// The tunnel gateway and rendezvous relay these named are gone
-	// (grain/task-2099, docs/relay-removed.md). They stay defined only so
+	// (grain/task-2099). They stay defined only so
 	// a unit file still passing them stops the daemon with a clear
 	// message (removedTunnelGatewaySettings, removedRelaySettings), rather
 	// than being ignored as unknown and leaving the UI unreachable.
 	fs.String("tunnel-gateway-url", "", "removed: the tunnel gateway is gone. The daemon refuses to start with this set")
 	fs.String("tunnel-token", "", "removed: the tunnel gateway is gone. The daemon refuses to start with this set")
-	fs.String("relay-url", "", "removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set")
-	fs.String("relay-auth-token-file", "", "removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set")
-	fs.String("relay-token", "", "removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set")
-	fs.String("relay-audience", "", "removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set")
-	fs.String("relay-iap-jwt-audience", "", "removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set")
-	fs.String("relay-session-lifetime", "", "removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set")
+	fs.String("relay-url", "", "removed: the rendezvous relay is gone. The daemon refuses to start with this set")
+	fs.String("relay-auth-token-file", "", "removed: the rendezvous relay is gone. The daemon refuses to start with this set")
+	fs.String("relay-token", "", "removed: the rendezvous relay is gone. The daemon refuses to start with this set")
+	fs.String("relay-audience", "", "removed: the rendezvous relay is gone. The daemon refuses to start with this set")
+	fs.String("relay-iap-jwt-audience", "", "removed: the rendezvous relay is gone. The daemon refuses to start with this set")
+	fs.String("relay-session-lifetime", "", "removed: the rendezvous relay is gone. The daemon refuses to start with this set")
 	local := localFlags(fs)
 
 	geminiAPIKeyFile := fs.String("gemini-api-key-file", "", "file holding the Gemini API key the agent runs as. "+
@@ -756,7 +759,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			"orchestrator.VMNamePrefix")
 	runHostImage := fs.String("run-host-image", "",
 		"drive each claude run in a run host of this image: a container that is a sibling of the daemon, "+
-			"not a child of it, writing to a spool the daemon tails (pkg/runhost, docs/non-disruptive-upgrade.md). "+
+			"not a child of it, writing to a spool the daemon tails (pkg/runhost, design/design/non-disruptive-upgrade.design.md). "+
 			"Normally the deployment image itself (\"self\" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes: a run host cannot reach a container sandbox")
 	runHostCredentialDir := fs.String("run-host-credential-dir", "",
 		"the shared credential directory every run host mounts read-write, as a directory and at the same path "+
@@ -989,14 +992,14 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	sandboxAccessAddr := fs.String("sandbox-access-addr", "",
 		"k8s-granule only: address to run the sandbox-access acceptor on (\":4244\"), which every sandbox pod's "+
 			"wrapper then dials out to over mTLS with its own certificate and token (pkg/sandboxaccess, "+
-			"docs/design/grain-on-gke.md \"Sandbox access\"); empty leaves it off and builds pods as before")
+			"design/design/grain-on-gke.design.md \"Sandbox access\"); empty leaves it off and builds pods as before")
 	sandboxAccessDial := fs.String("sandbox-access-dial", "",
 		"the address sandbox wrappers dial the acceptor at; empty is grain-access.<-k8s-namespace>.svc:4244, "+
 			"the Service deploy/kubernetes/grain-granule.yaml creates")
 	sandboxAccessCASecret := fs.String("sandbox-access-ca-secret", "",
 		"Secret Manager secret (projects/<p>/secrets/<s>) holding the sandbox-access CA, read through Workload "+
 			"Identity and generated into it on first start; empty keeps the CA in <data-dir>/sandbox-access-ca.pem")
-	k8sGranuleAccess := fs.String("k8s-granule-access", orchestrator.K8sGranuleAccessKubectl, "k8s-granule only: how grain runs steps in a sandbox's guest -- \"kubectl\" (granule exec over kubectl exec) or \"dialout\" (the wrapper's channel to -sandbox-access-addr's acceptor; refused unless grain runs in-cluster). docs/design/grain-on-gke.md#GKE-3")
+	k8sGranuleAccess := fs.String("k8s-granule-access", orchestrator.K8sGranuleAccessKubectl, "k8s-granule only: how grain runs steps in a sandbox's guest -- \"kubectl\" (granule exec over kubectl exec) or \"dialout\" (the wrapper's channel to -sandbox-access-addr's acceptor; refused unless grain runs in-cluster). design/design/grain-on-gke.design.md#GKE-3")
 	k8sGranuleReattachTimeout := fs.Duration("k8s-granule-reattach-timeout", orchestrator.DefaultK8sGranuleReattachTimeout, "k8s-granule dialout only: how long a step waits for a dropped channel to reconnect before the sandbox is lost (a CI job errors with \"infra: sandbox channel lost\" and is re-run; an agent's tool call fails and its sandbox is rebuilt)")
 	sandboxCPUs := fs.Int("sandbox-cpus", 0,
 		"deployment-wide default vCPU count for a granule-managed sandbox VM, passed as `granule vm create`'s "+
@@ -1046,6 +1049,15 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			if !passed["db-dsn"] && saved.DSN != "" {
 				*dbDSN = saved.DSN
 			}
+		}
+	}
+	if !passed["ui-require-iap"] {
+		if env := strings.TrimSpace(os.Getenv("GRAIN_REQUIRE_IAP")); env != "" {
+			v, err := strconv.ParseBool(env)
+			if err != nil {
+				return daemon.Config{}, fs, unknownFlags, fmt.Errorf("GRAIN_REQUIRE_IAP=%q is not a boolean", env)
+			}
+			*uiRequireIAP = v
 		}
 	}
 	if !passed["db-dsn"] {
@@ -1182,6 +1194,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UiIAPAudience:           *uiIAPAudience,
 		UiIAPIssuer:             *uiIAPIssuer,
 		UiIAPKeysURL:            *uiIAPKeysURL,
+		UiRequireIAP:            *uiRequireIAP,
 		UiAllowedPrincipals:     ui.SplitAllowedPrincipals(*uiAllowedPrincipals),
 		GeminiAPIKeyFile:        *geminiAPIKeyFile,
 		MaxAgentTurns:           *maxAgentTurns,
@@ -1449,6 +1462,9 @@ func checkConfig(cfg daemon.Config) error {
 		return errors.New("-max-mergers cannot be negative")
 	}
 	if err := daemon.CheckUIAllowedPrincipals(cfg); err != nil {
+		return err
+	}
+	if err := daemon.CheckUIRequireIAP(cfg); err != nil {
 		return err
 	}
 	if err := daemon.CheckCICacheBounds(cfg); err != nil {

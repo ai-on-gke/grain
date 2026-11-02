@@ -23,7 +23,7 @@ import (
 
 // The capability catalogue (settings/capabilities.yml,
 // model.CapabilityCatalogue) at filing and at edit
-// (docs/design/config-repo-settings.md §3.4). Dispatch asks it again
+// (design/design/config-repo-settings.design.md §3.4). Dispatch asks it again
 // (orchestrator.catalogueHold), so a config change merged after a task
 // was filed still has the last word.
 

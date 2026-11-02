@@ -15,7 +15,7 @@
 package daemon
 
 // Where each agent CLI runs: on the machine (host) or in the daemon's own
-// container (container) -- docs/design/cli-run-location.md -- or, behind
+// container (container) -- design/design/cli-run-location.design.md -- or, behind
 // grain hostd, detached on the machine as a container run would be
 // (detached).
 //
@@ -23,7 +23,7 @@ package daemon
 // (hostexec.go) and container is a subprocess beside the daemon.
 // detached is the image's own CLI with the deployment's login, started
 // through hostd's container-equivalent allowlist entry ("claude-detached")
-// so that it outlives a daemon upgrade (docs/non-disruptive-upgrade.md,
+// so that it outlives a daemon upgrade (design/design/non-disruptive-upgrade.design.md,
 // "Which substrate carries which CLI"). A
 // development daemon on the bare machine (`grain demo`, a local `grain
 // daemon`) has no container of its own, so it offers only host: a child
@@ -94,7 +94,7 @@ type CLIRunResolution struct {
 	// is a child of the daemon, so the restart finishes the run as
 	// interrupted and queues its task again. It says so, and why there is
 	// no location that would carry it, for Settings -> Models and the
-	// upgrade pane (docs/non-disruptive-upgrade.md, "Which substrate
+	// upgrade pane (design/design/non-disruptive-upgrade.design.md, "Which substrate
 	// carries which CLI"). Empty for a run grain hostd or a run host
 	// carries across the restart.
 	UpgradeInterrupts string `json:"upgradeInterrupts,omitempty"`

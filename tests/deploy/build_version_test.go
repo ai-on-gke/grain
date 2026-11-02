@@ -23,7 +23,7 @@ import (
 )
 
 // The version every build carries (scripts/build-version.sh,
-// docs/design/release-from-trunk.md's "Version Numbering Rules"), asked
+// design/design/release-from-trunk.design.md's "Version Numbering Rules"), asked
 // of the real script against a repository laid out the way release from
 // trunk leaves grain's: v2.1.0 promoted on a main commit and patched on a
 // release branch, v2.2.0-rc.1 tagged on main and dropped after its soak,
@@ -164,7 +164,7 @@ func TestBuildVersionMovesOnWhenTheReleaseIsPromoted(t *testing.T) {
 }
 
 // A release waiting for a person's approval is not a release: tagging
-// rc.2 v2.2.0-pending (docs/design/release-from-trunk.md, §4) leaves
+// rc.2 v2.2.0-pending (design/design/release-from-trunk.design.md, §4) leaves
 // main's builds versioned from v2.1.0, exactly as before, and candidate's
 // from its rc. Only the approval's v2.2.0 moves them on.
 func TestBuildVersionIgnoresAPendingRelease(t *testing.T) {

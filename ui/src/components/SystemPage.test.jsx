@@ -21,7 +21,7 @@ import SystemPage, { SYSTEM_TABS } from "./SystemPage.jsx";
 
 vi.mock("../api.js", () => ({ default: vi.fn(() => Promise.resolve({})) }));
 
-// docs/design/settings-panel.md §2.1: status and operations only.
+// design/design/settings-panel.design.md §2.1: status and operations only.
 describe("SystemPage", () => {
   afterEach(() => api.mockClear());
 

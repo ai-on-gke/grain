@@ -20,7 +20,7 @@ package orchestrator
 // it, that what it is granted is exactly the api presets it is
 // documented to hold and nothing else a person alone may grant, and that
 // it is a durable judgement task: a goal, pipeline.* subscriptions, the
-// judgement model (docs/design/durable-tasks.md#DT-6, DT-11).
+// judgement model (design/design/durable-tasks.design.md#DT-6, DT-11).
 
 import (
 	"context"

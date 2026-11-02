@@ -17,7 +17,7 @@ package gitproxy
 // cli_actions.go serves the /cli/ routes that act rather than read: the
 // in-sandbox grain CLI's grain ci wait, run-job and retrigger, grain pr
 // open, reply, resolve and review-comment, and the metadata grain git
-// revert reverts by (docs/design/sandbox-first-agent-surface.md, Stage 2).
+// revert reverts by (design/design/sandbox-first-agent-surface.design.md, Stage 2).
 //
 // Every one of them acts on the task the sandbox's token belongs to and
 // on nothing else. No request names a repository, a branch or a pull
@@ -555,7 +555,7 @@ func requireOwnCI(scope namespace.Scope) error {
 		return namespace.RefuseCapability("grain ci", "grain-ci")
 	}
 	if scope.TaskRepo == "" || scope.TaskBranch == "" {
-		return fmt.Errorf("%w: this task has no repository and branch of its own for grain CI to run on", namespace.ErrBadRequest)
+		return errNoTaskRepo
 	}
 	return nil
 }

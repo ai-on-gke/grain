@@ -16,7 +16,7 @@ import { expect, test } from "./fixtures.js";
 import { alertRow, openAlerts } from "./alerts.js";
 
 // Release-from-trunk pending-release approval walkthrough
-// (docs/test-plans/2026-10-28.md §6, docs/design/release-from-trunk.md §4).
+// (docs/test-plans/2026-10-28.md §6, design/design/release-from-trunk.design.md §4).
 //
 // `grain demo -github-sim -fake-ci` seeds a pending-release notification
 // (release.pending:v2.4.0) on GrainSourceRepo() and wires demoFakeCI so

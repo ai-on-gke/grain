@@ -760,7 +760,7 @@ func (s *StoredRunStore) LiveRuns(ctx context.Context) ([]Run, error) {
 //
 // attached names the runs the adoption pass took back -- every run with
 // a step to reattach by exec id, or a readopted sandbox whose step runner
-// is still there (docs/design/grain-on-gke.md#GKE-4) -- and those are
+// is still there (design/design/grain-on-gke.design.md#GKE-4) -- and those are
 // still going. What is left has nothing to attach: a run that was queued
 // and had no sandbox yet, or one on a backend that cannot give a sandbox
 // back. Those are stamped cancelled-and-interrupted rather than deleted.

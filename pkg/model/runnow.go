@@ -125,7 +125,7 @@ func settleRunNow(ctx context.Context, tx *sql.Tx, runID, taskID string) (bool, 
 	ending, survives := RunNowSurvives(outcome.String)
 	if suspended.Valid && !survives {
 		// Every suspension keeps the request, whatever its kind
-		// (docs/design/durable-tasks.md#DT-3): the four RunNowSurvives
+		// (design/design/durable-tasks.design.md#DT-3): the four RunNowSurvives
 		// names have words of their own, and the rest are said by kind.
 		ending, survives = fmt.Sprintf("was suspended (%s)", suspended.String), true
 	}

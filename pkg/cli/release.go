@@ -25,7 +25,7 @@ import (
 
 // cmdRelease is `grain release approve|reject vX.Y.0`: a person's answer
 // to a trunk release the release train has staged as vX.Y.0-pending
-// (docs/design/release-from-trunk.md, §4). It starts
+// (design/design/release-from-trunk.design.md, §4). It starts
 // .grain/workflows/promote-release.yml through the person-only
 // pending-releases routes, which refuse an agent whatever it holds -- so
 // run from an agent's sandbox this is refused, which is the point.

@@ -203,9 +203,12 @@ type Config struct {
 	// -ui-iap-issuer and -ui-iap-keys-url: what a signed assertion must
 	// carry, and where its keys are, for the UI/API to accept the
 	// identity in it (ui.Config.IAPAudience and the rest).
-	UiIAPAudience       string
-	UiIAPIssuer         string
-	UiIAPKeysURL        string
+	UiIAPAudience string
+	UiIAPIssuer   string
+	UiIAPKeysURL  string
+	// UiRequireIAP is -ui-require-iap (ui.Config.RequireIAP): the access
+	// code works over unforwarded loopback only.
+	UiRequireIAP        bool
 	UiAllowedPrincipals []string
 	UiOpen              bool
 	Actor               string
@@ -410,7 +413,7 @@ type Config struct {
 	GritClientToken string
 	// GritExperimental is -grit-experimental: the opt-in -grit-url is
 	// refused without, because the remote grit path runs no workflows
-	// yet (docs/design/grit-split.md, GS-3 to GS-5 deferred).
+	// yet (design/design/grit-split.design.md, GS-3 to GS-5 deferred).
 	GritExperimental bool
 
 	// ciCacheMaxAge, ciCacheMaxBytes, ciCacheMaxEntries and
@@ -784,7 +787,7 @@ type Config struct {
 	// channel, which needs SandboxAccessAddr and an in-cluster daemon).
 	// K8sGranuleReattachTimeout is how long a step waits for a dropped
 	// channel to come back (DefaultK8sGranuleReattachTimeout when zero).
-	// docs/design/grain-on-gke.md#GKE-3. Startup-only.
+	// design/design/grain-on-gke.design.md#GKE-3. Startup-only.
 	K8sGranuleAccess          string
 	K8sGranuleReattachTimeout time.Duration
 

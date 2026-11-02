@@ -21,7 +21,7 @@ import (
 
 // The types a JobRun carries that pkg/ci's diagnostics, shared-fault and
 // gate code produce. They moved here with JobRun so that the run record
-// is neutral (docs/design/grit-split.md, GS-2); the code that fills them
+// is neutral (design/design/grit-split.design.md, GS-2); the code that fills them
 // in stays where it was, and pkg/ci re-exports each under its old name.
 
 // FailureSummary holds high-signal structured diagnostics and test failure information

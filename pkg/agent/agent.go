@@ -469,7 +469,7 @@ type RunConfig struct {
 	OnResumableSession func(session string)
 
 	// CapabilityMCPServers are the MCP servers this run's capability
-	// grants expose (docs/capabilities-spec.md §5.2.4), each a loopback
+	// grants expose (design/spec/capabilities/capabilities.spec.md §5.2.4), each a loopback
 	// proxy on grain's own host, in grant order. A Framework passes them
 	// through CarryCapabilityServers for the host its CLI runs on, then
 	// registers every one beside grain-sandbox, under its Name, and
@@ -886,7 +886,7 @@ type Framework interface {
 var ErrDetached = errors.New("agent: the daemon stopped; the run continues in its run host for the next daemon to adopt")
 
 // ResultParser is the optional half of Framework an adopting daemon needs
-// (docs/non-disruptive-upgrade.md, Stage 2): it turns the whole stdout of
+// (design/design/non-disruptive-upgrade.design.md, Stage 2): it turns the whole stdout of
 // a run another process started -- read back from a run host's spool --
 // and the way it ended into the Result and error Run would have returned
 // for it, so the run's outcome is read by the same rules whichever daemon

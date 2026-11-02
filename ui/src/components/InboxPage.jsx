@@ -706,7 +706,7 @@ function StateSyncGroup({ failure, onOpenConfigRepo }) {
 }
 
 // NotificationsGroup is the open operator notifications
-// (notifications.js, docs/design/durable-tasks.md DT-5), above the task
+// (notifications.js, design/design/durable-tasks.design.md DT-5), above the task
 // rows: one row each, with what a person can do about it. An
 // acknowledged one stays here, marked, until whatever raised it clears
 // it; acknowledging only takes it out of the alerts bell's count.

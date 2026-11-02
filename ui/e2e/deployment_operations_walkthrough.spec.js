@@ -111,7 +111,7 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
     ).toBeVisible();
 
     // The sections that took Team settings' over
-    // (docs/design/settings-panel.md §3.2).
+    // (design/design/settings-panel.design.md §3.2).
     for (const [id, name] of [
       ["models", "Models"],
       ["git", "Git"],

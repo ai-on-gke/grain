@@ -35,7 +35,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/geminikey"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
-	"github.com/ai-on-gke/grain/pkg/capability/gitpushanyref"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
@@ -107,12 +106,7 @@ func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*mod
 		Host: cfg.GithubHost, InsecureHTTP: cfg.GithubInsecureHTTP,
 	}))
 	providers = append(providers, admincaps.Providers()...)
-	// git-push-any-ref is a team capability like the ones beside it, not
-	// an admin one (grain/task-2536): what it lifts is the proxy's
-	// one-branch rule, and the team's own git credential is still what
-	// every push goes out with.
 	providers = append(providers,
-		gitpushanyref.New(),
 		bootstrap.New(),
 		grainci.New(),
 		registrypush.NewWithConfig(registrypush.Config{}),
@@ -146,7 +140,7 @@ func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*mod
 	// for the api:release-gate-read preset (pkg/capability/ciapi), and
 	// what it needs is this process's CI API listener (CIAPI), which its
 	// own Resolve refuses without, and a job of grain's own repository,
-	// which it refuses every other one for (docs/design/release-from-trunk.md §6).
+	// which it refuses every other one for (design/design/release-from-trunk.design.md §6).
 	providers = append(providers, ciapi.NewAlias(CIAPI, ciapi.Config{}, model.ReleaseGateReadCapability,
 		ciapi.Aliases[model.ReleaseGateReadCapability]))
 	// claude-proxy, openai-proxy and gemini-proxy register

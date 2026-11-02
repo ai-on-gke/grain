@@ -772,7 +772,7 @@ jobs:
     # A run host (pkg/runhost) against a real docker daemon: a run in a
     # sibling container survives the Host that started it stopping, and
     # the next one adopts it from the persisted spool cursor with no hole
-    # in the transcript (docs/non-disruptive-upgrade.md, Stage 2) -- and
+    # in the transcript (design/design/non-disruptive-upgrade.design.md, Stage 2) -- and
     # the same across a whole daemon restart, pull request included. It
     # needs docker rather than KVM, so it sits here rather than beside
     # kvm-route-stress.yml's guests.

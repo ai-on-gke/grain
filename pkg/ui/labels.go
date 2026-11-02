@@ -201,8 +201,6 @@ func OfferedCapabilities() []Capability {
 			Description: prioritydispatch.Description},
 		{ID: durable.CapabilityName, Name: "Durable",
 			Description: durable.Description},
-		{ID: "git-push-any-ref", Name: "Push any ref",
-			Description: "Let this task push any branch or tag of the repositories it may write -- the default branch, force-pushes and deletions included -- rather than only its own task branch. For release jobs"},
 		{ID: "bootstrap-playbooks", Name: "Bootstrap playbooks",
 			Description: "Let this task read grain's own bootstrap playbooks -- the runbooks for setting up GCP service accounts, the primary GitHub connection, CloudRun-based IAP access, and test repos -- so it can walk whoever is on the other end of this chat through one of them"},
 		{ID: "github-sandbox", Name: "GitHub sandbox",
@@ -424,6 +422,11 @@ type Config struct {
 	// commit grain CI last judged, and the merge queue checks the head
 	// again before it merges either way.
 	GitHubPullRequests PullRequestReader
+	// Actions is what ci:read reads a repository's GitHub Actions runs,
+	// jobs and logs through (ci_actions.go). nil reads them through
+	// GitHubPullRequests, or the pull request opener's client, when
+	// either is a github.ActionsReader -- the daemon's are.
+	Actions github.ActionsReader
 	// GitHubForkPullRequests is that client asked which open pull request
 	// a fork head label ("owner:branch", model.ForkHead) heads, so a task
 	// filed with one as its branch is resolved to that pull request
@@ -806,7 +809,7 @@ type Config struct {
 	// all happens -- measured at 29.6-29.9s of a 29.9s exchange on the
 	// shipped 30s interval, against 0.04-0.44s for everything grain does
 	// between that decision and the agent's first turn
-	// (docs/hand-runs/2026-09-08-director-latency.md).
+	// (the 2026-09-08 director-latency hand run).
 	//
 	// A hint, never a guarantee, and deliberately so: the loop coalesces
 	// wakes and spaces them out, and the periodic tick is still what
@@ -1182,9 +1185,13 @@ type Config struct {
 	// nil uses CloudIdentityGroupChecker lazily when at least one group: entry
 	// is configured.
 	GroupChecker GroupMemberChecker
-	// IAPMode, when true, requires incoming requests behind Google Cloud IAP /
-	// Cloud Run Proxy to provide a cryptographically verified JWT assertion.
-	IAPMode bool
+	// RequireIAP is -ui-require-iap: the access code, as a bearer token
+	// or the grain_access cookie, is accepted only from loopback with no
+	// forwarding or proxy headers (accessCodeAccepted), and the "Enter
+	// access code" page is not served, so a network caller signs in
+	// through IAP alone. A registered IdentityVerifier that declares
+	// AccessCodeWins still takes the code over its own proxy.
+	RequireIAP bool
 	// LocalAPIToken is the secret in -data-dir/local-api-token
 	// (EnsureLocalAPIToken) that a loopback request presents as a bearer
 	// token to be trusted as loopback was.
