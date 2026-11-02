@@ -95,12 +95,14 @@ func newGitProxyRig(t *testing.T) *gitProxyRig {
 		grants        []model.Grant
 	}{
 		{"ta", "sandbox-a", model.RepoRef{Owner: "acme", Name: "widgets"}, []model.RepoRef{{Owner: "acme", Name: "shared-lib"}}, nil},
-		// tb is a release job: an operator granted it git-push-any-ref.
+		// tb is a release job: an operator granted it repo#write's
+		// any-ref grant (formerly git-push-any-ref).
 		{"tb", "sandbox-b", model.RepoRef{Owner: "other", Name: "gadgets"}, nil,
-			[]model.Grant{{Capability: model.GitPushAnyRefCapability, Via: model.GrantByLabel}}},
+			[]model.Grant{{Capability: model.GitPushAnyRefGrant, Via: model.GrantByLabel}}},
 		// tc is a self-debug run, which reads grain's own source. It holds
-		// git-push-any-ref as well, so a refused push to grain is the
-		// scope's refusal and not the one-branch rule's.
+		// the retired bare git-push-any-ref as well, which is still read as
+		// the any-ref grant, so a refused push to grain is the scope's
+		// refusal and not the one-branch rule's.
 		{"tc", "sandbox-c", model.RepoRef{Owner: "acme", Name: "gizmos"}, nil,
 			[]model.Grant{
 				{Capability: model.SelfDebugCapability, Via: model.GrantByLabel},
@@ -410,7 +412,8 @@ func TestGitProxyPushIsLimitedToTheTasksOwnBranch(t *testing.T) {
 	}
 }
 
-// git-push-any-ref, an admin grant for release jobs, is the one thing
+// The any-ref grant (model.GitPushAnyRefGrant, formerly git-push-any-ref),
+// a team grant for release jobs, is the one thing
 // that lifts the rule above -- for the run holding it, and in the
 // repositories it may push at all.
 func TestGitProxyPushAnyRefGrantIsTheOnlyWayPastTheTaskBranch(t *testing.T) {

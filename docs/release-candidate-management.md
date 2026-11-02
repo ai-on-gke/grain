@@ -356,7 +356,8 @@ fixes.
    `git checkout -b release/vX.Y.Z vX.Y.<Z-1>`, then `git cherry-pick -x`
    each commit. Use `git range-diff` against the originals to show the
    patches are unchanged. Push the branch. Pushing a `release/v*` branch
-   needs `git-push-any-ref`.
+   needs the repo server's any-ref grant
+   (`https://grain.dev/capabilities/repo#write`, formerly `git-push-any-ref`).
 3. **Pull-request suite.** A task's CI tools only run on its own branch.
    Force-push the release tree there
    (`git push -f origin release/v…:<task branch>`), get a full
