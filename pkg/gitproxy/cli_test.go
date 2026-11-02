@@ -94,7 +94,7 @@ func TestCLIRoutesScopeNarrateAndAnswer(t *testing.T) {
 		t.Errorf("ci runs without grain-ci: %d %s", rec.Code, rec.Body)
 	}
 	rec = get("tok-plain", "/cli/db/query")
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"db-read"`) ||
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"https://grain.dev/capabilities/grain#sql"`) ||
 		!strings.Contains(rec.Body.String(), "a human attaches it to the task") {
 		t.Errorf("db query without db-read: %d %s", rec.Code, rec.Body)
 	}
