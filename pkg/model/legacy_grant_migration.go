@@ -215,7 +215,7 @@ func rewriteConsoleSessionGrantsMulti(ctx context.Context, tx *sql.Tx, renames m
 	return nil
 }
 
-// foldRetiredCatalogueInProcess is migration 83's Up: it moves retired 1-to-1
+// foldRetiredCatalogueInProcess is migration 84's Up: it moves retired 1-to-1
 // preset capability entries in grain_config.capability_policy's catalogue from
 // inProcess[<retired>] into apiScopes.presets[<preset>], merging restrictions
 // conservatively when both exist, and rewrites retired task defaults in the
