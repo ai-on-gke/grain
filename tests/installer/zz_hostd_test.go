@@ -744,6 +744,11 @@ echo '{"type":"turn.completed","usage":{"input_tokens":1}}'
 		if got := strings.TrimSpace(sudoRead(report + ".pid")); got != pid {
 			t.Fatalf("the fake agy was started again (pid %s, then %s)", pid, got)
 		}
+		// The run filed during the cutover is seen to start, not to end:
+		// left running into the rollback below, it is a run on the
+		// upgraded hostd that that cutover has to wait out (drain_cap is an
+		// hour), and the rollback times out on this subtest's leftover.
+		f.waitForFinished(t, ctx, during)
 		f.waitForHostdOn(t, d, upgraded)
 	})
 
@@ -1247,7 +1252,11 @@ func (f *hostdFixture) waitForHostdOn(t *testing.T, d *deployment, version strin
 			return errors.New("grain-hostd.service has no main process")
 		}
 		if exe := strings.TrimSpace(sudo("readlink", "/proc/"+pid+"/exe").stdout); exe != want {
-			return fmt.Errorf("hostd (pid %s) runs %s, want %s", pid, exe, want)
+			// What it still holds, and what it and the upgrade unit last
+			// said: a cutover waiting on a run, or one never asked for.
+			journal := sudo("journalctl", "-u", "grain-hostd.service", "-u", "grain-hostd-upgrade.service", "-n", "40", "--no-pager").stdout
+			return fmt.Errorf("hostd (pid %s) runs %s, want %s; hostd -status: %s\nhostd's journal:\n%s",
+				pid, exe, want, strings.TrimSpace(f.hostdStatus(t, d)), journal)
 		}
 		if st := f.hostdStatus(t, d); !strings.HasPrefix(st, "answering on ") || strings.Contains(st, "draining") {
 			return fmt.Errorf("hostd says %q", st)

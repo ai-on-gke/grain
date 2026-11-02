@@ -1498,6 +1498,9 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	if err := seedGitHubCIDemo(ctx, store, ago); err != nil {
 		return err
 	}
+	if err := seedDemoHostds(ctx, store); err != nil {
+		return err
+	}
 	if err := seedDemoMemory(ctx, store, cfg, ago); err != nil {
 		return err
 	}
@@ -1984,6 +1987,26 @@ func syncDemoDeclarations(ctx context.Context, store *model.Store, repo model.Re
 // Written straight to the store rather than through ui.Client.PutMemory,
 // which is the one place in this seed that matters: the client stamps
 // UpdatedAt with the current time, and every age here is the point.
+// seedDemoHostds fills Settings -> Hostds: local, a workstation with an
+// owner and labels, and one revoked.
+func seedDemoHostds(ctx context.Context, store *model.Store) error {
+	if err := store.EnsureLocalHostd(ctx); err != nil {
+		return err
+	}
+	for _, h := range []model.Hostd{
+		{Name: "cloudtop-alice", Owner: "alice@example.com", Labels: map[string]string{"gpu": "yes", "os": "linux"}, CreatedBy: "operator"},
+		{Name: "old-laptop", Owner: "bob@example.com", CreatedBy: "operator"},
+	} {
+		if _, _, err := store.CreateHostd(ctx, h); err != nil {
+			return fmt.Errorf("seeding hostd %s: %w", h.Name, err)
+		}
+	}
+	if _, err := store.RevokeHostd(ctx, "old-laptop"); err != nil {
+		return fmt.Errorf("seeding a revoked hostd: %w", err)
+	}
+	return nil
+}
+
 func seedDemoMemory(ctx context.Context, store *model.Store, cfg ui.Config, ago func(time.Duration) time.Time) error {
 	day := 24 * time.Hour
 	agent := model.Principal{Kind: model.PrincipalAgent, ID: "demo-memory-run"}

@@ -211,7 +211,7 @@ func (r *Remote) Carry(ctx context.Context, handle func(net.Conn)) (addr string,
 	if err != nil {
 		return "", nil, err
 	}
-	sess, conn, err := r.dialSession(ctx)
+	sess, conn, err := r.dialSession(ctx, r.DefaultName())
 	if err != nil {
 		return "", nil, err
 	}

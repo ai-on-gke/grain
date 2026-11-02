@@ -575,7 +575,9 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	uiCfg.RepoComparer = repoComparisonGate{local: localRepoComparer}
 	// Assigned only when there is one, as Upgrader below: a nil
 	// *hostd.Remote in the interface would not read as nil.
-	if cfg.HostdRemote != nil {
+	if cfg.HostdHub != nil {
+		uiCfg.HostdRemote = cfg.HostdHub
+	} else if cfg.HostdRemote != nil {
 		uiCfg.HostdRemote = cfg.HostdRemote
 	}
 	branchGate := repoBranchGate{remote: githubTokens}

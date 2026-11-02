@@ -1244,17 +1244,19 @@ func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, ta
 		TaskID string `json:"taskId"`
 	}
 	if len(body) > 0 && json.Unmarshal(body, &fields) == nil {
-		if fields.Repo != "" {
+		if fields.Repo != "" && routeBodyHasField(pattern, "repo") {
 			return s.agentCanonicalRepo(fields.Repo)
 		}
-		if fields.TaskID != "" {
+		if fields.TaskID != "" && routeBodyHasField(pattern, "taskId") {
 			if t, err := s.tasks.Store.GetTask(ctx, fields.TaskID); err == nil && t != nil {
 				return taskRepo(t), nil
 			}
 		}
 	}
-	if repo := r.URL.Query().Get("repo"); repo != "" && r.Method == http.MethodGet {
-		return s.agentCanonicalRepo(repo)
+	if repo, ok, err := s.queryCallRepo(r, pattern, func(c string) bool {
+		return set.Allows(scope, c) || (ciCap && agentMayRead(acting, c))
+	}); ok {
+		return repo, err
 	}
 	if pathParam.MatchString(pathOf(pattern)) {
 		return "", nil
@@ -1291,6 +1293,117 @@ func (s *Server) agentCanonicalRepo(text string) (string, error) {
 		return "", err
 	}
 	return ref.String(), nil
+}
+
+// routeBodyHasField reports whether pattern's handler decodes a JSON body
+// containing a top-level field matching want (routeBodies), so an extra
+// "repo" or "taskId" added to a body the handler ignores cannot vouch for
+// a repository on a deployment-wide route.
+func routeBodyHasField(pattern, want string) bool {
+	body := routeBodies[pattern]
+	if body == nil {
+		return false
+	}
+	return structHasJSONField(reflect.TypeOf(body), gateKey(want), 0)
+}
+
+func structHasJSONField(t reflect.Type, want string, depth int) bool {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct || depth > 4 || t.PkgPath() == "time" {
+		return false
+	}
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if name == "-" {
+			continue
+		}
+		if name == "" {
+			if f.Anonymous {
+				if structHasJSONField(f.Type, want, depth+1) {
+					return true
+				}
+				continue
+			}
+			name = f.Name
+		}
+		if gateKey(name) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func routeHasQuery(pattern, param string) bool {
+	_, ok := routeQueries[pattern][param]
+	return ok
+}
+
+// queryCallRepo reads ?repo= on a GET route whose handler actually takes
+// repo (routeQueries), checking every repository named when the query
+// repeats or comma-separates values so an unallowed second value cannot
+// ride behind an allowed first one.
+func (s *Server) queryCallRepo(r *http.Request, pattern string, allowed func(string) bool) (string, bool, error) {
+	if r.Method != http.MethodGet || !routeHasQuery(pattern, "repo") {
+		return "", false, nil
+	}
+	values := r.URL.Query()["repo"]
+	if len(values) == 0 {
+		return "", false, nil
+	}
+	if pattern == "GET /api/metrics" {
+		var items []string
+		for _, raw := range values {
+			for _, part := range strings.Split(raw, ",") {
+				if part = strings.TrimSpace(part); part != "" {
+					items = append(items, part)
+				}
+			}
+		}
+		if len(items) == 0 {
+			return "", false, nil
+		}
+		var first string
+		for _, item := range items {
+			canonical, err := s.agentCanonicalRepo(item)
+			if err != nil {
+				return "", true, err
+			}
+			if first == "" {
+				first = canonical
+			}
+			if !allowed(canonical) {
+				return canonical, true, nil
+			}
+		}
+		return first, true, nil
+	}
+	if len(values) == 1 && strings.TrimSpace(values[0]) == "" {
+		return "", false, nil
+	}
+	var first string
+	for _, raw := range values {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			return "", true, nil
+		}
+		canonical, err := s.agentCanonicalRepo(trimmed)
+		if err != nil {
+			return "", true, err
+		}
+		if first == "" {
+			first = canonical
+		}
+		if !allowed(canonical) {
+			return canonical, true, nil
+		}
+	}
+	return first, true, nil
 }
 
 // agentDefaultRepo is the repository a collection read by acting is
@@ -1579,18 +1692,19 @@ func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pat
 		TaskID string `json:"taskId"`
 	}
 	if len(body) > 0 && json.Unmarshal(body, &fields) == nil {
-		if id := strings.TrimSpace(fields.TaskID); id != "" {
+		if id := strings.TrimSpace(fields.TaskID); id != "" && routeBodyHasField(pattern, "taskId") {
 			if t, err := s.tasks.Store.GetTask(ctx, id); err == nil && t != nil {
 				return taskRepo(t), []string{id}, nil
 			}
 		}
-		if repo := strings.TrimSpace(fields.Repo); repo != "" {
+		if repo := strings.TrimSpace(fields.Repo); repo != "" && routeBodyHasField(pattern, "repo") {
 			repo, err := s.agentCanonicalRepo(repo)
 			return repo, nil, err
 		}
 	}
-	if repo := strings.TrimSpace(r.URL.Query().Get("repo")); repo != "" && r.Method == http.MethodGet {
-		repo, err := s.agentCanonicalRepo(repo)
+	if repo, ok, err := s.queryCallRepo(r, pattern, func(c string) bool {
+		return set.Allows(scope, c)
+	}); ok {
 		return repo, nil, err
 	}
 	// If the credential is restricted to a single repository and calls a

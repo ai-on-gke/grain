@@ -130,6 +130,16 @@ func lastConfigAudit(t *testing.T, ctx context.Context, client *ui.Client, _, _ 
 	return audit[0].By
 }
 
+// registerHostd puts hostd ws-1 in the registry, as what the hostd
+// routes act on.
+func registerHostd(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	if _, _, err := client.Store.CreateHostd(context.Background(), model.Hostd{Name: "ws-1"}); err != nil {
+		t.Fatalf("registering ws-1: %v", err)
+	}
+	return "ws-1"
+}
+
 // releaseClient is approvalServer's deployment: grain CI on
 // ai-on-gke/grain, with a fake runner recording what is started.
 func releaseClient(t *testing.T) *ui.Client {
@@ -440,6 +450,32 @@ var attributedRoutes = map[string]attributedRoute{
 			}
 			return notes[0].UpdatedBy
 		},
+	},
+	// The hostd registry (Settings -> Hostds): each change is a
+	// config_audit entry about hostd:<name>.
+	"POST /api/hostds": {
+		body:        `{"name":"ws-1"}`,
+		agentGrants: []string{"api:capabilities:admin"},
+		recorded:    lastConfigAudit,
+	},
+	"PATCH /api/hostds/{name}": {
+		setup:       registerHostd,
+		path:        "/api/hostds/{id}",
+		body:        `{"owner":"bob@example.com"}`,
+		agentGrants: []string{"api:capabilities:admin"},
+		recorded:    lastConfigAudit,
+	},
+	"POST /api/hostds/{name}/rotate": {
+		setup:       registerHostd,
+		path:        "/api/hostds/{id}/rotate",
+		agentGrants: []string{"api:capabilities:admin"},
+		recorded:    lastConfigAudit,
+	},
+	"POST /api/hostds/{name}/revoke": {
+		setup:       registerHostd,
+		path:        "/api/hostds/{id}/revoke",
+		agentGrants: []string{"api:capabilities:admin"},
+		recorded:    lastConfigAudit,
 	},
 	"POST /api/pipeline-pause": {
 		body: `{"reason":"maintenance"}`,

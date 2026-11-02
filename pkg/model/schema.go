@@ -425,7 +425,13 @@ import "strconv"
 // behalf_kind/behalf_id/behalf_source), and the config_audit table
 // (operator-attribution spec §1.3, §4.4, §7.1). No row is rewritten: a row
 // written before reads back with an empty Principal.Source.
-const SchemaVersion = 91
+//
+// 92 adds the hostd registry: `hostd`, one row per grain hostd this
+// daemon takes host work through (the co-located one as `local`), and
+// `hostd_token`, the SHA-256 digests of each remote hostd's tokens.
+// `hostd` goes to the state repository; `hostd_token` never does
+// (staterepo.LocalTables).
+const SchemaVersion = 92
 
 // configAuditTable is the `config_audit` table: one row per change to the
 // deployment's configuration somebody made (model.ConfigAuditEntry,
@@ -491,6 +497,27 @@ const sandboxAccessTable = `CREATE TABLE IF NOT EXISTS ` + "`sandbox_access`" + 
   ` + "`token_hash`" + ` TEXT     NOT NULL,
   ` + "`not_after`" + `  DATETIME NOT NULL,
   PRIMARY KEY (` + "`sandbox`" + `)
+)`
+
+// hostdTable and hostdTokenTable are the hostd registry (model.Hostd),
+// named once for Tables and for the migration that adds them.
+const hostdTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd`" + ` (
+  ` + "`name`" + `       TEXT     NOT NULL,
+  ` + "`owner`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`labels`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`created_by`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + ` DATETIME NOT NULL,
+  ` + "`revoked_at`" + ` DATETIME NULL,
+  PRIMARY KEY (` + "`name`" + `)
+)`
+
+const hostdTokenTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd_token`" + ` (
+  ` + "`token_hash`" + ` TEXT     NOT NULL,
+  ` + "`hostd`" + `      TEXT     NOT NULL,
+  ` + "`prefix`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + ` DATETIME NOT NULL,
+  ` + "`revoked_at`" + ` DATETIME NULL,
+  PRIMARY KEY (` + "`token_hash`" + `)
 )`
 
 // externalAgentTokenTable and externalAgentTokenSequenceTable are named
@@ -3802,6 +3829,9 @@ var Tables = []string{
 
 	externalAgentTokenTable,
 	externalAgentTokenSequenceTable,
+
+	hostdTable,
+	hostdTokenTable,
 
 	`CREATE TABLE IF NOT EXISTS ` + "`secret_resolution_audit`" + ` (
   ` + "`id`" + `          INTEGER PRIMARY KEY AUTOINCREMENT,
