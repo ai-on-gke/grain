@@ -24,7 +24,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// designNewTaskForm is docs/design/config-repo-settings.md §6.2's
+// designNewTaskForm is design/design/config-repo-settings.design.md §6.2's
 // example, its capabilities trimmed to designCapabilities'.
 const designNewTaskForm = `
 default:

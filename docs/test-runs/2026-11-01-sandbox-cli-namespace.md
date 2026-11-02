@@ -121,7 +121,7 @@ Scope: PRs #209, #284, #262, #204, #292, #305, #255, #254, #296, #201, #257,
     refused (step 3).
   - The live daemon is the Google-layer build, and it has not picked up core
     at or past `c2e4b7d5`. Filed as a held follow-up against
-    `depot.code.corp.goog/experimental/grain` (see the closing note), beside
+    `git.example.com/experimental/grain` (see the closing note), beside
     upgrade #2188.
 - **N1: contract v2 cannot catch a stale CLI.** The live image's `grain`
   (`4bba4dc1`) **passes** the v2 compliance probe

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // The New Task form as settings/new-task-form.yml lays it out
-// (docs/design/config-repo-settings.md §6), in a real browser: with no
+// (design/design/config-repo-settings.design.md §6), in a real browser: with no
 // configuration its fields keep their places around "Advanced options",
 // and a configuration moves a field up the form, tucks another under
 // Advanced options and leaves a hidden one out. /api/config is answered

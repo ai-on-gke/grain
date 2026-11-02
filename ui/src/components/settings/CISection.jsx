@@ -16,7 +16,7 @@ import { TextField } from "@mui/material";
 import SettingsCard from "./SettingsCard.jsx";
 import { identifierField } from "../../identifierField.js";
 
-// CISection is Settings → CI (docs/design/settings-panel.md
+// CISection is Settings → CI (design/design/settings-panel.design.md
 // §3.2). `s` is the page's useSettingsSection().
 export default function CISection({ s }) {
   const { settings, onTextBlur, onIntBlur, onEnterKey } = s;

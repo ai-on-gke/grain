@@ -36,7 +36,7 @@ and upgrades while a host run is going.
   `scripts/setup.sh` from tag `v2.1.1` (`3373f53`).
 - **The "newer main" for step 7:** there was no newer published image, so I
   made one.
-  - I built `./google/cmd/grain` from the same tree, stamped with
+  - I built a wrapper distribution's `cmd/grain` from the same tree, stamped with
     `RELEASE=v2.3.0-dev.168+wt5047` and the published image's own sandbox and
     image refs.
   - I layered it over the published image (`FROM google-grain:main`, then
@@ -85,7 +85,7 @@ and upgrades while a host run is going.
 
 ### Install command
 
-This is what a Cloudtop's installer hands `setup.sh`, plus the fakes. The
+This is what a workstation's installer hands `setup.sh`, plus the fakes. The
 Google track's default image is the corp Artifact Registry, which a VM
 cannot pull, so `GRAIN_IMAGE` names the public `google-grain` image:
 
@@ -129,7 +129,7 @@ description.
 | Socket 0600 and mounted | **PASS.** Host: `drwx------ debian debian /run/grain-hostd`, `srw------- debian debian hostd.sock`. Mount: `/run/grain-hostd -> /run/grain-hostd true`. The container sees the same socket, as its uid 1000 |
 | Allowlist owned outside the container, and it has agy | **PASS.** `-rw-r--r-- root root /etc/grain/hostd.yaml`. `docker exec grain-daemon ls /etc/grain` gives "No such file or directory", so it isn't mounted. The file has `clis.agy.path: /opt/fakeagy/agy`, `paths_under` and `cwd_under` of `[/srv/grain/data, /srv/grain/scratch]`, the proxy variables as `pass_env`, and an empty `capabilities:` |
 | Settings → Models shows each CLI's location and hostd's status | **PASS**, with gaps. See the screenshots. claude: container ("set by -claude-run: a subprocess in the daemon's own container"). codex: container (auto). agy: host ("through grain hostd at /run/grain-hostd/hostd.sock, as its allowlist entry \"agy\""). custom: container. Banner: "grain hostd is up at /run/grain-hostd/hostd.sock, offering capability fakecap, cli agy". Gaps: the agy row shows no host path (`/opt/fakeagy/agy`), and nothing shows hostd's build (see step 7) |
-| Readiness summary shows each CLI's location and hostd | **FAIL (bug B).** The `Done.` block has a correct `hostd:` paragraph. But the `Readiness:` block says `agy CLI: /usr/local/bin/agy (in ghcr.io/bwsalmon/grain/google-grain:main)`, which is the image's own copy, not the host binary hostd runs. It has no run location for any CLI and no hostd status line. `docs/design/cli-run-location.md` says the readiness summary shows the same resolution as Settings (`agy: host (/opt/corp/bin/…)`) |
+| Readiness summary shows each CLI's location and hostd | **FAIL (bug B).** The `Done.` block has a correct `hostd:` paragraph. But the `Readiness:` block says `agy CLI: /usr/local/bin/agy (in ghcr.io/bwsalmon/grain/google-grain:main)`, which is the image's own copy, not the host binary hostd runs. It has no run location for any CLI and no hostd status line. `design/design/cli-run-location.design.md` says the readiness summary shows the same resolution as Settings (`agy: host (/opt/corp/bin/…)`) |
 
 Screenshots of the "Where each agent CLI runs" card (final install, hostd on):
 
@@ -250,7 +250,7 @@ with `GRAIN_HOSTD=0` (and the local-registry `GRAIN_IMAGE`):
   without grain hostd (kept /etc/grain/hostd.yaml)`. The unit file is gone,
   no `hostd` process is left, and `/run/grain-hostd` is no longer mounted. An
   empty `/run/grain-hostd` directory stays on the host.
-- **Bug A.** With the Google track's `GRAIN_AGY_RUN=host` (cloudtop-install's
+- **Bug A.** With the Google track's `GRAIN_AGY_RUN=host` (wrapper-installer's
   default, line 377), the unit still passes `-agy-run host`. The daemon then
   **refuses to start and crash-loops** (`status=2/INVALIDARGUMENT`):
 
@@ -286,7 +286,7 @@ On `grain-wt-5047-mig`:
    GRAIN_AGY_PATH=/opt/fakeagy/agy`. `grain version`: `v2.1.1 · google ·
    3373f53`. Task 2 (fake agy) succeeded on the host as the daemon's child.
 2. **Re-ran the current installer** (`GRAIN_INSTALL_MODE=container`, as
-   cloudtop-install.sh passes it):
+   wrapper-installer passes it):
    - It logged `Install mode: changing from host (the installed
      /etc/systemd/system/grain-daemon.service) to container, as given`.
    - **Same data:** `secrets.key` md5 and the access code's md5 are unchanged,
@@ -300,7 +300,7 @@ On `grain-wt-5047-mig`:
    - A new agy task (3) succeeded through hostd (`inContainer false`).
    - Minor: the `grain hostd: installing it` line is logged twice on this
      path.
-3. **Documented rollback** (`google/docs/cloudtop-install.md`, the current
+3. **Documented rollback** (the wrapper distribution's own docs, the current
    installer with `GRAIN_INSTALL_MODE=host GRAIN_IMAGE_TAG=v2.1.1`):
    - It exported the rows at schema 31, and the daemon rebuilt the store at
      schema 27. The schema-31 store was kept as `store.schema31-<time>`.
@@ -311,7 +311,7 @@ On `grain-wt-5047-mig`:
      kept.
    - Tasks 1–3 are all there.
    - `GRAIN_HOST_MODE_OPT_IN=1` was not written, because this was plain
-     setup.sh; cloudtop-install.sh is what sets it.
+     setup.sh; wrapper-installer is what sets it.
 4. **Bug D (low): rolling back with *v2.1.1's own* setup.sh** (the other way
    an operator might roll back) restores v2.1.1 in host mode with the data
    intact. But it leaves `grain-hostd.service` enabled. The unit kept running
@@ -324,7 +324,7 @@ On `grain-wt-5047-mig`:
 ## 7. Upgrades with a host run in flight: FAIL as specified (bug C)
 
 The daemon's half of #4468 (task 5046) is not wired yet.
-`docs/design/cli-run-location.md` says so under "Not yet wired":
+`design/design/cli-run-location.design.md` says so under "Not yet wired":
 
 - `HostdHost` starting detached;
 - the adoption pass reading `processes`;
@@ -394,7 +394,7 @@ false`, and both MCP tool calls answered from the Docker sandbox.
 | C | The daemon side of #4468 (task 5046) is not wired. A daemon upgrade kills and re-dispatches host runs, the UI upgrade never updates hostd, a setup.sh re-run restarts hostd with no drain, and Settings shows neither hostd's build nor adoption | Known: in the design doc's "Not yet wired" list | proposed from task 5047, which may duplicate an existing follow-up |
 | D | A rollback with v2.1.1's own setup.sh leaves `grain-hostd.service` enabled. It runs a deleted binary, then crash-loops on `unknown command "hostd"` | Low: the documented rollback is fine | proposed from task 5047 |
 
-## Not covered: needs the owner's real Cloudtop
+## Not covered: needs the owner's real Workstation
 
 - The corp exec policy: whether hostd's agy exec, and claude/codex in their
   per-run container, actually get past it.
@@ -405,5 +405,5 @@ false`, and both MCP tool calls answered from the Docker sandbox.
   repo's fakes.
 - The Google track's default image from the corp Artifact Registry. These
   VMs can't pull it, so they used the public `google-grain` image.
-- `cloudtop-install.sh` itself. It is Cloudtop-only, so I ran `setup.sh`
+- `wrapper-installer` itself. It is Workstation-only, so I ran `setup.sh`
   with the settings it hands over.

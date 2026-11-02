@@ -812,6 +812,28 @@ describe("TaskList", () => {
       expect(onReorder).toHaveBeenCalledWith([3], 1, 2);
     });
 
+    // The list names the rows it shows either side of the drop, even
+    // when one of them has another priority: Store.Reorder places the
+    // moved task against its own priority's tasks only, so a P9 row
+    // above means "the head of the P5 tasks" (grain/task-2339).
+    it("drops a task at a priority boundary between the rows it shows there", () => {
+      const onReorder = vi.fn();
+      renderList({
+        tasks: [
+          { ...threeTasks[1], priority: 9 },
+          threeTasks[0],
+          threeTasks[2],
+        ],
+        onReorder,
+      });
+
+      fireEvent.dragStart(rowFor("Third"));
+      fireEvent.dragOver(rowFor("First"));
+      fireEvent.drop(rowFor("First"));
+
+      expect(onReorder).toHaveBeenCalledWith([3], 2, 1);
+    });
+
     it("drops a task at the very end of the list", () => {
       const onReorder = vi.fn();
       renderList({ tasks: threeTasks, onReorder });

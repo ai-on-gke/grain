@@ -21,7 +21,7 @@ import (
 )
 
 // forbidden is what this package may not depend on, at any depth, and
-// why. docs/three-pieces.md is the argument; this is the part of it that
+// why. design/design/architecture.design.md is the argument; this is the part of it that
 // fails a build rather than being remembered.
 //
 // pkg/model is the task model: tasks, observations, the store, and the
@@ -37,7 +37,7 @@ import (
 //
 // pkg/ci is the awkward one, and it is forbidden for now rather than on
 // principle: grain CI's verdict belongs to the forge conceptually, but
-// pkg/ci currently keeps its runs in model.Store (docs/three-pieces.md's
+// pkg/ci currently keeps its runs in model.Store (design/design/architecture.design.md's
 // second thread), so importing it would drag pkg/model in behind it.
 // When CI owns its own run store this entry is the one to revisit.
 var forbidden = map[string]string{
@@ -62,7 +62,7 @@ func TestForgeDoesNotDependOnTasks(t *testing.T) {
 		}
 		seen[path] = true
 		if why, bad := forbidden[path]; bad {
-			t.Errorf("%s reaches %s (%s).\n\ndocs/three-pieces.md: tasks point at the forge, the "+
+			t.Errorf("%s reaches %s (%s).\n\ndesign/design/architecture.design.md: tasks point at the forge, the "+
 				"forge points at sandboxes, nothing points up.", strings.Join(from, "\n  -> "), path, why)
 			return
 		}

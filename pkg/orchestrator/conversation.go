@@ -85,7 +85,7 @@ package orchestrator
 // continuation. So this file keeps bounding the thread of a chat that
 // never ends, and the handover keeps being what survives the cut. See
 // "A chat that never ends is not split for you" in
-// docs/implementation-notes.md.
+// grain's former implementation notes.
 //
 // What a bound has over all of them is that it holds even when nobody is
 // watching, which is the state this was found in.

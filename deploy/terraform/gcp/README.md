@@ -946,7 +946,7 @@ other too.
   accordingly if you do that.
 - **The Cloud Run proxy and rendezvous relay are gone.** `cloudrun-proxy.tf`,
   `use_cloudrun_iap_proxy`, the `cloudrun_proxy_*` variables, and
-  `relay.tf` / `relay-daemon.tf` (`docs/relay-removed.md`) were removed.
+  `relay.tf` / `relay-daemon.tf` were removed.
   To reach a daemon from outside its host, either forward `ui_port` over
   IAP's TCP tunnel (`terraform output tunnel_command`, the default in
   `staging.tfvars` with `expose_ui_publicly = false`) or turn on the

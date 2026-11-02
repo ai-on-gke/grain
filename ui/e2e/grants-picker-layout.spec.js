@@ -15,7 +15,7 @@
 import { expect, test } from "./fixtures.js";
 
 // Layout of the Grants section (GrantsPicker.jsx,
-// docs/design/unified-grants.md) on the task pane, at desktop and phone
+// design/design/unified-grants.design.md) on the task pane, at desktop and phone
 // widths: the held grants are one stack of sections inside it -- a grant
 // with nothing to set on a single line -- "Add grant…" sits under it,
 // the legacy checklist above it, and the menu stays on screen.

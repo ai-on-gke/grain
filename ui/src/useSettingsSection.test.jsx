@@ -37,7 +37,7 @@ async function loaded(
   return { ...hook, onSaved, showError, dismissError };
 }
 
-// docs/design/settings-panel.md §3.4: one save and dirty-state model.
+// design/design/settings-panel.design.md §3.4: one save and dirty-state model.
 describe("useSettingsSection", () => {
   afterEach(() => api.mockReset());
 

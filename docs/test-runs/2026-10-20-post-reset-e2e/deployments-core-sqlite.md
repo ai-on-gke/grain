@@ -4,7 +4,7 @@
 | I2 | Access-code sign-in (no code 401, wrong code 401, code 200; grain access-code prints it) | core/sqlite | **PASS** | /: 401, /api/tasks: 401, wrong: 401, right: 200 |
 | I2b | Access-code login form (lower-case, spaces) sets a session cookie | core/sqlite | **PASS** | POST /api/auth/access-code: 303; cookie → /api/tasks 200 |
 | U1 | No team/account/admin/hub API routes | core/sqlite | **PASS** | all 404 |
-| C3 | Command-backed forge advertised only in the Google build | core/sqlite | **PASS** | sources: [] |
+| C3 | Command-backed forge advertised only in the wrapper distribution's build | core/sqlite | **PASS** | sources: [] |
 | C3b | Core refuses the forgecli source cleanly | core/sqlite | **PASS** | exit 1: grain: unknown ambient source "forgecli": gh, git, auto |
 | C5 | Fresh install has no default model | core/sqlite | **PASS** | defaultModel unset |
 | I4 | grain connections import (git + model + default model), idempotent | core/sqlite | **PASS** | imported 1 git and 1 model connections; token 0600; default model read back |

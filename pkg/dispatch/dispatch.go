@@ -867,7 +867,7 @@ func Cycle(ctx context.Context, store *model.Store, limits model.Limits, now tim
 	allCandidates := append(priorityCandidates, append(mergerCandidates, ordinary...)...)
 
 	// Durable tasks are priority candidates held to one count of their
-	// own, Limits.Durable (docs/design/durable-tasks.md#DT-1). Read once
+	// own, Limits.Durable (design/design/durable-tasks.design.md#DT-1). Read once
 	// and spent down, like live; StartRun is what enforces it.
 	if limits.Durable > 0 && len(priorityCandidates) > 0 && !liveDurableRead {
 		if liveDurable, err = store.LiveDurableRuns(ctx); err != nil {
@@ -1027,7 +1027,7 @@ func durableCeilingReason(ceiling int) string {
 // raiseDurableCeiling says, once a cycle, that a durable task could not
 // start because the ceiling is full. The design has this raise the
 // operator notification model.DurableCeilingSubject
-// (docs/design/durable-tasks.md#DT-5); until notifications exist
+// (design/design/durable-tasks.design.md#DT-5); until notifications exist
 // (DT-S6) it is logged under that subject. The ceiling is the
 // deployment's, and no team holds a count of its own, so the subject
 // names the default team.

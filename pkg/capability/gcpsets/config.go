@@ -187,7 +187,7 @@ func (c *Config) SetNames() []string {
 	return out
 }
 
-// Schema is the server's configure schema (docs/capabilities-spec.md
+// Schema is the server's configure schema (design/spec/capabilities/capabilities.spec.md
 // §4.5). By default, a single admin is configured at the top level via
 // admin_credential_source (defaulting to ambient) and admin_credential;
 // multi-admin configurations may still use admins and admin_credentials.

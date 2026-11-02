@@ -28,7 +28,7 @@ import (
 // # The rule
 //
 // At every moment every task is in exactly one of three conditions
-// (docs/design/task-liveness.md):
+// (design/design/task-liveness.design.md):
 //
 //   - waiting for a named resource that something will free -- a sandbox
 //     or worker slot, a model connection's usage-limit window, another

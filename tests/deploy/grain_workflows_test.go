@@ -1877,7 +1877,7 @@ func TestEverythingTheGateDoesNotRunTheNightlyDoes(t *testing.T) {
 	}
 }
 
-// releaseTrainPath is the daily release train (docs/design/release-from-trunk.md,
+// releaseTrainPath is the daily release train (design/design/release-from-trunk.design.md,
 // RFT-6): it cuts, soaks and stages releases from main, and a person's
 // approval through promote-release.yml is what makes one official.
 const releaseTrainPath = ".grain/workflows/release-train.yml"

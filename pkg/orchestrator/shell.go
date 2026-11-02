@@ -104,7 +104,7 @@ type ShellRequest struct {
 	// Attach, when non-nil, is reported the exec id and output cursor of
 	// the command where the transport is a sandbox's dial-out channel, and
 	// when its ExecID is set the call reattaches to that exec instead of
-	// starting the script (docs/design/grain-on-gke.md#GKE-4). A
+	// starting the script (design/design/grain-on-gke.design.md#GKE-4). A
 	// transport without the channel ignores the reporting, and refuses a
 	// reattach with sandboxaccess.ErrChannelLost: it has no exec to find.
 	Attach *sandboxaccess.Attachment

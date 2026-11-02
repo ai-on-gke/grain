@@ -15,7 +15,7 @@
 package orchestrator
 
 // The pipeline steward's mechanical duties as reconcilers
-// (docs/design/durable-tasks.md#DT-6): stalled tasks and stale ports
+// (design/design/durable-tasks.design.md#DT-6): stalled tasks and stale ports
 // raise and clear their notifications, a person's time-bound hold keeps
 // a cancelled run cancelled, and an unresolvable judgement model is said.
 

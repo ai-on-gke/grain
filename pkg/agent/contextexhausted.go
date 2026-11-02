@@ -26,7 +26,7 @@ import (
 // that only say so in their error text.
 //
 // orchestrator.classifyRunEnd records such a run as a `context`
-// suspension (docs/design/durable-tasks.md#DT-2): not the task's failure,
+// suspension (design/design/durable-tasks.design.md#DT-2): not the task's failure,
 // and resumed in a fresh CLI session from the conversation plus a
 // handover, since the session it was in is the thing that is full.
 var ErrContextExhausted = errors.New("agent: the conversation no longer fits the model's context window")

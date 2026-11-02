@@ -316,7 +316,7 @@ func (p *AgentPool) resolve(ctx context.Context, live Config, choice orchestrato
 		}
 	}
 	// The symbolic judgement model (model.JudgementModelName,
-	// docs/design/durable-tasks.md#DT-11) is resolved here, where every
+	// design/design/durable-tasks.design.md#DT-11) is resolved here, where every
 	// run's model is chosen: to the deployment's JudgementModel, or the
 	// strongest model its connections offer. Nothing resolving it is a
 	// task that chose no model -- it runs on the rotation, and
@@ -1296,7 +1296,7 @@ func BuildAntigravityFramework(ctx context.Context, cfg Config, secretStore *sec
 			// agy forks grain's mcpserver and hook commands by this binary's
 			// own path, so on the bare machine that path has to hold a grain
 			// of this daemon's version too -- the installer's to put there
-			// (docs/design/cli-run-location.md).
+			// (design/design/cli-run-location.design.md).
 			if hostdHost, err = cfg.cliHostdHost(r); err != nil {
 				return nil, err
 			}
@@ -1427,7 +1427,7 @@ func BuildClaudeFramework(ctx context.Context, cfg Config, secretStore *secrets.
 	// and the deployment's token, forking its mcpserver on the host from
 	// the grain the installer extracted to this binary's own path, so
 	// that nothing of the run is a child of this process and the run
-	// outlives it (docs/non-disruptive-upgrade.md).
+	// outlives it (design/design/non-disruptive-upgrade.design.md).
 	var container agent.Host
 	detached := false
 	if remoteHost == nil && cfg.RunHost == nil {

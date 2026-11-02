@@ -29,7 +29,7 @@ import (
 // grain hostd (ResolveCLIRun's ViaHostd). Every other run is a child of
 // the daemon, which a restart drains and finishes as interrupted -- a
 // durable task's run then comes back as a restart suspension instead
-// (docs/design/durable-tasks.md#DT-1, "Adoption across restarts and
+// (design/design/durable-tasks.design.md#DT-1, "Adoption across restarts and
 // upgrades").
 func (c Config) adoptableFrameworks(ctx context.Context) map[string]bool {
 	out := map[string]bool{}

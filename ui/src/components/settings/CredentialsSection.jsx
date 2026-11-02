@@ -25,7 +25,7 @@ import SettingsCard, { settingHints } from "./SettingsCard.jsx";
 import { identifierField } from "../../identifierField.js";
 import { ConfigManagedNotice } from "../ConfigRepoLink.jsx";
 
-// CredentialsSection is Settings → Legacy capabilities (docs/design/settings-panel.md
+// CredentialsSection is Settings → Legacy capabilities (design/design/settings-panel.design.md
 // §3.2). `s` is the page's useSettingsSection().
 export default function CredentialsSection({ s, claimedSecrets }) {
   const {

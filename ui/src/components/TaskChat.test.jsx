@@ -329,7 +329,7 @@ describe("TaskChat", () => {
     vi.unstubAllGlobals();
   });
 
-  // The server records the comment's author (docs/design/settings-panel.md
+  // The server records the comment's author (design/design/settings-panel.design.md
   // §6.1): a browser no longer claims one, whatever it once stored.
   it("sends no author in the comment payload", async () => {
     localStorage.setItem("grain.username", "alice");

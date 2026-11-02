@@ -1,8 +1,8 @@
 # 2026-10-22: agent CLI run locations (task 5012)
 
 What was run to verify per-CLI run locations
-([docs/design/cli-run-location.md](../../design/cli-run-location.md)) in
-the harness. A real Cloudtop is the owner's to test after the merge.
+([design/design/cli-run-location.design.md](../../../design/design/cli-run-location.design.md)) in
+the harness. A real Workstation is the owner's to test after the merge.
 
 ## Container launcher, end to end against real docker
 
@@ -30,7 +30,7 @@ filesystem.
 
 ## Settings → Models, against `grain demo`
 
-`grain demo` resolves run locations as a Cloudtop's daemon is started:
+`grain demo` resolves run locations as a workstation's daemon is started:
 `-claude-run=container`, `-agy-run=host` with the Jetski `-agy-path`, and
 codex on `auto`. The `auto` probe really runs on this machine, which has
 no `codex`. The demo's `-cli-image` is

@@ -52,7 +52,7 @@ The cheapest source available is used first:
    pull request's check runs on its adaptive/ETag schedule. The concluded
    ones in that answer are recorded with no call of their own. For concluded
    workflow runs on deployments whose webhook gateway GitHub cannot reach
-   (such as a Cloudtop behind UberProxy), the `github-ci-tails` reconciler
+   (such as a workstation behind an identity-aware reverse proxy), the `github-ci-tails` reconciler
    also polls `GET /repos/{o}/{r}/actions/runs?status=completed` with ETag
    (`If-None-Match` / `304 Not Modified`) and skips polling when the hourly
    GitHub budget is low (`github.BudgetLow`). Concluded runs from webhooks

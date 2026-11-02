@@ -190,7 +190,7 @@ describe("collectAlerts (grain/task-4008)", () => {
     expect(setupAlertText(2)).toBe("2 setup steps left");
   });
 
-  // The access code is owner access (docs/design/settings-panel.md §6.1).
+  // The access code is owner access (design/design/settings-panel.design.md §6.1).
   it("offers Settings → Config repo for a failing sync to whoever reads it", () => {
     const config = {
       ...base,

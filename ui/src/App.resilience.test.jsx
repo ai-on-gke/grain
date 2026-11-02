@@ -179,7 +179,7 @@ describe("App resilience", () => {
     expect(screen.queryByText(/cannot be reached/i)).toBeNull();
   });
 
-  // docs/non-disruptive-upgrade.md, Stage 1: a daemon that said it was
+  // design/design/non-disruptive-upgrade.design.md, Stage 1: a daemon that said it was
   // restarting (GET /api/config's `restarting`) and then stopped
   // answering is an upgrade's restart, and the banner says so.
   it("says grain is restarting when the daemon said it was", async () => {

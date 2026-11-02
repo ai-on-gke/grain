@@ -34,7 +34,7 @@ import (
 var procRoot = "/proc"
 
 // Service is the set of processes a capability server's data-plane
-// listeners must belong to (docs/capabilities-spec.md §5.3.2): the
+// listeners must belong to (design/spec/capabilities/capabilities.spec.md §5.3.2): the
 // process serving its control plane -- a stdio server's spawned child, or
 // whatever owns an HTTP server's /mcp listener -- and its descendants,
 // and, for an HTTP server running in a cgroup of its own (a systemd unit,
