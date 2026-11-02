@@ -92,6 +92,8 @@ jobs:
             npm-${{ runner.os }}-
 
       - name: Install sandbox guest dependencies
+        env:
+          SHARD: ${{ matrix.shard }}
         run: |
           sudo systemctl stop postgresql 2>/dev/null || true
           sudo systemctl disable postgresql 2>/dev/null || true
@@ -102,8 +104,21 @@ jobs:
             bubblewrap expect zstd socat psmisc iproute2 iptables shellcheck
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           sudo sysctl -w kernel.yama.ptrace_scope=0 || true
-          tmpsrc="$(mktemp -d)"
-          cat >"$tmpsrc/main.go" <<'EOF'
+          # The stand-in `sleep` is for tests/deploy's
+          # TestHostdUpgradeScriptDrainsOnlyAHostdOnAnOldBinary, which copies
+          # `sleep` under another name and so cannot use Ubuntu 26's multi-call
+          # uutils binary -- the same reason tests.yml's go-e2e job installs it.
+          # It goes on shard 2 only, the shard that runs tests/deploy. A Go
+          # program cannot keep a SIGTERM disposition it inherited as ignored
+          # (the Go runtime installs its own handler at startup), so under it
+          # `trap '' TERM; sleep 60` dies on the first SIGTERM where coreutils'
+          # `sleep` does not, and pkg/mcp's
+          # TestSSHRunCommandKillsACommandThatIgnoresSIGTERM sees timeout's 124
+          # instead of the 137 its SIGKILL escalation produces. Every other
+          # shard keeps the runner's own `sleep`, as tests.yml's go unit job does.
+          if [ "$SHARD" = 2 ]; then
+            tmpsrc="$(mktemp -d)"
+            cat >"$tmpsrc/main.go" <<'EOF'
           package main
 
           import (
@@ -129,12 +144,13 @@ jobs:
           	}
           }
           EOF
-          CGO_ENABLED=0 go build -o "$tmpsrc/sleep" "$tmpsrc/main.go"
-          sudo rm -f /usr/local/bin/sleep /usr/bin/sleep
-          sudo cp -f "$tmpsrc/sleep" /usr/local/bin/sleep
-          sudo cp -f "$tmpsrc/sleep" /usr/bin/sleep
-          sudo chmod 0755 /usr/local/bin/sleep /usr/bin/sleep
-          rm -rf "$tmpsrc"
+            CGO_ENABLED=0 go build -o "$tmpsrc/sleep" "$tmpsrc/main.go"
+            sudo rm -f /usr/local/bin/sleep /usr/bin/sleep
+            sudo cp -f "$tmpsrc/sleep" /usr/local/bin/sleep
+            sudo cp -f "$tmpsrc/sleep" /usr/bin/sleep
+            sudo chmod 0755 /usr/local/bin/sleep /usr/bin/sleep
+            rm -rf "$tmpsrc"
+          fi
           sudo git config --system user.name "grain-ci"
           sudo git config --system user.email "grain-ci@example.com"
           git config --global user.name "grain-ci"
