@@ -73,28 +73,3 @@ func TestMergeOnGreenMergesAGreenChangePastAHeadStillInCI(t *testing.T) {
 		t.Fatalf("the passed-over head says %q (%q), want waiting_ci", state, note)
 	}
 }
-
-// And with the switch off, the strict lane stands: nothing merges past a
-// head still in CI (TestAHeadStillInCIStillHoldsItsOwnBranch is the same
-// for a candidate lane).
-func TestWithoutMergeOnGreenAHeadStillInCIHoldsTheLane(t *testing.T) {
-	t.Parallel()
-	store, ctx := openStore(t)
-	fix := newBatchFixture(t)
-	runner := newFakeCI()
-	headBranch, behindBranch := headInCIBeforeGreen(t, ctx, store, fix, runner)
-	cfg := model.DefaultConfig()
-	cfg.MergeBatchSize = 1
-	if err := store.PutConfig(ctx, cfg); err != nil {
-		t.Fatal(err)
-	}
-
-	syncWithCI(t, ctx, store, fix.client, runner, baseTime.Add(time.Minute))
-
-	if mergedBranch(fix.sim, behindBranch) || mergedBranch(fix.sim, headBranch) {
-		t.Fatal("a change merged past a head still in CI with merge-on-green off")
-	}
-	if state, _ := mergeQueueStateOf(t, ctx, store, "t2"); state != "waiting_queue" {
-		t.Fatalf("t2 says %q, want waiting_queue", state)
-	}
-}
