@@ -96,8 +96,11 @@ test("a report board's backlog counts match the filtered lists they open", async
 
   const expectedWaiting = "/?f=repo:any:acme/widgets&f=state:any:queued";
   await expect(waiting).toHaveAttribute("href", expectedWaiting);
+  // The demo server is shared by every spec in the worker, and others
+  // file tasks in acme/widgets, so the seed's exact counts (pinned in
+  // pkg/metrics's tests) cannot be asserted here -- only that each chip
+  // agrees with the list it opens.
   const waitingCount = Number((await waiting.textContent()).match(/\d+/)[0]);
-  expect(waitingCount).toBe(2);
 
   await waiting.click();
   await expect(page).toHaveURL(
@@ -115,7 +118,6 @@ test("a report board's backlog counts match the filtered lists they open", async
     "/?f=repo:any:acme/widgets&f=state:any:awaiting_reply&f=completed:empty:";
   await expect(askedAgain).toHaveAttribute("href", expectedAsked);
   const askedCount = Number((await askedAgain.textContent()).match(/\d+/)[0]);
-  expect(askedCount).toBe(1);
 
   await askedAgain.click();
   await expect(page).toHaveURL(
@@ -159,8 +161,9 @@ test("phone width: backlog chips and narrowed filter chips wrap cleanly without 
     expect(box.x + box.width).toBeLessThanOrEqual(390);
   }
 
+  const askedCount = Number((await asked.textContent()).match(/\d+/)[0]);
   await asked.click();
-  await expect(page.locator(".task-row")).toHaveCount(1);
+  await expect(page.locator(".task-row")).toHaveCount(askedCount);
   const filterChips = page.locator(".narrowing-chips .MuiChip-root");
   await expect(filterChips).toHaveCount(3);
   const chipCount = await filterChips.count();
