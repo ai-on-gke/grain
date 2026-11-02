@@ -204,9 +204,12 @@ type Config struct {
 	// -ui-iap-issuer and -ui-iap-keys-url: what a signed assertion must
 	// carry, and where its keys are, for the UI/API to accept the
 	// identity in it (ui.Config.IAPAudience and the rest).
-	UiIAPAudience       string
-	UiIAPIssuer         string
-	UiIAPKeysURL        string
+	UiIAPAudience string
+	UiIAPIssuer   string
+	UiIAPKeysURL  string
+	// UiRequireIAP is -ui-require-iap (ui.Config.RequireIAP): the access
+	// code works over unforwarded loopback only.
+	UiRequireIAP        bool
 	UiAllowedPrincipals []string
 	UiOpen              bool
 	Actor               string

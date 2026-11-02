@@ -319,6 +319,7 @@ var legacyGrantReplacements = map[string]string{
 	"self-upgrade":     APIGrantPrefix + "self-upgrade",
 	"test-quarantine":  APIGrantPrefix + "test-quarantine",
 	"self-repair":      GrainHostExecGrant,
+	"git-push-any-ref": GitPushAnyRefGrant,
 }
 
 // legacyGrantMultiReplacements maps retired bare capabilities that split into
@@ -348,6 +349,19 @@ func CanonicalLegacyGrants(name string) []string {
 		return slices.Clone(many)
 	}
 	return []string{CanonicalLegacyGrant(name)}
+}
+
+// RetiredGrantNames is every retired bare capability name
+// CanonicalLegacyGrants rewrites, in no particular order.
+func RetiredGrantNames() []string {
+	names := make([]string, 0, len(legacyGrantReplacements)+len(legacyGrantMultiReplacements))
+	for name := range legacyGrantReplacements {
+		names = append(names, name)
+	}
+	for name := range legacyGrantMultiReplacements {
+		names = append(names, name)
+	}
+	return names
 }
 
 // APIAliasPreset returns the preset name that a bare capability name aliases,

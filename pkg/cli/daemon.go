@@ -305,6 +305,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	uiIAPIssuer := fs.String("ui-iap-issuer", "", "the issuer a signed assertion must carry; defaults to $GRAIN_IAP_ISSUER, then "+ui.GoogleIAPIssuer)
 	uiIAPKeysURL := fs.String("ui-iap-keys-url", "", "where the signing keys for those assertions are published (IAP's PEM map or a JWK set); "+
 		"defaults to $GRAIN_IAP_KEYS_URL, then "+ui.GoogleIAPCertURL)
+	uiRequireIAP := fs.Bool("ui-require-iap", false, "accept the access code (bearer or grain_access cookie) only from loopback with no forwarding "+
+		"or proxy headers, and serve no \"Enter access code\" page, so network callers sign in through IAP alone (docs/access-code.md); "+
+		"needs -ui-iap-audience or $GRAIN_IAP_AUDIENCE. Defaults to $GRAIN_REQUIRE_IAP")
 	uiAllowedPrincipals := fs.String("ui-allowed-principals", "", ui.AllowedPrincipalsUsage)
 	uiOpen := fs.Bool("ui-open", false, "open the UI in the system's default browser once it's listening")
 	actor := fs.String("as", "", "principal the UI/API attributes tasks and comments it creates to (defaults to the OS user)")
@@ -1060,6 +1063,15 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 			}
 		}
 	}
+	if !passed["ui-require-iap"] {
+		if env := strings.TrimSpace(os.Getenv("GRAIN_REQUIRE_IAP")); env != "" {
+			v, err := strconv.ParseBool(env)
+			if err != nil {
+				return daemon.Config{}, fs, unknownFlags, fmt.Errorf("GRAIN_REQUIRE_IAP=%q is not a boolean", env)
+			}
+			*uiRequireIAP = v
+		}
+	}
 	if !passed["db-dsn"] {
 		if env := os.Getenv("GRAIN_DB_DSN"); env != "" {
 			*dbDSN = env
@@ -1210,6 +1222,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UiIAPAudience:           *uiIAPAudience,
 		UiIAPIssuer:             *uiIAPIssuer,
 		UiIAPKeysURL:            *uiIAPKeysURL,
+		UiRequireIAP:            *uiRequireIAP,
 		UiAllowedPrincipals:     ui.SplitAllowedPrincipals(*uiAllowedPrincipals),
 		ExecutorAddr:            *executorAddr,
 		ExecutorTokenFile:       *executorTokenFile,
@@ -1488,6 +1501,9 @@ func checkConfig(cfg daemon.Config) error {
 		return errors.New("-max-mergers cannot be negative")
 	}
 	if err := daemon.CheckUIAllowedPrincipals(cfg); err != nil {
+		return err
+	}
+	if err := daemon.CheckUIRequireIAP(cfg); err != nil {
 		return err
 	}
 	if err := daemon.CheckCICacheBounds(cfg); err != nil {

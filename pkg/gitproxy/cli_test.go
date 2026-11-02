@@ -77,7 +77,7 @@ func TestCLIRoutesScopeNarrateAndAnswer(t *testing.T) {
 		t.Errorf("unauthenticated /cli/: %d", rec.Code)
 	}
 	rec := get("tok-ci", "/cli/ci/runs?conclusion=failure")
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "run-task grain/task-7") ||
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "run-task grain grain/task-7") ||
 		!strings.Contains(rec.Body.String(), "failing: go") || strings.Contains(rec.Body.String(), "run-main") {
 		t.Errorf("ci runs: %d %s", rec.Code, rec.Body)
 	}

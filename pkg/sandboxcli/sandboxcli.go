@@ -168,7 +168,7 @@ func detectSandboxProxy(env sandboxEnv) (base, token string, ok bool) {
 var sandboxCommands = map[string][]string{
 	"help": nil, "-h": nil, "--help": nil,
 	"ls": nil, "read": nil, "grep": nil,
-	"ci":            {"list", "log", "test-history", "artifact", "wait", "run-job", "retrigger"},
+	"ci":            {"list", "show", "log", "test-history", "artifact", "wait", "run-job", "retrigger"},
 	"pr":            {"status", "base-status", "open", "reply", "resolve", "review-comment"},
 	"git":           {"revert"},
 	"merge-queue":   nil,
@@ -193,7 +193,8 @@ var sandboxCommandFlags = map[string][]string{
 	"ls":                    {"glob"},
 	"read":                  {"tail", "offset", "limit", "lines", "n", "cursor", "since", "page"},
 	"grep":                  {"i", "C", "glob", "max"},
-	"ci list":               {"ref", "conclusion", "job", "since", "limit", "repo", "task"},
+	"ci list":               {"ref", "conclusion", "job", "since", "limit", "repo", "task", "provider"},
+	"ci show":               nil,
 	"ci test-history":       {"limit", "repo"},
 	"ci log":                {"task", "repo", "job", "step", "attempt", "tail", "offset", "limit", "lines", "n"},
 	"ci artifact":           {"o", "run", "task", "repo"},
@@ -447,7 +448,13 @@ func (c *sandboxCLI) run(args []string) error {
 		q.Set("n", "1")
 		return c.fs(uri, q)
 	case "ci list":
-		return c.get("/cli/ci/runs", p.query("ref", "conclusion", "job", "since", "limit", "repo", "task"), c.out)
+		return c.get("/cli/ci/runs", p.query("ref", "conclusion", "job", "since", "limit", "repo", "task", "provider"), c.out)
+	case "ci show":
+		run, err := p.arg(0, "run-id")
+		if err != nil {
+			return err
+		}
+		return c.get("/cli/ci/show", url.Values{"id": {run}}, c.out)
 	case "ci test-history":
 		test, err := p.arg(0, "test-name")
 		if err != nil {
@@ -737,6 +744,9 @@ func (c *sandboxCLI) ciRun(p sandboxArgs, run string) (repo, id string, err erro
 		return "", "", err
 	}
 	if run == "" {
+		if rc.Repo == "" && p.get("task") == "" {
+			return "", "", fmt.Errorf("this task has no repository or branch, so it has no latest grain CI run: name a run id, with --repo <owner/repo> if you like (`grain ci list --repo <owner/repo>` lists them), or pass --task <id>")
+		}
 		if run, err = c.latestRun(p.get("task")); err != nil {
 			return "", "", err
 		}
@@ -776,6 +786,10 @@ func (c *sandboxCLI) ciLog(p sandboxArgs) error {
 		return c.fs(uri, url.Values{"list": {""}})
 	}
 	uri += "/" + job
+	if strings.HasPrefix(run, "gha:") {
+		// A GitHub Actions job keeps one log, not one per step.
+		return c.read(uri+"/job.log", p, false)
+	}
 	if n := p.get("attempt"); n != "" {
 		uri += "/attempts/" + n
 	}
