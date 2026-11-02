@@ -120,3 +120,85 @@ func TestActionsReaderOnGitHubAndGHE(t *testing.T) {
 		})
 	}
 }
+
+func TestListActionsRunsPaginatesAndFiltersByWorkflow(t *testing.T) {
+	t.Parallel()
+	var forgeURL string
+	forge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/acme/widgets/actions/workflows/nightly.yml/runs":
+			w.Write([]byte(`{"total_count":1,"workflow_runs":[{"id":999,"name":"nightly","path":".github/workflows/nightly.yml",
+				"head_branch":"main","head_sha":"744a1db","event":"schedule","status":"completed","conclusion":"failure",
+				"run_started_at":"2026-11-02T02:21:46Z","updated_at":"2026-11-02T02:59:54Z"}]}`))
+		case "/repos/acme/widgets/actions/runs":
+			if r.URL.Query().Get("page") == "2" {
+				w.Write([]byte(`{"total_count":3410,"workflow_runs":[{"id":999,"name":"nightly","path":".github/workflows/nightly.yml",
+					"head_branch":"main","head_sha":"744a1db","event":"schedule","status":"completed","conclusion":"failure",
+					"run_started_at":"2026-11-02T02:21:46Z","updated_at":"2026-11-02T02:59:54Z"}]}`))
+				return
+			}
+			w.Header().Set("Link", `<`+forgeURL+`/repos/acme/widgets/actions/runs?page=2&per_page=100>; rel="next"`)
+			var buf strings.Builder
+			buf.WriteString(`{"total_count":3410,"workflow_runs":[`)
+			for i := 0; i < 100; i++ {
+				if i > 0 {
+					buf.WriteByte(',')
+				}
+				buf.WriteString(`{"id":`)
+				buf.WriteString(intString(1000 + i))
+				buf.WriteString(`,"name":"Tests","path":".github/workflows/tests.yml","head_branch":"main","status":"completed","conclusion":"success"}`)
+			}
+			buf.WriteString(`]}`)
+			w.Write([]byte(buf.String()))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"message":"Not Found"}`))
+		}
+	}))
+	forgeURL = forge.URL
+	t.Cleanup(forge.Close)
+
+	transport := &RealTransport{Host: strings.TrimPrefix(forge.URL, "http://"), ledger: &callerLedger{logf: func(string, ...any) {}}}
+	client := NewClient(transport, StaticToken{strPtr("t")})
+
+	for _, wf := range []string{"nightly", "nightly.yml", ".github/workflows/nightly.yml"} {
+		page, err := client.ListActionsRunsPage("acme", "widgets", ActionsRunsQuery{Workflow: wf, Limit: 20})
+		if err != nil {
+			t.Fatalf("ListActionsRunsPage(%q): %v", wf, err)
+		}
+		if !page.WorkflowFiltered || page.TotalCount != 1 || len(page.Runs) != 1 || page.Runs[0].ID != 999 {
+			t.Fatalf("ListActionsRunsPage(%q) = %+v, want 1 filtered nightly run 999", wf, page)
+		}
+	}
+
+	fallback, err := client.ListActionsRunsPage("acme", "widgets", ActionsRunsQuery{Workflow: "Nightly Suite", Limit: 50})
+	if err != nil {
+		t.Fatalf("fallback ListActionsRunsPage: %v", err)
+	}
+	if fallback.WorkflowFiltered {
+		t.Errorf("display-name fallback unexpectedly marked WorkflowFiltered")
+	}
+
+	paged, err := client.ListActionsRunsPage("acme", "widgets", ActionsRunsQuery{Branch: "main", Limit: 200})
+	if err != nil {
+		t.Fatalf("paged ListActionsRunsPage: %v", err)
+	}
+	if len(paged.Runs) != 101 || paged.Runs[100].ID != 999 || paged.TotalCount != 3410 {
+		t.Fatalf("paged = %d runs, last=%+v, total=%d; want 101 runs ending in 999 with total 3410",
+			len(paged.Runs), paged.Runs[len(paged.Runs)-1], paged.TotalCount)
+	}
+}
+
+func intString(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var digits [20]byte
+	i := len(digits)
+	for n > 0 {
+		i--
+		digits[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(digits[i:])
+}

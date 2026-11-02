@@ -258,7 +258,7 @@ To check whether the latest `release.yml` on `main` passed, and read the
 failing job's log if it did not:
 
 ```sh
-grain ci list --repo ai-on-gke/grain --ref main --provider github-actions
+grain ci list --repo ai-on-gke/grain --ref main --provider github-actions --workflow release.yml
 # gha:ai-on-gke:grain:123 github-actions/release.yml main 1a2b3c4d5e6f failure 2026-11-01T10:00:00Z failing: publish
 grain ci show gha:ai-on-gke:grain:123
 grain ci log gha:ai-on-gke:grain:123 --job publish --lines 80
@@ -266,7 +266,7 @@ grain ci log gha:ai-on-gke:grain:123 --job publish --lines 80
 
 The same reads over the API:
 
-- `GET /api/ci/runs?repo=ai-on-gke/grain&ref=main&provider=github-actions`
+- `GET /api/ci/runs?repo=ai-on-gke/grain&ref=main&provider=github-actions&workflow=release.yml`
 - `GET /api/ci/runs/gha:ai-on-gke:grain:123`
 - `GET /api/ci/runs/gha:ai-on-gke:grain:123/log?job=publish&tail=80`
 

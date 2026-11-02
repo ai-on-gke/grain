@@ -28,20 +28,45 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// MaxActionsRunsLimit bounds how many workflow runs one ListActionsRuns call
+// pages through (five 100-run GitHub pages).
+const MaxActionsRunsLimit = 500
 
 // ActionsRunsQuery narrows ListActionsRuns. Every field is optional.
 type ActionsRunsQuery struct {
 	// Branch keeps runs whose head branch is this one exactly -- GitHub's
 	// own ?branch=, which matches no other way.
 	Branch string
+	// Workflow narrows to one workflow file (such as "nightly.yml",
+	// ".github/workflows/nightly.yml", or "nightly") via GitHub's
+	// per-workflow runs endpoint when that workflow file exists on the
+	// forge, falling back to the repository-wide runs endpoint on 404.
+	Workflow string
 	// Since keeps runs created at or after it (?created=>=...).
 	Since time.Time
-	// Limit is the page size, at most 100 (GitHub's own bound); zero is 30.
+	// Limit is the maximum number of runs to return across pages, at most
+	// MaxActionsRunsLimit (500); zero is 30.
 	Limit int
+}
+
+// ActionsRunsPage is the runs ListActionsRunsPage fetched across pages plus
+// GitHub's own total_count for the server-side query.
+type ActionsRunsPage struct {
+	Runs             []WorkflowRun
+	TotalCount       int
+	WorkflowFiltered bool
+}
+
+// ActionsPageReader is an optional extension of ActionsReader that reports
+// GitHub's total_count alongside the paged runs.
+type ActionsPageReader interface {
+	ListActionsRunsPage(owner, repo string, q ActionsRunsQuery) (ActionsRunsPage, error)
 }
 
 // ActionsRunJob is one job of a workflow run with its steps, as
@@ -96,7 +121,10 @@ type ActionsReader interface {
 	ListActionsArtifacts(owner, repo string, runID int64) ([]ActionsArtifact, error)
 }
 
-var _ ActionsReader = (*RESTClient)(nil)
+var (
+	_ ActionsReader     = (*RESTClient)(nil)
+	_ ActionsPageReader = (*RESTClient)(nil)
+)
 
 // workflowRunJSON is a workflow run as the REST API spells it.
 type workflowRunJSON struct {
@@ -117,46 +145,129 @@ func (r workflowRunJSON) run() WorkflowRun {
 	return out
 }
 
-// ListActionsRuns is one page of the repository's workflow runs, newest
-// first. A 404 (Actions off, or not readable with this credential) is no
-// runs rather than an error, as it is for CompletedWorkflowRuns.
+// ListActionsRuns returns up to q.Limit of the repository's workflow runs,
+// newest first, following GitHub's pagination up to MaxActionsRunsLimit. A 404
+// (Actions off, or not readable with this credential) is no runs rather than
+// an error, as it is for CompletedWorkflowRuns.
 func (c *RESTClient) ListActionsRuns(owner, repo string, q ActionsRunsQuery) ([]WorkflowRun, error) {
+	page, err := c.ListActionsRunsPage(owner, repo, q)
+	return page.Runs, err
+}
+
+// ListActionsRunsPage is ListActionsRuns plus GitHub's total_count for the
+// server-side query. When q.Workflow names a workflow file (or stem), it
+// queries /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs first so
+// low-frequency scheduled workflows are not buried behind hundreds of PR runs.
+func (c *RESTClient) ListActionsRunsPage(owner, repo string, q ActionsRunsQuery) (ActionsRunsPage, error) {
 	limit := q.Limit
 	if limit <= 0 {
 		limit = 30
 	}
-	if limit > 100 {
-		limit = 100
+	if limit > MaxActionsRunsLimit {
+		limit = MaxActionsRunsLimit
 	}
-	query := url.Values{"per_page": {strconv.Itoa(limit)}}
+	perPage := min(limit, 100)
+	query := url.Values{"per_page": {strconv.Itoa(perPage)}}
 	if b := strings.TrimSpace(q.Branch); b != "" {
 		query.Set("branch", b)
 	}
 	if !q.Since.IsZero() {
 		query.Set("created", ">="+q.Since.UTC().Format(time.RFC3339))
 	}
-	resp, err := c.get(owner, repo, fmt.Sprintf("/repos/%s/%s/actions/runs?%s", owner, repo, query.Encode()))
-	if err != nil {
-		return nil, err
+	for _, wf := range actionsWorkflowFileCandidates(q.Workflow) {
+		p := fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/runs?%s", owner, repo, url.PathEscape(wf), query.Encode())
+		page, found, err := c.fetchActionsRunsPages(owner, repo, p, limit)
+		if err != nil {
+			return ActionsRunsPage{}, err
+		}
+		if found {
+			page.WorkflowFiltered = true
+			return page, nil
+		}
 	}
-	switch resp.Status {
-	case http.StatusOK:
-	case http.StatusNotFound:
-		return nil, nil
-	default:
-		return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	page, _, err := c.fetchActionsRunsPages(owner, repo, fmt.Sprintf("/repos/%s/%s/actions/runs?%s", owner, repo, query.Encode()), limit)
+	return page, err
+}
+
+func (c *RESTClient) fetchActionsRunsPages(owner, repo, startPath string, limit int) (ActionsRunsPage, bool, error) {
+	var runs []WorkflowRun
+	var totalCount int
+	var gotTotal bool
+	for p := startPath; p != "" && len(runs) < limit; {
+		resp, err := c.get(owner, repo, p)
+		if err != nil {
+			return ActionsRunsPage{}, false, err
+		}
+		switch resp.Status {
+		case http.StatusOK:
+		case http.StatusNotFound:
+			if !gotTotal {
+				return ActionsRunsPage{}, false, nil
+			}
+			return ActionsRunsPage{Runs: runs, TotalCount: max(totalCount, len(runs))}, true, nil
+		default:
+			return ActionsRunsPage{}, false, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+		}
+		var data struct {
+			TotalCount   int               `json:"total_count"`
+			WorkflowRuns []workflowRunJSON `json:"workflow_runs"`
+		}
+		if err := json.Unmarshal(resp.Body, &data); err != nil {
+			return ActionsRunsPage{}, false, err
+		}
+		if !gotTotal {
+			totalCount = data.TotalCount
+			gotTotal = true
+		}
+		for _, r := range data.WorkflowRuns {
+			runs = append(runs, r.run())
+			if len(runs) >= limit {
+				break
+			}
+		}
+		if len(runs) >= limit || len(data.WorkflowRuns) == 0 {
+			break
+		}
+		p = nextPagePath(resp.Headers["Link"])
 	}
-	var data struct {
-		WorkflowRuns []workflowRunJSON `json:"workflow_runs"`
+	return ActionsRunsPage{Runs: runs, TotalCount: max(totalCount, len(runs))}, gotTotal, nil
+}
+
+// actionsWorkflowFileCandidates turns a workflow selector ("nightly.yml",
+// ".github/workflows/nightly.yml", "nightly", or a numeric workflow id) into
+// the workflow_id path segment(s) GitHub's per-workflow runs endpoint accepts.
+// Display names with spaces or non-Actions paths return nil so the caller
+// falls back to /actions/runs.
+func actionsWorkflowFileCandidates(workflow string) []string {
+	w := strings.TrimSpace(workflow)
+	if w == "" || strings.ContainsAny(w, " \t\r\n") {
+		return nil
 	}
-	if err := json.Unmarshal(resp.Body, &data); err != nil {
-		return nil, err
+	clean := path.Clean(w)
+	if strings.HasPrefix(clean, ".grain/") {
+		return nil
 	}
-	runs := make([]WorkflowRun, 0, len(data.WorkflowRuns))
-	for _, r := range data.WorkflowRuns {
-		runs = append(runs, r.run())
+	clean = strings.TrimPrefix(clean, ".github/workflows/")
+	if clean == "" || clean == "." || strings.Contains(clean, "/") {
+		return nil
 	}
-	return runs, nil
+	lower := strings.ToLower(clean)
+	if strings.HasSuffix(lower, ".yml") || strings.HasSuffix(lower, ".yaml") || isDigitsOnly(clean) {
+		return []string{clean}
+	}
+	return []string{clean + ".yml", clean + ".yaml"}
+}
+
+func isDigitsOnly(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // GetActionsRun is GET /repos/{owner}/{repo}/actions/runs/{run_id}.
