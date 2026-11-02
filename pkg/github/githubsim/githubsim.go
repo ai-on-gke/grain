@@ -151,6 +151,8 @@ var (
 	pullCommentReactionsRe   = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/pulls/comments/(\d+)/reactions$`)
 	createCheckRunsRe        = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/check-runs$`)
 	updateCheckRunRe         = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/check-runs/(\d+)$`)
+	rerequestCheckRunRe      = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/check-runs/(\d+)/rerequest$`)
+	rerequestCheckSuiteRe    = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/check-suites/(\d+)/rerequest$`)
 	contentsRe               = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/contents/(.+)$`)
 )
 
@@ -381,6 +383,14 @@ type Sim struct {
 	// by resolve to one commit here the same way they do on GitHub (see
 	// checkRunsFor).
 	CheckRuns map[string][]github.CheckRun
+	// RerequestedCheckSuites and RerequestedCheckRuns record every
+	// POST .../check-suites/{id}/rerequest and .../check-runs/{id}/rerequest
+	// call the sim accepted. DisableCheckRerequest makes both endpoints
+	// refuse with 422, matching a third-party check provider or forge that
+	// does not support re-requesting checks in place.
+	RerequestedCheckSuites []int64
+	RerequestedCheckRuns   []int64
+	DisableCheckRerequest  bool
 	// WorkflowJobs is the CI behind those check runs: the GitHub Actions
 	// jobs, and their logs, that github.RESTClient.FailedJobLogs reaches
 	// through a commit's workflow runs. Keyed like CheckRuns, except that
@@ -1897,6 +1907,24 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			s.CheckRuns[payload.HeadSHA] = append(s.CheckRuns[payload.HeadSHA], cr)
 			return jsonResponse(201, map[string]any{"id": id}), nil
 		}
+		if m := rerequestCheckSuiteRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			if s.DisableCheckRerequest {
+				return github.ApiResponse{Status: 422, Body: []byte(`{"message":"Check suite cannot be rerequested"}`)}, nil
+			}
+			id := int64(mustAtoi(m[3]))
+			s.RerequestedCheckSuites = append(s.RerequestedCheckSuites, id)
+			return jsonResponse(201, map[string]any{}), nil
+		}
+		if m := rerequestCheckRunRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			if s.DisableCheckRerequest {
+				return github.ApiResponse{Status: 422, Body: []byte(`{"message":"Check run cannot be rerequested"}`)}, nil
+			}
+			id := int64(mustAtoi(m[3]))
+			s.RerequestedCheckRuns = append(s.RerequestedCheckRuns, id)
+			return jsonResponse(201, map[string]any{}), nil
+		}
 		if m := mergesRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
 			var payload struct {
@@ -3042,6 +3070,9 @@ func checkRunsJSON(runs []github.CheckRun) map[string]any {
 		item := map[string]any{"name": r.Name, "status": r.Status, "conclusion": r.Conclusion, "html_url": r.HTMLURL}
 		if r.ID != 0 {
 			item["id"] = r.ID
+		}
+		if r.CheckSuiteID != 0 {
+			item["check_suite"] = map[string]any{"id": r.CheckSuiteID}
 		}
 		if r.HeadSHA != "" {
 			item["head_sha"] = r.HeadSHA

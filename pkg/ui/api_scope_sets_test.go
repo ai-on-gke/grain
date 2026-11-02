@@ -148,3 +148,41 @@ func TestScopeSetUsageAndGrantsOutsideItsRepos(t *testing.T) {
 		t.Errorf("walk-readers holders' grants = %v, want %v", grants, want)
 	}
 }
+
+func TestAPIScopeSetsIncludeCataloguePresetAndRetiredInProcessEntries(t *testing.T) {
+	client, store, ctx := testClient(t)
+	off := false
+	setCatalogue(t, ctx, store, &model.CapabilityCatalogue{
+		InProcess: map[string]model.CatalogueInProcess{
+			"memory": {Enabled: &off},
+		},
+		APIScopes: model.CatalogueAPIScopes{
+			Presets: map[string]model.CataloguePreset{
+				"release-notes": {
+					Restrictions: &model.CapabilityRestrictions{
+						Repos:          model.Patterns{"acme/*"},
+						RequiresPerson: true,
+					},
+				},
+			},
+		},
+	})
+	resp := client.APIScopeSets(ctx)
+	byName := map[string]ui.APIScopeSetRow{}
+	for _, row := range resp.Sets {
+		byName[row.Name] = row
+	}
+	mem := byName["grain/memory"]
+	if mem.Catalogue == nil || !mem.Catalogue.Disabled || mem.Catalogue.Preset != "memory" ||
+		!slices.Equal(mem.Catalogue.LegacyInProcess, []string{"memory"}) {
+		t.Fatalf("grain/memory = %+v (catalogue %+v), want disabled from legacy in_process.memory", mem, mem.Catalogue)
+	}
+	rn := byName["grain/release-notes"]
+	if rn.Catalogue == nil || rn.Catalogue.Disabled || !rn.Person || rn.Catalogue.Restrictions == nil ||
+		!slices.Equal([]string(rn.Catalogue.Restrictions.Repos), []string{"acme/*"}) {
+		t.Fatalf("grain/release-notes = %+v (catalogue %+v), want repo restriction and person", rn, rn.Catalogue)
+	}
+	if ciRead := byName["grain/ci-read"]; ciRead.Catalogue != nil {
+		t.Errorf("unrestricted grain/ci-read has Catalogue = %+v, want nil", ciRead.Catalogue)
+	}
+}
