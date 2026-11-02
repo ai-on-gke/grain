@@ -5540,7 +5540,7 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 	// returning early from reopenAcknowledgeable with the task still deferred.
 	wokeOnMessage := false
 	ownAgent := model.Principal{Kind: model.PrincipalAgent, ID: id}
-	if by.Actor != ownAgent && (by.OnBehalfOf == nil || *by.OnBehalfOf != ownAgent) {
+	if !by.Actor.Same(ownAgent) && (by.OnBehalfOf == nil || !by.OnBehalfOf.Same(ownAgent)) {
 		var err error
 		wokeOnMessage, err = c.Store.WakeOnMessage(ctx, id, now)
 		if err != nil {

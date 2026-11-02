@@ -300,3 +300,47 @@ func TestClearAndReplaceGoalClearsNoProgressNotificationAndDeferral(t *testing.T
 		t.Fatalf("DeferredAt after ClearGoal = %v (%v), want nil", task.DeferredAt, err)
 	}
 }
+
+// TestATasksOwnCommentDoesNotWakeItFromAMessageHold pins that a run
+// parked on resume_later(when: {message: true}) waits for somebody
+// else's post: its own comment through the agent API, which now carries
+// the source the gate established it by, still counts as its own.
+func TestATasksOwnCommentDoesNotWakeItFromAMessageHold(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	self := create(t, c, ctx)
+	now := c.Now().UTC()
+	if err := store.StartRun(ctx, model.Run{ID: self.ID + "-1", TaskID: self.ID, Sandbox: "s1", Attempt: 1, StartedAt: now}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, self.ID+"-1", now, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Suspend(ctx, model.Suspension{
+		RunID: self.ID + "-1", TaskID: self.ID, Kind: model.SuspendRequested, CreatedAt: now,
+		Detail: "resume_later(when: {message: true})", ResumeOn: (model.ResumeOn{Message: true}).JSON(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetDeferred(ctx, self.ID, &now, nil, now); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, src := range []model.AuthSource{model.SourceSandbox, model.SourceSession, ""} {
+		own := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: self.ID, Source: src})
+		if err := c.AddComment(own, self.ID, "a note to myself", nil); err != nil {
+			t.Fatalf("AddComment as its own agent (source %q): %v", src, err)
+		}
+		if task, err := store.GetTask(ctx, self.ID); err != nil || task.DeferredAt == nil {
+			t.Fatalf("after its own comment (source %q): DeferredAt = %v (%v), want still deferred", src, task.DeferredAt, err)
+		}
+	}
+
+	other := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: "someone-else", Source: model.SourceSandbox})
+	if err := c.AddComment(other, self.ID, "a message from another task", nil); err != nil {
+		t.Fatalf("AddComment as another agent: %v", err)
+	}
+	if task, err := store.GetTask(ctx, self.ID); err != nil || task.DeferredAt != nil {
+		t.Fatalf("after another task's comment: DeferredAt = %v (%v), want woken", task.DeferredAt, err)
+	}
+}
