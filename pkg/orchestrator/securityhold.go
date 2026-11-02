@@ -921,8 +921,15 @@ func hasSecurityHold(task model.Task) bool {
 // human's Submit may end (model.LinkHumanOnlyHold). Every path that hands
 // auto-merge back on grain's own judgement checks it, except the
 // base-repair bypass, which exists to lift human gates.
+//
+// A task whose auto-merge somebody turned off explicitly
+// (model.AutoMergeDeclined) is one too: the hold releasing is not the
+// person changing their mind, so its auto-merge stays off and the change
+// waits for their Submit. The store refuses the write regardless
+// (model.guardAutoMerge); saying so here is what keeps each release from
+// announcing a merge that is not going to happen.
 func heldForHuman(task model.Task) bool {
-	return linkTarget(task, model.LinkHumanOnlyHold) != ""
+	return linkTarget(task, model.LinkHumanOnlyHold) != "" || model.AutoMergeDeclined(task)
 }
 
 // linkTarget is the target of task's last link of kind, or "".

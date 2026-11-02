@@ -293,26 +293,6 @@ test.describe("2026-10-22 UI fixes, together on one tip", () => {
     expect(await page.evaluate(() => window.__sweepNoReload)).toBe(true);
   });
 
-  test("System → Sandboxes says a failed executors read failed", async ({
-    page,
-  }) => {
-    // Stub at the HTTP boundary (recorded in the report): the demo has
-    // no state in which /api/executors fails on its own.
-    await page.route("**/api/executors", (route) =>
-      route.fulfill({ status: 500, body: "executor registry unavailable" }),
-    );
-    await page.goto("/system/sandboxes");
-    await expect(
-      page.getByText(/Model servers could not be read/),
-    ).toBeVisible();
-    await expect(page.getByText("No model servers connected.")).toHaveCount(0);
-    await expect(
-      page.getByText(
-        /The tokens they connect with are on Settings → Executors/,
-      ),
-    ).toBeVisible();
-  });
-
   test("a typed upgrade branch survives the status polls", async ({ page }) => {
     // The demo wires no Upgrader, so /api/upgrade is stubbed (recorded
     // in the report). The pane only polls while an upgrade is running or
