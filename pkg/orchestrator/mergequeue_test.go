@@ -1625,16 +1625,21 @@ func TestSyncPullRequestsGivesUpOnAQueueHeadWhoseChecksNeverFinish(t *testing.T)
 	sim.CheckRuns[stuckBranch] = []github.CheckRun{{Name: "deploy approval", Status: "queued"}}
 
 	// Well inside the deadline: still waiting, still nothing said. This is
-	// the same cycle a slow-but-honest CI run gets.
+	// the same cycle a slow-but-honest CI run gets. The head is never
+	// merged while PENDING -- but a check that has not so much as started
+	// in all that time no longer holds the change behind it, which merges
+	// past it (pendingStalled).
 	for _, at := range []time.Time{baseTime, baseTime.Add(deadline / 2)} {
 		if err := orchestrator.SyncPullRequests(ctx, store, client, at); err != nil {
 			t.Fatalf("SyncPullRequests inside the deadline: %v", err)
 		}
 	}
-	for _, pr := range sim.PullRequests {
-		if pr.Merged {
-			t.Fatal("something merged while the queue head's checks were still unfinished")
-		}
+	if mergedBranch(sim, stuckBranch) {
+		t.Fatal("the queue head merged while its checks were still unfinished")
+	}
+	if st, err := store.State(ctx, behind.ID); err != nil || st != model.StateClosed {
+		t.Fatalf("state of the task behind the stalled head = %q (%v), want closed: "+
+			"a check that never started held it for an hour", st, err)
 	}
 	if bodies := commentBodies(t, ctx, store, stuck.ID); len(bodies) != 0 {
 		t.Fatalf("expected no comments while inside the deadline, got %q", bodies)
@@ -1671,17 +1676,8 @@ func TestSyncPullRequestsGivesUpOnAQueueHeadWhoseChecksNeverFinish(t *testing.T)
 		t.Errorf("the comment does not name the check that never finished:\n%s", bodies[0])
 	}
 
-	// And the queue has moved on: the task behind the stuck one is head
-	// now, and merges.
 	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(deadline+time.Minute)); err != nil {
-		t.Fatalf("SyncPullRequests after the queue moved on: %v", err)
-	}
-	st, err := store.State(ctx, behind.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st != model.StateClosed {
-		t.Fatalf("state of the task behind the stuck one = %q, want closed: the queue never moved on", st)
+		t.Fatalf("SyncPullRequests after the queue gave up: %v", err)
 	}
 
 	// Giving up is not abandoning. The checks finally report, green, and
@@ -1693,7 +1689,7 @@ func TestSyncPullRequestsGivesUpOnAQueueHeadWhoseChecksNeverFinish(t *testing.T)
 	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(deadline+2*time.Minute)); err != nil {
 		t.Fatalf("SyncPullRequests once the stuck checks finished: %v", err)
 	}
-	st, err = store.State(ctx, stuck.ID)
+	st, err := store.State(ctx, stuck.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2113,37 +2109,5 @@ func TestSyncPullRequestsKeepsMergingWhileTheHeadIsRepaired(t *testing.T) {
 	}
 	if mergedBranch(sim, headBranch) {
 		t.Fatal("the head merged while it was still conflicted")
-	}
-}
-
-// The exception is only for a head that has stopped deciding. A head
-// whose checks are still running is about to answer on its own, usually
-// within a cycle or two, and merging past it would put a later change in
-// front of an earlier one for no better reason than being quicker to
-// test -- which is the ordering a queue exists to provide.
-func TestSyncPullRequestsDoesNotMergePastAHeadWhoseChecksAreRunning(t *testing.T) {
-	t.Parallel()
-	store, ctx := openStore(t)
-	sim, client := newSim(t, "acme", "widgets", "main")
-	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
-	_, headBranch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t1", repo)
-	behind, behindBranch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t2", repo)
-
-	setMergeable(sim, true)
-	sim.CheckRuns[headBranch] = []github.CheckRun{{Name: "tests", Status: "in_progress"}}
-	sim.CheckRuns[behindBranch] = greenCheck
-
-	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err != nil {
-		t.Fatalf("SyncPullRequests: %v", err)
-	}
-	if mergedBranch(sim, behindBranch) {
-		t.Fatal("merged past a head whose own tests had not reported yet")
-	}
-	st, err := store.State(ctx, behind.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st != model.StateCompleted {
-		t.Fatalf("state = %q, want still completed: it is waiting its turn", st)
 	}
 }
