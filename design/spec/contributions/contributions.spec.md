@@ -280,7 +280,7 @@ number         = %x31-39 *DIGIT          ; 1 or more, no leading zero
 UPPER          = %x41-5A
 ```
 
-For example `### Retag latest on promotion {#RFT-9}` (an ID is recognised only on a heading, so this example is not one). A `{#...}` token on a heading in a design or spec that does not match the grammar is an error (CL009).
+For example `### Retag latest on promotion {#D-7}`. A `{#...}` token on a heading in a design or spec that does not match the grammar is an error (CL009).
 
 3.5.2. A prefix SHOULD be used by one document only, so that uniqueness can be kept by reading one file.
 
