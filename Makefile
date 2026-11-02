@@ -586,9 +586,11 @@ tunnel-stress:
 
 # Upgrade test suite -- verifies upgrading from the previous version of the software
 # to the current version, ensuring data, tasks, schemas, and daemon health transition smoothly.
+# With GRAIN_UPGRADE_RELEASE_IMAGE set (ghcr.io/<repo>/grain), it also upgrades from the
+# published latest and floor releases (tests/container/release_upgrade_test.go).
 test-upgrade:
 	GRAIN_TEST_IMAGE=$${GRAIN_TEST_IMAGE:-grain-e2e:test} \
-		go test -v -timeout 30m ./tests/container/ -run 'TestUpgradeFromPreviousVersion|TestAnUpgrade'
+		go test -v -timeout 50m ./tests/container/ -run 'TestUpgradeFromPreviousVersion|TestUpgradeFromReleasedVersions|TestAnUpgrade'
 
 
 # The formatting gate, run here and by the go job in
