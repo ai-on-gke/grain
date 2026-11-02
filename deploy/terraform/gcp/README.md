@@ -67,6 +67,17 @@ and fill in every `CHANGE-ME`. At minimum: `project_id`,
 `deployer_member`, and `iap_members` -- an empty `iap_members` is a valid
 plan, but nobody can reach the UI until it names someone.
 
+`iap_members` is who IAP lets reach the daemon; `allowed_principals` is
+who grain then admits as themselves, without the access code. They are
+separate lists. Left unset, `allowed_principals` is `[deployer_member]`
+when that is a `user:` -- so the person installing the deployment, signed
+in through IAP, is the owner -- and otherwise empty, which leaves the
+daemon's own default (its OS account and grain's service accounts) that
+no IAP email matches. Set it explicitly when `deployer_member` is a
+service account, as it is for CI deploys. Anyone in `iap_members` who
+is not in `allowed_principals` still reaches the daemon, but is refused
+unless they present the access code.
+
 **3. No OAuth client needed.** IAP uses a Google-managed OAuth client
 when none is configured, which is why the IAP OAuth Admin API was
 deprecated in January 2025 -- there is normally no client to create any
@@ -239,7 +250,9 @@ Two things differ from a by-hand deploy:
 - **`deployer_member` must be the CI service account**, not a human --
   `push-secrets.sh` mints the minter's key, which needs
   `deployer_manages_minter_keys` (iam.tf) on whoever runs it, and writes
-  the secrets `secrets.tf` grants it `secretVersionManager` on.
+  the secrets `secrets.tf` grants it `secretVersionManager` on. That
+  also means `allowed_principals` seeds nobody by default, so name the
+  owner there explicitly.
 - **The workflow supplies `deploy_generation`**, so a manual re-run
   redeploys rather than no-oping. `wait-for-host` then blocks on the host
   reporting *that* generation, and CI goes green only once the rollout

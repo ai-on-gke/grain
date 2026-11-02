@@ -562,6 +562,12 @@ GRAIN_GCP_SERVICE_ACCOUNT_KEY_FILE="${GRAIN_GCP_SERVICE_ACCOUNT_KEY_FILE:-}"
 # "none" turns that off.
 GRAIN_IAP_RESOURCE="${GRAIN_IAP_RESOURCE:-}"
 GRAIN_IAP_AUDIENCE="${GRAIN_IAP_AUDIENCE:-}"
+# Who the daemon admits as themselves once IAP (or another identity
+# verifier) has authenticated them (-ui-allowed-principals): a
+# comma-separated user:/group:/domain:/serviceAccount: list. Unset leaves
+# the daemon's own default -- the owner account plus the service
+# accounts grain provisions -- which matches no IAP email.
+GRAIN_ALLOWED_PRINCIPALS="${GRAIN_ALLOWED_PRINCIPALS:-}"
 
 # --- the config repository (pkg/staterepo) ------------------------------
 #
@@ -1095,6 +1101,12 @@ Recognized variables:
                                       (projects/N/iap_web/compute/services/S)
                                       whose IAP access grain reconciles; "none"
                                       turns that off. Seeded once
+  GRAIN_ALLOWED_PRINCIPALS           comma-separated principals admitted as
+                                      themselves once IAP has authenticated
+                                      them (-ui-allowed-principals), e.g.
+                                      user:you@example.com,domain:example.com.
+                                      Default: the daemon's own (the owner
+                                      account and grain's service accounts)
   GRAIN_GCP_SERVICE_ACCOUNT_KEY_FILE a minter key to seed under the gcp-key-minter
                                       secret. Written on *every* run, unlike the
                                       seeded-once values above: the deploy that
@@ -6271,6 +6283,7 @@ write_systemd_units() {
   [ -n "$GRAIN_GCP_PROJECT" ] && daemon_args+=(-gcp-project "$GRAIN_GCP_PROJECT")
   [ -n "$GRAIN_GCP_SERVICE_ACCOUNT_EMAIL" ] && daemon_args+=(-gcp-agent-service-account "$GRAIN_GCP_SERVICE_ACCOUNT_EMAIL")
   [ -n "$GRAIN_IAP_RESOURCE" ] && daemon_args+=(-iap-resource "$GRAIN_IAP_RESOURCE")
+  [ -n "$GRAIN_ALLOWED_PRINCIPALS" ] && daemon_args+=(-ui-allowed-principals "$GRAIN_ALLOWED_PRINCIPALS")
   [ -n "$GRAIN_TARGET_REPO" ] && daemon_args+=(-default-target-repo "$GRAIN_TARGET_REPO")
   if [ -n "$GRAIN_SANDBOX_CPUS" ]; then
     daemon_args+=(-sandbox-cpus "$GRAIN_SANDBOX_CPUS")

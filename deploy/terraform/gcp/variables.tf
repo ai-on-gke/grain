@@ -837,8 +837,47 @@ variable "iap_members" {
     or "domain:example.com". Left empty (the default) grants nobody
     access -- a safe-but-useless default; set this before the first
     apply, or the environment is up but nobody can reach it.
+
+    Not the same list as allowed_principals: this is who IAP lets reach
+    the daemon at all, that one is who grain admits as themselves once
+    IAP has vouched for them.
   EOT
   default     = []
+}
+
+variable "allowed_principals" {
+  type        = list(string)
+  description = <<-EOT
+    Who grain admits as themselves once IAP has authenticated them --
+    the daemon's -ui-allowed-principals, handed to it through
+    files/deploy.sh and scripts/setup.sh. Entries are "user:<email>",
+    "group:<email>", "domain:<domain>" or "serviceAccount:<email>".
+
+    iap_members decides who reaches the daemon; this decides who the
+    daemon then signs in without the access code. Someone in
+    iap_members but not here still reaches the daemon, but is refused
+    unless they present the access code.
+
+    Left null (the default), it is [deployer_member] when that is a
+    "user:" -- the person who installed this deployment -- and otherwise
+    empty. Empty (or [] set explicitly) passes nothing, and the daemon
+    falls back to its own default: the deployment owner, which is the
+    OS account it runs as rather than an email, plus the service
+    accounts grain provisions. That default matches no IAP sign-in, so a
+    deployment whose deployer_member is a CI service account should set
+    this explicitly.
+
+    A non-empty list replaces that default rather than adding to it:
+    name any service account that reaches the UI through IAP here too.
+  EOT
+  default     = null
+
+  validation {
+    condition = var.allowed_principals == null ? true : alltrue([
+      for p in var.allowed_principals : can(regex("^(user|group|serviceAccount):[^@,\\s]+@[^@,\\s]+$|^domain:[^@,\\s]+$", p))
+    ])
+    error_message = "allowed_principals entries must be \"user:<email>\", \"group:<email>\", \"serviceAccount:<email>\" or \"domain:<domain>\", with no commas or spaces."
+  }
 }
 
 variable "create_iap_brand" {

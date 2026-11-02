@@ -15,6 +15,12 @@
 locals {
   agent_service_account_email = local.agent_account_needed ? google_service_account.agent[0].email : ""
 
+  # See variables.tf's allowed_principals: unset seeds the installing
+  # user, so they are admitted through IAP without the access code.
+  allowed_principals = var.allowed_principals != null ? var.allowed_principals : (
+    startswith(var.deployer_member, "user:") ? [var.deployer_member] : []
+  )
+
   # Empty together with gcp_agent_service_account above whenever no
   # agent account exists at all, mirroring v1's instance.tf's
   # own gemini_project_id local: a -gcp-project daemon flag with no
@@ -38,6 +44,7 @@ locals {
     credential_name           = var.credential_name
     default_target_repo       = var.default_target_repo
     target_repos              = join(",", var.test_repos)
+    allowed_principals        = join(",", local.allowed_principals)
     ui_port                   = var.ui_port
     slots                     = var.slots
     poll_interval             = var.poll_interval
