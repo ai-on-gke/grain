@@ -35,24 +35,45 @@ import (
 // hostd's missing socket.
 var ErrRemoteNotConnected = errors.New("no grain hostd is connected to this daemon")
 
-// Remote is the controller's end of a hostd that dials out to it (hostd
+// DefaultSharedName is the hostd the shared token (Remote.Token) names
+// when Remote.SharedName does not say.
+const DefaultSharedName = "remote"
+
+// Remote is the controller's end of the hostds that dial out to it (hostd
 // -server): the daemon serves RemotePath, hands each upgraded connection
-// to Serve, and gives Client.Dial its Dial, which opens a stream over
-// the session in place of a connection to the socket. One hostd is
-// connected at a time; a new one replaces the one before it, which is
-// what a reconnect after a drop looks like from here.
+// to Serve, and gives Client.Dial a Dialer's Dial, which opens a stream
+// over that hostd's session in place of a connection to the socket.
+//
+// Any number of hostds are connected at once, each under the name its
+// token belongs to -- never the name it gives itself, which only has to
+// agree (NameHeader). A new connection replaces the one before it only
+// for the same name, which is what a reconnect after a drop looks like
+// from here; no hostd can displace another's session.
 type Remote struct {
-	// Token is the shared token a hostd must present (Authorize).
+	// Token is the shared token of the deprecated -hostd-token-file: it
+	// names the one hostd SharedName. Kept for one release beside the
+	// registry's per-hostd tokens (Resolve).
 	Token string
+	// SharedName is the hostd Token names; DefaultSharedName when "".
+	SharedName string
+	// Resolve is the hostd registry: the name and owner of the hostd a
+	// token belongs to, ok false for a token that names none (never
+	// minted, rotated away, or its hostd revoked).
+	Resolve func(ctx context.Context, token string) (name, owner string, ok bool, err error)
+	// Default is the hostd Dial reaches; SharedName's when "" and Token is
+	// set.
+	Default string
 	// Logf logs connects, drops and refused tokens; nothing when nil.
 	Logf func(format string, args ...any)
+	// OnChange, when set, is told each time a hostd connects or drops.
+	OnChange func(name string, connected bool)
 	// now is time.Now, or a test's clock for refusal's rate limit.
 	now func() time.Time
 
 	mu       sync.Mutex
-	cur      *remoteSession
+	cur      map[string]*remoteSession
 	arrived  chan struct{}
-	last     RemoteStatus
+	last     map[string]RemoteStatus
 	sessions int
 
 	// refusedAt is when a refused hostd was last logged, and refused how
@@ -66,22 +87,29 @@ type Remote struct {
 // minute says so without filling the daemon's log.
 const refusalLogEvery = time.Minute
 
-// RemotePeer is what a hostd said about itself when it connected.
+// RemotePeer is what a hostd said about itself when it connected, and
+// who its token says it is.
 type RemotePeer struct {
+	// Name is the registry hostd the connection's token belongs to.
+	Name string `json:"name,omitempty"`
+	// Owner is that hostd's registry owner, "" for none.
+	Owner string `json:"owner,omitempty"`
+	// Host is the machine the hostd runs on (HostHeader): its instance.
 	Host     string `json:"host,omitempty"`
 	Build    string `json:"build,omitempty"`
 	Protocol string `json:"protocol,omitempty"`
 	Addr     string `json:"addr,omitempty"`
 }
 
-// RemoteStatus is Settings' view of the hostd that dials in.
+// RemoteStatus is Settings' view of a hostd that dials in.
 type RemoteStatus struct {
 	Connected bool `json:"connected"`
 	RemotePeer
 	// Since is when the connected hostd connected, or when the last one
 	// dropped.
 	Since time.Time `json:"since,omitzero"`
-	// Sessions counts the connections taken since the daemon started.
+	// Sessions counts the connections taken since the daemon started,
+	// from every hostd.
 	Sessions int `json:"sessions"`
 }
 
@@ -91,13 +119,65 @@ type remoteSession struct {
 	carries carryRegistry
 }
 
+func (r *Remote) sharedName() string {
+	if r.SharedName != "" {
+		return r.SharedName
+	}
+	return DefaultSharedName
+}
+
+// DefaultName is the hostd Dial reaches.
+func (r *Remote) DefaultName() string {
+	if r == nil {
+		return ""
+	}
+	if r.Default != "" {
+		return r.Default
+	}
+	if r.Token != "" {
+		return r.sharedName()
+	}
+	return ""
+}
+
 // Authorize reports whether token is the shared hostd token. With no
-// Token configured nothing is let in.
+// Token configured nothing is let in by it.
 func (r *Remote) Authorize(token string) bool {
 	if r == nil || r.Token == "" || token == "" {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(token), []byte(r.Token)) == 1
+}
+
+// Identify is the hostd token belongs to: the shared token's, or the
+// registry's. ok is false for a token that names none.
+func (r *Remote) Identify(ctx context.Context, token string) (name, owner string, ok bool, err error) {
+	if r == nil || token == "" {
+		return "", "", false, nil
+	}
+	if r.Authorize(token) {
+		return r.sharedName(), "", true, nil
+	}
+	if r.Resolve == nil {
+		return "", "", false, nil
+	}
+	name, owner, ok, err = r.Resolve(ctx, token)
+	if ok && r.Token != "" && name == r.sharedName() {
+		// The shared token's hostd holds this name: a registry hostd by
+		// it would take over that hostd's session, and work sent to it
+		// would not be checked against the registry's revocation.
+		return "", "", false, fmt.Errorf("registry hostd %q has the name -hostd-token-name gives the shared token's hostd; rename one of them", name)
+	}
+	return name, owner, ok, err
+}
+
+// SharedTokenName is the hostd the deprecated shared token names, "" when
+// no shared token is configured: a name the registry may not also use.
+func (r *Remote) SharedTokenName() string {
+	if r == nil || r.Token == "" {
+		return ""
+	}
+	return r.sharedName()
 }
 
 func (r *Remote) logf(format string, args ...any) {
@@ -106,9 +186,12 @@ func (r *Remote) logf(format string, args ...any) {
 	}
 }
 
-// Serve runs conn as the session to the connected hostd until it drops
-// or ctx is done, replacing any hostd connected before it.
+// Serve runs conn as the session to the hostd peer.Name until it drops
+// or ctx is done, replacing any session that same hostd had before it.
 func (r *Remote) Serve(ctx context.Context, conn net.Conn, peer RemotePeer) {
+	if peer.Name == "" {
+		peer.Name = r.sharedName()
+	}
 	m := mux.NewMux(conn, mux.Config{
 		IsServer:     true,
 		PingInterval: 15 * time.Second,
@@ -117,10 +200,16 @@ func (r *Remote) Serve(ctx context.Context, conn net.Conn, peer RemotePeer) {
 	defer m.Close()
 	sess := &remoteSession{m: m, peer: peer}
 	r.mu.Lock()
-	prev := r.cur
-	r.cur = sess
+	if r.cur == nil {
+		r.cur = map[string]*remoteSession{}
+	}
+	if r.last == nil {
+		r.last = map[string]RemoteStatus{}
+	}
+	prev := r.cur[peer.Name]
+	r.cur[peer.Name] = sess
 	r.sessions++
-	r.last = RemoteStatus{Connected: true, RemotePeer: peer, Since: time.Now(), Sessions: r.sessions}
+	r.last[peer.Name] = RemoteStatus{Connected: true, RemotePeer: peer, Since: time.Now(), Sessions: r.sessions}
 	if r.arrived != nil {
 		close(r.arrived)
 		r.arrived = nil
@@ -129,32 +218,50 @@ func (r *Remote) Serve(ctx context.Context, conn net.Conn, peer RemotePeer) {
 	if prev != nil {
 		_ = prev.m.Close()
 	}
-	r.logf("grain daemon: grain hostd on %s (build %s) connected from %s", peer.Host, peer.Build, peer.Addr)
+	r.logf("grain daemon: grain hostd %s on %s (build %s) connected from %s", peer.Name, peer.Host, peer.Build, peer.Addr)
 	go sess.acceptCarries()
+	if r.OnChange != nil {
+		r.OnChange(peer.Name, true)
+	}
 	select {
 	case <-ctx.Done():
 	case <-m.Done():
 	}
 	r.mu.Lock()
-	if r.cur == sess {
-		r.cur = nil
-		r.last.Connected = false
-		r.last.Since = time.Now()
+	dropped := r.cur[peer.Name] == sess
+	if dropped {
+		delete(r.cur, peer.Name)
+		st := r.last[peer.Name]
+		st.Connected = false
+		st.Since = time.Now()
+		r.last[peer.Name] = st
 	}
 	r.mu.Unlock()
-	r.logf("grain daemon: grain hostd on %s disconnected", peer.Host)
+	r.logf("grain daemon: grain hostd %s on %s disconnected", peer.Name, peer.Host)
+	if dropped && r.OnChange != nil {
+		r.OnChange(peer.Name, false)
+	}
 }
 
-// Dial opens a stream to the connected hostd, which serves it as one
-// socket connection. With none connected it is ErrRemoteNotConnected.
+// Dial opens a stream to the default hostd (DefaultName), which serves it
+// as one socket connection. With it not connected it is
+// ErrRemoteNotConnected.
 func (r *Remote) Dial(ctx context.Context) (net.Conn, error) {
-	_, st, err := r.dialSession(ctx)
+	return r.DialHostd(ctx, r.DefaultName())
+}
+
+// DialHostd is Dial to the hostd named name. Another hostd being
+// connected is no answer: there is no fallback from one to another.
+func (r *Remote) DialHostd(ctx context.Context, name string) (net.Conn, error) {
+	_, st, err := r.dialSession(ctx, name)
 	return st, err
 }
 
-func (r *Remote) dialSession(ctx context.Context) (*remoteSession, net.Conn, error) {
+// dialSession opens a stream to the hostd named name, with the session
+// it went over.
+func (r *Remote) dialSession(ctx context.Context, name string) (*remoteSession, net.Conn, error) {
 	r.mu.Lock()
-	sess := r.cur
+	sess := r.cur[name]
 	r.mu.Unlock()
 	if sess == nil {
 		return nil, nil, ErrRemoteNotConnected
@@ -166,11 +273,41 @@ func (r *Remote) dialSession(ctx context.Context) (*remoteSession, net.Conn, err
 	return sess, st, nil
 }
 
-// WaitConnected blocks until a hostd is connected or ctx is done.
+// Dialer is DialHostd for name, in Client.Dial's shape.
+func (r *Remote) Dialer(name string) func(context.Context) (net.Conn, error) {
+	return func(ctx context.Context) (net.Conn, error) { return r.DialHostd(ctx, name) }
+}
+
+// Disconnect closes the live session of the hostd named name, if one is
+// connected now, and reports whether there was one. Serve records the
+// drop as usual; Identify refuses any reconnect once its token is
+// revoked in the registry.
+func (r *Remote) Disconnect(name string) bool {
+	if r == nil || name == "" {
+		return false
+	}
+	r.mu.Lock()
+	sess := r.cur[name]
+	r.mu.Unlock()
+	if sess == nil {
+		return false
+	}
+	_ = sess.m.Close()
+	return true
+}
+
+// WaitConnected blocks until the default hostd is connected or ctx is
+// done.
 func (r *Remote) WaitConnected(ctx context.Context) error {
+	return r.WaitHostd(ctx, r.DefaultName())
+}
+
+// WaitHostd blocks until the hostd named name is connected or ctx is
+// done.
+func (r *Remote) WaitHostd(ctx context.Context, name string) error {
 	for {
 		r.mu.Lock()
-		if r.cur != nil {
+		if r.cur[name] != nil {
 			r.mu.Unlock()
 			return nil
 		}
@@ -187,12 +324,30 @@ func (r *Remote) WaitConnected(ctx context.Context) error {
 	}
 }
 
-// Status is whether a hostd is connected, and which.
+// Status is whether the default hostd is connected, and which.
 func (r *Remote) Status() RemoteStatus {
+	return r.HostdStatus(r.DefaultName())
+}
+
+// HostdStatus is whether the hostd named name is connected.
+func (r *Remote) HostdStatus(name string) RemoteStatus {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := r.last
+	out := r.last[name]
 	out.Sessions = r.sessions
+	return out
+}
+
+// Statuses is every hostd that has connected since the daemon started,
+// by name, whether or not it is connected now.
+func (r *Remote) Statuses() map[string]RemoteStatus {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]RemoteStatus, len(r.last))
+	for name, st := range r.last {
+		st.Sessions = r.sessions
+		out[name] = st
+	}
 	return out
 }
 
@@ -212,7 +367,7 @@ func RequestToken(r *http.Request) string {
 // refusalLogEvery, so an operator watching the daemon can tell a hostd
 // with the wrong token from no hostd at all -- otherwise only the hostd's
 // own log says so.
-func (r *Remote) logRefused(req *http.Request, missing bool) {
+func (r *Remote) logRefused(req *http.Request, why string) {
 	now := time.Now
 	if r.now != nil {
 		now = r.now
@@ -227,10 +382,6 @@ func (r *Remote) logRefused(req *http.Request, missing bool) {
 	more := r.refused
 	r.refusedAt, r.refused = t, 0
 	r.mu.Unlock()
-	why := "a token that is not this daemon's hostd token (-hostd-token-file or $GRAIN_HOSTD_TOKEN)"
-	if missing {
-		why = "no hostd token"
-	}
 	host := req.Header.Get(HostHeader)
 	if host == "" {
 		host = "an unnamed host"
@@ -239,16 +390,33 @@ func (r *Remote) logRefused(req *http.Request, missing bool) {
 	if more > 0 {
 		since = fmt.Sprintf(" (%d more refused since the last line like this)", more)
 	}
-	r.logf("grain daemon: refused a grain hostd on %s connecting from %s: it presented %s%s", host, req.RemoteAddr, why, since)
+	r.logf("grain daemon: refused a grain hostd on %s connecting from %s: %s%s", host, req.RemoteAddr, why, since)
 }
 
 // ServeHTTP takes a hostd's upgrade of RemotePath (Dialer.Dial): it is
-// refused unless it presents Token, and is otherwise answered 101 and
-// served as the session to that hostd until it drops.
+// refused unless its token names a hostd (Identify), and refused again if
+// it calls itself any other (NameHeader); it is otherwise answered 101
+// and served as the session to that hostd until it drops.
 func (r *Remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	if tok := RequestToken(req); !r.Authorize(tok) {
-		r.logRefused(req, tok == "")
+	tok := RequestToken(req)
+	name, owner, ok, err := r.Identify(req.Context(), tok)
+	if err != nil {
+		r.logf("grain daemon: looking up a grain hostd's token: %v", err)
+		http.Error(w, "grain hostd: this controller could not check that hostd token", http.StatusServiceUnavailable)
+		return
+	}
+	if !ok {
+		why := "it presented a token that is not a hostd token here (/api/hostds, or -hostd-token-file)"
+		if tok == "" {
+			why = "it presented no hostd token"
+		}
+		r.logRefused(req, why)
 		http.Error(w, "grain hostd: this controller does not take that hostd token", http.StatusUnauthorized)
+		return
+	}
+	if claimed := strings.TrimSpace(req.Header.Get(NameHeader)); claimed != "" && claimed != name {
+		r.logRefused(req, fmt.Sprintf("it calls itself hostd %q, but its token is hostd %q's", claimed, name))
+		http.Error(w, fmt.Sprintf("grain hostd: this token belongs to hostd %q, not %q", name, claimed), http.StatusForbidden)
 		return
 	}
 	if !strings.EqualFold(req.Header.Get("Upgrade"), wsupgrade.Protocol) {
@@ -277,6 +445,8 @@ func (r *Remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		c = &bufferedConn{Conn: conn, r: io.MultiReader(brw.Reader, conn)}
 	}
 	r.Serve(req.Context(), c, RemotePeer{
+		Name:     name,
+		Owner:    owner,
 		Host:     req.Header.Get(HostHeader),
 		Build:    req.Header.Get(BuildHeader),
 		Protocol: req.Header.Get(ProtocolHeader),

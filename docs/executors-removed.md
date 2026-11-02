@@ -5,8 +5,10 @@ outright, with no migration into hostd (task 2324). No deployment had
 executors or executor tokens worth keeping. `grain hostd` is now grain's
 only host agent: it listens on `/run/grain-hostd/hostd.sock` on the
 daemon's own machine, and a hostd on another machine dials in to
-`/api/hostd/connect` with the token the daemon was started with
-(`grain daemon -hostd-token-file`, `grain hostd -server <url> -token-file`).
+`/api/hostd/connect` with a token of its own from the hostd registry
+(Settings → Hostds; `grain hostd -server <url> -token-file`), or, for one
+more release, with the shared token the daemon was started with
+(`grain daemon -hostd-token-file`).
 
 The removal took out:
 
