@@ -810,10 +810,64 @@ func GitCredentialName(capability string) (name string, ok bool) {
 	return name, ok && name != ""
 }
 
-// GitPushAnyRefCapability is the admin-only grant that lets a task's run
-// push any ref of the repositories it may write, not only its own task
-// branch (pkg/capability/gitpushanyref, Store.GitPushAnyRef).
+// GitPushAnyRefCapability is the retired bare name of GitPushAnyRefGrant:
+// the grant that lets a task's run push any ref of the repositories it
+// may write, not only its own task branch (Store.GitPushAnyRef). It is
+// still read as that grant wherever it was not rewritten (a repository's
+// own .grain declaration, an older grain/config); schema migration 85
+// rewrote the stored rows.
 const GitPushAnyRefCapability = "git-push-any-ref"
+
+// RepoCapabilityServerID is the canonical capability_id of the in-process
+// repository-access server (docs/design/unified-grants.md §1, §4),
+// answered by grain itself like GrainCapabilityServerID.
+const RepoCapabilityServerID = "https://grain.dev/capabilities/repo"
+
+// The repo server's #write method, and the one value of it the git proxy
+// honours so far: every branch and tag, force-pushes and deletions
+// included (formerly git-push-any-ref).
+const (
+	RepoWriteMethod    = "write"
+	RepoWriteRef       = RepoCapabilityServerID + "#" + RepoWriteMethod
+	GitPushAnyRefGrant = RepoWriteRef + `={"force":true,"refs":["refs/heads/*","refs/tags/*"]}`
+)
+
+// gitPushAnyRefRefs are the ref patterns GitPushAnyRefGrant names.
+var gitPushAnyRefRefs = []string{"refs/heads/*", "refs/tags/*"}
+
+// IsGitPushAnyRefGrant reports whether grant lifts the git proxy's
+// one-branch push rule: GitPushAnyRefGrant, recorded or as a grant
+// string with its arguments in any order, or the retired bare
+// git-push-any-ref. A repo#write grant naming fewer refs, or without
+// force, is not it: the proxy does not honour narrower task-level refs
+// (docs/design/unified-grants.md Q3), so it opens nothing rather than
+// everything.
+func IsGitPushAnyRefGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if s == GitPushAnyRefCapability {
+		return true
+	}
+	if !IsCapabilityRef(s) {
+		return false
+	}
+	spec, err := CapabilityGrantSpec(s)
+	if err != nil || spec.Capability != RepoWriteRef {
+		return false
+	}
+	if force, _ := spec.With["force"].(bool); !force {
+		return false
+	}
+	refs, _ := spec.With["refs"].([]any)
+	if len(refs) != len(gitPushAnyRefRefs) {
+		return false
+	}
+	for _, want := range gitPushAnyRefRefs {
+		if !slices.Contains(refs, any(want)) {
+			return false
+		}
+	}
+	return true
+}
 
 // ReleaseGateReadCapability is the CI capability a release workflow's job
 // reads CI runs, persistent sandboxes and tasks through, and files its

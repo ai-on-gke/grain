@@ -26,7 +26,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
 	"github.com/ai-on-gke/grain/pkg/capability/geminikey"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
-	"github.com/ai-on-gke/grain/pkg/capability/gitpushanyref"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
 	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
@@ -289,7 +288,6 @@ var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 	"registry-push":       "Registry push",
 	"package-publish":     "Package publish",
 	"image-signing":       "Image signing",
-	"git-push-any-ref":    "Push any ref",
 	"console":             "Interactive console",
 	"priority-dispatch":   "Priority dispatch",
 	"durable":             "Durable",
@@ -359,7 +357,6 @@ func capabilityProviderCatalog() []model.CapabilityProvider {
 	}
 	providers = append(providers, admincaps.Providers()...)
 	providers = append(providers,
-		gitpushanyref.New(),
 		bootstrap.New(),
 		registrypush.NewWithConfig(registrypush.Config{}),
 		packagepublish.New(packagepublish.Config{}),

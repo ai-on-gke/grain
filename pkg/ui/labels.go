@@ -201,8 +201,6 @@ func OfferedCapabilities() []Capability {
 			Description: prioritydispatch.Description},
 		{ID: durable.CapabilityName, Name: "Durable",
 			Description: durable.Description},
-		{ID: "git-push-any-ref", Name: "Push any ref",
-			Description: "Let this task push any branch or tag of the repositories it may write -- the default branch, force-pushes and deletions included -- rather than only its own task branch. For release jobs"},
 		{ID: "bootstrap-playbooks", Name: "Bootstrap playbooks",
 			Description: "Let this task read grain's own bootstrap playbooks -- the runbooks for setting up GCP service accounts, the primary GitHub connection, CloudRun-based IAP access, and test repos -- so it can walk whoever is on the other end of this chat through one of them"},
 		{ID: "github-sandbox", Name: "GitHub sandbox",

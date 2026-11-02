@@ -4512,7 +4512,7 @@ func (s *Store) GitPushFastForwardOnly(ctx context.Context, sandbox string) (boo
 }
 
 // GitPushAnyRef reports whether a sandbox's currently live run holds
-// GitPushAnyRefCapability, which lifts the one-branch rule GitPushBranch
+// GitPushAnyRefGrant (IsGitPushAnyRefGrant), which lifts the one-branch rule GitPushBranch
 // feeds: the git proxy then lets it update any ref of a repository it may
 // push. false, with a nil error, for a sandbox with nothing live.
 func (s *Store) GitPushAnyRef(ctx context.Context, sandbox string) (bool, error) {
@@ -4525,7 +4525,7 @@ func (s *Store) GitPushAnyRef(ctx context.Context, sandbox string) (bool, error)
 		return false, fmt.Errorf("reading grants of task %s: %w", taskID, err)
 	}
 	for _, g := range grants {
-		if g.Capability == GitPushAnyRefCapability {
+		if IsGitPushAnyRefGrant(g.Capability) {
 			return true, nil
 		}
 	}
