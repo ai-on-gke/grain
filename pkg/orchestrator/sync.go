@@ -1004,7 +1004,10 @@ type StateRepoGate struct {
 	// CI receives the release event caused by every merged pull request. The
 	// run is against the destination branch's new head, so an `on: release`
 	// workflow is repository-agnostic and fires for both Grain-managed and
-	// externally merged pull requests when Grain next observes them.
+	// externally merged pull requests when Grain next observes them. A pull
+	// request merged after its task closed is recorded (closedprs.go) but
+	// starts nothing here: base-branch CI sees the branch's tip move either
+	// way.
 	CI ci.Runner
 	// Porter makes the ports a merge onto a paired branch calls for
 	// mechanically where it can (port.go); nil files every one as an
@@ -1264,6 +1267,13 @@ func SyncPullRequestsGuarding(ctx context.Context, store *model.Store, client gi
 			continue
 		}
 		if err := syncEntry(ctx, store, client, e, gate, walk, find, now); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	// The pull requests of tasks that closed before them, read only to
+	// record a merge or close nobody else will (closedprs.go).
+	if ctx.Err() == nil {
+		if err := syncClosedPullRequests(ctx, store, client, now); err != nil {
 			errs = append(errs, err)
 		}
 	}
