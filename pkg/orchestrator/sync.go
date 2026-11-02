@@ -379,6 +379,13 @@ type queueEntry struct {
 	// (waitclocks.go), for its row; zero for any other read.
 	unknownFor time.Duration
 	pendingFor time.Duration
+	// externalPending, externalPendingFor, externalStalled and
+	// externalStallThreshold carry forge.Observe's third-party check stall
+	// measurements for reconcileExternalCheckStall and statusOf.
+	externalPending        []github.CheckRun
+	externalPendingFor     time.Duration
+	externalStalled        bool
+	externalStallThreshold time.Duration
 }
 
 // observe fills in e's GitHub half: the pull request as it stands, the
@@ -443,6 +450,10 @@ func (e *queueEntry) observe(client github.Client, now time.Time) error {
 	e.health = model.PrHealth(seen.Health)
 	e.stalled, e.stallDeadline = seen.Stalled, seen.StallDeadline
 	e.missingChecks = seen.MissingChecks
+	e.externalPending = seen.ExternalPending
+	e.externalPendingFor = seen.ExternalPendingFor
+	e.externalStalled = seen.ExternalStalled
+	e.externalStallThreshold = seen.ExternalStallThreshold
 	return nil
 }
 
@@ -1360,6 +1371,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			return err
 		}
 		task = pinned
+		e.task = pinned
 		cleared, err := clearedForHead(ctx, store, client, task, ref, detail.HeadSHA, now)
 		if err != nil {
 			return err
@@ -1517,6 +1529,14 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		if err := setMergeQueueState(ctx, store, e.obs, task.ID, status, now); err != nil {
 			return err
 		}
+	}
+	mergedForExternalCheck, err := reconcileExternalCheckStall(
+		ctx, store, client, &e, task,
+		isMergeHead, blocked, repairing, working, stacked, rechecking,
+		review, walk.stateOf(lane), now,
+	)
+	if err != nil || mergedForExternalCheck {
+		return err
 	}
 	// The refusal record is about one clean pull request grain is trying
 	// to merge and cannot; a pull request that is not clean has something
@@ -1926,6 +1946,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	// ClosedAt, so there is never a cycle needing both writes at once.
 	if health == model.PrMerged || health == model.PrClosed {
 		forgetEmptyChecks(ref)
+		forge.ForgetExternalChecks(forgeRef(ref))
 		forgetMergeRefusals(ref)
 		forgetGitHubQueued(ref)
 	}
