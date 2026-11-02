@@ -539,6 +539,22 @@ func sessionSandboxesInUse(store *model.Store) map[string]bool {
 	return out
 }
 
+// sessionSandboxHolds returns the run holding each held session sandbox
+// (holdSessionSandbox), by sandbox name.
+func sessionSandboxHolds(store *model.Store) map[string]string {
+	if store == nil {
+		return nil
+	}
+	p := getSessionPool(store)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make(map[string]string, len(p.held))
+	for id, runID := range p.held {
+		out[id] = runID
+	}
+	return out
+}
+
 func warmSessionSandboxIDs(store *model.Store) map[string]model.Commitment {
 	if store == nil {
 		return nil
@@ -981,29 +997,45 @@ func continueSessionTurns(
 			}
 			task = *latestTask
 		}
-		inProcessRelayedRuns.Delete(relayedRunKey{store: store, runID: runID})
-
 		// Only a person's message wakes the session, but the turn is told
 		// everything said since what it last saw, each with who said it
-		// (addendumText) -- as a mid-run comment is and a redispatch's
+		// (addendumText) and with any attachments written into the sandbox
+		// (placeCommentAddendum) -- as a mid-run comment is and a redispatch's
 		// prompt is -- rather than bare bodies, so a grain notice or
 		// another task's message is neither dropped nor read as the
 		// person's own words. This task's own relayed answers are left out.
+		freshAttachments, err := store.CommentAttachmentsAfter(daemonCtx, task.ID, lastID)
+		if err != nil {
+			log.Printf("orchestrator: run %s: reading attachments on new session messages: %v", runID, err)
+			break
+		}
+		byComment := groupAttachmentsByComment(freshAttachments)
 		var promptBuilder strings.Builder
+		placeFailed := false
 		for _, c := range fresh {
 			if ownRelayedAnswer(c, task.ID) {
 				continue
 			}
+			rendered, err := placeCommentAddendum(hostCtx, runCfg.Tools, c, byComment[c.ID])
+			if err != nil {
+				log.Printf("orchestrator: run %s: placing attachments for in-process session turn: %v", runID, err)
+				placeFailed = true
+				break
+			}
 			if promptBuilder.Len() > 0 {
 				promptBuilder.WriteString("\n\n")
 			}
-			promptBuilder.WriteString(addendumText(c))
+			promptBuilder.WriteString(rendered)
 		}
+		if placeFailed {
+			break
+		}
+		inProcessRelayedRuns.Delete(relayedRunKey{store: store, runID: runID})
 		comments = append(comments, fresh...)
 		nextCfg := runCfg
 		nextCfg.ResumeSession = session
 		nextCfg.ContinuePrompt = promptBuilder.String()
-		nextCfg.Addenda = addendaPoller(store, task.ID, comments)
+		nextCfg.Addenda = addendaPoller(store, task.ID, runCfg.Tools, comments)
 		nextCfg.AddendaAfter = lastCommentID(comments)
 		turnAfter = nextCfg.AddendaAfter
 		// The messages are in front of the turn from here on, in its

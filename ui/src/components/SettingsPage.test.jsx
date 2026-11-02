@@ -929,7 +929,10 @@ describe("SettingsPage", () => {
 
   it("allows locking and unlocking settings in the UI from General", async () => {
     const user = userEvent.setup();
-    setup({ section: "general", config: { settingsLocked: false } });
+    setup({
+      section: "general",
+      config: { configRepo: "grain/config", settingsLocked: false },
+    });
 
     const envBox = await screen.findByLabelText("Environment name");
     const lockToggle = screen.getByRole("checkbox", {
@@ -979,7 +982,11 @@ describe("SettingsPage", () => {
     render(
       <PreferencesProvider>
         <SettingsPage
-          config={{ settingsLocked: true, configRepoOnly: false }}
+          config={{
+            configRepo: "grain/config",
+            settingsLocked: true,
+            configRepoOnly: false,
+          }}
           section="general"
           onSection={vi.fn()}
           showError={vi.fn()}
@@ -993,6 +1000,21 @@ describe("SettingsPage", () => {
       }),
     ).toBeChecked();
     expect(screen.queryByTestId("config-managed-notice")).toBeNull();
+  });
+
+  // settings-mutability D-12: without a config repository (`grain demo`),
+  // General disables the Settings lock card rather than offering a lock
+  // toward a grain/config that does not exist.
+  it("disables Lock settings in UI when no configRepo is reported", async () => {
+    setup({ section: "general", config: {} });
+    expect(await screen.findByLabelText("Environment name")).toBeEnabled();
+    const lockToggle = screen.getByRole("checkbox", {
+      name: /Lock settings in UI \(require config repo PRs\)/i,
+    });
+    expect(lockToggle).toBeDisabled();
+    expect(
+      screen.getByText(/Unavailable without a config repository/i),
+    ).toBeInTheDocument();
   });
 
   // settings-mutability.spec.md D-1, D-2: while settings are locked the
@@ -1063,6 +1085,107 @@ describe("SettingsPage", () => {
       expect(await screen.findByLabelText("Poll interval")).toBeEnabled();
       expect(screen.getByLabelText("Merge batch size")).toBeEnabled();
       expect(screen.queryByTestId("config-managed-notice")).toBeNull();
+    });
+
+    it("omits settings/capabilities.yml from Tasks and Capabilities notices when not exported, and draws each Tasks link once", async () => {
+      const lockedSettings = {
+        ...settings,
+        settingsLocked: true,
+        configRepoOnly: true,
+      };
+      const baseEntries = [
+        { path: "tables/grain_config.json", size: 200 },
+        { path: "tables/custom_field.json", size: 80 },
+        { path: "tables/api_scope_set.json", size: 80 },
+        { path: "settings/templates.yml", size: 40 },
+      ];
+      api.mockImplementation((path, opts) => {
+        if (path === "/api/settings" && !opts)
+          return Promise.resolve(lockedSettings);
+        if (path === "/api/state-repo/files")
+          return Promise.resolve({ entries: baseEntries });
+        return Promise.resolve({});
+      });
+
+      const { unmount } = render(
+        <PreferencesProvider>
+          <SettingsPage
+            config={locked}
+            section="tasks"
+            onSection={vi.fn()}
+            showError={vi.fn()}
+          />
+        </PreferencesProvider>,
+      );
+      await waitFor(() =>
+        expect(
+          screen
+            .getAllByTestId("config-repo-link")
+            .map((a) => a.getAttribute("data-config-path")),
+        ).toEqual(["tables/grain_config.json", "tables/custom_field.json"]),
+      );
+      unmount();
+
+      render(
+        <PreferencesProvider>
+          <SettingsPage
+            config={locked}
+            section="capabilities"
+            onSection={vi.fn()}
+            showError={vi.fn()}
+          />
+        </PreferencesProvider>,
+      );
+      await waitFor(() =>
+        expect(
+          screen
+            .getAllByTestId("config-repo-link")
+            .map((a) => a.getAttribute("data-config-path")),
+        ).toEqual(["tables/grain_config.json", "tables/api_scope_set.json"]),
+      );
+    });
+
+    it("draws each Tasks config-repo link once when settings/capabilities.yml is exported", async () => {
+      const lockedSettings = {
+        ...settings,
+        settingsLocked: true,
+        configRepoOnly: true,
+      };
+      api.mockImplementation((path, opts) => {
+        if (path === "/api/settings" && !opts)
+          return Promise.resolve(lockedSettings);
+        if (path === "/api/state-repo/files") {
+          return Promise.resolve({
+            entries: [
+              { path: "tables/grain_config.json", size: 200 },
+              { path: "tables/custom_field.json", size: 80 },
+              { path: "settings/capabilities.yml", size: 120 },
+            ],
+          });
+        }
+        return Promise.resolve({});
+      });
+
+      render(
+        <PreferencesProvider>
+          <SettingsPage
+            config={locked}
+            section="tasks"
+            onSection={vi.fn()}
+            showError={vi.fn()}
+          />
+        </PreferencesProvider>,
+      );
+      expect(await screen.findByText("Default grants")).toBeInTheDocument();
+      expect(
+        screen
+          .getAllByTestId("config-repo-link")
+          .map((a) => a.getAttribute("data-config-path")),
+      ).toEqual([
+        "tables/grain_config.json",
+        "tables/custom_field.json",
+        "settings/capabilities.yml",
+      ]);
     });
   });
 });

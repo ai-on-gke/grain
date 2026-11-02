@@ -705,10 +705,15 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				return nil, err
 			}
 		} else if _, hasPrev := model.LastSyncedConsoleSession(ctx, c.Store, openTask.ID); !hasPrev {
-			// With no snapshot, an edit that left reads or writes alone
-			// records the task's own as last synced, so the next sync
+			// With no snapshot, an edit that left capabilities, reads or writes
+			// alone records the task's own as last synced, so the next sync
 			// holds them to the declaration (ensureConsoleSessionSnapshot's
-			// reason) rather than keeping an entry it no longer names.
+			// reason) rather than keeping a dropped entry or swallowing one
+			// added while the daemon was down.
+			prevCaps := origSession.Capabilities
+			if req.Capabilities == nil && len(openTask.Grants) > 0 {
+				prevCaps = consoleSessionGrainCapabilities(openTask.Grants)
+			}
 			prevReads, prevWrites := origSession.Reads, origSession.Writes
 			if req.Reads == nil {
 				prevReads = openTask.Reads
@@ -716,15 +721,19 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 			if req.Writes == nil {
 				prevWrites = openTask.Writes
 			}
+			prevKeepRunning := origSession.KeepRunning
+			if req.KeepRunning == nil && req.KeepRunningSnake == nil {
+				prevKeepRunning = openTask.KeepRunning
+			}
 			if err := model.RecordSyncedConsoleSession(ctx, c.Store, openTask.ID, model.ConsoleSessionConfigSnapshot{
-				Capabilities:    origSession.Capabilities,
+				Capabilities:    prevCaps,
 				Reads:           prevReads,
 				Writes:          prevWrites,
 				NetworkAccess:   model.ConsoleSessionNetworkAccess(origSession, !c.Config.SandboxShapeIgnored),
 				Model:           strings.TrimSpace(origSession.Model),
 				Title:           model.ConsoleSessionTitle(origSession),
 				TasksApproved:   origSession.TasksApproved,
-				KeepRunning:     origSession.KeepRunning,
+				KeepRunning:     prevKeepRunning,
 				GoogleChatSpace: origSession.GoogleChatSpace,
 			}); err != nil {
 				return nil, err
@@ -738,6 +747,19 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 		}
 	}
 	return c.ListConsoleSessions(ctx)
+}
+
+func consoleSessionGrainCapabilities(grants []model.Grant) []string {
+	caps := make([]string, 0, len(grants))
+	for _, g := range grants {
+		if g.Via != model.GrantByGrain || g.Capability == "" || g.Capability == model.DurableCapability {
+			continue
+		}
+		if !slices.Contains(caps, g.Capability) {
+			caps = append(caps, g.Capability)
+		}
+	}
+	return caps
 }
 
 func (c *Client) ensureConsoleSessionSnapshot(ctx context.Context, task model.Task) {
@@ -756,19 +778,25 @@ func (c *Client) ensureConsoleSessionSnapshot(ctx context.Context, task model.Ta
 	if !ok {
 		return
 	}
-	// The reads and writes recorded are the task's own, not the
-	// declaration's: with no snapshot the declaration is authoritative
-	// (orchestrator.mergeConsoleSessionWrites), so the next sync drops an
-	// entry the declaration no longer names -- one removed while the
-	// daemon was down -- and keeps only what this edit adds.
+	// The GrantByGrain capabilities, reads and writes recorded are the task's
+	// own, not the declaration's: with no snapshot the declaration is
+	// authoritative (orchestrator.mergeConsoleSessionGrants / Writes), so the
+	// next sync drops an entry the declaration no longer names -- one removed
+	// while the daemon was down -- adds one the declaration gained, and keeps
+	// what this edit changes on the task.
+	prevCaps := session.Capabilities
+	if len(task.Grants) > 0 {
+		prevCaps = consoleSessionGrainCapabilities(task.Grants)
+	}
 	_ = model.RecordSyncedConsoleSession(ctx, c.Store, task.ID, model.ConsoleSessionConfigSnapshot{
-		Capabilities:    session.Capabilities,
+		Capabilities:    prevCaps,
 		Reads:           task.Reads,
 		Writes:          task.Writes,
 		NetworkAccess:   model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored),
 		Model:           strings.TrimSpace(session.Model),
 		Title:           model.ConsoleSessionTitle(session),
 		TasksApproved:   session.TasksApproved,
+		KeepRunning:     task.KeepRunning,
 		GoogleChatSpace: session.GoogleChatSpace,
 	})
 }
@@ -1029,7 +1057,7 @@ func (c *Client) stateRepoRef() model.RepoRef {
 // closes the task. When reset is true, the closed task is tagged with
 // model.ConsoleSessionResetTag so a later session with the same id will not
 // inherit its handover summary or link to it.
-func (c *Client) stopAndCloseConsoleSessionTask(ctx context.Context, taskID string, reset bool) error {
+func (c *Client) stopAndCloseConsoleSessionTask(ctx context.Context, taskID string, reset bool, reason string) error {
 	if taskID == "" {
 		return nil
 	}
@@ -1064,7 +1092,7 @@ func (c *Client) stopAndCloseConsoleSessionTask(ctx context.Context, taskID stri
 		return err
 	}
 	if obs == nil || obs.ClosedAt == nil {
-		if err := c.Store.ObserveField(ctx, taskID, now, func(o *model.Observation) {
+		if err := c.Store.ObserveClose(ctx, taskID, now, c.actor(ctx), reason, func(o *model.Observation) {
 			o.ClosedAt = &now
 			o.PendingQuestionCommentID = nil
 			o.PendingSecret = ""
@@ -1103,7 +1131,8 @@ func (c *Client) RestartConsoleSession(ctx context.Context, id string, req Resta
 		return nil, err
 	}
 	if oldTaskID != "" {
-		if err := c.stopAndCloseConsoleSessionTask(ctx, oldTaskID, !req.CarryHandover); err != nil {
+		if err := c.stopAndCloseConsoleSessionTask(ctx, oldTaskID, !req.CarryHandover,
+			"console session "+id+" was restarted"); err != nil {
 			return nil, err
 		}
 	}
@@ -1186,7 +1215,8 @@ func (c *Client) DeleteConsoleSession(ctx context.Context, id string) error {
 		return err
 	}
 	if taskID != "" {
-		if err := c.stopAndCloseConsoleSessionTask(ctx, taskID, true); err != nil {
+		if err := c.stopAndCloseConsoleSessionTask(ctx, taskID, true,
+			"console session "+id+" was deleted"); err != nil {
 			return err
 		}
 	}

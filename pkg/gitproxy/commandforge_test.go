@@ -175,6 +175,34 @@ func TestGGHForgeCallsGoThroughGGHAPI(t *testing.T) {
 	}
 }
 
+// GraphQL on an Enterprise Server is beside /api/v3, at /api/graphql,
+// which is where RealTransport sends it; through the tool it is the
+// tool's own "graphql" endpoint, the one gh posts wherever its host
+// serves GraphQL -- never /api/v3/graphql, which the host refuses.
+func TestGGHGraphQLGoesToTheToolsGraphQLEndpoint(t *testing.T) {
+	state := fakeGGHAPI(t)
+	c := gghDepotSet(t, "")
+	writeRaw(t, state, "api-response", gghResponse("200 OK",
+		map[string]string{"Content-Type": "application/json"},
+		`{"data":{"resolveReviewThread":{"thread":{"isResolved":true}}}}`))
+
+	transport, err := c.ForgeTransport("depot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := github.NewClient(transport, nil)
+	if err := client.ResolveReviewThread("experimental", "grain", "PRRT_1"); err != nil {
+		t.Fatal(err)
+	}
+	runs := apiRuns(t, state)
+	if len(runs) != 1 {
+		t.Fatalf("api runs = %q", runs)
+	}
+	if args := strings.Join(runs[0], " "); !strings.HasSuffix(args, " --input - graphql") {
+		t.Fatalf("args %q do not end in the tool's graphql endpoint", args)
+	}
+}
+
 func TestGGHPassesNon2xxThroughAndHonoursAProxy(t *testing.T) {
 	state := fakeGGHAPI(t)
 	c := gghDepotSet(t, "http://127.0.0.1:3128")

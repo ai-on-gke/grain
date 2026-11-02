@@ -472,7 +472,8 @@ func closeLiftedHoldReview(ctx context.Context, store *model.Store, reviewID, ta
 	if state == "" || state.Settled() || state == model.StateRunning {
 		return nil
 	}
-	if err := observeField(ctx, store, reviewID, now, func(o *model.Observation) {
+	reason := fmt.Sprintf("task %s's broken-rules hold was lifted", taskID)
+	if err := closeTask(ctx, store, reviewID, now, reason, func(o *model.Observation) {
 		o.ClosedAt = &now
 	}); err != nil {
 		return fmt.Errorf("orchestrator: closing security review %s: %w", reviewID, err)

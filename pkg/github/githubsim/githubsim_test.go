@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1125,4 +1126,84 @@ func TestSimPublishFilesWritesARealCommitOffEveryBranch(t *testing.T) {
 	if _, err := client.PublishFiles("acme", "widgets", "refs/heads/sneaky", "x", at, files); err == nil {
 		t.Fatal("expected publishing onto a branch to be refused")
 	}
+}
+
+func TestAddWorkflowRunSerialisesWithRequestsAndReplacesReRunAttempts(t *testing.T) {
+	t.Parallel()
+	bare := setupBareRepoWithBranch(t, "main")
+	sim := New("acme", "widgets", bare, "main")
+	client := github.NewClient(sim, nil)
+
+	first := sim.AddWorkflowRun(WorkflowRun{
+		Path: ".github/workflows/release.yml",
+		Jobs: []WorkflowJob{{
+			Name:        "publish-image",
+			Conclusion:  "failure",
+			FailingStep: "ko publish",
+			Log:         "2026-11-01T08:58:00.0000000Z error: 500 Internal Server Error\n",
+		}},
+	})
+	if first.ID <= 0 || first.Name != "release" || first.HeadBranch != "main" ||
+		first.HeadSHA == "" || first.HeadRepo != "acme/widgets" || first.Conclusion != "failure" {
+		t.Fatalf("AddWorkflowRun defaults = %+v", first)
+	}
+
+	var wg sync.WaitGroup
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			for i := 0; i < 10; i++ {
+				sim.AddWorkflowRun(WorkflowRun{
+					Name:       "ci",
+					HeadBranch: "main",
+					Conclusion: "success",
+					Jobs:       []WorkflowJob{{Name: fmt.Sprintf("job-%d-%d", n, i), Conclusion: "success"}},
+				})
+				if _, err := client.CompletedWorkflowRuns("acme", "widgets", 50); err != nil {
+					t.Errorf("CompletedWorkflowRuns: %v", err)
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	// Re-running first.ID at attempt 2 replaces attempt 1 in the listing and jobs.
+	rerun := sim.AddWorkflowRun(WorkflowRun{
+		ID:         first.ID,
+		Path:       ".github/workflows/release.yml",
+		RunAttempt: 2,
+		Jobs:       []WorkflowJob{{Name: "publish-image", Conclusion: "success"}},
+	})
+	if rerun.RunAttempt != 2 || rerun.Conclusion != "success" {
+		t.Fatalf("rerun = %+v, want attempt 2 success", rerun)
+	}
+	runs, err := client.CompletedWorkflowRuns("acme", "widgets", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	for _, r := range runs {
+		if r.ID == first.ID {
+			count++
+			if r.RunAttempt != 2 || r.Conclusion != "success" {
+				t.Errorf("listed run %d = %+v, want attempt 2 success", first.ID, r)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("run %d appeared %d times in CompletedWorkflowRuns, want 1", first.ID, count)
+	}
+	jobs, err := client.ListWorkflowRunJobs("acme", "widgets", first.ID)
+	if err != nil || len(jobs) != 1 || jobs[0].Conclusion != "success" {
+		t.Fatalf("ListWorkflowRunJobs(%d) = %+v, %v", first.ID, jobs, err)
+	}
+
+	// Sim.Request itself still refuses POST .../actions/runs as an unhandled GitHub endpoint.
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected Sim.Request POST /repos/acme/widgets/actions/runs to panic")
+		}
+	}()
+	_, _ = sim.Request("POST", "/repos/acme/widgets/actions/runs", nil, []byte(`{}`))
 }

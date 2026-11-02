@@ -204,8 +204,8 @@ func TestProposalIsFiledWithDefaultCapabilitiesNotItsParents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(custom.Capabilities, "gcp-key") || !slices.Contains(custom.Capabilities, "self-repair") {
-		t.Errorf("custom capabilities = %v, want [gcp-key self-repair]", custom.Capabilities)
+	if !slices.Contains(custom.Capabilities, "gcp-key") || !slices.Contains(custom.Capabilities, model.GrainHostExecGrant) {
+		t.Errorf("custom capabilities = %v, want [gcp-key %s] (self-repair as it is now spelt)", custom.Capabilities, model.GrainHostExecGrant)
 	}
 }
 
@@ -298,13 +298,13 @@ func TestSessionProposalAskingForACapabilityItsSessionLacksWaitsForAPerson(t *te
 	if filed.State != model.StateProposed {
 		t.Errorf("state = %s, want proposed -- the session never held self-repair", filed.State)
 	}
-	if !slices.Contains(filed.Capabilities, "self-repair") {
+	if !slices.Contains(filed.Capabilities, model.GrainHostExecGrant) {
 		t.Errorf("capabilities = %v, want self-repair kept for the person approving it", filed.Capabilities)
 	}
 	if proposal := mustGetTask(t, ctx, store, filed.ID); proposal.Approval != nil {
 		t.Errorf("approved by %+v, want nobody", proposal.Approval)
 	}
-	if !strings.Contains(filed.Description, "`self-repair`") {
+	if !strings.Contains(filed.Description, "`"+model.GrainHostExecGrant+"`") {
 		t.Errorf("body = %q, want a note naming self-repair", filed.Description)
 	}
 }

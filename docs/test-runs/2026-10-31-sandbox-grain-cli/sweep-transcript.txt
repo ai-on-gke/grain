@@ -1,0 +1,496 @@
+=== [0] $ command -v grain; sha256sum $(command -v grain) /usr/local/bin/grain; ls /home/debian/grain-full   (0.2s)
+exit=0
+stdout:
+/home/debian/.grain/bin/grain
+138aec2c090dea223ff6632b7fd60003ab7e5242cf7157f20877635ac0a08c11  /home/debian/.grain/bin/grain
+a5d460a42ff4302998f26b6388e1431a422f0cce589479fdaf165223d7864a4d  /usr/local/bin/grain
+/home/debian/grain-full
+
+stderr:
+
+=== [1] $ cd /home/debian/work && git log --oneline -1 && echo walk >> README.md && git -c user.name=a -c user.email=a@x commit -qam "walk: touch README" && git push -q origin HEAD 2>&1 | tail -2; git log --oneline -1   (0.1s)
+exit=0
+stdout:
+0ce363c ci: small job shape
+6be2652 walk: touch README
+
+stderr:
+
+=== [2] $ cd /home/debian/work && grain pr open 2>&1   (0.2s)
+exit=0
+stdout:
+Pull request #9001 in acme/widgets: https://github.example/acme/widgets/pull/9001
+No checks have reported against it yet.
+
+stderr:
+
+=== [3] $ timeout 300 grain ci wait 2>&1 | tail -15   (115.2s)
+exit=0
+stdout:
+grain CI passed on 6be265298311 (run 53ff74103351d607, waited 1m55s; wait credit used: 1m55s / 45m0s): test
+
+stderr:
+
+=== [4] $ cd /home/debian/work && /home/debian/cmp.sh ci list   (0.1s)
+exit=0
+stdout:
+2 of 2 matching run(s) in acme/widgets, newest first:
+53ff74103351d607 grain/6de5c6f2/task-4-walk-sweep-two 6be265298311 success 2026-10-31T22:24:28Z
+b737c960583ee0f7 grain/6de5c6f2/task-3-walk-sweep efadf4c37335 success 2026-10-31T22:22:47Z
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [5] $ cd /home/debian/work && /home/debian/cmp.sh ci log   (0.1s)
+exit=0
+stdout:
+test/
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [6] $ cd /home/debian/work && /home/debian/cmp.sh ci log --job test --step say --tail 1   (0.1s)
+exit=0
+stdout:
+
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [7] $ cd /home/debian/work && /home/debian/cmp.sh pr status   (0.2s)
+exit=0
+stdout:
+grain/6de5c6f2/task-4-walk-sweep-two (this task's branch) in acme/widgets -- latest grain CI run:
+53ff74103351d607 grain/6de5c6f2/task-4-walk-sweep-two 6be265298311 success 2026-10-31T22:24:28Z
+  test: success
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [8] $ cd /home/debian/work && /home/debian/cmp.sh pr base-status   (0.1s)
+exit=0
+stdout:
+main (the base branch) in acme/widgets has no grain CI run yet.
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [9] $ /home/debian/cmp.sh ls ci://acme/widgets   (0.1s)
+exit=0
+stdout:
+53ff74103351d607/
+b737c960583ee0f7/
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [10] $ R=$(grain ls ci://acme/widgets | head -1 | tr -d /); echo run=$R; /home/debian/cmp.sh ls ci://acme/widgets/$R; /home/debian/cmp.sh ls ci://acme/widgets/$R/test   (0.2s)
+exit=0
+stdout:
+run=53ff74103351d607
+test/
+[exit=0; full grain: identical]
+attempts/
+say.log
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [11] $ R=$(grain ls ci://acme/widgets | head -1 | tr -d /); /home/debian/cmp.sh read ci://acme/widgets/$R/test/say.log   (0.1s)
+exit=0
+stdout:
+WALKTHROUGH-CI-MARKER line one
+second line
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [12] $ /home/debian/cmp.sh grep MARKER ci://acme/widgets   (0.1s)
+exit=0
+stdout:
+53ff74103351d607/test/say.log:1:WALKTHROUGH-CI-MARKER line one
+b737c960583ee0f7/test/say.log:1:WALKTHROUGH-CI-MARKER line one
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [13] $ /home/debian/cmp.sh ls ci://other/repo   (0.1s)
+exit=0
+stdout:
+
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [14] $ /home/debian/cmp.sh ls task://   (0.1s)
+exit=0
+stdout:
+1/
+2/
+3/
+4/
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [15] $ /home/debian/cmp.sh ls task://2   (0.1s)
+exit=0
+stdout:
+attempts/
+conversation.md
+handover.md
+prompt.md
+record.md
+summary.md
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [16] $ CMP_LINES=8 /home/debian/cmp.sh read task://2/description.md   (0.1s)
+exit=0
+stdout:
+grain: not found: task://2/description.md
+[exit=1; full grain: identical]
+
+stderr:
+
+=== [17] $ /home/debian/cmp.sh grep walkthrough task://2   (0.1s)
+exit=0
+stdout:
+conversation.md:3:  walkthrough commands ran
+prompt.md:3:walkthrough
+record.md:10:  walkthrough
+record.md:18:  walkthrough commands ran
+summary.md:7:  2026-10-31T22:21:13Z comment #2 by grain (automation): walkthrough commands ran
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [18] $ /home/debian/cmp.sh ls deploy://   (0.1s)
+exit=0
+stdout:
+grain.log
+health
+merge-queue
+metrics/
+pipeline-changes
+state/
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [19] $ CMP_LINES=8 /home/debian/cmp.sh read deploy://health   (0.3s)
+exit=0
+stdout:
+{
+  "health": {
+    "enabled": true,
+    "sandboxReading": {
+      "ageMS": 0,
+      "stale": false
+    },
+    "host": {
+[exit=0; full grain exit=0, DIFFERS:]
+{
+  "health": {
+    "enabled": true,
+    "sandboxReading": {
+      "ageMS": 139,
+      "stale": false
+    },
+    "host": {
+
+stderr:
+
+=== [20] $ /home/debian/cmp.sh task message 1 "walkthrough: hello from task 2's sandbox"   (0.1s)
+exit=0
+stdout:
+grain: forbidden: task 4 may only message its parent or its children, and task 1 is neither: message_task to any other task needs api:task-admin
+[exit=1; full grain: identical]
+
+stderr:
+
+=== [21] $ /home/debian/cmp.sh log --max-lines 3   (0.1s)
+exit=0
+stdout:
+daemon log, most recent entries.
+
+No entries matched. This is an answer, not a failure: the read succeeded and this log held nothing matching in that window.
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [22] $ /home/debian/cmp.sh log --lines 2   (0.1s)
+exit=0
+stdout:
+daemon log, most recent entries.
+
+No entries matched. This is an answer, not a failure: the read succeeded and this log held nothing matching in that window.
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [23] $ /home/debian/cmp.sh log --since "$(date -u -d '-10 min' +%Y-%m-%dT%H:%M:%SZ)" --contains orchestrator --max-lines 5   (0.1s)
+exit=0
+stdout:
+daemon log, since 2026-10-31T22:16:26Z, containing "orchestrator".
+
+No entries matched. This is an answer, not a failure: the read succeeded and this log held nothing matching in that window.
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [24] $ /home/debian/cmp.sh log --since 10m --contains orchestrator --max-lines 5   (0.1s)
+exit=0
+stdout:
+grain: not found: deploy://grain.log: since "10m" is not an RFC3339 timestamp ("2026-09-07T10:56:13Z"); this tool takes no other kind of time -- no "1 hour ago", no journalctl expressions
+[exit=1; full grain: identical]
+
+stderr:
+
+=== [25] $ /home/debian/cmp.sh log --since not-a-time   (0.1s)
+exit=0
+stdout:
+grain: not found: deploy://grain.log: since "not-a-time" is not an RFC3339 timestamp ("2026-09-07T10:56:13Z"); this tool takes no other kind of time -- no "1 hour ago", no journalctl expressions
+[exit=1; full grain: identical]
+
+stderr:
+
+=== [26] $ /home/debian/cmp.sh log --since "$(date -u -d '-10 min' +%Y-%m-%dT%H:%M:%SZ)" --until "$(date -u -d '-9 min' +%Y-%m-%dT%H:%M:%SZ)" --max-lines 3   (0.1s)
+exit=0
+stdout:
+daemon log, 2026-10-31T22:16:26Z to 2026-10-31T22:17:26Z.
+
+No entries matched. This is an answer, not a failure: the read succeeded and this log held nothing matching in that window.
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [27] $ /home/debian/cmp.sh log --until 2000-01-01T00:00:00Z --max-lines 3   (0.1s)
+exit=0
+stdout:
+daemon log, up to 2000-01-01T00:00:00Z.
+
+No entries matched. This is an answer, not a failure: the read succeeded and this log held nothing matching in that window.
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [28] $ /home/debian/cmp.sh log --min-priority err --max-lines 3   (0.1s)
+exit=0
+stdout:
+daemon log, most recent entries, priority err and above.
+
+No entries matched. This is an answer, not a failure: the read succeeded and this log held nothing matching in that window.
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [29] $ /home/debian/cmp.sh log --priority warning --max-lines 3   (0.1s)
+exit=0
+stdout:
+daemon log, most recent entries, priority warning and above.
+
+No entries matched. This is an answer, not a failure: the read succeeded and this log held nothing matching in that window.
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [30] $ /home/debian/cmp.sh log --min-priority bogus --max-lines 3   (0.1s)
+exit=0
+stdout:
+grain: not found: deploy://grain.log: min_priority "bogus" is not a journald priority; the ones there are: emerg, alert, crit, err, warning, notice, info, debug
+[exit=1; full grain: identical]
+
+stderr:
+
+=== [31] $ /home/debian/cmp.sh log --max-lines 0   (0.1s)
+exit=0
+stdout:
+grain: bad request: max_lines "0" is not a positive whole number of entries
+[exit=1; full grain: identical]
+
+stderr:
+
+=== [32] $ /home/debian/cmp.sh log --max-lines 5000 --tail 1   (0.1s)
+exit=0
+stdout:
+
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [33] $ /home/debian/cmp.sh log --contains NO-SUCH-TEXT-xyz   (0.1s)
+exit=0
+stdout:
+daemon log, most recent entries, containing "NO-SUCH-TEXT-xyz".
+
+No entries matched. This is an answer, not a failure: the read succeeded and this log held nothing matching in that window.
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [34] $ /home/debian/cmp.sh log --tail 2   (0.1s)
+exit=0
+stdout:
+.
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [35] $ CMP_LINES=12 /home/debian/cmp.sh metrics --window 24h --repo acme/widgets   (0.1s)
+exit=0
+stdout:
+window: 2026-10-30T22:26:27Z -> 2026-10-31T22:26:27Z (24h0m0s)
+scope:  tasks in acme/widgets
+
+throughput
+  tasks filed                   3  (3.0/day)
+  tasks completed               1  (1.0/day)
+  tasks closed                  0
+  attempts started              3
+  attempts finished             2  (2.0/day)
+  attempt outcomes         failed=1 succeeded=1
+  ...how they ended        failed=1 succeeded=1
+  attempts per completion    1.00
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [36] $ CMP_LINES=6 /home/debian/cmp.sh metrics --window 7d   (0.1s)
+exit=0
+stdout:
+window: 2026-10-24T22:26:27Z -> 2026-10-31T22:26:27Z (168h0m0s)
+
+throughput
+  tasks filed                   4  (0.6/day)
+  tasks completed               1  (0.1/day)
+  tasks closed                  0
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [37] $ CMP_LINES=6 /home/debian/cmp.sh metrics --window bogus   (0.1s)
+exit=0
+stdout:
+grain: window "bogus": expected a duration like 36h, or a count of days or weeks like 7d
+[exit=1; full grain: identical]
+
+stderr:
+
+=== [38] $ CMP_LINES=6 /home/debian/cmp.sh metrics --since 2026-10-30 --until 2026-11-01   (0.1s)
+exit=0
+stdout:
+window: 2026-10-30T00:00:00Z -> 2026-11-01T00:00:00Z (48h0m0s)
+
+throughput
+  tasks filed                   4  (2.0/day)
+  tasks completed               1  (0.5/day)
+  tasks closed                  0
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [39] $ CMP_LINES=6 /home/debian/cmp.sh metrics --since not-a-date   (0.1s)
+exit=0
+stdout:
+grain: moment "not-a-date": expected a date like 2026-01-31, or an RFC 3339 timestamp
+[exit=1; full grain: identical]
+
+stderr:
+
+=== [40] $ CMP_LINES=6 /home/debian/cmp.sh metrics --window 24h --since 2026-10-30   (0.1s)
+exit=0
+stdout:
+grain: since and window both say where the report starts: give one or the other
+[exit=1; full grain: identical]
+
+stderr:
+
+=== [41] $ CMP_LINES=6 /home/debian/cmp.sh metrics --author debian   (0.1s)
+exit=0
+stdout:
+window: 2026-10-24T22:26:28Z -> 2026-10-31T22:26:28Z (168h0m0s)
+scope:  tasks by debian
+
+throughput
+  tasks filed                   3  (0.4/day)
+  tasks completed               1  (0.1/day)
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [42] $ CMP_LINES=6 /home/debian/cmp.sh metrics --repo other/repo   (0.1s)
+exit=0
+stdout:
+window: 2026-10-24T22:26:28Z -> 2026-10-31T22:26:28Z (168h0m0s)
+scope:  tasks in other/repo
+
+throughput
+  tasks filed                   0  (0.0/day)
+  tasks completed               0  (0.0/day)
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [43] $ CMP_LINES=6 /home/debian/cmp.sh metrics --repo acme/widgets,other/repo   (0.1s)
+exit=0
+stdout:
+window: 2026-10-24T22:26:28Z -> 2026-10-31T22:26:28Z (168h0m0s)
+scope:  tasks in acme/widgets or other/repo
+
+throughput
+  tasks filed                   3  (0.4/day)
+  tasks completed               1  (0.1/day)
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [44] $ /home/debian/cmp.sh host-script --list   (0.1s)
+exit=0
+stdout:
+grain host-script: no host scripts are granted to this sandbox
+[exit=0; full grain: identical]
+
+stderr:
+
+=== [45] $ /home/debian/cmp.sh host-script cluster-autoscaler --grain-help   (0.1s)
+exit=0
+stdout:
+grain host-script: no host script "cluster-autoscaler" is granted to this sandbox (or its grant was released); `grain host-script --list` shows the ones that are
+[exit=125; full grain: identical]
+
+stderr:
+
+=== [46] $ /home/debian/cmp.sh help   (0.1s)
+exit=0
+stdout:
+grain -- sandbox CLI for this grain deployment (proxy: http://10.241.0.1:45601)
+
+NAMESPACE & FILES (no size cap; pipe to grep, jq, head, or redirect to files):
+  grain ls <uri> [--glob <pat>]          List a directory in ci://, src://, task://, config://, memory://, deploy://
+  grain read <uri> [--tail N] [--offset N --limit N]
+                                         Read a file from the namespace to stdout
+  grain grep <pattern> <uri> [-i] [-C N] [--glob <pat>]
+                                         Search a file or subtree with an RE2 regex
+
+CI & PULL REQUEST (scoped to this task's repository and branch):
+  grain ci list [--task <id> | --ref <b>] [--conclusion <c>] [--job <j>] [--since <d>] [--limit N]
+                                         List recent grain CI runs
+  grain ci log [<run-id> | --task <id>] [--repo <r>] [--job <j>] [--step <s>] [--attempt K] [--tail N]
+                                         List a run's jobs and steps, or print one step's log
+  grain ci test-history <test-name> [--limit N]
+                                         Pass/fail/flake history across recent CI runs
+  grain ci artifact <job> <name> [-o <dest>] [--run <run-id> | --task <id>] [--repo <r>]
+                                         Download a CI artifact
+  grain ci wait [--jobs j1,j2] [--timeout 9m] [--resume <run-id>]
+                                         Start or attach to grain CI for this branch and wait for its verdict
+                                         (time blocked is credited back to this run's deadline)
+  grain ci run-job <job> [--timeout 9m] [--resume <run-id>]
+                                         Run a single named CI job against the current branch commit and wait
+  grain ci retrigger [--jobs j1,j2 | --all] [--commit <sha>] [--workflow <file>]
+                                         Rerun failed (or named) jobs fresh and uncached
+[exit=0; full grain: identical]
+
+stderr:
+

@@ -109,8 +109,10 @@ export default function NewTaskOverlay({
   prefill = null,
   fields,
   // templateId and boardId pick settings/new-task-form.yml's template
-  // and board layers (newTaskForm.js): the template this task is filed
-  // from, and the board whose "+ New task" opened the form.
+  // and board layers (newTaskForm.js): the template the form opens on
+  // (a template page's "New task from this template", which the Template
+  // picker below can still change), and the board whose "+ New task"
+  // opened the form.
   templateId = "",
   boardId = "",
   onClose,
@@ -168,6 +170,30 @@ export default function NewTaskOverlay({
   // Names alone where they are unique, more where they are not
   // (templateLabels.js).
   const templateLabel = templateLabeler(templates);
+  // fromTemplate is the template this task is filed from: the Template
+  // picker's own value, starting on the one the form was opened on. It
+  // picks the templates: layer every field resolves through, and is
+  // filed as templateId, where the server fills whatever the form left
+  // blank from the template (ui.Client.fromTemplate) after applying the
+  // layer's hidden defaults -- so a field this form states, a hidden
+  // default included, beats the template's own value for it.
+  const [fromTemplate, setFromTemplate] = useState(templateId);
+  // The templates the picker offers: those with no input fields of
+  // their own, which this form has nowhere to fill in ("Use…" on the
+  // Templates page does), plus whichever one is picked now.
+  const formTemplates = (templates || []).filter(
+    (t) => !(t.fields || []).length || t.id === fromTemplate,
+  );
+  const pickedTemplate =
+    (templates || []).find((t) => t.id === fromTemplate) || null;
+  // The picker is drawn where a template can matter to this form: it
+  // was opened from one, or settings/new-task-form.yml gives some
+  // template a layer of its own. Everywhere else it would be one more
+  // field nobody asked for.
+  const templatePickerShown =
+    formTemplates.length > 0 &&
+    (templateId !== "" ||
+      Object.keys(config?.newTaskForm?.templates || {}).length > 0);
   const liveDraft = draftDiscarded ? null : draft;
 
   // Which repo a restored draft is filed against when the page this form
@@ -236,7 +262,7 @@ export default function NewTaskOverlay({
   // defaults, and the capability picker's configuration.
   const taskForm = resolveNewTaskForm(config, {
     repo: noRepo ? "" : repo,
-    templateId,
+    templateId: fromTemplate,
     boardId,
   });
   const F = taskForm.fields;
@@ -263,8 +289,8 @@ export default function NewTaskOverlay({
   // settings/new-task-form.yml's capabilities.defaults where a layer
   // names them, and otherwise the catalogue's own (defaultCapabilitiesFor).
   const capabilityDefaultsFor = (r) =>
-    resolveNewTaskForm(config, { repo: r, templateId, boardId }).capabilities
-      .defaults ?? defaultCapabilitiesFor(config, r);
+    resolveNewTaskForm(config, { repo: r, templateId: fromTemplate, boardId })
+      .capabilities.defaults ?? defaultCapabilitiesFor(config, r);
   // base tracks Base branch as state, unlike most text fields on this
   // form, so picking a repo (below) can prefill it from
   // lastBaseForRepo without fighting an uncontrolled <input>'s own
@@ -908,6 +934,7 @@ export default function NewTaskOverlay({
     setCapabilities(capabilityDefaultsFor(openingRepo));
     capabilitiesEdited.current = false;
     formEdited.current.clear();
+    setFromTemplate(templateId);
     setCustomFields(fileableFieldValues(config, fields));
     setAttachments([]);
     setModel(String(openingDefault("model") ?? ""));
@@ -1097,7 +1124,7 @@ export default function NewTaskOverlay({
           ? { priority: parsedPriority }
           : {};
       })(),
-      ...(templateId ? { templateId } : {}),
+      ...(fromTemplate ? { templateId: fromTemplate } : {}),
       ...(boardId ? { boardId } : {}),
       ...(taskForm.configured ? hiddenPayload() : {}),
     };
@@ -1108,7 +1135,7 @@ export default function NewTaskOverlay({
       payload.attachments = await Promise.all(
         attachments.map((f) => fileToAttachment(f)),
       );
-      await api("/api/tasks", {
+      const created = await api("/api/tasks", {
         method: "POST",
         body: JSON.stringify(payload),
       });
@@ -1132,6 +1159,7 @@ export default function NewTaskOverlay({
       setCapabilities(capabilityDefaultsFor(openingRepo));
       capabilitiesEdited.current = false;
       formEdited.current.clear();
+      setFromTemplate(templateId);
       // Back to the declared defaults rather than to what this filing
       // carried: the link's values were for the task just filed, and
       // the form is being emptied for the next one.
@@ -1155,7 +1183,10 @@ export default function NewTaskOverlay({
       setAtFront(!!openingDefault("atFront"));
       setPriority("5");
       onClose();
-      await onCreated();
+      // The filed task, for what its answer says beyond "filed" -- the
+      // default grants the capability policy kept off it
+      // (DroppedDefaultsNotice).
+      await onCreated(created);
     } catch (err) {
       submittingRef.current = false;
       setSubmitting(false);
@@ -1173,8 +1204,14 @@ export default function NewTaskOverlay({
       <TextField
         name="title"
         label={F.title.label || "Title"}
-        helperText={F.title.helpText || undefined}
-        required
+        helperText={
+          F.title.helpText ||
+          (pickedTemplate
+            ? "left blank, the task takes the template's own title"
+            : undefined)
+        }
+        placeholder={pickedTemplate?.title || undefined}
+        required={!pickedTemplate}
         InputLabelProps={{ required: false }}
         autoFocus
         autoComplete="off"
@@ -2153,6 +2190,41 @@ export default function NewTaskOverlay({
       </TextField>
     </>
   );
+  // The template this task is filed from (fromTemplate, above). Not one
+  // of settings/new-task-form.yml's fields -- it is what picks their
+  // templates: layer -- so it keeps its own place at the top of the
+  // form, ahead of the title it may fill. Switching it re-applies the
+  // layer's defaults to every field nobody has touched (formDefaultsKey).
+  const templateNode = templatePickerShown ? (
+    <TextField
+      select
+      name="templateId"
+      label="Template"
+      value={fromTemplate}
+      onChange={(e) => setFromTemplate(e.target.value)}
+      InputLabelProps={{ shrink: true }}
+      SelectProps={{ displayEmpty: true }}
+      helperText={
+        pickedTemplate
+          ? pickedTemplate.repo
+            ? `fills what this form leaves blank; always files against ${pickedTemplate.repo}`
+            : "fills what this form leaves blank: title, description, reads, writes, capabilities, model"
+          : "file from a template to have it fill what this form leaves blank"
+      }
+      fullWidth
+      margin="normal"
+      size="small"
+    >
+      <MenuItem value="">
+        <GlyphLabel kind={null}>No template</GlyphLabel>
+      </MenuItem>
+      {formTemplates.map((t) => (
+        <MenuItem key={t.id} value={t.id}>
+          <GlyphLabel kind="templates">{templateLabel(t)}</GlyphLabel>
+        </MenuItem>
+      ))}
+    </TextField>
+  ) : null;
   const priorityNode = (
     <>
       <TextField
@@ -2223,6 +2295,13 @@ export default function NewTaskOverlay({
         node,
       })),
     {
+      key: "template",
+      order: 5,
+      visibility: "shown",
+      draws: templatePickerShown,
+      node: templateNode,
+    },
+    {
       key: "reviewers",
       order: 62,
       visibility: "shown",
@@ -2285,8 +2364,8 @@ export default function NewTaskOverlay({
             onClick={markSubmitAttempt}
             disabled={
               submitting ||
-              !title.trim() ||
-              (!noRepo && !repo.trim()) ||
+              (!title.trim() && !pickedTemplate) ||
+              (!noRepo && !repo.trim() && !pickedTemplate?.repo) ||
               (!noRepo && newBranch && !newBranchName.trim())
             }
           >

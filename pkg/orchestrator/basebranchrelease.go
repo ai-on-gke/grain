@@ -504,7 +504,8 @@ func collectBaseBranchRelease(ctx context.Context, deps Deps, row model.BaseBran
 	if err != nil {
 		return err
 	}
-	return closeSupersededTasks(ctx, deps.Store, ids, BaseReleaseTriager, fmt.Sprintf(
+	reason := fmt.Sprintf("superseded: release run %s published %s", row.RunID, row.Branch)
+	return closeSupersededTasks(ctx, deps.Store, ids, BaseReleaseTriager, reason, fmt.Sprintf(
 		"Closed as superseded: release run %s published `%s` on %s at %s, so its releases are "+
 			"working again and there is nothing left for this task to triage.",
 		row.RunID, row.Branch, row.Repo, shortSHA(row.Commit)), now)
@@ -940,7 +941,8 @@ func recordGitHubBaseBranchRelease(ctx context.Context, deps Deps, run Concluded
 		if err != nil {
 			return err
 		}
-		return closeSupersededTasks(ctx, deps.Store, ids, BaseReleaseTriager, fmt.Sprintf(
+		reason := fmt.Sprintf("superseded: release run %s published %s", row.RunID, branch)
+		return closeSupersededTasks(ctx, deps.Store, ids, BaseReleaseTriager, reason, fmt.Sprintf(
 			"Closed as superseded: GitHub Actions release workflow `%s` published `%s` on %s at %s (run `%s`), so its releases are working again and there is nothing left for this task to triage.",
 			run.WorkflowName, branch, run.Repo, shortSHA(row.Commit), row.RunID), now)
 	case ci.ConclusionFailure:

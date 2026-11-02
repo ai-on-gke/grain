@@ -1035,9 +1035,23 @@ func (s *Store) AttachmentMetas(ctx context.Context, taskID string) ([]Attachmen
 // included -- what a dispatched run needs to materialize them into its
 // sandbox (orchestrator.placeAttachments).
 func (s *Store) Attachments(ctx context.Context, taskID string) ([]Attachment, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+
-		"`id`, `comment_id`, `filename`, `content_type`, `size`, `content`, `created_at` "+
-		"FROM `task_attachment` WHERE `task_id` = ? ORDER BY `id`", taskID)
+	return s.queryAttachments(ctx, taskID,
+		"SELECT `id`, `comment_id`, `filename`, `content_type`, `size`, `content`, `created_at` "+
+			"FROM `task_attachment` WHERE `task_id` = ? ORDER BY `id`", taskID)
+}
+
+// CommentAttachmentsAfter is Attachments for only the comment attachments
+// whose comment_id is greater than after: what an in-process continuation or
+// mid-run addendum poll needs to materialize newly arrived comment files
+// without reading earlier attachments back out of the store.
+func (s *Store) CommentAttachmentsAfter(ctx context.Context, taskID string, after int64) ([]Attachment, error) {
+	return s.queryAttachments(ctx, taskID,
+		"SELECT `id`, `comment_id`, `filename`, `content_type`, `size`, `content`, `created_at` "+
+			"FROM `task_attachment` WHERE `task_id` = ? AND `comment_id` > ? ORDER BY `id`", taskID, after)
+}
+
+func (s *Store) queryAttachments(ctx context.Context, taskID, query string, args ...any) ([]Attachment, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("reading attachments on task %s: %w", taskID, err)
 	}
@@ -1405,6 +1419,24 @@ func (s *Store) TurnsStopped(ctx context.Context) (map[string]bool, error) {
 			return nil
 		})
 	return out, err
+}
+
+// TurnStopped is TurnsStopped for one task: whether it is open and
+// parked on the comment a person posts when they stop its turn.
+func (s *Store) TurnStopped(ctx context.Context, taskID string) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx,
+		"SELECT 1 FROM `task_observation` `o` JOIN `task_comment` `c` "+
+			"ON `c`.`id` = `o`.`pending_question_comment_id` "+
+			"WHERE `o`.`task_id` = ? AND `o`.`closed_at` IS NULL AND `c`.`body` = ?",
+		taskID, TurnStoppedComment).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // PendingQuestionSummaries is the one-line summary of the question every

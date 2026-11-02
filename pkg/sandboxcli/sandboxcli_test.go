@@ -20,10 +20,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -550,3 +552,72 @@ func TestSandboxCLIOnANoRepoTask(t *testing.T) {
 }
 
 type unimplementedCLIActions struct{ gitproxy.CLIActions }
+
+// --tail is a byte count wherever the namespace serves it
+// (namespace.Server's tail parameter), so `grain log --tail 2` prints
+// the last two bytes of the answer, not its last two entries -- which is
+// what the help said when a walkthrough read ".\n" back from it
+// (docs/test-runs/2026-10-31-sandbox-grain-cli.md, F1).
+func TestTailHelpSaysBytes(t *testing.T) {
+	for _, command := range []string{"read", "ci log", "log"} {
+		help := sandboxCommandHelp[command]
+		var tail string
+		for _, line := range strings.Split(help, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "--tail N") {
+				tail = line
+			}
+		}
+		if tail == "" {
+			t.Errorf("grain %s's help does not describe --tail:\n%s", command, help)
+		} else if !strings.Contains(strings.ToLower(tail), "bytes") {
+			t.Errorf("grain %s's help does not say --tail counts bytes: %q", command, tail)
+		}
+	}
+}
+
+// Every flag of grain log and grain metrics narrows the answer, so one
+// they do not know is refused before anything is read. A walkthrough
+// found `grain log --repo other/repo` accepted, and a misspelt
+// --min-prority answered with every priority
+// (docs/test-runs/2026-10-31-sandbox-grain-cli.md, F3).
+func TestSandboxLogAndMetricsRefuseUnknownFlags(t *testing.T) {
+	var reads atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reads.Add(1)
+		w.Write([]byte("an answer\n"))
+	}))
+	defer srv.Close()
+	env := fakeSandboxEnv(map[string]string{"GRAIN_SANDBOX_PROXY": srv.URL, "GRAIN_SANDBOX_TOKEN": "tok"}, "")
+	run := func(args ...string) (string, int) {
+		var out, errOut bytes.Buffer
+		code, handled := maybeRunSandboxCLI(args, env, &out, &errOut)
+		if !handled {
+			t.Fatalf("%q not handled in sandbox mode", args)
+		}
+		return errOut.String(), code
+	}
+	for _, args := range [][]string{
+		{"log", "--min-prority", "err"},
+		{"log", "--repo", "other/repo"},
+		{"metrics", "--windows", "7d"},
+		{"metrics", "summary", "--repos", "acme/a"},
+	} {
+		if errOut, code := run(args...); code == 0 || !strings.Contains(errOut, "unknown flag") {
+			t.Errorf("grain %s: exit %d, stderr %q; want it refused as an unknown flag", strings.Join(args, " "), code, errOut)
+		}
+	}
+	if n := reads.Load(); n != 0 {
+		t.Errorf("refused commands made %d reads, want none", n)
+	}
+	for _, args := range [][]string{
+		{"log", "daemon", "--since", "2026-10-29T00:00:00Z", "--until", "2026-10-29T06:00:00Z", "--priority", "err",
+			"--min-priority", "err", "--contains", "x", "--max-lines", "5", "--lines", "5", "--tail", "40"},
+		{"log", "--source", "dmesg"},
+		{"metrics", "summary", "--window", "7d", "--repo", "acme/a", "--author", "task"},
+		{"metrics", "--since", "2026-10-28", "--until", "2026-10-29"},
+	} {
+		if errOut, code := run(args...); code != 0 {
+			t.Errorf("grain %s: exit %d, stderr %q; want it read", strings.Join(args, " "), code, errOut)
+		}
+	}
+}

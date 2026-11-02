@@ -138,6 +138,9 @@ const RANK = {
   failed: 6,
   awaiting_submit: 6,
   closed: 7,
+  // A reopen recorded at the same instant as its close undid it, so it
+  // comes after.
+  reopened: 7.5,
 };
 
 // transitionRank is where a state transition falls among same-instant
@@ -233,7 +236,10 @@ function timelineEvents(t, zone, now = Date.now()) {
       at,
       sortAt: at,
       rank: transitionRank(tr),
-      badge: tr.state,
+      // A reopen is not a state of its own (model.TransitionReopened):
+      // the task is back to waiting on whatever its record implies, so it
+      // takes the waiting dot.
+      badge: tr.state === "reopened" ? "queued" : tr.state,
       inferred: Boolean(tr.inferred),
       lifecycle: true,
       // Only the most recent transition can still be "now" -- a running
@@ -243,9 +249,32 @@ function timelineEvents(t, zone, now = Date.now()) {
       current: i === lastTransitionIndex,
       closedTransition: tr.state === "closed",
       render: () => (
-        <div className="timeline-title">
-          {STATE_LABELS[tr.state] || tr.state}
-        </div>
+        <>
+          <div className="timeline-title">
+            {tr.state === "reopened"
+              ? "Reopened"
+              : STATE_LABELS[tr.state] || tr.state}
+          </div>
+          {/* Who closed or reopened it, why, and what the close cancelled
+              (model.TaskEvent) -- set only on a step somebody asked for. */}
+          {(tr.by || tr.reason || tr.detail) && (
+            <div className="timeline-meta timeline-transition-by">
+              {tr.by && <>by {tr.by}</>}
+              {tr.reason && (
+                <>
+                  {tr.by ? " · " : ""}
+                  {tr.reason}
+                </>
+              )}
+              {tr.detail && (
+                <>
+                  {tr.by || tr.reason ? " · " : ""}
+                  {tr.detail}
+                </>
+              )}
+            </div>
+          )}
+        </>
       ),
     };
   });

@@ -304,3 +304,61 @@ func TestDaemonChatDoesNotOverrunItsWaitInARestartGap(t *testing.T) {
 		t.Errorf("the turn took %s, past its 300ms wait: a poll's retry held it", took)
 	}
 }
+
+func TestDaemonChatRetriesWhenAttachmentPlacementFailsTransiently(t *testing.T) {
+	t.Parallel()
+	daemon := &chatDaemon{
+		replyOnPoll: 1,
+		replyMessages: []ui.Message{
+			{
+				ID:         15,
+				AuthorKind: "human",
+				Body:       "attached log",
+				Attachments: []ui.Attachment{
+					{ID: 66, Filename: "app.log", Size: 4},
+				},
+			},
+		},
+		attachments: map[int64][]byte{
+			66: []byte("boom"),
+		},
+	}
+	var attempts int
+	var writtenContent string
+	writeFile := func(ctx context.Context, args map[string]any) mcp.Result {
+		attempts++
+		if attempts == 1 {
+			return mcp.Result{Text: "transient exec error", IsError: true}
+		}
+		writtenContent, _ = args["content"].(string)
+		return mcp.Result{Text: "ok"}
+	}
+	srv := httptest.NewServer(daemon)
+	t.Cleanup(srv.Close)
+	var acked []int64
+	cursor := &deliveredCursor{
+		report: func(_ context.Context, through int64) error {
+			acked = append(acked, through)
+			return nil
+		},
+		byChat: map[int64]bool{},
+	}
+	chat := daemonChat{client: ui.NewHTTPClient(srv.URL), taskID: "t-1", poll: time.Millisecond, writeFile: writeFile, delivered: cursor}
+
+	turn, err := chat.Chat(context.Background(), "send log?", "", nil, time.Minute)
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if attempts < 2 {
+		t.Fatalf("writeFile attempts = %d, want retry after initial failure", attempts)
+	}
+	if writtenContent != "boom" {
+		t.Errorf("writtenContent = %q, want 'boom'", writtenContent)
+	}
+	if !strings.Contains(turn.Reply, "./attachments/66-app.log") {
+		t.Errorf("turn.Reply = %q, want attachment path", turn.Reply)
+	}
+	if len(acked) != 1 || acked[0] != 15 {
+		t.Errorf("acked = %v, want [15] recorded only once placement succeeded", acked)
+	}
+}

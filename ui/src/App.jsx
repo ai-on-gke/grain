@@ -79,6 +79,9 @@ import CIPage from "./components/CIPage.jsx";
 import CIRunOverlay from "./components/CIRunOverlay.jsx";
 import BatchActionsBar from "./components/BatchActionsBar.jsx";
 import ErrorBanner from "./components/ErrorBanner.jsx";
+import DroppedDefaultsNotice, {
+  droppedDefaults,
+} from "./components/DroppedDefaultsNotice.jsx";
 import ConfigRefusalDialog from "./components/ConfigRefusal.jsx";
 import DetailOverlay from "./components/DetailOverlay.jsx";
 import TaskLoadingOverlay from "./components/TaskLoadingOverlay.jsx";
@@ -745,6 +748,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // rides on the filing as boardId for the server's hidden defaults.
   // Null for the form opened anywhere else.
   const [newTaskBoard, setNewTaskBoard] = useState(null);
+  // newTaskTemplate is the template whose "New task from this template"
+  // opened the form: it picks settings/new-task-form.yml's templates
+  // layer and is filed as templateId (the form's Template picker can
+  // still change it). Null for the form opened anywhere else.
+  const [newTaskTemplate, setNewTaskTemplate] = useState(null);
   // newTaskPrefill is a task somebody is being offered rather than one
   // they are writing from scratch: the "New board"/"Edit board" buttons
   // open the form with the title and the description already in it
@@ -1350,10 +1358,18 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // (ui.CreateTaskRequest.AtFront, config.newestFirst), and the form
   // seeds its picker from that -- so without re-reading the config here,
   // the choice would only show up on the next full page load.
-  const refreshAfterCreate = useCallback(async () => {
-    await refreshList();
-    await refreshConfig();
-  }, [refreshList, refreshConfig]);
+  //
+  // It is also handed the filed task, and a filing that left a default
+  // grant off (ui.Task.DroppedDefaults) says so in a toast.
+  const [filedWithoutDefaults, setFiledWithoutDefaults] = useState(null);
+  const refreshAfterCreate = useCallback(
+    async (created) => {
+      if (droppedDefaults(created).length > 0) setFiledWithoutDefaults(created);
+      await refreshList();
+      await refreshConfig();
+    },
+    [refreshList, refreshConfig],
+  );
 
   const toggleSelect = useCallback((id) => {
     setSelected((prev) => {
@@ -1577,6 +1593,22 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const openNewTaskForRepo = useCallback((repo) => {
     setNewTaskRepo(repo);
     setNewTaskBoard(null);
+    setNewTaskTemplate(null);
+    setNewTaskFields(null);
+    setShowNewTask(true);
+  }, []);
+
+  // openNewTaskFromTemplate is a template page's "New task from this
+  // template": the form filed from it, against the repo it is bound to
+  // where it is bound to one. The template's page is closed under it,
+  // as a task is under "File a task with these fields", so the form is
+  // the thing on screen.
+  const openNewTaskFromTemplate = useCallback((template) => {
+    setOpenTemplateId(null);
+    setNewTaskRepo(template.repo || null);
+    setNewTaskBoard(null);
+    setNewTaskTemplate(template.id);
+    setNewTaskPrefill(null);
     setNewTaskFields(null);
     setShowNewTask(true);
   }, []);
@@ -1642,6 +1674,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
     setNewTaskFields(null);
     setNewTaskRepo(targetRepo || BOARDS_REPO);
     setNewTaskBoard(null);
+    setNewTaskTemplate(null);
     setShowNewTask(true);
   }, []);
 
@@ -3171,6 +3204,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const openNewTask = () => {
     setNewTaskRepo(null);
     setNewTaskBoard(view === "boards" ? openBoardId : null);
+    setNewTaskTemplate(null);
     setNewTaskPrefill(null);
     setNewTaskFields(null);
     setShowNewTask(true);
@@ -3206,6 +3240,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       closeDetail();
       setNewTaskRepo(null);
       setNewTaskBoard(null);
+      setNewTaskTemplate(null);
       setNewTaskPrefill(null);
       setNewTaskFields(
         fields && Object.keys(fields).length > 0 ? fields : null,
@@ -3279,15 +3314,26 @@ function AppContent({ onReload = () => window.location.reload() }) {
   }, [view, systemTab, isPhone]);
 
   const handleLogout = useCallback(async () => {
+    let redirect = "";
     try {
-      await api("/api/auth/logout", { method: "POST" });
+      const res = await api("/api/auth/logout", { method: "POST" });
+      if (typeof res?.redirect === "string") {
+        redirect = res.redirect;
+      }
     } catch {
       // Ignored
+    }
+    if (!redirect && config?.authMethod === "iap") {
+      redirect = "/_gcp_iap/clear_login_cookie";
+    }
+    if (redirect) {
+      window.location.assign(redirect);
+      return;
     }
     // The page itself is what the daemon gates: loaded again without the
     // session it is the access-code sign-in.
     onReload();
-  }, [onReload]);
+  }, [config?.authMethod, onReload]);
 
   // The persistent sandboxes, for the rail's Staging group. Quiet on
   // failure: a deployment that supervises none answers an empty list,
@@ -3443,6 +3489,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
       config={config}
       onOpenSystem={() => openSystem("")}
       onOpenSettings={() => openSettings()}
+      onOpenAccess={() => openSettings("access")}
+      onLogout={handleLogout}
     />
   );
 
@@ -3625,6 +3673,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                             onOpenSchedule={setOpenScheduleId}
                             openTemplateId={openTemplateId}
                             onOpenTemplate={setOpenTemplateId}
+                            onNewTaskFromTemplate={openNewTaskFromTemplate}
                             openSuiteId={openSuiteId}
                             onOpenSuite={setOpenSuiteId}
                             openSuiteRunId={openSuiteRunId}
@@ -3875,6 +3924,12 @@ function AppContent({ onReload = () => window.location.reload() }) {
           )}
         </div>
         {error !== null && <ErrorBanner message={error} />}
+        {filedWithoutDefaults !== null && (
+          <DroppedDefaultsNotice
+            created={filedWithoutDefaults}
+            onClose={() => setFiledWithoutDefaults(null)}
+          />
+        )}
         <ConfigRefusalDialog
           refusal={configRefusal}
           onClose={() => setConfigRefusal(null)}
@@ -3957,9 +4012,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
               prefill={newTaskPrefill}
               fields={newTaskFields}
               boardId={newTaskBoard || ""}
+              templateId={newTaskTemplate || ""}
               onClose={() => {
                 setShowNewTask(false);
                 setNewTaskBoard(null);
+                setNewTaskTemplate(null);
                 setNewTaskFields(null);
                 setNewTaskPrefill(null);
               }}

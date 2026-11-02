@@ -31,6 +31,10 @@ type GrainLogQuery struct {
 	MinPriority  string
 	Contains     string
 	MaxLines     int
+	// TaskID is the task whose sandbox is reading, for read_grain_log's
+	// audit line. The namespace sets it from the caller's Scope; it is
+	// never read from the query.
+	TaskID string
 }
 
 // MetricsQuery narrows a deploy://metrics read the way read_metrics' own

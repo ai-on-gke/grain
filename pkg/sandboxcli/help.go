@@ -146,8 +146,10 @@ ARGUMENTS & FLAGS:
   --hold-for-approval          File unapproved for a human to review even if your task's permission
                                would have queued it.
   --at-front                   Place at the front of the backlog ahead of already queued work.
-  --priority <N>               Task priority (default 5; higher numbers mean higher priority).
-                               Above your task's own and the default, it waits for a person.
+  --priority <N>               Task priority, 1 or more (default 5; higher numbers mean higher
+                               priority). 0 is refused. Not inherited from your task: left out,
+                               the proposal files at 5 (or its template's priority). Above your
+                               task's own and the default, it waits for a person.
   --no-repo                    Standalone task with no git repository or branch.
   --no-port                    Change belongs only on the target branch; do not port to paired branches.
   --keep-running               Immediately restart the task when its run exits instead of completing or parking.
@@ -298,7 +300,7 @@ var sandboxCommandHelp = map[string]string{
 const sandboxTaskListHelp = "grain task list [--state <s>[,<s>...]] [--repo <owner/name>] [--search <title text>]\n" +
 	"                [--kind <k>] [--changed-since <30m|24h|7d|time>] [--stalled] [--limit N] [--json]\n\n" +
 	"The tasks this run may read (its own, or every task with self-debug), one line each:\n" +
-	"id, state, repo, title, then \"(stalled)\" and \"blocked on <ids>\" where they apply.\n" +
+	"id, state, repo, title, then \"(stopped by operator)\" or \"(stalled)\" and \"blocked on <ids>\" where they apply.\n" +
 	"Oldest first by filing; --limit (default 50) keeps the newest. The count, and how many\n" +
 	"were left out, go to stderr. --state may be repeated or comma-separated (proposed, queued,\n" +
 	"running, awaiting_reply, failed, awaiting_submit, completed, closed); --kind is one of\n" +

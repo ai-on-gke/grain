@@ -34,6 +34,7 @@ package demo
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,6 +46,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/ghwebhook"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -52,9 +54,58 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
+type demoSimEventQueue struct {
+	mu      sync.Mutex
+	nextSeq uint64
+	acked   uint64
+	events  []ghwebhook.Event
+}
+
+var _ orchestrator.GitHubEventSource = (*demoSimEventQueue)(nil)
+
+func (q *demoSimEventQueue) enqueue(ev ghwebhook.Event) uint64 {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.nextSeq++
+	ev.Seq = q.nextSeq
+	q.events = append(q.events, ev)
+	return ev.Seq
+}
+
+func (q *demoSimEventQueue) Pending() ([]ghwebhook.Event, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	var out []ghwebhook.Event
+	for _, ev := range q.events {
+		if ev.Seq > q.acked {
+			out = append(out, ev)
+		}
+	}
+	return out, nil
+}
+
+func (q *demoSimEventQueue) Ack(seq uint64) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if seq <= q.acked {
+		return nil
+	}
+	q.acked = seq
+	idx := 0
+	for idx < len(q.events) && q.events[idx].Seq <= seq {
+		idx++
+	}
+	if idx > 0 {
+		q.events = append([]ghwebhook.Event(nil), q.events[idx:]...)
+	}
+	return nil
+}
+
 type demoSimState struct {
-	calls  *demoGitHubCalls
-	events orchestrator.GitHubEventSource
+	calls        *demoGitHubCalls
+	events       orchestrator.GitHubEventSource
+	simEvents    *demoSimEventQueue
+	declarations orchestrator.DeclarationSource
 	// sims is every simulated repository by "owner/name": -github-sim's
 	// own and demoGitHubSimUpstream, which the e2e hook
 	// (githubSimDemoHandler) edits issues on.
@@ -75,7 +126,7 @@ type demoGitHubSimTransport struct {
 }
 
 // simFor is the Sim that answers path.
-func (t demoGitHubSimTransport) simFor(path string) *githubsim.Sim {
+func (t *demoGitHubSimTransport) simFor(path string) *githubsim.Sim {
 	rest, ok := strings.CutPrefix(path, "/repos/")
 	if !ok {
 		return t.sim
@@ -96,7 +147,7 @@ func (t demoGitHubSimTransport) simFor(path string) *githubsim.Sim {
 	return nil
 }
 
-func (t demoGitHubSimTransport) Request(method, path string, headers map[string]string, body []byte) (github.ApiResponse, error) {
+func (t *demoGitHubSimTransport) Request(method, path string, headers map[string]string, body []byte) (github.ApiResponse, error) {
 	sim := t.simFor(path)
 	if sim == nil {
 		return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
@@ -105,6 +156,8 @@ func (t demoGitHubSimTransport) Request(method, path string, headers map[string]
 	if err == nil && t.calls != nil {
 		caller, kind := "sync", "head read"
 		switch {
+		case strings.Contains(path, "/actions/"):
+			caller, kind = "github-ci-tails", "checks"
 		case strings.HasSuffix(path, "/branches"):
 			caller, kind = "ui", "branch list"
 		case strings.Contains(path, "/compare/"):
@@ -113,6 +166,9 @@ func (t demoGitHubSimTransport) Request(method, path string, headers map[string]
 			caller, kind = "review-threads", "review comments"
 		case strings.Contains(path, "/pulls/"):
 			caller, kind = "sync", "PR read"
+		}
+		if c := headers[github.CallerHeader]; c != "" {
+			caller = c
 		}
 		t.calls.recordCall(caller, kind, resp.Status == 304)
 	}
@@ -209,9 +265,14 @@ func configureGitHubSimDemoWith(dir string, cfg ui.Config, repo model.RepoRef, s
 		State:  "open",
 	}
 	others := map[string]*githubsim.Sim{demoGitHubSimUpstream.String(): upstream}
-	client := github.NewClient(demoGitHubSimTransport{sim: sim, calls: ghCalls, others: others}, nil)
+	client := github.NewClient(&demoGitHubSimTransport{sim: sim, calls: ghCalls, others: others}, nil)
 	sims := map[string]*githubsim.Sim{repo.String(): sim, demoGitHubSimUpstream.String(): upstream}
-	demoSimClients.Store(client, &demoSimState{calls: ghCalls, sims: sims})
+	demoSimClients.Store(client, &demoSimState{
+		calls:        ghCalls,
+		simEvents:    &demoSimEventQueue{},
+		declarations: demoBareDeclarations{repo: repo, bare: bare},
+		sims:         sims,
+	})
 	cfg.GitHubBranches = client
 	cfg.GitHubForkPullRequests = client
 	prReader := demoPullRequests{repo: repo, client: client}
@@ -394,7 +455,12 @@ func demoGitStdin(gitDir, stdin string, args ...string) (string, error) {
 // how a walkthrough opens an issue (POST .../issues), labels one after the
 // fact (POST .../issues/N/labels) or closes one (PATCH .../issues/N with
 // {"state":"closed"}) for the issue importer to find on its next pass.
-// Everything else goes to app.
+//
+// As a test-only, loopback-only extension that Sim.Request itself refuses,
+// POST .../actions/runs appends a githubsim.WorkflowRun under the sim's
+// mutex and, when ?webhook=1 or {"webhook":true} is set, enqueues a
+// matching workflow_run webhook for the demo's event source. Everything
+// else goes to app.
 func githubSimDemoHandler(app http.Handler, client github.Client) http.Handler {
 	const prefix = "/api/e2e/github-sim/repos/"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -406,9 +472,15 @@ func githubSimDemoHandler(app http.Handler, client github.Client) http.Handler {
 			http.Error(w, "the GitHub sim hook only answers loopback callers", http.StatusForbidden)
 			return
 		}
-		var sims map[string]*githubsim.Sim
+		var (
+			st   *demoSimState
+			sims map[string]*githubsim.Sim
+		)
 		if v, ok := demoSimClients.Load(client); ok {
-			sims = v.(*demoSimState).sims
+			st, _ = v.(*demoSimState)
+			if st != nil {
+				sims = st.sims
+			}
 		}
 		path := strings.TrimPrefix(r.URL.Path, "/api/e2e/github-sim")
 		parts := strings.SplitN(strings.TrimPrefix(path, "/repos/"), "/", 3)
@@ -429,6 +501,10 @@ func githubSimDemoHandler(app http.Handler, client github.Client) http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		if r.Method == http.MethodPost && len(parts) == 3 && parts[2] == "actions/runs" {
+			handleGitHubSimAddWorkflowRun(w, r, sim, st, body)
+			return
+		}
 		if r.URL.RawQuery != "" {
 			path += "?" + r.URL.RawQuery
 		}
@@ -441,4 +517,173 @@ func githubSimDemoHandler(app http.Handler, client github.Client) http.Handler {
 		w.WriteHeader(resp.Status)
 		_, _ = w.Write(resp.Body)
 	})
+}
+
+type simWorkflowJobPayload struct {
+	Name             string `json:"name"`
+	Conclusion       string `json:"conclusion"`
+	Log              string `json:"log"`
+	NeverStarted     bool   `json:"never_started"`
+	NeverStartedAlt  bool   `json:"neverStarted"`
+	FailureReason    string `json:"failure_reason"`
+	FailureReasonAlt string `json:"failureReason"`
+	FailingStep      string `json:"failing_step"`
+	FailingStepAlt   string `json:"failingStep"`
+}
+
+type simWorkflowRunPayload struct {
+	ID             int64  `json:"id"`
+	Name           string `json:"name"`
+	Path           string `json:"path"`
+	Workflow       string `json:"workflow"`
+	HeadBranch     string `json:"head_branch"`
+	HeadBranchAlt  string `json:"headBranch"`
+	Branch         string `json:"branch"`
+	HeadSHA        string `json:"head_sha"`
+	HeadSHAAlt     string `json:"headSHA"`
+	HeadRepo       string `json:"head_repo"`
+	HeadRepoAlt    string `json:"headRepo"`
+	HeadRepository *struct {
+		FullName string `json:"full_name"`
+	} `json:"head_repository"`
+	Event         string                  `json:"event"`
+	Status        string                  `json:"status"`
+	Conclusion    string                  `json:"conclusion"`
+	RunAttempt    int                     `json:"run_attempt"`
+	RunAttemptAlt int                     `json:"runAttempt"`
+	HTMLURL       string                  `json:"html_url"`
+	HTMLURLAlt    string                  `json:"htmlURL"`
+	Jobs          []simWorkflowJobPayload `json:"jobs"`
+	Webhook       bool                    `json:"webhook"`
+}
+
+func firstSimString(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func handleGitHubSimAddWorkflowRun(w http.ResponseWriter, r *http.Request, sim *githubsim.Sim, st *demoSimState, body []byte) {
+	var req simWorkflowRunPayload
+	if len(bytes.TrimSpace(body)) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	wfPath := strings.TrimSpace(req.Path)
+	if wfPath == "" && strings.TrimSpace(req.Workflow) != "" {
+		wf := strings.TrimSpace(req.Workflow)
+		switch {
+		case strings.Contains(wf, "/"):
+			wfPath = wf
+		case strings.HasSuffix(wf, ".yml"), strings.HasSuffix(wf, ".yaml"):
+			wfPath = ".github/workflows/" + wf
+		default:
+			wfPath = ".github/workflows/" + wf + ".yml"
+		}
+	}
+	var headRepoFromObj string
+	if req.HeadRepository != nil {
+		headRepoFromObj = req.HeadRepository.FullName
+	}
+	attempt := req.RunAttempt
+	if attempt <= 0 {
+		attempt = req.RunAttemptAlt
+	}
+	jobs := make([]githubsim.WorkflowJob, len(req.Jobs))
+	for i, j := range req.Jobs {
+		jobs[i] = githubsim.WorkflowJob{
+			Name:          j.Name,
+			Conclusion:    j.Conclusion,
+			Log:           j.Log,
+			NeverStarted:  j.NeverStarted || j.NeverStartedAlt,
+			FailureReason: firstSimString(j.FailureReason, j.FailureReasonAlt),
+			FailingStep:   firstSimString(j.FailingStep, j.FailingStepAlt),
+		}
+	}
+	added := sim.AddWorkflowRun(githubsim.WorkflowRun{
+		ID:         req.ID,
+		Name:       req.Name,
+		Path:       wfPath,
+		HeadBranch: firstSimString(req.HeadBranch, req.HeadBranchAlt, req.Branch),
+		HeadSHA:    firstSimString(req.HeadSHA, req.HeadSHAAlt),
+		HeadRepo:   firstSimString(req.HeadRepo, req.HeadRepoAlt, headRepoFromObj),
+		Event:      req.Event,
+		Status:     req.Status,
+		Conclusion: req.Conclusion,
+		RunAttempt: attempt,
+		HTMLURL:    firstSimString(req.HTMLURL, req.HTMLURLAlt),
+		Jobs:       jobs,
+	})
+
+	wantWebhook := req.Webhook
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("webhook"))) {
+	case "1", "true", "yes":
+		wantWebhook = true
+	}
+
+	var webhookSeq uint64
+	if wantWebhook && st != nil && st.simEvents != nil {
+		now := time.Now().UTC().Truncate(time.Second)
+		started := now.Add(-time.Minute)
+		action := added.Status
+		if action == "" {
+			action = "completed"
+		}
+		whPayload, err := json.Marshal(map[string]any{
+			"action":     action,
+			"repository": map[string]string{"full_name": sim.Owner + "/" + sim.Repo},
+			"sender":     map[string]string{"login": "github-actions[bot]", "type": "Bot"},
+			"workflow_run": map[string]any{
+				"id":              added.ID,
+				"name":            added.Name,
+				"path":            added.Path,
+				"head_branch":     added.HeadBranch,
+				"head_sha":        added.HeadSHA,
+				"head_repository": map[string]string{"full_name": added.HeadRepo},
+				"event":           added.Event,
+				"status":          added.Status,
+				"conclusion":      added.Conclusion,
+				"run_attempt":     added.RunAttempt,
+				"html_url":        added.HTMLURL,
+				"run_started_at":  started.Format(time.RFC3339),
+				"updated_at":      now.Format(time.RFC3339),
+			},
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		ev, err := ghwebhook.ParsePayload("workflow_run", fmt.Sprintf("sim-workflow-run-%d-%d", added.ID, added.RunAttempt), whPayload)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		webhookSeq = st.simEvents.enqueue(ev)
+	}
+
+	out := map[string]any{
+		"id":              added.ID,
+		"name":            added.Name,
+		"path":            added.Path,
+		"head_branch":     added.HeadBranch,
+		"head_sha":        added.HeadSHA,
+		"head_repository": map[string]string{"full_name": added.HeadRepo},
+		"event":           added.Event,
+		"status":          added.Status,
+		"conclusion":      added.Conclusion,
+		"run_attempt":     added.RunAttempt,
+		"html_url":        added.HTMLURL,
+	}
+	if webhookSeq > 0 {
+		out["webhook_queued"] = true
+		out["webhook_seq"] = webhookSeq
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(out)
 }
