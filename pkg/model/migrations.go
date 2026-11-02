@@ -505,6 +505,19 @@ var Migrations = []Migration{
 				map[string][]string{"self-repair": {GrainHostExecGrant}})
 		},
 	},
+	{
+		Version:     85,
+		Description: "rewrite stored git-push-any-ref grants to https://grain.dev/capabilities/repo#write (the in-process capability is retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames := map[string][]string{GitPushAnyRefCapability: {GitPushAnyRefGrant}}
+			if err := rewriteLegacyGrantsMulti(renames)(ctx, tx); err != nil {
+				return err
+			}
+			// Unlike 67-82 (which 83 caught up on), this one rewrites
+			// repo_config.ci_capabilities at once.
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", renames)
+		},
+	},
 }
 
 // ApplyDataMigrations runs the row rewrites (Up) of every migration past

@@ -97,6 +97,7 @@ var retiredGrants = []struct {
 	{82, "db-read", []string{model.GrainSQLReadGrant}},
 	{82, "db-write", []string{model.GrainSQLWriteGrant}},
 	{84, "self-repair", []string{model.GrainHostExecGrant}},
+	{85, "git-push-any-ref", []string{model.GitPushAnyRefGrant}},
 }
 
 // Each retiring migration rewrites every stored grant of its capability
