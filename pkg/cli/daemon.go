@@ -645,9 +645,10 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 
 	// Every deployment names its sandbox backend: -container-sandboxes,
 	// -granule-sandboxes, -k8s-sandboxes, -host-sandboxes, or
-	// -disable-native-sandboxes for one whose sandboxes are all remote.
+	// -disable-native-sandboxes for a control-plane-only daemon (backend
+	// "none"), which creates no sandboxes and so runs no task.
 	disableNativeSandboxes := fs.Bool("disable-native-sandboxes", false,
-		"disable native sandboxes on this host -- in this mode only remote execution sandboxes can exist")
+		"select sandbox backend \"none\": run the control plane only -- no sandbox is created, so no task runs (for tests and walkthroughs)")
 	nativeSandboxes := fs.Bool("native-sandboxes", true,
 		"enable native sandboxes on this host; set to false to disable native sandboxes")
 	// A flag rather than a setting, unlike the switch that decides
