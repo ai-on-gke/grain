@@ -99,6 +99,8 @@ describe("pending releases", () => {
     expect(row.actions[0].release).toEqual({
       repo: "ai-on-gke/grain",
       version: "v2.4.0",
+      soak: null,
+      shortSoak: null,
     });
   });
 
@@ -107,6 +109,8 @@ describe("pending releases", () => {
     expect(pendingReleaseOf(unnamed)).toEqual({
       repo: "ai-on-gke/grain",
       version: "v2.4.0",
+      soak: null,
+      shortSoak: null,
     });
   });
 
@@ -127,6 +131,58 @@ describe("pending releases", () => {
     expect(await decideRelease(pendingReleaseOf(pending), true)).toBe(true);
     expect(api).toHaveBeenCalledWith(
       "/api/repos/ai-on-gke/grain/pending-releases/v2.4.0/approve",
+      { method: "POST" },
+    );
+  });
+
+  it("read the soak and the SHORT SOAK warning off the train's body", () => {
+    const short = {
+      ...pending,
+      body:
+        "v2.4.0-rc.2 passed its 24h staging soak and is staged as v2.4.0-pending.\n\n" +
+        "SHORT SOAK: under the 22h minimum; approving it needs short_soak_ok: true.\n\n" +
+        "Soak: soaked 1h00m of 24h (FORCE=true): supervisor: ok; http: ok\n" +
+        "Release notes: task 12",
+    };
+    expect(pendingReleaseOf(short)).toMatchObject({
+      soak: "soaked 1h00m of 24h (FORCE=true)",
+      shortSoak:
+        "SHORT SOAK: under the 22h minimum; approving it needs short_soak_ok: true.",
+    });
+    const full = {
+      ...pending,
+      body: "rc passed.\n\nSoak: soaked 25h10m of 24h: PASS\nRelease notes: x",
+    };
+    expect(pendingReleaseOf(full)).toMatchObject({
+      soak: "soaked 25h10m of 24h",
+      shortSoak: null,
+    });
+    expect(notificationAlerts([short])[0].actions[0].label).toBe(
+      "Approve short soak",
+    );
+    expect(notificationAlerts([full])[0].actions[0].label).toBe("Approve");
+  });
+
+  it("approve a short soak only with short_soak_ok, after saying so", async () => {
+    const release = {
+      repo: "ai-on-gke/grain",
+      version: "v2.4.0",
+      soak: "soaked 1h00m of 24h",
+      shortSoak: "SHORT SOAK: under the 22h minimum.",
+    };
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+    expect(await decideRelease(release, true)).toBe(true);
+    expect(confirm.mock.calls.at(-1)[0]).toContain("SHORT SOAK");
+    expect(confirm.mock.calls.at(-1)[0]).toContain("soaked 1h00m of 24h");
+    expect(api).toHaveBeenLastCalledWith(
+      "/api/repos/ai-on-gke/grain/pending-releases/v2.4.0/approve",
+      { method: "POST", body: JSON.stringify({ short_soak_ok: true }) },
+    );
+
+    vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+    expect(await decideRelease(release, false)).toBe(true);
+    expect(api).toHaveBeenLastCalledWith(
+      "/api/repos/ai-on-gke/grain/pending-releases/v2.4.0/reject",
       { method: "POST" },
     );
   });
