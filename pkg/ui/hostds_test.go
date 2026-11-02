@@ -176,12 +176,13 @@ func TestRepoScopedAgentCannotReachHostdRegistryOrMultiRepoQueries(t *testing.T)
 	seedAPITask(t, client, "10", "acme/widgets",
 		"api:capabilities:admin@acme/widgets",
 		"api:settings:read@acme/widgets",
+		"api:capabilities:read@acme/widgets",
 		"api:deployment:read@acme/widgets",
 		"api:tasks:read@acme/widgets",
 	)
 	seedAPITask(t, client, "11", "acme/widgets",
 		"api:capabilities:admin",
-		"api:settings:read",
+		"api:capabilities:read",
 	)
 
 	for _, tc := range []struct {
@@ -219,7 +220,7 @@ func TestRepoScopedAgentCannotReachHostdRegistryOrMultiRepoQueries(t *testing.T)
 	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
 	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
 		Name:   "ext-widgets",
-		Scopes: []string{"capabilities:admin", "settings:read", "deployment:read", "tasks:read"},
+		Scopes: []string{"capabilities:admin", "capabilities:read", "settings:read", "deployment:read", "tasks:read"},
 		Repos:  []string{"acme/widgets"},
 	})
 	if err != nil {
