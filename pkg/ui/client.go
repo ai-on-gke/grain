@@ -6674,7 +6674,12 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
 		changed = (o.ClosedAt == nil) == closed
 		if closed {
-			o.ClosedAt = &now
+			// A task already closed keeps the stamp it has: moving it
+			// would leave the recorded close standing beside a second,
+			// unattributed closed step at the new stamp.
+			if o.ClosedAt == nil {
+				o.ClosedAt = &now
+			}
 			obs = o
 			return
 		}
