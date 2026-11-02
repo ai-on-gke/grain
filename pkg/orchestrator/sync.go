@@ -275,11 +275,11 @@ type queueEntry struct {
 	// that merges cleanly merges on the verdict it already holds, however
 	// far behind it is. See bringHeadUpToDate for the other direction.
 	requireUpToDate bool
-	// mergeOnGreen is this repository's answer to "may a green entry
-	// merge past one ahead of it whose CI is still running"
-	// (model.RepoConfig.MergeOnGreen), read once per repository per cycle
-	// beside requireUpToDate above. False -- the default -- is the strict
-	// lane: an entry still deciding closes it (passedOver).
+	// mergeOnGreen is this repository's model.RepoConfig.MergeOnGreen,
+	// read once per repository per cycle beside requireUpToDate above.
+	// Nothing in the walk reads it any more: with no order between
+	// members (mergeWalk, task 2346) a green entry always merges past one
+	// still deciding, whichever way it is set.
 	mergeOnGreen bool
 	// gateIsGrainCI is this repository's answer to "are GitHub's check
 	// runs a source of verdicts here at all"
