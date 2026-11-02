@@ -17,9 +17,9 @@ import { spawnSync } from "node:child_process";
 
 // The browser half of docs/test-plans/2026-10-12.md §5
 // (docs/test-runs/2026-10-12-suite-release-batch-fixes.md): a suite run
-// whose template is deleted between passes, a release named after the
-// default branch, and a cleared merge batch size, against the real demo
-// server with the simulated GitHub (-github-sim) behind it.
+// whose template is deleted between passes and a release named after the
+// default branch, against the real demo server with the simulated
+// GitHub (-github-sim) behind it.
 //
 // The demo runs no reconcile loop and no agents, so e2e/releasehelper
 // stands in for both and nothing else: complete-suite-pass finishes a
@@ -200,58 +200,5 @@ test.describe("suite run, default-branch release and merge batch walkthrough", (
     helper(page, "-release", "walk-2", "sync-releases");
     expect(helper(page, "branch-sha", "walk-2.latest").out).toBe(mainBefore);
     expect(helper(page, "branch-sha", "main").out).toBe(mainBefore);
-  });
-
-  test("a cleared merge batch size reads blank after a reload and is grain's default", async ({
-    page,
-  }) => {
-    const stored = async () =>
-      (await (await page.request.get("/api/settings")).json()).mergeBatchSize;
-    const box = async () => {
-      await page.goto("/settings/engine");
-      const b = page.getByLabel("Merge batch size");
-      await expect(b).toBeVisible();
-      return b;
-    };
-    const save = async (b, value) => {
-      const put = page.waitForResponse(
-        (r) =>
-          r.url().endsWith("/api/settings") && r.request().method() === "PUT",
-      );
-      await b.fill(value);
-      await b.press("Enter");
-      return put;
-    };
-
-    expect((await save(await box(), "5")).status()).toBe(200);
-    await expect(await box()).toHaveValue("5");
-    expect(await stored()).toBe(5);
-
-    expect((await save(await box(), "")).status()).toBe(200);
-    const cleared = await box();
-    await expect(cleared).toHaveValue("");
-    await expect(cleared).toHaveAttribute("placeholder", "3");
-    expect(await stored()).toBe(3);
-
-    expect((await save(await box(), "5")).status()).toBe(200);
-    const b = await box();
-    await b.fill("-1");
-    await b.press("Enter");
-    await expect(
-      page
-        .getByText("Merge batch size must be at least 1; -1 was not saved.")
-        .first(),
-    ).toBeVisible();
-    await expect(await box()).toHaveValue("5");
-    expect(await stored()).toBe(5);
-
-    // A number box will not hold "abc" in a real browser; the API is
-    // where it can be sent, and it is refused there without a change.
-    const abc = await page.request.put("/api/settings", {
-      data: { mergeBatchSize: "abc" },
-    });
-    expect(abc.status()).toBe(400);
-    expect(await abc.text()).toContain("mergeBatchSize");
-    expect(await stored()).toBe(5);
   });
 });

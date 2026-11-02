@@ -161,8 +161,6 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		PollInterval:            ptr("1m"),
 		MaxWorkers:              ptr(4),
 		MaxMergesPerRepo:        ptr(2),
-		MergeBatchSize:          ptr(4),
-		MergeGatherWindow:       ptr("3m"),
 		MaxAutoSubmitDepth:      ptr(3),
 		MaxAutoSubmitFanOut:     ptr(4),
 		MaxAgentTurns:           ptr(42),

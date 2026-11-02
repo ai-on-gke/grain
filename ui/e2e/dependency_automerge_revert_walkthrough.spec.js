@@ -269,10 +269,10 @@ test.describe("Multi-Task Dependency Chains, Auto-Merge Lifecycle and Revert Wor
     // GET /api/merge-batches -- single-change overlap re-check on the
     // throwaway ref.
     await expect(
-      page.getByRole("heading", { name: "Merge batches" }),
+      page.getByRole("heading", { name: "Merge re-checks" }),
     ).toBeVisible();
     const batchPanel = page
-      .getByRole("heading", { name: "Merge batches" })
+      .getByRole("heading", { name: "Merge re-checks" })
       .locator("xpath=..");
     const countLabel = batchPanel.getByText(/1 change on main/i);
     const statusChip = batchPanel.getByText("Testing", { exact: true });
