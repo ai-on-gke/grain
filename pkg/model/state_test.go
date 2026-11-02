@@ -100,13 +100,13 @@ func task(approved bool) Task {
 	t := Task{
 		ID: "a1b2", Intent: IntentImplement, Title: "t",
 		Origin: Origin{
-			Attribution: Attribution{Actor: Principal{PrincipalHuman, "someone"}},
+			Attribution: Attribution{Actor: Principal{Kind: PrincipalHuman, ID: "someone"}},
 			Reason:      ReasonDirect,
 		},
 		Binding: BindingDirective,
 	}
 	if approved {
-		t.Approval = &Attribution{Actor: Principal{PrincipalHuman, "someone"}}
+		t.Approval = &Attribution{Actor: Principal{Kind: PrincipalHuman, ID: "someone"}}
 	}
 	return t
 }
@@ -498,8 +498,8 @@ func TestLinkKindsThatBlock(t *testing.T) {
 }
 
 func TestLandingStateIsDecidedByTheActorNotTheReason(t *testing.T) {
-	human := Principal{PrincipalHuman, "someone"}
-	bot := Principal{PrincipalAutomation, "grain"}
+	human := Principal{Kind: PrincipalHuman, ID: "someone"}
+	bot := Principal{Kind: PrincipalAutomation, ID: "grain"}
 	// Every reason, with a human actor: queued. With automation: not.
 	// A sixth reason cannot queue itself because reasons are not read.
 	for _, r := range []OriginReason{ReasonDirect, ReasonSchedule, ReasonFix,

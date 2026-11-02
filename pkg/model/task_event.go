@@ -65,6 +65,9 @@ type TaskEvent struct {
 	// task's agent, an external agent token, or the deployment's own
 	// actor for a caller nothing identified.
 	By Principal
+	// OnBehalfOf is whose request By relayed, nil for its own
+	// (operator-attribution spec §2.4). Nothing sets it yet.
+	OnBehalfOf *Principal
 	// Reason is what they said, "" for nothing.
 	Reason string
 	// Detail is what grain did because of it: for a close, the live run
@@ -95,9 +98,11 @@ func (s *Store) RecordTaskEvent(ctx context.Context, e TaskEvent) (int64, error)
 
 func insertTaskEvent(ctx context.Context, tx *sql.Tx, e TaskEvent) (int64, error) {
 	res, err := tx.ExecContext(ctx,
-		"INSERT INTO `task_event` (`task_id`,`kind`,`at`,`actor_kind`,`actor_id`,`reason`,`detail`) "+
-			"VALUES (?,?,?,?,?,?,?)",
-		e.TaskID, string(e.Kind), e.At.UTC(), string(e.By.Kind), e.By.ID, e.Reason, e.Detail)
+		"INSERT INTO `task_event` (`task_id`,`kind`,`at`,`actor_kind`,`actor_id`,`reason`,`detail`,"+
+			"`actor_source`,`behalf_kind`,`behalf_id`,`behalf_source`) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+		e.TaskID, string(e.Kind), e.At.UTC(), string(e.By.Kind), e.By.ID, e.Reason, e.Detail,
+		string(e.By.Source), behalfColumn(e.OnBehalfOf, func(p Principal) string { return string(p.Kind) }),
+		behalfColumn(e.OnBehalfOf, func(p Principal) string { return p.ID }), sourceOf(e.OnBehalfOf))
 	if err != nil {
 		return 0, err
 	}
@@ -165,16 +170,19 @@ func (s *Store) TaskEventsSince(ctx context.Context, since time.Time) ([]TaskEve
 func (s *Store) taskEvents(ctx context.Context, where string, arg any) ([]TaskEvent, error) {
 	var out []TaskEvent
 	err := each(ctx, s.db,
-		"SELECT `id`,`task_id`,`kind`,`at`,`actor_kind`,`actor_id`,`reason`,`detail` "+
+		"SELECT `id`,`task_id`,`kind`,`at`,`actor_kind`,`actor_id`,`reason`,`detail`,"+
+			"`actor_source`,`behalf_kind`,`behalf_id`,`behalf_source` "+
 			"FROM `task_event` "+where+" ORDER BY `at`, `id`", arg,
 		func(rows *sql.Rows) error {
 			var e TaskEvent
-			var kind, actorKind string
+			var kind, actorKind, actorSource, behalfSource string
+			var behalfKind, behalfID sql.NullString
 			if err := rows.Scan(&e.ID, &e.TaskID, &kind, &e.At, &actorKind, &e.By.ID,
-				&e.Reason, &e.Detail); err != nil {
+				&e.Reason, &e.Detail, &actorSource, &behalfKind, &behalfID, &behalfSource); err != nil {
 				return err
 			}
-			e.Kind, e.By.Kind = TaskEventKind(kind), PrincipalKind(actorKind)
+			e.Kind, e.By.Kind, e.By.Source = TaskEventKind(kind), PrincipalKind(actorKind), AuthSource(actorSource)
+			e.OnBehalfOf = principalFrom(behalfKind, behalfID, behalfSource)
 			out = append(out, e)
 			return nil
 		})
@@ -286,4 +294,13 @@ func MergeTaskEvents(ts []Transition, events []TaskEvent) []Transition {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
 	return out
+}
+
+// behalfColumn is one of task_event's behalf_* columns, "" for none: the
+// columns are NOT NULL DEFAULT ” there, unlike task's nullable pairs.
+func behalfColumn(p *Principal, col func(Principal) string) string {
+	if p == nil {
+		return ""
+	}
+	return col(*p)
 }

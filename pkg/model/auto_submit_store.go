@@ -116,7 +116,7 @@ func (s *Store) selfApprovedProposer(ctx context.Context, id string) (selfApprov
 	if actorKind.Valid {
 		t.Approval = &Attribution{
 			Actor:      Principal{Kind: PrincipalKind(actorKind.String), ID: actorID.String},
-			OnBehalfOf: principalFrom(behalfKind, behalfID),
+			OnBehalfOf: principalFrom(behalfKind, behalfID, ""),
 		}
 	}
 	return SelfApproved(t), parent.String, nil

@@ -548,7 +548,7 @@ func (s *Server) agentRails(ctx context.Context, acting *model.Task, pattern, me
 			me := model.Principal{Kind: model.PrincipalAgent, ID: acting.ID}
 			switch {
 			case strings.HasPrefix(path, "/api/pipeline-pause") || strings.HasPrefix(path, "/api/pause"):
-				if pause.By != me {
+				if !pause.By.Same(me) {
 					return fmt.Errorf("dispatch was paused by %s %s (%s); only they may lift it", pause.By.Kind, pause.By.ID, pause.Reason)
 				}
 				if method == http.MethodDelete && (!pause.AdmitsRunNow() || s.tasks.upgradeUnderway(ctx)) {
@@ -1633,7 +1633,7 @@ func (s *Server) externalAgentRails(ctx context.Context, tok *model.ExternalAgen
 		if pause != nil {
 			switch {
 			case strings.HasPrefix(path, "/api/pipeline-pause") || strings.HasPrefix(path, "/api/pause"):
-				if pause.By != me {
+				if !pause.By.Same(me) {
 					return fmt.Errorf("dispatch was paused by %s %s (%s); only they may lift it", pause.By.Kind, pause.By.ID, pause.Reason)
 				}
 				if method == http.MethodDelete && (!pause.AdmitsRunNow() || s.tasks.upgradeUnderway(ctx)) {

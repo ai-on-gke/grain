@@ -30,12 +30,12 @@ func (s *Store) GetReleaseNote(ctx context.Context, period string) (*ReleaseNote
 	if err := ValidateReleaseNotePeriod(period); err != nil {
 		return nil, err
 	}
-	var title, text, byKind, byID string
+	var title, text, byKind, byID, bySource string
 	var created, updated sql.NullTime
 	err := s.db.QueryRowContext(ctx,
-		"SELECT `title`,`text`,`created_at`,`updated_at`,`updated_by_kind`,`updated_by_id` "+
+		"SELECT `title`,`text`,`created_at`,`updated_at`,`updated_by_kind`,`updated_by_id`,`updated_by_source` "+
 			"FROM `release_note` WHERE `period` = ?", period).
-		Scan(&title, &text, &created, &updated, &byKind, &byID)
+		Scan(&title, &text, &created, &updated, &byKind, &byID, &bySource)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -44,7 +44,7 @@ func (s *Store) GetReleaseNote(ctx context.Context, period string) (*ReleaseNote
 	}
 	n := &ReleaseNote{
 		Period: period, Title: title, Text: text, Length: len(text),
-		UpdatedBy: Principal{Kind: PrincipalKind(byKind), ID: byID},
+		UpdatedBy: Principal{Kind: PrincipalKind(byKind), ID: byID, Source: AuthSource(bySource)},
 	}
 	if created.Valid {
 		n.CreatedAt = created.Time
@@ -71,18 +71,18 @@ func (s *Store) ListReleaseNotes(ctx context.Context) ([]ReleaseNote, error) {
 	var out []ReleaseNote
 	err := each(ctx, s.db,
 		"SELECT `period`,`title`,LENGTH(CAST(`text` AS BLOB)),`created_at`,`updated_at`,"+
-			"`updated_by_kind`,`updated_by_id` FROM `release_note` ORDER BY `period` DESC",
+			"`updated_by_kind`,`updated_by_id`,`updated_by_source` FROM `release_note` ORDER BY `period` DESC",
 		nil,
 		func(rows *sql.Rows) error {
-			var period, title, byKind, byID string
+			var period, title, byKind, byID, bySource string
 			var length int
 			var created, updated sql.NullTime
-			if err := rows.Scan(&period, &title, &length, &created, &updated, &byKind, &byID); err != nil {
+			if err := rows.Scan(&period, &title, &length, &created, &updated, &byKind, &byID, &bySource); err != nil {
 				return err
 			}
 			n := ReleaseNote{
 				Period: period, Title: title, Length: length,
-				UpdatedBy: Principal{Kind: PrincipalKind(byKind), ID: byID},
+				UpdatedBy: Principal{Kind: PrincipalKind(byKind), ID: byID, Source: AuthSource(bySource)},
 			}
 			if created.Valid {
 				n.CreatedAt = created.Time
@@ -144,10 +144,10 @@ func (s *Store) PutReleaseNote(ctx context.Context, n ReleaseNote) error {
 		}
 		_, err = tx.ExecContext(ctx,
 			"REPLACE INTO `release_note` "+
-				"(`period`,`title`,`text`,`created_at`,`updated_at`,`updated_by_kind`,`updated_by_id`) "+
-				"VALUES (?,?,?,?,?,?,?)",
+				"(`period`,`title`,`text`,`created_at`,`updated_at`,`updated_by_kind`,`updated_by_id`,`updated_by_source`) "+
+				"VALUES (?,?,?,?,?,?,?,?)",
 			n.Period, title, text, created.UTC(), n.UpdatedAt.UTC(),
-			string(n.UpdatedBy.Kind), n.UpdatedBy.ID)
+			string(n.UpdatedBy.Kind), n.UpdatedBy.ID, string(n.UpdatedBy.Source))
 		return err
 	})
 }
