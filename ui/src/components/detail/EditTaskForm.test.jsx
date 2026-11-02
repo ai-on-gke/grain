@@ -535,9 +535,36 @@ describe("DetailOverlay edit form", () => {
     expect(JSON.parse(api.mock.calls[0][1].body).priority).toBe(9);
   });
 
+  // As New task, Bulk edit, the template form, propose_task and the API
+  // read it: a whole number written with an exponent is that number.
+  it("saves a Task priority of 1e3 as 1000", async () => {
+    const act = vi.fn().mockResolvedValue(true);
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, priority: 7 }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const priorityInput = screen.getByLabelText("Task priority");
+    await user.clear(priorityInput);
+    await user.type(priorityInput, "1e3");
+
+    expect(priorityInput).not.toHaveAttribute("aria-invalid", "true");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    act.mock.calls[0][0]();
+    expect(JSON.parse(api.mock.calls[0][1].body).priority).toBe(1000);
+  });
+
   // The box's min and step are not enforced on Save (this is not a
   // <form>): a 0 used to save as the default 5 and a 2.5 as 2, silently.
-  it.each(["0", "2.5", "-2"])(
+  it.each(["0", "2.5", "-2", "1e-1", "1e20"])(
     "refuses a Task priority of %s rather than saving another",
     async (typed) => {
       const act = vi.fn().mockResolvedValue(true);
