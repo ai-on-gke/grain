@@ -795,7 +795,7 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 		verdict = mcp.WaitVerdictFailed
 		if run.Conclusion == ci.ConclusionCancelled {
 			resp.CancelReason = strings.TrimSpace(run.CancelReason)
-			resp.CancelledByHand = run.CancelledBy == ci.CancelByOperator
+			resp.CancelledByHand = run.CancelledBy.ByHand()
 			if id, ok := ci.SupersedingRun(run); ok {
 				if next, found := p.CLIActions.CIRun(ctx, id); found && next.ID == id && next.Commit != run.Commit &&
 					strings.EqualFold(next.Repo, scope.TaskRepo) && next.Ref == scope.TaskBranch {

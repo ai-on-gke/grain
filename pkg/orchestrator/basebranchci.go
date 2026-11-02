@@ -772,7 +772,7 @@ func collectBaseBranchCI(ctx context.Context, deps Deps, row model.BaseBranchCI,
 		// unjudged for ever because of it is the same dead end (task 285).
 		// It is retried after the same ciRetryDelay as grain's own.
 		row.Conclusion = string(ci.ConclusionErrored)
-		if run.CancelledBy == ci.CancelByOperator {
+		if run.CancelledBy.ByHand() {
 			row.Detail = "a person stopped this run: " + ciDetail(run)
 		} else {
 			row.Detail = "grain stopped this run itself: " + ciDetail(run)
@@ -1267,7 +1267,7 @@ func baseBranchCIWanted(ctx context.Context, store *model.Store,
 // errored, since a daemon restart or an upgrade killing the run that was
 // judging `main` is a verdict about nothing and used to leave the branch
 // unjudged until somebody happened to merge again (grain/task-471). That
-// includes a run an operator cancelled (ci.CancelByOperator): for a while
+// includes a run somebody cancelled (CancelledBy.ByHand): for a while
 // it was left alone, which left a branch whose wedged run somebody stopped
 // unjudged for good (task 285).
 //
