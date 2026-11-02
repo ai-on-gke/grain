@@ -145,7 +145,36 @@ func (s CIRepoScope) permits(repo string) bool {
 // a run with no repository of its own, whose calls are refused before
 // any lookup rather than after one -- a lookup that answered would be a
 // fact about somebody else's run.
-func (s CIRepoScope) mayReadAny() bool { return s.AllRepos || s.Repo != "" || len(s.Reads) > 0 }
+func (s CIRepoScope) mayReadAny() bool {
+	return s.AllRepos || strings.TrimSpace(s.Repo) != "" || s.readsList() != ""
+}
+
+// defaultRepo is the single repository an unscoped call defaults to: Repo when
+// the run has one of its own in CI scope, or its sole Read repository when it
+// has none of its own and reads exactly one. Empty when AllRepos is set with no
+// Repo, when the run reads nothing, or when it reads several repositories with
+// none of its own to choose between.
+func (s CIRepoScope) defaultRepo() string {
+	if r := strings.TrimSpace(s.Repo); r != "" {
+		return r
+	}
+	if s.AllRepos {
+		return ""
+	}
+	var sole string
+	for _, r := range s.Reads {
+		r = strings.TrimSpace(r)
+		if r == "" {
+			continue
+		}
+		if sole == "" {
+			sole = r
+		} else if !strings.EqualFold(sole, r) {
+			return ""
+		}
+	}
+	return sole
+}
 
 // refuseAll is what such a run is told, with both ways out of it: have a
 // repository, or hold the wide grant.
@@ -155,15 +184,23 @@ func (s CIRepoScope) refuseAll() error {
 		CIWideReadGrant)
 }
 
+// refuseMissingRepo is what a caller omitting "repo" is told when the run has
+// no own repository in CI scope and may read more than one repository, so an
+// unfiltered query across the deployment cannot be sent on its behalf.
+func (s CIRepoScope) refuseMissingRepo() error {
+	return fmt.Errorf("specify \"repo\" (%s): this run has no repository of its own in CI scope and may read more than one",
+		s.readsList())
+}
+
 // narrow is the scope applied to one list_ci_runs question: the filter a
 // caller asked, pinned to what this run may see, or the refusal to hand
 // back instead.
 //
-// A caller that named no repository gets its own, rather than every
-// repository's runs filtered down afterwards. Pinning it into the filter
-// is what makes the answer's own heading honest -- the list says "Filter:
-// repo acme/widgets" above itself, so a reader can see what it was
-// narrowed to without being told separately.
+// A caller that named no repository gets its own (or its sole readable
+// repository), rather than every repository's runs filtered down afterwards.
+// Pinning it into the filter is what makes the answer's own heading honest --
+// the list says "Filter: repo acme/widgets" above itself, so a reader can see
+// what it was narrowed to without being told separately.
 func (s CIRepoScope) narrow(f ci.RunFilter) (ci.RunFilter, error) {
 	if s.AllRepos {
 		return f, nil
@@ -177,7 +214,11 @@ func (s CIRepoScope) narrow(f ci.RunFilter) (ci.RunFilter, error) {
 	// A repository the caller named and may read -- one of Reads -- is
 	// kept as asked rather than swapped for this run's own.
 	if f.Repo == "" {
-		f.Repo = s.Repo
+		def := s.defaultRepo()
+		if def == "" {
+			return ci.RunFilter{}, s.refuseMissingRepo()
+		}
+		f.Repo = def
 	}
 	return f, nil
 }
@@ -222,9 +263,13 @@ func (s CIRepoScope) refuseRepo(repo string) error {
 		if s.Repo != "" {
 			own = s.Repo + ", its own repository, "
 		}
-		return fmt.Errorf("%q is not a repository this run may read CI for: use %s%s, which it may read, "+
-			"or leave \"repo\" out. (A task holding the %s grant reads every repository's runs; this one does not.)",
-			repo, own, reads, CIWideReadGrant)
+		leaveOut := ""
+		if s.defaultRepo() != "" {
+			leaveOut = ", or leave \"repo\" out"
+		}
+		return fmt.Errorf("%q is not a repository this run may read CI for: use %s%s, which it may read%s. "+
+			"(A task holding the %s grant reads every repository's runs; this one does not.)",
+			repo, own, reads, leaveOut, CIWideReadGrant)
 	}
 	return fmt.Errorf("%q is not a repository this run may read CI for: use %s, its own repository, "+
 		"or leave \"repo\" out. (A task holding the %s grant reads every repository's runs; this one does not.)",

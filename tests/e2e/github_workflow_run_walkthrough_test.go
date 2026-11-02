@@ -285,32 +285,37 @@ trigger:
 	}
 	assertNoForkEffect()
 
-	// The review template grants grain-ci (model.workflowReviewTemplate),
-	// for list_ci_runs and get_ci_log, but composing a task for a
-	// repository grain CI does not judge strips every grain-ci grant
-	// (model.applyGrainCIGrant) -- so the reviewer of a GitHub run is
-	// told to run `grain ci log 1201` and has no tool to do it with.
-	// Pinned as it stands; the follow-up filed from
-	// docs/test-runs/2026-11-01-github-actions-ci-workflow-run.md (B2)
-	// flips this assertion.
+	// Composing a task for a repository grain CI does not judge strips
+	// workflowReviewTemplate's grain-ci grant (model.applyGrainCIGrant,
+	// so merge gating is untouched) and attaches a repo-scoped
+	// api:ci-read@acme/widgets grant instead, so the reviewer of a GitHub
+	// workflow run can read the synthesized ci.Run log it was asked to
+	// inspect (`grain ci log 1201` / get_ci_log).
+	var hasCIRead bool
 	for _, g := range review.Grants {
 		if g.Capability == "grain-ci" {
-			t.Fatalf("review task holds grain-ci in a ci_mode github repo; update this walkthrough: %+v", review.Grants)
+			t.Fatalf("review task holds grain-ci in a ci_mode github repo: %+v", review.Grants)
+		}
+		if g.Capability == "api:ci-read@acme/widgets" && g.Via == model.GrantByGrain {
+			hasCIRead = true
 		}
 	}
-	if err := w.store.UpdateTask(ctx, review.ID, func(t *model.Task) error {
-		t.Grants = append(t.Grants, model.Grant{Capability: "grain-ci", Via: model.GrantByGrain})
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+	if !hasCIRead {
+		t.Fatalf("review task grants = %+v, want api:ci-read@acme/widgets (GrantByGrain)", review.Grants)
 	}
-	// 4. Holding it, the review task reads the GitHub run's log from its
-	// sandbox: the synthesized ci.Run behind `grain ci log 1201`.
+	// 4. With its composed grant, the review task reads the GitHub run's
+	// log from its sandbox: the synthesized ci.Run behind `grain ci log 1201`.
 	agent := startMCPServer(t, w.bin, "-sandbox-root", t.TempDir(), "-server", w.daemonURL,
-		"-task", review.ID, "-grant", "grain-ci", "-pr-repo", "acme/widgets", "-pr-branch", review.BranchName())
+		"-task", review.ID, "-pr-repo", "acme/widgets", "-pr-branch", review.BranchName())
 	text, isErr := callTool(t, agent, "get_ci_log", map[string]any{"run_id": "1201"})
 	if isErr || !strings.Contains(text, "pushing image to registry: 500 Internal Server Error") {
 		t.Errorf("get_ci_log {run_id: 1201} = %v:\n%s", isErr, text)
+	}
+	if runsText, runsErr := callTool(t, agent, "list_ci_runs", map[string]any{}); runsErr {
+		t.Errorf("list_ci_runs {} = %v:\n%s", runsErr, runsText)
+	}
+	if otherText, otherErr := callTool(t, agent, "list_ci_runs", map[string]any{"repo": "acme/other"}); !otherErr {
+		t.Errorf("list_ci_runs {repo: acme/other} succeeded with repo-scoped grant:\n%s", otherText)
 	}
 
 	// 6. An unchanged poll is a 304: revalidated, so free.

@@ -418,7 +418,7 @@ With `directConfigWrites: true` and `settings_locked: true`, `GET /api/config` r
 
 ### D-11: Config-managed notices link files that do not exist
 
-*Remainder, 2026-11-01 (`docs/test-runs/2026-11-01-settings-ownership-lock.md`): the Tasks and Capabilities notices still link `settings/capabilities.yml`, which a deployment that has not adopted the capability catalogue does not export, so the Config Repo Browser answers "file does not exist" (and Tasks draws that link twice). Filed as a follow-up.*
+*Fixed. Remainder 2026-11-01 (task 2281; found in `docs/test-runs/2026-11-01-settings-ownership-lock.md`): `ConfigManagedNotice` and `ReadOnlyGrants` drop paths that `GET /api/state-repo/files` says have not been exported (keeping at least the first path), and `TasksSection`'s `ReadOnlyGrants` omits its per-card `settings/capabilities.yml` link so Settings → Tasks links each file once (`ConfigRepoLink.test.jsx`, `config-repo-only-settings.spec.js`).*
 
 *Fixed in `CONFIG_REPO_SECTION_PATHS` 2026-10-31: Git links `tables/grain_config.json` and `tables/repo_config.json`, Agents `tables/grain_config.json`. The `trustboundary.NeverAutoMergePaths` entries are left (harmless).*
 

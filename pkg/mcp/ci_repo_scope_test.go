@@ -362,3 +362,55 @@ func TestListCIRunsSaysWhichRepositoriesTheTaskReads(t *testing.T) {
 		}
 	}
 }
+
+type filterRecordingCIRunner struct {
+	twoRepoCIRunner
+	filters []ci.RunFilter
+}
+
+func (r *filterRecordingCIRunner) FindGrainCIRuns(ctx context.Context, filter ci.RunFilter, limit int) (ci.RunPage, error) {
+	r.filters = append(r.filters, filter)
+	return r.twoRepoCIRunner.FindGrainCIRuns(ctx, filter, limit)
+}
+
+func TestReadOnlyScopeWithNoOwnRepoPinsSingleReadAndRefusesAmbiguousEmpty(t *testing.T) {
+	// Single repo-scoped ci:read grant when -pr-repo is absent or outside the grant:
+	// omitting "repo" pins the filter to that sole readable repository rather than
+	// querying Repo == "" across the whole deployment.
+	singleRunner := &filterRecordingCIRunner{}
+	singleScope := CIRepoScope{Reads: []string{"acme/widgets"}}
+	readTools := NewGrainCIReadTools(singleRunner, singleScope)
+	listRes := readTools[0].Handler(context.Background(), map[string]any{})
+	if listRes.IsError {
+		t.Fatalf("list_ci_runs with sole Read failed: %s", listRes.Text)
+	}
+	if len(singleRunner.filters) != 1 || singleRunner.filters[0].Repo != "acme/widgets" {
+		t.Fatalf("list_ci_runs filters = %+v, want [{Repo:acme/widgets}]", singleRunner.filters)
+	}
+	if !strings.Contains(listRes.Text, "ci-mine") || strings.Contains(listRes.Text, "ci-theirs") || strings.Contains(listRes.Text, "acme/gadgets") {
+		t.Errorf("list_ci_runs output = %s", listRes.Text)
+	}
+
+	// Multiple repo-scoped ci:read grants with no own Repo: omitting "repo" is
+	// refused before FindGrainCIRuns is called so an unfiltered deployment-wide
+	// query cannot starve readable repos or leak out-of-scope run counts.
+	multiRunner := &filterRecordingCIRunner{}
+	multiScope := CIRepoScope{Reads: []string{"acme/widgets", "acme/other"}}
+	multiTools := NewGrainCIReadTools(multiRunner, multiScope)
+	ambiguousList := multiTools[0].Handler(context.Background(), map[string]any{})
+	if !ambiguousList.IsError || !strings.Contains(ambiguousList.Text, "acme/widgets") || !strings.Contains(ambiguousList.Text, "acme/other") {
+		t.Errorf("list_ci_runs without repo = %+v, want refusal naming readable repos", ambiguousList)
+	}
+	ambiguousHist := multiTools[2].Handler(context.Background(), map[string]any{"test_name": "TestFoo"})
+	if !ambiguousHist.IsError || !strings.Contains(ambiguousHist.Text, "acme/widgets") || strings.Contains(ambiguousHist.Text, "leave \"repo\" out") {
+		t.Errorf("query_test_history without repo = %+v, want refusal without 'leave \"repo\" out'", ambiguousHist)
+	}
+	if len(multiRunner.filters) != 0 {
+		t.Fatalf("ambiguous calls sent FindGrainCIRuns queries: %+v", multiRunner.filters)
+	}
+	// Refusal for an out-of-scope repo also omits "leave \"repo\" out" when no default exists.
+	wrongRepo := multiTools[0].Handler(context.Background(), map[string]any{"repo": "acme/gadgets"})
+	if !wrongRepo.IsError || strings.Contains(wrongRepo.Text, "leave \"repo\" out") {
+		t.Errorf("out-of-scope refusal = %+v, should not suggest leaving repo out", wrongRepo)
+	}
+}
