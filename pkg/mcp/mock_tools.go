@@ -990,8 +990,8 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 			}
 			supersedes, _ := argString(args, "supersedes")
 			reviewTemplateID, _ := argString(args, "review_template_id")
-			priority, hasPriority := argInt(args, "priority")
-			if hasPriority && priority < 1 {
+			priority, hasPriority, whole := argWholeInt(args, "priority")
+			if hasPriority && (!whole || priority < 1) {
 				return Result{Text: "priority must be a positive integer (1 or more; leave it out for the default, 5)", IsError: true}
 			}
 			cpus, _ := argInt(args, "sandbox_cpus")
