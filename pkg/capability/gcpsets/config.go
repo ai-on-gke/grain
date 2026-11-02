@@ -75,7 +75,11 @@ var migratedNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$`)
 var rolePattern = regexp.MustCompile(`^(roles/[A-Za-z0-9_.]+|projects/[a-z0-9-]+/roles/[A-Za-z0-9_.]+|organizations/[0-9]+/roles/[A-Za-z0-9_.]+)$`)
 var projectPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
 var migratedProjectPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.:-]{0,62}$`)
-var keyPathPattern = regexp.MustCompile(`^/home/debian/\.[a-zA-Z0-9._-]+\.json$`)
+
+// keyPathPattern is where a migrated gcp-key:<name> set may place its
+// key: the path the in-process provider used, and nowhere else in the
+// sandbox's home (a set's key must not overwrite another dotfile).
+var keyPathPattern = regexp.MustCompile(`^/home/debian/\.gcp-service-account-[a-zA-Z0-9_-]+\.json$`)
 
 // Admin is one admin account: the identity that creates a set's service
 // accounts, binds their roles and mints their keys.

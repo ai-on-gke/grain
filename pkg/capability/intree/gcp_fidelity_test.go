@@ -109,7 +109,9 @@ func TestGCPKeyMigrationFidelity(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	now := time.Date(2026, 11, 2, 10, 0, 0, 0, time.UTC)
+	// The gcp server checks deadlines against the real clock, so the test
+	// clock starts from it rather than a fixed date that later passes.
+	now := time.Now().UTC().Truncate(time.Second)
 	cloud.Now = func() time.Time { return now }
 	if err := store.PutTask(ctx, model.Task{
 		ID:     "42",

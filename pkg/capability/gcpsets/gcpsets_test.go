@@ -124,6 +124,14 @@ func TestConfigValidationForBothCredentialSources(t *testing.T) {
 			c["admin_credentials"] = `{"a": ` + adminKey + `}`
 			c["permission_sets"].([]any)[0].(map[string]any)["resource_scope"] = "topics/x"
 		}, "buckets/<name>"},
+		"migrated key_path": {func(c map[string]any) {
+			c["admin_credentials"] = `{"a": ` + adminKey + `}`
+			c["permission_sets"].([]any)[0].(map[string]any)["key_path"] = "/home/debian/.gcp-service-account-s.json"
+		}, ""},
+		"key_path over another dotfile": {func(c map[string]any) {
+			c["admin_credentials"] = `{"a": ` + adminKey + `}`
+			c["permission_sets"].([]any)[0].(map[string]any)["key_path"] = "/home/debian/.claude.json"
+		}, "is not a sandbox key path"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := base()

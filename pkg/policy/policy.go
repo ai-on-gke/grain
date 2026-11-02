@@ -480,12 +480,18 @@ func deniesCapability(patterns []string, capability string) bool {
 			return true
 		}
 	}
+	unnamedGCPKey := gcpKeySetUnnamed(capability)
 	if to, ok := retiredAs(capability); ok {
 		capability = to
 	}
 	for _, pattern := range patterns {
 		trimmedPattern := strings.ToLower(strings.TrimSpace(pattern))
 		if strings.HasPrefix(trimmedPattern, "gcp-key:") {
+			// The server, not the policy, picks the set of a grant that
+			// names none, so any gcp-key:<set> deny may be the one it picks.
+			if unnamedGCPKey {
+				return true
+			}
 			if to, ok := retiredAs(trimmedPattern); ok && strings.EqualFold(to, strings.TrimSpace(capability)) {
 				return true
 			}
@@ -511,6 +517,28 @@ func deniesCapability(patterns []string, capability string) bool {
 		}
 	}
 	return false
+}
+
+// gcpKeySetUnnamed reports whether capability is a gcp#gcp-key grant that
+// leaves its permission set to the server: no permission_set, or "default"
+// in it or in the old account field. The gcp server then mints its first
+// configured set (newGCPMethod), which need not be sandbox-agent, so every
+// gcp-key:<set> deny has to stop it. (Allow is safe already: it admits one
+// only on a pattern matching bare gcp-key, which covers every set.)
+func gcpKeySetUnnamed(capability string) bool {
+	s := strings.TrimSpace(capability)
+	if !model.IsCapabilityRef(s) {
+		return false
+	}
+	spec, err := model.CapabilityGrantSpec(s)
+	if err != nil || spec.Capability != model.GCPKeyRef {
+		return false
+	}
+	set, _ := spec.With["permission_set"].(string)
+	if old, _ := spec.With["account"].(string); old != "" {
+		set = old
+	}
+	return set == "" || set == "default"
 }
 
 // becameCapability reports whether capability is to, the grant a retired
