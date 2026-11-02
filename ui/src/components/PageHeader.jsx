@@ -331,7 +331,34 @@ export default function PageHeader({
       setOverflowing((was) => (was === clipped ? was : clipped));
     };
     measure();
-    if (typeof ResizeObserver === "undefined") return undefined;
+    // The slot clips with overflow, which a browser still scrolls to
+    // show what is focused in it: Tab onto an action wrapped behind
+    // "more" scrolled the rail to that row and left it there, the
+    // search box and count gone from it until a reload. Closed, the slot
+    // only ever shows its first line; a keyboard stop on a later one
+    // opens the menu instead, with focus left where it landed.
+    const onScroll = () => {
+      if (!node.classList.contains("page-header-slot-expanded")) {
+        node.scrollTop = 0;
+      }
+    };
+    const onFocusIn = (event) => {
+      if (node.classList.contains("page-header-slot-expanded")) return;
+      const top =
+        event.target.getBoundingClientRect().top -
+        node.getBoundingClientRect().top +
+        node.scrollTop;
+      node.scrollTop = 0;
+      if (top >= node.clientHeight) setExpanded(true);
+    };
+    node.addEventListener("scroll", onScroll);
+    node.addEventListener("focusin", onFocusIn);
+    if (typeof ResizeObserver === "undefined") {
+      return () => {
+        node.removeEventListener("scroll", onScroll);
+        node.removeEventListener("focusin", onFocusIn);
+      };
+    }
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     const watchChildren = new MutationObserver(() => {
@@ -341,6 +368,8 @@ export default function PageHeader({
     watchChildren.observe(node, { childList: true, subtree: true });
     for (const child of node.children) observer.observe(child);
     return () => {
+      node.removeEventListener("scroll", onScroll);
+      node.removeEventListener("focusin", onFocusIn);
       observer.disconnect();
       watchChildren.disconnect();
     };
@@ -359,6 +388,7 @@ export default function PageHeader({
   const moreRef = useRef(null);
   useEffect(() => {
     const header = headerRef.current;
+    if (!expanded && slotRef.current) slotRef.current.scrollTop = 0;
     if (!expanded || !header) return undefined;
     const onPointerDown = (event) => {
       const target = event.target;
@@ -374,11 +404,22 @@ export default function PageHeader({
       setExpanded(false);
       moreRef.current?.focus();
     };
+    // Tab on past the rail closes it too, rather than leaving the menu
+    // over the page the keyboard has moved on to.
+    const onFocusOut = (event) => {
+      const next = event.relatedTarget;
+      if (!(next instanceof Element) || header.contains(next)) return;
+      if (next.closest(".MuiPopover-root, .MuiModal-root, .MuiPopper-root"))
+        return;
+      setExpanded(false);
+    };
     document.addEventListener("pointerdown", onPointerDown);
     header.addEventListener("keydown", onKeyDown);
+    header.addEventListener("focusout", onFocusOut);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown);
       header.removeEventListener("keydown", onKeyDown);
+      header.removeEventListener("focusout", onFocusOut);
     };
   }, [expanded]);
 

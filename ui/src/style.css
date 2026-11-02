@@ -573,8 +573,15 @@ samp,
   flex: 1;
 }
 
+/* The chat fills what the body has left, but never less than a working
+   window: on a short screen -- a 320x568 phone, or a phone turned on its
+   side -- New chat's name field and Create button left it 2px tall, the
+   composer clipped inside it and impossible to tap. The window's floor
+   makes the chat's own basis (flex: 1 0 auto) tall enough, and the body
+   scrolls to it instead. The window's basis is 0px, not 0%, so a long
+   conversation still scrolls the message list rather than growing it. */
 .console-session-body .task-chat {
-  flex: 1;
+  flex: 1 0 auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -585,7 +592,8 @@ samp,
 
 .console-session-body .task-chat-window {
   height: auto;
-  flex: 1;
+  flex: 1 1 0px;
+  min-height: 14rem;
 }
 
 .console-session-capabilities {
