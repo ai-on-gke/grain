@@ -76,6 +76,10 @@ type Server struct {
 	// RemoteMinBackoff and RemoteMaxBackoff bound the wait between
 	// reconnects to Remote: 1s and defaultRemoteMaxBackoff (5s) when zero.
 	RemoteMinBackoff, RemoteMaxBackoff time.Duration
+	// StageRoot is where OpStage may write on this machine, for a run a
+	// daemon reaches over Remote: "~/.grain" under hostd's home when
+	// empty (stageRoot).
+	StageRoot string
 	// Builtins are this build's own capabilities entries
 	// (intree.HostdBuiltins). Each one the allowlist has no entry of that
 	// name for is offered anyway, running BuiltinCommand -- this hostd's
@@ -563,6 +567,9 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		h.Draining = s.Draining()
 		h.Cutover = !h.Draining && s.CuttingOver()
 		describeCopies(ctx, &h, s.CurrentLink)
+		if sessionMux(ctx) != nil {
+			s.describeRemote(&h)
+		}
 		if req.Hello != nil {
 			if err := Compatible(h, *req.Hello); err != nil {
 				s.logf("hostd: a daemon said hello with %v", err)
@@ -596,6 +603,21 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 	case OpSocketOwner:
 		_ = writeJSON(conn, frameSocketOwner, SocketOwner{PID: s.socketOwner(req.Inode)})
 		return
+	case OpStage:
+		if sessionMux(ctx) == nil {
+			s.refuse(conn, "stage is served only over a session hostd dialed out on (grain hostd -server)")
+			return
+		}
+		_ = writeJSON(conn, frameStaged, s.stage(req.Stage))
+		return
+	case OpListen:
+		m := sessionMux(ctx)
+		if m == nil {
+			s.refuse(conn, "listen is served only over a session hostd dialed out on (grain hostd -server)")
+			return
+		}
+		s.listenCarry(ctx, conn, m, req.ID)
+		return
 	case OpStart:
 	default:
 		s.refuse(conn, fmt.Sprintf("unknown op %q", req.Op))
@@ -625,6 +647,11 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 			s.mu.Unlock()
 			s.signalChanged()
 		}()
+	}
+	if sessionMux(ctx) != nil {
+		// A run over the session was staged under StageRoot, which the
+		// daemon could not have named in this machine's allowlist.
+		a = a.withCLIRoot(s.stageRoot())
 	}
 	spec, err := a.Check(&req, s.env())
 	if err != nil {

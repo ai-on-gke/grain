@@ -59,6 +59,10 @@ type Remote struct {
 	// many have been refused since without a line of their own.
 	refusedAt time.Time
 	refused   int
+
+	// carries are the listeners this daemon has asked its hostd for
+	// (Carry), which the streams hostd opens back name.
+	carries carryRegistry
 }
 
 // refusalLogEvery is how often at most a refused hostd is logged: a
@@ -129,6 +133,7 @@ func (r *Remote) Serve(ctx context.Context, conn net.Conn, peer RemotePeer) {
 		_ = prev.m.Close()
 	}
 	r.logf("grain daemon: grain hostd on %s (build %s) connected from %s", peer.Host, peer.Build, peer.Addr)
+	go r.acceptCarries(m)
 	select {
 	case <-ctx.Done():
 	case <-m.Done():

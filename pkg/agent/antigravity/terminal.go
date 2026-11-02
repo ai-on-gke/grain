@@ -128,12 +128,18 @@ func (f *Framework) TerminalCommand(ctx context.Context, cfg agent.RunConfig) (*
 	if err != nil {
 		return nil, fmt.Errorf("antigravity: %w", err)
 	}
-	home, _, removeHome, err := writeAgyHome(ctx, f.host, nil, f.effectiveRemoteSessionRoot(), "", f.grainBinaryPath, mcpArgs, providerFor(apiKey), agent.RunConfig{CapabilityMCPServers: servers})
+	mcpURL, _, stopMCP, err := f.startCarriedMCP(ctx, mcpArgs)
 	if err != nil {
 		releaseServers()
 		return nil, err
 	}
-	cleanup := func() { releaseServers(); removeHome() }
+	home, _, removeHome, err := writeAgyHomeFor(ctx, f.host, nil, f.effectiveRemoteSessionRoot(), "", f.grainBinaryPath, mcpURL, mcpArgs, providerFor(apiKey), agent.RunConfig{CapabilityMCPServers: servers})
+	if err != nil {
+		stopMCP()
+		releaseServers()
+		return nil, err
+	}
+	cleanup := func() { stopMCP(); releaseServers(); removeHome() }
 
 	var args []string
 	if !f.ambientPermissions {
