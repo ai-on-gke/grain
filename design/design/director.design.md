@@ -44,7 +44,7 @@ Answers "why did task X fail?", "why is the merge queue stuck?", and "how full o
 
 Turns operator goals, design documents, or triage findings into structured backlog work and keeps the queue moving:
 
-- **Decomposition into task graphs.** Files self-contained tasks via `propose_task`, wiring `repo` (explicitly targeting the owning repository), `depends_on` for staged chains, `supersedes` to replace undispatched duplicates, inherited or band-appropriate `priority`, and `hold_for_approval: true` whenever a proposal needs human inspection before running—even on deployments where `ConsoleSession.TasksApproved` (`QueuesProposals`) lets the director queue routine work directly.
+- **Decomposition into task graphs.** Files self-contained tasks via `propose_task`, wiring `repo` (explicitly targeting the owning repository), `depends_on` for staged chains, `supersedes` to replace undispatched duplicates, explicit `priority` (`1` or more, default `5`; proposals do not inherit the session's priority, and values above `max(session.Priority, 5)` are held for a person), and `hold_for_approval: true` whenever a proposal needs human inspection before running—even on deployments where `ConsoleSession.TasksApproved` (`QueuesProposals`) lets the director queue routine work directly.
 - **Day-to-day queue hygiene.** With `api:task-admin` / `api:dispatch-control`, reorders priorities, pauses or resumes tasks and dispatch, stops or retries wedged tasks using `expect` state preconditions, sets or repairs task goals (`GoalDecl`), sends guidance to running task agents (`api_message_task_agent`), and closes obsolete tasks with an audited `reason`.
 
 ### W4 — Configuration and capability hygiene
