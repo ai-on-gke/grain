@@ -20,6 +20,7 @@ import {
   Checkbox,
   FormControlLabel,
   FormGroup,
+  Link,
   MenuItem,
   Paper,
   Stack,
@@ -29,6 +30,7 @@ import {
 import api from "../api.js";
 import { invalidateCapabilityMethods } from "./capabilityMethods.js";
 import { UsageList } from "./CapabilityServersPanel.jsx";
+import { summariseCatalogueEntries } from "./catalogueSummary.js";
 
 // CapabilityPolicyEditor is grain_config.capability_policy
 // (model.CapabilityPolicy, docs/capabilities-spec.md §4.2.2): rules that
@@ -200,6 +202,7 @@ function RuleRow({ rule, index, onChange, onRemove, readOnly }) {
 
 export default function CapabilityPolicyEditor({ showError, readOnly }) {
   const [rules, setRules] = useState(null);
+  const [catalogue, setCatalogue] = useState(null);
   const [dirty, setDirty] = useState(false);
   // preview is the denials a save is waiting on a confirmation for.
   const [preview, setPreview] = useState(null);
@@ -209,6 +212,7 @@ export default function CapabilityPolicyEditor({ showError, readOnly }) {
     try {
       const data = await api("/api/capability-policy");
       setRules((data?.policy?.rules || []).map(fromRule));
+      setCatalogue(data?.policy?.catalogue || null);
       setDirty(false);
       setPreview(null);
     } catch (err) {
@@ -221,6 +225,7 @@ export default function CapabilityPolicyEditor({ showError, readOnly }) {
   }, [load]);
 
   if (!rules) return null;
+  const catalogueEntries = summariseCatalogueEntries(catalogue);
 
   const update = (next) => {
     setRules(next);
@@ -238,6 +243,7 @@ export default function CapabilityPolicyEditor({ showError, readOnly }) {
       });
       invalidateCapabilityMethods();
       setRules((data?.policy?.rules || []).map(fromRule));
+      setCatalogue(data?.policy?.catalogue || null);
       setDirty(false);
       setPreview(null);
     } catch (err) {
@@ -276,7 +282,9 @@ export default function CapabilityPolicyEditor({ showError, readOnly }) {
       <Stack spacing={1.5}>
         {rules.length === 0 && (
           <Typography variant="body2">
-            No rules: every trusted run may.
+            {catalogueEntries.length > 0
+              ? "No method rules; catalogue restrictions from settings/capabilities.yml apply below."
+              : "No rules: every trusted run may."}
           </Typography>
         )}
         {rules.map((rule, i) => (
@@ -290,6 +298,43 @@ export default function CapabilityPolicyEditor({ showError, readOnly }) {
           />
         ))}
       </Stack>
+      {catalogueEntries.length > 0 && (
+        <Alert
+          severity={
+            catalogueEntries.some((e) => e.retired) ? "warning" : "info"
+          }
+          sx={{ mt: 2 }}
+          data-testid="policy-catalogue-entries"
+        >
+          <Typography variant="body2" sx={{ mb: 0.5 }}>
+            Catalogue restrictions in <code>settings/capabilities.yml</code>
+            {catalogueEntries.some((e) => e.scopeSet) && (
+              <>
+                {" "}
+                (see{" "}
+                <Link href="/settings/capabilities#api-scope-sets">
+                  API scope sets
+                </Link>
+                )
+              </>
+            )}
+            :
+          </Typography>
+          <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
+            {catalogueEntries.map((item) => (
+              <Typography
+                key={item.key}
+                component="li"
+                variant="caption"
+                sx={{ overflowWrap: "anywhere" }}
+              >
+                <code>{item.target}</code> — {item.details.join(" · ")} (
+                {item.source})
+              </Typography>
+            ))}
+          </Box>
+        </Alert>
+      )}
       {preview && (
         <Alert severity="warning" sx={{ mt: 2 }} data-testid="policy-preview">
           <Typography variant="body2" sx={{ mb: 1 }}>

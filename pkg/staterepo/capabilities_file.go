@@ -116,6 +116,7 @@ type capabilityAPIScopes struct {
 // neither restricts a set grain ships.
 type capabilityPreset struct {
 	Description  string                        `yaml:"description,omitempty"`
+	Enabled      *bool                         `yaml:"enabled,omitempty"`
 	Scopes       []string                      `yaml:"scopes,omitempty"`
 	Includes     []string                      `yaml:"includes,omitempty"`
 	ScopeRepos   []string                      `yaml:"scope_repos,omitempty"`
@@ -340,8 +341,8 @@ func (d *capabilitiesDoc) catalogue(prev *model.CapabilityCatalogue) *model.Capa
 		if d.APIScopes.Presets != nil {
 			c.APIScopes.Presets = map[string]model.CataloguePreset{}
 			for name, p := range *d.APIScopes.Presets {
-				if p.Restrictions != nil {
-					c.APIScopes.Presets[name] = model.CataloguePreset{Restrictions: p.Restrictions}
+				if p.Enabled != nil || p.Restrictions != nil || !p.definesSet() {
+					c.APIScopes.Presets[name] = model.CataloguePreset{Enabled: p.Enabled, Restrictions: p.Restrictions}
 				}
 			}
 		}
@@ -666,7 +667,16 @@ func capabilitiesDocumentFor(ctx context.Context, db querier) ([]byte, error) {
 	}
 	for name, cp := range cat.APIScopes.Presets {
 		p := presets[name]
-		p.Restrictions = cp.Restrictions
+		rowRequiresPerson := p.Restrictions != nil && p.Restrictions.RequiresPerson
+		p.Enabled = cp.Enabled
+		switch {
+		case cp.Restrictions != nil && rowRequiresPerson && !cp.Restrictions.RequiresPerson:
+			merged := *cp.Restrictions
+			merged.RequiresPerson = true
+			p.Restrictions = &merged
+		case cp.Restrictions != nil || !rowRequiresPerson:
+			p.Restrictions = cp.Restrictions
+		}
 		presets[name] = p
 	}
 	doc.APIScopes = &capabilityAPIScopes{Presets: &presets, RawScopes: cat.APIScopes.RawScopes}
@@ -747,4 +757,27 @@ func checkCapabilities(dir string) error {
 		return fmt.Errorf("staterepo: %s: %s", CapabilitiesPath, strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+// capabilitiesWarnings reports retired in_process keys in
+// settings/capabilities.yml that should be moved to api_scopes.presets.<name>.
+func capabilitiesWarnings(dir string) ([]string, error) {
+	doc, err := readCapabilitiesDoc(dir)
+	if err != nil || doc == nil || len(doc.InProcess) == 0 {
+		return nil, err
+	}
+	names := make([]string, 0, len(doc.InProcess))
+	for name := range doc.InProcess {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var warnings []string
+	for _, name := range names {
+		if preset, ok := model.RetiredInProcessPreset(name); ok {
+			warnings = append(warnings, fmt.Sprintf(
+				"%s: in_process.%s is retired; its entry still binds %s%s, so move it to api_scopes.presets.%s",
+				CapabilitiesPath, name, model.APIGrantPrefix, preset, preset))
+		}
+	}
+	return warnings, nil
 }

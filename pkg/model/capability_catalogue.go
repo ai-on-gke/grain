@@ -131,8 +131,9 @@ type CatalogueInProcess struct {
 	Restrictions *CapabilityRestrictions `json:"restrictions,omitempty" yaml:"restrictions,omitempty"`
 }
 
-// CataloguePreset is one api:<name> scope set's restrictions.
+// CataloguePreset is one api:<name> scope set's entry in api_scopes.presets.
 type CataloguePreset struct {
+	Enabled      *bool                   `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 	Restrictions *CapabilityRestrictions `json:"restrictions,omitempty" yaml:"restrictions,omitempty"`
 }
 
@@ -367,6 +368,50 @@ func (c *CapabilityCatalogue) judgeRetiredInProcess(g string, gc GrantContext) (
 	return person, nil
 }
 
+// canonicalPresetKey maps "grain/<preset>" to "<preset>" for grain's built-in
+// presets so settings/capabilities.yml's api_scopes.presets.<preset> (and
+// retired in_process.<preset> entries) bind api:<preset> and api:grain/<preset>
+// alike. Declared scope sets keep their own name.
+func canonicalPresetKey(what string) string {
+	if trimmed, ok := strings.CutPrefix(what, APIScopeSetBuiltinPrefix); ok {
+		if _, isPreset := APIPresetNamed(trimmed); isPreset {
+			return trimmed
+		}
+	}
+	return what
+}
+
+// presetLookupKeys are the api_scopes.presets keys that bind an api grant's
+// target (both "<preset>" and "grain/<preset>" for a built-in preset).
+func presetLookupKeys(what string) []string {
+	canon := canonicalPresetKey(what)
+	if canon != what {
+		return []string{canon, what}
+	}
+	if _, isPreset := APIPresetNamed(canon); isPreset {
+		return []string{canon, APIScopeSetBuiltinPrefix + canon}
+	}
+	return []string{what}
+}
+
+// RetiredInProcessPreset returns the api_scopes.presets key that replaced a
+// 1-to-1 retired in-process capability (such as "memory" -> "memory"), or
+// false when name is not a retired in-process capability replaced by a preset.
+func RetiredInProcessPreset(name string) (string, bool) {
+	to, ok := legacyGrantReplacements[strings.TrimSpace(name)]
+	if !ok {
+		return "", false
+	}
+	preset, isAPI := strings.CutPrefix(to, APIGrantPrefix)
+	if !isAPI {
+		return "", false
+	}
+	if _, ok := APIPresetNamed(preset); !ok {
+		return "", false
+	}
+	return preset, true
+}
+
 // retiredInProcessNames are the retired bare capabilities whose
 // replacement is g: an api: grant (any @repo limit aside), or a recorded
 // capability-server grant such as grain#host-exec={}. Sorted.
@@ -380,7 +425,7 @@ func retiredInProcessNames(g string) []string {
 		}
 	} else {
 		what, _, _ := strings.Cut(strings.TrimPrefix(grant, APIGrantPrefix), "@")
-		grant = APIGrantPrefix + what
+		grant = APIGrantPrefix + canonicalPresetKey(what)
 	}
 	var out []string
 	for legacy, to := range legacyGrantReplacements {
@@ -400,13 +445,29 @@ func retiredInProcessNames(g string) []string {
 func (c *CapabilityCatalogue) judgeAPIScopes(g string, gc GrantContext) (bool, error) {
 	rest := strings.TrimPrefix(g, APIGrantPrefix)
 	what, _, _ := strings.Cut(rest, "@")
-	if p, ok := c.APIScopes.Presets[what]; ok {
-		return p.Restrictions.judge(g, gc, nil)
+	matchedPreset := false
+	person := false
+	for _, key := range presetLookupKeys(what) {
+		p, ok := c.APIScopes.Presets[key]
+		if !ok {
+			continue
+		}
+		matchedPreset = true
+		if p.Enabled != nil && !*p.Enabled {
+			return false, fmt.Errorf("capability %s is disabled in settings/capabilities.yml", g)
+		}
+		reqPerson, err := p.Restrictions.judge(g, gc, nil)
+		if err != nil {
+			return false, err
+		}
+		person = person || reqPerson
+	}
+	if matchedPreset {
+		return person, nil
 	}
 	if !strings.Contains(what, ":") {
 		return false, nil
 	}
-	person := false
 	for _, pattern := range sortedRestrictionKeys(c.APIScopes.RawScopes) {
 		if ok, _ := path.Match(pattern, what); !ok {
 			continue
@@ -422,20 +483,46 @@ func (c *CapabilityCatalogue) judgeAPIScopes(g string, gc GrantContext) (bool, e
 }
 
 func (c *CapabilityCatalogue) judgeInProcess(g string, gc GrantContext) (bool, error) {
+	person := false
 	entry, ok := c.InProcess[g]
 	if !ok {
-		family, _, cut := strings.Cut(g, ":")
-		if !cut {
-			return false, nil
-		}
-		if entry, ok = c.InProcess[family]; !ok {
-			return false, nil
+		if family, _, cut := strings.Cut(g, ":"); cut {
+			entry, ok = c.InProcess[family]
 		}
 	}
-	if entry.Enabled != nil && !*entry.Enabled {
-		return false, fmt.Errorf("capability %s is disabled in settings/capabilities.yml", g)
+	if ok {
+		if entry.Enabled != nil && !*entry.Enabled {
+			return false, fmt.Errorf("capability %s is disabled in settings/capabilities.yml", g)
+		}
+		p, err := entry.Restrictions.judge(g, gc, nil)
+		if err != nil {
+			return false, err
+		}
+		person = person || p
 	}
-	return entry.Restrictions.judge(g, gc, nil)
+	trimmed := strings.TrimSpace(g)
+	if repl := CanonicalLegacyGrants(trimmed); !(len(repl) == 1 && repl[0] == trimmed) {
+		for _, rg := range repl {
+			p, err := c.judge(rg, gc)
+			if err != nil {
+				return false, err
+			}
+			person = person || p
+		}
+	} else if preset := APIAliasPreset(trimmed); preset != "" {
+		p, err := c.judgeAPIScopes(APIGrantPrefix+preset, gc)
+		if err != nil {
+			return false, err
+		}
+		person = person || p
+	} else if trimmed == ReleaseGateReadCapability {
+		p, err := c.judgeAPIScopes(APIGrantPrefix+ReleaseGateReadCapability, gc)
+		if err != nil {
+			return false, err
+		}
+		person = person || p
+	}
+	return person, nil
 }
 
 func (c *CapabilityCatalogue) server(id string) (CatalogueServer, bool) {
@@ -775,4 +862,344 @@ func SplitCapabilities(s string) []string {
 		return nil
 	}
 	return splitCapabilities(s)
+}
+
+// EffectivePreset returns the catalogue entry binding a scope set or preset
+// (such as "grain/memory" -> presetKey "memory", or "ops/triage" ->
+// "ops/triage"), combining any api_scopes.presets entry with any retired
+// in_process entry that still binds it. legacyInProcess lists any retired
+// in_process keys contributing to the result.
+func (c *CapabilityCatalogue) EffectivePreset(name string) (presetKey string, entry CataloguePreset, legacyInProcess []string, ok bool) {
+	presetKey = canonicalPresetKey(strings.TrimSpace(name))
+	if c == nil {
+		return presetKey, CataloguePreset{}, nil, false
+	}
+	for _, key := range presetLookupKeys(name) {
+		p, exists := c.APIScopes.Presets[key]
+		if !exists {
+			continue
+		}
+		entry = mergeCataloguePresets(entry, ok, p)
+		ok = true
+	}
+	for _, legacy := range sortedInProcess(c.InProcess) {
+		target, isRetired := RetiredInProcessPreset(legacy)
+		if !isRetired || target != presetKey {
+			continue
+		}
+		ip := c.InProcess[legacy]
+		entry = mergeCataloguePresets(entry, ok, CataloguePreset{
+			Enabled:      ip.Enabled,
+			Restrictions: ip.Restrictions,
+		})
+		ok = true
+		legacyInProcess = append(legacyInProcess, legacy)
+	}
+	return presetKey, entry, legacyInProcess, ok
+}
+
+// FoldRetiredInProcess moves retired 1-to-1 preset capability entries out of
+// c.InProcess into c.APIScopes.Presets, merging restrictions conservatively
+// when both exist. It returns true when c was modified.
+func (c *CapabilityCatalogue) FoldRetiredInProcess() bool {
+	return c.foldRetiredInProcessMap(nil)
+}
+
+func (c *CapabilityCatalogue) foldRetiredInProcessMap(retiredPresets map[string]string) bool {
+	if c == nil || len(c.InProcess) == 0 {
+		return false
+	}
+	changed := false
+	for _, legacy := range sortedInProcess(c.InProcess) {
+		var preset string
+		var ok bool
+		if retiredPresets != nil {
+			preset, ok = retiredPresets[legacy]
+		} else {
+			preset, ok = RetiredInProcessPreset(legacy)
+		}
+		if !ok {
+			continue
+		}
+		ip := c.InProcess[legacy]
+		if ip.Secret != "" {
+			continue
+		}
+		if c.APIScopes.Presets == nil {
+			c.APIScopes.Presets = map[string]CataloguePreset{}
+		}
+		existing, hasExisting := c.APIScopes.Presets[preset]
+		c.APIScopes.Presets[preset] = mergeCataloguePresets(existing, hasExisting, CataloguePreset{
+			Enabled:      ip.Enabled,
+			Restrictions: ip.Restrictions,
+		})
+		delete(c.InProcess, legacy)
+		changed = true
+	}
+	if len(c.InProcess) == 0 {
+		c.InProcess = nil
+	}
+	return changed
+}
+
+func mergeCataloguePresets(a CataloguePreset, hasA bool, b CataloguePreset) CataloguePreset {
+	if !hasA {
+		return CataloguePreset{
+			Enabled:      cloneBoolPtr(b.Enabled),
+			Restrictions: cloneRestrictions(b.Restrictions),
+		}
+	}
+	return CataloguePreset{
+		Enabled:      mergeEnabledPtr(a.Enabled, b.Enabled),
+		Restrictions: MergeCapabilityRestrictions(a.Restrictions, b.Restrictions),
+	}
+}
+
+func cloneBoolPtr(b *bool) *bool {
+	if b == nil {
+		return nil
+	}
+	v := *b
+	return &v
+}
+
+func mergeEnabledPtr(a, b *bool) *bool {
+	if (a != nil && !*a) || (b != nil && !*b) {
+		v := false
+		return &v
+	}
+	if a != nil || b != nil {
+		v := true
+		return &v
+	}
+	return nil
+}
+
+func clonePatterns(p Patterns) Patterns {
+	if p == nil {
+		return nil
+	}
+	out := make(Patterns, len(p))
+	copy(out, p)
+	return out
+}
+
+func cloneRestrictions(r *CapabilityRestrictions) *CapabilityRestrictions {
+	if r == nil {
+		return nil
+	}
+	cp := CapabilityRestrictions{
+		Repos:          clonePatterns(r.Repos),
+		Templates:      clonePatterns(r.Templates),
+		Kinds:          clonePatterns(r.Kinds),
+		CIOnly:         r.CIOnly,
+		RequiresPerson: r.RequiresPerson,
+	}
+	if len(r.RequiresPersonWhen) > 0 {
+		cp.RequiresPersonWhen = make(map[string][]string, len(r.RequiresPersonWhen))
+		for k, vals := range r.RequiresPersonWhen {
+			cp.RequiresPersonWhen[k] = slices.Clone(vals)
+		}
+	}
+	return &cp
+}
+
+// MergeCapabilityRestrictions returns a conservative restriction block that
+// admits only runs admitted by both a and b, and requires a person whenever
+// either requires one.
+func MergeCapabilityRestrictions(a, b *CapabilityRestrictions) *CapabilityRestrictions {
+	if a == nil {
+		return cloneRestrictions(b)
+	}
+	if b == nil {
+		return cloneRestrictions(a)
+	}
+	ciOnly := a.CIOnly || b.CIOnly
+	kinds := intersectKindPatterns(a.Kinds, b.Kinds)
+	if ciOnly && kinds != nil {
+		if !containsString(kinds, CatalogueKindCI) {
+			ciOnly = false
+			kinds = Patterns{}
+		} else {
+			kinds = Patterns{CatalogueKindCI}
+		}
+	}
+	return &CapabilityRestrictions{
+		Repos:              intersectRepoPatterns(a.Repos, b.Repos),
+		Templates:          intersectTemplatePatterns(a.Templates, b.Templates),
+		Kinds:              kinds,
+		CIOnly:             ciOnly,
+		RequiresPerson:     a.RequiresPerson || b.RequiresPerson,
+		RequiresPersonWhen: unionRequiresPersonWhen(a.RequiresPersonWhen, b.RequiresPersonWhen),
+	}
+}
+
+func intersectKindPatterns(a, b Patterns) Patterns {
+	if a == nil {
+		return clonePatterns(b)
+	}
+	if b == nil {
+		return clonePatterns(a)
+	}
+	out := Patterns{}
+	for _, k := range a {
+		if containsString(b, k) && !containsString(out, k) {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+func intersectRepoPatterns(a, b Patterns) Patterns {
+	if a == nil {
+		return clonePatterns(b)
+	}
+	if b == nil {
+		return clonePatterns(a)
+	}
+	if len(a) == 0 || len(b) == 0 {
+		return Patterns{}
+	}
+	hasAll := func(list Patterns) bool {
+		return slices.ContainsFunc(list, func(p string) bool { return strings.TrimSpace(p) == "*" })
+	}
+	if hasAll(a) {
+		return clonePatterns(b)
+	}
+	if hasAll(b) {
+		return clonePatterns(a)
+	}
+	out := Patterns{}
+	add := func(p string) {
+		pl := strings.ToLower(strings.TrimSpace(p))
+		if !slices.ContainsFunc(out, func(x string) bool { return strings.ToLower(strings.TrimSpace(x)) == pl }) {
+			out = append(out, strings.TrimSpace(p))
+		}
+	}
+	for _, p := range a {
+		if repoPatternSubsumedByList(p, b) {
+			add(p)
+		}
+	}
+	for _, q := range b {
+		if repoPatternSubsumedByList(q, a) {
+			add(q)
+		}
+	}
+	return out
+}
+
+func repoPatternSubsumedByList(pattern string, list Patterns) bool {
+	pl := strings.ToLower(strings.TrimSpace(pattern))
+	if pl == "" {
+		return false
+	}
+	if pl == CatalogueNoRepo {
+		return matchesRepo(list, nil)
+	}
+	if !strings.ContainsAny(pl, "*?[]\\") {
+		if ref, err := ParseRepo(pl); err == nil {
+			return matchesRepo(list, &ref)
+		}
+	}
+	for _, raw := range list {
+		ql := strings.ToLower(strings.TrimSpace(raw))
+		if ql == "*" || ql == pl {
+			return true
+		}
+		if globSubsumes(ql, pl, true) {
+			return true
+		}
+	}
+	return false
+}
+
+func intersectTemplatePatterns(a, b Patterns) Patterns {
+	if a == nil {
+		return clonePatterns(b)
+	}
+	if b == nil {
+		return clonePatterns(a)
+	}
+	if len(a) == 0 || len(b) == 0 {
+		return Patterns{}
+	}
+	if slices.Contains(a, "*") {
+		return clonePatterns(b)
+	}
+	if slices.Contains(b, "*") {
+		return clonePatterns(a)
+	}
+	out := Patterns{}
+	add := func(p string) {
+		if !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	for _, p := range a {
+		if templatePatternSubsumedByList(p, b) {
+			add(p)
+		}
+	}
+	for _, q := range b {
+		if templatePatternSubsumedByList(q, a) {
+			add(q)
+		}
+	}
+	return out
+}
+
+func templatePatternSubsumedByList(pattern string, list Patterns) bool {
+	if pattern == "" {
+		return false
+	}
+	if !strings.ContainsAny(pattern, "*?[]\\") {
+		return matchesTemplate(list, pattern, "")
+	}
+	for _, q := range list {
+		if q == "*" || q == pattern {
+			return true
+		}
+		if globSubsumes(q, pattern, true) {
+			return true
+		}
+	}
+	return false
+}
+
+// globSubsumes reports whether single-star glob outer ("prefix*suffix", with no
+// ?, [, ], or \ escapes in outer or inner) matches every string that inner
+// could match. When singleSegment is true, path.Match's '/' boundary is
+// respected.
+func globSubsumes(outer, inner string, singleSegment bool) bool {
+	if strings.ContainsAny(outer, "?[]\\") || strings.ContainsAny(inner, "?[]\\") || strings.Count(outer, "*") != 1 {
+		return false
+	}
+	prefix, suffix, _ := strings.Cut(outer, "*")
+	if len(inner) < len(prefix)+len(suffix) || !strings.HasPrefix(inner, prefix) || !strings.HasSuffix(inner, suffix) {
+		return false
+	}
+	middle := inner[len(prefix) : len(inner)-len(suffix)]
+	if singleSegment && strings.Contains(middle, "/") {
+		return false
+	}
+	return true
+}
+
+func unionRequiresPersonWhen(a, b map[string][]string) map[string][]string {
+	if len(a) == 0 && len(b) == 0 {
+		return nil
+	}
+	out := map[string][]string{}
+	for _, src := range []map[string][]string{a, b} {
+		for k, vals := range src {
+			for _, v := range vals {
+				if !slices.Contains(out[k], v) {
+					out[k] = append(out[k], v)
+				}
+			}
+			sort.Strings(out[k])
+		}
+	}
+	return out
 }

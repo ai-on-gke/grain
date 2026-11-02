@@ -296,6 +296,106 @@ func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 	}
 }
 
+// A store written before migration 85 whose capability_policy carries a
+// catalogue with retired in-process entries (memory, release-notes,
+// test-quarantine, ...) folds them into api_scopes.presets.<name>, merges
+// restrictions conservatively when both exist, and rewrites retired task
+// defaults inside the catalogue.
+func TestMigrationFoldsRetiredCatalogueInProcess(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+	off := false
+	on := true
+
+	cfg := testConfig()
+	cfg.CapabilityPolicy = model.CapabilityPolicy{
+		Catalogue: &model.CapabilityCatalogue{
+			Defaults: model.CatalogueDefaults{
+				Task: []string{"pipeline-control", "self-debug"},
+				Repos: map[string]model.CatalogueRepoDefaults{
+					"acme/widgets": {
+						Task: []string{"release-notes", "memory"},
+						CI:   []string{"gcp-key"},
+					},
+				},
+			},
+			InProcess: map[string]model.CatalogueInProcess{
+				"memory": {Enabled: &off},
+				"release-notes": {Restrictions: &model.CapabilityRestrictions{
+					Repos:          model.Patterns{"acme/*"},
+					RequiresPerson: true,
+				}},
+				"test-quarantine": {Restrictions: &model.CapabilityRestrictions{
+					Repos: model.Patterns{"acme/*"},
+					Kinds: model.Patterns{"task", "session"},
+				}},
+				"self-debug": {Restrictions: &model.CapabilityRestrictions{
+					Repos: model.Patterns{"ai-on-gke/grain"},
+				}},
+			},
+			APIScopes: model.CatalogueAPIScopes{
+				Presets: map[string]model.CataloguePreset{
+					"test-quarantine": {
+						Enabled: &on,
+						Restrictions: &model.CapabilityRestrictions{
+							Repos: model.Patterns{"acme/widgets"},
+							Kinds: model.Patterns{"task"},
+						},
+					},
+				},
+			},
+		},
+	}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 65 WHERE `id` = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("migrating a version-65 store: %v", err)
+	}
+
+	after, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat := after.CapabilityPolicy.Catalogue
+	if cat == nil {
+		t.Fatal("catalogue lost after migration")
+	}
+	for _, retired := range []string{"memory", "release-notes", "test-quarantine"} {
+		if _, exists := cat.InProcess[retired]; exists {
+			t.Errorf("inProcess[%q] survived migration: %+v", retired, cat.InProcess)
+		}
+	}
+	if _, exists := cat.InProcess["self-debug"]; !exists {
+		t.Error("inProcess[self-debug] was dropped")
+	}
+	mem, ok := cat.APIScopes.Presets["memory"]
+	if !ok || mem.Enabled == nil || *mem.Enabled {
+		t.Fatalf("apiScopes.presets[memory] = %+v, want disabled", mem)
+	}
+	rn, ok := cat.APIScopes.Presets["release-notes"]
+	if !ok || rn.Restrictions == nil || !rn.Restrictions.RequiresPerson || !slices.Equal([]string(rn.Restrictions.Repos), []string{"acme/*"}) {
+		t.Fatalf("apiScopes.presets[release-notes] = %+v", rn)
+	}
+	tq, ok := cat.APIScopes.Presets["test-quarantine"]
+	if !ok || tq.Restrictions == nil || !slices.Equal([]string(tq.Restrictions.Repos), []string{"acme/widgets"}) ||
+		!slices.Equal([]string(tq.Restrictions.Kinds), []string{"task"}) {
+		t.Fatalf("apiScopes.presets[test-quarantine] = %+v, want conservative intersection", tq)
+	}
+	if want := []string{"api:pipeline-control", "self-debug"}; !slices.Equal(cat.Defaults.Task, want) {
+		t.Errorf("catalogue.defaults.task = %v, want %v", cat.Defaults.Task, want)
+	}
+	if want := []string{"api:release-notes", "api:memory"}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
+		t.Errorf("catalogue.defaults.repos[acme/widgets].task = %v, want %v", cat.Defaults.Repos["acme/widgets"].Task, want)
+	}
+	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{"api:memory"}}); err == nil {
+		t.Error("migrated catalogue admitted api:memory, want disabled refusal")
+	}
+}
+
 func TestSchema65StoreAndStateRepoImportRewriteCICapabilities(t *testing.T) {
 	t.Parallel()
 	t.Run("in_place_from_65", func(t *testing.T) {
