@@ -16,17 +16,19 @@ package orchestrator_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 // What grain CI asks so that it can spend the deployment's sandboxes on
-// the change whose verdict unblocks everything behind it
-// (ci.PriorityMergeHead, grain/task-316). The answer has to be the queue's
-// own order rather than a second opinion about it, which is why it is
-// computed from the same two functions SyncPullRequests uses.
-func TestMergeQueueHeadsNamesTheBranchAtTheFrontOfTheQueue(t *testing.T) {
+// the changes whose verdict turns into a merge (ci.PriorityMergeHead,
+// grain/task-316). Members of a lane merge independently of each other
+// (grain/task-2346), so every member that is otherwise ready ranks the
+// same: the one filed second merges on its own green just as soon as the
+// one filed first.
+func TestMergeQueueHeadsNamesEveryMemberOfTheQueue(t *testing.T) {
 	t.Parallel()
 	store, ctx := openStore(t)
 	sim, client := newSim(t, "acme", "widgets", "main")
@@ -38,14 +40,52 @@ func TestMergeQueueHeadsNamesTheBranchAtTheFrontOfTheQueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MergeQueueHeads: %v", err)
 	}
-	if got := heads[repo.String()]; !got[first] || len(got) != 1 {
-		t.Errorf("heads of the %s queue = %v, want only the branch filed first (%q)", repo, got, first)
-	}
 	if first == second {
 		t.Fatal("the two tasks are on the same branch, so this proves nothing")
 	}
+	if got := heads[repo.String()]; !got[first] || !got[second] || len(got) != 2 {
+		t.Errorf("heads of the %s queue = %v, want both members (%q, %q)", repo, got, first, second)
+	}
 	if len(heads) != 1 {
-		t.Errorf("one repository has a queue, so one head: got %v", heads)
+		t.Errorf("one repository has a queue, so one entry: got %v", heads)
+	}
+}
+
+// A member something besides CI is holding -- an approval nobody has
+// given, a repair still being worked on its branch -- merges nothing when
+// its CI goes green, so its jobs do not go ahead of a member's that does.
+func TestMergeQueueHeadsLeavesOutAMemberHeldForSomethingElse(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	approval, approvalBranch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t1", repo)
+	repairing, repairingBranch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t2", repo)
+	_, ready := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t3", repo)
+
+	if err := store.UpdateTask(ctx, approval.ID, func(task *model.Task) error {
+		task.Links = append(task.Links, model.Link{Kind: model.LinkApprovalRequired, Target: "pkg/secret/=alice"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	repairAsked := baseTime.Add(time.Hour)
+	if err := store.Observe(ctx, model.Observation{
+		TaskID: repairing.ID, CompletedAt: &baseTime, MergeQueueRepairAt: &repairAsked,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if obs, err := store.GetObservation(ctx, repairing.ID); err != nil || obs == nil || !obs.RepairInFlight() {
+		t.Fatalf("the repairing member's observation = %+v (%v), want a repair in flight", obs, err)
+	}
+
+	heads, err := orchestrator.MergeQueueHeads(ctx, store)
+	if err != nil {
+		t.Fatalf("MergeQueueHeads: %v", err)
+	}
+	if got := heads[repo.String()]; !got[ready] || len(got) != 1 {
+		t.Errorf("heads of the %s queue = %v, want only %q: %q awaits an approval and %q a repair",
+			repo, got, ready, approvalBranch, repairingBranch)
 	}
 }
 
@@ -91,8 +131,8 @@ func TestMergeQueueHeadsReportsNothingForARepoWithNothingQueued(t *testing.T) {
 }
 
 // Each base branch is a queue of its own (grain/task-3340), so a
-// repository merging into `main` and `candidate` at once has a head on
-// each -- and both of their verdicts unblock somebody.
+// repository merging into `main` and `candidate` at once has members on
+// each -- and every one of their verdicts unblocks a merge.
 func TestMergeQueueHeadsNamesAHeadForEveryBaseBranch(t *testing.T) {
 	t.Parallel()
 	store, ctx := openStore(t)
@@ -108,9 +148,9 @@ func TestMergeQueueHeadsNamesAHeadForEveryBaseBranch(t *testing.T) {
 		t.Fatalf("MergeQueueHeads: %v", err)
 	}
 	got := heads[repo.String()]
-	if !got[mainHead] || !got[candidateHead] || got[mainBehind] || len(got) != 2 {
-		t.Errorf("heads of %s = %v, want %q (main) and %q (candidate) and nothing else",
-			repo, got, mainHead, candidateHead)
+	if !got[mainHead] || !got[candidateHead] || !got[mainBehind] || len(got) != 3 {
+		t.Errorf("heads of %s = %v, want %q and %q (main) and %q (candidate)",
+			repo, got, mainHead, mainBehind, candidateHead)
 	}
 }
 
