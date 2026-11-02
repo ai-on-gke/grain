@@ -25,6 +25,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -159,7 +160,17 @@ func TestAPinnedHostdIsWaitedForAcrossADisconnect(t *testing.T) {
 	// The sessions are hijacked connections, which the server's own
 	// Close does not cut: keep them to cut by hand.
 	var hijacked []net.Conn
-	ctl := httptest.NewUnstartedServer(cfg.HostdHub)
+	// away holds ws-a off while the test looks at it disconnected: the
+	// test hostd redials within milliseconds, faster than the checks
+	// below could otherwise see it gone.
+	var away atomic.Bool
+	ctl := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if away.Load() {
+			http.Error(w, "held off by the test", http.StatusServiceUnavailable)
+			return
+		}
+		cfg.HostdHub.ServeHTTP(w, r)
+	}))
 	ctl.Config.ConnState = func(conn net.Conn, st http.ConnState) {
 		if st == http.StateHijacked {
 			mu.Lock()
@@ -185,6 +196,7 @@ func TestAPinnedHostdIsWaitedForAcrossADisconnect(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	away.Store(true)
 	drop()
 	waitFor(t, func() bool { return !cfg.HostdHub.HostdStatus("ws-a").Connected })
 	_, _, err = cfg.SelectHostd(ctx, store, HostdSelector{Name: "ws-a"})
@@ -193,6 +205,7 @@ func TestAPinnedHostdIsWaitedForAcrossADisconnect(t *testing.T) {
 	}
 	waitFor(t, open)
 
+	away.Store(false)
 	waitFor(t, func() bool { return cfg.HostdHub.HostdStatus("ws-a").Connected })
 	if _, _, err := cfg.SelectHostd(ctx, store, HostdSelector{Name: "ws-a"}); err != nil {
 		t.Errorf("after ws-a reconnected: %v", err)
