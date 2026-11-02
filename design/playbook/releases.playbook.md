@@ -2,9 +2,9 @@
 
 **Owner:** @bwsalmon
 
-[`contributions.playbook.md`](contributions.playbook.md) defines how designs, specifications, tasks, and code land on `main`, and [`merging.design.md`](../design/merging.design.md) defines how pull requests merge independently once they are clean, green, and through their gates. This playbook design defines how landed commits on `main` become official releases: **cut a release candidate from trunk, run the full qualification suite against it, promote immediately on pass, or fix and re-cut on fail.**
+[`contributions.playbook.md`](contributions.playbook.md) defines how designs, specifications, tasks, and code land on `main`, and [`merging.design.md`](../design/merging.design.md) defines how pull requests merge independently once they are clean, green, and through their gates. This playbook design defines how landed commits on `main` become official releases.
 
-Releases go out continuously, as fast as qualification passes. There is no long-lived stabilization branch and no timed staging soak.
+**The core rule:** grain releases continuously from `main`—cutting a release candidate `vX.Y.Z-rc.N` from the newest known-good trunk commit, running the deterministic CI and agent qualification suite against it, promoting `vX.Y.Z` and `latest` automatically as soon as qualification passes, or triaging, fixing, and cutting `vX.Y.Z-rc.(N+1)` when qualification fails. Releases go out as fast as qualification passes, with no long-lived stabilization branch and no timed staging soak.
 
 ---
 
