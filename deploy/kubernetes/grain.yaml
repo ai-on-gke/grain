@@ -342,9 +342,9 @@ spec:
   # file wrong on every cluster that calls it something else. Set it if
   # the default is not the one you want grain's state on.
 ---
-# CHANGEME (3 of 3 -- first in the file, since the Deployment that
-# mounts it has to come after it, and numbered last because it was added
-# last): the cosign public key an upgrade's image must be signed with
+# CHANGEME (3 of 4 -- first in the file, since the Deployment that
+# mounts it has to come after it, and numbered third because it was
+# added after the other two): the cosign public key an upgrade's image must be signed with
 # (docs/image-signing.md) -- the cosign.pub half of the pair
 # the images this deployment upgrades to are released with. The Upgrade
 # button runs `cosign verify` against it (the -upgrade-verify-cmd flags
@@ -566,7 +566,7 @@ spec:
               mountPath: /data
       containers:
         - name: grain
-          # CHANGEME (1 of 3): the grain image to run. CI publishes one
+          # CHANGEME (1 of 4): the grain image to run. CI publishes one
           # per commit; ":main" is what the branch tip is kept at, and a
           # deployment that wants to be sure what it is running pins the
           # immutable sha- tag instead.
@@ -652,7 +652,7 @@ spec:
             - -upgrade-verify-cmd=verify
             - -upgrade-verify-cmd=--key=/etc/grain/cosign.pub
             - -upgrade-verify-cmd=--insecure-ignore-tlog=true
-            # CHANGEME (2 of 3): which repository this deployment files
+            # CHANGEME (2 of 4): which repository this deployment files
             # tasks against by default. Everything else -- concurrency,
             # the agent framework, the sandbox shape -- is a setting in
             # the UI rather than a flag here.
@@ -688,6 +688,18 @@ spec:
             # dispatch fails writing to a filesystem it does not own.
             - name: HOME
               value: /data/home
+            # CHANGEME (4 of 4, if this Service sits behind IAP): who the
+            # daemon admits as themselves once IAP has authenticated them
+            # (-ui-allowed-principals) -- the installing user, at least,
+            # as user:<their IAP email>. Comma-separated user:, group:,
+            # domain: and serviceAccount: entries. Not the IAP access
+            # list: that decides who reaches this pod, and this decides
+            # who is signed in without the access code. Without it the
+            # daemon's default is its own OS account, which no IAP email
+            # matches. Left as the placeholder, it admits nobody, and a
+            # tunnel with the access code works as before.
+            - name: GRAIN_ALLOWED_PRINCIPALS
+              value: user:CHANGEME@example.com
           # CAP_NET_BIND_SERVICE, and nothing else: the Dockerfile
           # setcaps /usr/local/bin/grain with it (cap_net_bind_service=+ep)
           # so the package cache can bind 443/80, the same reason
