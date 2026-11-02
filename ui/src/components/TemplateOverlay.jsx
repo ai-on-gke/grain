@@ -87,6 +87,10 @@ function TemplateOverlay({
   config,
   onClose,
   onSaved,
+  // onNewTask opens the New Task form filed from this template
+  // (NewTaskOverlay's templateId), where settings/new-task-form.yml's
+  // templates: layer for it applies. Absent, the button is not drawn.
+  onNewTask,
   showError,
   onReload,
 }) {
@@ -531,6 +535,11 @@ function TemplateOverlay({
             </Button>
           )}
           <Stack direction="row" spacing={1}>
+            {!isNew && onNewTask && (
+              <Button onClick={() => onNewTask(template)}>
+                New task from this template
+              </Button>
+            )}
             <Button onClick={onClose}>{locked ? "Close" : "Cancel"}</Button>
             <Button type="submit" variant="contained" disabled={locked}>
               {isNew ? "Add template" : "Save"}
