@@ -157,14 +157,15 @@ const reducedMotion = {
 const lightPalette = {
   palette: {
     mode: "light",
-    primary: { main: "#8a6a2e", dark: "#6d5324", contrastText: "#ffffff" },
+    primary: { main: "#856629", dark: "#6d5324", contrastText: "#ffffff" },
     error: { main: "#d0453a" },
-    // success mirrors --state-completed; warning is pulled off MUI's own
-    // bright orange to a burnt one that reads as the accent's louder
+    // success is deep enough to carry a filled chip's white label at
+    // 4.7:1 (the brighter #1a9c53 it replaced managed 3.5:1); warning is
+    // pulled off MUI's own bright orange to a burnt one that reads as the accent's louder
     // cousin rather than fighting it; info is the one cool tone left in
     // the app, gold's complement, which is what an Alert that is only
     // telling you something should be next to all this warmth.
-    success: { main: "#1a9c53" },
+    success: { main: "#158446" },
     warning: { main: "#a8621c" },
     info: { main: "#3f6b8a" },
     background: { default: "#f7f6f3", paper: "#ffffff" },
@@ -185,7 +186,7 @@ const darkPalette = {
     warning: { main: "#e29a4e" },
     info: { main: "#7fa8c7" },
     background: { default: "#0f1013", paper: "#14161a" },
-    text: { primary: "#e9e7e1", secondary: "#9b988f" },
+    text: { primary: "#e9e7e1", secondary: "#b8b5ad" },
     divider: "#292b31",
   },
 };
