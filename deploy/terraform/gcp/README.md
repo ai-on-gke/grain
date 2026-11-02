@@ -78,6 +78,12 @@ service account, as it is for CI deploys. Anyone in `iap_members` who
 is not in `allowed_principals` still reaches the daemon, but is refused
 unless they present the access code.
 
+The list only matters once the daemon verifies IAP's signed assertion,
+which takes `-ui-iap-audience` (the backend service's
+`/projects/NUMBER/global/backendServices/ID`). This module does not set
+that yet, so for now everyone still signs in with the access code and
+`allowed_principals` is carried to the daemon ready for when it does.
+
 **3. No OAuth client needed.** IAP uses a Google-managed OAuth client
 when none is configured, which is why the IAP OAuth Admin API was
 deprecated in January 2025 -- there is normally no client to create any

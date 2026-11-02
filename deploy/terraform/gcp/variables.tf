@@ -869,6 +869,10 @@ variable "allowed_principals" {
 
     A non-empty list replaces that default rather than adding to it:
     name any service account that reaches the UI through IAP here too.
+
+    It only takes effect once the daemon verifies IAP assertions
+    (-ui-iap-audience), which this module does not configure yet; until
+    then the access code is still how everyone signs in.
   EOT
   default     = null
 
