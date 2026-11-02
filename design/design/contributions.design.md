@@ -28,7 +28,7 @@ Alternatively, all design material can live in a separate repository rather than
 - **Specs:** Any change to a specification is reviewed by at least one human and a second entity (human or agent).
 - **Playbook designs:** Any change to a playbook design is reviewed by an owner and at least one other human.
 - **Playbooks:** Any change to a playbook is reviewed by at least one human and a second entity (human or agent).
-- **Code:** Any change to other code is reviewed by at least two entities (two agents, one human and one agent, or two humans).
+- **Code:** Any change to other code is reviewed by at least two entities (two agents, one human and one agent, or two humans) and at least one agent review.
 
 **Design and specification conformance.** Every review grain performs checks the change explicitly against the governing designs (`design/design/`) and specifications (`design/spec/`), so that code, specs, and designs stay in sync. This covers code PRs (grain-authored and external), spec PRs, task and grainfile PRs, playbook PRs, and security reviews. Specifically, the reviewer must:
 
