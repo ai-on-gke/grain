@@ -144,7 +144,8 @@ func reconcileConsoleSessions(ctx context.Context, deps Deps, now time.Time) err
 		if configured[sessionID] {
 			continue
 		}
-		if err := deps.Store.ObserveField(ctx, taskID, now, func(o *model.Observation) {
+		reason := fmt.Sprintf("console session %s was removed from the settings", sessionID)
+		if err := deps.Store.ObserveClose(ctx, taskID, now, model.GrainPrincipal, reason, func(o *model.Observation) {
 			o.ClosedAt = &now
 			o.PendingQuestionCommentID = nil
 			o.PendingSecret = ""

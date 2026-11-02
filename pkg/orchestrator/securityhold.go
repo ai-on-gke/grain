@@ -710,7 +710,7 @@ func closeSecurityReviewOnSettle(ctx context.Context, store *model.Store, client
 		}
 		return nil
 	}
-	if err := observeField(ctx, store, reviewID, now, func(o *model.Observation) {
+	if err := closeTask(ctx, store, reviewID, now, fmt.Sprintf("the change it reviews, %s, is %s", ref, health), func(o *model.Observation) {
 		o.ClosedAt = &now
 	}); err != nil {
 		return fmt.Errorf("orchestrator: closing security review %s: %w", reviewID, err)

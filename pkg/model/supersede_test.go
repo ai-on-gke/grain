@@ -96,6 +96,15 @@ func TestSupersedeClosesTheReplacedTaskAndLinksBothWays(t *testing.T) {
 	if want := model.SupersedeComment(replacement.ID, "director"); comments[0].Body != want {
 		t.Errorf("close comment = %q, want %q", comments[0].Body, want)
 	}
+
+	events, err := store.TaskEvents(ctx, old.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Kind != model.TaskEventClosed || events[0].By != model.GrainPrincipal ||
+		events[0].Reason != "superseded by task 471, proposed by task director" {
+		t.Errorf("task events = %+v, want one close by grain saying what superseded it", events)
+	}
 }
 
 // The bound, stated once and checked everywhere: a task with a run

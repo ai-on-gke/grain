@@ -25,7 +25,6 @@ package admincaps
 import (
 	"github.com/ai-on-gke/grain/pkg/capability"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
-	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -54,7 +53,6 @@ func IsTeamScoped(id string) bool {
 func Providers() []model.CapabilityProvider {
 	providers := []model.CapabilityProvider{
 		selfdebug.NewWithConfig(selfdebug.Config{}),
-		selfrepair.NewWithConfig(selfrepair.Config{}),
 	}
 	for _, r := range capability.Registered() {
 		providers = append(providers, r.New())

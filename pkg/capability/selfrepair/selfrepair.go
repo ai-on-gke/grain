@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package selfrepair is a GRANT model.CapabilityProvider: a task
-// holding it gets a tool to run shell commands directly on the host
+// Package selfrepair builds the tool that the
+// https://grain.dev/capabilities/grain#host-exec grant (once the bare
+// "self-repair" capability; docs/design/unified-grants.md §4) adds to a
+// run: run_host_command, to run shell commands directly on the host
 // grain's own controller runs on -- restart a systemd unit, poke at
 // grain's own config, call the grain CLI itself, anything a person at
 // that host's own terminal could do -- bwsalmon/agents#540's
-// "configuration mode." ui.OfferedCapabilities' own "self-repair" row
-// has named this since before there was anything behind it; this is
-// that provider.
+// "configuration mode." The grant itself is a dangerous method on the
+// in-process grain server (pkg/capability/grainserver), which only a
+// person may give; this package holds no provider of its own.
 //
 // Unlike selfdebug's read-only tools, everything here is capable of
 // changing grain's own running state, so every call is gated on a live
@@ -47,36 +49,11 @@ import (
 	"github.com/ai-on-gke/grain/pkg/procgroup"
 )
 
-// CapabilityName is the grant name ui.OfferedCapabilities lists as
-// "self-repair".
+// CapabilityName is the retired bare grant name this package's tool
+// was once offered under. It is kept so that a run still naming it
+// (model.CanonicalLegacyGrant reads it as model.GrainHostExecGrant) is
+// given the same tool; schema migration 84 rewrote every stored one.
 const CapabilityName = "self-repair"
-
-// Config configures self-repair capability settings.
-type Config struct{}
-
-// Provider is the self-repair capability. Every method but Spec is
-// model.BaseCapability's default -- see selfdebug.Provider's own doc
-// comment for why a GRANT capability whose only effect is which tools a
-// run gets needs nothing more.
-type Provider struct {
-	model.BaseCapability
-}
-
-// New returns a self-repair Provider, ready to register.
-func New() *Provider { return &Provider{} }
-
-// NewWithConfig returns a self-repair Provider with the given configuration.
-func NewWithConfig(_ Config) *Provider { return &Provider{} }
-
-func (p *Provider) Spec() model.CapabilitySpec {
-	return model.CapabilitySpec{
-		Name:        CapabilityName,
-		Label:       "Self repair",
-		Description: "Let this task run commands on grain's own host -- restart services, edit config, call the grain CLI -- each one needing a live reply in the task's chat before it runs",
-		Source:      model.GrantByLabel,
-		Provision:   model.ProvisionGrant,
-	}
-}
 
 // DefaultPollInterval is how often Confirm re-reads a task's comments
 // while waiting on a reply, absent a caller-supplied interval.

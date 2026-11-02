@@ -191,7 +191,7 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 	if !hasGrant(director.Grants, "self-debug") {
 		t.Fatalf("initial director grants = %+v, want self-debug", director.Grants)
 	}
-	if hasGrant(director.Grants, "self-repair") {
+	if hasGrant(director.Grants, model.GrainHostExecGrant) {
 		t.Fatalf("initial director grants = %+v, want self-repair absent", director.Grants)
 	}
 
@@ -221,6 +221,8 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 	}
 
 	postCapability(`{"id":"self-debug","attach":false}`)
+	// Attached by its retired bare id, which is recorded as the
+	// grain#host-exec grant it became.
 	postCapability(`{"id":"self-repair","attach":true}`)
 
 	edited, err := store.GetTask(ctx, director.ID)
@@ -230,14 +232,14 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 	if hasGrant(edited.Grants, "self-debug") {
 		t.Fatalf("after detach, task grants = %+v, want self-debug absent", edited.Grants)
 	}
-	if !hasGrant(edited.Grants, "self-repair") {
+	if !hasGrant(edited.Grants, model.GrainHostExecGrant) {
 		t.Fatalf("after attach, task grants = %+v, want self-repair present", edited.Grants)
 	}
 	sessions, err := client.ListConsoleSessions(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if slices.Contains(sessions[0].Capabilities, "self-debug") || !slices.Contains(sessions[0].Capabilities, "self-repair") {
+	if slices.Contains(sessions[0].Capabilities, "self-debug") || !slices.Contains(sessions[0].Capabilities, model.GrainHostExecGrant) {
 		t.Fatalf("before restart, ListConsoleSessions capabilities = %v, want self-debug absent and self-repair present", sessions[0].Capabilities)
 	}
 	cfg, err = store.GetConfig(ctx)
@@ -278,7 +280,7 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 	if hasGrant(restartedTask.Grants, "self-debug") {
 		t.Errorf("after daemon restart, task grants = %+v, reverted removed default self-debug", restartedTask.Grants)
 	}
-	if !hasGrant(restartedTask.Grants, "self-repair") {
+	if !hasGrant(restartedTask.Grants, model.GrainHostExecGrant) {
 		t.Errorf("after daemon restart, task grants = %+v, lost attached self-repair", restartedTask.Grants)
 	}
 	if !hasGrant(restartedTask.Grants, "upgrade-default") {
@@ -293,7 +295,7 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 	if slices.Contains(sessions[0].Capabilities, "self-debug") {
 		t.Errorf("after daemon restart, ListConsoleSessions capabilities = %v, reverted self-debug", sessions[0].Capabilities)
 	}
-	if !slices.Contains(sessions[0].Capabilities, "self-repair") {
+	if !slices.Contains(sessions[0].Capabilities, model.GrainHostExecGrant) {
 		t.Errorf("after daemon restart, ListConsoleSessions capabilities = %v, lost self-repair", sessions[0].Capabilities)
 	}
 	if !slices.Contains(sessions[0].Capabilities, "upgrade-default") {
@@ -332,7 +334,7 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 	if hasGrant(afterConfigEdit.Grants, "self-debug") {
 		t.Errorf("after offline config removal, task grants = %+v, reverted removed self-debug", afterConfigEdit.Grants)
 	}
-	if !hasGrant(afterConfigEdit.Grants, "self-repair") {
+	if !hasGrant(afterConfigEdit.Grants, model.GrainHostExecGrant) {
 		t.Errorf("after offline config removal, task grants = %+v, lost attached self-repair", afterConfigEdit.Grants)
 	}
 }
@@ -401,7 +403,7 @@ func TestConsoleSessionTaskEditWithoutSnapshotHonoursDeclarationChanges(t *testi
 	if hasGrant("self-debug") {
 		t.Errorf("synced Grants = %+v, reverted operator-detached self-debug", synced.Grants)
 	}
-	if hasGrant("self-repair") {
+	if hasGrant("self-repair") || hasGrant(model.GrainHostExecGrant) {
 		t.Errorf("synced Grants = %+v, kept self-repair dropped from declaration while down", synced.Grants)
 	}
 	if !hasGrant("bootstrap-playbooks") {

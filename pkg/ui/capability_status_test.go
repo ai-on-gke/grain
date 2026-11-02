@@ -140,7 +140,7 @@ func TestCapabilitiesListsEveryKnownCapabilityOnAFreshStore(t *testing.T) {
 		ids = append(ids, s.ID)
 	}
 	sort.Strings(ids)
-	want := []string{"bootstrap-playbooks", "claude-proxy", "console", "durable", "gcp-key", "gemini-key", "gemini-proxy", "git-push-any-ref", "github-sandbox", "image-signing", "openai-proxy", "package-publish", "priority-dispatch", "read-issues", "registry-push", "self-debug", "self-repair"}
+	want := []string{"bootstrap-playbooks", "claude-proxy", "console", "durable", "gcp-key", "gemini-key", "gemini-proxy", "git-push-any-ref", "github-sandbox", "image-signing", "openai-proxy", "package-publish", "priority-dispatch", "read-issues", "registry-push", "self-debug"}
 	if !reflect.DeepEqual(ids, want) {
 		t.Fatalf("capability ids = %v, want %v", ids, want)
 	}
@@ -153,7 +153,7 @@ func TestCapabilitiesSelfDebugAndSelfRepairAreAlwaysReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"self-debug", "self-repair", "bootstrap-playbooks"} {
+	for _, id := range []string{"self-debug", "bootstrap-playbooks"} {
 		status := capabilityStatus(t, got.Capabilities, id)
 		if !status.Ready {
 			t.Fatalf("%s: Ready = false, want true (status: %+v)", id, status)
@@ -486,7 +486,6 @@ func TestCapabilityStatusReportsWhetherATaskCanBeGrantedIt(t *testing.T) {
 		"self-debug":     true,
 		"gcp-key":        false,
 		"github-sandbox": false,
-		"self-repair":    false,
 	} {
 		if status := capabilityStatus(t, got.Capabilities, id); status.Grantable != want {
 			t.Errorf("%s: Grantable = %t, want %t (status: %+v)", id, status.Grantable, want, status)
