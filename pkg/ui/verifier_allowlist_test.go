@@ -411,7 +411,7 @@ func TestIAPPrincipalsNormalizationClockSkewAndServiceAccounts(t *testing.T) {
 	reqSA := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
 	reqSA.Header.Set(ui.IAPAssertionHeader, saTok)
 	pSA, ok := ui.ExtractPrincipal(reqSA)
-	if !ok || pSA != (model.Principal{Kind: model.PrincipalService, ID: "hostd-runner@my-proj.iam.gserviceaccount.com"}) {
+	if !ok || pSA != (model.Principal{Kind: model.PrincipalService, ID: "hostd-runner@my-proj.iam.gserviceaccount.com", Source: model.SourceIAP}) {
 		t.Fatalf("ExtractPrincipal(serviceAccount) = %+v, %v; want {service hostd-runner@my-proj.iam.gserviceaccount.com}", pSA, ok)
 	}
 	if !pSA.Kind.Valid() {
