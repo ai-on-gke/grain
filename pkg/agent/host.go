@@ -128,25 +128,6 @@ type Host interface {
 	Run(ctx context.Context, cmd Command, tee io.Writer) (stdout string, err error)
 }
 
-// MCPArgsAuthorizer is a Host that must be told which "grain mcpserver"
-// argvs it is expected to run. A remote executor (modelexec.RemoteHost)
-// starts the mcpserver a Framework configures on its own machine, which
-// forwards that argv back to grain to be served there -- and grain serves
-// only an argv it was told about here, so that the executor cannot choose
-// the server's sandbox, credentials or task for itself.
-type MCPArgsAuthorizer interface {
-	AuthorizeMCPArgs(args []string)
-}
-
-// AuthorizeMCPArgs tells h, if it needs telling, that args is an mcpserver
-// argv a Framework built for it. Every Framework calls it on the argv it
-// stages, and it does nothing for a Host that runs its mcpserver itself.
-func AuthorizeMCPArgs(h Host, args []string) {
-	if a, ok := h.(MCPArgsAuthorizer); ok && a != nil {
-		a.AuthorizeMCPArgs(args)
-	}
-}
-
 // UnconfinedHost is an agent.Host where the agent CLI runs directly in the host
 // machine with full access to native tools, rather than being confined to Grain's
 // sandboxing wrapper.
@@ -162,8 +143,8 @@ type HostProvider interface {
 }
 
 // LocalHost runs the CLI as a child of this process, on this machine --
-// what every Framework did before Host existed, and what a deployment
-// with no remote execution configured still does.
+// what every Framework did before Host existed, and what a run that
+// goes through no grain hostd or run host still does.
 type LocalHost struct {
 	// Logf is where Run announces each invocation it is about to make,
 	// and log.Printf -- the daemon's own log -- when nil, which is what

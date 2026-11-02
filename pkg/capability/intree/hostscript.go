@@ -759,10 +759,12 @@ func (h *hostScripts) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	flusher, _ := w.(http.Flusher)
 	out := &frameOut{w: w, f: flusher}
 	code, timedOut, truncated := h.run(r.Context(), a, argv, out)
-	out.exit(code)
 	rec.ExitCode, rec.TimedOut, rec.Truncated = code, timedOut, truncated
 	rec.DurationMS = h.cfg.Now().Sub(start).Milliseconds()
+	// Recorded before the exit frame goes out, so a caller that has its
+	// answer finds the call in audit.jsonl.
 	h.record(a, rec)
+	out.exit(code)
 }
 
 // run runs the script with argv, streaming its output to out, and

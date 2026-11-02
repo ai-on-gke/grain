@@ -396,10 +396,8 @@ Some limits:
 - **Container mode.** The path must exist inside the daemon's container.
   Unlike `GRAIN_*_PATH`, nothing bind-mounts it, so a host path the image
   doesn't carry is refused when it's saved.
-- **Run hosts and remote executors.** A Claude run sent to a run host execs
-  the path on the run pod, as `-claude-path` does, so the binary must be there
-  too. A remote executor runs the binary it offers; a connection's path is a
-  path on the daemon's machine and doesn't apply there.
+- **Run hosts.** A Claude run sent to a run host execs the path on the run
+  pod, as `-claude-path` does, so the binary must be there too.
 - **Who may set it.** Setting a CLI path is effectively "run this binary as
   the daemon": the daemon execs it under its own account, with the
   connection's credential. Only the people who may edit the connection's
@@ -534,7 +532,7 @@ Below the connections is the team's choice of model. It writes only
 
 Old links to the separate tabs (`/t/<team>/settings/connections` and
 `/t/<team>/settings/models`) both open this tab. Nothing else lives on it:
-connected remote executors are on the **Executors** tab, the commit identity
+the commit identity
 is on **Git identity**, and the memory agent's notes are on the team's
 **Memory** page in the left rail.
 

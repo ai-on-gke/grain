@@ -495,22 +495,6 @@ func TestPostgresSequencesAllocation(t *testing.T) {
 	if boardID1 == boardID2 {
 		t.Errorf("expected unique board IDs, got %q twice", boardID1)
 	}
-
-	execTokID1, err := store.NewExecutorTokenID(ctx)
-	if err != nil {
-		t.Fatalf("NewExecutorTokenID failed on Postgres: %v", err)
-	}
-	if !strings.HasPrefix(execTokID1, "exec-tok-") {
-		t.Errorf("unexpected executor token ID format: %q", execTokID1)
-	}
-
-	execTokID2, err := store.NewExecutorTokenID(ctx)
-	if err != nil {
-		t.Fatalf("second NewExecutorTokenID failed on Postgres: %v", err)
-	}
-	if execTokID1 == execTokID2 {
-		t.Errorf("expected unique executor token IDs, got %q twice", execTokID1)
-	}
 }
 
 func TestTaskPriorityDefaultUpdateAndQueueOrdering(t *testing.T) {
