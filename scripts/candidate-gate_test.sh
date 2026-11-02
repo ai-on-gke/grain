@@ -266,9 +266,9 @@ else
   echo "skip the HTTP probe's cases: python3 or curl is not installed"
 fi
 
-soak() {
+soak() { # soak [<check-soak args>...]
   run check-soak --rc-tag v2.3.0-rc.2 --rc-sha "$rc" --sandbox-json "$work/sandboxes.json" \
-    --tasks-json "$work/tasks.json" --staging-url "${staging:-http://127.0.0.1:1}"
+    --tasks-json "$work/tasks.json" --staging-url "${staging:-http://127.0.0.1:1}" --now "$now" "$@"
 }
 export RELEASE_NEVER_PROMOTE="v1.14.0"
 
@@ -277,7 +277,21 @@ if [ -n "$staging" ]; then
   tasks "$explore_done"
   soak
   check "check-soak: every signal green passes, whatever restarts counted before the deployment" 0 \
-    "PASS supervisor:" "PASS http:" "PASS exploration: task 700" "PASS defects:" "PASS never:" "Soak gate: PASS v2.3.0-rc.2."
+    "PASS supervisor:" "PASS http:" "PASS exploration: task 700" "PASS defects:" "PASS never:" \
+    "PASS soak-age: ${rc:0:12} has soaked 23h00m on staging (minimum 22h)" "Soak gate: PASS v2.3.0-rc.2."
+
+  # A forced train run asks about an rc deployed minutes ago: every other
+  # signal green is still not a PASS.
+  soak --now $((deployed + 19 * 60))
+  check "check-soak: a soak under the minimum is pending, however green" 2 \
+    "PENDING soak-age: ${rc:0:12} has soaked 0h19m on staging, under the 22h minimum" "Soak gate: PENDING v2.3.0-rc.2 (soak-age)."
+  soak --now $((deployed + 19 * 60)) --allow-short-soak
+  check "check-soak: --allow-short-soak passes a short soak and says so" 0 \
+    "PASS soak-age: ${rc:0:12} has soaked only 0h19m on staging, under the 22h minimum; --allow-short-soak passes it" "Soak gate: PASS v2.3.0-rc.2."
+  soak --min-soak-hours 24
+  check "check-soak: --min-soak-hours sets the minimum" 2 "PENDING soak-age: ${rc:0:12} has soaked 23h00m on staging, under the 24h minimum"
+  RELEASE_SOAK_HOURS=12 RELEASE_INTERVAL_SLACK_HOURS=0 soak --now $((deployed + 13 * 3600))
+  check "check-soak: the minimum defaults to RELEASE_SOAK_HOURS less the slack" 0 "PASS soak-age: ${rc:0:12} has soaked 13h00m on staging (minimum 12h)"
 
   sandbox running "$c1"
   soak
@@ -360,6 +374,9 @@ check "check-soak: grain-candidate missing from the listing fails" 1 "FAIL super
 
 run check-soak --rc-tag v2.3.0 --rc-sha "$rc" --sandbox-json "$work/sandboxes.json" --tasks-json "$work/tasks.json"
 check "check-soak: a tag that is not an rc is a usage error" 64 "not a release candidate tag"
+
+run check-soak --rc-tag v2.3.0-rc.2 --rc-sha "$rc" --sandbox-json "$work/sandboxes.json" --tasks-json "$work/tasks.json" --min-soak-hours soon
+check "check-soak: a minimum that is not hours is a usage error" 64 "--min-soak-hours soon is not a whole number of hours"
 
 echo
 echo "$((cases - failures))/$cases passed"
