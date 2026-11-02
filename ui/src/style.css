@@ -34,8 +34,10 @@
   --text-placeholder: #b5b0a3;
 
   /* Bronze, not the wheat gold the dark theme uses: the gold washes out
-     on white, and this has to carry white button text at 5:1. */
-  --accent: #8a6a2e;
+     on white, and this has to carry white button text at 5:1. It is
+     also link text, on white and on an Alert's tint (#eff3f5 for info),
+     so it is dark enough to hold 4.5:1 on the palest of those too. */
+  --accent: #856629;
   --accent-hover: #6d5324;
   --on-accent: #ffffff;
   --accent-subtle: #f6eeda;
@@ -126,8 +128,12 @@
   --border-strong: #3a3d44;
 
   --text: #e9e7e1;
-  --text-secondary: #9b988f;
-  --text-tertiary: #6f6c65;
+  /* The same rule as the light palette's: tertiary holds 4.5:1 on every
+     ground, the lightest here being --surface-active (5.0:1 there, 5.8:1
+     on --surface), and secondary rose with it to keep the step between
+     the two: text ~1.7x secondary ~1.5x tertiary. */
+  --text-secondary: #b8b5ad;
+  --text-tertiary: #959189;
   --text-placeholder: #57544e;
 
   /* The grain colour, on the two grounds the mark was drawn against. */

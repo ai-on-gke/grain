@@ -35,5 +35,10 @@ func newTestFramework(run runner, grain string, opts ...Option) *Framework {
 func newTerminalTestFramework(binary, grain string, opts ...Option) *Framework {
 	f := newTestFramework(nil, grain, opts...)
 	f.binPath = binary
+	// A catalog of codex's own shape rather than an exec of binary,
+	// which these tests name without needing it installed.
+	f.dumpModels = func(context.Context, string, []string) (string, error) {
+		return `{"models":[{"slug":"gpt-test","apply_patch_tool_type":"freeform"}]}`, nil
+	}
 	return f
 }

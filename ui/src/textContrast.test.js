@@ -15,9 +15,9 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { lightTheme } from "./theme.js";
+import { darkTheme, lightTheme } from "./theme.js";
 
-// The light palette's muted text tokens carry real text -- form hints,
+// Each palette's muted text tokens carry real text -- form hints,
 // counts, task numbers, the board's empty-column note -- so each has to
 // hold WCAG AA's 4.5:1 on every ground it is drawn on, and stay a
 // visible step apart from its neighbour (2026-11-02 walkthrough, F4).
@@ -25,13 +25,13 @@ const read = (path) =>
   readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
 const styleCss = read("./style.css");
 
-function rootTokens() {
-  const block = styleCss.match(/:root\s*\{([^}]*)\}/)[1];
-  const tokens = {};
+function tokens(selector) {
+  const block = styleCss.match(new RegExp(`${selector}\\s*\\{([^}]*)\\}`))[1];
+  const found = {};
   for (const m of block.matchAll(/(--[\w-]+):\s*(#[0-9a-f]{6});/gi)) {
-    tokens[m[1]] = m[2];
+    found[m[1]] = m[2];
   }
-  return tokens;
+  return found;
 }
 
 function luminance(hex) {
@@ -42,38 +42,90 @@ function luminance(hex) {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
+// lighten mixes hex toward white the way MUI's standard Alert draws its
+// ground.
+function lighten(hex, k) {
+  return `#${[1, 3, 5]
+    .map((i) => {
+      const c = parseInt(hex.slice(i, i + 2), 16);
+      return Math.round(c + (255 - c) * k)
+        .toString(16)
+        .padStart(2, "0");
+    })
+    .join("")}`;
+}
+
 function contrast(a, b) {
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
   return (hi + 0.05) / (lo + 0.05);
 }
 
-describe("light theme text contrast", () => {
-  const t = rootTokens();
-  const grounds = [
-    "--surface",
-    "--canvas",
-    "--surface-hover",
-    "--surface-active",
-  ];
+const lightTokens = tokens(":root");
+const darkTokens = {
+  ...lightTokens,
+  ...tokens(':root\\[data-theme="dark"\\]'),
+};
+const grounds = [
+  "--surface",
+  "--canvas",
+  "--surface-hover",
+  "--surface-active",
+];
 
-  for (const fg of ["--text", "--text-secondary", "--text-tertiary"]) {
-    it(`${fg} reaches 4.5:1 on every surface`, () => {
-      for (const bg of grounds) {
-        expect(contrast(t[fg], t[bg]), `${fg} on ${bg}`).toBeGreaterThanOrEqual(
-          4.5,
-        );
-      }
+for (const [name, t, theme] of [
+  ["light", lightTokens, lightTheme],
+  ["dark", darkTokens, darkTheme],
+]) {
+  describe(`${name} theme text contrast`, () => {
+    for (const fg of ["--text", "--text-secondary", "--text-tertiary"]) {
+      it(`${fg} reaches 4.5:1 on every surface`, () => {
+        for (const bg of grounds) {
+          expect(
+            contrast(t[fg], t[bg]),
+            `${fg} on ${bg}`,
+          ).toBeGreaterThanOrEqual(4.5);
+        }
+      });
+    }
+
+    it("keeps secondary a visible step between text and tertiary", () => {
+      expect(contrast(t["--text"], t["--text-secondary"])).toBeGreaterThan(1.5);
+      expect(
+        contrast(t["--text-secondary"], t["--text-tertiary"]),
+      ).toBeGreaterThan(1.3);
     });
-  }
 
-  it("keeps secondary a visible step between text and tertiary", () => {
-    expect(contrast(t["--text"], t["--text-secondary"])).toBeGreaterThan(1.5);
-    expect(
-      contrast(t["--text-secondary"], t["--text-tertiary"]),
-    ).toBeGreaterThan(1.3);
+    it("gives MUI the same secondary text colour as style.css", () => {
+      expect(theme.palette.text.secondary).toBe(t["--text-secondary"]);
+    });
+  });
+}
+
+// The light accent is link text as well as a button's ground, and a link
+// can sit in an Alert's tint (Settings -> Credentials' "How the two tabs
+// differ"); a filled success chip ("ready") puts white on success.main.
+describe("light theme accent and success contrast", () => {
+  it("gives MUI the same accent as style.css", () => {
+    expect(lightTheme.palette.primary.main).toBe(lightTokens["--accent"]);
   });
 
-  it("gives MUI the same secondary text colour as style.css", () => {
-    expect(lightTheme.palette.text.secondary).toBe(t["--text-secondary"]);
+  it("holds 4.5:1 for accent link text on every ground and alert tint", () => {
+    const alertTints = ["success", "info", "warning", "error"].map(
+      (c) => lightTheme.palette[c].main,
+    );
+    const tinted = alertTints.map((hex) => lighten(hex, 0.9));
+    for (const bg of [...grounds.map((g) => lightTokens[g]), ...tinted]) {
+      expect(
+        contrast(lightTokens["--accent"], bg),
+        `accent on ${bg}`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("holds 4.5:1 for a filled success chip's label", () => {
+    const { main, contrastText } = lightTheme.palette.success;
+    // MUI writes white as "#fff".
+    const label = contrastText.replace(/^#(\w)(\w)(\w)$/, "#$1$1$2$2$3$3");
+    expect(contrast(label, main)).toBeGreaterThanOrEqual(4.5);
   });
 });
