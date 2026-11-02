@@ -59,6 +59,25 @@ describe("BatchActionsBar", () => {
     });
   });
 
+  // The batch form of the overlay's Retry merge, one request per task.
+  it("asks the merge queue to retry every selected task with Retry merge", async () => {
+    const onRun = vi.fn();
+    render(
+      <BatchActionsBar
+        selection={[{ id: "1" }, { id: "2" }]}
+        config={null}
+        onRun={onRun}
+        onClear={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Retry merge" }));
+    expect(onRun).toHaveBeenCalledTimes(1);
+    onRun.mock.calls[0][0]("9");
+    expect(api).toHaveBeenCalledWith("/api/tasks/9/retry-merge", {
+      method: "POST",
+    });
+  });
+
   it("shows the selection count", () => {
     render(
       <BatchActionsBar
