@@ -71,7 +71,7 @@ Kinds:
 | Task fields (custom fields) | `workflow`, `CustomFieldsSection` | `/admin/workflow` | `PUT /api/deployment` (`customFields`) | D |
 | Relay (URL, audiences, token) | Access (`access`), `RelayPanel` | `/admin/access` | `GET`/`PUT /api/relay-settings`, `POST /api/relay-settings/test` | D |
 | Poll interval | Engine & Concurrency (`engine`) | `/admin/engine` | `/api/settings` (`pollInterval`) | D |
-| Merge queue: max merges per repo branch, batch size, gather window | `engine` | `/admin/engine` | `/api/settings` | D |
+| Merge queue: max merges per repo branch | `engine` | `/admin/engine` | `/api/settings` | D |
 | CI queue: jobs per run, age boost, reserve after | `engine`, "CI queue" | `/admin/engine` | `/api/settings` | D |
 | CI history: runs kept, step output kept/age, output per run | `engine`, "CI history" | `/admin/engine` | `/api/settings` | D |
 | CI job cache: size, entries, age | `engine`, "CI job cache" | `/admin/engine` | `/api/settings` | D |
@@ -103,7 +103,7 @@ Kinds:
 | Database (SQLite → Postgres) | `upgrade`, `UpgradePanel` "Database" | `/admin/upgrade` | `GET /api/database`, `POST /api/database/{test,upgrade}`, `POST /api/upgrade/postgres` | S |
 | Metrics, release notes | `MetricsOverlay` (+ `ReleaseNotesPanel`), sidebar footer | `/metrics` | `GET /api/metrics`, `/api/release-notes*` | S |
 | Health (standing alerts) | `AlertsButton` in the page header rail (`alerts.js` `collectAlerts`) | none | `GET /api/config` and what it carries | S |
-| Merge batches, CI | the CI view | `/ci`, `/ci/<run>` | `/api/ci/*`, `/api/merge-batches` | S, unchanged by this design |
+| Merge re-checks, CI | the CI view | `/ci`, `/ci/<run>` | `/api/ci/*`, `/api/merge-batches` | S, unchanged by this design |
 
 ### 1.3 Personal preferences (`SettingsOverlay.jsx`)
 
@@ -340,7 +340,7 @@ it while Settings is open):
 - **Matching.** `fuzzy.js` (already used by the model picker) ranks
   entries by label, then keywords.
 - **Results.** While the box holds text, the nav shows a flat list of
-  matches ("Merge batch size, Engine"), grouped by section, in place of
+  matches ("Max merges per repo branch, Engine"), grouped by section, in place of
   the groups. Choosing one navigates to `/settings/<section>#<anchor>`,
   scrolls the field into view, focuses it and outlines it for two
   seconds. Escape clears the filter and restores the groups.
@@ -476,9 +476,9 @@ Desktop, `/settings/engine`:
 │  Boards      │   Config repo  ● │ └──────────────────────────────────────┘   │
 │  Sessions    │ AGENTS           │ ┌ Merge queue ─────────────────────────┐   │
 │  Processes   │   Models         │ │ Max merges per repo branch [ 3  ]    │   │
-│  CI          │   Agents         │ │ Merge batch size           [    ]    │   │
-│  Repos     6 │   Memory         │ │ Merge gather window        [    ]    │   │
-│              │ WORK             │ └──────────────────────────────────────┘   │
+│  CI          │   Agents         │ └──────────────────────────────────────┘   │
+│  Repos     6 │   Memory         │                                            │
+│              │ WORK             │                                            │
 │              │   Tasks          │                                            │
 │              │   Repositories   │                                            │
 │              │ CONNECTIONS      │                                            │
