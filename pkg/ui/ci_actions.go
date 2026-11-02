@@ -563,23 +563,41 @@ func (s *Server) handleGetCIRunLog(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	_, jobs, err := s.tasks.actionsRunDetail(r.Context(), repo, runID)
+	job, text, status, err := s.tasks.actionsJobLog(r.Context(), repo, runID, r.URL.Query().Get("job"))
 	if err != nil {
-		writeClientError(w, err)
+		if status == 0 {
+			writeClientError(w, err)
+			return
+		}
+		writeError(w, status, err)
 		return
 	}
-	job, err := pickActionsJob(jobs, r.URL.Query().Get("job"))
+	resp := CIRunLogResponse{Run: id, Job: job.Name, JobID: job.ID, URL: job.HTMLURL, Bytes: len(text)}
+	resp.Log, resp.Truncated = tailActionsLog(text, tail)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// actionsJobLog is one job of run runID's whole log, the job picked by
+// name or id (pickActionsJob). A failure carries the HTTP status it
+// answers with, 0 for writeClientError to decide.
+func (c *Client) actionsJobLog(ctx context.Context, repo model.RepoRef, runID int64, name string) (github.ActionsRunJob, string, int, error) {
+	_, jobs, err := c.actionsRunDetail(ctx, repo, runID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err)
-		return
+		if errors.Is(err, errActionsBudgetLow) {
+			return github.ActionsRunJob{}, "", http.StatusServiceUnavailable, err
+		}
+		return github.ActionsRunJob{}, "", 0, err
 	}
-	reader := s.tasks.actionsReader()
+	job, err := pickActionsJob(jobs, name)
+	if err != nil {
+		return job, "", http.StatusNotFound, err
+	}
+	reader := c.actionsReader()
 	if reader == nil {
-		writeError(w, http.StatusNotFound, errNoActionsReader)
-		return
+		return job, "", http.StatusNotFound, errNoActionsReader
 	}
 	key := fmt.Sprintf("log|%s|%d", repo, job.ID)
-	text, err := cachedActions(s.tasks, key, func(string) time.Duration {
+	text, err := cachedActions(c, key, func(string) time.Duration {
 		if job.Status == "completed" {
 			return actionsFinishedTTL
 		}
@@ -591,19 +609,66 @@ func (s *Server) handleGetCIRunLog(w http.ResponseWriter, r *http.Request) {
 		var gh *github.Error
 		switch {
 		case errors.Is(err, errActionsBudgetLow):
-			writeError(w, http.StatusServiceUnavailable, err)
+			return job, "", http.StatusServiceUnavailable, err
 		case errors.As(err, &gh) && (gh.Status == http.StatusNotFound || gh.Status == http.StatusGone):
-			writeError(w, http.StatusNotFound, fmt.Errorf("the forge has no log for job %q (%d): it is past its retention window, or not written yet", job.Name, job.ID))
+			return job, "", http.StatusNotFound, fmt.Errorf("the forge has no log for job %q (%d): it is past its retention window, or not written yet", job.Name, job.ID)
 		case errors.As(err, &gh) && gh.Status == http.StatusForbidden:
-			writeError(w, http.StatusForbidden, fmt.Errorf("the forge refused job %q's log to this deployment's credential (it needs actions:read)", job.Name))
+			return job, "", http.StatusForbidden, fmt.Errorf("the forge refused job %q's log to this deployment's credential (it needs actions:read)", job.Name)
 		default:
-			writeError(w, http.StatusBadGateway, fmt.Errorf("reading job %q's log from the forge: %w", job.Name, err))
+			return job, "", http.StatusBadGateway, fmt.Errorf("reading job %q's log from the forge: %w", job.Name, err)
 		}
-		return
 	}
-	resp := CIRunLogResponse{Run: id, Job: job.Name, JobID: job.ID, URL: job.HTMLURL, Bytes: len(text)}
-	resp.Log, resp.Truncated = tailActionsLog(text, tail)
-	writeJSON(w, http.StatusOK, resp)
+	return job, text, http.StatusOK, nil
+}
+
+// ExternalCIRuns is this client's GitHub Actions runs as ci.ExternalRuns,
+// for the sandbox namespace and CLI.
+func (c *Client) ExternalCIRuns() ci.ExternalRuns { return actionsExternalRuns{c} }
+
+type actionsExternalRuns struct{ c *Client }
+
+func (a actionsExternalRuns) FindExternalRuns(ctx context.Context, f ci.RunFilter, limit int) ([]ci.Run, string) {
+	if f.Provider != "" && !strings.EqualFold(f.Provider, ci.ProviderGitHubActions) {
+		return nil, ""
+	}
+	repo, err := a.c.parseRepo(f.Repo)
+	if err != nil || !a.c.actionsListedFor(ctx, repo) {
+		return nil, ""
+	}
+	return a.c.listActionsRuns(ctx, repo, f, limit)
+}
+
+func (a actionsExternalRuns) ExternalRun(ctx context.Context, id string) (ci.Run, bool, error) {
+	repoText, runID, ok := ParseActionsRunID(id)
+	if !ok {
+		return ci.Run{}, false, nil
+	}
+	repo, err := a.c.parseRepo(repoText)
+	if err != nil {
+		return ci.Run{}, false, err
+	}
+	run, _, err := a.c.actionsRunDetail(ctx, repo, runID)
+	if err != nil {
+		return ci.Run{}, false, err
+	}
+	return run, true, nil
+}
+
+func (a actionsExternalRuns) ExternalJobLog(ctx context.Context, id, job string) (string, error) {
+	repoText, runID, ok := ParseActionsRunID(id)
+	if !ok {
+		return "", fmt.Errorf("%q is not a GitHub Actions run", id)
+	}
+	repo, err := a.c.parseRepo(repoText)
+	if err != nil {
+		return "", err
+	}
+	_, text, _, err := a.c.actionsJobLog(ctx, repo, runID, job)
+	if err != nil {
+		return "", err
+	}
+	text, _ = tailActionsLog(text, 0)
+	return text, nil
 }
 
 // tailActionsLog is the last lines lines of text (all of it for 0),
