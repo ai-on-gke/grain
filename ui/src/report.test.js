@@ -25,8 +25,9 @@ import {
   scopeSummary,
   sectionTitle,
 } from "./report.js";
-import { narrowingFromQuery } from "./paths.js";
+import { buildPath, narrowingFromQuery } from "./paths.js";
 import { ATTRIBUTES } from "./taskAttributes.js";
+import { narrowTasks } from "./taskFilters.js";
 
 // The reading a report board gives a board's query (report.js's own
 // note): three conditions become a scope the daemon can compute under,
@@ -144,14 +145,79 @@ describe("stateNarrowing", () => {
     ]);
   });
 
-  it("opens both asked states for Asked", () => {
+  it("opens only unfinished awaiting_reply tasks for Asked, matching backlogOf", () => {
     expect(stateNarrowing(scopeOf(""), "asked").filters).toEqual([
-      {
-        attr: "state",
-        op: "any",
-        values: ["awaiting_reply", "awaiting_submit"],
-      },
+      { attr: "state", op: "any", values: ["awaiting_reply"] },
+      { attr: "completed", op: "empty", values: [] },
     ]);
+    expect(stateNarrowing(scopeOf(""), "awaiting_reply").filters).toEqual([
+      { attr: "state", op: "any", values: ["awaiting_reply"] },
+      { attr: "completed", op: "empty", values: [] },
+    ]);
+  });
+
+  it("round-trips through URLs to the exact non-session task lists backlogOf counts", () => {
+    const tasks = [
+      { id: "2", repo: "acme/widgets", state: "queued" },
+      { id: "11", repo: "acme/widgets", state: "queued" },
+      {
+        id: "13",
+        repo: "acme/widgets",
+        state: "queued",
+        interactive: true,
+        consoleSession: "director",
+      },
+      { id: "4", repo: "acme/widgets", state: "awaiting_reply", endedAt: null },
+      {
+        id: "6",
+        repo: "acme/widgets",
+        state: "awaiting_submit",
+        endedAt: "2026-11-02T06:00:00Z",
+      },
+      {
+        id: "7",
+        repo: "acme/widgets",
+        state: "awaiting_reply",
+        endedAt: "2026-11-02T08:00:00Z",
+      },
+      {
+        id: "14",
+        repo: "acme/widgets",
+        state: "awaiting_reply",
+        interactive: true,
+        endedAt: null,
+      },
+      { id: "99", repo: "acme/other", state: "queued" },
+    ];
+    const scope = scopeOf("f=repo:any:acme/widgets");
+
+    const waitingHref = buildPath({
+      view: "tasks",
+      narrowing: stateNarrowing(scope, "queued"),
+    });
+    expect(waitingHref).toBe("/?f=repo:any:acme/widgets&f=state:any:queued");
+    expect(
+      narrowTasks(
+        tasks,
+        narrowingFromQuery(waitingHref.slice(waitingHref.indexOf("?"))),
+        {},
+      ).map((t) => t.id),
+    ).toEqual(["2", "11"]);
+
+    const askedHref = buildPath({
+      view: "tasks",
+      narrowing: stateNarrowing(scope, "asked"),
+    });
+    expect(askedHref).toBe(
+      "/?f=repo:any:acme/widgets&f=state:any:awaiting_reply&f=completed:empty:",
+    );
+    expect(
+      narrowTasks(
+        tasks,
+        narrowingFromQuery(askedHref.slice(askedHref.indexOf("?"))),
+        {},
+      ).map((t) => t.id),
+    ).toEqual(["4"]);
   });
 });
 
