@@ -42,20 +42,19 @@ PMs and engineers write or update a design document on a branch with the most ap
 
 A person starts specification generation explicitly, either by hand, with an external agent or through a grain task. The spec PR goes through the *Reviews* rules above (including checking against the design), and the agent that opened it listens to and answers review comments until humans approve and merge it. Whoever starts the step owns the resulting spec PR (for a grain task, that task's owner; see [`attribution.design.md`](attribution.design.md)).
 
-### Tasks
-
-A person creates a set of tasks explicitly—with their personal agent (or by hand) or by filing a grain task—to open a PR adding `.task.grain.md` grainfiles with task descriptions, dependencies, and initial permissions.
-
-The tasks PR goes through the same *Reviews* rules, with the opening agent listening to and answering review comments until humans audit, approve, and merge it. Whoever starts the tasks step owns the tasks PR (for a grain task, that task's owner). Per [`attribution.design.md`](attribution.design.md), the owner of the tasks PR owns every task imported from its grainfiles and every implementation PR those tasks produce.
-
 ### Implementation
 
 Implementation code reaches the repository by one of two paths:
 
-1. **Autonomous agent implementation (from tasks).** Grain automatically imports merged `.task.grain.md` files, dispatches agents to write the code PRs, reviews them with a separate agent (including design and spec conformance), and lands them through the grain merge queue once CI is green.
-2. **External pull requests (blocking grain review check).** A contributor opens a pull request directly on GitHub, by hand or with an interactive coding agent. Grain does not adopt the PR or land it through its merge queue; instead, grain runs a required, blocking GitHub check on every head of the PR, and it merges through GitHub's normal flow once required checks pass and a human approves it.
+1. **Autonomous agent implementation (from tasks).** A person creates a set of tasks explicitly—with their personal agent (or by hand) or by filing a grain task—to open a PR adding `.task.grain.md` grainfiles with task descriptions, dependencies, and initial permissions. Grain automatically imports merged `.task.grain.md` files, dispatches agents to write the code PRs, reviews them with a separate agent (including design and spec conformance), and lands them through the grain merge queue once CI is green.
+
+2. **External pull requests (blocking grain review check).** A contributor opens a pull request directly on GitHub, by hand or with an interactive coding agent. A grain agent review is required for all external PRs, and they merge through GitHub's normal flow once required checks pass.
 
 #### Autonomous agent implementation
+
+A person creates a set of tasks explicitly—with their personal agent (or by hand) or by filing a grain task—to open a PR adding `.task.grain.md` grainfiles with task descriptions, dependencies, and initial permissions.
+  
+The tasks PR goes through the same *Reviews* rules, with the opening agent listening to and answering review comments until humans audit, approve, and merge it. Whoever starts the tasks step owns the tasks PR (for a grain task, that task's owner). Per [`attribution.design.md`](attribution.design.md), the owner of the tasks PR owns every task imported from its grainfiles and every implementation PR those tasks produce.
 
 Grain automatically imports merged task grainfiles into its backlog, watched by the grain on-call. Agents decompose tasks into child tasks as needed while staying within their initial grants (`grainfiles.design.md`) and inheriting their parent's owner (`attribution.design.md`). No human is in the loop during routine implementation and landing: a second agent reviews each PR before the merge queue lands it, unless a trust-boundary rule or escalation requires a human. Design ambiguities are raised as clarification PRs against `design/` for humans to review and merge; execution or test blockers go to the grain inbox. Once landed, the grainfile task is marked complete with the task URL as the index into grain's database.
 
