@@ -211,7 +211,7 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: /^Repos/ }));
     await user.click(await screen.findByText("acme/other"));
     await user.click(
-      await screen.findByRole("button", { name: "grain/task-1" }),
+      await screen.findByRole("button", { name: /^grain\/task-1, / }),
     );
 
     expect(await screen.findByText("go test")).toBeInTheDocument();
