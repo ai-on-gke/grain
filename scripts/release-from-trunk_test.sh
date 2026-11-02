@@ -37,6 +37,7 @@ export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.com
 export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.com
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 unset GRAIN_API_URL GRAIN_API_TOKEN GRAIN_RELEASE_GATE_URL GRAIN_RELEASE_GATE_TOKEN RELEASE_NEVER_PROMOTE RELEASE_MAJOR RELEASE_FLOOR_MINOR
+unset GITHUB_ACTIONS GITHUB_TOKEN GH_TOKEN GITHUB_API_URL GITHUB_REPOSITORY RELEASE_CI_SOURCE RELEASE_GITHUB_REPO RELEASE_GITHUB_API_URL
 export HOME="$work/home"
 mkdir -p "$HOME"
 
@@ -417,6 +418,42 @@ out="$(cd "$work/clone" && env RELEASE_IMAGES="$work/images.sh" RELEASE_NOW="$no
 expect "no gate" "exits 1" eq "$status" 1
 expect "no gate" "names the capability" has "release-gate-read"
 expect "no gate" "tags nothing" eq "$(remote_tag v2.3.0-rc.1)" ""
+
+# --- GitHub Actions: main's verdicts are its workflow runs ---
+# github_runs <commit>: GitHub's answer for each required workflow, green
+# on commit, served where RELEASE_GITHUB_API_URL points.
+github_runs() {
+  local wf
+  for wf in tests release nightly; do
+    mkdir -p "$work/www/gh/repos/o/r/actions/workflows/$wf.yml"
+    printf '{"total_count":1,"workflow_runs":[{"id":1,"path":".github/workflows/%s.yml","head_branch":"main","head_sha":"%s","event":"%s","status":"completed","conclusion":"success","run_started_at":"%s","updated_at":"%s","repository":{"full_name":"o/r"},"head_repository":{"full_name":"o/r"}}]}\n' \
+      "$wf" "$1" "$([ "$wf" = nightly ] && echo schedule || echo push)" "$(iso $((now - 7200)))" "$(iso $((now - 3600)))" \
+      > "$work/www/gh/repos/o/r/actions/workflows/$wf.yml/runs"
+  done
+}
+if [ -n "$staging" ]; then
+  setup ""
+  runs
+  github_runs "$c2"
+  train RELEASE_RUNS_JSON= GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$staging/gh"
+  expect "github actions" "exits 0" eq "$status" 0
+  expect "github actions" "reads the workflow runs" has "read 3 GitHub Actions runs of o/r's tests release nightly on main"
+  expect "github actions" "cuts rc.1 on the commit GitHub Actions passed" eq "$(remote_tag v2.3.0-rc.1)" "$c2"
+fi
+
+setup ""
+train RELEASE_RUNS_JSON= RELEASE_CI_SOURCE=github
+expect "github actions, no token" "exits 1" eq "$status" 1
+expect "github actions, no token" "names the token" has "set GITHUB_TOKEN (actions: read)"
+expect "github actions, no token" "tags nothing" eq "$(remote_tag v2.3.0-rc.1)" ""
+
+setup ""
+runs "$c3"
+train RELEASE_CI_SOURCE=github
+expect "github actions, from a file" "RELEASE_RUNS_JSON still stands in" eq "$(remote_tag v2.3.0-rc.1)" "$c3"
+
+train RELEASE_CI_SOURCE=jenkins
+expect "unknown source" "is refused" has "RELEASE_CI_SOURCE is jenkins, not grain or github"
 
 # --- a dry run pushes nothing ---
 setup ""
