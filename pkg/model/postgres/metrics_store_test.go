@@ -162,6 +162,56 @@ func TestTaskTimingsReadTargetAndFixTaskLink(t *testing.T) {
 	}
 }
 
+func TestTaskTimingsReadSessionFlags(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+
+	director := task("a1b2", true)
+	director.Interactive = true
+	director.Tags = []string{model.ConsoleSessionTag(model.DirectorSessionID)}
+
+	taggedOnly := task("b2c3", true)
+	taggedOnly.Tags = []string{model.ConsoleSessionTag("ops")}
+
+	chat := task("c3d4", true)
+	chat.Interactive = true
+
+	barePrefix := task("d4e5", true)
+	barePrefix.Tags = []string{model.ConsoleSessionTagPrefix}
+
+	plain := task("e5f6", true)
+
+	for _, tk := range []model.Task{director, taggedOnly, chat, barePrefix, plain} {
+		if err := store.PutTask(ctx, tk); err != nil {
+			t.Fatalf("putting %s: %v", tk.ID, err)
+		}
+	}
+	timings, err := store.TaskTimings(ctx)
+	if err != nil {
+		t.Fatalf("TaskTimings: %v", err)
+	}
+	byID := map[string]model.TaskTiming{}
+	for _, tm := range timings {
+		byID[tm.TaskID] = tm
+	}
+	for _, tc := range []struct {
+		id                     string
+		interactive, isConsole bool
+	}{
+		{"a1b2", true, true},
+		{"b2c3", false, true},
+		{"c3d4", true, false},
+		{"d4e5", false, false},
+		{"e5f6", false, false},
+	} {
+		got := byID[tc.id]
+		if got.Interactive != tc.interactive || got.ConsoleSession != tc.isConsole {
+			t.Errorf("%s: Interactive=%v ConsoleSession=%v, want Interactive=%v ConsoleSession=%v",
+				tc.id, got.Interactive, got.ConsoleSession, tc.interactive, tc.isConsole)
+		}
+	}
+}
+
 // RunPrompts is the deployment-wide read behind metrics.Prompts: a size
 // per run measured in SQLite, and whether grain had to cut the task's
 // conversation to reach it. What it must not do is report a run that was

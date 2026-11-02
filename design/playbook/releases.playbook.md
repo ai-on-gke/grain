@@ -1,0 +1,349 @@
+# Continuous releases
+
+**Owner:** @bwsalmon
+
+[`contributions.playbook.md`](contributions.playbook.md) defines how designs, specifications, tasks, and code land on `main`, and [`merging.design.md`](../design/merging.design.md) defines how pull requests merge independently once they are clean, green, and through their gates. This playbook design defines how landed commits on `main` become official releases.
+
+**The core rule:** grain releases continuously from `main`—cutting a release candidate `vX.Y.Z-rc.N` from the newest known-good trunk commit, running the deterministic CI and agent qualification suite against it, promoting `vX.Y.Z` and `latest` automatically as soon as qualification passes, or triaging, fixing, and cutting `vX.Y.Z-rc.(N+1)` when qualification fails. Releases go out as fast as qualification passes, with no long-lived stabilization branch and no timed staging soak.
+
+---
+
+## Relationship to `release-from-trunk`
+
+This playbook supersedes the staging-soak and human-staging flow in [`release-from-trunk.design.md`](../design/release-from-trunk.design.md) and [`docs/release-candidate-management.md`](../../docs/release-candidate-management.md) while keeping trunk-based release selection, immutable version numbering, and container image provenance.
+
+| Mechanism | Disposition | Continuous-release rule |
+| --- | --- | --- |
+| **Release from trunk (`main`)** | **Survives** | Ordinary development and bug fixes land on `main` through normal pull requests. There is no long-lived stabilization branch, no `candidate -> main` back-merge, and no owed-ports ledger. |
+| **LKG commit selection (`select-lkg` in `scripts/candidate-gate.sh`)** | **Survives (narrowed)** | `select-lkg` picks the newest `main` commit after the floor whose per-push `tests.yml` and `release.yml` runs are green (with `:sha-<short>` images already published). `nightly.yml` moves out of pre-cut LKG selection and runs as Stage 1 of RC qualification itself. |
+| **Tag and channel conventions (`vX.Y.Z-rc.N`, `-discarded`, `vX.Y.Z`, `latest`, `candidate`/`rc`)** | **Survives** | Every RC is an annotated `vX.Y.Z-rc.N` tag; failed RCs receive `vX.Y.Z-rc.N-discarded` markers without moving `:candidate`/`:rc` backwards; promoted releases receive immutable `vX.Y.Z` tags and advance `latest`; `scripts/build-version.sh` orders all builds monotonically. |
+| **Operator controls in `scripts/release.conf`** | **Survives (extended)** | `RELEASE_MAJOR`, `RELEASE_FLOOR_MINOR`, and `RELEASE_NEVER_PROMOTE` remain authoritative, joined by `RELEASE_MIN_INTERVAL_MINUTES` and `RELEASE_MAX_RC_ATTEMPTS`. |
+| **`infra` verdict classification** | **Survives (extended)** | Cancelled, timed-out, capacity-starved, quota-paused, or restart-interrupted runs classify as `infra` and re-run without counting against the RC, across both CI jobs and agent qualification tasks. |
+| **Mechanical release notes (`scripts/release-notes.sh`)** | **Survives (automated)** | `scripts/release-notes.sh` generates `docs/releases/vX.Y.Z.md` and the GitHub Release body deterministically during promotion, extended to flag breaking changes, replacing the per-release `.grain/templates/release-notes.yml` agent task. |
+| **24-hour staging soak (`check-soak`, `RELEASE_STAGING_URL`, persistent staging sandbox, `staging-ui-exploration`)** | **Superseded** | Retired. Qualification is an active, deterministic two-stage suite run against the RC commit rather than a 24-hour wall-clock wait on a staging sandbox. |
+| **Daily cron bottleneck (`04:15 UTC` once-a-day train)** | **Superseded** | Retired as the primary driver. The train runs event-driven back-to-back whenever an RC finishes and new LKG commits exist on `main`, with a periodic cron kept only as a safety wake. |
+| **`vX.Y.0-pending` staging and routine human Approve/Reject (`promote-release.yml`)** | **Superseded** | Retired for routine minor releases: a passing qualification promotes `vX.Y.Z` and `latest` automatically. Human gating moves to governing designs, qualification rules, trust-boundary paths, and `RELEASE_MAJOR` bumps. |
+
+---
+
+## Lifecycle and state machine
+
+At most one release candidate qualifies at a time. Each candidate moves through a single deterministic loop:
+
+```mermaid
+stateDiagram-v2
+    [*] --> CutRC: New LKG on main (past min interval)
+
+    state "rc cut (vX.Y.Z-rc.N)" as CutRC
+    state "qualifying (Stage 1 CI -> Stage 2 Agent Suite)" as Qualifying
+    state "passed" as Passed
+    state "released (vX.Y.Z & latest)" as Released
+    state "failed (vX.Y.Z-rc.N-discarded)" as Failed
+    state "fixing (steward triage & high-priority fixes)" as Fixing
+    state "next rc (vX.Y.Z-rc.N+1)" as NextRC
+    state "escalated (human inbox)" as Escalated
+
+    CutRC --> Qualifying: Tag vX.Y.Z-rc.N, publish :rc images, start Stage 1
+    Qualifying --> Qualifying: infra (capacity / quota / restart) -> re-run
+    Qualifying --> Qualifying: flake (first failure of job or item) -> re-run once on same RC
+    Qualifying --> Passed: Stage 1 + Stage 2 clean & not in RELEASE_NEVER_PROMOTE
+    Passed --> Released: Tag vX.Y.Z, move latest, publish images & release notes
+    Released --> [*]
+
+    Qualifying --> Failed: Confirmed failure after single retry (or superseded)
+    Failed --> Escalated: Attempt count N >= RELEASE_MAX_RC_ATTEMPTS (3)
+    Failed --> Fixing: Wake pipeline steward (pipeline.rc-failed)
+    Fixing --> NextRC: Blocking fixes merged & LKG green (main, or release/vX.Y.Z on rc.3)
+    NextRC --> Qualifying: Tag vX.Y.Z-rc.(N+1), publish :rc images
+```
+
+1. **Cut RC (`rc cut`):** When no RC is in qualification and at least `RELEASE_MIN_INTERVAL_MINUTES` has elapsed since the previous promotion, the train selects the newest `main` commit after the current `latest` release whose `tests.yml` and `release.yml` runs are green (`:sha-<short>` images verified and published). It tags `vX.Y.Z-rc.1`, force-moves `refs/heads/candidate` onto that commit, and publishes `:vX.Y.Z-rc.1`, `:candidate`, and `:rc` container images stamped with `RELEASE=vX.Y.Z-rc.1`.
+2. **Qualify (`qualifying`):** Qualification runs in two sequential stages against `vX.Y.Z-rc.N` (§2, §13):
+   - **Stage 1 (CI qualification):** `.github/workflows/nightly.yml` runs against `vX.Y.Z-rc.N`.
+   - **Stage 2 (Agent qualification):** Only after Stage 1 passes, the deployment starts the `release-qualification` suite against `vX.Y.Z-rc.N` and reports the verdict back to the commit as check run `grain/release-qualification`.
+   - Transient infrastructure interruptions re-run via `infra -> re-run` (§4). A first failure of any job or suite item retries once on the same RC via `flake -> re-run once` (§3).
+3. **Promote on pass (`passed -> released`):** When Stage 1 and Stage 2 both pass and neither `vX.Y.Z-rc.N` nor `vX.Y.Z` appears in `RELEASE_NEVER_PROMOTE`, the train tags `vX.Y.Z`, advances `latest`, re-stamps and publishes `:vX.Y.Z` and `:latest` images from the verified `:sha-<short>` artifacts, and publishes deterministic release notes (§1, §8).
+4. **Fix and re-cut on fail (`failed -> fixing -> next rc`):** When any required check remains red after its single retry, the train tags `vX.Y.Z-rc.N-discarded`, marks the RC images discarded, and raises `pipeline.rc-failed:vX.Y.Z-rc.N` to wake the pipeline steward. The steward triages the failure, files high-priority fix tasks (or reverts), holds the next RC cut until the known blocker lands, and then allows `vX.Y.Z-rc.(N+1)` to cut and re-enter qualification (§5, §12).
+
+---
+
+## Design decisions
+
+### 1. Promotion gate
+
+**Decision:** **Promote automatically on a clean qualification pass**, retiring `-pending` and the routine human one-click approval step in `promote-release.yml`. Keep synchronous human control via `RELEASE_NEVER_PROMOTE` / `RELEASE_HOLD` in `scripts/release.conf`, human review on all qualification and release-machinery files, and human approval on `RELEASE_MAJOR` increases.
+
+- **Why:** In a continuous release loop targeting multi-release-per-day throughput, a mandatory human click re-creates the exact queue latency that continuous qualification removes: `-pending` blocks the pipeline whenever an operator is asleep or away, or forces multiple releases to batch into large jumps that are harder to bisect. Under [`contributions.playbook.md`](contributions.playbook.md), humans govern *designs, qualification suites, and trust-boundary rules*, while clean, green artifacts flow automatically.
+- **Trade-off:** A product defect that escapes both `tests.yml`/`release.yml` and the two-stage RC qualification suite reaches `latest` immediately without a human eyeball pause. We accept that trade-off because:
+  1. Qualification is deeper and more objective than a passive demo soak (§2);
+  2. Unattended deployments on `autoUpgradeChannel: latest` upgrade once daily at their configured window rather than instantaneously (§10);
+  3. Rollback re-points `latest` in minutes without mutating history (§11); and
+  4. Any edit to `.github/workflows/*`, `.grain/**`, `scripts/release*.sh`, or `design/playbook/releases.playbook.md` remains human-reviewed before merge.
+
+---
+
+### 2. What "pass" means
+
+A release candidate `vX.Y.Z-rc.N` passes qualification if and only if **every required check in Stage 0, Stage 1, and Stage 2 succeeds on `rc_sha`**, with zero required checks skipped, cancelled, or unanswered, and neither `vX.Y.Z-rc.N` nor `vX.Y.Z` listed in `RELEASE_NEVER_PROMOTE`.
+
+#### Stage 0 — Trunk LKG pre-filter (already green on `main` before cutting the RC)
+- `.github/workflows/tests.yml`: all active hosted push-gate jobs (`go`, `go-e2e`, `go-orchestrator`, `go-model`, `go-unit`, `granule`, `postgres`, `run-host`, `host-script-container`, `frontend`, `ui-e2e`, `lint`, `terraform`, `installer`, `package-cache`), plus workflow security scans.
+- `.github/workflows/release.yml`: full container and installer verification (`tests/container` and `tests/installer` across stock host, `trixie`, and `hostmode`, each failing if `--- SKIP` appears or zero tests pass) and `:sha-<short>` images pushed to the registry.
+
+#### Stage 1 — Deterministic CI qualification (`.github/workflows/nightly.yml` on `vX.Y.Z-rc.N`)
+
+Today `nightly.yml` has not run on GitHub Actions in over a week because relying on a single daily cron leaves qualification blind whenever schedules pause or fail to trigger. Under continuous releases, **cutting `vX.Y.Z-rc.N` triggers `nightly.yml` directly on the RC ref**, making Stage 1 deterministic and independent of cron health.
+
+| Job(s) | Workflow | Required now | Required once runner / WIF infra lands |
+| --- | --- | --- | --- |
+| `go-long` (4 shards), `staterepo-soak`, `loadtest`, `scalability`, `merge-stress`, `long-term-test`, `long-sim`, `postgres-stress`, `tunnel-stress`, `ui-e2e-long` (4 shards), `installer-variants`, `vulns`, `cmd-grain-stress`, `upgrade-test` | `nightly.yml` | **Yes (all 14 jobs, `success` required; `skipped` is a failure)** | **Yes** |
+| `real-vm`, `real-kubernetes` | `tests.yml` (`ENABLE_SELF_HOSTED_TESTS`) | **No** — skipped on hosted runners lacking nested KVM / cluster fixtures | **Yes** — required in Stage 0/1 once self-hosted KVM runners set `ENABLE_SELF_HOSTED_TESTS=true` |
+| `kvm-sandboxes`, `kvm-route-stress` | `nightly.yml` / `kvm-route-stress.yml` (`ENABLE_SELF_HOSTED_TESTS`) | **No** — skipped without nested KVM, 16 GiB RAM, and cached guest images | **Yes** — required in Stage 1 once `ENABLE_SELF_HOSTED_TESTS=true` |
+| `smoke` (`GCE and GKE lifecycle`) | `gcp-smoke.yml` (`GCP_WIF_PROVIDER`, `GCP_SA_EMAIL`) | **No** — skips every step while WIF variables are unset; a skipped job carries no verdict | **Yes** — dispatched in Stage 1 once WIF variables are set, with non-skipping assertion and transient cloud quota/IAM errors routed through `infra` retry (§4) |
+
+#### Stage 2 — Agent qualification (`release-qualification` suite)
+
+Stage 2 runs the four templates in `.grain/suites/release-qualification.yml` (`repo:suite:<owner>:<repo>:release-qualification` in the state repository) against the RC build:
+
+1. `qualification-mergequeue` — exercises independent clean-and-green pull request merging, review gates, and conflict-cluster repair (`merging.design.md`) against an isolated `qualification/<task-id>` scratch branch created from `rc_sha` and deleted on exit.
+2. `qualification-ci-diagnostics` — exercises CI log byte-range inspection, test history, quarantine, and retrigger tools against `rc_sha`.
+3. `qualification-base-triage` — stages a deliberate failure on an isolated `qualification/<task-id>` scratch branch, verifies base-branch failure detection, team attribution, steward/repair unblocking, and deletes the scratch branch.
+4. `qualification-system-smoke` — builds and runs `grain` from `rc_sha`, executes multi-team Playwright journeys, exercises bidirectional state-repository sync, checks deployment health/reconciler latency, and runs only after items 1–3 pass.
+
+#### Making an agent qualification item's verdict objective
+
+Prose comments cannot gate an automated release. Today `release-qualification` uses `mode: count` (`count: 1`, `auto-merge: true`), which marks `SuiteRunSucceeded` whenever its tasks finish—even if an agent discovered a bug and opened a fix PR or filed a follow-up defect task (`PassChanged` in `pkg/model/suite.go`). Under continuous releases, an agent item passes if and only if **all four objective conditions** hold:
+
+1. **Suite pass outcome is `PassClean` (`mode: until_clean`, `max-passes: 1`, `auto-merge: false`):** Every task in the suite run finishes in `StateCompleted` (`nothing_needed`) or `StateAwaitingReply` (`comment_on_issue`), with `OpenedPullRequest == false` and `Proposed == false`. Opening a PR, proposing any follow-up task, calling `ask_question`, failing, or closing uncompleted evaluates objectively to `FAIL`.
+2. **Structured machine-parsed verdict trailer:** Every qualification template requires its closing note to end with a strict key-value footer:
+   ```text
+   Qualification-Verdict: PASS | FAIL | INFRA
+   Qualified-Tag: vX.Y.Z-rc.N
+   Qualified-Commit: <full 40-char rc_sha>
+   ```
+   A missing footer, a mismatched `Qualified-Commit`, or `Qualification-Verdict != PASS` fails the item even if the agent exited cleanly via `comment_on_issue`.
+3. **Zero leaked scratch state:** Any `refs/heads/qualification/<task-id>` scratch branch left undeleted or any open child defect task linked via `Origin:` to the qualification task fails cleanup verification (or triggers automated ref reaping + `FAIL` if a defect task remains open).
+4. **Check-run projection:** The deployment aggregates the four items into a single GitHub check run `grain/release-qualification` (`conclusion: success | failure | neutral`) on `rc_sha`, giving the promotion workflow a binary, auditable status on the exact commit.
+
+---
+
+### 3. Flakes
+
+Without flake isolation, a 1% flake across ~20 qualification jobs and tasks fails ~18% of RC runs and stalls continuous delivery.
+
+- **Re-run once on the same RC:** When a required job in `nightly.yml` or an agent item in `release-qualification` fails for the first time on `vX.Y.Z-rc.N` with a product-failure exit (not `infra`), the qualification controller automatically re-runs **only the failed job(s)** (GitHub Actions `rerun-failed-jobs`, or selective `jobs` dispatch) or **only the failed qualification template** once against the exact same `rc_sha`.
+  - If the retry passes, the failure is classified as a **flake**, the RC continues qualifying, and no human intervention is needed.
+  - If the retry also fails (same or different assertion in that job/item), the RC is confirmed **red** (`vX.Y.Z-rc.N-discarded`).
+  - At most **two distinct jobs/items** may consume flake retries on a single RC; three independent red jobs in one run indicate systemic breakage rather than coincidence and fail immediately without burning retry quota.
+- **Quarantine known flakes (`.grain/quarantine.yml`):** Known flaky unit or E2E tests are added to `.grain/quarantine.yml` (a trust-boundary path requiring review). Every quarantine entry names an exact test identifier (never a regex), carries an owning de-flake task ID and a mandatory expiry date (at most 14 days), and never excuses step timeouts or process crashes. Quarantined failures remain recorded in `FailureSummary` (`passed (quarantined)`).
+- **Record flake rate and enforce de-flaking:** Every pass-on-retry and every quarantined failure is recorded in CI test history (`pkg/ci`). Reconcilers compute a rolling 7-day flake rate (`flaky_runs / total_runs`) per test, job, and qualification template. Crossing **>2% over 7 days** or **>=2 RC flake retries in 24 hours** raises `pipeline.flake-budget:<target>`, waking the pipeline steward to file a high-priority de-flake or quarantine task.
+
+---
+
+### 4. Infra failures versus product failures
+
+Environmental failures must never discard a healthy RC, burn a version retry attempt, or trigger false code bisection.
+
+- **What counts as `infra`:**
+  - **CI jobs (`nightly.yml`, `gcp-smoke.yml`):** workflow/job conclusions `cancelled` (when not superseded by a newer RC), `timed_out` during runner provisioning/cache/setup, `startup_failure`, runner preemption/spot eviction, registry/network HTTP 5xx/429 during setup, or cloud WIF/IAM token rate-limiting before test assertions run.
+  - **Agent qualification tasks (`release-qualification`):** sandbox provisioning timeouts, microVM/pod startup failures, host git-proxy or CA-rotation disconnects across a daemon restart, model connection quota/rate-limit pauses, daemon upgrade drains, or an explicit `Qualification-Verdict: INFRA` backed by a verified environmental error pattern.
+- **How `infra` is handled:**
+  - `infra` verdicts **never** mark the RC red and **never** consume the single flake-retry allowance (§3) or the 3-attempt RC cap (§5).
+  - The controller re-queues the affected job or task automatically (with exponential backoff, and waiting out model quota reset windows before re-dispatching agent tasks).
+  - **Bounded patience:** If the same job or item hits **3 consecutive `infra` failures** or remains blocked on `infra` for **more than 2 hours**, the reconciler leaves the RC in `qualifying` (not `-discarded`) and raises `pipeline.release-infra-stalled:vX.Y.Z-rc.N` so the steward or operator repairs the underlying runner, quota, or credential issue.
+
+---
+
+### 5. Fix-loop convergence
+
+While `vX.Y.Z-rc.1` runs qualification (~60–90 minutes), `main` keeps accepting merges. Cutting every retry blindly from `main` risks non-convergence when trunk is busy; cutting every RC onto a release branch re-introduces cherry-pick toil on happy paths.
+
+**Decision:** **Trunk-first for `rc.1` and `rc.2`, automatic short-lived branch lock (`release/vX.Y.Z`) on `rc.3`, bounded at 3 RC attempts before steward escalation.**
+
+1. **`rc.1` and `rc.2` cut directly from `main`:** When `vX.Y.Z-rc.1` fails, the fix lands on `main` as a high-priority PR. Once that fix (and any concurrent trunk merges) passes `tests.yml` and `release.yml`, `vX.Y.Z-rc.2` is cut directly from the new `main` LKG commit. Under normal merge rates, `rc.2` converges cleanly with zero cherry-picking and ships the latest trunk state.
+2. **`rc.3` isolates on short-lived `release/vX.Y.Z` if `main` introduced a new regression:** If `rc.2` fails—especially on a regression absent from `rc.1`, showing trunk churn outpaced stabilization—the steward branches `release/vX.Y.Z` from `rc.2`'s commit, allows **only** targeted `fix:` commits cherry-picked from `main` (`Backported-from: <main_sha>`—fixes always land on `main` first so trunk never regresses), lets `release.yml` (which already runs on `release/v*`) build `:sha-<short>` images, and cuts `vX.Y.Z-rc.3` from `release/vX.Y.Z`. Once `vX.Y.Z` promotes, `release/vX.Y.Z` is deleted immediately; `main` already carries every fix.
+3. **Hard bound of 3 attempts (`RELEASE_MAX_RC_ATTEMPTS=3`):** If `vX.Y.Z-rc.3` also fails qualification, automatic RC cutting pauses for `vX.Y.Z` and the steward raises `pipeline.release-escalated:vX.Y.Z` to the human Inbox with the three failure summaries and suspect commits. A human (or steward wake after human reply) resets or advances the train.
+
+- **Trade-off:** When `rc.3` uses `release/vX.Y.Z`, the resulting `vX.Y.Z` tag sits on a 1–2 commit cherry-pick spur off `rc.2` rather than `main`'s first-parent line (identical to hotfix patch branches today). `scripts/build-version.sh` and `scripts/release-notes.sh` already support `release/v*` ancestry, and reserving the branch strictly for `rc.3` keeps >90% of releases purely linear on `main` while guaranteeing convergence under heavy trunk traffic.
+
+---
+
+### 6. Concurrency
+
+- **One RC in qualification at a time:** The train never qualifies two RCs concurrently.
+- **New commits on `main` do not preempt an active RC:** When `vX.Y.Z-rc.N` is healthy and mid-qualification, newer commits landing on `main` wait for `vX.(Y+1).0-rc.1`. Cancelling an in-flight RC whenever `main` moves would cause livelock (zero releases ever finishing during active development hours).
+- **Superseded RCs are cancelled immediately:** A newer RC is cut while `rc.N` is still running in only two cases:
+  1. A required job or item in `rc.N` has **already confirmed red** (failed twice) while sibling jobs are still running—there is no value in letting remaining jobs burn 60 minutes of compute on a doomed RC; or
+  2. An operator explicitly dispatches a forced replacement cut or adds `vX.Y.Z-rc.N` to `RELEASE_NEVER_PROMOTE`.
+  In both cases, the controller **cancels `rc.N`'s in-flight `nightly.yml` workflow run and active `SuiteRun` tasks immediately**, tags `vX.Y.Z-rc.N-discarded`, publishes `:vX.Y.Z-rc.N-discarded` markers, and frees runner/sandbox capacity before starting `rc.(N+1)`.
+
+---
+
+### 7. Cadence and versioning
+
+- **Minor vs. patch numbering:**
+  - **Every trunk promotion increments `minor` (`vX.(Y+1).0`).** Trunk merges carry both features (`feat:`) and fixes (`fix:`). Bumping `minor` on every trunk release keeps `scripts/build-version.sh`'s `vX.(Y+1).0-dev.<n>+<sha>` builds strictly monotonic with the upcoming release without changing target version numbers mid-qualification when a `feat:` commit lands between `rc.1` and `rc.2`.
+  - **Patch versions (`vX.Y.Z`, `Z >= 1`) are reserved for surgical hotfixes** cherry-picked onto `release/vX.Y.Z` from an already-promoted `vX.Y.0` when `main` holds unshipped changes that must not ship with an emergency fix. Hotfix RCs (`vX.Y.1-rc.1`) run the same two-stage qualification suite before promoting `vX.Y.1`.
+  - **Failed RCs never consume a minor:** Discarding `v3.1.0-rc.1` cuts `v3.1.0-rc.2` on the same `3.1.0` target.
+- **`RELEASE_MAJOR` and breaking changes:**
+  - `RELEASE_MAJOR` in `scripts/release.conf` is human-owned. Raising `RELEASE_MAJOR` advances the next target to `v{RELEASE_MAJOR}.{RELEASE_FLOOR_MINOR}.0`.
+  - Commits and PR titles carrying Conventional Commit breaking markers (`feat!:`, `fix!:`, `<type>(<scope>)!:`, or a `BREAKING CHANGE:` trailer) are **gated in PR CI (`tests.yml`) and review**: a breaking change may merge to `main` only when `RELEASE_MAJOR` in `scripts/release.conf` already exceeds the highest promoted major tag (indicating `main` is actively accumulating a planned major release), or when accompanied by a human-approved bump to `RELEASE_MAJOR`. This prevents continuous auto-promotion from silently shipping breaking changes inside an ordinary minor release.
+- **Minimum cut interval (`RELEASE_MIN_INTERVAL_MINUTES`):**
+  - Default **`RELEASE_MIN_INTERVAL_MINUTES=120` (2 hours)** measured from the previous promoted release's timestamp (`FORCE=true` or rollback-fix priority bypasses the floor; setting `0` runs strictly back-to-back).
+  - A 2-hour floor batches rapid bursts of trunk merges into cohesive releases (~6–8 releases/day ceiling) and bounds qualification spend (§13), while **decoupling release cadence from deployment restarts**: deployments do not restart on every release tag unless configured to, because `autoUpgradeChannel: latest` runs on a daily schedule (§10).
+
+---
+
+### 8. Release notes per release
+
+Spawning an LLM agent task (`.grain/templates/release-notes.yml`) on every release does not scale to multiple releases per day and leaves promoted tags temporarily undocumented while the notes PR queues.
+
+- **Mechanical generation during promotion:** During promotion of `vX.Y.Z`, the workflow runs `scripts/release-notes.sh vX.Y.Z <prev_release> vX.Y.Z` directly (no agent sandbox, no LLM call), where `<prev_release>` is the newest promoted `vM.P.Z` tag not listed in `RELEASE_NEVER_PROMOTE` or retracted.
+- **Structured sections + breaking-change detection:** `scripts/release-notes.sh` groups first-parent PRs and commits into:
+  1. `## Breaking changes` (rendered only when `!:` subjects or `BREAKING CHANGE:` trailers appear—omitted when empty);
+  2. `## Features` (`feat:`);
+  3. `## Fixes` (`fix:`);
+  4. `## Other changes` (`refactor:`, `perf:`, `docs:`, `test:`, `chore:`).
+- **Where notes publish:**
+  1. Attached immediately as the body of the GitHub Release (`refs/tags/vX.Y.Z`) at promotion time, so downstream readers and `pkg/upgrade`'s release-notes view have instant notes; and
+  2. Committed to `docs/releases/vX.Y.Z.md` via an automated fast-path PR (`auto-merge: true`, docs-only path filter).
+- **Flagging breaking changes for a person:** If `scripts/release-notes.sh` detects any breaking-change commit in `<prev_release>..vX.Y.Z`:
+  - If `vX.Y.Z` is not a major bump (`Y != 0` or `Z != 0`), promotion **halts before pushing `vX.Y.Z` / `latest`** and raises `release.breaking-unapproved:vX.Y.Z` in the human Inbox (defense-in-depth behind the PR check in §7).
+  - On an approved major release, promotion proceeds and raises an informational `release.breaking-published:vX.Y.Z` summary in the Inbox highlighting every breaking item.
+- **Curated prose digests stay weekly:** Narrative prose summaries move to the existing weekly `release-process-review` schedule rather than blocking individual continuous releases.
+
+---
+
+### 9. Downstream editions
+
+A downstream edition repository imports core via Go modules (`go.mod`) and cuts its own edition release **only when its `go.mod` pins the exact commit of a core release tag (`vX.Y.Z`)**. If an automated updater advances `go.mod` to an untagged `main` pseudo-version (`vX.Y.0-0.2026...`), `go.mod` sits ahead of every release tag and the downstream edition never releases.
+
+**Decision:** **Sync downstream editions exclusively to core's `latest` release tag, coalescing skipped versions onto the newest promoted tag.**
+
+1. **Never sync to untagged `main` or `-rc.N`:** Downstream trunk automation forbids `go get <module>@main`. Only promoted release tags reachable through `refs/tags/latest` are eligible sync targets.
+2. **Event-driven or short-poll trigger on `latest`:** Whenever core moves `refs/tags/latest` to `vX.Y.Z` (detected via release webhook or a 15-minute tag poll), the downstream sync job resolves the exact `vX.Y.Z` tag pointing at `latest`'s commit (ignoring any tag with a `-retracted` or `-discarded` marker or listed in `RELEASE_NEVER_PROMOTE`), runs `go get <core-module>@vX.Y.Z && go mod tidy`, runs downstream CI, and submits.
+3. **Coalesce intermediate tags (`latest` wins):** If core promotes `v3.4.0` and then `v3.5.0` before the downstream sync change for `v3.4.0` finishes CI, the syncer **amends or supersedes** the in-flight downstream change directly to `v3.5.0` rather than queueing serial changes for every intermediate minor. Because `v3.5.0` is itself an exact core release tag, the moment that change lands, the downstream edition's `go.mod` matches `v3.5.0` exactly and immediately qualifies to tag its own `v3.5.0` edition release.
+4. **Rollback safety:** Because the syncer reads `refs/tags/latest` rather than sorting `v*` tags lexicographically, rolling `latest` back from a bad `v3.5.0` to `v3.4.0` (§11) stops downstream editions from syncing onto `v3.5.0` (and if already on `v3.5.0`, wait for `v3.6.0` or pin `v3.4.0` explicitly).
+
+---
+
+### 10. Upgrades of deployments
+
+Continuous releases mean `latest` moves several times a day while individual deployments upgrade once a day, once a week, or on demand—routinely jumping across many minor versions at once (`v3.2.0 -> v3.11.0`).
+
+- **Strictly forward-only, sequential, multi-version-safe schema migrations:**
+  - Every `SchemaVersion` bump in `pkg/model/migrations.go` is an idempotent/transactional step `v_k -> v_{k+1}` that runs sequentially across arbitrarily many skipped versions (`v_27 -> ... -> v_N`) in a single startup transaction on both SQLite and PostgreSQL, alongside any required `pkg/staterepo` dump fixup.
+  - Destructive schema changes (dropping or repurposing a live column before data is migrated in place) are forbidden; removals use expand-and-migrate steps so jumping 20 releases never loses state.
+  - `pkg/upgrade`'s pre-cutover schema rehearsal (`Prepare` export + running `grain state check -migrate` inside the target image before touching the active ref file) remains mandatory on every upgrade: a migration failure aborts the upgrade cleanly with the running daemon untouched.
+  - `nightly.yml`'s `upgrade-test` tests **both** upgrading from the previous `latest` release (`latest -> RC`) **and** a multi-version jump from an older baseline release (`floor -> RC`) so multi-release skips are continuously verified before promotion.
+- **Auto-upgrade follows `latest` on the deployment's own daily clock:**
+  - Deployments configured with `autoUpgradeChannel: "latest"` continue using `reconcileAutoUpgrade` (`pkg/orchestrator/autoupgrade.go`), which schedules at most **one non-disruptive drain-and-upgrade per calendar day at `autoUpgradeTime`** (skipping the drain altogether via `UpgradeUnchanged` when `latest` has not moved since yesterday).
+  - Thus rapid upstream promotions never bounce a deployment multiple times an hour; operators still get a fresh, fully qualified `latest` target immediately whenever they click **Upgrade now** in Settings.
+
+---
+
+### 11. Rollback
+
+If a promoted release `vX.Y.Z` is discovered to be bad after `latest` has moved to it:
+
+1. **Never delete `vX.Y.Z`:** Neither the git tag `refs/tags/vX.Y.Z` nor the `:vX.Y.Z` container images are ever deleted or force-moved onto another commit. Go module proxies, container digests, and audit logs depend on release tag immutability.
+2. **Re-point `latest` to the previous good release and mark `vX.Y.Z` retracted:** A human runs the rollback workflow (`promote.yml` / `scripts/release-from-trunk.sh rollback --bad vX.Y.Z --to vX.(Y-1).0`), which:
+   - Verifies that `vX.(Y-1).0` is an existing, non-retracted release tag;
+   - Pushes an annotated tag **`vX.Y.Z-retracted`** (recording who retracted it and why) and publishes `:vX.Y.Z-retracted` image markers;
+   - Force-moves git `refs/tags/latest` back to `vX.(Y-1).0` and retags container `:latest` to `vX.(Y-1).0`'s verified images (`scripts/release-images.sh promote vX.(Y-1).0`); and
+   - Marks the `vX.Y.Z` GitHub Release as retracted/pre-release so human readers see the warning immediately.
+3. **Deployment behavior on a retracted release:**
+   - `pkg/upgrade` detects `:vX.Y.Z-retracted` in the registry tag list (mirroring `DiscardedRC`): a deployment not yet on `vX.Y.Z` follows `latest` to `vX.(Y-1).0` (no-op if already there). A deployment that *already* upgraded onto `vX.Y.Z` **never auto-downgrades across a schema version**; instead, the Upgrade pane shows a prominent `RetractedRelease` alert offering safe downgrade if `SchemaVersion` matches `vX.(Y-1).0`, or advising wait-for-`vX.(Y+1).0` if `vX.Y.Z` bumped `SchemaVersion`.
+4. **Fix forward on trunk:** Rolling back `latest` automatically files (or wakes the steward to file) a top-priority fix task on `main` (plus a `retract vX.Y.Z` entry in `go.mod` when module consumers are affected) and appends `vX.Y.Z` to `RELEASE_NEVER_PROMOTE`. The next RC targets **`vX.(Y+1).0-rc.1`** from a commit carrying the fix, moving `latest` cleanly forward once qualified.
+
+---
+
+### 12. Who acts on a red RC: reconciler vs. pipeline steward
+
+Following [`merging.design.md`](../design/merging.design.md) and [`docs/pipeline-steward.md`](../../docs/pipeline-steward.md), mechanical state transitions belong in deterministic reconcilers/workflows while causal triage and convergence decisions belong to the durable **pipeline steward** (`system:pipeline-steward`, subscribed to `pipeline.*`).
+
+| Responsibility | Reconciler / Release Train (mechanical) | Pipeline Steward (judgement) |
+| --- | --- | --- |
+| **Cut & run qualification** | Select LKG after floor & cooldown; cut `vX.Y.Z-rc.N`; run Stage 1 (`nightly.yml`), then Stage 2 (`release-qualification`); project `grain/release-qualification` check run | — |
+| **Handle `infra` & flakes** | Auto-rerun `infra` failures with backoff; re-run first product failure per job/item once on same RC; record flake metrics; raise `pipeline.flake-budget` or `pipeline.release-infra-stalled` when bounds trip | When woken on flake-budget or infra-stall, file de-flake / quarantine PRs or notify operator on persistent infra outages |
+| **Promote passing RC** | Verify Stage 1 + Stage 2 green and `RELEASE_NEVER_PROMOTE` clear; push `vX.Y.Z` & `latest`, publish images & mechanical release notes | — |
+| **Discard red RC** | Tag `vX.Y.Z-rc.N-discarded`, publish discarded image marker, cancel remaining jobs/tasks on `rc.N`, raise **`pipeline.rc-failed:vX.Y.Z-rc.N`** with failing logs and commit range `<floor>..<rc_sha>`, place an `rc-hold` cursor until cleared | Woken immediately by `pipeline.rc-failed:vX.Y.Z-rc.N` |
+| **Triage & fix red RC** | — | Inspect failing logs and commits in `<floor>..<rc_sha>`; identify suspect PR(s); propose a revert or file high-priority fix task(s) (`priority` above normal backlog, `fixes_base_branch: true` when `main` is also broken) |
+| **Gate next RC (`rc.N+1`)** | Wait while steward's `rc-hold` / linked `rc-blocker` tasks remain open; cut `vX.Y.Z-rc.(N+1)` automatically as soon as blockers merge and pass Stage 0 | Link blocking fix tasks to the RC hold (so the train never wastes `rc.2` on an unfixed tree); pivot `rc.3` onto short-lived `release/vX.Y.Z` if `rc.2` broke on unrelated trunk churn (§5); escalate to human Inbox (`notify_operator`) if `rc.3` fails |
+
+Notice the crucial rule: **the steward still never promotes a release** (`releases:write` is not needed to promote, because promotion is purely deterministic on green qualification). What the steward controls on a red RC is *diagnosis, fix filing/reverts, holding `rc.(N+1)` until the fix lands, and `rc.3` branch isolation / human escalation*.
+
+---
+
+### 13. Cost and capacity
+
+Every run of the four-item `release-qualification` agent suite boots multiple sandboxes, runs sub-tasks against scratch branches, and spends frontier-model tokens. Unbounded execution would contend with engineering tasks for sandbox RAM and model quota.
+
+1. **Two-stage gating (cheap deterministic CI gates expensive agent sandboxes):**
+   - **Stage 0 (`tests.yml` + `release.yml`):** Already paid once per trunk merge. Commits failing Stage 0 are never cut as RCs.
+   - **Stage 1 (`nightly.yml` on GitHub Actions):** Costs **zero model tokens** and zero deployment sandboxes. Any Go race, soak, stress, installer, or upgrade regression fails in Stage 1 and discards the RC **before a single qualification agent task is filed**.
+   - **Stage 2 (`release-qualification` agent suite):** Starts **only after Stage 1 is 100% green**. Inside Stage 2, the three targeted functional items (`qualification-mergequeue`, `-ci-diagnostics`, `-base-triage`) run first; `qualification-system-smoke` depends on them, and fail-fast cancellation stops remaining items if any item confirms red after its retry.
+2. **Acceptable cadence and quota ceiling:**
+   - With `RELEASE_MIN_INTERVAL_MINUTES=120` and ~60–90 minutes per full qualification cycle, Stage 2 runs **0 times when `main` is idle** and **at most 6–8 times per 24 hours** during sustained commit activity (~24–32 agent tasks/day maximum, comparable to ordinary background review load).
+3. **Admission priority & quota awareness:**
+   - Qualification suite tasks dispatch ahead of normal backlog tasks (`PriorityReleaseGate` / elevated task priority) so full worker queues do not starve releases for 14 hours, while remaining below `priority-dispatch` interactive console and steward sessions and respecting hard host sandbox RAM caps.
+   - If all configured model pools are in active quota-reset pause, Stage 2 waits in `queued` (classified as `pending`/`infra`, never `failed`) rather than burning task retries into empty quota windows.
+
+---
+
+### 14. Credentials and permissions
+
+The train separates GitHub runner duties from private deployment duties so neither side requires cross-network inbound secrets (`GHCR_TOKEN`, `REPO_WRITE_TOKEN`, and `GRAIN_API_TOKEN`):
+
+| Capability / Operation | Where it runs | Credential & minimum scope | Failure mode avoided |
+| --- | --- | --- | --- |
+| **Push tags & pointers (`vX.Y.Z-rc.N`, `-discarded`, `-retracted`, `vX.Y.Z`, `latest`, `refs/heads/candidate`, `release/vX.Y.Z`)** | GitHub Actions (`release-train.yml`, `promote.yml`) | Scoped **GitHub App installation token** (preferred) or fine-grained **`REPO_WRITE_TOKEN`** (`contents: write` on this repo only; `refs/heads/main` remains protected against force-push and unreviewed commits) | Default `GITHUB_TOKEN` (`github-actions[bot]`) is blocked by tag rulesets and **does not fire downstream `on: push: tags` / `on: release` workflows** when pushing tags. An App token or `REPO_WRITE_TOKEN` authorizes protected tag pushes and triggers downstream release events cleanly. |
+| **Dispatch, retry & cancel qualification workflows (`nightly.yml`, `gcp-smoke.yml`)** | GitHub Actions (`release-train.yml`) | Job permission **`actions: write`** on `GITHUB_TOKEN` (or App token) | A `release-train.yml` with `actions: read` cannot dispatch `nightly.yml` on `vX.Y.Z-rc.N`, invoke `rerun-failed-jobs` on flakes, or cancel superseded RC runs; `actions: write` grants all three within the repository. |
+| **Publish & retag container images (`:vX.Y.Z-rc.N`, `:rc`, `:candidate`, `:vX.Y.Z`, `:latest`, `:-discarded`, `:-retracted`)** | GitHub Actions (`release.yml`, `release-train.yml`, `promote.yml`) | **`GHCR_TOKEN`** (`write:packages`, `read:packages`), or native `GITHUB_TOKEN` `packages: write` once `RELEASE_IMAGE_REPO` lives under the same GitHub organization as the repository | `GITHUB_TOKEN` fails whenever `RELEASE_IMAGE_REPO` points to a package namespace outside the repository's own org, and cron-triggered runs fail when registry credentials are event-gated. Setting `GHCR_TOKEN` (or aligning `RELEASE_IMAGE_REPO` with the repo org) gives scheduled and dispatched runs identical registry access. |
+| **Sign release & RC images** | GitHub Actions (`release.yml`, `release-train.yml`, `promote.yml`) | **`IMAGE_SIGNING_KEY`** (+ optional `IMAGE_SIGNING_PASSWORD`), or keyless Cosign Sigstore OIDC via **`id-token: write`** | Without `IMAGE_SIGNING_KEY` or keyless OIDC, workflows fall back to publishing unsigned images. Requiring keyless OIDC (`id-token: write`) or `IMAGE_SIGNING_KEY` ensures every `:vX.Y.Z-rc.N` and `:vX.Y.Z` image carries a verifiable signature. |
+| **Run Stage 2 agent qualification & report verdict (`grain/release-qualification`)** | **Grain deployment reconciler** (outbound to GitHub via its existing forge GitHub App / token) | Existing repository forge connection (`checks: write`, `contents: read` on GitHub); **no inbound `GRAIN_API_URL`, `GRAIN_API_TOKEN`, or `RELEASE_STAGING_URL` required on GitHub-hosted runners** | A GitHub-hosted runner cannot reach a firewalled deployment on `localhost` (`GRAIN_API_URL` / `RELEASE_STAGING_URL`), causing live train runs to fail preflight whenever `GRAIN_API_TOKEN` or external URLs are unset. Dropping staging removes `RELEASE_STAGING_URL`, and having the Grain daemon watch GitHub outbound for `vX.Y.Z-rc.N` + green `nightly.yml`, run `release-qualification` locally, and post check run `grain/release-qualification` back to GitHub removes inbound runner-to-daemon network and token requirements altogether. (Deployments that expose `GRAIN_API_URL` may still optionally set `GRAIN_API_TOKEN` with `api:release-gate-read`.) |
+
+---
+
+## Implementation gaps
+
+Nothing in this playbook design is implemented by this document. Once approved, implementation splits cleanly into the following candidate follow-up tasks across workflows, scripts, `.grain/` and state-repository (`grain/config`) declarations, the pipeline steward, and downstream edition sync:
+
+1. **Workflow — Trigger and shard `.github/workflows/nightly.yml` as Stage 1 RC qualification**
+   - Trigger `nightly.yml` on `push: tags: ['v*-rc.*']` as well as `workflow_dispatch` (adding an optional `jobs` input for selective single-job retry and `cancel-in-progress: false` on RC tags).
+   - Extend `upgrade-test` in `nightly.yml` to verify both `latest -> RC` and multi-version baseline -> RC schema upgrades.
+   - Verify all 14 hosted `nightly.yml` jobs run and pass end-to-end on GitHub Actions.
+
+2. **Workflow — Continuous `.github/workflows/release-train.yml` and auto-promotion**
+   - Remove `RELEASE_STAGING_URL`, the `GRAIN_API_URL` / `GRAIN_API_TOKEN` hard failure on hosted runners, the 24-hour soak check, and `-pending` staging.
+   - Upgrade permissions to `actions: write` (plus App token / `REPO_WRITE_TOKEN` for tag pushes) so the train cuts `vX.Y.Z-rc.N`, monitors Stage 1 (`nightly.yml`) + Stage 2 (`grain/release-qualification` check run), performs single-job flake retries and `infra` re-runs, cancels superseded RCs, and automatically promotes `vX.Y.Z` + `latest` on pass.
+   - Trigger event-driven on `workflow_run` completions (`release`, `nightly`) and check-run completions (`grain/release-qualification`), keeping a periodic cron as a safety net.
+   - Repurpose `promote-release.yml` / `promote.yml` for human rollback (`vX.Y.Z-retracted` + re-pointing `latest`) and major-version overrides; update `.grain/triggers/release-promotion.yml` and `tests/deploy` tests (`TestTheReleaseTrainNeverPromotesARelease`, scheduled workflow assertions) to match.
+
+3. **Infra & workflow — Enable self-hosted KVM tests and `gcp-smoke` WIF**
+   - Attach nested-KVM self-hosted runner capacity (`ENABLE_SELF_HOSTED_TESTS=true`, `SELF_HOSTED_RUNNER`) and configure `GCP_WIF_PROVIDER` / `GCP_SA_EMAIL` so `real-vm`, `real-kubernetes`, `kvm-sandboxes`, `kvm-route-stress`, and `gcp-smoke.yml` execute rather than skip, then add them to the required Stage 1 gate.
+
+4. **Scripts & upgrade — Refactor `scripts/release-from-trunk.sh`, `scripts/candidate-gate.sh`, `scripts/release.conf`, and `pkg/upgrade`**
+   - Replace `check-soak` with `check-qualification` reading `nightly.yml` job conclusions and the `grain/release-qualification` check run on `rc_sha`, with `infra` vs. single-retry flake accounting.
+   - Update `select-lkg` so `tests.yml` + `release.yml` alone qualify a trunk commit for cutting `vX.Y.Z-rc.N` (moving `nightly.yml` to post-cut Stage 1).
+   - Add `RELEASE_MIN_INTERVAL_MINUTES=120` and `RELEASE_MAX_RC_ATTEMPTS=3` to `scripts/release.conf`, `release/vX.Y.Z` convergence-branch creation on `rc.3`, and the `rollback` subcommand (`vX.Y.Z-retracted` + `RetractedRelease` warning in `pkg/upgrade`).
+   - Fix `scripts/release-from-trunk.sh` so `DRY_RUN=true` never mutates repo-local `.git/config` `user.name`/`user.email` or leaves stray local tags.
+
+5. **Scripts & CI — Deterministic `scripts/release-notes.sh` and breaking-change gate**
+   - Extend `scripts/release-notes.sh` to extract `!:` subjects and `BREAKING CHANGE:` trailers into `## Breaking changes`, publish the GitHub Release body and `docs/releases/vX.Y.Z.md` mechanically during promotion without filing `.grain/templates/release-notes.yml`, and enforce the PR/promotion check requiring a `RELEASE_MAJOR` bump (or explicit human override) when breaking changes are present.
+
+6. **Daemon, `.grain/` & `grain/config` — Objective `release-qualification` suite and GitHub check-run bridge**
+   - Update `.grain/suites/release-qualification.yml` (and the synced suite in `grain/config`) to `mode: until_clean`, `max-passes: 1`, `auto-merge: false` so `PassChanged` (any opened PR or proposed follow-up task) fails qualification objectively.
+   - Parameterize all four `.grain/templates/qualification-*.yml` templates with `rc_tag` and `rc_sha`, enforce the machine-parsed `Qualification-Verdict` / `Qualified-Commit` footer and scratch-branch cleanup, update `qualification-mergequeue.yml` to test independent clean+green merges and conflict clusters (`merging.design.md`) instead of retired optimistic batching, and sequence `qualification-system-smoke` after the first three items.
+   - Add the Grain orchestrator reconciler that watches target repos for `vX.Y.Z-rc.N` tags with a green Stage 1 `nightly.yml`, starts `release-qualification` at `PriorityReleaseGate` (with single-item flake retry and `infra`/quota-pause handling), and posts the `grain/release-qualification` check run back to GitHub.
+
+7. **`.grain/` & `grain/config` — Retire staging-soak schedules and update release templates/docs**
+   - Remove `staging-ui-exploration` schedules and persistent staging-sandbox entries from `grain/config`; retire per-release `release-notes` filing.
+   - Update `.grain/templates/release-watchdog.yml`, `.grain/templates/release-process-review.yml`, and `docs/release-candidate-management.md` to measure continuous RC qualification lead time, flake rates, and retracted releases instead of 24-hour staging soaks.
+
+8. **Steward & reconcilers — Red-RC triage, blocker holds, and escalation (`pkg/model/`, `pkg/orchestrator/`)**
+   - Raise `pipeline.rc-failed:<rc_tag>`, `pipeline.flake-budget:<target>`, `pipeline.release-infra-stalled:<rc_tag>`, and `pipeline.release-escalated:<version>` notifications.
+   - Update `pipelineStewardTemplate` (`pkg/model/pipeline_steward_template.go` and `docs/pipeline-steward.md`) so the steward triages `<floor>..<rc_sha>` on `pipeline.rc-failed`, files high-priority fix tasks or reverts, holds `rc.(N+1)` until linked blockers land, switches `rc.3` to `release/vX.Y.Z` when trunk churn caused `rc.2` to fail, and escalates to the human Inbox after 3 failed RC attempts.
+
+9. **Downstream edition — Release-tag-following `go.mod` sync**
+   - Configure the downstream edition repository's automated dependency sync to track core's `refs/tags/latest` release tag (never untagged `main` HEAD and never `-retracted` / `-discarded` tags), coalescing intermediate releases onto the newest promoted `vX.Y.Z` tag so every merged sync pins an exact core release tag and cuts a matching edition release.

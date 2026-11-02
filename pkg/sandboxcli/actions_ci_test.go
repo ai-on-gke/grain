@@ -35,10 +35,24 @@ import (
 type actionsCI struct{ run ci.Run }
 
 func (a actionsCI) FindExternalRuns(_ context.Context, f ci.RunFilter, _ int) ([]ci.Run, string) {
+	runs, _, note := a.FindExternalRunsCounted(context.Background(), f, 0)
+	return runs, note
+}
+
+func (a actionsCI) FindExternalRunsCounted(_ context.Context, f ci.RunFilter, limit int) ([]ci.Run, int, string) {
 	if f.Repo != a.run.Repo || (f.Provider != "" && f.Provider != ci.ProviderGitHubActions) {
-		return nil, ""
+		return nil, 0, ""
 	}
-	return []ci.Run{a.run}, ""
+	fCopy := f
+	fCopy.Provider = ""
+	if !fCopy.Matches(a.run) {
+		return nil, 0, ""
+	}
+	runs := []ci.Run{a.run}
+	if limit > 0 && len(runs) > limit {
+		runs = runs[:limit]
+	}
+	return runs, 1, ""
 }
 
 func (a actionsCI) ExternalRun(_ context.Context, id string) (ci.Run, bool, error) {
@@ -105,6 +119,8 @@ func TestSandboxCLIReadsGitHubActionsRuns(t *testing.T) {
 		{[]string{"ci", "list", "--repo", "acme/widgets"}, "2 of 2 matching run(s) in acme/widgets, newest first:\n" + ghaLine + grainLine},
 		{[]string{"ci", "list", "--repo", "acme/widgets", "--provider", "grain"}, "1 of 1 matching run(s) in acme/widgets, newest first:\n" + grainLine},
 		{[]string{"ci", "list", "--repo", "acme/widgets", "--provider", "github-actions"}, "1 of 1 matching run(s) in acme/widgets, newest first:\n" + ghaLine},
+		{[]string{"ci", "list", "--repo", "acme/widgets", "--provider", "github-actions", "--workflow", "release.yml"}, "1 of 1 matching run(s) in acme/widgets, newest first:\n" + ghaLine},
+		{[]string{"ci", "list", "--repo", "acme/widgets", "--provider", "github-actions", "--workflow", "nightly.yml"}, "0 of 0 matching run(s) in acme/widgets, newest first:\n"},
 		{[]string{"ci", "show", "gha:acme:widgets:42"}, strings.TrimSuffix(ghaLine, "\n") + " (acme/widgets)\n" +
 			"workflow: Release .github/workflows/release.yml, attempt 1, event push\n" +
 			"url: https://github.com/acme/widgets/actions/runs/42\n" +

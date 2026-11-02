@@ -24,8 +24,13 @@
   --border-strong: #d5d1c7;
 
   --text: #24221d;
-  --text-secondary: #6e6a60;
-  --text-tertiary: #9a9588;
+  /* Tertiary carries real text -- form hints, counts, task numbers, the
+     board's "Nothing here." -- so it has to hold WCAG AA's 4.5:1 on every
+     ground it sits on, the darkest being --surface-hover (4.8:1 there,
+     5.6:1 on white). Secondary moved down with it to keep the step
+     between the two: text ~1.9x secondary ~1.5x tertiary. */
+  --text-secondary: #524e46;
+  --text-tertiary: #6c685e;
   --text-placeholder: #b5b0a3;
 
   /* Bronze, not the wheat gold the dark theme uses: the gold washes out

@@ -3403,6 +3403,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
       stateFilter={stateFilter}
       onSetFilter={selectStateFilter}
       onOpenSystem={() => openSystem("")}
+      onOpenAccess={() => openSettings("access")}
+      onLogout={handleLogout}
       onOpenUpgrade={() => openSettings("upgrade")}
       onOpenNewTask={openNewTask}
     />

@@ -59,6 +59,7 @@ count: 2
 `)
 	write(".grain/schedules/nightly.yml", `name: Every night
 suite: sweep
+base: main
 every:
   hours: 6
 `)

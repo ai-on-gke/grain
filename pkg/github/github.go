@@ -1209,12 +1209,13 @@ type CheckRun struct {
 	// the same response: ID is the check run's id (an Actions job's id),
 	// App the slug of the App that posted it, Output its whole output --
 	// title, summary and text -- bounded.
-	ID          int64
-	HeadSHA     string
-	App         string
-	StartedAt   *time.Time
-	CompletedAt *time.Time
-	Output      string
+	ID           int64
+	CheckSuiteID int64
+	HeadSHA      string
+	App          string
+	StartedAt    *time.Time
+	CompletedAt  *time.Time
+	Output       string
 }
 
 // JobLog is one failed GitHub Actions job and the tail of what it
@@ -1597,6 +1598,8 @@ type Client interface {
 	ListPullRequestCommits(owner, repo string, number int) ([]Commit, error)
 	ListCheckRuns(owner, repo, ref string) ([]CheckRun, error)
 	ListWorkflowRuns(owner, repo, headSHA string) ([]CheckRun, error)
+	RerequestCheckSuite(owner, repo string, checkSuiteID int64) error
+	RerequestCheckRun(owner, repo string, checkRunID int64) error
 	FailedJobLogs(owner, repo, headSHA string) ([]JobLog, error)
 	ActionsState(owner, repo, headSHA string) (ActionsState, error)
 	RecentRunStarts(owner, repo string, limit int) (RunStarts, error)
@@ -2899,6 +2902,9 @@ func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) 
 				App         struct {
 					Slug string `json:"slug"`
 				} `json:"app"`
+				CheckSuite struct {
+					ID int64 `json:"id"`
+				} `json:"check_suite"`
 				Output struct {
 					Title   *string `json:"title"`
 					Summary *string `json:"summary"`
@@ -2929,6 +2935,7 @@ func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) 
 				FailureReason: reason,
 				StepsExecuted: len(item.Steps),
 				ID:            item.ID,
+				CheckSuiteID:  item.CheckSuite.ID,
 				HeadSHA:       item.HeadSHA,
 				App:           item.App.Slug,
 				StartedAt:     item.StartedAt,
@@ -2939,6 +2946,46 @@ func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) 
 		path = nextPagePath(resp.Headers["Link"])
 	}
 	return runs, nil
+}
+
+// RerequestCheckSuite asks GitHub to re-run a check suite in place on its
+// commit (POST /repos/{owner}/{repo}/check-suites/{check_suite_id}/rerequest).
+// GitHub answers 201 when the suite's app accepts re-requests and 403/404/422
+// when the credential or the app does not allow it.
+func (c *RESTClient) RerequestCheckSuite(owner, repo string, checkSuiteID int64) error {
+	if checkSuiteID <= 0 {
+		return &Error{Status: 422, Body: []byte(`{"message":"invalid check_suite_id"}`)}
+	}
+	resp, err := c.request(
+		"POST", fmt.Sprintf("/repos/%s/%s/check-suites/%d/rerequest", url.PathEscape(owner), url.PathEscape(repo), checkSuiteID),
+		c.headers(owner, repo, false), nil,
+	)
+	if err != nil {
+		return err
+	}
+	if resp.Status != 201 {
+		return &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	return nil
+}
+
+// RerequestCheckRun asks GitHub to re-run a single check run in place on its
+// commit (POST /repos/{owner}/{repo}/check-runs/{check_run_id}/rerequest).
+func (c *RESTClient) RerequestCheckRun(owner, repo string, checkRunID int64) error {
+	if checkRunID <= 0 {
+		return &Error{Status: 422, Body: []byte(`{"message":"invalid check_run_id"}`)}
+	}
+	resp, err := c.request(
+		"POST", fmt.Sprintf("/repos/%s/%s/check-runs/%d/rerequest", url.PathEscape(owner), url.PathEscape(repo), checkRunID),
+		c.headers(owner, repo, false), nil,
+	)
+	if err != nil {
+		return err
+	}
+	if resp.Status != 201 {
+		return &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	return nil
 }
 
 // ListWorkflowRuns returns the GitHub Actions workflow runs against one

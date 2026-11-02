@@ -115,3 +115,51 @@ test("behind hostd, host is offered only for what hostd's allowlist names, sayin
   }
   expect(overflow).toEqual([]);
 });
+
+test("behind hostd, capability servers list hostd's entries and offer run: host for them", async ({
+  page,
+}) => {
+  await page.goto("/settings/capabilities#capability-servers");
+  const hostEntries = await page.evaluate(async () => {
+    const r = await fetch("/api/capability-servers/host-entries");
+    return r.json();
+  });
+  const reachable = await page.evaluate(async () => {
+    const r = await fetch("/api/settings/cli-run");
+    return !!(await r.json()).hostExecutor?.hostd?.reachable;
+  });
+  if (!reachable) {
+    // hostd will not run here (as root, say): host-entries says it could not reach hostd.
+    expect(hostEntries.available).toBe(false);
+    return;
+  }
+  expect(hostEntries.available).toBe(true);
+  expect(hostEntries.entries).toEqual(["corp-search"]);
+
+  await page.getByTestId("capability-server-add-button").click();
+  const form = page.getByTestId("capability-server-add");
+  await expect(form).toBeVisible();
+
+  const runField = form.getByTestId("capability-server-run");
+  await expect(runField).toContainText(
+    "name the command to see if hostd offers it",
+  );
+
+  const commandInput = form
+    .getByTestId("capability-field-command")
+    .locator("input");
+  await commandInput.fill("other-cap");
+  await expect(runField).toContainText(
+    'grain hostd\'s allowlist has no capabilities entry for "other-cap" (it offers corp-search)',
+  );
+
+  await commandInput.fill("corp-search");
+  await expect(runField).not.toContainText("host is not available");
+  await runField.getByLabel("Run location").click();
+  const hostOption = page.getByRole("option", {
+    name: "host (through grain hostd)",
+  });
+  await expect(hostOption).toBeEnabled();
+  await hostOption.click();
+  await expect(runField).toContainText("host (through grain hostd)");
+});

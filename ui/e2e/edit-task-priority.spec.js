@@ -44,6 +44,13 @@ test("Edit refuses a Task priority that is not a whole number from 1", async ({
     expect(Math.abs(box.x - field.x)).toBeLessThan(32);
   }
 
+  // A whole number written with an exponent is that number, as New
+  // task and the API read it (2026-11-02 walkthrough): no refusal.
+  await priority.fill("1e3");
+  await expect(priority).toHaveAttribute("aria-invalid", "false");
+  await expect(save).toBeEnabled();
+  await expect(pane.getByText(/a whole number, 1 or more/)).toHaveCount(0);
+
   await priority.fill("8");
   await expect(priority).toHaveAttribute("aria-invalid", "false");
   await expect(save).toBeEnabled();

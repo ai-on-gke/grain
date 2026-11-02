@@ -86,7 +86,7 @@ func skipUnlessLiveRequired(t *testing.T, reason string) {
 // the 2026-09-08 agy-retry hand run, write down the new schedule,
 // and reconsider DefaultModelRetryCutoff and the private-diagnostic dependency
 // in the light of it before changing this line.
-const measuredAgyVersion = "1.4.9"
+const measuredAgyVersion = "1.4.12"
 
 // refusalProbeRuntime is a guard, well past the 2m30s 1.4.9 took to give
 // up on its own, and deliberately longer than DefaultModelRetryCutoff: the

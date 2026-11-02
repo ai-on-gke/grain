@@ -1819,6 +1819,9 @@ func ciRunsPath(f ci.RunFilter, limit int, view string) string {
 	if job := strings.TrimSpace(f.Job); job != "" {
 		query.Set("job", job)
 	}
+	if workflow := strings.TrimSpace(f.Workflow); workflow != "" {
+		query.Set("workflow", workflow)
+	}
 	if provider := strings.TrimSpace(f.Provider); provider != "" {
 		query.Set("provider", provider)
 	}

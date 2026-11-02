@@ -682,7 +682,7 @@ func (s *StoredRunStore) Find(f RunFilter, limit int) RunPage {
 // should send one: both readers parse the vocabulary first
 // (ParseRunState).
 func ciRunQueryOf(f RunFilter) model.CIRunQuery {
-	q := model.CIRunQuery{Repo: f.Repo, Ref: f.Ref, Job: f.Job, Since: f.Since, Until: f.Until}
+	q := model.CIRunQuery{Repo: f.Repo, Ref: f.Ref, Job: f.Job, Workflow: f.Workflow, Since: f.Since, Until: f.Until}
 	for _, state := range f.States {
 		switch {
 		case strings.EqualFold(state, StateRunning):

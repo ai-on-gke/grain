@@ -248,6 +248,7 @@ DEFAULT_TARGET_REPO="$(cfg default_target_repo)"
 TARGET_REPOS="$(cfg target_repos)"
 # Who the daemon admits as themselves once IAP has vouched for them
 # (variables.tf's allowed_principals). Empty leaves the daemon's default.
+IAP_AUDIENCE="$(cfg iap_audience)"
 ALLOWED_PRINCIPALS="$(cfg allowed_principals)"
 UI_PORT="$(cfg ui_port)"
 SLOTS="$(cfg slots)"
@@ -420,6 +421,7 @@ log "  image=${GRAIN_IMAGE}:${GRAIN_IMAGE_TAG:-<follows grain_ref>}" \
     "| pull credential: $([ -n "$IMAGE_PULL_TOKEN" ] && echo present || echo 'absent, pulling anonymously')"
 log "  target_repos=${TARGET_REPOS:-<empty: every task parks>}"
 log "  default_target_repo=${DEFAULT_TARGET_REPO:-<empty: a task with no repo parks>}"
+log "  iap_audience=${IAP_AUDIENCE:-<empty: IAP assertions are not verified>}"
 log "  allowed_principals=${ALLOWED_PRINCIPALS:-<empty: daemon default, which no IAP sign-in matches>}"
 log "  secrets key: $([ -n "$SECRETS_KEY" ] && echo 'pushed, seeded if this host has none' || echo 'absent, the host mints its own')"
 log "  secrets_repo_url=${SECRETS_REPO_URL:-<empty: the encrypted secrets file stays on this host alone>}" \
@@ -495,6 +497,7 @@ env \
   GRAIN_SECRETS_KEY="$SECRETS_KEY" \
   GRAIN_TARGET_REPO="$DEFAULT_TARGET_REPO" \
   GRAIN_TARGET_REPOS="$TARGET_REPOS" \
+  GRAIN_IAP_AUDIENCE="$IAP_AUDIENCE" \
   GRAIN_ALLOWED_PRINCIPALS="$ALLOWED_PRINCIPALS" \
   GRAIN_GRANULE_ENABLE="$([ "$ENABLE_GRANULE_SANDBOXES" = "true" ] && echo 1 || echo 0)" \
   GRAIN_CONTAINER_SANDBOXES="$([ "$ENABLE_GRANULE_SANDBOXES" = "true" ] && echo 0 || echo 1)" \
