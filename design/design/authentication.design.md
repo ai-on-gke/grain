@@ -77,7 +77,8 @@ What changes is that the verified IAP principal is recorded as the connection's 
 ### Without IAP
 
 - **No IAP configured.** Local and standalone deployments are unchanged. The access code, the login page and `grain_access` work as they do now.
-- **`-ui-require-iap`.** This replaces the unused `Config.IAPMode`. With it set, the network listener no longer accepts the access code at all, neither the bearer token nor the cookie, and the login page is gone. The code still works over loopback when the request carries no forwarding headers. That keeps `kubectl exec deploy/grain -- grain …` as a break-glass path that does not depend on IAP.
+- **`-ui-require-iap`** (`GRAIN_REQUIRE_IAP`). This replaces the unused `Config.IAPMode`. With it set, the network listener no longer accepts the access code at all, neither the bearer token nor the cookie, and the login page is gone. The code still works over loopback when the request carries no forwarding headers (`relayedByProxy`). That keeps `kubectl exec deploy/grain -- grain …` as a break-glass path that does not depend on IAP. The daemon refuses to start with the flag and no IAP audience.
+- **The flag governs IAP only.** A verifier that declares `AccessCodeWins() == true`, such as the Google layer's ÜberProxy verifier, keeps accepting the code over its own proxy with `-ui-require-iap` set, so break-glass through that proxy still works. `accessCodeAccepted` in `pkg/ui/accesscode.go` is the one place the flag is checked, and it lets such a verifier's requests through.
 - **IAP configured but `-ui-require-iap` not set.** Both are accepted. This is the migration state.
 
 ### `IdentityVerifier`
@@ -121,7 +122,7 @@ Agent calls from inside a sandbox never pass IAP and never carry a person's iden
 1. `IdentityVerifier` and the registry, with IAP as the first implementation. No behaviour change.
 2. Verified IAP callers pass `singleTenantGate` and become principals: `PrincipalService`, the allowlist, the CSRF check, and the UI header and logout.
 3. IAP mode for the CLI, and recording hostd's IAP principal (including matching a remote hostd's verified identity to its row's `owner`).
-4. `-ui-require-iap`. Then update `docs/access-code.md`, which says grain does not check the assertion.
+4. `-ui-require-iap`, and `docs/access-code.md` rewritten for the three modes. **Done** (task 2318).
 
 ## Open questions
 

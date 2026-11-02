@@ -49,6 +49,21 @@ func CheckUIAllowedPrincipals(cfg Config) error {
 	return nil
 }
 
+// CheckUIRequireIAP refuses -ui-require-iap without an IAP audience
+// (-ui-iap-audience or $GRAIN_IAP_AUDIENCE): with no assertion able to
+// verify and no access code accepted over the network, nobody could
+// reach the UI except from the daemon's own host.
+func CheckUIRequireIAP(cfg Config) error {
+	if !cfg.UiRequireIAP {
+		return nil
+	}
+	if strings.TrimSpace(cfg.UiIAPAudience) != "" || strings.TrimSpace(os.Getenv("GRAIN_IAP_AUDIENCE")) != "" {
+		return nil
+	}
+	return errors.New("-ui-require-iap needs an IAP audience: set -ui-iap-audience (or $GRAIN_IAP_AUDIENCE) to the IAP backend's " +
+		"/projects/NUMBER/global/backendServices/ID, or drop -ui-require-iap to keep accepting the access code over the network")
+}
+
 // startUIServer serves pkg/ui.Server -- the JSON API plus the static
 // frontend -- on addr, over the same store RunCycle dispatches against,
 // returning a shutdown func the same shape startGitProxy's own is.
@@ -130,6 +145,7 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		IAPAudience:                cfg.UiIAPAudience,
 		IAPIssuer:                  cfg.UiIAPIssuer,
 		IAPKeysURL:                 cfg.UiIAPKeysURL,
+		RequireIAP:                 cfg.UiRequireIAP,
 		AllowedPrincipals:          cfg.UiAllowedPrincipals,
 		ProvisionedServiceAccounts: provisionedSAs,
 		DBDriver:                   cfg.DbDriver,

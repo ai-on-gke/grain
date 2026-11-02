@@ -173,6 +173,32 @@ Then open `http://127.0.0.1:8080`, and give the deployment a GitHub
 credential on the Settings pane — the same first step a single-node
 deployment takes.
 
+## Signing in behind IAP
+
+Once `Service/grain` is behind a GKE Gateway with IAP, grain can take the
+person IAP signed in as the caller rather than asking for the access
+code ([docs/access-code.md](../../docs/access-code.md)):
+
+1. Set `-ui-iap-audience` (or `GRAIN_IAP_AUDIENCE`) to the IAP backend's
+   `/projects/NUMBER/global/backendServices/ID`, and
+   `-ui-allowed-principals` to who may get in. A verified assertion now
+   signs its person in. The access code still works too, so nobody is
+   locked out while you move over.
+2. When everybody signs in through IAP, add `-ui-require-iap` (or
+   `GRAIN_REQUIRE_IAP=true`). The network listener then takes no access
+   code at all, neither the bearer token nor the `grain_access` cookie,
+   and serves no "Enter access code" page. The daemon refuses to start
+   with this flag and no audience.
+
+`grain.yaml` carries both flags commented out; `-ui-require-iap` is off
+unless you add it. With it on, the code still works from inside the pod,
+over loopback, with no forwarding headers. That is the break-glass path
+when IAP or the allowlist is broken:
+
+```sh
+kubectl -n grain exec deploy/grain -- env GRAIN_SERVER=http://127.0.0.1:8080 GRAIN_DATA_DIR=/data grain list
+```
+
 ## What is different in the UI
 
 Several controls in the System overlay are reported as unavailable, and

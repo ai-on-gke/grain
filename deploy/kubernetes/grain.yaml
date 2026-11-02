@@ -657,6 +657,15 @@ spec:
             # the agent framework, the sandbox shape -- is a setting in
             # the UI rather than a flag here.
             - -default-target-repo=CHANGEME/CHANGEME
+            # Behind IAP (README "Signing in behind IAP"): set the IAP
+            # backend's audience so a verified assertion signs a person
+            # in, and, once everybody signs in that way, -ui-require-iap
+            # so the access code stops working over the network. The code
+            # then works only from inside this pod (kubectl exec), as
+            # break-glass. Off by default; the daemon refuses to start
+            # with -ui-require-iap and no audience.
+            # - -ui-iap-audience=/projects/NUMBER/global/backendServices/ID
+            # - -ui-require-iap
           env:
             # How a sandbox pod reaches this one. Sandbox pods route to a
             # pod IP directly, so this is the address of everything a

@@ -15,12 +15,15 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -92,6 +95,9 @@ func runAccessCode(args []string, stdout, stderr io.Writer) error {
 			return fmt.Errorf("%s is empty; restart the daemon to write a new code, or run `grain access-code rotate`", path)
 		}
 		fmt.Fprintln(stdout, code)
+		if note := accessCodeServerNote(); note != "" {
+			fmt.Fprintln(stderr, "grain access-code:", note)
+		}
 		return nil
 	case "rotate":
 		if _, err := os.Stat(path); err != nil {
@@ -121,3 +127,31 @@ func accessCodeFileError(path string, err error) error {
 	}
 	return err
 }
+
+// accessCodeServerNote asks the server the CLI would talk to
+// (serverSource) whether it takes the code over the network, and says
+// so when it does not (-ui-require-iap). It is a note, not an answer:
+// a server that cannot be reached, or one too old to say, gets none.
+var accessCodeServerNote = func() string {
+	server, _ := serverSource()
+	client := cliHTTPClient(time.Second, 2*time.Second)
+	client.Timeout = 3 * time.Second
+	resp, err := client.Get(strings.TrimRight(server, "/") + "/api/auth/access-code")
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var status struct {
+		RequireIAP bool `json:"requireIAP"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&status) != nil || !status.RequireIAP {
+		return ""
+	}
+	return accessCodeRequireIAPNote
+}
+
+const accessCodeRequireIAPNote = "the server requires IAP (-ui-require-iap): this code is not accepted over the network, " +
+	"only from the daemon's own host over loopback (kubectl exec deploy/grain -- grain ...); sign in through IAP instead"
