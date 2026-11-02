@@ -844,6 +844,39 @@ func withAgentRequester(ctx context.Context, what, id, kind string) (context.Con
 	return WithPrincipal(ctx, by), nil
 }
 
+// bodyAuthor is who a write whose body may name its author (a memory, a
+// release note) is recorded as (operator-attribution spec §2.3, §6):
+//
+//   - the request's own principal when it has one. A person's body is
+//     ignored; an agent's that names anybody but itself is refused, since
+//     an agent never claims somebody else.
+//   - otherwise only an agent the body names, as withAgentRequester
+//     allows -- a body naming a human or a service is refused, since
+//     nobody verified it;
+//   - and the zero Principal for a body naming nobody, which its caller
+//     records as RequestActor.
+func bodyAuthor(ctx context.Context, what, id, kind string) (model.Principal, error) {
+	named, err := requestPrincipal(what, id, kind)
+	if err != nil {
+		return model.Principal{}, err
+	}
+	if p, ok := PrincipalFromContext(ctx); ok {
+		if p.Kind == model.PrincipalAgent && named != (model.Principal{}) && !named.Same(p) {
+			return model.Principal{}, forbiddenErrorf("agent %q may not record %s as %s %q", p.ID, what, named.Kind, named.ID)
+		}
+		return p, nil
+	}
+	if named == (model.Principal{}) {
+		return named, nil
+	}
+	if named.Kind != model.PrincipalAgent {
+		return model.Principal{}, validationErrorf("%s may only name an agent, got %s %q: "+
+			"a person is recorded as themselves only when a verifier says who they are", what, named.Kind, named.ID)
+	}
+	named.Source = model.SourceSandbox
+	return named, nil
+}
+
 // requestPrincipal is the principal a request names, and the zero
 // Principal for one that names nobody -- which every caller of this
 // reads as "record this deployment's own actor".
