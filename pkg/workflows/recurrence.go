@@ -62,6 +62,19 @@ const (
 	RecurrenceGitHubWorkflowRun RecurrenceKind = "github_workflow_run"
 )
 
+// RecurrenceKinds is every RecurrenceKind, in declaration order. Tests
+// that have to cover each kind -- the state repository's export/import
+// round trip above all -- range over it, and a test in this package
+// fails when a kind is declared without being listed here.
+var RecurrenceKinds = []RecurrenceKind{
+	RecurrenceEveryNHours,
+	RecurrenceEveryNMinutes,
+	RecurrenceDaily,
+	RecurrenceWeekly,
+	RecurrenceMonthly,
+	RecurrenceGitHubWorkflowRun,
+}
+
 // GitHubWorkflowRunTrigger configures a schedule that fires when a GitHub
 // Actions workflow run concludes.
 type GitHubWorkflowRunTrigger struct {
