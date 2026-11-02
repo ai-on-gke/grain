@@ -389,6 +389,13 @@ func kindOf(method, endpoint string) string {
 	}
 	has := func(s string) bool { return strings.Contains(endpoint, s) }
 	switch {
+	case has("/actions/") && strings.HasSuffix(endpoint, "/logs"):
+		// A job's whole log: what ci:read's Actions log route and the
+		// failure-tail reader spend, counted apart from the cheap reads
+		// beside it because one of these is megabytes.
+		return "job logs"
+	case has("/actions/") && has("/artifacts"):
+		return "artifacts"
 	case has("/check-runs"), has("/check-suites"), has("/status"), has("/actions/"):
 		return "checks"
 	case has("/pulls/{n}/comments"), has("/pulls/{n}/reviews"):

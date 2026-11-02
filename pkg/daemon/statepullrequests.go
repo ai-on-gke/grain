@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path"
@@ -49,6 +50,7 @@ var (
 	_ github.CallerLabeler      = (*StateRepoPullRequestClient)(nil)
 	_ github.JobLogTailer       = (*StateRepoPullRequestClient)(nil)
 	_ github.WorkflowRunsReader = (*StateRepoPullRequestClient)(nil)
+	_ github.ActionsReader      = (*StateRepoPullRequestClient)(nil)
 )
 
 // WithCaller is this client with its forge requests charged to caller
@@ -1401,4 +1403,55 @@ func (c *StateRepoPullRequestClient) UpdateCheckRun(owner, name string, checkRun
 		return fmt.Errorf("%s/%s has no GitHub check run writer", owner, name)
 	}
 	return writer.UpdateCheckRun(owner, name, checkRunID, run)
+}
+
+// actionsReader is the wrapped client's GitHub Actions reads, or nil for
+// the native config repository (which has no Actions) and a client
+// without them.
+func (c *StateRepoPullRequestClient) actionsReader(owner, name string) github.ActionsReader {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil
+	}
+	reader, _ := c.Client.(github.ActionsReader)
+	return reader
+}
+
+// ListActionsRuns is github.ActionsReader, passed through.
+func (c *StateRepoPullRequestClient) ListActionsRuns(owner, name string, q github.ActionsRunsQuery) ([]github.WorkflowRun, error) {
+	if reader := c.actionsReader(owner, name); reader != nil {
+		return reader.ListActionsRuns(owner, name, q)
+	}
+	return nil, nil
+}
+
+// GetActionsRun is github.ActionsReader, passed through.
+func (c *StateRepoPullRequestClient) GetActionsRun(owner, name string, runID int64) (*github.WorkflowRun, error) {
+	if reader := c.actionsReader(owner, name); reader != nil {
+		return reader.GetActionsRun(owner, name, runID)
+	}
+	return nil, nil
+}
+
+// ListActionsJobs is github.ActionsReader, passed through.
+func (c *StateRepoPullRequestClient) ListActionsJobs(owner, name string, runID int64) ([]github.ActionsRunJob, error) {
+	if reader := c.actionsReader(owner, name); reader != nil {
+		return reader.ListActionsJobs(owner, name, runID)
+	}
+	return nil, nil
+}
+
+// ActionsJobLog is github.ActionsReader, passed through.
+func (c *StateRepoPullRequestClient) ActionsJobLog(owner, name string, jobID int64) (string, error) {
+	if reader := c.actionsReader(owner, name); reader != nil {
+		return reader.ActionsJobLog(owner, name, jobID)
+	}
+	return "", &github.Error{Status: http.StatusNotFound}
+}
+
+// ListActionsArtifacts is github.ActionsReader, passed through.
+func (c *StateRepoPullRequestClient) ListActionsArtifacts(owner, name string, runID int64) ([]github.ActionsArtifact, error) {
+	if reader := c.actionsReader(owner, name); reader != nil {
+		return reader.ListActionsArtifacts(owner, name, runID)
+	}
+	return nil, nil
 }

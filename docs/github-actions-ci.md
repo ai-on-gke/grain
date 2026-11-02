@@ -243,3 +243,46 @@ Configure the following in `ai-on-gke/grain` under **GitHub Repository -> Settin
 | `RELEASE_IMAGES` | Variable | Settings -> Secrets and variables -> Actions -> **Variables** | Optional | Set to `off` only if `release-from-trunk.sh` should skip invoking `scripts/release-images.sh`; leave unset for normal operation. |
 | `RELEASE_NOTES_TASK` | Variable | Settings -> Secrets and variables -> Actions -> **Variables** | Optional | Set to `off` to skip filing the `release-notes` task when staging `vX.Y.0-pending`; leave unset for normal operation. |
 | `RELEASE_NOTIFY` | Variable | Settings -> Secrets and variables -> Actions -> **Variables** | Optional | Set to `off` to skip sending the `release-pending` notification; leave unset for normal operation. |
+
+# Reading Actions runs from an agent
+
+This repository is gated by GitHub Actions (`ci_mode: github`), so its
+CI lives on GitHub rather than in grain CI. An agent still reads it
+through grain, with the `ci:read` routes and the sandbox `grain` CLI, and
+needs no GitHub credential of its own. The daemon fetches through its
+own forge connection: the GitHub App or token for github.com, and the
+host's own tool (`ForgeViaCommand`) for a GitHub Enterprise host. The
+full reference is [the agent API's "GitHub Actions runs"](agent-api.md#github-actions-runs).
+
+To check whether the latest `release.yml` on `main` passed, and read the
+failing job's log if it did not:
+
+```sh
+grain ci list --repo ai-on-gke/grain --ref main --provider github-actions
+# gha:ai-on-gke:grain:123 github-actions/release.yml main 1a2b3c4d5e6f failure 2026-11-01T10:00:00Z failing: publish
+grain ci show gha:ai-on-gke:grain:123
+grain ci log gha:ai-on-gke:grain:123 --job publish --lines 80
+```
+
+The same reads over the API:
+
+- `GET /api/ci/runs?repo=ai-on-gke/grain&ref=main&provider=github-actions`
+- `GET /api/ci/runs/gha:ai-on-gke:grain:123`
+- `GET /api/ci/runs/gha:ai-on-gke:grain:123/log?job=publish&tail=80`
+
+An Actions run's id is `gha:<owner>:<name>:<run id>`. For a GHE
+repository the host comes first: `gha:ghe.example.com:experimental:grain:<run id>`.
+
+How the reads behave:
+
+- When the forge cannot be asked, the list is built from grain's own
+  polled record of the repository's Actions jobs. That happens when
+  there is no forge connection, when the hour's API budget is low, or
+  when the forge read fails, and the answer's `actionsNote` says which.
+- Artifacts are listed, not downloaded.
+- Only the repositories this deployment works in (its target repos, or
+  every repository while that list is empty) are read, whatever a
+  caller's grant covers: the daemon's credential may reach others, and
+  a `gha:` id names whichever repository its caller wrote.
+- `grain ci wait` on a task's branch waits on the GitHub checks that
+  gate it.
