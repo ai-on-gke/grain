@@ -2968,8 +2968,30 @@ func afterAgentRun(ctx context.Context, deps Deps, task model.Task, runID string
 		}
 		return runErr
 	}
-	return noteFinishFailure(ctx, deps.Store, runID,
-		processResultFrom(ctx, deps.Store, deps.GitReach, deps.Client, deps.AppBotIdentity, task, result, runID, dispatchBranchSHA, now))
+	err := processResultFrom(ctx, deps.Store, deps.GitReach, deps.Client, deps.AppBotIdentity, task, result, runID, dispatchBranchSHA, now)
+	if err != nil && ctx.Err() != nil {
+		// ctx is the daemon's: it stopped between the agent returning and
+		// its result being turned into effects, so the finish failed on
+		// the shutdown rather than on anything about the run. Interrupted,
+		// as a run stopped a moment earlier is -- no strike, no backoff --
+		// and the next dispatch processes the conversation afresh.
+		return finishInterruptedResult(ctx, deps.Store, task.ID, runID, now, err)
+	}
+	return noteFinishFailure(ctx, deps.Store, runID, err)
+}
+
+// finishInterruptedResult records runID, whose result the daemon stopped
+// in the middle of processing, as interrupted by the shutdown and says so
+// on the task, then hands back err joined with errDaemonStopped.
+func finishInterruptedResult(ctx context.Context, store *model.Store, taskID, runID string, now time.Time, err error) error {
+	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runCleanupTimeout)
+	defer cancel()
+	if serr := store.SetRunOutcome(finishCtx, runID, model.InterruptedOutcome, model.InterruptedDetail); serr != nil {
+		return errors.Join(err, fmt.Errorf("orchestrator: recording run %s as interrupted: %w", runID, serr))
+	}
+	interruptedRuns.Add(1)
+	noteInterrupted(finishCtx, store, taskID, runID, now)
+	return fmt.Errorf("orchestrator: run %s: %w", runID, errors.Join(errDaemonStopped, err))
 }
 
 // noteFinishFailure records, on the run's own row, that turning a
