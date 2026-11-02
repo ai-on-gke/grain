@@ -471,9 +471,9 @@ again.
 deployment should reach only some repositories, and a GitHub App when it
 is shared, needs the Checks API, or should act as a bot rather than a
 person. Ambient suits one operator running grain as their own account on
-their own machine (a wrapper distribution's own installer sets one up on the default
-team with `GRAIN_WRAPPER_GIT_HOST=github.com`, when `gh` is logged in and no
-`GRAIN_GITHUB_TOKEN` was given; its own default is depot, section 11). It
+their own machine (a wrapper distribution's own installer can set one up on
+the default team for github.com, when `gh` is logged in and no
+`GRAIN_GITHUB_TOKEN` was given, or for a self-hosted forge, section 11). It
 replaces seeding the store once with `gh auth token`, which stored a
 snapshot that didn't follow logouts or rotation.
 
