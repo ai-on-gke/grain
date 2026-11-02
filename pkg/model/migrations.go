@@ -538,6 +538,11 @@ var Migrations = []Migration{
 			"DROP TABLE IF EXISTS `executor_token_sequence`",
 		},
 	},
+	{
+		Version:     88,
+		Description: "seed gcp#gcp-key permission sets from grain_config pool and gcp_key rows, and rewrite stored gcp-key and gcp-key:<name> grants (in-process gcp-key is retired)",
+		Up:          migrateGCPKeyToCapabilityServer,
+	},
 }
 
 // CorpResearchGrant is what migration 86 rewrote stored corp-research grants

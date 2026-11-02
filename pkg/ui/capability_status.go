@@ -357,7 +357,6 @@ func capabilityDisplayName(id string) string {
 // dispatch, so their specs can be read back out.
 func capabilityProviderCatalog() []model.CapabilityProvider {
 	providers := []model.CapabilityProvider{
-		gcpkey.NewProvider(gcpkey.Config{}),
 		geminikey.New("", model.CredentialRef{Name: gcpkey.DefaultMinterCredential}),
 		githubsandbox.NewProvider(githubsandbox.Config{}),
 	}
@@ -502,15 +501,6 @@ func (c *Client) checkable(id string) bool {
 // mints under it.
 func missingConfigFor(name string, cfg model.Config) []string {
 	switch name {
-	case "gcp-key":
-		var missing []string
-		if cfg.GCPProject == "" {
-			missing = append(missing, "GCP project")
-		}
-		if cfg.GCPServiceAccountEmail == "" {
-			missing = append(missing, "GCP service account email")
-		}
-		return missing
 	case "gemini-key":
 		if cfg.GCPProject == "" {
 			return []string{"GCP project"}

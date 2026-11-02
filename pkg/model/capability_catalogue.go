@@ -393,6 +393,17 @@ func retiredInProcessNames(g string) []string {
 			out = append(out, legacy)
 		}
 	}
+	if set, ok := ParseGCPKeyServerGrant(grant); ok {
+		if !slices.Contains(out, "gcp-key") {
+			out = append(out, "gcp-key")
+		}
+		if set != "" && set != GCPKeyDefaultPermissionSet {
+			named := GCPKeyCapability(set)
+			if !slices.Contains(out, named) {
+				out = append(out, named)
+			}
+		}
+	}
 	sort.Strings(out)
 	return out
 }

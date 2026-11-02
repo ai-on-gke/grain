@@ -401,7 +401,14 @@ import "strconv"
 // own -hostd-token-file) is grain's only host agent. A pure drop: the
 // importer passes over a table this build lacks, so a dump carrying
 // either imports without it.
-const SchemaVersion = 87
+//
+// 88 retires the in-process `gcp-key` and `gcp-key:<name>` providers onto
+// `https://grain.dev/capabilities/gcp#gcp-key`: seeds `sandbox-agent` and
+// `<name>` permission sets in `grain_config`.`mcp_servers` from the
+// deployment's pool and `gcp_key` rows, and rewrites stored grants across
+// tasks, templates, schedules, default_capabilities, ci_capabilities,
+// console_sessions and capability_policy.
+const SchemaVersion = 88
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the

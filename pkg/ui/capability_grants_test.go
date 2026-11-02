@@ -310,8 +310,8 @@ func TestCheckCapabilityGrants(t *testing.T) {
 	if !out[3].Unchecked {
 		t.Errorf("a grant of an unattached server: %+v", out[3])
 	}
-	if out[4].Recorded != "gcp-key" || out[4].Error != "" {
-		t.Errorf("an in-process capability: %+v", out[4])
+	if out[4].Recorded != model.GCPKeySandboxAgentGrant || out[4].Error != "" {
+		t.Errorf("retired gcp-key alias: %+v", out[4])
 	}
 }
 

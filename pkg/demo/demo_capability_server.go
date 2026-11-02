@@ -46,7 +46,7 @@ const DemoCapabilityID = "https://capabilities.demo.grain.example/cloud"
 // capability (admin accounts and permission sets), over gcpfake's
 // in-memory IAM rather than GCP -- the one external boundary it stubs --
 // so Settings can add admins and sets, Test them, and grant a set.
-const DemoGCPCapabilityID = "https://capabilities.demo.grain.example/gcp"
+const DemoGCPCapabilityID = "https://grain.dev/capabilities/gcp"
 
 // The demo's gchat server is grain's own built-in, registered under its
 // canonical capability_id with nothing configured, so Settings shows it
@@ -260,6 +260,7 @@ func configureCapabilityServerDemo(ctx context.Context, stored *model.Config, lo
 	if err != nil {
 		return nil, err
 	}
+	gcpEntry.Builtin = "gcp"
 	gcpEntry.Config = demoGCPConfig()
 	stored.MCPServers[DemoGCPCapabilityID] = gcpEntry
 

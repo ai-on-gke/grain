@@ -1219,6 +1219,9 @@ func ResolveCICapabilities(ctx context.Context, reg *model.CapabilityRegistry, c
 			continue
 		}
 		provider, ok := reg.LookupFor(id, true)
+		if !ok && model.IsCapabilityRef(model.CanonicalLegacyGrant(id)) {
+			continue
+		}
 		if !ok {
 			return cc, nil, &model.ResourceExhaustedError{
 				Capability: id,
