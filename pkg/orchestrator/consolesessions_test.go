@@ -1849,8 +1849,12 @@ func (d *delayedAcquireSandboxes) Acquire(ctx context.Context, name string, shap
 	return d.inner.Acquire(ctx, name, shape)
 }
 
+// Not t.Parallel: it compares wall-clock latencies measured one after the
+// other, and under the package's parallel -race load the scheduling jitter
+// between those runs can exceed the 200ms the comparisons rest on. Each
+// latency is also the best of a few runs, so one descheduled run cannot
+// decide the comparison on its own.
 func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
-	t.Parallel()
 	measure := func(name string, idleTTL time.Duration, inProcess bool, acquireDelay time.Duration) time.Duration {
 		store, ctx := openStore(t)
 		settings(t, store, func(cfg *model.Config) {
@@ -1929,9 +1933,18 @@ func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
 		return d
 	}
 
-	cold := measure("before (cold sandbox acquire + setup)", -1*time.Second, false, 200*time.Millisecond)
-	warm := measure("after (warm sandbox reuse)", 30*time.Minute, false, 200*time.Millisecond)
-	inProc := measure("after (in-process session continuation)", 350*time.Millisecond, true, 200*time.Millisecond)
+	best := func(name string, idleTTL time.Duration, inProcess bool, acquireDelay time.Duration) time.Duration {
+		var min time.Duration
+		for i := range 3 {
+			if d := measure(name, idleTTL, inProcess, acquireDelay); i == 0 || d < min {
+				min = d
+			}
+		}
+		return min
+	}
+	cold := best("before (cold sandbox acquire + setup)", -1*time.Second, false, 200*time.Millisecond)
+	warm := best("after (warm sandbox reuse)", 30*time.Minute, false, 200*time.Millisecond)
+	inProc := best("after (in-process session continuation)", 350*time.Millisecond, true, 200*time.Millisecond)
 
 	if warm >= cold {
 		t.Errorf("warm sandbox reuse (%v) was not faster than cold sandbox acquire (%v)", warm, cold)

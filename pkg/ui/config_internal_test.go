@@ -332,6 +332,66 @@ func TestConfigSaysWhenSettingsAreConfigRepoOnly(t *testing.T) {
 	}
 }
 
+// On a deployment with no state repository (`grain demo`, or a standalone UI
+// with Config.StateRepo == nil), settings_locked has no config repository to
+// send writes to (settings-mutability.spec.md D-12): configRepoOnly stays
+// false on GET/PUT /api/settings and GET /api/config, and non-bootstrap writes
+// continue to succeed directly.
+func TestSettingsLockedWithoutAStateRepositoryLeavesSettingsWritable(t *testing.T) {
+	t.Parallel()
+	_, client := testServer(t)
+	storeSettingsRow(t, client)
+	srv := ui.NewServerWithClient(client)
+
+	rec := do(t, srv, http.MethodPut, "/api/settings", `{"settingsLocked":true}`)
+	var putSettings struct {
+		SettingsLocked bool `json:"settingsLocked"`
+		ConfigRepoOnly bool `json:"configRepoOnly"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &putSettings) != nil {
+		t.Fatalf("PUT /api/settings settingsLocked=true: %d %s", rec.Code, rec.Body)
+	}
+	if !putSettings.SettingsLocked || putSettings.ConfigRepoOnly {
+		t.Fatalf("PUT /api/settings response = %+v, want settingsLocked=true configRepoOnly=false", putSettings)
+	}
+
+	rec = do(t, srv, http.MethodGet, "/api/config", "")
+	var gotCfg struct {
+		ConfigRepoOnly bool `json:"configRepoOnly"`
+		SettingsLocked bool `json:"settingsLocked"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &gotCfg) != nil {
+		t.Fatalf("GET /api/config: %d %s", rec.Code, rec.Body)
+	}
+	if gotCfg.ConfigRepoOnly || !gotCfg.SettingsLocked {
+		t.Fatalf("GET /api/config = %+v, want configRepoOnly=false settingsLocked=true", gotCfg)
+	}
+
+	rec = do(t, srv, http.MethodPut, "/api/settings", `{"pollInterval":"8s"}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"pollInterval":"8s"`) {
+		t.Fatalf("non-bootstrap PUT /api/settings without StateRepo: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(t, srv, http.MethodPost, "/api/templates", `{"name":"T","title":"Standalone"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("POST /api/templates without StateRepo: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(t, srv, http.MethodPut, "/api/repos/acme/widgets/settings", `{"promptExtension":"local"}`); rec.Code != http.StatusOK {
+		t.Fatalf("PUT /api/repos/acme/widgets/settings without StateRepo: %d %s", rec.Code, rec.Body)
+	}
+
+	rec = do(t, srv, http.MethodGet, "/api/settings", "")
+	var getSettings struct {
+		SettingsLocked bool   `json:"settingsLocked"`
+		ConfigRepoOnly bool   `json:"configRepoOnly"`
+		PollInterval   string `json:"pollInterval"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &getSettings) != nil {
+		t.Fatalf("GET /api/settings: %d %s", rec.Code, rec.Body)
+	}
+	if !getSettings.SettingsLocked || getSettings.ConfigRepoOnly || getSettings.PollInterval != "8s" {
+		t.Fatalf("GET /api/settings = %+v, want settingsLocked=true configRepoOnly=false pollInterval=8s", getSettings)
+	}
+}
+
 type realSyncStateRepo struct {
 	*fakeStateRepo
 	repo   *staterepo.Repo

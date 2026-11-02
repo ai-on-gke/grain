@@ -28,7 +28,7 @@ Ground truth audited: `pkg/ui/config_refusal.go`, `pkg/ui/config_bootstrap.go`, 
 | **G** | `checkGrainConfigWritable(before, after)` | Only if the request changes a non-bootstrap `grain_config` field (§2.4) | Yes | as S |
 | **—** | no guard | No | No | — (written directly in every mode) |
 
-1.3. **"Locked"** below means the server's `configRepoOnly(ctx)` is true for an API caller: `externalConfigRepo != ""` **or** (`settings_locked` is true **and** `directConfigWrites` is not set in `<data-dir>/state-repo.json`). Grain's own writes (reconcilers, merged config being applied, daemon loops) carry no `WriteRehearsal` in their context and are never refused (`configRepoFor`; `TestInternalModeLetsGrainsOwnWritesThrough`).
+1.3. **"Locked"** below means the server's `configRepoOnly(ctx)` is true for an API caller: `externalConfigRepo != ""` **or** (`Config.StateRepo != nil` **and** `settings_locked` is true **and** `directConfigWrites` is not set in `<data-dir>/state-repo.json`). Grain's own writes (reconcilers, merged config being applied, daemon loops) carry no `WriteRehearsal` in their context and are never refused (`configRepoFor`; `TestInternalModeLetsGrainsOwnWritesThrough`).
 
 1.4. **UI read-only** is what the React app renders, which is decided separately from the server (§2.6). Where the two differ, §4 lists it.
 
@@ -36,9 +36,7 @@ Ground truth audited: `pkg/ui/config_refusal.go`, `pkg/ui/config_bootstrap.go`, 
 
 ### 2.1 Standalone / demo (no config repository) {#SM-1}
 
-With no state repository (`Config.StateRepo == nil`, e.g. `grain demo`) and `settings_locked: false`, every guard returns nil: every setting a route exists for MUST be writable from the UI and the REST API and is written straight to the store, with nothing to sync. `GET /api/config` reports `configRepoOnly: false`.
-
-`configRepoFor` does not check for a state repository, so a standalone deployment whose row has `settings_locked: true` is treated exactly as §2.3 describes — non-bootstrap writes are refused and pointed at a `grain/config` that does not exist. Discrepancy D-12.
+With no state repository (`Config.StateRepo == nil` and no external remote, e.g. `grain demo`), `configRepoFor`, `configRepoOnly` and `rowConfigRepoOnly` treat the deployment as unlocked regardless of `settings_locked`: every guard returns nil, every setting a route exists for MUST be writable from the UI and the REST API and is written straight to the store with nothing to sync, and `GET /api/config` and `GET /api/settings` report `configRepoOnly: false`. When `GET /api/config` reports neither `configRepo` nor `externalConfigRepo`, Settings → General disables the *Settings lock* card so the UI does not offer a lock toward a repository that does not exist (D-12, fixed).
 
 ### 2.2 Internal `grain/config`, `settings_locked: false` (default) {#SM-2}
 
@@ -92,7 +90,7 @@ Every other `grain_config` field is non-bootstrap. Notably **not** bootstrap: `s
 2.6.1. **Settings page** (`SettingsPage.jsx`):
 - `external = externalConfigRepo != "" && section ∉ NOT_CONFIG` where `NOT_CONFIG = {config-repo, preferences, upgrade}`. In external mode every other section renders read-only (a disabled fieldset through `SettingsReadOnlyContext`) under the "Configuration is read-only and managed in …" banner.
 - `lockedInUI` is `settings.settingsLocked` once `GET /api/settings` has loaded, otherwise `config.configRepoOnly || config.settingsLocked`; `configManaged = (lockedInUI || external) && isConfigRepoSection(section)`. Only the sections in `CONFIG_REPO_SECTION_PATHS` — **General, Git, Repositories, Tasks, Agents, Capabilities, CI, Memory** — render read-only when locked, with a `ConfigManagedNotice` linking `/config?path=…` for each path.
-- A `SettingsCard` with `allowInExternalMode` escapes the read-only context: *Legacy capabilities* (its deployment-wide fieldset still honours `readOnly`), *Capability servers* (the panel draws its own read-only form from `readOnly`), *Task fields* (display-only), and *Settings lock* (only while `!external`, so the lock can be turned off from a locked General section).
+- A `SettingsCard` with `allowInExternalMode` escapes the read-only context: *Legacy capabilities* (its deployment-wide fieldset still honours `readOnly`), *Capability servers* (the panel draws its own read-only form from `readOnly`), *Task fields* (display-only), and *Settings lock* (only while `!external`, so the lock can be turned off from a locked General section; disabled when `GET /api/config` reports neither `configRepo` nor `externalConfigRepo`).
 - The settings search marks a hit "Read-only: in the config repo" when its section is a config-repo section and `configRepoOnly`.
 
 2.6.2. **Repo page** (`RepoPage.jsx`): `configRepoOnly = config.configRepoOnly || config.settingsLocked`; every configuration control is disabled with the config-repo notice as its `aria-describedby`. Operational actions (add a branch, import issues, manual release, base-branch run) are gated only by repo-admin rights (`adminReadOnly`).
@@ -140,8 +138,8 @@ Every other `grain_config` field is non-bootstrap. Notably **not** bootstrap: `s
 
 | Surface | 1. Standalone / demo (`StateRepo == nil`) | 2. Internal, unlocked | 3. Internal, `settings_locked` | 4. External config repo |
 | --- | --- | --- | --- | --- |
-| **Bootstrap `grain_config` fields** (`clearBootstrap`, §2.4: models and connections, sandbox resources/backend/image/`k8s*`, `maxWorkers`, CLI run locations, `settingsLocked` itself) | P, R, A. No C. | P, R, A, each synced to `grain/config` (`SyncAfterWrite`); C | P, R, A; C. Guard **B** / **G** with `bootstrapOnlyChange` allows the write. Exception: an agent turning the lock **off** goes through **S** and gets 409 (§2.9.2). | C only. P / R / A get 409. Guard **B** refuses in external mode. |
-| **Config-managed `grain_config` fields** (every other column, §2.4) | P, R, A. No C. With `settings_locked` on, **G** gets 409 anyway (D-12). | P, R, A (synced); C | C only. P / R / A get 409 (`internal: true`, rehearsed patch to `tables/grain_config.json` or `settings/capabilities.yml`). The UI greys out each such field it draws in a bootstrap or operations section (D-1, D-2, fixed 2026-11-01). | C only. P / R / A get 409. |
+| **Bootstrap `grain_config` fields** (`clearBootstrap`, §2.4: models and connections, sandbox resources/backend/image/`k8s*`, `maxWorkers`, CLI run locations, `settingsLocked` itself) | P, R, A (*Settings lock* disabled in the UI without a config repo, §2.1). No C. | P, R, A, each synced to `grain/config` (`SyncAfterWrite`); C | P, R, A; C. Guard **B** / **G** with `bootstrapOnlyChange` allows the write. Exception: an agent turning the lock **off** goes through **S** and gets 409 (§2.9.2). | C only. P / R / A get 409. Guard **B** refuses in external mode. |
+| **Config-managed `grain_config` fields** (every other column, §2.4) | P, R, A, even if `settings_locked` is set on the row (D-12, fixed). No C. | P, R, A (synced); C | C only. P / R / A get 409 (`internal: true`, rehearsed patch to `tables/grain_config.json` or `settings/capabilities.yml`). The UI greys out each such field it draws in a bootstrap or operations section (D-1, D-2, fixed 2026-11-01). | C only. P / R / A get 409. |
 | **`repo_config`** (repo page, `PUT /api/repos/{o}/{n}/…`, guard **S**) | P, R, A (`repos:*`, `capabilities:admin` for grants, without self-escalation) | P, R, A (synced); C | C only. P / R / A get 409. Release secrets get 409 too (**S·u**, D-6). | C only. P / R / A get 409. |
 | **Composed entities**: templates, schedules, suites, qualifications, boards, custom fields, API scope sets, standing / persistent sandboxes, `repo_workflow` (guard **S**) | P, R, A | P, R, A (synced); C | C only. P / R / A get 409. The UI is not lock-aware for boards and processes (D-4). An open console session's live task row stays writable (D-5). | C only. P / R / A get 409. |
 | ↳ **Memory** (`memory/**`; no guard) | P, R, A (`memory:write`) | P, R, A; C | P, R, A (the UI renders it read-only, D-3); C | P, R, A, until the next import replaces them (D-3); C |
@@ -263,7 +261,7 @@ Settings → Executors and its executor tokens were removed with remote executor
 | Setting / entity | UI (unlocked) | Config repo | Locked: server / UI | External | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `environmentName`, `showClosedByDefault` | Yes — General → Deployment; `PUT /api/settings` | Yes — `tables/grain_config.json` | Locked (G) / read-only | Yes | |
-| Settings lock `settingsLocked` (`settings_locked`) | Yes — General → Settings lock; `PUT /api/settings`, `PUT /api/config` | Yes — `tables/grain_config.json` (`settings_locked`) | Unlocked (Unlock toggle; bootstrap) / editable (`allowInExternalMode={!external}`) | Yes | Person only for unlock (§2.9.2). |
+| Settings lock `settingsLocked` (`settings_locked`) | Yes (disabled without `configRepo`) — General → Settings lock; `PUT /api/settings`, `PUT /api/config` | Yes — `tables/grain_config.json` (`settings_locked`) | Unlocked (Unlock toggle; bootstrap) / editable (`allowInExternalMode={!external}`) | Yes | Person only for unlock (§2.9.2). Disabled in General when no config repo exists (D-12, fixed). |
 | Deployment time zone `timeZone` | No — API only (`PUT /api/settings`); the UI's time zone is the browser preference | Yes — `tables/grain_config.json` | Locked (G) | Yes | |
 
 ### 3.12 Git (`/settings/git`)
@@ -427,7 +425,7 @@ With `directConfigWrites: true` and `settings_locked: true`, `GET /api/config` r
 
 ### D-12: `settings_locked` refuses writes on a deployment with no config repository
 
-*Reproduced live 2026-11-01 on `grain demo` (`docs/test-runs/2026-11-01-settings-ownership-lock.md`): with `settings_locked: true`, `PUT /api/settings {"pollInterval":…}` answers 409 with `repo: "grain/config"`, `url: "/repos/grain/config"` and a pointer to `POST /api/state-repo/pull-requests`, none of which exists there. Filed as a follow-up.*
+*Fixed 2026-11-01 (task 2280; reproduced live on `grain demo` in `docs/test-runs/2026-11-01-settings-ownership-lock.md`): `configRepoFor`, `configRepoOnly` and `rowConfigRepoOnly` treat `Config.StateRepo == nil` (with no external remote) as unlocked, so `configRepoOnly` stays false on `GET`/`PUT /api/settings` and `GET /api/config` and non-bootstrap writes succeed directly (`TestSettingsLockedWithoutAStateRepositoryLeavesSettingsWritable`). In the UI, `GeneralSection` disables the Settings lock card when `GET /api/config` reports neither `configRepo` nor `externalConfigRepo`.*
 
 `configRepoFor` refuses a non-bootstrap API write whenever `settings_locked` is on and `directConfigWrites` is off, without checking that `Config.StateRepo` exists. On a standalone deployment (§2.1) that flag leaves non-bootstrap settings writable by nobody but the unlock toggle. The 409 names `grain/config` and `POST /api/state-repo/pull-requests`, and neither exists there. The guard should treat "no state repository" as unlocked, or the UI should not offer the lock there.
 
