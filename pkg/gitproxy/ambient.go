@@ -91,8 +91,19 @@ type AmbientCommandSource struct {
 	// even by name -- a tool for one forge is never asked for a
 	// github.com login.
 	OnlyHosts bool
-	// ScopeFix is the command that adds the `repo` scope to the login.
+	// ScopeFix is the command that adds the scopes grain needs to the
+	// login: `repo`, and `workflow` for a push that touches
+	// .github/workflows.
 	ScopeFix string
+	// PushRefusedHint, when set, is asked about a push the source's host
+	// rejected a ref of: message is the host's own words (the reasons on
+	// its "ng" report lines and the "remote:" text beside them), and what
+	// it answers is added to what the pusher sees, as more "remote:"
+	// lines (or on the ng line, to a client without side-band): what to
+	// run to fix a refusal the host's text names but does not explain,
+	// such as a login without the `workflow` scope. Empty says nothing
+	// more; so does nil (pushhint.go).
+	PushRefusedHint func(host, message string) string
 	// ForgeViaCommand, when set, marks a tool that is the only way to the
 	// hosts it is for: they sit behind a front end that answers any
 	// client without the workstation's own login with a redirect to a
@@ -165,7 +176,14 @@ var builtinAmbientSources = []AmbientCommandSource{
 		Args:     []string{"auth", "token", "--hostname", "{host}"},
 		Env:      []string{"GH_PROMPT_DISABLED=1", "GH_NO_UPDATE_NOTIFIER=1"},
 		LoginFix: "gh auth login --hostname {host}",
-		ScopeFix: "gh auth refresh --hostname {host} --scopes repo",
+		ScopeFix: "gh auth refresh --hostname {host} --scopes repo,workflow",
+		PushRefusedHint: func(host, message string) string {
+			if !WorkflowScopeRefused(message) {
+				return ""
+			}
+			return "run `gh auth refresh --hostname " + host + " --scopes repo,workflow` as " +
+				ambientAccount() + " to give the login the `workflow` scope, then push again"
+		},
 	},
 }
 
@@ -312,13 +330,14 @@ func AmbientCommandOf(host, source string) string {
 }
 
 // AmbientScopeFix is the command that gives source's login on host the
-// `repo` scope.
+// scopes grain needs: `repo`, and `workflow` where the source's own fix
+// asks for it.
 func AmbientScopeFix(host, source string) string {
 	host = hostName(host)
 	if src, ok := resolvedSource(host, source); ok && src.ScopeFix != "" {
 		return expandHost(src.ScopeFix, host)
 	}
-	return "gh auth refresh --hostname " + host + " --scopes repo"
+	return "gh auth refresh --hostname " + host + " --scopes repo,workflow"
 }
 
 // AmbientForgeViaCommand reports whether source's login on host comes
@@ -1116,7 +1135,7 @@ func gitCredentialToken(protocol, host string) (password, username string, err e
 }
 
 // AmbientIdentity is who an ambient credential's token acts as, and
-// whether it carries the `repo` scope: GitHub's own /user lookup with the
+// whether it carries the `repo` and `workflow` scopes: GitHub's own /user lookup with the
 // token load would send, so it is the answer for exactly the login a
 // push would use. scopes is nil for a token GitHub reports none for (a
 // fine-grained or App user token).
@@ -1126,6 +1145,11 @@ type AmbientIdentity struct {
 	// NoRepoScope is set for a classic OAuth token without `repo`, which
 	// can read public repositories and push nothing.
 	NoRepoScope bool
+	// NoWorkflowScope is set for a classic OAuth token without
+	// `workflow`, whose host refuses a push that creates or changes a
+	// file under .github/workflows. A warning rather than a fault: work
+	// that never edits a workflow does not need the scope.
+	NoWorkflowScope bool
 	// ID and Name are the account's numeric id and display name, as
 	// /user reports them: what NoreplyEmail and AmbientGitIdentity
 	// (ambient_identity.go) build a commit identity for the login out
@@ -1217,12 +1241,15 @@ func (c *CredentialSet) AmbientIdentityOf(name string) (AmbientIdentity, error) 
 	}
 	out := AmbientIdentity{Login: who.Login, ID: who.ID, Name: strings.TrimSpace(who.Name)}
 	if raw, ok := headerValue(resp.Headers, "X-OAuth-Scopes"); ok {
-		out.NoRepoScope = true
+		out.NoRepoScope, out.NoWorkflowScope = true, true
 		for _, s := range strings.Split(raw, ",") {
 			if s = strings.TrimSpace(s); s != "" {
 				out.Scopes = append(out.Scopes, s)
-				if s == "repo" {
+				switch s {
+				case "repo":
 					out.NoRepoScope = false
+				case "workflow":
+					out.NoWorkflowScope = false
 				}
 			}
 		}
