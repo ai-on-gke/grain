@@ -1129,6 +1129,29 @@ func TestSettingsRejectionsAre400(t *testing.T) {
 	}
 }
 
+// A cleared Poll interval box (Settings → Engine) is grain's default,
+// the one its placeholder shows, not the 400 `time: invalid duration ""`
+// it was (2026-11-02 walkthrough).
+func TestSettingsBlankPollIntervalIsTheDefault(t *testing.T) {
+	t.Parallel()
+	srv, _ := testServer(t)
+	if rec := do(t, srv, http.MethodPut, "/api/settings", `{"pollInterval":"25s","githubHost":"github.com"}`); rec.Code != http.StatusOK {
+		t.Fatalf("set 25s: status = %d: %s", rec.Code, rec.Body)
+	}
+	rec := do(t, srv, http.MethodPut, "/api/settings", `{"pollInterval":"  "}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear: status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	got := decode[ui.Settings](t, do(t, srv, http.MethodGet, "/api/settings", ""))
+	want := model.DefaultPollInterval.String()
+	if got.PollInterval != want || got.PollIntervalDefault != want {
+		t.Fatalf("pollInterval = %q (default %q), want both %q", got.PollInterval, got.PollIntervalDefault, want)
+	}
+	if rec := do(t, srv, http.MethodPut, "/api/settings", `{"pollInterval":"0s"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("0s: status = %d, want 400: %s", rec.Code, rec.Body)
+	}
+}
+
 // The build stamp rides on /api/config (version.go) so the sidebar can
 // print which grain is answering. Which of the two branches below runs
 // is a property of how this test binary was built, not of the server:
