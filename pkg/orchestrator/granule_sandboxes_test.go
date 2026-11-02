@@ -1932,6 +1932,7 @@ func TestGranuleSandboxesGivesEachVMItsAllocatedAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(orchestrator.StubHostFirewallAddresses(pool.Addr))
 	k := orchestrator.NewGranuleSandboxes(orchestrator.GranuleConfig{
 		StateDir: stateDir, SSHUser: "debian", ExecKeyPath: "/images/key",
 		Workspace: "/workspace", ReadyPollInterval: time.Millisecond,
@@ -1988,6 +1989,7 @@ func TestReleasingAGranuleSandboxGivesBackItsAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(orchestrator.StubHostFirewallAddresses(pool.Addr))
 	k := orchestrator.NewGranuleSandboxes(orchestrator.GranuleConfig{
 		StateDir: stateDir, SSHUser: "debian", ExecKeyPath: "/images/key",
 		Workspace: "/workspace", ReadyPollInterval: time.Millisecond,
@@ -2046,6 +2048,7 @@ func TestAGranuleAcquireRecreatesARemovedSandboxNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(orchestrator.StubHostFirewallAddresses(pool.Addr))
 	k := orchestrator.NewGranuleSandboxes(orchestrator.GranuleConfig{
 		StateDir: stateDir, SSHUser: "debian", ExecKeyPath: "/images/key",
 		Workspace: "/workspace", ReadyPollInterval: time.Millisecond,

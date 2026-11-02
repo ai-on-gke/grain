@@ -169,7 +169,7 @@ func TestGranuleFirewall_HostIsolationRuleset(t *testing.T) {
 		},
 		fixedNetworks("172.18.0.2|16|172.18.0.1|fd00::2|64|fd00::1\n"))
 	k := NewGranuleSandboxes(GranuleConfig{GitProxyHost: "172.18.0.1"})
-	if err := k.enforceGranuleHostIsolation(context.Background(), "g-t1-1", netip.Addr{}); err != nil {
+	if err := k.enforceGranuleHostIsolation(context.Background(), "g-t1-1", netip.Addr{}, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -266,7 +266,7 @@ func TestGranuleFirewall_HostIsolationRulesetNarrowsToServicePorts(t *testing.T)
 			}
 		},
 	})
-	if err := k.enforceGranuleHostIsolation(context.Background(), "g-t1-1", netip.Addr{}); err != nil {
+	if err := k.enforceGranuleHostIsolation(context.Background(), "g-t1-1", netip.Addr{}, false); err != nil {
 		t.Fatal(err)
 	}
 	if asked != 1 {
@@ -299,7 +299,7 @@ func TestGranuleFirewall_HostIsolationRulesetNarrowsToServicePorts(t *testing.T)
 	// A deployment serving nothing yet accepts nothing at the gateway,
 	// rather than all of it.
 	got := granuleIsolationRuleset("vm_x", []guestNetwork{{IP: net.ParseIP("172.18.0.2"), Gateway: net.ParseIP("172.18.0.1")}},
-		nil, nil, nil, false)
+		nil, nil, nil, false, nil)
 	if strings.Contains(got, "daddr 172.18.0.1") {
 		t.Errorf("a deployment with no service ports accepts the gateway:\n%s", got)
 	}
@@ -542,7 +542,7 @@ func TestGranuleFirewall_CleanupStopsOnUnusableNFT(t *testing.T) {
 	}
 
 	// A NetworkNone enforcement still fails closed while nft is unusable.
-	if err := k.enforceGranuleHostIsolation(ctx, "g-t3-1", netip.Addr{}); err == nil {
+	if err := k.enforceGranuleHostIsolation(ctx, "g-t3-1", netip.Addr{}, false); err == nil {
 		t.Fatal("enforceGranuleHostIsolation succeeded while nft was unusable")
 	}
 
@@ -550,7 +550,7 @@ func TestGranuleFirewall_CleanupStopsOnUnusableNFT(t *testing.T) {
 	// teardown cleanup runs again.
 	allowNFT = true
 	*calls = nil
-	if err := k.enforceGranuleHostIsolation(ctx, "g-t3-1", netip.Addr{}); err != nil {
+	if err := k.enforceGranuleHostIsolation(ctx, "g-t3-1", netip.Addr{}, false); err != nil {
 		t.Fatalf("enforceGranuleHostIsolation after enabling nft: %v", err)
 	}
 	*calls = nil
@@ -558,4 +558,125 @@ func TestGranuleFirewall_CleanupStopsOnUnusableNFT(t *testing.T) {
 	if len(*calls) == 0 {
 		t.Fatal("cleanupGranuleHostIsolation ran no nft commands after enforceGranuleHostIsolation succeeded")
 	}
+}
+
+// withConnectedPrefixes stands in for the host's interfaces for one test.
+func withConnectedPrefixes(t *testing.T, prefixes ...string) {
+	t.Helper()
+	prev := hostConnectedPrefixes
+	t.Cleanup(func() { hostConnectedPrefixes = prev })
+	var ps []netip.Prefix
+	for _, p := range prefixes {
+		ps = append(ps, netip.MustParsePrefix(p))
+	}
+	hostConnectedPrefixes = func() ([]netip.Prefix, error) { return ps, nil }
+}
+
+// An open-network VM gets a chain too: the same service-port accepts at
+// the gateway and git proxy as a NetworkNone one, DNS anywhere, and then
+// drops by destination for link-local (the metadata server), loopback,
+// every network the host is on and the VM's own segment -- returning,
+// not dropping, for the rest, which is the internet.
+func TestGranuleFirewall_OpenNetworkFence(t *testing.T) {
+	calls := withHostFirewall(t,
+		func(ctx context.Context, stdin string, args ...string) ([]byte, error) { return nil, nil },
+		fixedNetworks("172.18.0.2|16|172.18.0.1|fd00::2|64|fd00::1\n"))
+	// The host's LAN, its loopback, a docker bridge, its own link-local
+	// address and a /32 inside the LAN that the LAN's prefix covers.
+	withConnectedPrefixes(t, "192.168.1.20/24", "127.0.0.1/8", "172.17.0.1/16", "fe80::1/64", "192.168.1.20/32", "2001:db8::5/64")
+	var guestCommands int
+	k := NewGranuleSandboxes(GranuleConfig{
+		GitProxyHost:        "172.18.0.1",
+		SandboxServicePorts: func() []SandboxServicePort { return []SandboxServicePort{{"tcp", 9728}} },
+		DNSEgress:           &recordingDNSEgress{restricted: map[string]int{}},
+	})
+	runner := countingRunner{n: &guestCommands}
+	if err := k.enforceGuestNetwork(context.Background(), "g-t1-1", runner, Shape{NetworkAccess: model.NetworkOpen}, netip.Addr{}); err != nil {
+		t.Fatal(err)
+	}
+	if guestCommands != 0 {
+		t.Errorf("an open VM's guest was sent %d commands; its route is its own", guestCommands)
+	}
+	if r := k.cfg.DNSEgress.(*recordingDNSEgress).restricted; len(r) != 0 {
+		t.Errorf("an open VM's queries were restricted at the sandbox resolver: %v", r)
+	}
+	var script string
+	for _, c := range *calls {
+		if strings.HasSuffix(c, "-f -") {
+			script = c
+		}
+	}
+	for _, family := range nftFamilies {
+		rule := func(r string) string { return fmt.Sprintf("add rule %s grain_network_none vm_g_t1_1 %s\n", family, r) }
+		ordered := []string{
+			rule("ip daddr 172.18.0.1 tcp dport { 9728 } accept"),
+			rule("ip6 daddr fd00::1 tcp dport { 9728 } accept"),
+			rule("icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert } accept"),
+			rule("meta l4proto { tcp, udp } th dport 53 accept"),
+			rule("ip daddr { 127.0.0.0/8, 169.254.0.0/16, 172.17.0.0/16, 172.18.0.0/16, 192.168.1.0/24 } counter drop"),
+			rule("ip6 daddr { ::1/128, 2001:db8::/64, fd00::/64, fe80::/10 } counter drop"),
+		}
+		last := -1
+		for _, want := range ordered {
+			i := strings.Index(script, want)
+			if i < 0 {
+				t.Errorf("ruleset is missing %q:\n%s", want, script)
+				continue
+			}
+			if i < last {
+				t.Errorf("%q is out of order:\n%s", want, script)
+			}
+			last = i
+		}
+		// Open is not none: nothing past the fence is dropped.
+		if strings.Contains(script, rule("counter drop")) {
+			t.Errorf("an open VM's chain drops everything:\n%s", script)
+		}
+	}
+	// Jumped to from the port as well as by address, so a guest that
+	// spoofs its source is still fenced by destination.
+	if !strings.Contains(script, "add rule bridge grain_network_none prerouting iifname \"veth1d9c4eb\" ether type != arp jump vm_g_t1_1\n") {
+		t.Errorf("an open VM's port does not jump to its chain:\n%s", script)
+	}
+}
+
+// An open VM whose fence cannot be installed is refused, the same as a
+// NetworkNone one whose isolation cannot: handing it over would put its
+// untrusted code in reach of the metadata server and this host.
+func TestGranuleFirewall_OpenNetworkFenceFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	for name, tc := range map[string]struct {
+		nft       nftRunner
+		connected func() ([]netip.Prefix, error)
+	}{
+		"no nft": {
+			nft: func(ctx context.Context, stdin string, args ...string) ([]byte, error) {
+				return nil, errors.New("nft binary not found")
+			},
+		},
+		"no view of the host's networks": {
+			nft:       func(ctx context.Context, stdin string, args ...string) ([]byte, error) { return nil, nil },
+			connected: func() ([]netip.Prefix, error) { return nil, errors.New("no interfaces") },
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			withHostFirewall(t, tc.nft, fixedNetworks("172.18.0.2|16|172.18.0.1|||"))
+			withConnectedPrefixes(t)
+			if tc.connected != nil {
+				hostConnectedPrefixes = tc.connected
+			}
+			k := NewGranuleSandboxes(GranuleConfig{})
+			err := k.enforceGuestNetwork(ctx, "g-t1-1", okRunner{}, Shape{NetworkAccess: model.NetworkOpen}, netip.Addr{})
+			if err == nil || !strings.Contains(err.Error(), "firewall") {
+				t.Fatalf("enforceGuestNetwork = %v, want a refusal naming the host firewall", err)
+			}
+		})
+	}
+}
+
+type countingRunner struct{ n *int }
+
+func (r countingRunner) Run(ctx context.Context, argv []string, stdin string) (string, string, int) {
+	*r.n++
+	return "", "", 0
 }

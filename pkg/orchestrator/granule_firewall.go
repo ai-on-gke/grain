@@ -425,16 +425,42 @@ func wrapNFTError(err error, out []byte) error {
 	return err
 }
 
+// interfacePrefixes is every prefix this process's network namespace
+// has an address in -- the host's, since the daemon runs in it (see
+// hostSysfsNet).
+func interfacePrefixes() ([]netip.Prefix, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, err
+	}
+	var out []netip.Prefix
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		addr, ok := netip.AddrFromSlice(ipnet.IP)
+		if !ok {
+			continue
+		}
+		bits, _ := ipnet.Mask.Size()
+		out = append(out, netip.PrefixFrom(addr.Unmap(), bits))
+	}
+	return out, nil
+}
+
 // Host-side variables the tests in this package replace; production
 // leaves them as they are.
 var (
-	hostNFT           nftRunner = runNFT
-	hostGuestNetworks           = inspectGuestNetworks
-	hostGuestPorts              = inspectGuestPorts
-	hostNetnsPorts              = netnsBridgePorts
+	hostConnectedPrefixes           = interfacePrefixes
+	hostNFT               nftRunner = runNFT
+	hostGuestNetworks               = inspectGuestNetworks
+	hostGuestPorts                  = inspectGuestPorts
+	hostNetnsPorts                  = netnsBridgePorts
 )
 
-// nftTable is the table every NetworkNone VM's chain lives in.
+// nftTable is the table every granule VM's chain lives in -- open-network
+// VMs' too, under the name it had before they had one.
 const nftTable = "grain_network_none"
 
 // nftBase is one base chain a NetworkNone VM's chain is jumped to from:
@@ -536,7 +562,10 @@ var (
 // jump is installed and the drop is not, or the reverse, for a caller
 // to have to reason about. The VM's chain is flushed before it is
 // filled, so applying it again replaces rather than duplicates.
-func granuleIsolationRuleset(chain string, nets []guestNetwork, ports []string, gitProxy net.IP, services []SandboxServicePort, allPorts bool) string {
+//
+// fence is the other shape the same chain takes: a model.NetworkOpen VM
+// (granuleOpenFence). Nil is NetworkNone, and the chain ends in a drop.
+func granuleIsolationRuleset(chain string, nets []guestNetwork, ports []string, gitProxy net.IP, services []SandboxServicePort, allPorts bool, fence *openFence) string {
 	matches := []string{""}
 	if !allPorts {
 		matches = serviceMatches(services)
@@ -573,6 +602,10 @@ func granuleIsolationRuleset(chain string, nets []guestNetwork, ports []string, 
 			fmt.Fprintf(&b, "add rule %s %s %s icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert } accept\n",
 				family, nftTable, chain)
 		}
+		if fence != nil {
+			fence.write(&b, family, chain, nets)
+			continue
+		}
 		fmt.Fprintf(&b, "add rule %s %s %s counter drop\n", family, nftTable, chain)
 	}
 	for _, base := range nftBases {
@@ -589,6 +622,133 @@ func granuleIsolationRuleset(chain string, nets []guestNetwork, ports []string, 
 			nftPortBase.family, nftTable, nftPortBase.hook, port, chain)
 	}
 	return b.String()
+}
+
+// openFence is what a model.NetworkOpen VM's chain drops in place of
+// NetworkNone's "everything": the destinations an open sandbox has no
+// business reaching even though it may reach the internet.
+//
+// "Open" is the internet beyond this host, not this host or the networks
+// it sits on. Without a chain at all an open guest -- running whatever
+// its task's repository runs -- could reach every service listening on
+// any of the host's addresses (the UI on a non-loopback -ui-addr, sshd,
+// a capability server's serverUrl: docs/capabilities-spec.md §3.2.4),
+// the neighbouring containers and VMs on its own segment, every machine
+// on the host's LAN or VPC subnet, and the cloud metadata server with
+// the host's service-account identity behind it. So the chain, after
+// the same service-port accepts at the gateway and git proxy that a
+// NetworkNone chain makes, drops by destination:
+//
+//   - link-local (169.254.0.0/16, fe80::/10): the metadata server, and
+//     anything else served on-link;
+//   - loopback, which no route should deliver but nothing obliges a
+//     kernel to refuse a forged one;
+//   - every prefix the host is directly connected to (Connected): its
+//     own addresses, docker's bridges and their containers, and its
+//     LAN or VPC subnet's peers;
+//   - the VM's own segments, in case the daemon's view of the host's
+//     interfaces (net.InterfaceAddrs) is not the host's.
+//
+// and returns, rather than accepting, for everything else -- so the
+// rest of the host's own firewall (docker's NAT among it) still decides
+// what happens to it.
+//
+// Everything here matches on the destination, never the source, so the
+// guest's root cannot step round it by spoofing: bridge prerouting
+// jumps by port, and a forged source still names the destination the
+// frame is going to.
+//
+// DNS (port 53) is let through to anywhere first. A guest with no
+// package cache resolves through whatever its image or granule's own
+// default names, which can be the host's LAN resolver or, on a GCE
+// host, the metadata server itself; resolution is the one thing on
+// those addresses an open sandbox has a use for, and a resolver is no
+// way out for a guest that already has the internet.
+type openFence struct {
+	// Connected is every prefix the host has an address in.
+	Connected []netip.Prefix
+}
+
+// openFenceAlways is dropped for every open VM, whatever the host's
+// interfaces are.
+var openFenceAlways = []netip.Prefix{
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("::1/128"),
+	netip.MustParsePrefix("fe80::/10"),
+}
+
+// prefixes is every destination f drops for nets, by family, masked,
+// sorted, and with any prefix another one already covers left out: nft
+// refuses an anonymous set holding two overlapping intervals, and two
+// prefixes either nest or do not overlap at all. Sorted so one host
+// always writes the same ruleset.
+func (f *openFence) prefixes(nets []guestNetwork) (v4, v6 []string) {
+	all := append(append([]netip.Prefix(nil), openFenceAlways...), f.Connected...)
+	for _, n := range nets {
+		if n.CIDR == nil {
+			continue
+		}
+		addr, ok := netip.AddrFromSlice(n.CIDR.IP)
+		if !ok {
+			continue
+		}
+		bits, _ := n.CIDR.Mask.Size()
+		all = append(all, netip.PrefixFrom(addr.Unmap(), bits))
+	}
+	seen := map[netip.Prefix]bool{}
+	var p4, p6 []netip.Prefix
+	for _, p := range all {
+		if !p.IsValid() {
+			continue
+		}
+		seen[p.Masked()] = true
+	}
+	for p := range seen {
+		covered := false
+		for q := range seen {
+			if q.Bits() < p.Bits() && q.Contains(p.Addr()) {
+				covered = true
+				break
+			}
+		}
+		if covered {
+			continue
+		}
+		if p.Addr().Is4() {
+			p4 = append(p4, p)
+		} else {
+			p6 = append(p6, p)
+		}
+	}
+	cmp := func(a, b netip.Prefix) int {
+		if c := a.Addr().Compare(b.Addr()); c != 0 {
+			return c
+		}
+		return a.Bits() - b.Bits()
+	}
+	slices.SortFunc(p4, cmp)
+	slices.SortFunc(p6, cmp)
+	for _, p := range p4 {
+		v4 = append(v4, p.String())
+	}
+	for _, p := range p6 {
+		v6 = append(v6, p.String())
+	}
+	return v4, v6
+}
+
+// write appends f's rules to one family's copy of chain, for a VM on
+// nets.
+func (f *openFence) write(b *strings.Builder, family, chain string, nets []guestNetwork) {
+	v4, v6 := f.prefixes(nets)
+	fmt.Fprintf(b, "add rule %s %s %s meta l4proto { tcp, udp } th dport 53 accept\n", family, nftTable, chain)
+	if len(v4) > 0 {
+		fmt.Fprintf(b, "add rule %s %s %s ip daddr { %s } counter drop\n", family, nftTable, chain, strings.Join(v4, ", "))
+	}
+	if len(v6) > 0 {
+		fmt.Fprintf(b, "add rule %s %s %s ip6 daddr { %s } counter drop\n", family, nftTable, chain, strings.Join(v6, ", "))
+	}
 }
 
 // serviceMatches is services as nft match fragments, one per protocol
@@ -657,7 +817,11 @@ func isGateway(ip net.IP, nets []guestNetwork) bool {
 // ruleset nft refused. The caller fails the Acquire on any of them,
 // because a sandbox whose only isolation is the guest's own cooperation
 // is not a sandbox with no network (#2394).
-func (k *GranuleSandboxes) enforceGranuleHostIsolation(ctx context.Context, vmName string, addr netip.Addr) error {
+//
+// open writes a model.NetworkOpen VM's chain instead (openFence): the
+// same accepts, then drops for this host, its networks and link-local
+// in place of the drop of everything.
+func (k *GranuleSandboxes) enforceGranuleHostIsolation(ctx context.Context, vmName string, addr netip.Addr, open bool) error {
 	var gitProxy net.IP
 	if k.cfg.GitProxyHost != "" {
 		if gitProxy = net.ParseIP(k.cfg.GitProxyHost); gitProxy == nil {
@@ -674,6 +838,14 @@ func (k *GranuleSandboxes) enforceGranuleHostIsolation(ctx context.Context, vmNa
 	ports, err := hostGuestPorts(ctx, granule.PodName(vmName))
 	if err != nil {
 		return fmt.Errorf("finding the bridge ports to firewall: %w", err)
+	}
+	var fence *openFence
+	if open {
+		connected, err := hostConnectedPrefixes()
+		if err != nil {
+			return fmt.Errorf("finding the networks this host is on: %w", err)
+		}
+		fence = &openFence{Connected: connected}
 	}
 
 	nftLock.Lock()
@@ -700,12 +872,16 @@ func (k *GranuleSandboxes) enforceGranuleHostIsolation(ctx context.Context, vmNa
 			accepted = "no port"
 		}
 	}
-	if _, err := hostNFT(ctx, granuleIsolationRuleset(chainName, nets, ports, gitProxy, services, allPorts), "-f", "-"); err != nil {
+	if _, err := hostNFT(ctx, granuleIsolationRuleset(chainName, nets, ports, gitProxy, services, allPorts, fence), "-f", "-"); err != nil {
 		return fmt.Errorf("installing nftables chain %s: %w", chainName, err)
 	}
 
-	log.Printf("orchestrator: granule VM %q: installed host nftables isolation rules outside the guest VM (chain %s for %s, bridge ports %s; the gateway accepts %s)",
-		vmName, chainName, strings.Join(ips, ", "), strings.Join(ports, ", "), accepted)
+	shape := "isolation"
+	if open {
+		shape = "open-network fence"
+	}
+	log.Printf("orchestrator: granule VM %q: installed host nftables %s rules outside the guest VM (chain %s for %s, bridge ports %s; the gateway accepts %s)",
+		vmName, shape, chainName, strings.Join(ips, ", "), strings.Join(ports, ", "), accepted)
 	return nil
 }
 
