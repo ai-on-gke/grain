@@ -950,10 +950,11 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		return fmt.Errorf("seeding a merge batch: %w", err)
 	}
 	batchStartedAt := ago(5 * time.Minute)
-	batchRef := model.MergeBatchRef(deploymentID, "main")
+	batchRef := model.MergeRecheckRef(deploymentID, completed.ID, "main")
 	if err := store.PutMergeBatch(ctx, model.MergeBatch{
 		Repo:       *cfg.DefaultTarget,
 		Branch:     "main",
+		TaskID:     completed.ID,
 		Ref:        batchRef,
 		BaseCommit: "1234567890abcdef1234567890abcdef12345678",
 		Commit:     "abcdef0123456789abcdef0123456789abcdef01",

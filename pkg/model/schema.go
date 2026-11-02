@@ -383,7 +383,12 @@ import "strconv"
 // included, to `https://grain.dev/capabilities/grain#host-exec={}`: the
 // in-process `self-repair` provider is retired for the `grain#host-exec`
 // method.
-const SchemaVersion = 84
+//
+// 85 rebuilds `merge_batch` with `task_id` in its primary key, so one
+// branch can hold an overlap re-check for each of several changes at once
+// (grain/task-2390). The rows are carried across with an empty task_id,
+// which the queue still reads, re-validates and cleans up as before.
+const SchemaVersion = 85
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the
@@ -2352,34 +2357,14 @@ var Tables = []string{
 	// base with several queued changes merged into it, and grain CI's
 	// verdict about that one tree.
 	//
-	// One row per (repo, branch), because a branch has at most one batch
-	// in flight and its members are held out of the ordinary merge path
-	// while it runs. `members` is JSON rather than a delimited list
-	// because a member is three fields including a commit; the rest is
+	// One row per (repo, branch, task): one change's overlap re-check
+	// (grain/task-2390), mergeBatchTable below. `members` is JSON rather
+	// than a delimited list because a member is three fields including a commit; the rest is
 	// the shape base_branch_ci above has, and it is off SettingsTables
 	// for the same reason -- the daemon writes it for itself, and a
 	// settings import landing mid-batch would either resurrect a batch
 	// whose ref has moved or drop one whose members are being held.
-	`CREATE TABLE IF NOT EXISTS ` + "`merge_batch`" + ` (
-  ` + "`owner`" + `       TEXT     NOT NULL,
-  ` + "`name`" + `        TEXT     NOT NULL,
-  ` + "`branch`" + `      TEXT     NOT NULL,
-  ` + "`ref`" + `         TEXT     NOT NULL,
-  ` + "`base_commit`" + ` TEXT     NOT NULL,
-  ` + "`commit`" + `      TEXT     NOT NULL,
-  ` + "`members`" + `     TEXT     NOT NULL DEFAULT '',
-  ` + "`run_id`" + `      TEXT     NOT NULL DEFAULT '',
-  ` + "`started_at`" + `  DATETIME NOT NULL,
-  ` + "`finished_at`" + ` DATETIME NULL,
-  ` + "`conclusion`" + `  TEXT     NOT NULL DEFAULT '',
-  ` + "`detail`" + `      TEXT     NOT NULL DEFAULT '',
-  ` + "`splits`" + `      INTEGER  NOT NULL DEFAULT 0,
-  ` + "`queued`" + `      INTEGER  NOT NULL DEFAULT 0,
-  ` + "`recheck_of`" + `     TEXT     NOT NULL DEFAULT '',
-  ` + "`recheck_detail`" + ` TEXT     NOT NULL DEFAULT '',
-  ` + "`recheck_at`" + `     DATETIME NULL,
-  PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `, ` + "`branch`" + `)
-)`,
+	mergeBatchTable,
 
 	// One firing of a schedule translated out of a workflow's own
 	// `on: schedule` cron (model.ScheduledWorkflowRun, grain/task-351):
@@ -4023,4 +4008,30 @@ const apiScopeSetTable = `CREATE TABLE IF NOT EXISTS ` + "`api_scope_set`" + ` (
   ` + "`version`" + `         INTEGER NOT NULL DEFAULT 0,
   ` + "`deprecated`" + `      INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`name`" + `)
+)`
+
+// mergeBatchTable is merge_batch's definition, named so that migration 85
+// (Migrations) can create the table it rebuilds from the very statement
+// a fresh store is created with. task_id joined the primary key there:
+// one row per change rather than per branch (grain/task-2390).
+const mergeBatchTable = `CREATE TABLE IF NOT EXISTS ` + "`merge_batch`" + ` (
+  ` + "`owner`" + `       TEXT     NOT NULL,
+  ` + "`name`" + `        TEXT     NOT NULL,
+  ` + "`branch`" + `      TEXT     NOT NULL,
+  ` + "`task_id`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`ref`" + `         TEXT     NOT NULL,
+  ` + "`base_commit`" + ` TEXT     NOT NULL,
+  ` + "`commit`" + `      TEXT     NOT NULL,
+  ` + "`members`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`run_id`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`started_at`" + `  DATETIME NOT NULL,
+  ` + "`finished_at`" + ` DATETIME NULL,
+  ` + "`conclusion`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`detail`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`splits`" + `      INTEGER  NOT NULL DEFAULT 0,
+  ` + "`queued`" + `      INTEGER  NOT NULL DEFAULT 0,
+  ` + "`recheck_of`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`recheck_detail`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`recheck_at`" + `     DATETIME NULL,
+  PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `, ` + "`branch`" + `, ` + "`task_id`" + `)
 )`

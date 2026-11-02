@@ -71,8 +71,12 @@ import (
 // off turns the rule off, observe decides as off does and records what
 // the rule would have said on every merge, and enforce -- the default once
 // merge batching is removed (grain/task-1023) -- re-checks what triggers
-// by testing that single change merged onto the current tip on the merge
-// queue's own ref (model.MergeBatchRef) and merging on green. On red, it
+// by testing that single change merged onto the current tip on a ref of
+// the queue's own for that change (model.MergeRecheckRef) and merging on
+// green. Each change has its own ref and row, so overlapping changes on
+// one branch are re-checked side by side rather than one at a time; a
+// green whose base the branch has moved past since is re-validated against
+// the live tip before it merges (stillHoldsOn, grain/task-2390). On red, it
 // takes the normal repair path: one automatic repair (or a second when
 // secondRepairReason holds), then merge_failed to the Inbox.
 
@@ -322,8 +326,8 @@ func observeRecheck(ctx context.Context, store *model.Store, client github.Clien
 // singleMergeRecheck is what the merge path does with a change the
 // predicate has just found eligible on its own head, before merging it:
 // in enforce mode, a change whose verdict triggers is not merged but
-// tested on top of the branch, one change at a time on the merge queue's
-// own ref.
+// tested on top of the branch, on a ref of its own (model.MergeRecheckRef)
+// and beside any other change being re-checked on the same branch.
 //
 // It answers whether the merge may go ahead now, and the verdict and
 // outcome to record if it does. held is the note for the row when it may
@@ -379,12 +383,26 @@ func singleMergeRecheck(ctx context.Context, store *model.Store, client github.C
 		out.held = v.why() + ", and this deployment runs no grain CI to re-check it with"
 		return out, nil
 	}
-	if row, err := store.GetMergeBatch(ctx, repo, branch); err != nil {
-		return out, fmt.Errorf("orchestrator: reading the overlap re-check for %s %s: %w", repo, branch, err)
+	// Only this change's own re-check can hold it: every change gets a
+	// row and a ref of its own (model.MergeRecheckRef), and a re-check
+	// another change has running on the same branch is re-validated
+	// against the live tip when it concludes (advanceMergeRecheck), so the
+	// two never need to wait on each other (grain/task-2390). A row for
+	// a head this change has since moved off tests a commit that is not
+	// going to merge, and gives way to the one that is.
+	if row, err := store.GetMergeBatch(ctx, repo, branch, e.task.ID); err != nil {
+		return out, fmt.Errorf("orchestrator: reading the overlap re-check of %s on %s %s: %w",
+			e.task.ID, repo, branch, err)
 	} else if row != nil && row.Running() {
-		out.held = v.why() + fmt.Sprintf(", and another overlap re-check on %s (`%s`) is still running",
-			branch, row.Ref)
-		return out, nil
+		if len(row.Members) > 0 && row.Members[0].HeadSHA == detail.HeadSHA {
+			out.held = v.why() + fmt.Sprintf(", and its overlap re-check on `%s` is still running", row.Ref)
+			return out, nil
+		}
+		ciRunner.Cancel(row.RunID, "the change this overlap re-check was testing has a new head", ci.CancelBySystem)
+		deps := Deps{Store: store, Client: client, CI: ciRunner}
+		if err := discardMergeRecheck(ctx, deps, *row, e.task.ID, now); err != nil {
+			return out, err
+		}
 	}
 	started, err := startMergeRecheck(ctx, Deps{Store: store, Client: client, CI: ciRunner}, repo, branch,
 		model.MergeBatchMember{TaskID: e.task.ID, Number: e.ref.Number, HeadSHA: detail.HeadSHA}, now)
@@ -430,7 +448,7 @@ func advanceMergeRecheck(ctx context.Context, deps Deps, row model.MergeBatch, n
 		for _, m := range row.Members {
 			errs = append(errs, clearRecheckState(ctx, deps, m.TaskID, now))
 		}
-		errs = append(errs, deps.Store.DeleteMergeBatch(ctx, row.Repo, row.Branch))
+		errs = append(errs, deps.Store.DeleteMergeBatch(ctx, row.Repo, row.Branch, row.TaskID))
 		return errors.Join(errs...)
 	}
 	m := row.Members[0]
@@ -450,7 +468,8 @@ func advanceMergeRecheck(ctx context.Context, deps Deps, row model.MergeBatch, n
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading %s's head on %s: %w", row.Branch, row.Repo, err)
 	}
-	if head != nil && head.SHA != "" && head.SHA != row.BaseCommit {
+	moved := head != nil && head.SHA != "" && head.SHA != row.BaseCommit
+	if moved && (run.Conclusion != ci.ConclusionSuccess || !stillHoldsOn(deps.Client, row, m, head.SHA)) {
 		return discardMergeRecheck(ctx, deps, row, m.TaskID, now)
 	}
 	row.Conclusion, row.Detail = string(run.Conclusion), ciDetail(run)
@@ -467,25 +486,72 @@ func advanceMergeRecheck(ctx context.Context, deps Deps, row model.MergeBatch, n
 		errs = append(errs, dropRecheckRef(deps, row))
 		errs = append(errs, clearRecheckState(ctx, deps, m.TaskID, now))
 		errs = append(errs, sendRecheckFailureBack(ctx, deps, row, m, now))
-		errs = append(errs, deps.Store.DeleteMergeBatch(ctx, row.Repo, row.Branch))
+		errs = append(errs, deps.Store.DeleteMergeBatch(ctx, row.Repo, row.Branch, row.TaskID))
 		return errors.Join(errs...)
 	case row.Conclusion == string(ci.ConclusionErrored):
 		var errs []error
 		errs = append(errs, dropRecheckRef(deps, row))
 		errs = append(errs, clearRecheckState(ctx, deps, m.TaskID, now))
 		errs = append(errs, blockErroredMergeRecheck(ctx, deps, row, m, now))
-		errs = append(errs, deps.Store.DeleteMergeBatch(ctx, row.Repo, row.Branch))
+		errs = append(errs, deps.Store.DeleteMergeBatch(ctx, row.Repo, row.Branch, row.TaskID))
 		return errors.Join(errs...)
 	default:
 		return discardMergeRecheck(ctx, deps, row, m.TaskID, now)
 	}
 }
 
+// stillHoldsOn is whether a re-check that passed on top of row.BaseCommit
+// still speaks for the merge now that the branch has moved on to tip --
+// because another change merged while this one's re-check ran, which with
+// a re-check per change (grain/task-2390) is the ordinary case rather than
+// the exception.
+//
+// It is the overlap rule again, asked about what has landed since the
+// re-check's base rather than since the change forked: the re-check
+// tested the change on top of row.BaseCommit, so if nothing that landed
+// after that overlaps what the change touches, the tree the merge
+// produces differs from the tested one only where the change's own run
+// and the re-check could not have been affected, and the green stands.
+// Anything else -- the branch rewritten rather than moved forward, a
+// comparison GitHub will not answer or cuts short, a file or package in
+// common, a global build input -- is a tree the re-check never saw, and
+// the change is re-checked on top of tip instead.
+func stillHoldsOn(client github.Client, row model.MergeBatch, m model.MergeBatchMember, tip string) bool {
+	if m.HeadSHA == "" || row.BaseCommit == "" {
+		return false
+	}
+	landed, err := client.CompareRefs(row.Repo.Owner, row.Repo.Name, row.BaseCommit, tip)
+	if err != nil {
+		log.Printf("orchestrator: comparing %s's re-check base %s with %s on %s: %v",
+			m.TaskID, shortSHA(row.BaseCommit), shortSHA(tip), row.Repo, err)
+		return false
+	}
+	if landed.MergeBase != row.BaseCommit {
+		return false
+	}
+	change, err := client.CompareRefs(row.Repo.Owner, row.Repo.Name, row.BaseCommit, m.HeadSHA)
+	if err != nil {
+		log.Printf("orchestrator: comparing %s with its re-check base %s on %s: %v",
+			m.TaskID, shortSHA(row.BaseCommit), row.Repo, err)
+		return false
+	}
+	v := overlapRule(comparedPaths(change.Files), comparedPaths(landed.Files),
+		!change.FilesTruncated && !landed.FilesTruncated)
+	if v.trigger {
+		log.Printf("orchestrator: %s's re-check on %s passed on %s, but what landed since overlaps it (%s): "+
+			"re-checking it on top of %s", m.TaskID, row.Repo, shortSHA(row.BaseCommit), v.detail, shortSHA(tip))
+		return false
+	}
+	log.Printf("orchestrator: %s's re-check on %s passed on %s, and nothing landed since overlaps it: "+
+		"merging on top of %s", m.TaskID, row.Repo, shortSHA(row.BaseCommit), shortSHA(tip))
+	return true
+}
+
 func discardMergeRecheck(ctx context.Context, deps Deps, row model.MergeBatch, taskID string, now time.Time) error {
 	var errs []error
 	errs = append(errs, dropRecheckRef(deps, row))
 	errs = append(errs, clearRecheckState(ctx, deps, taskID, now))
-	errs = append(errs, deps.Store.DeleteMergeBatch(ctx, row.Repo, row.Branch))
+	errs = append(errs, deps.Store.DeleteMergeBatch(ctx, row.Repo, row.Branch, row.TaskID))
 	return errors.Join(errs...)
 }
 
@@ -541,7 +607,7 @@ func mergeRecheckedMember(ctx context.Context, deps Deps, row model.MergeBatch,
 	errs = append(errs, clearRecheckState(ctx, deps, m.TaskID, now))
 	errs = append(errs, noteRecheckMerged(ctx, deps, row, m.TaskID, now))
 	errs = append(errs, dropRecheckRef(deps, row))
-	errs = append(errs, deps.Store.DeleteMergeBatch(ctx, row.Repo, row.Branch))
+	errs = append(errs, deps.Store.DeleteMergeBatch(ctx, row.Repo, row.Branch, row.TaskID))
 	return errors.Join(errs...)
 }
 
@@ -667,7 +733,7 @@ func startMergeRecheck(ctx context.Context, deps Deps, repo model.RepoRef, branc
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: naming the re-check ref for %s on %s: %w", branch, repo, err)
 	}
-	ref := model.MergeBatchRef(deploymentID, branch)
+	ref := model.MergeRecheckRef(deploymentID, m.TaskID, branch)
 	if err := resetRecheckRef(deps, repo, ref, head.SHA); err != nil {
 		return false, err
 	}
@@ -716,7 +782,7 @@ func startMergeRecheck(ctx context.Context, deps Deps, repo model.RepoRef, branc
 		started = &now
 	}
 	batch := model.MergeBatch{
-		Repo: repo, Branch: branch, Ref: ref, BaseCommit: head.SHA, Commit: tip,
+		Repo: repo, Branch: branch, TaskID: m.TaskID, Ref: ref, BaseCommit: head.SHA, Commit: tip,
 		Members: []model.MergeBatchMember{m}, RunID: run.ID, StartedAt: *started, Queued: 1,
 	}
 	if err := deps.Store.PutMergeBatch(ctx, batch); err != nil {
@@ -787,7 +853,7 @@ func clearRecheckState(ctx context.Context, deps Deps, taskID string, now time.T
 }
 
 // recheckingTaskHeads returns the head SHA of each task currently undergoing
-// an overlap re-check on the merge-queue ref.
+// an overlap re-check on its own re-check ref.
 func recheckingTaskHeads(ctx context.Context, store *model.Store) (map[string]string, error) {
 	if store == nil {
 		return nil, nil
