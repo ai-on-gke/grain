@@ -373,14 +373,22 @@ func BudgetLow(now time.Time) bool { return ledger.low(now) }
 // in, from its method and call shape (endpointOf). A shape this does
 // not know is "other" rather than a new row, so the table stays bounded
 // by this function rather than by the paths a future call site sends.
+//
+// GraphQL is named before the method is looked at: every GraphQL call is
+// a POST, reads included, and it is charged to a budget of its own
+// (X-RateLimit-Resource: graphql), so it is a row of its own rather than
+// a "write". Both places a host serves it are recognised -- /graphql on
+// api.github.com and /api/graphql on a GitHub Enterprise Server -- for
+// whichever of them a transport records.
 func kindOf(method, endpoint string) string {
+	if endpoint == "/graphql" || endpoint == "/api/graphql" {
+		return "graphql"
+	}
 	if method != "" && method != http.MethodGet {
 		return "write"
 	}
 	has := func(s string) bool { return strings.Contains(endpoint, s) }
 	switch {
-	case endpoint == "/graphql":
-		return "graphql"
 	case has("/check-runs"), has("/check-suites"), has("/status"), has("/actions/"):
 		return "checks"
 	case has("/pulls/{n}/comments"), has("/pulls/{n}/reviews"):
