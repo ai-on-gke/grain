@@ -287,6 +287,25 @@ func TestBacklogReportsQueueDepthAndTheOldestWait(t *testing.T) {
 	}
 }
 
+// A task parked on an operator's Stop is counted on its own line, and
+// never as queued: it is waiting on that person, not on a worker
+// (task 2345).
+func TestBacklogCountsStoppedTurnsApartFromTheQueue(t *testing.T) {
+	tasks := []model.TaskTiming{
+		{TaskID: "1", CreatedAt: at(0), ApprovedAt: at(0)},
+		{TaskID: "2", CreatedAt: at(0), ApprovedAt: at(0)},
+	}
+	states := map[string]model.State{"1": model.StateQueued, "2": model.StateAwaitingReply}
+	rep := metrics.Compute(metrics.Input{Window: win, Tasks: tasks, States: states,
+		TurnsStopped: map[string]bool{"2": true}})
+	if got, want := rep.Backlog.Queued, 1; got != want {
+		t.Errorf("Queued = %d, want %d", got, want)
+	}
+	if got, want := rep.Backlog.StoppedByOperator, 1; got != want {
+		t.Errorf("StoppedByOperator = %d, want %d", got, want)
+	}
+}
+
 // The oldest wait is measured from the moment a task came back, for one
 // that was put aside and picked back up (model.Task.UndeferredAt).
 //
