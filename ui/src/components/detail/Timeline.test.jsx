@@ -169,6 +169,53 @@ describe("DetailOverlay timeline", () => {
     );
   });
 
+  // Each attempt says which grain hostd its host work went to, the
+  // machine that hostd ran on and its owner (ui.Attempt.Hostd); one that
+  // recorded none says nothing.
+  it("shows the hostd each attempt's host work went to", () => {
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          attempts: [
+            {
+              number: 1,
+              startedAt: "2026-08-28T12:00:00Z",
+              finishedAt: "2026-08-28T12:10:00Z",
+              outcome: "failed",
+              hostd: {
+                hostd: "ws-a",
+                instance: "cloudtop",
+                owner: "alice@example.com",
+                at: "2026-08-28T12:00:01Z",
+              },
+            },
+            {
+              number: 2,
+              startedAt: "2026-08-28T13:00:00Z",
+              outcome: "failed",
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+
+    const lines = document.querySelectorAll(".timeline-attempt-hostd");
+    expect(lines).toHaveLength(1);
+    expect(lines[0].textContent).toBe(
+      "hostd ws-a on cloudtop · alice@example.com",
+    );
+    expect(lines[0]).toHaveAttribute(
+      "title",
+      "Host work on grain hostd ws-a, on cloudtop, owned by alice@example.com",
+    );
+  });
+
   // bwsalmon/agents#503: a "running" transition and the attempt it started
   // both landing on the timeline read as two nodes for the same moment.
   it("shows a single node for a running transition and its first attempt, not two", () => {

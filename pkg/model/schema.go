@@ -431,7 +431,12 @@ import "strconv"
 // `hostd_token`, the SHA-256 digests of each remote hostd's tokens.
 // `hostd` goes to the state repository; `hostd_token` never does
 // (staterepo.LocalTables).
-const SchemaVersion = 92
+//
+// 93 routes host work per run: `task_hostd` (a task's hostd pin or label
+// selector), `task_run_hostd` (the hostd, instance and owner each run
+// went to) and a `hostd` column on `task_run_capability_audit`, ” for
+// every record written before.
+const SchemaVersion = 93
 
 // configAuditTable is the `config_audit` table: one row per change to the
 // deployment's configuration somebody made (model.ConfigAuditEntry,
@@ -509,6 +514,26 @@ const hostdTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd`" + ` (
   ` + "`created_at`" + ` DATETIME NOT NULL,
   ` + "`revoked_at`" + ` DATETIME NULL,
   PRIMARY KEY (` + "`name`" + `)
+)`
+
+// taskHostdTable and taskRunHostdTable are a task's hostd selector and
+// the hostd each run resolved (model.SetTaskHostd, model.TaskRunHostd),
+// named once for Tables and for migration 93.
+const taskHostdTable = `CREATE TABLE IF NOT EXISTS ` + "`task_hostd`" + ` (
+  ` + "`task_id`" + `    TEXT     NOT NULL,
+  ` + "`selector`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`updated_at`" + ` DATETIME NOT NULL,
+  PRIMARY KEY (` + "`task_id`" + `)
+)`
+
+const taskRunHostdTable = `CREATE TABLE IF NOT EXISTS ` + "`task_run_hostd`" + ` (
+  ` + "`run_id`" + `   TEXT     NOT NULL,
+  ` + "`task_id`" + `  TEXT     NOT NULL,
+  ` + "`hostd`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`instance`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`owner`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`at`" + `       DATETIME NOT NULL,
+  PRIMARY KEY (` + "`run_id`" + `)
 )`
 
 const hostdTokenTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd_token`" + ` (
@@ -1480,8 +1505,15 @@ var Tables = []string{
   ` + "`at`" + `         DATETIME NOT NULL,
   ` + "`record`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`note`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`hostd`" + `      TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`run_id`" + `, ` + "`seq`" + `)
 )`,
+
+	// task_hostd and task_run_hostd: which grain hostd a task's host
+	// work is pinned or selected to, and which one each run went to
+	// (model.TaskRunHostd), beside the frozen task_run DDL.
+	taskHostdTable,
+	taskRunHostdTable,
 
 	// task_run_startup records the per-phase startup timestamps of a run
 	// (queued_at -> started_at -> sandbox_acquired_at -> sandbox_prepared_at -> first_turn_at)

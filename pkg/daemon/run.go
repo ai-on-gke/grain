@@ -1300,6 +1300,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		// The attached capability servers a task's capability
 		// references are minted through at admission.
 		CapabilityServers: capabilityServerLookup(live),
+		CapabilityHostd:   capabilityHostdName(cfg),
 		Policy:            localPolicy,
 		Store:             store, Client: githubClient, Sandboxes: sandboxes,
 		// Sandbox reconciliation sweeps the run hosts no live run

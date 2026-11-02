@@ -675,6 +675,9 @@ func attachmentFrom(a model.AttachmentMeta) Attachment {
 // attempts, last failure: reason").
 type TaskDetail struct {
 	Task
+	// Hostd is the task's hostd pin or label selector
+	// (model.SetTaskHostd), "" for the default hostd.
+	Hostd    string    `json:"hostd,omitempty"`
 	Comments []Comment `json:"comments"`
 	// LocalScriptApprovals is the local-script calls this task's run is
 	// waiting on a person for, and the ones answered recently
@@ -946,6 +949,10 @@ type Attempt struct {
 	// (model.CapabilityAuditRecord). The records are their own fetch
 	// (AttemptCapabilityAudit), for the transcript's reason.
 	CapabilityAuditCount int `json:"capabilityAuditCount,omitempty"`
+	// Hostd is the grain hostd this attempt's host work went to, the
+	// machine it ran on and its owner (model.TaskRunHostd); nil for an
+	// attempt that resolved none.
+	Hostd *model.TaskRunHostd `json:"hostd,omitempty"`
 	// QueuedAt, SandboxAcquiredAt, SandboxPreparedAt, AgentStartedAt and
 	// FirstTurnAt are the startup phase timestamps of this attempt
 	// (model.RunStartup, model.Run.AgentStartedAt), and Startup is the

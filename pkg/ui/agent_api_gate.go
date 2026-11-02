@@ -2069,6 +2069,7 @@ var taskMutationResponseKinds = map[string]taskMutationRespKind{
 	"POST /api/tasks/{id}/pause":                   taskRespSingle,
 	"POST /api/tasks/{id}/resume":                  taskRespSingle,
 	"PUT /api/tasks/{id}/goal":                     taskRespSingle,
+	"PUT /api/tasks/{id}/hostd":                    taskRespSingle,
 	"DELETE /api/tasks/{id}/goal":                  taskRespSingle,
 	"POST /api/tasks/{id}/reopen":                  taskRespSingle,
 	"POST /api/tasks/{id}/retry":                   taskRespSingle,
