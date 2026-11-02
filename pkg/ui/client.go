@@ -22,8 +22,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -294,6 +296,50 @@ const (
 // default": leaving the field out is how a caller asks for that, and
 // the Edit form, the host CLI and the sandbox CLI all say the same.
 const errPriorityNotPositive = "priority must be a positive integer (1 or more; leave it out for the default, 5)"
+
+// decodeTaskPriority reads a JSON task priority as the whole number it
+// is. A JSON number has no int type of its own, so 1000, 1000.0 and 1e3
+// are all the same 1000, and are read as it -- as New task's box, the
+// task Edit form and propose_task read them -- rather than refused
+// because Go's int decoding takes only the first spelling (2026-11-02
+// walkthrough: one entry, two answers). Anything that is not a whole
+// number -- 1.5, "8", true, a number past 2^53 written as anything but
+// plain digits, where a float64 no longer holds it exactly, or plain
+// digits past int -- is refused in errPriorityNotPositive's words. The
+// caller checks the 1-or-more bound.
+func decodeTaskPriority(raw json.RawMessage) (int, error) {
+	if n, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil {
+		return n, nil
+	}
+	const exact = 1 << 53
+	var x float64
+	if json.Unmarshal(raw, &x) != nil || x != math.Trunc(x) || math.Abs(x) > exact {
+		return 0, errors.New(errPriorityNotPositive)
+	}
+	return int(x), nil
+}
+
+// UnmarshalJSON reads Priority with decodeTaskPriority; every other field
+// decodes as it would without it.
+func (r *CreateTaskRequest) UnmarshalJSON(data []byte) error {
+	type Alias CreateTaskRequest
+	var aux struct {
+		Alias
+		RawPriority json.RawMessage `json:"priority,omitempty"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*r = CreateTaskRequest(aux.Alias)
+	if trimmed := strings.TrimSpace(string(aux.RawPriority)); trimmed != "" && trimmed != "null" {
+		n, err := decodeTaskPriority(aux.RawPriority)
+		if err != nil {
+			return err
+		}
+		r.Priority = &n
+	}
+	return nil
+}
 
 // decodeAttachments validates and base64-decodes uploads into the
 // model.Attachment shape Store.AddAttachment writes -- TaskID and
@@ -4074,11 +4120,9 @@ func (r *UpdateTaskRequest) UnmarshalJSON(data []byte) error {
 		if json.Unmarshal(aux.RawPriority, &b) == nil {
 			r.PriorityDispatch = &b
 		} else {
-			var n int
-			if err := json.Unmarshal(aux.RawPriority, &n); err != nil {
-				// 1.5, 1e3, a string, a number past int: the priority
-				// wording rather than Go's own decoding error.
-				return errors.New(errPriorityNotPositive)
+			n, err := decodeTaskPriority(aux.RawPriority)
+			if err != nil {
+				return err
 			}
 			r.Priority = &n
 		}
