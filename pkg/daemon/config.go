@@ -154,8 +154,8 @@ type Config struct {
 	// model.DefaultVMMHeadroom under a granule backend
 	// (sandboxVMMHeadroom), nothing under any other. Set with
 	// SandboxShapeIgnored, from the backend itself.
-	VMMHeadroom model.VMMHeadroom
-	PollInterval        time.Duration
+	VMMHeadroom  model.VMMHeadroom
+	PollInterval time.Duration
 	// Backup settings remain host-side rather than store-backed: the Google
 	// credential path describes this process's filesystem, and a schedule
 	// must be known before the UI is available to edit anything.
