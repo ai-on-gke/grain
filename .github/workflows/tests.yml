@@ -272,6 +272,7 @@ jobs:
           package main
 
           import (
+          	"math"
           	"os"
           	"strconv"
           	"strings"
@@ -289,6 +290,14 @@ jobs:
           		}
           		s := strings.TrimSuffix(arg, "s")
           		if v, err := strconv.ParseFloat(s, 64); err == nil {
+          			// `sleep infinity` (a container kept alive) blocks for
+          			// good: +Inf seconds would overflow to a negative
+          			// Duration and return at once.
+          			if math.IsInf(v, 1) {
+          				for {
+          					time.Sleep(math.MaxInt64)
+          				}
+          			}
           			time.Sleep(time.Duration(v * float64(time.Second)))
           		}
           	}
