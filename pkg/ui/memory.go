@@ -461,17 +461,9 @@ func memoryDocumentFrom(d model.MemoryDocument) MemoryDocument {
 // agent only from a task holding the memory capability, because it goes
 // into the prompt of every run this deployment dispatches.
 func (s *Server) memoryWriter(r *http.Request, id, kind, repo string) (model.Principal, error) {
-	p, hasPrincipal := PrincipalFromContext(r.Context())
-	if hasPrincipal && p.Kind == model.PrincipalHuman {
-		return p, nil
-	}
-
-	by, err := memoryAuthor(id, kind)
+	by, err := bodyAuthor(r.Context(), "a memory's author", id, kind)
 	if err != nil {
 		return model.Principal{}, err
-	}
-	if hasPrincipal {
-		by = p
 	}
 	if by.Kind == model.PrincipalAgent {
 		if err := s.tasks.requireMemoryGrant(r.Context(), by.ID, repo); err != nil {
