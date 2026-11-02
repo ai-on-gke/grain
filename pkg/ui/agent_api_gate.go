@@ -534,7 +534,7 @@ func (s *Server) agentRails(ctx context.Context, acting *model.Task, pattern, me
 		}
 		if pattern == "POST /api/tasks/{id}/run-now" || pattern == "POST /api/tasks/{id}/pause" || pattern == "POST /api/tasks/{id}/resume" {
 			me := model.Principal{Kind: model.PrincipalAgent, ID: acting.ID}
-			if p, err := s.tasks.Store.GetPause(ctx, target); err == nil && p != nil && p.PausedBy != me {
+			if p, err := s.tasks.Store.GetPause(ctx, target); err == nil && p != nil && !p.PausedBy.Same(me) {
 				return fmt.Errorf("task %s is paused by %s %s; only they may lift or override that pause",
 					target, p.PausedBy.Kind, principalName(p.PausedBy))
 			}
@@ -1616,7 +1616,7 @@ func (s *Server) externalAgentRails(ctx context.Context, tok *model.ExternalAgen
 			}
 		}
 		if pattern == "POST /api/tasks/{id}/run-now" || pattern == "POST /api/tasks/{id}/pause" || pattern == "POST /api/tasks/{id}/resume" {
-			if p, err := s.tasks.Store.GetPause(ctx, target); err == nil && p != nil && p.PausedBy != me {
+			if p, err := s.tasks.Store.GetPause(ctx, target); err == nil && p != nil && !p.PausedBy.Same(me) {
 				return fmt.Errorf("task %s is paused by %s %s; only they may lift or override that pause",
 					target, p.PausedBy.Kind, principalName(p.PausedBy))
 			}
