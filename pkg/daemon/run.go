@@ -410,6 +410,7 @@ func Run(ctx context.Context, cfg Config) error {
 			DefaultCPUs:     cfg.SandboxCPUs,
 			DefaultMemoryMB: cfg.SandboxMemoryMB,
 			DefaultDiskGB:   cfg.SandboxDiskGB,
+			HostMemoryMB:    granuleHostMemoryMB(),
 			// The deployment-wide network default, in force from the
 			// first sandbox this process builds rather than from the
 			// first reconcile tick (liveConfig only hands on what
@@ -594,6 +595,12 @@ func Run(ctx context.Context, cfg Config) error {
 	cfg = cfg.withHostCapacity(sandboxes)
 	if cfg.Ledger != nil && cfg.Ledger.Wake == nil {
 		cfg.Ledger.Wake = wakeCycle
+	}
+	// Set once, before anything admits a sandbox: every live sum the
+	// ledger gives the budget adds each VM's cgroup headroom, the other
+	// half of config.Budget's (model.Budget.VMMHeadroom).
+	if cfg.Ledger != nil {
+		cfg.Ledger.VMMHeadroom = cfg.VMMHeadroom
 	}
 	LogSandboxBudget(cfg)
 
