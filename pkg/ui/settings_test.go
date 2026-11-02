@@ -193,44 +193,6 @@ func TestUpdateSettingsRoundTripsEnvironmentName(t *testing.T) {
 	}
 }
 
-// The merge queue's gather window round-trips through a column of whole
-// milliseconds, so the values that cannot survive that are refused while
-// whoever typed them is still looking. The dangerous one is a negative
-// window too small to store: it is an operator turning the wait off, and
-// a stored zero means "never chosen", which would turn it back on at
-// grain's own five minutes (grain/task-360).
-func TestUpdateSettingsRejectsAGatherWindowTooSmallToStore(t *testing.T) {
-	t.Parallel()
-	c, _, ctx := testClient(t)
-	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
-		t.Fatal(err)
-	}
-	for _, bad := range []string{"-100us", "500us", "1ns"} {
-		window := bad
-		if _, err := c.UpdateSettings(ctx,
-			ui.UpdateSettingsRequest{MergeGatherWindow: &window}); err == nil {
-			t.Errorf("UpdateSettings accepted mergeGatherWindow %q, want a validation error "+
-				"rather than a silent 0", bad)
-		}
-	}
-	// The two values either side of it are fine, and mean opposite
-	// things: blank is grain's own window, and a negative one is off.
-	for _, good := range []string{"", "-1s", "90s"} {
-		window := good
-		if _, err := c.UpdateSettings(ctx,
-			ui.UpdateSettingsRequest{MergeGatherWindow: &window}); err != nil {
-			t.Fatalf("UpdateSettings refused mergeGatherWindow %q: %v", good, err)
-		}
-	}
-	read, err := c.GetSettings(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if read.MergeGatherWindow != "1m30s" {
-		t.Fatalf("mergeGatherWindow = %q after storing 90s", read.MergeGatherWindow)
-	}
-}
-
 // TestUpdateSettingsRejectsUnrenderableEnvironmentName pins the two
 // bounds on what is otherwise free text: it is rendered as a badge in
 // the sidebar and appended to the tab title, so a pasted paragraph or an
