@@ -25,25 +25,25 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// The deployment's own answer to "which of these runs matters most": the
-// branch at the front of a repository's merge queue, because its verdict
-// is what lets everything queued behind it move (grain/task-316). Every
-// other run is ranked the same, which is what the gate did before it had
-// an order at all.
-func TestCIMergeQueuePriorityRanksTheMergeQueueHeadAboveEverythingElse(t *testing.T) {
+// The deployment's own answer to "which of these runs matters most": a
+// branch in a repository's merge queue that merges on its verdict
+// (grain/task-316). Members of a lane merge independently of each other
+// (grain/task-2346), so every one of them ranks the same, and every other
+// run is ranked the same as before the gate had an order at all.
+func TestCIMergeQueuePriorityRanksEveryQueuedChangeAboveEverythingElse(t *testing.T) {
 	t.Parallel()
 	store := testStore(t)
 	ctx := context.Background()
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
-	head := queuedTaskLinkedToAPullRequest(t, ctx, store, "t1", repo, 1)
-	behind := queuedTaskLinkedToAPullRequest(t, ctx, store, "t2", repo, 2)
+	first := queuedTaskLinkedToAPullRequest(t, ctx, store, "t1", repo, 1)
+	second := queuedTaskLinkedToAPullRequest(t, ctx, store, "t2", repo, 2)
 
 	rank := daemon.CiMergeQueuePriority(store)
-	if got := rank(ci.Request{Repo: repo.String(), Ref: head.BranchName()}); got != ci.PriorityMergeHead {
-		t.Errorf("the head of the queue ranks %d, want %d", got, ci.PriorityMergeHead)
+	if got := rank(ci.Request{Repo: repo.String(), Ref: first.BranchName()}); got != ci.PriorityMergeHead {
+		t.Errorf("the change queued first ranks %d, want %d", got, ci.PriorityMergeHead)
 	}
-	if got := rank(ci.Request{Repo: repo.String(), Ref: behind.BranchName()}); got != ci.PriorityNormal {
-		t.Errorf("a change queued behind it ranks %d, want %d", got, ci.PriorityNormal)
+	if got := rank(ci.Request{Repo: repo.String(), Ref: second.BranchName()}); got != ci.PriorityMergeHead {
+		t.Errorf("the change queued second ranks %d, want %d: it merges on its own green", got, ci.PriorityMergeHead)
 	}
 	// A branch nobody has queued, and a request with nothing to go on:
 	// both ordinary work rather than a lookup failure.
@@ -55,23 +55,23 @@ func TestCIMergeQueuePriorityRanksTheMergeQueueHeadAboveEverythingElse(t *testin
 	}
 	// refs/heads/ or not, it is the same branch -- a caller that has not
 	// been through Request.normalize must not silently lose its rank.
-	if got := rank(ci.Request{Repo: repo.String(), Ref: "refs/heads/" + head.BranchName()}); got != ci.PriorityMergeHead {
-		t.Errorf("the head spelled as a ref ranks %d, want %d", got, ci.PriorityMergeHead)
+	if got := rank(ci.Request{Repo: repo.String(), Ref: "refs/heads/" + first.BranchName()}); got != ci.PriorityMergeHead {
+		t.Errorf("a queued change spelled as a ref ranks %d, want %d", got, ci.PriorityMergeHead)
 	}
 
-	// When the head becomes merge-blocked, the promoted queue head immediately
-	// receives PriorityMergeHead without waiting for a stale cache TTL.
+	// A change the queue has given up on merges nothing on its verdict,
+	// and loses its rank at once rather than after a stale cache TTL.
 	now := time.Date(2026, 9, 19, 12, 1, 0, 0, time.UTC)
 	if err := store.Observe(ctx, model.Observation{
-		TaskID: head.ID, CompletedAt: &now, MergeQueueBlockedAt: &now,
+		TaskID: first.ID, CompletedAt: &now, MergeQueueBlockedAt: &now,
 	}); err != nil {
-		t.Fatalf("blocking head %s: %v", head.ID, err)
+		t.Fatalf("blocking %s: %v", first.ID, err)
 	}
-	if got := rank(ci.Request{Repo: repo.String(), Ref: head.BranchName()}); got != ci.PriorityNormal {
-		t.Errorf("blocked former head ranks %d, want %d", got, ci.PriorityNormal)
+	if got := rank(ci.Request{Repo: repo.String(), Ref: first.BranchName()}); got != ci.PriorityNormal {
+		t.Errorf("a blocked change ranks %d, want %d", got, ci.PriorityNormal)
 	}
-	if got := rank(ci.Request{Repo: repo.String(), Ref: behind.BranchName()}); got != ci.PriorityMergeHead {
-		t.Errorf("promoted head ranks %d, want %d", got, ci.PriorityMergeHead)
+	if got := rank(ci.Request{Repo: repo.String(), Ref: second.BranchName()}); got != ci.PriorityMergeHead {
+		t.Errorf("the change still queued ranks %d, want %d", got, ci.PriorityMergeHead)
 	}
 }
 
