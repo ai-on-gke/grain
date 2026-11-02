@@ -235,7 +235,7 @@ func TestConsoleSessionRestartMidExchangeResumesSameConversation(t *testing.T) {
 		MaxWorkers: 1,
 		Config: Config{
 			AgentFramework: model.AgentFrameworkClaude,
-			Capabilities:   model.NewCapabilityRegistry(durable.New()),
+			Capabilities:   SessionTestRegistry(durable.New()),
 		},
 	}
 	if err := RunCycle(ctx, deps, restarted.Add(time.Second)); err != nil {
@@ -304,7 +304,7 @@ func TestConsoleSessionAddingCapabilityMidConversationRestartsAndResumes(t *test
 			AgentFramework:     model.AgentFrameworkClaude,
 			TaskCancellers:     cancellers,
 			CapabilityRestarts: restarts,
-			Capabilities:       model.NewCapabilityRegistry(durable.New(), selfdebug.New()),
+			Capabilities:       SessionTestRegistry(durable.New(), selfdebug.New()),
 		},
 	}
 
@@ -465,7 +465,7 @@ func TestConsoleSessionUsageLimitResumesOnAnotherConnection(t *testing.T) {
 			AgentFramework: model.AgentFrameworkClaude,
 			Pause:          pause,
 			Now:            func() time.Time { return now },
-			Capabilities:   model.NewCapabilityRegistry(durable.New()),
+			Capabilities:   SessionTestRegistry(durable.New()),
 		},
 	}
 

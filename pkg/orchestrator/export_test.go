@@ -31,6 +31,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/granule"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // DisableBranchExistsSleep makes branchExistsSettled's own backoff
@@ -431,3 +432,14 @@ func SessionKeysForTest(ctx context.Context, deps Deps, task model.Task) (sandbo
 
 // WriteExecutableStub is writeExecutableStub for tests in orchestrator_test.
 var WriteExecutableStub = writeExecutableStub
+
+// SessionTestRegistry is model.NewCapabilityRegistry with the agent API's
+// grants resolvable, as the daemon's own registry has them
+// (ui.AgentAPIDynamicProvider): every console session holds
+// model.ConsoleSessionCIReadGrant by default, and a registry without it
+// would refuse the session's dispatch.
+func SessionTestRegistry(providers ...model.CapabilityProvider) *model.CapabilityRegistry {
+	reg := model.NewCapabilityRegistry(providers...)
+	reg.RegisterDynamic(ui.AgentAPIDynamicProvider)
+	return reg
+}
