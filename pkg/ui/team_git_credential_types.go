@@ -99,6 +99,9 @@ type GitCredentialStatus struct {
 	// Proxy is the host record's proxy: optional everywhere, a command-backed
 	// forge's host included (its traffic goes through the forge's tool).
 	Proxy string `json:"proxy,omitempty"`
+	// Author is the human user's name recorded when this credential
+	// delegates a user's identity to grain (`grain git-login`).
+	Author string `json:"author,omitempty"`
 	// Fingerprint and SSHUser describe an SSH key.
 	Fingerprint string `json:"fingerprint,omitempty"`
 	SSHUser     string `json:"sshUser,omitempty"`
@@ -313,7 +316,7 @@ func (c *Client) gitCredentialStatus(name string) GitCredentialStatus {
 		return out
 	}
 	h := creds.HostOf(name)
-	out.Host, out.Kind, out.Proxy = h.Host, string(h.Kind), h.Proxy
+	out.Host, out.Kind, out.Proxy, out.Author = h.Host, string(h.Kind), h.Proxy, creds.AuthorOf(name)
 	if f, ok := creds.AmbientOf(name); ok {
 		out.Host, out.AmbientSource = f.Host, f.Source
 		id, pending, err := creds.AmbientIdentityWithin(name, ambientStatusWait)

@@ -476,6 +476,20 @@ func (c credentialTokenSource) TokenFor(owner, repo string) *string {
 	return cred.Token
 }
 
+// AuthorSignature is github.AuthorSignatureSource: the human user whose
+// delegated credential authenticates REST calls against owner/repo, so new
+// pull requests and comments are signed with their name via Grain.
+func (c credentialTokenSource) AuthorSignature(owner, repo string) string {
+	if c.credentials == nil {
+		return ""
+	}
+	cred, ok := c.selectCredential(owner, repo)
+	if !ok {
+		return ""
+	}
+	return c.credentials.AuthorOf(cred.Name)
+}
+
 // repoTeamCredentialTTL is how long repoTeamCredential trusts one
 // answer: long enough that the reconcile loop's many calls against one
 // repository cost a store read rather than one each, short enough that a

@@ -398,6 +398,7 @@ func refreshPullRequest(ctx context.Context, store *model.Store, client github.C
 	// Commit messages cannot say what images a run published, so the
 	// section publishImages wrote is carried over rather than rebuilt.
 	body = withImages(body, imagesSection(detail.Body))
+	body = github.PreservePullRequestSignature(body, detail.Body)
 	if body == detail.Body {
 		return
 	}
