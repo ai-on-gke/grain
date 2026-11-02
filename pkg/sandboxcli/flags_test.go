@@ -97,6 +97,8 @@ func TestSandboxCommandsRefuseFlagsTheyDoNotRead(t *testing.T) {
 		{[]string{"read", "config://README.md", "--tail"}, "grain read: flag --tail needs a value"},
 		{[]string{"read", "deploy://pipeline-changes", "--page", "0"}, `grain read: --page "0" is not a page size: it takes a positive integer`},
 		{[]string{"read", "deploy://pipeline-changes", "--page", "00"}, `grain read: --page "00" is not a page size`},
+		{[]string{"log", "--max-lines", "0"}, `grain log: --max-lines "0" is not a count of entries: it takes a positive integer`},
+		{[]string{"log", "-n", "0"}, `grain log: -n "0" is not a count of entries`},
 	} {
 		_, errOut, code := runIn(t, env, tc.args...)
 		if code != 2 || !strings.HasPrefix(errOut, tc.want) {

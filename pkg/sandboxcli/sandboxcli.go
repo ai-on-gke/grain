@@ -561,6 +561,13 @@ func (c *sandboxCLI) run(args []string) error {
 	case "health":
 		return c.fs("deploy://health", nil)
 	case "log":
+		for _, name := range []string{"max-lines", "lines", "n"} {
+			if n, err := strconv.Atoi(p.get(name)); p.has(name) && err == nil && n == 0 {
+				// read_grain_log refuses no entries too, but only once the
+				// proxy has been asked, and with exit status 1.
+				return usageError{fmt.Sprintf("grain log: %s %q is not a count of entries: it takes a positive integer\n", flagName(name), p.get(name))}
+			}
+		}
 		uri := "deploy://grain.log"
 		if source := grainLogSource(p); source != "" {
 			uri += "/" + source
