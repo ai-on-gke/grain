@@ -174,16 +174,21 @@ test("the tree is read in filing order from the keyboard", async ({ page }) => {
   const tree = page.getByRole("region", { name: "Work tree" });
   await expect(tree).toContainText("0 of 4 done");
   await tree.locator(".provenance-toggle").click();
-  await tree.getByRole("link", { name: chat, exact: true }).focus();
+  // The task being read is the page already open, so its own id is not
+  // a stop: Tab from the toggle lands on its first follow-up.
+  await expect(tree.getByRole("link", { name: chat, exact: true })).toHaveCount(
+    0,
+  );
+  await tree.locator(".provenance-toggle").focus();
+  await page.keyboard.press("Tab");
   const order = [];
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 5; i++) {
     order.push(
       await page.evaluate(() => document.activeElement.textContent.trim()),
     );
     await page.keyboard.press("Tab");
   }
   expect(order).toEqual([
-    chat,
     toggle,
     toolchain,
     pagination,

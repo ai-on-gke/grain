@@ -1722,8 +1722,11 @@ esac`
 // fails the Acquire that called it if it cannot.
 //
 // model.NetworkOpen -- and an unset access, which reads as open -- is
-// nothing to do: a guest comes up with the network its image and
-// granule's own networking gave it, which is what "open" means here.
+// the host's firewall alone, told to fence the guest off this host, the
+// networks it is on and link-local (openFence): a guest keeps the route
+// its image and granule's own networking gave it, which is what "open"
+// means here, and loses only what "open" never meant -- the metadata
+// server, the host's own listeners and its neighbours.
 // model.NetworkNone is three things: the sandbox resolver told to stop
 // forwarding this guest's queries (restrictGuestDNS), the host's
 // firewall told to drop everything from this guest -- forwarded, bridged
@@ -1751,6 +1754,13 @@ esac`
 // race the units that install it.
 func (k *GranuleSandboxes) enforceGuestNetwork(ctx context.Context, name string, runner sandboxRunner, shape Shape, addr netip.Addr) error {
 	if model.NormalizeNetworkAccess(shape.NetworkAccess) != model.NetworkNone {
+		if err := k.enforceGranuleHostIsolation(ctx, name, addr, true); err != nil {
+			return fmt.Errorf("orchestrator: granule VM %q has open network access, and this host's firewall "+
+				"could not be set to keep it off this host's own services, its networks and the metadata server "+
+				"(%v) -- refusing to hand over a sandbox whose untrusted code could reach them. Every granule "+
+				"sandbox needs nft on this host, and this daemon able to run it as root (directly, with "+
+				"CAP_NET_ADMIN, or through `sudo -n nft`)", name, err)
+		}
 		return nil
 	}
 	if err := k.restrictGuestDNS(ctx, name); err != nil {
@@ -1758,7 +1768,7 @@ func (k *GranuleSandboxes) enforceGuestNetwork(ctx context.Context, name string,
 			"sandbox resolver could not be told to stop forwarding its queries upstream (%v) -- refusing to "+
 			"hand over a sandbox that could still reach any nameserver on the internet through it", name, err)
 	}
-	if err := k.enforceGranuleHostIsolation(ctx, name, addr); err != nil {
+	if err := k.enforceGranuleHostIsolation(ctx, name, addr, false); err != nil {
 		return fmt.Errorf("orchestrator: granule VM %q was to have no network access, and this host's firewall "+
 			"could not be set to drop its traffic (%v) -- refusing to hand over a sandbox whose only isolation "+
 			"would be a default route its own guest has root enough to put back. NetworkNone on granule needs "+

@@ -39,6 +39,13 @@
 #   - .grain/triggers/release-promotion.yml holds every change to this
 #     file and the scripts it runs for a person's Submit.
 #
+# approve refuses a pending release whose recorded staging soak is under
+# the minimum (24h less the slack; release-from-trunk.sh writes it on the
+# -pending tag, with whether FORCE was used). The approval route carries no
+# dispatch inputs, so this path never sets RELEASE_SHORT_SOAK_OK: a person
+# who means to ship a short soak passes short_soak_ok: true to
+# .github/workflows/promote-release.yml, or rejects it here.
+#
 # The route selects one job: `promote` for an approval (which brings
 # `approve` in front of it) or `reject`. Dispatched whole, all three
 # refuse.
