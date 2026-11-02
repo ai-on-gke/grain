@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -83,15 +82,7 @@ apply)
 esac
 exit 0
 `
-	// Written as data and made executable by a child process, for the
-	// ETXTBSY reason writeFakeKubectlForGranule gives.
-	src := c.kubectl + ".src"
-	if err := os.WriteFile(src, []byte(script), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := exec.Command("install", "-m", "0755", src, c.kubectl).CombinedOutput(); err != nil {
-		t.Fatalf("installing fake kubectl: %v: %s", err, out)
-	}
+	writeExecutableStub(t, c.kubectl, script)
 	return c
 }
 

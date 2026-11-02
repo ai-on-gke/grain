@@ -171,10 +171,7 @@ func TestGuestKVMGrantScript(t *testing.T) {
 // the test puts on PATH in place of the real binary.
 func writeStub(t *testing.T, dir, name, body string) {
 	t.Helper()
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body), 0o755); err != nil {
-		t.Fatalf("writing %s stub: %v", name, err)
-	}
+	writeExecutableStub(t, filepath.Join(dir, name), "#!/bin/sh\n"+body)
 }
 
 func TestEnsureGuestTmpfs(t *testing.T) {

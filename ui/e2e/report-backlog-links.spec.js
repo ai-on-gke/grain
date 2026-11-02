@@ -64,31 +64,69 @@ test("a report board's oldest waiting task is a link that opens the overlay", as
   ).toBeVisible();
 });
 
-test("a report board's backlog count lands on the matching filtered list", async ({
+test("a report board's backlog counts match the filtered lists they open", async ({
   page,
 }) => {
   const board = await reportBoard(page);
   await page.goto(`/boards/${board.id}`);
 
   const waiting = page.getByRole("link", { name: /^Waiting \d+$/ });
+  const asked = page.getByRole("link", { name: /^Asked \d+$/ });
   await expect(waiting).toBeVisible();
-  const expected = "/?f=repo:any:acme/widgets&f=state:any:queued";
-  await expect(waiting).toHaveAttribute("href", expected);
-  const count = Number((await waiting.textContent()).match(/\d+/)[0]);
+  await expect(asked).toBeVisible();
+
+  // Bounding-box check: chips sit aligned on the row without overlapping,
+  // and each state dot is vertically centred inside its chip.
+  const waitingBox = await waiting.boundingBox();
+  const askedBox = await asked.boundingBox();
+  expect(waitingBox).not.toBeNull();
+  expect(askedBox).not.toBeNull();
+  expect(Math.abs(waitingBox.y - askedBox.y)).toBeLessThanOrEqual(2);
+  expect(waitingBox.x + waitingBox.width).toBeLessThan(askedBox.x);
+  for (const [chip, box] of [
+    [waiting, waitingBox],
+    [asked, askedBox],
+  ]) {
+    const dotBox = await chip.locator(".dot").boundingBox();
+    expect(dotBox).not.toBeNull();
+    const chipMidY = box.y + box.height / 2;
+    const dotMidY = dotBox.y + dotBox.height / 2;
+    expect(Math.abs(chipMidY - dotMidY)).toBeLessThanOrEqual(2);
+  }
+
+  const expectedWaiting = "/?f=repo:any:acme/widgets&f=state:any:queued";
+  await expect(waiting).toHaveAttribute("href", expectedWaiting);
+  // The demo server is shared by every spec in the worker, and others
+  // file tasks in acme/widgets, so the seed's exact counts (pinned in
+  // pkg/metrics's tests) cannot be asserted here -- only that each chip
+  // agrees with the list it opens.
+  const waitingCount = Number((await waiting.textContent()).match(/\d+/)[0]);
 
   await waiting.click();
   await expect(page).toHaveURL(
-    new RegExp(`${expected.replace(/[?|]/g, "\\$&")}$`),
+    new RegExp(`${expectedWaiting.replace(/[?|]/g, "\\$&")}$`),
   );
-  // The list it lands on is those tasks. Not exactly `count` of them:
-  // the backlog counts a console session's task too, and no task list
-  // shows one (taskFilters.js's isSessionTask).
+  // Session tasks are excluded from both backlogOf and the task list, so
+  // the rendered row count matches the chip count exactly.
   const rows = page.locator(".task-row");
-  await expect(rows.first()).toBeVisible();
-  expect(await rows.count()).toBeLessThanOrEqual(count);
+  await expect(rows).toHaveCount(waitingCount);
+
+  await page.goto(`/boards/${board.id}`);
+  const askedAgain = page.getByRole("link", { name: /^Asked \d+$/ });
+  await expect(askedAgain).toBeVisible();
+  const expectedAsked =
+    "/?f=repo:any:acme/widgets&f=state:any:awaiting_reply&f=completed:empty:";
+  await expect(askedAgain).toHaveAttribute("href", expectedAsked);
+  const askedCount = Number((await askedAgain.textContent()).match(/\d+/)[0]);
+
+  await askedAgain.click();
+  await expect(page).toHaveURL(
+    new RegExp(`${expectedAsked.replace(/[?|]/g, "\\$&")}$`),
+  );
+  await expect(rows).toHaveCount(askedCount);
 });
 
-test("the Metrics tab's backlog counts link to the list too", async ({
+test("the Metrics tab's backlog counts link to the matching list too", async ({
   page,
 }) => {
   await page.goto("/system/metrics");
@@ -96,6 +134,43 @@ test("the Metrics tab's backlog counts link to the list too", async ({
   await expect(asked).toBeVisible();
   await expect(asked).toHaveAttribute(
     "href",
-    "/?f=state:any:awaiting_reply|awaiting_submit",
+    "/?f=state:any:awaiting_reply&f=completed:empty:",
   );
+  const askedCount = Number((await asked.textContent()).match(/\d+/)[0]);
+
+  await asked.click();
+  await expect(page.locator(".task-row")).toHaveCount(askedCount);
+});
+
+test("phone width: backlog chips and narrowed filter chips wrap cleanly without horizontal overflow", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const board = await reportBoard(page);
+  await page.goto(`/boards/${board.id}`);
+
+  const waiting = page.getByRole("link", { name: /^Waiting \d+$/ });
+  const asked = page.getByRole("link", { name: /^Asked \d+$/ });
+  await expect(waiting).toBeVisible();
+  await expect(asked).toBeVisible();
+
+  for (const chip of [waiting, asked]) {
+    const box = await chip.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(390);
+  }
+
+  const askedCount = Number((await asked.textContent()).match(/\d+/)[0]);
+  await asked.click();
+  await expect(page.locator(".task-row")).toHaveCount(askedCount);
+  const filterChips = page.locator(".narrowing-chips .MuiChip-root");
+  await expect(filterChips).toHaveCount(3);
+  const chipCount = await filterChips.count();
+  for (let i = 0; i < chipCount; i++) {
+    const box = await filterChips.nth(i).boundingBox();
+    expect(box).not.toBeNull();
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(390);
+  }
 });

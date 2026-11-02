@@ -342,6 +342,72 @@ func TestTheOldestWaitIsMeasuredFromAnUndeferralRatherThanTheApproval(t *testing
 	}
 }
 
+// Live chat sessions (Interactive or ConsoleSession) and post-run asked
+// states (awaiting_submit and finished awaiting_reply) are out of the
+// backlog so each state chip's count and oldest-queued task match the
+// non-session task list its link opens.
+func TestBacklogExcludesSessionTasksAndFinishedAskedStates(t *testing.T) {
+	tasks := []model.TaskTiming{
+		// Queued console session approved earliest: must not count in Queued
+		// or claim OldestQueuedTaskID ahead of real backlog tasks.
+		{TaskID: "director", CreatedAt: at(-2 * time.Hour), ApprovedAt: at(-2 * time.Hour),
+			Interactive: true, ConsoleSession: true},
+		// Console-session-tagged task even without Interactive set.
+		{TaskID: "tagged-session", CreatedAt: at(-time.Hour), ApprovedAt: at(-time.Hour),
+			ConsoleSession: true},
+		// Interactive chat session parked in awaiting_reply with stopped turn.
+		{TaskID: "chat", CreatedAt: at(-time.Hour), ApprovedAt: at(-time.Hour),
+			Interactive: true},
+		// Real queued tasks: task 2 is the oldest non-session wait.
+		{TaskID: "2", CreatedAt: at(0), ApprovedAt: at(0)},
+		{TaskID: "11", CreatedAt: at(time.Hour), ApprovedAt: at(time.Hour)},
+		// Unfinished awaiting_reply (agent asked a question mid-task): counted.
+		{TaskID: "4", CreatedAt: at(0), ApprovedAt: at(0)},
+		// Post-run awaiting_submit: excluded.
+		{TaskID: "6", CreatedAt: at(0), ApprovedAt: at(0), CompletedAt: at(time.Hour)},
+		// Post-run awaiting_reply (answered investigation, CompletedAt != nil): excluded.
+		{TaskID: "7", CreatedAt: at(0), ApprovedAt: at(0), CompletedAt: at(time.Hour)},
+	}
+	states := map[string]model.State{
+		"director":       model.StateQueued,
+		"tagged-session": model.StateQueued,
+		"chat":           model.StateAwaitingReply,
+		"2":              model.StateQueued,
+		"11":             model.StateQueued,
+		"4":              model.StateAwaitingReply,
+		"6":              model.StateAwaitingSubmit,
+		"7":              model.StateAwaitingReply,
+	}
+	rep := metrics.Compute(metrics.Input{
+		Window:       win,
+		Tasks:        tasks,
+		States:       states,
+		TurnsStopped: map[string]bool{"chat": true},
+	})
+
+	if got, want := rep.Backlog.Queued, 2; got != want {
+		t.Errorf("Queued = %d, want %d (session tasks excluded)", got, want)
+	}
+	if got, want := rep.Backlog.ByState[model.StateQueued], 2; got != want {
+		t.Errorf("ByState[queued] = %d, want %d", got, want)
+	}
+	if got, want := rep.Backlog.OldestQueuedTaskID, "2"; got != want {
+		t.Errorf("OldestQueuedTaskID = %q, want %q (not a session task)", got, want)
+	}
+	if got, want := rep.Backlog.OldestQueuedWait, until.Sub(since); got != want {
+		t.Errorf("OldestQueuedWait = %v, want %v", got, want)
+	}
+	if got, want := rep.Backlog.ByState[model.StateAwaitingReply], 1; got != want {
+		t.Errorf("ByState[awaiting_reply] = %d, want %d (only unfinished awaiting_reply)", got, want)
+	}
+	if got, want := rep.Backlog.ByState[model.StateAwaitingSubmit], 0; got != want {
+		t.Errorf("ByState[awaiting_submit] = %d, want %d", got, want)
+	}
+	if got, want := rep.Backlog.StoppedByOperator, 0; got != want {
+		t.Errorf("StoppedByOperator = %d, want %d (session stopped turn excluded)", got, want)
+	}
+}
+
 // Percentiles are nearest-rank over the samples themselves: every number
 // a report shows is a duration something really took.
 func TestPercentilesAreNearestRankOverRealSamples(t *testing.T) {
