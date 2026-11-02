@@ -158,6 +158,16 @@ func TestCheckCapabilityPatterns(t *testing.T) {
 		{"allow: [repo-write:*]", "self-debug", "does not allow capability"},
 		{"allow: [\"*\"]\n  deny: [gcp-key]", "self-debug", ""},
 		{"allow: [\"*\"]\n  deny: [gcp-key]", "gcp-key:x", "forbids capability"},
+		// A retired bare name in a policy file still reaches the grant
+		// it became: migration 84 rewrote git-push-any-ref on the task,
+		// not here.
+		{"deny: [git-push-any-ref]", model.GitPushAnyRefGrant, "forbids capability"},
+		{"deny: [git-push-any-ref]", model.RepoWriteRef + `={"refs":["refs/tags/*","refs/heads/*"],"force":true}`, "forbids capability"},
+		{"deny: [Git-Push-Any-Ref]", model.GitPushAnyRefGrant, "forbids capability"},
+		{"deny: [\"" + model.RepoWriteRef + "\"]", model.GitPushAnyRefCapability, "forbids capability"},
+		{"allow: [git-push-any-ref]", model.GitPushAnyRefGrant, ""},
+		{"allow: [git-push-any-ref]", model.GrainSQLWriteGrant, "does not allow capability"},
+		{"allow: [db-read]", model.GrainSQLWriteGrant, "does not allow capability"},
 	}
 	for _, c := range cases {
 		p := mustParse(t, "repos: [acme/widgets, other/widgets, ai-on-gke/grain]\ncapabilities:\n  "+c.rules+"\n")

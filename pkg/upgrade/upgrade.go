@@ -503,7 +503,8 @@ func validateBranch(branch string) error {
 //
 // What enforces that is not this list. grain's own sandboxes cannot push
 // any of these refs (pkg/gitproxy: a run pushes only its own branch,
-// unless it holds the admin-only git-push-any-ref the cut holds). But on
+// unless it holds the team-granted repo#write any-ref grant,
+// model.GitPushAnyRefGrant, formerly git-push-any-ref). But on
 // GitHub anybody with write access to the repository can push a branch
 // or a tag unless a ruleset stops them -- that is as true of main as of
 // the rest, and it is GitHub's rulesets, not grain, that keep it out.
