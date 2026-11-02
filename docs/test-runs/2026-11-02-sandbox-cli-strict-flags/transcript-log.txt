@@ -1,0 +1,60 @@
+# grain log with grain-log (demo's daemon log is one line long)
+$ grain log
+  exit=0 proxy=[GET /fs/deploy/grain.log;]
+  | daemon log, most recent entries.
+  | 
+  | 1 entries, oldest first:
+  | 
+  | 2026-10-29T00:00:00Z grain demo: started daemon log
+$ grain log -n 1
+  exit=0 proxy=[GET /fs/deploy/grain.log?max_lines=1;]
+  | daemon log, most recent entries.
+  | 
+  | 1 entries, oldest first:
+  | 
+  | 2026-10-29T00:00:00Z grain demo: started daemon log
+$ grain log --lines 1
+  exit=0 proxy=[GET /fs/deploy/grain.log?max_lines=1;]
+  | daemon log, most recent entries.
+  | 
+  | 1 entries, oldest first:
+  | 
+  | 2026-10-29T00:00:00Z grain demo: started daemon log
+$ grain log --tail 10
+  exit=0 proxy=[GET /fs/deploy/grain.log?tail=10;]
+  | aemon log
+$ grain log --tail 10 -n 1
+  exit=0 proxy=[GET /fs/deploy/grain.log?max_lines=1&tail=10;]
+  | aemon log
+$ grain log --max-lines 0
+  exit=1 proxy=[GET /fs/deploy/grain.log?max_lines=0;]
+  | grain: bad request: max_lines "0" is not a positive whole number of entries
+$ grain log --since 10m
+  exit=0 proxy=[GET /fs/deploy/grain.log?since=2026-11-02T06%3A07%3A15Z;]
+  | daemon log, since 2026-11-02T06:07:15Z.
+  | 
+  | 1 entries, oldest first:
+  | 
+  | 2026-10-29T00:00:00Z grain demo: started daemon log
+$ grain log daemon --contains started
+  exit=0 proxy=[GET /fs/deploy/grain.log/daemon?contains=started;]
+  | daemon log, most recent entries, containing "started".
+  | 
+  | 1 entries, oldest first:
+  | 
+  | 2026-10-29T00:00:00Z grain demo: started daemon log
+$ grain log --help
+  exit=0 proxy=[none]
+  | grain log [<source> | --source daemon|dmesg] [--since <rfc3339>] [--until <rfc3339>] [--priority err|warning|...] [--contains <text>] [--lines N] [--tail N]
+  | 
+  | grain's own log, redacted (deploy://grain.log). Needs grain-log.
+  | 
+  |   --since, --until  the window, as RFC 3339 timestamps (default: the latest entries)
+  |   --source          which journal: daemon (the default) or dmesg (the kernel's)
+  |   --priority        least severe journald priority to return (err, warning, info, ...; alias --min-priority)
+  |   --contains        only entries containing this text (plain, case-insensitive)
+  |   --lines N, -n N   the latest N entries, one a line (alias --max-lines; default 200, at most 1000)
+  |   --tail N          the last N BYTES of what that returns
+$ grain read deploy://grain.log --tail 12
+  exit=0 proxy=[GET /fs/deploy/grain.log?tail=12;]
+  |  daemon log

@@ -858,6 +858,30 @@ func TestCLIWaitFollowsTheRunThatSupersededIt(t *testing.T) {
 	if len(actions.started) != 0 {
 		t.Errorf("following started %d runs, want none", len(actions.started))
 	}
+
+	// The one not followed -- superseded by a newer commit's run, as a
+	// second push and grain ci wait leave it (§7's two-push walk,
+	// docs/test-runs/2026-11-02-sandbox-cli-strict-flags.md) -- says
+	// why it was cancelled and what run, on what commit, replaced it,
+	// rather than a bare "failed ... cancelled".
+	rec := send(h, http.MethodPost, "tok-ci", "/cli/ci/wait", `{"resume_run_id":"moved"}`)
+	var moved gitproxy.CLIWaitResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &moved); err != nil {
+		t.Fatal(err)
+	}
+	if moved.CancelReason != ci.SupersededByRunReason("elsewhere") || moved.CancelledByHand ||
+		moved.SupersededBy != "elsewhere" || moved.SupersededByCommit != "c2" {
+		t.Errorf("moved = %+v, want the supersede reason and elsewhere on c2", moved)
+	}
+	// A run superseded at its own commit is followed, so names no successor.
+	rec = send(h, http.MethodPost, "tok-ci", "/cli/ci/wait", `{"resume_run_id":"cycle"}`)
+	var cycle gitproxy.CLIWaitResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &cycle); err != nil {
+		t.Fatal(err)
+	}
+	if cycle.SupersededBy != "" || cycle.CancelReason == "" {
+		t.Errorf("cycle = %+v, want its reason and no successor on another commit", cycle)
+	}
 }
 
 // The other half of U5's walk: a wait whose answer was "running" and
