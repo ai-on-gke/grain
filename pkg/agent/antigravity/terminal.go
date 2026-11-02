@@ -151,7 +151,7 @@ func (f *Framework) TerminalCommand(ctx context.Context, cfg agent.RunConfig) (*
 	if effort := f.Effort(); effort != "" {
 		args = append(args, "--effort", effort)
 	}
-	if cfg.SandboxRoot != "" {
+	if cfg.SandboxRoot != "" && !agent.ServesMCPOverHTTP(f.host) {
 		args = append(args, "--add-dir", cfg.SandboxRoot)
 	}
 
@@ -168,8 +168,9 @@ func (f *Framework) TerminalCommand(ctx context.Context, cfg agent.RunConfig) (*
 		Env:  env,
 		// The same directory Run starts agy in: the sandbox root for a
 		// host-rooted run, and the workspace inside the private HOME for
-		// a granule one, which has no local directory of its own.
-		Dir: workDir(cfg, home),
+		// a granule or carried-MCP one, which has no local directory of
+		// its own.
+		Dir: f.workDir(cfg, home),
 		// Removed once the session ends rather than once this function
 		// returns: the HOME has to outlive the call, because the process
 		// that reads it has not been started yet. Run gets to defer this;

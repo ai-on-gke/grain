@@ -1650,7 +1650,7 @@ func openAgyHome(ctx context.Context, host agent.Host, store *sessionstore.Store
 			remove(removeCtx)
 		}
 	}
-	if store != nil && taskID != "" {
+	if store != nil && sessionstore.ValidName(taskID) {
 		if isRemoteHost(host) {
 			root := remoteSessionRoot
 			if root == "" {
@@ -1818,6 +1818,13 @@ func workDir(cfg agent.RunConfig, home string) string {
 		return cfg.SandboxRoot
 	}
 	return agyWorkspaceDir(home)
+}
+
+func (f *Framework) workDir(cfg agent.RunConfig, home string) string {
+	if agent.ServesMCPOverHTTP(f.host) {
+		return agyWorkspaceDir(home)
+	}
+	return workDir(cfg, home)
 }
 
 // withheldNativeTools names the AGY built-ins called out in the prompt as
@@ -2014,10 +2021,11 @@ func (f *Framework) agyArgs(ctx context.Context, cfg agent.RunConfig, conversati
 		args = append(args, "--effort", effort)
 	}
 	// --add-dir names the one directory this run may touch. It is only
-	// meaningful for a host-rooted sandbox; a granule run reaches its
-	// workspace through the forked mcpserver's SSH transport instead, and
-	// there is no local path here to name.
-	if cfg.SandboxRoot != "" {
+	// meaningful when agy shares the sandbox's filesystem; a granule run,
+	// or one on another machine reaching grain's MCP server over HTTP,
+	// reaches its workspace through the mcpserver instead, and has no
+	// local path here to name.
+	if cfg.SandboxRoot != "" && !agent.ServesMCPOverHTTP(f.host) {
 		args = append(args, "--add-dir", cfg.SandboxRoot)
 	}
 	if conversationID != "" {
@@ -2237,7 +2245,7 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 		diagnosticHome:     runScratchDir(home),
 		diagnosticSecrets:  diagnosticSecrets,
 		env:                env,
-		dir:                workDir(cfg, home),
+		dir:                f.workDir(cfg, home),
 		firstTurn:          firstTurn,
 		nextTurn:           nextTurn,
 		interruptedTurn:    interruptedTurn,

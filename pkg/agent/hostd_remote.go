@@ -123,14 +123,6 @@ func (h HostdHost) CreateTemp(ctx context.Context, dir, pattern string) (string,
 	if !h.remote() {
 		return h.LocalHost.CreateTemp(ctx, dir, pattern)
 	}
-	if dir == "" {
-		// os.CreateTemp's "" is the temp area; hostd's is under its
-		// staging root.
-		var err error
-		if dir, err = h.MkdirTemp(ctx, "grain-temp-"); err != nil {
-			return "", err
-		}
-	}
 	r, err := h.stage(ctx, hostd.StageOp{Op: hostd.StageCreateTemp, Dir: dir, Pattern: pattern})
 	return r.Path, err
 }

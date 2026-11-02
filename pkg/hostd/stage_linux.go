@@ -62,13 +62,18 @@ func (s *Server) stageRoot() string {
 		}
 		root = filepath.Join(home, filepath.FromSlash(defaultStageDir))
 	}
-	if err := os.MkdirAll(root, 0o700); err != nil {
+	abs, err := filepath.Abs(expandHome(root))
+	if err != nil {
 		return ""
 	}
-	if resolved, err := filepath.EvalSymlinks(root); err == nil {
-		root = resolved
+	if err := os.MkdirAll(abs, 0o700); err != nil {
+		return ""
 	}
-	return root
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return ""
+	}
+	return resolved
 }
 
 // describeRemote fills in what a daemon on another machine needs to know
@@ -135,13 +140,7 @@ func (s *Server) stage(op *StageOp) StageReply {
 	perm := fs.FileMode(op.Perm) & fs.ModePerm
 	switch op.Op {
 	case StageMkdirTemp:
-		dir := filepath.Join(root, "tmp")
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return fail(err)
-		}
-		// MkdirAll is content with a symlink to a directory, which
-		// would take the new directory outside the root.
-		dir, err := confinedDir(root, dir)
+		dir, err := stageTempDir(root)
 		if err != nil {
 			return fail(err)
 		}
@@ -155,7 +154,16 @@ func (s *Server) stage(op *StageOp) StageReply {
 		if err != nil {
 			return fail(err)
 		}
-		if err := os.MkdirAll(path, perm); err != nil {
+		dirPerm := perm & 0o700
+		if dirPerm == 0 {
+			dirPerm = 0o700
+		}
+		if err := os.MkdirAll(path, dirPerm); err != nil {
+			return fail(err)
+		}
+		// MkdirAll succeeds on an existing symlink to a directory,
+		// leaving the link in place for the caller's next write or CLI.
+		if _, err := confinedDir(root, path); err != nil {
 			return fail(err)
 		}
 		return StageReply{Path: path}
@@ -164,20 +172,24 @@ func (s *Server) stage(op *StageOp) StageReply {
 		if err != nil {
 			return fail(err)
 		}
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, perm)
-		if err != nil {
+		filePerm := perm & 0o600
+		if filePerm == 0 {
+			filePerm = 0o600
+		}
+		if err := writeRegularFile(path, op.Data, filePerm); err != nil {
 			return fail(err)
-		}
-		_, werr := f.Write(op.Data)
-		if cerr := f.Close(); werr == nil {
-			werr = cerr
-		}
-		if werr != nil {
-			return fail(werr)
 		}
 		return StageReply{Path: path}
 	case StageCreateTemp:
-		dir, err := confinedDir(root, op.Dir)
+		var (
+			dir string
+			err error
+		)
+		if op.Dir == "" {
+			dir, err = stageTempDir(root)
+		} else {
+			dir, err = confinedDir(root, op.Dir)
+		}
 		if err != nil {
 			return fail(err)
 		}
@@ -347,7 +359,52 @@ func confinedDir(root, path string) (string, error) {
 	if info.Mode()&fs.ModeSymlink != 0 {
 		return "", fmt.Errorf("stage: %s is a symlink", path)
 	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("stage: %s is not a directory", path)
+	}
 	return path, nil
+}
+
+func stageTempDir(root string) (string, error) {
+	dir := filepath.Join(root, "tmp")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	// MkdirAll is content with a symlink to a directory, which would
+	// take a new file or directory outside the root.
+	return confinedDir(root, dir)
+}
+
+// writeRegularFile writes data to a regular file at path with owner-only
+// mode perm, refusing a symlink, FIFO or special file without blocking on
+// or truncating it, and tightening the mode of an existing file.
+func writeRegularFile(path string, data []byte, perm fs.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, perm)
+	if err != nil {
+		return err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		f.Close()
+		return fmt.Errorf("%s is not a regular file", path)
+	}
+	if err := f.Chmod(perm); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Truncate(0); err != nil {
+		f.Close()
+		return err
+	}
+	_, err = f.Write(data)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 // readTail is agent.LocalHost.ReadTail's: the last limit bytes of a

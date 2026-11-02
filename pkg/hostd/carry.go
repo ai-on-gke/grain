@@ -33,6 +33,7 @@ package hostd
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -44,8 +45,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/ai-on-gke/grain/pkg/tunnel/mux"
 )
 
 // Stage operations (StageOp.Op).
@@ -163,19 +162,20 @@ func (c *carryRegistry) lookup(id string) func(net.Conn) {
 // say which listener it is for.
 const carryHeaderTimeout = 10 * time.Second
 
-// acceptCarries serves the streams hostd opens over m until it closes:
-// each one a connection made to a listener the daemon asked for.
-func (r *Remote) acceptCarries(m *mux.Mux) {
+// acceptCarries serves the streams hostd opens over s.m until it closes:
+// each one a connection made to a listener the daemon asked this session
+// for.
+func (s *remoteSession) acceptCarries() {
 	for {
-		st, err := m.AcceptStream()
+		st, err := s.m.AcceptStream()
 		if err != nil {
 			return
 		}
-		go r.serveCarry(st)
+		go s.serveCarry(st)
 	}
 }
 
-func (r *Remote) serveCarry(st net.Conn) {
+func (s *remoteSession) serveCarry(st net.Conn) {
 	_ = st.SetReadDeadline(time.Now().Add(carryHeaderTimeout))
 	typ, payload, err := readFrame(st)
 	if err != nil || typ != frameRequest {
@@ -187,9 +187,10 @@ func (r *Remote) serveCarry(st net.Conn) {
 		st.Close()
 		return
 	}
-	handle := r.carries.lookup(req.ID)
+	handle := s.carries.lookup(req.ID)
 	if handle == nil {
-		// Not a listener this daemon asked for, or one it has released.
+		// Not a listener this daemon asked this session for, or one it
+		// has released.
 		st.Close()
 		return
 	}
@@ -210,13 +211,13 @@ func (r *Remote) Carry(ctx context.Context, handle func(net.Conn)) (addr string,
 	if err != nil {
 		return "", nil, err
 	}
-	conn, err := r.Dial(ctx)
+	sess, conn, err := r.dialSession(ctx)
 	if err != nil {
 		return "", nil, err
 	}
-	r.carries.add(id, handle)
+	sess.carries.add(id, handle)
 	fail := func(err error) (string, func(), error) {
-		r.carries.remove(id)
+		sess.carries.remove(id)
 		conn.Close()
 		return "", nil, err
 	}
@@ -250,7 +251,7 @@ func (r *Remote) Carry(ctx context.Context, handle func(net.Conn)) (addr string,
 	var once sync.Once
 	return l.Addr, func() {
 		once.Do(func() {
-			r.carries.remove(id)
+			sess.carries.remove(id)
 			conn.Close()
 		})
 	}, nil
@@ -262,40 +263,65 @@ func (r *Remote) Carry(ctx context.Context, handle func(net.Conn)) (addr string,
 // path. The secret keeps the listener to the CLI it was written for: it
 // is in that CLI's staged configuration and nowhere else on the
 // machine, and a request without it is answered 404 without reaching h.
+// A request with an Origin header or a Host other than the loopback
+// listener's own is answered 403, as mcp.StartCommandHTTP does on the
+// daemon's loopback, so a browser on the workstation cannot reach h
+// through cross-origin requests or DNS rebinding.
 func (r *Remote) CarryHTTP(ctx context.Context, h http.Handler) (url string, release func(), err error) {
 	secret, err := randomID()
 	if err != nil {
 		return "", nil, err
 	}
 	l := newConnListener()
-	srv := &http.Server{Handler: secretPrefix("/"+secret, h), ReadHeaderTimeout: time.Minute}
-	go func() { _ = srv.Serve(l) }()
 	addr, stop, err := r.Carry(ctx, l.push)
 	if err != nil {
-		_ = srv.Close()
+		_ = l.Close()
 		return "", nil, err
 	}
+	srv := &http.Server{Handler: carriedHTTP(addr, secret, h), ReadHeaderTimeout: time.Minute}
+	go func() { _ = srv.Serve(l) }()
 	return "http://" + addr + "/" + secret, func() {
 		stop()
 		_ = srv.Close()
 	}, nil
 }
 
-// secretPrefix serves h only the requests whose path starts with the
-// whole path segment prefix, with it taken off.
-func secretPrefix(prefix string, h http.Handler) http.Handler {
+// carriedHTTP serves h only the requests addressed to host with no
+// Origin header and starting with the whole path segment secret, with
+// that segment taken off.
+func carriedHTTP(host, secret string, h http.Handler) http.Handler {
+	rawPrefix := "/" + secret
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		rest, ok := strings.CutPrefix(req.URL.Path, prefix)
-		if !ok || (rest != "" && !strings.HasPrefix(rest, "/")) {
+		if req.Host != host || req.Header.Get("Origin") != "" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		trimmed, ok := strings.CutPrefix(req.URL.Path, "/")
+		if !ok {
 			http.NotFound(w, req)
 			return
 		}
-		if rest == "" {
-			rest = "/"
+		seg, tail, hasSlash := strings.Cut(trimmed, "/")
+		if len(seg) != len(secret) || subtle.ConstantTimeCompare([]byte(seg), []byte(secret)) != 1 {
+			http.NotFound(w, req)
+			return
+		}
+		rest := "/"
+		if hasSlash {
+			rest = "/" + tail
 		}
 		r2 := req.Clone(req.Context())
 		r2.URL.Path = rest
-		r2.URL.RawPath = ""
+		if r2.URL.RawPath != "" {
+			if rawRest, ok := strings.CutPrefix(r2.URL.RawPath, rawPrefix); ok && (rawRest == "" || strings.HasPrefix(rawRest, "/")) {
+				if rawRest == "" {
+					rawRest = "/"
+				}
+				r2.URL.RawPath = rawRest
+			} else {
+				r2.URL.RawPath = ""
+			}
+		}
 		r2.RequestURI = ""
 		h.ServeHTTP(w, r2)
 	})

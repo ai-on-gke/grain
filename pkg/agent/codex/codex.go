@@ -925,7 +925,7 @@ func (f *Framework) openHome(ctx context.Context, taskID string) (home string, p
 		// A grain hostd on another machine: the store is this daemon's
 		// disk, and the task's home has to be on that machine, kept
 		// where agy keeps its own there.
-		if f.sessions != nil && taskID != "" {
+		if f.sessions != nil && sessionstore.ValidName(taskID) {
 			root := remoteSessionRoot
 			if r, ok := f.host.(interface{ SessionRoot() string }); ok && r.SessionRoot() != "" {
 				root = r.SessionRoot()
