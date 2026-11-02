@@ -38,7 +38,10 @@ test("a person's close names them, and its long reason wraps inside its timeline
   request,
 }) => {
   const created = await request.post("/api/tasks", {
-    data: { title: `E2E close attribution ${Date.now()}`, repo: "acme/widgets" },
+    data: {
+      title: `E2E close attribution ${Date.now()}`,
+      repo: "acme/widgets",
+    },
   });
   expect(created.ok()).toBe(true);
   const { id } = await created.json();
@@ -52,13 +55,23 @@ test("a person's close names them, and its long reason wraps inside its timeline
   await expect(meta).toContainText(/^by human /);
 
   // Reopened, then closed again with a reason the meta line has to wrap.
-  expect((await request.post(`/api/tasks/${id}/reopen`, { data: {} })).ok()).toBe(true);
   expect(
-    (await request.post(`/api/tasks/${id}/close`, { data: { reason: LONG_REASON } })).ok(),
+    (await request.post(`/api/tasks/${id}/reopen`, { data: {} })).ok(),
+  ).toBe(true);
+  expect(
+    (
+      await request.post(`/api/tasks/${id}/close`, {
+        data: { reason: LONG_REASON },
+      })
+    ).ok(),
   ).toBe(true);
   // Closing it once more changes nothing, and records nothing.
   expect(
-    (await request.post(`/api/tasks/${id}/close`, { data: { reason: "closing again" } })).ok(),
+    (
+      await request.post(`/api/tasks/${id}/close`, {
+        data: { reason: "closing again" },
+      })
+    ).ok(),
   ).toBe(true);
 
   for (const vp of VIEWPORTS) {
@@ -78,18 +91,27 @@ test("a person's close names them, and its long reason wraps inside its timeline
     );
     const lb = await line.boundingBox();
     const ib = await item.boundingBox();
-    expect(lb.x, `${vp.label}: meta line starts inside its item`).toBeGreaterThanOrEqual(ib.x - 0.5);
-    expect(lb.x + lb.width, `${vp.label}: meta line ends inside its item`).toBeLessThanOrEqual(
-      ib.x + ib.width + 0.5,
-    );
-    expect(lb.y + lb.height, `${vp.label}: meta line inside its item`).toBeLessThanOrEqual(
-      ib.y + ib.height + 0.5,
-    );
+    expect(
+      lb.x,
+      `${vp.label}: meta line starts inside its item`,
+    ).toBeGreaterThanOrEqual(ib.x - 0.5);
+    expect(
+      lb.x + lb.width,
+      `${vp.label}: meta line ends inside its item`,
+    ).toBeLessThanOrEqual(ib.x + ib.width + 0.5);
+    expect(
+      lb.y + lb.height,
+      `${vp.label}: meta line inside its item`,
+    ).toBeLessThanOrEqual(ib.y + ib.height + 0.5);
     // The box is sized by its item either way; it is the text that ran
     // out of it.
-    const [scrollWidth, clientWidth] = await line.evaluate((e) => [e.scrollWidth, e.clientWidth]);
-    expect(scrollWidth, `${vp.label}: the reason wraps rather than overflowing`).toBeLessThanOrEqual(
-      clientWidth + 1,
-    );
+    const [scrollWidth, clientWidth] = await line.evaluate((e) => [
+      e.scrollWidth,
+      e.clientWidth,
+    ]);
+    expect(
+      scrollWidth,
+      `${vp.label}: the reason wraps rather than overflowing`,
+    ).toBeLessThanOrEqual(clientWidth + 1);
   }
 });
