@@ -213,7 +213,7 @@ const (
 	// GrainCICapability is the retired bare name of GrainCIGrant. It is
 	// still read as that grant wherever it was not rewritten (a
 	// repository's own .grain declaration, an older grain/config);
-	// schema migration 89 rewrote the stored rows.
+	// schema migration 90 rewrote the stored rows.
 	GrainCICapability = "grain-ci"
 )
 
