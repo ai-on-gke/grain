@@ -64,6 +64,15 @@ func DeviceWebBaseURL(host, baseURL string) string {
 	return "https://" + h
 }
 
+func defaultDeviceFlowHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
 // RequestDeviceCode initiates a GitHub OAuth Device Flow session against
 // webBaseURL (e.g. "https://github.com") for clientID and scopes.
 func RequestDeviceCode(ctx context.Context, client *http.Client, webBaseURL, clientID string, scopes []string) (DeviceCodeResponse, error) {
@@ -71,7 +80,7 @@ func RequestDeviceCode(ctx context.Context, client *http.Client, webBaseURL, cli
 		return DeviceCodeResponse{}, errors.New("OAuth client ID is required for device flow login")
 	}
 	if client == nil {
-		client = http.DefaultClient
+		client = defaultDeviceFlowHTTPClient()
 	}
 	endpoint := strings.TrimRight(strings.TrimSpace(webBaseURL), "/") + "/login/device/code"
 	form := url.Values{}
@@ -130,7 +139,7 @@ func RequestDeviceCode(ctx context.Context, client *http.Client, webBaseURL, cli
 // cancelled.
 func PollDeviceToken(ctx context.Context, client *http.Client, webBaseURL, clientID, deviceCode string, interval time.Duration) (string, error) {
 	if client == nil {
-		client = http.DefaultClient
+		client = defaultDeviceFlowHTTPClient()
 	}
 	if interval <= 0 {
 		interval = 5 * time.Second

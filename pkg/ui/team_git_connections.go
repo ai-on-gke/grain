@@ -241,23 +241,25 @@ func (c *Client) AddTeamGitConnection(ctx context.Context, id string, req AddTea
 	if err != nil {
 		return Team{}, validationErrorf("invalid connection: %w", err)
 	}
-	for _, raw := range settings.EffectiveGitConnections() {
-		existing, err := model.NormalizeTeamGitConnection(raw)
-		if err != nil || existing.Credential == "anonymous" {
-			continue
-		}
-		if !model.SameGitHost(existing.Host, candidate.Host, model.DefaultGitHost) || existing.Scope != candidate.Scope {
-			continue
-		}
-		onHost, _ := model.ResolveGitHost(candidate.Host, model.DefaultGitHost)
-		if candidate.Scope == "" {
+	if !req.Replace {
+		for _, raw := range settings.EffectiveGitConnections() {
+			existing, err := model.NormalizeTeamGitConnection(raw)
+			if err != nil || existing.Credential == "anonymous" {
+				continue
+			}
+			if !model.SameGitHost(existing.Host, candidate.Host, model.DefaultGitHost) || existing.Scope != candidate.Scope {
+				continue
+			}
+			onHost, _ := model.ResolveGitHost(candidate.Host, model.DefaultGitHost)
+			if candidate.Scope == "" {
+				return Team{}, validationErrorf(
+					"this deployment already has a default git connection on %s (%s): remove it or edit its scope first",
+					onHost, existing.Credential)
+			}
 			return Team{}, validationErrorf(
-				"this deployment already has a default git connection on %s (%s): remove it or edit its scope first",
-				onHost, existing.Credential)
+				"this deployment already has a git connection on %s for scope %q (%s): remove it or edit its scope first",
+				onHost, candidate.Scope, existing.Credential)
 		}
-		return Team{}, validationErrorf(
-			"this deployment already has a git connection on %s for scope %q (%s): remove it or edit its scope first",
-			onHost, candidate.Scope, existing.Credential)
 	}
 
 	credName := strings.TrimSpace(req.Credential)

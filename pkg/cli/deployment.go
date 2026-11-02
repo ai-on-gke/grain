@@ -149,6 +149,7 @@ func defaultGitLoginGHToken(ctx context.Context, host string) (string, error) {
 		host = model.DefaultGitHost
 	}
 	cmd := exec.CommandContext(ctx, "gh", "auth", "token", "--hostname", host)
+	cmd.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1")
 	out, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError
