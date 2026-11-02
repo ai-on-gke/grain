@@ -214,10 +214,18 @@ func capabilityMatch(pattern, capability string) bool {
 	return err == nil && ok
 }
 
+// matchesCapability reports whether any of patterns matches capability.
+// Repository access is matched in both its spellings
+// (model.RepoAccessSpellings): a policy written for repo-write:acme/* must
+// keep denying the repo#write {"repo":"acme/x"} migration 88 rewrote it
+// to, and one naming the repo#write method must deny a repository's own
+// .grain/workflows repo-write: that nothing rewrites.
 func matchesCapability(patterns []string, capability string) bool {
-	for _, pattern := range patterns {
-		if capabilityMatch(pattern, capability) {
-			return true
+	for _, spelling := range model.RepoAccessSpellings(capability) {
+		for _, pattern := range patterns {
+			if capabilityMatch(pattern, spelling) {
+				return true
+			}
 		}
 	}
 	return false

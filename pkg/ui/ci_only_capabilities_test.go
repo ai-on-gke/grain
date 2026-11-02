@@ -65,7 +65,13 @@ func TestCIOnlyCapabilitiesAreRefusedEverywhereATaskCouldHoldOne(t *testing.T) {
 	ctx := context.Background()
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 
-	for _, id := range append(slices.Clone(ciOnlyIDs), model.ReleaseGateReadCapability) {
+	for _, id := range append(slices.Clone(ciOnlyIDs),
+		model.ReleaseGateReadCapability,
+		"repo-read:acme/widgets",
+		"repo-write:acme/widgets",
+		model.RepoReadGrant(repo),
+		model.RepoWriteGrant(repo),
+	) {
 		// The deployment-wide default set: one accepted id here would
 		// be one every task on the deployment is filed holding.
 		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{
