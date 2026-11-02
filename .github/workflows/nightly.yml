@@ -15,10 +15,9 @@
 # GitHub Actions port of .grain/workflows/nightly.yml on GitHub-hosted
 # runners (ubuntu-latest).
 #
-# See docs/github-actions-ci.md for the job-by-job mapping from grain CI,
-# how the pre-provisioned Granulefile guest environment is emulated on
-# stock ubuntu-latest runners, and which nested-VM suites remain gated for
-# self-hosted runners.
+# See docs/github-actions-ci.md for the job-by-job mapping from grain CI and
+# how the pre-provisioned Granulefile guest environment is emulated on stock
+# ubuntu-latest runners.
 
 name: nightly
 
@@ -26,6 +25,14 @@ on:
   schedule:
     - cron: "11 2 * * *"
   workflow_dispatch:
+    inputs:
+      jobs:
+        description: "Optional comma-separated job IDs to run (for example: kvm-sandboxes,kvm-route-stress). Leave empty to run all jobs."
+        required: false
+        default: ""
+        type: string
+  push:
+    branches: ["grain/049f1e09/task-2538-ci-run-the-kvm-jobs-real-vm"]
 
 permissions:
   contents: read
@@ -44,6 +51,7 @@ env:
 jobs:
   go-long:
     name: go, shuffled and repeated
+    if: github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',go-long,'))
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -214,6 +222,7 @@ jobs:
 
   staterepo-soak:
     name: state repository soak
+    if: github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',staterepo-soak,'))
     runs-on: ubuntu-latest
     timeout-minutes: 35
     concurrency:
@@ -263,6 +272,7 @@ jobs:
 
   loadtest:
     name: sustained load
+    if: github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',loadtest,'))
     runs-on: ubuntu-latest
     timeout-minutes: 35
     concurrency:
@@ -334,6 +344,7 @@ jobs:
 
   scalability:
     name: metadata and model scalability
+    if: github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',scalability,'))
     runs-on: ubuntu-latest
     timeout-minutes: 35
     concurrency:
@@ -405,6 +416,7 @@ jobs:
 
   merge-stress:
     name: merge liveness stress
+    if: github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',merge-stress,'))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     concurrency:
@@ -459,6 +471,7 @@ jobs:
 
   long-term-test:
     name: end-to-end long term tests
+    if: github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',long-term-test,'))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     concurrency:
@@ -513,6 +526,7 @@ jobs:
 
   long-sim:
     name: long randomized cluster simulation
+    if: github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',long-sim,'))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:
@@ -567,6 +581,7 @@ jobs:
 
   postgres-stress:
     name: postgres concurrency and stress
+    if: github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',postgres-stress,'))
     runs-on: ubuntu-latest
     timeout-minutes: 25
     concurrency:
@@ -640,6 +655,7 @@ jobs:
 
   tunnel-stress:
     name: reverse tunnel multiplexer stress
+    if: github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',tunnel-stress,'))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:
@@ -681,6 +697,7 @@ jobs:
 
   ui-e2e-long:
     name: ui e2e, repeated
+    if: github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',ui-e2e-long,'))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -777,6 +794,7 @@ jobs:
 
   installer-variants:
     name: installer trixie and hostmode
+    if: github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',installer-variants,'))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:
@@ -888,6 +906,7 @@ jobs:
 
   vulns:
     name: govulncheck
+    if: github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',vulns,'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -929,6 +948,7 @@ jobs:
 
   cmd-grain-stress:
     name: pkg/cli stress under load
+    if: github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',cmd-grain-stress,'))
     runs-on: ubuntu-latest
     timeout-minutes: 40
     concurrency:
@@ -1042,20 +1062,11 @@ jobs:
           done
           echo "pkg/cli stress test completed successfully ($round rounds)"
 
-  # Disabled by default on stock GitHub-hosted ubuntu-latest runners:
-  #
-  # kvm-sandboxes boots concurrent Firecracker/Cloud-Hypervisor microVMs
-  # (4 vCPUs, 4096 MiB RAM each) inside Docker containers. It requires a
-  # pre-published guest VM image in GHCR matching ./scripts/granule/guest-inputs.sh
-  # (or ~45-110 minutes and >30 GB free disk to build Granulefile from scratch),
-  # plus nested KVM with at least 16 GiB dedicated RAM and 60 GB disk.
-  # Enable by setting repository variable ENABLE_SELF_HOSTED_TESTS=true (and
-  # optionally SELF_HOSTED_RUNNER to the self-hosted runner label).
   kvm-sandboxes:
     name: real KVM sandboxes
-    if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'
-    runs-on: ${{ vars.SELF_HOSTED_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 50
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',kvm-sandboxes,')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     concurrency:
       group: ${{ github.workflow }}-kvm-sandboxes-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -1065,6 +1076,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
 
       - name: Cache Go modules and build cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -1082,13 +1098,13 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Require KVM
+      - name: Configure /dev/kvm udev permissions
         run: |
           set -euo pipefail
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            iproute2 iptables dnsmasq-base e2fsprogs socat openssh-client
+            iproute2 iptables nftables dnsmasq-base e2fsprogs socat openssh-client
           if [ ! -e /dev/kvm ]; then
             echo "/dev/kvm is not in this runner, so the suite below would skip rather than run. A green tick here would mean nothing." >&2
             exit 1
@@ -1098,27 +1114,54 @@ jobs:
           sudo udevadm control --reload-rules || true
           sudo udevadm trigger --name-match=kvm || true
           sudo chmod 0666 /dev/kvm
+          sudo usermod -aG kvm "$USER" || true
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo git config --system user.name "grain-ci"
+          sudo git config --system user.email "grain-ci@example.com"
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
           ls -l /dev/kvm
           docker version
           command -v ssh-keygen
+          sudo -n nft --version
+          nproc
+          free -m
           df -h /
 
       - name: Resolve the sandbox guest
-        timeout-minutes: 120
+        timeout-minutes: 50
         env:
           IMAGE: grain-guest:e2e-test
         run: |
           set -euo pipefail
-          ./scripts/granule-guest-resolve.sh
+          t0=$(date +%s)
+          ./scripts/granule-guest-resolve.sh | tee /tmp/guest-resolve.log
+          dt=$(( $(date +%s) - t0 ))
+          hit="miss"
+          if grep -q "sandbox guest cache: hit" /tmp/guest-resolve.log; then
+            hit="hit"
+          fi
+          echo "resolve=${hit}(${dt}s),disk_avail=$(df -BM / | awk 'NR==2{print $4}')" > /tmp/guest-resolve.summary
 
       - name: Real KVM sandbox suite
         env:
           GRAIN_REAL_VM_TESTS: "1"
+          GRAIN_REAL_VM_CPUS: "2"
+          GRAIN_REAL_VM_MEMORY_MB: "2048"
         run: |
           set -uo pipefail
           mkdir -p /tmp/consoles
+          : > /tmp/vm-samples.log
           (
             while true; do
+              mem_line=$(free -m | awk '/^Mem:/{print $2,$3,$7}')
+              load_1m=$(awk '{print $1}' /proc/loadavg)
+              vms=$(docker ps -q --filter 'name=granule-vm-' 2>/dev/null | wc -l | tr -d ' ')
+              vm_rss=""
+              if [ "${vms:-0}" -gt 0 ]; then
+                vm_rss=$(docker stats --no-stream --format '{{.Name}}:{{.MemUsage}}:{{.CPUPerc}}' 2>/dev/null | grep '^granule-vm-' | tr '\n' ';' || true)
+              fi
+              echo "SAMPLE ${mem_line} ${load_1m} ${vms} ${vm_rss}" >> /tmp/vm-samples.log
               for c in $(docker ps -aq --filter 'name=granule-vm-' 2>/dev/null); do
                 if [ ! -e "/tmp/consoles/$c.started" ]; then
                   touch "/tmp/consoles/$c.started"
@@ -1130,11 +1173,20 @@ jobs:
             done
           ) &
           sampler=$!
+          suite_t0=$(date +%s)
           failed=""
           go test ./pkg/orchestrator/ \
             -run 'TestGranuleSandboxesAgainstARealDockerBackedVM|TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently|TestTheModelProxiesAreReachableFromInsideARealGuest|TestGranuleSandboxNetworkNoneIsolationOutsideGuestVM|TestHostScriptGrantInARealGranuleVM' \
             -count=1 -v -timeout 40m 2>&1 | tee /tmp/granule-vm.log || failed="the suite"
+          suite_dt=$(( $(date +%s) - suite_t0 ))
           kill "$sampler" 2>/dev/null || true
+
+          scaled_peak=$(awk 'BEGIN{min_avail=999999} $1=="SAMPLE"{total=$2; if($3+0>peak_used)peak_used=$3+0; if($4+0<min_avail)min_avail=$4+0; if($5+0>peak_load)peak_load=$5+0; if($6+0>=peak_vms && NF>=7){peak_vms=$6+0; r=""; for(i=7;i<=NF;i++)r=r (i>7?" ":"") $i; rss=substr(r,1,180)}} END{printf "total=%dMiB,peak_used=%dMiB,min_avail=%dMiB,peak_load=%.2f,peak_vms=%d,rss=%s",total,peak_used,min_avail,peak_load,peak_vms,rss}' /tmp/vm-samples.log)
+          pass_times=$(grep -E '^--- PASS: Test' /tmp/granule-vm.log | tr '\n' ';' || true)
+          res_sum=$(cat /tmp/guest-resolve.summary 2>/dev/null || true)
+          disk_end=$(df -BM / | awk 'NR==2{print "used=" $3 ",avail=" $4}')
+          echo "::notice title=kvm-probe-kvm-sandboxes::cpus=$(nproc),${res_sum},suite=${suite_dt}s(${scaled_peak}),disk_end=(${disk_end}),tests=(${pass_times})"
+
           for t in TestGranuleSandboxesAgainstARealDockerBackedVM \
                    TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently \
                    TestTheModelProxiesAreReachableFromInsideARealGuest \
@@ -1160,16 +1212,11 @@ jobs:
             exit 1
           fi
 
-  # Disabled by default on stock GitHub-hosted ubuntu-latest runners:
-  #
-  # kvm-route-stress boots two concurrent Firecracker/Cloud-Hypervisor
-  # microVMs (4 vCPUs, 4096 MiB RAM each) twenty times in a row. Same
-  # guest-image and nested-KVM requirements as kvm-sandboxes above.
   kvm-route-stress:
     name: twenty two-VM boots
-    if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'
-    runs-on: ${{ vars.SELF_HOSTED_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 70
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',kvm-route-stress,')
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
     concurrency:
       group: ${{ github.workflow }}-kvm-route-stress-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -1179,6 +1226,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
 
       - name: Cache Go modules and build cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -1196,13 +1248,13 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Require KVM
+      - name: Configure /dev/kvm udev permissions
         run: |
           set -euo pipefail
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            iproute2 iptables dnsmasq-base e2fsprogs socat openssh-client
+            iproute2 iptables nftables dnsmasq-base e2fsprogs socat openssh-client
           if [ ! -e /dev/kvm ]; then
             echo "/dev/kvm is not in this runner, so the suite below would skip rather than run. A green tick here would mean nothing." >&2
             exit 1
@@ -1212,28 +1264,55 @@ jobs:
           sudo udevadm control --reload-rules || true
           sudo udevadm trigger --name-match=kvm || true
           sudo chmod 0666 /dev/kvm
+          sudo usermod -aG kvm "$USER" || true
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo git config --system user.name "grain-ci"
+          sudo git config --system user.email "grain-ci@example.com"
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
           ls -l /dev/kvm
           docker version
           command -v ssh-keygen
+          sudo -n nft --version
+          nproc
+          free -m
           df -h /
 
       - name: Resolve the sandbox guest
-        timeout-minutes: 120
+        timeout-minutes: 50
         env:
           IMAGE: grain-guest:e2e-test
         run: |
           set -euo pipefail
-          ./scripts/granule-guest-resolve.sh
+          t0=$(date +%s)
+          ./scripts/granule-guest-resolve.sh | tee /tmp/guest-resolve.log
+          dt=$(( $(date +%s) - t0 ))
+          hit="miss"
+          if grep -q "sandbox guest cache: hit" /tmp/guest-resolve.log; then
+            hit="hit"
+          fi
+          echo "resolve=${hit}(${dt}s),disk_avail=$(df -BM / | awk 'NR==2{print $4}')" > /tmp/guest-resolve.summary
 
       - name: Twenty consecutive two-VM boots
         env:
           GRAIN_REAL_VM_TESTS: "1"
+          GRAIN_REAL_VM_CPUS: "2"
+          GRAIN_REAL_VM_MEMORY_MB: "2048"
         run: |
           set -uo pipefail
-          runs=20
+          runs="${GRAIN_REAL_VM_STRESS_RUNS:-20}"
           mkdir -p /tmp/consoles
+          : > /tmp/vm-samples.log
           (
             while true; do
+              mem_line=$(free -m | awk '/^Mem:/{print $2,$3,$7}')
+              load_1m=$(awk '{print $1}' /proc/loadavg)
+              vms=$(docker ps -q --filter 'name=granule-vm-' 2>/dev/null | wc -l | tr -d ' ')
+              vm_rss=""
+              if [ "${vms:-0}" -gt 0 ]; then
+                vm_rss=$(docker stats --no-stream --format '{{.Name}}:{{.MemUsage}}:{{.CPUPerc}}' 2>/dev/null | grep '^granule-vm-' | tr '\n' ';' || true)
+              fi
+              echo "SAMPLE ${mem_line} ${load_1m} ${vms} ${vm_rss}" >> /tmp/vm-samples.log
               for c in $(docker ps -aq --filter 'name=granule-vm-' 2>/dev/null); do
                 if [ ! -e "/tmp/consoles/$c.started" ]; then
                   touch "/tmp/consoles/$c.started"
@@ -1241,14 +1320,16 @@ jobs:
                   (docker logs -f "$c" > "/tmp/consoles/${name:-$c}.log" 2>&1 &)
                 fi
               done
-              sleep 2
+              sleep 3
             done
           ) &
           sampler=$!
+          suite_t0=$(date +%s)
           failed=""
           go test ./pkg/orchestrator/ \
             -run 'TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently' \
             -count="$runs" -v -timeout 65m 2>&1 | tee /tmp/granule-stress.log || failed="the stress run"
+          suite_dt=$(( $(date +%s) - suite_t0 ))
           kill "$sampler" 2>/dev/null || true
 
           passes="$(grep -c -- '--- PASS: TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently' /tmp/granule-stress.log || true)"
@@ -1257,6 +1338,11 @@ jobs:
             echo "expected ${runs} passing boots and got ${passes}; this job only means something when every one of them runs and passes" >&2
             failed="${failed:-a boot that did not run}"
           fi
+
+          scaled_peak=$(awk 'BEGIN{min_avail=999999} $1=="SAMPLE"{total=$2; if($3+0>peak_used)peak_used=$3+0; if($4+0<min_avail)min_avail=$4+0; if($5+0>peak_load)peak_load=$5+0; if($6+0>=peak_vms && NF>=7){peak_vms=$6+0; r=""; for(i=7;i<=NF;i++)r=r (i>7?" ":"") $i; rss=substr(r,1,180)}} END{printf "total=%dMiB,peak_used=%dMiB,min_avail=%dMiB,peak_load=%.2f,peak_vms=%d,rss=%s",total,peak_used,min_avail,peak_load,peak_vms,rss}' /tmp/vm-samples.log)
+          res_sum=$(cat /tmp/guest-resolve.summary 2>/dev/null || true)
+          disk_end=$(df -BM / | awk 'NR==2{print "used=" $3 ",avail=" $4}')
+          echo "::notice title=kvm-probe-kvm-route-stress::cpus=$(nproc),${res_sum},passes=${passes}/${runs},stress=${suite_dt}s(${scaled_peak}),disk_end=(${disk_end})"
 
           if [ -n "$failed" ]; then
             echo "===== the failing iterations ====="
@@ -1277,6 +1363,7 @@ jobs:
 
   upgrade-test:
     name: upgrade from previous version
+    if: github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',upgrade-test,'))
     runs-on: ubuntu-latest
     timeout-minutes: 40
     concurrency:

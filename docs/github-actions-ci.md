@@ -1,20 +1,18 @@
-# GitHub Actions CI (`tests.yml`, `nightly.yml`, `post-reset-e2e.yml`, `kvm-route-stress.yml`, `gcp-smoke.yml`)
+# GitHub Actions CI (`tests.yml`, `nightly.yml`, `post-reset-e2e.yml`, `gcp-smoke.yml`)
 
 This document describes the GitHub Actions ports in `.github/workflows/` of the non-agent test suites defined in `.grain/workflows/`, targeting GitHub-hosted `ubuntu-latest` runners:
 
 - `.github/workflows/tests.yml`: per-PR and per-push suite (`.grain/workflows/tests.yml`)
-- `.github/workflows/nightly.yml`: scheduled nightly and on-demand long/soak/stress suite (`.grain/workflows/nightly.yml`)
+- `.github/workflows/nightly.yml`: scheduled nightly and on-demand long/soak/stress suite (`.grain/workflows/nightly.yml`, plus on-demand `kvm-route-stress` for `.grain/workflows/kvm-route-stress.yml`)
 - `.github/workflows/post-reset-e2e.yml`: scheduled and on-demand post-reset end-to-end qualification suite (`.grain/workflows/post-reset-e2e.yml`)
-- `.github/workflows/kvm-route-stress.yml`: on-demand 20-boot two-VM KVM route stress suite (`.grain/workflows/kvm-route-stress.yml`)
 - `.github/workflows/gcp-smoke.yml`: scheduled and on-demand GCE VM and GKE cluster lifecycle smoke suite (`.grain/workflows/gcp-smoke.yml`)
 
 ## Triggers, Concurrency, and Permissions
 
 - **Triggers (`on:`)**:
   - `tests.yml`: `push` on `main`, `pull_request`, `merge_group`, and `workflow_dispatch` (with optional comma-separated `jobs` input for selective job execution)
-  - `nightly.yml`: `schedule` (`cron: "11 2 * * *"`) and `workflow_dispatch`
+  - `nightly.yml`: `schedule` (`cron: "11 2 * * *"`) and `workflow_dispatch` (with optional comma-separated `jobs` input, e.g. `kvm-route-stress` or `kvm-sandboxes`)
   - `post-reset-e2e.yml`: `schedule` (`cron: "23 5 * * *"`) and `workflow_dispatch`
-  - `kvm-route-stress.yml`: `workflow_dispatch`
   - `gcp-smoke.yml`: `schedule` (`cron: "41 4 * * *"`) and `workflow_dispatch`
 - **Concurrency (`concurrency:`)**:
   - Every job defines its own concurrency group keyed on `${{ github.workflow }}-<job-id>-${{ github.ref }}` with `cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}`, so superseded pushes to an open PR cancel in-flight runs for that job and ref without cancelling sibling jobs in the same workflow run or `main` branch runs.
@@ -47,7 +45,7 @@ This document describes the GitHub Actions ports in `.github/workflows/` of the 
 | `terraform` | `terraform` | Runs `terraform fmt -check`, `init -backend=false`, and `validate` for `deploy/terraform/gcp` | Pins Terraform `1.9.8` via `hashicorp/setup-terraform` and runs the same format/init/validate steps | Active (`ubuntu-latest`) |
 | `installer-e2e` | `installer` | Assembles `grain-installer:test` via `scripts/installer-test-image.sh` and runs `./tests/installer` (`GRAIN_INSTALLER_E2E=1`) | Same commands on `ubuntu-latest` (uses anonymous GHCR pulls from `ghcr.io/bwsalmon/grain/*` and host systemd/Docker) | Active (`ubuntu-latest`) |
 | `package-cache` | `package cache` | Runs `pkg/orchestrator` real-dockerd cache tests (`GRAIN_REAL_DOCKER_CACHE_TESTS=1`) and `pkg/daemon` transparent interception test (`GRAIN_REAL_INTERCEPT_TESTS=1`) | Seeds `/etc/docker/daemon.json` with `Granulefile`'s `bip`/`default-address-pools`/`mtu`, restarts Docker, and runs the same tests | Active (`ubuntu-latest`) |
-| `real-vm` | `real vm` | Formerly in `tests.yml` (now in `nightly.yml` as `kvm-sandboxes`): boots real Firecracker/Cloud-Hypervisor VMs | Present in `.github/workflows/tests.yml` behind `if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'` and `runs-on: ${{ vars.SELF_HOSTED_RUNNER \|\| 'ubuntu-latest' }}` | Disabled by default (self-hosted target) |
+| `real-vm` | `real vm` | Formerly in `tests.yml` (now in `nightly.yml` as `kvm-sandboxes`): boots real Firecracker/Cloud-Hypervisor VMs | Resolves `grain-guest:e2e-test` (`scripts/granule-guest-resolve.sh`), configures `/dev/kvm` udev permissions, and runs the 3 PR real-VM tests on `ubuntu-latest` at 2 vCPUs / 2,048 MiB per VM (`GRAIN_REAL_VM_CPUS=2`, `GRAIN_REAL_VM_MEMORY_MB=2048`), gated on `needs.changes.outputs.real-vm` | Active (`ubuntu-latest`) |
 | `real-kubernetes` | `real kubernetes` | Boots a `kind` + Calico cluster and exercises Kubernetes pod sandboxes | Present in `.github/workflows/tests.yml` behind `if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'` and `runs-on: ${{ vars.SELF_HOSTED_RUNNER \|\| 'ubuntu-latest' }}` | Disabled by default (self-hosted target) |
 
 #### Per-Job Path Filtering (`pull_request`) and `workflow_dispatch` Job Selection
@@ -84,8 +82,8 @@ Schedule: `cron: "11 2 * * *"` and `workflow_dispatch`.
 | `installer-variants` | `installer trixie and hostmode` | Assembles `grain-installer:test` (`GRAIN_INSTALLER_SANDBOX_IMAGE=debian:trixie`) and runs `./tests/installer/trixie` + `./tests/installer/hostmode` | Same commands on `ubuntu-latest` with `fetch-depth: 0` (required by `scripts/export-source.sh`), Go/Node setup, caches, and `git config` | Active (`ubuntu-latest`) |
 | `vulns` | `govulncheck` | Runs `make vuln` (`govulncheck ./...` under `go.mod` toolchain) | Same commands on `ubuntu-latest` with Go setup and cache | Active (`ubuntu-latest`) |
 | `cmd-grain-stress` | `pkg/cli stress under load` | Runs 4-way parallel `go test -race -count=1 ./pkg/cli` rounds within a 1,800s budget | Same stress loop on `ubuntu-latest` with Go setup, cache, `bubblewrap`, and `git config` | Active (`ubuntu-latest`) |
-| `kvm-sandboxes` | `real KVM sandboxes` | Resolves guest image (`scripts/granule-guest-resolve.sh`) and runs real KVM VM tests in `./pkg/orchestrator/` | Present in `.github/workflows/nightly.yml` behind `if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'` and `runs-on: ${{ vars.SELF_HOSTED_RUNNER \|\| 'ubuntu-latest' }}` | Disabled by default (self-hosted target) |
-| `kvm-route-stress` | `twenty two-VM boots` | Resolves guest image and runs 20 consecutive boots of `TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently` | Present in `.github/workflows/nightly.yml` behind `if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'` and `runs-on: ${{ vars.SELF_HOSTED_RUNNER \|\| 'ubuntu-latest' }}` | Disabled by default (self-hosted target) |
+| `kvm-sandboxes` | `real KVM sandboxes` | Resolves guest image (`scripts/granule-guest-resolve.sh`) and runs real KVM VM tests in `./pkg/orchestrator/` | Resolves `grain-guest:e2e-test` (`scripts/granule-guest-resolve.sh`), configures `/dev/kvm` udev permissions, and runs all 5 real KVM sandbox tests on `ubuntu-latest` at 2 vCPUs / 2,048 MiB per VM (`GRAIN_REAL_VM_CPUS=2`, `GRAIN_REAL_VM_MEMORY_MB=2048`) | Active (`ubuntu-latest`) |
+| `kvm-route-stress` | `twenty two-VM boots` | Resolves guest image and runs 20 consecutive boots of `TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently` | Same 20-boot two-VM stress suite on `ubuntu-latest` at 2 vCPUs / 2,048 MiB per VM (`GRAIN_REAL_VM_CPUS=2`, `GRAIN_REAL_VM_MEMORY_MB=2048`); also dispatchable standalone via `nightly.yml` `workflow_dispatch` with `jobs=kvm-route-stress` | Active (`ubuntu-latest`) |
 | `upgrade-test` | `upgrade from previous version` | Builds `grain-e2e:test` (`scripts/ci-docker-build.sh`) and runs `make test-upgrade` (`./tests/container/ -run 'TestUpgradeFromPreviousVersion\|TestAnUpgrade'`) | Same commands on `ubuntu-latest` with `fetch-depth: 0`, Go setup, cache, and `git config` | Active (`ubuntu-latest`) |
 
 ### 3. Post-Reset End-to-End Qualification (`.grain/workflows/post-reset-e2e.yml` -> `.github/workflows/post-reset-e2e.yml`)
@@ -98,15 +96,7 @@ Schedule: `cron: "23 5 * * *"` and `workflow_dispatch`.
 | `harness` | `e2e harness (githubsim)` | Runs `go test -count=1 -timeout 25m ./tests/e2e/` | Same commands on `ubuntu-latest` with Go/Node setup, caches, `bubblewrap`, `git config`, and `make frontend` | Active (`ubuntu-latest`) |
 | `security` | `route authorization` | Runs `go test -count=1 -timeout 15m ./tests/security/...` | Same commands on `ubuntu-latest` with Go setup and cache | Active (`ubuntu-latest`) |
 
-### 4. KVM Route Stress (`.grain/workflows/kvm-route-stress.yml` -> `.github/workflows/kvm-route-stress.yml`)
-
-Trigger: `workflow_dispatch`.
-
-| Job ID | Display Name | Grain CI (`.grain/workflows/kvm-route-stress.yml`) | GitHub Actions (`.github/workflows/kvm-route-stress.yml`) | Hosted Runner Status |
-| :--- | :--- | :--- | :--- | :--- |
-| `kvm-route-stress` | `twenty two-VM boots` | Resolves `grain-guest:e2e-test` via `scripts/granule-guest-resolve.sh` and runs `TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently` with `-count=20` | Present in `.github/workflows/kvm-route-stress.yml` behind `if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'` and `runs-on: ${{ vars.SELF_HOSTED_RUNNER \|\| 'ubuntu-latest' }}` | Disabled by default (self-hosted target) |
-
-### 5. GCP Smoke (`.grain/workflows/gcp-smoke.yml` -> `.github/workflows/gcp-smoke.yml`)
+### 4. GCP Smoke (`.grain/workflows/gcp-smoke.yml` -> `.github/workflows/gcp-smoke.yml`)
 
 Schedule: `cron: "41 4 * * *"` and `workflow_dispatch`.
 
@@ -134,8 +124,9 @@ Grain CI runs jobs inside a pre-provisioned VM/container image built from `Granu
 5. **PostgreSQL (`services: postgres` + Local Binaries)**:
    - `postgres` (`tests.yml`) and `postgres-stress` (`nightly.yml`) declare a `postgres:16-bookworm` service container (mapped to `5433:5432` with `pg_isready` health checks and tmpfs storage).
    - `postgres`, `postgres-stress`, `go-long`, and `post-reset-e2e`'s `deployments` stop and disable the runner's default system `postgresql` service so port `5432` remains free for `postgres.EnsureRunning` and `postgrestest` (which tune `max_connections = 200` for high-concurrency parallel store tests).
-6. **`/dev/kvm` udev Rule (`granule`, `kvm-sandboxes`, `kvm-route-stress`)**:
+6. **`/dev/kvm` udev Rule and Nested-VM Sizing (`granule`, `real-vm`, `kvm-sandboxes`, `kvm-route-stress`)**:
    - Jobs that access `/dev/kvm` write `/etc/udev/rules.d/99-kvm4all.rules` (`KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"`), reload udev rules, and apply `chmod 0666 /dev/kvm` when `/dev/kvm` is present on the runner.
+   - `real-vm` (`tests.yml`) and `kvm-sandboxes` / `kvm-route-stress` (`nightly.yml`) reclaim unused pre-installed runner toolchains (`/usr/share/dotnet`, `/usr/local/lib/android`, `/opt/ghc`, `/opt/hostedtoolcache/CodeQL`), resolve the content-addressed guest image (`ghcr.io/bwsalmon/grain/guest:inputs-<key>`) via `scripts/granule-guest-resolve.sh`, and set `GRAIN_REAL_VM_CPUS=2` and `GRAIN_REAL_VM_MEMORY_MB=2048` so two concurrent microVMs (`2,560 MiB` cgroup limit each) fit comfortably without overcommit on 4-vCPU / 16 GiB `ubuntu-latest` runners (overriding `orchestrator.DefaultShape()`'s 8,192 MiB production VM default).
 7. **Docker Daemon Bridge & Containerd Snapshotter Configuration (`package-cache`)**:
    - `TestPackageCachePullsThroughARealDockerd` verifies that `orchestrator.ConfigurePackageCache` preserves the sandbox's existing `/etc/docker/daemon.json` settings (`bip: "10.240.0.1/24"` and `default-address-pools: [{"base": "10.241.0.0/16", "size": 24}]` from `Granulefile`) and pulls images through `registry-mirrors` (`docker.io`) as well as `/etc/docker/certs.d/{ghcr.io,gcr.io}/hosts.toml`.
    - Stock `ubuntu-latest` runners do not include those keys in `/etc/docker/daemon.json`. The `package-cache` job seeds `/etc/docker/daemon.json` with `Granulefile`'s configuration plus `"features": {"containerd-snapshotter": true}` (so `dockerd` honors `certs.d/*/hosts.toml` mirrors) and restarts `docker.service` before running the package-cache and transparent-interception tests.
@@ -144,14 +135,13 @@ Grain CI runs jobs inside a pre-provisioned VM/container image built from `Granu
 
 ## Jobs Gated for Self-Hosted Runners (`vars.ENABLE_SELF_HOSTED_TESTS`)
 
-Heavyweight nested-VM and multi-node Kubernetes suites are included in `.github/workflows/tests.yml`, `.github/workflows/nightly.yml`, and `.github/workflows/kvm-route-stress.yml` behind `if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'` and `runs-on: ${{ vars.SELF_HOSTED_RUNNER || 'ubuntu-latest' }}` so they are documented in-place and ready to enable once self-hosted runners (or pre-published guest VM images in GHCR) are configured:
+The multi-node Kubernetes sandbox suite in `.github/workflows/tests.yml` remains gated behind `if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'` and `runs-on: ${{ vars.SELF_HOSTED_RUNNER || 'ubuntu-latest' }}` so it is documented in-place and ready to enable once self-hosted runners are configured:
 
-1. **`real-vm` (`tests.yml`), `kvm-sandboxes` (`nightly.yml`), and `kvm-route-stress` (`nightly.yml` and `kvm-route-stress.yml`)**:
-   - **Why they are disabled by default on `ubuntu-latest`**: Each boots concurrent Firecracker / Cloud-Hypervisor microVMs (`Granulefile` configures 4 vCPUs and 4,096 MiB RAM per VM) inside Docker containers (`TestGranuleSandboxesAgainstARealDockerBackedVM`, `TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently`, `TestTheModelProxiesAreReachableFromInsideARealGuest`, `TestGranuleSandboxNetworkNoneIsolationOutsideGuestVM`, `TestHostScriptGrantInARealGranuleVM`). `scripts/granule-guest-resolve.sh` requires a pre-published microVM guest image in GHCR matching `./scripts/granule/guest-inputs.sh` (or a host-level Docker cache); on a cold cache miss, building `Granulefile` inline takes 50–110 minutes and >30 GB of free disk space, exceeding standard hosted runner disk budgets (~14–20 GB free).
-2. **`real-kubernetes` (`tests.yml`)**:
+1. **`real-kubernetes` (`tests.yml`)**:
    - **Why it is disabled by default on `ubuntu-latest`**: Provisions a multi-node `kind` cluster with Calico CNI to test Kubernetes NetworkPolicy egress isolation and real pod sandboxes, exceeding standard hosted runner memory and disk budgets.
+   - *(Note: `real-vm` in `tests.yml` and `kvm-sandboxes` / `kvm-route-stress` in `nightly.yml` were previously gated here as well, and now run directly on `ubuntu-latest` via `/dev/kvm` udev permissions, `scripts/granule-guest-resolve.sh`, and `GRAIN_REAL_VM_CPUS=2` / `GRAIN_REAL_VM_MEMORY_MB=2048`.)*
 
-## Required Repository Variables and Secrets (`tests.yml`, `nightly.yml`, `post-reset-e2e.yml`, `kvm-route-stress.yml`, `gcp-smoke.yml`)
+## Required Repository Variables and Secrets (`tests.yml`, `nightly.yml`, `post-reset-e2e.yml`, `gcp-smoke.yml`)
 
 - **Secrets required**: **None**.
   - All test suites authenticate either anonymously (public GHCR images) or via keyless OIDC Workload Identity Federation (`gcp-smoke.yml`).
@@ -159,7 +149,7 @@ Heavyweight nested-VM and multi-node Kubernetes suites are included in `.github/
   - `GCP_WIF_PROVIDER` *(required to run `gcp-smoke.yml`, optional otherwise)*: Full resource name of the Google Cloud Workload Identity Provider (e.g. `projects/123456789/locations/global/workloadIdentityPools/github-pool/providers/github-provider`). When unset, `gcp-smoke.yml` emits a `::notice` annotation and skips cleanly.
   - `GCP_SA_EMAIL` *(required to run `gcp-smoke.yml`, optional otherwise)*: Email address of the GCP service account to impersonate for GCE/GKE lifecycle smoke tests (e.g. `grain-smoke@<project>.iam.gserviceaccount.com`). When unset, `gcp-smoke.yml` emits a `::notice` annotation and skips cleanly.
   - `GCP_PROJECT_ID` *(optional, for `gcp-smoke.yml`)*: Explicit GCP project ID to configure in `gcloud`; if omitted, `gcp-smoke.yml` derives the project ID from `GCP_SA_EMAIL`.
-  - `ENABLE_SELF_HOSTED_TESTS` *(optional)*: Set to `'true'` to enable the self-hosted nested-VM and Kubernetes jobs (`real-vm`, `real-kubernetes`, `kvm-sandboxes`, `kvm-route-stress`).
+  - `ENABLE_SELF_HOSTED_TESTS` *(optional)*: Set to `'true'` to enable the self-hosted Kubernetes job (`real-kubernetes` in `tests.yml`).
   - `SELF_HOSTED_RUNNER` *(optional)*: Runner label for self-hosted jobs (defaults to `'ubuntu-latest'` when unset).
 
 ---

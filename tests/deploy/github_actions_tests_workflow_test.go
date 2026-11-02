@@ -192,7 +192,7 @@ func TestGitHubActionsTestsWorkflowStructure(t *testing.T) {
 		"frontend":              {group: "frontend"},
 		"lint":                  {group: "lint"},
 		"terraform":             {group: "terraform"},
-		"real-vm":               {group: "go_backend", selfHosted: true},
+		"real-vm":               {group: "go_backend"},
 		"real-kubernetes":       {group: "go_backend", selfHosted: true},
 	}
 
