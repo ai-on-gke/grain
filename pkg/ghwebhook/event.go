@@ -16,7 +16,7 @@
 // inbound GitHub App webhook deliveries.
 //
 // Like pkg/checkpost, it is an edge forge package with no dependency on
-// pkg/model or grain's internal stores (docs/three-pieces.md): the public
+// pkg/model or grain's internal stores (design/design/architecture.design.md): the public
 // receiver verifies GitHub's X-Hub-Signature-256 with the webhook secret,
 // deduplicates deliveries by X-GitHub-Delivery, persists compact normalized
 // envelopes in a bounded JSONL log, and serves them over a timestamp-signed

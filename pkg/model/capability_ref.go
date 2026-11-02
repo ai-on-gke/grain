@@ -28,7 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
-// This file is how a capability reference (docs/capabilities-spec.md
+// This file is how a capability reference (design/spec/capabilities/capabilities.spec.md
 // §2.1-§2.3) is carried by the grant lists grain already has: a
 // Grant.Capability, a Config.DefaultCapabilities entry, a declaration's
 // capabilities: list, propose_task's capabilities argument. Each holds a
@@ -351,7 +351,7 @@ func splitCapabilities(s string) []string {
 }
 
 // CapabilityPolicy is the deployment's admission policy for capability
-// references (docs/capabilities-spec.md §4.2.2): which repositories, run
+// references (design/spec/capabilities/capabilities.spec.md §4.2.2): which repositories, run
 // kinds and trigger events may hold which <capability_id>#<method>. It is
 // grain's own configuration (Config.CapabilityPolicy), never anything a
 // capability server advertises.

@@ -27,7 +27,7 @@ In **Settings → Capabilities → Capability servers**, add a stdio server:
 
   Scripts then run with your ambient identity: your uid, plus the `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG` and `TZ` hostd passes to every entry. Anything else of yours a script needs, such as `KUBECONFIG` or `SSH_AUTH_SOCK`, must be listed in `pass_env`.
 
-  Scripts also run at `oom_score_adj` +500. `grain-hostd.service` itself runs at `OOMScoreAdjust=-900`, as the daemon does, so that under memory pressure the kernel kills the work and not the controller ([design/auto-overcommit.md](design/auto-overcommit.md)).
+  Scripts also run at `oom_score_adj` +500. `grain-hostd.service` itself runs at `OOMScoreAdjust=-900`, as the daemon does, so that under memory pressure the kernel kills the work and not the controller ([design/auto-overcommit.md](../design/design/auto-overcommit.design.md)).
 - **Run in the daemon's container** by leaving `run` unset. Scripts then run with the container's identity.
 
 The server listens on `127.0.0.1:9733` (`-listen` to change it). It keeps each grant's private script file, its scratch directory and `audit.jsonl` under `-data-dir`, which defaults to `~/.cache/grain/host-script`.

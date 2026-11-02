@@ -189,7 +189,7 @@ export default function Overlay({
             Settings on it: those are on the rail of the page this pane
             is opened over, and the pane is a step inside that page
             rather than a page of its own
-            (docs/design/settings-panel.md §4.1). */}
+            (design/design/settings-panel.design.md §4.1). */}
         <PageHeader
           variant="pane"
           title={

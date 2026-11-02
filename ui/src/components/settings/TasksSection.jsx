@@ -127,7 +127,7 @@ function TaskFieldsCard({ config, tasks, onShowStrandedValues }) {
   );
 }
 
-// TasksSection is Settings → Tasks (docs/design/settings-panel.md §3.2):
+// TasksSection is Settings → Tasks (design/design/settings-panel.design.md §3.2):
 // the defaults a new task is filed with, the backlog order and follow-up
 // limits, and the task fields the deployment declares. `s` is the page's
 // useSettingsSection(); every field here is an /api/settings key.
@@ -140,7 +140,7 @@ export default function TasksSection({
   const { settings, saveChoice, onIntBlur, onEnterKey } = s;
   // Read-only when the config repo holds these settings: the default
   // grants are then settings/capabilities.yml's, listed rather than
-  // edited (docs/design/config-repo-settings.md §7.4).
+  // edited (design/design/config-repo-settings.design.md §7.4).
   const readOnly = Boolean(s.readOnly);
   const defaultCapabilities = settings.defaultCapabilities || [];
   // The defaults are one list holding all three kinds a task's own

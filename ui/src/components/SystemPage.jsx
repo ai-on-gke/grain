@@ -127,7 +127,7 @@ function PowerTab({ config, showError }) {
   );
 }
 
-// SystemPage is the System view (docs/design/settings-panel.md §2.1):
+// SystemPage is the System view (design/design/settings-panel.design.md §2.1):
 // status and operations only -- every setting is in Settings. It opens
 // from the System icon beside the gear (the foot of the drawer on a
 // phone), on Health.

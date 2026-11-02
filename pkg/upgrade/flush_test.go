@@ -55,7 +55,7 @@ func (f *flusher) got() []string {
 	return append([]string(nil), f.events...)
 }
 
-// The upgrade protocol's step 3 (docs/non-disruptive-upgrade.md, piece
+// The upgrade protocol's step 3 (design/design/non-disruptive-upgrade.design.md, piece
 // 6): every run's spool cursor is flushed after the build is staged and
 // before the restart -- and a restart that leaves this process running
 // hands the runs back to it, as it hands back the queue.

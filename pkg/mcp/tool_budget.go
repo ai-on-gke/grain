@@ -15,7 +15,7 @@
 package mcp
 
 // tool_budget.go is the per-run tool budget a durable judgement task's
-// wake runs under (docs/design/durable-tasks.md#DT-13): the target is a
+// wake runs under (design/design/durable-tasks.design.md#DT-13): the target is a
 // wake that fits in context with no compaction, at most 40 tool calls and
 // 150 KB of tool output, against the 154 calls and 1.1 MB the pipeline
 // steward's first wake spent.

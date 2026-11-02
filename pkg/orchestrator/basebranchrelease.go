@@ -165,7 +165,7 @@ func reconcileBaseBranchRelease(ctx context.Context, deps Deps, now time.Time) e
 // follow when the release *was* that row's run. A repository grain does
 // not judge publishes nothing from here, as it published nothing before.
 //
-// # Trunk only (docs/design/release-from-trunk.md, RFT-2)
+// # Trunk only (design/design/release-from-trunk.design.md, RFT-2)
 //
 // Of those, only the repository's default branch is released. A release
 // is cut from trunk now: `candidate` is a pointer the release pipeline
@@ -516,7 +516,7 @@ func collectBaseBranchRelease(ctx context.Context, deps Deps, row model.BaseBran
 // only on a credential, quota or registry limit -- before it is counted
 // as a failed release or files triage: it is re-run, the jobs that did not
 // pass and only them, uncached, up to maxInfraRetries times and
-// infraRetryDelay apart (docs/design/release-from-trunk.md, RFT-2). The
+// infraRetryDelay apart (design/design/release-from-trunk.design.md, RFT-2). The
 // count is on the run (infraRetriesOf), so the row needs no column for it.
 //
 // It reports whether it has dealt with the run: true while the re-run is

@@ -856,7 +856,7 @@ func eagerToolsConfig() map[string]any {
 // asymmetry to hold on to is that an unknown key here is safe and a known
 // key of the wrong type costs a run every tool it has.
 //
-// Each capability MCP server (docs/capabilities-spec.md §5.2.4) is an
+// Each capability MCP server (design/spec/capabilities/capabilities.spec.md §5.2.4) is an
 // entry beside grain-sandbox, its serverUrl grain's proxy and every tool
 // its tools/list reported registered eagerly the same way.
 func mcpConfigJSON(grainBinaryPath string, mcpArgs []string, servers ...agent.CapabilityMCPServer) ([]byte, error) {
@@ -1367,7 +1367,7 @@ func HookDecisionFor(opts HookOptions, payload []byte) []byte {
 		// machine: agy refuses edits until it is called, so denying it
 		// traps a run that started in plan mode in a read-only loop. It
 		// was 100% of its calls failing before this
-		// (docs/design/sandbox-first-agent-surface.md §5).
+		// (design/design/sandbox-first-agent-surface.design.md §5).
 		return noOpinion
 	case "enter_plan_mode":
 		return denyReason("Plan mode is off in headless grain runs, and entering it would stop " +
@@ -2338,7 +2338,7 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 // ParseResult implements agent.ResultParser: the Result and error Run
 // would have returned for a run whose stream is stdout and which ended
 // with runErr, for a daemon adopting a host run another daemon started
-// detached in grain hostd (docs/design/cli-run-location.md, "Upgrades and
+// detached in grain hostd (design/design/cli-run-location.design.md, "Upgrades and
 // host runs"). stdout is the one exec hostd held. What Run reads from the
 // run's HOME -- the recorded tool calls, the diagnostic log -- the
 // adopting daemon does not have, so the stream alone decides.

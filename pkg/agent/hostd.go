@@ -28,7 +28,7 @@ import (
 
 // HostdHost runs one allowlisted agent CLI on the bare machine through
 // grain hostd, for a daemon that itself runs in the release container
-// (docs/design/cli-run-location.md, "Host CLIs through grain hostd").
+// (design/design/cli-run-location.design.md, "Host CLIs through grain hostd").
 //
 // Staging is LocalHost's: the run's working directory, staging dir, CLI
 // home and session store are on the daemon's bind mounts, which have the

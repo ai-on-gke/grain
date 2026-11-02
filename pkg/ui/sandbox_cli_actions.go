@@ -384,7 +384,7 @@ var sandboxGuardReadsBody = map[string]bool{
 }
 
 // ModelOnlyAgentAPIToolNames is the api_* tools grants reach that stay on
-// the model's control roster (docs/design/sandbox-first-agent-surface.md
+// the model's control roster (design/design/sandbox-first-agent-surface.design.md
 // §1B): every granted route the sandbox CLI cannot reach -- dangerous and
 // model-only scopes, scope sets that need a person, the model-only control
 // routes -- and those whose sandbox guard depends on the body, so the

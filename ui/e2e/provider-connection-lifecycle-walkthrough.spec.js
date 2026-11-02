@@ -482,7 +482,7 @@ test.describe("Walkthrough: Provider Connection Lifecycle, Key Verification and 
       // connections (demoExecutors in pkg/demo/demo_scenarios.go).
 
       // 5.1 Navigate to System → Sandboxes, where the connected remote
-      // executors are monitored now (docs/design/settings-panel.md §2.1:
+      // executors are monitored now (design/design/settings-panel.design.md §2.1:
       // connected executors are status; their join tokens are a setting).
       await page.goto("/system/sandboxes");
 

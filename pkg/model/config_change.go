@@ -23,7 +23,7 @@ import (
 )
 
 // A configuration change a session proposed with propose_config_change
-// (docs/design/config-repo-settings.md, section 4.3): the session pushed
+// (design/design/config-repo-settings.design.md, section 4.3): the session pushed
 // a branch of grain/config, the controller validated it, and the session
 // is parked until a person approves or rejects it inline in the chat
 // (ui's POST /api/tasks/{id}/config-change/approve and /reject).

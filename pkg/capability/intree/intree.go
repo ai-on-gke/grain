@@ -14,7 +14,7 @@
 
 // Package intree is grain's in-tree capability servers: the capabilities
 // compiled into the grain binary and served, one per process, by
-// `grain capability <name>` over stdio (docs/capabilities-spec.md §3.1.1),
+// `grain capability <name>` over stdio (design/spec/capabilities/capabilities.spec.md §3.1.1),
 // each implementing one of the standard patterns of §6 on top of
 // pkg/capability/protocol's Method and CapabilityServer:
 //
@@ -166,7 +166,7 @@ func (s *Server) methods() []*protocol.Method {
 }
 
 // configurable makes the server advertise configure with schema
-// (docs/capabilities-spec.md §4.5): each configure call builds the
+// (design/spec/capabilities/capabilities.spec.md §4.5): each configure call builds the
 // server's methods afresh from the configuration -- which build merges
 // over whatever the server's arguments and environment already said, the
 // fallback for an entry written before configure existed -- and replaces

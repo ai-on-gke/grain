@@ -17,7 +17,7 @@ import api from "./api.js";
 import { repoApiRoot } from "./repoApi.js";
 
 // notifications.js is operator notifications in the UI
-// (docs/design/durable-tasks.md, DT-5): the open ones, read from
+// (design/design/durable-tasks.design.md, DT-5): the open ones, read from
 // GET /api/notifications?open=1, joining the alerts bell's list
 // (notificationAlerts) and the Inbox's Notifications section.
 //
@@ -98,7 +98,7 @@ export function notificationAlerts(notifications) {
 
 // PENDING_RELEASE_FAMILY is the family the release train raises a
 // release whose soak passed under ("release.pending:vX.Y.0",
-// docs/design/release-from-trunk.md §4).
+// design/design/release-from-trunk.design.md §4).
 const PENDING_RELEASE_FAMILY = "release.pending";
 
 // pendingReleaseOf is the release a notification asks a person to

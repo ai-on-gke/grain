@@ -37,7 +37,7 @@ const SandboxAccessService = "grain-access"
 // and a daemon running in-cluster, since the wrappers dial a Service only
 // pods can reach. There is no fallback to kubectl exec: a deployment that
 // asked for the channel and cannot have it is refused at startup rather
-// than quietly running the other way (docs/design/grain-on-gke.md#GKE-3).
+// than quietly running the other way (design/design/grain-on-gke.design.md#GKE-3).
 func validateK8sGranuleAccess(cfg Config, inCluster bool) error {
 	switch cfg.K8sGranuleAccess {
 	case "", orchestrator.K8sGranuleAccessKubectl:

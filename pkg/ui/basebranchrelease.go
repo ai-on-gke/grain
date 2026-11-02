@@ -26,7 +26,7 @@ import (
 // is made, is model.BaseBranchPublishing's (pkg/model's
 // base_branch_publishing.go): the orchestrator raises the
 // `pipeline.not-publishing` notification from the same reading
-// (docs/design/durable-tasks.md, DT-5), so the health page and the
+// (design/design/durable-tasks.design.md, DT-5), so the health page and the
 // notification cannot disagree.
 
 // BaseBranchPublishing is one base branch grain has published nothing

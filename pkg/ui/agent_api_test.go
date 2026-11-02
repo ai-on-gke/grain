@@ -593,7 +593,7 @@ func TestAgentAPIPassesRepoPersonGateWhenConfigIsStored(t *testing.T) {
 
 // TestAgentAPIWriteRefusesAStaleExpectation is a task-admin write made
 // through the generated tool with an expect argument
-// (docs/design/durable-tasks.md#DT-13): the tool reads the task first and
+// (design/design/durable-tasks.design.md#DT-13): the tool reads the task first and
 // refuses, changing nothing, when the record disagrees.
 func TestAgentAPIWriteRefusesAStaleExpectation(t *testing.T) {
 	srv, client := testServer(t)

@@ -18,7 +18,7 @@
 
 ## How the environment was built (and what is stubbed)
 
-Plain `grain demo` has no CI engine (`cmd/grain/demo_observability.go` says so). `grain daemon` reads workflows by cloning from GitHub (`ciWorkflowSource`), and its checks run through the reconciler. Both need GitHub, so the run used a small harness instead, `harness.go.txt` in [`2026-10-01-ci-base-gate-retry-state/`](2026-10-01-ci-base-gate-retry-state/). It is built with `go build -o /tmp/walkbin ./_walk` from a copy at `_walk/main.go`. The harness wires the same production pieces the daemon wires:
+Plain `grain demo` has no CI engine (`cmd/grain/demo_observability.go` says so). `grain daemon` reads workflows by cloning from GitHub (`ciWorkflowSource`), and its checks run through the reconciler. Both need GitHub, so the run used a small harness instead, `harness.go.txt` in [`2026-10-01-ci-base-gate-retry-state/`](2026-10-01-ci-base-gate-retry-state). It is built with `go build -o /tmp/walkbin ./_walk` from a copy at `_walk/main.go`. The harness wires the same production pieces the daemon wires:
 
 - `ui.NewServer` serving the built frontend and the real `/api/ci/*` and `/api/tasks/*` handlers;
 - `model.Store` on SQLite in `/tmp/walk/data/store`, which survives restarts;

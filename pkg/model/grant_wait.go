@@ -30,7 +30,7 @@ import (
 // the admitter (orchestrator.grantAdmitter) derives it, StartRun clears
 // it with the attempt it belongs to, and putTask invalidates it when the
 // grants or target it was derived from change. Nothing else may leave
-// one standing: see docs/implementation-notes.md, "Who invalidates a
+// one standing: see grain's former implementation notes, "Who invalidates a
 // derived admission fact".
 type GrantWait struct {
 	TaskID     string

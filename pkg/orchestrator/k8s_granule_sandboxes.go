@@ -487,7 +487,7 @@ func (k *K8sGranuleSandboxes) networkNoneForwardedPorts() []int {
 }
 
 // ReservedGuestPorts are the guest loopback ports a capability grant may
-// not forward into (docs/capabilities-spec.md §5.3.1): the guest's sshd
+// not forward into (design/spec/capabilities/capabilities.spec.md §5.3.1): the guest's sshd
 // (port 22) plus any controller service ports forwarded into guest
 // loopback by `granule forward` or the dial-out channel.
 func (k *K8sGranuleSandboxes) ReservedGuestPorts() []int {
@@ -1127,7 +1127,7 @@ func (s *k8sGranuleSandbox) UsesChannelPortForward() bool {
 // process's own rather than the grant's host_port itself, so every
 // connection still goes through serve (portforward.Forward.Serve): the
 // relay's check that host_port belongs to the capability server's service,
-// and the grant's Close cutting it (docs/capabilities-spec.md §5.3.2,
+// and the grant's Close cutting it (design/spec/capabilities/capabilities.spec.md §5.3.2,
 // §5.3.4).
 func (s *k8sGranuleSandbox) ForwardCapabilityPort(ctx context.Context, sandboxPort int, serve func(context.Context, net.Conn)) error {
 	cr := s.currentChannelRunner()

@@ -71,7 +71,7 @@ async function withDaemon(args, fn) {
 
 // operatorPage is a browser on loopback, signed in with the access code.
 // It names nobody: grain has no users, and the UI sends no X-Grain-User
-// (docs/design/settings-panel.md §6.1).
+// (design/design/settings-panel.design.md §6.1).
 async function operatorPage(browser, url) {
   const context = await browser.newContext({
     baseURL: url,

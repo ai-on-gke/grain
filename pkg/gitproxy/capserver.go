@@ -15,7 +15,7 @@
 package gitproxy
 
 // capserver.go serves an external capability server's sandbox-callable
-// tools under /cap/ (docs/capabilities-spec.md §5.2.6): GET /cap/ lists
+// tools under /cap/ (design/spec/capabilities/capabilities.spec.md §5.2.6): GET /cap/ lists
 // the servers granted to the sandbox's attempt (or CI job) and their
 // sandbox tools, GET /cap/<server> one of them, and /cap/<server>/mcp is
 // the server's own MCP endpoint, carried to the proxy grain already holds
@@ -228,7 +228,7 @@ func (p *GitProxy) serveExternalCap(w http.ResponseWriter, r *http.Request, serv
 		}
 		for _, tool := range calls {
 			if !srv.sandboxTool(tool) {
-				http.Error(cw, fmt.Sprintf("forbidden: tool %q of capability server %q is model-only: only the agent's own MCP channel may call it, never the sandbox (docs/capabilities-spec.md §5.2.6)", tool, name), http.StatusForbidden)
+				http.Error(cw, fmt.Sprintf("forbidden: tool %q of capability server %q is model-only: only the agent's own MCP channel may call it, never the sandbox (design/spec/capabilities/capabilities.spec.md §5.2.6)", tool, name), http.StatusForbidden)
 				return
 			}
 		}

@@ -142,9 +142,9 @@ between `git clone` and the first `200` from `/api/config`.
 ## 2. Install with a site's own installer
 
 A site can wrap `scripts/setup.sh` in an installer of its own, with that
-site's answers. Google's Cloudtop installer is the one there is, and its
+site's answers. Google's Workstation installer is the one there is, and its
 journey is in
-[google/docs/user-journeys.md](../google/docs/user-journeys.md).
+the wrapper distribution's own docs.
 
 ---
 
@@ -514,7 +514,7 @@ one deployment, so there is nothing to navigate between.
 | # | Journey | Steps today | Worst friction point | Walkthrough can automate |
 | --- | --- | --- | --- | --- |
 | 1 | Host install and first sign-in | 14 (5 decisions, 5 shell) | Reading the generated password with `sudo cat` | UI part yes. Install needs a VM |
-| 2 | A site's own installer | see google/docs/user-journeys.md | | |
+| 2 | A site's own installer | see the wrapper distribution's own docs | | |
 | 3 | Upgrade and confirm version | 7 (2 decisions) | Host-mode unit isn't refreshed by an upgrade | Yes, with `-upgrade-image` (no restart) |
 | 4 | Set up a new team (retired) | | | |
 | 5 | GCP access | 2 (path A), 3 (path B needs the API) | Named keys have no UI | Path A yes. A real mint needs GCP |

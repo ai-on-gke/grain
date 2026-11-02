@@ -176,7 +176,7 @@ var apiAliasCapabilities = map[string]string{
 }
 
 // GrainCapabilityServerID is the canonical capability_id of the in-process
-// grain server (docs/design/unified-grants.md §1, §4).
+// grain server (design/design/unified-grants.design.md §1, §4).
 const GrainCapabilityServerID = "https://grain.dev/capabilities/grain"
 
 // Recorded canonical grants on the in-process grain server.
@@ -301,7 +301,7 @@ func HasGrainSQLWrite(grants []string) bool {
 }
 
 // legacyGrantReplacements are the bare capabilities converted to api or
-// capability-server grants (docs/design/unified-grants.md §4) whose
+// capability-server grants (design/design/unified-grants.design.md §4) whose
 // in-process provider is gone: each is written as its replacement wherever a
 // grant is recorded (CanonicalLegacyGrant / CanonicalLegacyGrants), and the
 // store migration that retired it rewrote the rows already stored. The bare

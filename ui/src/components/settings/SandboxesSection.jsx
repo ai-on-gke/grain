@@ -51,7 +51,7 @@ const SANDBOX_BACKEND_ISOLATION = {
     "Each run boots a Granule microVM with its own guest kernel over /dev/kvm inside a privileged Kubernetes pod.",
 };
 
-// SandboxesSection is Settings → Sandboxes (docs/design/settings-panel.md
+// SandboxesSection is Settings → Sandboxes (design/design/settings-panel.design.md
 // §3.2). `s` is the page's useSettingsSection().
 export default function SandboxesSection({ s }) {
   const {

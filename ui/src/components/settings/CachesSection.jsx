@@ -20,7 +20,7 @@ import {
 } from "@mui/material";
 import SettingsCard from "./SettingsCard.jsx";
 
-// CachesSection is Settings → Caches (docs/design/settings-panel.md
+// CachesSection is Settings → Caches (design/design/settings-panel.design.md
 // §3.2). `s` is the page's useSettingsSection().
 export default function CachesSection({ s }) {
   const { settings, saveChoice, onIntBlur, onEnterKey } = s;

@@ -15,7 +15,7 @@
 package staterepo
 
 // settings/new-task-form.yml: the New Task form's configuration
-// (docs/design/config-repo-settings.md §6, model.NewTaskForm). It is
+// (design/design/config-repo-settings.design.md §6, model.NewTaskForm). It is
 // grain_config.new_task_form written as YAML, and read the way
 // settings/capabilities.yml is: dumpRowsOf puts what the file says over
 // the column tables/ holds, so the file wins wherever it is present. An
@@ -139,7 +139,7 @@ func newTaskFormDocumentFor(ctx context.Context, db querier) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-const newTaskFormHeader = `# The New Task form (docs/design/config-repo-settings.md §6): which
+const newTaskFormHeader = `# The New Task form (design/design/config-repo-settings.design.md §6): which
 # fields it shows (shown), tucks under "Advanced options" (more) or
 # leaves out and files with their default (hidden), in what order and
 # under what labels, and what the capability picker offers and pre-adds.

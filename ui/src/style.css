@@ -2268,7 +2268,7 @@ html[data-phone="true"] .gantt-body {
 }
 /* ...and on a finger, the same link with a target under it. "Open" set
    at 0.8rem with no padding is a 31x19px box -- measured in a real
-   browser at 390px and 360px, docs/hand-runs/2026-09-07-panel-dashboard.md
+   browser at 390px and 360px, the 2026-09-07 panel-dashboard hand run
    section 6 -- and it is the only way out of a panel into the view it
    summarises, so it is the gesture a phone reader makes most and the
    smallest thing on the page. 44px is what the coarse-pointer block
@@ -2650,7 +2650,7 @@ html[data-phone="true"] .gantt-body {
   color: inherit;
 }
 
-/* The Processes table (docs/design/settings-panel.md §5.1): one grid
+/* The Processes table (design/design/settings-panel.design.md §5.1): one grid
    row per schedule, template, suite or trigger, with the columns every
    kind shares -- kind, name, repo, last run, next run, enabled -- and
    what only one kind has as chips under the name. The heading row is
@@ -4851,7 +4851,7 @@ fieldset legend {
 }
 
 /* A setting the Settings filter jumped to, outlined for two seconds
-   (docs/design/settings-panel.md §3.3). */
+   (design/design/settings-panel.design.md §3.3). */
 .setting-highlight {
   outline: 2px solid var(--mui-palette-primary-main, #1976d2);
   outline-offset: 4px;

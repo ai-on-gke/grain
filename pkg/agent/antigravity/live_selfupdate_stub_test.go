@@ -38,7 +38,7 @@ package antigravity
 //	GRAIN_LIVE_AGENT_TEST=1 go test ./pkg/agent/antigravity/ \
 //	  -run TestLiveAgyDoesNotReplaceItsOwnBinary -count=1 -v
 //
-// docs/hand-runs/2026-09-17-agy-self-update.md is the run this was
+// the 2026-09-17 agy-self-update hand run is the run this was
 // written from, against agy 1.1.27.
 
 import (
@@ -119,7 +119,7 @@ func TestLiveAgyDoesNotReplaceItsOwnBinary(t *testing.T) {
 // the production argv, the private HOME, the turn on stdin, the stub
 // provider answering it -- which is the shape the update was first seen
 // on. A bare `agy --version` does not update; `agy models` does, even
-// when it refuses the listing (docs/hand-runs/2026-09-17-agy-self-update.md).
+// when it refuses the listing (the 2026-09-17 agy-self-update hand run).
 //
 // A failed exec is not fatal here. What is being measured is what the
 // process did to its own file, and a refused turn has still run the

@@ -23,7 +23,7 @@ import {
 import { guardLeaving } from "./unsavedEdits.js";
 
 // useSettingsSection is the Settings view's one save and dirty-state
-// model (docs/design/settings-panel.md §3.4). It holds GET /api/settings
+// model (design/design/settings-panel.design.md §3.4). It holds GET /api/settings
 // for every section, and the gestures that commit a field:
 //
 //   - checkboxes, radios and selects through saveChoice, on change;
