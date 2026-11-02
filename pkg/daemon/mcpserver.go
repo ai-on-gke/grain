@@ -1754,9 +1754,10 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		Queued: filedApproved(created),
 		// The daemon's own account of why it is not queued, which only it
 		// can give: it is the side that read the parent's permission.
-		Held:         created.HeldBy != "",
-		ApprovalNote: created.ApprovalNote,
-		Parked:       filedParked(created),
+		Held:            created.HeldBy != "",
+		ApprovalNote:    created.ApprovalNote,
+		Parked:          filedParked(created),
+		DroppedDefaults: droppedDefaults(created.DroppedDefaults),
 	}, nil
 }
 
@@ -2715,6 +2716,17 @@ func granuleSandboxTools(granuleVM, sshUser, execKey, workspace string) ([]mcp.T
 }
 
 // supersedeKept is ui.Task.SupersedeKept as mcp reports it.
+func droppedDefaults(dropped []ui.DroppedDefault) []mcp.DroppedDefault {
+	if len(dropped) == 0 {
+		return nil
+	}
+	out := make([]mcp.DroppedDefault, len(dropped))
+	for i, d := range dropped {
+		out[i] = mcp.DroppedDefault{Grant: d.Grant, Reason: d.Reason}
+	}
+	return out
+}
+
 func supersedeKept(kept []ui.SupersedeKeptEntry) []mcp.SupersedeKept {
 	var out []mcp.SupersedeKept
 	for _, k := range kept {

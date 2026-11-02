@@ -31,8 +31,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
-	"github.com/ai-on-gke/grain/pkg/capability/reporead"
-	"github.com/ai-on-gke/grain/pkg/capability/repowrite"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -330,7 +328,6 @@ func TestPackagePublishAndRepoWriteStripWritePermissionsOnUntrustedEvents(t *tes
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	reg := model.NewCapabilityRegistry(
 		packagepublish.New(packagepublish.Config{}),
-		repowrite.New(repo),
 	)
 	creds := ciCredentialJSON(`{"registry":"ghcr.io","username":"bot","token":"secret"}`)
 
@@ -356,13 +353,19 @@ func TestPackagePublishAndRepoWriteStripWritePermissionsOnUntrustedEvents(t *tes
 		if err != nil {
 			t.Fatalf("event %s returned unexpected error: %v", event, err)
 		}
-		if len(claimedCIGrants(t, cc)) != 2 {
-			t.Fatalf("event %s expected 2 grants, got: %+v", event, claimedCIGrants(t, cc))
+		// repo-write has no provider: its own gate admits it, and the
+		// proxy's write scope is what it widens.
+		claimed := claimedCIGrants(t, cc)
+		if len(claimed) != 1 || claimed[0].Capability != "package-publish" {
+			t.Fatalf("event %s expected only package-publish among the provider grants, got: %+v", event, claimed)
 		}
-		for _, g := range claimedCIGrants(t, cc) {
-			if g.Capability != "package-publish" && g.Capability != "repo-write:acme/widgets" {
-				t.Errorf("unexpected grant for %s: %s", event, g.Capability)
-			}
+		if !model.RepoAccessAdmitsCIEvent("repo-write:acme/widgets", string(event), false) {
+			t.Errorf("event %s refused repo-write", event)
+		}
+	}
+	for _, event := range []ci.Event{ci.EventPullRequest, ci.EventPush} {
+		if model.RepoAccessAdmitsCIEvent("repo-write:acme/widgets", string(event), false) {
+			t.Errorf("event %s admitted repo-write", event)
 		}
 	}
 }
@@ -561,7 +564,6 @@ func TestCICrossRepoReadCapabilityGrantsReadScope(t *testing.T) {
 	adapter.Sandboxes = ciCapabilityBackend{&ciPlacingSandbox{fakeSandbox: fake, root: t.TempDir()}}
 	adapter.Capabilities = func() *model.CapabilityRegistry {
 		reg := model.NewCapabilityRegistry()
-		reg.RegisterDynamic(reporead.DynamicProvider)
 		return reg
 	}
 
@@ -626,7 +628,6 @@ func TestCICrossRepoWriteCapabilityGatingAndScopes(t *testing.T) {
 			adapter.Sandboxes = ciCapabilityBackend{&ciPlacingSandbox{fakeSandbox: fake, root: t.TempDir()}}
 			adapter.Capabilities = func() *model.CapabilityRegistry {
 				reg := model.NewCapabilityRegistry()
-				reg.RegisterDynamic(repowrite.DynamicProvider)
 				return reg
 			}
 
@@ -671,7 +672,6 @@ func TestTrustedScheduleHoldsOnlyTheProvidersThatOptedIn(t *testing.T) {
 	reg := model.NewCapabilityRegistry(
 		packagepublish.New(packagepublish.Config{Credentials: trustedSchedulePackageCredential{}}),
 		registrypush.New(),
-		repowrite.New(repo),
 	)
 	creds := ciCredentialJSON(`{"registry":"ghcr.io","username":"bot","token":"secret"}`)
 	requestedCaps := []string{"package-publish", registrypush.CapabilityName, "repo-write:acme/widgets"}
@@ -697,8 +697,14 @@ func TestTrustedScheduleHoldsOnlyTheProvidersThatOptedIn(t *testing.T) {
 		granted = append(granted, g.Capability)
 	}
 	slices.Sort(granted)
-	if want := []string{"package-publish", "repo-write:acme/widgets"}; !slices.Equal(granted, want) {
+	if want := []string{"package-publish"}; !slices.Equal(granted, want) {
 		t.Fatalf("trusted schedule grants = %v, want %v", granted, want)
+	}
+	// repo-write carries its own gate, which takes the trusted schedule
+	// and no caller's own.
+	if !model.RepoAccessAdmitsCIEvent("repo-write:acme/widgets", string(ci.EventSchedule), true) ||
+		model.RepoAccessAdmitsCIEvent("repo-write:acme/widgets", string(ci.EventSchedule), false) {
+		t.Error("repo-write's gate does not take exactly grain's own trusted schedule")
 	}
 
 	// The flag means nothing on any other event.
@@ -755,8 +761,6 @@ func TestDeclaredRepoAccessRunsAsTheTeamOnlyWhenTheEventMayCarryIt(t *testing.T)
 			}
 			adapter.Capabilities = func() *model.CapabilityRegistry {
 				reg := model.NewCapabilityRegistry()
-				reg.RegisterDynamic(repowrite.DynamicProvider)
-				reg.RegisterDynamic(reporead.DynamicProvider)
 				return reg
 			}
 
@@ -807,7 +811,6 @@ func TestDeclaredRepoWriteFailsClearlyWhenTheTeamHasNoCredential(t *testing.T) {
 	}
 	adapter.Capabilities = func() *model.CapabilityRegistry {
 		reg := model.NewCapabilityRegistry()
-		reg.RegisterDynamic(repowrite.DynamicProvider)
 		return reg
 	}
 

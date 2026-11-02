@@ -1177,10 +1177,14 @@ type Config struct {
 	// (-ui-allowed-principals). When empty, defaults to $GRAIN_ALLOWED_PRINCIPALS,
 	// or the deployment owner (Actor) plus provisioned service accounts.
 	AllowedPrincipals []string
-	// ProvisionedServiceAccounts lists GCP service accounts grain itself
-	// provisions for this deployment, included in the default allowlist when
-	// AllowedPrincipals is unset.
+	// ProvisionedServiceAccounts lists daemon-owned GCP service accounts grain
+	// itself provisions for this deployment (never gcp-key sandbox agent
+	// accounts), included in the default allowlist when AllowedPrincipals is unset.
 	ProvisionedServiceAccounts []string
+	// GCPKeyServiceAccounts lists the gcp-key agent service account pool
+	// configured by daemon flags, if any. Merged with the store's gcp-key pool
+	// so those accounts are never admitted by default or by -ui-allowed-principals.
+	GCPKeyServiceAccounts []string
 	// GroupChecker, when set, resolves group: entries in AllowedPrincipals;
 	// nil uses CloudIdentityGroupChecker lazily when at least one group: entry
 	// is configured.

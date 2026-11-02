@@ -112,6 +112,7 @@ func init() {
 			return list, nil
 		},
 		IsRepoAccess: IsRepoAccessCapability,
+		IsRepoRead:   IsRepoReadCapability,
 		DeclaredOnly: declaredOnly,
 	}
 }

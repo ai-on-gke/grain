@@ -164,8 +164,11 @@ type Framework struct {
 	// endpoint in its own process and writes codex a URL.
 	host            agent.Host
 	grainBinaryPath string
-	startMCP        func(context.Context, string, []string) (*mcp.ManagedHTTP, error)
-	detachedMCP     bool
+	// hostAuthFile says authFile is on the CLI's machine, not this one
+	// (WithHostAuthFile).
+	hostAuthFile bool
+	startMCP     func(context.Context, string, []string) (*mcp.ManagedHTTP, error)
+	detachedMCP  bool
 	// binPath is the codex binary itself, held here as well as inside
 	// the runner above because an interactive session is not run through
 	// that seam: TerminalCommand hands the argv to pkg/console, which
@@ -295,6 +298,14 @@ func WithAPIKeyFunc(fn func(context.Context) (string, error)) Option {
 // refreshed login through the same path while it runs.
 func WithAuthFile(path string) Option {
 	return func(f *Framework) { f.authFile = path }
+}
+
+// WithHostAuthFile is WithAuthFile for a login on the machine the CLI
+// runs on rather than this one -- a grain hostd's own codex login
+// (hostd.Hello.CodexAuth). path is that machine's, so it is linked as
+// it is, and not checked here, where it is not.
+func WithHostAuthFile(path string) Option {
+	return func(f *Framework) { f.authFile, f.hostAuthFile = path, true }
 }
 
 // WithGranuleSSH gives a Framework what it needs to reach a
@@ -850,19 +861,31 @@ func (f *Framework) writeConfig(ctx context.Context, mcpArgs []string, taskID st
 		releaseServers()
 		return "", false, nil, err
 	}
-	config, err := f.configTOML(endpoint, servers...)
+	// A codex on another machine reaches the endpoint carried to its own
+	// loopback (agent.CarryMCPEndpoint); the copy keeps endpoint's own
+	// URL for Close.
+	carriedURL, releaseMCP, err := agent.CarryMCPEndpoint(f.host, endpoint.URL, endpoint.Token)
 	if err != nil {
 		endpoint.Close()
+		releaseServers()
+		return "", false, nil, fmt.Errorf("codex: %w", err)
+	}
+	stop := func() { releaseMCP(); endpoint.Close() }
+	carried := *endpoint
+	carried.URL = carriedURL
+	config, err := f.configTOML(&carried, servers...)
+	if err != nil {
+		stop()
 		releaseServers()
 		return "", false, nil, err
 	}
 	home, persistent, removeHome, err := f.writeHome(ctx, config, taskID)
 	if err != nil {
-		endpoint.Close()
+		stop()
 		releaseServers()
 		return "", false, nil, err
 	}
-	return home, persistent, func() { endpoint.Close(); releaseServers(); removeHome() }, nil
+	return home, persistent, func() { stop(); releaseServers(); removeHome() }, nil
 }
 
 // openHome is the directory this run's CODEX_HOME will be, and how to
@@ -898,7 +921,25 @@ func (f *Framework) openHome(ctx context.Context, taskID string) (home string, p
 			remove(removeCtx)
 		}
 	}
-	if dir, release, ok := f.sessions.Open(frameworkName, taskID); ok {
+	if agent.ServesMCPOverHTTP(f.host) {
+		// A grain hostd on another machine: the store is this daemon's
+		// disk, and the task's home has to be on that machine, kept
+		// where agy keeps its own there.
+		if f.sessions != nil && sessionstore.ValidName(taskID) {
+			root := remoteSessionRoot
+			if r, ok := f.host.(interface{ SessionRoot() string }); ok && r.SessionRoot() != "" {
+				root = r.SessionRoot()
+			}
+			base := filepath.Join(root, frameworkName)
+			if p, ok := f.host.(agent.DirPruner); ok {
+				_ = p.PruneDir(ctx, base, 7*24*time.Hour, 64)
+			}
+			dir := filepath.Join(base, taskID)
+			if err := f.host.MkdirAll(ctx, dir, 0o700); err == nil {
+				return dir, true, detached(func(removeCtx context.Context) { f.clearRunFiles(removeCtx, dir) }), nil
+			}
+		}
+	} else if dir, release, ok := f.sessions.Open(frameworkName, taskID); ok {
 		return dir, true, detached(func(removeCtx context.Context) {
 			f.clearRunFiles(removeCtx, dir)
 			release()
@@ -982,6 +1023,9 @@ func (f *Framework) writeHome(ctx context.Context, config []byte, taskID string)
 // back through, is a run that fails minutes later saying nothing at all
 // about auth.json.
 func (f *Framework) resolveAuthFile() (string, error) {
+	if f.hostAuthFile {
+		return f.authFile, nil
+	}
 	authFile, err := filepath.Abs(f.authFile)
 	if err != nil {
 		return "", fmt.Errorf("codex: resolving shared auth file: %w", err)
@@ -991,6 +1035,10 @@ func (f *Framework) resolveAuthFile() (string, error) {
 	}
 	return authFile, nil
 }
+
+// remoteSessionRoot is where a task's CODEX_HOME is kept on a grain
+// hostd's machine, beside agy's (antigravity's defaultRemoteSessionRoot).
+const remoteSessionRoot = "~/.grain/sessions"
 
 // homeRemovalTimeout bounds that removal. It is generous: the cost of
 // waiting is one goroutine at the end of a run, and the cost of giving

@@ -19,6 +19,8 @@ import (
 	"fmt"
 
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/policy"
@@ -104,19 +106,61 @@ func CheckCIJobCatalogue(cat *model.CapabilityCatalogue, req ci.SandboxRequest) 
 	return err
 }
 
-// ciCatalogueRefusal is CheckCIJobCatalogue for CiGrantReservations.Acquire,
-// reading the catalogue through config and saying a refusal once in the
-// daemon log.
+// CheckCIJobRepoAccessPolicy judges a CI job's repository access grants
+// (repo#read, repo#write {repo}, and their bare repo-read:/repo-write:
+// spellings) against the deployment's CapabilityPolicy. Non-repo capability
+// references are judged in mintCIPass, which skips repository access because
+// it mints no pass.
+func CheckCIJobRepoAccessPolicy(capPolicy model.CapabilityPolicy, servers map[string]protocol.ServerConfig, req ci.SandboxRequest) error {
+	var canonical []string
+	for _, id := range req.Capabilities {
+		if target, ok := model.RepoReadTarget(id); ok {
+			canonical = append(canonical, model.RepoReadGrant(target))
+		} else if target, ok := model.RepoWriteTarget(id); ok {
+			canonical = append(canonical, model.RepoWriteGrant(target))
+		}
+	}
+	if len(canonical) == 0 {
+		return nil
+	}
+	var repoPtr *model.RepoRef
+	if repo, err := model.ParseRepo(req.Repo); err == nil {
+		repoPtr = &repo
+	}
+	configured, _ := intree.EnsureBuiltins(servers)
+	subject := model.CapabilitySubject{
+		Repo:      repoPtr,
+		Kind:      model.CapabilityRunCI,
+		Event:     string(req.Event),
+		Untrusted: req.Untrusted,
+	}
+	for _, grant := range canonical {
+		if err := capPolicy.Permits(grant, subject, configured); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ciCatalogueRefusal is CheckCIJobCatalogue and CheckCIJobRepoAccessPolicy for
+// CiGrantReservations.Acquire, reading the catalogue and capability policy
+// through config and saying a refusal once in the daemon log.
 func ciCatalogueRefusal(ctx context.Context, config func(context.Context) (*model.Config, error), req ci.SandboxRequest, logf func(string, ...any)) error {
 	if config == nil {
-		return nil
+		return CheckCIJobRepoAccessPolicy(model.CapabilityPolicy{}, nil, req)
 	}
 	cfg, err := config(ctx)
 	if err != nil {
 		return fmt.Errorf("reading the capability catalogue: %w", err)
 	}
 	if cfg == nil {
-		return nil
+		return CheckCIJobRepoAccessPolicy(model.CapabilityPolicy{}, nil, req)
+	}
+	if err := CheckCIJobRepoAccessPolicy(cfg.CapabilityPolicy, cfg.MCPServers, req); err != nil {
+		if logf != nil {
+			logf("grain ci: %s: %s job %s refused by capability policy: %v", req.Repo, req.Event, req.Name, err)
+		}
+		return err
 	}
 	if err := CheckCIJobCatalogue(cfg.CapabilityPolicy.Catalogue, req); err != nil {
 		if logf != nil {

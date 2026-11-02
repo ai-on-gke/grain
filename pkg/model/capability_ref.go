@@ -465,6 +465,9 @@ func (p CapabilityPolicy) Permits(g string, s CapabilitySubject, servers ...map[
 		return nil
 	}
 	ref := CapabilityGrantRef(g)
+	if s.Kind != "" && s.Kind != CapabilityRunCI && (ref == RepoReadRef || IsRepoAccessGrant(g)) {
+		return fmt.Errorf("%s", CIOnlyRefusal(g))
+	}
 	refs := equivalentCapabilityRefs(ref, servers)
 	for i, r := range p.Rules {
 		if !r.Deny || !r.namesAny(refs) {
@@ -504,6 +507,9 @@ func (p CapabilityPolicy) VerdictForKind(ref, kind string, servers ...map[string
 		return CapabilityPolicyAllowed
 	}
 	ref = CapabilityGrantRef(ref)
+	if kind != "" && kind != CapabilityRunCI && ref == RepoReadRef {
+		return CapabilityPolicyDenied
+	}
 	refs := equivalentCapabilityRefs(ref, servers)
 	allOfKind := CapabilitySubject{Kind: kind}
 	anyDeny := false

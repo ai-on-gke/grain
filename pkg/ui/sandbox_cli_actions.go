@@ -338,6 +338,10 @@ func (a SandboxCLIActions) ProposeTask(ctx context.Context, callerTaskID, runID 
 	if err != nil {
 		return gitproxy.CLIProposeResult{}, cliActionError(err)
 	}
+	var dropped []gitproxy.CLIDroppedDefault
+	for _, d := range created.DroppedDefaults {
+		dropped = append(dropped, gitproxy.CLIDroppedDefault{Grant: d.Grant, Reason: d.Reason})
+	}
 	return gitproxy.CLIProposeResult{
 		ID:              created.ID,
 		URL:             "/tasks/" + created.ID,
@@ -346,6 +350,7 @@ func (a SandboxCLIActions) ProposeTask(ctx context.Context, callerTaskID, runID 
 		Queued:          false,
 		Held:            true,
 		ApprovalNote:    created.ApprovalNote,
+		DroppedDefaults: dropped,
 	}, nil
 }
 

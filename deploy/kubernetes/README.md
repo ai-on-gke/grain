@@ -154,9 +154,10 @@ the daemon, only `kubectl exec`.
 ## Installing
 
 ```sh
-# Edit the three CHANGEME values in grain.yaml first -- the image, the
-# default target repo, and the cosign.pub the Upgrade button verifies
-# images against (docs/image-signing.md). Upgrading a
+# Edit the CHANGEME values in grain.yaml first -- the image, the
+# default target repo, the cosign.pub the Upgrade button verifies
+# images against (docs/image-signing.md), and, behind IAP,
+# GRAIN_ALLOWED_PRINCIPALS (see "Signing in behind IAP"). Upgrading a
 # deployment that predates the securityContext? Take the chown above
 # before this apply.
 kubectl apply -f deploy/kubernetes/grain.yaml
@@ -181,8 +182,8 @@ code ([docs/access-code.md](../../docs/access-code.md)):
 
 1. Set `-ui-iap-audience` (or `GRAIN_IAP_AUDIENCE`) to the IAP backend's
    `/projects/NUMBER/global/backendServices/ID`, and
-   `-ui-allowed-principals` to who may get in. A verified assertion now
-   signs its person in. The access code still works too, so nobody is
+   `GRAIN_ALLOWED_PRINCIPALS` (below) to who may get in. A verified
+   assertion now signs its person in. The access code still works too, so nobody is
    locked out while you move over.
 2. When everybody signs in through IAP, add `-ui-require-iap` (or
    `GRAIN_REQUIRE_IAP=true`). The network listener then takes no access
@@ -190,7 +191,22 @@ code ([docs/access-code.md](../../docs/access-code.md)):
    and serves no "Enter access code" page. The daemon refuses to start
    with this flag and no audience.
 
-`grain.yaml` carries both flags commented out; `-ui-require-iap` is off
+`grain.yaml` sets the allowlist as `GRAIN_ALLOWED_PRINCIPALS` on the
+`grain` container (the same as `-ui-allowed-principals`), a
+comma-separated list of `user:`, `group:`, `domain:` and
+`serviceAccount:` entries. Put the installing user there as
+`user:<their IAP email>`. Without it the daemon's default is the
+deployment owner, which is the OS account it runs as rather than an
+email, so no IAP sign-in matches it.
+
+This is a different list from the IAP access list on the backend
+service. The IAP access list decides who reaches the pod at all. This
+one decides who grain signs in without the access code. Someone IAP lets
+through who is not on it is refused unless they present the access code.
+A non-empty list also replaces the daemon's default rather than adding
+to it, so list any service account that reaches the UI through IAP too.
+
+`grain.yaml` carries both IAP flags commented out; `-ui-require-iap` is off
 unless you add it. With it on, the code still works from inside the pod,
 over loopback, with no forwarding headers. That is the break-glass path
 when IAP or the allowlist is broken:
