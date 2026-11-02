@@ -90,13 +90,12 @@ for i in 0 1 2 3 4 5; do
   git commit -q --allow-empty -m "c$i"
   c[i]="$(git rev-parse HEAD)"
 done
-c0="${c[0]}" c1="${c[1]}" c2="${c[2]}" c3="${c[3]}" c4="${c[4]}" c5="${c[5]}"
+c0="${c[0]}" c2="${c[2]}" c3="${c[3]}" c4="${c[4]}" c5="${c[5]}"
 git update-ref refs/remotes/origin/main "$c5"
 cd - >/dev/null
 
 now=1790000000
 recent=$((now - 3600))
-stale=$((now - 30 * 3600))
 
 # run_json <commit> <workflow> <conclusion> [<started-epoch>] [<job>]: one
 # run with one job.
@@ -230,10 +229,10 @@ gh_job() {
 # stage1_run [<conclusion> [<run-id> [<attempt> [<created-epoch>]]]] [<name>=<conclusion>...]:
 # every Stage 1 job in one run, each <conclusion> (success) unless named.
 stage1_run() {
-  local c="${1:-success}" run="${2:-100}" attempt="${3:-1}" t="${4:-$recent}" name want o
+  local concl="${1:-success}" run="${2:-100}" attempt="${3:-1}" t="${4:-$recent}" name want o
   shift $(($# < 4 ? $# : 4))
   for name in "${stage1_names[@]}" "stage 1 qualification verdict"; do
-    want="$c"
+    want="$concl"
     for o in "$@"; do
       [ "${o%=*}" != "$name" ] || want="${o#*=}"
     done
