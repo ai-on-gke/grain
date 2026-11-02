@@ -78,3 +78,80 @@ func TestApplyGrainCIGrantCreditsTheRepoNotTheDeclaration(t *testing.T) {
 		t.Errorf("empty.GrantSources = %v, want [%q]", empty.GrantSources, LayerRepo)
 	}
 }
+
+func TestWorkflowReviewCompositionGrantsRepoScopedCIReadWithoutGrainCI(t *testing.T) {
+	repo := RepoRef{Owner: "acme", Name: "widgets"}
+	tmpl := workflowReviewTemplate("release")
+	templateID := tmpl.ID
+
+	sched := Schedule{
+		ID:         "sched-gh-review",
+		Title:      "Review release workflow",
+		Target:     repo,
+		TemplateID: &templateID,
+		Recurrence: Recurrence{
+			Kind:              RecurrenceGitHubWorkflowRun,
+			GitHubWorkflowRun: &GitHubWorkflowRunTrigger{Workflow: "release.yml"},
+		},
+	}
+
+	comp := ComposeScheduleTask(sched, tmpl)
+	applyGrainCIGrant(&comp, false)
+	from, ok := scheduleReviewsWorkflowRun(sched, tmpl)
+	if !ok || from != LayerTemplate {
+		t.Fatalf("scheduleReviewsWorkflowRun = (%q, %v), want (%q, true)", from, ok, LayerTemplate)
+	}
+	applyWorkflowReviewCIReadGrant(&comp, from)
+
+	if len(comp.Grants) != 1 || comp.Grants[0].Capability != "api:ci-read@acme/widgets" || comp.Grants[0].Via != GrantByGrain {
+		t.Fatalf("comp.Grants = %+v, want [{Capability:api:ci-read@acme/widgets Via:grain}]", comp.Grants)
+	}
+	if len(comp.GrantSources) != 1 || comp.GrantSources[0] != LayerTemplate {
+		t.Errorf("comp.GrantSources = %v, want [%q]", comp.GrantSources, LayerTemplate)
+	}
+	if comp.Sources.Grants != LayerTemplate {
+		t.Errorf("comp.Sources.Grants = %q, want %q", comp.Sources.Grants, LayerTemplate)
+	}
+	// Calling applyWorkflowReviewCIReadGrant again when ci:read is already
+	// granted for the repository does not add a duplicate.
+	applyWorkflowReviewCIReadGrant(&comp, from)
+	if len(comp.Grants) != 1 {
+		t.Errorf("duplicate ci-read grant added: %+v", comp.Grants)
+	}
+
+	// A github_workflow_run schedule firing an inline prompt or custom
+	// template (not workflowReviewTemplate) credits LayerSchedule.
+	customSched := Schedule{
+		ID:     "sched-gh-custom",
+		Title:  "Custom workflow review",
+		Target: repo,
+		Recurrence: Recurrence{
+			Kind:              RecurrenceGitHubWorkflowRun,
+			GitHubWorkflowRun: &GitHubWorkflowRunTrigger{Workflow: "release.yml"},
+		},
+	}
+	customComp := ComposeScheduleTask(customSched, nil)
+	applyGrainCIGrant(&customComp, false)
+	from, ok = scheduleReviewsWorkflowRun(customSched, nil)
+	if !ok || from != LayerSchedule {
+		t.Fatalf("scheduleReviewsWorkflowRun(custom) = (%q, %v), want (%q, true)", from, ok, LayerSchedule)
+	}
+	applyWorkflowReviewCIReadGrant(&customComp, from)
+	if len(customComp.Grants) != 1 || customComp.Grants[0].Capability != "api:ci-read@acme/widgets" {
+		t.Fatalf("customComp.Grants = %+v, want [api:ci-read@acme/widgets]", customComp.Grants)
+	}
+	if customComp.Sources.Grants != LayerSchedule || len(customComp.GrantSources) != 1 || customComp.GrantSources[0] != LayerSchedule {
+		t.Errorf("customComp sources = %q / %v, want %q", customComp.Sources.Grants, customComp.GrantSources, LayerSchedule)
+	}
+
+	// Ordinary cron schedules on non-grain-CI repos do not get api:ci-read.
+	ordinary := Schedule{
+		ID:         "sched-ordinary",
+		Title:      "Weekly audit",
+		Target:     repo,
+		Recurrence: Recurrence{Kind: RecurrenceDaily},
+	}
+	if _, ok := scheduleReviewsWorkflowRun(ordinary, nil); ok {
+		t.Fatal("ordinary daily schedule reported as workflow-run review")
+	}
+}

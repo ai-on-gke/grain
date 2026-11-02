@@ -408,10 +408,11 @@ func (c *Client) capabilityPolicyFor(ctx context.Context) (model.CapabilityPolic
 // the policy keeps from this run kind, say -- is dropped, since nobody
 // asked for it, and dropped names it with the policy's reason, for the
 // task's thread: a filer who expected the default is told it is not
-// there rather than left to find it missing. Admission asks the policy
+// there rather than left to find it missing, and so is whoever filed
+// it over the API (Task.DroppedDefaults). Admission asks the policy
 // again when it mints, so a policy saved after a task was filed still
 // has the last word.
-func (c *Client) policyFilingGrants(ctx context.Context, grants []model.Grant, target *model.RepoRef) (kept []model.Grant, dropped []string, err error) {
+func (c *Client) policyFilingGrants(ctx context.Context, grants []model.Grant, target *model.RepoRef) (kept []model.Grant, dropped []DroppedDefault, err error) {
 	policy, configured, err := c.capabilityPolicyFor(ctx)
 	if err != nil || len(policy.Rules) == 0 {
 		return grants, nil, err
@@ -421,7 +422,7 @@ func (c *Client) policyFilingGrants(ctx context.Context, grants []model.Grant, t
 	for _, g := range grants {
 		if err := policy.Permits(g.Capability, subject, configured); err != nil {
 			if g.Via == model.GrantByDefault {
-				dropped = append(dropped, fmt.Sprintf("Default grant %s was not attached to this task: %v.", model.CapabilityGrantRef(g.Capability), err))
+				dropped = append(dropped, DroppedDefault{Grant: model.CapabilityGrantRef(g.Capability), Reason: err.Error()})
 				continue
 			}
 			return nil, nil, validationErrorf("%v", err)
@@ -429,6 +430,19 @@ func (c *Client) policyFilingGrants(ctx context.Context, grants []model.Grant, t
 		kept = append(kept, g)
 	}
 	return kept, dropped, nil
+}
+
+// DroppedDefault is a deployment or repository default grant CreateTask
+// left off the task it filed, and why: the capability policy's own
+// words for the refusal.
+type DroppedDefault struct {
+	Grant  string `json:"grant"`
+	Reason string `json:"reason"`
+}
+
+// Note is the sentence the task's thread carries for d.
+func (d DroppedDefault) Note() string {
+	return fmt.Sprintf("Default grant %s was not attached to this task: %s.", d.Grant, d.Reason)
 }
 
 // policyEditRefusalFor is the capability policy's answer to grant being
