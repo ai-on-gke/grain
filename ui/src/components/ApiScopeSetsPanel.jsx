@@ -30,6 +30,10 @@ import {
 } from "@mui/material";
 import api from "../api.js";
 import { UsageList } from "./CapabilityServersPanel.jsx";
+import {
+  formatScopeSetCatalogue,
+  hasRunRestrictions,
+} from "./catalogueSummary.js";
 
 // ApiScopeSetsPanel is Settings → Capabilities → API scope sets
 // (docs/agent-api.md, "Scope sets"): every named set of agent API scopes
@@ -91,6 +95,27 @@ export function ScopeSetRow({ set, readOnly, onEdit, onDelete }) {
         {set.person && (
           <Chip size="small" color="warning" label="requires a person" />
         )}
+        {set.catalogue?.disabled && (
+          <Chip size="small" color="error" label="disabled" />
+        )}
+        {!set.catalogue?.disabled &&
+          hasRunRestrictions(set.catalogue?.restrictions) && (
+            <Chip
+              size="small"
+              color="warning"
+              variant="outlined"
+              label="restricted"
+            />
+          )}
+        {(set.catalogue?.legacyInProcess || []).map((legacy) => (
+          <Chip
+            key={legacy}
+            size="small"
+            color="warning"
+            variant="outlined"
+            label={`in_process.${legacy}`}
+          />
+        ))}
         {set.deprecated && <Chip size="small" label="deprecated" />}
         {!set.builtin && !readOnly && (
           <Box sx={{ ml: "auto", display: "flex", gap: 1 }}>
@@ -123,6 +148,16 @@ export function ScopeSetRow({ set, readOnly, onEdit, onDelete }) {
           {set.includes?.length > 0 && `includes ${listText(set.includes)}`}
           {set.includes?.length > 0 && set.deny?.length > 0 && " · "}
           {set.deny?.length > 0 && `denies ${listText(set.deny)}`}
+        </Typography>
+      )}
+      {set.catalogue && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          data-testid={`api-scope-set-catalogue-${set.name}`}
+          sx={{ display: "block", mt: 0.5, overflowWrap: "anywhere" }}
+        >
+          {formatScopeSetCatalogue(set.catalogue)}
         </Typography>
       )}
     </Box>
