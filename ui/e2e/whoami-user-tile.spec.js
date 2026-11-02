@@ -47,8 +47,54 @@ test.describe("sidebar user tile", () => {
       expect(t.y + t.height).toBeLessThanOrEqual(s.y + 1);
     }
 
+    // Inside the rail, and its label never wider than the tile.
+    const rail = await page.locator("aside").first().boundingBox();
+    const t = await tile.boundingBox();
+    expect(t.x).toBeGreaterThanOrEqual(rail.x - 1);
+    expect(t.x + t.width).toBeLessThanOrEqual(rail.x + rail.width + 1);
+    const label = await page.getByTestId("user-tile-label").boundingBox();
+    expect(label.x + label.width).toBeLessThanOrEqual(t.x + t.width + 1);
+
     await tile.click();
     await expect(page).toHaveURL(/\/settings\/access/);
+    await expect(page.getByTestId("access-recorded-as")).toHaveText(
+      whoami.actor.label,
+    );
+  });
+
+  test("folded, keeps the tile as an icon inside the narrow rail", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await page.getByTestId("sidebar-toggle").click();
+    const tile = page.getByTestId("user-tile");
+    await expect(tile).toBeVisible();
+    await expect(page.getByTestId("user-tile-label")).toHaveCount(0);
+    const rail = await page.locator("aside").first().boundingBox();
+    const t = await tile.boundingBox();
+    expect(t.x + t.width).toBeLessThanOrEqual(rail.x + rail.width + 1);
+    // Unfold again, for the next test on this worker's browser storage.
+    await page.getByTestId("sidebar-toggle").click();
+    await expect(page.getByTestId("user-tile-label")).toBeVisible();
+  });
+
+  test("on a phone, sits at the foot of the drawer under System", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Open navigation" }).click();
+    const drawer = page.getByRole("dialog", { name: "Navigation" });
+    const tile = drawer.getByTestId("user-tile");
+    await expect(tile).toBeVisible();
+    const system = await drawer
+      .getByRole("button", { name: "System" })
+      .first()
+      .boundingBox();
+    const t = await tile.boundingBox();
+    expect(t.y).toBeGreaterThanOrEqual(system.y + system.height - 1);
+    expect(t.x + t.width).toBeLessThanOrEqual(390);
   });
 
   test("shows a verified sign-in's email with no qualifier", async ({

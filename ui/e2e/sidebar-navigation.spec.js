@@ -126,9 +126,14 @@ test.describe("Sidebar Navigation Restructuring & Foldable Controls", () => {
     await expect(page.getByTestId("top-bar-system")).toBeVisible();
     await expect(page.getByTestId("top-bar-settings")).toBeVisible();
 
-    // 6. No user tile: the build stamp alone is the foot, a link to
-    // Settings -> Upgrade (design/design/settings-panel.design.md §4.3).
-    await expect(aside.getByTestId("user-tile")).toHaveCount(0);
+    // 6. The foot is the user tile -- who GET /api/whoami says this
+    // browser is (operator-attribution spec §5.4) -- over the build stamp,
+    // a link to Settings -> Upgrade (design/design/settings-panel.design.md
+    // §4.3).
+    await expect(aside.getByTestId("user-tile")).toHaveAttribute(
+      "title",
+      /^operator \((access code|local)\)$/,
+    );
     const stamp = aside.getByTestId("build-stamp");
     await expect(stamp).toBeVisible();
     await expect(stamp).toHaveAttribute("href", "/settings/upgrade");
