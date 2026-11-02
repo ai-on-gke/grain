@@ -22,7 +22,7 @@ import {
   TextField,
 } from "@mui/material";
 import api from "../../api.js";
-import { wholeNumber } from "../../wholeNumber.js";
+import { taskPriority, wholeNumber } from "../../wholeNumber.js";
 import {
   connectionLabel,
   connectionsServingModels,
@@ -98,7 +98,7 @@ export default function EditTaskForm({
   const priorityText = String(priority).trim();
   const priorityValid =
     priorityText === "" ||
-    (/^\d+$/.test(priorityText) && Number(priorityText) >= 1);
+    (/^\d+$/.test(priorityText) && !Number.isNaN(taskPriority(priorityText)));
   // The deployment's connections and default model: a task names no
   // team of its own.
   const connections = config?.agentBackends || [];

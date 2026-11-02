@@ -50,7 +50,7 @@ import {
 } from "./TemplateFields.jsx";
 import BranchField from "./BranchField.jsx";
 import RepoField from "./RepoField.jsx";
-import { wholeNumber } from "../wholeNumber.js";
+import { taskPriority, wholeNumber } from "../wholeNumber.js";
 import WriteReposField from "./WriteReposField.jsx";
 import {
   configuredCapabilities,
@@ -235,7 +235,7 @@ function TemplateOverlay({
     const priorityText = String(data.get("priority") || "").trim();
     if (
       priorityText !== "" &&
-      !(/^\d+$/.test(priorityText) && wholeNumber(priorityText) >= 1)
+      !(/^\d+$/.test(priorityText) && !Number.isNaN(taskPriority(priorityText)))
     ) {
       setPriorityInvalid(true);
       return;
@@ -411,6 +411,14 @@ function TemplateOverlay({
             defaultValue={template?.priority ?? ""}
             placeholder="5"
             onChange={() => setPriorityInvalid(false)}
+            // This box sits in a <form>, so the browser's own min/step
+            // check stops 0, -1 and 1.5 before submit runs: say it in the
+            // words the rest of the refusals use, not the browser's
+            // bubble (2026-11-02 walkthrough).
+            onInvalid={(e) => {
+              e.preventDefault();
+              setPriorityInvalid(true);
+            }}
             error={priorityInvalid}
             helperText={
               priorityInvalid
