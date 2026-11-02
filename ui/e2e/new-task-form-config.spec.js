@@ -495,3 +495,44 @@ test("Task priority follows the picked template and files what it shows", async 
   expect(filed.priority).toBe(5);
   await dialog.getByRole("button", { name: "Discard draft" }).click();
 });
+
+// A template with input fields is not offered by the Template picker,
+// and its own page's "New task from this template" opens Use…, which
+// asks for them, rather than a New Task form that can only be refused
+// (2026-11-02 walkthrough: 'field "Who" is required').
+test("a template with input fields goes through Use…, not the New Task form", async ({
+  page,
+}) => {
+  const asks = {
+    id: "e2e-asks",
+    name: "E2E asks",
+    title: "Greet {{who}}",
+    description: "Say hello to {{who}}.",
+    fields: [{ name: "who", label: "Who", required: true }],
+    capabilities: [],
+    reads: [],
+    writes: [],
+    autoMerge: false,
+    createdAt: new Date().toISOString(),
+  };
+  await page.route("**/api/templates", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response = await route.fetch();
+    const body = await response.json();
+    await route.fulfill({ response, json: [...body, asks] });
+  });
+  await serveForm(page, { templates: { "e2e-asks": { fields: {} } } });
+  await page.goto("/new");
+  const form = page.getByRole("dialog");
+  await form.getByRole("combobox", { name: "Template" }).click();
+  await expect(page.getByRole("option", { name: "E2E asks" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  await page.goto("/processes/templates/e2e-asks");
+  await page
+    .getByRole("button", { name: "New task from this template" })
+    .click();
+  const use = page.getByRole("dialog").last();
+  await expect(use.getByLabel(/^Who/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "New task" })).toHaveCount(0);
+});
