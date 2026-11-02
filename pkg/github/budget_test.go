@@ -229,7 +229,9 @@ func TestKindOfNamesTheReadsTheIncidentNamed(t *testing.T) {
 		{"GET", "/repos/acme/widgets/issues/12/comments", "comments"},
 		{"GET", "/repos/acme/widgets", "repo read"},
 		{"PUT", "/repos/acme/widgets/pulls/12/merge", "write"},
-		{"POST", "/graphql", "write"},
+		{"POST", "/graphql", "graphql"},
+		{"POST", "/api/graphql", "graphql"},
+		{"POST", "/repos/acme/widgets/issues/12/comments", "write"},
 	} {
 		if got := kindOf(c.method, endpointOf(c.path)); got != c.want {
 			t.Errorf("kindOf(%s %s) = %q, want %q", c.method, c.path, got, c.want)

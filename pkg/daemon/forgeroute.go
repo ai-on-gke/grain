@@ -116,7 +116,7 @@ func (r *forgeRouter) Request(method, path string, headers map[string]string, bo
 		// so it is asked through the tool as any other such host is.
 		host = r.defHost
 	}
-	transport, err := r.transport(host, owner, repo, path == "/graphql")
+	transport, err := r.transport(host, owner, repo)
 	if err != nil {
 		return github.ApiResponse{}, fmt.Errorf("reaching the forge API for %s/%s/%s: %w", host, owner, repo, err)
 	}
@@ -217,11 +217,11 @@ func looksLikeHost(seg string) bool {
 // transport is the cached transport for owner/repo on host. The
 // credential owner/repo is pushed with decides which login a command-backed host is
 // asked through, so the cache is keyed by what transportFor was given.
-func (r *forgeRouter) transport(host, owner, repo string, graphql bool) (github.Transport, error) {
+// A GraphQL request goes through the same transport as REST: a
+// github.RealTransport sends "/graphql" to its own host's GraphQL
+// endpoint (/api/graphql beside a GitHub Enterprise Server's /api/v3).
+func (r *forgeRouter) transport(host, owner, repo string) (github.Transport, error) {
 	key := strings.ToLower(host + "/" + owner + "/" + repo)
-	if graphql {
-		key += "#graphql"
-	}
 	r.mu.Lock()
 	if t, ok := r.cache[key]; ok {
 		r.mu.Unlock()
@@ -232,9 +232,6 @@ func (r *forgeRouter) transport(host, owner, repo string, graphql bool) (github.
 	if err != nil {
 		return nil, err
 	}
-	if graphql {
-		t = graphqlTransport(t)
-	}
 	r.mu.Lock()
 	if r.cache == nil {
 		r.cache = map[string]github.Transport{}
@@ -242,19 +239,6 @@ func (r *forgeRouter) transport(host, owner, repo string, graphql bool) (github.
 	r.cache[key] = t
 	r.mu.Unlock()
 	return t, nil
-}
-
-// graphqlTransport is t aimed at its host's GraphQL endpoint: a GitHub
-// Enterprise Server serves REST under /api/v3 and GraphQL at
-// /api/graphql, so the /graphql path a RESTClient posts to goes under
-// /api rather than /api/v3.
-func graphqlTransport(t github.Transport) github.Transport {
-	rt, ok := t.(*github.RealTransport)
-	if !ok || !strings.HasSuffix(rt.PathPrefix, "/v3") {
-		return t
-	}
-	return &github.RealTransport{Host: rt.Host, UseTLS: rt.UseTLS, Client: rt.Client,
-		PathPrefix: strings.TrimSuffix(rt.PathPrefix, "/v3")}
 }
 
 // forgeTransport is forgeRouter.transportFor: the transport for
