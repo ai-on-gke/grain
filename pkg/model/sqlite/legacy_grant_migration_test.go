@@ -96,6 +96,7 @@ var retiredGrants = []struct {
 	{81, "deployment-health", []string{"api:deployment:read", model.GrainHealthGrant}},
 	{82, "db-read", []string{model.GrainSQLReadGrant}},
 	{82, "db-write", []string{model.GrainSQLWriteGrant}},
+	{84, "self-repair", []string{model.GrainHostExecGrant}},
 }
 
 // Each retiring migration rewrites every stored grant of its capability
@@ -197,7 +198,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 	if want := append([]string{"self-debug"}, replacements...); !slices.Equal(repo.DefaultCapabilities, want) {
 		t.Errorf("repo default capabilities = %v, want %v", repo.DefaultCapabilities, want)
 	}
-	// Migration 83 rewrites retired names in repo_config.ci_capabilities as well.
+	// Migrations 83 and 84 rewrite retired names in repo_config.ci_capabilities as well.
 	if want := append([]string{"package-publish"}, replacements...); !slices.Equal(repo.CICapabilities, want) {
 		t.Errorf("repo CI capabilities = %v, want %v", repo.CICapabilities, want)
 	}

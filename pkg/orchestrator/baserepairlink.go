@@ -174,9 +174,10 @@ func forgetGreenNoted(ctx context.Context, store *model.Store, taskID string) er
 	})
 }
 
-// closeSupersededTasks closes each of ids that is not running, with note.
+// closeSupersededTasks closes each of ids that is not running, with note,
+// recording the close as by's for reason.
 func closeSupersededTasks(ctx context.Context, store *model.Store, ids []string, by model.Principal,
-	note string, now time.Time) error {
+	reason, note string, now time.Time) error {
 
 	var errs []error
 	for _, id := range ids {
@@ -188,7 +189,7 @@ func closeSupersededTasks(ctx context.Context, store *model.Store, ids []string,
 		if st == "" || st == model.StateClosed || st == model.StateRunning {
 			continue
 		}
-		if err := observeField(ctx, store, id, now, func(o *model.Observation) {
+		if err := closeTaskBy(ctx, store, id, now, by, reason, func(o *model.Observation) {
 			o.ClosedAt = &now
 		}); err != nil {
 			errs = append(errs, fmt.Errorf("orchestrator: closing %s: %w", id, err))

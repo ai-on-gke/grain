@@ -32,7 +32,9 @@ import (
 // and the capabilities of grain_config.console_sessions -- the standing
 // director and steward among them. Migrations 67-82 left
 // repo_config.ci_capabilities alone, and migration 83 rewrites past
-// retirements there via rewriteCapabilityListColumnMulti; earlier
+// retirements there via rewriteCapabilityListColumnMulti (a retirement
+// after it, such as migration 84's self-repair, rewrites that column
+// itself); earlier
 // migrations do not change, since stores already past them will not
 // re-run them.
 //

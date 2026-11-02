@@ -220,8 +220,9 @@ func EscalatedCapabilities(child, parent Task) []string {
 		held[g.Capability] = true
 	}
 	var out []string
+	listed := map[string]bool{}
 	for _, g := range child.Grants {
-		if IsCapabilityRef(g.Capability) {
+		if IsCapabilityRef(g.Capability) || listed[g.Capability] {
 			continue
 		}
 		// A dangerous api scope, or priority-dispatch, is a person's to
@@ -232,6 +233,7 @@ func EscalatedCapabilities(child, parent Task) []string {
 			continue
 		}
 		held[g.Capability] = true
+		listed[g.Capability] = true
 		out = append(out, g.Capability)
 	}
 	// A capability reference the parent's recorded grants do not cover

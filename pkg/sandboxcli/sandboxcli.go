@@ -538,6 +538,9 @@ func (c *sandboxCLI) run(args []string) error {
 	case "quarantine":
 		return c.quarantine(p)
 	case "metrics":
+		if err := p.only("metrics", "window", "since", "until", "repo", "author"); err != nil {
+			return err
+		}
 		if section := p.optArg(0); section != "" {
 			return c.fs("deploy://metrics/"+section, metricsQuery(p))
 		}
@@ -545,6 +548,9 @@ func (c *sandboxCLI) run(args []string) error {
 	case "health":
 		return c.fs("deploy://health", nil)
 	case "log":
+		if err := p.only("log", "source", "since", "until", "priority", "min-priority", "contains", "max-lines", "lines", "tail"); err != nil {
+			return err
+		}
 		uri := "deploy://grain.log"
 		if source := grainLogSource(p); source != "" {
 			uri += "/" + source

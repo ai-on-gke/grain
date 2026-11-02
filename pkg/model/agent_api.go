@@ -191,6 +191,13 @@ const (
 	GrainSQLRef        = GrainCapabilityServerID + "#" + GrainSQLMethod
 	GrainSQLReadGrant  = GrainSQLRef + `={"write":false}`
 	GrainSQLWriteGrant = GrainSQLRef + `={"write":true}`
+
+	// GrainHostExecMethod runs shell commands on grain's own host, each
+	// one only after a live reply in the task's chat (formerly
+	// self-repair). Dangerous: only a person may grant it.
+	GrainHostExecMethod = "host-exec"
+	GrainHostExecRef    = GrainCapabilityServerID + "#" + GrainHostExecMethod
+	GrainHostExecGrant  = GrainHostExecRef + "={}"
 )
 
 func init() {
@@ -200,6 +207,7 @@ func init() {
 		}
 		return protocol.GrantCovered
 	})
+	protocol.RequirePersonGrant(GrainCapabilityServerID, GrainHostExecMethod)
 }
 
 // IsGrainJournalGrant reports whether grant names grain#journal (recorded or
@@ -230,6 +238,21 @@ func IsGrainHealthGrant(grant string) bool {
 // HasGrainHealth reports whether any grant in grants opens grain#health.
 func HasGrainHealth(grants []string) bool {
 	return slices.ContainsFunc(grants, IsGrainHealthGrant)
+}
+
+// IsGrainHostExecGrant reports whether grant names grain#host-exec
+// (recorded or bare) or the retired bare self-repair alias.
+func IsGrainHostExecGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if s == "self-repair" {
+		return true
+	}
+	return CapabilityGrantRef(s) == GrainHostExecRef
+}
+
+// HasGrainHostExec reports whether any grant in grants opens grain#host-exec.
+func HasGrainHostExec(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGrainHostExecGrant)
 }
 
 // ParseGrainSQLGrant reports whether grant names grain#sql (recorded or bare)
@@ -295,6 +318,7 @@ var legacyGrantReplacements = map[string]string{
 	"db-write":         GrainSQLWriteGrant,
 	"self-upgrade":     APIGrantPrefix + "self-upgrade",
 	"test-quarantine":  APIGrantPrefix + "test-quarantine",
+	"self-repair":      GrainHostExecGrant,
 }
 
 // legacyGrantMultiReplacements maps retired bare capabilities that split into

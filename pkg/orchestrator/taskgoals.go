@@ -524,7 +524,7 @@ func meetGoal(ctx context.Context, deps Deps, task model.Task, g model.TaskGoal,
 // closeOnGoal closes task with outcome goal-met and a note naming the
 // evidence.
 func closeOnGoal(ctx context.Context, store *model.Store, task model.Task, g model.TaskGoal, now time.Time) error {
-	if err := observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+	if err := closeTask(ctx, store, task.ID, now, fmt.Sprintf("goal met (%s)", g.Kind), func(o *model.Observation) {
 		o.ClosedAt = &now
 		if o.CompletedAt == nil {
 			o.CompletedAt = &now

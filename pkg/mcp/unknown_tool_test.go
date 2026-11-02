@@ -36,7 +36,7 @@ func TestAnUnknownToolNamesTheCapabilityThatWouldServeIt(t *testing.T) {
 	if err == nil {
 		t.Fatal("calling a tool this server does not serve succeeded")
 	}
-	if !strings.Contains(err.Error(), "self-repair") {
+	if !strings.Contains(err.Error(), "grain#host-exec") {
 		t.Errorf("the refusal does not name the capability that serves it: %v", err)
 	}
 	if !strings.Contains(err.Error(), "a human attaches it") {

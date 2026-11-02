@@ -152,11 +152,17 @@ var commandForgeSkippedHeaders = map[string]bool{
 }
 
 // endpoint is u as the tool's api command takes it: relative to its REST
-// API when u is under APIBase, and the whole URL otherwise.
+// API when u is under APIBase, and the whole URL otherwise. The host's
+// GraphQL endpoint -- /api/graphql beside an Enterprise Server's
+// /api/v3, where github.RealTransport sends GraphQL -- is the tool's own
+// "graphql", which it posts to wherever its host serves GraphQL.
 func (t *CommandForgeTransport) endpoint(u *url.URL) string {
 	full := u.String()
 	if t.APIBase != "" {
 		base := strings.TrimSuffix(t.APIBase, "/")
+		if root, ok := strings.CutSuffix(base, "/v3"); ok && full == root+"/graphql" {
+			return "graphql"
+		}
 		if rest, ok := strings.CutPrefix(full, base+"/"); ok {
 			return rest
 		}

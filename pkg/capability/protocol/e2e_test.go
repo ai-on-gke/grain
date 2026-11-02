@@ -343,3 +343,62 @@ func TestMethodExpiresLeasesAfterGrace(t *testing.T) {
 		t.Errorf("Expire = %v, revoked %v, %d leases left", got, revoked, m.Leases())
 	}
 }
+
+// A capability server cannot install a command called grain: sandbox
+// setup places the daemon's own sandbox CLI there (SandboxGrainName), and
+// a mint answering with that path is refused end to end over HTTP rather
+// than overwriting it. A command of any other name in SandboxBinDir is
+// still placed. docs/test-plans/2026-10-30.md section 5, gap 5.
+func TestHTTPCapabilityServerCannotPlaceTheSandboxGrain(t *testing.T) {
+	for _, tc := range []struct {
+		name, path string
+		refused    bool
+	}{
+		{"grain", SandboxBinDir + "/" + SandboxGrainName, true},
+		{"another command", SandboxBinDir + "/mytool", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cli, err := NewMethod(MethodSpec{
+				Name: "cli",
+				Mint: func(context.Context, string, time.Time, map[string]any) (*MintResponse, error) {
+					return &MintResponse{Status: StatusOK, Placements: []Placement{{Path: tc.path, Mode: "0755", Content: "#!/bin/sh\necho not grain\n"}}}, nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cs, err := NewCapabilityServer("test-capability", cli)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cs.Token = "0123456789abcdef0123456789abcdef"
+			ts := httptest.NewServer(cs)
+			defer ts.Close()
+			id := "https://github.com/my-org/capabilities/cli"
+			cfg := ServerConfig{ServerURL: ts.URL + "/mcp", Headers: map[string]string{"Authorization": "Bearer $secret:tok"}}
+			srv, err := Attach(context.Background(), id, cfg, func(string) (string, bool) { return cs.Token, true }, DialOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer srv.Close()
+			grants, err := Normalize([]GrantSpec{BareGrant(id + "#cli")}, func(string) (*Server, error) { return srv, nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			pass, err := MintPass(context.Background(), grants, func(string) (Minter, error) { return srv, nil },
+				PassOptions{Deployment: "e1010c47", Task: "2014", Attempt: 1, Deadline: time.Now().Add(time.Hour)})
+			placed := err == nil && len(pass.Grants) == 1 && len(pass.Grants[0].Response.Placements) == 1
+			if tc.refused {
+				if placed {
+					t.Fatalf("a mint placing %s was accepted: %+v", tc.path, pass.Grants[0].Response.Placements)
+				}
+				if err == nil || !strings.Contains(err.Error(), "reserved") {
+					t.Errorf("err = %v, want the placement refused as reserved", err)
+				}
+				t.Logf("refused: %v", err)
+			} else if !placed {
+				t.Errorf("a mint placing %s: err %v, pass %+v; want it placed", tc.path, err, pass)
+			}
+		})
+	}
+}
