@@ -214,8 +214,8 @@ func TestSandboxCLIAgainstTheProxy(t *testing.T) {
 		t.Errorf("src without self-debug: %d %s", code, errOut)
 	}
 	_, errOut, code = run("db", "query", "SELECT 1")
-	if code != 1 || !strings.Contains(errOut, `"db-read"`) {
-		t.Errorf("db query without db-read: %d %s", code, errOut)
+	if code != 1 || !strings.Contains(errOut, `"https://grain.dev/capabilities/grain#sql"`) {
+		t.Errorf("db query without grain#sql: %d %s", code, errOut)
 	}
 }
 
