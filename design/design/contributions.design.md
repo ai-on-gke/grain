@@ -62,9 +62,8 @@ Grain automatically imports merged task grainfiles into its backlog, watched by 
 
 Developers iterating interactively and contributors working outside grain open standard GitHub pull requests directly against the repository.
 
-- **No adoption.** Grain does not adopt external PRs: it does not track them as tasks, push to their branches, or submit them to its merge queue. The author iterates on their own PR, and it merges through the repository's normal GitHub flow once every required check is green and a human has approved it. Together, the grain review check and human approval meet the *Reviews* rule for code (at least two entities: the grain agent and a human).
 - **Required, blocking GitHub check.** The grain review (`grain/review`) is a required, blocking GitHub check that runs on every new head SHA pushed to the PR.
-- **Who triggers it.** It runs automatically on PRs from **organization members and repository collaborators**. A PR from anyone else is not reviewed automatically, protecting the model budget. *(Open question: whether a maintainer can trigger it manually on an outside contributor's PR, for example with a label. Recommendation: yes, scoped to the labeled head SHA so new commits require re-triggering.)*
+- **Who triggers it.** It runs automatically on PRs from **organization members and repository collaborators**. A PR from anyone else is not reviewed automatically, protecting the model budget. External PRs need to be reviewed by an organization member before the grain check can be performed.
 - **How it runs (trust model).**
   - The model never runs inside GitHub Actions. Fork PRs get no repository secrets, and placing a model credential in a workflow job that reads untrusted PR content breaks the trust boundary.
   - Instead, the PR event—through grain's GitHub App, or a thin, secretless Actions workflow calling grain's API—asks grain to review that head SHA. Grain runs the reviewer in its own isolated sandbox, with **no write access** to the PR's branch or repository, and posts the verdict via the GitHub App as a check run plus inline review comments.
