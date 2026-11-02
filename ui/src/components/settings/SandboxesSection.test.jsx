@@ -353,6 +353,14 @@ describe("SandboxesSection", () => {
     });
     expect(k8sGranuleOpt).not.toBeDisabled();
 
+    // "none" is a control-plane-only daemon now that remote executors
+    // are gone, and is labelled as one.
+    expect(
+      screen.getByRole("option", {
+        name: "None (control plane only) — unavailable (needs -disable-native-sandboxes at daemon startup)",
+      }),
+    ).toBeDisabled();
+
     expect(
       screen.getByText(
         /Each run executes in a Kubernetes container pod scheduled on the cluster, sharing the node kernel \(no VM\)\./i,

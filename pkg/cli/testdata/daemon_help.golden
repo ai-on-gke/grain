@@ -86,7 +86,7 @@ Usage of grain daemon:
   -default-target-repo string
     	owner/name a task created through the UI/API with no repo of its own targets
   -disable-native-sandboxes
-    	disable native sandboxes on this host -- in this mode only remote execution sandboxes can exist
+    	select sandbox backend "none": run the control plane only -- no sandbox is created, so no task runs (for tests and walkthroughs)
   -docker-root-dir docker info
     	path to the local docker engine's own data root, for the UI's host disk figures only (grain/task-148): the sandbox image and every granule VM's disk overlay are written there rather than under -sandbox-dir, so on a deployment that gives sandboxes a volume of their own it is a disk worth a figure. Empty asks docker info for it once at startup, which is right whenever the daemon can reach the docker socket and sees that path where dockerd does; name it here when it cannot, or when this process sees the same directory at a path of its own. A path this process cannot stat is logged once and left out, not reported as a broken figure -- a containerised daemon is usually shown docker's socket and not the tree behind it
   -flag-names grain daemon
