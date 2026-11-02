@@ -562,6 +562,18 @@ GRAIN_GCP_SERVICE_ACCOUNT_KEY_FILE="${GRAIN_GCP_SERVICE_ACCOUNT_KEY_FILE:-}"
 # "none" turns that off.
 GRAIN_IAP_RESOURCE="${GRAIN_IAP_RESOURCE:-}"
 GRAIN_IAP_AUDIENCE="${GRAIN_IAP_AUDIENCE:-}"
+# Who the daemon admits as themselves once IAP (or another identity
+# verifier) has authenticated them (-ui-allowed-principals): a
+# comma-separated user:/group:/domain:/serviceAccount: list. Unset on a
+# re-run keeps whatever the installed grain-daemon.service already passes
+# (resolve_allowed_principals); empty or "none" clears an installed one
+# and leaves the daemon's own default -- the owner account plus the
+# service accounts grain provisions -- which matches no IAP email.
+GRAIN_ALLOWED_PRINCIPALS_GIVEN=0
+if [ "${GRAIN_ALLOWED_PRINCIPALS+set}" = set ]; then
+  GRAIN_ALLOWED_PRINCIPALS_GIVEN=1
+fi
+GRAIN_ALLOWED_PRINCIPALS="${GRAIN_ALLOWED_PRINCIPALS:-}"
 
 # --- the config repository (pkg/staterepo) ------------------------------
 #
@@ -1095,6 +1107,14 @@ Recognized variables:
                                       (projects/N/iap_web/compute/services/S)
                                       whose IAP access grain reconciles; "none"
                                       turns that off. Seeded once
+  GRAIN_ALLOWED_PRINCIPALS           comma-separated principals admitted as
+                                      themselves once IAP has authenticated
+                                      them (-ui-allowed-principals), e.g.
+                                      user:you@example.com,domain:example.com.
+                                      Unset keeps the installed unit's flag;
+                                      empty or "none" clears it to the daemon's
+                                      own default (the owner account and
+                                      grain's service accounts)
   GRAIN_GCP_SERVICE_ACCOUNT_KEY_FILE a minter key to seed under the gcp-key-minter
                                       secret. Written on *every* run, unlike the
                                       seeded-once values above: the deploy that
@@ -2481,6 +2501,115 @@ resolve_policy() {
 # --- end of the local policy ---------------------------------------------------
 
 if ! resolve_policy /etc/systemd/system/grain-daemon.service; then
+  exit 2
+fi
+
+# --- the allowed principals (GRAIN_ALLOWED_PRINCIPALS) -------------------------
+
+# normalize_allowed_principals prints VALUE the way the daemon reads it
+# (pkg/ui/allowlist.go's SplitAllowedPrincipals and ParseAllowedPrincipals:
+# comma-separated user:/group:/serviceAccount:/domain: entries, blanks
+# around each entry dropped, empty ones skipped), or says on stderr why
+# the daemon could not use it and fails. Dropping spaces and refusing
+# whitespace, quotes, backslashes, '$' and '%' inside an entry also keeps
+# the unquoted ExecStart in grain-daemon.service from splitting the list
+# into separate daemon arguments or interpolating systemd specifiers.
+normalize_allowed_principals() {
+  local value="$1" origin="$2" raw entry prefix val parts=() out=""
+  raw="${value//$'\n'/,}"
+  IFS=, read -r -a parts <<<"$raw"
+  for entry in "${parts[@]}"; do
+    entry="${entry#"${entry%%[![:space:]]*}"}"
+    entry="${entry%"${entry##*[![:space:]]}"}"
+    if [ -z "$entry" ]; then
+      continue
+    fi
+    if [[ "$entry" != *:* ]]; then
+      echo "setup.sh: allowed principal \"$entry\" ($origin) must start with user:, serviceAccount:, group:, or domain:" >&2
+      return 1
+    fi
+    prefix="${entry%%:*}"
+    val="${entry#*:}"
+    prefix="${prefix#"${prefix%%[![:space:]]*}"}"
+    prefix="${prefix%"${prefix##*[![:space:]]}"}"
+    val="${val#"${val%%[![:space:]]*}"}"
+    val="${val%"${val##*[![:space:]]}"}"
+    if [ -z "$val" ]; then
+      echo "setup.sh: allowed principal \"$entry\" ($origin) has an empty ${prefix}: value" >&2
+      return 1
+    fi
+    if [[ "$prefix" =~ [[:space:]\"\'\\\$%] ]] || [[ "$val" =~ [[:space:]\"\'\\\$%] ]]; then
+      echo "setup.sh: allowed principal \"$entry\" ($origin) must not contain spaces, quotes, backslashes, '\$' or '%'" >&2
+      return 1
+    fi
+    case "$prefix" in
+      user|serviceAccount|group)
+        if [[ ! "$val" =~ ^[^@]+@[^@]+$ ]]; then
+          echo "setup.sh: allowed principal \"$entry\" ($origin): $prefix entry must be an email address" >&2
+          return 1
+        fi
+        ;;
+      domain)
+        if [[ "$val" == *@* ]] || [[ "$val" == */* ]]; then
+          echo "setup.sh: allowed principal \"$entry\" ($origin): domain entry must be a bare domain such as example.com" >&2
+          return 1
+        fi
+        ;;
+      *)
+        echo "setup.sh: allowed principal \"$entry\" ($origin) has unknown prefix \"$prefix:\" (want user:, serviceAccount:, group:, or domain:)" >&2
+        return 1
+        ;;
+    esac
+    out="${out:+$out,}${prefix}:${val}"
+  done
+  if [ -z "$out" ]; then
+    echo "setup.sh: allowed principals \"$value\" ($origin) names no principal at all" >&2
+    return 1
+  fi
+  printf '%s\n' "$out"
+}
+
+# resolve_allowed_principals settles GRAIN_ALLOWED_PRINCIPALS for the unit
+# about to be written over UNIT: an explicit empty value or "none" clears
+# it; another explicit value is normalized and checked; when unset in the
+# caller's environment (a bare `sudo ./setup.sh` update), the installed
+# unit's -ui-allowed-principals is checked and kept so an update neither
+# locks out the IAP allowlist nor reverts to the daemon's default.
+resolve_allowed_principals() {
+  local unit="$1" installed
+  installed="$(installed_unit_flag "$unit" ui-allowed-principals)"
+  if [ "${GRAIN_ALLOWED_PRINCIPALS_GIVEN:-0}" = "1" ]; then
+    if [ -z "$GRAIN_ALLOWED_PRINCIPALS" ] || [ "$GRAIN_ALLOWED_PRINCIPALS" = "none" ]; then
+      GRAIN_ALLOWED_PRINCIPALS=""
+      if [ -n "$installed" ]; then
+        log "Allowed principals: removing $installed (kept in $unit)"
+      fi
+      return 0
+    fi
+    GRAIN_ALLOWED_PRINCIPALS="$(normalize_allowed_principals "$GRAIN_ALLOWED_PRINCIPALS" \
+      "from GRAIN_ALLOWED_PRINCIPALS")" || return 1
+    if [ -n "$installed" ] && [ "$installed" != "$GRAIN_ALLOWED_PRINCIPALS" ]; then
+      log "Allowed principals: changing from $installed (the installed $unit) to $GRAIN_ALLOWED_PRINCIPALS"
+    else
+      log "Allowed principals: $GRAIN_ALLOWED_PRINCIPALS (as given)"
+    fi
+    return 0
+  fi
+  if [ -z "$installed" ]; then
+    GRAIN_ALLOWED_PRINCIPALS=""
+    return 0
+  fi
+  if ! GRAIN_ALLOWED_PRINCIPALS="$(normalize_allowed_principals "$installed" "kept from $unit")"; then
+    echo "          pass GRAIN_ALLOWED_PRINCIPALS=... (or GRAIN_ALLOWED_PRINCIPALS=none) to replace it" >&2
+    return 1
+  fi
+  log "Allowed principals: keeping $GRAIN_ALLOWED_PRINCIPALS from the installed $unit"
+  log "  (pass GRAIN_ALLOWED_PRINCIPALS=... to change it, or GRAIN_ALLOWED_PRINCIPALS=none to clear it)"
+}
+
+# --- end of the allowed principals ---------------------------------------------
+
+if ! resolve_allowed_principals /etc/systemd/system/grain-daemon.service; then
   exit 2
 fi
 
@@ -6271,6 +6400,7 @@ write_systemd_units() {
   [ -n "$GRAIN_GCP_PROJECT" ] && daemon_args+=(-gcp-project "$GRAIN_GCP_PROJECT")
   [ -n "$GRAIN_GCP_SERVICE_ACCOUNT_EMAIL" ] && daemon_args+=(-gcp-agent-service-account "$GRAIN_GCP_SERVICE_ACCOUNT_EMAIL")
   [ -n "$GRAIN_IAP_RESOURCE" ] && daemon_args+=(-iap-resource "$GRAIN_IAP_RESOURCE")
+  [ -n "$GRAIN_ALLOWED_PRINCIPALS" ] && daemon_args+=(-ui-allowed-principals "$GRAIN_ALLOWED_PRINCIPALS")
   [ -n "$GRAIN_TARGET_REPO" ] && daemon_args+=(-default-target-repo "$GRAIN_TARGET_REPO")
   if [ -n "$GRAIN_SANDBOX_CPUS" ]; then
     daemon_args+=(-sandbox-cpus "$GRAIN_SANDBOX_CPUS")

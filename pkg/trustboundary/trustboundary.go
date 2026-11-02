@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v9"
+const Version = "trust-boundary/v10"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -75,6 +75,10 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v10 added the single-tenant access gate, verified-identity seam and
+// principal allowlist (grain/task-2434, 2026-11-02 security review finding 1):
+// pkg/ui/accesscode.go, single_tenant.go, verifier.go and allowlist.go.
 //
 // v8 added release-promotion (grain/task-1236): the person-only step
 // that makes a pending release official -- .grain/workflows/promote-release.yml,
@@ -136,6 +140,8 @@ var Categories = []Category{
 		prefixes:    []string{"pkg/access/", "pkg/iapreconciler/", "pkg/policy/", "pkg/jwks/"},
 		files: []string{
 			"pkg/ui/server.go", "pkg/ui/principal.go", "pkg/ui/access.go",
+			"pkg/ui/accesscode.go", "pkg/ui/single_tenant.go",
+			"pkg/ui/allowlist.go", "pkg/ui/verifier.go",
 			"pkg/ui/auth.go", "pkg/ui/agent_keys.go", "pkg/ui/github_tokens.go",
 			"pkg/ui/csrf.go", "pkg/ui/hostguard.go", "pkg/ui/security_headers.go",
 			"pkg/ui/team_scope.go",

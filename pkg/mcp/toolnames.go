@@ -123,7 +123,7 @@ var capabilityForTool = map[string]string{
 	"list_issues":                "read-issues",
 	"read_issue":                 "read-issues",
 	"query_grain_db":             "https://grain.dev/capabilities/grain#sql",
-	"exec_grain_db":              `https://grain.dev/capabilities/grain#sql={"write":true}`,
+	"execute_grain_db":           `https://grain.dev/capabilities/grain#sql={"write":true}`,
 }
 
 // CapabilityForTool names the capability that puts tool on a run's

@@ -472,7 +472,7 @@ func (c *Client) policyEditRefusalFor(ctx context.Context, id, grant string) err
 // rather than offer a grant filing would turn away.
 func (c *Client) markPolicyRefusals(ctx context.Context, methods []CapabilityMethod, subject model.CapabilitySubject) ([]CapabilityMethod, error) {
 	policy, configured, err := c.capabilityPolicyFor(ctx)
-	if err != nil || len(policy.Rules) == 0 {
+	if err != nil {
 		return methods, err
 	}
 	for i := range methods {

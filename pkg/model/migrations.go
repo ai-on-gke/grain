@@ -538,6 +538,72 @@ var Migrations = []Migration{
 			"DROP TABLE IF EXISTS `executor_token_sequence`",
 		},
 	},
+	{
+		Version:     88,
+		Description: "rewrite stored repo-read:<repo> and repo-write:<repo> grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/repo#read / #write {repo} (the in-process providers are retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames, err := legacyRepoAccessRenames(ctx, tx)
+			if err != nil || len(renames) == 0 {
+				return err
+			}
+			if err := rewriteLegacyGrantsMulti(renames)(ctx, tx); err != nil {
+				return err
+			}
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", renames)
+		},
+	},
+	{
+		Version:     89,
+		Description: "rebuild merge_batch keyed by task as well as branch: one overlap re-check per change",
+		// Neither engine changes a primary key in place. The rows are
+		// copied out to a table with no constraints at all (CREATE TABLE
+		// ... AS, so that no constraint name is left behind to collide
+		// with the new table's on Postgres), and back into merge_batch
+		// created afresh from the statement a new store uses.
+		Statements: []string{
+			"CREATE TABLE `merge_batch_v88` AS SELECT * FROM `merge_batch`",
+			"DROP TABLE `merge_batch`",
+			mergeBatchTable,
+			"INSERT INTO `merge_batch` (`owner`,`name`,`branch`,`task_id`,`ref`,`base_commit`,`commit`," +
+				"`members`,`run_id`,`started_at`,`finished_at`,`conclusion`,`detail`,`splits`,`queued`," +
+				"`recheck_of`,`recheck_detail`,`recheck_at`) " +
+				"SELECT `owner`,`name`,`branch`,'',`ref`,`base_commit`,`commit`," +
+				"`members`,`run_id`,`started_at`,`finished_at`,`conclusion`,`detail`,`splits`,`queued`," +
+				"`recheck_of`,`recheck_detail`,`recheck_at` FROM `merge_batch_v88`",
+			"DROP TABLE `merge_batch_v88`",
+		},
+	},
+	{
+		Version:     90,
+		Description: "fold retired in-process catalogue entries into api_scopes.presets in grain_config.capability_policy",
+		Up: foldRetiredCatalogueInProcess(
+			map[string]string{
+				"team-broadcast":   "team-broadcast",
+				"dispatch-control": "dispatch-control",
+				"pipeline-control": "pipeline-control",
+				"memory":           "memory",
+				"release-notes":    "release-notes",
+				"self-upgrade":     "self-upgrade",
+				"test-quarantine":  "test-quarantine",
+			},
+			map[string][]string{
+				"team-broadcast":        {"api:team-broadcast"},
+				"dispatch-control":      {"api:dispatch-control"},
+				"pipeline-control":      {"api:pipeline-control"},
+				"memory":                {"api:memory"},
+				"release-notes":         {"api:release-notes"},
+				"self-upgrade":          {"api:self-upgrade"},
+				"test-quarantine":       {"api:test-quarantine"},
+				"grain-log":             {GrainJournalGrant},
+				"deployment-health":     {"api:deployment:read", GrainHealthGrant},
+				"db-read":               {GrainSQLReadGrant},
+				"db-write":              {GrainSQLWriteGrant},
+				"self-repair":           {GrainHostExecGrant},
+				GitPushAnyRefCapability: {GitPushAnyRefGrant},
+				"corp-research":         {CorpResearchGrant},
+			},
+		),
+	},
 }
 
 // CorpResearchGrant is what migration 86 rewrote stored corp-research grants
@@ -633,12 +699,7 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 	for v := from + 1; v <= SchemaVersion; v++ {
 		m, _ := migrationFor(v)
 		for _, stmt := range m.Statements {
-			if _, err := tx.ExecContext(ctx, stmt); err != nil {
-				if strings.Contains(strings.ToUpper(stmt), " ADD COLUMN ") &&
-					(strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") ||
-						strings.Contains(strings.ToLower(err.Error()), "already exists")) {
-					continue
-				}
+			if err := execMigrationStatement(ctx, tx, stmt); err != nil {
 				return fmt.Errorf("migrating schema to %d (%s): %w", v, m.Description, err)
 			}
 		}
@@ -658,6 +719,32 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 		return fmt.Errorf("migrating schema %d to %d: restamping: %w", from, SchemaVersion, err)
 	}
 	return tx.Commit()
+}
+
+// execMigrationStatement runs one of a migration's Statements, passing over
+// an ADD COLUMN whose column the store already has. That statement runs
+// under a savepoint: Postgres aborts the whole transaction on any failed
+// statement (SQLSTATE 25P02 on everything after it), so without rolling
+// back to the savepoint the error it passes over would fail the next
+// statement instead, under that statement's name.
+func execMigrationStatement(ctx context.Context, tx *sql.Tx, stmt string) error {
+	if !strings.Contains(strings.ToUpper(stmt), " ADD COLUMN ") {
+		_, err := tx.ExecContext(ctx, stmt)
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "SAVEPOINT grain_add_column"); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, stmt); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") &&
+			!strings.Contains(strings.ToLower(err.Error()), "already exists") {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT grain_add_column")
+		return err
+	}
+	_, err := tx.ExecContext(ctx, "RELEASE SAVEPOINT grain_add_column")
+	return err
 }
 
 // storeViews names the views the store holds, whichever build made

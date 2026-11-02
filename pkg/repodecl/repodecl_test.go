@@ -223,6 +223,19 @@ func TestATemplatesCapabilitiesAcceptArbitraryCapabilities(t *testing.T) {
 			t.Errorf("%q: error = %q, want it named and %q", tc.entry, msg, tc.want)
 		}
 	}
+	// The repo server's spelling of the same access answers to the same
+	// rule: no file reaches grain's own configuration through it either.
+	for _, entry := range []string{
+		model.RepoWriteGrant(model.RepoRef{Owner: "grain", Name: "config"}),
+		model.RepoReadGrant(model.RepoRef{Owner: "Grain", Name: "Config"}),
+	} {
+		msg := loadErr(t, map[string]string{
+			".grain/templates/nightly.yml": "title: Bump dependencies\ncapabilities: ['" + entry + "']\n",
+		})
+		if !strings.Contains(msg, "grain's own configuration") {
+			t.Errorf("%s: error = %q, want grain's own configuration refused", entry, msg)
+		}
+	}
 }
 
 // A schedule takes its repository access from the template it fires,
@@ -663,5 +676,30 @@ func TestDeclaredIssueImportIsRefusedAsAuthority(t *testing.T) {
 		if !strings.Contains(err, want) {
 			t.Fatalf("Load = %s\nwant it to say %q", err, want)
 		}
+	}
+}
+
+func TestDeclaredRepoCapabilityRejectsMissingRepoAndScheduleAccess(t *testing.T) {
+	for _, bad := range []string{
+		"https://grain.dev/capabilities/repo#read",
+		`https://grain.dev/capabilities/repo#read={"repo":"not-a-repo"}`,
+		"https://grain.dev/capabilities/repo#write",
+		`https://grain.dev/capabilities/repo#write={"repo":"not-a-repo"}`,
+	} {
+		err := loadErr(t, map[string]string{
+			".grain/templates/triage.yml": "title: Triage\ncapabilities:\n  - '" + bad + "'\n",
+		})
+		if !strings.Contains(err, "does not name a repository") {
+			t.Errorf("template capability %q: got %q, want 'does not name a repository'", bad, err)
+		}
+	}
+
+	schedErr := loadErr(t, map[string]string{
+		".grain/templates/triage.yml": "title: Triage\n",
+		".grain/schedules/nightly.yml": "template: triage\nevery:\n  hours: 6\ncapabilities:\n" +
+			"  - capability: https://grain.dev/capabilities/repo#write\n    with:\n      repo: acme/widgets\n",
+	})
+	if !strings.Contains(schedErr, "repository access belongs on the template it fires") {
+		t.Errorf("schedule with repo#write {repo}: got %q, want template-only refusal", schedErr)
 	}
 }

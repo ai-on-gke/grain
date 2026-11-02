@@ -88,6 +88,19 @@ type FiledProposal struct {
 	// Queued says: Queued is its approval, and the park is a second thing
 	// standing between it and a run that only an operator lifts.
 	Parked string
+	// DroppedDefaults is the deployment and repository default grants
+	// the capability policy kept off the proposal when it was filed, each
+	// with the policy's reason (ui.Task.DroppedDefaults). Reported
+	// because nobody asked for a default, so nothing else tells the run
+	// that the follow-up it just filed will start without one.
+	DroppedDefaults []DroppedDefault
+}
+
+// DroppedDefault is one default grant the capability policy kept off a
+// proposal, and why (ui.DroppedDefault).
+type DroppedDefault struct {
+	Grant  string
+	Reason string
 }
 
 // SupersedeKept is one dependent a supersede left where it was, and why
@@ -1090,9 +1103,9 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 					return Result{Text: "Could not file proposal: " + err.Error(), IsError: true}
 				}
 				standing := proposalStanding(task, filed)
-				return Result{Text: fmt.Sprintf("Proposed task #%s is visible now: %s. %s%s%s",
+				return Result{Text: fmt.Sprintf("Proposed task #%s is visible now: %s. %s%s%s%s",
 					filed.ID, relativeProposalURL(filed), standing, notBeforeOutcome(task.NotBefore),
-					supersedeOutcome(task.Supersedes, filed))}
+					supersedeOutcome(task.Supersedes, filed), droppedDefaultsOutcome(filed.DroppedDefaults))}
 			}
 
 			sink.mu.Lock()
@@ -1245,6 +1258,22 @@ func supersedeOutcome(asked string, filed FiledProposal) string {
 	return fmt.Sprintf(" Task %s is still open: grain would not close it -- a task that has "+
 		"already been dispatched, has a pull request, lives in another repository or does not "+
 		"exist is left for a human. The note on the new task says which.", asked)
+}
+
+// droppedDefaultsOutcome is what a propose_task call -- live, or `grain
+// task propose` -- is told about the default grants the capability
+// policy kept off the task it just filed: one sentence per grant, with
+// the policy's reason, and "" when none was dropped. The task's thread
+// carries the same note, but the run that filed it does not read that
+// thread, and a default is the one grant it never asked for and so would
+// not think to check.
+func droppedDefaultsOutcome(dropped []DroppedDefault) string {
+	var out string
+	for _, d := range dropped {
+		out += fmt.Sprintf(" Default grant %s was not attached to it: %s.",
+			d.Grant, strings.TrimSuffix(strings.TrimSpace(d.Reason), "."))
+	}
+	return out
 }
 
 // hashList is ids written "#1, #2".

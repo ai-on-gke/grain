@@ -49,6 +49,7 @@ import {
   optionsFor,
   resolveConditions,
   unknownConditions,
+  unknownValues,
 } from "../taskFilters.js";
 import { GlyphLabel } from "./ItemGlyph.jsx";
 import { ListSearchField, ListToolbar } from "./ListPrimitives.jsx";
@@ -234,15 +235,23 @@ export default function NarrowingBar({
       {((!editingFilters && conditions.length > 0) || unknown.length > 0) && (
         <div className="narrowing-chips">
           {!editingFilters &&
-            conditions.map(({ attr, cond, index }) => (
-              <Chip
-                key={index}
-                size="small"
-                label={describeCondition(attr, cond, config)}
-                onClick={() => setEditingFilters(true)}
-                onDelete={() => removeCondition(index)}
-              />
-            ))}
+            conditions.map(({ attr, cond, index }) => {
+              const bad = unknownValues(attr, cond);
+              return (
+                <Chip
+                  key={index}
+                  size="small"
+                  label={describeCondition(attr, cond, config)}
+                  {...(bad.length > 0 && {
+                    color: "warning",
+                    variant: "outlined",
+                    title: `${bad.map((v) => `“${v}”`).join(", ")} ${bad.length === 1 ? "is not a value" : "are not values"} ${attr.label} has, so ${bad.length === 1 ? "it matches" : "they match"} no task`,
+                  })}
+                  onClick={() => setEditingFilters(true)}
+                  onDelete={() => removeCondition(index)}
+                />
+              );
+            })}
           {unknown.map(({ cond, index, badOp }) => (
             <Chip
               key={`unknown-${index}`}

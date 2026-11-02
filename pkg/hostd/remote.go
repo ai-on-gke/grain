@@ -86,8 +86,9 @@ type RemoteStatus struct {
 }
 
 type remoteSession struct {
-	m    *mux.Mux
-	peer RemotePeer
+	m       *mux.Mux
+	peer    RemotePeer
+	carries carryRegistry
 }
 
 // Authorize reports whether token is the shared hostd token. With no
@@ -129,6 +130,7 @@ func (r *Remote) Serve(ctx context.Context, conn net.Conn, peer RemotePeer) {
 		_ = prev.m.Close()
 	}
 	r.logf("grain daemon: grain hostd on %s (build %s) connected from %s", peer.Host, peer.Build, peer.Addr)
+	go sess.acceptCarries()
 	select {
 	case <-ctx.Done():
 	case <-m.Done():
@@ -146,17 +148,22 @@ func (r *Remote) Serve(ctx context.Context, conn net.Conn, peer RemotePeer) {
 // Dial opens a stream to the connected hostd, which serves it as one
 // socket connection. With none connected it is ErrRemoteNotConnected.
 func (r *Remote) Dial(ctx context.Context) (net.Conn, error) {
+	_, st, err := r.dialSession(ctx)
+	return st, err
+}
+
+func (r *Remote) dialSession(ctx context.Context) (*remoteSession, net.Conn, error) {
 	r.mu.Lock()
 	sess := r.cur
 	r.mu.Unlock()
 	if sess == nil {
-		return nil, ErrRemoteNotConnected
+		return nil, nil, ErrRemoteNotConnected
 	}
 	st, err := sess.m.OpenStream(ctx)
 	if err != nil {
-		return nil, ErrRemoteNotConnected
+		return nil, nil, ErrRemoteNotConnected
 	}
-	return st, nil
+	return sess, st, nil
 }
 
 // WaitConnected blocks until a hostd is connected or ctx is done.
