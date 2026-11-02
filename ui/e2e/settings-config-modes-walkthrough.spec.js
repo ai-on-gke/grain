@@ -29,13 +29,28 @@ const EXTERNAL = "https://github.com/acme/grain-config";
 
 // withConfig answers GET /api/settings and /api/config with `extra`
 // folded in, so the page draws the mode `extra` names.
+//
+// A request still in flight when the test navigates away is cancelled
+// with its page, and the response it was reading is disposed under it
+// ("Response has been disposed"). Nobody is waiting for that answer any
+// more, so the handler lets it go rather than failing the test.
 async function withConfig(page, extra) {
   for (const glob of ["**/api/settings", "**/api/config"]) {
     await page.route(glob, async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
-      const response = await route.fetch();
-      const body = await response.json();
-      await route.fulfill({ response, json: { ...body, ...extra } });
+      let response, body;
+      try {
+        response = await route.fetch();
+        body = await response.json();
+      } catch (err) {
+        if (/disposed|closed|cancel/i.test(String(err))) return;
+        throw err;
+      }
+      await route
+        .fulfill({ response, json: { ...body, ...extra } })
+        .catch((err) => {
+          if (!/disposed|closed|cancel|handled/i.test(String(err))) throw err;
+        });
     });
   }
 }
