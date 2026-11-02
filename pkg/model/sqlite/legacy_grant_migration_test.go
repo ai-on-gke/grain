@@ -98,9 +98,10 @@ var retiredGrants = []struct {
 	{82, "db-read", []string{model.GrainSQLReadGrant}},
 	{82, "db-write", []string{model.GrainSQLWriteGrant}},
 	{84, "self-repair", []string{model.GrainHostExecGrant}},
+	{85, "git-push-any-ref", []string{model.GitPushAnyRefGrant}},
 	// corp-research is the Google build's: core has no alias for it, which
 	// that build registers with capability.Register (retiredAs).
-	{85, "corp-research", []string{model.CorpResearchGrant}},
+	{86, "corp-research", []string{model.CorpResearchGrant}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'
@@ -214,7 +215,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 	if want := append([]string{"self-debug"}, replacements...); !slices.Equal(repo.DefaultCapabilities, want) {
 		t.Errorf("repo default capabilities = %v, want %v", repo.DefaultCapabilities, want)
 	}
-	// Migrations 83, 84 and 85 rewrite retired names in repo_config.ci_capabilities as well.
+	// Migrations 83 to 86 rewrite retired names in repo_config.ci_capabilities as well.
 	if want := append([]string{"package-publish"}, replacements...); !slices.Equal(repo.CICapabilities, want) {
 		t.Errorf("repo CI capabilities = %v, want %v", repo.CICapabilities, want)
 	}
@@ -255,10 +256,10 @@ func storedGrantState(t *testing.T, ctx context.Context, db *sql.DB) map[string]
 	return out
 }
 
-// Migration 85 rewrites corp-research in every stored location and nothing
+// Migration 86 rewrites corp-research in every stored location and nothing
 // else, leaves a store already holding only the method grant untouched, and
 // changes nothing when it runs a second time.
-func TestMigration85RewritesCorpResearchIdempotently(t *testing.T) {
+func TestMigration86RewritesCorpResearchIdempotently(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
@@ -299,11 +300,11 @@ func TestMigration85RewritesCorpResearchIdempotently(t *testing.T) {
 	}
 	before := storedGrantState(t, ctx, db)
 
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 84 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 85 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-84 store: %v", err)
+		t.Fatalf("migrating a version-85 store: %v", err)
 	}
 	after := storedGrantState(t, ctx, db)
 
@@ -352,7 +353,7 @@ func TestMigration85RewritesCorpResearchIdempotently(t *testing.T) {
 	}
 
 	// Running it again is a no-op.
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 84 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 85 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {

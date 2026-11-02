@@ -121,7 +121,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			Audience:              s.tasks.Config.IAPAudience,
 			Issuer:                s.tasks.Config.IAPIssuer,
 			KeysURL:               s.tasks.Config.IAPKeysURL,
-			Mode:                  s.tasks.Config.IAPMode,
+			RequireIAP:            s.tasks.Config.RequireIAP,
 			LocalAPIToken:         s.localAPITokenNow(),
 			AccessSessionLifetime: s.tasks.Config.AccessSessionLifetime,
 		}))

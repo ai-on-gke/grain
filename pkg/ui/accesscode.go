@@ -301,8 +301,30 @@ func accessLifetime(cfg IAPConfig) time.Duration {
 // request came from: on a single-tenant daemon the code is the
 // credential wherever it is presented from.
 func presentsAccessCode(r *http.Request, cfg IAPConfig) bool {
+	if !accessCodeAccepted(r, cfg) {
+		return false
+	}
 	got, ok := bearerToken(r)
 	return ok && matchesAccessCode(got, cfg.LocalAPIToken)
+}
+
+// accessCodeAccepted reports whether r may authenticate with the access
+// code at all. Without -ui-require-iap it always may. With it, the code
+// counts only for a request straight from loopback that no proxy
+// relayed (relayedByProxy: no X-Forwarded-*, Forwarded or verifier
+// header), which keeps `kubectl exec deploy/grain -- grain ...` as a
+// break-glass path that does not depend on IAP; or for one a registered
+// verifier decides that declares AccessCodeWins, whose proxy keeps the
+// code as its own break-glass path. -ui-require-iap governs IAP only.
+func accessCodeAccepted(r *http.Request, cfg IAPConfig) bool {
+	if !cfg.RequireIAP {
+		return true
+	}
+	if isLoopbackRequest(r) && !relayedByProxy(r) {
+		return true
+	}
+	cv := cachedOrVerifyCaller(r)
+	return cv.present && cv.err == nil && cv.accessCodeWins
 }
 
 func bearerToken(r *http.Request) (string, bool) {
@@ -317,6 +339,9 @@ func bearerToken(r *http.Request) (string, bool) {
 // accessSessionIssued is when r's access session cookie was issued, if
 // it carries one the current code signed and it has not expired.
 func accessSessionIssued(r *http.Request, cfg IAPConfig) (time.Time, bool) {
+	if !accessCodeAccepted(r, cfg) {
+		return time.Time{}, false
+	}
 	c, err := r.Cookie(AccessCookieName)
 	if err != nil || c == nil {
 		return time.Time{}, false
@@ -564,6 +589,10 @@ const errAccessCodeNeeded = "this daemon is single-tenant and every caller shows
 	"sign in with it on the UI's \"Enter access code\" page, or send it as a bearer token " +
 	"(`grain access-code` prints it, to the account grain runs as and root)"
 
+const errIAPRequired = "this daemon requires IAP (-ui-require-iap): the access code is not accepted over the network, " +
+	"so sign in through the deployment's IAP URL; the code still works from the daemon's own host over loopback " +
+	"(kubectl exec deploy/grain -- grain ...)"
+
 const errAccessCodeLimited = "too many wrong access codes: wait a minute and try again"
 
 // singleTenantGate is a single-tenant daemon's access gate, ahead of
@@ -623,7 +652,8 @@ func (s *Server) singleTenantGate(w http.ResponseWriter, r *http.Request, cfg IA
 	if singleTenantOpenRoute(r) {
 		return true
 	}
-	if tok, ok := bearerToken(r); ok && couldBeAccessCode(tok, cfg.LocalAPIToken) {
+	codeAccepted := accessCodeAccepted(r, cfg)
+	if tok, ok := bearerToken(r); ok && codeAccepted && couldBeAccessCode(tok, cfg.LocalAPIToken) {
 		// A source over its own limit is refused before its code is
 		// looked at, so the refusal is the same whether the code was
 		// right; a wrong one is counted. Loopback is never refused a
@@ -648,6 +678,17 @@ func (s *Server) singleTenantGate(w http.ResponseWriter, r *http.Request, cfg IA
 		// Expired, or signed with a code since rotated.
 		clearAccessCookie(w, r)
 	}
+	if !codeAccepted {
+		// No code form to offer: behind IAP a browser that got here
+		// without an assertion bypassed the Gateway, and signs in by
+		// going through it.
+		if strings.HasPrefix(r.URL.Path, "/api/") || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+			writeError(w, http.StatusUnauthorized, errors.New(errIAPRequired))
+			return false
+		}
+		writeIAPRequiredPage(w)
+		return false
+	}
 	if strings.HasPrefix(r.URL.Path, "/api/") || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
 		writeError(w, http.StatusUnauthorized, errors.New(errAccessCodeNeeded))
 		return false
@@ -669,7 +710,14 @@ type AccessCodeRequest struct {
 func (s *Server) handleAccessCodeStatus(w http.ResponseWriter, r *http.Request) {
 	cfg, _ := IAPConfigFromContext(r.Context())
 	_, ok := accessSessionIssued(r, cfg)
-	writeJSON(w, http.StatusOK, map[string]any{"authenticated": ok})
+	resp := map[string]any{"authenticated": ok}
+	if cfg.RequireIAP {
+		// What `grain access-code` reads to say the code it prints works
+		// over loopback only.
+		resp["requireIAP"] = true
+		resp["accessCodeAccepted"] = accessCodeAccepted(r, cfg)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleAccessCodeLogin is POST /api/auth/access-code: the access code,
@@ -678,6 +726,10 @@ func (s *Server) handleAccessCodeStatus(w http.ResponseWriter, r *http.Request) 
 // UI on success and shown the page again otherwise.
 func (s *Server) handleAccessCodeLogin(w http.ResponseWriter, r *http.Request) {
 	cfg, _ := IAPConfigFromContext(r.Context())
+	if !accessCodeAccepted(r, cfg) {
+		writeError(w, http.StatusForbidden, errors.New(errIAPRequired))
+		return
+	}
 	isJSON := strings.HasPrefix(strings.TrimSpace(r.Header.Get("Content-Type")), "application/json")
 	fail := func(status int, msg string) {
 		if isJSON {
@@ -779,4 +831,28 @@ func writeAccessCodePage(w http.ResponseWriter, status int, msg string) {
 	if err := accessCodePage.Execute(w, msg); err != nil {
 		fmt.Fprintln(w, "enter access code")
 	}
+}
+
+var iapRequiredPage = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>grain: sign in through IAP</title>
+</head>
+<body>
+<h1>Sign in through IAP</h1>
+<p>This grain requires Identity-Aware Proxy and does not take an access code over the network.
+Open it at the deployment's IAP URL to sign in with your Google account.</p>
+</body>
+</html>
+`
+
+// writeIAPRequiredPage is what a browser without an assertion gets from a
+// -ui-require-iap daemon in place of the "Enter access code" page.
+func writeIAPRequiredPage(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusUnauthorized)
+	io.WriteString(w, iapRequiredPage)
 }

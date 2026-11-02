@@ -78,13 +78,9 @@ func (c *Client) ListCapabilityMethods(ctx context.Context) []CapabilityMethod {
 	}
 	configured, _ = intree.EnsureBuiltins(configured)
 	statuses := grainserver.Statuses()
-	inProcess := map[string]bool{}
-	for _, s := range statuses {
-		inProcess[s.ID] = true
-	}
 	if c.Config.CapabilityServers != nil {
 		for _, s := range c.Config.CapabilityServers.Statuses() {
-			if inProcess[s.ID] {
+			if grainserver.IsInProcessID(s.ID) {
 				continue
 			}
 			statuses = append(statuses, s)

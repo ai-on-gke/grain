@@ -217,9 +217,9 @@ capability.Register(capability.Method{
 
 - **Resolved and listed like `…/grain`.** `grainserver.Lookup` builds the server from every method registered on its ID, so admission normalizes and mints a grant of it with no `mcpServers` entry. `grainserver.IsInProcessGrant` treats it as in-process: it opens no listener, so it needs no isolated sandbox. `GET /api/capability-methods` lists it beside `…/grain`, so the picker offers it.
 - **The grant.** A method is granted as `<server>#<method>={}`. `RunGrant` forwards that grant, its bare reference and its aliases to the run, and `grain mcpserver` takes it without a warning. `DefaultOn` seeds the grant into `NewDeploymentConfig` and the shipped director session, exactly as `Registration.DefaultOn` does for a provider.
-- **Aliases.** Each alias is registered with `model.RegisterLegacyGrantAlias`, so `CanonicalLegacyGrant(s)` rewrites it wherever a grant is recorded, and a `settings/capabilities.yml` entry naming it binds the method too. The bare name keeps working wherever nothing rewrote it, such as a repository's `.grain` or an older grain/config. Rewriting the rows a store already holds is a migration in core's list (`pkg/model/migrations.go`; migration 85 does it for `corp-research`).
+- **Aliases.** Each alias is registered with `model.RegisterLegacyGrantAlias`, so `CanonicalLegacyGrant(s)` rewrites it wherever a grant is recorded, and a `settings/capabilities.yml` entry naming it binds the method too. The bare name keeps working wherever nothing rewrote it, such as a repository's `.grain` or an older grain/config. Rewriting the rows a store already holds is a migration in core's list (`pkg/model/migrations.go`; migration 86 does it for `corp-research`).
 - **Host tools.** An antigravity `HostToolGrant` is held by a run holding its method under any spelling: recorded, bare, or a registered alias. Its `Capability` may be the method grant or the retired bare name.
-- **What it cannot do.** A build cannot add methods to core's own `…/grain` server, and an alias cannot shadow one of core's retired names. `Register` panics on either.
+- **What it cannot do.** A build cannot add methods to core's own `…/grain` or `…/repo` servers, and an alias cannot shadow one of core's retired names. `Register` panics on either.
 
 ## Google Chat (`gchat#post`)
 

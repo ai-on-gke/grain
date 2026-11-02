@@ -315,7 +315,7 @@ type queueStatus struct {
 //   - A pull request that merged or closed. syncEntry is closing the task
 //     out on this same cycle, and this is past the point any of it is
 //     about a merge that has still to happen.
-func statusOf(e queueEntry, isMergeHead, blocked bool, review reviewState, heads map[string]string) queueStatus {
+func statusOf(e queueEntry, isMergeHead, blocked bool, review reviewState, lane laneState) queueStatus {
 	task, health := e.task, e.health
 	if !task.AutoMerge {
 		return queueStatus{}
@@ -379,18 +379,20 @@ func statusOf(e queueEntry, isMergeHead, blocked bool, review reviewState, heads
 		// at all. stalledChecksPhrase names whichever it is, and this
 		// wait is bounded by the clock that is already running on it
 		// (forge.ChecksStalled, escalateStalledChecks).
+		// It holds itself and nobody else (mergeWalk), and says how
+		// long its checks have sat as they are.
 		return queueStatus{
 			state: mergeStateWaitingCI,
-			note:  "waiting on " + waitingPhrase(e),
+			note:  "waiting on " + waitingPhrase(e) + waitedFor(e.pendingFor),
 		}
 	case model.PrUnknown:
 		if !e.checksKnown {
 			return queueStatus{state: mergeStateUnreadable, note: unknownHealthNote(e)}
 		}
-		return queueStatus{state: mergeStateWaitingQueue, note: unknownHealthNote(e)}
+		return queueStatus{state: mergeStateWaitingQueue, note: unknownHealthNote(e) + waitedFor(e.unknownFor)}
 	case model.PrClean:
 		if isQueueMember(e) && !isMergeHead {
-			return queueStatus{state: mergeStateWaitingQueue, note: queuePositionNote(e, heads)}
+			return queueStatus{state: mergeStateWaitingQueue, note: laneFullNote(e, lane)}
 		}
 		// Everything else clean merges on this very cycle: a stacked task
 		// (a fix or a review, which is nobody's queue member and merges
@@ -585,23 +587,35 @@ func reviewNote(review reviewState) string {
 	return "waiting for review task " + review.taskID + " to finish"
 }
 
-// queuePositionNote says who is ahead. A head that is not merging this
-// cycle has spent its lane's merges rather than lost its place, and those
-// are different waits to be in: the first ends when somebody else's change
-// lands, the second on the very next cycle.
-//
-// Both are about e's own lane -- its repository and base branch
-// (mergelane.go) -- so a `candidate` change names the `candidate` change in
-// front of it, never a `main` one it was never waiting for.
-//
-// heads is mergeWalk's: keyed by lane, and by the bare repository for a
-// head nobody could place in a lane (mergeWalk.claimHeadOf).
-func queuePositionNote(e queueEntry, heads map[string]string) string {
+// laneFullNote is the row of a clean member the walk did not merge this
+// cycle. There is no order between pull requests (mergeWalk), so it never
+// names another change as being in front: what holds it is its lane's
+// merges for this cycle being spent, or -- rarely -- a merge into that
+// lane whose effect nothing has read yet. Both end on the next cycle.
+func laneFullNote(e queueEntry, lane laneState) string {
 	name := laneName(e)
-	if head := headIn(heads, laneOf(e)); head != "" && head != e.task.ID {
-		return fmt.Sprintf("behind task %s in the %s queue", head, name)
+	if lane.closed != "" {
+		return fmt.Sprintf("merges next cycle: %s (the %s branch)", lane.closed, name)
 	}
-	return fmt.Sprintf("waiting for the next cycle: the %s queue has had all its merges for this one", name)
+	n := len(lane.merges)
+	if n == 0 {
+		return fmt.Sprintf("merges next cycle: this cycle's merges into %s are used", name)
+	}
+	merges := "merge"
+	verb := "is"
+	if n > 1 {
+		merges, verb = "merges", "are"
+	}
+	return fmt.Sprintf("merges next cycle: this cycle's %d %s into %s %s used (%s merged)",
+		n, merges, name, verb, taskList(lane.merges))
+}
+
+// taskList is "task 12", "tasks 12 and 14", "tasks 12, 14 and 15".
+func taskList(ids []string) string {
+	if len(ids) == 1 {
+		return "task " + ids[0]
+	}
+	return "tasks " + strings.Join(ids[:len(ids)-1], ", ") + " and " + ids[len(ids)-1]
 }
 
 // oneLine renders an error or a GitHub message for a row: first line

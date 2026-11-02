@@ -261,11 +261,23 @@ func TestARestartedHostdKeepsAFinishedSpoolForTheDaemon(t *testing.T) {
 	started := make(chan Started, 1)
 	c := detachedClient(ts, started)
 	ctx, cancel := context.WithCancel(context.Background())
+	// The process finishes only once the daemon has detached from it. One
+	// that exits at once can race the cancel below, deliver its exit to the
+	// still-attached daemon, and have its spool released as read -- the
+	// opposite of what this test is about.
+	goAhead := filepath.Join(ts.dir, "go-ahead")
+	script := "while [ ! -e go-ahead ]; do sleep 0.01; done; echo done; exit 7"
+	ran := make(chan struct{})
 	go func() {
-		_, _ = c.Run(ctx, Request{Kind: KindCLI, Name: "sh", Args: []string{"-c", "echo done; exit 7"}, Detach: true, Run: "r"}, nil, nil, nil)
+		defer close(ran)
+		_, _ = c.Run(ctx, Request{Kind: KindCLI, Name: "sh", Args: []string{"-c", script}, Dir: ts.dir, Detach: true, Run: "r"}, nil, nil, nil)
 	}()
 	st := <-started
 	cancel()
+	<-ran
+	if err := os.WriteFile(goAhead, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	waitGone(t, st.PID, 10*time.Second)
 	for !listed(t, ts, st.ID).Exited {
 		time.Sleep(20 * time.Millisecond)

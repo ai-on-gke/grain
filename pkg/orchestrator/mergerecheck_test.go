@@ -513,12 +513,6 @@ func TestMergeRecheckErroredDoesNotSpinInAnInfiniteLoop(t *testing.T) {
 		t.Parallel()
 		ctx, store, fix, runner, branch := recheckFixture(t, model.MergeRecheckEnforce, "landed.go")
 
-		// Queue a second, non-overlapping green change behind t1 to verify it
-		// is no longer held back once t1's errored re-check hands t1 to a person.
-		t2, b2 := queuedTaskWithPullRequest(t, ctx, store, fix.sim, fix.client, "t2", fix.repo)
-		pushFileToBranch(t, fix.sim.BareRepo, b2, "docs/notes.md", "notes", "unrelated docs")
-		t2 = grantCI(t, ctx, store, t2)
-		greenGrainCI(t, ctx, store, fix.client, runner, t2, fix.repo, b2)
 		setMergeable(fix.sim, true)
 
 		before := runner.started()
@@ -565,9 +559,6 @@ func TestMergeRecheckErroredDoesNotSpinInAnInfiniteLoop(t *testing.T) {
 
 		if mergedBranch(fix.sim, branch) {
 			t.Fatal("t1 merged after its overlap re-check errored")
-		}
-		if !mergedBranch(fix.sim, b2) {
-			t.Fatal("t2 stayed blocked behind t1 after t1's overlap re-check errored")
 		}
 		if repairInFlightNow(t, ctx, store, "t1") {
 			t.Fatal("t1 was sent for an automatic repair on an errored overlap re-check")
@@ -674,4 +665,31 @@ func TestMergeRecheckErroredDoesNotSpinInAnInfiniteLoop(t *testing.T) {
 			t.Fatalf("obs = %+v, want MergeQueueBlockedAt set and state merge_failed", obs)
 		}
 	})
+}
+
+// There is no order between pull requests (mergeWalk): while one change's
+// overlap re-check runs on the branch's merge-queue ref, an unrelated
+// clean change in the same lane merges on the same cycle. The re-check
+// holds the change being re-checked, and nothing else.
+func TestAnUnrelatedChangeMergesWhileAnotherIsBeingReChecked(t *testing.T) {
+	t.Parallel()
+	ctx, store, fix, runner, branch := recheckFixture(t, model.MergeRecheckEnforce, "landed.go")
+	t2, b2 := queuedTaskWithPullRequest(t, ctx, store, fix.sim, fix.client, "t2", fix.repo)
+	pushFileToBranch(t, fix.sim.BareRepo, b2, "docs/notes.md", "notes", "unrelated docs")
+	t2 = grantCI(t, ctx, store, t2)
+	greenGrainCI(t, ctx, store, fix.client, runner, t2, fix.repo, b2)
+	setMergeable(fix.sim, true)
+
+	syncWithCI(t, ctx, store, fix.client, runner, baseTime.Add(time.Minute))
+
+	if row := mustBatch(t, ctx, store, fix.repo); !row.Running() {
+		t.Fatalf("t1's overlap re-check is not running: %+v", row)
+	}
+	if mergedBranch(fix.sim, branch) {
+		t.Fatal("t1 merged while its overlap re-check was still running")
+	}
+	if !mergedBranch(fix.sim, b2) {
+		_, note := mergeQueueStateOf(t, ctx, store, "t2")
+		t.Fatalf("t2 waited for t1's re-check: %q", note)
+	}
 }

@@ -507,6 +507,19 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     85,
+		Description: "rewrite stored git-push-any-ref grants to https://grain.dev/capabilities/repo#write (the in-process capability is retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames := map[string][]string{GitPushAnyRefCapability: {GitPushAnyRefGrant}}
+			if err := rewriteLegacyGrantsMulti(renames)(ctx, tx); err != nil {
+				return err
+			}
+			// Unlike 67-82 (which 83 caught up on), this one rewrites
+			// repo_config.ci_capabilities at once.
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", renames)
+		},
+	},
+	{
+		Version:     86,
 		Description: "rewrite stored corp-research grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/corp#research={} (the Google build's in-process capability is retired)",
 		Up: func(ctx context.Context, tx *sql.Tx) error {
 			renames := map[string]string{"corp-research": CorpResearchGrant}
@@ -519,7 +532,7 @@ var Migrations = []Migration{
 	},
 }
 
-// CorpResearchGrant is what migration 85 rewrote stored corp-research grants
+// CorpResearchGrant is what migration 86 rewrote stored corp-research grants
 // to: the method the Google build registers (capability.Register) in place
 // of its in-process corp-research provider, and makes corp-research an alias
 // of. Core serves no such method; it names the grant only because the

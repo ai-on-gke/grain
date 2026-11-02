@@ -39,7 +39,8 @@ type Method struct {
 	// Server is the capability_id of the in-process server the method is
 	// on, such as https://grain.dev/capabilities/corp. Every method
 	// registered with one Server is served by the one in-process server.
-	// It may not be core's own model.GrainCapabilityServerID.
+	// It may not be one of core's own (model.GrainCapabilityServerID,
+	// model.RepoCapabilityServerID).
 	Server string
 	// Spec is the method: its name, arguments and Mint, as
 	// protocol.NewMethod takes them.
@@ -80,12 +81,12 @@ var registeredMethods = map[string]Method{}
 // Register adds the in-process capability server method m to every
 // listing of grain's capabilities until the returned func is called. It
 // is meant to be called from init(), and panics on a method whose
-// reference is not valid, whose server is core's own grain server, or
+// reference is not valid, whose server is one of core's own in-process servers, or
 // which is already registered, since each is a programming error no
 // deployment could work around.
 func Register(m Method) (unregister func()) {
-	if m.Server == model.GrainCapabilityServerID {
-		panic(fmt.Sprintf("capability: Register(%q): core's own grain server takes no contributed methods", m.Ref()))
+	if m.Server == model.GrainCapabilityServerID || m.Server == model.RepoCapabilityServerID {
+		panic(fmt.Sprintf("capability: Register(%q): core's own in-process servers take no contributed methods", m.Ref()))
 	}
 	if _, err := protocol.ParseRef(m.Ref()); err != nil {
 		panic(fmt.Sprintf("capability: Register(%q): %v", m.Ref(), err))

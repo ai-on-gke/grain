@@ -17,7 +17,6 @@ package orchestrator
 import (
 	"context"
 	"errors"
-	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -1021,7 +1020,7 @@ func TestSyncEntryForgetsTheEmptyChecksSightingOnceChecksRegister(t *testing.T) 
 func syncOneEntry(ctx context.Context, store *model.Store, client github.Client,
 	e queueEntry, heads map[string]string, now time.Time) error {
 
-	return syncEntry(ctx, store, client, e, StateRepoGate{}, &mergeWalk{heads: maps.Clone(heads)},
+	return syncEntry(ctx, store, client, e, StateRepoGate{}, &mergeWalk{},
 		newRepoFinder(client), now)
 }
 
