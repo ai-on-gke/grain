@@ -1253,6 +1253,89 @@ func TestOnlyTheScheduledSmokeJobHoldsAGCPCredential(t *testing.T) {
 	} {
 		absent(t, smoke, obsolete)
 	}
+
+	// On GitHub Actions, an unconfigured repository must skip at the job
+	// level (conclusion `skipped`) rather than running a step that exits 0
+	// and marking the whole run green `success`; a half-configured pair
+	// emits a `::warning` and fails.
+	ghJob := from(t, ghSmoke, "\n  smoke:")
+	contains(t, ghJob, "if: vars.GCP_WIF_PROVIDER != '' || vars.GCP_SA_EMAIL != ''")
+	contains(t, ghJob, "::warning")
+	absent(t, ghJob, `echo "configured=false"`)
+	ghSweep := from(t, ghJob, "Delete anything left behind")
+	contains(t, ghSweep, "if: always() && steps.auth.outcome == 'success'")
+	contains(t, ghSweep, "instances delete")
+	contains(t, ghSweep, "clusters delete")
+	contains(t, ghSweep, "labels.purpose=gce-vm-smoke")
+	contains(t, ghSweep, "resourceLabels.purpose=gke-cluster-smoke")
+}
+
+func TestSetupGCPSmokeWIFScriptConfiguresLeastPrivilegeWIF(t *testing.T) {
+	const scriptName = "setup-gcp-smoke-wif.sh"
+	executable(t, "scripts", scriptName)
+	scriptPath := filepath.Join(repoRoot(t), "scripts", scriptName)
+
+	if out, err := exec.Command("bash", "-n", scriptPath).CombinedOutput(); err != nil {
+		t.Fatalf("bash -n scripts/%s: %v\n%s", scriptName, err, out)
+	}
+
+	// Never runs on its own without an explicit project argument.
+	cmd := exec.Command(scriptPath)
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("scripts/%s succeeded with no arguments; expected exit 2:\n%s", scriptName, out)
+	} else if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 2 {
+		t.Fatalf("scripts/%s with no arguments exited %v, want exit 2:\n%s", scriptName, err, out)
+	}
+
+	outBytes, err := exec.Command(scriptPath, "example-smoke-proj", "--dry-run").CombinedOutput()
+	if err != nil {
+		t.Fatalf("scripts/%s --dry-run failed: %v\n%s", scriptName, err, outBytes)
+	}
+	out := string(outBytes)
+
+	for _, api := range []string{
+		"iam.googleapis.com",
+		"iamcredentials.googleapis.com",
+		"sts.googleapis.com",
+		"compute.googleapis.com",
+		"container.googleapis.com",
+		"iap.googleapis.com",
+	} {
+		contains(t, out, api)
+	}
+	contains(t, out, "https://token.actions.githubusercontent.com")
+	contains(t, out, "assertion.repository == 'ai-on-gke/grain'")
+	for _, role := range []string{
+		"roles/compute.instanceAdmin.v1",
+		"roles/compute.osLogin",
+		"roles/iap.tunnelResourceAccessor",
+		"roles/container.admin",
+		"roles/iam.serviceAccountUser",
+		"roles/iam.workloadIdentityUser",
+	} {
+		contains(t, out, role)
+	}
+	for _, unwanted := range []string{
+		"roles/owner",
+		"roles/editor",
+		"roles/compute.admin",
+		"roles/iam.serviceAccountAdmin",
+	} {
+		absent(t, out, unwanted)
+	}
+	for _, variable := range []string{
+		"GCP_WIF_PROVIDER=projects/<PROJECT_NUMBER>/locations/global/workloadIdentityPools/grain-gcp-smoke/providers/github",
+		"GCP_SA_EMAIL=grain-gcp-smoke@example-smoke-proj.iam.gserviceaccount.com",
+		"GCP_PROJECT_ID=example-smoke-proj",
+	} {
+		contains(t, out, variable)
+	}
+
+	refOut, err := exec.Command(scriptPath, "--project", "example-smoke-proj", "--ref", "refs/heads/main", "--dry-run").CombinedOutput()
+	if err != nil {
+		t.Fatalf("scripts/%s --ref --dry-run failed: %v\n%s", scriptName, err, refOut)
+	}
+	contains(t, string(refOut), "assertion.ref == 'refs/heads/main'")
 }
 
 // The credential that can *write* to a GitHub repository lives in
