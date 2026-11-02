@@ -1,6 +1,6 @@
 # Driving grain from an external CLI
 
-`contributions.design.md` says designs are written "in interactive sessions between PMs, engineers and agents", outside grain, "with any interactive coding agent or by hand". After that, grain takes over: it generates specs and tasks, implements, reviews and merges. In practice the engineer's interactive agent keeps working after the design merges. That agent is Jetski / Antigravity, Claude Code, Codex CLI or Gemini CLI, running on a workstation or a laptop. The engineer uses it to hand work to grain, check on that work, answer grain's questions, and sometimes write the code themselves and ask grain to review and land it.
+`contributions.playbook.md` says designs are written "in interactive sessions between PMs, engineers and agents", outside grain, "with any interactive coding agent or by hand". After that, grain takes over: it generates specs and tasks, implements, reviews and merges. In practice the engineer's interactive agent keeps working after the design merges. That agent is Jetski / Antigravity, Claude Code, Codex CLI or Gemini CLI, running on a workstation or a laptop. The engineer uses it to hand work to grain, check on that work, answer grain's questions, and sometimes write the code themselves and ask grain to review and land it.
 
 Today all of that is possible, but it takes effort. This design makes it effortless. An engineer should be able to tell their agent "have grain do these three things and tell me when they've merged", and the agent should know how to do it without being taught each time.
 
@@ -182,7 +182,7 @@ When the token expires, every call fails with exit `3` and the message `token fo
 
 The engineer says: "Let's write a design for per-repo CI quotas, then let grain spec and build it."
 
-1. **Draft locally.** Jetski and the engineer write `design/design/ci-quotas.design.md` in a local checkout, in the same `#` / `##` format as the other docs there. Jetski pushes a branch and opens the PR with the engineer's own `gh` or `git` login, so the engineer is the PR's author. The PR is a human-authored design PR in the sense of `contributions.design.md`, and its contributors are the engineer and the reviewers whose comments change it.
+1. **Draft locally.** Jetski and the engineer write `design/design/ci-quotas.design.md` in a local checkout, in the same `#` / `##` format as the other docs there. Jetski pushes a branch and opens the PR with the engineer's own `gh` or `git` login, so the engineer is the PR's author. The PR is a human-authored design PR in the sense of `contributions.playbook.md`, and its contributors are the engineer and the reviewers whose comments change it.
 2. **Bring grain in.**
    ```sh
    grain pr review https://github.com/ai-on-gke/grain/pull/150 --design
