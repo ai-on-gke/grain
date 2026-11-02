@@ -19,7 +19,7 @@
 # stabilization branch, no back-merge and no port; every tag it makes is
 # on a main commit, and refs/heads/candidate is only ever a pointer it
 # force-moves onto the release candidate staging (grain-candidate, :4280)
-# runs. .grain/workflows/release-train.yml runs it daily; by hand it is
+# runs. .github/workflows/release-train.yml runs it daily (.grain/workflows/release-train.yml by dispatch); by hand it is
 #
 #   scripts/release-from-trunk.sh
 #
@@ -99,6 +99,17 @@
 # sandboxes and /api/tasks. RELEASE_RUNS_JSON, RELEASE_SANDBOXES_JSON and
 # RELEASE_TASKS_JSON name files to read instead.
 #
+# main's CI verdicts come from wherever main's gate runs (RELEASE_CI_SOURCE).
+# With "grain" they are grain CI's runs, GET /api/ci/runs above. A
+# repository whose gate is GitHub Actions (ci_mode: github) runs tests.yml,
+# release.yml and nightly.yml there and nowhere else, so grain has no
+# verdict on them: with "github" they are GitHub's workflow runs of each
+# required workflow on main, GET /repos/{RELEASE_GITHUB_REPO}/actions/
+# workflows/<suite>.yml/runs, read with GITHUB_TOKEN (actions: read) --
+# the train's only use of that token besides git. The soak, the task list
+# and the notifications still come from grain. The default is "github"
+# inside GitHub Actions and "grain" anywhere else.
+#
 # Settings (environment):
 #   RELEASE_REMOTE           the remote (origin)
 #   RELEASE_NOW              the time, in seconds (now)
@@ -107,6 +118,11 @@
 #                            24 and 2: a daily 04:15 run never misses the
 #                            boundary by a minute of jitter
 #   RELEASE_STAGING_URL      staging's UI (http://127.0.0.1:4280)
+#   RELEASE_CI_SOURCE        grain or github: where main's CI verdicts come from
+#   RELEASE_GITHUB_REPO      the repository whose workflow runs count
+#                            ($GITHUB_REPOSITORY, else ai-on-gke/grain)
+#   RELEASE_GITHUB_API_URL   GitHub's API ($GITHUB_API_URL, else api.github.com)
+#   RELEASE_GITHUB_PAGES     pages of 100 runs read per workflow (3)
 #   RELEASE_IMAGES           the image publisher (bash scripts/release-images.sh);
 #                            "off" publishes nothing
 #   RELEASE_NOTES_TASK       "off" files no release-notes task
@@ -294,6 +310,44 @@ gate_json() { # gate_json <override-var> <path> <out>
   fi
   curl -fsS --max-time 60 -H "Authorization: Bearer $GRAIN_API_TOKEN" \
     "${GRAIN_API_URL%/}$2" -o "$3" || die "could not read $2 from the release gate"
+}
+
+ci_source="${RELEASE_CI_SOURCE:-}"
+if [ -z "$ci_source" ]; then
+  ci_source=grain
+  [ "${GITHUB_ACTIONS:-}" != true ] || ci_source=github
+fi
+case "$ci_source" in
+  grain | github) ;;
+  *) die "RELEASE_CI_SOURCE is $ci_source, not grain or github" ;;
+esac
+
+# main's runs of each required workflow on GitHub Actions, as one
+# listing of workflow runs (scripts/candidate-gate.sh reads either shape).
+github_runs() { # github_runs <out>
+  if [ -n "${RELEASE_RUNS_JSON:-}" ]; then
+    [ -r "$RELEASE_RUNS_JSON" ] || die "RELEASE_RUNS_JSON names $RELEASE_RUNS_JSON, which is not a readable file"
+    cp "$RELEASE_RUNS_JSON" "$1"
+    return 0
+  fi
+  local token="${GITHUB_TOKEN:-${GH_TOKEN:-}}" api repo pages wf page n
+  [ -n "$token" ] || die "no GitHub token to read main's workflow runs with: set GITHUB_TOKEN (actions: read), RELEASE_RUNS_JSON, or RELEASE_CI_SOURCE=grain"
+  api="${RELEASE_GITHUB_API_URL:-${GITHUB_API_URL:-https://api.github.com}}"
+  repo="${RELEASE_GITHUB_REPO:-${GITHUB_REPOSITORY:-${GRAIN_CI_REPO:-ai-on-gke/grain}}}"
+  pages="${RELEASE_GITHUB_PAGES:-3}"
+  : > "$work/github-runs.jsonl"
+  for wf in ${CANDIDATE_GATE_REQUIRED-tests release nightly}; do
+    for ((page = 1; page <= pages; page++)); do
+      curl -fsS --max-time 60 -H "Authorization: Bearer $token" -H "Accept: application/vnd.github+json" \
+        "${api%/}/repos/$repo/actions/workflows/$wf.yml/runs?branch=main&per_page=100&page=$page" -o "$work/github-page.json" ||
+        die "could not read $wf.yml's runs on main from $api"
+      n="$(jq '.workflow_runs | length' "$work/github-page.json")" || die "$api's answer for $wf.yml is not a listing of workflow runs"
+      cat "$work/github-page.json" >> "$work/github-runs.jsonl"
+      [ "$n" -ge 100 ] || break
+    done
+  done
+  jq -s '{workflow_runs: (map(.workflow_runs) | add // [])}' "$work/github-runs.jsonl" > "$1"
+  say "read $(jq '.workflow_runs | length' "$1") GitHub Actions runs of $repo's ${CANDIDATE_GATE_REQUIRED-tests release nightly} on main"
 }
 
 tasks_json="$work/tasks.json"
@@ -528,7 +582,11 @@ fi
 
 # --- Phase 2 ---
 
-gate_json RELEASE_RUNS_JSON "/api/ci/runs?repo=${GRAIN_CI_REPO:-ai-on-gke/grain}&ref=main&limit=500" "$work/runs.json"
+if [ "$ci_source" = github ]; then
+  github_runs "$work/runs.json"
+else
+  gate_json RELEASE_RUNS_JSON "/api/ci/runs?repo=${GRAIN_CI_REPO:-ai-on-gke/grain}&ref=main&limit=500" "$work/runs.json"
+fi
 fetch_tasks
 lkg_status=0
 lkg_out="$(bash "$scripts_dir/candidate-gate.sh" select-lkg --runs-json "$work/runs.json" ${floor:+--floor-sha "$floor"} \
