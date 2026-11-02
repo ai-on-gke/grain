@@ -329,6 +329,13 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	if err != nil {
 		t.Fatalf("commenting: %v", err)
 	}
+	if _, err := store.RecordTaskEvent(ctx, model.TaskEvent{
+		TaskID: "a1b2", Kind: model.TaskEventClosed, At: sub, Reason: awkward,
+		By:     model.Principal{Kind: model.PrincipalHuman, ID: "bwsalmon"},
+		Detail: "cancelled run a1b2-1 (attempt 1)",
+	}); err != nil {
+		t.Fatalf("recording a close: %v", err)
+	}
 	// One attachment on the task itself (a NULL comment_id) and one on
 	// the comment (an integer one).
 	blob := make([]byte, 512)
@@ -495,6 +502,15 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	}
 	if err := store.SetRunSandboxKeys(ctx, "a1b2-1", "shape=default|target=owner/payments-api", "gcp-key:label"); err != nil {
 		t.Fatalf("recording run sandbox keys: %v", err)
+	}
+	if err := model.RecordSyncedConsoleSession(ctx, store, "a1b2", model.ConsoleSessionConfigSnapshot{
+		Capabilities:  []string{"memory"},
+		Reads:         []model.RepoRef{{Owner: "owner", Name: "docs"}},
+		Writes:        []model.WriteTarget{{Repo: model.RepoRef{Owner: "owner", Name: "payments-api"}, Base: "main"}},
+		NetworkAccess: model.NetworkOpen,
+		Title:         "Director",
+	}); err != nil {
+		t.Fatalf("recording console session sync: %v", err)
 	}
 	// A run of grain's own CI (ci_run, ci_job, ci_step): the three tables
 	// whose interesting column is a step's output, which is raw bytes

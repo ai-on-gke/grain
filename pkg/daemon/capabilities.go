@@ -253,6 +253,12 @@ func GitHubCredentialLadder(dataDir string) (*gitproxy.CredentialSet, error) {
 // the two in step.
 const defaultSourceDir = "/usr/local/share/grain/src"
 
+// defaultCoreSourceDir is where an image whose own module builds on
+// core, rather than being core, carries core's source at the version it
+// was built against, for src://core/... (namespace.CoreSource). Core's
+// own image has none: its src/ already is core.
+const defaultCoreSourceDir = "/usr/local/share/grain/core-src"
+
 // sourceDir is the tree the self-debug capability reads.
 //
 // The image's own copy wins over anything a flag names, which is the

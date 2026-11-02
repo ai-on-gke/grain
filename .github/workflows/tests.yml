@@ -747,7 +747,7 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.run-host == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     concurrency:
       group: ${{ github.workflow }}-run-host-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -784,7 +784,7 @@ jobs:
       - name: Daemon restart acceptance test
         env:
           GRAIN_RUNHOST_DOCKER: "1"
-        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 15m -run '^TestDaemonRestartAdoptsTheRunAndItOpensItsPullRequest$' -v ./pkg/cli/
+        run: ./scripts/run-go-tests.sh go test -count=1 -timeout 20m -run '^(TestDaemonRestartAdoptsTheRunAndItOpensItsPullRequest|TestDaemonRestartKeepsAWarmSessionSandboxOnlyUnderItsRecordedKeys)$' -v ./pkg/cli/
 
   host-script-container:
     name: host-script container

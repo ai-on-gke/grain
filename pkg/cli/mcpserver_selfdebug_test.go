@@ -257,3 +257,47 @@ func TestDaemonTasksReadsAPromptAndATranscript(t *testing.T) {
 		t.Errorf("read_grain_task_transcript = %q, want attempt 1's own transcript", transcript.Text)
 	}
 }
+
+func TestDaemonTasksCarriesCloseAndReopenTransitions(t *testing.T) {
+	t.Parallel()
+	closedAt := time.Date(2026, 10, 30, 5, 8, 18, 0, time.UTC)
+	reopenedAt := closedAt.Add(5 * time.Second)
+	reader, id := taskWorld(t, func(ctx context.Context, store *model.Store, taskID string) {
+		if _, err := store.RecordTaskEvent(ctx, model.TaskEvent{
+			TaskID: taskID, Kind: model.TaskEventClosed, At: closedAt,
+			By:     model.Principal{Kind: model.PrincipalHuman, ID: "bob@example.com"},
+			Reason: "cycling in-flight tasks",
+			Detail: "cancelled run " + taskID + "-1 (attempt 1)",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.RecordTaskEvent(ctx, model.TaskEvent{
+			TaskID: taskID, Kind: model.TaskEventReopened, At: reopenedAt,
+			By:     model.Principal{Kind: model.PrincipalAgent, ID: "1937"},
+			Reason: "back to the queue",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	full := callSelfDebugTool(t, reader, "read_grain_task", map[string]any{"task_id": id, "view": "full"})
+	for _, want := range []string{
+		"Transitions:",
+		"2026-10-30T05:08:18Z  closed by human bob@example.com (cycling in-flight tasks); cancelled run " + id + "-1 (attempt 1)",
+		"2026-10-30T05:08:23Z  reopened by agent 1937 (back to the queue)",
+	} {
+		if !strings.Contains(full.Text, want) {
+			t.Errorf("read_grain_task(full) = %q, want it to contain %q", full.Text, want)
+		}
+	}
+
+	summary := callSelfDebugTool(t, reader, "read_grain_task", map[string]any{"task_id": id})
+	for _, want := range []string{
+		"2026-10-30T05:08:18Z closed by human bob@example.com (cycling in-flight tasks); cancelled run " + id + "-1 (attempt 1)",
+		"2026-10-30T05:08:23Z reopened by agent 1937 (back to the queue)",
+	} {
+		if !strings.Contains(summary.Text, want) {
+			t.Errorf("read_grain_task(summary) = %q, want it to contain %q", summary.Text, want)
+		}
+	}
+}

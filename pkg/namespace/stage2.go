@@ -133,7 +133,10 @@ type MemoryProvider interface {
 type DeployProvider interface {
 	ReadMergeQueue(ctx context.Context) (string, error)
 	ReadMetrics(ctx context.Context, section string, q MetricsQuery) (string, error)
-	ReadPipelineChanges(ctx context.Context) (string, error)
+	// ReadPipelineChanges is one page of the pipeline feed after cursor
+	// ("" for the provider's lookback), at most limit entries (0 for its
+	// default page).
+	ReadPipelineChanges(ctx context.Context, cursor string, limit int) (string, error)
 	ReadHealth(ctx context.Context) (string, error)
 	ReadState(ctx context.Context, table string) (string, error)
 	ListStateTables(ctx context.Context) ([]string, error)
@@ -1055,7 +1058,11 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 		if len(parts) > 1 {
 			return nil, fmt.Errorf("%w: deploy://%s", ErrNotFound, relPath)
 		}
-		text, err := s.Deploy.ReadPipelineChanges(ctx)
+		cursor, limit, err := pipelineQueryFrom(ctx)
+		if err != nil {
+			return nil, err
+		}
+		text, err := s.Deploy.ReadPipelineChanges(ctx, cursor, limit)
 		if err != nil {
 			return nil, err
 		}

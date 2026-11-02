@@ -85,6 +85,25 @@ func TestCreateAndUpdateTaskPriority(t *testing.T) {
 		t.Fatal("UpdateTask(priority=-1) succeeded, want ValidationError")
 	}
 
+	// 0 is refused on create and edit alike, the way -1 is: leaving the
+	// field out is how a caller asks for the default, and an edit to 0
+	// must not quietly reset the task to 5.
+	zeroPri := 0
+	if _, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "zero", Priority: &zeroPri}); err == nil {
+		t.Fatal("CreateTask(priority=0) succeeded, want ValidationError")
+	} else {
+		var ve *ui.ValidationError
+		if !errors.As(err, &ve) || !strings.Contains(err.Error(), "positive integer") || !strings.Contains(err.Error(), "leave it out") {
+			t.Errorf("CreateTask(priority=0) error = %v, want a ValidationError saying to leave it out", err)
+		}
+	}
+	if _, err := c.UpdateTask(ctx, high.ID, ui.UpdateTaskRequest{Priority: &zeroPri}); err == nil {
+		t.Fatal("UpdateTask(priority=0) succeeded, want ValidationError")
+	}
+	if after, err := store.GetTask(ctx, high.ID); err != nil || after == nil || after.Priority != 2 {
+		t.Errorf("after refused UpdateTask(priority=0), stored task = %+v (err=%v), want priority 2 kept", after, err)
+	}
+
 	// Templates also reject negative priorities and normalize 0 to unset.
 	if _, err := c.CreateTemplate(ctx, ui.CreateTemplateRequest{
 		Name:     "bad-tmpl",
@@ -139,6 +158,14 @@ func TestTasksAdminCapabilityAllowsEditingPriorityViaREST(t *testing.T) {
 	stored, err := client.Store.GetTask(context.Background(), "2")
 	if err != nil || stored.Priority != 9 {
 		t.Errorf("stored Priority = %d (err=%v), want 9", stored.Priority, err)
+	}
+
+	// {"priority": 0} is refused with 400 rather than resetting the task to 5.
+	if code, resp := asAgent(t, srv, "1", http.MethodPatch, "/api/tasks/2", `{"priority": 0}`, ""); code != http.StatusBadRequest || !strings.Contains(resp, "positive integer") {
+		t.Errorf("PATCH /api/tasks/2 with priority=0: status %d (%s), want 400 naming a positive integer", code, resp)
+	}
+	if stored, err := client.Store.GetTask(context.Background(), "2"); err != nil || stored.Priority != 9 {
+		t.Errorf("after PATCH priority=0, stored Priority = %d (err=%v), want 9 kept", stored.Priority, err)
 	}
 
 	// api:tasks:admin without api:tasks:write cannot edit title or toggle priority-dispatch.
@@ -233,6 +260,93 @@ func TestTasksAdminCapabilityAllowsEditingPriorityViaREST(t *testing.T) {
 		}
 		if code, resp := doExtPatch("/api/tasks/2", grantPayload); code != http.StatusForbidden {
 			t.Errorf("external PATCH /api/tasks/2 with %s under tasks:admin: status %d (%s), want 403", grantPayload, code, resp)
+		}
+	}
+}
+
+// encoding/json matches an object key to a struct field under Unicode
+// simple folding, where U+017F (ſ) is an s and U+212A (the Kelvin sign) a
+// k. The agent gates read body keys with strings.ToLower, which leaves
+// those runes alone, so "priorityDiſpatch" attached priority-dispatch
+// under api:tasks:write without capabilities:admin, and
+// "autoApproveProposalſ" / "reviewerſ" filed past the refusals of the
+// spellings they fold to (docs/test-runs/2026-11-01-task-priorities.md).
+func TestAgentGatesFoldBodyKeysAsEncodingJSONDoes(t *testing.T) {
+	t.Parallel()
+	srv, client := testServer(t)
+	seedAPITask(t, client, "1", "acme/widgets", "api:tasks:write")
+	seedAPITask(t, client, "2", "acme/widgets")
+
+	for _, payload := range []string{
+		"{\"priorityDiſpatch\": true}",
+		"{\"PRIORITY_DIſPATCH\": true}",
+		"{\"grantſ\": []}",
+		"{\"KeepRunning\": true}",
+	} {
+		if code, resp := asAgent(t, srv, "1", http.MethodPatch, "/api/tasks/2", payload, "testing"); code != http.StatusForbidden {
+			t.Errorf("PATCH /api/tasks/2 with %s under api:tasks:write: status %d (%s), want 403", payload, code, resp)
+		}
+	}
+	stored, err := client.Store.GetTask(context.Background(), "2")
+	if err != nil || stored == nil {
+		t.Fatalf("GetTask(2): %v", err)
+	}
+	for _, g := range stored.Grants {
+		t.Errorf("task 2 gained grant %q through a folded key", g.Capability)
+	}
+
+	enableExternalAgentAPI(t, client.Store)
+	humanCtx := ui.WithPrincipal(context.Background(), model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:   "fold-bot",
+		Scopes: []string{"tasks:write"},
+		Repos:  []string{"acme/widgets"},
+	})
+	if err != nil {
+		t.Fatalf("CreateExternalAgentToken: %v", err)
+	}
+	for _, extra := range []string{
+		"\"autoApproveProposalſ\": true",
+		"\"reviewerſ\": [\"mallory\"]",
+		"\"writeſ\": [{\"repo\": \"other/repo\"}]",
+		"\"priorityDiſpatch\": true",
+	} {
+		payload := `{"title": "folded", "description": "d", "repo": "acme/widgets", ` + extra + `}`
+		req := httptest.NewRequest(http.MethodPost, "/api/tasks", bytes.NewBufferString(payload))
+		req.Header.Set("Authorization", "Bearer "+issued.Token)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("external POST /api/tasks with %s: status %d (%s), want 403", extra, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// The priority-dispatch toggle is priorityDispatch or priority_dispatch, and
+// the agent gate refuses both; the snake_case spelling used to decode to
+// nothing, so PATCH {"priority_dispatch": true} answered 200 and changed
+// nothing (docs/test-runs/2026-11-01-task-priorities.md).
+func TestUpdateTaskRequestReadsEveryPriorityDispatchSpelling(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{
+		{`{"priorityDispatch": true}`, true},
+		{`{"priority_dispatch": true}`, true},
+		{`{"priority_dispatch": false}`, false},
+		{`{"priority": true}`, true},
+	} {
+		var req ui.UpdateTaskRequest
+		if err := json.Unmarshal([]byte(tc.body), &req); err != nil {
+			t.Fatalf("Unmarshal(%s): %v", tc.body, err)
+		}
+		if req.PriorityDispatch == nil || *req.PriorityDispatch != tc.want {
+			t.Errorf("Unmarshal(%s).PriorityDispatch = %v, want %v", tc.body, req.PriorityDispatch, tc.want)
+		}
+		if req.Priority != nil {
+			t.Errorf("Unmarshal(%s).Priority = %d, want unset", tc.body, *req.Priority)
 		}
 	}
 }

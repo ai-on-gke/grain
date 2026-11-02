@@ -72,8 +72,9 @@ type stubDeployProvider struct {
 	grainLog        string
 	// gotMetrics and gotLog, when set, record the query each read was
 	// asked with.
-	gotMetrics *MetricsQuery
-	gotLog     *GrainLogQuery
+	gotMetrics  *MetricsQuery
+	gotLog      *GrainLogQuery
+	gotPipeline *pipelineRead
 }
 
 func (s stubDeployProvider) ReadMergeQueue(ctx context.Context) (string, error) {
@@ -90,8 +91,17 @@ func (s stubDeployProvider) ReadMetrics(ctx context.Context, section string, q M
 	return s.metrics["all"], nil
 }
 
-func (s stubDeployProvider) ReadPipelineChanges(ctx context.Context) (string, error) {
+func (s stubDeployProvider) ReadPipelineChanges(ctx context.Context, cursor string, limit int) (string, error) {
+	if s.gotPipeline != nil {
+		*s.gotPipeline = pipelineRead{cursor, limit}
+	}
 	return s.pipelineChanges, nil
+}
+
+// pipelineRead is what a deploy://pipeline-changes read asked its provider for.
+type pipelineRead struct {
+	cursor string
+	limit  int
 }
 
 func (s stubDeployProvider) ReadHealth(ctx context.Context) (string, error) {
@@ -330,6 +340,37 @@ func TestDeployReadsForwardTheirQuery(t *testing.T) {
 		Repos: []string{"acme/a", "acme/b", "acme/c"}, Authors: []string{"task"}}
 	if !reflect.DeepEqual(gotMetrics, want) {
 		t.Errorf("metrics query = %+v, want %+v", gotMetrics, want)
+	}
+}
+
+// deploy://pipeline-changes passes ?cursor= (or ?since=) and ?page= on, so
+// a read can page past the feed's first page.
+func TestPipelineChangesReadForwardsItsCursor(t *testing.T) {
+	t.Parallel()
+	var got pipelineRead
+	srv := &Server{Deploy: stubDeployProvider{pipelineChanges: "a change\n", gotPipeline: &got}}
+	scope := Scope{TaskID: 1, TaskIDStr: "1", MayReadPipeline: true}
+	for _, tc := range []struct {
+		query string
+		want  pipelineRead
+	}{
+		{"", pipelineRead{}},
+		{"?cursor=2026-10-29T11:50:43Z~1&page=20", pipelineRead{"2026-10-29T11:50:43Z~1", 20}},
+		{"?since=2026-10-29T11:50:43Z", pipelineRead{"2026-10-29T11:50:43Z", 0}},
+	} {
+		got = pipelineRead{}
+		rec := serveRequest(srv, scope, http.MethodGet, "/fs/deploy/pipeline-changes"+tc.query, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%q: status=%d body=%q", tc.query, rec.Code, rec.Body.String())
+		}
+		if got != tc.want {
+			t.Errorf("%q: provider asked for %+v, want %+v", tc.query, got, tc.want)
+		}
+	}
+	for _, q := range []string{"?page=0", "?page=lots"} {
+		if rec := serveRequest(srv, scope, http.MethodGet, "/fs/deploy/pipeline-changes"+q, nil); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status=%d, want 400; body=%q", q, rec.Code, rec.Body.String())
+		}
 	}
 }
 

@@ -1453,7 +1453,9 @@ func grainCLISection(task model.Task) string {
 	s := "\n\n### Grain CLI (`grain`)\n\n" +
 		"Inside your sandbox, the `grain` CLI (run it with `run_command`) reaches this deployment's " +
 		"namespace, CI, pull request, merge queue and the capabilities granted to this task, with no " +
-		"tool-result size cap -- pipe it to `grep`, `jq` or a file:\n\n" +
+		"size cap of its own. What `run_command` hands back is still cut to about 20 KB, and counts at " +
+		"that size towards any tool budget the run is under, so send long output to a file and " +
+		"`grep`, `jq` or `head` it rather than printing it all:\n\n" +
 		"- **Namespace** (`ci://`, `src://`, `task://`, `config://`, `memory://`, `deploy://`): " +
 		"`grain ls <uri>`, `grain read <uri> [--tail N]`, `grain grep <re> <uri>`. For example " +
 		"`grain ls ci://" + repo + "`.\n"
@@ -1484,7 +1486,7 @@ func grainCLISection(task model.Task) string {
 // tool roster already names those.
 var grainCLIGrants = []struct{ grant, commands string }{
 	{model.SelfDebugCapability, "`grain ls/read/grep src://...`, `grain task list`, `grain task read <id>`, " +
-		"`grain task transcript <id>`, `grain metrics [<section>] [--window 7d | --since <t> --until <t>] [--repo <r>]`, `grain read deploy://pipeline-changes`"},
+		"`grain task transcript <id>`, `grain metrics [<section>] [--window 7d | --since <t> --until <t>] [--repo <r>]`, `grain read deploy://pipeline-changes [--cursor <c>] [--page N]`"},
 	{"grain-log", "`grain log [--source daemon|dmesg] [--since <t>] [--until <t>] [--priority err] [--contains <s>] [--max-lines N]`"},
 	{"deployment-health", "`grain health`, `grain read deploy://state`"},
 	{"bootstrap-playbooks", "`grain playbooks [<name>]`"},
@@ -2668,21 +2670,35 @@ func lastCommentID(seen []model.Comment) int64 {
 // own prompt -- its highest comment id seeds the cursor here, so the
 // first poll only ever returns what arrived after dispatch, never
 // something already sitting in the prompt this run started with.
-func addendaPoller(store *model.Store, taskID string, seen []model.Comment) func(context.Context) ([]string, error) {
+func addendaPoller(store *model.Store, taskID string, tools []mcp.Tool, seen []model.Comment) func(context.Context) ([]string, error) {
 	lastID := lastCommentID(seen)
 	return func(ctx context.Context) ([]string, error) {
-		comments, err := store.Comments(ctx, taskID)
+		comments, err := store.CommentsAfter(ctx, taskID, lastID)
 		if err != nil {
 			return nil, fmt.Errorf("orchestrator: polling %s's conversation for addenda: %w", taskID, err)
 		}
-		var addenda []string
+		if len(comments) == 0 {
+			return nil, nil
+		}
+		attachments, err := store.CommentAttachmentsAfter(ctx, taskID, lastID)
+		if err != nil {
+			return nil, fmt.Errorf("orchestrator: reading attachments on %s's addenda: %w", taskID, err)
+		}
+		byComment := groupAttachmentsByComment(attachments)
+		addenda := make([]string, 0, len(comments))
+		nextLastID := lastID
 		for _, c := range comments {
-			if c.ID <= lastID {
+			if c.ID <= nextLastID {
 				continue
 			}
-			lastID = c.ID
-			addenda = append(addenda, addendumText(c))
+			rendered, err := placeCommentAddendum(ctx, tools, c, byComment[c.ID])
+			if err != nil {
+				return nil, err
+			}
+			nextLastID = c.ID
+			addenda = append(addenda, rendered)
 		}
+		lastID = nextLastID
 		return addenda, nil
 	}
 }
@@ -3445,15 +3461,16 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			Deadline: clock.base,
 			// A durable judgement task's wake runs under the per-wake
 			// tool budget (model.UsesToolBudget, DT-13).
-			ToolBudget: model.UsesToolBudget(task),
-			Grants:     grants, GrainSourceDir: grainSourceDir, GrainSecretsDir: grainSecretsDir, GrainStateDir: grainStateDir,
+			ToolBudget:               model.UsesToolBudget(task),
+			ToolBudgetPipelineCursor: model.IsPipelineStewardFiring(task),
+			Grants:                   grants, GrainSourceDir: grainSourceDir, GrainSecretsDir: grainSecretsDir, GrainStateDir: grainStateDir,
 			LocalScripts: localScripts, LocalScriptsEnvFile: localScriptsEnvFile,
 			// Which repositories a proposal this run makes may be filed
 			// against -- the half of propose_task's `repo` argument only
 			// the store can answer (proposalRepos).
 			ProposeRepos: proposeRepos,
 			MaxTurns:     cfg.MaxAgentTurns, TranscriptPath: transcriptPath, RunID: d.RunID,
-			Addenda: addendaPoller(store, task.ID, comments),
+			Addenda: addendaPoller(store, task.ID, tools, comments),
 			// Where that same conversation stops in this run's prompt,
 			// for the route a comment posted mid-run actually takes:
 			// the run's own forked mcpserver polls the daemon from this
@@ -3577,7 +3594,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		// advance DeliveredCommentID past comments the agent never answered
 		// (undeliveredHumanComment's started-time rule still prevents a
 		// failed interactive run from looping).
-		if err := store.AdvanceDelivered(finishCtx, task.ID, lastCommentID(comments), cfg.now()); err != nil {
+		if err := store.AdvanceDeliveredFrom(finishCtx, task.ID, lastCommentID(comments), cfg.now()); err != nil {
 			log.Printf("orchestrator: run %s: recording the conversation it was dispatched for: %v", d.RunID, err)
 		}
 	}

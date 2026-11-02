@@ -419,6 +419,17 @@ func TestProposeTaskAcceptsAndValidatesPriority(t *testing.T) {
 	if !negRes.IsError {
 		t.Errorf("propose_task with priority=-1 succeeded, want error")
 	}
+	zeroRes := tool.Handler(context.Background(), map[string]any{
+		"title":    "zero priority",
+		"body":     "nope",
+		"priority": float64(0),
+	})
+	if !zeroRes.IsError || !strings.Contains(zeroRes.Text, "positive integer") {
+		t.Errorf("propose_task with priority=0 = %+v, want a positive-integer error", zeroRes)
+	}
+	if got := len(sink.ProposedTasks()); got != 1 {
+		t.Errorf("ProposedTasks() after refused calls = %d, want 1", got)
+	}
 }
 
 func TestProposeTaskAcceptsCapabilities(t *testing.T) {

@@ -219,7 +219,9 @@ func runDemoReconcilers(ctx context.Context, deps orchestrator.Deps, now time.Ti
 			if r.Name != name {
 				continue
 			}
-			if err := r.Reconcile(ctx, deps, now); err != nil {
+			d := deps
+			d.Client = github.WithCaller(d.Client, r.Name)
+			if err := r.Reconcile(ctx, d, now); err != nil {
 				errs = append(errs, fmt.Errorf("%s: %w", name, err))
 			}
 		}

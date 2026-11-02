@@ -301,7 +301,7 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 			})
 		}
 		if openTask != nil {
-			prev, hasPrev := model.LastSyncedConsoleSession(c.Store, openTask.ID)
+			prev, hasPrev := model.LastSyncedConsoleSession(ctx, c.Store, openTask.ID)
 			if c.configRepoOnly(ctx) && hasPrev && strings.TrimSpace(openTask.Title) != "" &&
 				(openTask.Title != prev.Title || model.ConsoleSessionTitle(s) == prev.Title) {
 				title = openTask.Title
@@ -691,7 +691,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 			return nil, err
 		}
 		if writable {
-			model.RecordSyncedConsoleSession(c.Store, openTask.ID, model.ConsoleSessionConfigSnapshot{
+			if err := model.RecordSyncedConsoleSession(ctx, c.Store, openTask.ID, model.ConsoleSessionConfigSnapshot{
 				Capabilities:    session.Capabilities,
 				Reads:           session.Reads,
 				Writes:          session.Writes,
@@ -701,19 +701,43 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				TasksApproved:   session.TasksApproved,
 				KeepRunning:     session.KeepRunning,
 				GoogleChatSpace: session.GoogleChatSpace,
-			})
-		} else if _, hasPrev := model.LastSyncedConsoleSession(c.Store, openTask.ID); !hasPrev {
-			model.RecordSyncedConsoleSession(c.Store, openTask.ID, model.ConsoleSessionConfigSnapshot{
-				Capabilities:    origSession.Capabilities,
-				Reads:           origSession.Reads,
-				Writes:          origSession.Writes,
+			}); err != nil {
+				return nil, err
+			}
+		} else if _, hasPrev := model.LastSyncedConsoleSession(ctx, c.Store, openTask.ID); !hasPrev {
+			// With no snapshot, an edit that left capabilities, reads or writes
+			// alone records the task's own as last synced, so the next sync
+			// holds them to the declaration (ensureConsoleSessionSnapshot's
+			// reason) rather than keeping a dropped entry or swallowing one
+			// added while the daemon was down.
+			prevCaps := origSession.Capabilities
+			if req.Capabilities == nil && len(openTask.Grants) > 0 {
+				prevCaps = consoleSessionGrainCapabilities(openTask.Grants)
+			}
+			prevReads, prevWrites := origSession.Reads, origSession.Writes
+			if req.Reads == nil {
+				prevReads = openTask.Reads
+			}
+			if req.Writes == nil {
+				prevWrites = openTask.Writes
+			}
+			prevKeepRunning := origSession.KeepRunning
+			if req.KeepRunning == nil && req.KeepRunningSnake == nil {
+				prevKeepRunning = openTask.KeepRunning
+			}
+			if err := model.RecordSyncedConsoleSession(ctx, c.Store, openTask.ID, model.ConsoleSessionConfigSnapshot{
+				Capabilities:    prevCaps,
+				Reads:           prevReads,
+				Writes:          prevWrites,
 				NetworkAccess:   model.ConsoleSessionNetworkAccess(origSession, !c.Config.SandboxShapeIgnored),
 				Model:           strings.TrimSpace(origSession.Model),
 				Title:           model.ConsoleSessionTitle(origSession),
 				TasksApproved:   origSession.TasksApproved,
-				KeepRunning:     origSession.KeepRunning,
+				KeepRunning:     prevKeepRunning,
 				GoogleChatSpace: origSession.GoogleChatSpace,
-			})
+			}); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if writable {
@@ -725,12 +749,25 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 	return c.ListConsoleSessions(ctx)
 }
 
+func consoleSessionGrainCapabilities(grants []model.Grant) []string {
+	caps := make([]string, 0, len(grants))
+	for _, g := range grants {
+		if g.Via != model.GrantByGrain || g.Capability == "" || g.Capability == model.DurableCapability {
+			continue
+		}
+		if !slices.Contains(caps, g.Capability) {
+			caps = append(caps, g.Capability)
+		}
+	}
+	return caps
+}
+
 func (c *Client) ensureConsoleSessionSnapshot(ctx context.Context, task model.Task) {
 	sessionID, ok := model.ConsoleSessionIDOf(task)
 	if !ok {
 		return
 	}
-	if _, hasPrev := model.LastSyncedConsoleSession(c.Store, task.ID); hasPrev {
+	if _, hasPrev := model.LastSyncedConsoleSession(ctx, c.Store, task.ID); hasPrev {
 		return
 	}
 	cfg, err := c.consoleSessionConfig(ctx)
@@ -741,14 +778,25 @@ func (c *Client) ensureConsoleSessionSnapshot(ctx context.Context, task model.Ta
 	if !ok {
 		return
 	}
-	model.RecordSyncedConsoleSession(c.Store, task.ID, model.ConsoleSessionConfigSnapshot{
-		Capabilities:    session.Capabilities,
-		Reads:           session.Reads,
-		Writes:          session.Writes,
+	// The GrantByGrain capabilities, reads and writes recorded are the task's
+	// own, not the declaration's: with no snapshot the declaration is
+	// authoritative (orchestrator.mergeConsoleSessionGrants / Writes), so the
+	// next sync drops an entry the declaration no longer names -- one removed
+	// while the daemon was down -- adds one the declaration gained, and keeps
+	// what this edit changes on the task.
+	prevCaps := session.Capabilities
+	if len(task.Grants) > 0 {
+		prevCaps = consoleSessionGrainCapabilities(task.Grants)
+	}
+	_ = model.RecordSyncedConsoleSession(ctx, c.Store, task.ID, model.ConsoleSessionConfigSnapshot{
+		Capabilities:    prevCaps,
+		Reads:           task.Reads,
+		Writes:          task.Writes,
 		NetworkAccess:   model.ConsoleSessionNetworkAccess(session, !c.Config.SandboxShapeIgnored),
 		Model:           strings.TrimSpace(session.Model),
 		Title:           model.ConsoleSessionTitle(session),
 		TasksApproved:   session.TasksApproved,
+		KeepRunning:     task.KeepRunning,
 		GoogleChatSpace: session.GoogleChatSpace,
 	})
 }

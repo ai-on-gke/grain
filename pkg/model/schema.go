@@ -368,7 +368,37 @@ import "strconv"
 // `https://grain.dev/capabilities/grain#sql={"write":false}` and
 // `https://grain.dev/capabilities/grain#sql={"write":true}`: the in-process
 // `db-read` and `db-write` providers are retired.
-const SchemaVersion = 82
+//
+// 83 changes no table: it rewrites retired capability names in
+// `repo_config`.`ci_capabilities` (`team-broadcast`, `dispatch-control`,
+// `pipeline-control`, `memory`, `release-notes`, `self-upgrade`,
+// `test-quarantine`, `grain-log`, `deployment-health`, `db-read` and
+// `db-write`) to the canonical grants migrations 67, 68, 69, 71, 72, 75,
+// 76, 80, 81 and 82 wrote everywhere else. Those migrations left
+// `ci_capabilities` alone, which leaves a bare retired name in a
+// repository's CI list to be handed to its jobs and refused (or, for one
+// with no provider, waited on) when a job starts.
+const SchemaVersion = 83
+
+// taskEventTable is the `task_event` table: one row per close or reopen of
+// a task by somebody (model.TaskEvent). actor_kind/actor_id are the
+// model.Principal that asked; reason is what they said, "" for nothing;
+// detail is what grain did because of it -- the live run and CI runs a
+// close cancelled. Observation.ClosedAt only ever holds the current
+// closure, so this is the only record of a close somebody later undid.
+// Needs no SchemaVersion bump and no migration rung, for the reason
+// task_run_tool gives: Store.Init's applySchema creates a missing table and
+// its indexes on every start.
+const taskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
+  ` + "`id`" + `         INTEGER PRIMARY KEY AUTOINCREMENT,
+  ` + "`task_id`" + `    TEXT     NOT NULL,
+  ` + "`kind`" + `       TEXT     NOT NULL,
+  ` + "`at`" + `         DATETIME NOT NULL,
+  ` + "`actor_kind`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_id`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`reason`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`detail`" + `     TEXT     NOT NULL DEFAULT ''
+)`
 
 // ciStepAttachmentTable is the `ci_step_attachment` table, named once for
 // Tables and for the migration that adds it.
@@ -670,6 +700,22 @@ var Tables = []string{
   ` + "`immediate`" + `         INTEGER  NOT NULL DEFAULT 0,
   ` + "`grace_until`" + `       DATETIME NULL,
   ` + "`run_id`" + `            TEXT     NULL,
+  PRIMARY KEY (` + "`task_id`" + `)
+)`,
+
+	// console_session_sync is the standing-session declaration last synced
+	// onto a session's task (model.ConsoleSessionConfigSnapshot, as JSON),
+	// so the sync that tells a config change from an operator's own edit
+	// on the task still can after a daemon restart. Held in memory only, a
+	// reads: or writes: entry dropped from the declaration while the
+	// daemon was down stayed on the task for good.
+	//
+	// Needs no SchemaVersion bump, for task_write's own reason: an older
+	// store gains an empty table, and a task with no row is synced as one
+	// that has never been, with the declaration authoritative.
+	`CREATE TABLE IF NOT EXISTS ` + "`console_session_sync`" + ` (
+  ` + "`task_id`" + `  TEXT NOT NULL,
+  ` + "`snapshot`" + ` TEXT NOT NULL,
   PRIMARY KEY (` + "`task_id`" + `)
 )`,
 
@@ -3788,6 +3834,12 @@ var Tables = []string{
 	// when the step starts and checkpointed as it runs, so a restarted
 	// daemon reattaches the step instead of interrupting its run.
 	ciStepAttachmentTable,
+
+	// Every close and reopen of a task somebody asked for, with who, when
+	// and why (model.TaskEvent).
+	taskEventTable,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_event_task`" + ` ON ` + "`task_event`" + ` (` + "`task_id`" + `)`,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_event_at`" + ` ON ` + "`task_event`" + ` (` + "`at`" + `)`,
 }
 
 // Views is the derivations, each a (name, DDL) pair so Init can drop and

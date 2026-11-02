@@ -85,6 +85,26 @@ func grainLogQueryFrom(ctx context.Context) (GrainLogQuery, error) {
 	return out, nil
 }
 
+// pipelineQueryFrom reads deploy://pipeline-changes' ?cursor= (or ?since=,
+// the same thing: a cursor a page ended with, or an RFC 3339 time) and
+// ?page=, the most entries to return. Not ?limit=, which every namespace
+// read already takes as a byte count.
+func pipelineQueryFrom(ctx context.Context) (cursor string, limit int, err error) {
+	q := queryFrom(ctx)
+	cursor = strings.TrimSpace(q.Get("cursor"))
+	if cursor == "" {
+		cursor = strings.TrimSpace(q.Get("since"))
+	}
+	if raw := strings.TrimSpace(q.Get("page")); raw != "" {
+		n, convErr := strconv.Atoi(raw)
+		if convErr != nil || n <= 0 {
+			return "", 0, fmt.Errorf("%w: page %q is not a positive whole number of changes", ErrBadRequest, raw)
+		}
+		limit = n
+	}
+	return cursor, limit, nil
+}
+
 // metricsQueryFrom reads ?window=, ?since=, ?until=, and every ?repo= and
 // ?author= (each also comma-separated).
 func metricsQueryFrom(ctx context.Context) MetricsQuery {

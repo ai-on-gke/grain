@@ -144,6 +144,23 @@ export function unfiledLinkValues(config, prefill) {
   return out;
 }
 
+// hiddenLinkValues is what a /new link carried for fields the form
+// hides (settings/new-task-form.yml's customFields at visibility:
+// hidden), as unfiledLinkValues' sentences: a hidden field files its
+// default, so these values are left out the same way an unoffered one
+// is -- and said, rather than filed where nobody filing could see them.
+export function hiddenLinkValues(config, prefill) {
+  if (!prefill) return [];
+  const kept = fileableFieldValues(config, prefill);
+  const out = [];
+  for (const f of declaredFields(config)) {
+    if (prefill[f.name] === undefined) continue;
+    for (const v of valueList(kept[f.name]))
+      out.push(`${fieldLabel(f)}: “${v}” is in a field this form hides`);
+  }
+  return out;
+}
+
 // LEGACY_NOTICE and LEGACY_SET_NOTICE are what a form says about one:
 // what happened, and what the person in front of it can do about it.
 // Neither is an error -- nothing is wrong with the task, and saving the

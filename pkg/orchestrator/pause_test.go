@@ -243,6 +243,30 @@ func TestBeginKeepsTheLaterReset(t *testing.T) {
 	}
 }
 
+// agy's "Individual quota reached ... Resets in 17h32m" (task 1908): the
+// model stays paused for the whole window it named. With a 6h cap the
+// next run met the same refusal two or three times a window; with
+// RetryAfter unread it met it every ~16 minutes.
+func TestBeginHoldsAModelPauseForTheWholeNamedWindow(t *testing.T) {
+	t.Parallel()
+	now := baseNow()
+	p := newPause(t)
+	window := 17*time.Hour + 32*time.Minute
+	scope := PauseScope{Connection: "alpha-agy", Model: "gemini-4-carbon-medium", Team: "alpha", Framework: "antigravity"}
+
+	got := p.Begin(now, scope, &agent.UsageLimitError{Framework: "antigravity", RetryAfter: window})
+
+	if want := now.Add(window); !got.Equal(want) {
+		t.Errorf("Begin = %s, want %s (the window agy named, not 6h nor 15m)", got, want)
+	}
+	if !p.ModelPaused("alpha-agy", "gemini-4-carbon-medium", "alpha", now.Add(window-time.Minute)) {
+		t.Error("the model's pause lifted before the window agy named")
+	}
+	if p.ModelPaused("alpha-agy", "gemini-4-carbon-medium", "alpha", now.Add(window+time.Minute)) {
+		t.Error("the model's pause outlasted the window agy named")
+	}
+}
+
 func TestBeginExtendsToALaterReset(t *testing.T) {
 	t.Parallel()
 	now := baseNow()
@@ -363,6 +387,10 @@ func TestResumeAtBoundsWhatTheProviderSaid(t *testing.T) {
 		{"a reset in the past", &agent.UsageLimitError{ResetAt: now.Add(-time.Hour)}, defaultUsageLimitPause},
 		{"an absurd reset", &agent.UsageLimitError{ResetAt: now.Add(4000 * time.Hour)}, maxUsageLimitPause},
 		{"an honest reset", &agent.UsageLimitError{ResetAt: now.Add(2 * time.Hour)}, 2 * time.Hour},
+		// agy's "Resets in 17h32m" (task 1908): the whole window, not a
+		// 6h cap that meets the limit again, nor the 15m default.
+		{"a long provider-named delay", &agent.UsageLimitError{RetryAfter: 17*time.Hour + 32*time.Minute}, 17*time.Hour + 32*time.Minute},
+		{"a delay past a day", &agent.UsageLimitError{RetryAfter: 30 * time.Hour}, maxUsageLimitPause},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := resumeAt(now, tc.limit)

@@ -28,6 +28,8 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -135,6 +137,7 @@ type agentCall struct {
 	scope       APIScope
 	repo        string
 	reason      string
+	body        []byte
 	targetTask  string
 	targetTasks []string
 }
@@ -201,9 +204,7 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 				}
 				agent := model.Principal{Kind: model.PrincipalAgent, ID: call.principalID()}
 				r = r.WithContext(withAgentCall(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call))
-				rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-				next(rec, r)
-				s.recordAgentCall(r.Context(), call, rec.status, rec.bytes)
+				s.serveAgentCall(w, r, next, call)
 				return
 			}
 		}
@@ -220,9 +221,7 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 		}
 		agent := model.Principal{Kind: model.PrincipalAgent, ID: taskID}
 		r = r.WithContext(withAgentCall(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call))
-		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		next(rec, r)
-		s.recordAgentCall(r.Context(), call, rec.status, rec.bytes)
+		s.serveAgentCall(w, r, next, call)
 	}
 }
 
@@ -282,6 +281,7 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	if err != nil {
 		return call, err
 	}
+	call.body = body
 	method, _, _ := strings.Cut(pattern, " ")
 	if target := r.PathValue("id"); target != "" && strings.HasPrefix(pathOf(pattern), "/api/tasks/{id}") {
 		call.targetTask = target
@@ -341,6 +341,11 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	if err := s.agentFilingEscalation(ctx, acting, set, pattern, scope, call.repo, body); err != nil {
 		return call, err
 	}
+	if pattern == "PATCH /api/tasks/{id}" {
+		if err := agentTaskPatchBodyAllowed(body); err != nil {
+			return call, err
+		}
+	}
 	return call, nil
 }
 
@@ -369,17 +374,46 @@ func tasksAdminTaskPatchBodyAllowed(body []byte) error {
 		return errors.New("api:tasks:admin without api:tasks:write requires a JSON object editing priority on PATCH /api/tasks/{id}")
 	}
 	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(trimmed, &fields); err != nil || fields == nil {
+	if err := json.Unmarshal(trimmed, &fields); err != nil || len(fields) == 0 {
 		return errors.New("api:tasks:admin without api:tasks:write requires a single JSON object editing priority on PATCH /api/tasks/{id}")
 	}
 	for k, raw := range fields {
-		if !strings.EqualFold(k, "priority") {
+		if gateKey(k) != "priority" {
 			return fmt.Errorf("api:tasks:admin without api:tasks:write may only edit priority on PATCH /api/tasks/{id} (got %q)", k)
 		}
 		var on bool
 		if json.Unmarshal(raw, &on) == nil {
 			return errors.New("api:tasks:admin without api:tasks:write may only edit numeric priority on PATCH /api/tasks/{id}")
 		}
+		var n int
+		if json.Unmarshal(raw, &n) != nil || strings.TrimSpace(string(raw)) == "null" {
+			return errors.New("api:tasks:admin without api:tasks:write requires a numeric priority on PATCH /api/tasks/{id}")
+		}
+	}
+	return nil
+}
+
+// agentTaskPatchBodyAllowed refuses empty or no-op PATCH /api/tasks/{id}
+// bodies from agent callers. Malformed JSON or wrong field types are left to
+// readJSON so they keep their usual syntax/type error messages.
+func agentTaskPatchBodyAllowed(body []byte) error {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return validationErrorf("PATCH /api/tasks/{id} requires a JSON object naming at least one field to edit")
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &fields); err != nil || fields == nil {
+		return nil
+	}
+	if len(fields) == 0 {
+		return validationErrorf("PATCH /api/tasks/{id} requires at least one field to edit")
+	}
+	var req UpdateTaskRequest
+	if err := json.Unmarshal(trimmed, &req); err != nil {
+		return nil
+	}
+	if reflect.ValueOf(req).IsZero() {
+		return validationErrorf("PATCH /api/tasks/{id} requires at least one recognized non-null field to edit")
 	}
 	return nil
 }
@@ -756,6 +790,34 @@ func grantsInBody(pattern string, body []byte) []string {
 	return addedGrantsInBody(pattern, body, nil, nil)
 }
 
+// gateKey is a JSON object key folded the way encoding/json matches one
+// against a struct field: case-insensitively, under Unicode simple
+// folding, so U+017F (ſ) is an s and U+212A (the Kelvin sign) a k. The
+// gates below compare body keys by gateKey, never by strings.ToLower:
+// ToLower leaves ſ as it is, so "autoApproveProposalſ" or
+// "priorityDiſpatch" reached the field it names while missing the case
+// that refuses it.
+func gateKey(key string) string {
+	var b strings.Builder
+	b.Grow(len(key))
+	for _, r := range key {
+		if r >= utf8.RuneSelf {
+			// The smallest rune in r's folding orbit, as
+			// encoding/json's foldRune picks it.
+			for {
+				next := unicode.SimpleFold(r)
+				if next <= r {
+					r = next
+					break
+				}
+				r = next
+			}
+		}
+		b.WriteRune(unicode.ToLower(r))
+	}
+	return b.String()
+}
+
 func patchTouchesTaskGrants(body []byte) bool {
 	if len(body) == 0 {
 		return false
@@ -769,7 +831,7 @@ func patchTouchesTaskGrants(body []byte) bool {
 		if trimmed == "" || trimmed == "null" {
 			continue
 		}
-		lower := strings.ToLower(key)
+		lower := gateKey(key)
 		// "priority" is the numeric dispatch priority unless it is a
 		// boolean, which UpdateTaskRequest reads as priorityDispatch:
 		// the priority-dispatch grant, under either spelling.
@@ -802,7 +864,7 @@ func addedGrantsInBody(pattern string, body []byte, stored map[string][]string, 
 	}
 	var names []string
 	for key, raw := range fields {
-		lower := strings.ToLower(key)
+		lower := gateKey(key)
 		if lower == "priority" || lower == "prioritydispatch" || lower == "priority_dispatch" {
 			var on bool
 			if json.Unmarshal(raw, &on) == nil && (on || pattern == "PATCH /api/tasks/{id}") {
@@ -884,6 +946,29 @@ func grantNamesIn(raw json.RawMessage) []string {
 	return nil
 }
 
+// networkAccessWidens reports whether a body asking for access gives work
+// more network than limit, the caller's own (an acting task's
+// NetworkAccess). Both are read as dispatch reads them
+// (orchestrator.deploymentNetworkAccess): "" is the deployment's default,
+// so a task with no override on a deployment whose default is none has
+// none, and may not ask for "open" -- nor, on a deployment whose default is
+// open, for "". A config that cannot be read is taken as none.
+func (s *Server) networkAccessWidens(ctx context.Context, limit model.NetworkAccess, access string) bool {
+	deployment := model.NetworkNone
+	if s.tasks != nil && s.tasks.Store != nil {
+		if cfg, err := s.tasks.Store.GetConfig(ctx); err == nil && cfg != nil {
+			deployment = model.NormalizeNetworkAccess(cfg.NetworkAccess)
+		}
+	}
+	effective := func(v model.NetworkAccess) model.NetworkAccess {
+		if v = model.NetworkAccess(strings.TrimSpace(string(v))); v == "" {
+			return deployment
+		}
+		return v
+	}
+	return effective(limit) == model.NetworkNone && effective(model.NetworkAccess(access)) != model.NetworkNone
+}
+
 // agentFilingEscalation refuses the rest of what a task, schedule or
 // template body can hand out beyond its capabilities (agentGrantEscalation):
 // push or read access to a repository, auto-merge (and Submit, which
@@ -909,7 +994,7 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 		return nil
 	}
 	for key, raw := range fields {
-		switch strings.ToLower(key) {
+		switch gateKey(key) {
 		case "writes":
 			var targets []WriteTarget
 			if json.Unmarshal(raw, &targets) != nil {
@@ -942,8 +1027,7 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 			}
 		case "networkaccess", "network_access":
 			var access string
-			if json.Unmarshal(raw, &access) == nil && acting.NetworkAccess == model.NetworkNone &&
-				model.NetworkAccess(strings.TrimSpace(access)) != model.NetworkNone {
+			if json.Unmarshal(raw, &access) == nil && s.networkAccessWidens(ctx, acting.NetworkAccess, access) {
 				return errors.New("an agent with networkAccess \"none\" cannot widen networkAccess")
 			}
 		case "approved", "interactive":
@@ -1336,6 +1420,7 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	if err != nil {
 		return call, err
 	}
+	call.body = body
 	method, _, _ := strings.Cut(pattern, " ")
 	if target := r.PathValue("id"); target != "" && strings.HasPrefix(pathOf(pattern), "/api/tasks/{id}") {
 		call.targetTask = target
@@ -1391,6 +1476,11 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	}
 	if err := s.externalAgentFilingEscalation(ctx, tok, held, set, pattern, scope, call.repo, body); err != nil {
 		return call, err
+	}
+	if pattern == "PATCH /api/tasks/{id}" {
+		if err := agentTaskPatchBodyAllowed(body); err != nil {
+			return call, err
+		}
 	}
 	return call, nil
 }
@@ -1584,7 +1674,7 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 		return set.Allows(scope, r)
 	}
 	for key, raw := range fields {
-		switch strings.ToLower(key) {
+		switch gateKey(key) {
 		case "writes":
 			var targets []WriteTarget
 			if json.Unmarshal(raw, &targets) != nil {
@@ -1615,6 +1705,13 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 			if json.Unmarshal(raw, &on) == nil && on {
 				return errors.New("an external agent cannot turn on autoApproveProposals")
 			}
+		case "networkaccess", "network_access":
+			// An external agent has no sandbox of its own, so the most
+			// it may hand out is the deployment's default.
+			var access string
+			if json.Unmarshal(raw, &access) == nil && s.networkAccessWidens(ctx, "", access) {
+				return errors.New("an external agent cannot widen networkAccess past this deployment's default of \"none\"")
+			}
 		case "approved":
 			var on bool
 			if json.Unmarshal(raw, &on) == nil && on && !set.Allows("tasks:admin", repo) {
@@ -1624,6 +1721,11 @@ func (s *Server) externalAgentFilingEscalation(ctx context.Context, tok *model.E
 			var who string
 			if json.Unmarshal(raw, &who) == nil && strings.TrimSpace(who) != "" {
 				return fmt.Errorf("an agent cannot name somebody else as the %s of work it files", key)
+			}
+		case "proposalkey":
+			var k string
+			if json.Unmarshal(raw, &k) == nil && strings.TrimSpace(k) != "" {
+				return errors.New("an agent cannot set proposalKey directly")
 			}
 		case "reviewers":
 			if hasReviewersField(pattern, raw) {
@@ -1776,3 +1878,305 @@ func (s *statusRecorder) Flush() {
 }
 
 func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
+type taskMutationRespKind int
+
+const (
+	// taskRespNone marks a mutating task route whose response carries only
+	// action-specific metadata (never a Task or TaskDetail record).
+	taskRespNone taskMutationRespKind = iota + 1
+	// taskRespSingle marks a mutating route that echoes a single Task or
+	// TaskDetail JSON object. Without tasks:read on that repository, only
+	// {id, state} is returned.
+	taskRespSingle
+	// taskRespPatch marks PATCH /api/tasks/{id}, which returns {id, state}
+	// plus any scalar/list fields explicitly replaced by the request body
+	// when the caller lacks tasks:read.
+	taskRespPatch
+	// taskRespList marks POST /api/tasks/reorder, which returns a []Task
+	// slice across the queue.
+	taskRespList
+	// taskRespWaitOn marks POST /api/tasks/{id}/wait-on, whose WaitTarget
+	// entries include target tasks' titles and closing notes.
+	taskRespWaitOn
+	// taskRespCreate marks POST /api/tasks. A plain filing echoes back only
+	// what the caller just wrote, so it is returned whole; a filing that
+	// names a template or a task to supersede draws on text the caller may
+	// not read, and is cut to {id, state} like taskRespSingle.
+	taskRespCreate
+)
+
+// taskMutationResponseKinds classifies every non-GET, non-internal route under
+// /api/tasks (and every non-GET route holding a tasks:* scope). Held total by
+// TestTaskMutationResponseClassificationIsTotal so a new task mutation cannot
+// silently echo respondWithTask to a caller without tasks:read.
+var taskMutationResponseKinds = map[string]taskMutationRespKind{
+	"POST /api/tasks":                              taskRespCreate,
+	"POST /api/tasks/from-template":                taskRespSingle,
+	"POST /api/tasks/reorder":                      taskRespList,
+	"PATCH /api/tasks/{id}":                        taskRespPatch,
+	"POST /api/tasks/{id}/capabilities":            taskRespSingle,
+	"POST /api/tasks/{id}/depends-on":              taskRespSingle,
+	"POST /api/tasks/{id}/approve":                 taskRespSingle,
+	"POST /api/tasks/{id}/withdraw-approval":       taskRespSingle,
+	"POST /api/tasks/{id}/park-until":              taskRespNone,
+	"POST /api/tasks/{id}/resume-later":            taskRespNone,
+	"POST /api/tasks/{id}/defer":                   taskRespSingle,
+	"POST /api/tasks/{id}/undefer":                 taskRespSingle,
+	"POST /api/tasks/{id}/submit":                  taskRespSingle,
+	"POST /api/tasks/{id}/comments":                taskRespSingle,
+	"PUT /api/tasks/{id}/secret":                   taskRespSingle,
+	"POST /api/tasks/{id}/close":                   taskRespSingle,
+	"POST /api/tasks/{id}/stop":                    taskRespSingle,
+	"POST /api/tasks/{id}/pause":                   taskRespSingle,
+	"POST /api/tasks/{id}/resume":                  taskRespSingle,
+	"PUT /api/tasks/{id}/goal":                     taskRespSingle,
+	"DELETE /api/tasks/{id}/goal":                  taskRespSingle,
+	"POST /api/tasks/{id}/reopen":                  taskRespSingle,
+	"POST /api/tasks/{id}/retry":                   taskRespSingle,
+	"POST /api/tasks/{id}/retry-merge":             taskRespSingle,
+	"POST /api/tasks/{id}/force-merge":             taskRespSingle,
+	"POST /api/tasks/{id}/run-now":                 taskRespSingle,
+	"POST /api/tasks/{id}/pull-request":            taskRespNone,
+	"POST /api/tasks/{id}/sandbox/recreate":        taskRespNone,
+	"POST /api/tasks/{id}/messages":                taskRespNone,
+	"POST /api/tasks/{id}/notes":                   taskRespNone,
+	"POST /api/tasks/{id}/agent-messages":          taskRespNone,
+	"POST /api/tasks/{id}/change-publish":          taskRespSingle,
+	"POST /api/tasks/{id}/change-mail":             taskRespSingle,
+	"POST /api/tasks/{id}/change-sync":             taskRespSingle,
+	"POST /api/tasks/{id}/wait-on":                 taskRespWaitOn,
+	"POST /api/repos/{owner}/{name}/import-issues": taskRespNone,
+}
+
+type bufferedResponseRecorder struct {
+	header      http.Header
+	body        bytes.Buffer
+	status      int
+	wroteHeader bool
+}
+
+func (b *bufferedResponseRecorder) Header() http.Header {
+	return b.header
+}
+
+func (b *bufferedResponseRecorder) WriteHeader(code int) {
+	if !b.wroteHeader {
+		b.status = code
+		b.wroteHeader = true
+	}
+}
+
+func (b *bufferedResponseRecorder) Write(p []byte) (int, error) {
+	if !b.wroteHeader {
+		b.WriteHeader(http.StatusOK)
+	}
+	return b.body.Write(p)
+}
+
+func (s *Server) serveAgentCall(w http.ResponseWriter, r *http.Request, next http.HandlerFunc, call agentCall) {
+	kind, ok := taskMutationResponseKinds[call.pattern]
+	if !ok || kind == taskRespNone {
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next(rec, r)
+		s.recordAgentCall(r.Context(), call, rec.status, rec.bytes)
+		return
+	}
+
+	buf := &bufferedResponseRecorder{
+		header: make(http.Header),
+		status: http.StatusOK,
+	}
+	next(buf, r)
+
+	raw := buf.body.Bytes()
+	out := raw
+	if buf.status >= 200 && buf.status < 300 && len(raw) > 0 {
+		out = s.redactAgentTaskResponse(r.Context(), call, kind, raw)
+	}
+	for k, vals := range buf.header {
+		w.Header()[k] = append([]string(nil), vals...)
+	}
+	if len(out) != len(raw) {
+		w.Header().Del("Content-Length")
+	}
+	if buf.wroteHeader || len(out) > 0 {
+		w.WriteHeader(buf.status)
+	}
+	var written int
+	if len(out) > 0 {
+		written, _ = w.Write(out)
+	}
+	s.recordAgentCall(r.Context(), call, buf.status, int64(written))
+}
+
+func (s *Server) redactAgentTaskResponse(ctx context.Context, call agentCall, kind taskMutationRespKind, raw []byte) []byte {
+	if kind == taskRespCreate {
+		if !createDrawsOnOtherText(call.body) {
+			return raw
+		}
+		kind = taskRespSingle
+	}
+	switch kind {
+	case taskRespSingle, taskRespPatch:
+		var full map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &full); err != nil || full == nil {
+			return raw
+		}
+		respRepo := jsonStringField(full, "repo")
+		canRead := call.grants.Allows("tasks:read", respRepo)
+		if canRead && kind == taskRespPatch && !model.SameRepoText(call.repo, respRepo) {
+			canRead = call.grants.Allows("tasks:read", call.repo)
+		}
+		if canRead {
+			return raw
+		}
+		redacted := map[string]json.RawMessage{}
+		for _, k := range []string{"id", "state"} {
+			if v, ok := full[k]; ok {
+				redacted[k] = v
+			}
+		}
+		if kind == taskRespPatch {
+			for _, k := range editedPatchResponseKeys(call.body) {
+				if v, ok := full[k]; ok {
+					redacted[k] = v
+				}
+			}
+		}
+		return marshalJSONLine(redacted, raw)
+
+	case taskRespList:
+		if call.grants.Allows("tasks:read", "") {
+			return raw
+		}
+		var items []map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &items); err != nil {
+			return raw
+		}
+		requested := map[string]bool{}
+		var req ReorderRequest
+		if len(call.body) > 0 && json.Unmarshal(call.body, &req) == nil {
+			for _, id := range req.IDs {
+				if trimmed := strings.TrimSpace(id); trimmed != "" {
+					requested[trimmed] = true
+				}
+			}
+		}
+		filtered := make([]map[string]json.RawMessage, 0, len(items))
+		for _, item := range items {
+			repo := jsonStringField(item, "repo")
+			if repo != "" && call.grants.Allows("tasks:read", repo) {
+				filtered = append(filtered, item)
+				continue
+			}
+			id := jsonStringField(item, "id")
+			if requested[id] {
+				stub := map[string]json.RawMessage{}
+				for _, k := range []string{"id", "state"} {
+					if v, ok := item[k]; ok {
+						stub[k] = v
+					}
+				}
+				filtered = append(filtered, stub)
+			}
+		}
+		return marshalJSONLine(filtered, raw)
+
+	case taskRespWaitOn:
+		if call.grants.Allows("tasks:read", "") {
+			return raw
+		}
+		var resp waitOnResponse
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			return raw
+		}
+		for i := range resp.Targets {
+			targetRepo := ""
+			if s.tasks != nil && s.tasks.Store != nil {
+				if t, err := s.tasks.Store.GetTask(ctx, resp.Targets[i].ID); err == nil && t != nil {
+					targetRepo = taskRepo(t)
+				}
+			}
+			if !call.grants.Allows("tasks:read", targetRepo) {
+				resp.Targets[i].Title = ""
+				resp.Targets[i].ClosingNote = ""
+			}
+		}
+		return marshalJSONLine(resp, raw)
+	}
+	return raw
+}
+
+// createDrawsOnOtherText reports whether a POST /api/tasks body names a
+// template, a task to supersede, or a proposalKey, any of which can populate
+// or resolve the response from an existing record rather than only what the
+// caller sent.
+func createDrawsOnOtherText(body []byte) bool {
+	var req CreateTaskRequest
+	if len(body) == 0 || json.Unmarshal(body, &req) != nil {
+		return true
+	}
+	return strings.TrimSpace(req.TemplateID) != "" ||
+		strings.TrimSpace(req.Supersedes) != "" ||
+		strings.TrimSpace(req.ProposalKey) != ""
+}
+
+func editedPatchResponseKeys(body []byte) []string {
+	var req UpdateTaskRequest
+	if len(body) == 0 || json.Unmarshal(body, &req) != nil {
+		return nil
+	}
+	var keys []string
+	add := func(set bool, key string) {
+		if set {
+			keys = append(keys, key)
+		}
+	}
+	add(req.Title != nil, "title")
+	add(req.Description != nil, "description")
+	add(req.Repo != nil, "repo")
+	add(req.Base != nil, "base")
+	add(req.Priority != nil, "priority")
+	add(req.PriorityDispatch != nil, "priorityDispatch")
+	add(req.Issue != nil, "issue")
+	add(req.AutoMerge != nil, "autoMerge")
+	add(req.AutoApproveProposals != nil, "autoApproveProposals")
+	add(req.SandboxCPUs != nil, "sandboxCpus")
+	add(req.SandboxMemoryMB != nil, "sandboxMemoryMb")
+	add(req.SandboxDiskGB != nil, "sandboxDiskGb")
+	add(req.AgentFramework != nil, "agentFramework")
+	add(req.Model != nil, "model")
+	add(req.AgentBackendID != nil, "agentBackendId")
+	add(req.NetworkAccess != nil, "networkAccess")
+	add(req.NothingNeededAction != nil, "nothingNeededAction")
+	add(req.KeepRunning != nil || req.KeepRunningSnake != nil, "keepRunning")
+	add(req.NoPort != nil, "noPort")
+	add(req.FixesBaseBranch != nil, "fixesBaseBranch")
+	add(req.PromptExtension != nil, "promptExtension")
+	add(req.ReviewTemplateID != nil, "reviewTemplateId")
+	add(req.Reads != nil, "reads")
+	add(req.Writes != nil, "writes")
+	add(req.GoogleChatSpace != nil, "googleChatSpace")
+	return keys
+}
+
+func jsonStringField(m map[string]json.RawMessage, key string) string {
+	raw, ok := m[key]
+	if !ok {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return strings.TrimSpace(s)
+}
+
+func marshalJSONLine(v any, fallback []byte) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fallback
+	}
+	return append(b, '\n')
+}

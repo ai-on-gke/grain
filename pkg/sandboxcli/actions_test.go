@@ -284,9 +284,11 @@ func TestStage3SandboxCLICommands(t *testing.T) {
 	if gotPri, ok := proxy.bodies["POST /cli/proposals"]["priority"].(float64); !ok || gotPri != 8 {
 		t.Errorf("task propose priority in body = %v, want 8", proxy.bodies["POST /cli/proposals"]["priority"])
 	}
-	if _, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "t", "--body", "b", "--priority", "-1"); code != 1 ||
-		!strings.Contains(errOut, "--priority") {
-		t.Errorf("task propose --priority -1: %d %s", code, errOut)
+	for _, bad := range []string{"-1", "0"} {
+		if _, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "t", "--body", "b", "--priority", bad); code != 1 ||
+			!strings.Contains(errOut, "--priority") || !strings.Contains(errOut, "positive integer") {
+			t.Errorf("task propose --priority %s: %d %s", bad, code, errOut)
+		}
 	}
 	if _, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "t", "--body", "b", "--supersedes", "5"); code != 1 ||
 		!strings.Contains(errOut, "propose_task") {
@@ -315,6 +317,20 @@ func TestStage3SandboxCLICommands(t *testing.T) {
 	// 6. memory write, memory doc-write (and memory doc write), release-notes, quarantine
 	if out, errOut, code := runActionCLI(t, srv, nil, "memory", "write", "remember this"); code != 0 || !strings.Contains(out, "remember this") {
 		t.Errorf("memory write: %d %s %s", code, out, errOut)
+	}
+	// Memory has no keys: the form the old help advertised ("write <key>
+	// <body>") must be refused rather than replace the deployment's whole
+	// memory with "<key> <body>".
+	delete(proxy.bodies, "PUT /api/memory")
+	if _, errOut, code := runActionCLI(t, srv, nil, "memory", "write", "walk-key", "a body"); code == 0 || !strings.Contains(errOut, "takes no <key>") {
+		t.Errorf("memory write <key> <body>: %d %s, want a refusal", code, errOut)
+	}
+	if body, sent := proxy.bodies["PUT /api/memory"]; sent {
+		t.Errorf("memory write <key> <body> reached PUT /api/memory with %v", body)
+	}
+	if _, errOut, code := runActionCLI(t, srv, nil, "memory", "write", "acme/widgets", "repo memory"); code != 0 ||
+		proxy.bodies["PUT /api/memory"]["repo"] != "acme/widgets" || proxy.bodies["PUT /api/memory"]["text"] != "repo memory" {
+		t.Errorf("memory write <repo> <text>: %d %s %v", code, errOut, proxy.bodies["PUT /api/memory"])
 	}
 	if out, errOut, code := runActionCLI(t, srv, nil, "memory", "doc", "write", "arch", "doc body", "--summary", "Arch"); code != 0 || !strings.Contains(out, `"arch"`) {
 		t.Errorf("memory doc write: %d %s %s", code, out, errOut)
@@ -456,5 +472,27 @@ func TestSandboxAPIInputModesAndCIArtifactDownload(t *testing.T) {
 	}
 	if _, err := os.Stat(missingDest); !os.IsNotExist(err) {
 		t.Errorf("failed ci artifact left partial file behind at %s: %v", missingDest, err)
+	}
+}
+
+// TestQuarantineSaysWhenItsFollowUpWasNotFiled: a repoless run's
+// quarantine could not file its held repair proposal, and the CLI used to
+// print the quarantine alone and exit 0 as though somebody were now on it.
+func TestQuarantineSaysWhenItsFollowUpWasNotFiled(t *testing.T) {
+	proxy := &fakeActionProxy{bodies: map[string]map[string]any{}, answers: map[string]string{
+		"/cli/quarantine": `{"task_id":"7","follow_up_error":"no repo given"}`,
+	}}
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+	dir := t.TempDir()
+	out, errOut, code := runActionCLI(t, srv, nil, "quarantine", "pkg/foo", "TestFlaky", "--reason", "timing flake", "-C", dir)
+	if code == 0 || !strings.Contains(errOut, "follow-up repair task was not filed: no repo given") {
+		t.Errorf("quarantine with a failed follow-up: %d %q %q, want a non-zero exit naming the failure", code, out, errOut)
+	}
+	if !strings.Contains(out, `Quarantined test "pkg/foo.TestFlaky"`) {
+		t.Errorf("stdout = %q, want the quarantine itself still reported", out)
+	}
+	if raw, err := os.ReadFile(filepath.Join(dir, ".grain", "quarantine.yml")); err != nil || !strings.Contains(string(raw), "pkg/foo.TestFlaky") {
+		t.Errorf("quarantine.yml = %q, %v", raw, err)
 	}
 }

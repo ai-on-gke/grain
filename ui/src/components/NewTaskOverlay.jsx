@@ -71,6 +71,7 @@ import BranchField from "./BranchField.jsx";
 import {
   CustomFieldInputs,
   fileableFieldValues,
+  hiddenLinkValues,
   unfiledLinkValues,
 } from "./CustomFields.jsx";
 import { GlyphLabel } from "./ItemGlyph.jsx";
@@ -239,6 +240,17 @@ export default function NewTaskOverlay({
     boardId,
   });
   const F = taskForm.fields;
+  // What a /new link asked for that this form leaves out: the values
+  // the declarations would refuse, and -- where settings/new-task-form.yml
+  // hides the custom fields -- every value it carried for them, since a
+  // hidden field files its default. Drawn beside the custom fields when
+  // they are shown, and at the top of the form otherwise, so neither a
+  // collapsed "Advanced options" nor a hidden field swallows it.
+  const customFieldsHidden = F.customFields.visibility === "hidden";
+  const linkNotice = [
+    ...unfiledLinkValues(config, fields),
+    ...(customFieldsHidden ? hiddenLinkValues(config, fields) : []),
+  ];
   // The repo's own block holds its branch, its base and the other repos
   // it writes, as long as they sit where it does and right after it.
   const inRepoGroup = (id) =>
@@ -632,7 +644,6 @@ export default function NewTaskOverlay({
   });
   const setCustomField = (name, value) =>
     setCustomFields((prev) => ({ ...prev, [name]: value }));
-  const unfiledFromLink = unfiledLinkValues(config, fields);
 
   const [resetKey, setResetKey] = useState(0);
   // repoSeed is what Repos starts from when it is remounted for a reason
@@ -1065,7 +1076,16 @@ export default function NewTaskOverlay({
       // request entirely on a deployment that declares none, which is
       // most of them -- an empty map would be a key on every filing
       // saying nothing.
-      ...(Object.keys(customFields).length > 0 ? { customFields } : {}),
+      // A form that hides its custom fields files their declared
+      // defaults, never values a /new link put there out of sight
+      // (linkNotice says which were left out).
+      ...(Object.keys(customFields).length > 0
+        ? {
+            customFields: customFieldsHidden
+              ? fileableFieldValues(config, null)
+              : customFields,
+          }
+        : {}),
       dependsOn: dependsOn.map((t) => (typeof t === "object" && t ? t.id : t)),
       reads,
       writes: ct ? [] : writes,
@@ -1088,7 +1108,7 @@ export default function NewTaskOverlay({
       payload.attachments = await Promise.all(
         attachments.map((f) => fileToAttachment(f)),
       );
-      await api("/api/tasks", {
+      const created = await api("/api/tasks", {
         method: "POST",
         body: JSON.stringify(payload),
       });
@@ -1135,7 +1155,10 @@ export default function NewTaskOverlay({
       setAtFront(!!openingDefault("atFront"));
       setPriority("5");
       onClose();
-      await onCreated();
+      // The filed task, for what its answer says beyond "filed" -- the
+      // default grants the capability policy kept off it
+      // (DroppedDefaultsNotice).
+      await onCreated(created);
     } catch (err) {
       submittingRef.current = false;
       setSubmitting(false);
@@ -1200,6 +1223,12 @@ export default function NewTaskOverlay({
       )}
     </>
   );
+  const linkNoticeNode = linkNotice.length > 0 && (
+    <Alert severity="warning" sx={{ mt: 1 }} data-testid="unfiled-link-values">
+      This link asked for values this form has left out: {linkNotice.join("; ")}
+      .
+    </Alert>
+  );
   const customFieldsNode = (
     <>
       {/* This deployment's own fields, above the repo and the rest of
@@ -1211,17 +1240,9 @@ export default function NewTaskOverlay({
             (unfiledLinkValues): a value its field does not offer, or a
             field this deployment does not declare. Said here, beside the
             fields, so the task filed is not quietly a different one from
-            the task the link's sender meant. */}
-      {unfiledFromLink.length > 0 && (
-        <Alert
-          severity="warning"
-          sx={{ mt: 1 }}
-          data-testid="unfiled-link-values"
-        >
-          This link asked for values this form has left out:{" "}
-          {unfiledFromLink.join("; ")}.
-        </Alert>
-      )}
+            the task the link's sender meant -- and at the top of the form
+            when these fields are tucked away or hidden (linkNotice). */}
+      {F.customFields.visibility === "shown" && linkNoticeNode}
       <CustomFieldInputs
         config={config}
         values={customFields}
@@ -2278,6 +2299,7 @@ export default function NewTaskOverlay({
       }
     >
       <>
+        {F.customFields.visibility !== "shown" && linkNoticeNode}
         {shownSlots.filter((s) => s.order < ADVANCED_ORDER).map(renderSlot)}
         {moreSlots.some((s) => s.draws) && (
           <Accordion

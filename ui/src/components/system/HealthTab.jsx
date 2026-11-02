@@ -77,7 +77,7 @@ export default function HealthTab({
           )
             return;
           evt.preventDefault();
-          onOpenSettings(loc.section, loc.anchor);
+          onOpenSettings(loc.section, loc.target);
         }}
       >
         {label}

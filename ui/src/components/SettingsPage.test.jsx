@@ -413,6 +413,102 @@ describe("SettingsPage", () => {
     expect(screen.getByLabelText("Max worker agents")).toBeDisabled();
   });
 
+  // settings-mutability.spec.md D-9: external mode leaves secret entry
+  // in the UI. A model connection's credential and an executor join
+  // token are secrets the config repo never holds and their routes take
+  // in external mode; the connection's own fields are the config repo's
+  // and stay read-only.
+  describe("under an external config repo", () => {
+    const external = {
+      ...settings,
+      externalConfigRepo: "https://github.com/acme/grain-config.git",
+      externalConfigBranch: "main",
+      agentBackends: [
+        {
+          id: "conn-1",
+          name: "Primary Claude",
+          framework: "claude",
+          authMode: "api_key",
+          models: ["claude-opus-5-5"],
+        },
+      ],
+    };
+    const renderSection = (section) => {
+      api.mockImplementation((path) => {
+        if (path === "/api/settings") return Promise.resolve(external);
+        if (path === "/api/deployment")
+          return Promise.resolve({ id: "default", modelSettings: [] });
+        if (path === "/api/executors" || path === "/api/executors/tokens")
+          return Promise.resolve([]);
+        return Promise.resolve({});
+      });
+      render(
+        <PreferencesProvider>
+          <SettingsPage
+            config={{
+              externalConfigRepo: external.externalConfigRepo,
+              externalConfigBranch: external.externalConfigBranch,
+            }}
+            section={section}
+            onSection={vi.fn()}
+            showError={vi.fn()}
+          />
+        </PreferencesProvider>,
+      );
+    };
+
+    it("keeps a model connection's credential usable and the connection read-only", async () => {
+      const user = userEvent.setup();
+      renderSection("models");
+      await screen.findByTestId("external-config-repo-banner");
+      await screen.findByText("Primary Claude");
+      expect(
+        screen.getByRole("button", { name: "New connection" }),
+      ).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Disable" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Remove" })).toBeDisabled();
+      // The deployment's model defaults are config and stay in the
+      // read-only fieldset.
+      expect(
+        screen
+          .getByRole("region", { name: "Models" })
+          .querySelector("[data-settings-readonly]"),
+      ).not.toBeNull();
+
+      await user.click(screen.getByRole("button", { name: "Edit" }));
+      expect(screen.getByLabelText("Name")).toBeDisabled();
+      expect(screen.getByLabelText("Concurrency")).toBeDisabled();
+      const credential = screen.getByLabelText("Claude Code OAuth token", {
+        selector: "input[type=password]",
+      });
+      expect(credential).toBeEnabled();
+      await user.type(credential, "sk-test");
+      await user.click(screen.getByRole("button", { name: "Set credential" }));
+      await waitFor(() =>
+        expect(api).toHaveBeenCalledWith(
+          "/api/agent-backends/conn-1/credential",
+          { method: "PUT", body: JSON.stringify({ value: "sk-test" }) },
+        ),
+      );
+      expect(
+        screen.getByRole("button", { name: "Clear credential" }),
+      ).toBeEnabled();
+    });
+
+    it("keeps executor join tokens usable", async () => {
+      renderSection("executors");
+      await screen.findByTestId("external-config-repo-banner");
+      expect(
+        await screen.findByRole("button", { name: "Issue Token" }),
+      ).toBeEnabled();
+      expect(
+        screen
+          .getByRole("region", { name: "Executor join tokens" })
+          .querySelector("[data-settings-readonly]"),
+      ).toBeNull();
+    });
+  });
+
   // Upgrade moved here from System (/system/upgrade): it is an action,
   // not a setting, so it carries no save state and is not read-only
   // under an external config repo, and its pointer to the upgrade-check
@@ -545,8 +641,11 @@ describe("SettingsPage", () => {
   });
 
   // 2026-11-01 walkthrough: the config-map server's own secret was listed
-  // under Other secrets, and its Delete broke the server.
-  it("leaves a capability server's own secret out of Other secrets", async () => {
+  // under Other secrets, and its Delete broke the server. GET /api/secrets
+  // now names the servers using each secret (task 2263), and the pane
+  // lists it with them, without a Delete.
+  it("lists a capability server's own secret with its server, not under Other secrets", async () => {
+    const id = "https://grain.dev/capabilities/config-map";
     api.mockImplementation((path, init) => {
       if (path === "/api/settings" && !init?.method) {
         return Promise.resolve(settings);
@@ -555,23 +654,14 @@ describe("SettingsPage", () => {
         return Promise.resolve({
           enabled: true,
           secrets: [
-            { name: "capability-server-1f6d92c4", keys: ["secret_values"] },
+            {
+              name: "capability-server-1f6d92c4",
+              keys: ["secret_values"],
+              capabilityServers: [id],
+            },
             { name: "walk-throwaway", keys: ["token"] },
           ],
         });
-      }
-      if (path === "/api/capability-servers" && !init?.method) {
-        return Promise.resolve([
-          {
-            id: "https://grain.dev/capabilities/config-map",
-            secrets: [
-              {
-                name: "capability-server-1f6d92c4/secret_values",
-                present: true,
-              },
-            ],
-          },
-        ]);
       }
       return Promise.resolve({});
     });
@@ -586,11 +676,14 @@ describe("SettingsPage", () => {
       </PreferencesProvider>,
     );
     expect(await screen.findByText("walk-throwaway")).toBeInTheDocument();
-    await waitFor(() =>
-      expect(
-        screen.queryByText("capability-server-1f6d92c4"),
-      ).not.toBeInTheDocument(),
-    );
+    const used = screen.getByRole("list", {
+      name: "Secrets used by capability servers",
+    });
+    expect(used).toHaveTextContent("capability-server-1f6d92c4");
+    expect(within(used).getByRole("link", { name: id })).toBeInTheDocument();
+    expect(
+      within(used).queryByRole("button", { name: "Delete secret" }),
+    ).not.toBeInTheDocument();
   });
 
   it("marks an edited Memory note dirty in the header and nav, asks before switching sections, and clears the dot after confirming", async () => {
@@ -970,6 +1063,107 @@ describe("SettingsPage", () => {
       expect(await screen.findByLabelText("Poll interval")).toBeEnabled();
       expect(screen.getByLabelText("Merge batch size")).toBeEnabled();
       expect(screen.queryByTestId("config-managed-notice")).toBeNull();
+    });
+
+    it("omits settings/capabilities.yml from Tasks and Capabilities notices when not exported, and draws each Tasks link once", async () => {
+      const lockedSettings = {
+        ...settings,
+        settingsLocked: true,
+        configRepoOnly: true,
+      };
+      const baseEntries = [
+        { path: "tables/grain_config.json", size: 200 },
+        { path: "tables/custom_field.json", size: 80 },
+        { path: "tables/api_scope_set.json", size: 80 },
+        { path: "settings/templates.yml", size: 40 },
+      ];
+      api.mockImplementation((path, opts) => {
+        if (path === "/api/settings" && !opts)
+          return Promise.resolve(lockedSettings);
+        if (path === "/api/state-repo/files")
+          return Promise.resolve({ entries: baseEntries });
+        return Promise.resolve({});
+      });
+
+      const { unmount } = render(
+        <PreferencesProvider>
+          <SettingsPage
+            config={locked}
+            section="tasks"
+            onSection={vi.fn()}
+            showError={vi.fn()}
+          />
+        </PreferencesProvider>,
+      );
+      await waitFor(() =>
+        expect(
+          screen
+            .getAllByTestId("config-repo-link")
+            .map((a) => a.getAttribute("data-config-path")),
+        ).toEqual(["tables/grain_config.json", "tables/custom_field.json"]),
+      );
+      unmount();
+
+      render(
+        <PreferencesProvider>
+          <SettingsPage
+            config={locked}
+            section="capabilities"
+            onSection={vi.fn()}
+            showError={vi.fn()}
+          />
+        </PreferencesProvider>,
+      );
+      await waitFor(() =>
+        expect(
+          screen
+            .getAllByTestId("config-repo-link")
+            .map((a) => a.getAttribute("data-config-path")),
+        ).toEqual(["tables/grain_config.json", "tables/api_scope_set.json"]),
+      );
+    });
+
+    it("draws each Tasks config-repo link once when settings/capabilities.yml is exported", async () => {
+      const lockedSettings = {
+        ...settings,
+        settingsLocked: true,
+        configRepoOnly: true,
+      };
+      api.mockImplementation((path, opts) => {
+        if (path === "/api/settings" && !opts)
+          return Promise.resolve(lockedSettings);
+        if (path === "/api/state-repo/files") {
+          return Promise.resolve({
+            entries: [
+              { path: "tables/grain_config.json", size: 200 },
+              { path: "tables/custom_field.json", size: 80 },
+              { path: "settings/capabilities.yml", size: 120 },
+            ],
+          });
+        }
+        return Promise.resolve({});
+      });
+
+      render(
+        <PreferencesProvider>
+          <SettingsPage
+            config={locked}
+            section="tasks"
+            onSection={vi.fn()}
+            showError={vi.fn()}
+          />
+        </PreferencesProvider>,
+      );
+      expect(await screen.findByText("Default grants")).toBeInTheDocument();
+      expect(
+        screen
+          .getAllByTestId("config-repo-link")
+          .map((a) => a.getAttribute("data-config-path")),
+      ).toEqual([
+        "tables/grain_config.json",
+        "tables/custom_field.json",
+        "settings/capabilities.yml",
+      ]);
     });
   });
 });

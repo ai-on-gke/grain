@@ -106,10 +106,9 @@ func newDeliveryWorld(t *testing.T) *deliveryWorld {
 		Config: orchestrator.Config{
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
 			Capabilities: model.NewCapabilityRegistry(durable.New(), selfdebug.New()),
-			// Warm retention off: §1 is about the conversation, not the
-			// sandbox, and the reaper can take a warm or just-claimed
-			// session sandbox out from under a run (filed from task 2243).
-			SessionSandboxIdleTTL: -1,
+			// Warm retention on, as a deployment runs it: each new turn's
+			// run is handed the sandbox the session's first run built.
+			SessionSandboxIdleTTL: 30 * time.Minute,
 		},
 	}
 	wakes := make(chan struct{}, 16)

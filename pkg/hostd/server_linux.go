@@ -214,6 +214,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		go func() {
 			<-ctx.Done()
 			ln.Close()
+			_ = os.Remove(s.Socket)
 		}()
 	}
 	go s.sweepExited(ctx)
@@ -357,16 +358,20 @@ func (s *Server) runningLocked() int {
 // drain_cap is spent still taking starts, and only the second one ends in
 // a cancel (Cutover).
 //
+// drain_cap is the allowlist's as it is on each pass, not as it was when
+// the drain began: an operator who shortens it for a drain already under
+// way is heeded, and a read that fails -- the file mid-edit -- keeps the
+// cap last read rather than falling back to DefaultDrainCap for good.
+//
 // A run: host capability server is not waited for: it serves the
 // deployment rather than a run, so it never ends by itself and would
 // hold every upgrade for the whole cap. It is cancelled once the runs
 // are done, and the daemon's capability registry starts it again on the
 // new hostd.
 func (s *Server) waitDrained(ctx context.Context) {
-	a, _, _ := s.loadAllowlist()
-	limit := a.drainCap()
-	timer := time.NewTimer(limit)
-	defer timer.Stop()
+	limit := s.drainCap(0)
+	s.logf("hostd: drain_cap %s", limit)
+	since := time.Now()
 	capped := false
 	refused := false
 	for {
@@ -405,27 +410,52 @@ func (s *Server) waitDrained(ctx context.Context) {
 			// The cap counts from when starts were first refused: a
 			// cutover's time spent taking them does not shorten it.
 			refused = true
-			timer.Reset(limit)
+			since = time.Now()
 		}
 		for _, p := range stuck {
 			s.logf("hostd: drain cap %s reached: cancelling %s %q (pid %d, run %s) so the upgrade can go ahead",
 				limit, p.info.Kind, p.info.Name, p.info.PID, p.info.Run)
 			p.cancel()
 		}
+		wait := time.Second
+		if !capped {
+			if l := s.drainCap(limit); l != limit {
+				s.logf("hostd: drain_cap is now %s (was %s): the allowlist changed during the drain", l, limit)
+				limit = l
+			}
+			left := limit - time.Since(since)
+			if left <= 0 {
+				if !refusing {
+					s.logf("hostd: cutover: %d run(s) have kept running for all of %s; refusing new starts so the upgrade can go ahead", n, limit)
+					s.Drain()
+				} else {
+					capped = true
+				}
+				continue
+			}
+			wait = min(wait, left)
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-s.changed:
-		case <-timer.C:
-			if !refusing {
-				s.logf("hostd: cutover: %d run(s) have kept running for all of %s; refusing new starts so the upgrade can go ahead", n, limit)
-				s.Drain()
-				continue
-			}
-			capped = true
-		case <-time.After(time.Second):
+		case <-time.After(wait):
 		}
 	}
+}
+
+// drainCap is the allowlist's drain_cap as it is now, or last when the
+// allowlist cannot be read (DefaultDrainCap when nothing has been read).
+func (s *Server) drainCap(last time.Duration) time.Duration {
+	a, _, err := s.loadAllowlist()
+	if err != nil {
+		if last > 0 {
+			return last
+		}
+		s.logf("hostd: reading drain_cap: %v; using %s until the allowlist reads again", err, DefaultDrainCap)
+		return DefaultDrainCap
+	}
+	return a.drainCap()
 }
 
 func (s *Server) listen() (*net.UnixListener, error) {
@@ -439,15 +469,31 @@ func (s *Server) listen() (*net.UnixListener, error) {
 		}
 		_ = os.Remove(s.Socket)
 	}
-	// The socket is created under a umask that leaves nobody but its
-	// owner any access, so there is no window in which it is wider.
-	old := syscall.Umask(0o177)
-	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: s.Socket, Net: "unix"})
-	syscall.Umask(old)
+	// The socket is bound inside a fresh directory only its owner can
+	// enter, narrowed to 0600 there and only then renamed into place, so
+	// there is no window in which anyone else can reach it. Not by
+	// setting the umask around the bind: the umask is the whole
+	// process's, and a file or directory anything else in the process
+	// created in that window (a test running beside an in-process hostd)
+	// came out 0600 -- a directory nobody could create anything in.
+	private, err := os.MkdirTemp(dir, ".h")
 	if err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(s.Socket, 0o600); err != nil {
+	defer os.RemoveAll(private)
+	staged := filepath.Join(private, "s")
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: staged, Net: "unix"})
+	if err != nil {
+		return nil, err
+	}
+	// Close removes the socket by the name it now has, not the staged
+	// one (unixListener's own unlink would aim at the staged name).
+	ln.SetUnlinkOnClose(false)
+	if err := os.Chmod(staged, 0o600); err != nil {
+		ln.Close()
+		return nil, err
+	}
+	if err := os.Rename(staged, s.Socket); err != nil {
 		ln.Close()
 		return nil, err
 	}

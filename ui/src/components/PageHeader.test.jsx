@@ -245,4 +245,47 @@ describe("PageHeader", () => {
       scroll.mockRestore();
     }
   });
+
+  it("shows the signed-in email in GlobalButtons for IAP/verifier auth and opens Access/Logout menu", () => {
+    const onOpenAccess = vi.fn();
+    const onLogout = vi.fn();
+    const { rerender } = render(
+      <GlobalButtons
+        config={{
+          authenticated: false,
+          authMethod: "trusted",
+          actor: "operator@example.com",
+        }}
+        onOpenSystem={() => {}}
+        onOpenSettings={() => {}}
+        onOpenAccess={onOpenAccess}
+        onLogout={onLogout}
+      />,
+    );
+    expect(screen.queryByTestId("top-bar-user")).toBeNull();
+
+    rerender(
+      <GlobalButtons
+        config={{
+          authenticated: true,
+          authMethod: "iap",
+          actor: "user:alice@example.com",
+        }}
+        onOpenSystem={() => {}}
+        onOpenSettings={() => {}}
+        onOpenAccess={onOpenAccess}
+        onLogout={onLogout}
+      />,
+    );
+    const badge = screen.getByTestId("top-bar-user");
+    expect(badge).toHaveTextContent("alice@example.com");
+
+    fireEvent.click(badge);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Access settings" }));
+    expect(onOpenAccess).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(badge);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Log out" }));
+    expect(onLogout).toHaveBeenCalledTimes(1);
+  });
 });

@@ -378,9 +378,9 @@ func TestWalkthroughReplayedClaudeSessionLimitPausesUntilItsReset(t *testing.T) 
 	if len(paused) != 1 || paused[0].Framework != "claude" {
 		t.Fatalf("paused %v, want claude alone", paused)
 	}
-	// Pause.Begin bounds a named reset to at most six hours away.
+	// Pause.Begin bounds a named reset to at most a day away.
 	want := limit.ResetAt
-	if ceiling := now.Add(6 * time.Hour); want.After(ceiling) {
+	if ceiling := now.Add(24 * time.Hour); want.After(ceiling) {
 		want = ceiling
 	}
 	if !until.Equal(want) {

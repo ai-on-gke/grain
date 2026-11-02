@@ -1035,9 +1035,23 @@ func (s *Store) AttachmentMetas(ctx context.Context, taskID string) ([]Attachmen
 // included -- what a dispatched run needs to materialize them into its
 // sandbox (orchestrator.placeAttachments).
 func (s *Store) Attachments(ctx context.Context, taskID string) ([]Attachment, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT "+
-		"`id`, `comment_id`, `filename`, `content_type`, `size`, `content`, `created_at` "+
-		"FROM `task_attachment` WHERE `task_id` = ? ORDER BY `id`", taskID)
+	return s.queryAttachments(ctx, taskID,
+		"SELECT `id`, `comment_id`, `filename`, `content_type`, `size`, `content`, `created_at` "+
+			"FROM `task_attachment` WHERE `task_id` = ? ORDER BY `id`", taskID)
+}
+
+// CommentAttachmentsAfter is Attachments for only the comment attachments
+// whose comment_id is greater than after: what an in-process continuation or
+// mid-run addendum poll needs to materialize newly arrived comment files
+// without reading earlier attachments back out of the store.
+func (s *Store) CommentAttachmentsAfter(ctx context.Context, taskID string, after int64) ([]Attachment, error) {
+	return s.queryAttachments(ctx, taskID,
+		"SELECT `id`, `comment_id`, `filename`, `content_type`, `size`, `content`, `created_at` "+
+			"FROM `task_attachment` WHERE `task_id` = ? AND `comment_id` > ? ORDER BY `id`", taskID, after)
+}
+
+func (s *Store) queryAttachments(ctx context.Context, taskID, query string, args ...any) ([]Attachment, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("reading attachments on task %s: %w", taskID, err)
 	}
@@ -1659,6 +1673,26 @@ func (s *Store) AdvanceDelivered(ctx context.Context, taskID string, through int
 	return s.ObserveField(ctx, taskID, now, func(o *Observation) {
 		if o.DeliveredCommentID == nil || *o.DeliveredCommentID < through {
 			o.DeliveredCommentID = &through
+		}
+	})
+}
+
+// AdvanceDeliveredFrom is AdvanceDelivered for a run that has just
+// finished a turn, through the last comment its prompt held -- 0 when
+// it held none, which is a delivered mark of its own: the run was shown
+// nothing, so every person's comment on the task is one it has not
+// seen. Without it a chat filed with only a body has no mark after its
+// first turn, and a message posted while that turn wrote its answer is
+// read as answered (undeliveredHumanComment). A mark already recorded is
+// never moved back.
+func (s *Store) AdvanceDeliveredFrom(ctx context.Context, taskID string, through int64, now time.Time) error {
+	if through > 0 {
+		return s.AdvanceDelivered(ctx, taskID, through, now)
+	}
+	return s.ObserveField(ctx, taskID, now, func(o *Observation) {
+		if o.DeliveredCommentID == nil {
+			zero := int64(0)
+			o.DeliveredCommentID = &zero
 		}
 	})
 }

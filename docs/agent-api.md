@@ -122,7 +122,7 @@ every `DELETE`.
 |---|---|---|
 | `tasks:read` | read tasks, conversations, transcripts, trees | |
 | `tasks:write` | file, edit, comment on, reorder, defer, pause, resume, retry, stop, close and reopen tasks | |
-| `tasks:admin` | approve proposed tasks, recreate sandboxes | yes |
+| `tasks:admin` | approve proposed tasks, recreate sandboxes, edit numeric task `priority` (`PATCH /api/tasks/{id}` with `{"priority": <int>}` only) | yes |
 | `tasks:from-template` | file a task from a repository's own declared template (`POST /api/tasks/from-template`); an agent's call also needs `tasks:write`, since it is served as `POST /api/tasks` | |
 | `merge:write` | open pull requests for tasks, retry their merges | |
 | `merge:force` | force-merge past the gate | yes |
@@ -453,6 +453,20 @@ not taken from the repository's CI capabilities list.
   that default, with a note on the proposal, instead. Whatever template
   a review comes from, it never carries a dangerous api grant the
   reviewed task did not hold itself.
+- **Task priority is 1 or more, everywhere.** `priority` on
+  `POST`/`PATCH /api/tasks`, `grain create -priority` and
+  `grain update -priority`, `grain task propose --priority`,
+  `propose_task`'s `priority` and the Edit form all refuse 0 and below
+  with the same message. No value means "the default": leave the field
+  out to file at 5 (or at the template's priority), and set 5 to put an
+  edited task back on it. A `propose_task` priority above both the
+  proposer's own and 5 is filed for a person to approve.
+- **Follow-ups do not inherit their parent's priority.** A proposal
+  that names no `priority` files at 5, or at its template's priority,
+  whatever the proposing task's priority is
+  (`pkg/orchestrator/finish.go`). A follow-up from a priority-9 task
+  that should run as urgently has to ask for 9 itself, which it may do
+  without a person's approval because 9 is not above its parent's.
 - **Edits to grants go through the existing policy.** Approval rules,
   `capability_policy.go` and the proposal trust gate apply to api grants
   exactly as they apply to any other capability.
@@ -584,7 +598,12 @@ Each external agent is issued its own scoped bearer token (`gma_<hex>`):
   `<area>:<level>@owner/name` in `scopes` (`tasks:write@acme/widgets`).
   Each level is its own scope: a credential holding only `tasks:write`
   can file and edit tasks but is offered no `tasks:read` tool to list or
-  read them.
+  read them, and mutating task routes answer with `{id, state}` (plus any
+  fields that `PATCH /api/tasks/{id}` itself just replaced; empty `PATCH`
+  bodies are refused) rather than echoing the full task record unless the
+  caller also holds `tasks:read` on that repository. A plain `POST
+  /api/tasks` still answers with the whole new task, since it holds only
+  what the caller sent; one naming a `templateId` or `supersedes` does not.
 - **Expiry and limits**: an optional `expiresAt` timestamp, a per-credential
   request rate limit (`rateLimit`, requests per minute, default `60`), and
   an in-flight concurrency cap (`maxConcurrent`, default `8`).

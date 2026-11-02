@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useEffect, useState } from "react";
 import {
   Box,
   Checkbox,
@@ -20,25 +19,11 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import api from "../../api.js";
 import CapabilitiesPanel from "../CapabilitiesPanel.jsx";
 import SecretsPanel from "../SecretsPanel.jsx";
 import SettingsCard, { settingHints } from "./SettingsCard.jsx";
 import { identifierField } from "../../identifierField.js";
 import { ConfigManagedNotice } from "../ConfigRepoLink.jsx";
-
-// capabilityServerSecrets names the store secrets capability servers'
-// own entries refer to -- capability-server-1f6d92c4 for the config-map
-// server's secret values -- as GET /api/capability-servers reports them
-// (name "<secret>/<key>"). Each is set on that server's own page.
-export function capabilityServerSecrets(servers) {
-  const list = Array.isArray(servers) ? servers : servers?.servers || [];
-  return list.flatMap((server) =>
-    (server.secrets || [])
-      .map((sec) => String(sec.name || "").split("/")[0])
-      .filter(Boolean),
-  );
-}
 
 // CredentialsSection is Settings → Legacy capabilities (docs/design/settings-panel.md
 // §3.2). `s` is the page's useSettingsSection().
@@ -55,22 +40,6 @@ export default function CredentialsSection({ s, claimedSecrets }) {
     readOnly,
   } = s;
   const { restartRequired, restartHint, restartChip } = settingHints(settings);
-  // Other secrets is what nothing else claims, and a capability server's
-  // own secret is claimed by that server: listed here, its Delete broke
-  // the server with a confirmation that never said so (2026-11-01
-  // walkthrough).
-  const [serverSecrets, setServerSecrets] = useState([]);
-  useEffect(() => {
-    let live = true;
-    api("/api/capability-servers")
-      .then((servers) => {
-        if (live) setServerSecrets(capabilityServerSecrets(servers));
-      })
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, []);
   const handleSecretsChanged = async () => {
     await reloadSettings();
     await onSaved?.();
@@ -202,7 +171,7 @@ export default function CredentialsSection({ s, claimedSecrets }) {
             </Box>
 
             <SecretsPanel
-              claimed={[...(claimedSecrets || []), ...serverSecrets]}
+              claimed={claimedSecrets}
               showError={showError}
               onSecretsChanged={handleSecretsChanged}
             />

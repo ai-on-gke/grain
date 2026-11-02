@@ -295,6 +295,7 @@ export default function TasksSection({
               grants={[...apiDefaults, ...refDefaults]}
               empty="None: a new task starts with only the grants whoever files it adds."
               testId="default-grants-list"
+              showLink={false}
             />
           ) : (
             <GrantsPicker

@@ -62,7 +62,7 @@ func TestSettingsLockedRefusesExactlyTheFieldsTheUIGreysOut(t *testing.T) {
 		`{"sessionSandboxIdleTtl":"45m"}`,
 		`{"githubHost":"github.example.com"}`,
 		`{"gcpProject":"my-project-123"}`,
-		`{"gcpServiceAccountEmail":"sa@proj.iam.gserviceaccount.com"}`,
+		`{"gcpServiceAccountEmail":"sa@my-project-123.iam.gserviceaccount.com"}`,
 	} {
 		if rec := do(t, srv, http.MethodPut, "/api/settings", body); rec.Code != http.StatusConflict {
 			t.Errorf("config-managed %s while locked: status %d, want 409: %s", body, rec.Code, rec.Body)

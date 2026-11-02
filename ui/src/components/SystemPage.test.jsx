@@ -140,19 +140,22 @@ describe("SystemPage", () => {
     const pollPendingLink = within(pendingRow).getByRole("link", {
       name: "Poll interval",
     });
-    expect(pollPendingLink).toHaveAttribute("href", "/settings/engine#polling");
+    expect(pollPendingLink).toHaveAttribute(
+      "href",
+      "/settings/engine#pollInterval",
+    );
     const githubPendingLink = within(pendingRow).getByRole("link", {
       name: "GitHub host",
     });
     expect(githubPendingLink).toHaveAttribute(
       "href",
-      "/settings/credentials#credentials",
+      "/settings/credentials#githubHost",
     );
     await user.click(pollPendingLink);
-    expect(onOpenSettings).toHaveBeenCalledWith("engine", "polling");
+    expect(onOpenSettings).toHaveBeenCalledWith("engine", "pollInterval");
     onOpenSettings.mockClear();
     await user.click(githubPendingLink);
-    expect(onOpenSettings).toHaveBeenCalledWith("credentials", "credentials");
+    expect(onOpenSettings).toHaveBeenCalledWith("credentials", "githubHost");
     await user.click(within(pendingRow).getByRole("button", { name: "Power" }));
     expect(onTab).toHaveBeenCalledWith("power");
 
@@ -165,21 +168,18 @@ describe("SystemPage", () => {
     });
     expect(pollUnrunnableLink).toHaveAttribute(
       "href",
-      "/settings/engine#polling",
+      "/settings/engine#pollInterval",
     );
     const backendUnrunnableLink = within(unrunnableRow).getByRole("link", {
       name: "Sandbox backend",
     });
     expect(backendUnrunnableLink).toHaveAttribute(
       "href",
-      "/settings/sandboxes#backend-and-size",
+      "/settings/sandboxes#sandboxBackend",
     );
     onOpenSettings.mockClear();
     await user.click(backendUnrunnableLink);
-    expect(onOpenSettings).toHaveBeenCalledWith(
-      "sandboxes",
-      "backend-and-size",
-    );
+    expect(onOpenSettings).toHaveBeenCalledWith("sandboxes", "sandboxBackend");
   });
 
   it("opens Config repo when clicking Config repo on a failing state-repo sync in Health", async () => {

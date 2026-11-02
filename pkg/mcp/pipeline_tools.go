@@ -99,22 +99,42 @@ func readPipelineChangesTool(reader PipelineReader) Tool {
 				return Result{Text: noTaskReader, IsError: true}
 			}
 			after, _ := argString(args, "after")
-			limit := defaultPipelineChangeLimit
+			limit := 0
 			if f, ok := argFloat(args, "limit"); ok && int(f) > 0 {
 				limit = int(f)
 			}
-			page, err := reader.PipelineChanges(ctx, strings.TrimSpace(after), limit)
+			text, err := ReadPipelineChangesText(ctx, reader, after, limit, nil)
 			if err != nil {
 				return Result{Text: fmt.Sprintf("Error reading pipeline changes: %v", err), IsError: true}
 			}
-			return Result{Text: renderPipelineChanges(page, after == "")}
+			return Result{Text: text}
 		},
 	}
 }
 
+// ReadPipelineChangesText is one page of the feed after the cursor after
+// ("" for the last 24 hours), at most limit entries (0 for the default
+// page), as read_pipeline_changes prints it. next words the last line
+// from the page's cursor -- `grain read`'s own command to run next, say;
+// nil prints the bare cursor, which is what the tool's "after" takes.
+func ReadPipelineChangesText(ctx context.Context, reader PipelineReader, after string, limit int, next func(cursor string) string) (string, error) {
+	after = strings.TrimSpace(after)
+	if limit <= 0 {
+		limit = defaultPipelineChangeLimit
+	}
+	page, err := reader.PipelineChanges(ctx, after, limit)
+	if err != nil {
+		return "", err
+	}
+	if next == nil {
+		next = func(cursor string) string { return cursor }
+	}
+	return renderPipelineChanges(page, after == "", next), nil
+}
+
 // renderPipelineChanges is one line per entry and the cursor last, which
 // is the one line a reader must not lose.
-func renderPipelineChanges(page PipelineChangesPage, fromLookback bool) string {
+func renderPipelineChanges(page PipelineChangesPage, fromLookback bool, next func(cursor string) string) string {
 	var b strings.Builder
 	if len(page.Changes) == 0 {
 		if fromLookback {
@@ -130,7 +150,7 @@ func renderPipelineChanges(page PipelineChangesPage, fromLookback bool) string {
 	if page.More {
 		b.WriteString("(more changes follow: read again with this cursor)\n")
 	}
-	fmt.Fprintf(&b, "next: %s", page.Next)
+	fmt.Fprintf(&b, "next: %s", next(page.Next))
 	return b.String()
 }
 
