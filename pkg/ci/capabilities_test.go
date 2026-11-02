@@ -231,7 +231,7 @@ func TestAJobDeclaringRepoWriteRunsWithNoDeploymentGrant(t *testing.T) {
 }
 
 // release-gate-read is the release workflow's own to declare
-// (docs/design/release-from-trunk.md §6): a job naming it runs with no
+// (design/design/release-from-trunk.design.md §6): a job naming it runs with no
 // entry in the deployment's per-repository list, and the provider's event
 // gate and repository list -- the sandbox's to apply -- are what bound
 // it. An entry in that list reaches no job that did not declare it.

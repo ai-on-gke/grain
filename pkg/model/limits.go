@@ -119,7 +119,7 @@ type Limits struct {
 	// ceiling: jobs are bounded by the deployment's budget alone.
 	CIJobs int
 	// Durable is the ceiling on live runs of durable tasks
-	// (Task.IsDurable, docs/design/durable-tasks.md#DT-1). They are
+	// (Task.IsDurable, design/design/durable-tasks.design.md#DT-1). They are
 	// admitted outside Workers and Mergers, the way every task with
 	// priority dispatch is, so this is the one count that holds them: a
 	// safety ceiling on how many sandboxes may be held for as long as

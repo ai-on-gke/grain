@@ -507,7 +507,7 @@ describe("App", () => {
     await screen.findByText("Fix bug");
 
     await user.click(screen.getByRole("button", { name: /^Processes/ }));
-    // New asks for the kind first (docs/design/settings-panel.md §5.3).
+    // New asks for the kind first (design/design/settings-panel.design.md §5.3).
     await user.click(await screen.findByRole("button", { name: "+ New" }));
     await user.click(
       within(await screen.findByTestId("new-process-kind")).getByRole(

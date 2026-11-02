@@ -135,7 +135,7 @@ func (r *Registry) Register(tools ...Tool) {
 // Retain drops every registered tool keep says no to, leaving the rest in
 // the order they were registered. It is how `grain mcpserver` narrows a
 // roster built from every constructor down to the model-only control set
-// (docs/design/sandbox-first-agent-surface.md §6): the tools it drops are
+// (design/design/sandbox-first-agent-surface.design.md §6): the tools it drops are
 // still reachable as `grain` CLI commands inside the sandbox.
 func (r *Registry) Retain(keep func(name string) bool) {
 	order := r.order[:0]

@@ -2,7 +2,7 @@
 
 Task 3553: the walkthrough in §7 of
 [`test-plans/2026-10-13.md`](../test-plans/2026-10-13.md), Stage 2 of
-[`non-disruptive-upgrade.md`](../non-disruptive-upgrade.md). It follows
+[`non-disruptive-upgrade.md`](../../design/design/non-disruptive-upgrade.design.md). It follows
 [`2026-10-12-run-hosts.md`](2026-10-12-run-hosts.md) (the package against
 real docker) and
 [`2026-10-13-daemon-restart-adoption.md`](2026-10-13-daemon-restart-adoption.md)

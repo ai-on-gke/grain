@@ -44,7 +44,7 @@ func init() {
 		Args:      []string{"auth", "token"},
 		Env:       []string{"GH_HOST={host}", "GH_PROMPT_DISABLED=1", "GH_NO_UPDATE_NOTIFIER=1"},
 		LoginFix:  "GH_HOST={host} forgecli auth login",
-		ScopeFix:  "GH_HOST={host} forgecli auth refresh --scopes repo",
+		ScopeFix:  "GH_HOST={host} forgecli auth refresh --scopes repo,workflow",
 		Hosts:     []string{"*.code.forge.test"},
 		OnlyHosts: true,
 		ForgeViaCommand: &CommandForge{

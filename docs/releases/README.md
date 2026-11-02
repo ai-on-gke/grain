@@ -56,10 +56,6 @@ that time may still have a "Fixes owed to main" section.
 have no highlights. There is no `v1.1.0` tag, so `v1.2.0` is measured from
 `v1.1.0-rc.1`.
 
-This folder is about grain's own releases. `docs/release-notes.md` covers
-something else: the weekly account a deployment writes of its own activity
-across all the repositories it works in.
-
 There is no `v1.14.0`. Its candidate, `v1.14.0-rc.1`, held only the
 single-tenant reset's first stage and was never promoted
 (`RELEASE_NEVER_PROMOTE` in `scripts/release.conf`). The release after

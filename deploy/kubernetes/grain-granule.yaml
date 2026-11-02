@@ -94,7 +94,7 @@ rules:
   # reviewer need not discover it: RBAC cannot narrow create by name, so
   # this identity can create any Secret in this namespace. Anyone who can
   # act as it could already create privileged pods here, so it adds no
-  # reach (docs/design/grain-on-gke.md, Security 4).
+  # reach (design/design/grain-on-gke.design.md, Security 4).
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create", "delete"]
@@ -284,7 +284,7 @@ spec:
       storage: 20Gi
 ---
 # The sandbox-access acceptor's own Service, serving nothing else
-# (docs/design/grain-on-gke.md, "Sandbox access"). ClusterIP only, never
+# (design/design/grain-on-gke.design.md, "Sandbox access"). ClusterIP only, never
 # behind an external Gateway or Ingress. Nothing in deploy/kubernetes
 # narrows which in-cluster pods may reach it -- that is a NetworkPolicy
 # for the operator to add -- so what keeps it from being a way in is the

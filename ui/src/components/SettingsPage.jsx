@@ -94,7 +94,7 @@ const READS_SETTINGS = new Set([
   "caches",
 ]);
 
-// SettingsPage is the Settings view (docs/design/settings-panel.md §3):
+// SettingsPage is the Settings view (design/design/settings-panel.design.md §3):
 // every deployment setting, this browser's preferences and Memory, in
 // one view beside the sidebar, opened from the gear in the top bar. A
 // section nav with a filter on the left, the open section's cards on
@@ -142,7 +142,7 @@ export default function SettingsPage({
     (settings ? settings.externalConfigBranch : config?.externalConfigBranch) ||
     "main";
   // A config-repo-only section is read-only whichever repository holds
-  // the configuration (docs/design/config-repo-settings.md §2.1): what it
+  // the configuration (design/design/config-repo-settings.design.md §2.1): what it
   // draws is what the config repo says, and changing it is a pull
   // request.
   const external = Boolean(externalConfigRepo) && !NOT_CONFIG.has(current);

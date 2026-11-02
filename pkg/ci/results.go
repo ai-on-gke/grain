@@ -17,7 +17,7 @@ package ci
 import "github.com/ai-on-gke/grain/pkg/workflows"
 
 // The run record, its filters and the cache and artifact interfaces moved
-// to pkg/workflows with the parser (docs/design/grit-split.md, GS-2), so
+// to pkg/workflows with the parser (design/design/grit-split.design.md, GS-2), so
 // that grain and grit agree on one set of wire types. These aliases keep
 // this package's callers and importers compiling.
 
@@ -32,6 +32,7 @@ type (
 	CacheBounds          = workflows.CacheBounds
 	CacheStats           = workflows.CacheStats
 	CancelSource         = workflows.CancelSource
+	ActionsRun           = workflows.ActionsRun
 	ClearableArtifacts   = workflows.ClearableArtifacts
 	Conclusion           = workflows.Conclusion
 	Diagnostic           = workflows.Diagnostic
@@ -62,6 +63,8 @@ const (
 	ConclusionPending               = workflows.ConclusionPending
 	ConclusionSkipped               = workflows.ConclusionSkipped
 	ConclusionSuccess               = workflows.ConclusionSuccess
+	ProviderGrain                   = workflows.ProviderGrain
+	ProviderGitHubActions           = workflows.ProviderGitHubActions
 	DefaultArtifactMaxAge           = workflows.DefaultArtifactMaxAge
 	DefaultArtifactMaxArtifactBytes = workflows.DefaultArtifactMaxArtifactBytes
 	DefaultArtifactMaxBytes         = workflows.DefaultArtifactMaxBytes
@@ -98,6 +101,7 @@ var (
 	ParseRunState         = workflows.ParseRunState
 	ParseSince            = workflows.ParseSince
 	RunSortKeys           = workflows.RunSortKeys
+	ProviderOf            = workflows.ProviderOf
 	RunStateOf            = workflows.RunStateOf
 	RunStates             = workflows.RunStates
 	SortRuns              = workflows.SortRuns

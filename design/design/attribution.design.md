@@ -1,11 +1,11 @@
 # Attribution: crediting the people behind a change
 
-[`contributions.design.md`](contributions.design.md) defines how work flows through a repository: human-authored designs, specifications and task grainfiles started by a person and reviewed by humans, and implementation PRs either written autonomously by grain agents or opened externally on GitHub and gated by a blocking grain review check. This design defines who owns each task and pull request and who receives authorship credit on PR descriptions and merged commits, alongside operational actor tracking in [`operator-attribution.design.md`](operator-attribution.design.md).
+[`contributions.design.md`](contributions.design.md) defines how work flows through a repository: human-authored designs, specifications and task grainfiles started by a person and reviewed by humans, and implementation PRs either written by grain from merged tasks or opened externally on GitHub, reviewed by a blocking grain review check, and merged by their owner. This design defines who owns each task and pull request and who receives authorship credit on PR descriptions and merged commits, alongside operational actor tracking in [`operator-attribution.design.md`](operator-attribution.design.md).
 
 **The core rule:** every grain task has a single **owner**, fixed when the task is filed and inherited by every child task it spawns. How a pull request is credited depends on whether grain opened it or a contributor opened it externally:
 
-- **Internally generated PRs** (opened by grain agents: code PRs and agent-opened spec, tasks, clarification, and playbook PRs) take their owner from the task's owner. On a grain-implemented code PR, grain credits the task's owner plus—when the task came from a `.task.grain.md` grainfile—any additional people listed in an explicit `Contributors:` section on the **tasks PR** that merged that grainfile. Grain shows them in the PR description and writes them as `Co-authored-by:` trailers on the merge commit, alongside `Requested-by:` and `Approved-by:` (`operator-attribution.design.md`). Nothing else is derived: not design or spec PR reviewers, and not the implementation PR's own agent commits.
-- **External PRs** (opened outside grain, including external code PRs and human-opened design, spec, and tasks PRs) take their credit from the PR's declared `Owner:` line (defaulting to the GitHub PR author), plus its human commit authors and `Co-authored-by:` trailers. Grain takes that attribution as stated and neither adopts external PRs nor rewrites their merge commits.
+- **Internally generated PRs** (opened by grain agents: code PRs and agent-opened spec, tasks, clarification, and playbook PRs) take their owner from the task's owner. When the task came from a `.task.grain.md` grainfile, the tasks' author (the owner of the **tasks PR** that merged that grainfile) is the author on every implementation PR grain opens from it, together with any additional people listed in an explicit `Contributors:` section on that tasks PR. Grain shows them in the PR description and writes them as `Co-authored-by:` trailers on the merge commit, alongside `Requested-by:` and `Approved-by:` (`operator-attribution.design.md`). Nothing else is derived: not design or spec PR reviewers, and not the implementation PR's own agent commits.
+- **External PRs** (opened outside grain, including external code PRs and human-opened design, spec, and tasks PRs) take their credit from the PR's declared `Owner:` line (defaulting to the GitHub PR author), plus its human commit authors and `Co-authored-by:` trailers. Grain takes that attribution as stated, and the owner merges the PR through GitHub with it intact.
 
 ## Identity
 
@@ -72,7 +72,7 @@ Design docs, specs, and `.task.grain.md` files carry **no contributor lists** in
 
 - **Grainfile feature.** Alice drafts a design with Bob and opens a tasks PR with `Owner: @alice` and `Contributors:` listing `Bob Smith <bob@example.com>`. At merge, grain imports `auth.task.grain.md` with owner Alice, contributor Bob, and the tasks PR link. A sub-task split out via `propose_task` inherits both; both code PRs merge with `Co-authored-by:` trailers for Alice and Bob.
 - **Session and schedule tasks.** Dave asks the director session to fix a race; the session files a task on behalf of `dave@example.com`, setting Dave as `owner` and `Requested-by:`, and its merge commit credits Dave via `Co-authored-by:`. Separately, a nightly schedule with `owner: oncall` fires while `grain_config.oncall` is `eve@example.com`; that task and any repair task it proposes keep owner Eve even after `oncall` changes.
-- **External PR.** Frank opens a PR with a `Co-authored-by: Grace Hopper <grace@example.com>` commit trailer and no `Owner:` line. Grain runs the blocking `grain/review` check (`Owner:` defaults to `@frank`) without adopting the PR, and GitHub merges it with Frank and Grace's attribution intact.
+- **External PR.** Frank opens a PR with a `Co-authored-by: Grace Hopper <grace@example.com>` commit trailer and no `Owner:` line. Grain runs the blocking `grain/review` check (`Owner:` defaults to `@frank`); once it and the other checks pass, Frank merges the PR by hand, with Frank's and Grace's attribution intact.
 
 ## Quality by (optional)
 
@@ -80,9 +80,9 @@ A repository or deployment can enable an optional **Quality by** credit for back
 
 ## Merge commits and checks
 
-For PRs landed through grain's merge queue, grain composes the final commit message itself:
+For PRs grain merges, grain composes the final commit message itself:
 
-- **Merge-queue check.** Before landing an internal PR, grain checks and repairs the PR description and commit message so they carry `Owner:`, one `Co-authored-by:` trailer per person in the task's attribution set (verified task owner plus any tasks-PR `Contributors:`), `Requested-by:` / `Approved-by:`, and `Quality-by:` when enabled.
+- **Pre-merge check.** Before merging an internal PR, grain checks and repairs the PR description and commit message so they carry `Owner:`, one `Co-authored-by:` trailer per person in the task's attribution set (verified task owner plus any tasks-PR `Contributors:`), `Requested-by:` / `Approved-by:`, and `Quality-by:` when enabled.
 - **Tasks PR lint.** Grain's review check on PRs touching `.task.grain.md` validates the syntax of `Owner:` and `Contributors:` lines in the PR description before merge.
 - **Post-merge audit and durable record.** Missing required `Co-authored-by:` trailers on a grain-landed commit raise an inbox alert, and grainfile completion updates link the task URL and implementation PRs in Git.
 
@@ -92,4 +92,4 @@ For PRs landed through grain's merge queue, grain composes the final commit mess
 2. Parse and validate `Owner:` on PR descriptions and `Contributors:` on tasks PR descriptions, resolving `@handle` identities.
 3. Add `owner` (`<person>` or `oncall`) to schedules (and optional defaults on templates, suites, and triggers) and `oncall` to `grain_config` / Settings → General.
 4. Compose grain merge messages and PR descriptions from task `owner` and tasks-PR `Contributors:`, alongside `Requested-by:` and `Approved-by:`.
-5. Add merge-queue checks, tasks-PR identity lint, and post-merge inbox audits.
+5. Add pre-merge checks, tasks-PR identity lint, and post-merge inbox audits.

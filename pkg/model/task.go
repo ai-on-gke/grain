@@ -550,7 +550,7 @@ type Grant struct {
 //
 // A capability reference is covered only by a reference with the same
 // canonical capability and deep-equal normalized args
-// (UncoveredCapabilityRefs, docs/capabilities-spec.md §2.3.4).
+// (UncoveredCapabilityRefs, design/spec/capabilities/capabilities.spec.md §2.3.4).
 func GrantsSubsetOf(grants, allowed []Grant) bool {
 	have := make(map[string]bool, len(allowed))
 	for _, g := range allowed {
@@ -819,7 +819,7 @@ func GitCredentialName(capability string) (name string, ok bool) {
 const GitPushAnyRefCapability = "git-push-any-ref"
 
 // RepoCapabilityServerID is the canonical capability_id of the in-process
-// repository-access server (docs/design/unified-grants.md §1, §4),
+// repository-access server (design/design/unified-grants.design.md §1, §4),
 // answered by grain itself like GrainCapabilityServerID.
 const RepoCapabilityServerID = "https://grain.dev/capabilities/repo"
 
@@ -840,7 +840,7 @@ var gitPushAnyRefRefs = []string{"refs/heads/*", "refs/tags/*"}
 // string with its arguments in any order, or the retired bare
 // git-push-any-ref. A repo#write grant naming fewer refs, or without
 // force, is not it: the proxy does not honour narrower task-level refs
-// (docs/design/unified-grants.md Q3), so it opens nothing rather than
+// (design/design/unified-grants.design.md Q3), so it opens nothing rather than
 // everything.
 func IsGitPushAnyRefGrant(grant string) bool {
 	s := strings.TrimSpace(grant)
@@ -1240,7 +1240,7 @@ const (
 	// that ended on another one (-> that task's ID). One writer: a
 	// standing console session filed again after its own task was
 	// closed, which is how a chat that never ends gets a fresh thread
-	// (orchestrator.fileConsoleSession, docs/implementation-notes.md's
+	// (orchestrator.fileConsoleSession, grain's former implementation notes'
 	// "A chat that never ends is not split for you").
 	//
 	// LinkProposedBy's shape -- provenance, the timeline, and nothing
@@ -1750,7 +1750,7 @@ type Task struct {
 	NoPort bool
 	// ResumeOnDeadline makes a run of this task that runs out of wall
 	// clock a SuspendDeadline suspension rather than a failure, at most
-	// MaxDeadlineResumes times in a row (docs/design/durable-tasks.md#DT-2):
+	// MaxDeadlineResumes times in a row (design/design/durable-tasks.design.md#DT-2):
 	// the cheap "not done, keep going" for work that is merely large,
 	// which is not the durable grant.
 	ResumeOnDeadline bool

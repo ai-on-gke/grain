@@ -258,7 +258,7 @@ func (s *Store) RunStanding(ctx context.Context, runID string) (*DispatchStandin
 
 // failoverKinds are the suspensions that say the model, not the task, is
 // what stopped the run, and are resumed on the next model of the task's
-// rotation (docs/design/durable-tasks.md#DT-2).
+// rotation (design/design/durable-tasks.design.md#DT-2).
 var failoverKinds = map[SuspensionKind]bool{SuspendCapacity: true, SuspendUsageLimit: true, SuspendModel: true}
 
 // IsFailover reports whether k is resumed on another model: capacity,

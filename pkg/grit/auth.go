@@ -14,7 +14,7 @@
 
 // Package grit implements grit's standalone and embedded CI execution service
 // (/v1 API, durable event stream, tree store, client authentication/scopes,
-// and in-process grit.Local backend; see docs/design/grit-split.md).
+// and in-process grit.Local backend; see design/design/grit-split.design.md).
 package grit
 
 import (

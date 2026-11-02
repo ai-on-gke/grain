@@ -26,7 +26,7 @@
 // a quiet tab: 929 tasks handed to six dashboard panels as a new array
 // every tick, each panel sorting and filtering all of them again, 1.0s
 // of script per tick at six panels and 2.3s at ten
-// (docs/hand-runs/2026-09-07-panel-dashboard.md, section 5). None of
+// (the 2026-09-07 panel-dashboard hand run, section 5). None of
 // that work has anything to answer -- the answer is the one already on
 // screen.
 //

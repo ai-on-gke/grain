@@ -21,7 +21,7 @@ import (
 
 // The two surfaces partition PublishedToolNames: every published tool is
 // on exactly one of them, and the ones the design names are where it
-// puts them (docs/design/sandbox-first-agent-surface.md §1, §6).
+// puts them (design/design/sandbox-first-agent-surface.design.md §1, §6).
 func TestPublishedSurfacesPartitionTheRoster(t *testing.T) {
 	control := PublishedControlToolNames()
 	cli := PublishedCLICommandNames()

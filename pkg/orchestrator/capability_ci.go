@@ -31,7 +31,7 @@ import (
 )
 
 // This file carries a CI job's pass (minted by pkg/daemon's grant
-// admission) into the job's sandbox, in the order docs/capabilities-spec.md
+// admission) into the job's sandbox, in the order design/spec/capabilities/capabilities.spec.md
 // §5 sets: the same ports, placements and setup an agent run's pass gets
 // (capability_materialize.go), then every mcp_endpoint proxied, handshaken
 // and named as for an agent (capability_endpoints.go). A job's steps run

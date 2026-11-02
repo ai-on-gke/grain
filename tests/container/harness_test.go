@@ -292,7 +292,7 @@ func newDaemon(t *testing.T, root string, opts options) *Daemon {
 	// These tests configure the daemon -- its git connection above all,
 	// which every task they file needs -- through its API, which a
 	// deployment with a grain/config repository otherwise answers with a
-	// config pull request to open (docs/design/config-repo-settings.md,
+	// config pull request to open (design/design/config-repo-settings.design.md,
 	// section 4.1.1). The host-local opt-out keeps those writes direct, as
 	// it does for the e2e and installer harnesses.
 	if err := staterepo.SaveSettings(d.Data, staterepo.Settings{DirectConfigWrites: true}); err != nil {

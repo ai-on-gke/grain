@@ -26,7 +26,7 @@ package antigravity
 // real GEMINI_API_KEY would prove less, since nobody can ask Google to be
 // overloaded on demand.
 //
-// docs/hand-runs/2026-09-08-agy-retry.md is the hand run this came from,
+// the 2026-09-08 agy-retry hand run is the hand run this came from,
 // with the full numbers and the decision they led to.
 
 import (
@@ -83,7 +83,7 @@ func skipUnlessLiveRequired(t *testing.T, reason string) {
 // instead of reporting the mismatch as a surprising measurement.
 //
 // Moving it is a re-measurement, not an edit: rerun the hand run in
-// docs/hand-runs/2026-09-08-agy-retry.md, write down the new schedule,
+// the 2026-09-08 agy-retry hand run, write down the new schedule,
 // and reconsider DefaultModelRetryCutoff and the private-diagnostic dependency
 // in the light of it before changing this line.
 const measuredAgyVersion = "1.4.9"
@@ -115,7 +115,7 @@ func TestMeasuredAgyIsTheAgyTheImagePins(t *testing.T) {
 		t.Errorf("the image pins agy %s and the live retry probes in %s assert agy %s's behaviour "+
 			"(at least ten provider requests across %s, no refusal text on the stream, every 503 in the "+
 			"private diagnostic). Re-measure against the pinned release -- "+
-			"docs/hand-runs/2026-09-08-agy-retry.md says how -- then move measuredAgyVersion and whatever "+
+			"the 2026-09-08 agy-retry hand run says how -- then move measuredAgyVersion and whatever "+
 			"the new schedule changes about DefaultModelRetryCutoff, rather than leaving the nightly to report "+
 			"the disagreement as a changed schedule.",
 			pin, "live_retry_stub_test.go", measuredAgyVersion, refusalProbeRuntime)
@@ -135,7 +135,7 @@ func requireMeasuredAgy(t *testing.T) {
 	t.Helper()
 	if got := agyVersion(t); got != measuredAgyVersion {
 		skipUnlessLiveRequired(t, fmt.Sprintf("the agy on $PATH is %s and these probes measure %s "+
-			"(docs/hand-runs/2026-09-08-agy-retry.md); a schedule read off %s would say nothing about "+
+			"(the 2026-09-08 agy-retry hand run); a schedule read off %s would say nothing about "+
 			"the release this repository ships", got, measuredAgyVersion, got))
 	}
 }
@@ -219,7 +219,7 @@ func TestLiveAgyLosesTheProvidersRefusalText(t *testing.T) {
 		t.Skipf("agy %s still put none of the provider's refusal text on its stream across %d "+
 			"requests and %s. Grain therefore still needs the private diagnostic to classify this "+
 			"overload; this test says when that dependency can be removed (see "+
-			"docs/hand-runs/2026-09-08-agy-retry.md).\nstream:\n%s",
+			"the 2026-09-08 agy-retry hand run).\nstream:\n%s",
 			agyVersion(t), probe.requests, probe.elapsed.Round(time.Millisecond), probe.stdout)
 	}
 	t.Logf("agy now passes the provider's refusal through and grain classifies it: %v", capacity)

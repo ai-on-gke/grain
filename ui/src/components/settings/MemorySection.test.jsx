@@ -37,7 +37,7 @@ const section = (props = {}) => (
   <MemorySection config={config} tasks={[]} showError={() => {}} {...props} />
 );
 
-// Settings → Memory (docs/design/settings-panel.md §3.2): MemoryPanel
+// Settings → Memory (design/design/settings-panel.design.md §3.2): MemoryPanel
 // in a card, with the leave guard App reads.
 describe("MemorySection", () => {
   beforeEach(() => {

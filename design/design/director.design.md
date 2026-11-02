@@ -49,7 +49,7 @@ Turns operator goals, design documents, or triage findings into structured backl
 
 ### W4 — Configuration and capability hygiene
 
-Maintains the deployment's declarative state in `grain/config` (`docs/design/config-repo-settings.md`):
+Maintains the deployment's declarative state in `grain/config` (`design/design/config-repo-settings.design.md`):
 
 - **Reading configuration vs. runtime state.** Inspects `grain/config` (`settings/*.yml`, `tables/*.json`, `memory/**`) in `/home/debian/grain-state` (`prepareDirectorState`) alongside live bootstrap and runtime settings (`/api/config`), never confusing exported configuration with task or run history in the controller database.
 - **Proposing validated config changes.** Authors updates to templates, schedules, suites, repo settings, standing instructions, `tables/api_scope_set.json`, and `settings/capabilities.yml` (`CatalogueKindDirector`), submitting them either as `grain/config` pull requests or inline via `propose_config_change`—which runs four-stage `staterepo` validation, pins `headSha`, and parks on an in-chat approval card.
@@ -75,7 +75,7 @@ Regardless of operator prompts or untrusted repository text read during triage, 
 
 An operator opening the director rail expects an immediate reply even when `max_workers` is saturated or the pipeline is paused, without the session hoarding worker slots while idle or waiting:
 
-- **Priority admission (`durable` / console-session dispatch).** `ConsoleSessionGrants` always attaches `durable` (`DurableCapability`), which implies `priority-dispatch` (`docs/design/durable-tasks.md`). Director turns are admitted outside `max_workers` (under `max_durable_runs`), bypass pipeline pauses and red-base repair holds, and survive controller restarts via session adoption or CLI `--resume`.
+- **Priority admission (`durable` / console-session dispatch).** `ConsoleSessionGrants` always attaches `durable` (`DurableCapability`), which implies `priority-dispatch` (`design/design/durable-tasks.design.md`). Director turns are admitted outside `max_workers` (under `max_durable_runs`), bypass pipeline pauses and red-base repair holds, and survive controller restarts via session adoption or CLI `--resume`.
 - **Releasing the active slot when waiting or idle.** Priority admission requires strict slot discipline: the director never polls inside a live run waiting on asynchronous tasks or CI runs. Once it replies, files work, or asks for input, it records standing context via `grain handover write` when needed (carried across `"Start a fresh chat"` resets by `CarryConsoleSessionHandover`) and releases its active run by calling `ask_question` (`request_secret`, `propose_config_change`) or ending its turn to rest on `person-closes` (`GoalPersonCloses`).
 - **Two-layer warm idle pool.** Between turns, `continueSessionTurns` and `session_sandboxes.go` keep the CLI session and sandbox warm up to `session_sandbox_idle_ttl_ms` (default `30m`) for sub-second follow-ups. Held VMs appear as `"idle session"` on **System → Sandboxes** and are evicted oldest-first whenever queued worker runs need sandbox capacity.
 

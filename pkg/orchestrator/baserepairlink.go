@@ -104,7 +104,7 @@ func isBaseRepair(task model.Task, repo model.RepoRef, branch string, row *model
 // closeBaseRepairsOnGreen is what a green verdict on a base branch does
 // to the repairs of it: every repair -- grain's own and every one marked
 // fixes_base_branch -- is a base-green goal with on_met close
-// (docs/design/durable-tasks.md#DT-4), and this is that goal's check run
+// (design/design/durable-tasks.design.md#DT-4), and this is that goal's check run
 // against the verdict as it lands (checkBaseGreenGoals). A repair not
 // running is closed with outcome goal-met and a note naming the green
 // run and commit, which releases everything waiting on it; a running one

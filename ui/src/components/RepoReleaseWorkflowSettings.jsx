@@ -47,7 +47,7 @@ function jobList(value) {
 //
 // configReadOnly draws the release settings -- the automatic-release
 // switch and the job lists -- disabled for everybody: they are
-// config-repo only (docs/design/config-repo-settings.md §2.1). The
+// config-repo only (design/design/config-repo-settings.design.md §2.1). The
 // operational actions, a manual release and a base branch's check, stay
 // a repo admin's.
 export default function RepoReleaseWorkflowSettings({

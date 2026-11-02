@@ -14,7 +14,7 @@
 
 import { expect, test } from "./fixtures.js";
 
-// The task page's Goal section (docs/design/durable-tasks.md#DT-4): a
+// The task page's Goal section (design/design/durable-tasks.design.md#DT-4): a
 // goal set through PUT /api/tasks/{id}/goal is drawn with its check and
 // progress, and its editor stays inside the detail column at desktop and
 // phone widths. The column is 260px wide on a desktop, and two selects

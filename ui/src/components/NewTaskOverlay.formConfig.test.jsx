@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // The form as settings/new-task-form.yml configures it
-// (docs/design/config-repo-settings.md §6): placements, labels, defaults
+// (design/design/config-repo-settings.design.md §6): placements, labels, defaults
 // that follow the repo, and hidden fields filed with their defaults.
 
 import { render, screen } from "@testing-library/react";

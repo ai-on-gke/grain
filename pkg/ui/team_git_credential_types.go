@@ -328,6 +328,13 @@ func (c *Client) gitCredentialStatus(name string) GitCredentialStatus {
 		}
 		out.AmbientLogin = id.Login
 		out.AmbientWarning = ambientWarning(id.Login)
+		if !pending && err == nil && !id.NoRepoScope && id.NoWorkflowScope {
+			// A warning, not an Error: the login works for everything
+			// but a push that touches .github/workflows.
+			out.AmbientWarning += fmt.Sprintf("; it has no `workflow` scope, so a push that creates or "+
+				"changes a file under .github/workflows is refused: run `%s` on the grain host if this "+
+				"deployment's work edits workflows", gitproxy.AmbientScopeFix(f.Host, f.Source))
+		}
 	}
 	if info, ok := creds.SSHKeyInfoOf(name); ok {
 		out.Error = info.Error

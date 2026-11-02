@@ -425,6 +425,7 @@ func agentTaskPatchBodyAllowed(body []byte) error {
 var grainCIReadRoutes = map[string]bool{
 	"GET /api/ci/runs":                             true,
 	"GET /api/ci/runs/{id}":                        true,
+	"GET /api/ci/runs/{id}/log":                    true,
 	"GET /api/ci/runs/{id}/artifacts":              true,
 	"GET /api/ci/runs/{id}/artifacts/{job}/{name}": true,
 	"GET /api/ci/workflows":                        true,
@@ -1215,6 +1216,10 @@ func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, ta
 				return run.Repo, nil
 			}
 		}
+		// A GitHub Actions run names its repository in its id.
+		if repo, _, ok := ParseActionsRunID(r.PathValue("id")); ok {
+			return s.agentCanonicalRepo(repo)
+		}
 	}
 	if pathParam.MatchString(pathOf(pattern)) && !agentRepoDefaultRoutes[pattern] {
 		return "", nil
@@ -1525,6 +1530,10 @@ func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pat
 			if run, ok := s.tasks.Config.CI.Get(r.PathValue("id")); ok && run.Repo != "" {
 				return run.Repo, nil, nil
 			}
+		}
+		if repo, _, ok := ParseActionsRunID(r.PathValue("id")); ok {
+			canonical, err := s.agentCanonicalRepo(repo)
+			return canonical, nil, err
 		}
 	}
 	if pathParam.MatchString(pathOf(pattern)) {

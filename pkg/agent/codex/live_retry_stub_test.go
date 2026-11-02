@@ -25,7 +25,7 @@ package codex
 // is the only place codex's own ladder is visible. A real OPENAI_API_KEY
 // would prove less, since nobody can make OpenAI refuse on demand.
 //
-// docs/hand-runs/2026-09-08-codex-retry.md is the hand run this came
+// the 2026-09-08 codex-retry hand run is the hand run this came
 // from, with the full numbers; what is asserted here is only the shape
 // the decision depends on, because the numbers themselves are a vendor's
 // and will move.
@@ -97,7 +97,7 @@ func TestLiveCodexRetriesARefusedTurnItself(t *testing.T) {
 	}
 	if elapsed > internalRetryCeiling {
 		t.Errorf("codex spent %s retrying internally, past the %s this repository measured it at.\n"+
-			"That is the number agent/codex/retry.go and docs/hand-runs/2026-09-08-codex-retry.md "+
+			"That is the number agent/codex/retry.go and the 2026-09-08 codex-retry hand run "+
 			"both quote, and the reason grain leaves the retry alone: it is short beside the %s of "+
 			"grain's own first backoff. A ladder that has grown into minutes makes a refused run "+
 			"look hung, and is worth deciding about again rather than re-measuring later.",
@@ -118,7 +118,7 @@ func TestLiveCodexRetriesARefusedTurnItself(t *testing.T) {
 // with the provider's body dropped -- "exceeded retry limit, last
 // status: 429 Too Many Requests", identical with a Retry-After, without
 // one, and with a body worded exactly the way OpenAI words a rate limit
-// (docs/hand-runs/2026-09-08-codex-retry.md §7). capacity.go's header
+// (the 2026-09-08 codex-retry hand run §7). capacity.go's header
 // has why that reads as capacity rather than as a usage limit.
 //
 // Two facts, and both of them are somebody else's wording:

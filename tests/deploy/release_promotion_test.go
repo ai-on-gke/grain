@@ -26,7 +26,7 @@ import (
 )
 
 // promoteReleasePath is the person-only last step of a trunk release
-// (docs/design/release-from-trunk.md, §4).
+// (design/design/release-from-trunk.design.md, §4).
 const promoteReleasePath = ".grain/workflows/promote-release.yml"
 
 func promoteReleaseWorkflow(t *testing.T) ci.Workflow {

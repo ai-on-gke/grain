@@ -290,3 +290,36 @@ func (PullRequestGate) GitHubPullRequestReader() mcp.PullRequestReader {
 var errNoGitHubClientYet = errors.New(
 	"this daemon has no GitHub client yet: " +
 		"its reconcile loop has not started (or has failed -- check the daemon log)")
+
+// sandboxExternalCI is the namespace's ci.ExternalRuns -- GitHub Actions
+// runs, served under ci:// and by grain ci list/show/log -- over whatever
+// liveSandboxCLI holds: the UI/API server's client reads them through the
+// daemon's own forge connection (pkg/ui/ci_actions.go). Before that
+// client is up there are none to serve.
+type sandboxExternalCI struct{}
+
+var _ ci.ExternalRuns = sandboxExternalCI{}
+
+func (sandboxExternalCI) FindExternalRuns(ctx context.Context, f ci.RunFilter, limit int) ([]ci.Run, string) {
+	client := liveSandboxCLI.Load()
+	if client == nil {
+		return nil, ""
+	}
+	return client.ExternalCIRuns().FindExternalRuns(ctx, f, limit)
+}
+
+func (sandboxExternalCI) ExternalRun(ctx context.Context, id string) (ci.Run, bool, error) {
+	client := liveSandboxCLI.Load()
+	if client == nil {
+		return ci.Run{}, false, nil
+	}
+	return client.ExternalCIRuns().ExternalRun(ctx, id)
+}
+
+func (sandboxExternalCI) ExternalJobLog(ctx context.Context, id, job string) (string, error) {
+	client := liveSandboxCLI.Load()
+	if client == nil {
+		return "", errSandboxCLIUnwired
+	}
+	return client.ExternalCIRuns().ExternalJobLog(ctx, id, job)
+}
