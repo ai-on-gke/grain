@@ -472,6 +472,87 @@ func TestSandboxCLIReadsOtherTasksCI(t *testing.T) {
 	}
 }
 
+// A no_repo task's scope still names a branch, but no repository has it:
+// nothing about "this task's branch" is reported, and an unfiltered list
+// names each run's repository.
+func TestSandboxCLIOnANoRepoTask(t *testing.T) {
+	store := ci.NewRunStore(10)
+	at := time.Now()
+	store.Put(ci.Run{ID: "run-w", Repo: "acme/widgets", Ref: "main", Commit: "abc1234567890", Conclusion: ci.ConclusionSuccess, StartedAt: &at,
+		Jobs: []ci.JobRun{{Name: "go", Conclusion: ci.ConclusionSuccess, Steps: []ci.StepRun{
+			{Name: "Test", Conclusion: ci.ConclusionSuccess, Output: "--- PASS: TestThing (0.1s)\n"}}}}})
+	store.Put(ci.Run{ID: "run-l", Repo: "acme/library", Ref: "grain/dep/task-7", Commit: "def4567890123", Conclusion: ci.ConclusionSuccess, StartedAt: &at,
+		Jobs: []ci.JobRun{{Name: "test", Conclusion: ci.ConclusionSuccess, Steps: []ci.StepRun{
+			{Name: "Unit", Conclusion: ci.ConclusionSuccess, Output: "--- PASS: TestThing (0.2s)\n"}}}}})
+	tokenFile := filepath.Join(t.TempDir(), "tokens.json")
+	raw, _ := json.Marshal(map[string]string{"sb": "tok"})
+	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := &gitproxy.GitProxy{
+		Tokens:    tokens,
+		Namespace: &namespace.Server{CIStore: store, Redactor: redact.New(nil)},
+		NamespaceScopes: cliTestScopes{"sb": {TaskID: "7", RunID: "r", TaskBranch: "grain/dep/task-7",
+			MayReadCI: true, MayReadAllCI: true}},
+		// Refused before any action is taken, so none is implemented.
+		CLIActions: unimplementedCLIActions{},
+	}
+	srv := httptest.NewServer(gitproxy.NewHandler(proxy))
+	defer srv.Close()
+	env := fakeSandboxEnv(map[string]string{"GRAIN_SANDBOX_PROXY": srv.URL, "GRAIN_SANDBOX_TOKEN": "tok"}, "")
+	run := func(args ...string) (string, string, int) {
+		var out, errOut bytes.Buffer
+		code, handled := maybeRunSandboxCLI(args, env, &out, &errOut)
+		if !handled {
+			t.Fatalf("%q not handled in sandbox mode", args)
+		}
+		return out.String(), errOut.String(), code
+	}
+
+	for _, args := range [][]string{
+		{"pr", "status"}, {"pr", "base-status"}, {"pr", "status", "--ref", "main"},
+		{"ci", "wait"}, {"ci", "run-job", "go"}, {"ci", "retrigger"},
+	} {
+		out, errOut, code := run(args...)
+		if code == 0 || !strings.Contains(errOut, "this task has no repository or branch") || !strings.Contains(errOut, "--repo") ||
+			strings.Contains(out+errOut, "grain/dep/task-7") || strings.Contains(out+errOut, " in  ") {
+			t.Errorf("%q on a no-repo task: %d %q %q", args, code, out, errOut)
+		}
+	}
+	for _, args := range [][]string{{"ci", "log"}, {"ci", "artifact", "go", "x"}} {
+		out, errOut, code := run(args...)
+		if code == 0 || !strings.Contains(errOut, "no repository or branch") || !strings.Contains(errOut, "run id") ||
+			strings.Contains(errOut, "this task's branch") {
+			t.Errorf("%q on a no-repo task: %d %q %q", args, code, out, errOut)
+		}
+	}
+	if out, errOut, code := run("pr", "status", "--ref", "main", "--repo", "acme/widgets"); code != 0 || !strings.Contains(out, "main (branch) in acme/widgets") {
+		t.Errorf("pr status --ref --repo on a no-repo task: %d %q %s", code, out, errOut)
+	}
+	out, errOut, code := run("ci", "list")
+	if code != 0 || !strings.Contains(out, "across all readable repos") ||
+		!strings.Contains(out, "acme/widgets run-w main") || !strings.Contains(out, "acme/library run-l grain/dep/task-7") {
+		t.Errorf("ci list on a no-repo task: %d %q %s", code, out, errOut)
+	}
+	if out, errOut, code := run("ci", "list", "--repo", "acme/widgets"); code != 0 || !strings.Contains(out, "in acme/widgets") || strings.Contains(out, "acme/widgets run-w") {
+		t.Errorf("ci list --repo on a no-repo task: %d %q %s", code, out, errOut)
+	}
+	out, errOut, code = run("ci", "test-history", "TestThing")
+	if code != 0 || !strings.Contains(out, "across all readable repos") ||
+		!strings.Contains(out, "(acme/widgets main") || !strings.Contains(out, "(acme/library grain/dep/task-7") {
+		t.Errorf("ci test-history on a no-repo task: %d %q %s", code, out, errOut)
+	}
+	if out, errOut, code := run("ci", "log", "run-l", "--job", "test", "--step", "Unit"); code != 0 || !strings.Contains(out, "TestThing") {
+		t.Errorf("ci log <run-id> on a no-repo task: %d %q %s", code, out, errOut)
+	}
+}
+
+type unimplementedCLIActions struct{ gitproxy.CLIActions }
+
 // --tail is a byte count wherever the namespace serves it
 // (namespace.Server's tail parameter), so `grain log --tail 2` prints
 // the last two bytes of the answer, not its last two entries -- which is

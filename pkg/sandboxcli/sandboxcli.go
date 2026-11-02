@@ -737,6 +737,9 @@ func (c *sandboxCLI) ciRun(p sandboxArgs, run string) (repo, id string, err erro
 		return "", "", err
 	}
 	if run == "" {
+		if rc.Repo == "" && p.get("task") == "" {
+			return "", "", fmt.Errorf("this task has no repository or branch, so it has no latest grain CI run: name a run id, with --repo <owner/repo> if you like (`grain ci list --repo <owner/repo>` lists them), or pass --task <id>")
+		}
 		if run, err = c.latestRun(p.get("task")); err != nil {
 			return "", "", err
 		}
