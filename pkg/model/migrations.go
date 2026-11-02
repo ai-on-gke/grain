@@ -520,6 +520,18 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     86,
+		Description: "rewrite stored corp-research grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/corp#research={} (a wrapper distribution's in-process capability is retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames := map[string]string{"corp-research": CorpResearchGrant}
+			if err := rewriteLegacyGrants(renames)(ctx, tx); err != nil {
+				return err
+			}
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities",
+				map[string][]string{"corp-research": {CorpResearchGrant}})
+		},
+	},
+	{
+		Version:     87,
 		Description: "rebuild merge_batch keyed by task as well as branch: one overlap re-check per change",
 		// Neither engine changes a primary key in place. The rows are
 		// copied out to a table with no constraints at all (CREATE TABLE
@@ -527,7 +539,7 @@ var Migrations = []Migration{
 		// with the new table's on Postgres), and back into merge_batch
 		// created afresh from the statement a new store uses.
 		Statements: []string{
-			"CREATE TABLE `merge_batch_v85` AS SELECT * FROM `merge_batch`",
+			"CREATE TABLE `merge_batch_v86` AS SELECT * FROM `merge_batch`",
 			"DROP TABLE `merge_batch`",
 			mergeBatchTable,
 			"INSERT INTO `merge_batch` (`owner`,`name`,`branch`,`task_id`,`ref`,`base_commit`,`commit`," +
@@ -535,11 +547,20 @@ var Migrations = []Migration{
 				"`recheck_of`,`recheck_detail`,`recheck_at`) " +
 				"SELECT `owner`,`name`,`branch`,'',`ref`,`base_commit`,`commit`," +
 				"`members`,`run_id`,`started_at`,`finished_at`,`conclusion`,`detail`,`splits`,`queued`," +
-				"`recheck_of`,`recheck_detail`,`recheck_at` FROM `merge_batch_v85`",
-			"DROP TABLE `merge_batch_v85`",
+				"`recheck_of`,`recheck_detail`,`recheck_at` FROM `merge_batch_v86`",
+			"DROP TABLE `merge_batch_v86`",
 		},
 	},
 }
+
+// CorpResearchGrant is what migration 86 rewrote stored corp-research grants
+// to: the method a wrapper distribution's build registers (capability.Register) in place
+// of its in-process corp-research provider, and makes corp-research an alias
+// of. Core serves no such method; it names the grant only because the
+// migration list is core's, and a store migrated by a build without the
+// method holds a grant nothing there resolves, as the bare corp-research it
+// replaced resolved to no provider there either.
+const CorpResearchGrant = "https://grain.dev/capabilities/corp#research={}"
 
 // ApplyDataMigrations runs the row rewrites (Up) of every migration past
 // from, inside tx, on tables already at SchemaVersion's shape. It is for

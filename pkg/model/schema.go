@@ -390,11 +390,17 @@ import "strconv"
 // repo server's `#write` method. It rewrites `repo_config`.`ci_capabilities`
 // as well as the grant tables and capability lists.
 //
-// 86 rebuilds `merge_batch` with `task_id` in its primary key, so one
+// 86 rewrites stored `corp-research` grants, `repo_config`.`ci_capabilities`
+// included, to `https://grain.dev/capabilities/corp#research={}`: the Google
+// build retires its in-process `corp-research` provider for a
+// `corp#research` method it registers through capability.Register, with
+// `corp-research` as that method's alias.
+//
+// 87 rebuilds `merge_batch` with `task_id` in its primary key, so one
 // branch can hold an overlap re-check for each of several changes at once
 // (grain/task-2390). The rows are carried across with an empty task_id,
 // which the queue still reads, re-validates and cleans up as before.
-const SchemaVersion = 86
+const SchemaVersion = 87
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the
@@ -4016,7 +4022,7 @@ const apiScopeSetTable = `CREATE TABLE IF NOT EXISTS ` + "`api_scope_set`" + ` (
   PRIMARY KEY (` + "`name`" + `)
 )`
 
-// mergeBatchTable is merge_batch's definition, named so that migration 86
+// mergeBatchTable is merge_batch's definition, named so that migration 87
 // (Migrations) can create the table it rebuilds from the very statement
 // a fresh store is created with. task_id joined the primary key there:
 // one row per change rather than per branch (grain/task-2390).

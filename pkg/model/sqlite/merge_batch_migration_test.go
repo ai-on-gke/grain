@@ -22,16 +22,16 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// Migration 86 rebuilds merge_batch with task_id in its primary key
+// Migration 87 rebuilds merge_batch with task_id in its primary key
 // (grain/task-2390). An overlap re-check in flight across the upgrade is
 // carried over with an empty task_id, which the queue still reads and
 // cleans up, and once migrated one branch holds a re-check for each of
 // several changes.
-func TestMigration86KeysMergeBatchesByTask(t *testing.T) {
+func TestMigration87KeysMergeBatchesByTask(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
-	// merge_batch as schema 85 had it: keyed by branch alone.
+	// merge_batch as schema 86 had it: keyed by branch alone.
 	for _, stmt := range []string{
 		"DROP TABLE `merge_batch`",
 		"CREATE TABLE `merge_batch` (`owner` TEXT NOT NULL, `name` TEXT NOT NULL, `branch` TEXT NOT NULL, " +
@@ -57,11 +57,11 @@ func TestMigration86KeysMergeBatchesByTask(t *testing.T) {
 		string(members), started); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 85 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 86 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-85 store: %v", err)
+		t.Fatalf("migrating a version-86 store: %v", err)
 	}
 
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
