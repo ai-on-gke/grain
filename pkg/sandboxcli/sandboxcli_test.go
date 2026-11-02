@@ -535,7 +535,7 @@ func TestSandboxCLIOnANoRepoTask(t *testing.T) {
 	}
 	out, errOut, code := run("ci", "list")
 	if code != 0 || !strings.Contains(out, "across all readable repos") ||
-		!strings.Contains(out, "acme/widgets run-w main") || !strings.Contains(out, "acme/library run-l grain/dep/task-7") {
+		!strings.Contains(out, "acme/widgets run-w grain main") || !strings.Contains(out, "acme/library run-l grain grain/dep/task-7") {
 		t.Errorf("ci list on a no-repo task: %d %q %s", code, out, errOut)
 	}
 	if out, errOut, code := run("ci", "list", "--repo", "acme/widgets"); code != 0 || !strings.Contains(out, "in acme/widgets") || strings.Contains(out, "acme/widgets run-w") {
