@@ -69,6 +69,7 @@ const (
 	RecurrenceEveryNMinutes = workflows.RecurrenceEveryNMinutes
 	RecurrenceMonthly       = workflows.RecurrenceMonthly
 	RecurrenceWeekly        = workflows.RecurrenceWeekly
+	ReleaseShortSoakOKEnv   = workflows.ReleaseShortSoakOKEnv
 	ReleaseVersionEnv       = workflows.ReleaseVersionEnv
 	RequestedByEnv          = workflows.RequestedByEnv
 	RequestedByKindEnv      = workflows.RequestedByKindEnv

@@ -73,7 +73,7 @@ export function notificationAlerts(notifications) {
             ? [
                 {
                   kind: "approve-release",
-                  label: "Approve",
+                  label: release.shortSoak ? "Approve short soak" : "Approve",
                   notification: n,
                   release,
                 },
@@ -102,28 +102,48 @@ export function notificationAlerts(notifications) {
 const PENDING_RELEASE_FAMILY = "release.pending";
 
 // pendingReleaseOf is the release a notification asks a person to
-// approve, { repo, version }, or null when it asks nothing of the kind.
+// approve, { repo, version, soak, shortSoak }, or null when it asks
+// nothing of the kind. soak is how long it soaked ("soaked 1h00m of 24h
+// (FORCE=true)") and shortSoak the SHORT SOAK warning, both as the
+// release train wrote them into the body from the -pending tag's
+// Soak-Seconds and Soak-Forced trailers; either is null when the body
+// does not say.
 export function pendingReleaseOf(n) {
   const family = n?.family || (n?.subject || "").split(":")[0];
   if (family !== PENDING_RELEASE_FAMILY) return null;
   if (!(n.actions || []).includes("approve-release")) return null;
   const version = (n.subject || "").slice(PENDING_RELEASE_FAMILY.length + 1);
   if (!/^v\d+\.\d+\.0$/.test(version)) return null;
-  return { repo: n.repo || "ai-on-gke/grain", version };
+  const lines = (n.body || "").split("\n").map((l) => l.trim());
+  const soak =
+    lines
+      .find((l) => l.startsWith("Soak: "))
+      ?.match(/soaked \d+h\d{2}m of \d+h(?: \(FORCE=true\))?/)?.[0] || null;
+  const shortSoak = lines.find((l) => l.startsWith("SHORT SOAK:")) || null;
+  return { repo: n.repo || "ai-on-gke/grain", version, soak, shortSoak };
 }
 
 // decideRelease approves (or rejects) a pending release, after asking:
 // approving makes it official -- vX.Y.0 tagged, `latest` moved -- and
 // rejecting drops its release candidate. The daemon refuses anybody but
-// a person. Resolves to false when the person thought better of it.
+// a person. A release whose soak was short is approved with
+// short_soak_ok, and only after a question that says so: without it the
+// approve job refuses the release. Resolves to false when the person
+// thought better of it.
 export async function decideRelease(release, approve) {
-  const question = approve
-    ? `Approve ${release.version}? This tags ${release.version}, moves latest onto it and publishes its images.`
-    : `Reject ${release.version}? Its release candidate is dropped, and the next release train run cuts the next one.`;
+  const shortSoakOk = approve && !!release.shortSoak;
+  const question = !approve
+    ? `Reject ${release.version}? Its release candidate is dropped, and the next release train run cuts the next one.`
+    : shortSoakOk
+      ? `Approve ${release.version} on a SHORT SOAK? It ${release.soak || "has no recorded soak"}, under the minimum. ` +
+        `This accepts the short soak (short_soak_ok), tags ${release.version}, moves latest onto it and publishes its images.`
+      : `Approve ${release.version}? This tags ${release.version}, moves latest onto it and publishes its images.`;
   if (!window.confirm(question)) return false;
   await api(
     `${repoApiRoot(release.repo)}/pending-releases/${encodeURIComponent(release.version)}/${approve ? "approve" : "reject"}`,
-    { method: "POST" },
+    shortSoakOk
+      ? { method: "POST", body: JSON.stringify({ short_soak_ok: true }) }
+      : { method: "POST" },
   );
   return true;
 }

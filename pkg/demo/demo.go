@@ -1832,7 +1832,8 @@ func seedDemoNotifications(ctx context.Context, store *model.Store, taskID strin
 		Severity: model.NotificationWarning,
 		Title:    "v2.4.0 is ready to promote (v2.4.0-rc.2 passed its soak)",
 		Body: "v2.4.0-rc.2 passed its 24h staging soak and is staged as v2.4.0-pending: images built and " +
-			"published as :v2.4.0-pending, nothing left to build or test.",
+			"published as :v2.4.0-pending, nothing left to build or test.\n\n" +
+			"Soak: soaked 25h10m of 24h: PASS",
 		Repo:     model.GrainSourceRepo().String(),
 		RaisedBy: "system:release-gate",
 		RaisedAt: ago(90 * time.Minute),
