@@ -2081,7 +2081,9 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// proposals are judged on its own permission when it runs. A
 		// proposal grain itself files for a person (needsPersonWhy) waits
 		// too, but its note above already says why, and it is not marked
-		// as held: the run made no choice there.
+		// as held: the run made no choice there -- nor when the run also
+		// asked, since its permission would not have queued it either
+		// (AutoSubmits knows nothing of keep_running or priority).
 		heldByRun, _ := p["hold_for_approval"].(bool)
 		hold := heldByRun || needsPersonWhy != ""
 		switch {
@@ -2089,7 +2091,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			proposal.Body += model.ProposalEscalationNote(task.ID, proposal, escalated)
 		case len(ungranted) > 0, len(ungrantedReads) > 0:
 			// Filed for a person; the notes above say why.
-		case heldByRun && (approved || model.AutoSubmits(proposal, task)):
+		case heldByRun && needsPersonWhy == "" && (approved || model.AutoSubmits(proposal, task)):
 			proposal.Body += model.HeldForApprovalNote(task.ID)
 			proposal.Tags = append(proposal.Tags, model.HeldForApprovalTag)
 		case hold:
@@ -2129,6 +2131,13 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			proposal.AutoMerge = false
 		} else if asked && !proposal.AutoMerge && len(ungranted) == 0 {
 			proposal.Body += otherBranchAutoMergeNote(task, proposal)
+		}
+		// An explicit auto_merge: false is the run's own "this deserves
+		// a review", which nothing grain does later may overturn
+		// (model.DeclineAutoMerge) -- the same as the identical call
+		// filed live (ui.CreateTaskRequest.DeclineAutoMerge).
+		if said, ok := p["auto_merge"].(bool); ok && !said {
+			model.DeclineAutoMerge(&proposal, model.PrincipalString(model.Principal{Kind: model.PrincipalAgent, ID: task.ID}))
 		}
 		if err := store.PutTask(ctx, proposal); err != nil {
 			return fmt.Errorf("orchestrator: filing proposed task %q: %w", title, err)

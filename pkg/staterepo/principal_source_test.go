@@ -28,7 +28,7 @@ import (
 
 // TestADumpFromBeforePrincipalSourcesImportsWithEmptySources is
 // operator-attribution spec §7.1's state-repository half: this build
-// exports every principal's source, and a dump written by schema 86,
+// exports every principal's source, and a dump written by schema 87,
 // which has no *_source columns at all, imports with every source empty
 // rather than failing or guessing one.
 func TestADumpFromBeforePrincipalSourcesImportsWithEmptySources(t *testing.T) {
@@ -59,7 +59,7 @@ func TestADumpFromBeforePrincipalSourcesImportsWithEmptySources(t *testing.T) {
 		t.Fatalf("round trip: task %+v, %v; want its origin actor %+v", got, err, operator)
 	}
 
-	// Age the dump to schema 86: no *_source column in any table file.
+	// Age the dump to schema 87: no *_source column in any table file.
 	stripped := 0
 	for _, table := range []string{"task", "task_comment"} {
 		path := filepath.Join(dir, staterepo.TablesDir, table+".json")
@@ -86,7 +86,7 @@ func TestADumpFromBeforePrincipalSourcesImportsWithEmptySources(t *testing.T) {
 	if stripped == 0 {
 		t.Fatal("the dump this build wrote carries no *_source column, so there is no pre-upgrade shape to make here")
 	}
-	if err := staterepo.WriteSchemaVersion(dir, 86); err != nil {
+	if err := staterepo.WriteSchemaVersion(dir, 87); err != nil {
 		t.Fatal(err)
 	}
 

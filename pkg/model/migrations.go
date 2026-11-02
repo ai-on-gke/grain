@@ -532,20 +532,28 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     87,
+		Description: "drop executor_token and executor_token_sequence (remote executors are retired)",
+		Statements: []string{
+			"DROP TABLE IF EXISTS `executor_token`",
+			"DROP TABLE IF EXISTS `executor_token_sequence`",
+		},
+	},
+	{
+		Version:     88,
 		Description: "add a *_source column beside every principal's *_kind/*_id pair, task_event's on-behalf-of, and config_audit (operator-attribution spec §1.3, §7.1)",
 		Statements: append([]string{
 			// task_pause and task_event postdate the 2.0 baseline and
 			// Init's CREATE TABLE IF NOT EXISTS made them in place, so a
 			// store this old may not have them yet: create them in the
-			// shape schema 86 knew first, so that the ALTERs below meet
+			// shape schema 87 knew first, so that the ALTERs below meet
 			// the same table whichever store they run on.
-			schema86TaskPauseTable,
-			schema86TaskEventTable,
+			schema87TaskPauseTable,
+			schema87TaskEventTable,
 		}, principalSourceColumns()...),
 	},
 }
 
-// principalSourceColumns are migration 87's ALTERs: `<p>_source` beside
+// principalSourceColumns are migration 88's ALTERs: `<p>_source` beside
 // every stored principal, `”` for every row already there.
 func principalSourceColumns() []string {
 	cols := []struct{ table, column string }{
@@ -573,9 +581,9 @@ func principalSourceColumns() []string {
 	return out
 }
 
-// schema86TaskPauseTable and schema86TaskEventTable are task_pause and
-// task_event as schema 86 created them, frozen for migration 87.
-const schema86TaskPauseTable = `CREATE TABLE IF NOT EXISTS ` + "`task_pause`" + ` (
+// schema87TaskPauseTable and schema87TaskEventTable are task_pause and
+// task_event as schema 87 created them, frozen for migration 88.
+const schema87TaskPauseTable = `CREATE TABLE IF NOT EXISTS ` + "`task_pause`" + ` (
   ` + "`task_id`" + `           TEXT     NOT NULL,
   ` + "`paused_at`" + `         DATETIME NOT NULL,
   ` + "`paused_by_kind`" + `    TEXT     NOT NULL,
@@ -587,7 +595,7 @@ const schema86TaskPauseTable = `CREATE TABLE IF NOT EXISTS ` + "`task_pause`" + 
   PRIMARY KEY (` + "`task_id`" + `)
 )`
 
-const schema86TaskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
+const schema87TaskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
   ` + "`id`" + `         INTEGER PRIMARY KEY AUTOINCREMENT,
   ` + "`task_id`" + `    TEXT     NOT NULL,
   ` + "`kind`" + `       TEXT     NOT NULL,

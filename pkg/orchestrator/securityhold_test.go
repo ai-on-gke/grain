@@ -1027,3 +1027,37 @@ func TestSecurityHoldConfigRepoDefaultHoldAndPolicyExceptions(t *testing.T) {
 			trustboundary.ConfigPolicyPath, got.AutoMerge, got.Links)
 	}
 }
+
+// Task 2329: held for a security review, its auto-merge was turned off
+// on purpose while the review ran (a PATCH to false). The review coming
+// back clean drops the hold but is not that person changing their mind:
+// the change waits for their Submit.
+func TestSecurityHoldReleaseLeavesAnExplicitNoAlone(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	client, task, reviewID := heldTask(t, ctx, store)
+	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		model.DeclineAutoMerge(t, "human:operator")
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	completeReview(t, ctx, store, reviewID)
+	if err := orchestrator.SyncSecurityHolds(ctx, store, client, baseTime.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	got := reloaded(t, ctx, store, task.ID)
+	if linkOf(got, model.LinkSecurityHold) != "" {
+		t.Fatalf("a clean review did not settle the hold: links=%+v", got.Links)
+	}
+	if got.AutoMerge || !model.AutoMergeDeclined(got) {
+		t.Fatalf("a clean review overturned an explicit auto_merge false: automerge=%v links=%+v",
+			got.AutoMerge, got.Links)
+	}
+	for _, body := range prCommentBodies(t, client, got) {
+		if strings.Contains(body, "merges automatically") && strings.Contains(body, "finished without findings") {
+			t.Errorf("release note promises a merge that will not happen: %q", body)
+		}
+	}
+}

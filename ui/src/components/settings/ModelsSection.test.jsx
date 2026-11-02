@@ -209,7 +209,6 @@ describe("ModelsSection", () => {
     render(<ModelsSection config={{}} showError={vi.fn()} />);
     expect(await screen.findByText("Primary Antigravity")).toBeVisible();
     expect(screen.getByText("Legacy")).toBeVisible();
-    expect(screen.getByText(/Model servers/i)).toBeVisible();
-    expect(screen.getByText("grain model-server")).toBeVisible();
+    expect(screen.getByText("grain hostd -server")).toBeVisible();
   });
 });

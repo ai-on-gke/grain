@@ -286,8 +286,15 @@ func MergeTaskEvents(ts []Transition, events []TaskEvent) []Transition {
 	}
 	for _, e := range events {
 		state := StateClosed
-		if e.Kind == TaskEventReopened {
+		switch e.Kind {
+		case TaskEventReopened:
 			state = TransitionReopened
+		case TaskEventAutoMergeOn:
+			state = TransitionAutoMergeOn
+		case TaskEventAutoMergeOff:
+			state = TransitionAutoMergeOff
+		case TaskEventAutoMergeKeptOff:
+			state = TransitionAutoMergeKeptOff
 		}
 		by := e.By
 		out = append(out, Transition{State: state, At: e.At, By: &by, Reason: e.Reason, Detail: e.Detail})

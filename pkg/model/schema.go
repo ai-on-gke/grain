@@ -396,13 +396,19 @@ import "strconv"
 // `corp#research` method it registers through capability.Register, with
 // `corp-research` as that method's alias.
 //
-// 87 adds a `<p>_source` column beside every `<p>_kind`/`<p>_id` principal
+// 87 drops `executor_token` and `executor_token_sequence`: remote
+// executors are retired, and grain hostd (which authenticates with its
+// own -hostd-token-file) is grain's only host agent. A pure drop: the
+// importer passes over a table this build lacks, so a dump carrying
+// either imports without it.
+//
+// 88 adds a `<p>_source` column beside every `<p>_kind`/`<p>_id` principal
 // pair (task, task_comment, task_pause, pipeline_pause, scheduled_upgrade,
 // memory, memory_document, release_note and task_event, which also gains
 // behalf_kind/behalf_id/behalf_source), and the config_audit table
 // (operator-attribution spec §1.3, §4.4, §7.1). No row is rewritten: a row
 // written before reads back with an empty Principal.Source.
-const SchemaVersion = 87
+const SchemaVersion = 88
 
 // configAuditTable is the `config_audit` table: one row per change to the
 // deployment's configuration somebody made (model.ConfigAuditEntry,
@@ -3795,23 +3801,6 @@ var Tables = []string{
   ` + "`refresh`" + `          TEXT    NOT NULL DEFAULT '',
   ` + "`rollback_on_crash`" + ` INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`name`" + `)
-)`,
-
-	`CREATE TABLE IF NOT EXISTS ` + "`executor_token`" + ` (
-  ` + "`id`" + `                TEXT     NOT NULL,
-  ` + "`name`" + `              TEXT     NOT NULL,
-  ` + "`token_hash`" + `        TEXT     NOT NULL,
-  ` + "`prefix`" + `            TEXT     NOT NULL,
-  ` + "`created_at`" + `        DATETIME NOT NULL,
-  ` + "`revoked_at`" + `        DATETIME NULL,
-  ` + "`last_connected_at`" + ` DATETIME NULL,
-  PRIMARY KEY (` + "`id`" + `),
-  UNIQUE (` + "`token_hash`" + `)
-)`,
-
-	`CREATE TABLE IF NOT EXISTS ` + "`executor_token_sequence`" + ` (
-  ` + "`id`" + `        INTEGER PRIMARY KEY AUTOINCREMENT,
-  ` + "`issued_at`" + ` DATETIME NOT NULL
 )`,
 
 	externalAgentTokenTable,

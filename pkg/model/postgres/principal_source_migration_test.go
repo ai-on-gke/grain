@@ -24,11 +24,11 @@ import (
 )
 
 // operator is the {human, operator} every write recorded before
-// migration 87, with no source.
+// migration 88, with no source.
 var operator = model.Principal{Kind: model.PrincipalHuman, ID: "operator"}
 
 // seedPrincipalRows writes one row with operator, given source, in it to
-// every table migration 87 gives a source column.
+// every table migration 88 gives a source column.
 func seedPrincipalRows(t *testing.T, ctx context.Context, store *model.Store, source model.AuthSource) {
 	t.Helper()
 	operator := operator
@@ -134,17 +134,17 @@ func checkPrincipalRows(t *testing.T, ctx context.Context, store *model.Store, w
 	}
 }
 
-// TestMigration87AddsPrincipalSourcesWithoutRewritingRows is
-// operator-attribution spec §7.1: a schema-86 store gains every *_source
+// TestMigration88AddsPrincipalSourcesWithoutRewritingRows is
+// operator-attribution spec §7.1: a schema-87 store gains every *_source
 // column and config_audit, every row it held reads back with an empty
 // source, and a row written afterwards keeps the source it was given.
-func TestMigration87AddsPrincipalSourcesWithoutRewritingRows(t *testing.T) {
+func TestMigration88AddsPrincipalSourcesWithoutRewritingRows(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 	seedPrincipalRows(t, ctx, store, "")
-	rewindToSchema86(t, ctx, db)
+	rewindToSchema87(t, ctx, db)
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-86 store: %v", err)
+		t.Fatalf("migrating a version-87 store: %v", err)
 	}
 	checkPrincipalRows(t, ctx, store, "")
 
@@ -168,11 +168,11 @@ func TestMigration87AddsPrincipalSourcesWithoutRewritingRows(t *testing.T) {
 	}
 }
 
-// rewindToSchema86 is rewindSchemaTo(86), which drops migration 87's
+// rewindToSchema87 is rewindSchemaTo(87), which drops migration 88's
 // columns, and config_audit with them.
-func rewindToSchema86(t *testing.T, ctx context.Context, db *sql.DB) {
+func rewindToSchema87(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
-	rewindSchemaTo(t, ctx, db, 86)
+	rewindSchemaTo(t, ctx, db, 87)
 	if _, err := db.ExecContext(ctx, "DROP TABLE `config_audit`"); err != nil {
 		t.Fatal(err)
 	}

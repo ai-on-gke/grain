@@ -1546,11 +1546,19 @@ type CreateTaskRequest struct {
 	// already on GitHub; dispatch holds the task until then
 	// (orchestrator.heldForPendingBranch). Base must be named, and the
 	// task must have a repo.
-	NewBranch            bool   `json:"newBranch,omitempty"`
-	NewBranchFrom        string `json:"newBranchFrom,omitempty"`
-	Issue                int    `json:"issue,omitempty"`
-	AutoMerge            bool   `json:"autoMerge"`
-	AutoApproveProposals bool   `json:"autoApproveProposals"`
+	NewBranch     bool   `json:"newBranch,omitempty"`
+	NewBranchFrom string `json:"newBranchFrom,omitempty"`
+	Issue         int    `json:"issue,omitempty"`
+	AutoMerge     bool   `json:"autoMerge"`
+	// DeclineAutoMerge is the filer saying auto_merge: false out loud
+	// (propose_task's explicit false), rather than leaving it to the
+	// proposer's permission or a default -- which AutoMerge alone, always
+	// on the wire, cannot tell apart. The task is filed with
+	// model.DeclineAutoMerge's mark, so nothing grain does on its own
+	// account turns auto-merge back on. It can only ever lower what the
+	// task is filed with, so no gate has to judge it.
+	DeclineAutoMerge     bool `json:"declineAutoMerge,omitempty"`
+	AutoApproveProposals bool `json:"autoApproveProposals"`
 	// TimeZone is the IANA zone of whoever is filing the task, which its
 	// runs are told the time in (model.Task.TimeZone). POST /api/tasks
 	// fills it from the browser's TimeZoneHeader when the body names
@@ -2440,7 +2448,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	keepRunning := req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake)
 	autoMerge, autoSubmit, sessionQueued := req.AutoMerge, false, false
-	var limitNote, ungrantedNote, heldNote, personOnlyNote, refusal string
+	var limitNote, ungrantedNote, heldNote, needsPersonNote, personOnlyNote, refusal string
 	var escalated []string
 	if proposedBy != nil {
 		child := model.Task{Target: target, Base: req.Base, Grants: grants, Writes: writes}
@@ -2463,22 +2471,17 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			sessionQueued = false
 		}
 		refusal = model.AutoApprovalRefusal(child, *proposedBy, sessionQueued)
-		// Held (propose_task's hold_for_approval): whatever the
-		// proposer's permission would have done, nothing below approves
-		// this. Asked before the bound on self-approved work, which a
-		// proposal that is not going to be self-approved neither counts
-		// toward nor is measured against. The tag and the note go only on
-		// one the permission would actually have queued: one it did not
-		// cover was waiting for a person anyway.
-		if req.HoldForApproval {
-			if autoSubmit || sessionQueued {
-				heldNote = model.HeldForApprovalNote(proposedBy.ID)
-			}
-			autoSubmit, sessionQueued, req.Approved = false, false, false
-		}
+		// A target only a person may approve: grain's own hold, not the
+		// run's, so it is neither tagged nor told to the run as one it
+		// asked for (heldNote) -- and asked before hold_for_approval, so a
+		// run that asked as well is told this is why, not that its
+		// permission would have queued the work.
 		if needsPersonWhy != "" {
 			if autoSubmit || sessionQueued || req.Approved {
-				heldNote = fmt.Sprintf("\n\n_Filed for a person to approve: %s._", needsPersonWhy)
+				needsPersonNote = fmt.Sprintf("\n\n_Filed for a person to approve: %s._", needsPersonWhy)
+			}
+			if refusal == "" {
+				refusal = needsPersonWhy
 			}
 			autoSubmit, sessionQueued, req.Approved = false, false, false
 		}
@@ -2493,6 +2496,21 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			}
 			if refusal == "" {
 				refusal = why
+			}
+			autoSubmit, sessionQueued, req.Approved = false, false, false
+		}
+		// Held (propose_task's hold_for_approval): whatever the
+		// proposer's permission would have done, nothing below approves
+		// this. Asked before the bound on self-approved work, which a
+		// proposal that is not going to be self-approved neither counts
+		// toward nor is measured against, and after grain's own holds
+		// above. The tag and the note go only on one the permission would
+		// actually have queued: one it did not cover -- or one asking for
+		// a setting only a person may give -- was waiting for a person
+		// anyway, and its note says why.
+		if req.HoldForApproval {
+			if autoSubmit || sessionQueued {
+				heldNote = model.HeldForApprovalNote(proposedBy.ID)
 			}
 			autoSubmit, sessionQueued, req.Approved = false, false, false
 		}
@@ -2542,7 +2560,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		ID:                   id,
 		Intent:               model.IntentImplement,
 		Title:                req.Title,
-		Body:                 req.Description + forkNote + ungrantedNote + reviewTemplateNote + limitNote + heldNote + personOnlyNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
+		Body:                 req.Description + forkNote + ungrantedNote + reviewTemplateNote + limitNote + needsPersonNote + heldNote + personOnlyNote + neverEndingNote + supersedeRefusal + model.OriginKeptNote(req.Origin, target, proposedBy),
 		Origin:               origin,
 		Target:               target,
 		ChangeTarget:         changeTarget,
@@ -2585,6 +2603,9 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// and filing as nobody would read as grain's own to local policy.
 	if proposedBy != nil {
 		model.InheritRequester(&task, *proposedBy)
+	}
+	if req.DeclineAutoMerge && !req.AutoMerge {
+		model.DeclineAutoMerge(&task, model.PrincipalString(c.requestActor(ctx).Actor))
 	}
 	if req.FixesBaseBranch && !model.SetFixesBaseBranch(&task, true) {
 		return Task{}, validationErrorf("a task with no repo has no base branch to fix: " +
@@ -4421,7 +4442,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			submittedHead = c.submittedHead(ctx, *current)
 		}
 	}
-	if err := c.mutate(ctx, id, func(task *model.Task) error {
+	if err := c.mutate(model.WithAutoMergeChange(ctx, c.requestActor(ctx).Actor, "edited"), id, func(task *model.Task) error {
 		submitted = false
 		// Whether this edit moves the task off a repository it had a
 		// target in, which takes the pull requests it opened there off
@@ -4498,7 +4519,15 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 				humanSubmitted(task, submittedAt, submittedHead)
 				submitted = true
 			}
-			task.AutoMerge = *req.AutoMerge
+			// Either answer is the caller's own, and the one grain's holds
+			// must not overturn: a false stays false until a person or the
+			// API says true (model.DeclineAutoMerge).
+			if *req.AutoMerge {
+				model.AllowAutoMerge(task)
+				task.AutoMerge = true
+			} else {
+				model.DeclineAutoMerge(task, model.PrincipalString(c.requestActor(ctx).Actor))
+			}
 		}
 		if req.AutoApproveProposals != nil {
 			task.AutoApproveProposals = *req.AutoApproveProposals
@@ -5335,7 +5364,7 @@ func (c *Client) Submit(ctx context.Context, id string) error {
 		return c.submitWithApprovals(ctx, *task, pending)
 	}
 	now, head := c.now(), c.submittedHead(ctx, *task)
-	if err := c.mutate(ctx, id, func(task *model.Task) error {
+	if err := c.mutate(model.WithAutoMergeChange(ctx, c.requestActor(ctx).Actor, "submitted"), id, func(task *model.Task) error {
 		// Only a Submit that turns auto-merge on answers a hold. One
 		// over a change already merging itself (pressed to retry its CI)
 		// has looked at no new head, and must not pin a clearance to
@@ -5344,6 +5373,7 @@ func (c *Client) Submit(ctx context.Context, id string) error {
 		if !task.AutoMerge {
 			humanSubmitted(task, now, head)
 		}
+		model.AllowAutoMerge(task)
 		task.AutoMerge = true
 		return nil
 	}); err != nil {

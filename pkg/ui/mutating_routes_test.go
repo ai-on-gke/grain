@@ -178,10 +178,6 @@ var neverAttributedRoutes = map[string]bool{
 // Server goes into attributedRoutes, or onto neverAttributedRoutes with
 // its reason, never here.
 var notYetAttributedRoutes = map[string]bool{
-	"DELETE /api/executors/tokens/{id}":                                    true,
-	"DELETE /api/executors/tokens/{id}/revoke":                             true,
-	"POST /api/executors/tokens":                                           true,
-	"POST /api/executors/tokens/{id}/revoke":                               true,
 	"DELETE /api/agent-backends/{id}/codex-auth":                           true,
 	"DELETE /api/agent-backends/{id}/credential":                           true,
 	"DELETE /api/agent-keys/{framework}":                                   true,
