@@ -16,6 +16,8 @@ package ui
 
 import (
 	"context"
+	"log"
+	"net/http"
 	"reflect"
 	"strings"
 
@@ -59,6 +61,63 @@ func writeCommitNote(ctx context.Context) string {
 		"Exported straight after " + by + " changed this deployment's\n" +
 		"configuration through grain's API. Anything else written since the\n" +
 		"previous export is in this commit too."
+}
+
+// recordConfigWrite appends the config_audit row for r, a configuration
+// write that has just succeeded (operator-attribution spec §4.4): who
+// made it, as RequestActor says, and what it changed, as the route it
+// came by and the path it named. It runs where the state repository's
+// export is triggered (ServeHTTP's onSuccess), so it covers every write
+// guardConfigWrite let through -- settings, a repo's settings, a
+// schedule, a template, a session -- without each handler having to
+// remember. The summary is the method and path only: a body can carry a
+// secret, and the state repository's diff has the values.
+//
+// ctx is the context the write was made under, r the request it came in.
+func (c *Client) recordConfigWrite(ctx context.Context, r *http.Request) {
+	if c == nil || c.Store == nil || r == nil {
+		return
+	}
+	who := RequestActor(ctx)
+	surface := configAuditSurface(r)
+	summary := r.Method + " " + r.URL.Path
+	log.Printf("grain api: %s (%s) changed %s: %s",
+		PrincipalLabel(who.Actor, who.OnBehalfOf), sourceName(who.Actor.Source), surface, summary)
+	if _, err := c.Store.RecordConfigAudit(ctx, model.ConfigAuditEntry{
+		At: c.now(), By: who.Actor, OnBehalfOf: who.OnBehalfOf, Surface: surface, Summary: summary,
+	}); err != nil {
+		log.Printf("grain api: recording %s's change to %s in the config audit log: %v", who.Actor.ID, surface, err)
+	}
+}
+
+// configAuditSurface is what a configuration write changed, for its
+// config_audit row: `repo:<owner/name>` for a route under a repository,
+// `<kind>:<id>` for one naming a single schedule, template, session and
+// so on, and otherwise the route's first path segment (`settings`,
+// `capability-policy`, ...).
+func configAuditSurface(r *http.Request) string {
+	if owner, name := r.PathValue("owner"), r.PathValue("name"); owner != "" && name != "" {
+		return "repo:" + owner + "/" + name
+	}
+	rest := strings.TrimPrefix(r.URL.Path, "/api/")
+	kind, _, _ := strings.Cut(rest, "/")
+	if kind == "" {
+		kind = "settings"
+	}
+	for _, key := range []string{"id", "backendId", "name", "cred", "framework", "secret"} {
+		if v := r.PathValue(key); v != "" {
+			return strings.TrimSuffix(kind, "s") + ":" + v
+		}
+	}
+	return kind
+}
+
+// sourceName is s for a log line, saying so when there is none.
+func sourceName(s model.AuthSource) string {
+	if s == "" {
+		return "no source"
+	}
+	return string(s)
 }
 
 // changedConfigFields names the fields of model.Config that differ
