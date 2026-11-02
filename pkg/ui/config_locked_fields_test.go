@@ -53,8 +53,6 @@ func TestSettingsLockedRefusesExactlyTheFieldsTheUIGreysOut(t *testing.T) {
 	for _, body := range []string{
 		`{"pollInterval":"25s"}`,
 		`{"maxMergesPerRepo":2}`,
-		`{"mergeBatchSize":3}`,
-		`{"mergeGatherWindow":"90s"}`,
 		`{"packageCacheEnabled":true}`,
 		`{"packageCacheSizeGb":12}`,
 		`{"actionsCacheEnabled":true}`,

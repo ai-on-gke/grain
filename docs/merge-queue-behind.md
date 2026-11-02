@@ -26,8 +26,8 @@ rather than forgotten.
 
 - **The predicate**: may this merge? Fixed, small, short enough to hold in
   your head. `pkg/orchestrator/mergepredicate.go`, and nowhere else.
-- **The strategy**: which jobs to run, when, how batches are formed, what
-  is cached, published or skipped. Arbitrarily clever, changed freely,
+- **The strategy**: which jobs to run, when, which changes are re-checked
+  on top of the branch tip, what is cached, published or skipped. Arbitrarily clever, changed freely,
   tuned for cost.
 
 > Strategy may change *when* a change finds out. It may never change
@@ -35,88 +35,38 @@ rather than forgotten.
 
 ### The rule
 
-> A change may merge into branch `B` **iff it merges cleanly into `B`**,
-> and:
->
-> - **no batch is in flight for `B`**, and the change has a green grain CI
->   run on its own head; **or**
-> - **a batch for `B` is in flight, that batch is green, and the change is
->   the head of that batch's frontier.**
+> A change may merge into branch `B` **iff it merges cleanly into `B`**
+> and has a **green grain CI run on its own head** -- or an operator has
+> recorded a force merge for that exact head commit.
 
-**"In flight"** spans from the moment a batch's tree is fixed through to
-its last member merged (`model.MergeBatch.InFlight`), not merely the
-seconds spent merging. If the lock covered only the merge phase, a
-non-member could land during the batch's forty-minute suite and the
-members would then complete `base+A+X+C` -- a tree nobody tested and
-nobody chose. This is also what grain already did from the other side:
-`model.MergeBatch` has always said that "a batch whose base has moved
-since is abandoned rather than believed".
+That is the whole predicate (`mayMerge`, `pkg/orchestrator/mergepredicate.go`).
+Whether a change that passes it is first re-checked on top of `B`'s tip is
+strategy, decided by the overlap rule below ("The overlap re-check"), and
+does not change whether it was eligible. Nothing about other pull requests
+enters it: there is no order between them ("No order between pull
+requests" below).
 
-**The frontier** is the maximal unmerged suffix of the batch's own member
-order, and only its head may merge: `base+A+C` is as untested as `base+A`.
-It is valid only while `B`'s tip is exactly *batch base + the merged
-prefix*, which grain checks against the tip it reads after each step; if
-`B` is anywhere else the batch is void.
+### History: the batch arm (removed in grain/task-1023)
 
-**The mode is the lock.** "Nothing else may land in between" is not an
-extra condition to check -- only one arm is ever active, because a batch is
-either in flight for `B` or it is not.
-
-### Why the frontier arm exists at all
-
-The tree a batch tested is `base+A+B+C`. `base+A` and `base+A+B` were
-tested by nothing. A batch merged one pull request at a time therefore
-passes through unjudged intermediate states, and if it is interrupted --
-a restart, a crash, both of which happened on this deployment on
-20 Sep 2026 -- `B` is left on a tree no green covers with the remaining
-members holding no basis to continue.
-
-The frontier arm is that basis: merging along it **completes a tree that
-was tested**. The invariant is "`B` is always on a path to a tested tree,
-and every merge advances along it" -- you may move towards the tested
-tree, never sideways. It is also what makes the older equivalence honest:
-"merging each branch in order is logically equivalent to merging the
-branch itself" holds only with the frontier rule, because without it most
-of those steps are authorised by nothing.
-
-It does not make a member green. A verdict about `base+A+B+C` is not a
-verdict about `A`, and nothing writes one onto a member's own CI status;
-what the arm authorises is a *merge*, on the strength of the batch's own
-verdict.
+Until grain/task-1023 the predicate had a second arm for speculative merge
+batches: while a batch for `B` was in flight, nothing else could land on
+`B`, and a member of a green batch merged only as the head of that batch's
+*frontier* (the unmerged suffix of the batch's own member order), so that
+merging one member at a time always moved `B` towards the tree the batch
+had tested. A batch that failed part-way through merging was abandoned:
+what had merged stayed merged, the rest went back to the queue, and the
+throwaway ref was deleted. Batching, the gather window, the batch lock and
+bisection were all removed together, and with them the frontier arm and
+the batch size and gather window settings
+(`docs/merge-queue-batching.md` keeps the design as history).
 
 ### The residual, stated rather than papered over
 
-A batch abandoned mid-merge leaves `B` on `base+A`, a tree nothing tested.
-**This was already true and is not removable here.** The frontier rule
-does not eliminate the untested intermediate: it guarantees the
-destination and bounds how long anyone sits on one. What judges `base+A`
-is the post-merge base-branch run, which reports and holds nothing
-(grain/task-461).
-
-### Failure while merging a batch: abandon, do not resume
-
-On any failure part-way through merging a green batch -- a member that
-will not merge, a member whose head moved, an API error, a daemon that
-died:
-
-- **What merged stays merged.** It cannot be unmerged and should not be.
-- **The batch is dropped and the lock released.** The members that did not
-  land still hold their own greens, so they return to the ordinary queue
-  and are re-batched later. "Try again later" happens by itself: no resume
-  machinery, no batch left open.
-- **The merge branch is destroyed** (`dropBatchRef`,
-  `github.Client.DeleteBranch`). A half-merged batch's throwaway ref
-  stands for a merge nobody is going to perform. The members' own branches
-  are untouched -- nothing is ever merged *from* that ref.
-- **The lock is recoverable.** grain merges a batch's frontier inside the
-  cycle its verdict arrives, so a part-merged batch found at the *start* of
-  a cycle can only be one whose daemon stopped. It is abandoned on sight,
-  which needs neither a timer nor a liveness check of its own: finding it
-  there is the check. A stuck lock is exactly the deadlock class this rule
-  removes.
-- **The reason is recorded on the batch**, because "we merged A and then
-  stopped" is otherwise indistinguishable from a force merge to whoever
-  reads the history later.
+A change that merges on its own green lands on a tree nothing tested
+whenever something else landed on `B` after it forked, unless the overlap
+re-check asked for a second run on top of the tip. **This is not
+removable here.** What judges that tree is the post-merge base-branch run,
+which reports and holds nothing (grain/task-461).
 
 ### What was removed: the base-branch health gate
 
@@ -135,12 +85,12 @@ was the admission: one lane wide, and dependent on grain having filed a
 repair task *and* matched its id.
 
 It is also less risky to remove than "The compensating control" below
-implies, because that section predates batching: the conflict the gate
-exists to catch is now mostly caught an hour earlier, on a throwaway ref,
-with nothing having reached the base branch.
+implies, because that section predates the overlap re-check: the conflict
+the gate exists to catch is now mostly caught before the merge, on a
+throwaway ref, with nothing having reached the base branch.
 
 **The run itself stays, as information rather than as a gate.** It is how
-grain tells "this batch broke `main`" from "`main` was already broken", and
+grain tells "this merge broke `main`" from "`main` was already broken", and
 what a repair task is filed from. A change waiting its turn is still told
 the branch it will land on is red, naming the branch, the commit and the
 repair -- and now without claiming a hold that does not exist.
@@ -202,18 +152,14 @@ files -- not from operator configuration.
 (grain/task-461). No knob may be added that changes what counts as green;
 if green can be redefined from a text box, the predicate only looks fixed.
 
-### Admission to a batch is a separate decision
+### The stuck-verdict wedge is a separate decision
 
-A batch member must still be green on its own head (`batchable`,
-`grainCIVerdictOf`). That is deliberately a *named, separate* decision
-from eligibility to merge, so that relaxing it later does not touch the
-predicate. Both halves of the trade are in `batchable`'s own comment: the
-relaxation would dissolve the stuck-verdict wedge (a cancelled CI verdict
-is never retried, so a task can sit in `waiting_ci` on an answer that can
-never arrive -- tasks 149, 264, 312 -- and such a branch cannot enter a
-batch today), and it is deferred because a batch whose members were never
-individually green is much harder to attribute when it fails. **This
-change does not fix that wedge and does not claim to.**
+A change must be green on its own head (`grainCIVerdictOf`) both to merge
+and before it is re-checked. Relaxing that later must not touch the
+predicate. The cost of the rule is the stuck-verdict wedge: a cancelled CI
+verdict is never retried, so a task can sit in `waiting_ci` on an answer
+that can never arrive (tasks 149, 264, 312). **The predicate does not fix
+that wedge and does not claim to.**
 
 ### The two operator controls
 
@@ -372,8 +318,8 @@ who merges, and no row names it.
 otherwise; nothing enforces it until an operator says so.**
 
 The predicate above lets a change green on its own head merge as it
-stands, and a merge batch re-checks only when two or more changes are
-ready together. In the week investigation task 975 measured, 274 of 331
+stands. Before this, only a merge batch re-checked anything, and only when
+two or more changes were ready together. In the week investigation task 975 measured, 274 of 331
 merges into `bwsalmon/grain` went in on their own green with no second
 look. The batch re-check caught one real semantic conflict (a duplicate map
 key in `pkg/ui/route_scopes.go`). The one conflict that turned `main`
@@ -418,16 +364,18 @@ between the fork and the run, which is where a stale branch's conflicts
 live.
 
 This is strategy, not predicate. It decides *when* a change finds out, and
-`mayMerge` is unchanged. A re-check is an ordinary merge batch with one
-member on the queue's own ref (`grain-merge-queue/<deployment>/<branch>`). It
-holds the branch the way any batch does, lands on the frontier arm if it
-passes, and goes through the same handling as any batch if it fails: the
-uncached flake recheck, the culprit sent back to its agent, and the
-release of a failure the branch itself is carrying ("inherited from
-base"). After that release the change merges on its own green, rather
-than being re-checked on the same tip again. Batching stays an
-optimisation among overlapping changes, and a batch of one is not
-abandoned when batching is turned off.
+`mayMerge` is unchanged. A re-check merges that one change onto the queue's
+own ref (`grain-merge-queue/<deployment>/<branch>`) on top of `T` and runs
+grain CI there once. On green the change merges; on red it takes the
+ordinary repair path (one automatic repair, then `merge_failed` to the
+Inbox), after the uncached flake recheck and the release of a failure the
+branch itself is carrying ("inherited from base"). After that release the
+change merges on its own green, rather than being re-checked on the same
+tip again. There is one such ref per branch, so one re-check runs per lane
+at a time; it holds the change being re-checked and any other change that
+needs one, and nothing else. The rows are still `model.MergeBatch` and
+`GET /api/merge-batches` still reports them, each with one member; the
+names are left from batching.
 
 ### Modes, and how to switch
 
@@ -463,11 +411,13 @@ no second look.
 Each merge leaves a `merge_recheck_history` row (`model.MergeRecheckRecord`,
 the newest 1000 are kept). The row records the mode, the head, fork and
 tip, whether the rule triggered and which clauses fired, whether the
-change was in fact re-checked (a batch, or an enforced re-check) and
+change was in fact re-checked and
 whether that re-check caught it, and the branch's next post-merge verdict
 (green or red) on a tree containing it. Rows are written on every merge
-path: a single merge, each batch member merged on the frontier, and a
-batch culprit (caught). `read_grain_metrics`' `merges` section adds
+path: a merge on the change's own green, a merge after a green re-check,
+and a re-check that failed (caught). Rows written before grain/task-1023
+also cover batch members merged on the frontier and batch culprits.
+`read_grain_metrics`' `merges` section adds
 `rechecks`, which reports `merges`, `triggered`, `skipped`, `triggerRate`,
 `baseCurrent`, `clauses`, `packages` (where same-package fired),
 `rechecked`, `triggeredAndCaught`, `skippedAndCaught` and
@@ -1381,7 +1331,7 @@ queue, and neither is now:
    contains no publishing job on a native workflow, because the two
    events' plans are disjoint.
 2. **The judging run had to hold.** Since grain/task-471 it does not,
-   for any job. A red base branch is information: it tells "this batch
+   for any job. A red base branch is information: it tells "this merge
    broke `main`" from "`main` was already broken", and it is what a
    repair is filed from.
 

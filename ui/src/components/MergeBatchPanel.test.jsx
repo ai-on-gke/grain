@@ -146,7 +146,7 @@ describe("MergeBatchPanel", () => {
     renderPanel();
 
     expect(
-      await screen.findByText(/No batch is in flight/),
+      await screen.findByText(/No re-check is running/),
     ).toBeInTheDocument();
   });
 
@@ -159,7 +159,7 @@ describe("MergeBatchPanel", () => {
     });
     renderPanel({ taskId: "2" });
 
-    expect(await screen.findByText("Merge batch")).toBeInTheDocument();
+    expect(await screen.findByText("Merge re-check")).toBeInTheDocument();
     expect(screen.queryByText(/changes on release/)).toBeNull();
     expect(screen.getByText("Rename the thing")).toBeInTheDocument();
   });

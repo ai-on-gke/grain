@@ -45,7 +45,7 @@ A Grain deployment is a **single daemon** (`grain daemon`) owned by one person o
                          │  │ Forge & Merge Queue │   │ Agent & MCP Host  │  │
                          │  │ (pkg/forge, pkg/ci) │   │ (pkg/agent,       │  │
                          │  │ • .grain/workflows  │   │  pkg/mcp,         │  │
-                         │  │ • Merge batches     │   │  pkg/modelexec,   │  │
+                         │  │ • Overlap re-checks │   │  pkg/modelexec,   │  │
                          │  │ • Local git proxy   │   │  pkg/runhost)     │  │
                          │  └──────┬──────┬───────┘   └────┬──────────┬───┘  │
                          └─────────┼──────┼────────────────┼──────────┼──────┘
@@ -190,12 +190,9 @@ stateDiagram-v2
     state "completed (On Merge Queue)" as completed {
         direction TB
         waiting_ci --> waiting_queue : CI green
-        waiting_queue --> gathering : Batch window
-        gathering --> batching : >=2 PRs batched
-        waiting_queue --> merging : Solo merge predicate met
-        batching --> merging : Batch head green
+        waiting_queue --> merging : Merge predicate met
+        waiting_queue --> waiting_ci : Overlap re-check started
         waiting_ci --> repair_needed : CI red / conflict
-        batching --> repair_needed : Isolated batch failure
         repair_needed --> repair_queued : Re-queued for agent repair
         repair_queued --> repairing : Dispatched repair run
         repairing --> waiting_ci : Agent pushes fix
@@ -285,15 +282,15 @@ When the agent CLI exits, `ProcessResult` inspects the branch state on the remot
 
 ### Step 7: Grain CI and the merge queue
 
-Once a task is in `completed` (meaning `AutoMerge: true` with an open PR), the **Merge Queue** (`reconcileSync`, `reconcileCI`, `reconcileMergeBatches`) takes over.
+Once a task is in `completed` (meaning `AutoMerge: true` with an open PR), the **Merge Queue** (`reconcileSync`, `reconcileCI`, `advanceMergeRechecks`) takes over.
 
 Every merge in Grain is governed by one invariant—the **merge predicate** (`pkg/orchestrator/mergepredicate.go`, [Merge Queue Behind](merge-queue-behind.md)):
 
 > A change may merge into target branch `B` if and only if:
 > 1. It merges cleanly into `B` (no git conflicts), **and**
-> 2. Either **(a)** no merge batch is in flight for `B` and the change has a green Grain CI run on its own head SHA, or **(b)** a merge batch for `B` is in flight, that batch has a green Grain CI run, and this change is the head of that batch's frontier.
+> 2. It has a green Grain CI run on its own head SHA (or an operator has recorded a force merge for that exact head commit).
 
-Notice what this rule does **not** require: a solo pull request does not have to sit on the exact tip of `B` (`BEHIND` on GitHub) unless the repository explicitly enables strict up-to-date branch protection (`RequireBranchUpToDate`). When two or more PRs are ready at once, the batcher tests their combined tree against the tip of `B`.
+Notice what this rule does **not** require: a solo pull request does not have to sit on the exact tip of `B` (`BEHIND` on GitHub) unless the repository explicitly enables strict up-to-date branch protection (`RequireBranchUpToDate`). Nothing about other pull requests enters the rule: there is no order between them. A change that overlaps what has landed on `B` since it forked is first re-checked alone on top of the tip of `B` (the overlap re-check, below).
 
 As the merge queue drives a pull request, it updates `Observation.MergeQueueState` (`pkg/orchestrator/queuestatus.go`):
 
@@ -301,9 +298,8 @@ As the merge queue drives a pull request, it updates `Observation.MergeQueueStat
 | :--- | :--- | :--- |
 | `waiting_ci` | Driving | Waiting for Grain CI (`.grain/workflows`) or required GitHub checks to finish on the PR's head commit. |
 | `waiting_review` | Driving | Waiting for an automated pre-merge review task (`ReviewTemplateID` or workflow security review) to complete. |
-| `waiting_queue` | Driving | Checks are green and the PR is mergeable; waiting for its turn at the front of the branch's merge queue. |
-| `gathering` | Driving | Checks are green; held briefly for `MergeGatherWindow` so nearby PRs finishing CI can batch together. |
-| `batching` | Driving | Combined with other ready PRs on a throwaway ref (`grain-merge-queue/<deployment>/<branch>`) and running CI on the combined tree. |
+| `waiting_queue` | Driving | Checks are green, but the change cannot merge this cycle: the branch's `max_merges_per_repo` for the cycle is used, GitHub has not worked out whether it merges cleanly, or another overlap re-check holds the branch's re-check ref. There is no order between pull requests. |
+| `gathering`, `batching` | Retired | Merge batching states, removed in grain/task-1023. Never written now; kept so stored rows still classify. An overlap re-check shows as `waiting_ci`. |
 | `updating_branch` | Driving | Merging the base branch into the PR head (only when `RequireBranchUpToDate` is set). |
 | `merging` | Driving | All gates passed; calling GitHub to merge the pull request now. |
 | `base_broken` | Driving (info) | Post-merge base-branch CI (`BaseBranchCI`) is red and a `system:base-repair` task is open. Informational: does not deadlock new merges while the repair runs. |
@@ -539,15 +535,11 @@ When changes merge into a base branch (`main` or `candidate`), three separate re
 - **Automatic repair limits (`requeueForRepair`):** When a PR on the merge queue fails CI or develops a merge conflict (`repair_needed`), Grain automatically wakes the task (`repair_queued` → `repairing`) for one agent repair pass. On repositories that still rely on external GitHub check runs, `refreshStaleHead` ([Merge Queue Staleness](merge-queue-staleness.md)) first attempts a clean server-side merge of the base branch into the PR so stale-base failures are cleared without an agent run. To prevent infinite repair loops, Grain grants a second automatic repair (`secondRepairReason`) only if the base branch moved or the set of failing checks changed after the first repair; otherwise it escalates the task to a human.
 - **Person-cancelled CI:** If a human explicitly cancels a CI run in the UI, `reconcileCI` records the cancellation and holds off automatic re-triggering until a new commit is pushed or a human clicks **Retrigger CI**.
 
-### Batching (`pkg/orchestrator/mergebatch.go`, [Merge Queue Batching](merge-queue-batching.md))
+### Overlap re-check (`pkg/orchestrator/mergerecheck.go`)
 
-When multiple pull requests are ready to merge into the same base branch:
+Merge batching (the gather window, speculative combined trees and bisection) was removed in grain/task-1023; [Merge Queue Batching](merge-queue-batching.md) keeps the design as history. Pull requests on a branch have no order between them: each is judged on its own every cycle against the merge predicate, up to `max_merges_per_repo` merges per branch per cycle ([Merge Queue Behind](merge-queue-behind.md), "No order between pull requests").
 
-1. **Gather window (`MergeGatherWindow`):** The first green PR enters `gathering` briefly so other PRs whose CI is about to finish can join the same batch.
-2. **Speculative combined tree (`batching`):** Grain merges the candidate PRs in queue order onto a throwaway ref (`grain-merge-queue/<deployment>/<branch>`) on top of the current base branch tip, skipping any PR that conflicts with the base or with an earlier PR in the batch, and starts one Grain CI run on the combined head.
-3. **Fast-path merge:** If the batch head passes CI, every PR in that batch satisfies clause (b) of the merge predicate and merges in sequence without re-running CI on each individual PR.
-4. **Flake recheck and bisection:** If the combined batch run fails CI, Grain first runs **one uncached recheck** of only the failed jobs on the same batch tree to rule out a transient flake. If the failure reproduces, Grain **bisects the batch by halving from the front** (`split(A..D) → test(A..B)`), isolating the culprit PR and routing only that PR to `repair_needed` while the healthy half merges.
-5. **Overlap re-check of a single change (`pkg/orchestrator/mergerecheck.go`):** A change merging on its own green is re-checked on top of the branch only if what it touches overlaps what has landed since it forked: a shared file, a shared Go package, or a global build input in what landed. In `enforce` mode that re-check is a batch of one on the same ref. In `observe` mode, the per-repository default (`repo_config.merge_recheck`), it is only recorded. See [Merge Queue Behind](merge-queue-behind.md#the-overlap-re-check-grain-task-985).
+A change merging on its own green is re-checked on top of the branch only if what it touches overlaps what has landed since it forked: a shared file, a shared Go package, or a global build input in what landed. In `enforce` mode that change alone is merged onto the queue's throwaway ref (`grain-merge-queue/<deployment>/<branch>`) and run through Grain CI once; it merges if that passes and takes the ordinary repair path if it fails, after one uncached recheck of the failed jobs rules out a flake. In `observe` mode it is only recorded. See [Merge Queue Behind](merge-queue-behind.md#the-overlap-re-check-grain-task-985).
 
 ---
 

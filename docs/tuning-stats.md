@@ -105,11 +105,11 @@ against what a one-at-a-time queue would have spent
 `model.SummarizeMergeBatches` so this and the Settings pane beside the
 batch size cannot disagree).
 
-The two halves are in one section because the dial moves both. Raising
-`merge_batch_size` spends fewer suites per change and lands more per
-hour; it also fails as a unit, and every failure costs a bisect that the
-changes in it wait through. A tuning agent that read the pass rate
-without the wait would optimise CI cost by making people wait longer.
+The two halves were put in one section because the batch size moved
+both. Merge batching, and `merge_batch_size` with it, were removed in
+grain/task-1023, so the batch half now only reports the history recorded
+before that (and the single-member overlap re-checks that still write
+`model.MergeBatchRecord` rows); there is no batch size left to tune.
 The batch half is narrowed by `?repo=` and not by `?author=`, for the
 reason `ci_queueing` is not: a batch belongs to a repository and a base
 branch and records no members at all.

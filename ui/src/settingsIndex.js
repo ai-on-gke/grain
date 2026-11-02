@@ -124,20 +124,6 @@ export const SETTINGS_INDEX = [
     keywords: [],
   },
   {
-    id: "mergeBatchSize",
-    section: "engine",
-    anchor: "merge-queue",
-    label: "Merge batch size",
-    keywords: [],
-  },
-  {
-    id: "mergeGatherWindow",
-    section: "engine",
-    anchor: "merge-queue",
-    label: "Merge gather window",
-    keywords: [],
-  },
-  {
     id: "ciJobsPerRun",
     section: "ci",
     anchor: "ci-queue",

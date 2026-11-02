@@ -13,8 +13,7 @@
 // limitations under the License.
 
 import { useEffect } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import EngineSection from "./EngineSection.jsx";
 import api from "../../api.js";
@@ -26,10 +25,6 @@ const saved = {
   pollInterval: "10s",
   maxWorkers: 4,
   maxMergesPerRepo: 1,
-  mergeBatchSize: 4,
-  mergeBatchSizeChosen: 4,
-  mergeGatherWindow: "",
-  mergeGatherWindowDefault: "5m0s",
 };
 
 const showError = () => {};
@@ -48,34 +43,15 @@ function Page() {
 describe("EngineSection", () => {
   afterEach(() => api.mockReset());
 
-  // The 2026-11-01 walkthrough: a merge batch size the daemon refused
-  // (21, over its ceiling of 20) stayed in the box after the refusal, as
-  // though it had been saved, because the box was keyed on the chosen
-  // size alone and a rollback never changes that.
-  it("puts a merge batch size the daemon refused back to the saved one", async () => {
-    api.mockImplementation(async (path, opts) => {
-      if (!opts) return saved;
-      const body = JSON.parse(opts.body);
-      if (body.mergeBatchSize > 20)
-        throw new Error("mergeBatchSize cannot be more than 20");
-      return { ...saved, ...body, mergeBatchSizeChosen: body.mergeBatchSize };
-    });
-    const user = userEvent.setup();
+  // Merge batching went in grain/task-1023, and its two settings with
+  // it: the merge queue card holds only the per-branch merge limit.
+  it("offers no merge batch size or gather window", async () => {
+    api.mockImplementation(async () => saved);
     render(<Page />);
-    const box = await screen.findByLabelText("Merge batch size");
-    expect(box).toHaveValue(4);
-
-    await user.clear(box);
-    await user.type(box, "21{Enter}");
-    await waitFor(() =>
-      expect(screen.getByLabelText("Merge batch size")).toHaveValue(4),
-    );
-
-    const again = screen.getByLabelText("Merge batch size");
-    await user.clear(again);
-    await user.type(again, "6{Enter}");
-    await waitFor(() =>
-      expect(screen.getByLabelText("Merge batch size")).toHaveValue(6),
-    );
+    expect(
+      await screen.findByLabelText("Max merges per repo branch"),
+    ).toHaveValue(1);
+    expect(screen.queryByLabelText("Merge batch size")).toBeNull();
+    expect(screen.queryByLabelText("Merge gather window")).toBeNull();
   });
 });

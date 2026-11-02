@@ -53,8 +53,6 @@ var settingsAppliedLive = map[string]string{
 	"pollInterval":           "the reconcile loop's own ticker (liveConfig.refresh)",
 	"maxWorkers":             "the reconcile loop's own per-tick refresh (liveConfig.refresh)",
 	"maxMergesPerRepo":       "orchestrator.RunCycle's own per-cycle re-read",
-	"mergeBatchSize":         "orchestrator.reconcileMergeBatches reads the config row every cycle",
-	"mergeGatherWindow":      "orchestrator.reconcileMergeBatches reads the config row every cycle (mergeBatchSettings)",
 	"maxAutoSubmitDepth":     "read from the store as each proposal is filed (autoSubmitLimits)",
 	"maxAutoSubmitFanOut":    "read from the store as each proposal is filed (autoSubmitLimits)",
 	"maxAgentTurns":          "orchestrator.RunCycle's own per-cycle re-read",
