@@ -403,7 +403,12 @@ which would otherwise be starved by that congestion. Such a task:
 It places nothing in the sandbox and serves no tool. Its whole effect is
 on dispatch, through one predicate, `model.Task.HasPriorityDispatch`,
 which is true for console sessions and for every holder of this grant.
-The store's queries use the same predicate in SQL.
+The store's queries use the same predicate in SQL. It is separate from a
+task's numeric `priority` (`model.Task.Priority`, default `5`), which
+orders ready tasks and merge-queue entries within each admission group
+without bypassing `max_workers`, pauses, or concurrency limits
+(`design/spec/task-priorities/task-priorities.spec.md`), and from
+Kubernetes `PriorityClass` settings (`k8sPriorityClass*`).
 
 **Only a person may grant it,** because it lets a task jump the queue.
 Grant it from a task's, template's or schedule's capability checklist,

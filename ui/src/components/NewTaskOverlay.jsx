@@ -1108,7 +1108,7 @@ export default function NewTaskOverlay({
       payload.attachments = await Promise.all(
         attachments.map((f) => fileToAttachment(f)),
       );
-      await api("/api/tasks", {
+      const created = await api("/api/tasks", {
         method: "POST",
         body: JSON.stringify(payload),
       });
@@ -1155,7 +1155,10 @@ export default function NewTaskOverlay({
       setAtFront(!!openingDefault("atFront"));
       setPriority("5");
       onClose();
-      await onCreated();
+      // The filed task, for what its answer says beyond "filed" -- the
+      // default grants the capability policy kept off it
+      // (DroppedDefaultsNotice).
+      await onCreated(created);
     } catch (err) {
       submittingRef.current = false;
       setSubmitting(false);

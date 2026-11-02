@@ -122,7 +122,7 @@ every `DELETE`.
 |---|---|---|
 | `tasks:read` | read tasks, conversations, transcripts, trees | |
 | `tasks:write` | file, edit, comment on, reorder, defer, pause, resume, retry, stop, close and reopen tasks | |
-| `tasks:admin` | approve proposed tasks, recreate sandboxes | yes |
+| `tasks:admin` | approve proposed tasks, recreate sandboxes, edit numeric task `priority` (`PATCH /api/tasks/{id}` with `{"priority": <int>}` only) | yes |
 | `tasks:from-template` | file a task from a repository's own declared template (`POST /api/tasks/from-template`); an agent's call also needs `tasks:write`, since it is served as `POST /api/tasks` | |
 | `merge:write` | open pull requests for tasks, retry their merges | |
 | `merge:force` | force-merge past the gate | yes |
