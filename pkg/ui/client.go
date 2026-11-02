@@ -5088,7 +5088,7 @@ func (c *Client) SetDependency(ctx context.Context, id, dependsOnID string, atta
 		return validationErrorf("dependsOn id is required")
 	}
 	if !attach {
-		return c.mutate(ctx, id, func(task *model.Task) error {
+		if err := c.mutate(ctx, id, func(task *model.Task) error {
 			kept := make([]model.Link, 0, len(task.Links))
 			for _, l := range task.Links {
 				if !(l.Kind == model.LinkDependsOn && (l.Target == normDependsOnID || l.Target == dependsOnID)) {
@@ -5097,13 +5097,17 @@ func (c *Client) SetDependency(ctx context.Context, id, dependsOnID string, atta
 			}
 			task.Links = kept
 			return nil
-		})
+		}); err != nil {
+			return err
+		}
+		c.noteTaskAction(ctx, id, model.TaskEventDependencies, "no longer depends on "+normDependsOnID)
+		return nil
 	}
 	links, err := c.dependsOnLinks(ctx, []string{normDependsOnID}, id)
 	if err != nil {
 		return err
 	}
-	return c.mutate(ctx, id, func(task *model.Task) error {
+	if err := c.mutate(ctx, id, func(task *model.Task) error {
 		for _, l := range task.Links {
 			if l.Kind == model.LinkDependsOn &&
 				(l.Target == normDependsOnID || l.Target == strings.TrimSpace(dependsOnID)) {
@@ -5112,7 +5116,11 @@ func (c *Client) SetDependency(ctx context.Context, id, dependsOnID string, atta
 		}
 		task.Links = append(task.Links, links...)
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	c.noteTaskAction(ctx, id, model.TaskEventDependencies, "depends on "+normDependsOnID)
+	return nil
 }
 
 // ReorderRequest is a drag-and-drop move (bwsalmon/agents#476): ids, in
@@ -5164,7 +5172,22 @@ func (c *Client) Reorder(ctx context.Context, req ReorderRequest) error {
 	if req.BeforeID != "" {
 		beforeID = &req.BeforeID
 	}
-	return c.Store.Reorder(ctx, req.IDs, afterID, beforeID)
+	if err := c.Store.Reorder(ctx, req.IDs, afterID, beforeID); err != nil {
+		return err
+	}
+	where := "moved"
+	switch {
+	case req.AfterID != "" && req.BeforeID != "":
+		where = "moved between " + req.AfterID + " and " + req.BeforeID
+	case req.AfterID != "":
+		where = "moved after " + req.AfterID
+	case req.BeforeID != "":
+		where = "moved before " + req.BeforeID
+	}
+	for _, id := range req.IDs {
+		c.noteTaskAction(ctx, id, model.TaskEventReordered, where)
+	}
+	return nil
 }
 
 // Approve records approval on a proposed or deferred task, which is what
@@ -5246,7 +5269,11 @@ func (c *Client) WithdrawApproval(ctx context.Context, id string) error {
 	case model.StateCompleted, model.StateAwaitingSubmit, model.StateAwaitingReply, model.StateClosed:
 		return validationErrorf("task %s is %s: its approval is a record of work that already happened", id, state)
 	}
-	return c.Store.WithdrawApproval(ctx, id)
+	if err := c.Store.WithdrawApproval(ctx, id); err != nil {
+		return err
+	}
+	c.noteTaskAction(ctx, id, model.TaskEventApprovalWithdrawn, "")
+	return nil
 }
 
 // Defer puts a task aside: it stamps model.Task.DeferredAt, which is the
@@ -5299,7 +5326,15 @@ func (c *Client) Defer(ctx context.Context, id string, opts DeferOptions) error 
 		return validationErrorf("wake time %s is not in the future: a deferral until a moment that has passed would be undone by the next cycle",
 			opts.Until.UTC().Format(time.RFC3339))
 	}
-	return c.Store.SetDeferred(ctx, id, &now, opts.Until, now)
+	if err := c.Store.SetDeferred(ctx, id, &now, opts.Until, now); err != nil {
+		return err
+	}
+	detail := ""
+	if opts.Until != nil {
+		detail = "until " + opts.Until.UTC().Format(time.RFC3339)
+	}
+	c.noteTaskAction(ctx, id, model.TaskEventDeferred, detail)
+	return nil
 }
 
 // DeferOptions is what a caller chose at the moment of deferring, beyond
@@ -5345,6 +5380,7 @@ func (c *Client) Undefer(ctx context.Context, id string) error {
 	if err := c.Store.SetDeferred(ctx, id, nil, nil, c.now()); err != nil {
 		return err
 	}
+	c.noteTaskAction(ctx, id, model.TaskEventUndeferred, "")
 	if task.Interactive && task.Approval != nil && c.Config.Wake != nil {
 		c.Config.Wake()
 	}
@@ -5382,6 +5418,15 @@ func (c *Client) taskState(ctx context.Context, id string) (model.State, error) 
 // its next cycle rather than waiting out orchestrator's ciRetryDelay, or
 // waiting on a verdict nothing will replace.
 func (c *Client) Submit(ctx context.Context, id string) error {
+	if err := c.submit(ctx, id); err != nil {
+		return err
+	}
+	c.noteTaskAction(ctx, id, model.TaskEventSubmitted, "")
+	return nil
+}
+
+// submit is Submit, short of the note that says who asked for it.
+func (c *Client) submit(ctx context.Context, id string) error {
 	task, err := c.Store.GetTask(ctx, id)
 	if err != nil {
 		return err
@@ -5910,6 +5955,15 @@ func (c *Client) ReopenBecause(ctx context.Context, id, reason string) error {
 // pressing it is the person the stop was waiting on -- and the task is
 // queued again.
 func (c *Client) Retry(ctx context.Context, id string) error {
+	if err := c.retry(ctx, id); err != nil {
+		return err
+	}
+	c.noteTaskAction(ctx, id, model.TaskEventRetried, "")
+	return nil
+}
+
+// retry is Retry, short of the note that says who asked for it.
+func (c *Client) retry(ctx context.Context, id string) error {
 	task, err := c.Store.GetTask(ctx, id)
 	if err != nil {
 		return err
@@ -6744,7 +6798,7 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 		}
 		var cancelledRunID string
 		if obs != nil && obs.CI != nil && !obs.CI.Done() && obs.CI.RunID != "" {
-			c.Config.CI.Cancel(obs.CI.RunID, reason, ci.CancelByOperator)
+			c.Config.CI.Cancel(obs.CI.RunID, reason, ci.CancelByPrincipal(by.ID))
 			cancelledRunID = obs.CI.RunID
 			cancelledCI = append(cancelledCI, cancelledRunID)
 		}
@@ -6753,7 +6807,7 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 				continue
 			}
 			if run.RequestedBy == id || (task.Target != nil && run.Repo == task.Target.String() && run.Ref == task.BranchName()) {
-				c.Config.CI.Cancel(run.ID, reason, ci.CancelByOperator)
+				c.Config.CI.Cancel(run.ID, reason, ci.CancelByPrincipal(by.ID))
 				cancelledCI = append(cancelledCI, run.ID)
 			}
 		}
@@ -6779,6 +6833,21 @@ func (c *Client) recordTaskEvent(ctx context.Context, e model.TaskEvent) {
 	if _, err := c.Store.RecordTaskEvent(ctx, e); err != nil {
 		log.Printf("ui: recording the %s of task %s by %s: %v", e.Kind, e.TaskID, principalLabel(e.By), err)
 	}
+}
+
+// noteTaskAction records that whoever ctx names took action kind on task
+// id (operator-attribution spec §3.1's notes, model.TaskEventSubmitted
+// and the rest), with an agent's stated reason for its call. detail says
+// what the action was about, and never carries a secret's value. Like
+// recordTaskEvent it only logs a failure: the action is already done.
+func (c *Client) noteTaskAction(ctx context.Context, id string, kind model.TaskEventKind, detail string) {
+	who := c.requestActor(ctx)
+	var reason string
+	if call, ok := agentCallFromContext(ctx); ok {
+		reason = call.reason
+	}
+	c.recordTaskEvent(ctx, model.TaskEvent{TaskID: id, Kind: kind, At: c.now(),
+		By: who.Actor, OnBehalfOf: who.OnBehalfOf, Reason: reason, Detail: detail})
 }
 
 // closeCancelled says what a close cancelled, "" for nothing: the live

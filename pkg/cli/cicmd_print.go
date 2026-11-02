@@ -380,7 +380,7 @@ func (p *printer) ciRun(run ci.Run, mode cicli.OutputMode) {
 		// task has been waiting on a verdict.
 		who := "grain itself: a job past its timeout, a daemon that stopped under it, " +
 			"or a newer run superseding it -- the merge queue starts another for this commit"
-		if run.CancelledBy == ci.CancelByOperator {
+		if run.CancelledBy.ByHand() {
 			who = "a person, through grain's own API -- the merge queue starts another for " +
 				"this commit after a short delay"
 		}
