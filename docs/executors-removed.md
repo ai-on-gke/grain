@@ -32,7 +32,7 @@ The removal took out:
   "Where each agent CLI runs" sets up grain hostd. System → Sandboxes'
   list of connected model servers is gone too.
 - The `executor_token` and `executor_token_sequence` tables, which schema
-  84 drops. A state-repository export that still carries them imports;
+  85 drops. A state-repository export that still carries them imports;
   the importer skips a table this build lacks.
 - `grain mcpserver`'s `GRAIN_EXECUTOR_SOCK` tunnel client, and the
   GitHub-credential pins that guarded MCP servers arriving over the
