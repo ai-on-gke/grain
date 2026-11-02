@@ -90,6 +90,7 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/auth/logout":               public,
 	"GET /api/auth/user":                 public,
 	"GET /api/auth/status":               public,
+	"GET /api/whoami":                    trusted,
 
 	// The long poll that tells a signed-in page the daemon is going down
 	// for a restart before it stops answering (grain/task-3543).
@@ -295,6 +296,7 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/deployment/broadcast":   trusted,
 	"GET /api/deployment/secret-audit": trusted,
 	"GET /api/deployment/audit-logs":   trusted,
+	"GET /api/deployment/config-audit": trusted,
 
 	"GET /api/agent-models": trusted,
 
