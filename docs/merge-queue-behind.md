@@ -293,12 +293,16 @@ What the walk still keeps per lane, and why:
   or its outcome could not be read back, nothing more merges into that
   lane this cycle. That close is about correctness, not order, and it is
   the only lane close left.
-- **The re-check ref.** There is one merge-queue ref per branch
-  (`grain-merge-queue/<id>/<branch>`), so only one overlap re-check runs
-  per lane at a time. While it runs, it holds the change being re-checked,
-  and any other change that also needs a re-check (`singleMergeRecheck`'s
-  "another overlap re-check ... is still running"). A change that needs no
-  re-check keeps merging meanwhile.
+- **Nothing about the overlap re-check.** Each change that needs one gets
+  a ref and a row of its own
+  (`grain-merge-queue/<id>/recheck/<task>/<branch>`, `model.MergeRecheckRef`;
+  grain/task-2390), so two overlapping changes are re-checked side by side
+  rather than one after the other. When a passing re-check concludes and
+  the branch has moved past the tip it was built on (because another
+  change merged meanwhile), the overlap rule is asked again about what has
+  landed since that tip. If none of it overlaps the change, the re-check
+  still speaks for the merge and the change lands on it. Otherwise it is
+  re-checked again on top of the new tip.
 
 Each row says what that member waits on, and for how long where that
 helps. Examples: "waiting for GitHub to work out whether this branch
@@ -311,6 +315,18 @@ findings are about the repository or its base rather than one change, so
 three members failing the same way are not three escalations. That member
 is also read first under a low GitHub budget. It decides nothing about
 who merges, and no row names it.
+
+What is about one change alone is escalated for every member
+(grain/task-2390): its own checks stalled past the deadline, grain CI
+having given up on its own head, or its own repair stopped by a person.
+Otherwise a later member's stall stays hidden for as long as an earlier
+member keeps being read first.
+
+CI priority follows the same rule. `orchestrator.MergeQueueHeads`, which
+the CI job gate ranks runs by, names every member that is otherwise ready
+to merge (no pending approval, no repair in flight), not just the front
+of each lane. Any one of them going green turns into a merge, and none of
+them unblocks anyone else's.
 
 ## The overlap re-check (grain/task-985)
 
@@ -364,16 +380,19 @@ between the fork and the run, which is where a stale branch's conflicts
 live.
 
 This is strategy, not predicate. It decides *when* a change finds out, and
-`mayMerge` is unchanged. A re-check merges that one change onto the queue's
-own ref (`grain-merge-queue/<deployment>/<branch>`) on top of `T` and runs
-grain CI there once. On green the change merges; on red it takes the
-ordinary repair path (one automatic repair, then `merge_failed` to the
+`mayMerge` is unchanged. A re-check merges that one change onto a ref of
+the queue's own for that change
+(`grain-merge-queue/<deployment>/recheck/<task>/<branch>`) on top of `T`
+and runs grain CI there once. On green the change merges; on red it takes
+the ordinary repair path (one automatic repair, then `merge_failed` to the
 Inbox), after the uncached flake recheck and the release of a failure the
 branch itself is carrying ("inherited from base"). After that release the
 change merges on its own green, rather than being re-checked on the same
-tip again. There is one such ref per branch, so one re-check runs per lane
-at a time; it holds the change being re-checked and any other change that
-needs one, and nothing else. The rows are still `model.MergeBatch` and
+tip again. Each change has its own ref and row (grain/task-2390), so
+overlapping changes are re-checked side by side, and a re-check holds only
+the change it is about. A green whose base the branch has moved past is
+asked the overlap rule again before it merges (see "What the walk still
+keeps per lane" above). The rows are still `model.MergeBatch` and
 `GET /api/merge-batches` still reports them, each with one member; the
 names are left from batching.
 
