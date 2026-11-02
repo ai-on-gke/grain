@@ -1176,6 +1176,43 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     await expect(page).toHaveURL(/\/tasks\/8$/);
   });
 
+  test("5d. A board whose query names a state that does not exist says so on its chip", async ({
+    page,
+  }) => {
+    // grain/task-2401: `waiting` is the label of the state `queued`, and
+    // a board query written from the label drew the chip "state is any
+    // of running, waiting" -- word for word what `queued` draws -- over
+    // a tree missing every waiting task.
+    const stamp = Date.now();
+    const board = await seedOne(page, "/api/boards", {
+      name: `WT Unknown State ${stamp}`,
+      kind: "tree",
+      query: "f=state:any:running|waiting",
+    });
+    seededBoards.push(board.id);
+
+    await page.goto(`/boards/${board.id}`);
+    const chip = page.locator(".narrowing-chips .MuiChip-root").first();
+    await expect(chip).toHaveText(
+      "State is any of Running, “waiting” (unknown)",
+      {
+        ignoreCase: true,
+      },
+    );
+    await expect(chip).toHaveClass(/MuiChip-colorWarning/);
+    await expect(chip).toHaveAttribute(
+      "title",
+      /“waiting” is not a value State has/,
+    );
+
+    // The state the label belongs to is a known value, and not flagged.
+    await page.goto(`/boards/${board.id}?f=state:any:running|queued`);
+    await expect(chip).toHaveText("State is any of Running, Waiting", {
+      ignoreCase: true,
+    });
+    await expect(chip).not.toHaveClass(/MuiChip-colorWarning/);
+  });
+
   test("4b. Back from a reloaded task returns to the board it was opened from", async ({
     page,
   }) => {

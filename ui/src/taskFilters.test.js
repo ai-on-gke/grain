@@ -33,6 +33,7 @@ import {
   describeCondition,
   describeSort,
   describeUnknownConditions,
+  unknownValues,
   directionLabels,
   isDefaultSort,
   isSessionTask,
@@ -794,6 +795,51 @@ describe("describing a narrowing", () => {
         values: [],
       }),
     ).toBe("Repo is empty");
+  });
+
+  it("marks a value its attribute does not have, which matches nothing", () => {
+    // state:any:waiting is the label "Waiting" written for the state
+    // queued. It read "State is any of waiting", as state:any:queued
+    // does, over an empty list.
+    const waiting = {
+      attr: "state",
+      op: "any",
+      values: ["running", "waiting"],
+    };
+    expect(describeCondition(attr("state"), waiting, config)).toBe(
+      "State is any of Running, “waiting” (unknown)",
+    );
+    expect(unknownValues(attr("state"), waiting)).toEqual(["waiting"]);
+    expect(
+      describeCondition(
+        attr("state"),
+        { attr: "state", op: "any", values: ["queued", "asked"] },
+        config,
+      ),
+    ).toBe("State is any of Waiting, Asked");
+    expect(
+      unknownValues(attr("state"), {
+        attr: "state",
+        op: "any",
+        values: ["asked", "awaiting_reply", NONE],
+      }),
+    ).toEqual([]);
+    // An origin's order is only how it sorts ("imported" is not in it),
+    // and an open vocabulary takes any value.
+    expect(
+      unknownValues(attr("origin"), {
+        attr: "origin",
+        op: "any",
+        values: ["imported"],
+      }),
+    ).toEqual([]);
+    expect(
+      unknownValues(attr("repo"), {
+        attr: "repo",
+        op: "any",
+        values: ["nope/nope"],
+      }),
+    ).toEqual([]);
   });
 
   it("says a condition is still waiting rather than reading as a filter", () => {
