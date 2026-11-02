@@ -414,10 +414,15 @@ import "strconv"
 // (grain/task-2390). The rows are carried across with an empty task_id,
 // which the queue still reads, re-validates and cleans up as before.
 //
-// 90 rewrites stored `grain-ci` grants, `repo_config`.`ci_capabilities`
+// 90 changes no table: it folds retired 1-to-1 preset capability entries in
+// `grain_config`.`capability_policy`'s catalogue from `inProcess[<retired>]`
+// into `apiScopes.presets[<preset>]`, merging restrictions conservatively when
+// both exist, and rewrites retired task defaults in `catalogue.defaults`.
+//
+// 91 rewrites stored `grain-ci` grants, `repo_config`.`ci_capabilities`
 // included, to `https://grain.dev/capabilities/grain#ci={}`: the
 // in-process `grain-ci` provider is retired for the `grain#ci` method.
-const SchemaVersion = 90
+const SchemaVersion = 91
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the
