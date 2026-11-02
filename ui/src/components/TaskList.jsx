@@ -18,6 +18,7 @@ import { heldForRunNow } from "../alerts.js";
 import CampaignIcon from "@mui/icons-material/Campaign";
 import api from "../api.js";
 import GrantChip from "./GrantChip.jsx";
+import KeepRunningChip from "./KeepRunningChip.jsx";
 import {
   STATE_LABELS,
   statesOf,
@@ -765,6 +766,11 @@ export function TaskRow({
             label={`P${t.priority}`}
           />
         )}
+        {/* A task that never ends on its own (model.Task.KeepRunning):
+            what a person approving a held proposal from the Inbox most
+            needs to see before pressing approve, since approving it
+            starts a run that is restarted every time it exits. */}
+        {t.keepRunning && <KeepRunningChip />}
         {/* The two chips that say where a task came from carry the
             figure of the thing it came from (ItemGlyph.jsx) -- the same
             hourglass and lobes the nav rail shows for Schedules and
