@@ -2953,8 +2953,11 @@ func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) 
 // GitHub answers 201 when the suite's app accepts re-requests and 403/404/422
 // when the credential or the app does not allow it.
 func (c *RESTClient) RerequestCheckSuite(owner, repo string, checkSuiteID int64) error {
+	if checkSuiteID <= 0 {
+		return &Error{Status: 422, Body: []byte(`{"message":"invalid check_suite_id"}`)}
+	}
 	resp, err := c.request(
-		"POST", fmt.Sprintf("/repos/%s/%s/check-suites/%d/rerequest", owner, repo, checkSuiteID),
+		"POST", fmt.Sprintf("/repos/%s/%s/check-suites/%d/rerequest", url.PathEscape(owner), url.PathEscape(repo), checkSuiteID),
 		c.headers(owner, repo, false), nil,
 	)
 	if err != nil {
@@ -2969,8 +2972,11 @@ func (c *RESTClient) RerequestCheckSuite(owner, repo string, checkSuiteID int64)
 // RerequestCheckRun asks GitHub to re-run a single check run in place on its
 // commit (POST /repos/{owner}/{repo}/check-runs/{check_run_id}/rerequest).
 func (c *RESTClient) RerequestCheckRun(owner, repo string, checkRunID int64) error {
+	if checkRunID <= 0 {
+		return &Error{Status: 422, Body: []byte(`{"message":"invalid check_run_id"}`)}
+	}
 	resp, err := c.request(
-		"POST", fmt.Sprintf("/repos/%s/%s/check-runs/%d/rerequest", owner, repo, checkRunID),
+		"POST", fmt.Sprintf("/repos/%s/%s/check-runs/%d/rerequest", url.PathEscape(owner), url.PathEscape(repo), checkRunID),
 		c.headers(owner, repo, false), nil,
 	)
 	if err != nil {

@@ -148,8 +148,10 @@ func reconcileExternalCheckStall(
 	}
 
 	// Step 2: Nudge once per head.
-	// First, if the branch is behind its base, merge the base into the PR branch.
-	if detail.HeadRef != "" && detail.BaseRef != "" {
+	// First, if the branch is in this repository and behind its base, merge
+	// the base into the PR branch. Never call MergeBranch for a fork PR,
+	// whose HeadRef could collide with an unrelated branch in ref.Repo.
+	if sameRepoHeadBranch(ref.Repo, detail) {
 		result, mergeErr := client.MergeBranch(
 			ref.Repo.Owner, ref.Repo.Name,
 			detail.HeadRef, detail.BaseRef, refreshCommitMessage(detail),
@@ -224,7 +226,7 @@ func rerequestExternalChecks(client github.Client, owner, repo string, pending [
 	triedSuites := map[int64]bool{}
 	rerequested := false
 	for _, c := range pending {
-		if c.CheckSuiteID != 0 && !triedSuites[c.CheckSuiteID] {
+		if c.CheckSuiteID > 0 && !triedSuites[c.CheckSuiteID] {
 			triedSuites[c.CheckSuiteID] = true
 			err := client.RerequestCheckSuite(owner, repo, c.CheckSuiteID)
 			if err == nil {
@@ -235,7 +237,7 @@ func rerequestExternalChecks(client github.Client, owner, repo string, pending [
 				return rerequested, err
 			}
 		}
-		if c.ID != 0 {
+		if c.ID > 0 {
 			err := client.RerequestCheckRun(owner, repo, c.ID)
 			if err == nil {
 				rerequested = true
@@ -247,6 +249,20 @@ func rerequestExternalChecks(client github.Client, owner, repo string, pending [
 		}
 	}
 	return rerequested, nil
+}
+
+// sameRepoHeadBranch reports whether detail names a head branch in repo itself
+// distinct from its base branch -- so MergeBranch(repo, HeadRef, BaseRef)
+// writes only to the pull request's own head branch and never to a colliding
+// branch in repo when the pull request was opened from a fork.
+func sameRepoHeadBranch(repo model.RepoRef, detail github.PullRequestDetail) bool {
+	if detail.HeadRef == "" || detail.BaseRef == "" || detail.HeadRef == detail.BaseRef {
+		return false
+	}
+	if detail.HeadRepo != "" && !strings.EqualFold(detail.HeadRepo, repo.String()) {
+		return false
+	}
+	return true
 }
 
 func isRerequestUnsupported(err error) bool {

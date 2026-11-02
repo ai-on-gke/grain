@@ -143,4 +143,25 @@ func TestExternalChecksStalledResetsOnProgressAndNewCheckRuns(t *testing.T) {
 	if len(pending) != 0 || stalled {
 		t.Fatalf("with grain CI unfinished: pending=%v stalled=%v, want empty false", pending, stalled)
 	}
+
+	// While requiredCheck has not been posted yet, external checks are not the
+	// sole gate holding the PR pending.
+	pending, _, stalled, _ = forge.ExternalChecksStalledWithin(
+		ref, "sha-1", withNewRun, "grain-state-check", forge.GrainCI{}, t0.Add(90*time.Minute), 0,
+	)
+	if len(pending) != 0 || stalled {
+		t.Fatalf("with missing requiredCheck: pending=%v stalled=%v, want empty false", pending, stalled)
+	}
+
+	// When any completed check has failed, external stall does not fire.
+	withFailure := []github.CheckRun{
+		{ID: 1, Name: "Tests / unit", Status: "completed", Conclusion: strPtr("failure"), App: "github-actions"},
+		{ID: 2, Name: "cla/google", Status: "queued", App: "google-cla"},
+	}
+	pending, _, stalled, _ = forge.ExternalChecksStalledWithin(
+		ref, "sha-1", withFailure, "", forge.GrainCI{}, t0.Add(90*time.Minute), 0,
+	)
+	if len(pending) != 0 || stalled {
+		t.Fatalf("with failing check: pending=%v stalled=%v, want empty false", pending, stalled)
+	}
 }

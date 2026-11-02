@@ -308,7 +308,7 @@ func Observe(client github.Client, ref Ref, in Input, now time.Time) (Observatio
 		}
 		stalled, stallDeadline = ChecksStalledWithin(ref, detail.HeadSHA, now, timeout)
 		if len(missing) == 0 {
-			gated := gatedChecks(checks, policy)
+			gated := gatedChecks(checks, policy, in.RequiredCheck)
 			externalPending, externalPendingFor, externalStalled, externalStallThreshold = ExternalChecksStalledWithin(
 				ref, detail.HeadSHA, gated, in.RequiredCheck, grain, now, timeout,
 			)
@@ -426,12 +426,16 @@ func recordFailedRead(ref Ref, cause error, now time.Time, out error) error {
 	return out
 }
 
-func gatedChecks(checks []github.CheckRun, p *Policy) []github.CheckRun {
+func gatedChecks(checks []github.CheckRun, p *Policy, requiredCheck string) []github.CheckRun {
 	if p == nil || p.AllChecks || (p.Mode != "github" && p.Mode != "both") {
 		return checks
 	}
 	var gated []github.CheckRun
 	for _, c := range checks {
+		if requiredCheck != "" && c.Name == requiredCheck {
+			gated = append(gated, c)
+			continue
+		}
 		for _, n := range p.RequiredChecks {
 			if c.Name == n {
 				gated = append(gated, c)

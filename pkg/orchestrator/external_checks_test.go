@@ -427,3 +427,45 @@ func TestInFlightPausedAndAwaitingSubmitPullRequestsAreNotNudged(t *testing.T) {
 		}
 	}
 }
+
+// A fork pull request whose HeadRef collides with an existing branch name in
+// the target repository must never write a base merge into the target repo's
+// branch; it falls straight through to re-requesting the stalled check.
+func TestStalledExternalCheckOnForkPRDoesNotMergeIntoSameNamedTargetRepoBranch(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	_, branch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t-fork-ext", repo)
+
+	for i := range sim.PullRequests {
+		if sim.PullRequests[i].Head == branch {
+			sim.PullRequests[i].HeadRepo = "bob/widgets"
+		}
+	}
+
+	// Advance main so the colliding branch in acme/widgets is behind main.
+	pushFileToBranch(t, sim.BareRepo, "main", "MAIN.md", "new base commit", "advance main")
+	setMergeable(sim, true)
+
+	sim.CheckRuns[branch] = []github.CheckRun{
+		{ID: 81, CheckSuiteID: 960, Name: "cla/google", Status: "queued", App: "google-cla"},
+	}
+
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err != nil {
+		t.Fatalf("SyncPullRequests at t=0: %v", err)
+	}
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(45*time.Minute)); err != nil {
+		t.Fatalf("SyncPullRequests at t=45m: %v", err)
+	}
+
+	if n := mergeWrites(sim, repo); n != 0 {
+		t.Fatalf("merge writes on fork PR = %d, want 0 (must never merge into colliding target-repo branch)", n)
+	}
+	if branchContains(t, sim.BareRepo, branch, "main") {
+		t.Fatalf("target-repo branch %s was mutated by fork PR nudge", branch)
+	}
+	if len(sim.RerequestedCheckSuites) != 1 || sim.RerequestedCheckSuites[0] != 960 {
+		t.Fatalf("RerequestedCheckSuites = %v, want [960]", sim.RerequestedCheckSuites)
+	}
+}

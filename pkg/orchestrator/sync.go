@@ -2662,10 +2662,11 @@ func bringHeadUpToDate(ctx context.Context, store *model.Store, client github.Cl
 	task model.Task, obs *model.Observation, ref model.PullRequestRef,
 	detail github.PullRequestDetail, now time.Time) (bool, error) {
 
-	if detail.HeadRef == "" || detail.BaseRef == "" {
-		// Nothing to name in the call. A pull request grain cannot see the
-		// branches of is one it merges as it stands rather than one it
-		// holds forever on a write it cannot make.
+	if !sameRepoHeadBranch(ref.Repo, detail) {
+		// Nothing to name in the call, or the head branch lives in a fork. A
+		// pull request grain cannot update in ref.Repo is one it merges as it
+		// stands rather than writing to a same-named branch in ref.Repo or
+		// holding forever on a write it cannot make.
 		return false, nil
 	}
 
@@ -2857,7 +2858,13 @@ func refreshStaleHead(ctx context.Context, store *model.Store, client github.Cli
 	if refreshSpent(obs) {
 		return refreshAlreadyTried, nil
 	}
-	if detail.HeadRef == "" || detail.BaseRef == "" {
+	if detail.HeadRef == "" || detail.BaseRef == "" || detail.HeadRef == detail.BaseRef {
+		return refreshUnreachable, nil
+	}
+	if !sameRepoHeadBranch(ref.Repo, detail) {
+		if err := recordRefreshAttempt(ctx, store, task.ID, now); err != nil {
+			return refreshUnreachable, err
+		}
 		return refreshUnreachable, nil
 	}
 

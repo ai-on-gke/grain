@@ -96,6 +96,13 @@ func ExternalChecksStalledWithin(
 		externalChecks.forget(ref)
 		return nil, 0, false, 0
 	}
+	if grain.Passed {
+		checks = FilterActionsBudgetFailures(checks)
+	}
+	if requiredCheck != "" && !hasCheck(checks, requiredCheck) {
+		externalChecks.forget(ref)
+		return nil, 0, false, 0
+	}
 	for _, c := range checks {
 		if c.Status != "completed" {
 			if !IsExternalCheck(c, requiredCheck) {
@@ -105,7 +112,12 @@ func ExternalChecksStalledWithin(
 			pending = append(pending, c)
 			continue
 		}
-		if c.Conclusion == nil || *c.Conclusion == "cancelled" || *c.Conclusion == "stale" || *c.Conclusion == "action_required" {
+		if c.Conclusion == nil {
+			externalChecks.forget(ref)
+			return nil, 0, false, 0
+		}
+		switch *c.Conclusion {
+		case "failure", "timed_out", "startup_failure", "cancelled", "stale", "action_required":
 			externalChecks.forget(ref)
 			return nil, 0, false, 0
 		}
