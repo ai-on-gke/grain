@@ -323,6 +323,11 @@ type Pause struct {
 	// is counting towards a refusal nobody has a marker for, keyed by
 	// credential and error text (burstKey). See refusalburst.go.
 	bursts map[string][]burstFailure
+	// burstClaims is the earlier runs of a burst, by run id, with the
+	// detail they are re-recorded under (claimBurst): what a run that
+	// writes its own failure after the burst was declared reads back, so
+	// its write does not undo the re-record (claimedByBurst).
+	burstClaims map[string]burstClaim
 	// store keeps windows across restarts; nil until Restore attaches
 	// one, and nil for good in a test or one-shot cycle that never does.
 	store PauseStore

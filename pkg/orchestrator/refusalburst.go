@@ -125,6 +125,53 @@ func (p *Pause) observeFastFailure(now time.Time, scope PauseScope, runID, text 
 	return runs
 }
 
+// burstClaim is one earlier run of a declared burst (Pause.burstClaims).
+type burstClaim struct {
+	detail string
+	at     time.Time
+}
+
+// claimBurst records runs, the earlier runs of a burst declared at now, as
+// the burst's, re-recorded under detail. The run that completes a burst
+// re-records them itself (recordRunEnd), but they run concurrently with
+// it: one that has said it failed (observeFastFailure) may not have
+// written that yet, and its own write would land on top of the re-record.
+// Such a run reads its claim back once it has written (claimedByBurst).
+// Claims older than the window are forgotten here.
+func (p *Pause) claimBurst(now time.Time, runs []string, detail string) {
+	if p == nil || len(runs) == 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for id, c := range p.burstClaims {
+		if now.Sub(c.at) >= refusalBurstWindow {
+			delete(p.burstClaims, id)
+		}
+	}
+	if p.burstClaims == nil {
+		p.burstClaims = map[string]burstClaim{}
+	}
+	for _, id := range runs {
+		p.burstClaims[id] = burstClaim{detail: detail, at: now}
+	}
+}
+
+// claimedByBurst reports the detail runID is to be recorded paused under,
+// if a burst has claimed it (claimBurst), and spends the claim.
+func (p *Pause) claimedByBurst(runID string) (string, bool) {
+	if p == nil {
+		return "", false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	c, ok := p.burstClaims[runID]
+	if ok {
+		delete(p.burstClaims, runID)
+	}
+	return c.detail, ok
+}
+
 // refusalBurstLimit is the usage limit a burst is handled as: the
 // framework's, with no reset named, so Pause.Begin holds the run's
 // credential for defaultUsageLimitPause.
