@@ -214,8 +214,8 @@ func TestSandboxCLIAgainstTheProxy(t *testing.T) {
 		t.Errorf("src without self-debug: %d %s", code, errOut)
 	}
 	_, errOut, code = run("db", "query", "SELECT 1")
-	if code != 1 || !strings.Contains(errOut, `"db-read"`) {
-		t.Errorf("db query without db-read: %d %s", code, errOut)
+	if code != 1 || !strings.Contains(errOut, `"https://grain.dev/capabilities/grain#sql"`) {
+		t.Errorf("db query without grain#sql: %d %s", code, errOut)
 	}
 }
 
@@ -613,6 +613,7 @@ func TestSandboxLogAndMetricsRefuseUnknownFlags(t *testing.T) {
 		{"log", "daemon", "--since", "2026-10-29T00:00:00Z", "--until", "2026-10-29T06:00:00Z", "--priority", "err",
 			"--min-priority", "err", "--contains", "x", "--max-lines", "5", "--lines", "5", "--tail", "40"},
 		{"log", "--source", "dmesg"},
+		{"log", "-n", "5"},
 		{"metrics", "summary", "--window", "7d", "--repo", "acme/a", "--author", "task"},
 		{"metrics", "--since", "2026-10-28", "--until", "2026-10-29"},
 	} {

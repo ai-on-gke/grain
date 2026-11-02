@@ -377,6 +377,10 @@ The remote model executors (`grain executor` / `grain model-server`,
 `scripts/run-remote-executor.sh`) were removed; see
 [docs/executors-removed.md](docs/executors-removed.md) for what a remote
 hostd does and does not do yet.
+The `none` sandbox backend (`-disable-native-sandboxes`) that such
+deployments used remains only for a control-plane-only daemon in tests
+and walkthroughs; see
+[docs/sandbox-backend-none.md](docs/sandbox-backend-none.md).
 
 ## Documentation
 
@@ -384,7 +388,8 @@ hostd does and does not do yet.
   current design end to end: the control plane, sandboxes, `grain hostd`,
   agents, capabilities, CI and the merge queue, where state lives, and the
   security boundaries. Component designs live beside it in
-  [`design/design/`](design/design), and specifications in
+  [`design/design/`](design/design), playbook designs in
+  [`design/playbook/`](design/playbook), and specifications in
   [`design/spec/`](design/spec).
 - [`grain init`](docs/grain-init.md) documents bringing up a deployment from
   a source checkout: prerequisites, what it installs versus only demands,

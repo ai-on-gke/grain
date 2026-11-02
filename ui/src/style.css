@@ -4049,6 +4049,12 @@ fieldset legend {
   color: var(--text-tertiary);
   font-size: 0.8rem;
 }
+/* Who closed or reopened a task and why (model.TaskEvent): the reason is
+   whatever they typed, often a URL or a branch name, and an unbroken one
+   ran out of a phone's timeline item instead of wrapping inside it. */
+.timeline-transition-by {
+  overflow-wrap: anywhere;
+}
 /* The model an attempt ran on, on its meta line: a model id is one
    word to the reader, so a narrow line wraps before it, not inside it
    or inside the timestamp ahead of it. */

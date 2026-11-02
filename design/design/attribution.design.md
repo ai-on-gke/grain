@@ -1,6 +1,6 @@
 # Attribution: crediting the people behind a change
 
-[`contributions.design.md`](contributions.design.md) defines how work flows through a repository: human-authored designs, specifications and task grainfiles started by a person and reviewed by humans, and implementation PRs either written by grain from merged tasks or opened externally on GitHub, reviewed by a blocking grain review check, and merged by their owner. This design defines who owns each task and pull request and who receives authorship credit on PR descriptions and merged commits, alongside operational actor tracking in [`operator-attribution.design.md`](operator-attribution.design.md).
+[`contributions.playbook.md`](../playbook/contributions.playbook.md) defines how work flows through a repository: human-authored designs, specifications and task grainfiles started by a person and reviewed by humans, and implementation PRs either written by grain from merged tasks or opened externally on GitHub, reviewed by a blocking grain review check, and merged by their owner. This design defines who owns each task and pull request and who receives authorship credit on PR descriptions and merged commits, alongside operational actor tracking in [`operator-attribution.design.md`](operator-attribution.design.md).
 
 **The core rule:** every grain task has a single **owner**, fixed when the task is filed and inherited by every child task it spawns. How a pull request is credited depends on whether grain opened it or a contributor opened it externally:
 

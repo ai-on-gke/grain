@@ -937,7 +937,7 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 
 	case "grain.log":
 		if !scope.MayReadGrainLog {
-			return nil, RefuseCapability("deploy://"+relPath, "grain-log")
+			return nil, RefuseCapability("deploy://"+relPath, "https://grain.dev/capabilities/grain#journal")
 		}
 		if s == nil || s.Deploy == nil {
 			return nil, fmt.Errorf("%w: deploy://grain.log is not configured on this daemon", ErrNotFound)
@@ -961,7 +961,7 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 
 	case "health", "health.json":
 		if !scope.MayReadHealth {
-			return nil, RefuseCapability("deploy://"+relPath, "deployment-health")
+			return nil, RefuseCapability("deploy://"+relPath, "https://grain.dev/capabilities/grain#health")
 		}
 		if s == nil || s.Deploy == nil {
 			return nil, fmt.Errorf("%w: deploy://health is not configured on this daemon", ErrNotFound)
@@ -977,7 +977,7 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 
 	case "state", "state.json":
 		if !scope.MayReadHealth {
-			return nil, RefuseCapability("deploy://"+relPath, "deployment-health")
+			return nil, RefuseCapability("deploy://"+relPath, "https://grain.dev/capabilities/grain#health")
 		}
 		if s == nil || s.Deploy == nil {
 			return nil, fmt.Errorf("%w: deploy://state is not configured on this daemon", ErrNotFound)

@@ -1,0 +1,177 @@
+# src:// on the layer build (cwd = scratch module requiring core, replace => checkout)
+$ grain ls src://
+  exit=0 proxy=[GET /fs/src?list;]
+  | .dockerignore
+  | .git-blame-ignore-revs
+  | .github/
+  | .gitignore
+  | .grain/
+  | CODEOWNERS
+  | Dockerfile
+  | Dockerfile.build
+  | Dockerfile.build.dockerignore
+  | Dockerfile.k8s-sandbox
+  | Granulefile
+  | Granulefile.guest-base
+  | LICENSE
+  | Makefile
+  | NOTICE
+  | PROMPT.md
+  | README.md
+  | cmd/
+  | core/
+  | deploy/
+  | design/
+  | docs/
+  | go.mod
+  | go.sum
+  | pkg/
+  | playbooks/
+  | scripts/
+  | tests/
+  | third_party/
+  | ui/
+$ grain ls src://playbooks
+  exit=0 proxy=[GET /fs/src/playbooks?list;]
+  | cloudsql-postgres.md
+  | gcp-capabilities.md
+  | github-connections.md
+  | github-test-repos.md
+  | gke-sandbox-cluster.md
+  | host-migration.md
+$ grain ls src://pkg
+  exit=0 proxy=[GET /fs/src/pkg?list;]
+  | access/
+  | actionscache/
+  | agent/
+  | apierror/
+  | attest/
+  | authfix/
+  | backup/
+  | capability/
+  | change/
+  | checkpost/
+  | ci/
+  | cifault/
+  | cli/
+  | console/
+  | daemon/
+  | declschema/
+  | demo/
+  | designdoc/
+  | dispatch/
+  | forge/
+  | forkhead/
+  | gcpsetup/
+  | ghwebhook/
+  | github/
+  | gitproxy/
+  | gitrefs/
+  | granule/
+  | grit/
+  | gritapi/
+  | hostd/
+  | hostinit/
+  | hostscriptcli/
+  | hosttop/
+  | iapreconciler/
+  | installtrack/
+  | jwks/
+  | k8s/
+  | kubectlgate/
+  | layeronly/
+  | lifecycle/
+$ grain ls src://pkg --glob 'name*'
+  exit=0 proxy=[GET /fs/src/pkg?glob=name%2A&list;]
+  | namespace/
+$ grain ls src://core
+  exit=0 proxy=[GET /fs/src/core?list;]
+  | .dockerignore
+  | .git-blame-ignore-revs
+  | .github/
+  | .gitignore
+  | .grain/
+  | CODEOWNERS
+  | Dockerfile
+  | Dockerfile.build
+  | Dockerfile.build.dockerignore
+  | Dockerfile.k8s-sandbox
+  | Granulefile
+  | Granulefile.guest-base
+  | LICENSE
+  | Makefile
+  | NOTICE
+  | PROMPT.md
+  | README.md
+  | cmd/
+  | deploy/
+  | design/
+  | docs/
+  | go.mod
+  | go.sum
+  | pkg/
+  | scripts/
+  | tests/
+  | third_party/
+  | ui/
+$ grain ls src://core/pkg --glob 'name*'
+  exit=0 proxy=[GET /fs/src/core/pkg?glob=name%2A&list;]
+  | namespace/
+$ grain ls src://pkg/namespace --glob 'coresrc*'
+  exit=0 proxy=[GET /fs/src/pkg/namespace?glob=coresrc%2A&list;]
+  | coresrc.go
+  | coresrc_test.go
+$ grain ls src://core/pkg/namespace --glob 'coresrc*'
+  exit=0 proxy=[GET /fs/src/core/pkg/namespace?glob=coresrc%2A&list;]
+  | coresrc.go
+  | coresrc_test.go
+$ grain read src://pkg/namespace/coresrc.go
+  exit=0 proxy=[GET /fs/src/pkg/namespace/coresrc.go;]
+  | package namespace
+  | 
+  | // LAYERMARK the layer shadows core here.
+$ grain read src://core/pkg/namespace/coresrc.go --lines 3
+  exit=0 proxy=[GET /fs/src/core/pkg/namespace/coresrc.go;]
+  | 	info, err := os.Stat(p)
+  | 	return err == nil && info.IsDir()
+  | }
+$ grain read src://pkg/layeronly/x.go
+  exit=0 proxy=[GET /fs/src/pkg/layeronly/x.go;]
+  | package layeronly
+  | 
+  | // LAYERMARK only the layer has this file.
+  | const X = 1
+$ grain read src://core/pkg/layeronly/x.go
+  exit=1 proxy=[GET /fs/src/core/pkg/layeronly/x.go;]
+  | grain: not found: src://core/pkg/layeronly/x.go
+$ grain read src://core/go.mod --lines 1
+  exit=0 proxy=[GET /fs/src/core/go.mod;]
+  | tool github.com/bwsalmon/granule/cmd/granule
+$ grain grep LAYERMARK src://
+  exit=0 proxy=[GET /fs/src?grep=LAYERMARK&n=1;]
+  | [truncated: walked 2000 entries; narrow the path]
+$ grain grep LAYERMARK src://pkg
+  exit=0 proxy=[GET /fs/src/pkg?grep=LAYERMARK&n=1;]
+  | layeronly/x.go:3:// LAYERMARK only the layer has this file.
+  | [truncated: walked 2000 entries; narrow the path]
+$ grain grep LAYERMARK src://core
+  exit=0 proxy=[GET /fs/src/core?grep=LAYERMARK&n=1;]
+  | [truncated: walked 2000 entries; narrow the path]
+$ grain grep 'func CoreSource' src://pkg
+  exit=0 proxy=[GET /fs/src/pkg?grep=func+CoreSource&n=1;]
+  | [truncated: walked 2000 entries; narrow the path]
+$ grain grep 'func CoreSource' src://core/pkg
+  exit=0 proxy=[GET /fs/src/core/pkg?grep=func+CoreSource&n=1;]
+  | [truncated: walked 2000 entries; narrow the path]
+$ grain grep 'func CoreSource' src://
+  exit=0 proxy=[GET /fs/src?grep=func+CoreSource&n=1;]
+  | [truncated: walked 2000 entries; narrow the path]
+$ grain read src://pkg/nosuch.go
+  exit=1 proxy=[GET /fs/src/pkg/nosuch.go;]
+  | grain: not found: src://pkg/nosuch.go
+$ grain read src://core/pkg/nosuch.go
+  exit=1 proxy=[GET /fs/src/core/pkg/nosuch.go;]
+  | grain: not found: src://core/pkg/nosuch.go
+$ grain ls src://core/nosuch
+  exit=1 proxy=[GET /fs/src/core/nosuch?list;]
+  | grain: not found: src://core/nosuch

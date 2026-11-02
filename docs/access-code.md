@@ -34,7 +34,9 @@ network listener takes depends on two settings:
   issuer, audience and expiry. A caller whose assertion verifies is
   signed in as the email it names, if `-ui-allowed-principals` admits
   it, with no access code. An assertion that is present but does not
-  verify is refused with a `401` and never falls back to the code. The
+  verify is refused with a `401` and never falls back to the code (a
+  browser loading the UI is shown a "Sign-in could not be verified" page
+  with the reason, an API caller the JSON error). The
   code keeps working beside it, so this is the state to migrate in.
 - **IAP required.** `-ui-require-iap` (or `GRAIN_REQUIRE_IAP=true`) as
   well. The network listener no longer takes the code at all, neither

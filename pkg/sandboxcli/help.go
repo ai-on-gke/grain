@@ -291,7 +291,7 @@ var sandboxCommandHelp = map[string]string{
 	"issue list": "grain issue list [--repo owner/name] [--label <l>] [--limit N]\n\nGitHub issues. Needs read-issues.\n",
 	"issue read": "grain issue read <number> [--repo owner/name] [--comments]\n\nOne GitHub issue. Needs read-issues.\n",
 	"db query":   "grain db query <sql>\n\nA read-only SQL query on grain's database. Needs db-read.\n",
-	"ci":         "grain ci (list | log | test-history | artifact | wait | run-job | retrigger) ...\n\nRun 'grain ci <command> --help' for each.\n",
+	"ci":         "grain ci (list | show | log | test-history | artifact | wait | run-job | retrigger) ...\n\nRun 'grain ci <command> --help' for each.\n",
 	"pr":         "grain pr (status | base-status | open | reply | resolve | review-comment)\n",
 	"task":       "grain task (list | read | prompt | transcript | wait | message | propose) ...\n",
 	"issue":      "grain issue (list | read) ...\n",

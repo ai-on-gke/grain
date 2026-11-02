@@ -42,6 +42,7 @@ import ModelSelect from "./ModelSelect.jsx";
 import Overlay from "./Overlay.jsx";
 import BranchField from "./BranchField.jsx";
 import RepoField from "./RepoField.jsx";
+import { taskPriority } from "../wholeNumber.js";
 import {
   CustomFieldInput,
   declaredFields,
@@ -195,7 +196,7 @@ export default function BulkEditOverlay({
   const priorityText = String(priority).trim();
   const priorityInvalid =
     Boolean(change.priority) &&
-    !(/^\d+$/.test(priorityText) && Number(priorityText) >= 1);
+    !(/^\d+$/.test(priorityText) && !Number.isNaN(taskPriority(priorityText)));
   const fields = Object.keys(change).filter((f) => change[f]);
   const applicable = fields.length > 0 && !repoMissing && !priorityInvalid;
 

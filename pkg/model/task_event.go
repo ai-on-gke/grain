@@ -117,7 +117,8 @@ func insertTaskEvent(ctx context.Context, tx *sql.Tx, e TaskEvent) (int64, error
 // the same transaction, at that stamp, so the closed step the timeline
 // places there says who closed the task and why. A set that leaves
 // ClosedAt where it was -- the task already closed, a guard that declined
-// -- records nothing.
+// -- records nothing, and a task already closed keeps the stamp it has
+// whatever set writes (set may still reopen it by clearing ClosedAt).
 func (s *Store) ObserveClose(ctx context.Context, taskID string, now time.Time, by Principal, reason string,
 	set func(*Observation)) error {
 
@@ -134,6 +135,13 @@ func (s *Store) ObserveClose(ctx context.Context, taskID string, now time.Time, 
 			before = *obs.ClosedAt
 		}
 		set(obs)
+		// Most close sites stamp ClosedAt without asking whether the task
+		// is already closed. Re-stamping a standing closure would move the
+		// close the timeline shows and record a second close nothing
+		// reopened in between, so an existing stamp is kept.
+		if !before.IsZero() && obs.ClosedAt != nil {
+			obs.ClosedAt = &before
+		}
 		obs.ObservedAt = &now
 		if err := observe(ctx, tx, *obs); err != nil {
 			return err

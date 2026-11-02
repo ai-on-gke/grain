@@ -1343,6 +1343,11 @@ func BuildAntigravityFramework(ctx context.Context, cfg Config, secretStore *sec
 	}
 	if hostdHost != nil {
 		opts = append(opts, antigravity.WithHost(hostdHost))
+		if h, ok := hostdHost.(agent.HostdHost); ok && h.SessionRoot() != "" {
+			// A hostd on another machine keeps a task's HOME under its
+			// own staging root, by the absolute path its hello gave.
+			opts = append(opts, antigravity.WithRemoteSessionRoot(h.SessionRoot()))
+		}
 	}
 	if cfg.AgentAuthMode != model.AntigravityAuthAmbient {
 		opts = append(opts, antigravity.WithAPIKeyFunc(func(ctx context.Context) (string, error) {
@@ -1396,6 +1401,9 @@ func BuildClaudeFramework(ctx context.Context, cfg Config, secretStore *secrets.
 				if r.HostPath != "" {
 					claudePath = r.HostPath
 				}
+			}
+			if detached && remoteHostd(container) {
+				return nil, errDetachedRemote("claude")
 			}
 		}
 	}
@@ -1592,6 +1600,16 @@ func buildCodexFramework(ctx context.Context, cfg Config, secretStore *secrets.S
 				codexPath = r.HostPath
 			}
 		}
+		if detached && remoteHostd(container) {
+			return nil, errDetachedRemote("codex")
+		}
+	}
+	// A codex on another machine links that machine's own login, when it
+	// has one and this run is not on an API key: a login this daemon
+	// holds is a file here, which a link there cannot reach.
+	hostLogin := ""
+	if h, ok := container.(agent.HostdHost); ok && h.Remote != nil {
+		hostLogin = h.CodexAuth
 	}
 	if container == nil {
 		if err := checkConnectionCLI(cfg); err != nil {
@@ -1636,7 +1654,14 @@ func buildCodexFramework(ctx context.Context, cfg Config, secretStore *secrets.S
 	// place whenever its OAuth tokens rotate, which is why a run links
 	// to it rather than copying it.
 	authFile := configuredCodexAuthFile(cfg)
-	if apiKey == "" && cfg.codexAuthMode != model.AntigravityAuthAmbient {
+	if hostLogin != "" {
+		authFile = ""
+	} else if remoteHostd(container) && apiKey == "" && cfg.codexAuthMode != model.AntigravityAuthAmbient {
+		return nil, errors.New("codex runs through the grain hostd that dials in, on a machine with no codex login of its own " +
+			"($CODEX_HOME/auth.json or ~/.codex/auth.json): run `codex login` there as hostd's user, or set an OpenAI API key " +
+			"on this connection in Settings -> Models (/settings/models)")
+	}
+	if apiKey == "" && hostLogin == "" && cfg.codexAuthMode != model.AntigravityAuthAmbient {
 		if authFile == "" && cfg.AgentBackendID != "" {
 			return nil, errors.New("this connection has no Codex credential of its own: upload auth.json " +
 				"or set an OpenAI API key on it in Settings -> Models (/settings/models)")
@@ -1678,6 +1703,8 @@ func buildCodexFramework(ctx context.Context, cfg Config, secretStore *secrets.S
 		opts = append(opts, codex.WithAPIKeyFunc(func(ctx context.Context) (string, error) {
 			return backendCredential(ctx, cfg, secretStore, secrets.OpenAIAPIKeySecret, cfg.OpenAIAPIKeyFile)
 		}))
+	} else if hostLogin != "" {
+		opts = append(opts, codex.WithHostAuthFile(hostLogin))
 	} else {
 		opts = append(opts, codex.WithAuthFile(authFile))
 	}
@@ -2016,4 +2043,21 @@ func AgentCredential(ctx context.Context, secretStore *secrets.Store, secret, fi
 		return "", err
 	}
 	return value, nil
+}
+
+// remoteHostd reports whether h runs its CLI through a grain hostd on
+// another machine (agent.HostdHost.Remote).
+func remoteHostd(h agent.Host) bool {
+	hh, ok := h.(agent.HostdHost)
+	return ok && hh.Remote != nil
+}
+
+// errDetachedRemote is the refusal of a detached run through a grain
+// hostd on another machine: a detached CLI forks grain's mcpserver
+// beside itself, with this daemon's sandbox access and credentials,
+// which that machine does not have.
+func errDetachedRemote(cli string) error {
+	return fmt.Errorf("%s is set to run detached on the host, but the grain hostd it would run through dials in from another machine, "+
+		"where the mcpserver a detached run forks has none of this daemon's sandbox access or credentials: "+
+		"set %s to run on the host instead (Settings -> Models, \"Where each agent CLI runs\")", cli, cli)
 }
