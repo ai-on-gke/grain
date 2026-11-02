@@ -14,27 +14,24 @@
 
 package ui
 
-// The merge queue's speculative batches, as a person watching them sees
-// them: GET /api/merge-batches, one object per batch in flight.
+// The merge queue's overlap re-checks, as a person watching them sees
+// them: GET /api/merge-batches, one object per re-check in flight.
 //
-// It exists because of what batching looks like from outside without it.
-// A batch's members each get the "batching" state on their own row and a
-// sentence that names the throwaway ref, the commit and how many others
-// are in it (orchestrator.setBatchState), which is enough to know that
-// *this* change is being tested with others and nothing else. Three rows
-// all saying "Testing with the rest of the batch" do not say that they
-// are the same batch, which of them is first (and so which way a failure
-// is bisected), or where the one run that decides all three of them is.
-// That is a thing -- model.MergeBatch, one row per base branch -- and it
-// had no way out of the database.
+// The route, its JSON and the types here keep the word "batch" because
+// they were built for speculative merge batching, which grain/task-1023
+// removed. What the merge queue still writes to model.MergeBatch is the
+// overlap re-check (orchestrator/mergerecheck.go): one change whose own
+// run tested an older base, merged onto a throwaway ref on top of the
+// branch tip and run through grain CI once more before it lands. Every
+// row therefore has exactly one member. The name stays because agents,
+// the CLI's merge-queue report and repository-scoped grants all name the
+// route; the UI calls these "re-checks".
 //
-// The whole of it is a read. Nothing here cancels a batch, drops a member
-// or forms one: the batch is the reconciler's own state machine
-// (orchestrator.reconcileMergeBatches), it ends on its own within
-// model.MaxMergeBatchAge whatever happens, and a button that reached into
-// the middle of it would be a second thing deciding what the queue is
-// testing. What a person needs from the UI is to be able to see the bet,
-// which is what this answers.
+// The whole of it is a read. Nothing here cancels a re-check or starts
+// one: it is the reconciler's own state machine, it ends on its own
+// within model.MaxMergeBatchAge whatever happens, and a button that
+// reached into the middle of it would be a second thing deciding what
+// the queue is testing.
 
 import (
 	"context"
@@ -136,10 +133,8 @@ type MergeBatches struct {
 // MergeBatchesFor reports the batches in flight, for one repository when
 // repo names one and for the whole deployment when it is empty.
 //
-// A deployment with batching turned off (Settings.MergeBatchSize of 1)
-// answers with no batches, the same as a deployment that simply has
-// nothing queued -- there is no third state to report, since a batch row
-// only ever exists because the queue made one.
+// A deployment with nothing to re-check answers with no batches -- a
+// row only ever exists because the queue started a re-check.
 func (c *Client) MergeBatchesFor(ctx context.Context, repo string) (MergeBatches, error) {
 	out := MergeBatches{
 		Batches:       []MergeBatch{},
