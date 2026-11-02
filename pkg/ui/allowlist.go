@@ -29,6 +29,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
 
@@ -44,6 +45,14 @@ const (
 	// membership results are cached.
 	DefaultGroupMembershipCacheTTL = 5 * time.Minute
 )
+
+// cloudIdentityTimeout bounds each call the default group checker makes,
+// the token fetch included. Without it the ADC client is
+// http.DefaultClient underneath, and a token endpoint or Cloud Identity
+// that accepts the connection and never answers held every caller that
+// depends on a group: entry -- and every later one queued behind the token
+// source's lock -- indefinitely, rather than refusing them.
+var cloudIdentityTimeout = 10 * time.Second
 
 // GroupMemberChecker resolves whether memberEmail belongs to groupEmail.
 type GroupMemberChecker interface {
@@ -337,7 +346,17 @@ func (c *CloudIdentityGroupChecker) httpClient(ctx context.Context) (*http.Clien
 	if c.client != nil {
 		return c.client, nil
 	}
-	hc, err := google.DefaultClient(ctx, CloudIdentityGroupsReadonlyScope)
+	// The token source keeps the context it is made with for its own
+	// fetches, so it gets one that outlives this request and carries a
+	// client that gives up on a silent server, not the first caller's.
+	// The bound is on the transport rather than http.Client.Timeout,
+	// which oauth2.NewClient would copy onto the outer client, whose
+	// oauth2.Transport logs a deprecation on every timeout; IsMember's
+	// context bounds the Cloud Identity calls themselves.
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.ResponseHeaderTimeout = cloudIdentityTimeout
+	base := &http.Client{Transport: tr}
+	hc, err := google.DefaultClient(context.WithValue(context.Background(), oauth2.HTTPClient, base), CloudIdentityGroupsReadonlyScope)
 	if err != nil {
 		return nil, fmt.Errorf("cloud identity credentials: %w", err)
 	}
@@ -365,6 +384,8 @@ func (c *CloudIdentityGroupChecker) IsMember(ctx context.Context, groupEmail, me
 	}
 	c.cacheMu.RUnlock()
 
+	ctx, cancel := context.WithTimeout(ctx, cloudIdentityTimeout)
+	defer cancel()
 	hc, err := c.httpClient(ctx)
 	if err != nil {
 		return false, err
