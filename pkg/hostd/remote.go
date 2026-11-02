@@ -161,7 +161,23 @@ func (r *Remote) Identify(ctx context.Context, token string) (name, owner string
 	if r.Resolve == nil {
 		return "", "", false, nil
 	}
-	return r.Resolve(ctx, token)
+	name, owner, ok, err = r.Resolve(ctx, token)
+	if ok && r.Token != "" && name == r.sharedName() {
+		// The shared token's hostd holds this name: a registry hostd by
+		// it would take over that hostd's session, and work sent to it
+		// would not be checked against the registry's revocation.
+		return "", "", false, fmt.Errorf("registry hostd %q has the name -hostd-token-name gives the shared token's hostd; rename one of them", name)
+	}
+	return name, owner, ok, err
+}
+
+// SharedTokenName is the hostd the deprecated shared token names, "" when
+// no shared token is configured: a name the registry may not also use.
+func (r *Remote) SharedTokenName() string {
+	if r == nil || r.Token == "" {
+		return ""
+	}
+	return r.sharedName()
 }
 
 func (r *Remote) logf(format string, args ...any) {

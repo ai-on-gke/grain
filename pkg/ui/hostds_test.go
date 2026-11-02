@@ -247,3 +247,16 @@ func TestRepoScopedAgentCannotReachHostdRegistryOrMultiRepoQueries(t *testing.T)
 			mcpRec.Code, res.IsError, res.Content)
 	}
 }
+
+// The deprecated shared token's hostd holds its -hostd-token-name, so a
+// registry hostd cannot be created under it.
+func TestCreateHostdRefusesTheSharedTokensName(t *testing.T) {
+	srv, client := testServer(t)
+	client.Config.HostdRemote = &hostd.Remote{Token: "shared", SharedName: "edge"}
+	if rec := do(t, srv, http.MethodPost, "/api/hostds", `{"name":"edge"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("POST /api/hostds edge = %d %s, want 400", rec.Code, rec.Body.String())
+	}
+	if rec := do(t, srv, http.MethodPost, "/api/hostds", `{"name":"ws-1"}`); rec.Code != http.StatusCreated {
+		t.Errorf("POST /api/hostds ws-1 = %d %s, want 201", rec.Code, rec.Body.String())
+	}
+}

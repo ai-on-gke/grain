@@ -15,6 +15,7 @@
 package hostd
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -73,5 +74,30 @@ func TestRemoteLogsRefusedTokensRateLimited(t *testing.T) {
 	}
 	if want := "it presented no hostd token (5 more refused since the last line like this)"; !strings.HasSuffix(lines[1], want) {
 		t.Errorf("logged %q; want it to end %q", lines[1], want)
+	}
+}
+
+// A registry hostd named as the shared token's hostd is would share its
+// session slot, and work pinned to that name skips the registry's
+// revocation check: its token is refused instead.
+func TestRegistryHostdMayNotTakeTheSharedTokensName(t *testing.T) {
+	r := &Remote{Token: "shared", SharedName: "edge",
+		Resolve: func(_ context.Context, token string) (string, string, bool, error) {
+			return map[string]string{"t-edge": "edge", "t-other": "other"}[token], "", token == "t-edge" || token == "t-other", nil
+		}}
+	if name, _, ok, err := r.Identify(context.Background(), "shared"); !ok || err != nil || name != "edge" {
+		t.Fatalf("shared token = %q %v %v, want edge", name, ok, err)
+	}
+	if name, _, ok, err := r.Identify(context.Background(), "t-edge"); ok || err == nil {
+		t.Fatalf("registry token for the shared name = %q %v %v, want refused", name, ok, err)
+	}
+	if name, _, ok, err := r.Identify(context.Background(), "t-other"); !ok || err != nil || name != "other" {
+		t.Fatalf("other registry token = %q %v %v, want other", name, ok, err)
+	}
+	if got := r.SharedTokenName(); got != "edge" {
+		t.Fatalf("SharedTokenName = %q, want edge", got)
+	}
+	if got := (&Remote{}).SharedTokenName(); got != "" {
+		t.Fatalf("SharedTokenName with no shared token = %q, want empty", got)
 	}
 }

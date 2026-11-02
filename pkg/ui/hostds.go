@@ -74,6 +74,12 @@ type hostdDisconnector interface {
 	Disconnect(name string) bool
 }
 
+// hostdSharedNamer is the name the deprecated shared token's hostd holds,
+// which the registry may not also take (hostd.Remote).
+type hostdSharedNamer interface {
+	SharedTokenName() string
+}
+
 func hostdError(err error) error {
 	switch {
 	case errors.Is(err, model.ErrHostdNotFound):
@@ -113,6 +119,9 @@ func (c *Client) CreateHostd(ctx context.Context, req CreateHostdRequest) (Issue
 	}
 	if name == model.LocalHostd {
 		return IssuedHostdToken{}, validationErrorf("%q is the co-located hostd's name; a remote hostd needs another", name)
+	}
+	if s, ok := c.Config.HostdRemote.(hostdSharedNamer); ok && s.SharedTokenName() == name {
+		return IssuedHostdToken{}, validationErrorf("%q is the name -hostd-token-name gives the shared token's hostd; a registry hostd needs another", name)
 	}
 	if _, err := model.NormalizeHostdOwner(req.Owner); err != nil {
 		return IssuedHostdToken{}, validationErrorf("%v", err)
