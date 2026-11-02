@@ -94,6 +94,9 @@ func TestLiveCodexLoadsTheConfigGrainWrites(t *testing.T) {
 	// mcpServerArgs or configTOML that codex stops understanding fails
 	// here instead of at 3am in a deployment.
 	f := newTerminalTestFramework(codexPath, "/usr/local/bin/grain")
+	// And the real binary's catalog, stripped, so that codex reading the
+	// model_catalog_json a run names is part of what this measures.
+	f.dumpModels = hostModelDump(f.host, codexPath)
 	sandboxRoot := t.TempDir()
 	mcpArgs, err := f.mcpServerArgs(context.Background(), agent.RunConfig{SandboxRoot: sandboxRoot})
 	if err != nil {
