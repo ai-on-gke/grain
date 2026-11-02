@@ -234,7 +234,7 @@ func TestStage3SandboxCLICommands(t *testing.T) {
 		"/cli/notify":              `{"id":4,"subject":"flake","severity":"warning","count":1,"new":true}`,
 		"/cli/tasks/9/notes":       "Left a note on task #9 (comment 12).\n",
 		"/cli/tasks/wait":          `{"status":"settled","until":"closed","summary":"[reached] task #9 (completed)\n","waited_ms":2000,"credit_used_ms":2000,"credit_cap_ms":2700000,"credit_live":true}`,
-		"/cli/proposals":           `{"id":"101","url":"/tasks/101","hold_for_approval":true,"auto_merge":false,"held":true}`,
+		"/cli/proposals":           `{"id":"101","url":"/tasks/101","hold_for_approval":true,"auto_merge":false,"held":true,"dropped_defaults":[{"grant":"https://grain.dev/capabilities/grain#journal","reason":"rule 1: deny"}]}`,
 		"/cli/api-routes":          `[{"method":"GET","path":"/api/tasks","scope":"tasks:read","tool":"api_list_tasks"}]`,
 		"/api/tasks/9":             `{"id":"9","state":"completed"}`,
 		"/api/memory":              `{"text":"remember this"}`,
@@ -278,7 +278,8 @@ func TestStage3SandboxCLICommands(t *testing.T) {
 
 	// 4. task propose (draft allowed; --priority forwarded; --supersedes and --auto-merge refused)
 	if out, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "Follow-up", "--body", "Do x", "--depends-on", "7,8", "--priority", "8"); code != 0 ||
-		!strings.Contains(out, "Proposed task #101") || !strings.Contains(out, "held for human approval") {
+		!strings.Contains(out, "Proposed task #101") || !strings.Contains(out, "held for human approval") ||
+		!strings.Contains(out, "Default grant https://grain.dev/capabilities/grain#journal was not attached to it: rule 1: deny.") {
 		t.Errorf("task propose: %d %s %s", code, out, errOut)
 	}
 	if gotPri, ok := proxy.bodies["POST /cli/proposals"]["priority"].(float64); !ok || gotPri != 8 {
