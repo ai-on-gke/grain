@@ -94,11 +94,12 @@ export default function EditTaskForm({
   // form is not a <form>, so the box's own min and step are never
   // enforced on Save: without this a 0 saved as the default 5 (the
   // server reads 0 as unset) and a 2.5 saved as 2, both without a word
-  // (2026-11-01 intake walkthrough).
+  // (2026-11-01 intake walkthrough). Read with taskPriority, as New
+  // task reads it: "1e3" is the 1000 the number box takes it for, on
+  // every surface that takes a priority (2026-11-02 walkthrough).
   const priorityText = String(priority).trim();
   const priorityValid =
-    priorityText === "" ||
-    (/^\d+$/.test(priorityText) && !Number.isNaN(taskPriority(priorityText)));
+    priorityText === "" || !Number.isNaN(taskPriority(priorityText));
   // The deployment's connections and default model: a task names no
   // team of its own.
   const connections = config?.agentBackends || [];

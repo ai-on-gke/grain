@@ -4190,9 +4190,10 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 // rather than holding anything of their own. None of them puts a
 // credential in the subprocess.
 //
-// selfrepair's own grant is absent because its one tool blocks on a
-// human's reply in the task's chat, and that needs a store handle the
-// mcpserver process deliberately does not have.
+// grain#host-exec (once self-repair) is absent because it does not
+// travel on every run holding it: its one tool blocks on a human's reply
+// in the task's chat, so runGrants passes it only for an Interactive
+// task, where somebody is there to answer.
 //
 // A fixed order, so that a run's own arguments read the same way twice
 // for the same task rather than following whatever order the grants were
@@ -4208,11 +4209,6 @@ var toolGrants = []string{
 	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
 }
 
-// runGrants is the subset of toolGrants task holds, which is what a
-// Framework passes on to the mcpserver it forks
-// (agent.RunConfig.Grants). Nothing outside that list travels: a run's
-// tools are the only thing this is for, and a capability that mints
-// credentials has no business being named in a subprocess's arguments.
 // localScriptsFor is the local-scripts declarations task's
 // local-scripts:<name> capabilities grant this run (cfg.LocalScripts),
 // and a 0600 file of the secrets their scripts name, resolved as the
@@ -4252,11 +4248,29 @@ func localScriptsFor(ctx context.Context, cfg Config, task model.Task, runID str
 	return out, file, nil
 }
 
+// runGrants is the subset of toolGrants task holds, which is what a
+// Framework passes on to the mcpserver it forks
+// (agent.RunConfig.Grants), plus an Interactive task's grain#host-exec.
+// Nothing else travels: a run's tools are the only thing this is for,
+// and a capability that mints credentials has no business being named
+// in a subprocess's arguments.
 func runGrants(task model.Task) []string {
 	var grants []string
 	for _, grant := range append(slices.Clone(toolGrants), capability.RunGrants()...) {
 		if hasGrant(task, grant) {
 			grants = append(grants, grant)
+		}
+	}
+	// run_host_command asks a person in the task's chat before every
+	// command it runs (selfrepair.Confirm, and the forked mcpserver's
+	// daemonHostExecConfirm), so the grant that serves it travels only
+	// on a task somebody is sitting with -- the gate the mcpserver
+	// applies again with -interactive.
+	if task.Interactive {
+		for _, g := range task.Grants {
+			if grainserver.IsHostExecGrant(g.Capability) && !slices.Contains(grants, g.Capability) {
+				grants = append(grants, g.Capability)
+			}
 		}
 	}
 	return grants

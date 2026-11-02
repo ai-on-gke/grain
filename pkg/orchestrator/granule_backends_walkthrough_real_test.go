@@ -76,9 +76,7 @@ func TestGranuleBackendsWalkthroughOnRealVMs(t *testing.T) {
 	wrapLog := filepath.Join(wrapDir, "argv.log")
 	wrapper := filepath.Join(wrapDir, "granule-wrapper")
 	script := fmt.Sprintf("#!/bin/sh\necho \"$*\" >> %s\nexec %s \"$@\"\n", wrapLog, filepath.Join(granuleDir, "granule"))
-	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	orchestrator.WriteExecutableStub(t, wrapper, script)
 	// granule itself must not be on PATH: anything that bypassed the
 	// wrapper would then fail rather than quietly succeed.
 	if p, err := exec.LookPath("granule"); err == nil {

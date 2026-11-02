@@ -16,7 +16,6 @@ package orchestrator
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -264,9 +263,7 @@ cat <<'EOF'
 }
 EOF
 `
-	if err := os.WriteFile(kubectl, []byte(script), 0o755); err != nil {
-		t.Fatalf("writing fake kubectl: %v", err)
-	}
+	writeExecutableStub(t, kubectl, script)
 	k := NewK8sSandboxes(K8sConfig{
 		Image:        "example/sandbox",
 		Kubectl:      kubectl,

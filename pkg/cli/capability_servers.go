@@ -191,11 +191,16 @@ func printCapabilityServers(out *printer, list []ui.CapabilityServer) {
 		if s.Builtin != nil {
 			label += " (built-in " + s.Builtin.Name + ")"
 		}
+		if s.InProcess != nil {
+			label += " (built-in " + s.InProcess.Name + ", in-process)"
+		}
 		fmt.Printf("- %s\n    state: %s\n", label, state)
 		if len(s.Config.Aliases) > 0 {
 			fmt.Printf("    also answers to: %s\n", strings.Join(s.Config.Aliases, ", "))
 		}
-		if s.Config.Stdio() {
+		if s.InProcess != nil {
+			fmt.Printf("    runs: inside grain, nothing to configure\n")
+		} else if s.Config.Stdio() {
 			fmt.Printf("    command: %s %s\n", s.Config.Command, strings.Join(s.Config.Args, " "))
 		} else {
 			fmt.Printf("    serverUrl: %s\n", s.Config.ServerURL)
