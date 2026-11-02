@@ -383,7 +383,13 @@ import "strconv"
 // included, to `https://grain.dev/capabilities/grain#host-exec={}`: the
 // in-process `self-repair` provider is retired for the `grain#host-exec`
 // method.
-const SchemaVersion = 84
+//
+// 85 rewrites stored `corp-research` grants, `repo_config`.`ci_capabilities`
+// included, to `https://grain.dev/capabilities/corp#research={}`: the Google
+// build retires its in-process `corp-research` provider for a
+// `corp#research` method it registers through capability.Register, with
+// `corp-research` as that method's alias.
+const SchemaVersion = 85
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the

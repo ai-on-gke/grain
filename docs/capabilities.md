@@ -200,6 +200,27 @@ What each mint returns:
 
 A grant's ports are forwarded into the sandbox through the deployment's capability port relay (§5.3), and a mint returning ports is refused where there is none. The servers can also be exercised directly over stdio, or with `protocol.Attach`.
 
+## In-process methods contributed by a build (`capability.Register`)
+
+Some grants are answered inside grain itself rather than by an MCP server subprocess: core's own `https://grain.dev/capabilities/grain` server (`grain#journal`, `grain#health`, `grain#sql`, `grain#host-exec`) is one. A build that imports core, such as the Google layer, can add methods of its own in-process server through [`capability.Register`](../pkg/capability/methods.go), from `init()`, without core naming it:
+
+```go
+capability.Register(capability.Method{
+	Server:    "https://grain.dev/capabilities/corp",
+	Spec:      protocol.MethodSpec{Name: "research", Description: "...", Mint: mint},
+	Name:      "Corp research",
+	RunGrant:  true,                      // forward the grant to the run (agent.RunConfig.Grants)
+	DefaultOn: true,                      // seed it into a fresh deployment's defaults and the director's
+	Aliases:   []string{"corp-research"}, // retired bare names CanonicalLegacyGrant rewrites to the grant
+})
+```
+
+- **Resolved and listed like `…/grain`.** `grainserver.Lookup` builds the server from every method registered on its ID, so admission normalizes and mints a grant of it with no `mcpServers` entry. `grainserver.IsInProcessGrant` treats it as in-process: it opens no listener, so it needs no isolated sandbox. `GET /api/capability-methods` lists it beside `…/grain`, so the picker offers it.
+- **The grant.** A method is granted as `<server>#<method>={}`. `RunGrant` forwards that grant, its bare reference and its aliases to the run, and `grain mcpserver` takes it without a warning. `DefaultOn` seeds the grant into `NewDeploymentConfig` and the shipped director session, exactly as `Registration.DefaultOn` does for a provider.
+- **Aliases.** Each alias is registered with `model.RegisterLegacyGrantAlias`, so `CanonicalLegacyGrant(s)` rewrites it wherever a grant is recorded, and a `settings/capabilities.yml` entry naming it binds the method too. The bare name keeps working wherever nothing rewrote it, such as a repository's `.grain` or an older grain/config. Rewriting the rows a store already holds is a migration in core's list (`pkg/model/migrations.go`; migration 85 does it for `corp-research`).
+- **Host tools.** An antigravity `HostToolGrant` is held by a run holding its method under any spelling: recorded, bare, or a registered alias. Its `Capability` may be the method grant or the retired bare name.
+- **What it cannot do.** A build cannot add methods to core's own `…/grain` server, and an alias cannot shadow one of core's retired names. `Register` panics on either.
+
 ## Google Chat (`gchat#post`)
 
 `grain capability gchat` lets agents post to Google Chat spaces an operator allowlisted, as a bot, **one way**: nothing said in a space comes back into grain, and there is no read tool. It is a built-in (`https://grain.dev/capabilities/gchat`), registered enabled and reported as needing configuring until it has a space. The operator how-to is [docs/gchat.md](gchat.md).

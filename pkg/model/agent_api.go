@@ -16,9 +16,11 @@ package model
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
@@ -328,13 +330,66 @@ var legacyGrantMultiReplacements = map[string][]string{
 	"deployment-health": {APIGrantPrefix + "deployment:read", GrainHealthGrant},
 }
 
+var (
+	registeredLegacyAliasesMu sync.RWMutex
+	registeredLegacyAliases   = map[string]string{}
+)
+
+// RegisterLegacyGrantAlias makes the bare capability name from an alias
+// for the grant to until the returned func is called: CanonicalLegacyGrant
+// rewrites it as it does a name in legacyGrantReplacements. It is the seam
+// a build outside core retires one of its own in-process capabilities
+// through (capability.Register's Aliases), so core need not name it. It
+// panics on an empty name or one already an alias, core's or registered.
+func RegisterLegacyGrantAlias(from, to string) (unregister func()) {
+	from, to = strings.TrimSpace(from), strings.TrimSpace(to)
+	if from == "" || to == "" {
+		panic(fmt.Sprintf("model: RegisterLegacyGrantAlias(%q, %q): an alias needs both names", from, to))
+	}
+	registeredLegacyAliasesMu.Lock()
+	defer registeredLegacyAliasesMu.Unlock()
+	_, core := legacyGrantReplacements[from]
+	_, coreMulti := legacyGrantMultiReplacements[from]
+	if _, ok := registeredLegacyAliases[from]; ok || core || coreMulti {
+		panic(fmt.Sprintf("model: RegisterLegacyGrantAlias(%q): already an alias", from))
+	}
+	registeredLegacyAliases[from] = to
+	return func() {
+		registeredLegacyAliasesMu.Lock()
+		defer registeredLegacyAliasesMu.Unlock()
+		delete(registeredLegacyAliases, from)
+	}
+}
+
+// legacyGrantReplacement is what the retired bare name became, from core's
+// table or a registered alias.
+func legacyGrantReplacement(name string) (string, bool) {
+	if to, ok := legacyGrantReplacements[name]; ok {
+		return to, true
+	}
+	registeredLegacyAliasesMu.RLock()
+	defer registeredLegacyAliasesMu.RUnlock()
+	to, ok := registeredLegacyAliases[name]
+	return to, ok
+}
+
+// allLegacyGrantReplacements is legacyGrantReplacements with every
+// registered alias added.
+func allLegacyGrantReplacements() map[string]string {
+	out := maps.Clone(legacyGrantReplacements)
+	registeredLegacyAliasesMu.RLock()
+	defer registeredLegacyAliasesMu.RUnlock()
+	maps.Copy(out, registeredLegacyAliases)
+	return out
+}
+
 // CanonicalLegacyGrant is name, or the single grant a retired 1-to-1
 // in-process capability of that name became. Callers recording a capability
 // list should use CanonicalLegacyGrants so 1-to-many retirements (such as
 // deployment-health) expand to every grant they became.
 func CanonicalLegacyGrant(name string) string {
 	trimmed := strings.TrimSpace(name)
-	if to, ok := legacyGrantReplacements[trimmed]; ok {
+	if to, ok := legacyGrantReplacement(trimmed); ok {
 		return to
 	}
 	return name

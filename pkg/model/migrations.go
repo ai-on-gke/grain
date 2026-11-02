@@ -505,7 +505,28 @@ var Migrations = []Migration{
 				map[string][]string{"self-repair": {GrainHostExecGrant}})
 		},
 	},
+	{
+		Version:     85,
+		Description: "rewrite stored corp-research grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/corp#research={} (the Google build's in-process capability is retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames := map[string]string{"corp-research": CorpResearchGrant}
+			if err := rewriteLegacyGrants(renames)(ctx, tx); err != nil {
+				return err
+			}
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities",
+				map[string][]string{"corp-research": {CorpResearchGrant}})
+		},
+	},
 }
+
+// CorpResearchGrant is what migration 85 rewrote stored corp-research grants
+// to: the method the Google build registers (capability.Register) in place
+// of its in-process corp-research provider, and makes corp-research an alias
+// of. Core serves no such method; it names the grant only because the
+// migration list is core's, and a store migrated by a build without the
+// method holds a grant nothing there resolves, as the bare corp-research it
+// replaced resolved to no provider there either.
+const CorpResearchGrant = "https://grain.dev/capabilities/corp#research={}"
 
 // ApplyDataMigrations runs the row rewrites (Up) of every migration past
 // from, inside tx, on tables already at SchemaVersion's shape. It is for
