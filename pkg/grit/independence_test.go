@@ -30,7 +30,7 @@ import (
 const module = "github.com/ai-on-gke/grain/"
 
 // gritAllowed is every package of this module that grit -- cmd/grit and
-// pkg/grit/... -- may link (docs/design/grit-split.md, "The import
+// pkg/grit/... -- may link (design/design/grit-split.design.md, "The import
 // lint"): grit itself, the neutral packages, and leaf utilities holding
 // no grain state. It is an allowlist rather than a denylist so that a
 // new grain package is off-limits to grit by default. Adding to it is a
@@ -146,7 +146,7 @@ func neutralViolations(deps map[string][]string) []string {
 
 func TestGritImportsOnlyWhatItsAllowlistNames(t *testing.T) {
 	for _, b := range gritViolations(deps(t, "cmd/grit", "pkg/grit/...")) {
-		t.Errorf("grit links %s, which is not on gritAllowed: grit may not depend on grain-only code (docs/design/grit-split.md, \"The import lint\")", b)
+		t.Errorf("grit links %s, which is not on gritAllowed: grit may not depend on grain-only code (design/design/grit-split.design.md, \"The import lint\")", b)
 	}
 }
 

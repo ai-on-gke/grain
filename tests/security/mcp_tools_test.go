@@ -551,7 +551,7 @@ func TestGetCIArtifactRefusesARepositoryOutsideTheTask(t *testing.T) {
 }
 
 // TestControlRoster is the roster every production run is served
-// (docs/design/sandbox-first-agent-surface.md §6): with a sandbox and no
+// (design/design/sandbox-first-agent-surface.design.md §6): with a sandbox and no
 // -mcp-surface, the sandbox tools and the run-ending, parking and
 // escalation tools, plus the tools of grants no sandbox process may
 // reach -- and nothing the `grain` CLI serves instead.

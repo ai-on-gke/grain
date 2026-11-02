@@ -21,7 +21,7 @@ import BulkEditOverlay from "./BulkEditOverlay.jsx";
 // BatchActionsBar is DetailOverlay's Actions and CapabilityToggles, but
 // aimed at every selected task at once instead of the one the overlay
 // has open -- the same handful of idempotent endpoints (approve,
-// submit, defer, undefer, close, reopen, capabilities), most of which
+// submit, retry merge, defer, undefer, close, reopen, capabilities), most of which
 // already no-op on a task they do not apply to (Client.Approve on an
 // already-approved task, Client.SetCapability detaching a capability
 // that is not attached, ...), so firing one at every selection member is
@@ -138,6 +138,18 @@ export default function BatchActionsBar({
             onClick={() => run("/submit")}
           >
             Submit
+          </Button>
+          {/* Retry merge for each of them (ui.Client.RetryMerge): puts a
+              pull request the merge queue gave up on back on the queue.
+              A task with no pull request, or a closed one, refuses and is
+              counted; one the queue is still driving is left as it is. */}
+          <Button
+            variant="outlined"
+            size="small"
+            title="Put the selected tasks' pull requests back on the merge queue for another try. Tasks without a pull request, and closed tasks, are skipped and counted."
+            onClick={() => run("/retry-merge")}
+          >
+            Retry merge
           </Button>
           <Button
             variant="outlined"

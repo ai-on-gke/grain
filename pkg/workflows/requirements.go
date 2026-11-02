@@ -150,7 +150,7 @@ import (
 // A capability reference (model.IsCapabilityRef) is kept and dropped the
 // same way, for the same reason: the job's declaration is what asks for
 // it and the deployment's capability policy is what decides, when the
-// job's grants are minted (docs/capabilities-spec.md §4.2.2), so neither
+// job's grants are minted (design/spec/capabilities/capabilities.spec.md §4.2.2), so neither
 // the repository's CI capabilities list nor its absence there says
 // anything about it.
 //

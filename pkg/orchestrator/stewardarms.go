@@ -27,7 +27,7 @@ import (
 )
 
 // The pipeline steward's mechanical duties, moved into reconcilers
-// (docs/design/durable-tasks.md#DT-6, "Mechanical duties move into
+// (design/design/durable-tasks.design.md#DT-6, "Mechanical duties move into
 // reconcilers"). What the steward did by hand each wake is done here every
 // cycle, so that what is left for the steward is judgement:
 //

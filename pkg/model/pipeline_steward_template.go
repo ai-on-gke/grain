@@ -26,7 +26,7 @@ import (
 // steward is woken by the pipeline.* notifications it subscribes to
 // (PipelineStewardSubscriptions), so the schedule is only a safety wake
 // for something no notification covers
-// (docs/design/durable-tasks.md#DT-6).
+// (design/design/durable-tasks.design.md#DT-6).
 const PipelineStewardEveryNMinutes = 6 * 60
 
 // PipelineStewardSubscriptions are the notification families that wake
@@ -76,7 +76,7 @@ const PipelineStewardMaxActions = 5
 var PipelineStewardAPIPresets = []string{"task-admin", "dispatch-control", "ci-read"}
 
 // pipelineStewardTemplate is the pipeline steward itself: a durable
-// judgement agent, woken by notifications (docs/design/durable-tasks.md#DT-6).
+// judgement agent, woken by notifications (design/design/durable-tasks.design.md#DT-6).
 //
 //   - No Target. It changes nothing in any repository itself, and files
 //     no repairs: the base-branch reconciler owns those. A hold is a
@@ -140,11 +140,11 @@ func PipelineStewardGoal() *GoalDecl {
 }
 
 // PipelineStewardReportLines is the most lines a wake's report may run
-// to (docs/design/durable-tasks.md#DT-12).
+// to (design/design/durable-tasks.design.md#DT-12).
 const PipelineStewardReportLines = 15
 
 // pipelineStewardBody is what the run is told. It is written around the
-// four rules of docs/design/durable-tasks.md#DT-12, against the ways a
+// four rules of design/design/durable-tasks.design.md#DT-12, against the ways a
 // standing job with write access went wrong on 768's first wake: it read
 // everything and overflowed its context, described tasks from memory, and
 // acted on what it believed rather than on the record.
@@ -223,7 +223,7 @@ func pipelineStewardBody() string {
 }
 
 // UsesToolBudget reports whether t's runs are durable judgement wakes,
-// which run under the per-wake tool budget (docs/design/durable-tasks.md#DT-13,
+// which run under the per-wake tool budget (design/design/durable-tasks.design.md#DT-13,
 // mcp's tool_budget.go): the pipeline steward's standing task, and any
 // task holding the durable grant.
 func UsesToolBudget(t Task) bool {

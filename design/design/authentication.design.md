@@ -1,6 +1,6 @@
 # Authentication: IAP as a first-class sign-in
 
-A grain controller on GKE sits behind Google Cloud Identity-Aware Proxy (`docs/design/grain-on-gke.md`, *UI and API ingress*). IAP already knows who every caller is. Grain does not use that. This doc proposes that a verified IAP assertion authenticates the caller on its own, as a named principal, for the browser, the `grain` CLI, external agents and `grain hostd`. The access code stays for deployments without IAP.
+A grain controller on GKE sits behind Google Cloud Identity-Aware Proxy (`design/design/grain-on-gke.design.md`, *UI and API ingress*). IAP already knows who every caller is. Grain does not use that. This doc proposes that a verified IAP assertion authenticates the caller on its own, as a named principal, for the browser, the `grain` CLI, external agents and `grain hostd`. The access code stays for deployments without IAP.
 
 ## What exists today
 
@@ -68,7 +68,7 @@ An external agent can do the same with its own service account. It can also pres
 
 ### `grain hostd`
 
-hostd dials `/api/hostd/connect` through the Gateway with an ID token from its service account (Workload Identity or a key on the cloudtop) or from the user's login. It uses the token sources above, through `IAPTokenProvider`, as it does now. The hello frame still carries the hostd token. That token names which hostd this is, and it is what GKE-5 makes per hostd.
+hostd dials `/api/hostd/connect` through the Gateway with an ID token from its service account (Workload Identity or a key on the workstation) or from the user's login. It uses the token sources above, through `IAPTokenProvider`, as it does now. The hello frame still carries the hostd token. That token names which hostd this is, and it is what GKE-5 makes per hostd.
 
 What changes is that the verified IAP principal is recorded as the connection's principal and checked against the allowlist. A **remote** hostd (one that dials `/api/hostd/connect` through the IAP Gateway or another verifier's proxy) must present a verified identity equal to its hostd row's `owner`, so a stolen hostd token is useless without its owner's Google identity. Service accounts may be owners. A hostd reached locally (over its socket, with no proxy and no assertion) is unchanged and keeps using its token. The executor bootstrap routes (`executorBootstrapRoute`) stay open, as `docs/access-code.md` describes.
 
@@ -77,7 +77,8 @@ What changes is that the verified IAP principal is recorded as the connection's 
 ### Without IAP
 
 - **No IAP configured.** Local and standalone deployments are unchanged. The access code, the login page and `grain_access` work as they do now.
-- **`-ui-require-iap`.** This replaces the unused `Config.IAPMode`. With it set, the network listener no longer accepts the access code at all, neither the bearer token nor the cookie, and the login page is gone. The code still works over loopback when the request carries no forwarding headers. That keeps `kubectl exec deploy/grain -- grain …` as a break-glass path that does not depend on IAP.
+- **`-ui-require-iap`** (`GRAIN_REQUIRE_IAP`). This replaces the unused `Config.IAPMode`. With it set, the network listener no longer accepts the access code at all, neither the bearer token nor the cookie, and the login page is gone. The code still works over loopback when the request carries no forwarding headers (`relayedByProxy`). That keeps `kubectl exec deploy/grain -- grain …` as a break-glass path that does not depend on IAP. The daemon refuses to start with the flag and no IAP audience.
+- **The flag governs IAP only.** A verifier that declares `AccessCodeWins() == true`, such as the Google layer's ÜberProxy verifier, keeps accepting the code over its own proxy with `-ui-require-iap` set, so break-glass through that proxy still works. `accessCodeAccepted` in `pkg/ui/accesscode.go` is the one place the flag is checked, and it lets such a verifier's requests through.
 - **IAP configured but `-ui-require-iap` not set.** Both are accepted. This is the migration state.
 
 ### `IdentityVerifier`
@@ -121,7 +122,7 @@ Agent calls from inside a sandbox never pass IAP and never carry a person's iden
 1. `IdentityVerifier` and the registry, with IAP as the first implementation. No behaviour change.
 2. Verified IAP callers pass `singleTenantGate` and become principals: `PrincipalService`, the allowlist, the CSRF check, and the UI header and logout.
 3. IAP mode for the CLI, and recording hostd's IAP principal (including matching a remote hostd's verified identity to its row's `owner`).
-4. `-ui-require-iap`. Then update `docs/access-code.md`, which says grain does not check the assertion.
+4. `-ui-require-iap`, and `docs/access-code.md` rewritten for the three modes. **Done** (task 2318).
 
 ## Open questions
 

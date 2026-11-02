@@ -306,7 +306,7 @@ type Config struct {
 	// not ask for a pause, and refusing to upgrade because a gate would
 	// not close is the worse failure.
 	Hold func(branch string) (release func(), err error)
-	// Flush, when set, is step 3 of docs/non-disruptive-upgrade.md's
+	// Flush, when set, is step 3 of design/design/non-disruptive-upgrade.design.md's
 	// upgrade protocol: called once the new build is staged and just
 	// before RestartCmd, it stops this daemon tailing the runs it drives
 	// in run hosts, persists each one's spool cursor and stops writing
@@ -503,7 +503,8 @@ func validateBranch(branch string) error {
 //
 // What enforces that is not this list. grain's own sandboxes cannot push
 // any of these refs (pkg/gitproxy: a run pushes only its own branch,
-// unless it holds the admin-only git-push-any-ref the cut holds). But on
+// unless it holds the team-granted repo#write any-ref grant,
+// model.GitPushAnyRefGrant, formerly git-push-any-ref). But on
 // GitHub anybody with write access to the repository can push a branch
 // or a tag unless a ruleset stops them -- that is as true of main as of
 // the rest, and it is GitHub's rulesets, not grain, that keep it out.

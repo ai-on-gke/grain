@@ -30,7 +30,7 @@ const set = (key, value) =>
 const pinned = () => JSON.parse(localStorage.getItem("grain.pinned"));
 const keys = () => Object.keys({ ...localStorage }).sort();
 
-// docs/design/settings-panel.md §6.3: this browser's per-user keys become
+// design/design/settings-panel.design.md §6.3: this browser's per-user keys become
 // deployment-wide ones, and nothing anyone had pinned or chosen is lost.
 describe("migrateStorage", () => {
   beforeEach(() => {

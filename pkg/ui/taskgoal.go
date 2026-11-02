@@ -14,7 +14,7 @@
 
 package ui
 
-// A task's goal (model.TaskGoal, docs/design/durable-tasks.md#DT-4), as
+// A task's goal (model.TaskGoal, design/design/durable-tasks.design.md#DT-4), as
 // the task page's goal editor sets and clears it: PUT and DELETE
 // /api/tasks/{id}/goal.
 

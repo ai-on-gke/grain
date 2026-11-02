@@ -93,6 +93,13 @@ func RunStateOf(run Run) string {
 	if run.Conclusion.Done() {
 		return string(run.Conclusion)
 	}
+	if run.Actions != nil && run.Actions.Status != "" {
+		// A forge's run says itself whether it has started.
+		if run.Actions.Status == "in_progress" {
+			return StateRunning
+		}
+		return StatePending
+	}
 	for _, job := range run.Jobs {
 		if job.Conclusion.Done() || job.StartedAt != nil {
 			return StateRunning
@@ -197,6 +204,9 @@ type RunFilter struct {
 	// repository as its latest (grain/task-2388).
 	Sort       RunSortKey
 	Descending bool
+	// Provider keeps the runs of one CI provider (ProviderGrain,
+	// ProviderGitHubActions); "" keeps every provider's.
+	Provider string
 	// Visible, when set, is whether the reader asking may see a run on
 	// this repository at all. It is not a question the reader asked but a
 	// bound on who is asking -- pkg/ui's team read scope -- so it is
@@ -210,7 +220,7 @@ type RunFilter struct {
 // aside, which is an order rather than a question. It is what tells an
 // empty answer whether to say "nothing matched" or "nothing has run".
 func (f RunFilter) Narrowed() bool {
-	return f.Repo != "" || f.Ref != "" || len(f.States) > 0 || f.Job != "" || !f.Since.IsZero() || !f.Until.IsZero()
+	return f.Repo != "" || f.Ref != "" || len(f.States) > 0 || f.Job != "" || !f.Since.IsZero() || !f.Until.IsZero() || f.Provider != ""
 }
 
 // Describe is the filter as a reader's own sentence, for the line an
@@ -231,6 +241,9 @@ func (f RunFilter) Describe() string {
 	if f.Job != "" {
 		parts = append(parts, fmt.Sprintf("job %q", f.Job))
 	}
+	if f.Provider != "" {
+		parts = append(parts, "provider "+f.Provider)
+	}
 	if !f.Since.IsZero() {
 		parts = append(parts, "started since "+f.Since.UTC().Format(time.RFC3339))
 	}
@@ -249,6 +262,9 @@ func (f RunFilter) Matches(run Run) bool {
 		return false
 	}
 	if f.Ref != "" && !strings.Contains(strings.ToLower(run.Ref), strings.ToLower(f.Ref)) {
+		return false
+	}
+	if f.Provider != "" && !strings.EqualFold(ProviderOf(run), f.Provider) {
 		return false
 	}
 	if len(f.States) > 0 {

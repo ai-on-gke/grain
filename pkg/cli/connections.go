@@ -333,7 +333,7 @@ func importConnections(ctx context.Context, store *model.Store, dataDir string, 
 		}
 	}
 	if seed.Relay != nil || seed.RelaySettings != nil {
-		fmt.Fprintln(out, "note: skipping relay settings (the rendezvous relay has been removed; see docs/relay-removed.md)")
+		fmt.Fprintln(out, "note: skipping relay settings (the rendezvous relay has been removed)")
 	}
 	fmt.Fprintf(out, "imported %d git and %d model connections\n", len(seed.Git), len(seed.Models))
 	return nil

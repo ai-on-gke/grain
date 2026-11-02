@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package portforward carries a capability grant's ports
-// (docs/capabilities-spec.md §5.3) into a sandbox: TCP connections to
+// (design/spec/capabilities/capabilities.spec.md §5.3) into a sandbox: TCP connections to
 // 127.0.0.1:<sandbox_port> in the guest arrive at 127.0.0.1:<host_port> on
 // this host, whatever the sandbox backend.
 //
@@ -121,7 +121,7 @@ func (r *Relay) Open(ctx context.Context, hostPort int, service Service) (*Forwa
 // OpenOwn registers a forward to hostPort, a loopback listener of this
 // process's own -- a capability grant's data-plane proxy (protocol.Endpoint)
 // carried into a sandbox that cannot reach grain's loopback, a CI job's
-// (docs/capabilities-spec.md §5.2.2) -- checked the way Open checks a
+// (design/spec/capabilities/capabilities.spec.md §5.2.2) -- checked the way Open checks a
 // capability server's, against this process instead.
 func (r *Relay) OpenOwn(ctx context.Context, hostPort int) (*Forward, error) {
 	return r.Open(ctx, hostPort, Service{PID: os.Getpid()})
@@ -259,7 +259,7 @@ func (r *Relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 // Serve bridges guest -- a connection a sandbox's dial-out access channel
 // carried to this host, rather than one ServeHTTP accepted with the
-// forward's token (docs/design/grain-on-gke.md#GKE-3) -- to the forward's
+// forward's token (design/design/grain-on-gke.design.md#GKE-3) -- to the forward's
 // host_port under the rules ServeHTTP applies: the listener is checked
 // against the capability server's own service on every connection
 // (§5.3.2), and closing the forward cuts the connection (§5.3.4). It

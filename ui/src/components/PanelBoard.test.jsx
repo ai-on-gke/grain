@@ -408,7 +408,7 @@ describe("PanelBoard", () => {
   // -- and it is the browser's own last range it falls back to, so
   // there is not even one wrong answer to notice. A hand run measuring
   // this very dashboard was misled by exactly that
-  // (docs/hand-runs/2026-09-07-panel-dashboard.md, section 5).
+  // (the 2026-09-07 panel-dashboard hand run, section 5).
   it("says which range it could not use, and the span it drew instead", () => {
     localStorage.setItem(
       GANTT_STORAGE_KEY,
@@ -939,7 +939,7 @@ describe("PanelBoard", () => {
   // Six panels over 929 tasks were 1.0-1.2s of script on every
   // three-second poll and ten were 2.1-2.3s -- a saturated main thread
   // on a deployment where nothing was happening
-  // (docs/hand-runs/2026-09-07-panel-dashboard.md, section 5). The cause
+  // (the 2026-09-07 panel-dashboard hand run, section 5). The cause
   // was not the panels: it was one shared list sorted and filtered once
   // per panel, N answers to the question the dashboard asked once.
   // taskFilters.js's narrowTasks is where that is now answered once and

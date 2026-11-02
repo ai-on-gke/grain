@@ -34,7 +34,7 @@ type PackageCache struct {
 	// cache is the store as this wiring administers it -- stats, flush and
 	// its bound -- and dir where it keeps its files. The Server in front
 	// of it holds it as a pkgcache.Store; nothing past the builder below
-	// names the *pkgcache.Cache (docs/design/grit-split.md#GS-1).
+	// names the *pkgcache.Cache (design/design/grit-split.design.md#GS-1).
 	cache pkgcache.Admin
 	dir   string
 	// credentials is what registry pulls authenticate with; its

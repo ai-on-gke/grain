@@ -24,7 +24,7 @@
 #       v<M>.<P>.0 is the highest *promoted* release tag in the build's
 #       history and n counts commits since it. An unpromoted
 #       v<M>.<Y>.0-rc.<k> on main does not move it: under release from
-#       trunk (docs/design/release-from-trunk.md, "Version Numbering
+#       trunk (design/design/release-from-trunk.design.md, "Version Numbering
 #       Rules") an rc is tagged on a main commit a day before it is
 #       promoted, and one that fails its soak is followed by rc.<k+1> of
 #       the same minor, so main goes on building v<M>.<P+1>.0-dev until

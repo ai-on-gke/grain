@@ -444,12 +444,88 @@ func (p *Policy) checkApproval(task model.Task, requester Requester) error {
 	return nil
 }
 
+// retiredAs is the grant the retired bare capability name became
+// (model.CanonicalLegacyGrant), compared without regard to case like
+// every other pattern, and false for any other name.
+func retiredAs(name string) (string, bool) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	to := strings.TrimSpace(model.CanonicalLegacyGrant(name))
+	return to, to != name
+}
+
+// deniesCapability is matchesCapability for Deny, which also reads a
+// retired bare name, on either side, as the grant it became: a policy
+// file on this machine is not rewritten by the schema migration that
+// rewrote the task's grants (git-push-any-ref became repo#write), and a
+// deny it names must not stop applying when that happens. The retired
+// name denies the whole method it became, whatever the arguments.
+func deniesCapability(patterns []string, capability string) bool {
+	if matchesCapability(patterns, capability) {
+		return true
+	}
+	if to, ok := retiredAs(capability); ok {
+		capability = to
+	}
+	for _, pattern := range patterns {
+		if to, ok := retiredAs(pattern); ok && model.IsCapabilityRef(to) {
+			pattern = model.CapabilityGrantRef(to)
+		}
+		if capabilityMatch(pattern, capability) {
+			return true
+		}
+	}
+	// A glob that matched a retired name (deny: [git-*]) matched it
+	// before it was rewritten, so it still denies what it became.
+	for _, old := range model.RetiredGrantNames() {
+		if !matchesCapability(patterns, old) {
+			continue
+		}
+		for _, to := range model.CanonicalLegacyGrants(old) {
+			if becameCapability(to, capability) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// becameCapability reports whether capability is to, the grant a retired
+// name became: the same method for a capability reference, whatever its
+// arguments, and the same grant otherwise.
+func becameCapability(to, capability string) bool {
+	if model.IsCapabilityRef(to) {
+		return model.IsCapabilityRef(capability) &&
+			strings.EqualFold(model.CapabilityGrantRef(to), model.CapabilityGrantRef(strings.TrimSpace(capability)))
+	}
+	return strings.EqualFold(strings.TrimSpace(to), strings.TrimSpace(capability))
+}
+
+// allowsCapability is matchesCapability for Allow, which also admits
+// exactly the grant a retired bare name in it became -- arguments and
+// all, so an allow written for git-push-any-ref admits its repo#write
+// grant and no other repo#write.
+func allowsCapability(patterns []string, capability string) bool {
+	if matchesCapability(patterns, capability) {
+		return true
+	}
+	want := strings.TrimSpace(capability)
+	if to, ok := retiredAs(want); ok {
+		want = to
+	}
+	for _, pattern := range patterns {
+		if to, ok := retiredAs(pattern); ok && to == want {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *Policy) checkCapabilities(task model.Task) error {
 	for _, g := range task.Grants {
-		if matchesCapability(p.Capabilities.Deny, g.Capability) {
+		if deniesCapability(p.Capabilities.Deny, g.Capability) {
 			return fmt.Errorf("local policy forbids capability %q", g.Capability)
 		}
-		if len(p.Capabilities.Allow) > 0 && !matchesCapability(p.Capabilities.Allow, g.Capability) {
+		if len(p.Capabilities.Allow) > 0 && !allowsCapability(p.Capabilities.Allow, g.Capability) {
 			return fmt.Errorf("local policy does not allow capability %q", g.Capability)
 		}
 	}

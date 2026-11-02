@@ -22,7 +22,7 @@ import (
 )
 
 // The two wakes resume_later adds to the ones parks already had
-// (docs/design/durable-tasks.md#DT-9). A resume_later that names ci or
+// (design/design/durable-tasks.design.md#DT-9). A resume_later that names ci or
 // message defers its own task with no wake time, or with its at
 // (ui.Client.ResumeLater); what releases that deferral is the condition
 // arriving -- a CI verdict (Store.DueResumeOnCI, which

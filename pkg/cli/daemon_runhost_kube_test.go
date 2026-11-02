@@ -16,7 +16,7 @@ package cli
 
 // TestDaemonRollAdoptsTheRunAndItOpensItsPullRequest is
 // TestDaemonRestartAdoptsTheRunAndItOpensItsPullRequest on Kubernetes:
-// the same acceptance test of docs/non-disruptive-upgrade.md, against the
+// the same acceptance test of design/design/non-disruptive-upgrade.design.md, against the
 // real `grain daemon` running as deploy/kubernetes/grain.yaml's shape of
 // Deployment (one replica, Recreate, a ReadWriteOnce claim) in a kind
 // cluster, with -k8s-sandboxes and -run-host-image=self:
@@ -55,7 +55,7 @@ package cli
 // image runs this test binary in (seeding the claim, reading the store,
 // asking for the upgrade) are TestDaemonRollAdoptionRole.
 //
-// The task is durable (docs/design/durable-tasks.md#DT-1), so its run
+// The task is durable (design/design/durable-tasks.design.md#DT-1), so its run
 // has no deadline to carry across the roll.
 // TestDaemonRollResumesADurableRunItDidNotAdopt is the same roll with no
 // run host, where the run is suspended and resumed instead. Both passed
@@ -134,7 +134,7 @@ func TestDaemonRollAdoptsTheRunAndItOpensItsPullRequest(t *testing.T) {
 // run host: the durable run's claude is a child of the daemon pod, as
 // every run on a deployment with no adoptable framework is -- on
 // -k8s-granule-sandboxes, which has no run pods, that is every run
-// (docs/design/durable-tasks.md#DT-1, case 2). The stopping pod drains
+// (design/design/durable-tasks.design.md#DT-1, case 2). The stopping pod drains
 // it and finishes it as interrupted, which is a restart suspension; the
 // next daemon pod starts the task on its first cycles, ahead of the
 // queue, resumed (--resume) into the session the first run's stub
@@ -593,7 +593,7 @@ models:
 			// Small enough for a kind node beside the daemon pod; the
 			// default sandbox asks for 8 GiB.
 			SandboxCPUs: 1, SandboxMemoryMB: 1024, SandboxDiskGB: 5,
-			// Durable (docs/design/durable-tasks.md#DT-1): no deadline,
+			// Durable (design/design/durable-tasks.design.md#DT-1): no deadline,
 			// priority dispatch, and placed on the adoptable run host --
 			// the run this roll has to carry across is a durable one.
 			Grants: []model.Grant{{Capability: model.DurableCapability}},

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // The two views that are not a view of the tasks
-// (docs/design/settings-panel.md): Settings, every deployment setting,
+// (design/design/settings-panel.design.md): Settings, every deployment setting,
 // this browser's preferences and Memory, opened from the gear; and
 // System, status and operations (Health, Logs, Sandboxes, Caches, Top,
 // Pipeline, Metrics, Upgrade, Power), opened from the icon beside it.

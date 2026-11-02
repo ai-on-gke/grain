@@ -14,7 +14,7 @@ body: |
 
   ## 2. Check release-candidate progress on `main`
 
-  Releases are cut from `main` (`docs/design/release-from-trunk.md`): there is no
+  Releases are cut from `main` (`design/design/release-from-trunk.design.md`): there is no
   daily agent cut, no `candidate -> main` back-merge and no port tasks between the
   two branches any more, and `candidate` is never the base of a pull request.
   `.grain/workflows/release.yml` runs on every merge to `main`, so a green, current

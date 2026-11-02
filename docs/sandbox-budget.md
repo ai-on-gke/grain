@@ -4,7 +4,7 @@ Every sandbox grain builds, whether for an agent run or a CI job, is charged
 its shape (vCPU, memory, sandbox disk) to one ledger (`model.Ledger`). That
 ledger is held against one budget (`model.Budget`): the host, or the
 cluster's allocatable, times the overcommit ratios, less the host reserve.
-[Architecture](architecture.md) has the whole picture. This page covers who
+[Architecture](../design/design/architecture.design.md) has the whole picture. This page covers who
 waits for whom.
 
 ## Ordinary work, CI and repairs

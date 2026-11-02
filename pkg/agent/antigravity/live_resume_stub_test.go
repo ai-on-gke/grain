@@ -59,7 +59,7 @@ package antigravity
 //	GRAIN_LIVE_AGENT_TEST=1 go test ./pkg/agent/antigravity/ \
 //	  -run 'TestLiveAgyResumes|TestLiveAgyOpensANewConversation' -count=1 -v
 //
-// docs/hand-runs/2026-09-17-agy-resume.md is the run these were written
+// the 2026-09-17 agy-resume hand run is the run these were written
 // from, against agy 1.1.27 (the Dockerfile's pinned release) and 1.2.5
 // (what antigravity.google/cli/install.sh served that day, and therefore
 // what a freshly built k8s sandbox image carries).

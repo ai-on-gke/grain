@@ -45,7 +45,7 @@ import (
 // nothing below matches, no agent.UsageLimitError is returned, and
 // dispatch sends the next task straight at the same wall rather than
 // pausing. capacity.go's header has the same measurement and
-// docs/hand-runs/2026-09-08-agy-retry.md §5 records it. Framework.Run now classifies the bounded,
+// the 2026-09-08 agy-retry hand run §5 records it. Framework.Run now classifies the bounded,
 // redacted excerpt of the current exec's private --log-file as well as
 // its stream, so the refusal becomes an agent.UsageLimitError without
 // treating every generic exit 1 as quota exhaustion.
