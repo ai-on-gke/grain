@@ -16,9 +16,9 @@ Each repository has a `design/` folder with five classes of material:
 
 1. **Design documents (`design/design/*.design.md`)** — High-level "1-pager" designs for a specific topic, written in interactive sessions between PMs, engineers, and coding agents, and reviewed by humans. Designs may reference documents in other repositories.
 2. **Specifications (`design/spec/...`)** — Detailed normative specifications of design documents, generally one file or folder per design. Specifications are started by a person (with a personal agent or a grain task) and reviewed and edited by humans. They cover APIs, schemas, requirement IDs, and UI mockups.
-3. **Tasks (`**/*.task.grain.md`)** — High-level task definitions with initial capability and repository grants (per [`grainfiles.design.md`](grainfiles.design.md)). They are drafted when a person starts task generation, audited and merged by humans, and named `.task.grain.md` so grain imports them automatically once merged.
-4. **Playbook designs** — High-level designs for background processes such as releases, qualification, and nightly testing.
-5. **Playbooks (`**/*.process.grain.md`, `.grain/`)** — Concrete definitions of standing tasks, triggers, and schedules in grain's declarative formats.
+3. **Tasks (`**/*.task.grain.md`)** — High-level task definitions. They are drafted when a person starts task generation, audited and merged by humans, and named `.task.grain.md` so grain imports them automatically once merged.
+4. **Playbook designs** — High-level designs for background processes such as releases, qualification, and nightly testing. High-level "1-pager" designs for a specific process, written in interactive sessions between PMs, engineers, and coding agents, and reviewed by humans. Designs may reference documents in other repositories.
+5. **Playbooks (`**/*.process.grain.md`, `.grain/`)** — Concrete definitions of standing tasks, triggers, and schedules in grain's declarative formats, generally one file or folder per playbook design. These are imported and run by grain.
 
 Alternatively, all design material can live in a separate repository rather than in each code repository; both layouts follow the same rules.
 
