@@ -413,7 +413,12 @@ import "strconv"
 // branch can hold an overlap re-check for each of several changes at once
 // (grain/task-2390). The rows are carried across with an empty task_id,
 // which the queue still reads, re-validates and cleans up as before.
-const SchemaVersion = 89
+//
+// 90 changes no table: it folds retired 1-to-1 preset capability entries in
+// `grain_config`.`capability_policy`'s catalogue from `inProcess[<retired>]`
+// into `apiScopes.presets[<preset>]`, merging restrictions conservatively when
+// both exist, and rewrites retired task defaults in `catalogue.defaults`.
+const SchemaVersion = 90
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the
