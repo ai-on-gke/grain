@@ -3,6 +3,9 @@
 Task 2365. Status: **phases 1 and 2 landed** (phase 2: task 2370).
 Phases 3–5 are filed as follow-up tasks.
 
+To create a new repository on one of these hosts and connect it in one
+step, see [creating-repos.md](creating-repos.md).
+
 ## Deployment git connections (single-tenant reset, stage 1)
 
 Task 4680 ([single-tenant-reset.md](single-tenant-reset.md), stage 1)
