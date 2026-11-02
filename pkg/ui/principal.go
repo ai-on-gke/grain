@@ -104,9 +104,8 @@ type IAPConfig struct {
 	// KeysURL is where the assertion's signing keys are published, as
 	// IAP's PEM map or a JWK set. Empty means $GRAIN_IAP_KEYS_URL, and
 	// then GoogleIAPCertURL.
-	KeysURL   string
-	Mode      bool
-	Validator IAPValidator
+	KeysURL string
+	Mode    bool
 	// LocalAPIToken is Config.LocalAPIToken: the secret this host's own
 	// CLI presents (presentsLocalAPIToken).
 	LocalAPIToken string
@@ -227,6 +226,15 @@ func iapKeysURL(ctx context.Context) string {
 	return u
 }
 
+// iapAudienceFor is the audience (or comma-separated audiences) a request's
+// IAP assertions must carry.
+func iapAudienceFor(ctx context.Context) string {
+	if cfg, ok := IAPConfigFromContext(ctx); ok && strings.TrimSpace(cfg.Audience) != "" {
+		return strings.TrimSpace(cfg.Audience)
+	}
+	return GetIAPAudience()
+}
+
 // iapIssuerFor is the issuer a request's assertions must carry.
 func iapIssuerFor(ctx context.Context) string {
 	if cfg, ok := IAPConfigFromContext(ctx); ok && strings.TrimSpace(cfg.Issuer) != "" {
@@ -247,6 +255,12 @@ func ResetIAPConfig() {
 	ignoredIdentityHeadersMu.Lock()
 	clear(ignoredIdentityHeadersLogged)
 	ignoredIdentityHeadersMu.Unlock()
+	refusedAssertionsMu.Lock()
+	clear(refusedAssertionsLogged)
+	refusedAssertionsMu.Unlock()
+	refusedVerifiersMu.Lock()
+	clear(refusedVerifiersLogged)
+	refusedVerifiersMu.Unlock()
 }
 
 // fetchGoogleIAPKeys fetches the signing keys published at certURL. Two
@@ -505,14 +519,26 @@ func VerifyIAPToken(ctx context.Context, tokenStr string) (string, error) {
 	}
 
 	var validator IAPValidator
-	var aud string
+	aud := iapAudienceFor(ctx)
 
-	if cfg, ok := IAPConfigFromContext(ctx); ok {
-		validator = cfg.Validator
-		aud = strings.TrimSpace(cfg.Audience)
-	}
-	if aud == "" {
-		aud = GetIAPAudience()
+	for _, v := range registeredVerifiersSnapshot() {
+		if iv, ok := v.(*iapVerifier); ok {
+			validator = iv.validator
+			if iv.audience != "" {
+				aud = iv.audience
+			}
+			if iv.issuer != "" || iv.keysURL != "" {
+				cfg, _ := IAPConfigFromContext(ctx)
+				if iv.issuer != "" {
+					cfg.Issuer = iv.issuer
+				}
+				if iv.keysURL != "" {
+					cfg.KeysURL = iv.keysURL
+				}
+				ctx = WithIAPConfig(ctx, cfg)
+			}
+			break
+		}
 	}
 
 	var claims *IAPClaims
@@ -533,7 +559,7 @@ func VerifyIAPToken(ctx context.Context, tokenStr string) (string, error) {
 	if email == "" {
 		email = strings.TrimSpace(claims.Subject)
 	}
-	email = cleanIdentity(email)
+	email = normalizeIdentityEmail(email)
 	if email == "" {
 		return "", errors.New("no email or subject found in verified IAP token claims")
 	}
@@ -561,7 +587,8 @@ var (
 
 // relayedByProxy reports whether r shows signs of having been relayed
 // on somebody else's behalf, which makes an in-process-looking request no
-// longer the daemon's own (singleTenantTrusted).
+// longer the daemon's own (singleTenantTrusted). Every registered
+// IdentityVerifier's Headers() also count as proxy headers.
 func relayedByProxy(r *http.Request) bool {
 	for _, h := range proxyIdentityHeaders {
 		if r.Header.Get(h) != "" {
@@ -571,6 +598,13 @@ func relayedByProxy(r *http.Request) bool {
 	for _, h := range forwardingHeaders {
 		if r.Header.Get(h) != "" {
 			return true
+		}
+	}
+	for _, v := range registeredVerifiersSnapshot() {
+		for _, h := range v.Headers() {
+			if r.Header.Get(h) != "" {
+				return true
+			}
 		}
 	}
 	return false
@@ -609,52 +643,53 @@ const (
 	AuthMethodTrusted AuthMethod = "trusted"
 )
 
-// ExtractPrincipal returns who r is authenticated as. The daemon keeps no
-// accounts, so that is never a person, whatever a session, an IAP
-// assertion or an identity header beside the request says: it is judged
-// by its access code, or by being in-process, alone (singleTenantTrusted).
+// ExtractPrincipal returns who r is authenticated as through a registered
+// IdentityVerifier (such as Google Cloud IAP). Plaintext identity headers
+// never authenticate anybody. If the deciding verifier declares
+// AccessCodeWins() == true and r also carries a valid access code, the
+// request is judged by the access code alone and ExtractPrincipal returns
+// false.
 func ExtractPrincipal(r *http.Request) (model.Principal, bool) {
 	p, _, ok := extractPrincipal(r)
 	return p, ok
 }
 
-// extractPrincipal is ExtractPrincipal, also saying which of its
-// sources identified the caller. A person is nobody: the access gate
-// judges such a request by where it came from alone, and every handler
-// has to see the same caller the gate let in (grain/task-4338), so no
-// handler reading its caller (requestUser, actingUser) acts as,
-// authorizes against or attributes to somebody the gate did not let in
-// as themselves.
+// extractPrincipal is ExtractPrincipal, also saying which source
+// identified the caller.
 func extractPrincipal(r *http.Request) (model.Principal, AuthMethod, bool) {
-	p, method, ok := identifyCaller(r)
-	if ok && p.Kind == model.PrincipalHuman {
+	if r == nil {
 		return model.Principal{}, AuthMethodNone, false
 	}
-	return p, method, ok
+	cv := cachedOrVerifyCaller(r)
+	if !cv.present || cv.err != nil {
+		return model.Principal{}, AuthMethodNone, false
+	}
+	if cv.accessCodeWins {
+		cfg, _ := IAPConfigFromContext(r.Context())
+		if presentsAccessCode(r, cfg) {
+			return model.Principal{}, AuthMethodNone, false
+		}
+		if _, ok := accessSessionIssued(r, cfg); ok {
+			return model.Principal{}, AuthMethodNone, false
+		}
+	}
+	return model.Principal{Kind: cv.id.Kind, ID: cv.id.Email}, cv.method, true
 }
 
-// identifyCaller is whoever r's credentials name, and how, before
-// extractPrincipal drops a person: the access gate asks it whether a
-// request carries an IAP assertion that verifies, to refuse a person a
-// proxy vouched for (singleTenantRefusesIdentity). A plaintext identity
-// header names nobody; it is only logged (logIgnoredIdentityHeader).
+// identifyCaller asks each registered IdentityVerifier in turn (with IAP
+// registered first by default when its audience is set). The first verifier
+// whose header is present decides the request; its error refuses the request
+// and never falls through to another verifier. Plaintext identity headers
+// name nobody and are only logged (logIgnoredIdentityHeader).
 func identifyCaller(r *http.Request) (model.Principal, AuthMethod, bool) {
 	if r == nil {
 		return model.Principal{}, AuthMethodNone, false
 	}
-	iapAssertion := strings.TrimSpace(r.Header.Get(IAPAssertionHeader))
-	if iapAssertion != "" {
-		email, err := VerifyIAPToken(r.Context(), iapAssertion)
-		if err == nil && email != "" {
-			return model.Principal{Kind: model.PrincipalHuman, ID: email}, AuthMethodIAP, true
-		}
-		if err != nil {
-			logRefusedAssertion(iapAssertion, err)
-		}
+	cv := cachedOrVerifyCaller(r)
+	if !cv.present || cv.err != nil {
 		return model.Principal{}, AuthMethodNone, false
 	}
-	logIgnoredIdentityHeader(r)
-	return model.Principal{}, AuthMethodNone, false
+	return model.Principal{Kind: cv.id.Kind, ID: cv.id.Email}, cv.method, true
 }
 
 // withAuthMethod records how the request's principal was established
@@ -684,6 +719,15 @@ func authMethodFromContext(ctx context.Context) AuthMethod {
 // user in X-Grain-User on every request, and that is no proxy for an
 // operator to configure.
 func unverifiedIdentity(r *http.Request, proxyOnly bool) string {
+	for _, v := range activeVerifiers(r.Context()) {
+		if h := firstPresentHeader(r, v.Headers()); h != "" {
+			if v.Name() == string(AuthMethodIAP) {
+				return fmt.Sprintf("its %s did not verify against this deployment's IAP audience, issuer and keys "+
+					"(-ui-iap-audience, -ui-iap-issuer, -ui-iap-keys-url)", h)
+			}
+			return fmt.Sprintf("its %s header did not verify (%s)", h, v.Name())
+		}
+	}
 	if strings.TrimSpace(r.Header.Get(IAPAssertionHeader)) != "" {
 		return fmt.Sprintf("its %s did not verify against this deployment's IAP audience, issuer and keys "+
 			"(-ui-iap-audience, -ui-iap-issuer, -ui-iap-keys-url)", IAPAssertionHeader)
@@ -824,8 +868,8 @@ func requestPrincipal(what, id, kind string) (model.Principal, error) {
 	}
 	if !model.PrincipalKind(kind).Valid() {
 		return model.Principal{}, validationErrorf(
-			"%q is not a kind of principal grain knows (%s, %s or %s)",
-			kind, model.PrincipalHuman, model.PrincipalAgent, model.PrincipalAutomation)
+			"%q is not a kind of principal grain knows (%s, %s, %s or %s)",
+			kind, model.PrincipalHuman, model.PrincipalService, model.PrincipalAgent, model.PrincipalAutomation)
 	}
 	return model.Principal{Kind: model.PrincipalKind(kind), ID: id}, nil
 }

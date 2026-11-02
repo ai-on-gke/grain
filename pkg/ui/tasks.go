@@ -297,6 +297,13 @@ type Task struct {
 	// (mcp.FiledProposal).
 	SupersedeMoved []string             `json:"supersedeMoved,omitempty"`
 	SupersedeKept  []SupersedeKeptEntry `json:"supersedeKept,omitempty"`
+	// DroppedDefaults is the deployment and repository default grants
+	// the capability policy kept off this task when it was filed, each
+	// with the policy's reason -- the same thing the note on its thread
+	// says, for a caller filing over the API that reads no thread.
+	// Filled in only on the answer to the CreateTask call that dropped
+	// them, like SupersedeMoved.
+	DroppedDefaults []DroppedDefault `json:"droppedDefaults,omitempty"`
 	// Reverts is the ID of the task this one was filed to revert, and
 	// RevertedBy the ID of the task that reverted this one --
 	// model.LinkReverts and model.LinkRevertedBy.

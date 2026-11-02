@@ -258,13 +258,13 @@ func TestCouldBeAccessCode(t *testing.T) {
 
 func TestHostdConnectRoute(t *testing.T) {
 	for target, want := range map[string]bool{
-		"/api/hostd/connect":    true,
-		"/api/hostd/connect/x":  false,
+		"/api/hostd/connect":     true,
+		"/api/hostd/connect/x":   false,
 		"/api/executors/connect": false,
-		"/_grain/executor":      false,
-		"/install-executor.sh":  false,
-		"/install/linux/amd64":  false,
-		"/api/tasks":            false,
+		"/_grain/executor":       false,
+		"/install-executor.sh":   false,
+		"/install/linux/amd64":   false,
+		"/api/tasks":             false,
 	} {
 		r := httptest.NewRequest(http.MethodGet, "http://grain.example/", nil)
 		r.URL.Path = target

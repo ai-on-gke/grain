@@ -1170,6 +1170,20 @@ type Config struct {
 	// IAPKeysURL is where the assertion's signing keys are published (a
 	// PEM map or JWK set); empty means GoogleIAPCertURL.
 	IAPKeysURL string
+	// AllowedPrincipals, when non-empty, is the allowlist of user:,
+	// serviceAccount:, group:, and domain: entries admitted when a request
+	// authenticates through IAP or another registered IdentityVerifier
+	// (-ui-allowed-principals). When empty, defaults to $GRAIN_ALLOWED_PRINCIPALS,
+	// or the deployment owner (Actor) plus provisioned service accounts.
+	AllowedPrincipals []string
+	// ProvisionedServiceAccounts lists GCP service accounts grain itself
+	// provisions for this deployment, included in the default allowlist when
+	// AllowedPrincipals is unset.
+	ProvisionedServiceAccounts []string
+	// GroupChecker, when set, resolves group: entries in AllowedPrincipals;
+	// nil uses CloudIdentityGroupChecker lazily when at least one group: entry
+	// is configured.
+	GroupChecker GroupMemberChecker
 	// IAPMode, when true, requires incoming requests behind Google Cloud IAP /
 	// Cloud Run Proxy to provide a cryptographically verified JWT assertion.
 	IAPMode bool

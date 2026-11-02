@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -67,9 +68,11 @@ type Server struct {
 	// access is the single-tenant access gate's rate limiter, and
 	// accessCode the token file it checks codes against
 	// (localAPITokenNow) -- both accesscode.go's.
-	access          accessLimiter
-	accessCode      atomic.Pointer[accessCodeFile]
-	externalLimiter *externalAgentLimiter
+	access            accessLimiter
+	accessCode        atomic.Pointer[accessCodeFile]
+	externalLimiter   *externalAgentLimiter
+	defaultGroupsOnce sync.Once
+	defaultGroups     *CloudIdentityGroupChecker
 }
 
 // NewServer builds a Server over a store.
@@ -129,6 +132,12 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	// PrincipalAgent("external:<name>") and is held to its own scopes by
 	// agentAPIGate and handleMCP.
 	cfg, _ := IAPConfigFromContext(r.Context())
+	cv := verifyCallerNow(r)
+	r = r.WithContext(withCallerVerification(r.Context(), &cv))
+	if cv.present && cv.err != nil {
+		writeError(w, http.StatusUnauthorized, fmt.Errorf("identity assertion was not accepted: %w", cv.err))
+		return
+	}
 	if externalTokenFromContext(r.Context()) == nil && presentsExternalAgentToken(r) {
 		tok, release, ok := s.authenticateExternalAgent(w, r)
 		if !ok {
@@ -141,17 +150,17 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if !s.singleTenantGate(w, r, cfg) {
 		return
 	}
-	if singleTenantRefusesIdentity(r) && !s.presentsAccess(r) && !hostdConnectRoute(r) && externalTokenFromContext(r.Context()) == nil {
-		writeError(w, http.StatusUnauthorized, errors.New(singleTenantProxiedRefusal))
-		return
-	}
 	if tok := externalTokenFromContext(r.Context()); tok != nil {
 		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name}
 		r = r.WithContext(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted))
 	} else {
 		p, method, ok := extractPrincipal(r)
 		if ok {
-			r = r.WithContext(withAuthMethod(WithPrincipal(r.Context(), p), method))
+			if !singleTenantOpenRoute(r) || s.checkAllowedPrincipal(r.Context(), VerifiedIdentity{Email: p.ID, Kind: p.Kind}) == nil {
+				r = r.WithContext(withAuthMethod(WithPrincipal(r.Context(), p), method))
+			} else {
+				ok = false
+			}
 		}
 		if requiresAccess(r) && !ok && !singleTenantTrusted(r) {
 			// No verified principal at all. Only a caller this daemon

@@ -203,12 +203,13 @@ type Config struct {
 	// -ui-iap-issuer and -ui-iap-keys-url: what a signed assertion must
 	// carry, and where its keys are, for the UI/API to accept the
 	// identity in it (ui.Config.IAPAudience and the rest).
-	UiIAPAudience     string
-	UiIAPIssuer       string
-	UiIAPKeysURL      string
-	UiOpen            bool
-	Actor             string
-	DefaultTargetRepo string
+	UiIAPAudience       string
+	UiIAPIssuer         string
+	UiIAPKeysURL        string
+	UiAllowedPrincipals []string
+	UiOpen              bool
+	Actor               string
+	DefaultTargetRepo   string
 	// PolicyFile is -policy: this workstation's local policy
 	// (grain_policy.yml, pkg/policy), which every task's claims are
 	// checked against before it is given a sandbox. Empty enforces none.
