@@ -972,6 +972,7 @@ type MetricsRuns struct {
 type MetricsBacklog struct {
 	ByState             map[model.State]int `json:"byState"`
 	Queued              int                 `json:"queued"`
+	StoppedByOperator   int                 `json:"stoppedByOperator,omitempty"`
 	OldestQueuedSeconds float64             `json:"oldestQueuedSeconds"`
 	OldestQueuedTaskID  string              `json:"oldestQueuedTaskId,omitempty"`
 }
@@ -1406,6 +1407,7 @@ func (c *Client) Metrics(ctx context.Context, req MetricsRequest) (MetricsReport
 		{metricsTasks, "task timings", into(&in.Tasks, c.Store.TaskTimings)},
 		{metricsRuns, "run timings", into(&in.Runs, c.Store.RunTimings)},
 		{metricsStates, "task states", into(&in.States, c.Store.States)},
+		{metricsStates, "stopped turns", into(&in.TurnsStopped, c.Store.TurnsStopped)},
 		// What each run recorded about its own tool use. A deployment
 		// whose runs all predate these rows reads them as empty and gets
 		// the rest of the report unchanged -- which is the honest answer,
@@ -1727,6 +1729,7 @@ func metricsReportFrom(rep metrics.Report, cycles bool) MetricsReport {
 		Backlog: MetricsBacklog{
 			ByState:             rep.Backlog.ByState,
 			Queued:              rep.Backlog.Queued,
+			StoppedByOperator:   rep.Backlog.StoppedByOperator,
 			OldestQueuedSeconds: rep.Backlog.OldestQueuedWait.Seconds(),
 			OldestQueuedTaskID:  rep.Backlog.OldestQueuedTaskID,
 		},

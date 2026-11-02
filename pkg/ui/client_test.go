@@ -3462,6 +3462,99 @@ func TestStoppedTurnIsMarkedOnEveryView(t *testing.T) {
 	}
 }
 
+// TestRetryResumesAStoppedTurn is task 2345's: Retry on a task whose
+// running turn an operator stopped used to return success and change
+// nothing -- the task stayed awaiting_reply, parked on the stop, and no
+// cycle ever dispatched it again. It has to lift the stop and queue the
+// task, the way a reply does.
+func TestRetryResumesAStoppedTurn(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	c.Config.TaskCanceller = &recordingTaskCanceller{}
+	task := create(t, c, ctx)
+	if err := store.StartRun(ctx, model.Run{
+		ID: "r1", TaskID: task.ID, Sandbox: "s1", Attempt: 1, StartedAt: baseTime,
+	}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Stop(ctx, task.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := store.FinishRun(ctx, "r1", baseTime.Add(time.Minute), "cancelled", model.TurnStoppedDetail); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.Task(ctx, task.ID); err != nil || !got.TurnStopped {
+		t.Fatalf("after Stop: TurnStopped = %v (err %v), want true", got.TurnStopped, err)
+	}
+
+	woken := 0
+	c.Config.Wake = func() { woken++ }
+	if err := c.Retry(ctx, task.ID); err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+	got, err := c.Task(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != model.StateQueued || got.TurnStopped {
+		t.Fatalf("after Retry: state = %q, TurnStopped = %v; want queued and no longer stopped", got.State, got.TurnStopped)
+	}
+	if ready, err := store.IsReady(ctx, task.ID); err != nil || !ready {
+		t.Fatalf("after Retry: IsReady = %v (err %v), want the task dispatchable", ready, err)
+	}
+	if woken == 0 {
+		t.Error("Retry of a stopped turn did not wake the dispatch loop")
+	}
+}
+
+// TestRetryOfAStoppedTurnIsAPersonsToMake: a run with tasks:write on
+// another task can call retry through the agent API, but the stop it
+// would lift is waiting on a person -- the same rule a reply is held to.
+func TestRetryOfAStoppedTurnIsAPersonsToMake(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	c.Config.TaskCanceller = &recordingTaskCanceller{}
+	task := create(t, c, ctx)
+	if err := store.StartRun(ctx, model.Run{
+		ID: "r1", TaskID: task.ID, Sandbox: "s1", Attempt: 1, StartedAt: baseTime,
+	}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Stop(ctx, task.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := store.FinishRun(ctx, "r1", baseTime.Add(time.Minute), "cancelled", model.TurnStoppedDetail); err != nil {
+		t.Fatal(err)
+	}
+	agentCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: "999"})
+	if err := c.Retry(agentCtx, task.ID); err == nil {
+		t.Fatal("an agent's Retry lifted an operator's stop")
+	}
+	got, err := c.Task(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != model.StateAwaitingReply || !got.TurnStopped {
+		t.Fatalf("after an agent's Retry: state = %q, TurnStopped = %v; want still stopped", got.State, got.TurnStopped)
+	}
+}
+
+// TestRetryOnAPausedTaskSaysWhy: an operator's pause is not Retry's to
+// lift, and a Retry that succeeded while leaving the task paused would be
+// the same silent no-op TestRetryResumesAStoppedTurn is about.
+func TestRetryOnAPausedTaskSaysWhy(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	task := create(t, c, ctx)
+	if err := c.Pause(ctx, task.ID, ui.PauseOptions{}); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	err := c.Retry(ctx, task.ID)
+	if err == nil || !strings.Contains(err.Error(), "Resume") {
+		t.Fatalf("Retry on a paused task: err = %v, want one naming Resume", err)
+	}
+}
+
 func TestListTasksCarriesEveryTaskWithItsState(t *testing.T) {
 	t.Parallel()
 	c, _, ctx := testClient(t)

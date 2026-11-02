@@ -34,11 +34,35 @@ const VIEWPORTS = [
 // expectInside asserts that a menu item, and its policy verdict, lie
 // inside the menu: a long refusal wraps rather than running out of the
 // popover on a phone.
+//
+// The popover opens with MUI's Grow transition, a scale transform, so the
+// boxes are read only once its animations have finished, and all three in
+// one snapshot: read one round trip apart on a slow runner, the menu was
+// measured at one scale and the item at a larger one, and a row that fits
+// read as 1.6px wider than its menu.
 async function expectInside(menu, item) {
   await item.scrollIntoViewIfNeeded();
-  const menuBox = await menu.boundingBox();
-  const itemBox = await item.boundingBox();
-  const verdictBox = await item.locator(".method-policy-verdict").boundingBox();
+  await menu.evaluate((el) =>
+    Promise.all(
+      (el.closest(".MuiPopover-paper") || el)
+        .getAnimations({ subtree: true })
+        .map((a) => a.finished),
+    ),
+  );
+  const { menuBox, itemBox, verdictBox } = await item.evaluate(
+    (el, m) => {
+      const box = (e) => {
+        const r = e.getBoundingClientRect();
+        return { x: r.x, width: r.width };
+      };
+      return {
+        menuBox: box(m),
+        itemBox: box(el),
+        verdictBox: box(el.querySelector(".method-policy-verdict")),
+      };
+    },
+    await menu.elementHandle(),
+  );
   expect(itemBox.x).toBeGreaterThanOrEqual(menuBox.x - 1);
   expect(itemBox.x + itemBox.width).toBeLessThanOrEqual(
     menuBox.x + menuBox.width + 1,
