@@ -137,8 +137,6 @@ func entryFor(c statusCase) queueEntry {
 }
 
 func TestStatusOfIsTotal(t *testing.T) {
-	heads := map[string]string{"acme/widgets": "t1"}
-	behind := map[string]string{"acme/widgets": "t0"}
 
 	var cases []statusCase
 	for _, health := range statusHealths {
@@ -177,11 +175,7 @@ func TestStatusOfIsTotal(t *testing.T) {
 	states := map[string]int{}
 	for _, c := range cases {
 		e := entryFor(c)
-		h := heads
-		if !c.isHead {
-			h = behind
-		}
-		got := statusOf(e, c.isMergeHead, c.blocked, c.review, h)
+		got := statusOf(e, c.isMergeHead, c.blocked, c.review, laneState{})
 		if got.state == "" {
 			t.Fatalf("%s: no state at all -- an auto-merge task with an open pull "+
 				"request must always be waiting on something or being worked on", c.name)
@@ -219,15 +213,13 @@ func TestStatusOfIsTotal(t *testing.T) {
 // that a change making them speak is as visible as a change making a
 // driven task fall silent.
 func TestStatusOfNamesTheDeliberateBlanks(t *testing.T) {
-	heads := map[string]string{"acme/widgets": "t1"}
-
 	// A task nobody asked to be merged automatically. grain watches the
 	// pull request to close the task out; the task's own state
 	// (awaiting_submit) is the answer, and a queue activity line beside
 	// it would claim work nobody asked for.
 	watched := entryFor(statusCase{health: model.PrClean, checksKnown: true})
 	watched.task.AutoMerge = false
-	if got := statusOf(watched, true, false, reviewState{}, heads); got.state != "" {
+	if got := statusOf(watched, true, false, reviewState{}, laneState{}); got.state != "" {
 		t.Errorf("a task that is not auto-merge says %q, want nothing", got.state)
 	}
 
@@ -236,7 +228,7 @@ func TestStatusOfNamesTheDeliberateBlanks(t *testing.T) {
 	// waiting for.
 	for _, health := range []model.PrHealth{model.PrMerged, model.PrClosed} {
 		e := entryFor(statusCase{health: health, checksKnown: true})
-		if got := statusOf(e, true, false, reviewState{}, heads); got.state != "" {
+		if got := statusOf(e, true, false, reviewState{}, laneState{}); got.state != "" {
 			t.Errorf("a %s pull request says %q, want nothing", health, got.state)
 		}
 	}
@@ -388,7 +380,7 @@ func TestStatusOfNamesWhatEachCaseIsWaitingOn(t *testing.T) {
 			if h == nil {
 				h = heads
 			}
-			got := statusOf(tc.entry, tc.head, tc.blocked, tc.review, h)
+			got := statusOf(tc.entry, tc.head, tc.blocked, tc.review, laneState{})
 			if got.state != tc.wantState {
 				t.Fatalf("state = %q, want %q (note %q)", got.state, tc.wantState, got.note)
 			}
@@ -417,7 +409,7 @@ func TestBlockedStatusKeepsTheReasonTheQueueRecorded(t *testing.T) {
 	e.obs.MergeQueueState = mergeStateFailed
 	e.obs.MergeQueueNote = "the repair ran and did not take -- checks are still failing"
 
-	got := statusOf(e, true, true, reviewState{}, map[string]string{"acme/widgets": "t1"})
+	got := statusOf(e, true, true, reviewState{}, laneState{})
 	if got.state != mergeStateFailed || got.note != e.obs.MergeQueueNote {
 		t.Fatalf("status = %+v, want the recorded reason kept", got)
 	}
@@ -425,7 +417,7 @@ func TestBlockedStatusKeepsTheReasonTheQueueRecorded(t *testing.T) {
 	// An entry blocked by a build that recorded no reason still says
 	// something a person can act on.
 	e.obs.MergeQueueState, e.obs.MergeQueueNote = "", ""
-	got = statusOf(e, true, true, reviewState{}, map[string]string{"acme/widgets": "t1"})
+	got = statusOf(e, true, true, reviewState{}, laneState{})
 	if got.state != mergeStateFailed || !strings.Contains(got.note, "Retry merge") {
 		t.Fatalf("status = %+v, want a fallback sentence naming the way out", got)
 	}

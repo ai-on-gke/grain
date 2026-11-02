@@ -314,6 +314,58 @@ grain (`collectBaseBranchCI`, `ci.CancelByOperator`). That is the whole
 reason this control exists: the cancel is a decision about a commit, and
 the way to reverse a decision is for the person who made it to say so.
 
+### No order between pull requests (task 2346)
+
+There is no queue in the sense of an order. Every member of a lane (a
+repository and one base branch) is judged on its own, every cycle,
+against the predicate above, and every member the predicate admits
+merges, up to `max_merges_per_repo` merges per lane per cycle
+(`mergeWalk`, `pkg/orchestrator/sync.go`). A member that is pending,
+UNKNOWN, conflicted, failing, under review, awaiting a Submit, being
+re-checked or being repaired holds itself and nothing else.
+
+Before this, the first member of a lane was its head, and a member still
+deciding closed the lane behind it. Only a conflicted, failing or repaired
+member was "passed over". On ai-on-gke/grain's main queue on 2026-11-01,
+four members that GitHub had not finished computing mergeability for,
+and one waiting on a `cla/google` that never reported, held every green
+change behind them for an hour. The rows behind them named a head that was
+holding nobody. The order bought nothing the predicate does not already
+guarantee.
+
+What the walk still keeps per lane, and why:
+
+- **The cap.** Handing a change to GitHub's own merge queue counts as a
+  merge. A clean member the cap holds says "merges next cycle: this
+  cycle's 1 merge into acme/widgets main is used (task 2281 merged)".
+- **The base as it now stands.** Once a lane has had a merge this cycle,
+  the next member to merge into it has its pull request read again just
+  before its own merge. "Merges cleanly" is then GitHub's answer about the
+  base that merge moved, not the one read earlier. A member GitHub has not
+  recomputed reads UNKNOWN and waits for the next cycle.
+- **A close after a merge whose effect is unknown.** If a merge errored,
+  or its outcome could not be read back, nothing more merges into that
+  lane this cycle. That close is about correctness, not order, and it is
+  the only lane close left.
+- **The re-check ref.** There is one merge-queue ref per branch
+  (`grain-merge-queue/<id>/<branch>`), so only one overlap re-check runs
+  per lane at a time. While it runs, it holds the change being re-checked,
+  and any other change that also needs a re-check (`singleMergeRecheck`'s
+  "another overlap re-check ... is still running"). A change that needs no
+  re-check keeps merging meanwhile.
+
+Each row says what that member waits on, and for how long where that
+helps. Examples: "waiting for GitHub to work out whether this branch
+merges cleanly for 7m", or "waiting on checks that have not finished
+(`cla/google`) for 16m". It never says "behind task N".
+
+The first member read in each lane this cycle still does the lane's
+once-a-cycle work. That work is the escalations and base refreshes whose
+findings are about the repository or its base rather than one change, so
+three members failing the same way are not three escalations. That member
+is also read first under a low GitHub budget. It decides nothing about
+who merges, and no row names it.
+
 ## The overlap re-check (grain/task-985)
 
 **Status: implemented. Every repository is in `observe` unless configured
