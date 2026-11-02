@@ -627,7 +627,7 @@ own controls before the buttons every page shares.
 
 On a phone there is no rail: `PhoneNav`'s bar is the rail there, with
 the bell and the gear between the environment chip and "+", and System
-at the foot of the drawer (§4.3). Each page keeps its own header row in
+and the signed-in identity at the foot of the drawer (§4.3). Each page keeps its own header row in
 its body, as it always has, so nothing is drawn twice. The drawer holds
 the sidebar alone; it no longer carries a copy of the top bar.
 
@@ -702,7 +702,21 @@ sits under the user tile today (`buildStampLabel`, title
 build is this, and is there a newer one" is one click.
 
 On a phone (`pinFooter`), the drawer's foot holds a **System** row with
-its unbacked-state dot, then the build stamp. (Settings is on the bar.)
+its unbacked-state dot, then the signed-in row, then the build stamp.
+(Settings is on the bar.)
+
+The **signed-in row** (`data-testid="phone-signed-in"`) is the phone's
+stand-in for the header rail's email badge (`top-bar-user`), which has
+no rail to sit on there. It shows only when `verifiedUserEmail(config)`
+is set -- IAP or another IdentityVerifier vouched for the browser; an
+access-code session has no identity to show and gets no row. It reads
+"Signed in as" over the email, which is ellipsized on one line (the full
+address is the row's title) so a long service-account address never
+widens the 232px drawer. Tapping the row opens Settings → Access; a
+**Log out** button on its right does what the badge menu's Log out does
+(`POST /api/auth/logout`, then `/_gcp_iap/clear_login_cookie` under
+IAP). The drawer is already a menu, so the badge's own menu is not
+repeated. `phone-signed-in-logout.spec.js` checks the row at 390px.
 
 **Decision:** The footer is the build stamp alone, linked to System →
 Upgrade. *Recommended: yes.*

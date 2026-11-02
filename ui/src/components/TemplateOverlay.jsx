@@ -230,13 +230,10 @@ function TemplateOverlay({
     //
     // A whole number from 1 up, as on the task pane's own form
     // (EditTaskForm's priorityValid). Not parseInt, which read "1e2" as
-    // 1 and "2.5" as 2 without a word; and the box's own min and step
-    // let "1e2" through, so they are checked here as well.
+    // 1 and "2.5" as 2 without a word: taskPriority reads "1e2" as the
+    // 100 the box takes it for, and refuses "2.5".
     const priorityText = String(data.get("priority") || "").trim();
-    if (
-      priorityText !== "" &&
-      !(/^\d+$/.test(priorityText) && !Number.isNaN(taskPriority(priorityText)))
-    ) {
+    if (priorityText !== "" && Number.isNaN(taskPriority(priorityText))) {
       setPriorityInvalid(true);
       return;
     }

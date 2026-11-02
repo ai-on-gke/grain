@@ -366,9 +366,7 @@ func TestGranuleFirewall_FindNFTBinary(t *testing.T) {
 	t.Run("FallbackLocations", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		fakeNFT := filepath.Join(tmpDir, "nft")
-		if err := os.WriteFile(fakeNFT, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
-			t.Fatal(err)
-		}
+		writeExecutableStub(t, fakeNFT, "#!/bin/sh\nexit 0\n")
 
 		origFallback := nftFallbackPaths
 		defer func() { nftFallbackPaths = origFallback }()
