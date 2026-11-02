@@ -413,6 +413,66 @@ not taken from the repository's CI capabilities list.
 (`docs/design/release-from-trunk.md`, RFT-3), is the built-in preset
 `api:release-gate-read`. A job may declare it under either name.
 
+## GitHub Actions runs
+
+For a repository whose CI is GitHub Actions (`ci_mode: github`, or any
+repository whose GitHub CI is not ignored), the `ci:read` routes serve
+its Actions workflow runs beside grain CI's. The reads go through the
+daemon's own forge connection, so no credential reaches a sandbox: the
+GitHub App or token for github.com, and the host's own tool
+(`ForgeViaCommand`, `ggh` for `depot.code.corp.goog`) for a GitHub
+Enterprise host, whose REST API is under `/api/v3`. The rules for which
+repositories a task may read are the same as for grain CI runs.
+
+| Route | Answers |
+|---|---|
+| `GET /api/ci/runs?repo=owner/name` | Grain CI runs and Actions workflow runs merged, newest first. Each row has `provider` (`grain` or `github-actions`). An Actions row's `actions` object holds `runId`, `runAttempt`, `workflow` (the file), `workflowName`, GitHub's `status` and `conclusion`, `url` and `failedJobs`. `ref`, `conclusion`, `since`, `until` and `limit` filter both kinds of row. `provider=grain` or `provider=github-actions` keeps one kind. |
+| `GET /api/ci/runs/{id}` | With an Actions id (`gha:<owner>:<name>:<run id>`, for example `gha:ai-on-gke:grain:123`): the run with its jobs and their steps, each with its conclusion. Logs are not included. |
+| `GET /api/ci/runs/{id}/log?job=<name or id>&tail=<lines>` | One Actions job's log. With no `job`, the first job that failed, or the only job. It is capped at 256 KiB (`ci.MaxStepOutput`, the same cap as a grain CI step's output), and the end is kept. The answer gives `job`, `jobId`, `url`, the full size in `bytes`, and `truncated`. |
+| `GET /api/ci/runs/{id}/artifacts` | The Actions run's artifacts, names and sizes only. Downloading one (`.../artifacts/{job}/{name}`) answers 501. An Actions artifact is a zip behind a redirect, sometimes gigabytes, and grain does not fetch it for you; get it from the run's page. |
+
+Notes:
+
+- **Who sees Actions rows by default.** A call from an agent gets the
+  Actions rows without asking. A person's call needs `provider` to get
+  them. The CI pane is a person's call: it polls every few seconds and
+  shows grain CI only.
+- **Where the rows come from.** A listing reads the forge's
+  `actions/runs`, one page of at most 100, and adds in the jobs grain
+  has recorded for each run (`github_ci_job`, filled by the merge
+  queue's polls and by webhooks).
+  - If there is no forge connection, the hour's API budget is low
+    (`github.BudgetLow`), or the forge read fails, the listing is built
+    from grain's record alone.
+  - When that happens, `actionsNote` says why.
+- **Rate-limit budget.** Every forge call is charged to the `ci-read`
+  caller in the budget ledger (`GET /api/system/github`). Job logs and
+  artifact lists have their own kinds, `job logs` and `artifacts`.
+- **Caching.**
+  - A listing is cached for 30 seconds.
+  - A finished run, its jobs, and a finished job's log are cached for
+    10 minutes.
+  - A run or job that is still going is cached for 15 seconds.
+- **Log redirects.** A log comes back as a redirect to a blob host.
+  - On github.com, net/http follows it and drops the credential.
+  - Over `ggh`, the tool follows it itself. If it hands the redirect
+    back, the full URL is sent through the tool again.
+
+In a sandbox the same runs are read with the `grain` CLI and under
+`ci://`:
+
+```sh
+grain ci list --repo ai-on-gke/grain --ref main --provider github-actions
+grain ci show gha:ai-on-gke:grain:123
+grain ci log gha:ai-on-gke:grain:123 --job publish --lines 80
+grain read ci://ai-on-gke/grain/gha:ai-on-gke:grain:123/publish/job.log --tail 4000
+```
+
+`list_ci_runs` takes `provider` as well, and `get_ci_log` reads an
+Actions job's log when given a `gha:` run id. `grain ci wait` and
+`wait_for_checks` already wait on the GitHub checks that gate a
+`ci_mode: github` task's branch.
+
 ## Policy
 
 - **Dangerous scopes are a person's to grant.** An agent can't grant one
@@ -506,6 +566,7 @@ example:
 | `api_reorder` | `POST /api/tasks/reorder` |
 | `api_start_ci_run` | `POST /api/ci/runs` |
 | `api_get_ci_run` | `GET /api/ci/runs/{id}` |
+| `api_get_ci_run_log` | `GET /api/ci/runs/{id}/log` |
 | `api_run_schedule` | `POST /api/schedules/{id}/run` |
 | `api_cut_candidate` | `POST /api/repos/{owner}/{name}/releases/{release}/candidates` |
 

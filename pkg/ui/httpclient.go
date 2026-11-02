@@ -1820,6 +1820,9 @@ func ciRunsPath(f ci.RunFilter, limit int, view string) string {
 	if job := strings.TrimSpace(f.Job); job != "" {
 		query.Set("job", job)
 	}
+	if provider := strings.TrimSpace(f.Provider); provider != "" {
+		query.Set("provider", provider)
+	}
 	for _, state := range f.States {
 		query.Add("conclusion", state)
 	}
@@ -1865,6 +1868,20 @@ func (c *HTTPClient) CIRun(ctx context.Context, id string) (ci.Run, error) {
 		return ci.Run{}, err
 	}
 	return run, nil
+}
+
+// CIRunLog is one GitHub Actions job's log -- GET /api/ci/runs/{id}/log,
+// job by name or id ("" for the first that failed).
+func (c *HTTPClient) CIRunLog(ctx context.Context, id, job string) (CIRunLogResponse, error) {
+	path := "/api/ci/runs/" + url.PathEscape(id) + "/log"
+	if job = strings.TrimSpace(job); job != "" {
+		path += "?job=" + url.QueryEscape(job)
+	}
+	var resp CIRunLogResponse
+	if err := c.do(ctx, http.MethodGet, path, nil, &resp); err != nil {
+		return CIRunLogResponse{}, err
+	}
+	return resp, nil
 }
 
 // CIRunArtifacts is what one run left behind -- GET

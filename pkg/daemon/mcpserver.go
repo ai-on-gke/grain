@@ -835,6 +835,16 @@ func (d DaemonGrainCI) GrainCIRun(ctx context.Context, id string) (ci.Run, error
 	return d.Client.CIRun(ctx, id)
 }
 
+// GrainCIJobLog is mcp.GrainCIJobLogReader: a GitHub Actions job's log,
+// from the daemon's GET /api/ci/runs/{id}/log.
+func (d DaemonGrainCI) GrainCIJobLog(ctx context.Context, runID, job string) (mcp.CIJobLog, error) {
+	resp, err := d.Client.CIRunLog(ctx, runID, job)
+	if err != nil {
+		return mcp.CIJobLog{}, err
+	}
+	return mcp.CIJobLog{Job: resp.Job, JobID: resp.JobID, URL: resp.URL, Bytes: resp.Bytes, Truncated: resp.Truncated, Log: resp.Log}, nil
+}
+
 func (d DaemonGrainCI) FindGrainCIRuns(ctx context.Context, f ci.RunFilter, limit int) (ci.RunPage, error) {
 	resp, err := d.Client.FindCIRuns(ctx, f, limit)
 	if err != nil {
