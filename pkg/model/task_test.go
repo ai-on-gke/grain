@@ -74,11 +74,14 @@ func TestGitCredentialCapabilityRoundTrips(t *testing.T) {
 func TestRepoReadCapabilityRoundTrips(t *testing.T) {
 	repo := RepoRef{Owner: "acme", Name: "tools"}
 	id := RepoReadCapability(repo)
-	if id != "repo-read:acme/tools" {
-		t.Errorf("RepoReadCapability = %q, want %q", id, "repo-read:acme/tools")
+	if want := `https://grain.dev/capabilities/repo#read={"repo":"acme/tools"}`; id != want {
+		t.Errorf("RepoReadCapability = %q, want %q", id, want)
 	}
-	if got, ok := RepoReadTarget(id); !ok || !got.Same(repo) {
-		t.Errorf("RepoReadTarget(%q) = %v, %v, want %v true", id, got, ok, repo)
+	// The retired bare spelling is read as the same grant indefinitely.
+	for _, id := range []string{id, "repo-read:acme/tools", ` https://grain.dev/capabilities/repo#read={ "repo": "acme/tools" } `} {
+		if got, ok := RepoReadTarget(id); !ok || !got.Same(repo) {
+			t.Errorf("RepoReadTarget(%q) = %v, %v, want %v true", id, got, ok, repo)
+		}
 	}
 	if _, ok := RepoReadTarget("gemini-key"); ok {
 		t.Error("an ordinary capability id should not read as a repo-read capability")
@@ -94,11 +97,14 @@ func TestRepoReadCapabilityRoundTrips(t *testing.T) {
 func TestRepoWriteCapabilityRoundTrips(t *testing.T) {
 	repo := RepoRef{Owner: "acme", Name: "tools"}
 	id := RepoWriteCapability(repo)
-	if id != "repo-write:acme/tools" {
-		t.Errorf("RepoWriteCapability = %q, want %q", id, "repo-write:acme/tools")
+	if want := `https://grain.dev/capabilities/repo#write={"repo":"acme/tools"}`; id != want {
+		t.Errorf("RepoWriteCapability = %q, want %q", id, want)
 	}
-	if got, ok := RepoWriteTarget(id); !ok || !got.Same(repo) {
-		t.Errorf("RepoWriteTarget(%q) = %v, %v, want %v true", id, got, ok, repo)
+	// The retired bare spelling is read as the same grant indefinitely.
+	for _, id := range []string{id, "repo-write:acme/tools", ` https://grain.dev/capabilities/repo#write={ "repo": "acme/tools" } `} {
+		if got, ok := RepoWriteTarget(id); !ok || !got.Same(repo) {
+			t.Errorf("RepoWriteTarget(%q) = %v, %v, want %v true", id, got, ok, repo)
+		}
 	}
 	if _, ok := RepoWriteTarget("gemini-key"); ok {
 		t.Error("an ordinary capability id should not read as a repo-write capability")
@@ -613,5 +619,46 @@ func TestNormalizeTaskID(t *testing.T) {
 		if got := NormalizeTaskID(tc.in); got != tc.want {
 			t.Errorf("NormalizeTaskID(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// Repository access carries what the retired reporead / repowrite
+// providers decided: it is never the any-ref grant, read is admitted on
+// every event, and write only on a release, a workflow_dispatch or
+// grain's own trusted schedule.
+func TestRepoAccessGrantCarriesItsEventGate(t *testing.T) {
+	repo := RepoRef{Owner: "acme", Name: "tools"}
+	if IsRepoAccessGrant(GitPushAnyRefGrant) || IsRepoAccessGrant(RepoWriteRef) ||
+		IsRepoAccessGrant(RepoWriteRef+`={"repo":"acme/tools","force":true}`) {
+		t.Error("a repo#write that names no repository alone read as repository access")
+	}
+	if IsGitPushAnyRefGrant(RepoWriteGrant(repo)) {
+		t.Error("repo#write {repo} read as the any-ref grant")
+	}
+	for _, tc := range []struct {
+		event   string
+		trusted bool
+		write   bool
+	}{
+		{"release", false, true},
+		{"workflow_dispatch", false, true},
+		{"schedule", true, true},
+		{"schedule", false, false},
+		{"push", false, false},
+		{"pull_request", false, false},
+	} {
+		for _, read := range []string{RepoReadGrant(repo), "repo-read:acme/tools"} {
+			if !RepoAccessAdmitsCIEvent(read, tc.event, tc.trusted) {
+				t.Errorf("%s refused on %s (trusted %v)", read, tc.event, tc.trusted)
+			}
+		}
+		for _, write := range []string{RepoWriteGrant(repo), "repo-write:acme/tools"} {
+			if got := RepoAccessAdmitsCIEvent(write, tc.event, tc.trusted); got != tc.write {
+				t.Errorf("RepoAccessAdmitsCIEvent(%s, %s, %v) = %v, want %v", write, tc.event, tc.trusted, got, tc.write)
+			}
+		}
+	}
+	if RepoAccessAdmitsCIEvent("package-publish", "release", false) {
+		t.Error("a capability that is not repository access was admitted")
 	}
 }

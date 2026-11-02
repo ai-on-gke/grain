@@ -402,12 +402,19 @@ import "strconv"
 // importer passes over a table this build lacks, so a dump carrying
 // either imports without it.
 //
-// 88 adds the hostd registry: `hostd`, one row per grain hostd this
+// 88 rewrites stored `repo-read:<repo>` and `repo-write:<repo>` grants,
+// `repo_config`.`ci_capabilities` included, to
+// `https://grain.dev/capabilities/repo#read={"repo":"<repo>"}` and
+// `#write={"repo":"<repo>"}`: the in-process reporead and repowrite
+// providers are retired for the repo server's methods, whose grant carries
+// the CI-only rule and write's event gate itself.
+//
+// 89 adds the hostd registry: `hostd`, one row per grain hostd this
 // daemon takes host work through (the co-located one as `local`), and
 // `hostd_token`, the SHA-256 digests of each remote hostd's tokens.
 // `hostd` goes to the state repository; `hostd_token` never does
 // (staterepo.LocalTables).
-const SchemaVersion = 88
+const SchemaVersion = 89
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the
