@@ -363,7 +363,7 @@ func Run(ctx context.Context, cfg Config) error {
 	servicePorts := &SandboxServicePorts{}
 	if cfg.DisableNativeSandboxes {
 		sandboxes = orchestrator.NewDisabledSandboxes()
-		log.Print("grain daemon: native sandboxes are disabled -- only remote execution sandboxes can exist")
+		log.Print(`grain daemon: sandbox backend "none" -- this daemon runs the control plane only and creates no sandboxes, so no task will run`)
 	} else if cfg.GranuleSandboxes {
 		// The image chooseSandboxImage settled on -- this build's own
 		// stamp, an operator's -sandbox-image, or a pin kept -- with a
