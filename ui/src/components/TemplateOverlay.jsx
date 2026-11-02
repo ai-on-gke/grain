@@ -50,7 +50,7 @@ import {
 } from "./TemplateFields.jsx";
 import BranchField from "./BranchField.jsx";
 import RepoField from "./RepoField.jsx";
-import { wholeNumber } from "../wholeNumber.js";
+import { taskPriority, wholeNumber } from "../wholeNumber.js";
 import WriteReposField from "./WriteReposField.jsx";
 import {
   configuredCapabilities,
@@ -235,7 +235,7 @@ function TemplateOverlay({
     const priorityText = String(data.get("priority") || "").trim();
     if (
       priorityText !== "" &&
-      !(/^\d+$/.test(priorityText) && wholeNumber(priorityText) >= 1)
+      !(/^\d+$/.test(priorityText) && !Number.isNaN(taskPriority(priorityText)))
     ) {
       setPriorityInvalid(true);
       return;
