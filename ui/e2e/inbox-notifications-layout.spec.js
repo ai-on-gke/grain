@@ -15,7 +15,7 @@
 import { expect, test } from "./fixtures.js";
 import { alertRow, closeAlerts, openAlerts } from "./alerts.js";
 
-// Operator notifications (docs/design/durable-tasks.md DT-5) on the
+// Operator notifications (design/design/durable-tasks.design.md DT-5) on the
 // Inbox and in the alerts bell, over the demo's three seeded ones
 // (pkg/demo's seedDemoNotifications): an open stalled-merge warning, a
 // pending release asking for Approve or Reject, and an agent's

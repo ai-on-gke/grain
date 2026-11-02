@@ -33,7 +33,7 @@ only when, they appear in all capitals.
   (`api:ci:read`), `api:<preset>` (`api:task-admin`), or either api form
   narrowed with `@owner/name`.
 - The **canonical** unified-grant spelling of
-  [`docs/design/unified-grants.md`](../../../docs/design/unified-grants.md)
+  [`design/design/unified-grants.design.md`](../../design/unified-grants.design.md)
   §3–§4: `https://grain.dev/capabilities/api#<scope-or-preset>`,
   `…/grain#<method>`, `…/repo#read|write`, `…/skill#skill`, and so on.
   Below, `…/` abbreviates `https://grain.dev/capabilities/`. Canonical
@@ -72,7 +72,7 @@ refused without it. The reason is written to the controller log
   - `Capabilities`: `self-debug`, `grain-log`, `deployment-health` and
     `bootstrap-playbooks`, plus every build `DefaultOn` registration
     (`RegisterDefaultConsoleSessionCapability`, e.g. `corp-research` on
-    the Google build).
+    the wrapper distribution's build).
   - `NetworkAccess: NetworkOpen`. This is **not** `none`, which
     `docs/director.md` and the task that filed this spec both say. Its
     doc comment explains why: the host-directory sandbox cannot honour
@@ -95,7 +95,7 @@ refused without it. The reason is written to the controller log
   catalogue, which admits everything, and no shipped rule names the
   director kind.
 - `propose_config_change` is designed
-  (`docs/design/config-repo-settings.md` §4.3) but **not implemented**.
+  (`design/design/config-repo-settings.design.md` §4.3) but **not implemented**.
   No tool or route of that name exists under `pkg/`.
 
 ## 2. Workflow-to-capability traceability matrix {#DC-2}
@@ -122,7 +122,7 @@ to. *Implicit* means the grant comes with the task rather than from
 | Dispatch pause state | `api:dispatch:read` | `…/api#dispatch:read` | 1 |
 | `GET /api/config`, `GET /api/state-repo*` | `api:settings:read` | `…/api#settings:read` | 1 |
 | `/home/debian/grain-state` (`tables/`, `settings/`, `memory/`) | implicit `Reads: [<state repo>]` | `…/repo#read` `{repo: grain/config}` | 1 (implicit) |
-| Edition defaults (`corp-research` on Google builds) | build `DefaultOn` registration | `…/corp#research` *(proposed)* | 1 (build) |
+| Edition defaults (`corp-research` on wrapper distribution builds) | build `DefaultOn` registration | `…/corp#research` *(proposed)* | 1 (build) |
 
 ### 2.2 W3 — Backlog and lifecycle management
 

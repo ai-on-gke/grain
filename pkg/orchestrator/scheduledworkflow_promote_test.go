@@ -26,7 +26,7 @@ import (
 // promote.yml is what publishes the release the git `latest` tag names
 // (moved by a person's approval, never by release-train.yml itself), and it holds package-publish and
 // image-signing only as a trusted release
-// (docs/design/release-from-trunk.md §6, RFT-3).
+// (design/design/release-from-trunk.design.md §6, RFT-3).
 
 // releaseTrainSchedule files the schedule .grain/workflows/release-train.yml's
 // cron declares, due at nextRunAt.

@@ -168,6 +168,7 @@ func startGitProxy(dataDir string, store *model.Store, githubHost string, insecu
 	coreSrcDir, coreModule := namespace.CoreSource(srcDir, defaultCoreSourceDir)
 	nsServer := &namespace.Server{
 		CIStore:     daemonNamespaceCIStore{fallback: fallbackCI},
+		ExternalCI:  sandboxExternalCI{},
 		ArtifactDir: ciArtifactDir(dataDir),
 		SrcDir:      srcDir,
 		CoreSrcDir:  coreSrcDir,

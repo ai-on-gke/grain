@@ -17,7 +17,7 @@ package mcp
 // ci_run_summary.go is list_ci_runs' summary view, its default: one line
 // per run -- id, ref, verdict, failing jobs -- and "after" paging, so the
 // list a judgement agent reads is the shape the notes used to advise
-// narrowing it to (docs/design/durable-tasks.md#DT-13). view "full" is the
+// narrowing it to (design/design/durable-tasks.design.md#DT-13). view "full" is the
 // report renderGrainCIRunList has always written.
 
 import (
@@ -97,6 +97,18 @@ func ciRunSummaryLine(run ci.Run) string {
 		verdict = "running"
 	}
 	line := fmt.Sprintf("%s %s %s %s", run.ID, run.Repo, run.Ref, verdict)
+	if a := run.Actions; a != nil {
+		// A GitHub Actions run: which workflow, and GitHub's own state
+		// for one still going.
+		if verdict == "running" {
+			line = fmt.Sprintf("%s %s %s %s", run.ID, run.Repo, run.Ref, ci.RunStateOf(run))
+		}
+		if a.WorkflowName != "" {
+			line += fmt.Sprintf(" [github-actions %q]", a.WorkflowName)
+		} else {
+			line += " [github-actions]"
+		}
+	}
 	if run.StartedAt != nil {
 		line += " " + run.StartedAt.UTC().Format(time.RFC3339)
 	}
@@ -109,6 +121,9 @@ func ciRunSummaryLine(run ci.Run) string {
 			}
 			failing = append(failing, name)
 		}
+	}
+	if len(failing) == 0 && run.Actions != nil {
+		failing = run.Actions.FailedJobs
 	}
 	if len(failing) > 0 {
 		shown := failing

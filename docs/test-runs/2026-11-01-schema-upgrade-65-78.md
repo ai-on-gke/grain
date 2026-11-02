@@ -106,7 +106,7 @@ These all agree:
 - the version table in `pkg/model/sqlite/legacy_grant_migration_test.go` (67, 68, 69, 71, 72, 75, 76, 80, 81, 82);
 - the stamps in the 74/77 → 78 tests in `pkg/model/sqlite/store_test.go`, and `TestADumpBefore78UpgradesUnsluggedTaskBranchTemplate`;
 - the `dump.go` `< 78` threshold;
-- the migration numbers cited in `docs/agent-api.md`, `docs/manual-mode.md` and `docs/design/unified-grants.md`.
+- the migration numbers cited in `docs/agent-api.md`, `docs/manual-mode.md` and `design/design/unified-grants.design.md`.
 
 The "schema 70" in the commit messages of `98eb06ac`, `17fcb581`, `c6855867` and `9f7044fe` is history only; no code or doc repeats it.
 

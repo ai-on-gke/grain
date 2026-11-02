@@ -33,7 +33,7 @@ package e2e
 // behind it, so what a resumed exec *sent* can be read rather than
 // inferred, and it covers the cross-dispatch case this file does not
 // (a conversation resumed from a different sandbox, out of a HOME with
-// its summary indexes gone). docs/hand-runs/2026-09-17-agy-resume.md has
+// its summary indexes gone). the 2026-09-17 agy-resume hand run has
 // the measurement. What remains this file's alone is the one thing a
 // stub cannot see: whether Google's own side of a resumed conversation
 // survives. On agy 1.1.27 and 1.2.5 that is nothing -- the conversation

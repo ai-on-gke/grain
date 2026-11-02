@@ -25,7 +25,7 @@ import (
 // sandbox: the exec the sandbox's wrapper knows it by and how much of its
 // output grain has read. A restarted grain reattaches the step by ExecID
 // from Cursor rather than marking its run interrupted
-// (docs/design/grain-on-gke.md#GKE-4).
+// (design/design/grain-on-gke.design.md#GKE-4).
 type CIStepAttachment struct {
 	RunID string
 	// JobID is the job's PlannedJob.ID within the run.

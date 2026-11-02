@@ -21,7 +21,7 @@ import api from "../../api.js";
 vi.mock("../../api.js", () => ({ default: vi.fn() }));
 
 // Settings → Access says how this browser is signed in and offers the
-// way out of it (docs/design/settings-panel.md §3.2). grain has no users
+// way out of it (design/design/settings-panel.design.md §3.2). grain has no users
 // (§6.1): there is no Username box, and the only name shown is the actor
 // the server reports for an IAP sign-in.
 const section = (props = {}) => (

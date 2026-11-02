@@ -275,7 +275,7 @@ test.describe("UI Navigation, Sidebar Split-Button Intake & In-App Upgrade Dialo
     await expect(suitesSvg).toBeVisible();
 
     // Metrics is a System tab now; the System glyph is on the page header rail's
-    // button (docs/design/settings-panel.md §4.1).
+    // button (design/design/settings-panel.design.md §4.1).
     const metricsBtn = page.getByTestId("top-bar-system");
     await expect(metricsBtn).toBeVisible();
     const metricsSvg = metricsBtn.locator("svg");

@@ -126,7 +126,7 @@ container sandbox. Pass them to the server, and do not rely on them in the
 backend itself.
 
 `mcp_servers`, present only for a run whose capability grants expose MCP
-servers ([`docs/capabilities-spec.md`](capabilities-spec.md) §5.2.4), lists
+servers ([`design/spec/capabilities/capabilities.spec.md`](../design/spec/capabilities/capabilities.spec.md) §5.2.4), lists
 them in grant order, each as `{"name": ..., "type": "http", "url": ...,
 "tools": [...]}`. Connect to each `url` as a Streamable HTTP MCP server beside
 `mcp_server`, under its `name`, and admit the `tools` it lists. The URL is a

@@ -316,7 +316,7 @@ func TestSandboxToolingSectionNamesTheAbsencesAndTheirSubstitutes(t *testing.T) 
 		}
 	}
 	// A grain-ci run reads CI with the `grain` CLI: its MCP roster has no
-	// CI tools (docs/design/sandbox-first-agent-surface.md §6).
+	// CI tools (design/design/sandbox-first-agent-surface.design.md §6).
 	got = sandboxToolingSection(true, true)
 	for _, want := range []string{"`gh`", "`grain ci wait`", "`grain pr status`", "`grain pr base-status`"} {
 		if !strings.Contains(got, want) {

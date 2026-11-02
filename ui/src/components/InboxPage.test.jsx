@@ -655,7 +655,7 @@ describe("InboxPage", () => {
   });
 
   // grain's own escalations are raised as notifications now
-  // (docs/design/durable-tasks.md, DT-5), but the rows they map keep
+  // (design/design/durable-tasks.design.md, DT-5), but the rows they map keep
   // appearing until they are removed: a stalled merge shows both its
   // pipeline.merge-stalled notification and its "Unblock a merge" row.
   it("keeps a stalled merge's row beside its merge-stalled notification", async () => {

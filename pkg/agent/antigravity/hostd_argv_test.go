@@ -28,7 +28,7 @@ import (
 
 // The argv and environment agy is started with, exactly as Run builds
 // them, pass grain hostd's checks for an entry shaped like the one the
-// installer writes (docs/design/cli-run-location.md, "What a host-run agy
+// installer writes (design/design/cli-run-location.design.md, "What a host-run agy
 // is sent"): every path in them sits under the data dir, and the four
 // variables are the ones the entry names. hostd's checks refuse anything
 // with a path outside paths_under, a ".." or a "~", so this is what keeps

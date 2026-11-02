@@ -15,7 +15,7 @@
 // Package runhost runs one agent run's CLI, and the "grain mcpserver" it
 // forks, in a run host: a container that is a sibling of the daemon
 // rather than a child of it, so that restarting the daemon does not kill
-// the run (docs/non-disruptive-upgrade.md, "Run hosts").
+// the run (design/design/non-disruptive-upgrade.design.md, "Run hosts").
 //
 // The daemon creates, lists and destroys run hosts through a Driver. It
 // never parents them, and it never calls into one: a run host's whole
@@ -43,7 +43,7 @@ import (
 const Protocol = 1
 
 // Supported reports whether a daemon of this build may adopt a run host
-// that speaks protocol p. Skew is N-1 (docs/non-disruptive-upgrade.md,
+// that speaks protocol p. Skew is N-1 (design/design/non-disruptive-upgrade.design.md,
 // "Version skew is never a stranding"): this build adopts its own
 // protocol and the one before, and refuses the next one by name because
 // a rolled-back daemon must not misread what a newer build wrote.
@@ -141,7 +141,7 @@ type Info struct {
 // it has on the machine that created it. A Mount is always a directory:
 // a CLI that refreshes a login by renaming a new file over the old one
 // replaces the inode, and a bind mount of the single file would pin the
-// old one (docs/non-disruptive-upgrade.md, "The shared credential
+// old one (design/design/non-disruptive-upgrade.design.md, "The shared credential
 // directory"). Spec.Validate refuses anything else.
 type Mount struct {
 	Path     string

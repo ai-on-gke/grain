@@ -4,7 +4,7 @@ base: main
 body: |
   Review the past week of release pipeline execution on `main` and suggest
   concrete improvements to the release process. Releases are cut from
-  `main` (`docs/design/release-from-trunk.md`). This run changes no code:
+  `main` (`design/design/release-from-trunk.design.md`). This run changes no code:
   it reports what happened and files follow-up tasks for the fixes.
 
   ## 1. Inspect the past 7 days of release activity

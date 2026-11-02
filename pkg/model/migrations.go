@@ -520,7 +520,7 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     86,
-		Description: "rewrite stored corp-research grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/corp#research={} (the Google build's in-process capability is retired)",
+		Description: "rewrite stored corp-research grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/corp#research={} (a wrapper distribution's in-process capability is retired)",
 		Up: func(ctx context.Context, tx *sql.Tx) error {
 			renames := map[string]string{"corp-research": CorpResearchGrant}
 			if err := rewriteLegacyGrants(renames)(ctx, tx); err != nil {
@@ -533,7 +533,7 @@ var Migrations = []Migration{
 }
 
 // CorpResearchGrant is what migration 86 rewrote stored corp-research grants
-// to: the method the Google build registers (capability.Register) in place
+// to: the method a wrapper distribution's build registers (capability.Register) in place
 // of its in-process corp-research provider, and makes corp-research an alias
 // of. Core serves no such method; it names the grant only because the
 // migration list is core's, and a store migrated by a build without the

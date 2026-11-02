@@ -67,7 +67,7 @@ import ChipStrip from "./ChipStrip.jsx";
 const DECLARATIONS_DOC =
   "https://github.com/ai-on-gke/grain/blob/main/docs/declarations.md";
 
-// ProcessesList is the Processes page (docs/design/settings-panel.md §5):
+// ProcessesList is the Processes page (design/design/settings-panel.design.md §5):
 // one table of every schedule, workflow schedule, template, suite and
 // trigger, where there used to be a Schedules, a Templates and a Suites
 // page. Each row carries a kind chip, and the toolbar has a kind filter

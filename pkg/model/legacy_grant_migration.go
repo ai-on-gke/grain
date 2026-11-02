@@ -24,7 +24,7 @@ import (
 )
 
 // rewriteLegacyGrants is the Up of a migration retiring the in-process
-// capabilities named in renames (docs/design/unified-grants.md §4): every
+// capabilities named in renames (design/design/unified-grants.design.md §4): every
 // stored grant of one is rewritten to the api grant it became. That is
 // the three grant tables (a row whose new name the same owner already
 // holds is dropped rather than duplicated, keeping the one already

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # Make a pending release official, or drop it -- a person's answer to
-# "vX.Y.0 is ready to promote" (docs/design/release-from-trunk.md, §4).
+# "vX.Y.0 is ready to promote" (design/design/release-from-trunk.design.md, §4).
 #
 # The release train (scripts/release-from-trunk.sh, run daily by
 # .grain/workflows/release-train.yml) does everything up to the release
