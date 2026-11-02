@@ -12,13 +12,14 @@ Attribution and task ownership are defined in [`attribution.design.md`](attribut
 
 ## The design folder
 
-Each repository has a `design/` folder with five classes of material:
+Each repository has a `design/` folder with six classes of material:
 
 1. **Design documents (`design/design/*.design.md`)** — High-level "1-pager" designs for a specific topic, written in interactive sessions between PMs, engineers, and coding agents, and reviewed by humans. Designs may reference documents in other repositories.
 2. **Specifications (`design/spec/...`)** — Detailed normative specifications of design documents, generally one file or folder per design. Specifications are started by a person (with a personal agent or a grain task) and reviewed and edited by humans. They cover APIs, schemas, requirement IDs, and UI mockups.
-3. **Tasks (`**/*.task.grain.md`)** — High-level task definitions with initial capability and repository grants (per [`grainfiles.design.md`](grainfiles.design.md)). They are drafted when a person starts task generation, audited and merged by humans, and named `.task.grain.md` so grain imports them automatically once merged.
-4. **Playbook designs** — High-level designs for background processes such as releases, qualification, and nightly testing.
-5. **Playbooks (`**/*.process.grain.md`, `.grain/`)** — Concrete definitions of standing tasks, triggers, and schedules in grain's declarative formats.
+3. **Tasks (`**/*.task.grain.md`)** — High-level task definitions. They are drafted when a person starts task generation, audited and merged by humans, and named `.task.grain.md` so grain imports them automatically once merged.
+4. **Playbook designs** — High-level designs for background processes such as releases, qualification, and nightly testing. High-level "1-pager" designs for a specific process, written in interactive sessions between PMs, engineers, and coding agents, and reviewed by humans. Designs may reference documents in other repositories.
+5. **Playbooks (`**/*.process.grain.md`, `.grain/`)** — Concrete definitions of standing tasks, triggers, and schedules in grain's declarative formats, generally one file or folder per playbook design. These are imported and run by grain.
+6. **Agent designs** Designs, rules and principles decided upon by the agents. As with other code this requires at least 2 agents to review each change. Agent principles and designs *must* conform to the human designs; when they conflict the human designs are authoritative. However, agents are free to expand agent designs and rules as they see fit.
 
 Alternatively, all design material can live in a separate repository rather than in each code repository; both layouts follow the same rules.
 
@@ -28,7 +29,7 @@ Alternatively, all design material can live in a separate repository rather than
 - **Specs:** Any change to a specification is reviewed by at least one human and a second entity (human or agent).
 - **Playbook designs:** Any change to a playbook design is reviewed by an owner and at least one other human.
 - **Playbooks:** Any change to a playbook is reviewed by at least one human and a second entity (human or agent).
-- **Code:** Any change to other code is reviewed by at least two entities (two agents, one human and one agent, or two humans).
+- **Code:** Any change to other code is reviewed by at least two entities and one grain agent (one agents and one grain agent or one human and one grain agent).
 
 **Design and specification conformance.** Every review grain performs checks the change explicitly against the governing designs (`design/design/`) and specifications (`design/spec/`), so that code, specs, and designs stay in sync. This covers code PRs (grain-authored and external), spec PRs, task and grainfile PRs, playbook PRs, and security reviews. Specifically, the reviewer must:
 
