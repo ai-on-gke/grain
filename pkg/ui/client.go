@@ -5506,7 +5506,10 @@ func (c *Client) commentWithAuthor(ctx context.Context, id, body string, uploads
 		return err
 	}
 	actor := c.actor(ctx)
-	if trimmed := strings.TrimSpace(author); trimmed != "" {
+	// An author naming the request's own principal keeps its kind: a
+	// verified *.gserviceaccount.com caller is a service principal, as it
+	// is on the tasks it files and closes, not a human.
+	if trimmed := strings.TrimSpace(author); trimmed != "" && trimmed != actor.ID {
 		actor = model.Principal{Kind: model.PrincipalHuman, ID: trimmed}
 	}
 	return c.addAttributedComment(ctx, id, body, attachments, model.Attribution{Actor: actor}, now, reopenAck)
