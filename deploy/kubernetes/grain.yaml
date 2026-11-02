@@ -4,9 +4,9 @@
 # namespace, identity and permissions, the priorities sandbox pods run
 # at, storage, the key upgrades are
 # verified against, the deployment itself, a Service in front of its UI,
-# and a Service in front of what its sandboxes reach. `kubectl apply -f grain.yaml` after editing the three values called
+# and a Service in front of what its sandboxes reach. `kubectl apply -f grain.yaml` after editing the CHANGEME values called
 # out below stands a deployment up; see
-# deploy/kubernetes/README.md for what those three are and what has to
+# deploy/kubernetes/README.md for what those values are and what has to
 # exist before this will run.
 #
 # What it is *not* is a Helm chart or a kustomize base. This is the

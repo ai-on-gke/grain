@@ -157,7 +157,7 @@ the daemon, only `kubectl exec`.
 # Edit the CHANGEME values in grain.yaml first -- the image, the
 # default target repo, the cosign.pub the Upgrade button verifies
 # images against (docs/image-signing.md), and, behind IAP,
-# GRAIN_ALLOWED_PRINCIPALS (see "Signing in through IAP"). Upgrading a
+# GRAIN_ALLOWED_PRINCIPALS (see "Signing in behind IAP"). Upgrading a
 # deployment that predates the securityContext? Take the chown above
 # before this apply.
 kubectl apply -f deploy/kubernetes/grain.yaml

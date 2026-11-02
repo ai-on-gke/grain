@@ -276,6 +276,13 @@ resource "google_compute_instance" "host" {
       error_message = "enable_gemini_key, agent_can_manage_compute_instances, agent_can_manage_gke, and agent_can_manage_cloud_sql all need a real key on the agent account to do anything -- set deployer_member so push-secrets.sh can mint one after apply (see iam.tf's deployer_manages_minter_keys)."
     }
 
+    precondition {
+      condition = alltrue([
+        for p in local.allowed_principals : can(regex("^(user|group|serviceAccount):[^@,\\s\"'\\\\$%]+@[^@,\\s\"'\\\\$%]+$|^domain:[^@,/\\s\"'\\\\$%]+$", p))
+      ])
+      error_message = "allowed_principals (including deployer_member when allowed_principals is null and deployer_member starts with \"user:\") must be \"user:<email>\", \"group:<email>\", \"serviceAccount:<email>\" or \"domain:<domain>\", with no commas, slashes in domains, quotes or spaces."
+    }
+
     # A guest image and an OCI image used to have to exist somewhere for
     # setup.sh to fetch before it could bring up a single granule VM, and
     # neither had a project-independent default this module could supply

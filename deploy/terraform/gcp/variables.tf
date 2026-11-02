@@ -878,9 +878,9 @@ variable "allowed_principals" {
 
   validation {
     condition = var.allowed_principals == null ? true : alltrue([
-      for p in var.allowed_principals : can(regex("^(user|group|serviceAccount):[^@,\\s]+@[^@,\\s]+$|^domain:[^@,\\s]+$", p))
+      for p in var.allowed_principals : can(regex("^(user|group|serviceAccount):[^@,\\s\"'\\\\$%]+@[^@,\\s\"'\\\\$%]+$|^domain:[^@,/\\s\"'\\\\$%]+$", p))
     ])
-    error_message = "allowed_principals entries must be \"user:<email>\", \"group:<email>\", \"serviceAccount:<email>\" or \"domain:<domain>\", with no commas or spaces."
+    error_message = "allowed_principals entries must be \"user:<email>\", \"group:<email>\", \"serviceAccount:<email>\" or \"domain:<domain>\", with no commas, slashes in domains, quotes or spaces."
   }
 }
 
