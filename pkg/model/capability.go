@@ -549,7 +549,17 @@ func secretsContext(ctx context.Context, cc CapabilityContext) context.Context {
 func ResolveGrants(ctx context.Context, reg *CapabilityRegistry, cc CapabilityContext) ([]GrantResolution, error) {
 	ctx = secretsContext(ctx, cc)
 	granted := make(map[string]Grant, len(cc.Task.Grants))
+	var out []GrantResolution
 	for _, g := range cc.Task.Grants {
+		// Repository access has no provider: the reference carries
+		// what one decided (IsRepoAccessGrant). It is CI-only, and a CI
+		// job's is honoured by the scope it widens rather than here.
+		if IsRepoAccessGrant(g.Capability) {
+			if !cc.CI {
+				out = append(out, GrantResolution{Grant: g, Resolution: RefusedBecause(CIOnlyRefusal(g.Capability))})
+			}
+			continue
+		}
 		// A capability reference is a capability server's to mint, at
 		// admission (protocol.MintPass), not an in-process provider's.
 		if IsCapabilityRef(g.Capability) {
@@ -558,7 +568,6 @@ func ResolveGrants(ctx context.Context, reg *CapabilityRegistry, cc CapabilityCo
 		granted[g.Capability] = g
 	}
 
-	var out []GrantResolution
 	seen := make(map[string]bool, len(granted))
 	for _, p := range reg.Providers() {
 		g, ok := granted[p.Spec().Name]

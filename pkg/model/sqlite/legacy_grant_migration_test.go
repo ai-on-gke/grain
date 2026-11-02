@@ -101,10 +101,12 @@ var retiredGrants = []struct {
 	{82, "db-write", []string{model.GrainSQLWriteGrant}},
 	{84, "self-repair", []string{model.GrainHostExecGrant}},
 	{85, "git-push-any-ref", []string{model.GitPushAnyRefGrant}},
+	{88, "repo-read:acme/tools", []string{model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
+	{88, "repo-write:acme/tools", []string{model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
 	// corp-research is the Google build's: core has no alias for it, which
 	// that build registers with capability.Register (retiredAs).
 	{86, "corp-research", []string{model.CorpResearchGrant}},
-	{88, "gcp-key", []string{model.GCPKeySandboxAgentGrant}},
+	{89, "gcp-key", []string{model.GCPKeySandboxAgentGrant}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'
@@ -395,7 +397,7 @@ func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 
 		if err := store.PutRepoConfig(ctx, model.RepoConfig{
 			Repo:           widgets,
-			CICapabilities: []string{"package-publish", r.legacy, "repo-read:acme/tools"},
+			CICapabilities: []string{"package-publish", r.legacy, "release-gate-read"},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -431,12 +433,12 @@ func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 		dedup := model.RepoRef{Owner: "dedup", Name: r.legacy}
 		jsonEncoded := model.RepoRef{Owner: "json", Name: r.legacy}
 
-		beforeWidgets := []string{"package-publish", r.legacy, "repo-read:acme/tools"}
+		beforeWidgets := []string{"package-publish", r.legacy, "release-gate-read"}
 		gotWidgets, err := store.GetRepoConfig(ctx, widgets)
 		if err != nil || gotWidgets == nil {
 			t.Fatalf("%s widgets: %v, %+v", r.legacy, err, gotWidgets)
 		}
-		wantWidgets := append(append([]string{"package-publish"}, r.to...), "repo-read:acme/tools")
+		wantWidgets := append(append([]string{"package-publish"}, r.to...), "release-gate-read")
 		if !slices.Equal(gotWidgets.CICapabilities, wantWidgets) {
 			t.Errorf("%s: widgets CI capabilities = %v, want %v", r.legacy, gotWidgets.CICapabilities, wantWidgets)
 		}
@@ -517,7 +519,7 @@ func TestSchema65StoreAndStateRepoImportRewriteCICapabilities(t *testing.T) {
 	})
 }
 
-func TestMigration88SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
+func TestMigration89SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
@@ -595,21 +597,21 @@ func TestMigration88SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		}
 	}
 
-	// Rewind to schema 87 and export a pre-migration state-repo dump before migrating in place.
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 87 WHERE `id` = 1"); err != nil {
+	// Rewind to schema 88 and export a pre-migration state-repo dump before migrating in place.
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 88 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	exportDir := t.TempDir()
 	if err := staterepo.Export(ctx, db, exportDir); err != nil {
-		t.Fatalf("exporting version-87 store: %v", err)
+		t.Fatalf("exporting version-88 store: %v", err)
 	}
-	if err := staterepo.WriteSchemaVersion(exportDir, 87); err != nil {
-		t.Fatalf("stamping version-87 export: %v", err)
+	if err := staterepo.WriteSchemaVersion(exportDir, 88); err != nil {
+		t.Fatalf("stamping version-88 export: %v", err)
 	}
 
-	// Migrate in place to 88.
+	// Migrate in place to 89.
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating version-87 store to 88: %v", err)
+		t.Fatalf("migrating version-88 store to 89: %v", err)
 	}
 
 	assertMigrated := func(t *testing.T, s *model.Store, sqlDB *sql.DB) {
@@ -725,20 +727,20 @@ func TestMigration88SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 
 	assertMigrated(t, store, db)
 
-	// Re-running migration 88 is idempotent.
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 87 WHERE `id` = 1"); err != nil {
+	// Re-running migration 89 is idempotent.
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 88 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("re-running migration 88: %v", err)
+		t.Fatalf("re-running migration 89: %v", err)
 	}
 	assertMigrated(t, store, db)
 
-	// Importing the pre-migration schema-87 state-repo export into a fresh store rewrites grants and seeds permission sets.
+	// Importing the pre-migration schema-88 state-repo export into a fresh store rewrites grants and seeds permission sets.
 	importedStore, importedDB, importCtx := openStore(t)
 	_ = importCtx
 	if err := staterepo.Import(ctx, importedDB, exportDir); err != nil {
-		t.Fatalf("staterepo.Import of schema-87 export: %v", err)
+		t.Fatalf("staterepo.Import of schema-88 export: %v", err)
 	}
 	assertMigrated(t, importedStore, importedDB)
 }

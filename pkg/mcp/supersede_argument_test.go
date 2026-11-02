@@ -131,3 +131,35 @@ type filerFunc func(context.Context, ProposedTask, string) (FiledProposal, error
 func (f filerFunc) FileProposal(ctx context.Context, p ProposedTask, key string) (FiledProposal, error) {
 	return f(ctx, p, key)
 }
+
+// A default grant the capability policy kept off the proposal is named,
+// with the policy's reason: nobody asked for a default, so a run told
+// only that its proposal is filed would hand it work it cannot do
+// (docs/test-runs/2026-11-02-security-fixes-live.md, F3).
+func TestProposeTaskReportsTheDefaultsThePolicyDropped(t *testing.T) {
+	filer := filerFunc(func(context.Context, ProposedTask, string) (FiledProposal, error) {
+		return FiledProposal{ID: "48", URL: "/tasks/48", Queued: true,
+			DroppedDefaults: []DroppedDefault{
+				{Grant: "https://grain.dev/capabilities/grain#journal", Reason: "the capability policy denies it (rule 1: deny)"},
+			},
+		}, nil
+	})
+	got := NewLiveProposalTools(&MockSink{}, nil, "47", filer)[0].
+		Handler(context.Background(), map[string]any{"title": "follow-up", "body": "b"})
+	if got.IsError {
+		t.Fatalf("result = %+v", got)
+	}
+	want := "Default grant https://grain.dev/capabilities/grain#journal was not attached to it: the capability policy denies it (rule 1: deny)."
+	if !strings.Contains(got.Text, want) {
+		t.Errorf("result = %q, want it to say %q", got.Text, want)
+	}
+
+	quiet := filerFunc(func(context.Context, ProposedTask, string) (FiledProposal, error) {
+		return FiledProposal{ID: "49", URL: "/tasks/49", Queued: true}, nil
+	})
+	got = NewLiveProposalTools(&MockSink{}, nil, "47", quiet)[0].
+		Handler(context.Background(), map[string]any{"title": "other", "body": "b"})
+	if strings.Contains(got.Text, "Default grant") {
+		t.Errorf("result = %q, want no dropped-default sentence when nothing was dropped", got.Text)
+	}
+}

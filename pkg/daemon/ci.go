@@ -638,6 +638,13 @@ func (s CiSandboxes) Acquire(ctx context.Context, req ci.SandboxRequest) (ci.San
 	if err := ciPolicyRefusal(s.Policy, req, s.Log); err != nil {
 		return nil, err
 	}
+	var configFn func(context.Context) (*model.Config, error)
+	if s.Grants != nil {
+		configFn = s.Grants.Config
+	}
+	if err := ciCatalogueRefusal(ctx, configFn, req, s.Log); err != nil {
+		return nil, err
+	}
 
 	shape := s.jobShape(req)
 	// Waiting rather than failing while a Kubernetes cluster has no node
@@ -967,16 +974,7 @@ func (s *CiSandbox) prepareJob(ctx context.Context, repo model.RepoRef, ref stri
 		if err != nil {
 			return fmt.Errorf("materializing CI capabilities: %w", err)
 		}
-		for _, grant := range resolved {
-			if otherRepo, ok := model.RepoReadTarget(grant.Grant.Capability); ok {
-				s.Owner.Scopes.Grant(s.SandboxName, otherRepo)
-			}
-			if otherRepo, ok := model.RepoWriteTarget(grant.Grant.Capability); ok {
-				if s.Owner.WriteScopes != nil {
-					s.Owner.WriteScopes.Grant(s.SandboxName, otherRepo)
-				}
-			}
-		}
+		s.grantRepoAccess(event, trustedSchedule, ids, withholdEventGated)
 	}
 	placements := append([]model.Materialized(nil), s.materialized...)
 	if len(releaseSecrets) > 0 {
@@ -1042,10 +1040,10 @@ func (s *CiSandbox) readoptJob(ctx context.Context, repo model.RepoRef, event ci
 		return nil
 	}
 	// The other repositories this job may reach are the ones prepareJob
-	// granted it, and no more: resolved through the same event gate, so a
-	// push or pull-request run's declared repo-write (release, manual and
-	// trusted schedule runs only -- repowrite.Provider) is not handed to
-	// its sandbox just because the daemon restarted under it.
+	// granted it, and no more: through the same event gate, so a push or
+	// pull-request run's declared repo#write (release, manual and trusted
+	// schedule runs only -- model.RepoAccessAdmitsCIEvent) is not handed
+	// to its sandbox just because the daemon restarted under it.
 	if s.Owner.Capabilities == nil {
 		return errors.New("CI capability providers are not configured")
 	}
@@ -1062,19 +1060,44 @@ func (s *CiSandbox) readoptJob(ctx context.Context, repo model.RepoRef, event ci
 			return fmt.Errorf("CI capability %q refused: %s", grant.Grant.Capability, grant.Resolution.Reason)
 		}
 	}
-	for _, grant := range resolved {
-		if otherRepo, ok := model.RepoReadTarget(grant.Grant.Capability); ok && s.Owner.Scopes != nil {
-			s.Owner.Scopes.Grant(s.SandboxName, otherRepo)
-		}
-		if otherRepo, ok := model.RepoWriteTarget(grant.Grant.Capability); ok && s.Owner.WriteScopes != nil {
-			s.Owner.WriteScopes.Grant(s.SandboxName, otherRepo)
-		}
-	}
+	s.grantRepoAccess(event, trustedSchedule, ids, len(withholdEventGated) > 0 && withholdEventGated[0])
 	return nil
 }
 
+// grantRepoAccess widens the proxy's read and write scopes for this job's
+// sandbox to every other repository ids grant it access to on this event
+// (ciRepoAccessAdmitted). The grant carries that decision itself
+// (model.IsRepoAccessGrant): there is no provider to resolve it through.
+func (s *CiSandbox) grantRepoAccess(event ci.Event, trustedSchedule bool, ids []string, withholdEventGated bool) {
+	for _, id := range ids {
+		if !ciRepoAccessAdmitted(id, event, trustedSchedule, withholdEventGated) {
+			continue
+		}
+		if otherRepo, ok := model.RepoReadTarget(id); ok && s.Owner.Scopes != nil {
+			s.Owner.Scopes.Grant(s.SandboxName, otherRepo)
+		}
+		if otherRepo, ok := model.RepoWriteTarget(id); ok && s.Owner.WriteScopes != nil {
+			s.Owner.WriteScopes.Grant(s.SandboxName, otherRepo)
+		}
+	}
+}
+
+// ciRepoAccessAdmitted reports whether id is repository access this run
+// is handed: read access always, and write access through its event gate
+// (model.RepoAccessAdmitsCIEvent) unless the run withholds every
+// event-gated grant.
+func ciRepoAccessAdmitted(id string, event ci.Event, trustedSchedule, withholdEventGated bool) bool {
+	if _, ok := model.RepoReadTarget(id); ok {
+		return true
+	}
+	if _, ok := model.RepoWriteTarget(id); !ok || withholdEventGated {
+		return false
+	}
+	return model.RepoAccessAdmitsCIEvent(id, string(event), trustedSchedule)
+}
+
 // registerWithProxy registers this job's sandbox with the proxy and,
-// when it holds repository access it declared (repo-read:, repo-write:),
+// when it holds repository access it declared (repo#read, repo#write),
 // checks that the deployment has a git connection covering every one of
 // them, so a job that cannot reach one is told so in one sentence rather
 // than by a failed clone (grain/task-1654, grain/task-4622).
@@ -1084,7 +1107,7 @@ func (s *CiSandbox) readoptJob(ctx context.Context, repo model.RepoRef, event ci
 // git connections on that team's row, and stage 4c gave CI runs no team
 // of their own).
 func (s *CiSandbox) registerWithProxy(ctx context.Context, repo model.RepoRef, event ci.Event, trustedSchedule bool, ids []string, withholdEventGated ...bool) error {
-	if ciHoldsRepoAccess(s.Owner.Capabilities, event, trustedSchedule, ids, withholdEventGated...) {
+	if ciHoldsRepoAccess(event, trustedSchedule, ids, withholdEventGated...) {
 		if s.Owner.TeamGitCredential != nil {
 			for _, target := range ciRepoAccessTargets(repo, ids) {
 				if _, err := s.Owner.TeamGitCredential(ctx, model.DefaultTeamID, target.Owner, target.Name); err != nil {
@@ -1103,39 +1126,14 @@ func (s *CiSandbox) registerWithProxy(ctx context.Context, repo model.RepoRef, e
 }
 
 // ciHoldsRepoAccess reports whether ids hold a repository access this
-// event may carry: any `repo-read:`, or a `repo-write:` whose provider's
-// event gate admits this run (resolveCICapabilities applies the same
-// gate, so an untrusted run's declared write is never granted and is
-// not counted here).
-func ciHoldsRepoAccess(capabilities func() *model.CapabilityRegistry, event ci.Event, trustedSchedule bool, ids []string, withholdEventGated ...bool) bool {
+// event may carry: any repo#read, or a repo#write whose event gate admits
+// this run (grantRepoAccess applies the same gate, so an untrusted run's
+// declared write is never granted and is not counted here).
+func ciHoldsRepoAccess(event ci.Event, trustedSchedule bool, ids []string, withholdEventGated ...bool) bool {
 	withhold := len(withholdEventGated) > 0 && withholdEventGated[0]
-	var reg *model.CapabilityRegistry
-	for _, id := range ids {
-		if _, ok := model.RepoReadTarget(id); ok {
-			return true
-		}
-		if _, ok := model.RepoWriteTarget(id); !ok || capabilities == nil {
-			continue
-		}
-		if reg == nil {
-			// Asked for only once a job declares write: a job that
-			// declares nothing never builds a registry here.
-			if reg = capabilities(); reg == nil {
-				return false
-			}
-		}
-		provider, ok := reg.Lookup(id)
-		if !ok {
-			continue
-		}
-		if events, ok := provider.(model.CIEventCapability); ok {
-			if withhold || (!events.SupportsCIEvent(string(event)) && !ciTrustedScheduleAdmits(provider, event, trustedSchedule)) {
-				continue
-			}
-		}
-		return true
-	}
-	return false
+	return slices.ContainsFunc(ids, func(id string) bool {
+		return ciRepoAccessAdmitted(id, event, trustedSchedule, withhold)
+	})
 }
 
 // ciRepoAccessTargets is the repository under test and every repository
@@ -1214,8 +1212,10 @@ func ResolveCICapabilities(ctx context.Context, reg *model.CapabilityRegistry, c
 	for _, id := range ids {
 		// A capability reference has no in-process provider: it is
 		// minted through its capability server by the grant admission
-		// (CiGrantReservations.Acquire).
-		if id == grainci.CapabilityName || model.IsCapabilityRef(id) {
+		// (CiGrantReservations.Acquire). Repository access, in either
+		// spelling, is neither: grantRepoAccess widens the proxy's scope
+		// for it.
+		if id == grainci.CapabilityName || model.IsCapabilityRef(id) || model.IsRepoAccessGrant(id) {
 			continue
 		}
 		provider, ok := reg.LookupFor(id, true)

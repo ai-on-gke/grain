@@ -490,3 +490,60 @@ func TestATrustedReleaseOfABranchNotReviewedIntoIsRefused(t *testing.T) {
 		t.Fatalf("a release a person vouched for was refused-checked anyway: %v", asked)
 	}
 }
+
+func TestUntrustedAndWithheldRunsEnforceRepoAccessReferenceCapabilities(t *testing.T) {
+	shared := model.RepoRef{Owner: "acme", Name: "shared-lib"}
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	readRef := model.RepoReadGrant(shared)
+	writeRef := model.RepoWriteGrant(widgets)
+
+	// 1. An untrusted commit (not on req.Ref) refuses both repo#read and repo#write {repo}
+	// upfront as unmet requirements without acquiring any sandbox.
+	untrustedReq := Request{Repo: "acme/widgets", Ref: "main", Event: EventPullRequest}.
+		WithUntrustedCommit("this run withholds every capability: fork commit")
+	for _, capID := range []string{readRef, writeRef} {
+		unmet := unmetRequirements(Job{Capabilities: []string{capID}}, untrustedReq)
+		if len(unmet) != 1 || !strings.Contains(unmet[0], "fork commit") {
+			t.Errorf("untrusted unmetRequirements(%q) = %v, want untrusted refusal", capID, unmet)
+		}
+	}
+
+	// 2. A non-person workflow_dispatch (WithholdEventGated) refuses repo#write {repo}
+	// upfront while allowing repo#read {repo}, matching bare repo-write:/repo-read:.
+	backend := &fakeSandboxes{}
+	service := newTestService(t, backend, map[string]string{
+		".grain/workflows/dispatch.yml": "on:\n  workflow_dispatch:\njobs:\n" +
+			"  reader:\n    cache: false\n" +
+			"    capabilities:\n      - capability: https://grain.dev/capabilities/repo#read\n        with:\n          repo: acme/shared-lib\n" +
+			"    steps:\n      - run: true\n" +
+			"  writer:\n    cache: false\n" +
+			"    capabilities:\n      - capability: https://grain.dev/capabilities/repo#write\n        with:\n          repo: acme/widgets\n" +
+			"    steps:\n      - run: true\n",
+	})
+	started, err := service.Start(context.Background(), Request{
+		Repo: "acme/widgets", Ref: "main", Event: EventManual, WithholdEventGated: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := waitForRun(t, service, started.ID)
+	var readerJob, writerJob *JobRun
+	for i := range got.Jobs {
+		switch got.Jobs[i].JobID {
+		case "reader":
+			readerJob = &got.Jobs[i]
+		case "writer":
+			writerJob = &got.Jobs[i]
+		}
+	}
+	if readerJob == nil || readerJob.Conclusion != ConclusionSuccess {
+		t.Fatalf("reader job = %+v, want success", readerJob)
+	}
+	if writerJob == nil || writerJob.Conclusion != ConclusionErrored ||
+		!strings.Contains(writerJob.Error, "not a person places no capabilities") {
+		t.Fatalf("writer job = %+v, want errored with non-person withhold message", writerJob)
+	}
+	if len(backend.acquired) != 1 || !reflect.DeepEqual(backend.acquired[0].Capabilities, []string{readRef}) {
+		t.Fatalf("acquired sandboxes = %+v, want only reader sandbox", backend.acquired)
+	}
+}

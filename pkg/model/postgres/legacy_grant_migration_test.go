@@ -64,7 +64,7 @@ func sameGrantMeaning(t *testing.T, what string, before, after []string) {
 		t.Errorf("%s: dangerous %v before the migration and %v after", what, b, a)
 	}
 	for _, name := range before {
-		to := model.CanonicalLegacyGrants(name)
+		to := retiredAs(name)
 		retired := len(to) != 1 || to[0] != name
 		if !retired && !slices.Contains(after, name) {
 			t.Errorf("%s: %q, which is not retired, was lost (%v -> %v)", what, name, before, after)
@@ -147,7 +147,22 @@ var retiredGrants = []struct {
 	{82, "db-read", []string{model.GrainSQLReadGrant}},
 	{82, "db-write", []string{model.GrainSQLWriteGrant}},
 	{85, "git-push-any-ref", []string{model.GitPushAnyRefGrant}},
-	{88, "gcp-key", []string{model.GCPKeySandboxAgentGrant}},
+	{88, "repo-read:acme/tools", []string{model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
+	{88, "repo-write:acme/tools", []string{model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
+	{89, "gcp-key", []string{model.GCPKeySandboxAgentGrant}},
+}
+
+// retiredAs is what a store migration rewrote name to: retiredGrants'
+// entry for it, which covers the parameterized names (repo-read:<repo>,
+// repo-write:<repo>) no fixed alias table holds, or else
+// model.CanonicalLegacyGrants.
+func retiredAs(name string) []string {
+	for _, r := range retiredGrants {
+		if r.legacy == name {
+			return r.to
+		}
+	}
+	return model.CanonicalLegacyGrants(name)
 }
 
 func TestMigrationRewritesRetiredGrants(t *testing.T) {
@@ -260,7 +275,7 @@ func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 
 		if err := store.PutRepoConfig(ctx, model.RepoConfig{
 			Repo:           widgets,
-			CICapabilities: []string{"package-publish", r.legacy, "repo-read:acme/tools"},
+			CICapabilities: []string{"package-publish", r.legacy, "release-gate-read"},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -294,12 +309,12 @@ func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 		dedup := model.RepoRef{Owner: "dedup", Name: r.legacy}
 		jsonEncoded := model.RepoRef{Owner: "json", Name: r.legacy}
 
-		beforeWidgets := []string{"package-publish", r.legacy, "repo-read:acme/tools"}
+		beforeWidgets := []string{"package-publish", r.legacy, "release-gate-read"}
 		gotWidgets, err := store.GetRepoConfig(ctx, widgets)
 		if err != nil || gotWidgets == nil {
 			t.Fatalf("%s widgets: %v, %+v", r.legacy, err, gotWidgets)
 		}
-		wantWidgets := append(append([]string{"package-publish"}, r.to...), "repo-read:acme/tools")
+		wantWidgets := append(append([]string{"package-publish"}, r.to...), "release-gate-read")
 		if !slices.Equal(gotWidgets.CICapabilities, wantWidgets) {
 			t.Errorf("%s: widgets CI capabilities = %v, want %v", r.legacy, gotWidgets.CICapabilities, wantWidgets)
 		}
@@ -392,7 +407,7 @@ func equalRows(got, want map[string][]string) bool {
 	return true
 }
 
-func TestMigration88SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
+func TestMigration89SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
@@ -470,17 +485,17 @@ func TestMigration88SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		}
 	}
 
-	rewindSchemaTo(t, ctx, db, 87)
+	rewindSchemaTo(t, ctx, db, 88)
 	exportDir := t.TempDir()
 	if err := staterepo.Export(ctx, db, exportDir); err != nil {
-		t.Fatalf("exporting version-87 store: %v", err)
+		t.Fatalf("exporting version-88 store: %v", err)
 	}
-	if err := staterepo.WriteSchemaVersion(exportDir, 87); err != nil {
-		t.Fatalf("stamping version-87 export: %v", err)
+	if err := staterepo.WriteSchemaVersion(exportDir, 88); err != nil {
+		t.Fatalf("stamping version-88 export: %v", err)
 	}
 
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating version-87 store to 88: %v", err)
+		t.Fatalf("migrating version-88 store to 89: %v", err)
 	}
 
 	assertMigrated := func(t *testing.T, s *model.Store, sqlDB *sql.DB) {
@@ -596,16 +611,16 @@ func TestMigration88SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 
 	assertMigrated(t, store, db)
 
-	rewindSchemaTo(t, ctx, db, 87)
+	rewindSchemaTo(t, ctx, db, 88)
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("re-running migration 88: %v", err)
+		t.Fatalf("re-running migration 89: %v", err)
 	}
 	assertMigrated(t, store, db)
 
 	importedStore, importedDB, importCtx := openStore(t)
 	_ = importCtx
 	if err := staterepo.Import(ctx, importedDB, exportDir); err != nil {
-		t.Fatalf("staterepo.Import of schema-87 export: %v", err)
+		t.Fatalf("staterepo.Import of schema-88 export: %v", err)
 	}
 	assertMigrated(t, importedStore, importedDB)
 }

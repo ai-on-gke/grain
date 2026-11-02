@@ -88,6 +88,7 @@ func (s *Server) remoteSession(ctx context.Context) error {
 	stop := context.AfterFunc(ctx, func() { _ = m.Close() })
 	defer stop()
 	s.logf("hostd: connected to the controller (hostd protocol %d, build %s)", ProtocolVersion, s.Build)
+	ctx = context.WithValue(ctx, sessionKey{}, m)
 	for {
 		st, err := m.AcceptStream()
 		if err != nil {

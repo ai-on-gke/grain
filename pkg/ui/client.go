@@ -442,6 +442,13 @@ func (c *Client) capabilityByID(id string) (Capability, bool) {
 			return Capability{}, false
 		}
 		ref := model.CapabilityGrantRef(id)
+		// repo#read and repo#write {repo} are CI-only repository access
+		// grants; only repo#write {refs, force} (git-push-any-ref) is a
+		// task/template grant.
+		if ref == model.RepoReadRef || model.IsRepoAccessGrant(id) ||
+			(ref == model.RepoWriteRef && !model.IsGitPushAnyRefGrant(id)) {
+			return Capability{}, false
+		}
 		return Capability{ID: id, Name: ref, Description: "Granted by the capability server " + ref}, true
 	}
 	for _, capability := range c.Config.Capabilities {

@@ -46,8 +46,8 @@ func TestSetRepoSettingsAppliesCapabilitiesAndUnfixableChecks(t *testing.T) {
 	if !reflect.DeepEqual(got.DefaultCapabilities, []string{model.GCPKeySandboxAgentGrant}) {
 		t.Errorf("defaultCapabilities = %v, want [%s]", got.DefaultCapabilities, model.GCPKeySandboxAgentGrant)
 	}
-	if !reflect.DeepEqual(got.CICapabilities, []string{"gemini-key", "package-publish", "repo-read:acme/tools"}) {
-		t.Errorf("ciCapabilities = %v, want [gemini-key package-publish repo-read:acme/tools]", got.CICapabilities)
+	if want := []string{"gemini-key", "package-publish", model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"})}; !reflect.DeepEqual(got.CICapabilities, want) {
+		t.Errorf("ciCapabilities = %v, want %v", got.CICapabilities, want)
 	}
 	if !reflect.DeepEqual(got.UnfixableChecks, []string{"cla/google", "license/check"}) {
 		t.Errorf("unfixableChecks = %v, want [cla/google license/check]", got.UnfixableChecks)

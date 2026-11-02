@@ -195,3 +195,48 @@ func (s *Server) writePrincipalRefusedPage(w http.ResponseWriter, r *http.Reques
 		fmt.Fprintln(w, "not allowed")
 	}
 }
+
+// writeAssertionRefused answers a request whose signed identity header
+// is present but does not verify: 401, never a fall-through to the
+// access code (authentication.design.md, "A bad assertion is final"). A
+// browser loading a UI page is shown a page that says so, rather than
+// the API's JSON error, since an expired or rotated-key assertion
+// reaches a person's browser, not only a forger's curl.
+func writeAssertionRefused(w http.ResponseWriter, r *http.Request, err error) {
+	err = fmt.Errorf("identity assertion was not accepted: %w", err)
+	if !browserNavigation(r) {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusUnauthorized)
+	if err := assertionRefusedPage.Execute(w, err.Error()); err != nil {
+		fmt.Fprintln(w, "identity assertion was not accepted")
+	}
+}
+
+var assertionRefusedPage = template.Must(template.New("assertion-refused").Parse(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>grain: sign-in not verified</title>
+<style>
+body { font-family: system-ui, sans-serif; display: flex; min-height: 100vh; margin: 0; align-items: center; justify-content: center; background: #f5f5f5; }
+main { background: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.15); max-width: 30rem; width: 100%; box-sizing: border-box; }
+h1 { font-size: 1.25rem; margin: 0 0 1rem; }
+p { color: #444; font-size: .9rem; overflow-wrap: anywhere; }
+code { font-size: .85rem; }
+</style>
+</head>
+<body>
+<main>
+<h1>Sign-in could not be verified</h1>
+<p>The signed identity the proxy in front of grain attached to this request did not verify, so grain refused it. The access code is not consulted when a signed identity fails.</p>
+<p id="refused-reason"><code>{{.}}</code></p>
+<p>Reload the page to sign in again. If it keeps happening, the owner checks that the daemon's <code>-ui-iap-audience</code>, <code>-ui-iap-issuer</code> and <code>-ui-iap-keys-url</code> match the proxy's backend and that this host's clock is right.</p>
+</main>
+</body>
+</html>
+`))

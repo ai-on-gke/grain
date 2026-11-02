@@ -63,7 +63,7 @@ func TestRepoCICapabilitiesAPIKeepsTaskDefaultsIndependent(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT repo-read/write: %d %s", rec.Code, rec.Body)
 	}
-	if gotRepoReadWrite := decode[ui.RepoDefaults](t, rec); !reflect.DeepEqual(gotRepoReadWrite.CICapabilities, []string{"repo-read:acme/tools", "repo-write:acme/tools"}) {
+	if gotRepoReadWrite := decode[ui.RepoDefaults](t, rec); !reflect.DeepEqual(gotRepoReadWrite.CICapabilities, []string{model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"}), model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "tools"})}) {
 		t.Fatalf("saved repo-read/write: %+v", gotRepoReadWrite)
 	}
 	for _, id := range []string{"self-debug", "unknown", "github-credential:default", "repo-read:invalid", "repo-write:invalid"} {

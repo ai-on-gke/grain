@@ -93,11 +93,14 @@ func WithCICapabilityServers(service *ci.Service, servers func() orchestrator.Ca
 }
 
 // ciCapabilityRefs is the capability references among ids, as grants.
+// Repository access (repo#read, repo#write {repo}) is not one of them: it
+// mints nothing, and is honoured, through its own event gate, by the
+// proxy scope CiSandbox.grantRepoAccess widens.
 func ciCapabilityRefs(ids []string) []model.Grant {
 	var out []model.Grant
 	for _, id := range ids {
 		c := model.CanonicalLegacyGrant(id)
-		if model.IsCapabilityRef(c) {
+		if model.IsCapabilityRef(c) && !model.IsRepoAccessGrant(c) {
 			out = append(out, model.Grant{Capability: c, Via: model.GrantByDefault})
 		}
 	}

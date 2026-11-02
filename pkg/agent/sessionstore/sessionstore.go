@@ -425,11 +425,16 @@ func (s *Store) oversized(dir string) bool {
 	return over
 }
 
-// validName is what may become one path element of this store. Task ids
-// and framework names are grain's own and are already tame, which is the
-// point: nothing about a path under the deployment's data directory
-// should depend on that staying true, and a name this refuses costs its
-// caller a temp home rather than an escape from the root.
+// ValidName reports whether name may become one path element of a session
+// store. Task ids and framework names are grain's own and are already tame,
+// which is the point: nothing about a path under the deployment's data
+// directory or a remote host's staging root should depend on that staying
+// true, and a name this refuses costs its caller a temp home rather than an
+// escape from the root.
+func ValidName(name string) bool {
+	return validName(name)
+}
+
 func validName(name string) bool {
 	if name == "" || len(name) > 64 || name == "." || name == ".." {
 		return false

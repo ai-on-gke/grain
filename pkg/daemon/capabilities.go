@@ -45,8 +45,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
-	"github.com/ai-on-gke/grain/pkg/capability/reporead"
-	"github.com/ai-on-gke/grain/pkg/capability/repowrite"
 	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
@@ -57,7 +55,7 @@ import (
 
 func newCapabilityRegistryWithStore(_ *model.Store, local localscripts.Config, providers ...model.CapabilityProvider) *model.CapabilityRegistry {
 	reg := model.NewCapabilityRegistry(providers...)
-	reg.RegisterDynamic(reporead.DynamicProvider, repowrite.DynamicProvider,
+	reg.RegisterDynamic(
 		localscripts.DynamicProvider(local), ui.AgentAPIDynamicProvider)
 	// A CI job's api grants are a token for CIAPI rather than routes an
 	// agent may call (pkg/capability/ciapi).

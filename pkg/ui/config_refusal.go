@@ -111,6 +111,9 @@ func (e *externalConfigRepoError) Error() string {
 			b.WriteString(c.Patch)
 		}
 		b.WriteString("\n" + e.openPullRequest())
+		if e.Description != "" {
+			b.WriteString(" Note: " + e.Description + ".")
+		}
 	case len(e.Paths) > 0:
 		fmt.Fprintf(&b, " Configuration here is managed in %s. Make this change in %s instead", where, strings.Join(e.Paths, ", "))
 		if e.Description != "" {
