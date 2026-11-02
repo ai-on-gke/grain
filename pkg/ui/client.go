@@ -170,15 +170,6 @@ func (c *Client) now() time.Time {
 	return time.Now().UTC()
 }
 
-// actor returns the authenticated principal in ctx if present, falling back to
-// the client's configured default Actor.
-func (c *Client) actor(ctx context.Context) model.Principal {
-	if p, ok := PrincipalFromContext(ctx); ok {
-		return p
-	}
-	return c.Config.Actor
-}
-
 // ValidationError marks a request Client rejected before touching the
 // store -- a blank title, an unparseable repo, an unknown capability ID.
 // Server maps this to a 400; a CLI caller can print Error() on its own
@@ -2258,7 +2249,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	parkUnreached := false
 	if reachRefused != "" {
-		if req.ProposedBy == "" && c.actor(ctx).Kind == model.PrincipalHuman {
+		if req.ProposedBy == "" && c.requestActor(ctx).Actor.Kind == model.PrincipalHuman {
 			return Task{}, validationErrorf("%s", reachRefused)
 		}
 		parkUnreached = true
@@ -2353,15 +2344,15 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	if proposedBy == nil {
 		submittingUser := strings.TrimSpace(req.Creator)
-		if submittingUser == "" && c.Config.Actor.Kind == model.PrincipalHuman {
-			submittingUser = strings.TrimSpace(c.Config.Actor.ID)
+		if submittingUser == "" {
+			submittingUser = c.operatorPerson()
 			req.Creator = submittingUser
 		}
 		if submittingUser == "" {
 			return Task{}, validationErrorf("creator is required")
 		}
 	}
-	orderKey, err := c.Store.OrderKeyForNewTask(ctx, atFront || (req.Interactive && proposedBy == nil && c.actor(ctx).Kind != model.PrincipalAgent))
+	orderKey, err := c.Store.OrderKeyForNewTask(ctx, atFront || (req.Interactive && proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent))
 	if err != nil {
 		return Task{}, err
 	}
@@ -2451,7 +2442,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		}
 	}
 	catalogueHold := false
-	if len(catalogueNeedsPerson) > 0 && (proposedBy != nil || c.actor(ctx).Kind == model.PrincipalAgent) {
+	if len(catalogueNeedsPerson) > 0 && (proposedBy != nil || c.requestActor(ctx).Actor.Kind == model.PrincipalAgent) {
 		why := model.CatalogueRequiresPersonNote(catalogueNeedsPerson)
 		if needsPersonWhy == "" {
 			needsPersonWhy = why
@@ -2555,7 +2546,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// -- which is the one thing a provenance field must never say
 	// (grain/task-311).
 	origin := model.Origin{
-		Attribution: model.Attribution{Actor: c.actor(ctx)},
+		Attribution: model.Attribution{Actor: c.requestActor(ctx).Actor},
 		Reason:      model.ReasonDirect,
 	}
 	if proposedBy != nil {
@@ -2569,7 +2560,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// agent's proposal records none, even one naming a template: a run
 	// cannot hand the refs it may push on to work it files.
 	var filedFrom string
-	if proposedBy == nil && c.actor(ctx).Kind != model.PrincipalAgent {
+	if proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent {
 		filedFrom = strings.TrimSpace(req.TemplateID)
 	}
 	task := model.Task{
@@ -2621,7 +2612,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		model.InheritRequester(&task, *proposedBy)
 	}
 	if req.DeclineAutoMerge && !req.AutoMerge {
-		model.DeclineAutoMerge(&task, model.PrincipalString(c.actor(ctx)))
+		model.DeclineAutoMerge(&task, model.PrincipalString(c.requestActor(ctx).Actor))
 	}
 	if req.FixesBaseBranch && !model.SetFixesBaseBranch(&task, true) {
 		return Task{}, validationErrorf("a task with no repo has no base branch to fix: " +
@@ -2642,8 +2633,8 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	switch {
 	case catalogueHold:
 		task.Body += "\n\n_Filed for a person to approve: " + needsPersonWhy + "._"
-	case req.Approved || (req.Interactive && proposedBy == nil && c.actor(ctx).Kind != model.PrincipalAgent):
-		task.Approval = &model.Attribution{Actor: c.actor(ctx)}
+	case req.Approved || (req.Interactive && proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent):
+		task.Approval = &model.Attribution{Actor: c.requestActor(ctx).Actor}
 		task.ApprovedAt = &now
 	case sessionQueued:
 		task.Approval = &model.Attribution{Actor: model.ConsoleSessionPrincipal}
@@ -2718,7 +2709,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			// whoever reads the pair will find it.
 			if _, err := c.Store.AddComment(ctx, model.Comment{
 				TaskID:    id,
-				Author:    model.Attribution{Actor: c.actor(ctx)},
+				Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
 				Body:      model.SupersedeRefusedLine(supersedes, refusal),
 				CreatedAt: now,
 			}); err != nil {
@@ -4460,7 +4451,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			submittedHead = c.submittedHead(ctx, *current)
 		}
 	}
-	if err := c.mutate(model.WithAutoMergeChange(ctx, c.actor(ctx), "edited"), id, func(task *model.Task) error {
+	if err := c.mutate(model.WithAutoMergeChange(ctx, c.requestActor(ctx).Actor, "edited"), id, func(task *model.Task) error {
 		submitted = false
 		// Whether this edit moves the task off a repository it had a
 		// target in, which takes the pull requests it opened there off
@@ -4544,7 +4535,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 				model.AllowAutoMerge(task)
 				task.AutoMerge = true
 			} else {
-				model.DeclineAutoMerge(task, model.PrincipalString(c.actor(ctx)))
+				model.DeclineAutoMerge(task, model.PrincipalString(c.requestActor(ctx).Actor))
 			}
 		}
 		if req.AutoApproveProposals != nil {
@@ -4947,7 +4938,7 @@ func (c *Client) noteEdit(ctx context.Context, id string, titleChanged bool, tit
 	}
 	_, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
-		Author:    model.Attribution{Actor: c.actor(ctx)},
+		Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
 		Body:      body,
 		CreatedAt: c.now(),
 	})
@@ -5152,7 +5143,7 @@ func (c *Client) Approve(ctx context.Context, id string) error {
 	if err := c.catalogueApprovalRefusal(ctx, *task); err != nil {
 		return err
 	}
-	if err := c.Store.Approve(ctx, id, model.Attribution{Actor: c.actor(ctx)}, c.now()); err != nil {
+	if err := c.Store.Approve(ctx, id, model.Attribution{Actor: c.requestActor(ctx).Actor}, c.now()); err != nil {
 		return err
 	}
 	if task.Interactive && task.DeferredAt == nil && c.Config.Wake != nil {
@@ -5382,7 +5373,7 @@ func (c *Client) Submit(ctx context.Context, id string) error {
 		return c.submitWithApprovals(ctx, *task, pending)
 	}
 	now, head := c.now(), c.submittedHead(ctx, *task)
-	if err := c.mutate(model.WithAutoMergeChange(ctx, c.actor(ctx), "submitted"), id, func(task *model.Task) error {
+	if err := c.mutate(model.WithAutoMergeChange(ctx, c.requestActor(ctx).Actor, "submitted"), id, func(task *model.Task) error {
 		// Only a Submit that turns auto-merge on answers a hold. One
 		// over a change already merging itself (pressed to retry its CI)
 		// has looked at no new head, and must not pin a clearance to
@@ -5544,7 +5535,7 @@ func (c *Client) commentWithAuthor(ctx context.Context, id, body string, uploads
 	if err != nil {
 		return err
 	}
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
 	// An author naming the request's own principal keeps its kind: a
 	// verified *.gserviceaccount.com caller is a service principal, as it
 	// is on the tasks it files and closes, not a human.
@@ -5591,7 +5582,7 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 	// returning early from reopenAcknowledgeable with the task still deferred.
 	wokeOnMessage := false
 	ownAgent := model.Principal{Kind: model.PrincipalAgent, ID: id}
-	if by.Actor != ownAgent && (by.OnBehalfOf == nil || *by.OnBehalfOf != ownAgent) {
+	if !by.Actor.Same(ownAgent) && (by.OnBehalfOf == nil || !by.OnBehalfOf.Same(ownAgent)) {
 		var err error
 		wokeOnMessage, err = c.Store.WakeOnMessage(ctx, id, now)
 		if err != nil {
@@ -5726,7 +5717,7 @@ func (c *Client) Stop(ctx context.Context, id string) error {
 
 	commentID, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
-		Author:    model.Attribution{Actor: c.actor(ctx)},
+		Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
 		Body:      model.TurnStoppedComment,
 		CreatedAt: now,
 	})
@@ -5900,7 +5891,7 @@ func (c *Client) Retry(ctx context.Context, id string) error {
 	// Only a person lifts a stop a person made, the same rule a reply
 	// is held to (addAttributedComment): a run calling retry through the
 	// agent API on a task it may write is not the one the stop waits on.
-	if stopped && c.actor(ctx).Kind != model.PrincipalHuman {
+	if stopped && c.requestActor(ctx).Actor.Kind != model.PrincipalHuman {
 		return validationErrorf("%s was stopped by an operator: only a person can resume it, by replying or pressing Retry", id)
 	}
 	if stopped {
@@ -6034,7 +6025,7 @@ func (c *Client) RetryMerge(ctx context.Context, id string) error {
 	// later has no other way to see happened.
 	_, err = c.Store.AddComment(ctx, model.Comment{
 		TaskID: id,
-		Author: model.Attribution{Actor: c.actor(ctx)},
+		Author: model.Attribution{Actor: c.requestActor(ctx).Actor},
 		Body: fmt.Sprintf(
 			"Asked the merge queue to try %s again. It takes its place in the queue "+
 				"as if it had never been given up on: the checks are read afresh -- and "+
@@ -6169,7 +6160,7 @@ func (c *Client) ForceMerge(ctx context.Context, id, reason, head string) error 
 		return err
 	}
 	now := c.now()
-	by := c.actor(ctx).ID
+	by := c.requestActor(ctx).Actor.ID
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
 		o.ForceMergeAt = &now
 		o.ForceMergeReason, o.ForceMergeBy, o.ForceMergeSkipped = reason, by, skipped
@@ -6223,7 +6214,7 @@ func (c *Client) ForceMerge(ctx context.Context, id, reason, head string) error 
 		"forced again."
 	if _, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
-		Author:    model.Attribution{Actor: c.actor(ctx)},
+		Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
 		Body:      body,
 		CreatedAt: now,
 	}); err != nil {
@@ -6418,7 +6409,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 	if task == nil {
 		return &NotFoundError{ID: id}
 	}
-	if by := c.actor(ctx); by.Kind == model.PrincipalAgent {
+	if by := c.requestActor(ctx).Actor; by.Kind == model.PrincipalAgent {
 		if p, err := c.Store.GetPause(ctx, id); err != nil {
 			return err
 		} else if p != nil {
@@ -6439,7 +6430,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 		// Un-parking is "go on without an answer", which only the person
 		// the question (or request_secret) was put to may decide. An
 		// agent's run_task_now would otherwise answer it for them.
-		if by := c.actor(ctx); by.Kind == model.PrincipalAgent {
+		if by := c.requestActor(ctx).Actor; by.Kind == model.PrincipalAgent {
 			return forbiddenErrorf("%s is waiting for a person's reply, and agent %q may not start it in "+
 				"their place: a person has to answer it or Run now it themselves", id, by.ID)
 		}
@@ -6449,7 +6440,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 		if err := c.agentMayApprove(ctx, *task); err != nil {
 			return err
 		}
-		if err := c.Store.Approve(ctx, id, model.Attribution{Actor: c.actor(ctx)}, now); err != nil {
+		if err := c.Store.Approve(ctx, id, model.Attribution{Actor: c.requestActor(ctx).Actor}, now); err != nil {
 			return err
 		}
 	}
@@ -6476,7 +6467,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 	// thread), so it names the branch that work belongs on.
 	if _, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
-		Author:    model.Attribution{Actor: c.actor(ctx)},
+		Author:    model.Attribution{Actor: c.requestActor(ctx).Actor},
 		Body:      runNowComment(state, pullRequestRefOf(*task)),
 		CreatedAt: now,
 	}); err != nil {
@@ -6505,7 +6496,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 // start it. A person asking -- the button, `grain run-now` -- is the
 // person those proposals wait for, so nothing is checked for them.
 func (c *Client) agentMayApprove(ctx context.Context, task model.Task) error {
-	by := c.actor(ctx)
+	by := c.requestActor(ctx).Actor
 	if by.Kind != model.PrincipalAgent {
 		return nil
 	}
@@ -6655,7 +6646,7 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 		return &NotFoundError{ID: id}
 	}
 	now := c.now()
-	by := c.actor(ctx)
+	by := c.requestActor(ctx).Actor
 	eventReason := strings.TrimSpace(opts.Reason)
 	if eventReason == "" {
 		if call, ok := agentCallFromContext(ctx); ok {

@@ -246,7 +246,7 @@ func (s *Server) wantsActions(r *http.Request, filter ci.RunFilter) (model.RepoR
 	if filter.Provider != "" && !strings.EqualFold(filter.Provider, ci.ProviderGitHubActions) {
 		return model.RepoRef{}, false
 	}
-	if filter.Provider == "" && s.tasks.actor(r.Context()).Kind == model.PrincipalHuman {
+	if filter.Provider == "" && s.tasks.requestActor(r.Context()).Actor.Kind == model.PrincipalHuman {
 		return model.RepoRef{}, false
 	}
 	repo, err := s.tasks.parseRepo(filter.Repo)

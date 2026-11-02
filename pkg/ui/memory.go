@@ -192,7 +192,7 @@ func (c *Client) PutMemory(ctx context.Context, repo, text string, by model.Prin
 // spelling of it is the one that eventually disagrees.
 func (c *Client) memoryAuthorOrActor(ctx context.Context, by model.Principal) model.Principal {
 	if by.Kind == "" && by.ID == "" {
-		return c.actor(ctx)
+		return c.requestActor(ctx).Actor
 	}
 	return by
 }

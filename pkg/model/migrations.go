@@ -604,7 +604,73 @@ var Migrations = []Migration{
 			},
 		),
 	},
+	{
+		Version:     91,
+		Description: "add a *_source column beside every principal's *_kind/*_id pair, task_event's on-behalf-of, and config_audit (operator-attribution spec §1.3, §7.1)",
+		Statements: append([]string{
+			// task_pause and task_event postdate the 2.0 baseline and
+			// Init's CREATE TABLE IF NOT EXISTS made them in place, so a
+			// store this old may not have them yet: create them in the
+			// shape schema 90 knew first, so that the ALTERs below meet
+			// the same table whichever store they run on.
+			schema90TaskPauseTable,
+			schema90TaskEventTable,
+		}, principalSourceColumns()...),
+	},
 }
+
+// principalSourceColumns are migration 91's ALTERs: `<p>_source` beside
+// every stored principal, `”` for every row already there.
+func principalSourceColumns() []string {
+	cols := []struct{ table, column string }{
+		{"task", "origin_actor_source"},
+		{"task", "origin_behalf_source"},
+		{"task", "approval_actor_source"},
+		{"task", "approval_behalf_source"},
+		{"task_comment", "author_source"},
+		{"task_comment", "author_behalf_source"},
+		{"task_pause", "paused_by_source"},
+		{"pipeline_pause", "actor_source"},
+		{"scheduled_upgrade", "actor_source"},
+		{"memory", "updated_by_source"},
+		{"memory_document", "updated_by_source"},
+		{"release_note", "updated_by_source"},
+		{"task_event", "actor_source"},
+		{"task_event", "behalf_kind"},
+		{"task_event", "behalf_id"},
+		{"task_event", "behalf_source"},
+	}
+	out := make([]string, 0, len(cols))
+	for _, c := range cols {
+		out = append(out, "ALTER TABLE `"+c.table+"` ADD COLUMN `"+c.column+"` TEXT NOT NULL DEFAULT ''")
+	}
+	return out
+}
+
+// schema90TaskPauseTable and schema90TaskEventTable are task_pause and
+// task_event as schema 90 created them, frozen for migration 91.
+const schema90TaskPauseTable = `CREATE TABLE IF NOT EXISTS ` + "`task_pause`" + ` (
+  ` + "`task_id`" + `           TEXT     NOT NULL,
+  ` + "`paused_at`" + `         DATETIME NOT NULL,
+  ` + "`paused_by_kind`" + `    TEXT     NOT NULL,
+  ` + "`paused_by_id`" + `      TEXT     NOT NULL,
+  ` + "`from_state`" + `        TEXT     NOT NULL,
+  ` + "`immediate`" + `         INTEGER  NOT NULL DEFAULT 0,
+  ` + "`grace_until`" + `       DATETIME NULL,
+  ` + "`run_id`" + `            TEXT     NULL,
+  PRIMARY KEY (` + "`task_id`" + `)
+)`
+
+const schema90TaskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
+  ` + "`id`" + `         INTEGER PRIMARY KEY AUTOINCREMENT,
+  ` + "`task_id`" + `    TEXT     NOT NULL,
+  ` + "`kind`" + `       TEXT     NOT NULL,
+  ` + "`at`" + `         DATETIME NOT NULL,
+  ` + "`actor_kind`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_id`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`reason`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`detail`" + `     TEXT     NOT NULL DEFAULT ''
+)`
 
 // CorpResearchGrant is what migration 86 rewrote stored corp-research grants
 // to: the method a wrapper distribution's build registers (capability.Register) in place

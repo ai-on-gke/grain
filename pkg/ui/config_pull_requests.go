@@ -128,7 +128,7 @@ func validateConfigChanges(changes []staterepo.FileChange) error {
 // config pull request the way it opens any other, from a task on the
 // repository.
 func (c *Client) OpenConfigPullRequest(ctx context.Context, req ConfigPullRequestRequest) (ConfigPullRequest, error) {
-	if c.actor(ctx).Kind != model.PrincipalHuman {
+	if c.requestActor(ctx).Actor.Kind != model.PrincipalHuman {
 		return ConfigPullRequest{}, forbiddenErrorf("only a person may open a config pull request here; an agent opens one from a task on %s", internalConfigRepo)
 	}
 	if err := validateConfigChanges(req.Changes); err != nil {
@@ -149,7 +149,7 @@ func (s *Server) handleOpenConfigPullRequest(w http.ResponseWriter, r *http.Requ
 	if !readJSON(w, r, &req) {
 		return
 	}
-	req.User = actingUser(r, "")
+	req.User = requestPerson(r.Context())
 	pr, err := s.tasks.OpenConfigPullRequest(r.Context(), req)
 	var invalid *ConfigPullRequestInvalid
 	switch {

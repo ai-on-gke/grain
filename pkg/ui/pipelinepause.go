@@ -249,7 +249,7 @@ func (s *Server) handlePausePipeline(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
-	status, paused, err := s.tasks.PausePipeline(ctx, req.Reason, s.tasks.actor(ctx))
+	status, paused, err := s.tasks.PausePipeline(ctx, req.Reason, s.tasks.requestActor(ctx).Actor)
 	if err != nil {
 		writeClientError(w, err)
 		return
