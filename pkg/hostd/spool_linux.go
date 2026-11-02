@@ -38,7 +38,7 @@ import (
 // Detached processes (protocol 2): a host CLI or capability server that
 // outlives the daemon connection that started it, until its own
 // deadline, the way a run host outlives the daemon
-// (docs/non-disruptive-upgrade.md, "Run hosts").
+// (design/design/non-disruptive-upgrade.design.md, "Run hosts").
 //
 // Its output goes to a spool on the host rather than down the
 // connection, laid out as a run host's is (runhost/spool.go) and read the

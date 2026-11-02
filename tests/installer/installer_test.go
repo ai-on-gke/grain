@@ -145,7 +145,7 @@ func install() (*deployment, error) {
 	// These tests configure the installed daemon -- its repositories,
 	// capability servers and git connections -- through its API and CLI,
 	// which a deployment with a grain/config repository otherwise sends
-	// to a config pull request (docs/design/config-repo-settings.md,
+	// to a config pull request (design/design/config-repo-settings.design.md,
 	// section 4.1.1). The host-local opt-out keeps them writing directly.
 	if err := staterepo.SaveSettings(d.data, staterepo.Settings{DirectConfigWrites: true}); err != nil {
 		return nil, err

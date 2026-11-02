@@ -32,7 +32,7 @@ import (
 )
 
 // What follows, down to queueEntry, is this file's side of the boundary
-// docs/three-pieces.md draws: the pure "what is true about this branch"
+// design/design/architecture.design.md draws: the pure "what is true about this branch"
 // half of what used to be here now lives in pkg/forge, which imports no
 // pkg/model and so cannot read a task, and this is the adapter onto it.
 //

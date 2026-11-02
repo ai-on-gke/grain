@@ -113,7 +113,7 @@ jobs:
 	dataDir := filepath.Join(home, ".grain")
 	// The test configures the daemon through its API, which a deployment
 	// with a grain/config repository otherwise sends to a config pull
-	// request (docs/design/config-repo-settings.md, section 4.1.1).
+	// request (design/design/config-repo-settings.design.md, section 4.1.1).
 	if err := staterepo.SaveSettings(dataDir, staterepo.Settings{DirectConfigWrites: true}); err != nil {
 		t.Fatal(err)
 	}

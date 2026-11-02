@@ -14,7 +14,7 @@
 
 // Package forge is what is true about a branch, and whether it may land.
 //
-// It is one of the three pieces docs/three-pieces.md names, and the rule
+// It is one of the three pieces design/design/architecture.design.md names, and the rule
 // that document states is the whole of this package's contract: tasks
 // point at the forge, the forge points at sandboxes, and nothing points
 // up. So there is no model.Task here, no model.Observation, no

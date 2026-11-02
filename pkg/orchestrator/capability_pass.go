@@ -35,7 +35,7 @@ import (
 )
 
 // This file is admission minting for capability references
-// (docs/capabilities-spec.md §4.2.2-§4.2.4, §4.4.1): a task holding a
+// (design/spec/capabilities/capabilities.spec.md §4.2.2-§4.2.4, §4.4.1): a task holding a
 // reference (model.IsCapabilityRef) has every one of them resolved,
 // checked against the deployment's capability policy and minted, as one
 // pass, once the rest of admission has admitted it and before its

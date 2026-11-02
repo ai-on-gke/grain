@@ -1,6 +1,6 @@
 # Driving grain from an external CLI
 
-`contributions.design.md` says designs are written "in interactive sessions between PMs, engineers and agents", outside grain, "with any interactive coding agent or by hand". After that, grain takes over: it generates specs and tasks, implements, reviews and merges. In practice the engineer's interactive agent keeps working after the design merges. That agent is Jetski / Antigravity, Claude Code, Codex CLI or Gemini CLI, running on a Cloudtop or a laptop. The engineer uses it to hand work to grain, check on that work, answer grain's questions, and sometimes write the code themselves and ask grain to review and land it.
+`contributions.design.md` says designs are written "in interactive sessions between PMs, engineers and agents", outside grain, "with any interactive coding agent or by hand". After that, grain takes over: it generates specs and tasks, implements, reviews and merges. In practice the engineer's interactive agent keeps working after the design merges. That agent is Jetski / Antigravity, Claude Code, Codex CLI or Gemini CLI, running on a workstation or a laptop. The engineer uses it to hand work to grain, check on that work, answer grain's questions, and sometimes write the code themselves and ask grain to review and land it.
 
 Today all of that is possible, but it takes effort. This design makes it effortless. An engineer should be able to tell their agent "have grain do these three things and tell me when they've merged", and the agent should know how to do it without being taught each time.
 
@@ -12,10 +12,10 @@ Grain already has nearly all the pieces. They just don't fit together for someon
 - **Finding the server** (`cliconn.go`). The CLI takes `-server`, then `$GRAIN_SERVER`, then `/etc/grain/cli.env`, then `http://127.0.0.1:4242`. That fits a CLI on the daemon's own host. It does not fit an engineer with two deployments and neither of them local.
 - **Credentials** (`pkg/ui/httpclient.go`). The CLI tries `-token` / `$GRAIN_TOKEN` (and its aliases), then the local API token for a loopback server, then a Google ID token from ADC or `gcloud auth print-identity-token --audiences=<url>` for an `https://` or `*.run.app` server. Nothing is saved between commands, so a remote user either exports the access code in every shell or passes `-token` on every call.
 - **External agents** (`docs/agent-api.md` § External agents, `pkg/ui/external_agents.go`). An operator can enable `POST /mcp` and issue per-agent `gma_…` tokens. Each token carries a scope set, a repository limit, an expiry, a rate limit and a concurrency cap. Calls run as `{agent, external:<name>}`, are journaled, and leave an audit comment on any task they change. The same escalation rails apply as for in-grain agents: an external agent cannot grant itself capabilities, enable auto-merge, or merge without review.
-- **The namespace** (`docs/design/grain-namespace.md`). `ci://`, `src://`, `task://`, `config://`, `memory://` and `deploy://` are served at `/fs/<scheme>/<path>`, with `?list`, `?glob`, `?grep`, `?tail` and `?follow`. They are only mounted on the in-sandbox git proxy (`127.0.0.1:9728`), not on the daemon's main API.
-- **The in-sandbox CLI** (`docs/design/sandbox-first-agent-surface.md`). It covers the same verbs an external agent wants: `grain ls|read|grep`, `grain ci wait` with resumable long-polls, `grain task wait`, `grain merge-queue`, `grain pr status`. It is scoped to one task's branch and authenticated by the sandbox's proxy credential.
+- **The namespace** (`design/design/grain-namespace.design.md`). `ci://`, `src://`, `task://`, `config://`, `memory://` and `deploy://` are served at `/fs/<scheme>/<path>`, with `?list`, `?glob`, `?grep`, `?tail` and `?follow`. They are only mounted on the in-sandbox git proxy (`127.0.0.1:9728`), not on the daemon's main API.
+- **The in-sandbox CLI** (`design/design/sandbox-first-agent-surface.design.md`). It covers the same verbs an external agent wants: `grain ls|read|grep`, `grain ci wait` with resumable long-polls, `grain task wait`, `grain merge-queue`, `grain pr status`. It is scoped to one task's branch and authenticated by the sandbox's proxy credential.
 - **Adopting someone else's PR** (`docs/github-bot.md`, `pkg/orchestrator/takeover.go`). Commenting `@<slug> take over` on a PR, or adding the `grain:take-over` label, files a shepherd task. Grain files a code review (and a security review when needed) for every head, holds the merge queue until those reviews pass, and carries the PR to merge. `@<slug> review` asks for a review only.
-- **Reaching a deployment.** Behind IAP, the CLI's ID-token path works. A single-tenant deployment takes the access code as a bearer token from any address (`docs/access-code.md`). Deployments behind a corporate identity-aware proxy are reached through the Google layer, which imports this module. Core has no doc for that path and must not name corp tooling (`tests/hygiene/boundary_test.go`), so this design leaves it to a credential-source hook that the Google layer registers (below).
+- **Reaching a deployment.** Behind IAP, the CLI's ID-token path works. A single-tenant deployment takes the access code as a bearer token from any address (`docs/access-code.md`). Deployments behind a corporate identity-aware proxy are reached through a wrapper distribution, which imports this module. Core has no doc for that path and must not name corp tooling (`tests/hygiene/boundary_test.go`), so this design leaves it to a credential-source hook that a wrapper distribution registers (below).
 
 The gaps come down to four things:
 
@@ -49,7 +49,7 @@ The engineer's agent drives grain the same way the engineer would: by running th
   "contexts": {
     "team-prod": {"server": "https://grain.team.example.com", "auth": "external-token", "credential": "keyring:grain/team-prod"},
     "personal":  {"server": "https://grain-abc123.run.app",   "auth": "google-id-token", "audience": "https://grain-abc123.run.app"},
-    "cloudtop":  {"server": "http://127.0.0.1:4242",           "auth": "local"}
+    "workstation":  {"server": "http://127.0.0.1:4242",           "auth": "local"}
   }
 }
 ```
@@ -64,8 +64,8 @@ The engineer's agent drives grain the same way the engineer would: by running th
    - **IAP or Cloud Run.** If the server answers through IAP or is `*.run.app`, login checks that the existing ADC / `gcloud auth print-identity-token --audiences=<url>` path mints a token the server accepts. It records `auth: google-id-token` and the audience, and stores no secret. Each call mints a fresh token through the code in `httpclient.go` today.
    - **External-agent token (the default for agents).** If the server accepts `gma_` tokens, login offers to mint one: `grain login --issue-token --scope-set grain/external-dev --repos ai-on-gke/grain,gke-labs/granule --expires 30d`. A credential for a non-dangerous scope set can be issued by whoever the login session authenticated as, through `POST /api/external-agents/tokens`. A dangerous one still needs a person and is refused here. An operator can also mint the token in the UI and paste it into `grain login --token-stdin`.
    - **Access code.** On a single-tenant deployment the access code is the only credential, and login reads it from stdin. The CLI warns that this grants everything, and suggests minting a scoped `gma_` token instead once logged in.
-   - **Corp proxy.** A credential-source hook (`cli.RegisterCredentialSource`, matching the registries core already uses for the Google layer) lets the Google layer add `auth: corp-proxy`. That source mints the corp proxy's credential from the user's existing corp sign-in session. When the session has expired it **fails fast**, naming the command that renews it. It never follows a login redirect: a `302` to a sign-in page, or an HTML body where JSON was expected, is reported as `not signed in to <proxy>: run <fix>` instead of hanging or being parsed as data.
-3. Secrets go in the OS keyring (Secret Service, macOS Keychain, Windows Credential Manager) under `grain/<context>`. On a headless Cloudtop with no keyring they go in `~/.config/grain/credentials/<context>` with mode `0600`, and the CLI refuses to read a file that is group- or world-readable. `config.json` never holds the secret itself.
+   - **Corp proxy.** A credential-source hook (`cli.RegisterCredentialSource`, matching the registries core already uses for a wrapper distribution) lets a wrapper distribution add `auth: corp-proxy`. That source mints the corp proxy's credential from the user's existing corp sign-in session. When the session has expired it **fails fast**, naming the command that renews it. It never follows a login redirect: a `302` to a sign-in page, or an HTML body where JSON was expected, is reported as `not signed in to <proxy>: run <fix>` instead of hanging or being parsed as data.
+3. Secrets go in the OS keyring (Secret Service, macOS Keychain, Windows Credential Manager) under `grain/<context>`. On a headless Workstation with no keyring they go in `~/.config/grain/credentials/<context>` with mode `0600`, and the CLI refuses to read a file that is group- or world-readable. `config.json` never holds the secret itself.
 
 `grain logout [<ctx>]` deletes the stored secret and, for a token login minted, revokes it (`POST /api/external-agents/tokens/{id}/revoke`). `grain whoami` prints the context, server, principal (`external:jane-jetski`, or a human identity behind IAP), scopes and repository limits. It is the first thing the skill tells an agent to run.
 
@@ -151,7 +151,7 @@ Each journey below follows the same format: what the engineer wants, what Jetski
 
 ### CUJ 1: One-time setup
 
-The engineer, on a fresh Cloudtop, says: "Set me up to use our team's grain."
+The engineer, on a fresh Workstation, says: "Set me up to use our team's grain."
 
 1. **Install.** Jetski runs the install line the deployment shows on its Settings → CLI page, which downloads the release binary that matches the server's version:
    ```sh
@@ -163,11 +163,11 @@ The engineer, on a fresh Cloudtop, says: "Set me up to use our team's grain."
    grain login https://grain.team.example.com --name team --issue-token \
        --scope-set grain/external-dev --repos ai-on-gke/grain,gke-labs/granule --expires 30d
    ```
-   Grain answers `whoami` and reports that it is behind IAP and accepts `gma_` tokens. The CLI authenticates the issuing call with the engineer's own IAP identity, which it gets from `gcloud`. The daemon mints `gma_…` named `jane-jetski-cloudtop` with `owner: jane@…`, and the CLI stores it in the keyring. If the engineer's `gcloud` login is missing, login stops with `run: gcloud auth login`; it never opens a browser redirect it can't finish.
+   Grain answers `whoami` and reports that it is behind IAP and accepts `gma_` tokens. The CLI authenticates the issuing call with the engineer's own IAP identity, which it gets from `gcloud`. The daemon mints `gma_…` named `jane-jetski-workstation` with `owner: jane@…`, and the CLI stores it in the keyring. If the engineer's `gcloud` login is missing, login stops with `run: gcloud auth login`; it never opens a browser redirect it can't finish.
 3. **Verify.**
    ```sh
    grain whoami
-   # context team  https://grain.team.example.com  as external:jane-jetski-cloudtop (owner jane@…)
+   # context team  https://grain.team.example.com  as external:jane-jetski-workstation (owner jane@…)
    # scopes grain/external-dev  repos ai-on-gke/grain gke-labs/granule  expires 2026-11-28
    ```
 4. **Teach Jetski.**

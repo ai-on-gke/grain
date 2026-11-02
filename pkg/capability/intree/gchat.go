@@ -68,7 +68,7 @@ const GChatMethod = "post"
 // otherwise (docs/ports.md).
 const DefaultGChatPort = 4251
 
-// Credential sources (docs/capabilities-spec.md §4.5.8).
+// Credential sources (design/spec/capabilities/capabilities.spec.md §4.5.8).
 const (
 	GChatSourceConfigured = "configured"
 	GChatSourceAmbient    = "ambient"

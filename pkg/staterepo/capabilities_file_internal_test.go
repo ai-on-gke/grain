@@ -25,7 +25,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// designCapabilities is docs/design/config-repo-settings.md §3.2's
+// designCapabilities is design/design/config-repo-settings.design.md §3.2's
 // example, trimmed to what this build's vocabulary knows.
 const designCapabilities = `
 defaults:

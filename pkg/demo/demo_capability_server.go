@@ -35,7 +35,7 @@ import (
 )
 
 // DemoCapabilityID is the demo's one capability server
-// (docs/capabilities-spec.md §3.1): a real protocol.CapabilityServer over
+// (design/spec/capabilities/capabilities.spec.md §3.1): a real protocol.CapabilityServer over
 // Streamable HTTP on a loopback port, attached by a real servers.Registry,
 // so the UI's grant forms, the task capabilities API and Settings →
 // Capability servers all read a server the way a deployment's are read.
@@ -199,7 +199,7 @@ func demoCapabilityMethods() ([]*protocol.Method, error) {
 }
 
 // demoCapabilityConfigSchema is the demo server's configuration
-// (docs/capabilities-spec.md §4.5): a pattern-checked project, an enum
+// (design/spec/capabilities/capabilities.spec.md §4.5): a pattern-checked project, an enum
 // region, and apiToken, a secret field Settings shows write-only. None
 // is required, so the server attaches before anyone has configured it.
 var demoCapabilityConfigSchema = map[string]any{

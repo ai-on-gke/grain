@@ -32,7 +32,7 @@ import (
 // before it is released, since what it reads (a container's state, a
 // pod's container statuses, a guest's console) goes with the sandbox.
 //
-// Under auto overcommit (docs/design/auto-overcommit.md) grain admits
+// Under auto overcommit (design/design/auto-overcommit.design.md) grain admits
 // more sandboxes than the host strictly has memory for and lets the
 // kernel pick one off when it is wrong. This is how grain finds out it
 // was one of its own, so that the run is retried as infrastructure

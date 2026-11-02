@@ -38,7 +38,7 @@ describe("ItemGlyph", () => {
   });
 
   it("draws Processes a figure of its own, not the Schedules posts", () => {
-    // docs/design/settings-panel.md §5.7: the page lists templates and
+    // design/design/settings-panel.design.md §5.7: the page lists templates and
     // triggers as well as schedules, so it does not borrow the figure
     // that reads as "time".
     const { container } = render(<ItemGlyph kind="processes" />);

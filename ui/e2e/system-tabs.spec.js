@@ -237,7 +237,7 @@ test("system sandboxes and caches tabs walkthrough", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Caches" })).toBeVisible();
   await expect(page.getByText(/Total space consumed: 0 B/)).toBeVisible();
 
-  // 7. System is a view (docs/design/settings-panel.md §2.1): the rail
+  // 7. System is a view (design/design/settings-panel.design.md §2.1): the rail
   // leaves it, and Back returns to the tab that was open.
   await page.getByRole("button", { name: /^Tasks \d+/ }).click();
   await expect(

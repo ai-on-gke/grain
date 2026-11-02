@@ -58,7 +58,7 @@ var ErrChannelLost = errors.New("sandbox access channel lost")
 // ChannelLostFault starts the error a CI job concludes errored with when one
 // of its steps ended in ErrChannelLost: the engine writes it
 // (pkg/grit/engine), and the orchestrator reads it to re-run the job
-// uncached rather than charge the tree (docs/design/grain-on-gke.md#GKE-3).
+// uncached rather than charge the tree (design/design/grain-on-gke.design.md#GKE-3).
 const ChannelLostFault = "infra: sandbox channel lost"
 
 // ChannelLostError is the typed error returned for ErrChannelLost, carrying
@@ -172,7 +172,7 @@ func (r *Runner) RunStream(ctx context.Context, argv []string, stdin string, out
 
 // Attachment ties one exec to a record that outlives this process, so a
 // grain that restarts mid-step can find the command again
-// (docs/design/grain-on-gke.md, "Restart: reattach rather than interrupt").
+// (design/design/grain-on-gke.design.md, "Restart: reattach rather than interrupt").
 //
 // The wrapper keeps an exec, its spool and, once it ends, its exit status
 // across the acceptor going away; what it cannot keep is which of grain's

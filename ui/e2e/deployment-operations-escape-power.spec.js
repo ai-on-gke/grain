@@ -28,7 +28,7 @@ import { test, expect } from "./fixtures.js";
 // are answered here.
 
 // Settings is a view now rather than a pane Escape closes
-// (docs/design/settings-panel.md §3.1); leaving it by the rail is the
+// (design/design/settings-panel.design.md §3.1); leaving it by the rail is the
 // way out, and a box being typed in is saved on the way, as it was by
 // Escape.
 test("saves a typed setting when the rail leaves Settings", async ({

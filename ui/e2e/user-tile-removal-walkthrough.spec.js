@@ -15,7 +15,7 @@
 import path from "node:path";
 import { test, expect } from "./fixtures.js";
 
-// Stage (c) of docs/design/settings-panel.md (§6), walked through on a
+// Stage (c) of design/design/settings-panel.design.md (§6), walked through on a
 // real `grain demo` in a real browser. Nothing is stubbed: the board is
 // made through POST /api/boards, the Director is the session the demo
 // seeds, and the task and comment are filed through the UI's own forms.

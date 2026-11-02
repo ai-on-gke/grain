@@ -31,7 +31,7 @@ import (
 // orchestrator.reconcileWake undefers.
 //
 // The agent's own suspension (SuspendRequested, task_run.suspend_kind),
-// which resume_later generalises (docs/design/durable-tasks.md#DT-9): the
+// which resume_later generalises (design/design/durable-tasks.design.md#DT-9): the
 // run did what it meant to, and nothing about it is a failure for
 // MaxConsecutiveFailures to count, nor a success that ends a streak --
 // kept apart from "succeeded" so the
@@ -90,7 +90,7 @@ func ParkedUntil(detail string) (time.Time, bool) {
 // ResumeOn is what a requested suspension (SuspendRequested) waits for
 // before its task is queued again: task_suspension.resume_on, as JSON.
 // The task is re-queued when any one condition is met; a ResumeOn with
-// none is the next cycle (docs/design/durable-tasks.md#DT-9).
+// none is the next cycle (design/design/durable-tasks.design.md#DT-9).
 //
 // wait_for_task's two parks are forms of it: park: true is Tasks (with
 // UntilMerged), resume_at is At. CI and Message are resume_later's own.

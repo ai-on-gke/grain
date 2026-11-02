@@ -370,7 +370,7 @@ func sampleHostLoad(ctx context.Context, into *sysstat.History) {
 // 29.6-29.9s of the 29.9s a measured director exchange took at the
 // shipped 30s, against 0.04-0.44s for everything grain itself does
 // between the dispatch decision and the agent's first turn
-// (docs/hand-runs/2026-09-08-director-latency.md). It is the largest
+// (the 2026-09-08 director-latency hand run). It is the largest
 // single term in the wait and the only one that buys nothing: the tick
 // is a poll for work nobody has announced, and a reply is an
 // announcement.

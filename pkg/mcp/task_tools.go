@@ -376,7 +376,7 @@ var listTasksInputSchema = map[string]any{
 
 // taskListFilter is list_grain_tasks' narrowing beyond state: the filters
 // that let a judgement agent ask for what moved instead of sweeping the
-// whole list (docs/design/durable-tasks.md#DT-13).
+// whole list (design/design/durable-tasks.design.md#DT-13).
 //
 // State may name several states, comma-separated ("proposed,queued"),
 // and a task in any of them matches. Repo and Search are grain task
@@ -701,7 +701,7 @@ var taskIDInputSchema = map[string]any{
 // The views read_grain_task answers in. Summary is the default: about a
 // kilobyte that says what the task is and what last happened to it, which
 // is what a judgement agent re-reads before acting on or naming a task
-// (docs/design/durable-tasks.md#DT-13). Full is the whole record, and
+// (design/design/durable-tasks.design.md#DT-13). Full is the whole record, and
 // conversation pages the thread by comment id.
 const (
 	TaskViewSummary      = "summary"

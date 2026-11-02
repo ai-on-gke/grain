@@ -27,7 +27,7 @@ import (
 )
 
 // The deployment's capability policy (grain_config.capability_policy,
-// model.CapabilityPolicy, docs/capabilities-spec.md §4.2.2) and who holds
+// model.CapabilityPolicy, design/spec/capabilities/capabilities.spec.md §4.2.2) and who holds
 // each capability server's references today. Settings edits the policy
 // here, previews which existing grants a change would newly refuse before
 // it is saved, and warns with a server's holders before it is removed or

@@ -59,7 +59,7 @@ import { pickerAllows, pickerDisplay, sortByDisplay } from "../newTaskForm.js";
 
 // GrantsPicker is the one "Grants" control of the new task overlay, the
 // task pane, the template editor and the schedule editor
-// (docs/design/unified-grants.md, slice 1): every grant a task holds --
+// (design/design/unified-grants.design.md, slice 1): every grant a task holds --
 // grain API scopes and presets (api:<name>[@owner/repo], docs/agent-api.md)
 // and capability server methods with their with: arguments
 // (docs/capabilities.md) -- is one section in one list, and one "Add
@@ -93,7 +93,7 @@ import { pickerAllows, pickerDisplay, sortByDisplay } from "../newTaskForm.js";
 //
 // runKind is the kind of run the grants are for ("task", "process" or
 // "ci"): each method carries the capability policy's verdict per kind
-// (docs/capabilities-spec.md §4.2.2), shown on it. policyRepo, where the
+// (design/spec/capabilities/capabilities.spec.md §4.2.2), shown on it. policyRepo, where the
 // form knows the repository too, has the listing judge that one run: a
 // method the policy denies it is listed disabled with the policy's own
 // reason rather than offered as a grant filing would refuse, and a held

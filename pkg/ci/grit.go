@@ -23,7 +23,7 @@ import (
 )
 
 // The job cache and artifact store implementations moved to grit
-// (docs/design/grit-split.md, GS-2: pkg/grit/cache and
+// (design/design/grit-split.design.md, GS-2: pkg/grit/cache and
 // pkg/grit/artifacts), which grain still links for embedded mode. These
 // aliases keep this package's callers and importers compiling.
 

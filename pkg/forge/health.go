@@ -83,7 +83,7 @@ import (
 // was never judged. Reading it as clean merges on the strength of a
 // suite that never reported -- on this repository the cancelled check
 // caught in the field was `go`, the whole Go suite (see
-// docs/hand-runs/2026-09-07-merge-queue.md section 3, which is where
+// the 2026-09-07 merge-queue hand run section 3, which is where
 // this decision was filed from). Reading it as failing is the mistake
 // the paragraph above avoids: it dispatches an agent at a job nobody
 // has any reason to think is broken, and it would have a merge queue's

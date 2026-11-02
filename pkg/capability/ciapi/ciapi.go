@@ -39,7 +39,7 @@
 //     only the templates its grant names (model.APIPreset.Templates).
 //
 // release-gate-read, the release train's capability
-// (docs/design/release-from-trunk.md, RFT-3), is the built-in preset
+// (design/design/release-from-trunk.design.md, RFT-3), is the built-in preset
 // api:release-gate-read, and the bare name a workflow declares is an
 // alias for it (NewAlias).
 //
@@ -384,7 +384,7 @@ func (*Provider) SupportsCIEvent(event string) bool {
 
 // SupportsTrustedSchedule admits the cron grain itself fired from a
 // workflow on the default branch: release-train.yml is one
-// (docs/design/release-from-trunk.md §6). A caller's own `-event
+// (design/design/release-from-trunk.design.md §6). A caller's own `-event
 // schedule` run is still refused (ci.Request.TrustedSchedule).
 func (*Provider) SupportsTrustedSchedule() bool { return true }
 

@@ -19,7 +19,7 @@
 //
 // Like cmd/checkpost, it runs as its own unprivileged binary with zero
 // GitHub credentials and zero access to grain's internal SQLite/Postgres
-// store or sandbox network (docs/three-pieces.md). On GKE, that lets
+// store or sandbox network (design/design/architecture.design.md). On GKE, that lets
 // Service/grain stay protected behind Google Cloud IAP + access-code while
 // Service/grain-webhook sits behind a non-IAP BackendConfig on
 // /webhooks/github alone.

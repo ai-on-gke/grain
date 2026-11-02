@@ -147,7 +147,7 @@ type Engine struct {
 	// Attachments, when set, is where each running step's exec id and
 	// output cursor are kept, so a grain that restarts mid-step can
 	// reattach the step rather than interrupt its run
-	// (docs/design/grain-on-gke.md#GKE-4). nil keeps nothing: a restart
+	// (design/design/grain-on-gke.design.md#GKE-4). nil keeps nothing: a restart
 	// can then only rerun the step through its in-sandbox step runner.
 	Attachments StepAttachments
 	// AttachmentCheckpoint is how often a running step's cursor is
@@ -249,7 +249,7 @@ type AdoptedJob struct {
 	// Attachment, when set, is the stored exec of the step that was
 	// running when grain stopped: that step is reattached by its exec id
 	// from its cursor rather than started again
-	// (docs/design/grain-on-gke.md#GKE-4).
+	// (design/design/grain-on-gke.design.md#GKE-4).
 	Attachment *StepAttachment
 	// Lost, when set, is why the job's sandbox did not come back across
 	// the restart. Sandbox is then nil, and the step that was running ends
@@ -1128,7 +1128,7 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 
 	// A first attempt whose sandbox the kernel OOM-killed is retried
 	// whatever the job declares: under memory overcommit that is the
-	// deployment's doing, not the tree's (docs/design/auto-overcommit.md).
+	// deployment's doing, not the tree's (design/design/auto-overcommit.design.md).
 	var oomHow string
 	var oomKilled bool
 	if !channelLost {
@@ -1366,7 +1366,7 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 }
 
 // ChannelLostFaultPrefix is the JobRun.Error prefix recorded when a step ends
-// with sandboxaccess.ErrChannelLost (docs/design/grain-on-gke.md#GKE-3).
+// with sandboxaccess.ErrChannelLost (design/design/grain-on-gke.design.md#GKE-3).
 const ChannelLostFaultPrefix = sandboxaccess.ChannelLostFault
 
 // OOMRetryReasonPrefix starts a job's RetryReason (and Error, Warning)

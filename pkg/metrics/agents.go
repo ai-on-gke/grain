@@ -22,7 +22,7 @@ import (
 )
 
 // Agents groups per-wake tool use, re-reads, and steward report checks by
-// template over the report's window (docs/design/durable-tasks.md#DT-14).
+// template over the report's window (design/design/durable-tasks.design.md#DT-14).
 type Agents struct {
 	Templates   []AgentTemplate
 	ReportCheck AgentReportCheck

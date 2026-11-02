@@ -280,7 +280,7 @@ func parseFields(prompt string) map[string]string {
 	return out
 }
 
-// serveCapability is a stdio capability server (docs/capabilities-spec.md)
+// serveCapability is a stdio capability server (design/spec/capabilities/capabilities.spec.md)
 // with one method, host-probe. It records where it was started in
 // reportPath before it serves, so the test can see a `run: host` server
 // came up on the host, as the installing user, before any run mints

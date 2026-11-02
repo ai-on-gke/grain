@@ -63,7 +63,7 @@ func TestRunReportsAnOverloadedProviderAsCapacity(t *testing.T) {
 // the provider's: it retries the call not at all and collapses the whole
 // thing to "exceeded retry limit, last status: 429 Too Many Requests",
 // the provider's body gone with it (capacity.go's header, and
-// docs/hand-runs/2026-09-08-codex-retry.md §7). Run must still hand that
+// the 2026-09-08 codex-retry hand run §7). Run must still hand that
 // back as an agent.CapacityError -- so that the attempt is retried in
 // place, is recorded under model.CapacityOutcome, and costs the task
 // nothing -- and must not read it as a usage limit, which would stop

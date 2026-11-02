@@ -22,7 +22,7 @@ repository, is still a row an operator writes, in grain's UI or as a pull reques
 repository. What a repository declares is the subset that is genuinely
 about that repository.
 
-[grainfile-format.md](grainfile-format.md) describes how grain plans to
+[`design/design/grainfiles.design.md`](../design/design/grainfiles.design.md) describes how grain plans to
 read the same declarations written in the Grainfile Format, which `settings:`
 keys it reads, and the execution records it writes back.
 
@@ -447,9 +447,11 @@ of this: a job holding `repo-write:` for a repository may already push any
 ref of it (`docs/ci-capabilities.md`), and has no task branch to be held
 to.
 
-`git-push-any-ref` is still there for ad-hoc work with no template behind
-it. It is a team capability now, not an admin one: a team grants it to
-its own task, and the team's own credential still bounds every push.
+The repo server's any-ref grant, `https://grain.dev/capabilities/repo#write` with `{"force": true, "refs": ["refs/heads/*", "refs/tags/*"]}`
+(formerly the bare `git-push-any-ref`, which is still read as it), is
+still there for ad-hoc work with no template behind it. It is a team
+grant, not an admin one: a team grants it to its own task, and the
+team's own credential still bounds every push.
 
 ### `.grain/suites/<name>.yml`
 
@@ -583,7 +585,7 @@ back into the change's branch, `no` once every one has finished whatever
 it said, and `required` never -- that one waits for a human's Submit,
 however clean its reviews were. A gating task that left findings holds the
 change as questions to its owner, and the owner's reply sends another run
-to carry the decision out (docs/implementation-notes.md, "What a review
+to carry the decision out ("What a review
 does with what it finds"). Several gating triggers matching one change
 all have to finish, under the strictest `human` among them. A change whose
 file list cannot be read in full is held by every gating trigger.
