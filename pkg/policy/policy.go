@@ -474,7 +474,30 @@ func deniesCapability(patterns []string, capability string) bool {
 			return true
 		}
 	}
+	// A glob that matched a retired name (deny: [git-*]) matched it
+	// before it was rewritten, so it still denies what it became.
+	for _, old := range model.RetiredGrantNames() {
+		if !matchesCapability(patterns, old) {
+			continue
+		}
+		for _, to := range model.CanonicalLegacyGrants(old) {
+			if becameCapability(to, capability) {
+				return true
+			}
+		}
+	}
 	return false
+}
+
+// becameCapability reports whether capability is to, the grant a retired
+// name became: the same method for a capability reference, whatever its
+// arguments, and the same grant otherwise.
+func becameCapability(to, capability string) bool {
+	if model.IsCapabilityRef(to) {
+		return model.IsCapabilityRef(capability) &&
+			strings.EqualFold(model.CapabilityGrantRef(to), model.CapabilityGrantRef(strings.TrimSpace(capability)))
+	}
+	return strings.EqualFold(strings.TrimSpace(to), strings.TrimSpace(capability))
 }
 
 // allowsCapability is matchesCapability for Allow, which also admits

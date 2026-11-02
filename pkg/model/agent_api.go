@@ -351,6 +351,19 @@ func CanonicalLegacyGrants(name string) []string {
 	return []string{CanonicalLegacyGrant(name)}
 }
 
+// RetiredGrantNames is every retired bare capability name
+// CanonicalLegacyGrants rewrites, in no particular order.
+func RetiredGrantNames() []string {
+	names := make([]string, 0, len(legacyGrantReplacements)+len(legacyGrantMultiReplacements))
+	for name := range legacyGrantReplacements {
+		names = append(names, name)
+	}
+	for name := range legacyGrantMultiReplacements {
+		names = append(names, name)
+	}
+	return names
+}
+
 // APIAliasPreset returns the preset name that a bare capability name aliases,
 // or "" if name is not a preset alias capability.
 func APIAliasPreset(name string) string {
