@@ -59,17 +59,17 @@ cat > $d/stdin-$n 2>/dev/null
 { pwd; ls -la attachments 2>&1; } > $d/attachments-$n
 echo '{"type":"system","subtype":"init","session_id":"'"$sid"'"}'
 echo '{"type":"assistant","session_id":"'"$sid"'","message":{"content":[{"type":"text","text":"turn '"$n"' started"}]}}'
-task=$(sed -n 's/.*"-task", "\([^"]*\)".*/\1/p' $d/mcp-$n.json)
+task=$(sed -n 's/.*"-task", *"\([^"]*\)".*/\1/p' $d/mcp-$n.json)
 s=$(cat $d/sleep 2>/dev/null || echo 5)
 mcp() {
-	args=$(sed -n 's/.*"args": \[\([^]]*\)\].*/\1/p' $d/mcp-$n.json | tr -d '",')
+	args=$(sed -n 's/.*"args": *\[\([^]]*\)\].*/\1/p' $d/mcp-$n.json | tr ',' ' ' | tr -d '"')
 	{ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"stub","version":"0"}}}'
 	  echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 	  echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"'"$1"'","arguments":'"$2"'}}'
 	  sleep "$3"; } | /usr/local/bin/grain $args > $d/mcp-out-$n 2>&1
 }
 if [ -e $d/ask-$task ]; then
-	rm -f $d/ask-$task
+	rm -f $d/ask-$task; touch $d/asking-$task
 	sleep 8
 	echo "$(date -u +%H:%M:%S) ask_question task=$task n=$n" >> $d/events
 	mcp ask_question '{"question":"Which file should I edit?","summary":"Pick the file to edit"}' 5
@@ -439,7 +439,13 @@ models:
 		if once("ask-over-comment", 25) {
 			stub("ask-" + dir)
 			comment(dir, "please pick a file", "")
-			time.Sleep(4 * time.Second)
+			// The stub marks the turn that will ask, then waits 8 s before
+			// asking: the person's comment lands in that window.
+			pollUntil(ctx, 2*time.Minute, func() bool {
+				_, err := os.Stat(filepath.Join(credDir, "asking-"+dir))
+				return err == nil
+			})
+			time.Sleep(3 * time.Second)
 			comment(dir, "typed while the agent asks: use README.md", "")
 			for i := 0; i < 8; i++ {
 				time.Sleep(5 * time.Second)
