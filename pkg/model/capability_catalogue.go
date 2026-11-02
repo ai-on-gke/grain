@@ -352,16 +352,16 @@ func (c *CapabilityCatalogue) judgeAPI(g string, gc GrantContext) (bool, error) 
 func (c *CapabilityCatalogue) judgeRetiredInProcess(g string, gc GrantContext) (bool, error) {
 	person := false
 	for _, legacy := range retiredInProcessNames(g) {
-		entry, ok := c.InProcess[legacy]
+		entry, key, ok := c.inProcessEntry(legacy)
 		if !ok {
 			continue
 		}
 		if entry.Enabled != nil && !*entry.Enabled {
-			return false, fmt.Errorf("capability %s is disabled in settings/capabilities.yml (in_process.%s, the capability it replaced)", g, legacy)
+			return false, fmt.Errorf("capability %s is disabled in settings/capabilities.yml (in_process.%s, the capability it replaced)", g, key)
 		}
 		p, err := entry.Restrictions.judge(g, gc, nil)
 		if err != nil {
-			return false, fmt.Errorf("%v (in_process.%s, the capability it replaced)", err, legacy)
+			return false, fmt.Errorf("%v (in_process.%s, the capability it replaced)", err, key)
 		}
 		person = person || p
 	}
@@ -414,10 +414,19 @@ func RetiredInProcessPreset(name string) (string, bool) {
 
 // retiredInProcessNames are the retired bare capabilities whose
 // replacement is g: an api: grant (any @repo limit aside), or a recorded
-// capability-server grant such as grain#host-exec={}. Sorted.
+// capability-server grant such as grain#host-exec={} or repo#read/#write
+// {repo}. Sorted.
 func retiredInProcessNames(g string) []string {
 	grant := strings.TrimSpace(g)
+	var out []string
 	if IsCapabilityRef(grant) {
+		if repo, ok := RepoReadTarget(grant); ok {
+			out = append(out, RepoReadCapabilityPrefix+repo.String())
+		} else if CapabilityGrantRef(grant) == RepoReadRef {
+			out = append(out, strings.TrimSuffix(RepoReadCapabilityPrefix, ":"))
+		} else if repo, ok := RepoWriteTarget(grant); ok {
+			out = append(out, RepoWriteCapabilityPrefix+repo.String())
+		}
 		// Compare in recorded form, so a bare grain#host-exec or one
 		// spelled with other JSON spacing is bound all the same.
 		if pg, ok := recordedCapabilityGrant(grant); ok {
@@ -427,7 +436,6 @@ func retiredInProcessNames(g string) []string {
 		what, _, _ := strings.Cut(strings.TrimPrefix(grant, APIGrantPrefix), "@")
 		grant = APIGrantPrefix + canonicalPresetKey(what)
 	}
-	var out []string
 	for legacy, to := range allLegacyGrantReplacements() {
 		if to == grant {
 			out = append(out, legacy)
@@ -482,15 +490,21 @@ func (c *CapabilityCatalogue) judgeAPIScopes(g string, gc GrantContext) (bool, e
 	return person, nil
 }
 
+func (c *CapabilityCatalogue) inProcessEntry(g string) (CatalogueInProcess, string, bool) {
+	if entry, ok := c.InProcess[g]; ok {
+		return entry, g, true
+	}
+	family, _, cut := strings.Cut(g, ":")
+	if !cut {
+		return CatalogueInProcess{}, "", false
+	}
+	entry, ok := c.InProcess[family]
+	return entry, family, ok
+}
+
 func (c *CapabilityCatalogue) judgeInProcess(g string, gc GrantContext) (bool, error) {
 	person := false
-	entry, ok := c.InProcess[g]
-	if !ok {
-		if family, _, cut := strings.Cut(g, ":"); cut {
-			entry, ok = c.InProcess[family]
-		}
-	}
-	if ok {
+	if entry, _, ok := c.inProcessEntry(g); ok {
 		if entry.Enabled != nil && !*entry.Enabled {
 			return false, fmt.Errorf("capability %s is disabled in settings/capabilities.yml", g)
 		}
@@ -498,7 +512,18 @@ func (c *CapabilityCatalogue) judgeInProcess(g string, gc GrantContext) (bool, e
 		if err != nil {
 			return false, err
 		}
-		person = person || p
+		person = p
+	}
+	// Bare repo-read:<repo> and repo-write:<repo> stay accepted in
+	// .grain/workflows alongside repo#read / repo#write {repo}: a
+	// catalogue that restricts the repo server binds the bare spelling too.
+	if repo, ok := RepoReadTarget(g); ok {
+		p, err := c.judgeServerRef(RepoReadGrant(repo), gc)
+		return person || p, err
+	}
+	if repo, ok := RepoWriteTarget(g); ok {
+		p, err := c.judgeServerRef(RepoWriteGrant(repo), gc)
+		return person || p, err
 	}
 	trimmed := strings.TrimSpace(g)
 	if repl := CanonicalLegacyGrants(trimmed); !(len(repl) == 1 && repl[0] == trimmed) {

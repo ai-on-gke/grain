@@ -402,11 +402,18 @@ import "strconv"
 // importer passes over a table this build lacks, so a dump carrying
 // either imports without it.
 //
-// 88 changes no table: it folds retired 1-to-1 preset capability entries in
+// 88 rewrites stored `repo-read:<repo>` and `repo-write:<repo>` grants,
+// `repo_config`.`ci_capabilities` included, to
+// `https://grain.dev/capabilities/repo#read={"repo":"<repo>"}` and
+// `#write={"repo":"<repo>"}`: the in-process reporead and repowrite
+// providers are retired for the repo server's methods, whose grant carries
+// the CI-only rule and write's event gate itself.
+//
+// 89 changes no table: it folds retired 1-to-1 preset capability entries in
 // `grain_config`.`capability_policy`'s catalogue from `inProcess[<retired>]`
 // into `apiScopes.presets[<preset>]`, merging restrictions conservatively when
 // both exist, and rewrites retired task defaults in `catalogue.defaults`.
-const SchemaVersion = 88
+const SchemaVersion = 89
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the

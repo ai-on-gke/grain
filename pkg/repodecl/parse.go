@@ -403,6 +403,16 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 				continue
 			}
 			target, write = r, true
+		case model.IsRepoAccessGrant(c):
+			// The repo server's spelling of the same access
+			// (https://grain.dev/capabilities/repo#read / #write
+			// {repo}), held to the same rules as the bare names above.
+			if r, ok := model.RepoReadTarget(c); ok {
+				target = r
+			} else {
+				target, _ = model.RepoWriteTarget(c)
+				write = true
+			}
 		case model.IsCapabilityRef(c):
 			// A capability reference (design/spec/capabilities/capabilities.spec.md §2.2):
 			// its grammar is checked here; its with: arguments against
@@ -410,6 +420,12 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 			// again at admission.
 			if err := model.CheckCapabilityGrantSyntax(c); err != nil {
 				errs = append(errs, fmt.Errorf("%s: capabilities: %v", f.path, err))
+				continue
+			}
+			ref := model.CapabilityGrantRef(c)
+			if ref == model.RepoReadRef || (ref == model.RepoWriteRef && !model.IsGitPushAnyRefGrant(c)) {
+				errs = append(errs, fmt.Errorf("%s: capabilities: %q does not name a repository -- "+
+					"pass repo: <owner>/<repo> (or refs/force for branch push)", f.path, c))
 				continue
 			}
 			if !seenGrants[c] {

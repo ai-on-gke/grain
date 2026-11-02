@@ -482,3 +482,68 @@ func TestRetiredGrainServerCapabilitiesAndPresetAliases(t *testing.T) {
 		}
 	}
 }
+
+func TestCatalogueRepoAccessBindingsAcrossBothSpellings(t *testing.T) {
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	deploy := model.RepoRef{Owner: "acme", Name: "deploy"}
+
+	// Pre-retirement in_process rules (both family "repo-write" and target-specific
+	// "repo-write:acme/deploy") continue to bind canonical repo#write {repo} grants.
+	legacyFamily := &model.CapabilityCatalogue{
+		InProcess: map[string]model.CatalogueInProcess{
+			"repo-write": {Enabled: boolp(false)},
+			"repo-read:acme/deploy": {Restrictions: &model.CapabilityRestrictions{
+				Repos: model.Patterns{"acme/widgets"},
+			}},
+		},
+	}
+	if _, err := legacyFamily.ValidateGrants(model.GrantContext{
+		Kind: model.CatalogueKindCI, Repo: &widgets,
+		Grants: []string{model.RepoWriteGrant(deploy)},
+	}); err == nil {
+		t.Fatal("in_process.repo-write enabled:false let repo#write {repo} through")
+	}
+	otherRepo := model.RepoRef{Owner: "other", Name: "app"}
+	if _, err := legacyFamily.ValidateGrants(model.GrantContext{
+		Kind: model.CatalogueKindCI, Repo: &otherRepo,
+		Grants: []string{model.RepoReadGrant(deploy)},
+	}); err == nil {
+		t.Fatal("in_process.repo-read:acme/deploy restriction let other/app through")
+	}
+	if _, err := legacyFamily.ValidateGrants(model.GrantContext{
+		Kind: model.CatalogueKindCI, Repo: &widgets,
+		Grants: []string{model.RepoReadGrant(deploy)},
+	}); err != nil {
+		t.Fatalf("allowed repo#read {repo} refused: %v", err)
+	}
+
+	// Post-retirement servers rules on https://grain.dev/capabilities/repo also
+	// bind bare repo-read:/repo-write: grants in .grain/workflows.
+	serverCat := &model.CapabilityCatalogue{
+		Servers: []model.CatalogueServer{{
+			ID: "https://grain.dev/capabilities/repo",
+			Methods: []model.CatalogueMethod{{
+				Name: "write",
+				Args: map[string]model.CatalogueArg{"repo": {Allowed: []string{"acme/widgets"}}},
+			}},
+		}},
+	}
+	if _, err := serverCat.ValidateGrants(model.GrantContext{
+		Kind: model.CatalogueKindCI, Repo: &widgets,
+		Grants: []string{"repo-write:acme/deploy"},
+	}); err == nil {
+		t.Fatal("servers repo#write args.repo.allowed let bare repo-write:acme/deploy through")
+	}
+	if _, err := serverCat.ValidateGrants(model.GrantContext{
+		Kind: model.CatalogueKindCI, Repo: &widgets,
+		Grants: []string{"repo-write:acme/widgets"},
+	}); err != nil {
+		t.Fatalf("allowed bare repo-write:acme/widgets refused: %v", err)
+	}
+	if _, err := serverCat.ValidateGrants(model.GrantContext{
+		Kind: model.CatalogueKindCI, Repo: &widgets,
+		Grants: []string{"repo-read:acme/widgets"},
+	}); err == nil {
+		t.Fatal("servers unlisted method read let bare repo-read:acme/widgets through")
+	}
+}

@@ -7,7 +7,8 @@ including runs requested manually or through an agent. No daemon restart is
 needed. Clearing the list returns CI to a read-only checkout without capability
 material. Agent task defaults do not grant anything to CI.
 
-Repository access (`repo-read:` / `repo-write:`) is not granted here. A
+Repository access (`repo#read` / `repo#write` `{repo}`, formerly
+`repo-read:` / `repo-write:`) is not granted here. A
 job declares it in its own workflow file, and its team's GitHub
 credential decides whether it holds. See
 [Repository access](#repository-access-declared-in-the-repository-enforced-by-the-teams-credential).
@@ -77,7 +78,8 @@ that uses none, and `gcp-smoke.yml`'s `smoke` job is the one that asks for
 a GCP key -- as the gcp server's reference
 `https://grain.dev/capabilities/gcp#gcp-key`, not the legacy `gcp-key`.
 
-Repository access (`repo-read:` / `repo-write:`) and capability references
+Repository access (`repo#read` / `repo#write` `{repo}`, or `repo-read:` /
+`repo-write:`) and capability references
 are unaffected by all three: they are granted by being declared, never by
 this list ([below](#repository-access-declared-in-the-repository-enforced-by-the-teams-credential)).
 A grain build older than the empty-list rule reads `capabilities: []` as an
@@ -458,8 +460,15 @@ outright.
 
 ## Repository access: declared in the repository, enforced by the team's credential
 
-`repo-read:<owner>/<repo>` and `repo-write:<owner>/<repo>` are not
-granted from this list. **The declaration in the repository is the
+`https://grain.dev/capabilities/repo#read={"repo":"<owner>/<repo>"}` and
+`https://grain.dev/capabilities/repo#write={"repo":"<owner>/<repo>"}`, or
+their older spellings `repo-read:<owner>/<repo>` and
+`repo-write:<owner>/<repo>`, are not granted from this list. Both spellings
+are accepted in a job's `capabilities:` and will stay accepted, since those
+files live in other people's repositories. No provider stands behind either
+one: the grant carries its own rules (`model.IsRepoAccessGrant`). It is
+CI-only, so a task that holds it is refused. Write access has the event gate
+described below (`model.RepoAccessAdmitsCIEvent`). **The declaration in the repository is the
 allowance; the team's GitHub credential is the authority.** A job gets
 read or write access to a repository only when both of these hold:
 
@@ -501,8 +510,9 @@ workflow's `on: schedule` cron (`ci.Request.TrustedSchedule`, set only by
 `push` or `pull_request` run, and a caller's own
 `grain ci run -event schedule`, still never hold write, whatever the job
 declares. A provider opts in to trusted schedules with
-`model.TrustedScheduleCapability`. `repo-write`, `release-gate-read` and
-`package-publish` have opted in, so the daily `release-train` cron
+`model.TrustedScheduleCapability`. Repository write access is no
+provider's: its gate, `model.RepoAccessAdmitsCIEvent`, admits trusted
+schedules itself. `release-gate-read` and `package-publish` have opted in, so the daily `release-train` cron
 publishes its rc and pending images itself; `registry-push` has not, so a
 cron still can't publish with it. Once a `release-train` schedule's run on
 the default branch finishes, the orchestrator also starts
@@ -541,8 +551,9 @@ Both are gone:
 
 - A `repo-read:` or `repo-write:` entry in `repo_config.ci_capabilities`
   is now a no-op. It no longer satisfies a job's declaration, and it no
-  longer reaches a job that did not declare it. Existing rows are left
-  as they are rather than rewritten, and can be removed at leisure.
+  longer reaches a job that did not declare it. Schema migration 88
+  rewrote existing entries, and every stored grant, to the
+  `repo#read` / `repo#write` `{repo}` form. They can be removed at leisure.
 - A job that relied on such an entry without declaring it must now
   declare it in its workflow file. Its team must also have a credential
   that can reach the repository.
