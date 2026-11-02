@@ -146,7 +146,7 @@ cloud_identity_calls() { curl -s "$ISSUER/stats" | jq -c 'with_entries(select(.k
 A=X-Goog-IAP-JWT-Assertion
 browser() { (cd "$ROOT/ui" && OUT=$OUT PROXY=$PROXY DEMO=$DEMO NET=$NET CODE=$CODE node "$ROOT/tests/iap/browser.mjs") >> "$RESULTS" 2> "$OUT/browser-$MODE.log" || FAILS=$((FAILS + 1)); }
 
-echo "## IAP on, default allowlist (the owner)" | tee -a "$RESULTS"
+echo "| | **IAP on, default allowlist (the owner)** | | | |" | tee -a "$RESULTS"
 start_demo iap "${IAP_FLAGS[@]}"
 
 # 1. Allowed person: UI, API, CLI, no access code.
@@ -239,7 +239,7 @@ check 9 "IAP cookie, no Origin/Sec-Fetch-Site" '^403' "$(post_task -H "$(as owne
 check 9 "cross-origin DELETE" '^403' \
 	"$(st_body -X DELETE -H "$(as owner@example.com)" -H 'Origin: https://evil.example' "$PROXY/api/tasks/1")"
 
-echo "## IAP on, -ui-allowed-principals with a fake Cloud Identity" | tee -a "$RESULTS"
+echo "| | **IAP on, -ui-allowed-principals with a fake Cloud Identity** | | | |" | tee -a "$RESULTS"
 ALLOW='user:alice@example.com,domain:corp.example,serviceAccount:bot@proj.iam.gserviceaccount.com,group:ops@example.com'
 GOOGLE_APPLICATION_CREDENTIALS=$OUT/adc.json start_demo allowlist "${IAP_FLAGS[@]}" \
 	-ui-allowed-principals "$ALLOW" -ui-cloud-identity-endpoint "$ISSUER"
@@ -290,7 +290,7 @@ check 8 "access code: shown as 'operator (access code)' (spec OA-1.2.2)" 'operat
 	"$(jq -c '{author,authorKind,authorLabel}' "$OUT/attr-code.json")" "N/A: <p>Label (OA-1.2.2) not on main"
 MODE=allowlist ATTR_TASK=$tid browser
 
-echo "## group: entries with no lookup configured" | tee -a "$RESULTS"
+echo "| | **group: entries with no lookup configured** | | | |" | tee -a "$RESULTS"
 start_demo nolookup "${IAP_FLAGS[@]}" -ui-allowed-principals 'user:alice@example.com,group:ops@example.com'
 check 2 "no ADC: a direct entry still admits alice" '^200 .*alice@example.com' "$(who alice@example.com)"
 check 2 "no ADC: group-dependent carol refused, fails closed" '^403 .*(credentials|group)' "$(who carol@example.com)"
@@ -301,7 +301,7 @@ who alice@example.com > /dev/null
 check 2 "no group: entries, lookup available: carol refused" '^403' "$(who carol@example.com)"
 check 2 "no group: entries: Cloud Identity never called (not even a token)" '^\{\}$' "$(cloud_identity_calls)"
 
-echo "## No IAP configured" | tee -a "$RESULTS"
+echo "| | **No IAP configured** | | | |" | tee -a "$RESULTS"
 start_demo noiap
 check 6 "no code: 401" '^401' "$(code_of "$DEMO/api/auth/user")"
 check 6 "bearer code: 200 trusted" '^200 .*"authMethod":"trusted"' "$(st_body -H "Authorization: Bearer $CODE" "$DEMO/api/auth/user")"
@@ -316,7 +316,7 @@ check 6 "a valid-looking assertion does not authenticate" '^401' "$(code_of -H "
 check 6 "... and is logged" 'no IAP audience is configured' "$(cat "$DEMO_LOG")"
 MODE=noiap browser
 
-echo "## -ui-require-iap" | tee -a "$RESULTS"
+echo "| | **-ui-require-iap** | | | |" | tee -a "$RESULTS"
 start_demo requireiap "${IAP_FLAGS[@]}" -ui-require-iap
 jar=$OUT/require.jar
 check 7 "loopback, no forwarding headers: bearer works" '^200 .*"authMethod":"trusted"' \
