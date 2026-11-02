@@ -447,9 +447,11 @@ of this: a job holding `repo-write:` for a repository may already push any
 ref of it (`docs/ci-capabilities.md`), and has no task branch to be held
 to.
 
-`git-push-any-ref` is still there for ad-hoc work with no template behind
-it. It is a team capability now, not an admin one: a team grants it to
-its own task, and the team's own credential still bounds every push.
+The repo server's any-ref grant, `https://grain.dev/capabilities/repo#write` with `{"force": true, "refs": ["refs/heads/*", "refs/tags/*"]}`
+(formerly the bare `git-push-any-ref`, which is still read as it), is
+still there for ad-hoc work with no template behind it. It is a team
+grant, not an admin one: a team grants it to its own task, and the
+team's own credential still bounds every push.
 
 ### `.grain/suites/<name>.yml`
 

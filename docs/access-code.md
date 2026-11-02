@@ -12,6 +12,62 @@ owner access.** Whoever has both can file and approve work, read every
 task and change every setting. Treat it like a password. If it leaks,
 rotate it.
 
+## Three modes
+
+Behind Google Cloud Identity-Aware Proxy, grain can sign a person in
+from IAP's signed assertion instead
+(`design/design/authentication.design.md`). Which credentials the
+network listener takes depends on two settings:
+
+| Mode | Set | The access code | An IAP assertion |
+| --- | --- | --- | --- |
+| **No IAP** | neither | accepted from anywhere, as below | not checked (logged and ignored) |
+| **IAP, code still accepted** | `-ui-iap-audience` | accepted from anywhere | verified, and its person is signed in |
+| **IAP required** | `-ui-iap-audience` and `-ui-require-iap` | only over loopback with no forwarding headers ([break-glass](#break-glass-over-loopback)) | verified, and its person is signed in |
+
+- **No IAP.** Local and standalone deployments. Everything on this page
+  applies as written.
+- **IAP, code still accepted.** `-ui-iap-audience` (or
+  `GRAIN_IAP_AUDIENCE`) names the IAP backend's audience, with
+  `-ui-iap-issuer` and `-ui-iap-keys-url` for a signing proxy other than
+  IAP. Grain checks `X-Goog-IAP-JWT-Assertion` against IAP's keys,
+  issuer, audience and expiry. A caller whose assertion verifies is
+  signed in as the email it names, if `-ui-allowed-principals` admits
+  it, with no access code. An assertion that is present but does not
+  verify is refused with a `401` and never falls back to the code. The
+  code keeps working beside it, so this is the state to migrate in.
+- **IAP required.** `-ui-require-iap` (or `GRAIN_REQUIRE_IAP=true`) as
+  well. The network listener no longer takes the code at all, neither
+  the bearer token nor the `grain_access` cookie, and there is no
+  "Enter access code" page: a browser without an assertion gets a page
+  telling it to sign in through IAP, an API caller a `401`, and
+  `POST /api/auth/access-code` a `403` with no cookie. The daemon
+  refuses to start with `-ui-require-iap` and no IAP audience.
+  `grain access-code` still prints the code, and says the server takes
+  it over loopback only.
+
+`-ui-require-iap` governs IAP only. A wrapper build's own
+`IdentityVerifier` that declares the access code wins over it
+(`AccessCodeWins()`, as the Google layer's ÜberProxy verifier does) keeps
+taking the code over its proxy, so break-glass through that proxy still
+works with the flag set.
+
+In every mode the executor routes stay open
+([Remote executors](#remote-executors)), and calls from inside a
+sandbox (the git and API proxy, `grain mcpserver`) work as before.
+
+### Break-glass over loopback
+
+With `-ui-require-iap` the code is still accepted from `127.0.0.1` or
+`::1` when the request carries none of `X-Forwarded-For`, `Forwarded`,
+`X-Real-Ip`, IAP's headers or any registered verifier's headers. A proxy
+on the same host therefore cannot relay somebody's code in. That leaves
+a way in which does not depend on IAP, from the daemon's own host:
+
+```bash
+kubectl -n grain exec deploy/grain -- env GRAIN_SERVER=http://127.0.0.1:8080 GRAIN_DATA_DIR=/data grain list
+```
+
 ## Where it lives and how to see it
 
 The code is the daemon's local API token: `<data-dir>/local-api-token`
@@ -40,6 +96,11 @@ An installation from before access codes keeps the token it already had
 never changes the code.
 
 ## Signing in from a browser
+
+Behind IAP, the browser signs in through IAP's Google sign-in, and
+grain shows no code page to a caller whose assertion verifies. With
+`-ui-require-iap` there is no code page at all. The rest of this
+section is how the code works where it is accepted.
 
 A request to a single-tenant daemon that carries no valid code gets a
 minimal **Enter access code** page (`401`) and never the app. An API
@@ -138,8 +199,9 @@ loopback, as it always has with the local API token. The daemon sets
 `GRAIN_LOCAL_API_TOKEN_FILE` in its own environment, so processes it
 starts on the host can find the file. That includes a run's
 `grain mcpserver`, which re-reads the file on every request and so keeps
-working across a rotation. A bearer code is accepted from any address in
-any address, because the code is the credential.
+working across a rotation. A bearer code is accepted from any address,
+because the code is the credential, unless the daemon requires IAP
+(`-ui-require-iap`), which takes it over unforwarded loopback only.
 
 ## Rotating
 
@@ -160,21 +222,27 @@ It writes a new code at its next start.
 Before access codes, a daemon ran an unauthenticated request from
 loopback as its own operator, and a multi-tenant one also believed
 trusted networks and (with a flag) identity headers. All of
-that is gone: every caller, local or remote, shows the code, and every
-caller that does is the deployment's own actor. In particular:
+that is gone: every caller, local or remote, shows the code or a
+verified IAP assertion. A caller with the code is the deployment's own
+actor, and a caller with an assertion is the person it names. In
+particular:
 
 - **Loopback:** an SSH port-forward to localhost is a caller like any
   other.
 - **Network addresses:** a network address isn't a credential.
-- **Identity headers:** a request with no code that a proxy names
-  a person in still gets a `401` (task 4338). A request *with* the code
-  is judged by the code alone, and whatever person a proxy's headers name
-  beside it is dropped rather than believed or refused.
+- **Plaintext identity headers:** `X-Goog-Authenticated-User-Email`
+  and the like name nobody. A request that carries only such a header
+  gets a `401` (task 4338). Only a signed assertion that verifies
+  (`X-Goog-IAP-JWT-Assertion`, or a registered verifier's header) signs
+  a person in. When a request carries both an IAP assertion and the
+  code, the IAP person is the caller.
 
 Still open without the code:
 
 - the login page and its script (`/api/auth/access-code`,
-  `/api/auth/access-code/login.js`);
+  `/api/auth/access-code/login.js`). With `-ui-require-iap`,
+  `GET /api/auth/access-code` only says the server requires IAP, and
+  posting a code to it over the network is refused;
 - `/api/auth/logout`;
 - the account routes' `404` (there are no accounts to make or sign in
   to).
@@ -251,4 +319,5 @@ Agents must not be able to read the code. What holds today:
 The access code is how the deployment's owner reaches their own grain.
 A task somebody else asked for is checked against the local policy
 ([local-policy.md](local-policy.md)), not against the code. The access
-code is the only way into a single-tenant daemon's UI.
+code and, behind IAP, a verified assertion from an allowed principal are
+the only ways into a single-tenant daemon's UI.

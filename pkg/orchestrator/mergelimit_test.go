@@ -26,7 +26,7 @@ import (
 )
 
 // syncOneMergePerCycle is SyncPullRequests with each lane held to one
-// merge a cycle, as model.DefaultMaxMergesPerRepo was before schema 85:
+// merge a cycle, as model.DefaultMaxMergesPerRepo was before schema 86:
 // for a test about what the cycle after a merge does with the entries
 // left behind it.
 func syncOneMergePerCycle(ctx context.Context, store *model.Store, client github.Client, now time.Time) error {
