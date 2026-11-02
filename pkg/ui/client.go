@@ -5825,6 +5825,13 @@ func (c *Client) ReopenBecause(ctx context.Context, id, reason string) error {
 // RetryRequestedAt only ever narrows how far back task_streak looks, and
 // a task with no failing streak to narrow just keeps whatever state it
 // already had.
+//
+// A task parked on a stopped turn (Task.TurnStopped) is the exception:
+// what holds it is the stop, not a streak, and stamping RetryRequestedAt
+// alone left it awaiting_reply with nothing ever dispatching it. So Retry
+// lifts the stop as a reply would (reopenAcknowledgeable) -- the person
+// pressing it is the person the stop was waiting on -- and the task is
+// queued again.
 func (c *Client) Retry(ctx context.Context, id string) error {
 	task, err := c.Store.GetTask(ctx, id)
 	if err != nil {
@@ -5833,13 +5840,40 @@ func (c *Client) Retry(ctx context.Context, id string) error {
 	if task == nil {
 		return &NotFoundError{ID: id}
 	}
+	// An operator's pause is the one hold Retry does not lift: it is a
+	// separate decision with its own way out, and lifting it here would
+	// be undoing somebody else's pause behind their back. Said, rather
+	// than stamping a retry nothing will ever dispatch.
+	if pause, err := c.Store.GetPause(ctx, id); err != nil {
+		return err
+	} else if pause != nil {
+		return validationErrorf("%s is paused by %s: Resume it to put it back in the queue",
+			id, principalName(pause.PausedBy))
+	}
 	now := c.now()
+	stopped, err := c.Store.TurnStopped(ctx, id)
+	if err != nil {
+		return err
+	}
+	if stopped {
+		reopened, err := c.reopenAcknowledgeable(ctx, id, now)
+		if err != nil || reopened {
+			return err
+		}
+	}
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
 		o.RetryRequestedAt = &now
+		// A stopped task in some state other than awaiting_reply (one at
+		// its failure-streak limit, say) still has the stop to lift, or
+		// clearing its streak would leave it parked all the same.
+		if stopped {
+			o.PendingQuestionCommentID = nil
+			o.PendingSecret = ""
+		}
 	}); err != nil {
 		return err
 	}
-	if task.Interactive && c.Config.Wake != nil {
+	if (task.Interactive || stopped) && c.Config.Wake != nil {
 		c.Config.Wake()
 	}
 	return nil
