@@ -172,7 +172,7 @@ check 1 "CLI: grain create through the proxy, no code" '^[0-9]+$' "$cli_id"
 check 1 "CLI without IAP (the ID token straight to grain) is refused" 'access code|401|single-tenant' \
 	"$(GRAIN_SERVER=$DEMO "$GRAIN" list 2>&1 | head -3)"
 unset GRAIN_ID_TOKEN
-MODE=iap browser
+BADTOK=$(tok owner@example.com exp=-10m) MODE=iap browser
 
 # 3. Bad assertions: straight to the demo (as a request that bypassed the
 # load balancer would), each with the valid access code too, so a fall-through
@@ -198,6 +198,8 @@ check 3 "garbled token, no code" '^401' "$(st_body -H "$A: not.a.jwt" "$DEMO/api
 check 3 "garbled token, plus the valid code" '^401' "$(st_body -H "$A: garbage" -H "Authorization: Bearer $CODE" "$DEMO/api/auth/user")"
 check 3 "garbled token, plus the access cookie (browser)" '^401' \
 	"$(st_body -H "$A: garbage" -H "Accept: text/html" -H "Authorization: Bearer $CODE" "$DEMO/")"
+check 3 "a browser navigation with an expired assertion gets a 401 page" '^401 .*Sign-in could not be verified' \
+	"$(st_body -H "$A: $(tok owner@example.com exp=-10m)" -H 'Accept: text/html' "$DEMO/")"
 check 3 "refused assertions are logged" 'refused.*(signature|expired|issuer|audience)' \
 	"$(grep -iE 'assertion' "$DEMO_LOG" | head -3)"
 

@@ -31,6 +31,7 @@ let failed = 0;
 const caseOf = {
   iap: "1",
   csrf: "9",
+  bad: "3",
   allowlist: "2",
   attribution: "8",
   noiap: "6",
@@ -122,6 +123,19 @@ headers:{"Content-Type":"text/plain"},body:JSON.stringify({title:"csrf-browser-f
     check("csrf", "neither cross-site write was stored", !list.some((t) => /^csrf-browser/.test(t.title)), list.length);
     attacker.close();
     await victim.close();
+
+    // 3. A browser reaching grain with an assertion that does not verify
+    // (expired here) is refused with a page, not the API's JSON.
+    for (const [w, h, name] of [[1440, 900, "11-bad-assertion-page"], [390, 844, "11b-bad-assertion-page-phone"]]) {
+      const bctx = await browser.newContext({ viewport: { width: w, height: h }, extraHTTPHeaders: { "X-Goog-IAP-JWT-Assertion": process.env.BADTOK } });
+      const bp = await bctx.newPage();
+      const r = await bp.goto(`${DEMO}/`);
+      const h1 = (await bp.locator("h1").first().innerText().catch(() => "")) || "";
+      const ow = await bp.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      check("bad", `expired assertion, browser at ${w}px: 401 page, fits`, r.status() === 401 && /Sign-in could not be verified/.test(h1) && ow <= 0, `${r.status()} ${h1} overflow ${ow}px`);
+      await shot(bp, name);
+      await bctx.close();
+    }
   }
 
   if (MODE === "allowlist") {

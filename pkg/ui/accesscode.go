@@ -606,7 +606,7 @@ func (s *Server) singleTenantGate(w http.ResponseWriter, r *http.Request, cfg IA
 	cv := cachedOrVerifyCaller(r)
 	if cv.present {
 		if cv.err != nil {
-			writeError(w, http.StatusUnauthorized, fmt.Errorf("identity assertion was not accepted: %w", cv.err))
+			writeAssertionRefused(w, r, cv.err)
 			return false
 		}
 		if cv.accessCodeWins {
