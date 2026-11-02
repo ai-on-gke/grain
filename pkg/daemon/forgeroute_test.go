@@ -101,6 +101,11 @@ func fakeForgeCLI(args []string) int {
 	}
 	upstream := os.Getenv(fakeForgeCLIUpstreamEnv)
 	target := upstream + "/api/v3/" + endpoint
+	if endpoint == "graphql" {
+		// gh's own name for its host's GraphQL endpoint, which on an
+		// Enterprise host is /api/graphql beside /api/v3.
+		target = upstream + "/api/graphql"
+	}
 	if strings.HasPrefix(endpoint, "https://") || strings.HasPrefix(endpoint, "http://") {
 		u, err := url.Parse(endpoint)
 		if err != nil {
@@ -121,6 +126,7 @@ func fakeForgeCLI(args []string) int {
 	}
 	req.Header = headers
 	req.Header.Set("X-Fake-ForgeCLI-Host", os.Getenv("GH_HOST"))
+	req.Header.Set("X-Fake-ForgeCLI-Endpoint", endpoint)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -147,6 +153,15 @@ type fakeDepot struct {
 	mu     sync.Mutex
 	reqs   []string
 	auth   []string
+	// calls is every `forgecli api` run that reached the depot: the
+	// endpoint argument it was given and the GH_HOST it ran under.
+	calls []string
+}
+
+func (d *fakeDepot) apiCalls() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.calls...)
 }
 
 func (d *fakeDepot) requests() []string {
@@ -161,11 +176,18 @@ func (d *fakeDepot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if a := r.Header.Get("Authorization"); a != "" {
 		d.auth = append(d.auth, a)
 	}
+	if e := r.Header.Get("X-Fake-ForgeCLI-Endpoint"); e != "" {
+		d.calls = append(d.calls, "api "+e+" GH_HOST="+r.Header.Get("X-Fake-ForgeCLI-Host"))
+	}
 	d.mu.Unlock()
 	if d.handle != nil && d.handle(w, r) {
 		return
 	}
-	if rest, ok := strings.CutPrefix(r.URL.RequestURI(), "/api/v3"); ok {
+	uri := r.URL.RequestURI()
+	if uri == "/api/graphql" {
+		uri = "/api/v3/graphql"
+	}
+	if rest, ok := strings.CutPrefix(uri, "/api/v3"); ok {
 		body, _ := io.ReadAll(r.Body)
 		headers := map[string]string{}
 		for k := range r.Header {
@@ -330,9 +352,11 @@ type defaultHostGuard struct {
 	calls []string
 }
 
-func (g *defaultHostGuard) Request(method, path string, _ map[string]string, _ []byte) (github.ApiResponse, error) {
+func (g *defaultHostGuard) Request(method, path string, headers map[string]string, _ []byte) (github.ApiResponse, error) {
 	g.mu.Lock()
-	g.calls = append(g.calls, method+" "+path)
+	// The repository a call is about, as well as its path: a GraphQL
+	// call's path ("/graphql") names none.
+	g.calls = append(g.calls, method+" "+path+" repo="+headers[github.RepoHeader])
 	g.mu.Unlock()
 	return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`),
 		URL: method + " https://api.github.com" + path}, nil
