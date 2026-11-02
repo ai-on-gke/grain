@@ -328,6 +328,8 @@ func TestHostScriptGrantInARealGranuleVM(t *testing.T) {
 		Workspace:         "/home/debian",
 		ReadyTimeout:      3 * time.Minute,
 		ReadyPollInterval: time.Second,
+		DefaultCPUs:       realVMDefaultCPUs(t),
+		DefaultMemoryMB:   realVMDefaultMemoryMB(t),
 	})
 	name, err := k.VMNameFor("hs1-1")
 	if err != nil {

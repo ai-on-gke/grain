@@ -1343,22 +1343,12 @@ jobs:
             exit "$status"
           fi
 
-  # Disabled on GitHub-hosted ubuntu-latest runners:
-  #
-  # real-vm boots two concurrent Firecracker/Cloud-Hypervisor microVMs
-  # inside Docker containers (TestGranuleSandboxesAgainstARealDockerBackedVM,
-  # TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently, and
-  # TestTheModelProxiesAreReachableFromInsideARealGuest). It requires a
-  # pre-published guest VM image in GHCR matching ./scripts/granule/guest-inputs.sh
-  # (or ~45 minutes and >30 GB disk to build Granulefile from scratch), plus
-  # nested KVM with at least 16 GiB dedicated RAM and 60 GB disk. Move to a
-  # self-hosted runner with KVM and pre-warmed guest image cache to enable.
   real-vm:
     name: real vm
     needs: [changes]
-    if: vars.ENABLE_SELF_HOSTED_TESTS == 'true' && needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.real-vm == 'true'
-    runs-on: ${{ vars.SELF_HOSTED_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 30
+    if: needs.changes.outputs.go_backend == 'true' && needs.changes.outputs.real-vm == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     concurrency:
       group: ${{ github.workflow }}-real-vm-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -1366,15 +1356,118 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Ensure sufficient runner disk space
+        run: |
+          avail_mb=$(df -BM --output=avail / | tail -1 | tr -dc '0-9')
+          if [ "${avail_mb:-0}" -lt 35000 ]; then
+            sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          fi
+          df -h /
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Configure /dev/kvm udev permissions
+        run: |
+          set -euo pipefail
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            iproute2 iptables nftables dnsmasq-base e2fsprogs socat openssh-client
+          if [ ! -e /dev/kvm ]; then
+            echo "/dev/kvm is not in this runner, so the suite below would skip rather than run. A green tick here would mean nothing." >&2
+            exit 1
+          fi
+          printf '%s\n' 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules || true
+          sudo udevadm trigger --name-match=kvm || true
+          sudo chmod 0666 /dev/kvm
+          sudo usermod -aG kvm "$USER" || true
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo git config --system user.name "grain-ci"
+          sudo git config --system user.email "grain-ci@example.com"
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
+          ls -l /dev/kvm
+          docker version
+          command -v ssh-keygen
+          sudo -n nft --version
+          nproc
+          free -m
+          df -h /
+
+      - name: Resolve the sandbox guest
+        timeout-minutes: 50
+        env:
+          IMAGE: grain-guest:e2e-test
+        run: ./scripts/granule-guest-resolve.sh
 
       - name: Real VM sandbox tests
         env:
           GRAIN_REAL_VM_TESTS: "1"
+          GRAIN_REAL_VM_CPUS: "2"
+          GRAIN_REAL_VM_MEMORY_MB: "2048"
         run: |
-          ./scripts/run-go-tests.sh go test -v -count=1 -timeout 20m \
+          set -uo pipefail
+          mkdir -p /tmp/consoles
+          (
+            while true; do
+              for c in $(docker ps -aq --filter 'name=granule-vm-' 2>/dev/null); do
+                if [ ! -e "/tmp/consoles/$c.started" ]; then
+                  touch "/tmp/consoles/$c.started"
+                  name="$(docker inspect -f '{{.Name}}' "$c" 2>/dev/null | tr -d /)"
+                  (docker logs -f "$c" > "/tmp/consoles/${name:-$c}.log" 2>&1 &)
+                fi
+              done
+              sleep 2
+            done
+          ) &
+          watcher=$!
+          failed=""
+          go test ./pkg/orchestrator/ \
             -run 'TestGranuleSandboxesAgainstARealDockerBackedVM|TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently|TestTheModelProxiesAreReachableFromInsideARealGuest' \
-            ./pkg/orchestrator/
+            -count=1 -v -timeout 25m 2>&1 | tee /tmp/granule-vm.log || failed="the suite"
+          kill "$watcher" 2>/dev/null || true
+
+          for t in TestGranuleSandboxesAgainstARealDockerBackedVM \
+                   TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently \
+                   TestTheModelProxiesAreReachableFromInsideARealGuest; do
+            if ! grep -q -- "--- PASS: $t" /tmp/granule-vm.log; then
+              echo "$t did not run and pass; this job only means something when all of them do" >&2
+              failed="${failed:-a test that did not run}"
+            fi
+          done
+          if [ -n "$failed" ]; then
+            echo "===== nproc / free -m / df -h / ====="
+            nproc; free -m; df -h /
+            echo "===== docker ps -a ====="
+            docker ps -a
+            echo "===== dmesg tail ====="
+            (sudo dmesg 2>/dev/null || dmesg 2>/dev/null || echo "no dmesg here") | tail -80
+            for f in /tmp/consoles/*.log; do
+              [ -e "$f" ] || continue
+              echo "===== guest console $f ====="
+              tail -200 "$f"
+            done
+            exit 1
+          fi
 
   # Boots a single-node kind cluster with Calico CNI (v3.33.0) on ubuntu-latest
   # to enforce NetworkPolicy egress isolation and exercise real Kubernetes pod
