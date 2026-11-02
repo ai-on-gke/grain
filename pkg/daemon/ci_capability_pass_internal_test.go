@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
-	"github.com/ai-on-gke/grain/pkg/capability/repowrite"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
@@ -397,11 +396,7 @@ func TestReadoptGrantsOnlyTheWriteScopesTheEventAdmits(t *testing.T) {
 				Scopes:      gitproxy.NewReadScopes(),
 				WriteScopes: gitproxy.NewWriteScopes(),
 				Teams:       gitproxy.NewSandboxTeams(),
-				Capabilities: func() *model.CapabilityRegistry {
-					reg := model.NewCapabilityRegistry()
-					reg.RegisterDynamic(repowrite.DynamicProvider)
-					return reg
-				},
+				Capabilities: func() *model.CapabilityRegistry { return model.NewCapabilityRegistry() },
 			}
 			sb := &CiSandbox{Owner: owner, Backing: &ciToolSandbox{}, SandboxName: "c0123abcd-2"}
 			if err := sb.readoptJob(context.Background(), model.RepoRef{Owner: "acme", Name: "widgets"},

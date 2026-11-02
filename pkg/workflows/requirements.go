@@ -86,7 +86,7 @@ import (
 // own `repo-read:`/`repo-write:` is met by being declared, the
 // per-repository list is not consulted for them, and cmd/grain's
 // ciSandbox puts the job's git requests through the proxy as its team.
-// The untrusted-event gate on repo-write (pkg/capability/repowrite) is
+// The untrusted-event gate on repo-write (model.RepoAccessAdmitsCIEvent) is
 // unchanged: that protects against untrusted code, which is a different
 // question from whose approval a repository needs.
 //
