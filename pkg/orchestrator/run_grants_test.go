@@ -254,3 +254,17 @@ func TestRunCycleForwardsARegisteredRunGrant(t *testing.T) {
 		t.Errorf("RunConfig.Grants = %v, want the registered %s among them", held, capabilitytest.ID)
 	}
 }
+
+// A method contributed from outside core (capability.Register) as a run
+// grant travels to the run whether the task holds its recorded grant or the
+// bare name it retires, and the in-process server it is on admits it
+// without any capability server being attached.
+func TestRunCycleForwardsARegisteredMethodGrant(t *testing.T) {
+	capabilitytest.RegisterMethod(t)
+	for _, grant := range []string{capabilitytest.MethodGrant, capabilitytest.MethodAlias} {
+		held, _ := runWithGrants(t, []model.Grant{{Capability: grant, Via: model.GrantByLabel}}, "")
+		if !slices.Contains(held, grant) {
+			t.Errorf("a task holding %s: RunConfig.Grants = %v, want it among them", grant, held)
+		}
+	}
+}
