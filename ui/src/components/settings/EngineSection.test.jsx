@@ -24,6 +24,7 @@ vi.mock("../../api.js", () => ({ default: vi.fn() }));
 
 const saved = {
   pollInterval: "10s",
+  pollIntervalDefault: "10s",
   maxWorkers: 4,
   maxMergesPerRepo: 1,
   mergeBatchSize: 4,
@@ -47,6 +48,37 @@ function Page() {
 
 describe("EngineSection", () => {
   afterEach(() => api.mockReset());
+
+  // The 2026-11-02 walkthrough: a cleared Poll interval was sent as ""
+  // and refused with `time: invalid duration ""`; now the box shows
+  // grain's default as its placeholder, and clearing it saves that.
+  it("shows grain's poll interval as the placeholder a cleared box saves", async () => {
+    let stored = "25s";
+    api.mockImplementation(async (path, opts) => {
+      if (opts) {
+        const body = JSON.parse(opts.body);
+        stored = body.pollInterval.trim() || "10s";
+      }
+      return { ...saved, pollInterval: stored };
+    });
+    const user = userEvent.setup();
+    render(<Page />);
+    const box = await screen.findByLabelText("Poll interval");
+    expect(box).toHaveValue("25s");
+    expect(box).toHaveAttribute("placeholder", "10s");
+    expect(
+      screen.getByText("Go duration, e.g. 10s. Blank uses grain's default"),
+    ).toBeInTheDocument();
+
+    await user.clear(box);
+    await user.tab();
+    await waitFor(() =>
+      expect(screen.getByLabelText("Poll interval")).toHaveValue("10s"),
+    );
+    expect(JSON.parse(api.mock.calls.at(-1)[1].body)).toEqual({
+      pollInterval: "",
+    });
+  });
 
   // The 2026-11-01 walkthrough: a merge batch size the daemon refused
   // (21, over its ceiling of 20) stayed in the box after the refusal, as
