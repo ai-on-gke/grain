@@ -873,9 +873,7 @@ mkdir -p "$4"
 if [ "$n" -le %[2]d ]; then touch "$4/partial"; printf '%%s\n' %[3]s >&2; exit 128; fi
 touch "$4/HEAD"
 `, bin, failures, shellQuote(stderr))
-	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(fake), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutableStub(t, filepath.Join(bin, "git"), fake)
 	cmd := exec.Command("sh", "-c", "set -e\n"+RetryingCloneScript("'http://proxy/o/r.git'", "'clone'")+"\necho cloned")
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"))

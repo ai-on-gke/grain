@@ -20,7 +20,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -425,13 +424,7 @@ fi
 shift 3
 exec "$@"
 `
-	src := kubectl + ".src"
-	if err := os.WriteFile(src, []byte(script), 0o644); err != nil {
-		t.Fatalf("writing fake kubectl: %v", err)
-	}
-	if out, err := exec.Command("install", "-m", "0755", src, kubectl).CombinedOutput(); err != nil {
-		t.Fatalf("installing fake kubectl: %v: %s", err, out)
-	}
+	writeExecutableStub(t, kubectl, script)
 	k := NewK8sGranuleSandboxes(K8sGranuleConfig{
 		Namespace: "gke-sandboxes",
 		Kubectl:   kubectl,
@@ -492,16 +485,7 @@ for arg in "$@"; do
 done
 printf '%s|True|docker-pullable://example/granule@sha256:abc|\n' "$phase"
 `
-	// The script is written as plain data and made executable by a child
-	// process: a write fd held here could be inherited by any parallel
-	// test's fork and make exec'ing the script fail with ETXTBSY.
-	src := bin + ".src"
-	if err := os.WriteFile(src, []byte(script), 0o644); err != nil {
-		t.Fatalf("writing fake kubectl: %v", err)
-	}
-	if out, err := exec.Command("install", "-m", "0755", src, bin).CombinedOutput(); err != nil {
-		t.Fatalf("installing fake kubectl: %v: %s", err, out)
-	}
+	writeExecutableStub(t, bin, script)
 	return bin
 }
 
@@ -834,15 +818,7 @@ cat <<'EOF'
 }
 EOF
 `
-	// Written as data and made executable by a child process, for the
-	// ETXTBSY reason writeFakeKubectlForGranule gives.
-	src := kubectl + ".src"
-	if err := os.WriteFile(src, []byte(script), 0o644); err != nil {
-		t.Fatalf("writing fake kubectl: %v", err)
-	}
-	if out, err := exec.Command("install", "-m", "0755", src, kubectl).CombinedOutput(); err != nil {
-		t.Fatalf("installing fake kubectl: %v: %s", err, out)
-	}
+	writeExecutableStub(t, kubectl, script)
 	k := NewK8sGranuleSandboxes(K8sGranuleConfig{
 		Image:        "example/granule",
 		Kubectl:      kubectl,
@@ -909,13 +885,7 @@ case "$verb" in
 esac
 exit 0
 `
-	src := bin + ".src"
-	if err := os.WriteFile(src, []byte(script), 0o644); err != nil {
-		t.Fatalf("writing fake kubectl: %v", err)
-	}
-	if out, err := exec.Command("install", "-m", "0755", src, bin).CombinedOutput(); err != nil {
-		t.Fatalf("installing fake kubectl: %v: %s", err, out)
-	}
+	writeExecutableStub(t, bin, script)
 	return &sweepKubectl{dir: dir, bin: bin}
 }
 
