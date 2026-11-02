@@ -4069,7 +4069,9 @@ func (r *UpdateTaskRequest) UnmarshalJSON(data []byte) error {
 		} else {
 			var n int
 			if err := json.Unmarshal(aux.RawPriority, &n); err != nil {
-				return err
+				// 1.5, 1e3, a string, a number past int: the priority
+				// wording rather than Go's own decoding error.
+				return errors.New(errPriorityNotPositive)
 			}
 			r.Priority = &n
 		}
