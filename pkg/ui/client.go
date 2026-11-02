@@ -5855,6 +5855,12 @@ func (c *Client) Retry(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	// Only a person lifts a stop a person made, the same rule a reply
+	// is held to (addAttributedComment): a run calling retry through the
+	// agent API on a task it may write is not the one the stop waits on.
+	if stopped && c.actor(ctx).Kind != model.PrincipalHuman {
+		return validationErrorf("%s was stopped by an operator: only a person can resume it, by replying or pressing Retry", id)
+	}
 	if stopped {
 		reopened, err := c.reopenAcknowledgeable(ctx, id, now)
 		if err != nil || reopened {

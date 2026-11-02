@@ -3507,6 +3507,38 @@ func TestRetryResumesAStoppedTurn(t *testing.T) {
 	}
 }
 
+// TestRetryOfAStoppedTurnIsAPersonsToMake: a run with tasks:write on
+// another task can call retry through the agent API, but the stop it
+// would lift is waiting on a person -- the same rule a reply is held to.
+func TestRetryOfAStoppedTurnIsAPersonsToMake(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	c.Config.TaskCanceller = &recordingTaskCanceller{}
+	task := create(t, c, ctx)
+	if err := store.StartRun(ctx, model.Run{
+		ID: "r1", TaskID: task.ID, Sandbox: "s1", Attempt: 1, StartedAt: baseTime,
+	}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Stop(ctx, task.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := store.FinishRun(ctx, "r1", baseTime.Add(time.Minute), "cancelled", model.TurnStoppedDetail); err != nil {
+		t.Fatal(err)
+	}
+	agentCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: "999"})
+	if err := c.Retry(agentCtx, task.ID); err == nil {
+		t.Fatal("an agent's Retry lifted an operator's stop")
+	}
+	got, err := c.Task(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != model.StateAwaitingReply || !got.TurnStopped {
+		t.Fatalf("after an agent's Retry: state = %q, TurnStopped = %v; want still stopped", got.State, got.TurnStopped)
+	}
+}
+
 // TestRetryOnAPausedTaskSaysWhy: an operator's pause is not Retry's to
 // lift, and a Retry that succeeded while leaving the task paused would be
 // the same silent no-op TestRetryResumesAStoppedTurn is about.
