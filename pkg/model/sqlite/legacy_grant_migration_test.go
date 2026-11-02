@@ -470,7 +470,7 @@ func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 	}
 }
 
-// A store written before migration 89 whose capability_policy carries a
+// A store written before migration 90 whose capability_policy carries a
 // catalogue with retired in-process entries (memory, release-notes,
 // test-quarantine, ...) folds them into api_scopes.presets.<name>, merges
 // restrictions conservatively when both exist, and rewrites retired task

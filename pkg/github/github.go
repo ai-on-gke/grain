@@ -2236,8 +2236,8 @@ func (c *RESTClient) UpdateBranch(owner, repo, branch, sha string, force bool) e
 
 // DeleteBranch removes branch entirely. It is for a ref grain owns and
 // nobody has a pull request against -- the merge queue's own throwaway
-// batch ref (model.MergeBatchRef), destroyed when the batch it stood for
-// is dropped part-way through merging (orchestrator.dropBatchRef).
+// re-check ref (model.MergeRecheckRef), destroyed when the re-check it
+// stood for ends (orchestrator.dropRecheckRef).
 //
 // A branch that is already gone is not an error: GitHub answers 422 for a
 // ref that does not exist, and "make sure this is not there" is what every
