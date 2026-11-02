@@ -117,7 +117,7 @@ exec)
   cd %q && exec "$@"
   ;;
 inspect)
-  echo running
+`+fakeDockerInspect+`
   ;;
 *)
   echo "fake docker: unexpected subcommand: $*" >&2
@@ -130,6 +130,17 @@ esac
 	// under sudo, without this.
 	install(t, dir, "nft", "#!/bin/sh\nexit 0\n")
 }
+
+// fakeDockerInspect is a fake docker's answer to `docker inspect`: the
+// address a VM's host firewall chain is written for, which every granule
+// VM gets (orchestrator's enforceGuestNetwork -- open-network ones too),
+// no network whose bridge port has to be found, and "running" for every
+// other question asked of a container.
+const fakeDockerInspect = `  case "$*" in
+  *GlobalIPv6Address*) echo "172.18.0.2|16|172.18.0.1|||" ;;
+  *"len .NetworkSettings.Networks"*) echo 0 ;;
+  *) echo running ;;
+  esac`
 
 // fakeGuestSudoDir is a directory holding a `sudo` that refuses
 // everything, put ahead of the real one for the commands a fake guest
