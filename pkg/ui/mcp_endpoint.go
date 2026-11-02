@@ -70,7 +70,7 @@ const controllerMCPInstructions = `Grain Controller MCP workflow guide:
    - grain_submit_task(...) to file a task. approve defaults to false (filed as "proposed" awaiting human approval); only set approve=true when explicitly authorized.
 2. All other Grain controller operations (~270+ routes across CI, merge queue, repos, releases, schedules, templates, settings, secrets, capabilities, deployment) use progressive discovery:
    - Call grain_explore_scope() with no arguments to list the scope groups you are authorized to use.
-   - Call grain_explore_scope(scope="<group>") (e.g. "ci", "merge", "repos", "tasks") to get domain guidance and exact JSON input schemas for tools in that scope.
+   - Call grain_explore_scope(scope="<group>", tool="<word>") (e.g. scope="tasks", tool="comment") to get the exact JSON input schemas of just the routes you need; a whole group (scope alone) can run to tens of KB, so name the tool whenever you know what you are after.
    - Call grain_invoke(tool="api_...", arguments={...}, reason?="...") to execute an authorized route.
 3. Safety & authorization rules:
    - Destructive (DELETE) and dangerous-scope routes require a non-empty reason explaining why the change is being made.
@@ -316,7 +316,7 @@ func formatSubrequestError(code int, body []byte) error {
 func (s *Server) exploreScopeTool() mcp.Tool {
 	return mcp.Tool{
 		Name:        ToolGrainExploreScope,
-		Description: "List authorized Grain controller API scope groups, or return domain guidance and JSON input schemas for one scope group or scope.",
+		Description: "List authorized Grain controller API scope groups, or return domain guidance and JSON input schemas for one scope group or scope -- narrowed to the routes whose tool name or path matches tool, when given.",
 		Meta:        controllerAlwaysLoadMeta,
 		InputSchema: map[string]any{
 			"type": "object",
@@ -324,6 +324,10 @@ func (s *Server) exploreScopeTool() mcp.Tool {
 				"scope": map[string]any{
 					"type":        "string",
 					"description": "Optional scope group (e.g. 'tasks', 'ci', 'merge', 'repos', 'settings') or exact scope (e.g. 'ci:read'). Omit to list all authorized scope groups.",
+				},
+				"tool": map[string]any{
+					"type":        "string",
+					"description": "Optional route tool name (e.g. 'api_add_comment') or a word of it or of its path (e.g. 'comment'): only matching routes' schemas are returned, which is far cheaper than a whole group's. With scope, searches that group; alone, every authorized route.",
 				},
 			},
 		},
@@ -336,11 +340,13 @@ func (s *Server) exploreScopeTool() mcp.Tool {
 			authorized := access.authorizedRoutes()
 			rawScope, _ := args["scope"].(string)
 			query := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(rawScope)), APIGrantPrefix)
+			rawTool, _ := args["tool"].(string)
+			toolQuery := strings.ToLower(strings.TrimSpace(rawTool))
 
-			if query == "" {
+			if query == "" && toolQuery == "" {
 				return renderScopeOverview(access, authorized)
 			}
-			return renderScopeDetail(access, authorized, query)
+			return renderScopeDetail(access, authorized, query, toolQuery)
 		},
 	}
 }
@@ -412,10 +418,10 @@ func renderScopeOverview(access mcpCallerAccess, authorized []APIRoute) mcp.Resu
 
 	payload := map[string]any{
 		"totalAuthorizedRoutes": len(authorized),
-		"hint":                  "Call grain_explore_scope(scope='<group>') to view route tool names and JSON input schemas, then grain_invoke(tool, arguments, reason?) to execute.",
+		"hint":                  "Call grain_explore_scope(scope='<group>', tool='<word>') to view matching route tool names and JSON input schemas (scope alone lists a whole group, which is much larger), then grain_invoke(tool, arguments, reason?) to execute.",
 		"groups":                out,
 	}
-	encoded, _ := json.MarshalIndent(payload, "", "  ")
+	encoded, _ := json.Marshal(payload)
 	return mcp.Result{Text: string(encoded)}
 }
 
@@ -442,11 +448,25 @@ func routeMatchesScopeQuery(rt APIRoute, query string, presetScopes []APIScope) 
 	return false
 }
 
-func renderScopeDetail(access mcpCallerAccess, authorized []APIRoute, query string) mcp.Result {
+// routeMatchesToolQuery reports whether rt is one a tool query names: its
+// tool name exactly, or a word of its tool name or path.
+func routeMatchesToolQuery(rt APIRoute, toolQuery string) bool {
+	if toolQuery == "" {
+		return true
+	}
+	tool := strings.ToLower(rt.Tool)
+	return tool == toolQuery || tool == APIToolPrefix+toolQuery ||
+		strings.Contains(tool, toolQuery) || strings.Contains(strings.ToLower(rt.Path), toolQuery)
+}
+
+func renderScopeDetail(access mcpCallerAccess, authorized []APIRoute, query, toolQuery string) mcp.Result {
 	presetScopes := ExpandAPIPreset(query)
+	inScope := func(rt APIRoute) bool {
+		return query == "" || routeMatchesScopeQuery(rt, query, presetScopes)
+	}
 	var matched []exploredRouteSchema
 	for _, rt := range authorized {
-		if !routeMatchesScopeQuery(rt, query, presetScopes) {
+		if !inScope(rt) || !routeMatchesToolQuery(rt, toolQuery) {
 			continue
 		}
 		matched = append(matched, exploredRouteSchema{
@@ -464,7 +484,7 @@ func renderScopeDetail(access mcpCallerAccess, authorized []APIRoute, query stri
 		// Distinguish "exists in Grain's API but caller lacks grant" from "unknown scope".
 		var missingScopes []string
 		for _, rt := range AgentAPIRoutes() {
-			if routeMatchesScopeQuery(rt, query, presetScopes) {
+			if inScope(rt) && routeMatchesToolQuery(rt, toolQuery) {
 				s := string(rt.Scope)
 				if !slices.Contains(missingScopes, s) {
 					missingScopes = append(missingScopes, s)
@@ -472,9 +492,22 @@ func renderScopeDetail(access mcpCallerAccess, authorized []APIRoute, query stri
 			}
 		}
 		sort.Strings(missingScopes)
+		what := fmt.Sprintf("Scope %q", query)
+		if toolQuery != "" {
+			what = fmt.Sprintf("Tool %q", toolQuery)
+			if query != "" {
+				what += fmt.Sprintf(" in scope %q", query)
+			}
+		}
 		if len(missingScopes) > 0 {
 			return mcp.Result{
-				Text:    fmt.Sprintf("Scope %q is not authorized for this caller (requires grant for %s).", query, strings.Join(missingScopes, ", ")),
+				Text:    fmt.Sprintf("%s is not authorized for this caller (requires grant for %s).", what, strings.Join(missingScopes, ", ")),
+				IsError: true,
+			}
+		}
+		if toolQuery != "" {
+			return mcp.Result{
+				Text:    fmt.Sprintf("No authorized route matches tool %q. Call %s with a scope and no tool to list a group's routes.", toolQuery, ToolGrainExploreScope),
 				IsError: true,
 			}
 		}
@@ -495,7 +528,14 @@ func renderScopeDetail(access mcpCallerAccess, authorized []APIRoute, query stri
 		"routeCount": len(matched),
 		"routes":     matched,
 	}
-	encoded, _ := json.MarshalIndent(payload, "", "  ")
+	if toolQuery != "" {
+		payload["tool"] = toolQuery
+	}
+	// Compact rather than indented: the schemas are read by a model, which
+	// pays for every byte of indentation, and the indented form of a
+	// scope's nested schemas was larger than the tools/list of the same
+	// routes it replaced (mcp_token_benchmark_test.go).
+	encoded, _ := json.Marshal(payload)
 	return mcp.Result{Text: string(encoded)}
 }
 
@@ -868,7 +908,7 @@ func (s *Server) filingContextTool() mcp.Tool {
 					"note":    "grain_submit_task defaults approve=false so tasks land in 'proposed' state awaiting human approval unless approve=true is explicitly passed.",
 				},
 			}
-			encoded, _ := json.MarshalIndent(out, "", "  ")
+			encoded, _ := json.Marshal(out)
 			return mcp.Result{Text: string(encoded)}
 		},
 	}
