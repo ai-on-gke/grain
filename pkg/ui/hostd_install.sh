@@ -120,87 +120,91 @@ IAP_AUDIENCE=""
 CA_FILE=""
 START=1
 
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -h|--help) usage; exit 0 ;;
-    --name) need_arg "$1" $#; NAME="$2"; shift 2 ;;
-    --user) need_arg "$1" $#; HOSTD_USER="$2"; shift 2 ;;
-    --capacity) need_arg "$1" $#; CAPACITY="$2"; shift 2 ;;
-    --label) need_arg "$1" $#; LABELS="$LABELS $2"; shift 2 ;;
-    --server) need_arg "$1" $#; SERVER="$2"; shift 2 ;;
-    --grain-bin) need_arg "$1" $#; GRAIN_BIN="$2"; shift 2 ;;
-    --image) need_arg "$1" $#; IMAGE="$2"; shift 2 ;;
-    --binary-url) need_arg "$1" $#; BINARY_URL="$2"; shift 2 ;;
-    --sha256) need_arg "$1" $#; BINARY_SHA256="$2"; shift 2 ;;
-    --any-version) ANY_VERSION=1; shift ;;
-    --iap-audience) need_arg "$1" $#; IAP_AUDIENCE="$2"; shift 2 ;;
-    --ca-file) need_arg "$1" $#; CA_FILE="$2"; shift 2 ;;
-    --no-start) START=0; shift ;;
-    *) usage >&2; die "unknown option: $1" ;;
-  esac
-done
+parse_args() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      --name) need_arg "$1" $#; NAME="$2"; shift 2 ;;
+      --user) need_arg "$1" $#; HOSTD_USER="$2"; shift 2 ;;
+      --capacity) need_arg "$1" $#; CAPACITY="$2"; shift 2 ;;
+      --label) need_arg "$1" $#; LABELS="$LABELS $2"; shift 2 ;;
+      --server) need_arg "$1" $#; SERVER="$2"; shift 2 ;;
+      --grain-bin) need_arg "$1" $#; GRAIN_BIN="$2"; shift 2 ;;
+      --image) need_arg "$1" $#; IMAGE="$2"; shift 2 ;;
+      --binary-url) need_arg "$1" $#; BINARY_URL="$2"; shift 2 ;;
+      --sha256) need_arg "$1" $#; BINARY_SHA256="$2"; shift 2 ;;
+      --any-version) ANY_VERSION=1; shift ;;
+      --iap-audience) need_arg "$1" $#; IAP_AUDIENCE="$2"; shift 2 ;;
+      --ca-file) need_arg "$1" $#; CA_FILE="$2"; shift 2 ;;
+      --no-start) START=0; shift ;;
+      *) usage >&2; die "unknown option: $1" ;;
+    esac
+  done
+}
 
 # --- what was asked for ----------------------------------------------------
 #
 # Everything below reaches a systemd unit or YAML, so each value is held
 # to a plain character set rather than quoted for either.
 
-[ "$(id -u)" = 0 ] || die "run this as root (sudo): it writes $CONFIG_DIR and $UNIT"
-[ "$(uname -s)" = Linux ] || die "grain hostd's service is a systemd unit: this installs it on Linux only"
-command -v systemctl >/dev/null 2>&1 || die "systemctl not found: grain-hostd.service needs systemd"
+check_request() {
+  [ "$(id -u)" = 0 ] || die "run this as root (sudo): it writes $CONFIG_DIR and $UNIT"
+  [ "$(uname -s)" = Linux ] || die "grain hostd's service is a systemd unit: this installs it on Linux only"
+  command -v systemctl >/dev/null 2>&1 || die "systemctl not found: grain-hostd.service needs systemd"
 
-[ -n "$NAME" ] || die "--name is required: the hostd's name in Settings -> Hostds"
-case "$NAME" in
-  *[!a-z0-9-]*|-*|*-) die "--name $NAME is not a hostd name: lowercase letters, digits and '-', at most 63" ;;
-esac
-[ "${#NAME}" -le 63 ] || die "--name $NAME is longer than 63 characters"
-
-case "$SERVER" in
-  http://*|https://*) ;;
-  "") die "--server is required: the URL of the grain daemon" ;;
-  *) die "--server $SERVER is not an http:// or https:// URL" ;;
-esac
-case "$SERVER" in
-  *[!]A-Za-z0-9._~:/@[-]*) die "--server $SERVER holds a character grain-hostd.service cannot carry: give the daemon's plain URL" ;;
-esac
-SERVER="${SERVER%/}"
-
-[ -n "$HOSTD_USER" ] || die "--user is required when not run through sudo: the account hostd runs as"
-case "$HOSTD_USER" in
-  *[!A-Za-z0-9._-]*|-*) die "--user $HOSTD_USER is not a plain user name" ;;
-esac
-id -u "$HOSTD_USER" >/dev/null 2>&1 || die "no user $HOSTD_USER on this machine"
-[ "$(id -u "$HOSTD_USER")" != 0 ] || die "--user $HOSTD_USER is root, and grain hostd refuses to run as root"
-HOSTD_GROUP="$(id -gn "$HOSTD_USER")"
-
-case "$CAPACITY" in
-  "") ;;
-  *[!0-9]*) die "--capacity $CAPACITY is not a whole number" ;;
-esac
-
-for label in $LABELS; do
-  case "$label" in
-    *=*=*|=*|*=) die "--label $label is not KEY=VALUE" ;;
-    *=*) ;;
-    *) die "--label $label is not KEY=VALUE" ;;
+  [ -n "$NAME" ] || die "--name is required: the hostd's name in Settings -> Hostds"
+  case "$NAME" in
+    *[!a-z0-9-]*|-*|*-) die "--name $NAME is not a hostd name: lowercase letters, digits and '-', at most 63" ;;
   esac
-  case "$label" in
-    *[!A-Za-z0-9._/=:@+-]*) die "--label $label: keys and values are letters, digits and ._/:@+-" ;;
-  esac
-done
+  [ "${#NAME}" -le 63 ] || die "--name $NAME is longer than 63 characters"
 
-for value in "$IAP_AUDIENCE" "$CA_FILE"; do
-  case "$value" in
-    *[!A-Za-z0-9._/:@+-]*) die "$value holds a character grain-hostd.service cannot carry" ;;
+  case "$SERVER" in
+    http://*|https://*) ;;
+    "") die "--server is required: the URL of the grain daemon" ;;
+    *) die "--server $SERVER is not an http:// or https:// URL" ;;
   esac
-done
-if [ -n "$CA_FILE" ]; then
-  [ -r "$CA_FILE" ] || die "--ca-file $CA_FILE cannot be read"
-fi
+  case "$SERVER" in
+    *[!]A-Za-z0-9._~:/@[-]*) die "--server $SERVER holds a character grain-hostd.service cannot carry: give the daemon's plain URL" ;;
+  esac
+  SERVER="${SERVER%/}"
 
-if [ -e "$UNIT" ] && [ "$(head -n1 "$UNIT")" != "$UNIT_MARKER" ]; then
-  die "$UNIT is not one this script wrote (scripts/setup.sh's co-located hostd?); remove it first if this machine should dial in instead"
-fi
+  [ -n "$HOSTD_USER" ] || die "--user is required when not run through sudo: the account hostd runs as"
+  case "$HOSTD_USER" in
+    *[!A-Za-z0-9._-]*|-*) die "--user $HOSTD_USER is not a plain user name" ;;
+  esac
+  id -u "$HOSTD_USER" >/dev/null 2>&1 || die "no user $HOSTD_USER on this machine"
+  [ "$(id -u "$HOSTD_USER")" != 0 ] || die "--user $HOSTD_USER is root, and grain hostd refuses to run as root"
+  HOSTD_GROUP="$(id -gn "$HOSTD_USER")"
+
+  case "$CAPACITY" in
+    "") ;;
+    *[!0-9]*) die "--capacity $CAPACITY is not a whole number" ;;
+  esac
+
+  for label in $LABELS; do
+    case "$label" in
+      *=*=*|=*|*=) die "--label $label is not KEY=VALUE" ;;
+      *=*) ;;
+      *) die "--label $label is not KEY=VALUE" ;;
+    esac
+    case "$label" in
+      *[!A-Za-z0-9._/=:@+-]*) die "--label $label: keys and values are letters, digits and ._/:@+-" ;;
+    esac
+  done
+
+  for value in "$IAP_AUDIENCE" "$CA_FILE"; do
+    case "$value" in
+      *[!A-Za-z0-9._/:@+-]*) die "$value holds a character grain-hostd.service cannot carry" ;;
+    esac
+  done
+  if [ -n "$CA_FILE" ]; then
+    [ -r "$CA_FILE" ] || die "--ca-file $CA_FILE cannot be read"
+  fi
+
+  if [ -e "$UNIT" ] && [ "$(head -n1 "$UNIT")" != "$UNIT_MARKER" ]; then
+    die "$UNIT is not one this script wrote (scripts/setup.sh's co-located hostd?); remove it first if this machine should dial in instead"
+  fi
+}
 
 # --- the token ---------------------------------------------------------------
 
@@ -217,16 +221,13 @@ read_token() {
     trap - EXIT INT
     echo >&2
   else
-    # Piped into sh (curl | sh) stdin is this script itself, already read
-    # to its end by the time this runs: the read finds nothing, and says so.
+    # Piped into sh (curl | sh) stdin is this script itself, read to its
+    # end before main runs: the read finds nothing, and says so.
     IFS= read -r TOKEN || true
   fi
   TOKEN="$(printf '%s' "${TOKEN:-}" | tr -d ' \t\r\n')"
   [ -n "$TOKEN" ] || die "no token: give it on stdin or in \$GRAIN_HOSTD_TOKEN (not as an argument), or run this from a terminal to be asked"
 }
-
-TOKEN=""
-read_token
 
 # --- grain -------------------------------------------------------------------
 
@@ -258,9 +259,6 @@ sha256_of() {
     openssl dgst -sha256 -r "$1" | awk '{print $1}'
   fi
 }
-
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
 
 # from_image takes /usr/local/bin/grain out of $IMAGE, with docker or podman.
 from_image() {
@@ -328,38 +326,42 @@ find_grain() {
   die "found no grain ${GRAIN_DAEMON_RELEASE:-hostd} to install: name one with --grain-bin, an image with --image, or --binary-url with --sha256"
 }
 
-FOUND=""
-find_grain
-BUILD="$(build_of "$FOUND")"
-case "$BUILD" in
-  ""|*[!A-Za-z0-9._+-]*) BUILD=unstamped ;;
-esac
+install_grain() {
+  FOUND=""
+  find_grain
+  BUILD="$(build_of "$FOUND")"
+  case "$BUILD" in
+    ""|*[!A-Za-z0-9._+-]*) BUILD=unstamped ;;
+  esac
 
-# A root-owned copy in its own version directory, and current pointed at
-# it by rename, the layout scripts/setup.sh gives a co-located hostd.
-install -d -m0755 -o root -g root "$VERSIONS_DIR" "$VERSIONS_DIR/$BUILD"
-if [ "$FOUND" != "$VERSIONS_DIR/$BUILD/grain" ]; then
-  install -m0755 -o root -g root "$FOUND" "$VERSIONS_DIR/$BUILD/.grain.new"
-  mv -f "$VERSIONS_DIR/$BUILD/.grain.new" "$VERSIONS_DIR/$BUILD/grain"
-fi
-ln -sfn "$BUILD" "$VERSIONS_DIR/.current.new"
-mv -fT "$VERSIONS_DIR/.current.new" "$VERSIONS_DIR/current"
-GRAIN="$VERSIONS_DIR/current/grain"
-log "grain $BUILD is at $VERSIONS_DIR/$BUILD/grain"
+  # A root-owned copy in its own version directory, and current pointed at
+  # it by rename, the layout scripts/setup.sh gives a co-located hostd.
+  install -d -m0755 -o root -g root "$VERSIONS_DIR" "$VERSIONS_DIR/$BUILD"
+  if [ "$FOUND" != "$VERSIONS_DIR/$BUILD/grain" ]; then
+    install -m0755 -o root -g root "$FOUND" "$VERSIONS_DIR/$BUILD/.grain.new"
+    mv -f "$VERSIONS_DIR/$BUILD/.grain.new" "$VERSIONS_DIR/$BUILD/grain"
+  fi
+  ln -sfn "$BUILD" "$VERSIONS_DIR/.current.new"
+  mv -fT "$VERSIONS_DIR/.current.new" "$VERSIONS_DIR/current"
+  GRAIN="$VERSIONS_DIR/current/grain"
+  log "grain $BUILD is at $VERSIONS_DIR/$BUILD/grain"
+}
 
 # --- /etc/grain ----------------------------------------------------------------
 
-install -d -m0755 -o root -g root "$CONFIG_DIR"
-[ ! -L "$TOKEN_FILE" ] || die "$TOKEN_FILE is a symlink; not writing the token through it"
-# Created 0600 under a 077 umask and handed to the hostd user before it
-# is renamed into place, so nobody else can read it at any moment.
-tmp="$(umask 077; mktemp "$CONFIG_DIR/.hostd-token.XXXXXX")"
-(umask 077; printf '%s\n' "$TOKEN" > "$tmp")
-chown "$HOSTD_USER:$HOSTD_GROUP" "$tmp"
-chmod 0400 "$tmp"
-mv -f "$tmp" "$TOKEN_FILE"
-TOKEN=""
-log "the token is in $TOKEN_FILE, readable by $HOSTD_USER alone"
+write_token() {
+  install -d -m0755 -o root -g root "$CONFIG_DIR"
+  [ ! -L "$TOKEN_FILE" ] || die "$TOKEN_FILE is a symlink; not writing the token through it"
+  # Created 0600 under a 077 umask and handed to the hostd user before it
+  # is renamed into place, so nobody else can read it at any moment.
+  tmp="$(umask 077; mktemp "$CONFIG_DIR/.hostd-token.XXXXXX")"
+  (umask 077; printf '%s\n' "$TOKEN" > "$tmp")
+  chown "$HOSTD_USER:$HOSTD_GROUP" "$tmp"
+  chmod 0400 "$tmp"
+  mv -f "$tmp" "$TOKEN_FILE"
+  TOKEN=""
+  log "the token is in $TOKEN_FILE, readable by $HOSTD_USER alone"
+}
 
 allowlist_content() {
   cat <<YAML
@@ -394,37 +396,40 @@ capabilities:
 YAML
 }
 
-[ ! -L "$ALLOWLIST" ] || die "$ALLOWLIST is a symlink; grain hostd refuses one, and this script will not write through it"
-if [ -e "$ALLOWLIST" ]; then
-  if [ -n "$CAPACITY$LABELS" ]; then
-    log "keeping $ALLOWLIST as it is: set capacity: and labels: in it by hand (--capacity and --label only write a new one)"
+write_allowlist() {
+  [ ! -L "$ALLOWLIST" ] || die "$ALLOWLIST is a symlink; grain hostd refuses one, and this script will not write through it"
+  if [ -e "$ALLOWLIST" ]; then
+    if [ -n "$CAPACITY$LABELS" ]; then
+      log "keeping $ALLOWLIST as it is: set capacity: and labels: in it by hand (--capacity and --label only write a new one)"
+    else
+      log "keeping $ALLOWLIST as it is"
+    fi
   else
-    log "keeping $ALLOWLIST as it is"
+    tmp="$(mktemp "$ALLOWLIST.XXXXXX")"
+    allowlist_content > "$tmp"
+    chown root:root "$tmp"
+    chmod 0644 "$tmp"
+    mv -f "$tmp" "$ALLOWLIST"
+    log "wrote $ALLOWLIST"
   fi
-else
-  tmp="$(mktemp "$ALLOWLIST.XXXXXX")"
-  allowlist_content > "$tmp"
-  chown root:root "$tmp"
-  chmod 0644 "$tmp"
-  mv -f "$tmp" "$ALLOWLIST"
-  log "wrote $ALLOWLIST"
-fi
-chown root:root "$ALLOWLIST"
-chmod 0644 "$ALLOWLIST"
-"$GRAIN" hostd -ensure-builtins -allowlist "$ALLOWLIST" -command "$GRAIN" >&2 ||
-  log "WARNING: could not add grain's own capabilities entries to $ALLOWLIST"
-if ! "$GRAIN" hostd -check -allowlist "$ALLOWLIST" >/dev/null; then
-  log "WARNING: grain hostd will refuse $ALLOWLIST as it stands: fix it before host work reaches this machine"
-fi
+  chown root:root "$ALLOWLIST"
+  chmod 0644 "$ALLOWLIST"
+  "$GRAIN" hostd -ensure-builtins -allowlist "$ALLOWLIST" -command "$GRAIN" >&2 ||
+    log "WARNING: could not add grain's own capabilities entries to $ALLOWLIST"
+  if ! "$GRAIN" hostd -check -allowlist "$ALLOWLIST" >/dev/null; then
+    log "WARNING: grain hostd will refuse $ALLOWLIST as it stands: fix it before host work reaches this machine"
+  fi
+}
 
 # --- grain-hostd.service ---------------------------------------------------------
 
-ARGS="-server $SERVER -token-file $TOKEN_FILE -name $NAME -allowlist $ALLOWLIST -socket $SOCKET_DIR/hostd.sock -state-dir $STATE_DIR"
-[ -z "$IAP_AUDIENCE" ] || ARGS="$ARGS -iap-audience $IAP_AUDIENCE"
-[ -z "$CA_FILE" ] || ARGS="$ARGS -ca-file $CA_FILE"
+write_unit() {
+  ARGS="-server $SERVER -token-file $TOKEN_FILE -name $NAME -allowlist $ALLOWLIST -socket $SOCKET_DIR/hostd.sock -state-dir $STATE_DIR"
+  [ -z "$IAP_AUDIENCE" ] || ARGS="$ARGS -iap-audience $IAP_AUDIENCE"
+  [ -z "$CA_FILE" ] || ARGS="$ARGS -ca-file $CA_FILE"
 
-tmp="$(mktemp "$UNIT.XXXXXX")"
-cat > "$tmp" <<UNIT
+  tmp="$(mktemp "$UNIT.XXXXXX")"
+  cat > "$tmp" <<UNIT
 $UNIT_MARKER
 # Re-run it to change anything here.
 [Unit]
@@ -448,15 +453,39 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 UNIT
-chmod 0644 "$tmp"
-mv -f "$tmp" "$UNIT"
-systemctl daemon-reload
-log "wrote $UNIT: $GRAIN hostd -server $SERVER -name $NAME, as $HOSTD_USER"
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$UNIT"
+  systemctl daemon-reload
+  log "wrote $UNIT: $GRAIN hostd -server $SERVER -name $NAME, as $HOSTD_USER"
+}
 
-if [ "$START" = 1 ]; then
-  systemctl enable grain-hostd.service >/dev/null 2>&1
-  systemctl restart grain-hostd.service
-  log "grain-hostd.service started; it shows as connected in Settings -> Hostds once it has dialed in (journalctl -u grain-hostd -f)"
-else
-  log "not starting grain-hostd.service (--no-start): systemctl enable --now grain-hostd.service"
-fi
+start_unit() {
+  if [ "$START" = 1 ]; then
+    systemctl enable grain-hostd.service >/dev/null 2>&1
+    systemctl restart grain-hostd.service
+    log "grain-hostd.service started; it shows as connected in Settings -> Hostds once it has dialed in (journalctl -u grain-hostd -f)"
+  else
+    log "not starting grain-hostd.service (--no-start): systemctl enable --now grain-hostd.service"
+  fi
+}
+
+main() {
+  parse_args "$@"
+  check_request
+  TOKEN=""
+  read_token
+  WORK="$(mktemp -d)"
+  trap 'rm -rf "$WORK"' EXIT
+  FOUND=""
+  install_grain
+  write_token
+  write_allowlist
+  write_unit
+  start_unit
+}
+
+# Everything above only defines functions, so by the time this line runs
+# sh has read the whole script: piped into sh (curl | sh), stdin is then
+# at its end, and read_token finds nothing there rather than eating the
+# script's own next line as a token.
+main "$@"
