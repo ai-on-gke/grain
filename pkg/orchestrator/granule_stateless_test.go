@@ -121,9 +121,7 @@ rm)
 esac
 `, host.file, orchestrator.StateDirLabel, inner)
 	for name, script := range map[string]string{"granule": granuleScript, "docker": dockerScript} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		orchestrator.WriteExecutableStub(t, filepath.Join(dir, name), script)
 	}
 	warmUpFakeDocker(t, filepath.Join(dir, "docker"))
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))

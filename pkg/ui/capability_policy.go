@@ -43,7 +43,9 @@ type CapabilityPolicyBody struct {
 // an open task, a template, a schedule, or a job of a workflow this
 // deployment declares for a repo.
 type CapabilityGrantHolder struct {
-	// Kind is "task", "template", "schedule" or "workflow".
+	// Kind is "task", "template", "schedule", "workflow", or "default"
+	// (the deployment's default grants, ID "deployment", or a
+	// repository's, ID owner/name).
 	Kind string `json:"kind"`
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -256,6 +258,31 @@ func (c *Client) grantHolders(ctx context.Context, keep func(string) bool) ([]Ca
 		}
 		repo := s.Target
 		addGrants("schedule", s.ID, s.Title, &repo, s.Grants, taskSubject(&repo))
+	}
+	// The deployment's and each repository's default grants are seeded
+	// onto every task filed there (model.Config.DefaultCapabilities), so
+	// they are holders too: the next task holds what they name.
+	asGrants := func(ids []string) []model.Grant {
+		var grants []model.Grant
+		for _, g := range ids {
+			grants = append(grants, model.Grant{Capability: g})
+		}
+		return grants
+	}
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if cfg != nil {
+		addGrants("default", "deployment", "Deployment defaults", nil, asGrants(cfg.DefaultCapabilities), taskSubject(nil))
+	}
+	repoConfigs, err := c.Store.ListRepoConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, rc := range repoConfigs {
+		repo := rc.Repo
+		addGrants("default", repo.String(), "Repository defaults", &repo, asGrants(rc.DefaultCapabilities), taskSubject(&repo))
 	}
 	workflows, err := c.Store.ListRepoWorkflows(ctx)
 	if err != nil {

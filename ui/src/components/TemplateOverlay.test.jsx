@@ -60,7 +60,7 @@ function overlay(template) {
 
 // Submitted straight through the form rather than by clicking Save, so
 // what is checked is the form's own reading of the box, not the
-// browser's min and step (which let "1e2" through regardless).
+// browser's min and step.
 function submitWithPriority(value) {
   const box = screen.getByRole("spinbutton", { name: "Task priority" });
   fireEvent.change(box, { target: { value } });
@@ -99,7 +99,17 @@ describe("TemplateOverlay task priority", () => {
     expect(sentBody("POST")).toMatchObject({ priority: 100 });
   });
 
-  it.each(["0", "-1", "1.5", "1e2"])(
+  // As New task, Edit, Bulk edit, propose_task and the API read it: a
+  // whole number written with an exponent is that number.
+  it("sends 1e2 as the 100 the box takes it for", async () => {
+    api.mockResolvedValue(saved);
+    const onSaved = overlay(null);
+    submitWithPriority("1e2");
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(sentBody("POST")).toMatchObject({ priority: 100 });
+  });
+
+  it.each(["0", "-1", "1.5", "1e-1", "1e20"])(
     "refuses %s rather than saving some other priority",
     async (value) => {
       api.mockResolvedValue(saved);
