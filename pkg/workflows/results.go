@@ -229,7 +229,54 @@ type Run struct {
 	// BuildOf for why it is a pointer.
 	Build *Build `json:"build,omitempty"`
 
+	// Actions is set on a run that is a GitHub Actions workflow run
+	// rather than one of grain's own (Provider ProviderGitHubActions):
+	// what the forge said about it that a grain run has no field for.
+	// GET /api/ci/runs lists such runs beside grain's for a repository
+	// whose CI is GitHub's (pkg/ui/ci_actions.go).
+	Actions *ActionsRun `json:"actions,omitempty"`
+	// Provider is which CI ran this: ProviderGrain or
+	// ProviderGitHubActions. "" is grain's own, as it was before any
+	// other provider was listed beside it.
+	Provider string `json:"provider,omitempty"`
+
 	Jobs []JobRun `json:"jobs"`
+}
+
+// The CI providers a listed run can come from (Run.Provider).
+const (
+	ProviderGrain         = "grain"
+	ProviderGitHubActions = "github-actions"
+)
+
+// ProviderOf is run's provider, "" read as grain's own.
+func ProviderOf(run Run) string {
+	if run.Provider == "" {
+		return ProviderGrain
+	}
+	return run.Provider
+}
+
+// ActionsRun is what a GitHub Actions workflow run carries beyond a
+// grain run's own fields.
+type ActionsRun struct {
+	// RunID is GitHub's own id for the run; Run.ID is the namespaced
+	// gha:<owner>:<name>:<run id> that never collides with a grain run's.
+	RunID      int64 `json:"runId"`
+	RunAttempt int   `json:"runAttempt,omitempty"`
+	// Workflow is the workflow's file (.github/workflows/tests.yml) and
+	// WorkflowName the name it gives itself ("Tests").
+	Workflow     string `json:"workflow,omitempty"`
+	WorkflowName string `json:"workflowName,omitempty"`
+	// Status is GitHub's: queued, in_progress, completed, ... and
+	// Conclusion GitHub's own word for a completed run, kept beside the
+	// Run.Conclusion grain's vocabulary maps it to.
+	Status     string `json:"status,omitempty"`
+	Conclusion string `json:"conclusion,omitempty"`
+	URL        string `json:"url,omitempty"`
+	// FailedJobs names the jobs that did not pass, when the jobs are known
+	// (grain's polled record of them, or a show that read them).
+	FailedJobs []string `json:"failedJobs,omitempty"`
 }
 
 // InterruptedRunError is what a run gets for an Error when the daemon

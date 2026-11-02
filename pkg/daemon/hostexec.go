@@ -14,7 +14,7 @@
 
 package daemon
 
-// What "host" can mean for this deployment (docs/design/cli-run-location.md,
+// What "host" can mean for this deployment (design/design/cli-run-location.design.md,
 // "Deployments with no host executor").
 //
 // A daemon on the bare machine starts a host CLI as its own child. A

@@ -24,7 +24,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// Model failover (docs/design/durable-tasks.md#DT-2): a run suspended
+// Model failover (design/design/durable-tasks.design.md#DT-2): a run suspended
 // because its model refused it -- no capacity, a usage limit, a
 // model-side failure -- records that model on its suspension
 // (task_suspension.model_hint), and the task's next run is offered the

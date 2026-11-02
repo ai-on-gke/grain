@@ -2,7 +2,7 @@
 
 What was run to verify that "host" is refused or hidden where a
 deployment has no host executor
-([docs/design/cli-run-location.md](../../design/cli-run-location.md),
+([design/design/cli-run-location.design.md](../../../design/design/cli-run-location.design.md),
 "Deployments with no host executor"). Nothing was deployed to a real
 cluster. The Kubernetes behaviour is checked against the manifests in
 `deploy/kubernetes` and against `grain demo`.

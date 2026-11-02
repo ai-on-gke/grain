@@ -314,7 +314,7 @@ func TestRealGitPushThroughTheProxyReachesOnlyTheTaskBranch(t *testing.T) {
 }
 
 func TestRealGitPushWithPushAnyRefReachesEveryRef(t *testing.T) {
-	rig := newRealPushRig(t, []model.Grant{{Capability: model.GitPushAnyRefCapability, Via: model.GrantByLabel}})
+	rig := newRealPushRig(t, []model.Grant{{Capability: model.GitPushAnyRefGrant, Via: model.GrantByLabel}})
 	head := strings.TrimSpace(gitIn(t, rig.clone, "rev-parse", "HEAD"))
 	for _, c := range []struct {
 		name, refspec, ref, want string

@@ -26,7 +26,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
-// A direct config pull request (docs/design/config-repo-settings.md,
+// A direct config pull request (design/design/config-repo-settings.design.md,
 // section 4.1): the edit a refused configuration write handed back
 // (configWriteRehearsal), submitted as it is to open a pull request in
 // grain/config. It is validated before it is opened

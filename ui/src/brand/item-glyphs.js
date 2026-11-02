@@ -74,7 +74,7 @@ import { fillScalar } from "./grain-mark.js";
 //   processes  3·6 (+) at 1.2   a loop through three nodes: the
 //                               Processes page, which lists schedules,
 //                               templates, suites and triggers together
-//                               (docs/design/settings-panel.md §5.7) --
+//                               (design/design/settings-panel.design.md §5.7) --
 //                               standing work that comes round again,
 //                               which the schedules' two posts, read as
 //                               "time", would not say of a template.

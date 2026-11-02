@@ -268,7 +268,7 @@ func reconcileConsoleSession(ctx context.Context, deps Deps, session model.Conso
 // previous is the session's own closed task when this filing is a fresh
 // conversation for a session that had one, and "" when the session is
 // being filed for the first time. A replacement carries exactly two
-// things across, and both are decided in docs/implementation-notes.md's
+// things across, and both are decided in grain's former implementation notes'
 // "A chat that never ends is not split for you":
 //
 //   - model.LinkContinues back to the closed task -- provenance, so the

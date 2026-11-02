@@ -22,7 +22,7 @@ import { migrateStorage } from "./storageMigration.js";
 import "./style.css";
 
 // Before anything reads localStorage: this browser's per-user keys
-// become deployment-wide ones (docs/design/settings-panel.md §6.3).
+// become deployment-wide ones (design/design/settings-panel.design.md §6.3).
 migrateStorage();
 
 createRoot(document.getElementById("root")).render(

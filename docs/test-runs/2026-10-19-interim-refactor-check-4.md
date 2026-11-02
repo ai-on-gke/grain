@@ -11,7 +11,7 @@ does the full qualification after the reset.
 | | |
 |---|---|
 | Commit | `main` at **1838be04e** (merge of task 4792, 3e-iii-c1). Re-fetched before reporting: unchanged, so every row is from this commit |
-| Builds | **Google**: `go build ./google/cmd/grain`. **Core**: `go build ./cmd/grain`. Also a Google build with the frontend embedded (`cd ui && npm ci && npm run build`, then the same `go build`) for the browser check |
+| Builds | **Google**: `go build a wrapper distribution's `cmd/grain`. **Core**: `go build ./cmd/grain`. Also a wrapper distribution's build with the frontend embedded (`cd ui && npm ci && npm run build`, then the same `go build`) for the browser check |
 | Daemons | `grain daemon -data-dir <fresh> -sandbox-backend none -ui-addr 127.0.0.1:<port> -sandbox-port-base <multiple of 1024>`. Google and core on SQLite; Google and core on PostgreSQL 15 (Debian package, local; later starts find the database through `db-config.json`) |
 | Pre-reset data | Written by a build of `3e5b6c386`, the commit before stage 1 (4680): one dir `-tenancy multi` (a team `eng` and a registered account `alice`), one dir `-tenancy single`, one multi-tenant Postgres database (the same team and account) |
 | Stubs | **forgecli**: a shell script on the Google daemon's `PATH` that logs its calls, prints a token for `auth token`, and answers `api … user` and `api … user/repos` with an HTTP header block and canned JSON (`walker`; `walk-org/service-a`, `walk-org/service-b`). **GitHub**: `pkg/github/githubsim`, inside the e2e harness. The github.com PAT in the seed file is fake (GitHub answers it 401). Nothing of grain's own was stubbed |
@@ -58,7 +58,7 @@ multi-tenant", a new `ErrBeforeBaseline`) and **bug E** on
 | 9 | `grain connections import` from a seed | **PASS on SQLite and Postgres**. Two git entries (github.com PAT `bot` with `token_file`, anonymous `git.example.test` scope `acme`) and one antigravity model connection with a key file give `imported 2 git and 1 model connections`. A second run gives the same message and changes nothing. `secrets/github/bot.token` is 0600. Postgres dirs need no flags | same |
 | 10 | Gemini discovery (live) | **PASS**. The imported connection discovered 11 models (gemini-3.8/3.7/3.6-flash at high/medium/low, gemini-3.1-pro-high/low) on all four daemons and on the imported dir. Discovery runs when the daemon starts, so an import into a running daemon shows the models after the next restart. **Default-model mismatch: still open** (bug 1 of the 10-18 candidate qualification): the seed's `default_model: gemini-3.1-pro`, also the example in `grain connections import -h`, gives `the default agent framework is not ready: no configured agent backend matches team "default", model "gemini-3.1-pro": of 1 configured, 1 not serving that model -- connections are the team's own, so a team admin of "default" adds one in Team settings -> Models & connections` | still failing |
 | 11 | PAT / GitHub App against the fake GitHub | **PASS (e2e harness)**. `TestGitHostsPhase5EndToEnd` and the rest of `tests/e2e`; `pkg/gitproxy` in CI | same |
-| 12 | Command-backed forge via fake `forgecli`, Google build | **PASS, now through `/api/deployment`**. `POST /api/deployment/git-connections {host: depot.code.corp.example, type: ambient, source: forgecli}` is 200. It runs `forgecli auth token`, `forgecli api --include … user` and `forgecli api … user/repos`. The connection reports `ambientLogin: walker` ("pushes and API calls act as walker…"), and `GET /api/deployment/reachable-repos` lists `depot.code.corp.example/walk-org/service-a` and `service-b` (push) | same |
+| 12 | Command-backed forge via fake `forgecli`, wrapper distribution build | **PASS, now through `/api/deployment`**. `POST /api/deployment/git-connections {host: git.example.com, type: ambient, source: forgecli}` is 200. It runs `forgecli auth token`, `forgecli api --include … user` and `forgecli api … user/repos`. The connection reports `ambientLogin: walker` ("pushes and API calls act as walker…"), and `GET /api/deployment/reachable-repos` lists `git.example.com/walk-org/service-a` and `service-b` (push) | same |
 | 13 | `forgecli` in the core build | **PASS**. The same request is a 400 `unknown ambient source "forgecli": gh, git, auto` | same |
 | 14 | Per-model pause | **PASS (CI)**. `pkg/orchestrator` and `pkg/cli` in the uncached `go` job | same |
 | 15 | Task lifecycle: create (CLI) → approve | **PASS (live)**. On core/SQLite, `grain create -repo acme/widgets -title … -body …` filed task 2 (proposed) and `grain approve 2` queued it. `grain create -team eng` still exists and fails `team "eng" does not exist` (3e-iv-b) | same |
@@ -124,7 +124,7 @@ New this check (proposed as a task by this run, not auto-merge, against
   `3e5b6c386`, stop it, copy it (`cp -a dir /tmp/a`), start `main`'s
   `grain daemon -data-dir dir …` (exits 1 in the guard's words), then
   `diff -r /tmp/a dir`: `state/restart-gap.json differ`, only `startedAt`.
-  Same on SQLite and Postgres, core and Google builds. *Owner: stage 7
+  Same on SQLite and Postgres, core and wrapper distribution builds. *Owner: stage 7
   (4686, landed). Touches the same message as bug D's fix (task 4800).*
 
 ## Observations, not filed

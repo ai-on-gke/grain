@@ -19,7 +19,7 @@ import { test, expect } from "./fixtures.js";
 // with no host executor, against the real `grain demo` server resolving
 // as deploy/kubernetes/grain.yaml's daemon would (-host-executor=
 // kubernetes, pkg/demo's demoCLIRunConfig). None of grain's own APIs are
-// mocked. docs/design/cli-run-location.md, "Deployments with no host
+// mocked. design/design/cli-run-location.design.md, "Deployments with no host
 // executor".
 //
 // Screenshots of the card are written, in light and dark, only when

@@ -835,6 +835,16 @@ func (d DaemonGrainCI) GrainCIRun(ctx context.Context, id string) (ci.Run, error
 	return d.Client.CIRun(ctx, id)
 }
 
+// GrainCIJobLog is mcp.GrainCIJobLogReader: a GitHub Actions job's log,
+// from the daemon's GET /api/ci/runs/{id}/log.
+func (d DaemonGrainCI) GrainCIJobLog(ctx context.Context, runID, job string) (mcp.CIJobLog, error) {
+	resp, err := d.Client.CIRunLog(ctx, runID, job)
+	if err != nil {
+		return mcp.CIJobLog{}, err
+	}
+	return mcp.CIJobLog{Job: resp.Job, JobID: resp.JobID, URL: resp.URL, Bytes: resp.Bytes, Truncated: resp.Truncated, Log: resp.Log}, nil
+}
+
 func (d DaemonGrainCI) FindGrainCIRuns(ctx context.Context, f ci.RunFilter, limit int) (ci.RunPage, error) {
 	resp, err := d.Client.FindCIRuns(ctx, f, limit)
 	if err != nil {
@@ -1081,7 +1091,7 @@ func (d daemonChat) Chat(ctx context.Context, message, summary string, attachmen
 			// moments away and will most likely succeed, where treating
 			// one dropped request as "nobody is there" would end a
 			// conversation over a blip. That covers a daemon restart too
-			// (docs/non-disruptive-upgrade.md): this process is the CLI's,
+			// (design/design/non-disruptive-upgrade.design.md): this process is the CLI's,
 			// not the daemon's, so it outlives an upgrade with the CLI,
 			// and the first poll the new daemon answers reads everything
 			// said since the run's own message, a reply posted after the
@@ -1966,7 +1976,7 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 			"otherwise would.")
 	toolBudget := fs.Bool("tool-budget", false,
 		"count this run's tool calls and result bytes against a durable judgement task's per-wake "+
-			"budget (mcp.ToolBudgetSoftCalls and the rest, docs/design/durable-tasks.md#DT-13), passed "+
+			"budget (mcp.ToolBudgetSoftCalls and the rest, design/design/durable-tasks.design.md#DT-13), passed "+
 			"on by the Framework that forked this process (agent.GrantArgs, for "+
 			"agent.RunConfig.ToolBudget). Unset, nothing is counted.")
 	toolBudgetPipelineCursor := fs.Bool("tool-budget-pipeline-cursor", false,
@@ -1985,7 +1995,7 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 		"which tools to serve: \"control\" (the sandbox tools, the run-ending and escalation tools and the "+
 			"model-only grants' tools; everything else is a `grain` CLI command inside the sandbox) or \"full\" "+
 			"(every tool, for a client that cannot shell out and for tests). Empty is control when a sandbox "+
-			"flag is set, full otherwise (docs/design/sandbox-first-agent-surface.md §6)")
+			"flag is set, full otherwise (design/design/sandbox-first-agent-surface.design.md §6)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

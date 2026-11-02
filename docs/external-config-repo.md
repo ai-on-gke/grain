@@ -62,7 +62,7 @@ Internal mode answers the same way for every setting outside Models and
 Sandboxes: the refusal names `grain/config` (`"internal": true`), and
 `POST /api/state-repo/pull-requests` with `{"changes": <its change>}`
 opens a validated pull request there, held for a person to submit
-(`docs/design/config-repo-settings.md`, section 4.1.1).
+(`design/design/config-repo-settings.design.md`, section 4.1.1).
 
 ## Trying it
 

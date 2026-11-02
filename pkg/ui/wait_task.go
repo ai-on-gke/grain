@@ -246,7 +246,7 @@ type resumeLaterRequest struct {
 }
 
 // ResumeLater is the daemon's half of resume_later
-// (docs/design/durable-tasks.md#DT-9), and of wait_for_task's two parks,
+// (design/design/durable-tasks.design.md#DT-9), and of wait_for_task's two parks,
 // which are forms of it: the run working on id stops and asks for its
 // task to be queued again when when is met. What holds the task until
 // then is what already held a park:

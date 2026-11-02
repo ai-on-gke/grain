@@ -104,7 +104,7 @@ affected (`Check` substitutes the resolved working directory).
 
 Fix: substitute the resolved path into the argument, require it to
 exist, and refuse a final component that is a symlink at check time;
-document in `docs/design/cli-run-location.md` that `paths_under`
+document in `design/design/cli-run-location.design.md` that `paths_under`
 contains what the CLI is *told*, not what a daemon able to write under
 the root can swap in afterwards (a race remains for any path the
 daemon can rewrite, which only an `openat`-style open in the child

@@ -174,7 +174,7 @@ checks live on GitHub permanently and grain has to hear about them.
    a route on the daemon -- it is the one public-facing thing this
    deployment will have and should not share a process with every
    credential grain holds -- and it is the first piece of the forge to
-   live outside the daemon, which is why docs/three-pieces.md draws that
+   live outside the daemon, which is why design/design/architecture.design.md draws that
    boundary before this is built.
 2. **Stand up the bare repos.** `git clone --mirror` from GitHub onto the
    daemon host. GitHub keeps every ref, so it is also the backup.

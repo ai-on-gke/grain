@@ -29,7 +29,7 @@ import (
 )
 
 // StewardRegressionWindow is the rolling window over which the steward's
-// report-check failure rate is evaluated (docs/design/durable-tasks.md#DT-14).
+// report-check failure rate is evaluated (design/design/durable-tasks.design.md#DT-14).
 const StewardRegressionWindow = 7 * 24 * time.Hour
 
 // StewardRegressionThreshold is the 7-day failure-rate threshold (5% of claims)
@@ -112,7 +112,7 @@ func ReadIDsFromAPICalls(calls []model.RunAPICall) map[string]bool {
 
 // stewardReportCheck checks a steward wake's report for uncited claims,
 // cited-but-unread IDs, and attribute mismatches against the fixed vocabulary
-// of kind tags and task states (docs/design/durable-tasks.md#DT-14).
+// of kind tags and task states (design/design/durable-tasks.design.md#DT-14).
 func stewardReportCheck(runID, report string, calls []model.RunAPICall, tasks map[string]StewardCheckTask, promptIDs ...string) StewardReportCheckResult {
 	res := StewardReportCheckResult{
 		Check: model.RunReportCheck{RunID: runID},

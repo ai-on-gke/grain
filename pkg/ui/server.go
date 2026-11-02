@@ -121,7 +121,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			Audience:              s.tasks.Config.IAPAudience,
 			Issuer:                s.tasks.Config.IAPIssuer,
 			KeysURL:               s.tasks.Config.IAPKeysURL,
-			Mode:                  s.tasks.Config.IAPMode,
+			RequireIAP:            s.tasks.Config.RequireIAP,
 			LocalAPIToken:         s.localAPITokenNow(),
 			AccessSessionLifetime: s.tasks.Config.AccessSessionLifetime,
 		}))
@@ -599,6 +599,7 @@ func (s *Server) routes() {
 	s.route("GET /api/ci/faults", s.handleListCIFaults)
 	s.route("GET /api/ci/runs/{id}", s.handleGetCIRun)
 	s.route("DELETE /api/ci/runs/{id}", s.handleCancelCIRun)
+	s.route("GET /api/ci/runs/{id}/log", s.handleGetCIRunLog)
 	s.route("GET /api/ci/runs/{id}/artifacts", s.handleListCIRunArtifacts)
 	s.route("GET /api/ci/runs/{id}/artifacts/{job}/{name}", s.handleGetCIArtifact)
 	// The job cache behind those runs: what it holds, and the one thing

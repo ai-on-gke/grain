@@ -593,7 +593,7 @@ func TestAgentAPIPassesRepoPersonGateWhenConfigIsStored(t *testing.T) {
 
 // TestAgentAPIWriteRefusesAStaleExpectation is a task-admin write made
 // through the generated tool with an expect argument
-// (docs/design/durable-tasks.md#DT-13): the tool reads the task first and
+// (design/design/durable-tasks.design.md#DT-13): the tool reads the task first and
 // refuses, changing nothing, when the record disagrees.
 func TestAgentAPIWriteRefusesAStaleExpectation(t *testing.T) {
 	srv, client := testServer(t)
@@ -1104,6 +1104,36 @@ func TestSandboxCLIChannelAllowsNonDangerousScopesAndRefusesDangerousAndEscalati
 	}
 	if !hasListTasks {
 		t.Errorf("SandboxAPIRoutes([api:tasks:read ...]) missing GET /api/tasks: %+v", taskRoutes)
+	}
+}
+
+// TestSandboxCLIChannelRefusesModelOnlyControlRoutes pins
+// sandboxChannelGuard: speaking to an operator and parking a run are the
+// model's control tools, never the sandbox CLI's, even for a run whose
+// grants (api:tasks:admin among them) reach the route on any other task.
+func TestSandboxCLIChannelRefusesModelOnlyControlRoutes(t *testing.T) {
+	srv, client := testServer(t)
+	seedAPITask(t, client, "1", "acme/widgets", "api:tasks:read", "api:tasks:write", "api:tasks:admin")
+	seedAPITask(t, client, "2", "acme/widgets")
+	seedAPITask(t, client, "3", "acme/widgets")
+
+	for _, tc := range []struct {
+		path, body string
+	}{
+		{"/api/tasks/2/messages", `{"body":"hello from the sandbox"}`},
+		{"/api/tasks/2/park-until", `{"until":"2030-01-01T00:00:00Z"}`},
+		{"/api/tasks/2/resume-later", `{"when":{"at":"1h"}}`},
+		{"/api/tasks/2/wait-on", `{"ids":["3"],"park":true}`},
+	} {
+		code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPost, tc.path, tc.body, "testing sandbox guard")
+		if code != http.StatusForbidden || !strings.Contains(resp, "model-only control action") {
+			t.Errorf("POST %s %s over sandbox-cli: got %d %s, want 403 refusing a model-only control action", tc.path, tc.body, code, resp)
+		}
+	}
+	// A blocking wait is the CLI's own (grain task wait): only park is refused.
+	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPost, "/api/tasks/2/wait-on",
+		`{"ids":["3"]}`, ""); code != http.StatusOK {
+		t.Errorf("POST /api/tasks/2/wait-on without park over sandbox-cli: got %d %s, want 200", code, resp)
 	}
 }
 

@@ -56,7 +56,7 @@ export const CAPABILITY_SERVERS_GUIDE =
   "https://github.com/ai-on-gke/grain/blob/main/docs/capability-servers-ui.md";
 
 // CapabilityServersPanel is the deployment's mcpServers
-// (docs/capabilities-spec.md §3.1): the capability servers grain attaches,
+// (design/spec/capabilities/capabilities.spec.md §3.1): the capability servers grain attaches,
 // keyed by capability_id, with each one's attach status. Everything here
 // is plain configuration that is exported to grain/config; a credential
 // is bound to a secret in the encrypted store, so what the entry holds is

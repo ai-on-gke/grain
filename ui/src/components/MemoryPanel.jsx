@@ -75,7 +75,7 @@ import {
 //
 // `canWrite()` says whether the reader may save a memory. Settings →
 // Memory leaves it out: the access code is owner access
-// (docs/design/settings-panel.md §6.1). A scope the reader may not write is shown read-only
+// (design/design/settings-panel.design.md §6.1). A scope the reader may not write is shown read-only
 // rather than offering a Save the server would refuse. Optional: without
 // it every scope is editable.
 //

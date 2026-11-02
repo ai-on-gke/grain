@@ -45,7 +45,7 @@ import (
 var hostModeUnitPath = "/etc/systemd/system/grain-daemon.service"
 
 // hostModeDocsURL is the migration's own section of the design doc.
-const hostModeDocsURL = "https://github.com/ai-on-gke/grain/blob/main/docs/design/cli-run-location.md#migrating-a-host-mode-install"
+const hostModeDocsURL = "https://github.com/ai-on-gke/grain/blob/main/design/design/cli-run-location.design.md#migrating-a-host-mode-install"
 
 // hostModeMigrateCommand is what migrates the install.
 const hostModeMigrateCommand = "sudo ./scripts/setup.sh (or ./google/scripts/cloudtop-install.sh on a Cloudtop)"

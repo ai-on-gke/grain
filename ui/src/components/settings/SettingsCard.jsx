@@ -28,7 +28,7 @@ export const SettingsReadOnlyContext = createContext(false);
 // SettingsCard is one card of a Settings section: what used to be a
 // sub-heading of a System tab ("CI queue", "Sandbox budget"), with an
 // anchor so /settings/ci#ci-queue scrolls to it
-// (docs/design/settings-panel.md §3.1).
+// (design/design/settings-panel.design.md §3.1).
 //
 // A card wrapping a panel that already names its own parts (a
 // connection list, the memory editor) is given `label` instead of a

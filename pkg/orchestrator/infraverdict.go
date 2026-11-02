@@ -28,7 +28,7 @@ import (
 
 // Trunk release gates: the runs a release from trunk is selected on, and
 // what grain does when one of them ends without a verdict about the tree
-// (docs/design/release-from-trunk.md, RFT-2).
+// (design/design/release-from-trunk.design.md, RFT-2).
 //
 // # Priority
 //
@@ -57,7 +57,7 @@ import (
 //
 // A CI job whose dial-out sandbox channel dropped and did not come back
 // within -k8s-granule-reattach-timeout concludes errored with a
-// sandboxaccess.ChannelLostFault error (docs/design/grain-on-gke.md#GKE-3):
+// sandboxaccess.ChannelLostFault error (design/design/grain-on-gke.design.md#GKE-3):
 // the pod went away under it, which says nothing about the tree. That is
 // not only a release gate's problem, so a task branch's required run gets
 // the same treatment: its channel-lost jobs are re-run once, uncached, as

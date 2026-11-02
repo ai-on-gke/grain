@@ -63,7 +63,7 @@ import (
 // read_file answer 45 KB, so the cap cut nothing in 1,254 calls. The
 // same window is what sizes the replacement (`grain metrics -window
 // 90d`, quoted in full under "No single answer may eat the run's
-// context" in docs/implementation-notes.md):
+// context" in grain's former implementation notes):
 //
 //	tool          calls  mean bytes    p50      p95      p99    max
 //	run_command    1162        2163  <=1023   <=8191  <=32767  43460
