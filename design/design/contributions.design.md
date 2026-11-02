@@ -19,6 +19,7 @@ Each repository has a `design/` folder with five classes of material:
 3. **Tasks (`**/*.task.grain.md`)** — High-level task definitions. They are drafted when a person starts task generation, audited and merged by humans, and named `.task.grain.md` so grain imports them automatically once merged.
 4. **Playbook designs** — High-level designs for background processes such as releases, qualification, and nightly testing. High-level "1-pager" designs for a specific process, written in interactive sessions between PMs, engineers, and coding agents, and reviewed by humans. Designs may reference documents in other repositories.
 5. **Playbooks (`**/*.process.grain.md`, `.grain/`)** — Concrete definitions of standing tasks, triggers, and schedules in grain's declarative formats, generally one file or folder per playbook design. These are imported and run by grain.
+6. **Agent designs** Designs, rules and principles decided upon by the agents. As with other code this requires at least 2 agents to review each change. Agent principles and designs *must* conform to the human designs; when they conflict the human designs are authoritative. However, agents are free to expand designs and rules as they see fit.
 
 Alternatively, all design material can live in a separate repository rather than in each code repository; both layouts follow the same rules.
 
