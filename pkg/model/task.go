@@ -1186,7 +1186,7 @@ const (
 	// that ended on another one (-> that task's ID). One writer: a
 	// standing console session filed again after its own task was
 	// closed, which is how a chat that never ends gets a fresh thread
-	// (orchestrator.fileConsoleSession, grain's former implementation notes's
+	// (orchestrator.fileConsoleSession, grain's former implementation notes'
 	// "A chat that never ends is not split for you").
 	//
 	// LinkProposedBy's shape -- provenance, the timeline, and nothing
