@@ -1199,9 +1199,13 @@ type Config struct {
 	// nil uses CloudIdentityGroupChecker lazily when at least one group: entry
 	// is configured.
 	GroupChecker GroupMemberChecker
-	// IAPMode, when true, requires incoming requests behind Google Cloud IAP /
-	// Cloud Run Proxy to provide a cryptographically verified JWT assertion.
-	IAPMode bool
+	// RequireIAP is -ui-require-iap: the access code, as a bearer token
+	// or the grain_access cookie, is accepted only from loopback with no
+	// forwarding or proxy headers (accessCodeAccepted), and the "Enter
+	// access code" page is not served, so a network caller signs in
+	// through IAP alone. A registered IdentityVerifier that declares
+	// AccessCodeWins still takes the code over its own proxy.
+	RequireIAP bool
 	// LocalAPIToken is the secret in -data-dir/local-api-token
 	// (EnsureLocalAPIToken) that a loopback request presents as a bearer
 	// token to be trusted as loopback was.
