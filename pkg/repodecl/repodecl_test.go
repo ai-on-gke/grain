@@ -223,6 +223,19 @@ func TestATemplatesCapabilitiesAcceptArbitraryCapabilities(t *testing.T) {
 			t.Errorf("%q: error = %q, want it named and %q", tc.entry, msg, tc.want)
 		}
 	}
+	// The repo server's spelling of the same access answers to the same
+	// rule: no file reaches grain's own configuration through it either.
+	for _, entry := range []string{
+		model.RepoWriteGrant(model.RepoRef{Owner: "grain", Name: "config"}),
+		model.RepoReadGrant(model.RepoRef{Owner: "Grain", Name: "Config"}),
+	} {
+		msg := loadErr(t, map[string]string{
+			".grain/templates/nightly.yml": "title: Bump dependencies\ncapabilities: ['" + entry + "']\n",
+		})
+		if !strings.Contains(msg, "grain's own configuration") {
+			t.Errorf("%s: error = %q, want grain's own configuration refused", entry, msg)
+		}
+	}
 }
 
 // A schedule takes its repository access from the template it fires,

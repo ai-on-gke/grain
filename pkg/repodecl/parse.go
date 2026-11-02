@@ -403,6 +403,16 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 				continue
 			}
 			target, write = r, true
+		case model.IsRepoAccessGrant(c):
+			// The repo server's spelling of the same access
+			// (https://grain.dev/capabilities/repo#read / #write
+			// {repo}), held to the same rules as the bare names above.
+			if r, ok := model.RepoReadTarget(c); ok {
+				target = r
+			} else {
+				target, _ = model.RepoWriteTarget(c)
+				write = true
+			}
 		case model.IsCapabilityRef(c):
 			// A capability reference (design/spec/capabilities/capabilities.spec.md §2.2):
 			// its grammar is checked here; its with: arguments against
