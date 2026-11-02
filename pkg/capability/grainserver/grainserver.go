@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package grainserver holds grain's in-process capability servers
-// (docs/design/unified-grants.md §1, §4), answered by grain itself rather
+// (design/design/unified-grants.design.md §1, §4), answered by grain itself rather
 // than by an external MCP server subprocess:
 //
 //   - https://grain.dev/capabilities/grain: the host- and controller-side

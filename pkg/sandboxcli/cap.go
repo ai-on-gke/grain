@@ -15,7 +15,7 @@
 package sandboxcli
 
 // sandboxcli_cap.go is grain cap: the sandbox-callable tools of the
-// external capability servers granted to this run (docs/capabilities-spec.md
+// external capability servers granted to this run (design/spec/capabilities/capabilities.spec.md
 // §5.2.6), reached through the sandbox proxy's /cap/ -- GET /cap/ for
 // the listing, GET /cap/<server> for one server's tools and their input
 // schemas, which each tool's flags are generated from, and

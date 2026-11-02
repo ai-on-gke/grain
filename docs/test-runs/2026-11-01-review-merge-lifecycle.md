@@ -108,7 +108,7 @@ driven there rather than called out of scope:
   once;
 - a task with a run in flight, or a queued task, is left alone.
 
-The Google layer's real provider is not exercised.
+a wrapper distribution's real provider is not exercised.
 
 ### Pages
 

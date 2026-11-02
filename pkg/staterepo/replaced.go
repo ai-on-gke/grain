@@ -30,7 +30,7 @@ package staterepo
 // That is a real thing to be undone by rather than a theoretical one. A
 // deployment is ahead of its own dump between exports by construction,
 // and `grain repo-case -apply` is the case that was driven end to end
-// (docs/hand-runs/2026-09-07-repo-case.md, finding 2): a reconciliation of
+// (the 2026-09-07 repo-case hand run, finding 2): a reconciliation of
 // every divergent repo-name spelling in the database, applied while an
 // ordinary settings pull request had merged in between, was half undone on
 // the next start -- the merged repo_config split in two again, the

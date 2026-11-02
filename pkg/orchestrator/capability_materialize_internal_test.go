@@ -306,8 +306,8 @@ func (s *channelSandbox) ForwardCapabilityPort(_ context.Context, sandboxPort in
 // A port forward carried over the dial-out channel goes through the
 // relay's forward rather than straight to host_port: no guest forwarder or
 // token is placed, and the grant's Close cuts a connection the channel is
-// carrying, as it does a guest forwarder's (docs/capabilities-spec.md
-// §5.3.4, docs/design/grain-on-gke.md#GKE-3).
+// carrying, as it does a guest forwarder's (design/spec/capabilities/capabilities.spec.md
+// §5.3.4, design/design/grain-on-gke.design.md#GKE-3).
 func TestMaterializePassForwardsChannelPortsThroughTheRelaysForward(t *testing.T) {
 	if _, err := os.Stat("/proc/net/tcp"); err != nil {
 		t.Skip("socket ownership is read from /proc")

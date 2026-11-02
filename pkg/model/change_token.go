@@ -26,7 +26,7 @@ import (
 // history that answer is 1.7 MB built out of a scan of most of the
 // database -- about a second of it -- to say, nearly every time, exactly
 // what it said three seconds ago
-// (docs/hand-runs/2026-09-07-panel-dashboard.md, section 5). What that
+// (the 2026-09-07 panel-dashboard hand run, section 5). What that
 // poll needs first is a question whose answer is cheap and whose "no"
 // can be trusted: nothing has been committed since you last asked, so
 // the answer you already have is still the answer.

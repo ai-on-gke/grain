@@ -85,7 +85,7 @@ spec:
 # the service-account identity behind it), the cluster's own Services
 # and API server address, every peer pod and node, and any capability
 # server whose serverUrl is inside the cluster
-# (docs/capabilities-spec.md §3.2.4).
+# (design/spec/capabilities/capabilities.spec.md §3.2.4).
 #
 # It is in this file, and applied with it, because it shares the first
 # policy's precondition: a CNI that enforces NetworkPolicy. On a cluster

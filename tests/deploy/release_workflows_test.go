@@ -44,7 +44,7 @@ func TestScheduledDeclarationsTargetMain(t *testing.T) {
 	root := repoRoot(t)
 	schedulesDir := filepath.Join(root, ".grain", "schedules")
 
-	// Every change lands on main (docs/design/release-from-trunk.md,
+	// Every change lands on main (design/design/release-from-trunk.design.md,
 	// RFT-1): these schedules used to run on candidate.
 	for _, filename := range []string{
 		"nightly-features-test-plan.yml",
@@ -241,7 +241,7 @@ func TestBranchSpecificSuitesSplit(t *testing.T) {
 
 // TestReleaseQualification verifies the release qualification templates
 // specified in docs/test-plans/2026-09-29.md §5. The cross-branch porting
-// that plan also covered is retired (docs/design/release-from-trunk.md,
+// that plan also covered is retired (design/design/release-from-trunk.design.md,
 // RFT-1), and TestScheduledDeclarationsTargetMain checks the schedules.
 func TestReleaseQualification(t *testing.T) {
 	templatesDir := filepath.Join(repoRoot(t), ".grain", "templates")

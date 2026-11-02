@@ -73,7 +73,7 @@ func CheckRunHostBackend(cfg Config) error {
 }
 
 // NewRunHost builds the runhost.Host a deployment with -run-host-image
-// drives its claude runs in (docs/non-disruptive-upgrade.md, Stage 2),
+// drives its claude runs in (design/design/non-disruptive-upgrade.design.md, Stage 2),
 // or nil when the flag is unset, which leaves every run a child of the
 // daemon under agent.LocalHost exactly as before.
 //
@@ -166,7 +166,7 @@ func NewRunHost(ctx context.Context, cfg Config, store *model.Store) (*runhost.H
 }
 
 // newKubeRunHostDriver is the run-pod driver for a daemon under
-// -k8s-sandboxes (docs/non-disruptive-upgrade.md, "The shared credential
+// -k8s-sandboxes (design/design/non-disruptive-upgrade.design.md, "The shared credential
 // directory", Kubernetes). Each -k8s-run-host-volume claim is checked
 // before any run is dispatched onto it: a gcsfuse-backed claim, a
 // ReadWriteOncePod one, or (under -k8s-run-host-rwx) one that is not

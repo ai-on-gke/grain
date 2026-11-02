@@ -17,7 +17,7 @@ package mcp
 // ci_run_summary.go is list_ci_runs' summary view, its default: one line
 // per run -- id, ref, verdict, failing jobs -- and "after" paging, so the
 // list a judgement agent reads is the shape the notes used to advise
-// narrowing it to (docs/design/durable-tasks.md#DT-13). view "full" is the
+// narrowing it to (design/design/durable-tasks.design.md#DT-13). view "full" is the
 // report renderGrainCIRunList has always written.
 
 import (

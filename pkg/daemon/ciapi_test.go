@@ -54,7 +54,7 @@ func ciAPIRegistry(gate *ciapi.Endpoint) *model.CapabilityRegistry {
 	return reg
 }
 
-// release-gate-read (docs/design/release-from-trunk.md §6, RFT-3) and
+// release-gate-read (design/design/release-from-trunk.design.md §6, RFT-3) and
 // any other api grant a job declares are granted to the cron grain
 // itself fires and to trusted events, and to nothing an untrusted tree
 // can ask for: a pull request's, an ordinary push's, or an agent's

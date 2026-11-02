@@ -295,7 +295,7 @@ GRAIN_GROUP=""
 # from an operator's environment or an old runbook, is refused rather
 # than quietly ignored (resolve_install_mode).
 GRAIN_INSTALL_MODE="${GRAIN_INSTALL_MODE:-}"
-# --- grain hostd (docs/design/cli-run-location.md) ----------------------
+# --- grain hostd (design/design/cli-run-location.design.md) ----------------------
 #
 # A container-mode daemon starts the few programs that must run on the
 # bare machine -- agy under the installing user's corp identity, a stdio
@@ -508,7 +508,7 @@ GRAIN_CODEX_PATH="${GRAIN_CODEX_PATH:-}"
 # Override the daemon's default Codex model -- the exact counterpart of
 # GRAIN_GEMINI_MODEL/GRAIN_CLAUDE_MODEL above.
 GRAIN_CODEX_MODEL="${GRAIN_CODEX_MODEL:-}"
-# Where each agent CLI runs (docs/design/cli-run-location.md): "container"
+# Where each agent CLI runs (design/design/cli-run-location.design.md): "container"
 # (a subprocess in the daemon's own container, from its image) or "host"
 # (on this machine as $GRAIN_USER, through grain hostd, for a CLI its
 # allowlist names). Passed as -claude-run, -codex-run and -agy-run; empty
@@ -2873,7 +2873,7 @@ resolve_hostd() {
   # claude detached by default: the image's claude, with the deployment's
   # login, as a container run -- but through hostd's claude-detached
   # entry, so a daemon upgrade does not interrupt it
-  # (docs/non-disruptive-upgrade.md). Not over an operator's own claude
+  # (design/design/non-disruptive-upgrade.design.md). Not over an operator's own claude
   # (GRAIN_CLAUDE_PATH), which only a container run mounts in.
   if [ -z "${GRAIN_CLAUDE_RUN:-}" ] && [ -z "${GRAIN_CLAUDE_PATH:-}" ]; then
     GRAIN_CLAUDE_RUN=detached
@@ -3635,7 +3635,7 @@ WRAPPER
     # Behind grain hostd /usr/local/bin/grain is the image's own binary,
     # not a wrapper: hostd's unit runs it, and a host-run agy forks its
     # mcpserver and hooks by the daemon's own path, which is this one
-    # (docs/design/cli-run-location.md, "agy's MCP server and hooks").
+    # (design/design/cli-run-location.design.md, "agy's MCP server and hooks").
     # The operator's `grain` is then that binary too, as in host mode.
     install_hostd_binary
   else
@@ -7002,7 +7002,7 @@ hostd_allowlist_content() {
   cat <<YAML
 # grain hostd's allowlist: every program the containerised grain daemon
 # may start on this host, and what each request for it may carry
-# (docs/design/cli-run-location.md, "Host CLIs through grain hostd").
+# (design/design/cli-run-location.design.md, "Host CLIs through grain hostd").
 #
 # Written once by scripts/setup.sh; a re-run keeps your edits. hostd
 # re-reads it on every request, and loads it only while it is owned by
@@ -7011,7 +7011,7 @@ YAML
   local proxies
   proxies="$(IFS=,; echo "${HOSTD_PROXY_VARS[*]}")"
   proxies="${proxies//,/, }"
-  # The container-equivalent entries (docs/non-disruptive-upgrade.md,
+  # The container-equivalent entries (design/design/non-disruptive-upgrade.design.md,
   # "Which substrate carries which CLI"): the image's own claude and
   # codex, which the extractor puts beside hostd's grain, run with the
   # container's HOME -- so ~/.claude, codex's home and the per-task

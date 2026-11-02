@@ -248,7 +248,7 @@ func verifyImport(ctx context.Context, out io.Writer, dataDir string, manifest *
 		}
 	}
 	if skippedRelay {
-		fmt.Fprintln(out, "note: skipping relay settings from bundle (the rendezvous relay has been removed; see docs/relay-removed.md)")
+		fmt.Fprintln(out, "note: skipping relay settings from bundle (the rendezvous relay has been removed)")
 	}
 
 	// Verify state repository consistency if present

@@ -18,7 +18,7 @@ package daemon
 // (pkg/namespace) and /cli/ reads (pkg/gitproxy's cli.go) answer from,
 // beyond grain CI's records: the task://, memory://, deploy:// and
 // config:// roots, and GitHub issues and grain's database. Stage 2 of
-// docs/design/sandbox-first-agent-surface.md.
+// design/design/sandbox-first-agent-surface.design.md.
 //
 // Each is the backend of the MCP tool it replaces, asked the same way:
 // read_grain_task* (DaemonTasks), query_merge_queue (daemonMergeQueue),

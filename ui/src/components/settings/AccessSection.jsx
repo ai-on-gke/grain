@@ -42,7 +42,7 @@ export function verifiedUserEmail(config) {
 }
 
 // AccessSection is Settings → Access: how this browser is signed in
-// (docs/design/settings-panel.md §3.2). grain has no users (§6): the access
+// (design/design/settings-panel.design.md §3.2). grain has no users (§6): the access
 // code is the local credential, and when signed in via IAP or another
 // IdentityVerifier the server-verified email is shown with logout.
 export default function AccessSection({ config, onLogout }) {

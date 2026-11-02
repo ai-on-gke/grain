@@ -38,7 +38,7 @@ type HostdLister interface {
 var _ HostdLister = hostd.Client{}
 
 // RecoverHostd is RecoverRunHosts for host CLIs a previous daemon left
-// running detached in grain hostd (docs/design/cli-run-location.md,
+// running detached in grain hostd (design/design/cli-run-location.design.md,
 // "Upgrades and host runs"), and runs beside it, before
 // RecoverOrphanedRuns: it says hello, lists hostd's processes, and
 // decides the live rows driven through hostd -- a row with a hostd cursor

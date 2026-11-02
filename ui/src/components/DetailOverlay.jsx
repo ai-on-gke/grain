@@ -801,7 +801,7 @@ export default function DetailOverlay({
 
           <Actions t={t} config={config} act={act} onOpenTask={onOpenTask} />
           {/* What grain checks to close this task, rather than its agent's
-              word (docs/design/durable-tasks.md#DT-4). */}
+              word (design/design/durable-tasks.design.md#DT-4). */}
           <GoalSection t={t} act={act} />
           {/* The repos this task may change, in one section
               (grain/task-202): the one it is filed against, then the

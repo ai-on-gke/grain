@@ -521,7 +521,7 @@ RUN if [ "$INSTALL_CLAUDE_CLI" = "1" ]; then \
 # installer says so ("The Antigravity CLI automatically self-updates in
 # the background during regular runs"), and one dispatch-shaped exec of
 # the 1.1.27 unpacked below replaced it with 1.2.5 seven seconds later
-# when the file was writable (docs/hand-runs/2026-09-17-agy-self-update.md).
+# when the file was writable (the 2026-09-17 agy-self-update hand run).
 # `chmod -R a+rX` further down stops that for a non-root process and
 # stops nothing at all for a root one, and this image declares no USER of
 # its own: the systemd unit scripts/setup.sh writes passes --user, while

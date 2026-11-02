@@ -27,7 +27,7 @@ import (
 )
 
 // A durable task is placed on a framework this daemon can adopt across
-// its own restart (docs/design/durable-tasks.md#DT-1): on a deployment
+// its own restart (design/design/durable-tasks.design.md#DT-1): on a deployment
 // whose default models are [gemini-x, claude-y] and whose claude runs in
 // a run host, a durable run goes to claude-y first, an ordinary one keeps
 // the list's order, and a pinned model or connection is left alone.

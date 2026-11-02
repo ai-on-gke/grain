@@ -12,9 +12,9 @@ the first weekly run compares against.
 | Install lifecycle (the template keeps its old "shared host" name; this build is single-tenant only): `setup.sh` in container and host mode, `grain init`, re-run, upgrade, channel switch, rollback, uninstall | `.grain/templates/install-walkthrough-shared-host.yml` | Tuesdays 05:00 | task 4345 | `docs/test-runs/YYYY-MM-DD-install-upgrade-walkthrough.md` |
 | Leftover VM sweep | `.grain/templates/install-walkthrough-vm-sweep.yml` | Thursdays 05:00 | -- | closing comment only |
 
-The first single-tenant run (task 4344) used the Cloudtop installer. That
+The first single-tenant run (task 4344) used the Workstation installer. That
 walkthrough is Google-internal now, and lives in
-[google/docs/install-walkthroughs.md](../../google/docs/install-walkthroughs.md).
+the wrapper distribution's own docs.
 
 The schedules are in `.grain/schedules/install-walkthrough-*.yml`. They are a
 day apart so the walkthroughs don't compete for sandboxes or for the

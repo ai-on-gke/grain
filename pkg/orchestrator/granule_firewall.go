@@ -638,7 +638,7 @@ func granuleIsolationRuleset(chain string, nets []guestNetwork, ports []string, 
 // it sits on. Without a chain at all an open guest -- running whatever
 // its task's repository runs -- could reach every service listening on
 // any of the host's addresses (the UI on a non-loopback -ui-addr, sshd,
-// a capability server's serverUrl: docs/capabilities-spec.md §3.2.4),
+// a capability server's serverUrl: design/spec/capabilities/capabilities.spec.md §3.2.4),
 // the neighbouring containers and VMs on its own segment, every machine
 // on the host's LAN or VPC subnet, and the cloud metadata server with
 // the host's service-account identity behind it. So the chain, after

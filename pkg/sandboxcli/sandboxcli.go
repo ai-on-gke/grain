@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package sandboxcli is the grain CLI as an agent's sandbox sees it
-// (docs/design/sandbox-first-agent-surface.md, §4): read commands that
+// (design/design/sandbox-first-agent-surface.design.md, §4): read commands that
 // reach this deployment over the sandbox's own scoped proxy
 // (http://127.0.0.1:9728 or the guest's bridge gateway on :9728, the same
 // address and credential git uses), with

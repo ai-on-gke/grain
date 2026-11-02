@@ -365,7 +365,7 @@ func TestLiveCodexResumesAThreadAcrossExecs(t *testing.T) {
 //     thread before trusting it.
 //
 // Both were measured by hand on 0.153.0
-// (docs/hand-runs/2026-09-07-codex-resume.md, section 4); this is that
+// (the 2026-09-07 codex-resume hand run, section 4); this is that
 // section kept where a codex release has to walk past it, which the
 // hand-run alone is not. It is agent/claude's
 // TestLiveClaudeRefusesASessionItDoesNotHave asked of the other binary,
@@ -590,7 +590,7 @@ func refuseWithOverload(w http.ResponseWriter) {
 //
 // Every part of that except the status was measured to be dropped by
 // codex 0.153.0 before grain sees anything
-// (docs/hand-runs/2026-09-08-codex-retry.md §7), which is exactly why
+// (the 2026-09-08 codex-retry hand run §7), which is exactly why
 // the stub sends it: the probe built on this
 // (TestLiveCodexReportsA429GrainCanClassify) is watching for the day one
 // of them survives, since a body carrying `rate_limit_exceeded` reaches

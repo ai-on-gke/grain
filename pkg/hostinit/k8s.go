@@ -704,7 +704,7 @@ func checkK8sStorageClassRWO(k K8sOptions, dataDir string, timeout time.Duration
 
 // checkK8sRunHostRWXClass reads the provisioner of the class
 // RunHostRWXClass names and refuses one backed by gcsfuse
-// (docs/non-disruptive-upgrade.md, "The shared credential directory"):
+// (design/design/non-disruptive-upgrade.design.md, "The shared credential directory"):
 // the spool's exit.json and a refreshing CLI's login are both written by
 // rename, and a rename there is not atomic. It does not bind a scratch
 // claim, as the ReadWriteOnce check does: the daemon checks the bound

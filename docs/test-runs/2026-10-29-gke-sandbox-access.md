@@ -91,7 +91,7 @@ terraform init -backend=false && terraform validate && terraform fmt -check -rec
 
 The base `deploy/kubernetes/` has no `kustomization.yaml`; its files are applied one by one. `sandbox-access-networkpolicy.yaml` no longer exists: #123 folded it into `deploy/kubernetes/gke/networkpolicy.yaml`, and `TestDeployGKEManifestsAndBaseSync` asserts it stays gone.
 
-The rendered policies, read rule by rule against `docs/design/grain-on-gke.md` (Security, point 3):
+The rendered policies, read rule by rule against `design/design/grain-on-gke.design.md` (Security, point 3):
 
 - **`grain-access-ingress`** selects the daemon pod. The rendered Deployment carries `app.kubernetes.io/name=grain` and `app.kubernetes.io/component=daemon`.
   - TCP 4244 is admitted only `from` pods with `app.kubernetes.io/managed-by=grain` and `app.kubernetes.io/component=sandbox`. These are the labels `pkg/k8s.Manifest` stamps on every sandbox pod (`ManagedByValue`, `SandboxValue`).
@@ -167,7 +167,7 @@ Compared with `docs/deploy-gke.md`:
   - `model.Store.DeleteFinishedSandboxAccess` deletes rows that a finished `task_run` or `ci_job` claims and no unfinished one does.
   - The k8s-granule orphan sweep (startup `ReapOrphans` and every reconcile tick) calls it.
   - Test: `TestK8sGranuleSweepClearsFinishedRunsStoredHash` covers finished, running, unclaimed, and finished-plus-running rows, and the sweep. It fails without the sweep call. It was re-verified on the real daemon (lifetime 3).
-- **Design-doc drift:** `docs/design/grain-on-gke.md` now names the real sandbox labels and the real 8080 sources, and notes the enforcement requirement.
+- **Design-doc drift:** `design/design/grain-on-gke.design.md` now names the real sandbox labels and the real 8080 sources, and notes the enforcement requirement.
 
 ### Follow-ups proposed
 
