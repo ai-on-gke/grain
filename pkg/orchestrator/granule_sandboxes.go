@@ -200,6 +200,10 @@ type GranuleConfig struct {
 	DefaultCPUs     int
 	DefaultMemoryMB int
 	DefaultDiskGB   int
+	// HostMemoryMB is this host's total memory, the cap on every VM's
+	// cgroup memory limit (GranuleMemoryLimitMB). Zero is unknown and
+	// caps nothing.
+	HostMemoryMB int
 	// DefaultNetworkAccess seeds the deployment-wide network a run that
 	// asked for none of its own gets (model.Config.NetworkAccess,
 	// grain/task-269), exactly as the three defaults above seed the
@@ -339,10 +343,22 @@ func (c GranuleConfig) readyPollInterval() time.Duration {
 // so the conversion lives at the one place they meet (createArgs).
 const mibPerGiB = 1024
 
-// GranuleVMMMemoryOverheadMB is the host cgroup memory headroom (in MiB)
-// added to a sandbox's guest MemoryMB for cloud-hypervisor / qemu overhead
-// when sizing the VM container's cgroup memory limit (-memory-limit-mb).
-const GranuleVMMMemoryOverheadMB = 512
+// GranuleMemoryLimitMB is the cgroup memory limit (-memory-limit-mb, or
+// a kubernetes-granule pod's memory limit) for a VM whose guest has
+// guestMB of RAM: the guest plus model.DefaultVMMHeadroom -- the larger
+// of a quarter of the guest and 1 GiB -- capped at capMB, the host's or
+// the largest node's memory, when that is known (zero is unknown).
+//
+// It used to be the guest plus a flat 512 MiB, granule's own default,
+// and an IO-heavy guest that filled its RAM with page cache and then
+// wrote a multi-GB file had its VMM OOM-killed from the host: the VMM's
+// disk writes go through host page cache charged to the same cgroup,
+// and there is no balloon to give guest memory back. The budget charges
+// the same headroom (model.Budget.VMMHeadroom), so the larger limit
+// never oversubscribes a host.
+func GranuleMemoryLimitMB(guestMB, capMB int) int {
+	return model.DefaultVMMHeadroom().LimitMB(guestMB, capMB)
+}
 
 // GranuleOOMScoreAdj is the positive oom_score_adj passed on every
 // `granule vm create` so the kernel OOM killer picks a sandbox VM
@@ -456,7 +472,7 @@ func (c GranuleConfig) createArgs(shape Shape) []string {
 	// shrink one, so a VM never comes up smaller than this.
 	args = append(args,
 		"-disk-size-mb", strconv.Itoa(shape.DiskGB*mibPerGiB),
-		"-memory-limit-mb", strconv.Itoa(shape.MemoryMB+GranuleVMMMemoryOverheadMB),
+		"-memory-limit-mb", strconv.Itoa(GranuleMemoryLimitMB(shape.MemoryMB, c.HostMemoryMB)),
 		"-oom-score-adj", strconv.Itoa(GranuleOOMScoreAdj),
 	)
 	return args
@@ -613,6 +629,9 @@ type GranuleSandboxes struct {
 	// granule.DockerContainerExit and granule.DockerContainerLogTail.
 	vmExit     func(ctx context.Context, vmName string) (granule.ContainerExit, error)
 	consoleLog func(ctx context.Context, vmName string) (string, error)
+	// cgroupOOMKills reads a VM container's memory.events oom_kill count
+	// for SandboxOOM; nil is granule.DockerContainerOOMKills.
+	cgroupOOMKills func(ctx context.Context, vmName string) (int, error)
 }
 
 // now is the clock the health breaker's own intervals are measured

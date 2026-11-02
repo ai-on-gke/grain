@@ -486,6 +486,26 @@ func fits(nodes []NodeUsage, pending []Requests, want Requests) Fit {
 // FreeSummary is the reading as one record for a health pane: how many
 // nodes a sandbox pod may land on, their allocatable and free totals,
 // the largest single free node, and when it was read.
+// LargestAllocatableMemoryMB is the most allocatable memory any one
+// node in the held reading has, in MiB -- the most one pod could ever be
+// given -- or zero when there is no reading yet. It never reads the
+// cluster itself.
+func (f *FitChecker) LargestAllocatableMemoryMB() int {
+	if f == nil {
+		return 0
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.reading == nil {
+		return 0
+	}
+	var largest int64
+	for _, n := range f.reading.Nodes {
+		largest = max(largest, n.Allocatable.MemoryBytes)
+	}
+	return int(largest / (1 << 20))
+}
+
 type FreeSummary struct {
 	Known       bool
 	Nodes       int

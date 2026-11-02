@@ -149,6 +149,12 @@ type Config struct {
 	// is no per-run commitment to add up and the budget charges agent
 	// runs nothing.
 	SandboxShapeIgnored bool
+	// VMMHeadroom is what each sandbox's cgroup is allowed beyond its
+	// guest's RAM, and so what the budget charges on top of each shape:
+	// model.DefaultVMMHeadroom under a granule backend
+	// (sandboxVMMHeadroom), nothing under any other. Set with
+	// SandboxShapeIgnored, from the backend itself.
+	VMMHeadroom model.VMMHeadroom
 	PollInterval        time.Duration
 	// Backup settings remain host-side rather than store-backed: the Google
 	// credential path describes this process's filesystem, and a schedule
@@ -1243,6 +1249,7 @@ func (c Config) Budget() model.Budget {
 	budget.DiskFloor = c.DiskFloor()
 	budget.RepairReserve = c.RepairReserve()
 	budget.ClusterFit = c.ClusterFit
+	budget.VMMHeadroom = c.VMMHeadroom
 	return budget
 }
 
@@ -1371,6 +1378,7 @@ func (c Config) AgentShape() model.Commitment {
 // were briefly unreadable at startup gets its budget without a restart.
 func (c Config) withHostCapacity(sandboxes orchestrator.Sandboxes) Config {
 	c.SandboxShapeIgnored = SandboxShapeIgnored(sandboxes)
+	c.VMMHeadroom = sandboxVMMHeadroom(sandboxes)
 	if fit, ok := sandboxes.(model.ClusterFit); ok {
 		c.ClusterFit = fit
 	}

@@ -74,7 +74,9 @@ are untouched, so `scripts/granule/build-granule-image.sh` and
   `docker run` when starting `granule-vm-<name>` (grain task 500). This
   bounds each VM container's `memory.max` and `memory.swap.max` (to 0)
   and ensures the kernel OOM killer picks a sandbox VM before the host
-  daemon or `hostd` (`-900`).
+  daemon or `hostd` (`-900`). Grain never relies on the 512 MiB default: it
+  always passes `-memory-limit-mb` as guest memory plus `max(1 GiB, 25%)`
+  (`orchestrator.GranuleMemoryLimitMB`, grain task 2593).
 - **Sanitized GCP project placeholder in IPv6 e2e docs and scripts.**
   `.grain/workflows/e2e-ipv6-gke.yml`, `docs/ipv6-dual-stack-design.md`,
   and `test/e2e-ipv6.sh` replace a contributor-specific GCP project name

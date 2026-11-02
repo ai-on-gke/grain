@@ -270,7 +270,7 @@ func TestRunBuildsAGranuleVMForADispatchUsingCreateArgs(t *testing.T) {
 	want := "vm create " + orchestrator.VMNamePrefix + sandbox + " -state-dir " + cfg.GranuleStateDir +
 		" -backend docker -image gs://bucket/granule-guest-deadbeef.qcow2" +
 		" -kontur-image " + daemon.DefaultSandboxImage +
-		" -cpus 2 -memory-mb 8192 -disk-size-mb 30720 -memory-limit-mb 8704 -oom-score-adj 500"
+		" -cpus 2 -memory-mb 8192 -disk-size-mb 30720 -memory-limit-mb 10240 -oom-score-adj 500"
 	if !strings.Contains(string(data), want) {
 		t.Errorf("granule invoked as %q, want a %q among the calls", data, want)
 	}
