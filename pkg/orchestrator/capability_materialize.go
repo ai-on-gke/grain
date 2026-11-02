@@ -37,7 +37,7 @@ import (
 )
 
 // This file materializes a minted pass (capability_pass.go) into the
-// run's sandbox, in the order docs/capabilities-spec.md §5 sets, before
+// run's sandbox, in the order design/spec/capabilities/capabilities.spec.md §5 sets, before
 // RunDispatch starts anything: every grant's ports forwarded (§5.3), then
 // every placement written (§5.1), then the one setup_root and each
 // grant's setup run (§5.5); then every mcp_endpoint is proxied and every

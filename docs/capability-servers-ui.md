@@ -5,7 +5,7 @@ servers** and **Capability policy**: adding a capability server, trying it
 before trusting it, configuring it, editing it, deciding who may use it, and
 removing it. What a capability server is, and the `mcpServers` shape these
 pages edit, is in [capabilities.md](capabilities.md#expose-it-in-grain-grainconfig-mcpservers--settings-ui--cli);
-the protocol is [capabilities-spec.md](capabilities-spec.md) (§3.1 entries,
+the protocol is [capabilities-spec.md](../design/spec/capabilities/capabilities.spec.md) (§3.1 entries,
 §4.2.2 policy, §4.5 configuration).
 
 Everything on these pages is stored in `grain_config` and exported to

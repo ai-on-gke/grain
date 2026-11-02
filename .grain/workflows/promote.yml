@@ -46,7 +46,7 @@
 #
 # The orchestrator also starts it, as a trusted `release` of main, once a
 # scheduled .grain/workflows/release-train.yml run finishes
-# (orchestrator.startPromotion, docs/design/release-from-trunk.md RFT-3).
+# (orchestrator.startPromotion, design/design/release-from-trunk.design.md RFT-3).
 # The train no longer moves `latest` (RFT-8), so that run republishes the
 # release `latest` already names; promote-release.yml's own `promote` job
 # is what follows an approval.

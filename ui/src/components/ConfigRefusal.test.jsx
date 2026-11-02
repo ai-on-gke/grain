@@ -90,7 +90,7 @@ describe("ConfigRefusalDialog", () => {
   });
 });
 
-// docs/design/config-repo-settings.md §2.3: a refusal of this
+// design/design/config-repo-settings.design.md §2.3: a refusal of this
 // deployment's own grain/config opens its file in the Config Repo
 // Browser, and can open the config pull request itself.
 describe("ConfigRefusalDialog for the internal grain/config", () => {

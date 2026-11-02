@@ -71,7 +71,7 @@ func TestTheImageCarriesEveryBinaryTheDaemonShellsOutTo(t *testing.T) {
 //
 // agy updates its own binary in the background during an ordinary run --
 // one dispatch-shaped exec of the pinned release replaced a writable copy
-// seven seconds later (docs/hand-runs/2026-09-17-agy-self-update.md) --
+// seven seconds later (the 2026-09-17 agy-self-update hand run) --
 // which would make the Dockerfile's verified `AGY_CLI_SHA256_AMD64`, the
 // `agy --version` check at the end of that install, and every measured
 // fact in pkg/agent/antigravity claims about a release this image stops

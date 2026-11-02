@@ -45,7 +45,7 @@ const deploy = {
 const noop = () => {};
 
 // The Processes page narrowed to templates, which is what /templates
-// opens now (docs/design/settings-panel.md §5.4): its New button is the
+// opens now (design/design/settings-panel.design.md §5.4): its New button is the
 // template form's, and each row has its Use button.
 function ControlledTemplatesList({ onRefresh, ...props }) {
   const [openTemplateId, setOpenTemplateId] = useState(null);

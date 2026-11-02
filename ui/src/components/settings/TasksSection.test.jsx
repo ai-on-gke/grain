@@ -184,7 +184,7 @@ describe("TasksSection", () => {
     });
   });
 
-  // docs/design/config-repo-settings.md §7.4, settings-mutability D-11:
+  // design/design/config-repo-settings.design.md §7.4, settings-mutability D-11:
   // under the config repo the defaults are listed as read-only chips
   // rather than edited with a GrantsPicker, and the section's own
   // ConfigManagedNotice links the config-repo files without repeating

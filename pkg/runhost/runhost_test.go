@@ -515,7 +515,7 @@ func TestAttachReturnsTheSpoolOfACancelledRun(t *testing.T) {
 }
 
 // An upgrade flushes before it restarts the daemon (Host.Flush, piece 6
-// of docs/non-disruptive-upgrade.md): every tail lets go with its cursor
+// of design/design/non-disruptive-upgrade.design.md): every tail lets go with its cursor
 // persisted while the daemon's own context is still live, the run host
 // keeps working, and the next daemon picks it up from that cursor with no
 // hole and no duplicate. A run starting to tail mid-flush lets go too.

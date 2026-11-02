@@ -734,7 +734,7 @@ func (k *GranuleSandboxes) VMNameFor(sandbox string) (string, error) {
 func (k *GranuleSandboxes) IsolatesNetwork() bool { return true }
 
 // ReservedGuestPorts are the guest loopback ports a capability grant may
-// not forward into (docs/capabilities-spec.md §5.3.1): the guest's sshd,
+// not forward into (design/spec/capabilities/capabilities.spec.md §5.3.1): the guest's sshd,
 // which a granule guest image runs for grain's own transport.
 func (k *GranuleSandboxes) ReservedGuestPorts() []int { return []int{22} }
 
@@ -768,7 +768,7 @@ func (k *GranuleSandboxes) Acquire(ctx context.Context, sandbox string, shape Sh
 // so the startup reap destroys whatever was created beneath it. Whatever
 // adds that route also has to make children readoptable: label each
 // child's container with its parent, and reserve each child at the
-// address it holds (docs/non-disruptive-upgrade.md, stage 2d).
+// address it holds (design/design/non-disruptive-upgrade.design.md, stage 2d).
 //
 // A deployment that allocates no addresses (nil Addresses) has no families
 // to put one in, so the parent is recorded nowhere and this is Acquire with

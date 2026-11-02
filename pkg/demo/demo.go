@@ -1776,7 +1776,7 @@ func (demoChangelists) Mail(_ context.Context, _ model.Task, target string, revi
 // seedDemoNotifications raises three operator notifications (DT-5), so
 // the alerts bell and the Inbox's Notifications section have rows to
 // show: a warning a reconciler would raise, a trunk release waiting for a
-// person's Approve or Reject (docs/design/release-from-trunk.md §4), and
+// person's Approve or Reject (design/design/release-from-trunk.design.md §4), and
 // an agent's own note to the operator about a task, already acknowledged.
 func seedDemoNotifications(ctx context.Context, store *model.Store, taskID string, ago func(time.Duration) time.Time) error {
 	if _, err := store.RaiseNotification(ctx, model.Notification{

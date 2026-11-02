@@ -14,7 +14,7 @@
 
 // Package selfrepair builds the tool that the
 // https://grain.dev/capabilities/grain#host-exec grant (once the bare
-// "self-repair" capability; docs/design/unified-grants.md §4) adds to a
+// "self-repair" capability; design/design/unified-grants.design.md §4) adds to a
 // run: run_host_command, to run shell commands directly on the host
 // grain's own controller runs on -- restart a systemd unit, poke at
 // grain's own config, call the grain CLI itself, anything a person at

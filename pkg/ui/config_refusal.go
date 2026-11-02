@@ -52,7 +52,7 @@ type externalConfigRepoError struct {
 	// Internal is set when the repository is this deployment's own
 	// controller-local grain/config rather than an external mirror:
 	// non-bootstrap configuration is written only through it in either
-	// mode (docs/design/config-repo-settings.md, section 4.1).
+	// mode (design/design/config-repo-settings.design.md, section 4.1).
 	Internal bool
 	// Paths are the repository files holding the setting: the files the
 	// rehearsed write changed, or the files of the tables the route
@@ -383,7 +383,7 @@ func (c *Client) settingsWritable(ctx context.Context) bool {
 
 // checkSettingsWritable guards a write of non-bootstrap configuration
 // to tables. The config repository is the only write path for such
-// configuration (docs/design/config-repo-settings.md, section 2.2): an
+// configuration (design/design/config-repo-settings.design.md, section 2.2): an
 // external one, and -- for a request that came through the HTTP API --
 // this deployment's own grain/config too. It refuses the write at once,
 // with the files those tables are exported to, when the request carries

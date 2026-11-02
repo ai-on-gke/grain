@@ -38,7 +38,7 @@ import {
   splitRepo,
 } from "../../gitConnections.js";
 
-// GitConnections is Settings → Git (docs/design/settings-panel.md §3.2):
+// GitConnections is Settings → Git (design/design/settings-panel.design.md §3.2):
 // the deployment's git connections, and who its agents push and commit
 // as (grain/task-25). `deployment` is the deployment's record
 // (useDeployment), null while it loads.

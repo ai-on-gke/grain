@@ -20,7 +20,7 @@ import SettingsCard, { settingHints } from "./SettingsCard.jsx";
 import { identifierField } from "../../identifierField.js";
 import { ConfigManagedNotice } from "../ConfigRepoLink.jsx";
 
-// EngineSection is Settings → Engine (docs/design/settings-panel.md
+// EngineSection is Settings → Engine (design/design/settings-panel.design.md
 // §3.2). `s` is the page's useSettingsSection().
 export default function EngineSection({ s }) {
   const { settings, onTextBlur, onIntBlur, onEnterKey, readOnly } = s;

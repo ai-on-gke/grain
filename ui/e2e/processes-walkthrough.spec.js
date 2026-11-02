@@ -15,7 +15,7 @@
 import path from "node:path";
 import { expect, test } from "./fixtures.js";
 
-// The Processes page (docs/design/settings-panel.md §5, stage b) against
+// The Processes page (design/design/settings-panel.design.md §5, stage b) against
 // the real `grain demo` server. -sensitive-hold adds a declared trigger
 // to the demo's own schedules, templates, suites and acme/widgets
 // declarations, so every kind but workflow schedules has a row to open:

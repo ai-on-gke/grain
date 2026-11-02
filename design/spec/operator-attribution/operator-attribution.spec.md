@@ -26,7 +26,7 @@ only when, they appear in all capitals.
 5. `GET /api/whoami`
 6. Security
 7. Migration and tests
-8. The Google layer
+8. a wrapper distribution
 
 ## 1. The actor record {#OA-1}
 
@@ -339,7 +339,7 @@ change does not stop the trailers being written. The grainfile
 `requestor` field of an exported task takes the same value.
 `attribution.design.md` may use it as a `Co-authored-by:` candidate,
 but that is its decision. A change backend that has a requester of its
-own (a CL in the Google layer, through `pkg/change`)
+own (a CL in a wrapper distribution, through `pkg/change`)
 takes it from `Task.Creator` when that is verified.
 
 ## 5. `GET /api/whoami` {#OA-5}
@@ -434,7 +434,7 @@ principal:
 | the agent API gate, a console session whose last message is alice's | `{agent, <session>, session}` | `{human, alice@example.com, iap}` |
 | the access code plus `X-Goog-Authenticated-User-Email: mallory@…` and `X-Grain-User: mallory` | `{human, operator, access-code}` | — |
 
-The fake verifier test also pins the contract the Google layer relies
+The fake verifier test also pins the contract a wrapper distribution relies
 on (`authentication.design.md`, *IdentityVerifier*).
 
 7.3. **Nothing can forget.** `TestEveryMutatingRouteIsAttributed` walks
@@ -456,9 +456,9 @@ approver (email in the trailers), the operator fallback (`operator`, as
 today), and an unverified `grain create -author` creator (no
 `Requested-by:`).
 
-## 8. The Google layer {#OA-8}
+## 8. a wrapper distribution {#OA-8}
 
-8.1. The Google layer MUST register its signed-proxy verifier with
+8.1. a wrapper distribution MUST register its signed-proxy verifier with
 `ui.RegisterIdentityVerifier` at start-up. Its `Name()` is the source
 this spec records (written `example-proxy` in this tree's fixtures), and
 its `Headers()` name the proxy's signed header. `Verify` returns
@@ -466,13 +466,13 @@ its `Headers()` name the proxy's signed header. `Verify` returns
 only after checking that header's signature. Extracting the username is
 another task's work. This spec only consumes it.
 
-8.2. Nothing else in the Google layer has to change for attribution to
+8.2. Nothing else in a wrapper distribution has to change for attribution to
 flow. §2 records the principal and §4 renders it. Its change backend
 (`pkg/change` registration) SHOULD take the CL requester from a verified
 `Task.Creator` (§4.6), and its design doc's "Attribution" section
 SHOULD point at this spec.
 
-8.3. This spec needs two things from the Google layer: the stable email
+8.3. This spec needs two things from a wrapper distribution: the stable email
 form above (lowercased, the full email, never the bare username), so that §1's
 IDs compare equal across the IAP and signed-proxy paths; and a test in
 that tree that drives one request through its registered verifier and

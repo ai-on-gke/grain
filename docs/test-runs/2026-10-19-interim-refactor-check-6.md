@@ -11,7 +11,7 @@ does the full qualification after the reset.
 | | |
 |---|---|
 | Commit | `main` at **d2115416e** (merge of task 4836) when the run started. **`main` moved twice mid-run**: to **66a303126** (merge of task 4834, 3e-iv-b2c-i), where every row b2c-i touches (1, 2, 4, 5–9, 12, 13, 15, 21, 24, 25, 26 and the residue) was re-run and the second uncached CI run is on it; then to **5c1bbb8ec** (task 4826, the Silo hub removal, and 4843, the `hub e2e` job deleted), where rows 1, 2, 4, 5, 9, 10, 12, 15, 21 and 26 were re-run on both builds (core/SQLite, Google/Postgres) and the final CI run is on it. Re-fetched before reporting: still 5c1bbb8ec |
-| Builds | **Google**: `go build ./google/cmd/grain`. **Core**: `go build ./cmd/grain`. Both again on 66a303126, after `cd ui && npm ci && npm run build`, so they embed the frontend (used for the browser check) |
+| Builds | **Google**: `go build a wrapper distribution's `cmd/grain`. **Core**: `go build ./cmd/grain`. Both again on 66a303126, after `cd ui && npm ci && npm run build`, so they embed the frontend (used for the browser check) |
 | Daemons | `grain daemon -data-dir <fresh> -sandbox-backend none -ui-addr 127.0.0.1:<port> -sandbox-port-base <multiple of 1024>`. Google and core on SQLite; Google and core on PostgreSQL 15 (Debian package, local; later starts find the database through `db-config.json`). Four per head |
 | Pre-reset data | Written by a build of `3e5b6c386`, the commit before stage 1 (4680): one dir `-tenancy multi` (a team `eng` and a registered account `alice`), one dir `-tenancy single`, one multi-tenant Postgres database (team `eng`) |
 | Baseline-19 data (new) | Written by a build of **e4977c21d** (check #5's head, schema 19), SQLite and Postgres: the seed's connections, a task, a memory document and `targetRepos`. This is the "earlier post-reset `main`" for the stage 6 part two check |
@@ -31,7 +31,7 @@ e1010c47 host's tasks 176–210 aren't part of the reset and aren't listed):
 | `50dcce158` | 4805 | `team-config-repo.spec.js` deleted |
 | `efedf89ab` | (bug G) | **Bug G fixed**: a pre-reset data dir is refused before a store is created in it |
 | `e65a1d3da` | 4817 | **3e-iii-c5**: the UI trust options (`-ui-trusted-cidrs` and the rest) are gone |
-| `5abd8de0d` | 4820 | **3e-iii-c6**: hostinit's always-skipped admin steps and cloudtop-install's `make_admin` |
+| `5abd8de0d` | 4820 | **3e-iii-c6**: hostinit's always-skipped admin steps and wrapper-installer's `make_admin` |
 | `49d76fe0a` | 4821 | **3e-iii-c7**: `GRAIN_TENANCY` out of the install-walkthrough templates |
 | `00ff869d8`, `88719db89` | 4793 | **3e-iii-d**: team RBAC (`team_scope.go`, `ci_scope.go`, `system_admin.go`, the role checks); the hub's submitter check kept |
 | `394615300`, `18c773c83` | 4814 | **3e-iv-b2a**: every `/api/teams*` route is gone; the deployment routes have handlers of their own |
@@ -68,7 +68,7 @@ the `team_user` reads and writes, `teams.go`'s remainder) and **stage
 | 9 | `grain connections import` from a seed | **PASS on SQLite and Postgres**, both heads. `imported 2 git and 1 model connections`, twice. `secrets/github/bot.token` is 0600 | same |
 | 10 | Gemini discovery (live) | **PASS**. 11 models (gemini-3.8/3.7/3.6-flash at high/medium/low, gemini-3.1-pro-high/low) on all eight daemons and on the imported dirs. **Default-model mismatch: still open** (the seed's `default_model: gemini-3.1-pro`, also `grain connections import -h`'s example): `the default agent framework is not ready: no configured agent backend matches team "default", model "gemini-3.1-pro": of 1 configured, 1 not serving that model -- connections are the team's own, so a team admin of "default" adds one in Team settings -> Models & connections…` | still failing |
 | 11 | PAT / GitHub App against the fake GitHub | **PASS (e2e harness)**. `tests/e2e` (local and CI); `pkg/gitproxy` in CI | same |
-| 12 | Command-backed forge via fake `forgecli`, Google build | **PASS** (SQLite and Postgres, both heads). `POST /api/deployment/git-connections {host: depot.code.corp.example, type: ambient, source: forgecli}` is 200; it runs `forgecli auth token`, `forgecli api --include … user` and `… user/repos`; `ambientLogin: walker`; `GET /api/deployment/reachable-repos` lists `walk-org/service-a` and `service-b` | same |
+| 12 | Command-backed forge via fake `forgecli`, wrapper distribution build | **PASS** (SQLite and Postgres, both heads). `POST /api/deployment/git-connections {host: git.example.com, type: ambient, source: forgecli}` is 200; it runs `forgecli auth token`, `forgecli api --include … user` and `… user/repos`; `ambientLogin: walker`; `GET /api/deployment/reachable-repos` lists `walk-org/service-a` and `service-b` | same |
 | 13 | `forgecli` in the core build | **PASS**. 400 `unknown ambient source "forgecli": gh, git, auto` | same |
 | 14 | Per-model pause | **PASS (CI)**. `pkg/orchestrator` and `pkg/cli` in the uncached `go` job | same |
 | 15 | Task lifecycle: create (CLI) → approve | **PASS (live)**, both heads. `grain create -repo acme/widgets …` filed task 2; `grain approve 2` queued it. `grain create -team` still exists and fails `team "eng" does not exist` | same |

@@ -347,7 +347,7 @@ func scheduledWorkflowRequester(row model.ScheduledWorkflowRun) string {
 // trunk release is selected on (releaseGateWorkflowStems) and runs on
 // the repository's default branch: the firings that rank as release
 // gates and whose `infra` verdicts are re-run before they are reviewed
-// (docs/design/release-from-trunk.md, RFT-2). The advisory live-provider
+// (design/design/release-from-trunk.design.md, RFT-2). The advisory live-provider
 // suites are deliberately not among them -- their reds are mostly the
 // deployment's credentials and quota already, and re-running a suite
 // that is failing on an IAM 429 spends the quota it is short of.
@@ -532,7 +532,7 @@ func collectScheduledWorkflowRun(ctx context.Context, deps Deps, row model.Sched
 
 // releaseTrainStem is the scheduled workflow that cuts, soaks and stages
 // trunk releases (.grain/workflows/release-train.yml,
-// docs/design/release-from-trunk.md §6), and promoteWorkflowPath the one
+// design/design/release-from-trunk.design.md §6), and promoteWorkflowPath the one
 // that publishes a promoted release's images as vX.Y.0 and `latest`.
 const (
 	releaseTrainStem    = "release-train"
@@ -544,7 +544,7 @@ const (
 // `latest` image matches the git `latest` tag without waiting for the
 // next merge to fire promote.yml's own `release` trigger. The train
 // itself stops at vX.Y.0-pending and never moves `latest`
-// (docs/design/release-from-trunk.md RFT-8): a person's approval does,
+// (design/design/release-from-trunk.design.md RFT-8): a person's approval does,
 // through promote-release.yml, whose own promote job publishes it. What
 // this start adds is a republish of the release `latest` already names. It is a release rather than the
 // schedule's own event because that is what package-publish and

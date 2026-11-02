@@ -129,7 +129,7 @@ type Template struct {
 	// once rather than at each filing. Empty, the default, means close.
 	NothingNeededAction NothingNeededAction
 	// Goal is the goal every task filed from this template is declared
-	// with (TaskGoal, docs/design/durable-tasks.md#DT-4); nil for none.
+	// with (TaskGoal, design/design/durable-tasks.design.md#DT-4); nil for none.
 	Goal *GoalDecl
 
 	// Model is the model every task filed from this template asks for

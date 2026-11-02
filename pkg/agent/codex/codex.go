@@ -581,7 +581,7 @@ func (f *Framework) pullRequestArgs(cfg agent.RunConfig) []string {
 // The two differ by the subcommand and the positional id and by nothing
 // else -- every flag below is one `codex exec resume` takes too, which is
 // a fact about the binary rather than a guess (see retry.go's header and
-// docs/hand-runs/2026-09-07-codex-resume.md). Building both here rather
+// the 2026-09-07 codex-resume hand run). Building both here rather
 // than at the call site is what keeps them from drifting apart: a flag
 // added to a run's first exec and forgotten on its retry would leave the
 // two attempts of one run configured differently.
@@ -669,7 +669,7 @@ const authFileName = "auth.json"
 // Code Mode remains available for models that require it; its JS host
 // orchestrates MCP calls without getting a local execution environment.
 //
-// Each capability MCP server (docs/capabilities-spec.md §5.2.4) follows
+// Each capability MCP server (design/spec/capabilities/capabilities.spec.md §5.2.4) follows
 // as a table of its own, its URL grain's proxy and each tool its
 // tools/list reported preapproved the same way.
 func (f *Framework) configTOML(endpoint *mcp.ManagedHTTP, servers ...agent.CapabilityMCPServer) ([]byte, error) {
@@ -1159,7 +1159,7 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 // ParseResult implements agent.ResultParser: the Result and error Run
 // would have returned for a run whose stream is stdout and which ended
 // with runErr, for a daemon adopting a run another daemon started
-// detached in grain hostd (docs/non-disruptive-upgrade.md, "Which
+// detached in grain hostd (design/design/non-disruptive-upgrade.design.md, "Which
 // substrate carries which CLI"). stdout is the one exec hostd held, so it
 // is its own last attempt, and the thread it names is the one the run
 // leaves resumable. The turn cap was this daemon's to enforce and went

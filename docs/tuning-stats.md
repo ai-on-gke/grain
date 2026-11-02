@@ -165,7 +165,7 @@ Read those adjustments against `throughput` and `capacity`. A rise in
 the memory ratio followed by OOM kills and a cut is the controller
 working as designed: it gives up a few retried sandboxes in exchange for
 admitting more work. Memory starts at 1.0 because of grain/task-173. See
-[design/auto-overcommit.md](design/auto-overcommit.md) for the
+[design/auto-overcommit.md](../design/design/auto-overcommit.design.md) for the
 controller, its bounds and its targets.
 
 ## Retention, stated

@@ -1,13 +1,13 @@
 # Grain: a single-node agent cluster
 
-> **Historical.** For how Grain works today, read [`architecture.md`](architecture.md) and `README.md`.
+> **Historical.** For how Grain works today, read [`architecture.design.md`](../design/design/architecture.design.md) and `README.md`.
 > This describes v1 — a controller VM plus a pool of
 > libvirt sandbox VMs, driven by a Python host adapter — whose code this
 > repository no longer carries. It is kept because it is still the spec
 > several packages implement and cite: the git proxy's credential ladder
 > and withheld scopes, the split surface between orchestrator and
 > sandbox, and the secrets-on-`/data` layout all originate here. Read it
-> for those; read [`architecture.md`](architecture.md) and `README.md` for what actually ships.
+> for those; read [`architecture.design.md`](../design/design/architecture.design.md) and `README.md` for what actually ships.
 
 ## Status
 
