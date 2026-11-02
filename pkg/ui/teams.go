@@ -49,7 +49,6 @@ type Team struct {
 	ConfigRepo       string   `json:"configRepo,omitempty"`
 	ConfigCloneURL   string   `json:"configCloneUrl,omitempty"`
 	CloneCommand     string   `json:"cloneCommand,omitempty"`
-	MergeBatchSize   int      `json:"mergeBatchSize"`
 	RepairTemplateID string   `json:"repairTemplateID,omitempty"`
 	AgentFramework   string   `json:"agentFramework,omitempty"`
 	AgentBackendID   string   `json:"agentBackendId,omitempty"`
@@ -112,7 +111,6 @@ func teamFrom(cfg model.Config, defaultHost string) Team {
 		ConfigRepo:       configRepo,
 		ConfigCloneURL:   configCloneURL,
 		CloneCommand:     cloneCommand,
-		MergeBatchSize:   cfg.MergeBatchSize,
 		RepairTemplateID: cfg.RepairTemplateID,
 		AgentFramework:   cfg.AgentFramework,
 		AgentBackendID:   cfg.AgentBackendID,

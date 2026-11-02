@@ -57,10 +57,8 @@ func cmdSettings(ctx context.Context, c *ui.HTTPClient, out *printer, args []str
 	maxWorkers := fs.Int("max-workers", 0, "maximum number of ordinary tasks dispatched at once")
 	_ = fs.Int("max-mergers", 0, "deprecated and ignored: this deployment's sandbox budget is what bounds the host")
 	maxMergesPerRepo := fs.Int("max-merges-per-repo", 0, "maximum ready pull requests one repository may merge per queue cycle")
-	mergeBatchSize := fs.Int("merge-batch-size", 0, "how many queued changes the merge queue tests together before merging them (1 turns batching off)")
-	mergeGatherWindow := fs.String("merge-gather-window", "",
-		"how long the merge queue holds a lone ready change, waiting for a second one whose CI is still "+
-			"running, so the two can be tested together, e.g. 5m (a negative duration turns the wait off)")
+	_ = fs.Int("merge-batch-size", 0, "deprecated and ignored: the merge queue no longer batches")
+	_ = fs.String("merge-gather-window", "", "deprecated and ignored: the merge queue no longer batches")
 	_ = fs.Int("max-ci-jobs", 0, "deprecated and ignored: this deployment's sandbox budget is what bounds the host")
 	// The deployment-wide framework and model settings are gone: a run's
 	// model is a model connection's, chosen per task or by the
@@ -316,12 +314,9 @@ func cmdSettings(ctx context.Context, c *ui.HTTPClient, out *printer, args []str
 		case "max-merges-per-repo":
 			v := *maxMergesPerRepo
 			req.MaxMergesPerRepo = &v
-		case "merge-batch-size":
-			v := *mergeBatchSize
-			req.MergeBatchSize = &v
-		case "merge-gather-window":
-			v := *mergeGatherWindow
-			req.MergeGatherWindow = &v
+		case "merge-batch-size", "merge-gather-window":
+			out.note(fmt.Sprintf("-%s no longer sets anything: the merge queue no longer batches "+
+				"(grain/task-1023)", f.Name))
 		case "max-ci-jobs":
 			out.note("-max-ci-jobs no longer sets anything: this deployment's sandbox budget is what " +
 				"bounds the host")
