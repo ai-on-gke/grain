@@ -368,6 +368,8 @@ func (c *Client) SetRepoReleaseSecret(ctx context.Context, repo, name, value str
 			return RepoReleaseSettings{}, err
 		}
 	}
+	// Audited whether or not the listing changed: the value did.
+	noteConfigWrite(ctx)
 	return c.RepoReleaseSettings(ctx, parsed.String())
 }
 
@@ -420,6 +422,8 @@ func (c *Client) DeleteRepoReleaseSecret(ctx context.Context, repo, name string)
 	}); err != nil {
 		return RepoReleaseSettings{}, err
 	}
+	// Audited whether or not the listing changed: the value did.
+	noteConfigWrite(ctx)
 	return c.RepoReleaseSettings(ctx, parsed.String())
 }
 

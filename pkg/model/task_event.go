@@ -49,13 +49,35 @@ const (
 	TaskEventReopened TaskEventKind = "reopened"
 )
 
+// The notes operator-attribution spec §3.1 asks of the task actions that
+// recorded nobody: who withdrew an approval, submitted, retried,
+// deferred, undeferred or parked a task, set what it waits on or
+// depends on, moved it in the queue, or set the secret it asked for.
+// They are events rather than comments because a person's comment is a
+// reply -- it answers a pending question and reaches a live run -- and
+// none of these is one. Not timeline steps: MergeTaskEvents leaves them
+// out, and the pipeline's change feed (ui.taskChanges) lists them.
+const (
+	TaskEventApprovalWithdrawn TaskEventKind = "approval-withdrawn"
+	TaskEventSubmitted         TaskEventKind = "submitted"
+	TaskEventRetried           TaskEventKind = "retried"
+	TaskEventDeferred          TaskEventKind = "deferred"
+	TaskEventUndeferred        TaskEventKind = "undeferred"
+	TaskEventParked            TaskEventKind = "parked"
+	TaskEventDependencies      TaskEventKind = "dependencies"
+	TaskEventReordered         TaskEventKind = "reordered"
+	// TaskEventSecretSet's Detail names the secret, never its value.
+	TaskEventSecretSet TaskEventKind = "secret-set"
+)
+
 // TransitionReopened is the timeline's name for a reopen. It is not one
 // of StateOf's answers -- a reopened task is in whatever state its record
 // implies -- but the moment it came back is worth a step of its own, the
 // same way the close it undid is.
 const TransitionReopened State = "reopened"
 
-// TaskEvent is one close or reopen of a task.
+// TaskEvent is one close or reopen of a task, a change to its
+// auto-merge, or a note of who took one of the actions above.
 type TaskEvent struct {
 	ID     int64
 	TaskID string
@@ -293,8 +315,10 @@ func MergeTaskEvents(ts []Transition, events []TaskEvent) []Transition {
 		out = append(out, t)
 	}
 	for _, e := range events {
-		state := StateClosed
+		var state State
 		switch e.Kind {
+		case TaskEventClosed:
+			state = StateClosed
 		case TaskEventReopened:
 			state = TransitionReopened
 		case TaskEventAutoMergeOn:
@@ -303,6 +327,9 @@ func MergeTaskEvents(ts []Transition, events []TaskEvent) []Transition {
 			state = TransitionAutoMergeOff
 		case TaskEventAutoMergeKeptOff:
 			state = TransitionAutoMergeKeptOff
+		default:
+			// A note about an action, not a step (TaskEventSubmitted, ...).
+			continue
 		}
 		by := e.By
 		out = append(out, Transition{State: state, At: e.At, By: &by, Reason: e.Reason, Detail: e.Detail})
