@@ -83,13 +83,20 @@ func (c *Client) catalogueFilingGrants(ctx context.Context, grants []model.Grant
 // with no template -- what the new-task form files.
 func (c *Client) markCatalogueRefusals(ctx context.Context, checks []GrantCheck, target *model.RepoRef) ([]GrantCheck, error) {
 	cat, err := c.capabilityCatalogue(ctx)
-	if err != nil || cat == nil {
+	if err != nil {
 		return checks, err
 	}
 	for i, check := range checks {
 		grant := check.Recorded
 		if grant == "" {
 			grant = check.Grant
+		}
+		if ciOnlyCapability(grant) {
+			checks[i].CatalogueRefusal = model.CIOnlyRefusal(grant)
+			continue
+		}
+		if cat == nil {
+			continue
 		}
 		gc := c.catalogueGrantContext(ctx, target, "", []model.Grant{{Capability: grant}})
 		if _, err := cat.ValidateGrants(gc); err != nil {
