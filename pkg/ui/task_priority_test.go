@@ -167,6 +167,18 @@ func TestTasksAdminCapabilityAllowsEditingPriorityViaREST(t *testing.T) {
 	if stored, err := client.Store.GetTask(context.Background(), "2"); err != nil || stored.Priority != 9 {
 		t.Errorf("after PATCH priority=0, stored Priority = %d (err=%v), want 9 kept", stored.Priority, err)
 	}
+	// Not a whole number an int holds: the same words, not Go's
+	// decoding error, on an edit and on a filing alike.
+	for _, bad := range []string{"1.5", "1e3", `"8"`, "99999999999999999999"} {
+		// A person's edit: the agent gate above refuses these first.
+		if rec := do(t, srv, http.MethodPatch, "/api/tasks/2", `{"priority": `+bad+`}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "positive integer") || strings.Contains(rec.Body.String(), "unmarshal") {
+			t.Errorf("PATCH /api/tasks/2 with priority=%s: status %d (%s), want 400 naming a positive integer", bad, rec.Code, rec.Body.String())
+		}
+		rec := do(t, srv, http.MethodPost, "/api/tasks", `{"title":"odd priority","repo":"acme/widgets","priority": `+bad+`}`)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "positive integer") || strings.Contains(rec.Body.String(), "unmarshal") {
+			t.Errorf("POST /api/tasks with priority=%s: status %d (%s), want 400 naming a positive integer", bad, rec.Code, rec.Body.String())
+		}
+	}
 
 	// api:tasks:admin without api:tasks:write cannot edit title or toggle priority-dispatch.
 	if code, _ := asAgent(t, srv, "1", http.MethodPatch, "/api/tasks/2", `{"title": "hijacked"}`, ""); code != http.StatusForbidden {

@@ -28,3 +28,19 @@ export function wholeNumber(value) {
   const n = Number(s);
   return Number.isInteger(n) ? n : NaN;
 }
+
+// taskPriority reads a Task priority box as the priority it files: a
+// whole number from 1 up, or NaN. Bounded at Number.MAX_SAFE_INTEGER as
+// well: past it the number a box holds is no longer the one typed
+// (9007199254740993 was filed as 9007199254740992), and past int64 the
+// server refused it with Go's own JSON decoding error rather than
+// anything about priority (2026-11-02 walkthrough).
+export function taskPriority(value) {
+  const n = wholeNumber(value);
+  return n >= 1 && Number.isSafeInteger(n) ? n : NaN;
+}
+
+// PRIORITY_REFUSAL is what every Task priority box says under a value it
+// will not save.
+export const PRIORITY_REFUSAL =
+  "a whole number, 1 or more; default 5, higher numbers run first";
