@@ -550,6 +550,12 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 	if err := invalidateStaleGrantWait(ctx, tx, t); err != nil {
 		return err
 	}
+	// Who changed auto-merge, and a declined task's kept off against a
+	// write that has not lifted the mark (task_auto_merge.go).
+	autoMergeEvent, err := guardAutoMerge(ctx, tx, &t)
+	if err != nil {
+		return err
+	}
 
 	if t.WorkOrigin == "" {
 		origin, err := originForNewTask(ctx, tx, t)
@@ -598,6 +604,11 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 		changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(), joinCSV(NormalizeReviewers(t.Reviewers)), priority, t.KeepRunning,
 	); err != nil {
 		return fmt.Errorf("writing task %s: %w", t.ID, err)
+	}
+	if autoMergeEvent != nil {
+		if _, err := insertTaskEvent(ctx, tx, *autoMergeEvent); err != nil {
+			return fmt.Errorf("recording %s's auto-merge change: %w", t.ID, err)
+		}
 	}
 
 	for _, table := range []string{"task_read", "task_write", "task_filed_template", "task_grant", "task_link", "task_tag", "task_custom_field"} {

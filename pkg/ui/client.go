@@ -1555,11 +1555,19 @@ type CreateTaskRequest struct {
 	// already on GitHub; dispatch holds the task until then
 	// (orchestrator.heldForPendingBranch). Base must be named, and the
 	// task must have a repo.
-	NewBranch            bool   `json:"newBranch,omitempty"`
-	NewBranchFrom        string `json:"newBranchFrom,omitempty"`
-	Issue                int    `json:"issue,omitempty"`
-	AutoMerge            bool   `json:"autoMerge"`
-	AutoApproveProposals bool   `json:"autoApproveProposals"`
+	NewBranch     bool   `json:"newBranch,omitempty"`
+	NewBranchFrom string `json:"newBranchFrom,omitempty"`
+	Issue         int    `json:"issue,omitempty"`
+	AutoMerge     bool   `json:"autoMerge"`
+	// DeclineAutoMerge is the filer saying auto_merge: false out loud
+	// (propose_task's explicit false), rather than leaving it to the
+	// proposer's permission or a default -- which AutoMerge alone, always
+	// on the wire, cannot tell apart. The task is filed with
+	// model.DeclineAutoMerge's mark, so nothing grain does on its own
+	// account turns auto-merge back on. It can only ever lower what the
+	// task is filed with, so no gate has to judge it.
+	DeclineAutoMerge     bool `json:"declineAutoMerge,omitempty"`
+	AutoApproveProposals bool `json:"autoApproveProposals"`
 	// TimeZone is the IANA zone of whoever is filing the task, which its
 	// runs are told the time in (model.Task.TimeZone). POST /api/tasks
 	// fills it from the browser's TimeZoneHeader when the body names
@@ -2594,6 +2602,9 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// and filing as nobody would read as grain's own to local policy.
 	if proposedBy != nil {
 		model.InheritRequester(&task, *proposedBy)
+	}
+	if req.DeclineAutoMerge && !req.AutoMerge {
+		model.DeclineAutoMerge(&task, model.PrincipalString(c.actor(ctx)))
 	}
 	if req.FixesBaseBranch && !model.SetFixesBaseBranch(&task, true) {
 		return Task{}, validationErrorf("a task with no repo has no base branch to fix: " +
@@ -4430,7 +4441,7 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			submittedHead = c.submittedHead(ctx, *current)
 		}
 	}
-	if err := c.mutate(ctx, id, func(task *model.Task) error {
+	if err := c.mutate(model.WithAutoMergeChange(ctx, c.actor(ctx), "edited"), id, func(task *model.Task) error {
 		submitted = false
 		// Whether this edit moves the task off a repository it had a
 		// target in, which takes the pull requests it opened there off
@@ -4507,7 +4518,15 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 				humanSubmitted(task, submittedAt, submittedHead)
 				submitted = true
 			}
-			task.AutoMerge = *req.AutoMerge
+			// Either answer is the caller's own, and the one grain's holds
+			// must not overturn: a false stays false until a person or the
+			// API says true (model.DeclineAutoMerge).
+			if *req.AutoMerge {
+				model.AllowAutoMerge(task)
+				task.AutoMerge = true
+			} else {
+				model.DeclineAutoMerge(task, model.PrincipalString(c.actor(ctx)))
+			}
 		}
 		if req.AutoApproveProposals != nil {
 			task.AutoApproveProposals = *req.AutoApproveProposals
@@ -5344,7 +5363,7 @@ func (c *Client) Submit(ctx context.Context, id string) error {
 		return c.submitWithApprovals(ctx, *task, pending)
 	}
 	now, head := c.now(), c.submittedHead(ctx, *task)
-	if err := c.mutate(ctx, id, func(task *model.Task) error {
+	if err := c.mutate(model.WithAutoMergeChange(ctx, c.actor(ctx), "submitted"), id, func(task *model.Task) error {
 		// Only a Submit that turns auto-merge on answers a hold. One
 		// over a change already merging itself (pressed to retry its CI)
 		// has looked at no new head, and must not pin a clearance to
@@ -5353,6 +5372,7 @@ func (c *Client) Submit(ctx context.Context, id string) error {
 		if !task.AutoMerge {
 			humanSubmitted(task, now, head)
 		}
+		model.AllowAutoMerge(task)
 		task.AutoMerge = true
 		return nil
 	}); err != nil {
