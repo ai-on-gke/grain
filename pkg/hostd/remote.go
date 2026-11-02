@@ -363,7 +363,7 @@ func (r *Remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if !ok {
-		why := "it presented a token that is not a hostd token here (Settings -> Hostds, or -hostd-token-file)"
+		why := "it presented a token that is not a hostd token here (/api/hostds, or -hostd-token-file)"
 		if tok == "" {
 			why = "it presented no hostd token"
 		}

@@ -376,9 +376,11 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	hostdSocket := fs.String("hostd-socket", "", "grain hostd's unix socket, for a daemon in a container whose host "+
 		"CLIs run through hostd; empty uses "+hostd.DefaultSocketPath+" when its directory is mounted into the container. "+
 		"Refused on Kubernetes, which has no host")
-	hostdTokenFile := fs.String("hostd-token-file", "", "file holding the shared token a grain hostd on another machine dials in to "+
-		hostd.RemotePath+" with (grain hostd -server <this daemon's URL> -token-file ...): its host CLIs and run: host capability "+
-		"servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset; neither means no hostd may dial in")
+	hostdTokenFile := fs.String("hostd-token-file", "", "deprecated, for one release: file holding a shared token a grain hostd on another machine dials in to "+
+		hostd.RemotePath+" with (grain hostd -server <this daemon's URL> -token-file ...), as the one hostd -hostd-token-name names: its host CLIs and run: host capability "+
+		"servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each hostd in the hostd registry (/api/hostds) instead, "+
+		"which gives it a token of its own")
+	hostdTokenName := fs.String("hostd-token-name", hostd.DefaultSharedName, "the hostd name a hostd dialing in with -hostd-token-file's shared token is known by")
 	openAIAPIKeyFile := fs.String("openai-api-key-file", "", "file holding the OpenAI API key the agent "+
 		"authenticates as, passed to the codex subprocess as OPENAI_API_KEY. Optional, and the exact "+
 		"counterpart of the two files above: the UI stores one as the "+
@@ -1291,7 +1293,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		K8sGranuleAccess:      *k8sGranuleAccess, K8sGranuleReattachTimeout: *k8sGranuleReattachTimeout, SandboxCPUs: *sandboxCPUs, SandboxMemoryMB: *sandboxMemoryMB, SandboxDiskGB: *sandboxDiskGB,
 	}
 	grit.Apply(&cfg)
-	if cfg.HostdRemote, err = hostdRemote(*hostdTokenFile); err != nil {
+	if cfg.HostdRemote, err = hostdRemote(*hostdTokenFile, *hostdTokenName); err != nil {
 		return cfg, fs, unknownFlags, err
 	}
 	cfg, err = local(cfg, passed)
@@ -1300,7 +1302,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 
 // hostdRemote is the acceptor for a grain hostd dialing in with the token
 // in tokenFile, or $GRAIN_HOSTD_TOKEN; nil when neither names one.
-func hostdRemote(tokenFile string) (*hostd.Remote, error) {
+func hostdRemote(tokenFile, name string) (*hostd.Remote, error) {
 	token := strings.TrimSpace(os.Getenv("GRAIN_HOSTD_TOKEN"))
 	if tokenFile != "" {
 		t, err := daemon.ReadTokenFile(tokenFile)
@@ -1312,7 +1314,17 @@ func hostdRemote(tokenFile string) (*hostd.Remote, error) {
 	if token == "" {
 		return nil, nil
 	}
-	return &hostd.Remote{Token: token, Logf: log.Printf}, nil
+	if name == "" {
+		name = hostd.DefaultSharedName
+	}
+	if err := model.ValidateHostdName(name); err != nil {
+		return nil, fmt.Errorf("-hostd-token-name: %w", err)
+	}
+	if name == model.LocalHostd {
+		return nil, fmt.Errorf("-hostd-token-name: %q is the co-located hostd's name", name)
+	}
+	log.Printf("grain daemon: -hostd-token-file is deprecated and goes in the next release: register hostd %s in the hostd registry (POST /api/hostds) and give it the token it answers with", name)
+	return &hostd.Remote{Token: token, SharedName: name, Logf: log.Printf}, nil
 }
 
 // checkConfig is every "these flags cannot be started with" rule daemon()

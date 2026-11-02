@@ -148,7 +148,9 @@ Usage of grain daemon:
   -hostd-socket string
     	grain hostd's unix socket, for a daemon in a container whose host CLIs run through hostd; empty uses /run/grain-hostd/hostd.sock when its directory is mounted into the container. Refused on Kubernetes, which has no host
   -hostd-token-file string
-    	file holding the shared token a grain hostd on another machine dials in to /api/hostd/connect with (grain hostd -server <this daemon's URL> -token-file ...): its host CLIs and run: host capability servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset; neither means no hostd may dial in
+    	deprecated, for one release: file holding a shared token a grain hostd on another machine dials in to /api/hostd/connect with (grain hostd -server <this daemon's URL> -token-file ...), as the one hostd -hostd-token-name names: its host CLIs and run: host capability servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each hostd in the hostd registry (/api/hostds) instead, which gives it a token of its own
+  -hostd-token-name string
+    	the hostd name a hostd dialing in with -hostd-token-file's shared token is known by (default "remote")
   -iap-backend-service string
     	GCP Compute backend service name for dynamic IAP IAM reconciliation; empty disables IAP reconciliation (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
   -iap-resource string

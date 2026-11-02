@@ -627,6 +627,12 @@ func (s *Server) routes() {
 
 	// A grain hostd on another machine dialing in (hostd -server).
 	s.route("GET /api/hostd/connect", s.handleHostdConnect)
+	// The hostd registry (Settings -> Hostds).
+	s.route("GET /api/hostds", s.handleListHostds)
+	s.route("POST /api/hostds", s.handleCreateHostd)
+	s.route("PATCH /api/hostds/{name}", s.handleUpdateHostd)
+	s.route("POST /api/hostds/{name}/rotate", s.handleRotateHostdToken)
+	s.route("POST /api/hostds/{name}/revoke", s.handleRevokeHostd)
 
 	static, err := fs.Sub(staticFS, "static")
 	if err != nil {

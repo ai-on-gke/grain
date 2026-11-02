@@ -56,7 +56,7 @@ type Dialer struct {
 	// http://127.0.0.1:4242. A path other than "/" replaces RemotePath.
 	Server string
 	// Token is this hostd's token, which names it to the controller (a
-	// registry token from Settings -> Hostds, or the deprecated shared
+	// registry token from /api/hostds, or the deprecated shared
 	// -hostd-token-file one).
 	Token string
 	// Name, when set, is the registry hostd this one says it is: the

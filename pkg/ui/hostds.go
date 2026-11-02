@@ -1,0 +1,227 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package ui
+
+// The hostd registry's API (model.Hostd): Settings -> Hostds lists the
+// hostds this daemon takes host work through, creates one and shows its
+// token once, rotates and revokes tokens, and sets a hostd's owner and
+// labels. A hostd dialing in is named by its token alone
+// (hostd.Remote.ServeHTTP).
+
+import (
+	"context"
+	"errors"
+	"log"
+	"net/http"
+	"strings"
+
+	"github.com/ai-on-gke/grain/pkg/hostd"
+	"github.com/ai-on-gke/grain/pkg/model"
+)
+
+// HostdView is one registry row as Settings shows it, with whether the
+// hostd is connected now.
+type HostdView struct {
+	model.Hostd
+	// Connection is what the hostd last said when it dialed in; nil for
+	// one that has not connected since the daemon started (and for
+	// local, which does not dial in).
+	Connection *hostd.RemoteStatus `json:"connection,omitempty"`
+}
+
+// CreateHostdRequest is POST /api/hostds.
+type CreateHostdRequest struct {
+	Name   string            `json:"name"`
+	Owner  string            `json:"owner,omitempty"`
+	Labels map[string]string `json:"labels,omitempty"`
+}
+
+// UpdateHostdRequest is PATCH /api/hostds/{name}: a field left out is
+// left as it is.
+type UpdateHostdRequest struct {
+	Owner  *string            `json:"owner,omitempty"`
+	Labels *map[string]string `json:"labels,omitempty"`
+}
+
+// IssuedHostdToken is the answer to creating a hostd or rotating its
+// token: the only time the token itself is ever shown.
+type IssuedHostdToken struct {
+	Hostd model.Hostd `json:"hostd"`
+	Token string      `json:"token"`
+}
+
+// hostdStatuses is what Config.HostdRemote can say about the hostds
+// connected to it (hostd.Remote).
+type hostdStatuses interface {
+	Statuses() map[string]hostd.RemoteStatus
+}
+
+func hostdError(err error) error {
+	switch {
+	case errors.Is(err, model.ErrHostdNotFound):
+		return &NotFoundError{message: err.Error()}
+	case errors.Is(err, model.ErrHostdExists), errors.Is(err, model.ErrHostdRevoked):
+		return validationErrorf("%v", err)
+	}
+	return err
+}
+
+// ListHostds is the registry, with each hostd's connection.
+func (c *Client) ListHostds(ctx context.Context) ([]HostdView, error) {
+	rows, err := c.Store.ListHostds(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var statuses map[string]hostd.RemoteStatus
+	if st, ok := c.Config.HostdRemote.(hostdStatuses); ok {
+		statuses = st.Statuses()
+	}
+	out := make([]HostdView, 0, len(rows))
+	for _, h := range rows {
+		v := HostdView{Hostd: h}
+		if st, ok := statuses[h.Name]; ok {
+			v.Connection = &st
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// CreateHostd adds a remote hostd and mints its first token.
+func (c *Client) CreateHostd(ctx context.Context, req CreateHostdRequest) (IssuedHostdToken, error) {
+	name := strings.TrimSpace(req.Name)
+	if err := model.ValidateHostdName(name); err != nil {
+		return IssuedHostdToken{}, validationErrorf("%v", err)
+	}
+	if name == model.LocalHostd {
+		return IssuedHostdToken{}, validationErrorf("%q is the co-located hostd's name; a remote hostd needs another", name)
+	}
+	if _, err := model.NormalizeHostdOwner(req.Owner); err != nil {
+		return IssuedHostdToken{}, validationErrorf("%v", err)
+	}
+	if err := model.ValidateHostdLabels(req.Labels); err != nil {
+		return IssuedHostdToken{}, validationErrorf("%v", err)
+	}
+	h, token, err := c.Store.CreateHostd(ctx, model.Hostd{
+		Name: name, Owner: req.Owner, Labels: req.Labels, CreatedBy: c.actor(ctx).ID,
+	})
+	if err != nil {
+		return IssuedHostdToken{}, hostdError(err)
+	}
+	return IssuedHostdToken{Hostd: *h, Token: token}, nil
+}
+
+// RotateHostdToken retires name's tokens and mints a new one.
+func (c *Client) RotateHostdToken(ctx context.Context, name string) (IssuedHostdToken, error) {
+	if name == model.LocalHostd {
+		return IssuedHostdToken{}, validationErrorf("%q is the co-located hostd, and it takes no token", name)
+	}
+	token, err := c.Store.RotateHostdToken(ctx, name)
+	if err != nil {
+		return IssuedHostdToken{}, hostdError(err)
+	}
+	h, err := c.Store.GetHostd(ctx, name)
+	if err != nil {
+		return IssuedHostdToken{}, err
+	}
+	return IssuedHostdToken{Hostd: *h, Token: token}, nil
+}
+
+// RevokeHostd revokes name and every token it has.
+func (c *Client) RevokeHostd(ctx context.Context, name string) (model.Hostd, error) {
+	if name == model.LocalHostd {
+		return model.Hostd{}, validationErrorf("%q is the co-located hostd and cannot be revoked", name)
+	}
+	h, err := c.Store.RevokeHostd(ctx, name)
+	if err != nil {
+		return model.Hostd{}, hostdError(err)
+	}
+	return *h, nil
+}
+
+// UpdateHostd sets name's owner and labels.
+func (c *Client) UpdateHostd(ctx context.Context, name string, req UpdateHostdRequest) (model.Hostd, error) {
+	if req.Owner != nil {
+		if _, err := model.NormalizeHostdOwner(*req.Owner); err != nil {
+			return model.Hostd{}, validationErrorf("%v", err)
+		}
+	}
+	if req.Labels != nil {
+		if err := model.ValidateHostdLabels(*req.Labels); err != nil {
+			return model.Hostd{}, validationErrorf("%v", err)
+		}
+	}
+	h, err := c.Store.UpdateHostd(ctx, name, req.Owner, req.Labels)
+	if err != nil {
+		return model.Hostd{}, hostdError(err)
+	}
+	return *h, nil
+}
+
+func (s *Server) handleListHostds(w http.ResponseWriter, r *http.Request) {
+	out, err := s.tasks.ListHostds(r.Context())
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleCreateHostd(w http.ResponseWriter, r *http.Request) {
+	var req CreateHostdRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	issued, err := s.tasks.CreateHostd(r.Context(), req)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	log.Printf("grain hostd: registered hostd %s (owner %q)", issued.Hostd.Name, issued.Hostd.Owner)
+	writeJSON(w, http.StatusCreated, issued)
+}
+
+func (s *Server) handleRotateHostdToken(w http.ResponseWriter, r *http.Request) {
+	issued, err := s.tasks.RotateHostdToken(r.Context(), r.PathValue("name"))
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	log.Printf("grain hostd: rotated hostd %s's token", issued.Hostd.Name)
+	writeJSON(w, http.StatusOK, issued)
+}
+
+func (s *Server) handleRevokeHostd(w http.ResponseWriter, r *http.Request) {
+	h, err := s.tasks.RevokeHostd(r.Context(), r.PathValue("name"))
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	log.Printf("grain hostd: revoked hostd %s and its tokens", h.Name)
+	writeJSON(w, http.StatusOK, h)
+}
+
+func (s *Server) handleUpdateHostd(w http.ResponseWriter, r *http.Request) {
+	var req UpdateHostdRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	h, err := s.tasks.UpdateHostd(r.Context(), r.PathValue("name"), req)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, h)
+}

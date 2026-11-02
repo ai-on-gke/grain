@@ -162,6 +162,12 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := RecordDatabaseConfig(cfg.DataDir, cfg.DbDriver, cfg.DbDSN); err != nil {
 		log.Printf("grain daemon: recording the database in %s: %v", cfg.DataDir, err)
 	}
+	// The hostd registry: the co-located hostd is always in it as local,
+	// and any hostd it names may dial in alongside it.
+	if err := store.EnsureLocalHostd(ctx); err != nil {
+		log.Printf("grain daemon: %v", err)
+	}
+	cfg.HostdHub = newHostdHub(cfg, store)
 
 	// Run hosts (pkg/runhost), when this deployment asks for them. Built
 	// here, as soon as the store is, because every framework built below
