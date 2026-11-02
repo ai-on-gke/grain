@@ -611,6 +611,10 @@ func (s *Server) singleTenantGate(w http.ResponseWriter, r *http.Request, cfg IA
 			return true
 		}
 		if err := s.checkAllowedPrincipal(r.Context(), cv.id); err != nil {
+			if browserNavigation(r) {
+				s.writePrincipalRefusedPage(w, r, cv, err)
+				return false
+			}
 			writeError(w, http.StatusForbidden, err)
 			return false
 		}
