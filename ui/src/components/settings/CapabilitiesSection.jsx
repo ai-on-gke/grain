@@ -41,8 +41,8 @@ export default function CapabilitiesSection({
         data-testid="gcp-key-deprecation-notice"
         sx={{ mb: 2 }}
       >
-        Deprecated: bare <code>gcp-key</code> and <code>gcp-key:&lt;name&gt;</code>{" "}
-        in-process grants were retired onto{" "}
+        Deprecated: bare <code>gcp-key</code> and{" "}
+        <code>gcp-key:&lt;name&gt;</code> in-process grants were retired onto{" "}
         <code>https://grain.dev/capabilities/gcp#gcp-key</code> permission sets.
         They remain readable as aliases for one release; update{" "}
         <code>.grain</code> declarations and external configs to{" "}
