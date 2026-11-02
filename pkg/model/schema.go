@@ -396,11 +396,17 @@ import "strconv"
 // `corp#research` method it registers through capability.Register, with
 // `corp-research` as that method's alias.
 //
-// 87 rebuilds `merge_batch` with `task_id` in its primary key, so one
+// 87 drops `executor_token` and `executor_token_sequence`: remote
+// executors are retired, and grain hostd (which authenticates with its
+// own -hostd-token-file) is grain's only host agent. A pure drop: the
+// importer passes over a table this build lacks, so a dump carrying
+// either imports without it.
+//
+// 88 rebuilds `merge_batch` with `task_id` in its primary key, so one
 // branch can hold an overlap re-check for each of several changes at once
 // (grain/task-2390). The rows are carried across with an empty task_id,
 // which the queue still reads, re-validates and cleans up as before.
-const SchemaVersion = 87
+const SchemaVersion = 88
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the
@@ -3739,23 +3745,6 @@ var Tables = []string{
   PRIMARY KEY (` + "`name`" + `)
 )`,
 
-	`CREATE TABLE IF NOT EXISTS ` + "`executor_token`" + ` (
-  ` + "`id`" + `                TEXT     NOT NULL,
-  ` + "`name`" + `              TEXT     NOT NULL,
-  ` + "`token_hash`" + `        TEXT     NOT NULL,
-  ` + "`prefix`" + `            TEXT     NOT NULL,
-  ` + "`created_at`" + `        DATETIME NOT NULL,
-  ` + "`revoked_at`" + `        DATETIME NULL,
-  ` + "`last_connected_at`" + ` DATETIME NULL,
-  PRIMARY KEY (` + "`id`" + `),
-  UNIQUE (` + "`token_hash`" + `)
-)`,
-
-	`CREATE TABLE IF NOT EXISTS ` + "`executor_token_sequence`" + ` (
-  ` + "`id`" + `        INTEGER PRIMARY KEY AUTOINCREMENT,
-  ` + "`issued_at`" + ` DATETIME NOT NULL
-)`,
-
 	externalAgentTokenTable,
 	externalAgentTokenSequenceTable,
 
@@ -4022,7 +4011,7 @@ const apiScopeSetTable = `CREATE TABLE IF NOT EXISTS ` + "`api_scope_set`" + ` (
   PRIMARY KEY (` + "`name`" + `)
 )`
 
-// mergeBatchTable is merge_batch's definition, named so that migration 87
+// mergeBatchTable is merge_batch's definition, named so that migration 88
 // (Migrations) can create the table it rebuilds from the very statement
 // a fresh store is created with. task_id joined the primary key there:
 // one row per change rather than per branch (grain/task-2390).

@@ -31,7 +31,7 @@ import (
 const (
 	// ExternalAgentTokenPrefix prefixes every minted external-agent bearer
 	// token, so it is distinguishable in logs and never mistaken for an
-	// executor join token (gxt_) or an access code.
+	// access code.
 	ExternalAgentTokenPrefix = "gma_"
 
 	// ExternalAgentPrincipalPrefix is the prefix before the credential's
@@ -56,7 +56,7 @@ const (
 var ErrExternalAgentTokenRevoked = errors.New("external agent credential is revoked")
 
 // ExternalAgentToken is a scoped bearer credential issued to an external
-// agent (docs/agent-api.md, "External agents"). Like ExecutorToken, only
+// agent (docs/agent-api.md, "External agents"). Only
 // the SHA-256 hash of the secret is stored; the raw token is returned once
 // at issue or rotation and never shown again.
 type ExternalAgentToken struct {

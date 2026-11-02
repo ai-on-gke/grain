@@ -444,10 +444,9 @@ func Run(opts Options) error {
 		baseBranch = configureBaseBranchDemo(store, repo, cfg.CI.(*demoFakeCI), client)
 	}
 	// Stand-ins for what sits outside grain (demo_scenarios.go): a
-	// credential's issuer and remote executors, on every demo; a fresh
-	// install's missing setup and a provider's usage limit, on request.
+	// credential's issuer, on every demo; a fresh install's missing
+	// setup and a provider's usage limit, on request.
 	cfg.CapabilityChecks = demoCapabilityChecks{}
-	cfg.Executors = demoExecutors{started: time.Now().UTC()}
 	// -staging: two staging environments for the rail's Staging group
 	// (demo_persistent_sandboxes.go). Off by default, where System ->
 	// Sandboxes says it has no sandbox backend to report on.

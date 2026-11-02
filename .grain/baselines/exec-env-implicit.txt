@@ -23,7 +23,6 @@ pkg/mcp/exec_conn.go 1
 pkg/mcp/git_reverter.go 1
 pkg/mcp/kubectl_exec_runner.go 1
 pkg/mcp/managed_http.go 1
-pkg/modelexec/client.go 1
 pkg/orchestrator/container_sandboxes.go 1
 pkg/orchestrator/granule_firewall.go 2
 pkg/sandboximage/sandboximage.go 1

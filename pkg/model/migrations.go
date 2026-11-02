@@ -532,6 +532,14 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     87,
+		Description: "drop executor_token and executor_token_sequence (remote executors are retired)",
+		Statements: []string{
+			"DROP TABLE IF EXISTS `executor_token`",
+			"DROP TABLE IF EXISTS `executor_token_sequence`",
+		},
+	},
+	{
+		Version:     88,
 		Description: "rebuild merge_batch keyed by task as well as branch: one overlap re-check per change",
 		// Neither engine changes a primary key in place. The rows are
 		// copied out to a table with no constraints at all (CREATE TABLE
@@ -539,7 +547,7 @@ var Migrations = []Migration{
 		// with the new table's on Postgres), and back into merge_batch
 		// created afresh from the statement a new store uses.
 		Statements: []string{
-			"CREATE TABLE `merge_batch_v86` AS SELECT * FROM `merge_batch`",
+			"CREATE TABLE `merge_batch_v87` AS SELECT * FROM `merge_batch`",
 			"DROP TABLE `merge_batch`",
 			mergeBatchTable,
 			"INSERT INTO `merge_batch` (`owner`,`name`,`branch`,`task_id`,`ref`,`base_commit`,`commit`," +
@@ -547,8 +555,8 @@ var Migrations = []Migration{
 				"`recheck_of`,`recheck_detail`,`recheck_at`) " +
 				"SELECT `owner`,`name`,`branch`,'',`ref`,`base_commit`,`commit`," +
 				"`members`,`run_id`,`started_at`,`finished_at`,`conclusion`,`detail`,`splits`,`queued`," +
-				"`recheck_of`,`recheck_detail`,`recheck_at` FROM `merge_batch_v86`",
-			"DROP TABLE `merge_batch_v86`",
+				"`recheck_of`,`recheck_detail`,`recheck_at` FROM `merge_batch_v87`",
+			"DROP TABLE `merge_batch_v87`",
 		},
 	},
 }
