@@ -70,7 +70,8 @@ func TestTheReleaseTrainsGrantNeverReachesAPromotion(t *testing.T) {
 	}
 	authorize := func(u RefUpdate) string {
 		t.Helper()
-		reason, err := (&ModelAuthorizer{Store: store}).AuthorizeRefUpdates(ctx, "sandbox-train", repo.Owner, repo.Name, []RefUpdate{u})
+		reason, err := (&ModelAuthorizer{Store: store}).AuthorizeRefUpdates(withPushCheck(ctx, historyOnMain(oidB)),
+			"sandbox-train", repo.Owner, repo.Name, []RefUpdate{u})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -103,6 +104,12 @@ func TestTheReleaseTrainsGrantNeverReachesAPromotion(t *testing.T) {
 		"the convergence branch, rewritten":  {Old: oidA, New: oidB, Ref: "refs/heads/release/v3.2.0"},
 		"the convergence branch, deleted":    {Old: oidA, New: zero, Ref: "refs/heads/release/v3.2.0"},
 		"a branch nested under the release/": {Old: zero, New: oidB, Ref: "refs/heads/release/v3/x"},
+		// The right refs, on a commit main does not have: the workflows
+		// they start would run that commit's code.
+		"an rc tag off main":              {Old: zero, New: oidA, Ref: "refs/tags/v3.2.0-rc.1"},
+		"a -pending tag off main":         {Old: zero, New: oidA, Ref: "refs/tags/v3.2.0-pending"},
+		"candidate, force-moved off main": {Old: oidB, New: oidA, Ref: "refs/heads/candidate"},
+		"a convergence branch off main":   {Old: zero, New: oidA, Ref: "refs/heads/release/v3.2.0"},
 	} {
 		reason := authorize(u)
 		if reason == "" {

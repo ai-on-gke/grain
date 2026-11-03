@@ -737,6 +737,21 @@ if [ "$mode" != train ]; then
   fi
   from_rc="$(git tag --points-at "$pending_sha" -l "$version-rc.*" | grep -E "^${version//./\\.}-rc\\.[0-9]+$" | sort -t. -k4,4n | tail -n 1 || true)"
   if [ "$mode" = approve ]; then
+    # A person approves a version name, not a commit, so what it releases
+    # has to be a commit the train could have staged: one on main, or on
+    # the release's own convergence branch -- never a -pending tag pushed
+    # onto anything else.
+    on_branch=""
+    if git merge-base --is-ancestor "$pending_sha" "$main_ref"; then
+      on_branch=main
+    elif remote_branch "release/$version"; then
+      git fetch -q --force "$remote" "+refs/heads/release/$version:refs/remotes/$remote/release/$version" ||
+        die "could not fetch release/$version from $remote; nothing was done"
+      if git merge-base --is-ancestor "$pending_sha" "refs/remotes/$remote/release/$version"; then
+        on_branch="release/$version"
+      fi
+    fi
+    [ -n "$on_branch" ] || die "$version-pending is on ${pending_sha:0:12}, which is on neither main nor release/$version: it is no commit the train stages, so it is not promoted; reject it; nothing was done"
     prev="$(promoted | tail -n 1)"
     override=""
     said=""

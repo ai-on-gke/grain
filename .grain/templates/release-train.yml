@@ -18,6 +18,11 @@ capabilities: [grain-ci]
 # own credential. A train that could push them could release without the
 # approval. Changing this list waits for a person's Submit
 # (pkg/trustboundary's template-push category); so does this file.
+#
+# Each push also has to land on a commit main (or candidate, or a
+# release/v* branch) already has: the proxy refuses a commit the push
+# carries or one only on this task's branch (pushCheck.onHistory), since
+# the workflows these refs start run the pushed commit's code.
 push:
   - refs/tags/v*-rc.*
   - refs/tags/v*-pending

@@ -719,6 +719,30 @@ expect "dry run" "writes no user.email into .git/config" eq "$(git -C "$work/clo
 train
 expect "a real run" "writes no identity into .git/config either" eq "$(git -C "$work/clone" config --local --get user.name || true)" ""
 
+# --- approve promotes only a commit on main or release/vX.Y.Z ---
+setup ""
+(
+  cd "$work/seed"
+  git checkout -q -b side "$c1"
+  git commit -q --allow-empty -m "not on main"
+  git push -q origin side
+  git checkout -q main
+)
+side="$(git -C "$work/seed" rev-parse side)"
+tag_remote v2.3.0-rc.1 "$side"
+(
+  cd "$work/seed"
+  git tag -a v2.3.0-pending "$side" -m "Release v2.3.0 pending approval" -m "Qualification: PASS"
+  git push -q origin refs/tags/v2.3.0-pending
+)
+: > "$work/images.log"
+approve approve v2.3.0 GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=alice@example.com
+expect "pending off main" "is refused" eq "$status" 1
+expect "pending off main" "says why" has "which is on neither main nor release/v2.3.0"
+expect "pending off main" "tags no v2.3.0" eq "$(remote_tag v2.3.0)" ""
+expect "pending off main" "leaves latest on v2.1.0" eq "$(remote_tag latest)" "$c0"
+expect "pending off main" "publishes nothing" images_were ""
+
 # --- the release train's tag grant (RELEASE_PUSH_GRANT=train, playbook 0.4) ---
 setup ""
 runs "$c3"

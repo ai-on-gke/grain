@@ -170,6 +170,7 @@ type packCommits map[string][]string
 
 const (
 	objCommit   = 1
+	objTag      = 4
 	objOfsDelta = 6
 	objRefDelta = 7
 )
@@ -208,6 +209,19 @@ func (p *packReader) ReadByte() (byte, error) {
 // spooled to disk is walked from the file (GitProxy.HandleRequest) rather
 // than read back into memory whole.
 func readPackStream(pack io.Reader, hashLen int) (packCommits, error) {
+	commits, _, err := readPackObjects(pack, hashLen)
+	return commits, err
+}
+
+// packTags is the object each annotated tag a pack carries points at, by
+// the tag object's name in hex.
+type packTags map[string]string
+
+// readPackObjects is readPackStream, and the annotated tags the pack
+// carries as well: what a declared push of a tag is peeled through to the
+// commit it names (pushCheck.onHistory). A tag stored as a delta is not
+// resolved, which leaves it unpeeled -- a proof not made.
+func readPackObjects(pack io.Reader, hashLen int) (packCommits, packTags, error) {
 	fr, ok := pack.(flate.Reader)
 	if !ok {
 		fr = bufio.NewReaderSize(pack, 64<<10)
@@ -215,14 +229,14 @@ func readPackStream(pack io.Reader, hashLen int) (packCommits, error) {
 	r := &packReader{r: fr}
 	var header [12]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil || string(header[:4]) != "PACK" {
-		return nil, errors.New("not a packfile")
+		return nil, nil, errors.New("not a packfile")
 	}
 	if v := binary.BigEndian.Uint32(header[4:8]); v != 2 && v != 3 {
-		return nil, fmt.Errorf("unsupported pack version %d", v)
+		return nil, nil, fmt.Errorf("unsupported pack version %d", v)
 	}
 	count := binary.BigEndian.Uint32(header[8:12])
 	if count > maxPackObjects {
-		return nil, fmt.Errorf("pack claims %d objects", count)
+		return nil, nil, fmt.Errorf("pack claims %d objects", count)
 	}
 	newHash := sha1.New
 	if hashLen == 32 {
@@ -236,21 +250,22 @@ func readPackStream(pack io.Reader, hashLen int) (packCommits, error) {
 	byOffset := map[int64]object{}
 	byName := map[string]object{}
 	commits := packCommits{}
+	tags := packTags{}
 	var kept, inflated int64
 
 	for i := uint32(0); i < count; i++ {
 		start := r.n
 		c, err := r.ReadByte()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		typ := int(c>>4) & 7
 		for shift := 4; c&0x80 != 0; shift += 7 {
 			if c, err = r.ReadByte(); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if shift > 56 {
-				return nil, errors.New("object size overflows")
+				return nil, nil, errors.New("object size overflows")
 			}
 		}
 		var base *object
@@ -258,16 +273,16 @@ func readPackStream(pack io.Reader, hashLen int) (packCommits, error) {
 		case objOfsDelta:
 			c, err := r.ReadByte()
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			ofs := int64(c & 0x7f)
 			for c&0x80 != 0 {
 				if c, err = r.ReadByte(); err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				ofs = ((ofs + 1) << 7) | int64(c&0x7f)
 				if ofs > start {
-					return nil, errors.New("delta offset out of range")
+					return nil, nil, errors.New("delta offset out of range")
 				}
 			}
 			if b, ok := byOffset[start-ofs]; ok {
@@ -276,18 +291,18 @@ func readPackStream(pack io.Reader, hashLen int) (packCommits, error) {
 		case objRefDelta:
 			name := make([]byte, hashLen)
 			if _, err := io.ReadFull(r, name); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if b, ok := byName[hex.EncodeToString(name)]; ok {
 				base = &b
 			}
 		case 1, 2, 3, 4:
 		default:
-			return nil, fmt.Errorf("unknown object type %d", typ)
+			return nil, nil, fmt.Errorf("unknown object type %d", typ)
 		}
 		zr, err := zlib.NewReader(r)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		// Only a commit, or a delta this could resolve against one, is read
 		// into memory, and only those are held to maxPackObjectBytes. Every
@@ -295,7 +310,7 @@ func readPackStream(pack io.Reader, hashLen int) (packCommits, error) {
 		// io.Discard: the walk has no use for it, and a file larger than the
 		// bound is an ordinary thing for a fast-forward to carry. Either
 		// way the read is held to the pack's inflation budget.
-		keep := typ == objCommit || base != nil && base.typ == objCommit && base.data != nil
+		keep := typ == objCommit || typ == objTag || base != nil && base.typ == objCommit && base.data != nil
 		budgeted := inflateBudget{zr: zr, pack: r, inflated: &inflated}
 		var data []byte
 		if keep {
@@ -305,10 +320,10 @@ func readPackStream(pack io.Reader, hashLen int) (packCommits, error) {
 		}
 		_ = zr.Close()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if int64(len(data)) > maxPackObjectBytes {
-			return nil, errors.New("decompressed pack object exceeds maximum size")
+			return nil, nil, errors.New("decompressed pack object exceeds maximum size")
 		}
 
 		obj := object{typ: typ}
@@ -325,9 +340,13 @@ func readPackStream(pack io.Reader, hashLen int) (packCommits, error) {
 			}
 		} else if typ == objCommit {
 			obj.data = data
+		} else if typ == objTag {
+			if target, ok := tagTarget(data); ok {
+				tags[objectName(newHash, "tag", data)] = target
+			}
 		}
 		if kept += int64(len(obj.data)); kept > maxPackCommitBytes {
-			return nil, errors.New("pack commits exceed maximum total size")
+			return nil, nil, errors.New("pack commits exceed maximum total size")
 		}
 		byOffset[start] = obj
 		if obj.typ == objCommit {
@@ -336,7 +355,7 @@ func readPackStream(pack io.Reader, hashLen int) (packCommits, error) {
 			commits[name] = commitParents(obj.data)
 		}
 	}
-	return commits, nil
+	return commits, tags, nil
 }
 
 func objectName(newHash func() hash.Hash, typ string, data []byte) string {
@@ -344,6 +363,13 @@ func objectName(newHash func() hash.Hash, typ string, data []byte) string {
 	fmt.Fprintf(h, "%s %d\x00", typ, len(data))
 	h.Write(data)
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// tagTarget is the object line of one tag object's header.
+func tagTarget(data []byte) (string, bool) {
+	line, _, _ := bytes.Cut(data, []byte("\n"))
+	target, ok := bytes.CutPrefix(line, []byte("object "))
+	return string(bytes.TrimSpace(target)), ok && len(target) > 0
 }
 
 // commitParents is the parent lines of one commit object's header.

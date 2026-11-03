@@ -137,10 +137,11 @@ push:
 
 `refs/heads/release/v*` is the rc.3 convergence branch (§5). The train creates it once from rc.2's commit, with no force and no delete; the approval's run deletes it.
 
-`vX.Y.Z` and `latest` are deliberately left out. They are the promotion's refs, pushed by the approval's own run. A train that can push them can release without the approval, and then the approval would no longer be the one action. That's gap 3, and it's closed by three checks:
+`vX.Y.Z` and `latest` are deliberately left out. They are the promotion's refs, pushed by the approval's own run. A train that can push them can release without the approval, and then the approval would no longer be the one action. That's gap 3, and it's closed by four checks:
 
-- **The proxy.** It refuses the train's run anything outside the list, and `TestTheReleaseTrainsGrantNeverReachesAPromotion` (`pkg/gitproxy`) holds the real template to that.
-- **The script.** In train mode it never pushes `vX.Y.Z` or `latest`. With `RELEASE_PUSH_GRANT=train` (which the template sets) it pushes nothing outside the list, deletes nothing, and refuses `approve`, `reject` and `rollback`.
+- **The proxy, on names.** It refuses the train's run anything outside the list, and `TestTheReleaseTrainsGrantNeverReachesAPromotion` (`pkg/gitproxy`) holds the real template to that.
+- **The proxy, on commits.** A declared push moves refs onto commits the repository already has; it doesn't publish new code. So outside the default branch itself, the new tip has to be on the default branch already, or on a branch the same list declares (`candidate`, `release/v*`). An annotated tag is peeled to the commit it names. A commit the push itself carries, or one only on the run's own task branch, is refused (`pushCheck.onHistory`). The workflows these refs start (`release.yml`, `promote.yml`, `nightly.yml`) run from the pushed commit, so without this a run could have them run code nobody merged.
+- **The script.** In train mode it never pushes `vX.Y.Z` or `latest`. With `RELEASE_PUSH_GRANT=train` (which the template sets) it pushes nothing outside the list, deletes nothing, and refuses `approve`, `reject` and `rollback`. And `approve` promotes only a `-pending` commit on `main` or on `release/vX.Y.Z`: the person presses Approve on a version name, not a commit, so a `-pending` tag on anything else is refused.
 - **The trust boundary.** A change to any template's `push:` list is person-only: `trustboundary.TemplatePush`, matched by `guardTemplatePush` (`pkg/orchestrator/repoguard.go`), which compares the list at the base and the head and fails closed.
 
 Whether the train should hold `vX.Y.Z` and `latest` anyway is the operator's call. It's a one-line change to this list, and it waits for a person's Submit.
