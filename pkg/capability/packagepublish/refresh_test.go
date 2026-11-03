@@ -60,6 +60,15 @@ func (r *rotating) PackageCredential(registry, owner, repo string) (Credential, 
 		Token: fmt.Sprintf("token-%d", len(r.calls)), Name: "default"}, nil
 }
 
+// asked is what the ladder has been asked so far. The calls come in on
+// the listener's goroutines, from a helper process the race detector
+// cannot see synchronise with the test, so they are read under the lock.
+func (r *rotating) asked() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.calls...)
+}
+
 // listener is grain's CI API listener with the refresh route mounted,
 // as the daemon serves it.
 func listener(t *testing.T, refresh *Refresher) *httptest.Server {
@@ -172,12 +181,8 @@ func TestTheHelperHandsEveryPushTheLaddersCurrentToken(t *testing.T) {
 			t.Errorf("get = %+v, want secret %q", got, want)
 		}
 	}
-	// The ladder is asked for the job's own repository, every time. Read
-	// under the fake's lock: the endpoint's handler goroutine writes calls.
-	source.mu.Lock()
-	calls := append([]string(nil), source.calls...)
-	source.mu.Unlock()
-	for _, call := range calls {
+	// The ladder is asked for the job's own repository, every time.
+	for _, call := range source.asked() {
 		if call != " acme/widgets" {
 			t.Errorf("ladder asked %q, want the job's own repository", call)
 		}
@@ -196,11 +201,8 @@ func TestTheHelperHandsEveryPushTheLaddersCurrentToken(t *testing.T) {
 	if _, _, err := runHelper(t, helper, `{"ServerURL":"ghcr.io","Username":"u","Secret":"s"}`, "store"); err != nil {
 		t.Errorf("store: %v", err)
 	}
-	source.mu.Lock()
-	asked := len(source.calls)
-	source.mu.Unlock()
-	if asked != 4 {
-		t.Errorf("ladder asked %d times, want 4", asked)
+	if calls := source.asked(); len(calls) != 4 {
+		t.Errorf("ladder asked %d times, want 4", len(calls))
 	}
 
 	// The log says who asked and which credential answered, and holds
