@@ -530,8 +530,8 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 		t.Fatalf("composing template: %v", err)
 	}
 	tmplCaps := field(t, tmplComp.Tasks[0], "capabilities")
-	if !slices.Equal(tmplCaps.Values, []string{"gcp-key", model.GrainCIGrant}) {
-		t.Errorf("template values = %v, want [gcp-key grain-ci]", tmplCaps.Values)
+	if !slices.Equal(tmplCaps.Values, []string{model.GCPKeySandboxAgentGrant, model.GrainCIGrant}) {
+		t.Errorf("template values = %v, want [%s grain-ci]", tmplCaps.Values, model.GCPKeySandboxAgentGrant)
 	}
 	if !slices.Equal(tmplCaps.Sources, []string{"template", "repo"}) {
 		t.Errorf("template sources = %v, want [template repo]", tmplCaps.Sources)
@@ -548,8 +548,8 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 		t.Fatalf("composing schedule: %v", err)
 	}
 	schedCaps := field(t, schedComp.Tasks[0], "capabilities")
-	if !slices.Equal(schedCaps.Values, []string{"gcp-key", model.GrainCIGrant}) {
-		t.Errorf("schedule values = %v, want [gcp-key grain-ci]", schedCaps.Values)
+	if !slices.Equal(schedCaps.Values, []string{model.GCPKeySandboxAgentGrant, model.GrainCIGrant}) {
+		t.Errorf("schedule values = %v, want [%s grain-ci]", schedCaps.Values, model.GCPKeySandboxAgentGrant)
 	}
 	if !slices.Equal(schedCaps.Sources, []string{"template", "repo"}) {
 		t.Errorf("schedule sources = %v, want [template repo]", schedCaps.Sources)
@@ -566,8 +566,8 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 		t.Fatalf("composing suite: %v", err)
 	}
 	suiteCaps := field(t, suiteComp.Tasks[0], "capabilities")
-	if !slices.Equal(suiteCaps.Values, []string{"gcp-key", model.GrainCIGrant}) {
-		t.Errorf("suite values = %v, want [gcp-key grain-ci]", suiteCaps.Values)
+	if !slices.Equal(suiteCaps.Values, []string{model.GCPKeySandboxAgentGrant, model.GrainCIGrant}) {
+		t.Errorf("suite values = %v, want [%s grain-ci]", suiteCaps.Values, model.GCPKeySandboxAgentGrant)
 	}
 	if !slices.Equal(suiteCaps.Sources, []string{"template", "repo"}) {
 		t.Errorf("suite sources = %v, want [template repo]", suiteCaps.Sources)

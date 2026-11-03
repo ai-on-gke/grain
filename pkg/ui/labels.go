@@ -183,8 +183,6 @@ type Capability struct {
 // whoever is looking at the failure.
 func OfferedCapabilities() []Capability {
 	offered := []Capability{
-		{ID: "gcp-key", Name: "GCP key",
-			Description: "Mint a short-lived GCP service-account key for this task and place it in its sandbox"},
 		{ID: "gemini-key", Name: "Gemini key",
 			Description: "Mint a short-lived Gemini API key for this task"},
 		{ID: "self-debug", Name: "Self debug",
@@ -607,6 +605,11 @@ type Config struct {
 	// with a sandbox pool -- and the pane shows one line fewer, the same
 	// nil-means-unavailable contract Sandboxes above gives.
 	SandboxImage *SandboxImage
+	// SandboxImageFunc, when set, returns the current SandboxImage dynamically
+	// so live changes to model.Config.SandboxImage, k8s_granule_image,
+	// k8s_sandbox_image, or sandbox_image_mirror are reflected immediately in
+	// GET /api/sandboxes and sandbox guest publishing readings.
+	SandboxImageFunc func() *SandboxImage
 	// SandboxShapeIgnored says that the sandbox backend this deployment
 	// actually runs has no shape to apply, so the three deployment-wide
 	// sandbox-shape settings (Settings.SandboxCPUs and friends) are
