@@ -24,7 +24,7 @@ Usage of grain daemon:
   -checkpost-url string
     	base url of this deployment's checkpost service, which CI reports verdicts to; empty asks GitHub for check runs as before
   -ci
-    	run grain's own CI: the .grain/workflows a repository declares, in this deployment's own sandboxes, for the repos whose CI mode is "Use Grain CI" (Settings -> Repos), which also grants their tasks the grain-ci capability. -ci=false turns the engine off entirely, so no repository's workflows run however its CI mode is set, and the CI API reports that this deployment has none. A job's sandbox is built the way a run's is and given no credential beyond a read-only checkout of the one repository under test (pkg/ci, "What a workflow file is trusted with"). (default true)
+    	run grain's own CI: the .grain/workflows a repository declares, in this deployment's own sandboxes, for the repos whose CI mode is "Use Grain CI" (Settings -> Repos), which also grants their tasks the https://grain.dev/capabilities/grain#ci={} grant. -ci=false turns the engine off entirely, so no repository's workflows run however its CI mode is set, and the CI API reports that this deployment has none. A job's sandbox is built the way a run's is and given no credential beyond a read-only checkout of the one repository under test (pkg/ci, "What a workflow file is trusted with"). (default true)
   -ci-artifact-max-age duration
     	how long a run's CI artifacts are kept before the sweep drops them; 0 uses grain's own default, 336h0m0s, which is about how long a red run stays worth investigating. See -ci-artifact-max-bytes for what this group holds. (default 336h0m0s)
   -ci-artifact-max-bytes bytes

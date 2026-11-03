@@ -483,6 +483,16 @@ func (s *Server) authenticateExternalAgent(w http.ResponseWriter, r *http.Reques
 	return tok, release, true
 }
 
+// tokenWriter is who an external agent token write was made by, for its
+// log line: the label and source RequestActor gives, as config writes
+// log theirs (recordConfigWrite). A credential is not configuration, so
+// it has no config_audit row; this line is its audit trail
+// (docs/test-runs/2026-11-03-operator-attribution.md F6).
+func tokenWriter(r *http.Request) string {
+	who := RequestActor(r.Context())
+	return PrincipalLabel(who.Actor, who.OnBehalfOf) + " (" + sourceName(who.Actor.Source) + ")"
+}
+
 func (s *Server) handleListExternalAgentTokens(w http.ResponseWriter, r *http.Request) {
 	tokens, err := s.tasks.ListExternalAgentTokens(r.Context())
 	if err != nil {
@@ -502,8 +512,8 @@ func (s *Server) handleCreateExternalAgentToken(w http.ResponseWriter, r *http.R
 		writeClientError(w, err)
 		return
 	}
-	log.Printf("grain external-agent: issued credential id=%s name=%q scopeSet=%q scopes=%v repos=%v",
-		issued.ID, issued.Name, issued.ScopeSet, issued.Scopes, issued.Repos)
+	log.Printf("grain external-agent: %s issued credential id=%s name=%q scopeSet=%q scopes=%v repos=%v",
+		tokenWriter(r), issued.ID, issued.Name, issued.ScopeSet, issued.Scopes, issued.Repos)
 	writeJSON(w, http.StatusCreated, issued)
 }
 
@@ -515,7 +525,7 @@ func (s *Server) handleRotateExternalAgentToken(w http.ResponseWriter, r *http.R
 		return
 	}
 	s.externalLimiter.reset(strings.TrimSpace(id))
-	log.Printf("grain external-agent: rotated credential id=%s name=%q", issued.ID, issued.Name)
+	log.Printf("grain external-agent: %s rotated credential id=%s name=%q", tokenWriter(r), issued.ID, issued.Name)
 	writeJSON(w, http.StatusOK, issued)
 }
 
@@ -526,7 +536,7 @@ func (s *Server) handleRevokeExternalAgentToken(w http.ResponseWriter, r *http.R
 		return
 	}
 	s.externalLimiter.reset(strings.TrimSpace(id))
-	log.Printf("grain external-agent: revoked credential id=%s", id)
+	log.Printf("grain external-agent: %s revoked credential id=%s", tokenWriter(r), id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -537,7 +547,7 @@ func (s *Server) handleDeleteExternalAgentToken(w http.ResponseWriter, r *http.R
 		return
 	}
 	s.externalLimiter.reset(strings.TrimSpace(id))
-	log.Printf("grain external-agent: deleted credential id=%s", id)
+	log.Printf("grain external-agent: %s deleted credential id=%s", tokenWriter(r), id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -548,7 +558,7 @@ func (s *Server) handleRevokeAllExternalAgentTokens(w http.ResponseWriter, r *ht
 		return
 	}
 	s.externalLimiter.resetAll()
-	log.Printf("grain external-agent: kill switch revoked %d active credential(s)", n)
+	log.Printf("grain external-agent: %s's kill switch revoked %d active credential(s)", tokenWriter(r), n)
 	writeJSON(w, http.StatusOK, RevokeAllExternalAgentTokensResponse{Revoked: n})
 }
 

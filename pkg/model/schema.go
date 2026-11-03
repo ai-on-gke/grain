@@ -445,13 +445,17 @@ import "strconv"
 // row is always written whole, so a 1 written because it was the default
 // cannot be told from a 1 somebody chose, and both keep it.
 //
-// 96 adds `allowed_principal` and `allowed_principal_migration`: the
+// 96 rewrites stored `grain-ci` grants, `repo_config`.`ci_capabilities`
+// included, to `https://grain.dev/capabilities/grain#ci={}`: the
+// in-process `grain-ci` provider is retired for the `grain#ci` method.
+//
+// 97 adds `allowed_principal` and `allowed_principal_migration`: the
 // database-backed list of `user:<email>` and `group:<email>` entries
 // admitted when authenticated by IAP or another IdentityVerifier, plus the
 // one-time startup migration record off `-ui-allowed-principals`. Kept off
 // SettingsTables so a config-repo pull request cannot lock operators out
 // or grant sign-in access (design/design/settings.design.md §1).
-const SchemaVersion = 96
+const SchemaVersion = 97
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified

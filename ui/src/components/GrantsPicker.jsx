@@ -119,13 +119,19 @@ const RUN_KIND_LABELS = {
   ci: "CI jobs",
 };
 
+// Where a CI job's repository access is explained: it is declared in the
+// job's workflow file, which is the one place that grants it.
+const REPO_ACCESS_DOC =
+  "https://github.com/ai-on-gke/grain/blob/main/docs/ci-capabilities.md#repository-access-declared-in-the-repository-enforced-by-the-teams-credential";
+const REPO_ACCESS_DOC_LABEL = "Repository access docs";
+
 function policyVerdictText(verdict, runKind) {
   if (!verdict) return "";
   const forKind = RUN_KIND_LABELS[runKind]
     ? ` for ${RUN_KIND_LABELS[runKind]}`
     : "";
   if (verdict === "ci_only") {
-    return `CI only: not a grant${forKind}, granted under a repository's CI capabilities`;
+    return `CI only: not a grant${forKind}; a CI job declares it in its workflow's capabilities:`;
   }
   if (verdict === "denied") {
     return `denied by the capability policy${forKind}`;
@@ -205,14 +211,10 @@ export default function GrantsPicker({
     Boolean(runKind) && (!subjectRepo || runKind === "ci");
   // A CI-only method (repo#read) is refused this run by grain's own rule,
   // not by the capability policy, so it is worded as that and points at
-  // the repository's CI capabilities: the policy has no rule to change.
+  // how a CI job gets it -- declared in the job's own workflow file. The
+  // repository's CI capabilities list does not grant it, and neither does
+  // the policy, which has no rule to change.
   const ciOnly = (m) => Boolean(runKind) && m?.policy?.[runKind] === "ci_only";
-  const ciCapabilitiesHref = subjectRepo
-    ? `/repos/${subjectRepo}/settings/ci`
-    : "/repos";
-  const ciCapabilitiesLabel = subjectRepo
-    ? `${subjectRepo} → CI capabilities`
-    : "Repos → CI capabilities";
   const load = useCallback(
     (fresh) => {
       const subject = subjectRepo ? { kind: runKind, repo: subjectRepo } : null;
@@ -388,12 +390,14 @@ export default function GrantsPicker({
         severity: "warning",
         badge: "CI only",
         suffix: " (CI only)",
-        textNote: `This grant is ${policyNote}. Remove this grant, and enable it for the repository's CI jobs instead (${ciCapabilitiesLabel}).`,
+        textNote: `This grant is ${policyNote}. Remove this grant: a CI job that needs it declares it in its own .grain/workflows file (${REPO_ACCESS_DOC_LABEL}).`,
         note: (
           <>
-            This grant is {policyNote}. Remove this grant, and enable it for the
-            repository&apos;s CI jobs instead (
-            <Link href={ciCapabilitiesHref}>{ciCapabilitiesLabel}</Link>
+            This grant is {policyNote}. Remove this grant: a CI job that needs
+            it declares it in its own .grain/workflows file (
+            <Link href={REPO_ACCESS_DOC} target="_blank" rel="noreferrer">
+              {REPO_ACCESS_DOC_LABEL}
+            </Link>
             ).
           </>
         ),
@@ -745,13 +749,18 @@ export default function GrantsPicker({
                   <Link
                     href={
                       isCIOnly
-                        ? ciCapabilitiesHref
+                        ? REPO_ACCESS_DOC
                         : "/settings/capabilities#capability-policy"
                     }
+                    {...(isCIOnly
+                      ? { target: "_blank", rel: "noreferrer" }
+                      : {})}
                     onClick={(e) => e.stopPropagation()}
                     onKeyDown={(e) => e.stopPropagation()}
                   >
-                    {isCIOnly ? ciCapabilitiesLabel : "Settings → Capabilities"}
+                    {isCIOnly
+                      ? REPO_ACCESS_DOC_LABEL
+                      : "Settings → Capabilities"}
                   </Link>
                   )
                 </Typography>

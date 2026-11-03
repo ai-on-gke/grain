@@ -1219,13 +1219,22 @@ func ResolveCICapabilities(ctx context.Context, reg *model.CapabilityRegistry, c
 		// event to be judged on.
 		CI: true,
 	}
+	// The job's own ceiling (ci.Service.MaxRunTime, carried as ctx's
+	// deadline) and its teardown, as its capability pass is bounded
+	// (ciPassDeadline): what a provider mints for the job -- the
+	// package-publish refresh token, a CI API or model proxy token --
+	// then dies with the job even if no Revoke comes, rather than at the
+	// provider's own longest lease. No deadline is no bound, as before.
+	if end, ok := ctx.Deadline(); ok {
+		cc.Deadline = end.Add(ciReleaseTimeout).UTC()
+	}
 	for _, id := range ids {
 		// A capability reference has no in-process provider: it is
 		// minted through its capability server by the grant admission
-		// (CiGrantReservations.Acquire). Repository access, in either
-		// spelling, is neither: grantRepoAccess widens the proxy's scope
-		// for it.
-		if id == grainci.CapabilityName || model.IsCapabilityRef(id) || model.IsRepoAccessGrant(id) {
+		// (CiGrantReservations.Acquire). grain#ci, in either spelling,
+		// is added below whatever the list says; repository access, in
+		// either spelling, is widened on the proxy by grantRepoAccess.
+		if grainci.IsGrant(id) || model.IsCapabilityRef(id) || model.IsRepoAccessGrant(id) {
 			continue
 		}
 		provider, ok := reg.LookupFor(id, true)
@@ -1245,9 +1254,11 @@ func ResolveCICapabilities(ctx context.Context, reg *model.CapabilityRegistry, c
 		}
 		cc.Task.Grants = append(cc.Task.Grants, model.Grant{Capability: id, Via: model.GrantByDefault})
 	}
-	if _, ok := reg.Lookup(grainci.CapabilityName); ok {
-		cc.Task.Grants = append(cc.Task.Grants, model.Grant{Capability: grainci.CapabilityName, Via: model.GrantByDefault})
-	}
+	// Every job is grain CI's own, so its context holds grain#ci whether
+	// or not the job's list names it. No registry provider answers for it
+	// (it is a method of the in-process grain server), and ResolveGrants
+	// passes a capability reference by, so this is the whole of it.
+	cc.Task.Grants = append(cc.Task.Grants, model.Grant{Capability: grainci.Grant, Via: model.GrantByDefault})
 	resolved, err := model.ResolveGrants(ctx, reg, cc)
 	if err != nil {
 		return cc, nil, fmt.Errorf("resolving CI capabilities: %w", err)

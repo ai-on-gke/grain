@@ -347,3 +347,58 @@ func TestTheCIAPIIsAnsweredByGrainsOwnAPI(t *testing.T) {
 		t.Errorf("grain's API answered a sandbox's own request without an access code")
 	}
 }
+
+// A CI job's capability context carries the job's own deadline (its run's
+// ceiling, ctx's deadline, and the teardown after it), so what a provider
+// mints for the job is bounded by the job rather than by the provider's
+// longest lease: the walk's package-publish refresh tokens were all good
+// for 6h whatever the run's ceiling, because nothing set it
+// (docs/test-runs/2026-11-03-capabilities-ci-repo.md, F3). A job with no
+// deadline still states none.
+func TestACIJobsCapabilityContextCarriesItsDeadline(t *testing.T) {
+	gate := ciapi.NewEndpoint()
+	reg := ciAPIRegistry(gate)
+	refresh := packagepublish.NewRefresher()
+	refresh.Log = func(string, ...any) {}
+	reg.Register(packagepublish.New(packagepublish.Config{
+		Credentials: stubPackageCredentials{}, Refresh: refresh,
+		RefreshURL: func() string { return "http://192.0.2.1:9000" },
+	}))
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	end := time.Now().Add(90 * time.Minute)
+	ctx, cancel := context.WithDeadline(context.Background(), end)
+	defer cancel()
+	cc, resolved, err := ResolveCICapabilities(ctx, reg, nil, repo, "c1234-0", ci.EventManual, false,
+		[]string{packagepublish.CapabilityName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := end.Add(ciReleaseTimeout).UTC(); !cc.Deadline.Equal(want) {
+		t.Errorf("Deadline = %v, want the job's %v", cc.Deadline, want)
+	}
+	materialized, err := model.MaterializeGrants(context.Background(), reg, cc, resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leased := false
+	for _, m := range materialized {
+		if l := m.Materialization.Lease; l != nil && l.Capability == packagepublish.CapabilityName {
+			leased = true
+			if l.ExpiresAt == nil || !l.ExpiresAt.Equal(cc.Deadline) {
+				t.Errorf("package-publish lease expires %v, want the job's deadline %v", l.ExpiresAt, cc.Deadline)
+			}
+		}
+	}
+	if !leased {
+		t.Errorf("no package-publish lease was minted: %+v", materialized)
+	}
+
+	cc, _, err = ResolveCICapabilities(context.Background(), reg, nil, repo, "c1234-1", ci.EventManual, false,
+		[]string{packagepublish.CapabilityName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cc.Deadline.IsZero() {
+		t.Errorf("Deadline = %v for a job with no deadline, want none", cc.Deadline)
+	}
+}

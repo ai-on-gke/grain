@@ -202,6 +202,21 @@ const (
 	GrainHostExecMethod = "host-exec"
 	GrainHostExecRef    = GrainCapabilityServerID + "#" + GrainHostExecMethod
 	GrainHostExecGrant  = GrainHostExecRef + "={}"
+
+	// GrainCIMethod runs a repository's own .grain/workflows in grain's
+	// sandboxes for the branches a task pushes, and holds the merge
+	// queue until they pass (formerly grain-ci). grain grants it from a
+	// repository's CI Mode (adjustGrainCIGrant); nobody attaches it by
+	// hand.
+	GrainCIMethod = "ci"
+	GrainCIRef    = GrainCapabilityServerID + "#" + GrainCIMethod
+	GrainCIGrant  = GrainCIRef + "={}"
+
+	// GrainCICapability is the retired bare name of GrainCIGrant. It is
+	// still read as that grant wherever it was not rewritten (a
+	// repository's own .grain declaration, an older grain/config);
+	// schema migration 96 rewrote the stored rows.
+	GrainCICapability = "grain-ci"
 )
 
 func init() {
@@ -257,6 +272,21 @@ func IsGrainHostExecGrant(grant string) bool {
 // HasGrainHostExec reports whether any grant in grants opens grain#host-exec.
 func HasGrainHostExec(grants []string) bool {
 	return slices.ContainsFunc(grants, IsGrainHostExecGrant)
+}
+
+// IsGrainCIGrant reports whether grant names grain#ci (recorded or bare)
+// or the retired bare grain-ci alias.
+func IsGrainCIGrant(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if s == GrainCICapability {
+		return true
+	}
+	return CapabilityGrantRef(s) == GrainCIRef
+}
+
+// HasGrainCI reports whether any grant in grants opens grain#ci.
+func HasGrainCI(grants []string) bool {
+	return slices.ContainsFunc(grants, IsGrainCIGrant)
 }
 
 // ParseGrainSQLGrant reports whether grant names grain#sql (recorded or bare)
@@ -324,6 +354,7 @@ var legacyGrantReplacements = map[string]string{
 	"test-quarantine":  APIGrantPrefix + "test-quarantine",
 	"self-repair":      GrainHostExecGrant,
 	"git-push-any-ref": GitPushAnyRefGrant,
+	GrainCICapability:  GrainCIGrant,
 }
 
 // legacyGrantMultiReplacements maps retired bare capabilities that split into

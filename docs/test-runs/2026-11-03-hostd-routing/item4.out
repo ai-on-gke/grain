@@ -1,0 +1,32 @@
+[]
+task 21
+06:42:35 CLI pid 19031 is live under:   17106 (ws-a's hostd is 17106)
+{"state":"running","attempts":[{"outcome":null,"hostd":"ws-a"}]}
+06:42:35 stopping the daemon
+06:42:38 CLI still alive while the daemon is down: yes
+answering on $HR/ws-a/hostd.sock (v0.0.0-20261103062229-0750695788a4+dirty, protocol 4), offering cli agy ($HR/bin/fakeagy)
+process p-e085833c3e02ec12: cli "agy", pid 19031, run 21-1 of task 21, running for 3s, detached, no daemon attached
+06:42:38 starting the daemon
+06:42:39 {"state":"running","activity":"writing a file in the sandbox","attempts":[{"outcome":null,"detail":"","hostd":"ws-a"}]}
+06:43:01 {"state":"awaiting_reply","activity":null,"attempts":[{"outcome":"succeeded","detail":"the run made 1 tool call(s) [write_file x1]","hostd":"ws-a"}]}
+CLI after restart: gone
+--- daemon log about run 21-1
+2026/11/03 06:27:55 grain daemon: shutdown interrupted 0 run(s): 0 finished as interrupted, 0 left for the next start to recover; none counts against its task
+2026/11/03 06:37:51 grain daemon: shutdown interrupted 0 run(s): 0 finished as interrupted, 0 left for the next start to recover; none counts against its task
+2026/11/03 06:39:57 grain daemon: shutdown interrupted 0 run(s): 0 finished as interrupted, 0 left for the next start to recover; none counts against its task
+2026/11/03 06:40:33 grain daemon: shutdown interrupted 0 run(s): 0 finished as interrupted, 0 left for the next start to recover; none counts against its task
+2026/11/03 06:42:35 runhost: run 21-1's CLI "agy" started detached through grain hostd as p-e085833c3e02ec12 (pid 19031)
+2026/11/03 06:42:35 runhost: daemon stopping; leaving run 21-1's CLI running in grain hostd at cursor 0
+2026/11/03 06:42:35 orchestrator: run 21-1: left running in its run host for the next daemon to adopt
+2026/11/03 06:42:35 orchestrator: run 21-1 (task 21): orchestrator: run 21-1: agent: the daemon stopped; the run continues in its run host for the next daemon to adopt
+2026/11/03 06:42:35 grain daemon: shutdown interrupted 0 run(s): 0 finished as interrupted, 0 left for the next start to recover; none counts against its task
+2026/11/03 06:42:42 orchestrator: adopted grain hostd process hostd:p-e085833c3e02ec12 for run 21-1 at cursor 0 after a 7s gap
+2026/11/03 06:42:42 grain daemon: grain hostd ws-a adoption: 1 adopted, 0 lost, 0 unclaimed process(es) released
+2026/11/03 06:42:42 orchestrator: resuming adopted run 21-1 (task 21) from cursor 0; 7s of restart credited
+--- records
+task_id  selector  updated_at                             
+-------  --------  ---------------------------------------
+21       ws-a      2026-11-03 06:42:35.073607427 +0000 UTC
+run_id  task_id  hostd  instance       owner              at                                     
+------  -------  -----  -------------  -----------------  ---------------------------------------
+21-1    21       ws-a   debuerreotype  alice@example.com  2026-11-03 06:42:35.507596103 +0000 UTC

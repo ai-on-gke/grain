@@ -1507,7 +1507,7 @@ func grantAdmitterWithFrameworks(ctx context.Context, deps Deps, prepared map[st
 			if err := deps.Store.UpdateTask(callCtx, task.ID, func(t *model.Task) error {
 				if !grainci.Granted(t.Grants) {
 					t.Grants = append(t.Grants, model.Grant{
-						Capability: grainci.CapabilityName,
+						Capability: grainci.Grant,
 						Via:        model.GrantByDefault,
 					})
 				}
@@ -1516,7 +1516,7 @@ func grantAdmitterWithFrameworks(ctx context.Context, deps Deps, prepared map[st
 				return dispatch.Admission{}, err
 			}
 			task.Grants = append(task.Grants, model.Grant{
-				Capability: grainci.CapabilityName,
+				Capability: grainci.Grant,
 				Via:        model.GrantByDefault,
 			})
 			_ = clearAdmissionWait(callCtx, deps.Store, task.ID)

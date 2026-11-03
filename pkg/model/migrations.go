@@ -654,6 +654,18 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     96,
+		Description: "rewrite stored grain-ci grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/grain#ci={} (the in-process capability is retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames := map[string]string{GrainCICapability: GrainCIGrant}
+			if err := rewriteLegacyGrants(renames)(ctx, tx); err != nil {
+				return err
+			}
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities",
+				map[string][]string{GrainCICapability: {GrainCIGrant}})
+		},
+	},
+	{
+		Version:     97,
 		Description: "add allowed_principal and allowed_principal_migration for verified-identity sign-in access",
 		Statements: []string{
 			allowedPrincipalTable,

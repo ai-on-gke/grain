@@ -645,7 +645,7 @@ describe("GrantsPicker", () => {
       args: null,
       policy: { task: "ci_only", process: "ci_only" },
     };
-    const refusal = `${repoRead.ref} is a CI capability, not a task grant: it gives a repository's CI jobs read access to a repository, and only a CI job is handed it -- a task run is not one.`;
+    const refusal = `${repoRead.ref} is a CI capability, not a task grant: it gives a CI job read access to another repository, and only a CI job is handed it -- a task run is not one.`;
     api.mockImplementation(async (path, opts) => {
       if (path === "/api/capability-methods?kind=task&repo=acme%2Fwidgets")
         return [{ ...repoRead, policyRefusal: refusal }, gcpKey];
@@ -677,12 +677,19 @@ describe("GrantsPicker", () => {
     expect(row).toHaveAttribute("data-policy-verdict", "ci_only");
     expect(row).not.toHaveAttribute("data-policy-denied");
     expect(row).toHaveTextContent(
-      "CI only: not a grant for processes, granted under a repository's CI capabilities",
+      "CI only: not a grant for processes; a CI job declares it in its workflow's capabilities:",
     );
     expect(row).not.toHaveTextContent("capability policy");
+    // The repository's CI capabilities list does not grant repository
+    // access (docs/test-runs/2026-11-03-capabilities-ci-repo.md, F1), so
+    // the row points at how a job declares it rather than at that list.
+    expect(row).not.toHaveTextContent("CI capabilities");
     expect(
-      within(row).getByRole("link", { name: "Repos → CI capabilities" }),
-    ).toHaveAttribute("href", "/repos");
+      within(row).getByRole("link", { name: "Repository access docs" }),
+    ).toHaveAttribute(
+      "href",
+      expect.stringContaining("docs/ci-capabilities.md#repository-access"),
+    );
     await user.keyboard("{Escape}");
     unmount();
 
@@ -709,10 +716,11 @@ describe("GrantsPicker", () => {
     expect(row).toHaveAttribute("title", `${repoRead.ref} — ${refusal}`);
     expect(row).not.toHaveTextContent("capability policy");
     expect(
-      within(row).getByRole("link", {
-        name: "acme/widgets → CI capabilities",
-      }),
-    ).toHaveAttribute("href", "/repos/acme/widgets/settings/ci");
+      within(row).getByRole("link", { name: "Repository access docs" }),
+    ).toHaveAttribute(
+      "href",
+      expect.stringContaining("docs/ci-capabilities.md#repository-access"),
+    );
   });
 
   // A task's one run on a known repo is judged by the listing: a method

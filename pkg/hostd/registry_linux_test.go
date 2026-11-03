@@ -16,7 +16,11 @@ package hostd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptrace"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -207,5 +211,84 @@ func TestDisconnectDropsLiveSessionOfRevokedHostdOnly(t *testing.T) {
 	}
 	if ctl.remote.Disconnect("ws-a") {
 		t.Error("second Disconnect(ws-a) = true, want false")
+	}
+}
+
+// A run routed to one hostd of several carries its endpoints to that
+// hostd's machine (Remote.Carrier), not the default hostd's -- with none
+// configured, as on a registry-only daemon, the default carry fails --
+// and a carried listener serves a client that keeps its connection
+// alive across requests, as every CLI's HTTP client does: the second
+// request on one connection used to be cancelled, a 502 behind the
+// run's MCP reverse proxy (docs/test-runs/2026-11-03-hostd-routing.md).
+func TestACarryGoesToTheNamedHostdAndServesKeepAliveRequests(t *testing.T) {
+	ctl, _ := startRegistryController(t)
+	startNamedRemoteServer(t, ctl, "tok-a", "ws-a", "")
+	startNamedRemoteServer(t, ctl, "tok-b", "ws-b", "")
+	waitHostd(t, ctl.remote, "ws-a", true)
+	waitHostd(t, ctl.remote, "ws-b", true)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	if _, _, err := ctl.remote.CarryHTTP(ctx, http.NotFoundHandler()); !errors.Is(err, ErrRemoteNotConnected) {
+		t.Fatalf("CarryHTTP to the default hostd with none configured = %v, want ErrRemoteNotConnected", err)
+	}
+	// As the run's MCP reverse proxy does, a request whose context is
+	// already cancelled -- its connection read as gone -- is a 502.
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if err := r.Context().Err(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		_, _ = io.WriteString(w, "ok")
+	})
+	base, release, err := ctl.remote.Carrier("ws-a").CarryHTTP(ctx, ok)
+	if err != nil {
+		t.Fatalf("carrying to ws-a: %v", err)
+	}
+	defer release()
+
+	client := &http.Client{Transport: &http.Transport{MaxIdleConnsPerHost: 1}}
+	defer client.CloseIdleConnections()
+	for i := range 3 {
+		reused := false
+		trace := &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) { reused = info.Reused }}
+		req, _ := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodPost, base+"/mcp", strings.NewReader("{}"))
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || string(body) != "ok" {
+			t.Fatalf("request %d (connection reused: %v) = %d %q, want 200 ok", i, reused, resp.StatusCode, body)
+		}
+		if i > 0 && !reused {
+			t.Errorf("request %d opened a new connection; want the kept-alive one", i)
+		}
+	}
+
+	// The listener is ws-a's: ws-b going away leaves it, ws-a's does not.
+	ctl.remote.Disconnect("ws-b")
+	client.CloseIdleConnections()
+	if resp, err := client.Post(base+"/mcp", "application/json", strings.NewReader("{}")); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("after ws-b disconnected: %v %v, want ws-a's listener still serving", resp, err)
+	} else {
+		resp.Body.Close()
+	}
+	ctl.remote.Disconnect("ws-a")
+	client.CloseIdleConnections()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, err := client.Post(base+"/mcp", "application/json", strings.NewReader("{}"))
+		if err != nil {
+			break
+		}
+		resp.Body.Close()
+		if time.Now().After(deadline) {
+			t.Fatal("ws-a's carried listener still serves after ws-a disconnected")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

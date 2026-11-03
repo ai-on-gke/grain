@@ -140,7 +140,7 @@ func guardAutoMerge(ctx context.Context, tx *sql.Tx, t *Task) (*TaskEvent, error
 		return nil, fmt.Errorf("reading %s's auto-merge: %w", t.ID, err)
 	}
 	if before == t.AutoMerge {
-		return nil, nil
+		return declinedWhileOff(ctx, tx, t)
 	}
 	by, reason := autoMergeChangeFrom(ctx)
 	e := &TaskEvent{TaskID: t.ID, Kind: TaskEventAutoMergeOff, At: time.Now().UTC(), By: by, Reason: reason,
@@ -167,12 +167,47 @@ func guardAutoMerge(ctx context.Context, tx *sql.Tx, t *Task) (*TaskEvent, error
 	return e, nil
 }
 
+// declinedWhileOff is guardAutoMerge's event for a write that leaves
+// auto-merge off but declines it for the first time -- a person's PATCH
+// to false on a change a hold had already turned off. Nothing about
+// auto_merge changes, yet from here on only a person's Submit or PATCH
+// turns it back on, so it is recorded as an auto-merge-off by whoever
+// declined it (docs/test-runs/2026-11-03-operator-attribution.md F5).
+// Before this, the decision left no event and no timeline step.
+func declinedWhileOff(ctx context.Context, tx *sql.Tx, t *Task) (*TaskEvent, error) {
+	if t.AutoMerge || !AutoMergeDeclined(*t) {
+		return nil, nil
+	}
+	var one int
+	err := tx.QueryRowContext(ctx, "SELECT 1 FROM `task_link` WHERE `task_id` = ? AND `kind` = ?",
+		t.ID, string(LinkAutoMergeDeclined)).Scan(&one)
+	if err == nil {
+		return nil, nil
+	}
+	if err != sql.ErrNoRows {
+		return nil, fmt.Errorf("reading %s's auto-merge mark: %w", t.ID, err)
+	}
+	by, reason := autoMergeChangeFrom(ctx)
+	return &TaskEvent{TaskID: t.ID, Kind: TaskEventAutoMergeOff, At: time.Now().UTC(), By: by, Reason: reason,
+		Detail: autoMergeWriter()}, nil
+}
+
 // modelPackage is this package's import path, the prefix every frame of
 // the store's own machinery shares.
 const modelPackage = "github.com/ai-on-gke/grain/pkg/model"
 
+// autoMergeWrappers are functions outside this package that only pass an
+// edit through to UpdateTask on their callers' behalf. Naming one would
+// name every write the same (ui.(*Client).mutate, which every Client
+// edit goes through), so autoMergeWriter looks past them to the function
+// that made the change.
+var autoMergeWrappers = map[string]bool{
+	"github.com/ai-on-gke/grain/pkg/ui.(*Client).mutate": true,
+}
+
 // autoMergeWriter is the first function outside the store -- the caller
-// of UpdateTask or PutTask -- that is writing, as "pkg.Func (file.go:N)".
+// of UpdateTask or PutTask -- that is writing, as "pkg.Func (file.go:N)",
+// past any of autoMergeWrappers.
 func autoMergeWriter() string {
 	pcs := make([]uintptr, 48)
 	n := runtime.Callers(2, pcs)
@@ -181,7 +216,7 @@ func autoMergeWriter() string {
 		f, more := frames.Next()
 		fn := f.Function
 		if fn != "" && !strings.HasPrefix(fn, modelPackage) && !strings.HasPrefix(fn, "database/sql") &&
-			!strings.HasPrefix(fn, "runtime.") {
+			!strings.HasPrefix(fn, "runtime.") && !autoMergeWrappers[fn] {
 			if i := strings.LastIndex(fn, "/"); i >= 0 {
 				fn = fn[i+1:]
 			}
