@@ -758,3 +758,40 @@ func TestDeclaredRepoCapabilityRejectsMissingRepoAndScheduleAccess(t *testing.T)
 		t.Errorf("schedule with repo#write {repo}: got %q, want template-only refusal", schedErr)
 	}
 }
+
+// `trigger: {git_ref: ...}` fires a template when another repository's ref
+// moves (model.RecurrenceGitRef), and asks for a full ref name.
+func TestAScheduleFiresATemplateWhenAnotherRepositorysRefMoves(t *testing.T) {
+	files := map[string]string{
+		".grain/templates/sync.yml": "title: Sync the upstream release\n",
+		".grain/schedules/sync.yml": `
+template: sync
+trigger:
+  git_ref:
+    repo: upstream/core
+    ref: refs/tags/latest
+`,
+	}
+	declared := load(t, files)
+	if len(declared.Schedules) != 1 {
+		t.Fatalf("declared %d schedules, want 1", len(declared.Schedules))
+	}
+	r := declared.Schedules[0].Schedule.Recurrence
+	if r.Kind != model.RecurrenceGitRef || r.GitRef == nil ||
+		r.GitRef.Repo != "upstream/core" || r.GitRef.Ref != "refs/tags/latest" {
+		t.Fatalf("recurrence = %+v (git_ref %+v)", r, r.GitRef)
+	}
+
+	files[".grain/schedules/sync.yml"] = "template: sync\ntrigger:\n  git_ref:\n    repo: upstream/core\n    ref: latest\n"
+	if msg := loadErr(t, files); !strings.Contains(msg, "full `ref:`") {
+		t.Fatalf("short ref: error = %q", msg)
+	}
+	files[".grain/schedules/sync.yml"] = "template: sync\ntrigger:\n  git_ref:\n    ref: refs/tags/latest\n"
+	if msg := loadErr(t, files); !strings.Contains(msg, "repo: owner/name") {
+		t.Fatalf("no repo: error = %q", msg)
+	}
+	files[".grain/schedules/sync.yml"] = "trigger:\n  git_ref:\n    repo: upstream/core\n    ref: refs/tags/latest\n"
+	if msg := loadErr(t, files); !strings.Contains(msg, "needs a `template:`") {
+		t.Fatalf("no template: error = %q", msg)
+	}
+}

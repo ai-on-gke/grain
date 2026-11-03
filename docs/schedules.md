@@ -294,6 +294,46 @@ opening comment. Concluded runs arrive via `workflow_run` webhooks or the
 ETag-cached `GET /repos/{o}/{r}/actions/runs?status=completed` polling fallback
 and are deduplicated by `(repo, run_id, attempt)`.
 
+## Update: event-driven schedules triggered by another repository's ref
+
+A schedule can also fire when a ref moves, including a ref in a repository
+other than the one that declares the schedule (`RecurrenceGitRef`,
+`pkg/workflows/recurrence.go`):
+
+```yaml
+template: sync-oss-release
+trigger:
+  git_ref:
+    repo: upstream/core
+    ref: refs/tags/latest
+```
+
+- **`repo`** (required): `owner/name`, or `host/owner/name` for a repository
+  on another git host. It has to be on the deployment's target repo list, and
+  it is read with the git credential the deployment already holds for it.
+- **`ref`** (required): a full ref name such as `refs/tags/latest` or
+  `refs/heads/main`.
+
+The daemon checks the ref itself with `git ls-remote`, at most once every two
+minutes per schedule. No sandbox starts until the ref has moved. It compares
+the commit the ref peels to (an annotated tag's target commit, not the tag
+object), so a tag re-cut on the same commit does not fire. The first check
+only records where the ref is. After that, every change of commit fires the
+schedule's `template:` or `suite:` once. The filed task gets a comment
+naming the old and new commits. The last commit seen is stored per schedule
+(`git_ref_cursor`), so a restart neither fires again nor misses a move made
+while the daemon was down.
+
+When the schedule's overlap policy holds the firing back (an earlier firing's
+task is still open), the move is not dropped: the stored commit stays where
+it was, and the schedule fires once that task closes. A move that happens
+while the schedule is paused fires when it is resumed.
+
+This replaces polling a ref from a short `every:` cadence. Such a poll starts
+an agent run each time, and most of those runs end `nothing_needed`. A
+long-cadence schedule can still sit beside the trigger as a safety net, for
+example while the watched repository is unreachable.
+
 ## Update: templates (bwsalmon/agents#516)
 
 A schedule's own content -- title, description, target repo, base
