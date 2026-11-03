@@ -181,7 +181,7 @@ func TestRunCycleForwardsAllKnownToolGrants(t *testing.T) {
 		model.GrainSQLReadGrant,
 		model.GrainSQLWriteGrant,
 		bootstrap.CapabilityName,
-		grainci.CapabilityName,
+		grainci.Grant,
 		readissues.CapabilityName,
 	}
 

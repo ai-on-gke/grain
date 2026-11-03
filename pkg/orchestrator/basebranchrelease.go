@@ -797,7 +797,7 @@ func fileBaseBranchReleaseTriage(ctx context.Context, deps Deps, row model.BaseB
 
 	if !grainci.Granted(grants) {
 		grants = append(grants, model.Grant{
-			Capability: grainci.CapabilityName,
+			Capability: grainci.Grant,
 			Via:        model.GrantByGrain,
 		})
 	}
