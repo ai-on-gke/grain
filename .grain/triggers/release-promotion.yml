@@ -6,6 +6,7 @@ on: pull_request
 paths:
   - .grain/workflows/promote-release.yml
   - .grain/workflows/promote.yml
+  - .github/workflows/promote-release.yml
   - scripts/release-from-trunk.sh
   - scripts/release-images.sh
   - scripts/verify-release-approval.sh
