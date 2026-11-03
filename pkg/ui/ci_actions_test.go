@@ -158,6 +158,16 @@ func newFakeActions(now time.Time) *fakeActions {
 // repository's.
 func actionsServer(t *testing.T, forge *fakeActions, now time.Time) (*ui.Server, *ui.Client, *model.Store) {
 	t.Helper()
+	if forge == nil {
+		return actionsServerOver(t, nil, now)
+	}
+	return actionsServerOver(t, forge, now)
+}
+
+// actionsServerOver is actionsServer over any Actions reader, such as a
+// github.RESTClient in front of githubsim; nil leaves the client's own.
+func actionsServerOver(t *testing.T, forge github.ActionsReader, now time.Time) (*ui.Server, *ui.Client, *model.Store) {
+	t.Helper()
 	grainStarted := now.Add(-time.Hour)
 	runner := &fakeCIRunner{runs: []ci.Run{{ID: "run-g1", Repo: "acme/widgets", Ref: "main",
 		Conclusion: ci.ConclusionSuccess, StartedAt: &grainStarted, FinishedAt: &grainStarted}}}
