@@ -2,11 +2,11 @@
 
 **Status:** draft for review. Normative.
 **Specifies:** [`external-cli.design.md`](../../design/external-cli.design.md)
-**Related:** [`sandbox-first-agent-surface.design.md`](../../design/sandbox-first-agent-surface.design.md), [`grain-namespace.design.md`](../../design/grain-namespace.design.md), [`operator-attribution.spec.md`](../operator-attribution/operator-attribution.spec.md), [`task-priorities.spec.md`](../task-priorities/task-priorities.spec.md), [`docs/agent-api.md`](../../../docs/agent-api.md), [`docs/access-code.md`](../../../docs/access-code.md)
+**Related:** `design/spec/cli/` (the full host and in-sandbox `grain` CLI command/flag specification), [`sandbox-first-agent-surface.design.md`](../../design/sandbox-first-agent-surface.design.md), [`grain-namespace.design.md`](../../design/grain-namespace.design.md), [`operator-attribution.spec.md`](../operator-attribution/operator-attribution.spec.md), [`task-priorities.spec.md`](../task-priorities/task-priorities.spec.md), [`docs/agent-api.md`](../../../docs/agent-api.md), [`docs/access-code.md`](../../../docs/access-code.md)
 
 The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT**, and **MAY** in this document are to be interpreted as described in RFC 2119.
 
-This specification defines the external `grain` command-line interface (`pkg/cli`, `cmd/grain`), the server endpoints and authorization rules it relies on (`pkg/ui`, `pkg/model`, `pkg/namespace`), and the onboarding surfaces (`grain skill`, `grain mcp`, Settings → CLI, and `/cli/install.sh`) used by humans and interactive workstation agents outside a Grain sandbox.
+This specification defines the **external-agent workflow** over the `grain` CLI (`pkg/cli`, `cmd/grain`), the server endpoints and authorization rules that back it (`pkg/ui`, `pkg/model`, `pkg/namespace`), and its workstation onboarding surfaces (`grain skill`, `grain mcp`, Settings → CLI, and `/cli/install.sh`). Baseline command and flag syntax already shipped across the host and in-sandbox `grain` CLI belongs to `design/spec/cli/` as the single command-reference source of truth; sections 5–7 below specify only the workflow deltas, API contracts, and external-caller semantics required beyond baseline CLI behaviour.
 
 ---
 
@@ -213,23 +213,22 @@ Resolved credentials **MUST** be sent as `Authorization: Bearer <token>` on JSON
 
 ---
 
-## 5. Task, inbox, waiting, and log commands
+## 5. External task, inbox, waiting, and log workflow deltas
 
-### 5.1 `grain list` and `grain get` {#XC-18}
+Baseline flag syntax and output behaviour for `grain list`, `grain get`, `grain create`, and `grain comment` are specified in `design/spec/cli/`. For the external-agent workflow, the following extensions and contracts apply:
 
-1. `grain list` **MUST** support filtering by `-state`, `-repo`, `-search`, `-author`, `-priority`, and `-filter <expr>` (repeatable), hiding `closed` and `deferred` tasks by default unless requested or configured, and **MUST** add two built-in `-filter` predicates:
+### 5.1 `grain list` provenance filters and `grain get --comments-since` {#XC-18}
+
+1. In addition to its baseline filters (`design/spec/cli/`), `grain list` **MUST** support two `-filter` predicates for external orchestration:
    - `derived_from:eq:<owner/name#pr>` (or PR URL): matches tasks whose provenance/links record `Derived from:` pointing at that PR;
    - `filed_via:has:<substring>`: case-insensitively matches tasks whose `filed_via` ([#XC-15](#XC-15)) contains `<substring>` (for example `session=abc123` or `jetski/`).
-2. `grain get <id> [--comments-since <RFC3339>] [--json]` (`GET /api/tasks/{id}?comments_since=<RFC3339>`, scope `tasks:read`) **MUST** return the task's metadata, current state, PR URL, merge commit (if merged), and conversation comments; when `--comments-since` is given, only conversation items created strictly after that timestamp **MUST** be returned.
+2. `grain get <id>` (`GET /api/tasks/{id}`, scope `tasks:read`) **MUST** accept `--comments-since <RFC3339>` (`?comments_since=<RFC3339>`) so external polling loops receive only conversation items created strictly after that timestamp.
 
-### 5.2 `grain create` {#XC-19}
+### 5.2 `grain create` external authoring flags (`--body-file` and `--design`) {#XC-19}
 
-`grain create` **MUST** support:
-- `--repo <owner/name>` or `--no-repo`, and `--base <branch>`;
-- `--title <text>`;
-- `--body <text>` and `--body-file <path|->` (`-` reads UTF-8 markdown from stdin; passing both `--body` and `--body-file` **MUST** fail with exit `2`);
-- `--design <path>`: records `<path>` (a `design/...` design or spec file) on the task's provenance links so downstream reviews and commits inherit the design/spec chain;
-- repeatable `--depends-on <task-id>`, `--position front|end`, `--priority <N>`, repeatable `--field <key=value>`, repeatable `--capability`, `--read`, `--write`, `--attach`, and `--approve` (`--json` returns the created task object including `id` and `state`).
+Alongside its baseline task-creation flags (`-repo`/`-no-repo`, `-base`, `-title`, `-body`, `-depends-on`, `-position`, `-priority`, `-field`, `-capability`, `-read`, `-write`, `-attach`, `-approve`; see `design/spec/cli/`), `grain create` **MUST** support:
+- `--body-file <path|->` (`-` reads UTF-8 markdown from stdin; passing both `--body` and `--body-file` **MUST** fail with exit `2`);
+- `--design <path>`: records `<path>` (a `design/...` design or spec file) on the task's provenance links so downstream reviews and commits inherit the design/spec chain.
 
 ### 5.3 `grain comment` and `grain reply` {#XC-20}
 
@@ -297,11 +296,13 @@ Resolved credentials **MUST** be sent as `Authorization: Bearer <token>` on JSON
 
 ---
 
-## 7. CI, merge-queue, and pull request commands
+## 7. External CI, merge-queue, and pull request workflow
 
-### 7.1 `grain ci` external subcommands {#XC-26}
+Baseline `grain ci` subcommands (`list`, `show`, `watch`, `run`, `cancel`, `cache`, `artifact`, `faults` in `pkg/cli/cicmd.go`) and the in-sandbox `grain ci` / `grain pr` / `grain merge-queue` subcommands (`pkg/sandboxcli`) are specified in `design/spec/cli/`. Outside a sandbox, the external-agent workflow adds the following commands and API contracts:
 
-In addition to `grain ci list`, `show`, `watch`, `run`, `cancel`, `cache`, `artifact`, and `faults` (`pkg/cli/cicmd.go`), the external CLI **MUST** implement:
+### 7.1 External `grain ci wait`, `retrigger`, and `test-history` {#XC-26}
+
+`pkg/cli/cicmd.go` **MUST** expose three workflow verbs outside the sandbox (sharing formatting/types with the in-sandbox implementations in `design/spec/cli/`):
 
 1. `grain ci wait (<run-id> | --pr <url|owner/name#n> | --ref <branch> --repo <owner/name>) [--jobs <j1,j2>] [--timeout 30m] [--json]` (`ci:read`): attaches to the specified or latest in-flight CI run on the PR/branch, blocks via long-poll slices (with **no** `RunWaitCredits`) up to `--timeout` (default `30m`), prints the verdict with failing-job details and shared-fault annotations (`GrainCISharedFaults`), and exits `0` on `success`, `1` on `failure`/`cancelled`/`timed_out`, or `5` when `--timeout` elapses while the run is still in progress.
 2. `grain ci retrigger <run-id> [--jobs <j1,j2>] [--json]` (`ci:write`): reruns failed jobs of `<run-id>` once with cache disabled, matching in-sandbox `grain ci retrigger`.
@@ -374,9 +375,11 @@ In addition to `grain ci list`, `show`, `watch`, `run`, `cancel`, `cache`, `arti
 
 ---
 
-## 9. Relationship to the in-sandbox `grain` CLI
+## 9. Boundary with `design/spec/cli/` and the in-sandbox `grain` CLI
 
-`design/design/sandbox-first-agent-surface.design.md` specifies the in-sandbox `grain` CLI (`pkg/sandboxcli`), which runs inside a Grain task's VM/container against the local git/API proxy (`http://127.0.0.1:9728`). The two surfaces coexist in one `grain` binary without contradiction:
+`design/spec/cli/` is the normative reference for the whole `grain` CLI's command and flag surface (both host `pkg/cli` and in-sandbox `pkg/sandboxcli`), while `design/design/sandbox-first-agent-surface.design.md` describes the in-sandbox proxy architecture (`http://127.0.0.1:9728`). Once new verbs specified here (`context`, `login`, `logout`, `whoami`, `reply`, `inbox`, `wait`, `logs`, `fs`, `merge-queue`, `pr`, `skill`, `mcp`) land in code, their canonical flag tables merge into `design/spec/cli/` while their external-agent auth, attribution, scope, and long-poll rules remain here.
+
+The host/external CLI and in-sandbox CLI coexist in one `grain` binary without contradiction:
 
 1. **Dispatch boundary (`cmd/grain`, [#XC-3](#XC-3)):** `pkg/sandboxcli.MaybeRun` handles invocations inside a task sandbox (detected via `/etc/grain/sandbox.env` or `$GRAIN_SANDBOX_CLI`) and yields to `pkg/cli` whenever `GRAIN_SANDBOX_CLI=0` or an explicit external target (`-server`, `$GRAIN_SERVER`, `--context`, `$GRAIN_CONTEXT`) is given.
 2. **Namespace (`grain ls|read|grep` vs `grain fs ls|cat|read|grep`, [#XC-24](#XC-24)–[#XC-25](#XC-25)):** Inside a sandbox, `ls`, `read`, and `grep` are top-level verbs; on a workstation, `pkg/cli` already owns host/operator top-level verbs, so namespace commands live under `grain fs` and accept both `cat` and `read` over the same `pkg/namespace` client logic.
