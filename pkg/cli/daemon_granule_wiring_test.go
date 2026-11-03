@@ -117,7 +117,7 @@ exec)
   cd %q && exec "$@"
   ;;
 inspect)
-  echo running
+`+fakeDockerInspect+`
   ;;
 *)
   echo "fake docker: unexpected subcommand: $*" >&2
@@ -130,6 +130,17 @@ esac
 	// under sudo, without this.
 	install(t, dir, "nft", "#!/bin/sh\nexit 0\n")
 }
+
+// fakeDockerInspect is a fake docker's answer to `docker inspect`: the
+// address a VM's host firewall chain is written for, which every granule
+// VM gets (orchestrator's enforceGuestNetwork -- open-network ones too),
+// no network whose bridge port has to be found, and "running" for every
+// other question asked of a container.
+const fakeDockerInspect = `  case "$*" in
+  *GlobalIPv6Address*) echo "172.18.0.2|16|172.18.0.1|||" ;;
+  *"len .NetworkSettings.Networks"*) echo 0 ;;
+  *) echo running ;;
+  esac`
 
 // fakeGuestSudoDir is a directory holding a `sudo` that refuses
 // everything, put ahead of the real one for the commands a fake guest
@@ -270,7 +281,7 @@ func TestRunBuildsAGranuleVMForADispatchUsingCreateArgs(t *testing.T) {
 	want := "vm create " + orchestrator.VMNamePrefix + sandbox + " -state-dir " + cfg.GranuleStateDir +
 		" -backend docker -image gs://bucket/granule-guest-deadbeef.qcow2" +
 		" -kontur-image " + daemon.DefaultSandboxImage +
-		" -cpus 2 -memory-mb 8192 -disk-size-mb 30720 -memory-limit-mb 8704 -oom-score-adj 500"
+		" -cpus 2 -memory-mb 8192 -disk-size-mb 30720 -memory-limit-mb 10240 -oom-score-adj 500"
 	if !strings.Contains(string(data), want) {
 		t.Errorf("granule invoked as %q, want a %q among the calls", data, want)
 	}

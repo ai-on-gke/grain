@@ -193,7 +193,7 @@ var sandboxCommandFlags = map[string][]string{
 	"ls":                    {"glob"},
 	"read":                  {"tail", "offset", "limit", "lines", "n", "cursor", "since", "page"},
 	"grep":                  {"i", "C", "glob", "max"},
-	"ci list":               {"ref", "conclusion", "job", "since", "limit", "repo", "task", "provider"},
+	"ci list":               {"ref", "conclusion", "job", "workflow", "since", "limit", "repo", "task", "provider"},
 	"ci show":               nil,
 	"ci test-history":       {"limit", "repo"},
 	"ci log":                {"task", "repo", "job", "step", "attempt", "tail", "offset", "limit", "lines", "n"},
@@ -455,9 +455,9 @@ func (c *sandboxCLI) run(args []string) error {
 			q.Set("context", v)
 		}
 		q.Set("n", "1")
-		return c.fs(uri, q)
+		return c.grep(uri, q)
 	case "ci list":
-		return c.get("/cli/ci/runs", p.query("ref", "conclusion", "job", "since", "limit", "repo", "task", "provider"), c.out)
+		return c.get("/cli/ci/runs", p.query("ref", "conclusion", "job", "workflow", "since", "limit", "repo", "task", "provider"), c.out)
 	case "ci show":
 		run, err := p.arg(0, "run-id")
 		if err != nil {
@@ -650,6 +650,34 @@ func (c *sandboxCLI) fs(uri string, q url.Values) error {
 		return err
 	}
 	return c.get(p, q, c.out)
+}
+
+// grep is fs for a ?grep= query, except that a walk the namespace cut
+// short before finding anything exits 1: what it did not search may hold
+// the match, so an empty answer with exit 0 would read as "not there".
+func (c *sandboxCLI) grep(uri string, q url.Values) error {
+	p, err := fsPath(uri)
+	if err != nil {
+		return err
+	}
+	resp, err := c.do(p, q)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		fmt.Fprintln(c.errOut, "grain: "+strings.TrimSpace(string(body)))
+		return errSandboxReported
+	}
+	if _, err := io.Copy(c.out, resp.Body); err != nil {
+		return err
+	}
+	if resp.Header.Get("X-Grain-Walk-Truncated") == "true" && resp.Header.Get("X-Grain-Matches") == "0" {
+		fmt.Fprintf(c.errOut, "grain grep: no match in the part of %s searched before the walk cap, and the rest was not searched: narrow the path or pass --glob\n", uri)
+		return errSandboxReported
+	}
+	return nil
 }
 
 // get streams path's response body to w, or prints the proxy's refusal.

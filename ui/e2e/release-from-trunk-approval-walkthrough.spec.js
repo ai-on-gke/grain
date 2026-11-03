@@ -47,14 +47,16 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
     );
     return list.find((n) => n.subject === subject);
   };
-  const raisePendingRelease = async (version) => {
+  const raisePendingRelease = async (version, body) => {
     await ok(
       await page.request.post("/api/notifications", {
         data: {
           subject: `release.pending:${version}`,
           severity: "warning",
           title: `${version} is ready to promote (${version}-rc.1 passed its soak)`,
-          body: `${version}-rc.1 passed its 24h staging soak and is staged as ${version}-pending.`,
+          body:
+            body ||
+            `${version}-rc.1 passed its 24h staging soak and is staged as ${version}-pending.`,
           repo: "ai-on-gke/grain",
           actions: ["approve-release", "reject-release"],
         },
@@ -169,7 +171,52 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
   expect(n260?.clearedAt).toBeTruthy();
   expect(n260?.clearedBy).toMatch(/^human:/);
 
-  // 4. Confirm an agent token is refused even when holding api:releases:write.
+  // 4. Raise v2.8.0 on a short soak: the Inbox says so beside its
+  // Approve, and approving it asks about the short soak and accepts it
+  // with short_soak_ok.
+  await raisePendingRelease(
+    "v2.8.0",
+    "v2.8.0-rc.1 passed its 24h staging soak and is staged as v2.8.0-pending.\n\n" +
+      "SHORT SOAK: under the 22h minimum; approving it needs short_soak_ok: true.\n\n" +
+      "Soak: soaked 1h00m of 24h (FORCE=true): PASS",
+  );
+  await page.goto("/inbox");
+  const v280Row = section
+    .getByTestId("inbox-notification")
+    .filter({ hasText: "v2.8.0 is ready to promote" });
+  await expect(v280Row).toBeVisible();
+  const soak = v280Row.getByTestId("inbox-release-soak");
+  await expect(soak).toHaveText("SHORT SOAKsoaked 1h00m of 24h (FORCE=true)");
+  const approveShort = v280Row.getByRole("button", {
+    name: "Approve short soak",
+  });
+  const soakBox = await soak.boundingBox();
+  const approveShortBox = await approveShort.boundingBox();
+  expect(soakBox.x + soakBox.width).toBeLessThanOrEqual(approveShortBox.x);
+  expect(
+    Math.abs(
+      soakBox.y +
+        soakBox.height / 2 -
+        (approveShortBox.y + approveShortBox.height / 2),
+    ),
+  ).toBeLessThanOrEqual(2);
+
+  dialogMessage = "";
+  page.once("dialog", (dialog) => {
+    dialogMessage = dialog.message();
+    dialog.accept();
+  });
+  const approval = page.waitForRequest((req) =>
+    req.url().endsWith("/pending-releases/v2.8.0/approve"),
+  );
+  await approveShort.click();
+  expect((await approval).postDataJSON()).toEqual({ short_soak_ok: true });
+  expect(dialogMessage).toContain("Approve v2.8.0 on a SHORT SOAK?");
+  expect(dialogMessage).toContain("soaked 1h00m of 24h (FORCE=true)");
+  await expect(v280Row).toHaveCount(0);
+  expect(await ciRuns()).toHaveLength(4);
+
+  // 5. Confirm an agent token is refused even when holding api:releases:write.
   await ok(
     await page.request.post("/api/tasks/1/capabilities", {
       data: { id: "api:releases:write", attach: true },
@@ -187,5 +234,5 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
     const body = await res.json();
     expect(body.error).toContain(`only a person may ${verb} a release`);
   }
-  expect(await ciRuns()).toHaveLength(3);
+  expect(await ciRuns()).toHaveLength(4);
 });

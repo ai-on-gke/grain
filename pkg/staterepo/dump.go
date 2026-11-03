@@ -220,6 +220,10 @@ func Export(ctx context.Context, db *sql.DB, dir string) error {
 // per-call logs pruned locally after their retention window.
 var LocalTables = map[string]bool{
 	"task_run_api_call": true,
+	// The digests of each remote hostd's tokens (model.Hostd): the
+	// registry itself is exported, its credentials are not, and a store
+	// restored from the repository mints them again (Rotate).
+	"hostd_token": true,
 }
 
 // exportAll is Export's body, against whatever is already reading: the

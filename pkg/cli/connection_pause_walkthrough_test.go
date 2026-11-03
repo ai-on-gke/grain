@@ -42,6 +42,10 @@ if [ "$1" = "--version" ]; then
 	echo "codex-cli REVIEWED_VERSION"
 	exit 0
 fi
+if [ "$1 $2" = "debug models" ]; then
+	echo '{"models":[{"slug":"gpt-test"}]}'
+	exit 0
+fi
 printf '%s\n' "$OPENAI_API_KEY" >> "$GRAIN_MODEL_DISPATCH_LOG"
 if [ "$OPENAI_API_KEY" = "EXHAUSTED_KEY" ]; then
 	echo '{"type":"turn.failed","error":{"message":"You have hit your usage limit for this plan. Try again in 2h 0m."}}'

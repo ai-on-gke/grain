@@ -119,3 +119,36 @@ func TestAPersonApprovesOrRejectsAPendingRelease(t *testing.T) {
 		}
 	}
 }
+
+// A short soak is accepted only by a person saying so on the approval:
+// short_soak_ok reaches the run in a field no API caller can set, an
+// approval without it carries nothing, and a rejection refuses it.
+func TestAPersonMayAcceptAShortSoakOnTheApproval(t *testing.T) {
+	srv, _, _, runner := approvalServer(t)
+	path := "/api/repos/ai-on-gke/grain/pending-releases/v2.4.0/"
+
+	if rec := do(t, srv, http.MethodPost, path+"approve", ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("a plain approval: %d %s, want 202", rec.Code, rec.Body)
+	}
+	if runner.started[0].ReleaseShortSoakOK {
+		t.Errorf("an approval without short_soak_ok accepted a short soak")
+	}
+
+	rec := do(t, srv, http.MethodPost, path+"approve", `{"short_soak_ok":true}`)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"shortSoakOk":true`) {
+		t.Fatalf("an approval accepting a short soak: %d %s, want 202 saying so", rec.Code, rec.Body)
+	}
+	if got := runner.started[1]; !got.ReleaseShortSoakOK || got.RequestedByKind != "human" {
+		t.Errorf("approval with short_soak_ok started %+v, want a person's run accepting the short soak", got)
+	}
+
+	if rec := do(t, srv, http.MethodPost, path+"reject", `{"short_soak_ok":true}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("a rejection with short_soak_ok: %d %s, want 400", rec.Code, rec.Body)
+	}
+	if rec := do(t, srv, http.MethodPost, path+"approve", `{"short_soak_ok":"yes"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("a malformed short_soak_ok: %d %s, want 400", rec.Code, rec.Body)
+	}
+	if len(runner.started) != 2 {
+		t.Errorf("started %d runs, want 2: a refused decision starts nothing", len(runner.started))
+	}
+}

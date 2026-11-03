@@ -66,6 +66,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Refuse a patch tag that did not come from its release branch
+        # A vX.Y.Z tag with Z >= 1 publishes only if it was cut on
+        # release/vX.Y.Z from vX.Y.<Z-1>, or carries nothing but fix:
+        # commits past vX.Y.0 (docs/release-candidate-management.md,
+        # section 9). v3.0.1 and v3.0.2 were main's head, feat: and all.
+        run: bash ./scripts/patch-tag-guard.sh "${GITHUB_REF:-}"
+
       - name: Free runner disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
@@ -266,6 +273,10 @@ jobs:
           image="$RELEASE_IMAGE_GRAIN"
           echo "tests/container against $image"
           export GRAIN_TEST_IMAGE="$image"
+          # The published releases TestUpgradeFromReleasedVersions upgrades
+          # from (latest and floor); without it that test skips, and a skip
+          # fails this step.
+          export GRAIN_UPGRADE_RELEASE_IMAGE="ghcr.io/${RELEASE_IMAGE_REPO,,}/grain"
           go test ./tests/container/... -count=1 -v -timeout 30m 2>&1 | tee /tmp/container.log
           if grep -q -- "--- SKIP" /tmp/container.log; then
             grep -- "--- SKIP" /tmp/container.log >&2

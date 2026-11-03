@@ -22,6 +22,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App.jsx";
+import api from "./api.js";
 import { DISCARD_PROMPT } from "./components/Overlay.jsx";
 import { initialTasks, resetAppTestState, setupApi } from "./appTestHarness.js";
 
@@ -97,6 +98,48 @@ describe("App", () => {
     expect(
       await screen.findByText("Weekly dependency bump"),
     ).toBeInTheDocument();
+  });
+
+  // A raw task schedule's Keep running is a box on its pane, read back
+  // from what was saved and sent on Save (2026-11-03 walkthrough: the
+  // API took keepRunning but the form had no way to say it).
+  it("reads and saves a schedule's Keep running", async () => {
+    const schedule = {
+      id: "sched-1",
+      title: "Nightly dependency bump",
+      description: "",
+      repo: "acme/widgets",
+      base: "",
+      autoMerge: false,
+      keepRunning: true,
+      recurrence: { kind: "everyNHours", everyNHours: 24 },
+      enabled: true,
+      nextRunAt: "2026-08-29T00:00:00Z",
+    };
+    setupApi(initialTasks, [schedule]);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Fix bug");
+
+    await user.click(screen.getByRole("button", { name: /^Processes/ }));
+    await user.click(await screen.findByText("Nightly dependency bump"));
+    const box = await screen.findByRole("checkbox", { name: "Keep running" });
+    expect(box).toBeChecked();
+    await user.click(box);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(
+        api.mock.calls.find(
+          ([path, opts]) =>
+            path === "/api/schedules/sched-1" && opts?.method === "PATCH",
+        ),
+      ).toBeTruthy(),
+    );
+    const [, opts] = api.mock.calls.find(
+      ([path, o]) => path === "/api/schedules/sched-1" && o?.method === "PATCH",
+    );
+    expect(JSON.parse(opts.body)).toMatchObject({ keepRunning: false });
   });
 
   it("switches a schedule to every N minutes", async () => {

@@ -702,6 +702,10 @@ func parseSchedule(f file, repo model.RepoRef, templates, suites map[string]bool
 				"repository declares, named by file (%s/%s.yml)",
 				f.path, suite, model.SuiteDeclarationDir, suite)
 		}
+		if sched.Base == "" {
+			return model.Schedule{}, fmt.Errorf("%s: a schedule that runs a suite needs `base:` -- "+
+				"a suite run has no default branch to fall back to", f.path)
+		}
 		id := model.RepoDeclaredID(model.DeclaredSuite, repo, suite)
 		sched.SuiteID = &id
 		sched.Title = displayName(raw.Name, f.stem)

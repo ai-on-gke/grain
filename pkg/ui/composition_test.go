@@ -614,3 +614,38 @@ func TestCompositionShowsATemplatesOwnPriority(t *testing.T) {
 		}
 	}
 }
+
+func TestCompositionShowsKeepRunningWhereItIsOn(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	tmpl := templateForComposition(t, c, ctx, ui.CreateTemplateRequest{
+		Name: "Standing", Title: "Standing work", Repo: "acme/widgets", KeepRunning: true,
+	})
+	plain := templateForComposition(t, c, ctx, ui.CreateTemplateRequest{
+		Name: "Plain", Title: "Plain work", Repo: "acme/widgets",
+	})
+
+	got, err := c.TemplateComposition(ctx, tmpl.ID, "acme/widgets", "main", nil, true)
+	if err != nil {
+		t.Fatalf("composing the template: %v", err)
+	}
+	wantField(t, got.Tasks[0], "keepRunning", "template", "on")
+
+	inline, err := c.DraftScheduleComposition(ctx, ui.CreateScheduleRequest{
+		Title: "Inline standing work", Repo: "acme/widgets", KeepRunning: true, Recurrence: everyDay,
+	})
+	if err != nil {
+		t.Fatalf("composing a draft schedule: %v", err)
+	}
+	wantField(t, inline.Tasks[0], "keepRunning", "schedule", "on")
+
+	other, err := c.TemplateComposition(ctx, plain.ID, "acme/widgets", "main", nil, true)
+	if err != nil {
+		t.Fatalf("composing the plain template: %v", err)
+	}
+	for _, f := range other.Tasks[0].Fields {
+		if f.Name == "keepRunning" {
+			t.Errorf("a template that does not keep running previews %+v; want no keepRunning row", f)
+		}
+	}
+}

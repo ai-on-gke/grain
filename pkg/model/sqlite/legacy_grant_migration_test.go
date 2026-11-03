@@ -104,7 +104,7 @@ var retiredGrants = []struct {
 	{86, "corp-research", []string{model.CorpResearchGrant}},
 	{88, "repo-read:acme/tools", []string{model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
 	{88, "repo-write:acme/tools", []string{model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
-	{91, "grain-ci", []string{model.GrainCIGrant}},
+	{95, "grain-ci", []string{model.GrainCIGrant}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'

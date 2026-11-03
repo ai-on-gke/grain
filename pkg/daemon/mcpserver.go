@@ -38,6 +38,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
+	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -191,7 +192,7 @@ func (d DaemonTasks) Task(ctx context.Context, id string) (mcp.TaskRecord, error
 	if err != nil {
 		return mcp.TaskRecord{}, err
 	}
-	record := mcp.TaskRecord{TaskSummary: taskSummary(detail.Task), Description: detail.Description, Author: detail.Author, AuthorKind: detail.AuthorKind, Base: detail.Base, Capabilities: detail.Capabilities, PullRequest: detail.PullRequest, FailedAttempts: detail.FailedAttempts, LastFailureAt: detail.LastFailureAt, LastFailureReason: detail.LastFailureReason, Activity: mcp.TaskActivity{Note: detail.Activity, At: detail.ActivityAt, BySetup: detail.ActivityBySetup}}
+	record := mcp.TaskRecord{TaskSummary: taskSummary(detail.Task), Description: detail.Description, Author: detail.Author, AuthorKind: detail.AuthorKind, Base: detail.Base, Capabilities: detail.Capabilities, PullRequest: detail.PullRequest, PullRequestMergedAt: detail.PrMergedAt, PullRequestClosedAt: detail.PrClosedAt, FailedAttempts: detail.FailedAttempts, LastFailureAt: detail.LastFailureAt, LastFailureReason: detail.LastFailureReason, Activity: mcp.TaskActivity{Note: detail.Activity, At: detail.ActivityAt, BySetup: detail.ActivityBySetup}}
 	for _, a := range detail.Attempts {
 		record.Attempts = append(record.Attempts, mcp.TaskAttempt{Number: a.Number, StartedAt: a.StartedAt, FinishedAt: a.FinishedAt, Outcome: a.Outcome, Detail: a.Detail, PromptBytes: a.PromptBytes, PromptTokens: a.PromptTokens, Model: a.Model, AgentFramework: a.AgentFramework})
 	}
@@ -551,8 +552,15 @@ func (d daemonConfigChanges) ProposeConfigChange(ctx context.Context, p mcp.Conf
 	})
 }
 
-// writesConfigRepo reports whether t may push grain/config.
+// writesConfigRepo reports whether t may push grain/config from the
+// grain-state checkout propose_config_change's script starts in. That
+// checkout is made only for a task with no repo of its own
+// (orchestrator.wantsStateCheckout): one with a Repo is checked out into
+// that repo instead, so it is not offered a tool that could only fail.
 func writesConfigRepo(t ui.Task) bool {
+	if t.Repo != "" {
+		return false
+	}
 	for _, w := range t.Writes {
 		if ref, err := model.ParseRepo(w.Repo); err == nil && model.IsConfigRepo(ref) {
 			return true
@@ -1431,6 +1439,7 @@ var servedGrants = []string{
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
+	selfrepair.CapabilityName, grainserver.HostExecRef, grainserver.HostExecGrant,
 }
 
 func warnUnknownGrants(grants GrantNames) {
@@ -2148,8 +2157,8 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 		// task), and this gate is so an ordinary run is not shown a
 		// tool that could only ever refuse.
 		// propose_config_change is a grain/config writer's: the director,
-		// as grain_config.console_sessions declares it, or any task
-		// somebody granted grain/config as a write target.
+		// as grain_config.console_sessions declares it, or any repo-less
+		// task somebody granted grain/config as a write target.
 		if writesConfigRepo(taskDetail.Task) {
 			registry.Register(mcp.NewProposeConfigChangeTools(
 				daemonConfigChanges{client: client, taskID: *taskID}, *taskID, tools)...)
@@ -2342,6 +2351,18 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 			registry.Register(mcp.NewChatTools(daemonChat{client: client, taskID: *taskID, writeFile: writeFile,
 				delivered: delivered}, mcp.SandboxFileReaderOf(tools))...)
 			liveFiler = proposals
+			// run_host_command waits on the same person chat does, for
+			// each command it is asked to run, and so is gated the same
+			// way: a background run is given no tool rather than one
+			// whose every call would time out unanswered.
+			if grainserver.HasHostExec(grants) {
+				registry.Register(selfrepair.ConfirmedHostCommandTools(daemonHostExecConfirm{client: client, taskID: *taskID,
+					timeout: selfrepair.DefaultConfirmTimeout, delivered: delivered}.Confirm)...)
+			}
+		}
+		if grainserver.HasHostExec(grants) && !*interactive {
+			fmt.Fprintln(os.Stderr, "grain mcpserver: run_host_command is not served to this run: "+
+				"grain#host-exec confirms every command with a person in the task's chat, and this run is not -interactive")
 		}
 		registry.Register(mcp.NewLiveProposalTools(escapeSink, proposeRepoList.Nameable(), *taskID,
 			liveFiler)...)

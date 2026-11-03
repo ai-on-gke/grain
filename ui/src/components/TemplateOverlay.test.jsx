@@ -60,7 +60,7 @@ function overlay(template) {
 
 // Submitted straight through the form rather than by clicking Save, so
 // what is checked is the form's own reading of the box, not the
-// browser's min and step (which let "1e2" through regardless).
+// browser's min and step.
 function submitWithPriority(value) {
   const box = screen.getByRole("spinbutton", { name: "Task priority" });
   fireEvent.change(box, { target: { value } });
@@ -99,7 +99,17 @@ describe("TemplateOverlay task priority", () => {
     expect(sentBody("POST")).toMatchObject({ priority: 100 });
   });
 
-  it.each(["0", "-1", "1.5", "1e2"])(
+  // As New task, Edit, Bulk edit, propose_task and the API read it: a
+  // whole number written with an exponent is that number.
+  it("sends 1e2 as the 100 the box takes it for", async () => {
+    api.mockResolvedValue(saved);
+    const onSaved = overlay(null);
+    submitWithPriority("1e2");
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(sentBody("POST")).toMatchObject({ priority: 100 });
+  });
+
+  it.each(["0", "-1", "1.5", "1e-1", "1e20"])(
     "refuses %s rather than saving some other priority",
     async (value) => {
       api.mockResolvedValue(saved);
@@ -124,4 +134,57 @@ describe("TemplateOverlay task priority", () => {
       ).not.toBeInTheDocument();
     },
   );
+});
+
+describe("TemplateOverlay hostd", () => {
+  afterEach(() => api.mockReset());
+
+  it("sends the hostd every task the template files starts pinned to", async () => {
+    api.mockResolvedValue(saved);
+    const onSaved = overlay(null);
+    const box = screen.getByRole("textbox", { name: "Hostd" });
+    fireEvent.change(box, { target: { value: " gpu=yes " } });
+    fireEvent.submit(box.closest("form"));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(sentBody("POST")).toMatchObject({ hostd: "gpu=yes" });
+  });
+
+  it("clears a saved hostd when the box is emptied on an edit", async () => {
+    api.mockResolvedValue(saved);
+    const onSaved = overlay({ ...saved, hostd: "laptop" });
+    const box = screen.getByRole("textbox", { name: "Hostd" });
+    expect(box.value).toBe("laptop");
+    fireEvent.change(box, { target: { value: "" } });
+    fireEvent.submit(box.closest("form"));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(sentBody("PATCH")).toMatchObject({ hostd: "" });
+  });
+});
+
+// Keep running sits beside Interactive (2026-11-03 walkthrough: the API
+// took keepRunning on a template, but the form had no box for it).
+describe("TemplateOverlay keep running", () => {
+  afterEach(() => api.mockReset());
+
+  it("sends Keep running on a new template", async () => {
+    api.mockResolvedValue(saved);
+    const onSaved = overlay(null);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Keep running" }));
+    fireEvent.submit(
+      screen.getByRole("textbox", { name: "Name" }).closest("form"),
+    );
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(sentBody("POST")).toMatchObject({ keepRunning: true });
+  });
+
+  it("reads a saved Keep running back and clears it on an edit", async () => {
+    api.mockResolvedValue(saved);
+    const onSaved = overlay({ ...saved, keepRunning: true });
+    const box = screen.getByRole("checkbox", { name: "Keep running" });
+    expect(box).toBeChecked();
+    fireEvent.click(box);
+    fireEvent.submit(box.closest("form"));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(sentBody("PATCH")).toMatchObject({ keepRunning: false });
+  });
 });

@@ -62,7 +62,7 @@ func approvalViews(t model.Task) []ApprovalView {
 // of, and auto-merge comes back only when none is left. A caller who
 // approves none of them is refused, and told who can.
 func (c *Client) submitWithApprovals(ctx context.Context, task model.Task, pending []model.ApprovalRequirement) error {
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
 	user := ""
 	if actor.Kind == model.PrincipalHuman {
 		user = actor.ID
@@ -90,7 +90,7 @@ func (c *Client) submitWithApprovals(ctx context.Context, task model.Task, pendi
 	}
 	var remaining []model.ApprovalRequirement
 	now, head := c.now(), c.submittedHead(ctx, task)
-	released := model.WithAutoMergeChange(ctx, c.actor(ctx), "approved by "+user)
+	released := model.WithAutoMergeChange(ctx, c.requestActor(ctx).Actor, "approved by "+user)
 	if err := c.Store.UpdateTask(released, task.ID, func(t *model.Task) error {
 		for _, r := range model.PendingApprovals(*t) {
 			if approves[r.Rule] {

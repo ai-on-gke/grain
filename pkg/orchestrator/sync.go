@@ -275,11 +275,11 @@ type queueEntry struct {
 	// that merges cleanly merges on the verdict it already holds, however
 	// far behind it is. See bringHeadUpToDate for the other direction.
 	requireUpToDate bool
-	// mergeOnGreen is this repository's answer to "may a green entry
-	// merge past one ahead of it whose CI is still running"
-	// (model.RepoConfig.MergeOnGreen), read once per repository per cycle
-	// beside requireUpToDate above. False -- the default -- is the strict
-	// lane: an entry still deciding closes it (passedOver).
+	// mergeOnGreen is this repository's model.RepoConfig.MergeOnGreen,
+	// read once per repository per cycle beside requireUpToDate above.
+	// Nothing in the walk reads it any more: with no order between
+	// members (mergeWalk, task 2346) a green entry always merges past one
+	// still deciding, whichever way it is set.
 	mergeOnGreen bool
 	// gateIsGrainCI is this repository's answer to "are GitHub's check
 	// runs a source of verdicts here at all"
@@ -379,6 +379,13 @@ type queueEntry struct {
 	// (waitclocks.go), for its row; zero for any other read.
 	unknownFor time.Duration
 	pendingFor time.Duration
+	// externalPending, externalPendingFor, externalStalled and
+	// externalStallThreshold carry forge.Observe's third-party check stall
+	// measurements for reconcileExternalCheckStall and statusOf.
+	externalPending        []github.CheckRun
+	externalPendingFor     time.Duration
+	externalStalled        bool
+	externalStallThreshold time.Duration
 }
 
 // observe fills in e's GitHub half: the pull request as it stands, the
@@ -443,6 +450,10 @@ func (e *queueEntry) observe(client github.Client, now time.Time) error {
 	e.health = model.PrHealth(seen.Health)
 	e.stalled, e.stallDeadline = seen.Stalled, seen.StallDeadline
 	e.missingChecks = seen.MissingChecks
+	e.externalPending = seen.ExternalPending
+	e.externalPendingFor = seen.ExternalPendingFor
+	e.externalStalled = seen.ExternalStalled
+	e.externalStallThreshold = seen.ExternalStallThreshold
 	return nil
 }
 
@@ -993,7 +1004,10 @@ type StateRepoGate struct {
 	// CI receives the release event caused by every merged pull request. The
 	// run is against the destination branch's new head, so an `on: release`
 	// workflow is repository-agnostic and fires for both Grain-managed and
-	// externally merged pull requests when Grain next observes them.
+	// externally merged pull requests when Grain next observes them. A pull
+	// request merged after its task closed is recorded (closedprs.go) but
+	// starts nothing here: base-branch CI sees the branch's tip move either
+	// way.
 	CI ci.Runner
 	// Porter makes the ports a merge onto a paired branch calls for
 	// mechanically where it can (port.go); nil files every one as an
@@ -1256,6 +1270,13 @@ func SyncPullRequestsGuarding(ctx context.Context, store *model.Store, client gi
 			errs = append(errs, err)
 		}
 	}
+	// The pull requests of tasks that closed before them, read only to
+	// record a merge or close nobody else will (closedprs.go).
+	if ctx.Err() == nil {
+		if err := syncClosedPullRequests(ctx, store, client, now); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	// What the queue said about the tasks it is no longer watching, taken
 	// back: every state above is written from this loop and corrected by
 	// the next pass through it, so a task that has left the watched set
@@ -1360,6 +1381,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			return err
 		}
 		task = pinned
+		e.task = pinned
 		cleared, err := clearedForHead(ctx, store, client, task, ref, detail.HeadSHA, now)
 		if err != nil {
 			return err
@@ -1522,6 +1544,14 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		if err := setMergeQueueState(ctx, store, e.obs, task.ID, status, now); err != nil {
 			return err
 		}
+	}
+	mergedForExternalCheck, err := reconcileExternalCheckStall(
+		ctx, store, client, &e, task,
+		isMergeHead, blocked, repairing, working, stacked, rechecking,
+		review, walk.stateOf(lane), now,
+	)
+	if err != nil || mergedForExternalCheck {
+		return err
 	}
 	// The refusal record is about one clean pull request grain is trying
 	// to merge and cannot; a pull request that is not clean has something
@@ -1930,6 +1960,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	// ClosedAt, so there is never a cycle needing both writes at once.
 	if health == model.PrMerged || health == model.PrClosed {
 		forgetEmptyChecks(ref)
+		forge.ForgetExternalChecks(forgeRef(ref))
 		forgetMergeRefusals(ref)
 		forgetGitHubQueued(ref)
 	}
@@ -2645,10 +2676,11 @@ func bringHeadUpToDate(ctx context.Context, store *model.Store, client github.Cl
 	task model.Task, obs *model.Observation, ref model.PullRequestRef,
 	detail github.PullRequestDetail, now time.Time) (bool, error) {
 
-	if detail.HeadRef == "" || detail.BaseRef == "" {
-		// Nothing to name in the call. A pull request grain cannot see the
-		// branches of is one it merges as it stands rather than one it
-		// holds forever on a write it cannot make.
+	if !sameRepoHeadBranch(ref.Repo, detail) {
+		// Nothing to name in the call, or the head branch lives in a fork. A
+		// pull request grain cannot update in ref.Repo is one it merges as it
+		// stands rather than writing to a same-named branch in ref.Repo or
+		// holding forever on a write it cannot make.
 		return false, nil
 	}
 
@@ -2840,7 +2872,13 @@ func refreshStaleHead(ctx context.Context, store *model.Store, client github.Cli
 	if refreshSpent(obs) {
 		return refreshAlreadyTried, nil
 	}
-	if detail.HeadRef == "" || detail.BaseRef == "" {
+	if detail.HeadRef == "" || detail.BaseRef == "" || detail.HeadRef == detail.BaseRef {
+		return refreshUnreachable, nil
+	}
+	if !sameRepoHeadBranch(ref.Repo, detail) {
+		if err := recordRefreshAttempt(ctx, store, task.ID, now); err != nil {
+			return refreshUnreachable, err
+		}
 		return refreshUnreachable, nil
 	}
 

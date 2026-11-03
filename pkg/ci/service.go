@@ -1010,8 +1010,8 @@ func (s *Service) inspectableCache() (InspectableCache, bool) {
 // by is who asked, and it is not optional in the same way: it decides
 // whether anything ever starts another run for this commit
 // (Run.CancelledBy, orchestrator.reconcileTaskCI). Grain's own callers
-// pass CancelBySystem; only the route a person reaches passes
-// CancelByOperator.
+// pass CancelBySystem; only the routes a person reaches pass who asked
+// (CancelByPrincipal).
 //
 // Both are written on the record immediately as well as kept, so a
 // reader polling the run while its jobs are still giving up sees them

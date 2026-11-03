@@ -15,17 +15,41 @@
 # GitHub Actions port of .grain/workflows/nightly.yml on GitHub-hosted
 # runners (ubuntu-latest).
 #
-# See docs/github-actions-ci.md for the job-by-job mapping from grain CI,
-# how the pre-provisioned Granulefile guest environment is emulated on
-# stock ubuntu-latest runners, and which nested-VM suites remain gated for
-# self-hosted runners.
+# See docs/github-actions-ci.md for the job-by-job mapping from grain CI and
+# how the pre-provisioned Granulefile guest environment is emulated on stock
+# ubuntu-latest runners.
 
 name: nightly
 
+# Stage 1 of release-candidate qualification
+# (design/playbook/releases.playbook.md, "What pass means"): every
+# vX.Y.Z-rc.N tag runs this whole workflow on the RC's own ref, so a
+# candidate's verdict never waits on cron health. The -discarded,
+# -retracted and other suffixed markers a failed RC is given are excluded:
+# they name an RC that already has its verdict.
+#
+# A tag pushed with the default GITHUB_TOKEN fires no `push` workflows, so
+# a train pushing with it has to `workflow_dispatch` this file on the tag
+# instead (gh workflow run nightly.yml --ref vX.Y.Z-rc.N), which lands on
+# the same ref with the same jobs. The `jobs` input is how the train
+# re-runs only the job that failed on the same RC, once, as a flake retry
+# (playbook section 3).
+#
+# The schedule stays as a safety net on main.
 on:
+  push:
+    tags:
+      - "v*-rc.*"
+      - "!v*-rc.*-*"
   schedule:
     - cron: "11 2 * * *"
   workflow_dispatch:
+    inputs:
+      jobs:
+        description: "Optional comma-separated job IDs to run (for example: upgrade-test or kvm-sandboxes,kvm-route-stress), such as one failed job re-run on the same RC. Leave empty to run all jobs."
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -44,15 +68,20 @@ env:
 jobs:
   go-long:
     name: go, shuffled and repeated
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',go-long,')
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
+    # Every job's group is keyed on the ref. A run on main or on an RC tag
+    # is never cancelled by the next one on the same ref: a flake retry
+    # dispatched on vX.Y.Z-rc.N queues behind the run it retries rather
+    # than killing it (playbook section 6). Branch runs still supersede.
     concurrency:
       group: ${{ github.workflow }}-go-long-${{ matrix.shard }}-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -92,6 +121,8 @@ jobs:
             npm-${{ runner.os }}-
 
       - name: Install sandbox guest dependencies
+        env:
+          SHARD: ${{ matrix.shard }}
         run: |
           sudo systemctl stop postgresql 2>/dev/null || true
           sudo systemctl disable postgresql 2>/dev/null || true
@@ -102,11 +133,25 @@ jobs:
             bubblewrap expect zstd socat psmisc iproute2 iptables shellcheck
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           sudo sysctl -w kernel.yama.ptrace_scope=0 || true
-          tmpsrc="$(mktemp -d)"
-          cat >"$tmpsrc/main.go" <<'EOF'
+          # The stand-in `sleep` is for tests/deploy's
+          # TestHostdUpgradeScriptDrainsOnlyAHostdOnAnOldBinary, which copies
+          # `sleep` under another name and so cannot use Ubuntu 26's multi-call
+          # uutils binary -- the same reason tests.yml's go-e2e job installs it.
+          # It goes on shard 2 only, the shard that runs tests/deploy. A Go
+          # program cannot keep a SIGTERM disposition it inherited as ignored
+          # (the Go runtime installs its own handler at startup), so under it
+          # `trap '' TERM; sleep 60` dies on the first SIGTERM where coreutils'
+          # `sleep` does not, and pkg/mcp's
+          # TestSSHRunCommandKillsACommandThatIgnoresSIGTERM sees timeout's 124
+          # instead of the 137 its SIGKILL escalation produces. Every other
+          # shard keeps the runner's own `sleep`, as tests.yml's go unit job does.
+          if [ "$SHARD" = 2 ]; then
+            tmpsrc="$(mktemp -d)"
+            cat >"$tmpsrc/main.go" <<'EOF'
           package main
 
           import (
+          	"math"
           	"os"
           	"strconv"
           	"strings"
@@ -124,17 +169,26 @@ jobs:
           		}
           		s := strings.TrimSuffix(arg, "s")
           		if v, err := strconv.ParseFloat(s, 64); err == nil {
+          			// `sleep infinity` (a container kept alive) blocks for
+          			// good: +Inf seconds would overflow to a negative
+          			// Duration and return at once.
+          			if math.IsInf(v, 1) {
+          				for {
+          					time.Sleep(math.MaxInt64)
+          				}
+          			}
           			time.Sleep(time.Duration(v * float64(time.Second)))
           		}
           	}
           }
           EOF
-          CGO_ENABLED=0 go build -o "$tmpsrc/sleep" "$tmpsrc/main.go"
-          sudo rm -f /usr/local/bin/sleep /usr/bin/sleep
-          sudo cp -f "$tmpsrc/sleep" /usr/local/bin/sleep
-          sudo cp -f "$tmpsrc/sleep" /usr/bin/sleep
-          sudo chmod 0755 /usr/local/bin/sleep /usr/bin/sleep
-          rm -rf "$tmpsrc"
+            CGO_ENABLED=0 go build -o "$tmpsrc/sleep" "$tmpsrc/main.go"
+            sudo rm -f /usr/local/bin/sleep /usr/bin/sleep
+            sudo cp -f "$tmpsrc/sleep" /usr/local/bin/sleep
+            sudo cp -f "$tmpsrc/sleep" /usr/bin/sleep
+            sudo chmod 0755 /usr/local/bin/sleep /usr/bin/sleep
+            rm -rf "$tmpsrc"
+          fi
           sudo git config --system user.name "grain-ci"
           sudo git config --system user.email "grain-ci@example.com"
           git config --global user.name "grain-ci"
@@ -214,11 +268,12 @@ jobs:
 
   staterepo-soak:
     name: state repository soak
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',staterepo-soak,')
     runs-on: ubuntu-latest
     timeout-minutes: 35
     concurrency:
       group: ${{ github.workflow }}-staterepo-soak-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -263,11 +318,12 @@ jobs:
 
   loadtest:
     name: sustained load
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',loadtest,')
     runs-on: ubuntu-latest
     timeout-minutes: 35
     concurrency:
       group: ${{ github.workflow }}-loadtest-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -334,11 +390,12 @@ jobs:
 
   scalability:
     name: metadata and model scalability
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',scalability,')
     runs-on: ubuntu-latest
     timeout-minutes: 35
     concurrency:
       group: ${{ github.workflow }}-scalability-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -405,11 +462,12 @@ jobs:
 
   merge-stress:
     name: merge liveness stress
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',merge-stress,')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     concurrency:
       group: ${{ github.workflow }}-merge-stress-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -459,11 +517,12 @@ jobs:
 
   long-term-test:
     name: end-to-end long term tests
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',long-term-test,')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     concurrency:
       group: ${{ github.workflow }}-long-term-test-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -513,11 +572,12 @@ jobs:
 
   long-sim:
     name: long randomized cluster simulation
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',long-sim,')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:
       group: ${{ github.workflow }}-long-sim-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -567,11 +627,12 @@ jobs:
 
   postgres-stress:
     name: postgres concurrency and stress
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',postgres-stress,')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     concurrency:
       group: ${{ github.workflow }}-postgres-stress-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     services:
       postgres:
         image: postgres:16-bookworm
@@ -640,11 +701,12 @@ jobs:
 
   tunnel-stress:
     name: reverse tunnel multiplexer stress
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',tunnel-stress,')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:
       group: ${{ github.workflow }}-tunnel-stress-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -681,6 +743,7 @@ jobs:
 
   ui-e2e-long:
     name: ui e2e, repeated
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',ui-e2e-long,')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -689,7 +752,7 @@ jobs:
         pass: [1, 2, 3]
     concurrency:
       group: ${{ github.workflow }}-ui-e2e-long-${{ matrix.pass }}-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -777,11 +840,12 @@ jobs:
 
   installer-variants:
     name: installer trixie and hostmode
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',installer-variants,')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:
       group: ${{ github.workflow }}-installer-variants-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     env:
       GRAIN_INSTALLER_SANDBOX_IMAGE: debian:trixie
       GRAIN_TEST_IMAGE: grain-installer:test
@@ -888,11 +952,12 @@ jobs:
 
   vulns:
     name: govulncheck
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',vulns,')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
       group: ${{ github.workflow }}-vulns-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -929,11 +994,12 @@ jobs:
 
   cmd-grain-stress:
     name: pkg/cli stress under load
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',cmd-grain-stress,')
     runs-on: ubuntu-latest
     timeout-minutes: 40
     concurrency:
       group: ${{ github.workflow }}-cmd-grain-stress-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -1042,29 +1108,28 @@ jobs:
           done
           echo "pkg/cli stress test completed successfully ($round rounds)"
 
-  # Disabled by default on stock GitHub-hosted ubuntu-latest runners:
-  #
-  # kvm-sandboxes boots concurrent Firecracker/Cloud-Hypervisor microVMs
-  # (4 vCPUs, 4096 MiB RAM each) inside Docker containers. It requires a
-  # pre-published guest VM image in GHCR matching ./scripts/granule/guest-inputs.sh
-  # (or ~45-110 minutes and >30 GB free disk to build Granulefile from scratch),
-  # plus nested KVM with at least 16 GiB dedicated RAM and 60 GB disk.
-  # Enable by setting repository variable ENABLE_SELF_HOSTED_TESTS=true (and
-  # optionally SELF_HOSTED_RUNNER to the self-hosted runner label).
   kvm-sandboxes:
     name: real KVM sandboxes
-    if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'
-    runs-on: ${{ vars.SELF_HOSTED_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 50
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',kvm-sandboxes,')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     concurrency:
       group: ${{ github.workflow }}-kvm-sandboxes-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Ensure sufficient runner disk space
+        run: |
+          avail_mb=$(df -BM --output=avail / | tail -1 | tr -dc '0-9')
+          if [ "${avail_mb:-0}" -lt 35000 ]; then
+            sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          fi
+          df -h /
 
       - name: Cache Go modules and build cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -1082,13 +1147,13 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Require KVM
+      - name: Configure /dev/kvm udev permissions
         run: |
           set -euo pipefail
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            iproute2 iptables dnsmasq-base e2fsprogs socat openssh-client
+            iproute2 iptables nftables dnsmasq-base e2fsprogs socat openssh-client
           if [ ! -e /dev/kvm ]; then
             echo "/dev/kvm is not in this runner, so the suite below would skip rather than run. A green tick here would mean nothing." >&2
             exit 1
@@ -1098,22 +1163,31 @@ jobs:
           sudo udevadm control --reload-rules || true
           sudo udevadm trigger --name-match=kvm || true
           sudo chmod 0666 /dev/kvm
+          sudo usermod -aG kvm "$USER" || true
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo git config --system user.name "grain-ci"
+          sudo git config --system user.email "grain-ci@example.com"
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
           ls -l /dev/kvm
           docker version
           command -v ssh-keygen
+          sudo -n nft --version
+          nproc
+          free -m
           df -h /
 
       - name: Resolve the sandbox guest
-        timeout-minutes: 120
+        timeout-minutes: 50
         env:
           IMAGE: grain-guest:e2e-test
-        run: |
-          set -euo pipefail
-          ./scripts/granule-guest-resolve.sh
+        run: ./scripts/granule-guest-resolve.sh
 
       - name: Real KVM sandbox suite
         env:
           GRAIN_REAL_VM_TESTS: "1"
+          GRAIN_REAL_VM_CPUS: "2"
+          GRAIN_REAL_VM_MEMORY_MB: "2048"
         run: |
           set -uo pipefail
           mkdir -p /tmp/consoles
@@ -1129,12 +1203,13 @@ jobs:
               sleep 2
             done
           ) &
-          sampler=$!
+          watcher=$!
           failed=""
           go test ./pkg/orchestrator/ \
             -run 'TestGranuleSandboxesAgainstARealDockerBackedVM|TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently|TestTheModelProxiesAreReachableFromInsideARealGuest|TestGranuleSandboxNetworkNoneIsolationOutsideGuestVM|TestHostScriptGrantInARealGranuleVM' \
             -count=1 -v -timeout 40m 2>&1 | tee /tmp/granule-vm.log || failed="the suite"
-          kill "$sampler" 2>/dev/null || true
+          kill "$watcher" 2>/dev/null || true
+
           for t in TestGranuleSandboxesAgainstARealDockerBackedVM \
                    TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently \
                    TestTheModelProxiesAreReachableFromInsideARealGuest \
@@ -1160,25 +1235,28 @@ jobs:
             exit 1
           fi
 
-  # Disabled by default on stock GitHub-hosted ubuntu-latest runners:
-  #
-  # kvm-route-stress boots two concurrent Firecracker/Cloud-Hypervisor
-  # microVMs (4 vCPUs, 4096 MiB RAM each) twenty times in a row. Same
-  # guest-image and nested-KVM requirements as kvm-sandboxes above.
   kvm-route-stress:
     name: twenty two-VM boots
-    if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'
-    runs-on: ${{ vars.SELF_HOSTED_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 70
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',kvm-route-stress,')
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
     concurrency:
       group: ${{ github.workflow }}-kvm-route-stress-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Ensure sufficient runner disk space
+        run: |
+          avail_mb=$(df -BM --output=avail / | tail -1 | tr -dc '0-9')
+          if [ "${avail_mb:-0}" -lt 35000 ]; then
+            sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          fi
+          df -h /
 
       - name: Cache Go modules and build cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -1196,13 +1274,13 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Require KVM
+      - name: Configure /dev/kvm udev permissions
         run: |
           set -euo pipefail
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            iproute2 iptables dnsmasq-base e2fsprogs socat openssh-client
+            iproute2 iptables nftables dnsmasq-base e2fsprogs socat openssh-client
           if [ ! -e /dev/kvm ]; then
             echo "/dev/kvm is not in this runner, so the suite below would skip rather than run. A green tick here would mean nothing." >&2
             exit 1
@@ -1212,25 +1290,34 @@ jobs:
           sudo udevadm control --reload-rules || true
           sudo udevadm trigger --name-match=kvm || true
           sudo chmod 0666 /dev/kvm
+          sudo usermod -aG kvm "$USER" || true
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo git config --system user.name "grain-ci"
+          sudo git config --system user.email "grain-ci@example.com"
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
           ls -l /dev/kvm
           docker version
           command -v ssh-keygen
+          sudo -n nft --version
+          nproc
+          free -m
           df -h /
 
       - name: Resolve the sandbox guest
-        timeout-minutes: 120
+        timeout-minutes: 50
         env:
           IMAGE: grain-guest:e2e-test
-        run: |
-          set -euo pipefail
-          ./scripts/granule-guest-resolve.sh
+        run: ./scripts/granule-guest-resolve.sh
 
       - name: Twenty consecutive two-VM boots
         env:
           GRAIN_REAL_VM_TESTS: "1"
+          GRAIN_REAL_VM_CPUS: "2"
+          GRAIN_REAL_VM_MEMORY_MB: "2048"
         run: |
           set -uo pipefail
-          runs=20
+          runs="${GRAIN_REAL_VM_STRESS_RUNS:-20}"
           mkdir -p /tmp/consoles
           (
             while true; do
@@ -1241,15 +1328,15 @@ jobs:
                   (docker logs -f "$c" > "/tmp/consoles/${name:-$c}.log" 2>&1 &)
                 fi
               done
-              sleep 2
+              sleep 3
             done
           ) &
-          sampler=$!
+          watcher=$!
           failed=""
           go test ./pkg/orchestrator/ \
             -run 'TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently' \
             -count="$runs" -v -timeout 65m 2>&1 | tee /tmp/granule-stress.log || failed="the stress run"
-          kill "$sampler" 2>/dev/null || true
+          kill "$watcher" 2>/dev/null || true
 
           passes="$(grep -c -- '--- PASS: TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently' /tmp/granule-stress.log || true)"
           echo "TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently: ${passes}/${runs} boots passed"
@@ -1276,12 +1363,13 @@ jobs:
           fi
 
   upgrade-test:
-    name: upgrade from previous version
+    name: upgrade from previous versions
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',upgrade-test,')
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     concurrency:
       group: ${{ github.workflow }}-upgrade-test-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -1315,14 +1403,196 @@ jobs:
       - name: Build deployment image to test upgrade into
         run: bash scripts/ci-docker-build.sh -t grain-e2e:test .
 
+      # Two real upgrades onto this build as well as the self-built one
+      # (playbook section 10): from the newest promoted release below it
+      # (latest -> RC) and from the oldest supported release of its major
+      # (floor -> RC), both pulled from the published images. Each has to
+      # PASS; a skip means it proved nothing and fails the job.
       - name: Run upgrade tests
+        env:
+          RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO || 'bwsalmon/grain' }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set +e
+          export GRAIN_UPGRADE_RELEASE_IMAGE="ghcr.io/${RELEASE_IMAGE_REPO,,}/grain"
+          if [ "$REF_TYPE" = tag ]; then
+            export GRAIN_UPGRADE_TARGET="$REF_NAME"
+          fi
           make test-upgrade 2>&1 | tee /tmp/upgrade-test.log
           status=${PIPESTATUS[0]}
+          for want in TestUpgradeFromPreviousVersion TestUpgradeFromReleasedVersions/latest TestUpgradeFromReleasedVersions/floor; do
+            if ! grep -q -- "--- PASS: ${want} " /tmp/upgrade-test.log; then
+              echo "::error title=upgrade-test::${want} did not run and pass"
+              status=1
+            fi
+          done
+          if grep -q -- "--- SKIP:" /tmp/upgrade-test.log; then
+            echo "::error title=upgrade-test::an upgrade test skipped"
+            status=1
+          fi
           if [ "$status" -ne 0 ]; then
-            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/upgrade-test.log | tail -n 10 | while IFS= read -r line; do
+            grep -aE -- '--- FAIL:|--- SKIP:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/upgrade-test.log | tail -n 10 | while IFS= read -r line; do
               echo "::error title=upgrade-test::$line"
             done
             exit "$status"
           fi
+
+  real-kubernetes:
+    name: real kubernetes
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',real-kubernetes,')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    concurrency:
+      group: ${{ github.workflow }}-real-kubernetes-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Free runner disk space
+        run: |
+          echo "=== Disk and memory before cleanup ==="
+          df -h /
+          free -m
+          for dir in \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost \
+            /opt/az; do
+            sudo rm -rf "$dir" &
+          done
+          wait || true
+          echo "=== Disk after cleanup ==="
+          df -h /
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Cache kind and Calico images
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/grain-k8s
+          key: k8s-images-${{ runner.os }}-${{ hashFiles('scripts/prepare-real-k8s-ci.sh') }}
+          restore-keys: |
+            k8s-images-${{ runner.os }}-
+
+      - name: Prepare kind and Calico images
+        run: ./scripts/prepare-real-k8s-ci.sh
+
+      - name: Real Kubernetes sandbox tests
+        env:
+          GRAIN_REAL_K8S_TESTS: "1"
+        run: |
+          set +e
+          want=TestK8sSandboxesAgainstARealKindCluster
+          rm -f /tmp/k8s-metrics.csv /tmp/real-k8s.log
+          (
+            while true; do
+              ts="$(date +%s)"
+              mem="$(free -m | awk '/^Mem:/ {print $2 "," $3 "," $7}')"
+              dsk="$(df -BM / | awk 'NR==2 {gsub(/M/,""); print $2 "," $3 "," $4}')"
+              echo "${ts},${mem},${dsk}" >> /tmp/k8s-metrics.csv
+              sleep 2
+            done
+          ) >/dev/null 2>&1 &
+          sampler=$!
+          t0="$(date +%s)"
+          GRAIN_GOTEST_LOG=/tmp/real-k8s.log ./scripts/run-go-tests.sh \
+            go test -v -count=1 -timeout 18m -run "^${want}\$" ./pkg/orchestrator/
+          status=$?
+          t1="$(date +%s)"
+          kill "$sampler" 2>/dev/null || true
+          wait "$sampler" 2>/dev/null || true
+
+          echo "=== Real Kubernetes resource summary (elapsed $((t1 - t0))s) ==="
+          awk -F, '
+            BEGIN { max_mem=0; min_avail=999999; max_disk=0; min_free_disk=999999 }
+            NF==7 {
+              total_mem=$2; if ($3+0 > max_mem) max_mem=$3+0; if ($4+0 < min_avail) min_avail=$4+0;
+              total_disk=$5; if ($6+0 > max_disk) max_disk=$6+0; if ($7+0 < min_free_disk) min_free_disk=$7+0;
+            }
+            END {
+              printf "mem_total_mb=%s peak_mem_used_mb=%d min_mem_avail_mb=%d | disk_total_mb=%s peak_disk_used_mb=%d min_disk_free_mb=%d\n",
+                total_mem, max_mem, min_avail, total_disk, max_disk, min_free_disk
+            }
+          ' /tmp/k8s-metrics.csv
+          df -h /
+          free -m
+
+          if ! grep -q -- "--- PASS: ${want}" /tmp/real-k8s.log || grep -q -- "--- SKIP:" /tmp/real-k8s.log; then
+            echo "::error title=real-kubernetes::${want} did not run and pass"
+            status=1
+          fi
+          if [ "$status" -ne 0 ]; then
+            grep -aE -- '--- FAIL:|--- SKIP:|_test\.go:[0-9]+:|^FAIL' /tmp/real-k8s.log | tail -n 10 | while IFS= read -r line; do
+              echo "::error title=real-kubernetes::$line"
+            done
+            exit "$status"
+          fi
+
+  # The one verdict Stage 1 hands the release train: every hosted job in
+  # the playbook's Stage 1 table ran and succeeded. GitHub calls a run
+  # with skipped jobs a success; this does not, so a job that never ran
+  # cannot qualify an RC. A dispatch naming `jobs` (a flake retry) is
+  # judged on the jobs it named. The KVM and real-kubernetes jobs are not
+  # required yet and are left out.
+  stage-1:
+    name: stage 1 qualification verdict
+    if: always()
+    needs:
+      - go-long
+      - staterepo-soak
+      - loadtest
+      - scalability
+      - merge-stress
+      - long-term-test
+      - long-sim
+      - postgres-stress
+      - tunnel-stress
+      - ui-e2e-long
+      - installer-variants
+      - vulns
+      - cmd-grain-stress
+      - upgrade-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every Stage 1 job to succeed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          SELECTED: ${{ inputs.jobs }}
+        run: |
+          failed=0
+          judged=0
+          for job in $(jq -r 'keys[]' <<<"$NEEDS"); do
+            if [ -n "$SELECTED" ] && [[ ",${SELECTED// /}," != *",${job},"* ]]; then
+              continue
+            fi
+            judged=$((judged + 1))
+            result="$(jq -r --arg j "$job" '.[$j].result' <<<"$NEEDS")"
+            echo "${job}: ${result}"
+            if [ "$result" != success ]; then
+              echo "::error title=stage-1::${job} ended ${result}, and Stage 1 requires success"
+              failed=1
+            fi
+          done
+          echo "judged ${judged} Stage 1 job(s)"
+          exit "$failed"

@@ -44,8 +44,8 @@ func TestVerifiedServiceAccountCommentIsAServicePrincipal(t *testing.T) {
 		email string
 		want  model.Principal
 	}{
-		{"Bot@My-Proj.iam.gserviceaccount.com", model.Principal{Kind: model.PrincipalService, ID: "bot@my-proj.iam.gserviceaccount.com"}},
-		{"alice@example.com", model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com"}},
+		{"Bot@My-Proj.iam.gserviceaccount.com", model.Principal{Kind: model.PrincipalService, ID: "bot@my-proj.iam.gserviceaccount.com", Source: model.SourceIAP}},
+		{"alice@example.com", model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceIAP}},
 	} {
 		h := map[string]string{
 			ui.IAPAssertionHeader: signIAPToken(t, priv, tunnelKid, tunnelAudience, c.email, "s", ui.GoogleIAPIssuer, exp),

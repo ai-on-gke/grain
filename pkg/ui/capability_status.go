@@ -606,9 +606,9 @@ func capabilitySecretsFor(requires []string, list []secrets.SecretInfo) []Capabi
 	return out
 }
 
-// capabilitiesWithReadiness is Config.Capabilities -- the per-task
-// picker's own listing -- with each row told whether this deployment can
-// actually honour it, from the same capabilityStatuses the Settings
+// capabilitiesWithReadiness is pickerCapabilities -- the per-task
+// picker's own listing, its api scope sets as they are now -- with each
+// row told whether this deployment can actually honour it, from the same capabilityStatuses the Settings
 // pane's Capabilities tab is built from.
 //
 // The two listings were entirely independent before this, which is the
@@ -634,12 +634,13 @@ func (c *Client) capabilitiesWithReadiness(cfg *model.Config, repoConfigs []mode
 	if cfg != nil {
 		deployment = *cfg
 	}
-	byID := make(map[string]CapabilityStatus, len(c.Config.Capabilities))
+	rows := c.pickerCapabilities()
+	byID := make(map[string]CapabilityStatus, len(rows))
 	for _, s := range c.capabilityStatuses(deployment, repoConfigs) {
 		byID[s.ID] = s
 	}
-	out := make([]Capability, 0, len(c.Config.Capabilities))
-	for _, row := range c.Config.Capabilities {
+	out := make([]Capability, 0, len(rows))
+	for _, row := range rows {
 		if status, ok := byID[row.ID]; ok {
 			ready := status.Ready
 			row.Ready = &ready

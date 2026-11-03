@@ -144,3 +144,56 @@ func TestRehearseApplyNeverWritesTheLiveDatabase(t *testing.T) {
 		t.Fatalf("the rehearsal wrote the live row: %+v %v", got, err)
 	}
 }
+
+// A change to the content of one of grain's own schedules passes -- the
+// import takes it -- but says, before anybody approves it, that the
+// next reconcile cycle undoes it. A change to the cadence of the same
+// schedule is one that sticks, and says nothing.
+func TestValidateCandidateConfigWarnsOfAnEditToGrainsOwnSchedule(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, store, live := liveDeployment(t)
+	if err := store.PutSchedule(ctx, systemSchedule()); err != nil {
+		t.Fatal(err)
+	}
+	warned := func(dir string) []string {
+		t.Helper()
+		report, err := staterepo.ValidateCandidateConfig(ctx, db, dir)
+		if err != nil {
+			t.Fatalf("ValidateCandidateConfig: %v (%+v)", err, report)
+		}
+		var out []string
+		for _, w := range report.Check.Warnings {
+			if strings.Contains(w, model.MemoryAgentTemplateID) {
+				out = append(out, w)
+			}
+		}
+		return out
+	}
+
+	edited := candidate(t, db, store, live, func(*model.Config) {})
+	editSettings(t, edited, "schedule", func(entries []map[string]any) {
+		for _, entry := range entries {
+			if entry["id"] == model.MemoryAgentTemplateID {
+				entry["title"] = "Write down what grain has learned, carefully"
+			}
+		}
+	})
+	got := warned(edited)
+	if len(got) != 1 || !strings.Contains(got[0], "title") || !strings.Contains(got[0], "undone") {
+		t.Fatalf("warnings about %s = %q, want one naming the title and saying it is undone",
+			model.MemoryAgentTemplateID, got)
+	}
+
+	cadence := candidate(t, db, store, live, func(*model.Config) {})
+	editSettings(t, cadence, "schedule", func(entries []map[string]any) {
+		for _, entry := range entries {
+			if entry["id"] == model.MemoryAgentTemplateID {
+				entry["enabled"] = false
+			}
+		}
+	})
+	if got := warned(cadence); len(got) != 0 {
+		t.Fatalf("disabling grain's own schedule warned %q; that change sticks", got)
+	}
+}

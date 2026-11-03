@@ -837,17 +837,27 @@ func readOnlyNames(task model.Task) []string {
 	return names
 }
 
+// writeTargetsSection tells a run about its write targets. grain/config
+// is left out of it for a task that is given the writable
+// grain-state checkout (wantsStateCheckout): that run changes it with
+// propose_config_change from that checkout, which the state-repo note
+// says, and telling it in the same prompt that it cannot push there and
+// must propose_task the change instead sent it two opposite ways.
 func writeTargetsSection(task model.Task) string {
-	if len(task.Writes) == 0 {
-		return ""
-	}
-	names := make([]string, len(task.Writes))
-	for i, w := range task.Writes {
-		if w.Base != "" {
-			names[i] = fmt.Sprintf("%s (on branch `%s`)", w.Repo, w.Base)
+	stateCheckout := wantsStateCheckout(task)
+	var names []string
+	for _, w := range task.Writes {
+		if stateCheckout && model.IsConfigRepo(w.Repo) {
 			continue
 		}
-		names[i] = fmt.Sprintf("%s (on its default branch)", w.Repo)
+		if w.Base != "" {
+			names = append(names, fmt.Sprintf("%s (on branch `%s`)", w.Repo, w.Base))
+			continue
+		}
+		names = append(names, fmt.Sprintf("%s (on its default branch)", w.Repo))
+	}
+	if len(names) == 0 {
+		return ""
 	}
 	s := fmt.Sprintf(
 		"\n\nThis task may land work in more than one repository or branch: besides the one you "+
@@ -1840,8 +1850,7 @@ func stateCheckCommand(prepared checkout, image string) string {
 }
 
 func directorStateSection(prepared checkout, task model.Task) string {
-	id, ok := model.ConsoleSessionIDOf(task)
-	if !ok || id != model.DirectorSessionID {
+	if !wantsStateCheckout(task) {
 		return ""
 	}
 	path := DirectorStateDir
@@ -4191,9 +4200,10 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 // rather than holding anything of their own. None of them puts a
 // credential in the subprocess.
 //
-// selfrepair's own grant is absent because its one tool blocks on a
-// human's reply in the task's chat, and that needs a store handle the
-// mcpserver process deliberately does not have.
+// grain#host-exec (once self-repair) is absent because it does not
+// travel on every run holding it: its one tool blocks on a human's reply
+// in the task's chat, so runGrants passes it only for an Interactive
+// task, where somebody is there to answer.
 //
 // A fixed order, so that a run's own arguments read the same way twice
 // for the same task rather than following whatever order the grants were
@@ -4209,11 +4219,6 @@ var toolGrants = []string{
 	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
 }
 
-// runGrants is the subset of toolGrants task holds, which is what a
-// Framework passes on to the mcpserver it forks
-// (agent.RunConfig.Grants). Nothing outside that list travels: a run's
-// tools are the only thing this is for, and a capability that mints
-// credentials has no business being named in a subprocess's arguments.
 // localScriptsFor is the local-scripts declarations task's
 // local-scripts:<name> capabilities grant this run (cfg.LocalScripts),
 // and a 0600 file of the secrets their scripts name, resolved as the
@@ -4253,11 +4258,29 @@ func localScriptsFor(ctx context.Context, cfg Config, task model.Task, runID str
 	return out, file, nil
 }
 
+// runGrants is the subset of toolGrants task holds, which is what a
+// Framework passes on to the mcpserver it forks
+// (agent.RunConfig.Grants), plus an Interactive task's grain#host-exec.
+// Nothing else travels: a run's tools are the only thing this is for,
+// and a capability that mints credentials has no business being named
+// in a subprocess's arguments.
 func runGrants(task model.Task) []string {
 	var grants []string
 	for _, grant := range append(slices.Clone(toolGrants), capability.RunGrants()...) {
 		if hasGrant(task, grant) {
 			grants = append(grants, grant)
+		}
+	}
+	// run_host_command asks a person in the task's chat before every
+	// command it runs (selfrepair.Confirm, and the forked mcpserver's
+	// daemonHostExecConfirm), so the grant that serves it travels only
+	// on a task somebody is sitting with -- the gate the mcpserver
+	// applies again with -interactive.
+	if task.Interactive {
+		for _, g := range task.Grants {
+			if grainserver.IsHostExecGrant(g.Capability) && !slices.Contains(grants, g.Capability) {
+				grants = append(grants, g.Capability)
+			}
 		}
 	}
 	return grants
@@ -4767,6 +4790,16 @@ func classifyRunEndArms(ctx context.Context, store *model.Store, cfg Config, tas
 		// that replaces this one.
 		outcome = model.InterruptedOutcome
 		detail = runErr.Error()
+		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
+	case runErr != nil && errors.Is(runErr, agent.ErrHostdLost):
+		// The hostd the CLI ran on dropped and was not back within
+		// -hostd-reattach-timeout (runhost.Hostd.ReattachTimeout): an
+		// infrastructure failure, the machine's and not the task's.
+		// Interrupted, as a drain's refusal is: no strike, and the task
+		// is queued again, where it waits for its hostd if it is
+		// pinned to one.
+		outcome = model.InterruptedOutcome
+		detail = runErr.Error() + partialWorkSuffix(result)
 		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
 	case hitCapacity:
 		// The provider had no capacity for this run: overloaded,

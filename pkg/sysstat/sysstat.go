@@ -148,3 +148,11 @@ type Snapshot struct {
 func Read() (Snapshot, error) {
 	return read()
 }
+
+// MemTotalMB is the machine's total memory alone, without Read's
+// sampling interval: what a caller sizing something against the host
+// (a granule VM's cgroup limit cap) needs once, at startup.
+func MemTotalMB() (int, error) {
+	total, _, _, _, err := readMemory()
+	return total, err
+}

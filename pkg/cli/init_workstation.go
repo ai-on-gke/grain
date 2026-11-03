@@ -196,8 +196,10 @@ func renderWorkstationPolicy(o workstationOptions) string {
 	b.WriteString("# grain_policy.yml, written by `grain init workstation`. It is yours to\n" +
 		"# edit; a re-run keeps it. Every key is described in docs/local-policy.md.\n" +
 		"# The daemon reads it at start: `systemctl --user restart grain` after editing.\n\n")
-	b.WriteString("# Repositories a task may target, read or write. Nothing else.\n")
-	writeYAMLList(&b, "repos", o.Repos)
+	b.WriteString("# Repositories a task may target, read or write. Nothing else.\n" +
+		"# grain/config is this deployment's own state repository, served by this daemon:\n" +
+		"# the Director and any chat proposing a config change read or write it.\n")
+	writeYAMLList(&b, "repos", withConfigRepo(o.Repos))
 	b.WriteString("\n# Whose tasks are this machine's own: they need no further approval.\n" +
 		"# Anybody else's needs an approval by one of approvers.\n")
 	writeYAMLList(&b, "local_requesters", o.Owners)
@@ -230,6 +232,21 @@ func renderWorkstationPolicy(o workstationOptions) string {
 	b.WriteString("\n# Host sandboxes run as you; only your own tasks run there.\n" +
 		"allow_external_on_host_sandboxes: false\n")
 	return b.String()
+}
+
+// withConfigRepo is repos with grain/config (model.ConfigRepo) appended
+// unless it is already named. Left out, local policy held every task
+// that reads or writes the deployment's own state repository -- the
+// Director, and every repo-less session given grain/config to propose
+// changes to -- at dispatch forever, on the daemon this very command
+// set up (docs/test-runs/2026-11-03-config-state.md, finding 1).
+func withConfigRepo(repos []string) []string {
+	for _, r := range repos {
+		if ref, err := model.ParseRepo(r); err == nil && model.IsConfigRepo(ref) {
+			return repos
+		}
+	}
+	return append(append([]string(nil), repos...), model.ConfigRepo().String())
 }
 
 func writeYAMLList(b *strings.Builder, key string, items []string) {

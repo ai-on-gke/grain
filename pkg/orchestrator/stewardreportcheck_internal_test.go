@@ -383,3 +383,159 @@ func TestRunAPICallPrunedAfter30Days(t *testing.T) {
 		t.Fatalf("RunAPICalls after 30d prune = %+v, want only recent-1", calls)
 	}
 }
+
+func TestStewardProcessResultRelaysAndChecksFiledCommentOnIssueOverFinalText(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openInternalStore(t)
+
+	now := time.Date(2026, 11, 2, 11, 0, 0, 0, time.UTC)
+	human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
+	steward := model.Task{
+		ID:         "2117",
+		Intent:     model.IntentImplement,
+		Title:      "Pipeline steward",
+		Body:       "steward",
+		TemplateID: model.PipelineStewardTemplateID,
+		Tags:       []string{model.ScheduleFiringTag(model.PipelineStewardTemplateID)},
+		Origin:     model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+		Approval:   &model.Attribution{Actor: human},
+		Binding:    model.BindingDirective,
+		CreatedAt:  &now,
+		ApprovedAt: &now,
+		Grants:     []model.Grant{{Capability: model.DurableCapability, Via: model.GrantByGrain}},
+	}
+	if err := store.PutTask(ctx, steward); err != nil {
+		t.Fatalf("PutTask steward: %v", err)
+	}
+	if err := store.SetTaskGoal(ctx, steward.ID, *model.PipelineStewardGoal(), "test", now); err != nil {
+		t.Fatalf("SetTaskGoal: %v", err)
+	}
+	for _, id := range []string{"832", "979", "1245"} {
+		if err := store.PutTask(ctx, model.Task{
+			ID: id, Intent: model.IntentImplement, Title: "fix: task " + id, Body: "body",
+			Origin:     model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+			Approval:   &model.Attribution{Actor: human},
+			Binding:    model.BindingDirective,
+			CreatedAt:  &now,
+			ApprovedAt: &now,
+		}); err != nil {
+			t.Fatalf("PutTask %s: %v", id, err)
+		}
+	}
+
+	// Wake 1 (citation-dropping pattern): comment_on_issue carries per-line
+	// [task N] and [ci run ...] citations; FinalText is a longer free-text
+	// summary that drops the run IDs.
+	run1 := "2117-56"
+	if err := store.StartRun(ctx, model.Run{
+		ID: run1, TaskID: steward.ID, Sandbox: "sbx-1", Attempt: 56, StartedAt: now.Add(-2 * time.Minute),
+	}, model.Limits{}); err != nil {
+		t.Fatalf("StartRun %s: %v", run1, err)
+	}
+	if err := store.FinishRun(ctx, run1, now, "succeeded", "ok"); err != nil {
+		t.Fatalf("FinishRun %s: %v", run1, err)
+	}
+	filedCited := strings.Join([]string{
+		"- Task 832 remains queued while its branch checks run [task 832].",
+		"- Main grain CI passed on the latest trunk merge [ci run 5f7d9ba82a6aa836].",
+		"- Pull request grain CI passed all required jobs [ci run 7497fb8bd8e2374b].",
+	}, "\n")
+	res1 := &agent.Result{
+		FinalText: "I reviewed the pipeline delta feed and updated the handover cursor. Task 832 is queued while checks run, and both the latest trunk CI run and pull request CI run succeeded cleanly with no steward action required.",
+		ToolCalls: []agent.ToolCall{
+			{Name: "read_grain_task", Arguments: map[string]any{"task_id": "832"}, Text: "832 [queued]"},
+			{Name: "comment_on_issue", Arguments: map[string]any{"comment": filedCited}, Text: "Recorded."},
+		},
+	}
+	if err := store.RecordRunTelemetry(ctx, run1, runTelemetryAt(res1, now)); err != nil {
+		t.Fatalf("RecordRunTelemetry %s: %v", run1, err)
+	}
+	if err := processResult(ctx, store, nil, nil, nil, steward, res1, run1, now); err != nil {
+		t.Fatalf("processResult %s: %v", run1, err)
+	}
+	comments, err := store.Comments(ctx, steward.ID)
+	if err != nil || len(comments) != 1 {
+		t.Fatalf("Comments after %s = %+v, err=%v; want 1 comment", run1, comments, err)
+	}
+	if comments[0].Body != filedCited {
+		t.Errorf("posted comment = %q, want filed comment_on_issue %q", comments[0].Body, filedCited)
+	}
+	check1, ok, err := store.GetRunReportCheck(ctx, run1)
+	if err != nil || !ok {
+		t.Fatalf("GetRunReportCheck(%s): ok=%v err=%v", run1, ok, err)
+	}
+	if check1.Claims != 3 || check1.Uncited != 0 || check1.Unread != 0 || check1.Mismatched != 0 {
+		t.Errorf("check1 = %+v, want Claims=3 Uncited=0 Unread=0 Mismatched=0", *check1)
+	}
+
+	// Wake 2 (extra-claims pattern): comment_on_issue files a single "Nothing
+	// needed doing" line; FinalText adds status claims about unread tasks.
+	now2 := now.Add(10 * time.Minute)
+	if _, err := store.WakeRestingTask(ctx, steward.ID, "wake", now2); err != nil {
+		t.Fatalf("WakeRestingTask: %v", err)
+	}
+	run2 := "2117-57"
+	if err := store.StartRun(ctx, model.Run{
+		ID: run2, TaskID: steward.ID, Sandbox: "sbx-2", Attempt: 57, StartedAt: now2.Add(-time.Minute),
+	}, model.Limits{}); err != nil {
+		t.Fatalf("StartRun %s: %v", run2, err)
+	}
+	if err := store.FinishRun(ctx, run2, now2, "succeeded", "ok"); err != nil {
+		t.Fatalf("FinishRun %s: %v", run2, err)
+	}
+	filedNoop := "Nothing needed doing: the pipeline has not changed since 17:46Z."
+	res2 := &agent.Result{
+		FinalText: "Nothing changed since 17:46Z. Tasks #1245 and #979 are still queued and the main CI run is green.",
+		ToolCalls: []agent.ToolCall{
+			{Name: "comment_on_issue", Arguments: map[string]any{"comment": filedNoop}, Text: "Recorded."},
+		},
+	}
+	if err := processResult(ctx, store, nil, nil, nil, steward, res2, run2, now2); err != nil {
+		t.Fatalf("processResult %s: %v", run2, err)
+	}
+	comments, err = store.Comments(ctx, steward.ID)
+	if err != nil || len(comments) == 0 {
+		t.Fatalf("Comments after %s = %+v, err=%v", run2, comments, err)
+	}
+	if got := comments[len(comments)-1].Body; got != filedNoop {
+		t.Errorf("posted comment = %q, want filed comment_on_issue %q", got, filedNoop)
+	}
+	check2, ok, err := store.GetRunReportCheck(ctx, run2)
+	if err != nil || !ok {
+		t.Fatalf("GetRunReportCheck(%s): ok=%v err=%v", run2, ok, err)
+	}
+	if check2.Claims != 0 || check2.Uncited != 0 || check2.Unread != 0 || check2.Mismatched != 0 {
+		t.Errorf("check2 = %+v, want zero claims/mismatches", *check2)
+	}
+
+	// Wake 3 (plain FinalText fallback with no comment_on_issue call): the
+	// fallback comment posted onto the goal task is also checked by
+	// stewardReportCheck so an omitted comment_on_issue cannot bypass it.
+	now3 := now2.Add(10 * time.Minute)
+	if _, err := store.WakeRestingTask(ctx, steward.ID, "wake", now3); err != nil {
+		t.Fatalf("WakeRestingTask 3: %v", err)
+	}
+	run3 := "2117-58"
+	if err := store.StartRun(ctx, model.Run{
+		ID: run3, TaskID: steward.ID, Sandbox: "sbx-3", Attempt: 58, StartedAt: now3.Add(-time.Minute),
+	}, model.Limits{}); err != nil {
+		t.Fatalf("StartRun %s: %v", run3, err)
+	}
+	if err := store.FinishRun(ctx, run3, now3, "succeeded", "ok"); err != nil {
+		t.Fatalf("FinishRun %s: %v", run3, err)
+	}
+	res3 := &agent.Result{
+		FinalText: "- Task #979 is queued.",
+	}
+	if err := processResult(ctx, store, nil, nil, nil, steward, res3, run3, now3); err != nil {
+		t.Fatalf("processResult %s: %v", run3, err)
+	}
+	check3, ok, err := store.GetRunReportCheck(ctx, run3)
+	if err != nil || !ok {
+		t.Fatalf("GetRunReportCheck(%s): ok=%v err=%v", run3, ok, err)
+	}
+	if check3.Claims != 1 || check3.Unread != 1 {
+		t.Errorf("check3 = %+v, want Claims=1 Unread=1 on unread fallback FinalText", *check3)
+	}
+}

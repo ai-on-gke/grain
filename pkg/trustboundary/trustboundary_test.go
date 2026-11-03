@@ -15,6 +15,9 @@
 package trustboundary
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -237,6 +240,11 @@ var knownBoundaryFiles = []string{
 	"pkg/daemon/run.go", "pkg/daemon/sandboxnet.go",
 	"pkg/ui/server.go", "pkg/ui/auth.go", "pkg/orchestrator/securityhold.go",
 	"pkg/gitproxy/", "pkg/secrets/", "pkg/ci/", "pkg/workflows/", "deploy/kubernetes/",
+	"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/taskhostd.go",
+	"pkg/daemon/hostd_registry.go", "pkg/daemon/hostd_route.go", "pkg/daemon/hostexec.go",
+	"pkg/model/hostd.go", "pkg/ui/messages.go", "pkg/daemon/mcpserver_hostexec.go",
+	"pkg/model/repo_access.go", "pkg/daemon/ci.go", "pkg/daemon/ci_policy.go",
+	"pkg/daemon/ci_capability_pass.go", "pkg/daemon/capabilities.go",
 }
 
 // Entries ending in "/" are directories: every .go file under them, as it
@@ -277,4 +285,86 @@ func TestEveryKnownBoundaryFileIsClassified(t *testing.T) {
 			}
 		}
 	}
+}
+
+// One path per place v11 added (2026-11-03 security review finding 2): the
+// hostd registry, the host-exec confirmation and CI repository access, none
+// of which v10 held, so a change to who may do what there merged itself.
+func TestHostdAndCIRepoAccessGatesAreClassified(t *testing.T) {
+	cases := map[string]string{
+		"pkg/ui/hostd_connect.go":          "auth-routes",
+		"pkg/ui/hostds.go":                 "auth-routes",
+		"pkg/ui/taskhostd.go":              "auth-routes",
+		"pkg/daemon/hostd_registry.go":     "auth-routes",
+		"pkg/daemon/hostd_route.go":        "auth-routes",
+		"pkg/daemon/hostexec.go":           "auth-routes",
+		"pkg/model/hostd.go":               "auth-routes",
+		"pkg/ui/messages.go":               "auth-routes",
+		"pkg/daemon/mcpserver_hostexec.go": "capabilities-secrets",
+		"pkg/model/repo_access.go":         "capabilities-secrets",
+		"pkg/daemon/ci.go":                 "capabilities-secrets",
+		"pkg/daemon/ci_policy.go":          "capabilities-secrets",
+		"pkg/daemon/ci_capability_pass.go": "capabilities-secrets",
+		"pkg/daemon/capabilities.go":       "capabilities-secrets",
+	}
+	for p, want := range cases {
+		got := categoryIDs(Classify([]string{p}))
+		if !reflect.DeepEqual(got, []string{want}) {
+			t.Errorf("Classify(%q) = %v, want [%s]", p, got, want)
+		}
+	}
+
+	// The gates themselves, found by name rather than by path, so moving
+	// one into a file the list does not name fails here instead of
+	// silently unclassifying it again.
+	gates := map[string][]string{
+		"pkg/model": {
+			"RepoAccessAdmitsCIEvent", "RepoReadTarget", "RepoWriteTarget", "IsGitPushAnyRefGrant",
+			"HostdForToken", "CreateHostd", "RotateHostdToken", "NormalizeHostdOwner",
+		},
+		"pkg/ui":     {"hostdConnectIdentity", "messagesSince"},
+		"pkg/daemon": {"registryResolver", "SelectHostd", "grantRepoAccess", "ciRepoAccessAdmitted", "CheckCIJobRepoAccessPolicy"},
+	}
+	for dir, names := range gates {
+		defined := funcFiles(t, dir)
+		for _, name := range names {
+			file, ok := defined[name]
+			if !ok {
+				t.Errorf("%s: no func or method %s -- update this test to where it went", dir, name)
+				continue
+			}
+			if Classify([]string{file}) == nil {
+				t.Errorf("%s is defined in %s, which Classify leaves unclassified", name, file)
+			}
+		}
+	}
+}
+
+// funcFiles maps each func and method name declared in dir's non-test Go
+// files (dir relative to the repository root) to the repository path of
+// the file declaring it.
+func funcFiles(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join("../..", dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	fset := token.NewFileSet()
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join("../..", dir, name), nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range f.Decls {
+			if fn, ok := d.(*ast.FuncDecl); ok {
+				out[fn.Name.Name] = dir + "/" + name
+			}
+		}
+	}
+	return out
 }

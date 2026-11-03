@@ -13,140 +13,184 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The release train: release grain from main after a staging soak
-# (design/design/release-from-trunk.design.md, §§2-5). It replaces the legacy
-# candidate cut (scripts/release-candidate-cut.sh): there is no
-# stabilization branch, no back-merge and no port; every tag it makes is
-# on a main commit, and refs/heads/candidate is only ever a pointer it
-# force-moves onto the release candidate staging (grain-candidate, :4280)
-# runs. .github/workflows/release-train.yml runs it daily (.grain/workflows/release-train.yml by dispatch); by hand it is
+
+# The release train: release grain continuously from main
+# (design/playbook/releases.playbook.md, which supersedes the staging soak
+# of design/design/release-from-trunk.design.md). There is no
+# stabilization branch, no back-merge and no port: every tag it makes is
+# on a main commit -- except an rc.3, which is cut from a short-lived
+# release/vX.Y.Z convergence branch -- and refs/heads/candidate is only
+# ever a pointer it force-moves onto the newest release candidate.
+# .github/workflows/release-train.yml runs it (.grain/workflows/release-train.yml
+# by dispatch); by hand it is
 #
 #   scripts/release-from-trunk.sh
 #
-# It does everything up to the release itself and stops there: a soak
-# that passes stages the release as vX.Y.0-pending, and a person makes it
-# official (design/design/release-from-trunk.design.md, §4). The person's two
-# answers are the other two modes, which .grain/workflows/promote-release.yml
-# runs and nothing else should:
+# It does everything up to the release itself and stops there: an rc that
+# qualifies is staged as vX.Y.Z-pending, and a person makes it official.
+# The person's answers are the other modes, which
+# .grain/workflows/promote-release.yml (and promote.yml) run and nothing
+# else should:
 #
-#   scripts/release-from-trunk.sh approve vX.Y.0
-#   scripts/release-from-trunk.sh reject vX.Y.0
+#   scripts/release-from-trunk.sh approve vX.Y.Z
+#   scripts/release-from-trunk.sh reject vX.Y.Z
+#   scripts/release-from-trunk.sh rollback --bad vX.Y.Z [--to vA.B.C] [--reason TEXT]
 #
 # Each refuses unless GRAIN_CI_REQUESTED_BY_KIND is "human" -- grain sets
-# it only on a run its person-only approval route started -- so neither an
-# agent nor a schedule can promote a release. approve tags vX.Y.0 and
-# force-moves `latest` onto the pending commit, retags the staged
-# :vX.Y.0-pending images as :vX.Y.0 and :latest (release-images.sh
-# promote) and deletes the vX.Y.0-pending tag. reject takes the failed-soak
-# path: the rc the release came from is tagged -discarded and its images
-# marked (discard-rc), the staged images are marked rejected
-# (discard-pending), any rc of the next minor cut on top of it is dropped
-# the same way, and the -pending tag is deleted, so the next run cuts
-# rc.N+1 of the same minor.
+# it only on a run its person-only routes started -- so neither an agent
+# nor a schedule can promote or retract a release.
+#   approve  tags vX.Y.Z and force-moves `latest` onto the pending commit,
+#            retags the staged :vX.Y.Z-pending images as :vX.Y.Z and
+#            :latest (release-images.sh promote), deletes the vX.Y.Z-pending
+#            tag and the release/vX.Y.Z convergence branch, if there is one.
+#            A -pending tag from before qualification (one that records a
+#            soak, not "Qualification: PASS") still needs its 24h soak less
+#            the slack, or short_soak_ok: true (RELEASE_SHORT_SOAK_OK).
+#   reject   the rc the release came from is tagged -discarded and its
+#            images marked (discard-rc), the staged images are marked
+#            rejected (discard-pending), any rc of a later version cut on
+#            top of it is dropped the same way, and the -pending tag is
+#            deleted, so the next run cuts rc.N+1 of the same version.
+#   rollback (playbook section 11) never deletes or moves vX.Y.Z: it tags
+#            vX.Y.Z-retracted on it (who, and why), marks its images
+#            retracted (release-images.sh retract), and force-moves
+#            `latest` -- the git tag and the images (release-images.sh
+#            promote) -- back to --to, by default the newest earlier
+#            release that is neither retracted nor in RELEASE_NEVER_PROMOTE.
+#            pkg/upgrade's RetractedRelease then tells deployments on
+#            vX.Y.Z to move. Adding vX.Y.Z to RELEASE_NEVER_PROMOTE and
+#            fixing forward on main are for a person; the next release is
+#            the next minor.
 #
 # Each train run is two idempotent phases.
 #
-# Phase 1 -- the release candidate soaking, if there is one. The target
-# release is vM.(P+1).0, P the highest promoted minor of RELEASE_MAJOR
-# (raised to RELEASE_FLOOR_MINOR, stepping over a vM.Y.0 in
-# RELEASE_NEVER_PROMOTE -- the same rule scripts/build-version.sh versions
-# main's builds by). Its newest rc, vM.Y.0-rc.N, soaks unless it carries
-# a vM.Y.0-rc.N-discarded tag:
-#   - younger than 24h less RELEASE_INTERVAL_SLACK_HOURS (2): still
-#     soaking; the run stops here (FORCE=true skips the wait);
-#   - otherwise scripts/candidate-gate.sh check-soak judges it:
-#       PENDING  the run stops here, and the next one asks again;
-#       PASS     it is staged for a person to approve: vM.Y.0-pending is
-#                tagged on its commit and pushed (naming the rc and the
-#                soak verdict), its images built and published as
-#                :vM.Y.0-pending (release-images.sh pending), the
-#                release-notes task filed (from the newest vX.Y.0
-#                RELEASE_NEVER_PROMOTE does not name, so never from a
-#                placeholder such as v2.5.0), and an operator notification
-#                raised with Approve and Reject; vM.Y.0 and `latest` are
-#                not touched. Phase 2 then cuts the next minor's rc.1;
-#       FAIL     it is dropped: vM.Y.0-rc.N-discarded is tagged on its
-#                commit and pushed, its images marked (release-images.sh
-#                discard-rc), and Phase 2 cuts rc.N+1 of the same minor --
-#                an rc that fails never costs a minor number. A failure
-#                no filed defect accounts for (the supervisor, the HTTP
-#                probe, a failed exploration run) also makes the run exit
-#                1 once Phase 2 is done, so the scheduled workflow's
-#                review files soak triage.
-#     An rc RELEASE_NEVER_PROMOTE names is dropped without a soak.
+# Phase 1 -- the release candidate in qualification, if there is one. The
+# target is the version whose rcs exist past the newest release (promoted
+# or pending) of RELEASE_MAJOR; with none, it is chosen at the cut
+# (Phase 2). Its newest rc, vM.Y.Z-rc.N, qualifies unless it carries a
+# vM.Y.Z-rc.N-discarded tag: scripts/candidate-gate.sh check-qualification
+# reads nightly.yml's jobs on it (Stage 1) and the
+# grain/release-qualification check run on its commit (Stage 2):
+#   PENDING  still running, or a job's first failure waits on its one
+#            retry; INFRA  a job was cancelled, timed out or starved of
+#            capacity and is to be re-run, never counted as red. Either way
+#            the run stops here, and says which jobs to re-run
+#            (qualification_rerun=<stage>:<job>:<flake|infra>,... in
+#            RELEASE_TRAIN_OUTPUT) -- re-running them is the workflow's;
+#   PASS     it is staged for a person to approve: vM.Y.Z-pending is
+#            tagged on its commit and pushed ("Qualification: PASS"), its
+#            images published as :vM.Y.Z-pending (release-images.sh
+#            pending), the release-notes task filed (from the newest release
+#            neither RELEASE_NEVER_PROMOTE names nor is retracted), and an
+#            operator notification raised; vM.Y.Z and `latest` are not
+#            touched;
+#   FAIL     it is dropped: vM.Y.Z-rc.N-discarded is tagged on its commit
+#            and pushed, its images marked (release-images.sh discard-rc),
+#            and Phase 2 cuts rc.N+1 of the same version -- an rc that
+#            fails never costs a version number.
+#   An rc RELEASE_NEVER_PROMOTE names is dropped without qualifying.
 #
 #   While a release is pending, the train keeps going but never past it:
-#   the pending release counts as the newest release for choosing the
-#   next target (so the next rc is vM.(Y+1).0-rc.1, cut strictly after
-#   the pending commit), each run raises its notification again, and an
-#   rc of the next minor whose soak passes waits -- it is never staged,
-#   and never supersedes the pending release, until a person approves or
-#   rejects it. scripts/build-version.sh does not count -pending tags, so
-#   main's builds keep versioning from the last promoted release.
+#   the pending release counts as the newest release for choosing the next
+#   version, and an rc after it that qualifies waits -- it is never staged
+#   over the pending release until a person approves or rejects it.
 #
-# Phase 2 -- with nothing soaking, cut the next rc: the newest main commit
-# scripts/candidate-gate.sh select-lkg finds known-good strictly after the
-# floor (the dropped rc's commit, the promoted release's, or nothing) is
-# tagged vM.Y.0-rc.K, refs/heads/candidate is force-moved onto it --
-# grain-candidate refreshes onto it by itself, and the next soak checks it
-# did -- and its images are published (release-images.sh rc). No new
-# known-good commit cuts nothing: main red for a week ships nothing and
-# `latest` stands.
+# Phase 2 -- with nothing qualifying, cut the next rc: the newest commit
+# scripts/candidate-gate.sh select-lkg finds known-good (tests.yml and
+# release.yml green) strictly after the floor (the dropped rc's commit, or
+# the newest release's) is tagged vM.Y.Z-rc.K, refs/heads/candidate is
+# force-moved onto it and its images are published (release-images.sh rc).
+# No new known-good commit cuts nothing: main red for a week ships
+# nothing and `latest` stands. Before an rc.1:
+#   - at least RELEASE_MIN_INTERVAL_MINUTES must have passed since the
+#     newest release (promoted or pending) was tagged; FORCE=true skips it;
+#   - the commits since the newest release choose the version (playbook
+#     section 7): a feat:, a breaking change (type!: or BREAKING CHANGE:)
+#     or a subject that is not a Conventional Commit makes the next minor,
+#     vM.(P+1).0; fix:, perf:, refactor: and revert: alone make a patch,
+#     vM.P.(Z+1) (never of a retracted release or of a major's first);
+#     docs:, chore:, test:, ci:, style: and build: alone release nothing
+#     and wait for something that does.
+# rc.3 converges (playbook section 5): after rc.2 is dropped, the train
+# makes release/vM.Y.Z from rc.2's commit and cuts rc.3 from that branch
+# (on release.yml alone, which runs on release/v*) once fixes cherry-picked
+# onto it from main are green. After RELEASE_MAX_RC_ATTEMPTS dropped rcs
+# the train cuts nothing more of that version and exits 1, so a person
+# decides (escalated_version= in RELEASE_TRAIN_OUTPUT).
 #
-# What it reads comes through the release-gate-read capability, the
-# api:release-gate-read preset (GRAIN_API_URL and GRAIN_API_TOKEN, sourced
-# from ~/.grain-api/env when unset): GET /api/ci/runs, /api/persistent-
-# sandboxes and /api/tasks. RELEASE_RUNS_JSON, RELEASE_SANDBOXES_JSON and
-# RELEASE_TASKS_JSON name files to read instead.
-#
-# main's CI verdicts come from wherever main's gate runs (RELEASE_CI_SOURCE).
-# With "grain" they are grain CI's runs, GET /api/ci/runs above. A
-# repository whose gate is GitHub Actions (ci_mode: github) runs tests.yml,
-# release.yml and nightly.yml there and nowhere else, so grain has no
-# verdict on them: with "github" they are GitHub's workflow runs of each
-# required workflow on main, GET /repos/{RELEASE_GITHUB_REPO}/actions/
-# workflows/<suite>.yml/runs, read with GITHUB_TOKEN (actions: read) --
-# the train's only use of that token besides git. The soak, the task list
-# and the notifications still come from grain. The default is "github"
+# CI verdicts come from wherever the gate runs (RELEASE_CI_SOURCE). With
+# "grain" they are grain CI's runs, GET /api/ci/runs, read through the
+# release-gate-read capability (the api:release-gate-read preset:
+# GRAIN_API_URL and GRAIN_API_TOKEN, sourced from ~/.grain-api/env when
+# unset). With "github" they are GitHub's workflow runs, GET
+# /repos/{RELEASE_GITHUB_REPO}/actions/workflows/<suite>.yml/runs (and, for
+# an rc, the jobs of each nightly.yml run on it), read with GITHUB_TOKEN
+# (actions: read). The grain/release-qualification check run is read from
+# GitHub (checks: read) whenever there is a token. The default is "github"
 # inside GitHub Actions and "grain" anywhere else.
 #
 # Settings (environment):
 #   RELEASE_REMOTE           the remote (origin)
 #   RELEASE_NOW              the time, in seconds (now)
-#   FORCE                    true promotes or drops an rc younger than the soak
-#   RELEASE_SOAK_HOURS, RELEASE_INTERVAL_SLACK_HOURS
-#                            24 and 2: a daily 04:15 run never misses the
-#                            boundary by a minute of jitter
-#   RELEASE_STAGING_URL      staging's UI (http://127.0.0.1:4280)
-#   RELEASE_CI_SOURCE        grain or github: where main's CI verdicts come from
+#   FORCE                    true cuts an rc.1 inside RELEASE_MIN_INTERVAL_MINUTES
+#   RELEASE_SHORT_SOAK_OK    approve only, for a -pending tag from the soak
+#                            era: true promotes one whose recorded soak is
+#                            under RELEASE_SOAK_HOURS (24) less
+#                            RELEASE_INTERVAL_SLACK_HOURS (2)
+#   RELEASE_CI_SOURCE        grain or github: where CI verdicts come from
 #   RELEASE_GITHUB_REPO      the repository whose workflow runs count
 #                            ($GITHUB_REPOSITORY, else ai-on-gke/grain)
 #   RELEASE_GITHUB_API_URL   GitHub's API ($GITHUB_API_URL, else api.github.com)
 #   RELEASE_GITHUB_PAGES     pages of 100 runs read per workflow (3)
+#   RELEASE_RUNS_JSON        a file to read the cut's CI runs from instead
+#   RELEASE_QUALIFICATION_RUNS_JSON, RELEASE_QUALIFICATION_CHECKS_JSON
+#                            files to read the rc's nightly.yml jobs and
+#                            check runs from instead
 #   RELEASE_IMAGES           the image publisher (bash scripts/release-images.sh);
 #                            "off" publishes nothing
 #   RELEASE_NOTES_TASK       "off" files no release-notes task
 #   RELEASE_NOTIFY           "off" raises no operator notification
-#   RELEASE_TRAIN_OUTPUT     a file to append pending_version=, promoted_version=,
-#                            rc_tag= and discarded_rc= lines to, for the jobs
-#                            after this one
-#   DRY_RUN                  true pushes, publishes and files nothing
-#   RELEASE_DEPLOYED_AT      when the rc reached staging, in seconds (by
-#                            default check-soak reads it off the supervisor)
-#   RELEASE_MAJOR, RELEASE_FLOOR_MINOR, RELEASE_NEVER_PROMOTE
+#   RELEASE_ROLLBACK_TO, RELEASE_ROLLBACK_REASON
+#                            rollback's --to and --reason
+#   RELEASE_TRAIN_OUTPUT     a file to append key=value outputs to, for the
+#                            jobs after this one
+#   DRY_RUN                  true pushes, publishes and files nothing, and
+#                            leaves no tag it made behind in the checkout
+#   GIT_USER_NAME, GIT_USER_EMAIL
+#                            who the tags are made by (grain-ci[bot]), when
+#                            GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL are
+#                            unset; never written to the checkout's config
+#   RELEASE_MAJOR, RELEASE_FLOOR_MINOR, RELEASE_NEVER_PROMOTE,
+#   RELEASE_MIN_INTERVAL_MINUTES, RELEASE_MAX_RC_ATTEMPTS
 #                            override scripts/release.conf as main has it
 set -euo pipefail
 
 mode=train
 version=""
+rollback_to="${RELEASE_ROLLBACK_TO:-}"
+rollback_reason="${RELEASE_ROLLBACK_REASON:-}"
 case "${1:-}" in
   "") ;;
   approve | reject)
     mode="$1"
     version="${2:-${GRAIN_CI_RELEASE_VERSION:-}}"
     ;;
+  rollback)
+    mode=rollback
+    shift
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --bad) version="${2:-}"; shift 2 ;;
+        --to) rollback_to="${2:-}"; shift 2 ;;
+        --reason) rollback_reason="${2:-}"; shift 2 ;;
+        -*) echo "release-from-trunk: usage: release-from-trunk.sh rollback --bad vX.Y.Z [--to vA.B.C] [--reason TEXT]" >&2; exit 2 ;;
+        *) version="$1"; shift ;;
+      esac
+    done
+    version="${version:-${GRAIN_CI_RELEASE_VERSION:-}}"
+    ;;
   *)
-    echo "release-from-trunk: usage: release-from-trunk.sh [approve|reject vX.Y.0]" >&2
+    echo "release-from-trunk: usage: release-from-trunk.sh [approve|reject vX.Y.Z | rollback --bad vX.Y.Z [--to vA.B.C] [--reason TEXT]]" >&2
     exit 2
     ;;
 esac
@@ -155,15 +199,36 @@ scripts_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 remote="${RELEASE_REMOTE:-origin}"
 now="${RELEASE_NOW:-$(date +%s)}"
 FORCE="${FORCE:-false}"
+short_soak_ok="${RELEASE_SHORT_SOAK_OK:-false}"
 DRY_RUN="${DRY_RUN:-false}"
 soak_hours="${RELEASE_SOAK_HOURS:-24}"
 slack_hours="${RELEASE_INTERVAL_SLACK_HOURS:-2}"
-staging_url="${RELEASE_STAGING_URL:-http://127.0.0.1:4280}"
 images_cmd="${RELEASE_IMAGES:-bash $scripts_dir/release-images.sh}"
 output="${RELEASE_TRAIN_OUTPUT:-}"
 
+# Who makes the tags: through the environment, never the checkout's
+# .git/config, so running the train by hand -- dry run or not -- leaves
+# the person's own identity where it was.
+export GIT_COMMITTER_NAME="${GIT_COMMITTER_NAME:-${GIT_USER_NAME:-grain-ci[bot]}}"
+export GIT_COMMITTER_EMAIL="${GIT_COMMITTER_EMAIL:-${GIT_USER_EMAIL:-grain-ci[bot]@users.noreply.github.com}}"
+export GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-$GIT_COMMITTER_NAME}"
+export GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-$GIT_COMMITTER_EMAIL}"
+
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+# A dry run puts every local tag back the way the fetch left it: the tags
+# it made are deleted, and the ones it moved or deleted restored.
+restore_tags() {
+  [ "$DRY_RUN" = true ] && [ -f "$work/tags.before" ] || return 0
+  local ref obj
+  git for-each-ref --format='%(refname) %(objectname)' refs/tags > "$work/tags.after"
+  while read -r ref obj; do
+    grep -qxF "$ref $obj" "$work/tags.before" || git update-ref -d "$ref" 2>/dev/null || true
+  done < "$work/tags.after"
+  while read -r ref obj; do
+    grep -qxF "$ref $obj" "$work/tags.after" || git update-ref "$ref" "$obj" 2>/dev/null || true
+  done < "$work/tags.before"
+}
+trap 'restore_tags; rm -rf "$work"' EXIT
 
 say() { echo "release-from-trunk: $*"; }
 die() {
@@ -175,12 +240,10 @@ emit() { # emit <key> <value>: an output for the jobs after this one
   [ -z "$output" ] || printf '%s=%s\n' "$1" "$2" >> "$output"
 }
 
-git config user.name "${GIT_USER_NAME:-grain-ci[bot]}"
-git config user.email "${GIT_USER_EMAIL:-grain-ci[bot]@users.noreply.github.com}"
-
 say "fetching $remote's main, candidate and tags"
 git fetch -q --force --tags "$remote" "+refs/heads/main:refs/remotes/$remote/main" || die "could not fetch main from $remote"
 main_ref="refs/remotes/$remote/main"
+git for-each-ref --format='%(refname) %(objectname)' refs/tags > "$work/tags.before"
 
 # The operator's settings, as main has them: read with git rather than
 # sourced, so they are the default branch's whatever this run checked
@@ -192,11 +255,17 @@ conf_value() {
 never="${RELEASE_NEVER_PROMOTE-$(conf_value RELEASE_NEVER_PROMOTE)}"
 floor_minor="${RELEASE_FLOOR_MINOR-$(conf_value RELEASE_FLOOR_MINOR)}"
 floor_minor="${floor_minor:-0}"
+min_interval="${RELEASE_MIN_INTERVAL_MINUTES-$(conf_value RELEASE_MIN_INTERVAL_MINUTES)}"
+min_interval="${min_interval:-120}"
+max_attempts="${RELEASE_MAX_RC_ATTEMPTS-$(conf_value RELEASE_MAX_RC_ATTEMPTS)}"
+max_attempts="${max_attempts:-3}"
 highest_major="$(git tag -l 'v[0-9]*' | sed -nE 's/^v([0-9]+)\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$/\1/p' | sort -n | tail -n 1)"
 major="${RELEASE_MAJOR:-$(conf_value RELEASE_MAJOR)}"
 major="${major:-${highest_major:-0}}"
 [[ "$major" =~ ^[0-9]+$ ]] || die "RELEASE_MAJOR is \"$major\", which is not a number; nothing was done"
 [[ "$floor_minor" =~ ^[0-9]+$ ]] || die "RELEASE_FLOOR_MINOR is \"$floor_minor\", which is not a number; nothing was done"
+[[ "$min_interval" =~ ^[0-9]+$ ]] || die "RELEASE_MIN_INTERVAL_MINUTES is \"$min_interval\", which is not a number; nothing was done"
+[[ "$max_attempts" =~ ^[1-9][0-9]*$ ]] || die "RELEASE_MAX_RC_ATTEMPTS is \"$max_attempts\", which is not a positive number; nothing was done"
 # Version numbers never go backwards: a RELEASE_MAJOR behind the newest
 # released (or pending) major is stale, so the train releases that major
 # instead, as scripts/build-version.sh does. The floor is RELEASE_MAJOR's,
@@ -214,36 +283,53 @@ never_promotes() { # never_promotes <tag>
   return 1
 }
 
-# The promoted releases: vX.Y.0 tags, newest last.
-promoted() { git tag -l 'v[0-9]*' | grep -E '^v[0-9]+\.[0-9]+\.0$' | sort -V || true; }
+commit_of() { git rev-parse --verify -q "refs/tags/$1^{commit}"; }
+retracted() { commit_of "$1-retracted" >/dev/null; } # retracted <vX.Y.Z>
 
-# The releases waiting for a person: vX.Y.0 for each vX.Y.0-pending tag
-# whose vX.Y.0 does not exist, newest last.
+# The promoted releases: vX.Y.Z tags, newest last.
+promoted() { git tag -l 'v[0-9]*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V || true; }
+
+# The releases waiting for a person: vX.Y.Z for each vX.Y.Z-pending tag
+# whose vX.Y.Z does not exist, newest last.
 pending_releases() {
   local t
-  git tag -l 'v[0-9]*-pending' | sed -nE 's/^(v[0-9]+\.[0-9]+\.0)-pending$/\1/p' | sort -V |
+  git tag -l 'v[0-9]*-pending' | sed -nE 's/^(v[0-9]+\.[0-9]+\.[0-9]+)-pending$/\1/p' | sort -V |
     while read -r t; do
       git rev-parse -q --verify "refs/tags/$t" >/dev/null || printf '%s\n' "$t"
     done
 }
 
-# target: sets target (vM.Y.0), target_minor, released (the newest
-# promoted release, the one target follows; empty if there is none),
-# pending (the newest pending release, if any) and notes_from (the newest
-# one RELEASE_NEVER_PROMOTE does not name, which target's release notes
-# are written from). A vX.Y.0 tag the list names is a placeholder --
-# v2.5.0, tagged on main only so that the minors the legacy cut used up
-# are never reused -- so it still counts for the next minor and for the
-# floor below, but it was never released and there is nothing in it to
-# write notes from.
+# version_gt <a> <b>: whether version a sorts after version b.
+version_gt() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]; }
+
+rc_tags() { # rc_tags <version>: its rc tags, highest N last
+  git tag -l "$1-rc.*" | grep -E "^${1//./\\.}-rc\\.[0-9]+$" | sort -t. -k4,4n || true
+}
+
+# target_release: sets released (the newest promoted release; empty if
+# there is none), pending (the newest pending release, if any), base (the
+# newest of either in RELEASE_MAJOR, which the next version follows),
+# notes_from (the newest promoted release RELEASE_NEVER_PROMOTE does not
+# name and that is not retracted, which release notes are written from),
+# minor_target (vM.(P+1).0, raised to RELEASE_FLOOR_MINOR and stepping
+# over a minor RELEASE_NEVER_PROMOTE names), patch_target (vM.P.(Z+1) of
+# base; empty when base is not a release of this major a patch can
+# follow: none, retracted, a placeholder RELEASE_NEVER_PROMOTE names, or
+# under the floor), and target: the version whose rcs are in flight past
+# base, if any, else minor_target until the cut chooses. A vX.Y.0 tag the
+# list names is a placeholder -- v2.5.0, tagged on main only so that the
+# minors the legacy cut used up are never reused -- so it still counts
+# for the next version and for the floor, but it was never released and
+# there is nothing in it to write notes from.
 target_release() {
-  local p
+  local p z b_minor b_patch
   released="$(promoted | tail -n 1)"
   pending="$(pending_releases | tail -n 1)"
-  notes_from="$(promoted | while read -r t; do never_promotes "$t" || printf '%s\n' "$t"; done | tail -n 1)"
-  # A pending release holds its minor: the next target is the one after
-  # it, whether or not a person has approved it yet.
-  p="$({ promoted; pending_releases; } | sed -nE "s/^v$major\\.([0-9]+)\\.0$/\\1/p" | sort -n | tail -n 1)"
+  notes_from="$(promoted | while read -r t; do never_promotes "$t" || retracted "$t" || printf '%s\n' "$t"; done | tail -n 1)"
+  base="$({ promoted; pending_releases; } | grep -E "^v$major\\." | sort -V | tail -n 1 || true)"
+  # A pending release holds its version: the next is the one after it,
+  # whether or not a person has approved it yet.
+  p="$({ promoted; pending_releases; } | sed -nE "s/^v$major\\.([0-9]+)\\.[0-9]+$/\\1/p" | sort -n | tail -n 1)"
   if [ -n "$p" ]; then
     target_minor=$((p + 1))
   else
@@ -253,10 +339,81 @@ target_release() {
   while never_promotes "v$major.$target_minor.0"; do
     target_minor=$((target_minor + 1))
   done
-  target="v$major.$target_minor.0"
+  minor_target="v$major.$target_minor.0"
+  patch_target=""
+  if [ -n "$base" ] && ! retracted "$base" && ! never_promotes "$base"; then
+    b_minor="$(printf '%s' "$base" | cut -d. -f2)"
+    b_patch="$(printf '%s' "$base" | cut -d. -f3)"
+    if [ "$b_minor" -ge "$floor_minor" ]; then
+      z=$((b_patch + 1))
+      while never_promotes "v$major.$b_minor.$z"; do
+        z=$((z + 1))
+      done
+      patch_target="v$major.$b_minor.$z"
+    fi
+  fi
+  target="$minor_target"
+  if [ -n "$patch_target" ] && [ -n "$(rc_tags "$patch_target")" ] && [ -z "$(rc_tags "$minor_target")" ]; then
+    target="$patch_target"
+  fi
 }
 
-commit_of() { git rev-parse --verify -q "refs/tags/$1^{commit}"; }
+# bump_kind <from> <to>: what the commits in from..to release (playbook
+# section 7) -- "minor" for a feature, a breaking change or a commit that
+# does not say what it is, "patch" for fixes alone, "none" for nothing
+# but docs, chores, tests and the like.
+bump_kind() {
+  local kind=none record subject type
+  local breaking=$'(^|\n)BREAKING[ -]CHANGE:' conventional='^([A-Za-z]+)(\([^)]*\))?(!)?: '
+  [ -n "$1" ] || { echo minor; return; }
+  while IFS= read -r -d $'\x1e' record; do
+    record="${record#$'\n'}"
+    [ -n "$record" ] || continue
+    subject="${record%%$'\x1f'*}"
+    if [[ "${record#*$'\x1f'}" =~ $breaking ]]; then
+      echo minor
+      return
+    fi
+    if [[ "$subject" =~ $conventional ]]; then
+      type="${BASH_REMATCH[1],,}"
+      if [ -n "${BASH_REMATCH[3]}" ]; then
+        echo minor
+        return
+      fi
+      case "$type" in
+        feat) echo minor; return ;;
+        fix | perf | refactor | revert) kind="patch" ;;
+        docs | chore | test | tests | ci | style | build) ;;
+        *) echo minor; return ;;
+      esac
+    else
+      echo minor
+      return
+    fi
+  done < <(git log --no-merges --format='%s%x1f%b%x1e' "$1..$2")
+  echo "$kind"
+}
+
+soak_duration() { printf '%dh%02dm' "$(($1 / 3600))" "$(($1 % 3600 / 60))"; } # soak_duration <seconds>
+
+# recorded_soak <release> <rc>: how long the rc behind a soak-era
+# <release>-pending soaked, in seconds -- the Soak-Seconds the train
+# wrote on the tag, or the time from the rc's tag to the -pending one;
+# nothing if neither says.
+recorded_soak() {
+  local s cut staged
+  s="$(git for-each-ref --format='%(contents)' "refs/tags/$1-pending" | sed -nE 's/^Soak-Seconds: ([0-9]+)$/\1/p' | tail -n 1)"
+  if [ -z "$s" ] && [ -n "$2" ]; then
+    cut="$(git for-each-ref --format='%(taggerdate:unix)' "refs/tags/$2")"
+    staged="$(git for-each-ref --format='%(taggerdate:unix)' "refs/tags/$1-pending")"
+    [ -z "$cut" ] || [ -z "$staged" ] || s=$((staged - cut))
+  fi
+  printf '%s' "$s"
+}
+
+# qualified <release>: whether <release>-pending records a qualification
+# pass rather than a soak.
+qualified() { git for-each-ref --format='%(contents)' "refs/tags/$1-pending" | grep -qx 'Qualification: PASS'; }
 
 push() { # push <git push args...>
   if [ "$DRY_RUN" = true ]; then
@@ -279,6 +436,8 @@ images() { # images <release-images.sh args...>
   # shellcheck disable=SC2086 # the command is words on purpose
   $images_cmd "$@"
 }
+
+remote_branch() { git ls-remote --exit-code -q --heads "$remote" "refs/heads/$1" >/dev/null 2>&1; } # remote_branch <name>
 
 # Grain's CI API address and token (the job's api grants, release-gate-read
 # among them), from the env file the token is placed in when the
@@ -322,39 +481,73 @@ case "$ci_source" in
   *) die "RELEASE_CI_SOURCE is $ci_source, not grain or github" ;;
 esac
 
-# main's runs of each required workflow on GitHub Actions, as one
-# listing of workflow runs (scripts/candidate-gate.sh reads either shape).
-github_runs() { # github_runs <out>
+github_token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+github_api="${RELEASE_GITHUB_API_URL:-${GITHUB_API_URL:-https://api.github.com}}"
+github_repo="${RELEASE_GITHUB_REPO:-${GITHUB_REPOSITORY:-${GRAIN_CI_REPO:-ai-on-gke/grain}}}"
+github_get() { # github_get <path> <out>
+  curl -fsS --max-time 60 -H "Authorization: Bearer $github_token" -H "Accept: application/vnd.github+json" \
+    "${github_api%/}/repos/$github_repo/$1" -o "$2"
+}
+
+# A branch's runs of each of CANDIDATE_GATE_REQUIRED on GitHub Actions,
+# as one listing of workflow runs (scripts/candidate-gate.sh reads either
+# shape).
+github_runs() { # github_runs <out> <branch>
   if [ -n "${RELEASE_RUNS_JSON:-}" ]; then
     [ -r "$RELEASE_RUNS_JSON" ] || die "RELEASE_RUNS_JSON names $RELEASE_RUNS_JSON, which is not a readable file"
     cp "$RELEASE_RUNS_JSON" "$1"
     return 0
   fi
-  local token="${GITHUB_TOKEN:-${GH_TOKEN:-}}" api repo pages wf page n
-  [ -n "$token" ] || die "no GitHub token to read main's workflow runs with: set GITHUB_TOKEN (actions: read), RELEASE_RUNS_JSON, or RELEASE_CI_SOURCE=grain"
-  api="${RELEASE_GITHUB_API_URL:-${GITHUB_API_URL:-https://api.github.com}}"
-  repo="${RELEASE_GITHUB_REPO:-${GITHUB_REPOSITORY:-${GRAIN_CI_REPO:-ai-on-gke/grain}}}"
+  local pages wf page n
+  [ -n "$github_token" ] || die "no GitHub token to read $2's workflow runs with: set GITHUB_TOKEN (actions: read), RELEASE_RUNS_JSON, or RELEASE_CI_SOURCE=grain"
   pages="${RELEASE_GITHUB_PAGES:-3}"
   : > "$work/github-runs.jsonl"
-  for wf in ${CANDIDATE_GATE_REQUIRED-tests release nightly}; do
+  for wf in ${CANDIDATE_GATE_REQUIRED-tests release}; do
     for ((page = 1; page <= pages; page++)); do
-      curl -fsS --max-time 60 -H "Authorization: Bearer $token" -H "Accept: application/vnd.github+json" \
-        "${api%/}/repos/$repo/actions/workflows/$wf.yml/runs?branch=main&per_page=100&page=$page" -o "$work/github-page.json" ||
-        die "could not read $wf.yml's runs on main from $api"
-      n="$(jq '.workflow_runs | length' "$work/github-page.json")" || die "$api's answer for $wf.yml is not a listing of workflow runs"
+      github_get "actions/workflows/$wf.yml/runs?branch=$2&per_page=100&page=$page" "$work/github-page.json" ||
+        die "could not read $wf.yml's runs on $2 from $github_api"
+      n="$(jq '.workflow_runs | length' "$work/github-page.json")" || die "$github_api's answer for $wf.yml is not a listing of workflow runs"
       cat "$work/github-page.json" >> "$work/github-runs.jsonl"
       [ "$n" -ge 100 ] || break
     done
   done
   jq -s '{workflow_runs: (map(.workflow_runs) | add // [])}' "$work/github-runs.jsonl" > "$1"
-  say "read $(jq '.workflow_runs | length' "$1") GitHub Actions runs of $repo's ${CANDIDATE_GATE_REQUIRED-tests release nightly} on main"
+  say "read $(jq '.workflow_runs | length' "$1") GitHub Actions runs of $github_repo's ${CANDIDATE_GATE_REQUIRED-tests release} on $2"
 }
 
-tasks_json="$work/tasks.json"
-have_tasks=""
-fetch_tasks() {
-  [ -n "$have_tasks" ] || gate_json RELEASE_TASKS_JSON "/api/tasks?limit=500" "$tasks_json"
-  have_tasks=yes
+# qualification_json <rc> <sha>: what check-qualification reads -- the
+# jobs of every nightly.yml run on the rc ($work/qual-runs.json) and the
+# check runs on its commit ($work/qual-checks.json, when there is a way to
+# read them; qual_checks names it then).
+qual_checks=""
+qualification_json() {
+  local id
+  if [ -n "${RELEASE_QUALIFICATION_RUNS_JSON:-}" ]; then
+    gate_json RELEASE_QUALIFICATION_RUNS_JSON "" "$work/qual-runs.json"
+  elif [ "$ci_source" = github ]; then
+    [ -n "$github_token" ] || die "no GitHub token to read nightly.yml's runs on $1 with: set GITHUB_TOKEN (actions: read) or RELEASE_QUALIFICATION_RUNS_JSON"
+    github_get "actions/workflows/nightly.yml/runs?head_sha=$2&per_page=100" "$work/qual-wf.json" ||
+      die "could not read nightly.yml's runs on $1 from $github_api"
+    : > "$work/qual-jobs.jsonl"
+    for id in $(jq -r '.workflow_runs[].id' "$work/qual-wf.json"); do
+      github_get "actions/runs/$id/jobs?filter=all&per_page=100" "$work/qual-page.json" ||
+        die "could not read the jobs of nightly.yml run $id from $github_api"
+      cat "$work/qual-page.json" >> "$work/qual-jobs.jsonl"
+    done
+    jq -s '{jobs: (map(.jobs) | add // [])}' "$work/qual-jobs.jsonl" > "$work/qual-runs.json"
+  else
+    gate_json RELEASE_QUALIFICATION_RUNS_JSON "/api/ci/runs?repo=${GRAIN_CI_REPO:-ai-on-gke/grain}&ref=$1&limit=200" "$work/qual-runs.json"
+  fi
+  if [ -n "${RELEASE_QUALIFICATION_CHECKS_JSON:-}" ]; then
+    gate_json RELEASE_QUALIFICATION_CHECKS_JSON "" "$work/qual-checks.json"
+    qual_checks="$work/qual-checks.json"
+  elif [ -n "$github_token" ]; then
+    github_get "commits/$2/check-runs?check_name=grain%2Frelease-qualification&filter=all&per_page=100" "$work/qual-checks.json" ||
+      die "could not read the check runs on $1 from $github_api"
+    qual_checks="$work/qual-checks.json"
+  else
+    say "no GitHub token, so no grain/release-qualification check run to read for $1"
+  fi
 }
 
 # File the release-notes task for a promotion, through the gate's one
@@ -412,25 +605,71 @@ raise_pending() { # raise_pending <release> <rc> <body>
   fi
 }
 
-# pending_body <release> <rc> <soak summary> <notes task>: what the
+# pending_body <release> <rc> <verdict> <notes task>: what the
 # notification says.
 pending_body() {
-  printf '%s passed its %sh staging soak and is staged as %s-pending: images built and published as :%s-pending, nothing left to build or test.\n\n' \
-    "$2" "$soak_hours" "$1" "$1"
-  printf 'Soak: %s\n' "${3:-PASS}"
+  printf '%s passed qualification (Stage 1 nightly.yml, Stage 2 grain/release-qualification) and is staged as %s-pending: images built and published as :%s-pending, nothing left to build or test.\n\n' \
+    "$2" "$1" "$1"
+  printf 'Qualification: %s\n' "${3:-PASS}"
   printf 'Release notes: %s\n\n' "${4:-the release-notes task for $1 (docs/releases/$1.md); merge it before approving}"
   printf 'Approve tags %s and moves latest onto it; Reject drops %s and the next run cuts its next rc. ' "$1" "$2"
-  printf 'Meanwhile the daily train may cut and soak the next minor'"'"'s rc, but it never promotes or supersedes %s: it waits for your answer.\n' "$1"
+  printf 'Meanwhile the train may cut and qualify the next version'"'"'s rc, but it never promotes or supersedes %s: it waits for your answer.\n' "$1"
 }
 
-# --- approve / reject: a person's answer to a pending release ---
+# --- approve / reject / rollback: a person's answer ---
 
 if [ "$mode" != train ]; then
-  [[ "$version" =~ ^v[0-9]+\.[0-9]+\.0$ ]] || die "$mode needs the pending release, vX.Y.0 (got \"$version\")"
+  if [ "$mode" = rollback ]; then
+    [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "rollback needs the release to retract, --bad vX.Y.Z (got \"$version\")"
+  else
+    [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "$mode needs the pending release, vX.Y.Z (got \"$version\")"
+  fi
   if [ "${GRAIN_CI_REQUESTED_BY_KIND:-}" != human ]; then
     die "only a person may $mode $version: GRAIN_CI_REQUESTED_BY_KIND is \"${GRAIN_CI_REQUESTED_BY_KIND:-}\", not \"human\" -- use \`grain release $mode $version\` or the Upgrade pane, which run .grain/workflows/promote-release.yml for a person; nothing was done"
   fi
   by="${GRAIN_CI_REQUESTED_BY:-a person}"
+fi
+
+if [ "$mode" = rollback ]; then
+  bad_sha="$(commit_of "$version" || true)"
+  [ -n "$bad_sha" ] || die "$version is not a release: $remote has no $version tag; nothing was done"
+  if [ -z "$rollback_to" ]; then
+    rollback_to="$(promoted | while read -r t; do
+      version_gt "$version" "$t" || continue
+      never_promotes "$t" || retracted "$t" || printf '%s\n' "$t"
+    done | tail -n 1)"
+    [ -n "$rollback_to" ] || die "there is no release before $version to roll latest back to; nothing was done"
+  fi
+  [[ "$rollback_to" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "--to $rollback_to is not a release, vX.Y.Z; nothing was done"
+  to_sha="$(commit_of "$rollback_to" || true)"
+  [ -n "$to_sha" ] || die "--to $rollback_to is not a release: $remote has no $rollback_to tag; nothing was done"
+  version_gt "$version" "$rollback_to" || die "--to $rollback_to is not older than $version; rollback only goes back; nothing was done"
+  ! retracted "$rollback_to" || die "--to $rollback_to is itself retracted; nothing was done"
+  ! never_promotes "$rollback_to" || die "--to $rollback_to is named by RELEASE_NEVER_PROMOTE; nothing was done"
+  latest_sha="$(commit_of latest || true)"
+  if retracted "$version" && [ "$latest_sha" = "$to_sha" ]; then
+    say "rollback: $version is already retracted and latest is on $rollback_to; nothing to do"
+    exit 0
+  fi
+  say "rollback: $by retracts $version (${bad_sha:0:12}) and moves latest back to $rollback_to (${to_sha:0:12})${rollback_reason:+: $rollback_reason}"
+  if ! retracted "$version"; then
+    git tag -a "$version-retracted" "$bad_sha" -m "Release $version retracted" \
+      -m "Retracted by $by${rollback_reason:+: $rollback_reason}" \
+      -m "$version stays tagged: a release is never deleted or moved. latest goes back to $rollback_to." \
+      -m "Rolled-Back-To: $rollback_to"
+    push "refs/tags/$version-retracted" || die "could not push $version-retracted; latest was not moved"
+  fi
+  emit retracted_version "$version"
+  git tag -fa latest "$to_sha" -m "Latest release $rollback_to" -m "Rolled back from $version, retracted by $by"
+  push --force "refs/tags/latest" || die "pushed $version-retracted, but could not move latest back to $rollback_to"
+  emit latest_version "$rollback_to"
+  images retract "$version" || die "moved latest back to $rollback_to, but could not mark $version's images retracted: run \`release-images.sh retract $version\`"
+  images promote "$rollback_to" || die "moved latest back to $rollback_to, but could not move the :latest images: run \`release-images.sh promote $rollback_to\`"
+  say "rollback: $version is retracted and latest is $rollback_to again. Still for a person: add $version to RELEASE_NEVER_PROMOTE in scripts/release.conf, mark its GitHub Release a pre-release, and fix forward on main -- the next release is the next minor"
+  exit 0
+fi
+
+if [ "$mode" != train ]; then
   pending_sha="$(commit_of "$version-pending" || true)"
   [ -n "$pending_sha" ] || die "$version is not pending: $remote has no $version-pending tag; nothing was done"
   if commit_of "$version" >/dev/null; then
@@ -439,8 +678,25 @@ if [ "$mode" != train ]; then
   from_rc="$(git tag --points-at "$pending_sha" -l "$version-rc.*" | grep -E "^${version//./\\.}-rc\\.[0-9]+$" | sort -t. -k4,4n | tail -n 1 || true)"
   if [ "$mode" = approve ]; then
     prev="$(promoted | tail -n 1)"
-    say "approve: $by approved $version (${from_rc:-?}, ${pending_sha:0:12}); promoting it to $version and latest"
-    git tag -a "$version" "$pending_sha" -m "Release $version" -m "Promoted from ${from_rc:-$version-pending}, approved by $by"
+    override=""
+    said=""
+    if qualified "$version"; then
+      said="qualified"
+    else
+      # A -pending tag staged by the soak-era train: its soak still counts.
+      min_soak=$(((soak_hours - slack_hours) * 3600))
+      soaked="$(recorded_soak "$version" "$from_rc")"
+      said="${soaked:+soaked $(soak_duration "$soaked") of ${soak_hours}h}"
+      if [ -z "$soaked" ] || [ "$soaked" -lt "$min_soak" ]; then
+        if [ "$short_soak_ok" != true ]; then
+          die "$version ${said:-has no recorded soak or qualification}, under the $((soak_hours - slack_hours))h minimum: approve it with short_soak_ok: true if that is meant, or reject it; nothing was done"
+        fi
+        override="; short soak (${said:-no recorded soak}, under the $((soak_hours - slack_hours))h minimum) accepted with short_soak_ok: true"
+        say "approve: $version ${said:-has no recorded soak}, under the $((soak_hours - slack_hours))h minimum; $by passed short_soak_ok: true"
+      fi
+    fi
+    say "approve: $by approved $version (${from_rc:-?}, ${pending_sha:0:12}${said:+, $said}); promoting it to $version and latest"
+    git tag -a "$version" "$pending_sha" -m "Release $version" -m "Promoted from ${from_rc:-$version-pending}, approved by $by$override"
     git tag -fa latest "$pending_sha" -m "Latest release $version"
     push "refs/tags/$version" || die "could not push $version; latest was not moved and $version-pending stands"
     push --force "refs/tags/latest" || die "pushed $version, but could not move latest onto it"
@@ -448,6 +704,11 @@ if [ "$mode" != train ]; then
     images promote "$version" || die "tagged $version and latest, but could not publish their images: re-run .grain/workflows/promote.yml"
     push --delete "refs/tags/$version-pending" || die "promoted $version, but could not delete $version-pending"
     git tag -d "$version-pending" >/dev/null
+    # The convergence branch has done its job: main carries every fix.
+    if remote_branch "release/$version"; then
+      push --delete "refs/heads/release/$version" || die "promoted $version, but could not delete release/$version"
+      say "approve: deleted the convergence branch release/$version"
+    fi
     say "approve: $version is released (after ${prev:-nothing}); $version-pending is gone"
     exit 0
   fi
@@ -459,10 +720,12 @@ if [ "$mode" != train ]; then
     emit discarded_rc "$from_rc"
   fi
   images discard-pending "$version" || die "could not mark $version-pending's images rejected"
-  # An rc of the next minor was cut on top of the release just rejected,
+  # An rc of a later version was cut on top of the release just rejected,
   # and would be versioned past a release that never shipped: drop it too.
-  next="${version%.*.*}.$(( $(printf '%s' "$version" | cut -d. -f2) + 1 )).0"
-  for later in $(git tag -l "$next-rc.*" | grep -E "^${next//./\\.}-rc\\.[0-9]+$" | sort -t. -k4,4n || true); do
+  vmajor="$(printf '%s' "$version" | cut -d. -f1)"
+  for later in $(git tag -l "$vmajor.*-rc.*" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$' | sort -V || true); do
+    version_gt "${later%-rc.*}" "$version" || continue
+    commit_of "${later%-rc.*}" >/dev/null && continue
     commit_of "$later-discarded" >/dev/null && continue
     git tag -fa "$later-discarded" "$(commit_of "$later")" -m "Release candidate $later dropped: $version, which it follows, was rejected by $by"
     push "refs/tags/$later-discarded" || die "could not push $later-discarded"
@@ -476,7 +739,7 @@ if [ "$mode" != train ]; then
 fi
 
 target_release
-say "major $major (floor minor $floor_minor); newest promoted release ${released:-none}${pending:+; $pending pending approval}; target $target; its notes are from ${notes_from:-the start}"
+say "major $major (floor minor $floor_minor); newest promoted release ${released:-none}${pending:+; $pending pending approval}; next minor $minor_target${patch_target:+, next patch $patch_target}; notes from ${notes_from:-the start}"
 if [ -n "$pending" ]; then
   pending_sha="$(commit_of "$pending-pending")"
   pending_rc="$(git tag --points-at "$pending_sha" -l "$pending-rc.*" | sort -t. -k4,4n | tail -n 1 || true)"
@@ -486,13 +749,9 @@ fi
 
 # --- Phase 1 ---
 
-rc_tags() { # the rc tags of $target, highest N last
-  git tag -l "$target-rc.*" | grep -E "^${target//./\\.}-rc\\.[0-9]+$" | sort -t. -k4,4n || true
-}
 floor=""
 next_n=1
-triage=""
-rc="$(rc_tags | tail -n 1)"
+rc="$(rc_tags "$target" | tail -n 1)"
 if [ -n "$rc" ]; then
   rc_sha="$(commit_of "$rc")"
   n="${rc##*.}"
@@ -501,7 +760,7 @@ if [ -n "$rc" ]; then
     floor="$rc_sha"
     next_n=$((n + 1))
   elif never_promotes "$rc"; then
-    say "phase 1: RELEASE_NEVER_PROMOTE names $rc; dropping it without a soak"
+    say "phase 1: RELEASE_NEVER_PROMOTE names $rc; dropping it without qualifying it"
     git tag -fa "$rc-discarded" "$rc_sha" -m "Release candidate $rc dropped: RELEASE_NEVER_PROMOTE names it"
     push "refs/tags/$rc-discarded"
     images discard-rc "$rc" || die "could not mark $rc's images discarded (its -discarded tag is pushed)"
@@ -509,110 +768,168 @@ if [ -n "$rc" ]; then
     floor="$rc_sha"
     next_n=$((n + 1))
   else
-    cut_ts="$(git for-each-ref --format='%(taggerdate:unix)' "refs/tags/$rc")"
-    [ -n "$cut_ts" ] || cut_ts="$(git log -1 --format=%ct "$rc_sha")"
-    age=$((now - cut_ts))
-    min_age=$(((soak_hours - slack_hours) * 3600))
-    if [ "$age" -lt "$min_age" ] && [ "$FORCE" != true ]; then
-      say "phase 1: $rc (${rc_sha:0:12}) soak in progress ($((age / 3600))h / ${soak_hours}h); nothing to cut while it soaks"
-      exit 0
-    fi
-    say "phase 1: $rc (${rc_sha:0:12}) has soaked $((age / 3600))h; asking the soak gate"
-    gate_json RELEASE_SANDBOXES_JSON "/api/persistent-sandboxes" "$work/sandboxes.json"
-    fetch_tasks
-    soak_status=0
-    soak_out="$(bash "$scripts_dir/candidate-gate.sh" check-soak --rc-tag "$rc" --rc-sha "$rc_sha" \
-      --sandbox-json "$work/sandboxes.json" --tasks-json "$tasks_json" --staging-url "$staging_url" \
-      --deployed-at "${RELEASE_DEPLOYED_AT:-}" 2>&1)" || soak_status=$?
-    printf '%s\n' "$soak_out" | sed 's/^/  /'
-    case "$soak_status" in
+    say "phase 1: $rc (${rc_sha:0:12}) is in qualification; asking the qualification gate"
+    qualification_json "$rc" "$rc_sha"
+    q_status=0
+    q_out="$(bash "$scripts_dir/candidate-gate.sh" check-qualification --rc-tag "$rc" --rc-sha "$rc_sha" \
+      --runs-json "$work/qual-runs.json" ${qual_checks:+--checks-json "$qual_checks"} 2>&1)" || q_status=$?
+    printf '%s\n' "$q_out" | sed 's/^/  /'
+    case "$q_status" in
       0)
         if [ -n "$pending" ]; then
-          say "phase 1: $rc passed its soak, but $pending is still pending approval; $rc waits behind it and is never staged over it"
+          say "phase 1: $rc qualified, but $pending is still pending approval; $rc waits behind it and is never staged over it"
           exit 0
         fi
-        prev="$notes_from"
-        verdict="$(printf '%s\n' "$soak_out" | sed -n 's/^PASS //p' | paste -sd';' - | sed 's/;/; /g')"
-        say "phase 1: $rc passed its soak; staging $target-pending for a person to approve ($target and latest are not touched)"
+        say "phase 1: $rc qualified; staging $target-pending for a person to approve ($target and latest are not touched)"
         git tag -a "$target-pending" "$rc_sha" -m "Release $target pending approval" \
-          -m "From $rc, whose ${soak_hours}h staging soak passed: ${verdict:-PASS}" \
-          -m "A person approves it (grain release approve $target) or rejects it (grain release reject $target)."
+          -m "From $rc, which passed Stage 1 (nightly.yml) and Stage 2 (grain/release-qualification)." \
+          -m "A person approves it (grain release approve $target) or rejects it (grain release reject $target)." \
+          -m "Qualification: PASS"
         push "refs/tags/$target-pending" || die "could not push $target-pending"
         emit pending_version "$target"
         images pending "$target" || die "tagged $target-pending, but could not stage its images: run \`release-images.sh pending $target\`"
         notes_task=""
-        file_release_notes "$target" "$prev"
-        raise_pending "$target" "$rc" "$(pending_body "$target" "$rc" "${verdict:-PASS}" "$notes_task")"
+        file_release_notes "$target" "$notes_from"
+        raise_pending "$target" "$rc" "$(pending_body "$target" "$rc" PASS "$notes_task")"
         floor="$rc_sha"
         next_n=1
         target_release
-        say "the next release is $target; it is cut and soaked, but never promoted past $pending"
         ;;
-      2)
-        say "phase 1: $rc's soak is pending; the next run asks again"
+      2 | 3)
+        reruns="$(printf '%s\n' "$q_out" | sed -nE 's/^RERUN ([^ ]+) (.+) (flake|infra)$/\1:\2:\3/p' | paste -sd, -)"
+        verdict=pending
+        [ "$q_status" = 2 ] || verdict=infra
+        emit qualification "$verdict"
+        [ -z "$reruns" ] || emit qualification_rerun "$reruns"
+        if printf '%s\n' "$q_out" | grep -q 'stalled after'; then
+          emit qualification_stalled "$rc"
+        fi
+        say "phase 1: $rc's qualification is $verdict${reruns:+; to re-run: $reruns}; one rc qualifies at a time, so nothing is cut"
         exit 0
         ;;
       1)
-        summary="$(printf '%s\n' "$soak_out" | sed -n 's/^FAIL //p' | paste -sd';' - | sed 's/;/; /g')"
-        say "phase 1: $rc failed its soak; dropping it"
-        git tag -fa "$rc-discarded" "$rc_sha" -m "Release candidate $rc failed its staging soak" -m "$summary"
+        summary="$(printf '%s\n' "$q_out" | sed -n 's/^FAIL //p' | paste -sd';' - | sed 's/;/; /g')"
+        say "phase 1: $rc failed qualification; dropping it"
+        git tag -fa "$rc-discarded" "$rc_sha" -m "Release candidate $rc failed qualification" -m "$summary"
         push "refs/tags/$rc-discarded" || die "could not push $rc-discarded"
         images discard-rc "$rc" || die "could not mark $rc's images discarded (its -discarded tag is pushed)"
         emit discarded_rc "$rc"
-        if printf '%s\n' "$soak_out" | grep -qE '^FAIL (supervisor|http|exploration):'; then
-          triage="$rc failed its soak on staging itself, not on a filed defect: $summary"
-        fi
+        emit qualification fail
         floor="$rc_sha"
         next_n=$((n + 1))
         ;;
       *)
-        die "the soak gate could not judge $rc (exit $soak_status)"
+        die "the qualification gate could not judge $rc (exit $q_status)"
         ;;
     esac
   fi
-elif [ -n "$pending" ]; then
-  floor="$(commit_of "$pending-pending")"
-  say "phase 1: nothing soaking; $target's rc.1 must be after the pending $pending (${floor:0:12})"
-elif [ -n "$released" ]; then
-  floor="$(commit_of "$released")"
-  say "phase 1: nothing soaking; $target's rc.1 must be after $released (${floor:0:12})"
-else
-  say "phase 1: nothing soaking and nothing promoted yet"
+fi
+if [ -z "$floor" ]; then
+  if [ -n "$pending" ]; then
+    floor="$(commit_of "$pending-pending")"
+    say "phase 1: nothing in qualification; the next rc must be after the pending $pending (${floor:0:12})"
+  elif [ -n "$released" ]; then
+    floor="$(commit_of "$released")"
+    say "phase 1: nothing in qualification; the next rc must be after $released (${floor:0:12})"
+  else
+    say "phase 1: nothing in qualification and nothing promoted yet"
+  fi
 fi
 
 # --- Phase 2 ---
 
-if [ "$ci_source" = github ]; then
-  github_runs "$work/runs.json"
-else
-  gate_json RELEASE_RUNS_JSON "/api/ci/runs?repo=${GRAIN_CI_REPO:-ai-on-gke/grain}&ref=main&limit=500" "$work/runs.json"
+# Bounded attempts (playbook section 5): past the last, a person decides.
+if [ "$next_n" -gt "$max_attempts" ]; then
+  emit escalated_version "$target"
+  die "$target has had $((next_n - 1)) release candidates dropped, RELEASE_MAX_RC_ATTEMPTS ($max_attempts); the train cuts no more of it until a person resets or advances it"
 fi
-fetch_tasks
+
+# Where the rc is cut from: main, or -- for rc.3 and after -- the
+# release/vX.Y.Z convergence branch made from the rc before it.
+cut_ref="$main_ref"
+cut_branch=main
+required="${CANDIDATE_GATE_REQUIRED-tests release}"
+if [ "$next_n" -ge 3 ]; then
+  cut_branch="release/$target"
+  required="${RELEASE_BRANCH_REQUIRED-release}"
+  if remote_branch "$cut_branch"; then
+    git fetch -q --force "$remote" "+refs/heads/$cut_branch:refs/remotes/$remote/$cut_branch" || die "could not fetch $cut_branch from $remote"
+    cut_ref="refs/remotes/$remote/$cut_branch"
+    say "phase 2: rc.$next_n of $target converges on $cut_branch (${floor:0:12} and the fixes cherry-picked onto it)"
+  else
+    say "phase 2: rc.$((next_n - 1)) of $target failed too; making $cut_branch from it (${floor:0:12}): cherry-pick fix: commits onto it from main (Backported-from: <sha>), and rc.$next_n is cut from it once release.yml is green there"
+    push "$floor:refs/heads/$cut_branch" || die "could not make $cut_branch"
+    emit convergence_branch "$cut_branch"
+    exit 0
+  fi
+elif [ -n "$floor" ] && [ "$next_n" = 1 ] && ! git merge-base --is-ancestor "$floor" "$main_ref"; then
+  # The newest release was cut from a convergence branch: main carries
+  # its fixes, so the next rc is after where the branch left main.
+  floor="$(git merge-base "$floor" "$main_ref" || true)"
+  say "phase 2: the newest release is off main's history; the next rc must be after where it left main (${floor:0:12})"
+fi
+
+# A minimum interval between releases (playbook section 7).
+if [ "$next_n" = 1 ] && [ "$FORCE" != true ] && [ "$min_interval" -gt 0 ]; then
+  last="${pending:+$pending-pending}"
+  last="${last:-$released}"
+  if [ -n "$last" ]; then
+    last_ts="$(git for-each-ref --format='%(taggerdate:unix)' "refs/tags/$last")"
+    [ -n "$last_ts" ] || last_ts="$(git log -1 --format=%ct "$(commit_of "$last")")"
+    if [ $((now - last_ts)) -lt $((min_interval * 60)) ]; then
+      say "phase 2: ${last%-pending} was tagged $(((now - last_ts) / 60))m ago, under RELEASE_MIN_INTERVAL_MINUTES ($min_interval); nothing to cut yet (FORCE=true cuts anyway)"
+      exit 0
+    fi
+  fi
+fi
+
+if [ "$ci_source" = github ]; then
+  CANDIDATE_GATE_REQUIRED="$required" github_runs "$work/runs.json" "$cut_branch"
+else
+  gate_json RELEASE_RUNS_JSON "/api/ci/runs?repo=${GRAIN_CI_REPO:-ai-on-gke/grain}&ref=$cut_branch&limit=500" "$work/runs.json"
+fi
 lkg_status=0
-lkg_out="$(bash "$scripts_dir/candidate-gate.sh" select-lkg --runs-json "$work/runs.json" ${floor:+--floor-sha "$floor"} \
-  --ref "$main_ref" --tasks-json "$tasks_json" --now "$now" 2>&1)" || lkg_status=$?
+lkg_out="$(CANDIDATE_GATE_REQUIRED="$required" bash "$scripts_dir/candidate-gate.sh" select-lkg --runs-json "$work/runs.json" \
+  ${floor:+--floor-sha "$floor"} --ref "$cut_ref" 2>&1)" || lkg_status=$?
 printf '%s\n' "$lkg_out" | sed 's/^/  /'
 lkg="$(printf '%s\n' "$lkg_out" | sed -n 's/^LKG \([0-9a-f]\{40\}\)$/\1/p' | tail -n 1)"
 if [ -z "$lkg" ]; then
   [ "$lkg_status" -le 1 ] || die "the LKG selector failed (exit $lkg_status)"
-  say "phase 2: no new LKG commit on main${floor:+ since ${floor:0:12}}; nothing to cut"
-else
-  new_rc="$target-rc.$next_n"
-  while commit_of "$new_rc" >/dev/null; do
-    # Never re-tag: an rc of this number already exists (one cut by hand).
-    next_n=$((next_n + 1))
-    new_rc="$target-rc.$next_n"
-  done
-  say "phase 2: cutting $new_rc on ${lkg:0:12}"
-  git tag -a "$new_rc" "$lkg" -m "Release candidate $new_rc"
-  push "refs/tags/$new_rc" || die "could not push $new_rc; candidate was not moved"
-  push --force "$lkg:refs/heads/candidate" || die "pushed $new_rc, but could not move candidate onto it"
-  emit rc_tag "$new_rc"
-  images rc "$new_rc" || die "cut $new_rc and moved candidate, but could not publish its images: run \`release-images.sh rc $new_rc\`"
-  say "phase 2: $new_rc is cut and candidate is on it; grain-candidate refreshes onto it by itself, and the next run's soak checks that it did"
+  say "phase 2: no new LKG commit on $cut_branch${floor:+ since ${floor:0:12}}; nothing to cut"
+  exit 0
 fi
 
-if [ -n "$triage" ]; then
-  echo "release-from-trunk: $triage" >&2
-  exit 1
+# A new version's first rc: what the commits since the newest release
+# are chooses minor or patch -- or nothing at all.
+if [ "$next_n" = 1 ]; then
+  kind="$(bump_kind "$floor" "$lkg")"
+  case "$kind" in
+    none)
+      say "phase 2: ${floor:0:12}..${lkg:0:12} holds only docs, chores, tests and the like; nothing to release until a fix or a feature lands"
+      emit release_waits "$lkg"
+      exit 0
+      ;;
+    patch)
+      if [ -n "$patch_target" ]; then
+        target="$patch_target"
+      else
+        say "phase 2: fixes alone, but ${base:-nothing} is no release a patch can follow; releasing the next minor"
+      fi
+      ;;
+  esac
+  say "phase 2: the commits since ${base:-the start} make a $kind release: $target"
 fi
+
+new_rc="$target-rc.$next_n"
+while commit_of "$new_rc" >/dev/null; do
+  # Never re-tag: an rc of this number already exists (one cut by hand).
+  next_n=$((next_n + 1))
+  new_rc="$target-rc.$next_n"
+done
+say "phase 2: cutting $new_rc on ${lkg:0:12}"
+git tag -a "$new_rc" "$lkg" -m "Release candidate $new_rc" ${cut_branch:+-m "Cut from $cut_branch."}
+push "refs/tags/$new_rc" || die "could not push $new_rc; candidate was not moved"
+push --force "$lkg:refs/heads/candidate" || die "pushed $new_rc, but could not move candidate onto it"
+emit rc_tag "$new_rc"
+images rc "$new_rc" || die "cut $new_rc and moved candidate, but could not publish its images: run \`release-images.sh rc $new_rc\`"
+say "phase 2: $new_rc is cut and candidate is on it; nightly.yml qualifies it (Stage 1), then grain/release-qualification (Stage 2)"

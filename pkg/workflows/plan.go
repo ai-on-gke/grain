@@ -157,6 +157,12 @@ type Request struct {
 	// set. Set only by grain's own callers, never from JSON, for
 	// RequestedByKind's reason.
 	ReleaseVersion string `json:"-"`
+	// ReleaseShortSoakOK is a person's explicit acceptance that the
+	// release they approve soaked under the minimum, handed to every step
+	// as GRAIN_CI_RELEASE_SHORT_SOAK_OK=true when set (promote-release.yml
+	// passes it on as RELEASE_SHORT_SOAK_OK). Set only by grain's own
+	// callers, never from JSON, for RequestedByKind's reason.
+	ReleaseShortSoakOK bool `json:"-"`
 	// GateOnBase asks for this run to be refused when its head would run
 	// fewer jobs than BaseRef's workflows require for the same branch and
 	// event (basegate.go). BaseRef is the branch the change is going

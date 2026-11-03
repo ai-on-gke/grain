@@ -33,20 +33,20 @@ this document can answer about itself.
 
 ``````console
 $ codex --version
-codex-cli 0.153.0
+codex-cli 0.166.0
 ``````
 
 ``````console
 path   /opt/codex/codex-x86_64-unknown-linux-musl
-size   258471008 bytes
-sha256 fce635028842bfe9257140e8b7d53162732945e2f356fc35225be0702b4974be
+size   319346888 bytes
+sha256 b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8
 ``````
 
 The release this capture is of, against the release the image carries:
 
 ``````console
-pinned by the Dockerfile   rust-v0.153.0
-captured here              codex-cli 0.153.0
+pinned by the Dockerfile   rust-v0.166.0
+captured here              codex-cli 0.166.0
 ``````
 
 And one line codex prints ahead of almost everything, which every capture below has had removed from it and which is worth reading once. Every probe in this document runs with a `CODEX_HOME` under `/tmp`, because that is what `writeConfig` gives a real run -- `os.MkdirTemp("")` -- so this is what a grain run gets too:
@@ -74,7 +74,6 @@ Commands:
   logout            Remove stored authentication credentials
   mcp               Manage external MCP servers for Codex
   plugin            Manage Codex plugins
-  mcp-server        Start Codex as an MCP server (stdio)
   app-server        [experimental] Run the app server or related tooling
   remote-control    [experimental] Manage the app-server daemon with remote control enabled
   completion        Generate shell completion scripts
@@ -90,6 +89,7 @@ Commands:
   archive           Archive a saved session by id or session name
   delete            Permanently delete a saved session by id or session name
   migrate-rollouts  Inspect or migrate legacy local sessions to paginated thread history
+  migrate-nfs-db    [experimental] Migrate configured SQLite databases to DELETE mode in place
   unarchive         Unarchive a saved session by id or session name
   fork              Fork a previous interactive session (picker by default; use --last to fork the
                     most recent)
@@ -165,6 +165,9 @@ Options:
   -C, --cd <DIR>
           Tell the agent to use the specified directory as its working root
 
+      --worktree
+          Run the session in a new managed Git worktree
+
       --add-dir <DIR>
           Additional directories that should be writable alongside the primary workspace
 
@@ -184,6 +187,9 @@ Options:
           Disable alternate screen mode
           
           Runs the TUI in inline mode, preserving terminal scrollback history.
+
+      --no-daemon
+          Run without the shared background server, even if it is already running
 
   -h, --help
           Print help (see a summary with '-h')
@@ -265,11 +271,20 @@ Options:
   -C, --cd <DIR>
           Tell the agent to use the specified directory as its working root
 
+      --worktree
+          Run the session in a new managed Git worktree
+
       --add-dir <DIR>
           Additional directories that should be writable alongside the primary workspace
 
       --thread-source <SOURCE>
           Source classification for newly created or forked threads
+
+      --cyber-access-program <PROGRAM>
+          Request an experimental Cyber access program for this turn (OpenAI provider only). Omit to
+          use server defaults. Not supported with review; fork requires a prompt
+          
+          [possible values: standard, daybreak_blue, daybreak_red]
 
       --skip-git-repo-check
           Allow running Codex outside a Git repository
@@ -322,13 +337,16 @@ Options:
           Examples: - `-c model="o3"` - `-c 'sandbox_permissions=["disk-full-read-access"]'` - `-c
           shell_environment_policy.inherit=all`
 
+      --enable <FEATURE>
+          Enable a feature (repeatable). Equivalent to `-c features.<name>=true`
+
       --remote <ADDR>
           Connect the TUI to a remote app server endpoint.
           
           Accepted forms: `ws://host:port`, `wss://host:port`, `unix://`, or `unix://PATH`.
 
-      --enable <FEATURE>
-          Enable a feature (repeatable). Equivalent to `-c features.<name>=true`
+      --disable <FEATURE>
+          Disable a feature (repeatable). Equivalent to `-c features.<name>=false`
 
       --remote-auth-token-env <ENV_VAR>
           Name of the environment variable containing the bearer token to send to a remote app
@@ -336,9 +354,6 @@ Options:
 
   -C, --cd <DIR>
           Use this directory for new tasks on a remote server
-
-      --disable <FEATURE>
-          Disable a feature (repeatable). Equivalent to `-c features.<name>=false`
 
       --no-alt-screen
           Disable alternate screen mode
@@ -371,11 +386,23 @@ Options:
           Examples: - `-c model="o3"` - `-c 'sandbox_permissions=["disk-full-read-access"]'` - `-c
           shell_environment_policy.inherit=all`
 
+      --startup-sign-out
+          Sign out using the managed auth path before loading fresh startup requirements
+
       --enable <FEATURE>
           Enable a feature (repeatable). Equivalent to `-c features.<name>=true`
 
+      --print-startup-config
+          Validate configuration and print requirements as JSON without starting the app server
+
       --disable <FEATURE>
           Disable a feature (repeatable). Equivalent to `-c features.<name>=false`
+
+      --startup-client-info <STARTUP_CLIENT_INFO>
+          ClientInfo JSON used for configuration/auth request identity
+
+      --cloud-skills-snapshot <PATH>
+          Load frozen cloud skills from a JSON snapshot instead of a live skill service
 
       --code-mode-host <URL>
           Connect to a remote code-mode host instead of starting a local host
@@ -408,7 +435,7 @@ Options:
           See https://developers.openai.com/codex/config-advanced/#metrics for more details.
 
       --ws-auth <MODE>
-          Websocket auth mode for non-loopback listeners
+          Authentication mode for incoming WebSocket connections
           
           [possible values: capability-token, signed-bearer-token]
 
@@ -444,6 +471,7 @@ Commands:
   bootstrap               Install durable local app-server management for SSH-driven use
   start                   Start the local app server daemon if it is not already running
   restart                 Restart the local app server daemon
+  update                  Update the daemon package (may interrupt running work)
   enable-remote-control   Enable remote control for future starts and a currently running managed
                           daemon
   disable-remote-control  Disable remote control for future starts and a currently running managed
@@ -657,6 +685,9 @@ Options:
 
   -C, --cd <DIR>
           Tell the agent to use the specified directory as its working root
+
+      --worktree
+          Run the session in a new managed Git worktree
 
       --add-dir <DIR>
           Additional directories that should be writable alongside the primary workspace
@@ -1106,6 +1137,9 @@ Options:
   -C, --cd <DIR>
           Tell the agent to use the specified directory as its working root
 
+      --worktree
+          Run the session in a new managed Git worktree
+
       --add-dir <DIR>
           Additional directories that should be writable alongside the primary workspace
 
@@ -1145,14 +1179,17 @@ Options:
           Examples: - `-c model="o3"` - `-c 'sandbox_permissions=["disk-full-read-access"]'` - `-c
           shell_environment_policy.inherit=all`
 
-      --json
-          Emit a redacted machine-readable report
-
       --enable <FEATURE>
           Enable a feature (repeatable). Equivalent to `-c features.<name>=true`
 
+      --json
+          Emit a redacted machine-readable report
+
       --disable <FEATURE>
           Disable a feature (repeatable). Equivalent to `-c features.<name>=false`
+
+      --network-only
+          Run config, network environment, provider HTTP, and Responses WebSocket checks
 
       --summary
           Only show grouped check rows and the final count summary
@@ -1198,19 +1235,61 @@ Options:
           Error out when config.toml contains fields that are not recognized by this version of
           Codex
 
+      --disable <FEATURE>
+          Disable a feature (repeatable). Equivalent to `-c features.<name>=false`
+
+      --linux-sandbox-pid-namespace <MODE>
+          Linux PID namespace: isolate (default) or inherit. Inherit allows signals to other
+          same-UID processes; enable only when provisioning a dedicated environment
+          
+          [default: isolate]
+
+      --proxy-private-ips-via-upstream
+          Allow permitted private IP destinations to use the configured upstream proxy. If no valid
+          upstream proxy applies to the request protocol, connect directly. Loopback stays local.
+          This flag does not require upstream routing
+          
+          [env: CODEX_EXEC_SERVER_PROXY_PRIVATE_IPS_VIA_UPSTREAM=]
+
       --concurrent-requests <COUNT>
           Maximum number of requests to process concurrently on each connection
           
           [default: 1]
 
-      --disable <FEATURE>
-          Disable a feature (repeatable). Equivalent to `-c features.<name>=false`
-
       --listen <URL>
           Transport endpoint URL. Supported values: `ws://IP:PORT` (default), `stdio`, `stdio://`
 
+      --ws-auth <MODE>
+          Authentication mode for incoming WebSocket connections
+          
+          [possible values: capability-token, signed-bearer-token]
+
+      --ws-token-file <PATH>
+          Absolute path to the capability-token file
+
+      --ws-token-sha256 <HEX>
+          Hex-encoded SHA-256 digest of the capability token
+
+      --ws-shared-secret-file <PATH>
+          Absolute path to the shared secret file for signed JWT bearer tokens
+
+      --ws-issuer <ISSUER>
+          Expected issuer for signed JWT bearer tokens
+
+      --ws-audience <AUDIENCE>
+          Expected audience for signed JWT bearer tokens
+
+      --ws-max-clock-skew-seconds <SECONDS>
+          Maximum clock skew when validating signed JWT bearer tokens
+
       --remote <URL>
           Register this exec-server as a remote environment using the given base URL
+
+      --remote-transport <REMOTE_TRANSPORT>
+          Transport used for the remote executor connection
+          
+          [default: noise]
+          [possible values: noise, direct]
 
       --environment-id <ID>
           Environment id to attach to when registering remotely
@@ -1220,6 +1299,23 @@ Options:
 
       --use-agent-identity-auth
           Use Agent Identity auth from CODEX_ACCESS_TOKEN for remote registration
+
+      --executor-credential-stdin
+          Read rotating executor credentials from stdin; exit when the pipe closes
+
+      --aws-sigv4
+          Sign Direct registration and WebSocket handshake requests with AWS SigV4
+
+      --aws-profile <PROFILE>
+          AWS profile used for SigV4 authentication
+
+      --aws-region <REGION>
+          AWS signing region. Uses the SDK region chain when omitted
+
+      --aws-service <SERVICE>
+          AWS signing service
+          
+          [default: execute-api]
 
       --exit-on-stdin-close
           Exit when the parent-owned standard-input pipe closes
@@ -1258,8 +1354,27 @@ Options:
       --disable <FEATURE>
           Disable a feature (repeatable). Equivalent to `-c features.<name>=false`
 
+      --linux-sandbox-pid-namespace <MODE>
+          Linux PID namespace: isolate (default) or inherit. Inherit allows signals to other
+          same-UID processes; enable only when provisioning a dedicated environment
+          
+          [default: isolate]
+
+      --proxy-private-ips-via-upstream
+          Allow permitted private IP destinations to use the configured upstream proxy. If no valid
+          upstream proxy applies to the request protocol, connect directly. Loopback stays local.
+          This flag does not require upstream routing
+          
+          [env: CODEX_EXEC_SERVER_PROXY_PRIVATE_IPS_VIA_UPSTREAM=]
+
       --remote <URL>
           Register this exec-server as a remote environment using the given base URL
+
+      --remote-transport <REMOTE_TRANSPORT>
+          Transport used for the remote executor connection
+          
+          [default: noise]
+          [possible values: noise, direct]
 
       --environment-id <ID>
           Environment id to attach to when registering remotely
@@ -1269,6 +1384,23 @@ Options:
 
       --use-agent-identity-auth
           Use Agent Identity auth from CODEX_ACCESS_TOKEN for remote registration
+
+      --executor-credential-stdin
+          Read rotating executor credentials from stdin; exit when the pipe closes
+
+      --aws-sigv4
+          Sign Direct registration and WebSocket handshake requests with AWS SigV4
+
+      --aws-profile <PROFILE>
+          AWS profile used for SigV4 authentication
+
+      --aws-region <REGION>
+          AWS signing region. Uses the SDK region chain when omitted
+
+      --aws-service <SERVICE>
+          AWS signing service
+          
+          [default: execute-api]
 
       --exit-on-stdin-close
           Exit when the parent-owned standard-input pipe closes
@@ -1480,6 +1612,9 @@ Options:
   -C, --cd <DIR>
           Tell the agent to use the specified directory as its working root
 
+      --worktree
+          Run the session in a new managed Git worktree
+
       --add-dir <DIR>
           Additional directories that should be writable alongside the primary workspace
 
@@ -1499,6 +1634,9 @@ Options:
           Disable alternate screen mode
           
           Runs the TUI in inline mode, preserving terminal scrollback history.
+
+      --no-daemon
+          Run without the shared background server, even if it is already running
 
   -h, --help
           Print help (see a summary with '-h')
@@ -1675,6 +1813,9 @@ Options:
       --oauth-client-id <CLIENT_ID>
           Optional OAuth client identifier to use for this MCP server
 
+      --oauth-client-secret <CLIENT_SECRET>
+          Optional OAuth client secret for the pre-registered client
+
       --oauth-client-registration <AUTO|CIMD|DCR>
           OAuth client-registration strategy for the immediate login only
           
@@ -1760,19 +1901,22 @@ Options:
           Examples: - `-c model="o3"` - `-c 'sandbox_permissions=["disk-full-read-access"]'` - `-c
           shell_environment_policy.inherit=all`
 
-      --scopes <SCOPE,SCOPE>
-          Comma-separated list of OAuth scopes to request
+      --no-browser
+          Print the authorization URL and accept the callback URL without opening a browser
 
       --enable <FEATURE>
           Enable a feature (repeatable). Equivalent to `-c features.<name>=true`
+
+      --scopes <SCOPE,SCOPE>
+          Comma-separated list of OAuth scopes to request
+
+      --disable <FEATURE>
+          Disable a feature (repeatable). Equivalent to `-c features.<name>=false`
 
       --oauth-client-registration <AUTO|CIMD|DCR>
           OAuth client-registration strategy for this login only
           
           [possible values: auto, cimd, dcr]
-
-      --disable <FEATURE>
-          Disable a feature (repeatable). Equivalent to `-c features.<name>=false`
 
   -h, --help
           Print help (see a summary with '-h')
@@ -1832,13 +1976,13 @@ Options:
           Print help (see a summary with '-h')
 ``````
 
-### `codex mcp-server`
+### `codex migrate-nfs-db`
 
 ``````console
-$ codex mcp-server --help
-Start Codex as an MCP server (stdio)
+$ codex migrate-nfs-db --help
+[experimental] Migrate configured SQLite databases to DELETE mode in place
 
-Usage: codex mcp-server [OPTIONS]
+Usage: codex migrate-nfs-db [OPTIONS]
 
 Options:
   -c, --config <key=value>
@@ -1849,9 +1993,11 @@ Options:
           Examples: - `-c model="o3"` - `-c 'sandbox_permissions=["disk-full-read-access"]'` - `-c
           shell_environment_policy.inherit=all`
 
-      --strict-config
-          Error out when config.toml contains fields that are not recognized by this version of
-          Codex
+      --staging-dir <STAGING_DIR>
+          Use a local directory with space for the database and WAL files. The default is the system
+          temporary directory
+          
+          [default: /tmp]
 
       --enable <FEATURE>
           Enable a feature (repeatable). Equivalent to `-c features.<name>=true`
@@ -1861,6 +2007,10 @@ Options:
 
   -h, --help
           Print help (see a summary with '-h')
+
+Stop SQLite clients on every host and keep them stopped through cutover.
+The NFS mount must support cross-client POSIX locks (no nolock/local_lock=all).
+This command replaces configured databases in place and retains their WAL backups.
 ``````
 
 ### `codex migrate-rollouts`
@@ -2114,6 +2264,10 @@ Options:
       --disable <FEATURE>
           Disable a feature (repeatable). Equivalent to `-c features.<name>=false`
 
+      --resume
+          After queueing, try to resume the thread on the local daemon or selected --remote server.
+          A failed resume produces a warning and the command still succeeds
+
       --remote <ADDR>
           Connect the TUI to a remote app server endpoint.
           
@@ -2123,58 +2277,23 @@ Options:
           Name of the environment variable containing the bearer token to send to a remote app
           server websocket
 
-  -i, --image <FILE>...
-          Optional image(s) to attach to the initial prompt
-
-  -m, --model <MODEL>
-          Model the agent should use
-
-      --oss
-          Use open-source provider
-
-      --local-provider <OSS_PROVIDER>
-          Specify which local provider to use (lmstudio or ollama). If not specified with --oss,
-          will use config default or show selection
-
   -p, --profile <CONFIG_PROFILE_V2>
           Layer $CODEX_HOME/<name>.config.toml on top of the base user config
-
-  -s, --sandbox <SANDBOX_MODE>
-          Select the sandbox policy to use when executing model-generated shell commands
-          
-          [possible values: read-only, workspace-write, danger-full-access]
-
-      --approve-for-me
-          Route approval requests through automatic review using the workspace-write sandbox
-
-      --dangerously-bypass-approvals-and-sandbox
-          Skip all confirmation prompts and execute commands without sandboxing. EXTREMELY
-          DANGEROUS. Intended solely for running in environments that are externally sandboxed
-
-      --dangerously-bypass-hook-trust
-          Run enabled hooks without requiring persisted hook trust for this invocation. DANGEROUS.
-          Intended only for automation that already vets hook sources
-
-  -C, --cd <DIR>
-          Tell the agent to use the specified directory as its working root
-
-      --add-dir <DIR>
-          Additional directories that should be writable alongside the primary workspace
 
       --strict-config
           Error out when config.toml contains fields that are not recognized by this version of
           Codex
 
   -c, --config <key=value>
-          Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`.
-          Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed
-          as TOML. If it fails to parse as TOML, the raw string is used as a literal.
-          
-          Examples: - `-c model="o3"` - `-c 'sandbox_permissions=["disk-full-read-access"]'` - `-c
-          shell_environment_policy.inherit=all`
+          Override a startup configuration value (key=value). Queued messages use the thread's
+          model.
 
   -h, --help
           Print help (see a summary with '-h')
+
+Local server options (without --remote):
+  -C, --cd <DIR>
+          Tell the agent to use the specified directory as its working root
 ``````
 
 ### `codex remote-control`
@@ -2205,6 +2324,9 @@ Options:
 
       --enable <FEATURE>
           Enable a feature (repeatable). Equivalent to `-c features.<name>=true`
+
+      --no-daemon
+          Run an embedded app-server in the foreground until Ctrl-C
 
       --disable <FEATURE>
           Disable a feature (repeatable). Equivalent to `-c features.<name>=false`
@@ -2385,6 +2507,9 @@ Options:
   -C, --cd <DIR>
           Tell the agent to use the specified directory as its working root
 
+      --worktree
+          Run the session in a new managed Git worktree
+
       --add-dir <DIR>
           Additional directories that should be writable alongside the primary workspace
 
@@ -2404,6 +2529,9 @@ Options:
           Disable alternate screen mode
           
           Runs the TUI in inline mode, preserving terminal scrollback history.
+
+      --no-daemon
+          Run without the shared background server, even if it is already running
 
   -h, --help
           Print help (see a summary with '-h')
@@ -2465,7 +2593,11 @@ Options:
 $ codex sandbox --help
 Run commands within a Codex-provided sandbox
 
-Usage: codex sandbox [OPTIONS] [COMMAND]...
+Usage: codex sandbox [OPTIONS] [COMMAND]... [COMMAND]
+
+Commands:
+  uninstall  Remove the legacy Windows sandbox's machine-wide accounts and network rules
+  help       Print this message or the help of the given subcommand(s)
 
 Arguments:
   [COMMAND]...
@@ -2481,7 +2613,7 @@ Options:
           shell_environment_policy.inherit=all`
 
       --sandbox-state-json <JSON>
-          JSON value from `codex/sandbox-state-meta` to apply directly
+          Opaque JSON value from `codex/sandbox-state` to apply directly
 
       --enable <FEATURE>
           Enable a feature (repeatable). Equivalent to `-c features.<name>=true`
@@ -2509,6 +2641,35 @@ Options:
 
   -h, --help
           Print help (see a summary with '-h')
+``````
+
+``````console
+$ codex sandbox uninstall --help
+Remove the legacy Windows sandbox's machine-wide accounts and network rules
+
+Usage: codex sandbox uninstall [OPTIONS]
+
+Options:
+  -c, --config <key=value>
+          Override a configuration value that would otherwise be loaded from `~/.codex/config.toml`.
+          Use a dotted path (`foo.bar.baz`) to override nested values. The `value` portion is parsed
+          as TOML. If it fails to parse as TOML, the raw string is used as a literal.
+          
+          Examples: - `-c model="o3"` - `-c 'sandbox_permissions=["disk-full-read-access"]'` - `-c
+          shell_environment_policy.inherit=all`
+
+      --enable <FEATURE>
+          Enable a feature (repeatable). Equivalent to `-c features.<name>=true`
+
+      --disable <FEATURE>
+          Disable a feature (repeatable). Equivalent to `-c features.<name>=false`
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Run as administrator after stopping apps using the legacy sandbox and its provisioning service, if
+installed.
+Preserves Codex home, including sandbox directories and filesystem permissions.
 ``````
 
 ### `codex unarchive`
@@ -2574,6 +2735,9 @@ Options:
   -C, --cd <DIR>
           Tell the agent to use the specified directory as its working root
 
+      --worktree
+          Run the session in a new managed Git worktree
+
       --add-dir <DIR>
           Additional directories that should be writable alongside the primary workspace
 
@@ -2617,7 +2781,9 @@ both           --profile
 both           --sandbox
 both           --strict-config
 both           --version
+both           --worktree
 exec only      --color
+exec only      --cyber-access-program
 exec only      --ephemeral
 exec only      --ignore-rules
 exec only      --ignore-user-config
@@ -2628,6 +2794,7 @@ exec only      --skip-git-repo-check
 exec only      --thread-source
 top-level only --ask-for-approval
 top-level only --no-alt-screen
+top-level only --no-daemon
 top-level only --remote
 top-level only --remote-auth-token-env
 top-level only --search
@@ -2692,45 +2859,16 @@ $ codex --no-alt-screen, on a pty, in a directory that is not a repository
 $PROBE/home-1
 $PROBE/plain-1
 Ask Codex to do anything
+Error: this CLI has no complete local package
 OpenAI Codex
-Press enter to continue
-Trusting
-Working
-Yes, continue
-You are in
-allows
-and
+To work without the background server, rerun the same command with --no-daemon (including
 codex
-comes
-config,
-contents
-directory
-directory:
-directory?
-exec
-for shortcuts
 helper binaries under temporary dir
-higher
 home: AbsolutePathBuf(
-hooks,
-injection.
-load.
+install a packaged Codex CLI or use the standalone installer
 loading
-model
-model:
-policies
-project-local
-prompt
-quit
-risk
-the
-this
+resume or fork and its arguments).
 tmp
-to change
-trust
-untrusted
-with
-you
 ``````
 
 ### The same, with that directory pre-trusted in `config.toml`
@@ -2739,9 +2877,9 @@ codex records a decision like that under `[projects."<path>"] trust_level`, whic
 
 ``````console
 $ phrase                       untrusted    trust_level = "trusted"
-trust                        drawn        not drawn
-untrusted                    drawn        not drawn
-Yes, continue                drawn        not drawn
+trust                        not drawn    not drawn
+untrusted                    not drawn    not drawn
+Yes, continue                not drawn    not drawn
 Ask Codex to do anything     drawn        drawn
 ``````
 

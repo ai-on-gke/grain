@@ -23,13 +23,18 @@ for command in docker timeout; do
 done
 
 container="granule-github-${label//./-}-$$"
+jit_container="$container-jit"
 cleanup() {
   status=$?
   if [[ $status -ne 0 ]]; then
     echo "GitHub runner image smoke test failed; recent runtime logs follow" >&2
     docker logs --tail 120 "$container" >&2 || true
+    if docker inspect "$jit_container" >/dev/null 2>&1; then
+      echo "and of the just-in-time runner container:" >&2
+      docker logs --tail 120 "$jit_container" >&2 || true
+    fi
   fi
-  docker rm -f "$container" >/dev/null 2>&1 || true
+  docker rm -f "$container" "$jit_container" >/dev/null 2>&1 || true
   exit "$status"
 }
 trap cleanup EXIT
@@ -81,11 +86,48 @@ guest bash -lc '
   exit "$missing"
 '
 
+# The Actions runner is the guest's workload. Started without a
+# just-in-time configuration, as here, it waits rather than exits, so the
+# VM stays up; its binary has to start as the runner user for the image
+# to be any use under Actions Runner Controller.
+guest test -x /home/runner/actions-runner/run.sh
+guest test -f /etc/granule/container.json
+guest systemctl is-active --quiet granule-container.service
+guest runuser -u runner -- /home/runner/actions-runner/bin/Runner.Listener --version >/dev/null
+
 # A second boot catches stale machine state and one-shot conversion failures
 # that a single successful startup would miss.
 docker restart -t 60 "$container" >/dev/null
 wait_for_boot
 guest id runner >/dev/null
 guest systemctl is-active --quiet granule-agent.service
+docker rm -f "$container" >/dev/null
+
+# The contract with Actions Runner Controller, end to end short of
+# GitHub: ACTIONS_RUNNER_INPUT_JITCONFIG on the VM's container reaches the
+# runner in the guest, and the container ends once the runner does. A
+# placeholder configuration is one the runner rejects at once -- it never
+# contacts GitHub -- and run.sh exits 0 after a rejected registration as
+# it does after a finished job, so the VM powers off and the container
+# exits 0, which is what ends an ARC runner pod.
+docker run -d --name "$jit_container" --privileged \
+  -e ACTIONS_RUNNER_INPUT_JITCONFIG=granule-test-image-placeholder "$image" >/dev/null
+jit_status=$(timeout 300s docker wait "$jit_container") || {
+  echo "the VM did not stop after its runner exited" >&2
+  exit 1
+}
+jit_logs=$(docker logs "$jit_container" 2>&1)
+grep -q 'granule-actions-runner: starting the Actions runner' <<<"$jit_logs" || {
+  echo "the guest never started the Actions runner with ACTIONS_RUNNER_INPUT_JITCONFIG set" >&2
+  exit 1
+}
+grep -q 'Exiting runner' <<<"$jit_logs" || {
+  echo "the Actions runner's run.sh did not run to its end" >&2
+  exit 1
+}
+[[ $jit_status == 0 ]] || {
+  echo "the runner container exited $jit_status, want the runner's own 0" >&2
+  exit 1
+}
 
 echo "validated $image as GitHub $label"

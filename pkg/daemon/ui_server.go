@@ -181,7 +181,10 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// GitHub token this deployment has beyond its default one
 		// (grain/task-117) -- the same names capabilityProviders builds
 		// the matching providers from, so every id the picker offers is
-		// one a dispatch can actually resolve.
+		// one a dispatch can actually resolve. The api rows appended last
+		// are only a marker that this picker offers the agent API: the
+		// Client reads them again per request (pickerCapabilities), so a
+		// scope set declared after startup is offered too.
 		Capabilities: append(append(ui.OfferedCapabilities(), ui.GitHubTokenCapabilities(live.GitHubTokens())...),
 			ui.APICapabilities()...),
 		Consoles: consoleSessions,
@@ -575,7 +578,9 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	uiCfg.RepoComparer = repoComparisonGate{local: localRepoComparer}
 	// Assigned only when there is one, as Upgrader below: a nil
 	// *hostd.Remote in the interface would not read as nil.
-	if cfg.HostdRemote != nil {
+	if cfg.HostdHub != nil {
+		uiCfg.HostdRemote = cfg.HostdHub
+	} else if cfg.HostdRemote != nil {
 		uiCfg.HostdRemote = cfg.HostdRemote
 	}
 	branchGate := repoBranchGate{remote: githubTokens}

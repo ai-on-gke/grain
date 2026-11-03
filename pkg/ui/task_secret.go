@@ -136,9 +136,13 @@ func (c *Client) SetPendingSecret(ctx context.Context, id, value string) error {
 	if err := c.AddComment(ctx, id, body, nil); err != nil {
 		return err
 	}
-	return c.Store.ObserveField(ctx, id, c.now(), func(o *model.Observation) {
+	if err := c.Store.ObserveField(ctx, id, c.now(), func(o *model.Observation) {
 		o.PendingSecret = ""
-	})
+	}); err != nil {
+		return err
+	}
+	c.noteTaskAction(ctx, id, model.TaskEventSecretSet, target.Name)
+	return nil
 }
 
 type setPendingSecretRequest struct {

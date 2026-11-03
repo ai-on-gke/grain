@@ -175,7 +175,12 @@ type Framework struct {
 	// starts it on a pseudo-terminal of its own (agent.TerminalCommand).
 	// A Framework built by a test's own runner has none, and refuses to
 	// be driven by hand rather than pretending it can be.
-	binPath          string
+	binPath string
+	// dumpModels prints the model catalog codex resolves in a home, for
+	// writeModelCatalog to strip apply_patch out of. New sets it to the
+	// real binary's `debug models` (hostModelDump); nil -- a test's own
+	// runner -- writes no catalog.
+	dumpModels       func(ctx context.Context, home string, env []string) (string, error)
 	checkRuntime     func(context.Context) error
 	apiKey           func(context.Context) (string, error)
 	authFile         string
@@ -421,6 +426,7 @@ func New(codexPath, grainBinaryPath string, opts ...Option) *Framework {
 	// same ordering agent/claude's and agent/antigravity's New keep.
 	f.run = hostRunner{host: f.host, codexPath: codexPath}
 	f.checkRuntime = func(ctx context.Context) error { return validateRuntime(ctx, f.host, codexPath) }
+	f.dumpModels = hostModelDump(f.host, codexPath)
 	return f
 }
 
@@ -673,8 +679,12 @@ const frameworkName = "codex"
 const authFileName = "auth.json"
 
 // configTOML gives Codex only a Grain-owned HTTP MCP endpoint. The
-// no-environment manifest written alongside this file removes native
-// environment-backed tools from the registry, including read access.
+// [features] switches below keep shell/exec, write_stdin and view_image
+// out of the registry -- codex 0.166.0 registers them whether or not the
+// turn has an environment -- and the stripped model catalog
+// (writeModelCatalog) does the same for apply_patch. The no-environment
+// manifest written alongside this file is a second layer: a native tool
+// that still slipped in would find no environment to run in.
 // read-only/never are defense in depth, not the isolation mechanism.
 // Code Mode remains available for models that require it; its JS host
 // orchestrates MCP calls without getting a local execution environment.
@@ -700,7 +710,7 @@ func (f *Framework) configTOML(endpoint *mcp.ManagedHTTP, servers ...agent.Capab
 	if extra := strings.TrimSpace(f.extraConfig); extra != "" {
 		b.WriteString(extra + "\n")
 	}
-	b.WriteString("[features]\ncode_mode_host = true\napps = false\nplugins = false\nmulti_agent = false\nmulti_agent_v2 = false\n")
+	b.WriteString("[features]\ncode_mode_host = true\nshell_tool = false\nunified_exec = false\nview_image = false\napps = false\nplugins = false\nmulti_agent = false\nmulti_agent_v2 = false\n")
 	b.WriteString("[orchestrator.skills]\nenabled = false\n")
 	b.WriteString("[skills.bundled]\nenabled = false\n")
 	if endpoint != nil {
@@ -840,6 +850,15 @@ func (f *Framework) writeConfig(ctx context.Context, mcpArgs []string, taskID st
 			releaseServers()
 			return "", false, nil, err
 		}
+		// Before mcpserver.json, so the wrapper this dump goes through on
+		// a detached host starts no MCP server for it; and before the
+		// spec, whose BaseConfig is what the wrapper writes back.
+		config, err = f.writeModelCatalog(ctx, home, config)
+		if err != nil {
+			removeHome()
+			releaseServers()
+			return "", false, nil, err
+		}
 		specData, err := json.Marshal(detachedMCPSpec{
 			Args:       mcpArgs,
 			BaseConfig: string(config),
@@ -881,6 +900,12 @@ func (f *Framework) writeConfig(ctx context.Context, mcpArgs []string, taskID st
 	}
 	home, persistent, removeHome, err := f.writeHome(ctx, config, taskID)
 	if err != nil {
+		stop()
+		releaseServers()
+		return "", false, nil, err
+	}
+	if _, err := f.writeModelCatalog(ctx, home, config); err != nil {
+		removeHome()
 		stop()
 		releaseServers()
 		return "", false, nil, err
@@ -955,7 +980,8 @@ func (f *Framework) openHome(ctx context.Context, taskID string) (home string, p
 // runFileNames are the files grain itself writes into a CODEX_HOME, and
 // the whole of what a run must not inherit from the one before it: the
 // config naming this run's own MCP endpoint and the bearer token for it,
-// the manifest that withholds codex's execution environments, and the
+// the manifest that withholds codex's execution environments, the model
+// catalog with apply_patch stripped out of it (modelcatalog.go), and the
 // link to the deployment's login. Everything else in there was written
 // by codex and is the conversation this store exists to keep.
 //
@@ -963,7 +989,7 @@ func (f *Framework) openHome(ctx context.Context, taskID string) (home string, p
 // rather than only written: a daemon killed mid-run would otherwise
 // leave a task's home holding a link to a credential for as long as the
 // store keeps that task.
-var runFileNames = []string{configFileName, environmentsFileName, authFileName, mcpServerFileName}
+var runFileNames = []string{configFileName, environmentsFileName, modelCatalogFileName, authFileName, mcpServerFileName}
 
 // clearRunFiles takes this run's own files back out of a home that
 // outlives it. Failures are not reported: this runs in a deferred

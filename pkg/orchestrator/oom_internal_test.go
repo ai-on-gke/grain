@@ -17,7 +17,6 @@ package orchestrator
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -215,8 +214,9 @@ func TestApplySandboxOOMLeavesOtherEndingsAlone(t *testing.T) {
 	}
 }
 
-// Granule: the VM process OOM-killed or SIGKILLed, or the guest kernel's
-// own OOM message on the console.
+// Granule: the VM container's cgroup reporting an oom_kill (the VMM
+// killed for host memory), the VM process OOM-killed or SIGKILLed, or
+// the guest kernel's own OOM message on the console.
 func TestGranuleOOMDetection(t *testing.T) {
 	const console = "[  12.3] systemd[1]: Started foo.\n" +
 		"[ 812.1] go invoked oom-killer: gfp_mask=0x140cca(GFP_HIGHUSER_MOVABLE|__GFP_COMP), order=0\n" +
@@ -224,17 +224,20 @@ func TestGranuleOOMDetection(t *testing.T) {
 		"[ 812.3] oom_reaper: reaped process 4242 (go)\n"
 	for _, tc := range []struct {
 		name    string
+		kills   int
 		exit    granule.ContainerExit
 		exitErr error
 		console string
 		want    string
 	}{
-		{"oom-killed vm process", granule.ContainerExit{Status: "exited", ExitCode: 137, OOMKilled: true}, nil, "", "VM process was OOM-killed"},
-		{"sigkilled vm process", granule.ContainerExit{Status: "exited", ExitCode: 137}, nil, "", "SIGKILL"},
-		{"guest kernel", granule.ContainerExit{Status: "running"}, nil, console, "guest kernel reported an OOM kill"},
-		{"guest kernel, container unreadable", granule.ContainerExit{}, errors.New("no such container"), console, "guest kernel reported"},
-		{"healthy", granule.ContainerExit{Status: "running"}, nil, "[ 1.0] booted\n", ""},
-		{"exited cleanly", granule.ContainerExit{Status: "exited", ExitCode: 0}, nil, "", ""},
+		{"cgroup oom_kill, container still up", 1, granule.ContainerExit{Status: "running"}, nil, "", "killed for host memory: its container's cgroup reached its memory limit"},
+		{"cgroup oom_kill beats the console", 2, granule.ContainerExit{Status: "exited", ExitCode: 137}, nil, console, "OOM-killed 2 process(es)"},
+		{"oom-killed vm process", -1, granule.ContainerExit{Status: "exited", ExitCode: 137, OOMKilled: true}, nil, "", "killed for host memory: its VMM process was OOM-killed"},
+		{"sigkilled vm process", -1, granule.ContainerExit{Status: "exited", ExitCode: 137}, nil, "", "SIGKILL"},
+		{"guest kernel", 0, granule.ContainerExit{Status: "running"}, nil, console, "guest kernel reported an OOM kill"},
+		{"guest kernel, container unreadable", -1, granule.ContainerExit{}, errors.New("no such container"), console, "guest kernel reported"},
+		{"healthy", 0, granule.ContainerExit{Status: "running"}, nil, "[ 1.0] booted\n", ""},
+		{"exited cleanly", -1, granule.ContainerExit{Status: "exited", ExitCode: 0}, nil, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			k := &GranuleSandboxes{
@@ -245,6 +248,12 @@ func TestGranuleOOMDetection(t *testing.T) {
 					return tc.exit, tc.exitErr
 				},
 				consoleLog: func(context.Context, string) (string, error) { return tc.console, nil },
+				cgroupOOMKills: func(context.Context, string) (int, error) {
+					if tc.kills < 0 {
+						return 0, errors.New("no cgroup")
+					}
+					return tc.kills, nil
+				},
 			}
 			sb := &granuleSandbox{owner: k, name: "r1", vmName: "vm-1"}
 			how, killed := sb.SandboxOOM(context.Background())
@@ -273,9 +282,7 @@ func TestContainerOOMDetection(t *testing.T) {
 		dir := t.TempDir()
 		docker := filepath.Join(dir, "docker")
 		script := "#!/bin/sh\n[ \"$1\" = inspect ] && echo '" + tc.inspect + "' && exit 0\nexit 1\n"
-		if err := os.WriteFile(docker, []byte(script), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		writeExecutableStub(t, docker, script)
 		c := NewContainerSandboxes(ContainerConfig{Docker: docker})
 		sb := &containerSandbox{owner: c, name: "r1", container: "grain-sandbox-r1"}
 		how, killed := sb.SandboxOOM(context.Background())
@@ -302,9 +309,7 @@ func TestK8sOOMDetection(t *testing.T) {
 		dir := t.TempDir()
 		kubectl := filepath.Join(dir, "kubectl")
 		script := "#!/bin/sh\nprintf '%s' '" + tc.statuses + "'\n"
-		if err := os.WriteFile(kubectl, []byte(script), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		writeExecutableStub(t, kubectl, script)
 		k := NewK8sSandboxes(K8sConfig{Kubectl: kubectl})
 		sb := &k8sSandbox{owner: k, name: "r1", podName: "grain-sandbox-r1"}
 		how, killed := sb.SandboxOOM(context.Background())

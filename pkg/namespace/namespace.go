@@ -67,6 +67,12 @@ const (
 	// inspects per request to keep store and filesystem work bounded.
 	maxWalkFiles = 2000
 
+	// maxSrcWalkFiles is maxWalkFiles for src://, a read-only tree on the
+	// daemon's own disk: high enough that a grep of src://pkg or src://
+	// reaches every file of core with a layer overlaid, rather than
+	// stopping partway and reading as "no such symbol".
+	maxSrcWalkFiles = 20000
+
 	// maxCIRunsListed bounds how many runs a ci://<owner>/<repo> directory
 	// listing fetches from the CI run store in one request.
 	maxCIRunsListed = 200
@@ -1466,6 +1472,23 @@ func writeTruncatedLine(b *strings.Builder, reason string) {
 	fmt.Fprintf(b, "[truncated: %s]\n", reason)
 }
 
+// walkCap is how many entries a ?glob= or ?grep= walk of scheme visits.
+func walkCap(scheme string) int {
+	if scheme == "src" {
+		return maxSrcWalkFiles
+	}
+	return maxWalkFiles
+}
+
+// skipWalkDir says whether a walk of scheme://relPath for pattern (a glob,
+// or "") passes over the directory name without descending: node_modules/
+// under src://, which on a source-built daemon is vendored JavaScript
+// nobody greps grain for, unless the path or pattern names it.
+func skipWalkDir(scheme, relPath, pattern, name string) bool {
+	return scheme == "src" && name == "node_modules" &&
+		!strings.Contains(relPath, "node_modules") && !strings.Contains(pattern, "node_modules")
+}
+
 // GlobResult is what a glob matched, and whether it saw everything there
 // was to match against.
 type GlobResult struct {
@@ -1532,6 +1555,7 @@ func (s *Server) GlobEntries(ctx context.Context, scope Scope, scheme, relPath, 
 
 	var matches []string
 	visited := 0
+	limit := walkCap(scheme)
 	truncated := ""
 	pruner := newGlobPruner(pattern)
 	var walk func(curRel string, n *ResolvedNode)
@@ -1554,9 +1578,12 @@ func (s *Server) GlobEntries(ctx context.Context, scope Scope, scheme, relPath, 
 			if skipAttempts && !matched {
 				continue
 			}
+			if isDir && skipWalkDir(scheme, relPath, pattern, e.Name) {
+				continue
+			}
 			visited++
-			if visited > maxWalkFiles {
-				truncated = fmt.Sprintf("walked %d entries; narrow the path", maxWalkFiles)
+			if visited > limit {
+				truncated = fmt.Sprintf("walked %d entries; narrow the path", limit)
 				return
 			}
 			if matched {
@@ -1570,7 +1597,7 @@ func (s *Server) GlobEntries(ctx context.Context, scope Scope, scheme, relPath, 
 				continue
 			}
 			walk(childRel, child)
-			if visited > maxWalkFiles {
+			if visited > limit {
 				return
 			}
 		}
@@ -1694,7 +1721,10 @@ type GrepResult struct {
 	Output    string
 	Matches   int
 	Truncated bool
-	MaxLimit  int
+	// WalkTruncated says the walk hit its cap before the match limit
+	// was reached, so part of the subtree went unsearched.
+	WalkTruncated bool
+	MaxLimit      int
 }
 
 func (s *Server) serveGrep(w http.ResponseWriter, r *http.Request, scope Scope, scheme, relPath, pattern string) {
@@ -1737,6 +1767,12 @@ func (s *Server) serveGrep(w http.ResponseWriter, r *http.Request, scope Scope, 
 	if res.Truncated {
 		w.Header().Set("X-Grain-Truncated", "true")
 	}
+	if res.WalkTruncated {
+		// grain grep exits non-zero on this with no match, rather than
+		// leave "not found" to be read off a body it found nothing in.
+		w.Header().Set("X-Grain-Walk-Truncated", "true")
+	}
+	w.Header().Set("X-Grain-Matches", strconv.Itoa(res.Matches))
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	if r.Method == http.MethodHead {
 		w.WriteHeader(http.StatusOK)
@@ -1784,6 +1820,10 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 	}
 	var files []targetFile
 	walkTruncated := false
+	// stoppedAt is the first entry the walk did not reach, when it hit
+	// the cap: it and everything after it in the walk went unsearched.
+	stoppedAt := ""
+	limit := walkCap(scheme)
 	if !node.IsDir {
 		files = append(files, targetFile{label: "", node: node})
 	} else {
@@ -1803,12 +1843,13 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 					if e.Name == "attempts" && !strings.Contains(globFilter, "attempts") && !strings.Contains(globFilter, "**") {
 						continue
 					}
-					if !pruner.canDescend(childRel) {
+					if !pruner.canDescend(childRel) || skipWalkDir(scheme, relPath, globFilter, e.Name) {
 						continue
 					}
 					visited++
-					if visited > maxWalkFiles {
+					if visited > limit {
 						walkTruncated = true
+						stoppedAt = childRel + "/"
 						return
 					}
 					child, err := s.Resolve(ctx, scope, scheme, joinRel(relPath, childRel))
@@ -1828,8 +1869,9 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 					continue
 				}
 				visited++
-				if visited > maxWalkFiles {
+				if visited > limit {
 					walkTruncated = true
+					stoppedAt = childRel
 					return
 				}
 				fn, err := s.Resolve(ctx, scope, scheme, joinRel(relPath, childRel))
@@ -1906,16 +1948,23 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 
 	if truncated {
 		fmt.Fprintf(&out, "[truncated at match limit (%d matches); pass --max %d (grain grep) to raise the limit]\n", maxMatches, maxMatches*2)
+		walkTruncated = false
 	} else if walkTruncated {
 		truncated = true
-		fmt.Fprintf(&out, "[truncated: walked %d entries; narrow the path]\n", maxWalkFiles)
+		unsearched := "there may be more matches"
+		if totalMatches == 0 {
+			unsearched = "finding no match here does not mean there is none"
+		}
+		fmt.Fprintf(&out, "[truncated: walked %d entries and stopped at %s; it and everything after it were not searched, so %s: narrow the path or pass --glob]\n",
+			limit, joinRel(relPath, stoppedAt), unsearched)
 	}
 
 	return GrepResult{
-		Output:    out.String(),
-		Matches:   totalMatches,
-		Truncated: truncated,
-		MaxLimit:  maxMatches,
+		Output:        out.String(),
+		Matches:       totalMatches,
+		Truncated:     truncated,
+		WalkTruncated: walkTruncated,
+		MaxLimit:      maxMatches,
 	}, nil
 }
 

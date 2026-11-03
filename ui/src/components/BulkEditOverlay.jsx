@@ -195,8 +195,7 @@ export default function BulkEditOverlay({
   // reading of nothing.
   const priorityText = String(priority).trim();
   const priorityInvalid =
-    Boolean(change.priority) &&
-    !(/^\d+$/.test(priorityText) && !Number.isNaN(taskPriority(priorityText)));
+    Boolean(change.priority) && Number.isNaN(taskPriority(priorityText));
   const fields = Object.keys(change).filter((f) => change[f]);
   const applicable = fields.length > 0 && !repoMissing && !priorityInvalid;
 

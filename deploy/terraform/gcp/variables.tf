@@ -855,8 +855,10 @@ variable "allowed_principals" {
 
     iap_members decides who reaches the daemon; this decides who the
     daemon then signs in without the access code. Someone in
-    iap_members but not here still reaches the daemon, but is refused
-    unless they present the access code.
+    iap_members but not here still reaches the daemon, where IAP's
+    verified identity takes precedence over the access code (403 on the
+    IAP URL; tunnel_command reaches the daemon directly for break-glass
+    access-code sign-in).
 
     Left null (the default), it is [deployer_member] when that is a
     "user:" -- the person who installed this deployment -- and otherwise
@@ -864,15 +866,16 @@ variable "allowed_principals" {
     falls back to its own default: the deployment owner, which is the
     OS account it runs as rather than an email, plus the service
     accounts grain provisions. That default matches no IAP sign-in, so a
-    deployment whose deployer_member is a CI service account should set
-    this explicitly.
+    deployment whose deployer_member is a CI service account must set
+    this explicitly to sign in over IAP.
 
     A non-empty list replaces that default rather than adding to it:
     name any service account that reaches the UI through IAP here too.
 
-    It only takes effect once the daemon verifies IAP assertions
-    (-ui-iap-audience), which this module does not configure yet; until
-    then the access code is still how everyone signs in.
+    When expose_ui_publicly is true, iap.tf passes the backend service's
+    audience to -ui-iap-audience so verified IAP assertions take effect;
+    when expose_ui_publicly is false, no IAP backend exists and everyone
+    signs in over tunnel_command with the access code.
   EOT
   default     = null
 

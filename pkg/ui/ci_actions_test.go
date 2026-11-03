@@ -40,6 +40,7 @@ type fakeActions struct {
 	// forgeRouter is told which forge to ask.
 	owners []string
 	runs   []github.WorkflowRun
+	total  int
 	jobs   map[int64][]github.ActionsRunJob
 	logs   map[int64]string
 }
@@ -61,14 +62,35 @@ func (f *fakeActions) count(call string) int {
 }
 
 func (f *fakeActions) ListActionsRuns(owner, repo string, q github.ActionsRunsQuery) ([]github.WorkflowRun, error) {
+	page, err := f.ListActionsRunsPage(owner, repo, q)
+	return page.Runs, err
+}
+
+func (f *fakeActions) ListActionsRunsPage(owner, repo string, q github.ActionsRunsQuery) (github.ActionsRunsPage, error) {
 	f.note("runs", owner)
 	var out []github.WorkflowRun
-	for _, r := range f.runs {
-		if q.Branch == "" || r.HeadBranch == q.Branch {
-			out = append(out, r)
-		}
+	wfFiltered := false
+	w := strings.TrimSpace(q.Workflow)
+	if w != "" && !strings.Contains(w, " ") {
+		wfFiltered = true
 	}
-	return out, nil
+	for _, r := range f.runs {
+		if q.Branch != "" && r.HeadBranch != q.Branch {
+			continue
+		}
+		if wfFiltered && !(ci.RunFilter{Workflow: w}).Matches(ci.Run{Actions: &ci.ActionsRun{Workflow: r.Path, WorkflowName: r.Name}}) {
+			continue
+		}
+		out = append(out, r)
+	}
+	total := len(out)
+	if !wfFiltered && q.Branch == "" && f.total > total {
+		total = f.total
+	}
+	if q.Limit > 0 && len(out) > q.Limit {
+		out = out[:q.Limit]
+	}
+	return github.ActionsRunsPage{Runs: out, TotalCount: total, WorkflowFiltered: wfFiltered || w == ""}, nil
 }
 
 func (f *fakeActions) GetActionsRun(owner, repo string, runID int64) (*github.WorkflowRun, error) {
@@ -135,6 +157,16 @@ func newFakeActions(now time.Time) *fakeActions {
 // that may read acme/widgets' CI and one that may read only another
 // repository's.
 func actionsServer(t *testing.T, forge *fakeActions, now time.Time) (*ui.Server, *ui.Client, *model.Store) {
+	t.Helper()
+	if forge == nil {
+		return actionsServerOver(t, nil, now)
+	}
+	return actionsServerOver(t, forge, now)
+}
+
+// actionsServerOver is actionsServer over any Actions reader, such as a
+// github.RESTClient in front of githubsim; nil leaves the client's own.
+func actionsServerOver(t *testing.T, forge github.ActionsReader, now time.Time) (*ui.Server, *ui.Client, *model.Store) {
 	t.Helper()
 	grainStarted := now.Add(-time.Hour)
 	runner := &fakeCIRunner{runs: []ci.Run{{ID: "run-g1", Repo: "acme/widgets", Ref: "main",
@@ -433,6 +465,71 @@ func TestParseActionsRunID(t *testing.T) {
 	}
 	if got := ui.ActionsRunID("acme/widgets", 42); got != "gha:acme:widgets:42" {
 		t.Errorf("ActionsRunID = %q", got)
+	}
+}
+
+func TestCIRunsListFindsScheduledNightlyPastFirstHundredRunsAndReportsMatched(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 2, 10, 44, 0, 0, time.UTC)
+	var runs []github.WorkflowRun
+	for i := 0; i < 160; i++ {
+		at := now.Add(-time.Duration(i+1) * 3 * time.Minute)
+		runs = append(runs, github.WorkflowRun{
+			ID: int64(2000 - i), Name: "Tests", Path: ".github/workflows/tests.yml",
+			HeadBranch: "main", HeadSHA: "aaa", Event: "push", Status: "completed", Conclusion: "success",
+			StartedAt: &at, UpdatedAt: &at,
+		})
+	}
+	nightlyAt := time.Date(2026, 11, 2, 2, 21, 46, 0, time.UTC)
+	nightlyEnd := time.Date(2026, 11, 2, 2, 59, 54, 0, time.UTC)
+	runs = append(runs, github.WorkflowRun{
+		ID: 41377312988, Name: "nightly", Path: ".github/workflows/nightly.yml",
+		HeadBranch: "main", HeadSHA: "744a1dbecd03", Event: "schedule", Status: "completed", Conclusion: "failure",
+		StartedAt: &nightlyAt, UpdatedAt: &nightlyEnd,
+	})
+	forge := &fakeActions{runs: runs, total: 3410}
+	srv, client, _ := actionsServer(t, forge, now)
+
+	// Unfiltered with limit=20 reports GitHub's true total_count (3410) rather than 20.
+	code, body := asAgent(t, srv, "reader", http.MethodGet, "/api/ci/runs?repo=acme/widgets&provider=github-actions&limit=20", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("unfiltered list: %d %s", code, body)
+	}
+	unfiltered := decodeString[ui.CIRunsResponse](t, body)
+	if len(unfiltered.Runs) != 20 || unfiltered.Matched != 3410 {
+		t.Fatalf("unfiltered = %d runs, Matched=%d; want 20 runs of 3410", len(unfiltered.Runs), unfiltered.Matched)
+	}
+
+	// Filtering by ?workflow=nightly.yml (or ?workflow=nightly) finds the scheduled nightly run directly.
+	for _, wf := range []string{"nightly.yml", "nightly", ".github/workflows/nightly.yml"} {
+		code, body = asAgent(t, srv, "reader", http.MethodGet, "/api/ci/runs?repo=acme/widgets&provider=github-actions&workflow="+wf, "", "")
+		if code != http.StatusOK {
+			t.Fatalf("workflow=%s: %d %s", wf, code, body)
+		}
+		got := decodeString[ui.CIRunsResponse](t, body)
+		if len(got.Runs) != 1 || got.Runs[0].ID != "gha:acme:widgets:41377312988" || got.Matched != 1 {
+			t.Fatalf("workflow=%s = %+v (Matched=%d), want 1 nightly run", wf, got.Runs, got.Matched)
+		}
+	}
+
+	// And ref=main&limit=200 pages past 100 runs to include nightly.yml without needing ?workflow=.
+	code, body = asAgent(t, srv, "reader", http.MethodGet, "/api/ci/runs?repo=acme/widgets&provider=github-actions&ref=main&limit=200", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("ref=main&limit=200: %d %s", code, body)
+	}
+	mainPage := decodeString[ui.CIRunsResponse](t, body)
+	if len(mainPage.Runs) != 161 || mainPage.Runs[160].ID != "gha:acme:widgets:41377312988" {
+		t.Fatalf("ref=main&limit=200 returned %d runs, last=%+v; want 161 ending in nightly",
+			len(mainPage.Runs), mainPage.Runs[len(mainPage.Runs)-1])
+	}
+
+	// ExternalCIRuns.FindExternalRunsCounted agrees on both --workflow and matched counts.
+	ext := client.ExternalCIRuns()
+	extRuns, extMatched, note := ci.FindExternalRunsCounted(context.Background(), ext, ci.RunFilter{
+		Repo: "acme/widgets", Provider: ci.ProviderGitHubActions, Workflow: "nightly.yml", Descending: true,
+	}, 20)
+	if note != "" || extMatched != 1 || len(extRuns) != 1 || extRuns[0].ID != "gha:acme:widgets:41377312988" {
+		t.Fatalf("FindExternalRunsCounted(nightly.yml) = %+v, matched=%d, note=%q", extRuns, extMatched, note)
 	}
 }
 

@@ -628,8 +628,11 @@ type Config struct {
 	// agent.RunConfig.Tools, whose only consumer was the in-process
 	// Gemini runtime agent/antigravity replaced; every Framework left
 	// forks a CLI that manages its own MCP connection and cannot be
-	// handed an in-process registry. See selfrepair.Confirm's own doc
-	// comment for what closing that gap would take.
+	// handed an in-process registry. grain#host-exec's run_host_command,
+	// the tool this field was built for, no longer comes this way: the
+	// forked "grain mcpserver" serves it (runGrants passes the grant for
+	// an Interactive task) and asks for each confirmation over the
+	// daemon -- see selfrepair.Confirm's own doc comment.
 	//
 	// self-debug and bootstrap-playbooks are the capabilities that no
 	// longer depend on this, and it is worth reading why: their tools are
@@ -638,9 +641,9 @@ type Config struct {
 	// them for itself out of an argument (agent.GrantArgs) plus, for
 	// self-debug's task half, a REST client of the daemon. What travels
 	// is the name of the grant, not the tools --
-	// agent.RunConfig.Grants, set by RunDispatch. selfrepair cannot
-	// follow them: its one tool blocks on a human reply in the task's own
-	// chat, which is a store handle that process deliberately lacks.
+	// agent.RunConfig.Grants, set by RunDispatch. host-exec followed them
+	// last, once that process could ask the daemon for the human reply
+	// its one tool blocks on, as the chat tool does.
 	GrantTools map[string]func(store *model.Store, taskID string) []mcp.Tool
 	// PackageCache answers where a sandbox reaches this deployment's
 	// apt, PyPI and Docker Hub cache (pkg/pkgcache) -- "http://host:port" -- or ""
