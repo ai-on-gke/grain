@@ -1305,6 +1305,13 @@ func TestSetupGCPSmokeWIFScriptConfiguresLeastPrivilegeWIF(t *testing.T) {
 	}
 	contains(t, out, "https://token.actions.githubusercontent.com")
 	contains(t, out, "assertion.repository == 'ai-on-gke/grain'")
+	// Trusting the repository alone would let a pull_request run, or a push
+	// to any agent branch, mint the smoke SA from its own unreviewed
+	// workflow files: the default condition must name the refs it admits.
+	contains(t, out, "assertion.ref == 'refs/heads/main'")
+	contains(t, out, "assertion.ref.startsWith('refs/tags/v')")
+	absent(t, out, "refs/pull/")
+	absent(t, out, "refs/heads/grain/")
 	for _, role := range []string{
 		"roles/compute.instanceAdmin.v1",
 		"roles/compute.osLogin",
@@ -1336,6 +1343,7 @@ func TestSetupGCPSmokeWIFScriptConfiguresLeastPrivilegeWIF(t *testing.T) {
 		t.Fatalf("scripts/%s --ref --dry-run failed: %v\n%s", scriptName, err, refOut)
 	}
 	contains(t, string(refOut), "assertion.ref == 'refs/heads/main'")
+	absent(t, string(refOut), "refs/heads/candidate")
 }
 
 // The credential that can *write* to a GitHub repository lives in

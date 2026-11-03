@@ -29,11 +29,13 @@
 #      Login, and Cloud Resource Manager APIs.
 #   2. Creates (or undeletes/updates) Workload Identity Pool `grain-gcp-smoke`
 #      and OIDC provider `github` for `https://token.actions.githubusercontent.com`,
-#      restricted by CEL `--attribute-condition` to `ai-on-gke/grain` (and
-#      optionally to a single git ref via `--ref`, e.g. `refs/heads/main`;
-#      left unpinned to `refs/heads/main` by default so `workflow_dispatch` on
-#      `candidate` / release branches and sibling workflows in `.github/workflows/`
-#      that read `GCP_WIF_PROVIDER` on `candidate` and `v*` tags also work).
+#      restricted by CEL `--attribute-condition` to `ai-on-gke/grain` and, by
+#      default, to the refs that legitimately run workflows reading
+#      `GCP_WIF_PROVIDER`: `refs/heads/main`, `refs/heads/candidate`,
+#      `refs/heads/rc/v*`, `refs/heads/release/v*` and `refs/tags/v*`. Pull
+#      request refs (`refs/pull/*`) and every other branch -- including agent
+#      task branches, whose workflow files are unreviewed -- cannot exchange a
+#      token. `--ref` narrows this to one exact ref (e.g. `refs/heads/main`).
 #   3. Creates service account `grain-gcp-smoke@<project>.iam.gserviceaccount.com`
 #      with the least roles `scripts/gce-vm-smoke.sh --iap`,
 #      `scripts/gke-cluster-smoke.sh`, and the cleanup sweep require:
@@ -81,9 +83,11 @@ Usage:
 Options:
   --project ID               GCP project ID (required; may also be the first positional arg)
   --repo OWNER/NAME          GitHub repository allowed by WIF (default: ai-on-gke/grain)
-  --ref GIT_REF              Additionally restrict OIDC attribute condition to assertion.ref == GIT_REF
-                             (e.g. refs/heads/main). Omitted by default so workflow_dispatch on
-                             candidate/branches and release workflows sharing GCP_WIF_PROVIDER work.
+  --ref GIT_REF              Restrict the OIDC attribute condition to assertion.ref == GIT_REF exactly
+                             (e.g. refs/heads/main). By default it admits refs/heads/main,
+                             refs/heads/candidate, refs/heads/rc/v*, refs/heads/release/v* and
+                             refs/tags/v* (where release workflows sharing GCP_WIF_PROVIDER run), and
+                             never pull-request refs or other branches.
   --pool ID                  Workload Identity Pool ID (default: grain-gcp-smoke)
   --provider ID              Workload Identity Provider ID (default: github)
   --service-account NAME     Service account ID without @... domain (default: grain-gcp-smoke)
@@ -179,6 +183,11 @@ ATTR_MAPPING="google.subject=assertion.sub,attribute.repository=assertion.reposi
 ATTR_CONDITION="assertion.repository == '${GITHUB_REPO}'"
 if [[ -n "$GIT_REF" ]]; then
   ATTR_CONDITION="${ATTR_CONDITION} && assertion.ref == '${GIT_REF}'"
+else
+  # Never trust the repository as a whole: a pull_request run or a push to any
+  # branch runs that branch's own (unreviewed) workflow files, which can ask
+  # for id-token: write and would otherwise mint this service account.
+  ATTR_CONDITION="${ATTR_CONDITION} && (assertion.ref == 'refs/heads/main' || assertion.ref == 'refs/heads/candidate' || assertion.ref.startsWith('refs/heads/rc/v') || assertion.ref.startsWith('refs/heads/release/v') || assertion.ref.startsWith('refs/tags/v'))"
 fi
 
 APIS=(
