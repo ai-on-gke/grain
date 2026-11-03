@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -1175,6 +1176,9 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 		holds = append(holds, held)
 	}
 	holds = append(holds, changeTargetHold(ctx, deps))
+	if held := untilMergedParkHold(ctx, deps, now); held != nil {
+		holds = append(holds, held)
+	}
 	if len(holds) > 0 {
 		opts = append(opts, dispatch.Hold(func(taskID string) string {
 			for _, held := range holds {
@@ -1810,6 +1814,54 @@ func pendingBranchHold(ctx context.Context, deps Deps) func(string) string {
 			log.Printf("orchestrator: recording why %s waits for its branch: %v", task.ID, err)
 		}
 		return "held for its branch: " + reason
+	}
+}
+
+// untilMergedParkHold keeps back a task parked until "merged" on a task
+// that closed with its pull request still open, which task_ready alone
+// would let go at the close (model.Store.UntilMergedParkWaitsOn): that
+// pull request can still be merged by hand, syncClosedPullRequests
+// records it when it is, and the wait was for the merge, not the close.
+// The hold ends when the pull request merges or closes, or once grain
+// stops reading it (closedPullRequestWindow) -- and at once for a task a
+// person asked to run now, or that no longer depends on the target. nil
+// when no closed task has an unsettled pull request, which is every
+// ordinary cycle: one query, and nothing read per task.
+func untilMergedParkHold(ctx context.Context, deps Deps, now time.Time) func(string) string {
+	links, err := deps.Store.ClosedUnsettledPullRequestLinks(ctx, now.Add(-closedPullRequestWindow))
+	if err != nil {
+		log.Printf("orchestrator: reading closed tasks' pull requests to hold parks until merged: %v", err)
+		return nil
+	}
+	if len(links) == 0 {
+		return nil
+	}
+	unsettled := map[string]bool{}
+	for _, l := range links {
+		unsettled[l.TaskID] = true
+	}
+	return func(taskID string) string {
+		task, err := deps.Store.GetTask(ctx, taskID)
+		if err != nil || task == nil {
+			return ""
+		}
+		if !slices.ContainsFunc(task.Links, func(l model.Link) bool {
+			return l.Kind == model.LinkDependsOn && unsettled[l.Target]
+		}) {
+			return ""
+		}
+		if obs, err := deps.Store.GetObservation(ctx, taskID); err == nil && obs != nil && obs.RunNowAt != nil {
+			return ""
+		}
+		target, err := deps.Store.UntilMergedParkWaitsOn(ctx, taskID, now)
+		if err != nil {
+			log.Printf("orchestrator: reading %s's park until merged: %v", taskID, err)
+			return ""
+		}
+		if target == "" {
+			return ""
+		}
+		return fmt.Sprintf("parked until task %s merges: it closed with its pull request still open", target)
 	}
 }
 

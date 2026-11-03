@@ -2344,7 +2344,9 @@ func parkedResumeSection(h History) string {
 	var b strings.Builder
 	b.WriteString("This run resumes from a park: the previous attempt called wait_for_task, " +
 		"parked this task on the task(s) below, and ended. They have all closed (or been removed " +
-		"from this task's dependencies), so grain queued it again. The sandbox did not survive " +
+		"from this task's dependencies) -- and for a wait until \"merged\", any pull request " +
+		"still open at the close has since merged or closed, or grain has stopped reading it " +
+		"-- so grain queued it again. The sandbox did not survive " +
 		"the park -- what that attempt pushed is on your branch, and nothing else of it is. " +
 		"Check how each one ended before carrying on: a task closed without merging is not " +
 		"the change you were waiting for.\n")
