@@ -12,14 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import React, { createContext, useContext, useMemo, useState } from "react";
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import {
   DEFAULT_PINNED_ITEMS,
+  PINNED_STORAGE_KEY,
   loadPinnedItems,
   resetPinnedItems,
   samePin,
   savePinnedItems,
 } from "./pinnedNav.js";
+import { migrateStorage } from "./storageMigration.js";
 
 const PinnedNavContext = createContext(null);
 
@@ -27,6 +35,22 @@ const PinnedNavContext = createContext(null);
 // (pinnedNav.js's PINNED_STORAGE_KEY, design/design/settings-panel.design.md §6.3).
 export function PinnedNavProvider({ children }) {
   const [pinnedItems, setPinnedItemsState] = useState(loadPinnedItems);
+
+  // Another tab of the same deployment saving, reordering or resetting
+  // its pins (Customize sidebar). The list is read back through the same
+  // migration and validation a fresh load goes through, and a removed
+  // key -- Reset to default, or storage cleared (evt.key === null) --
+  // reads as the defaults. Storage that will not take a write fires no
+  // event, so this tab's in-memory list stands until the page reloads.
+  useEffect(() => {
+    const onStorage = (evt) => {
+      if (evt.key !== null && evt.key !== PINNED_STORAGE_KEY) return;
+      migrateStorage();
+      setPinnedItemsState(loadPinnedItems());
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   const setPinnedItems = (items) => {
     setPinnedItemsState(items);

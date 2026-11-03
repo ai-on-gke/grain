@@ -185,3 +185,29 @@ func LogSandboxBudget(c Config) {
 		"swapping to find it. Nothing counts them",
 		limits.Budget.Summary(), limits.AgentShape)
 }
+
+// granuleHostMemoryMB is this host's total memory, the cap on a granule
+// VM's cgroup memory limit, or zero -- no cap -- when it cannot be read.
+func granuleHostMemoryMB() int {
+	total, err := sysstat.MemTotalMB()
+	if err != nil {
+		log.Printf("grain daemon: reading host memory to cap granule VM memory limits: %v -- leaving them uncapped", err)
+		return 0
+	}
+	return total
+}
+
+// sandboxVMMHeadroom is the cgroup memory each of this backend's
+// sandboxes is allowed beyond its guest's RAM, which the budget charges
+// on top of every shape: model.DefaultVMMHeadroom for the two granule
+// backends, whose limits orchestrator.GranuleMemoryLimitMB sizes, and
+// nothing for a container, a plain pod or a host directory, whose shape
+// is the whole of what it is allowed.
+func sandboxVMMHeadroom(sandboxes orchestrator.Sandboxes) model.VMMHeadroom {
+	switch sandboxes.(type) {
+	case *orchestrator.GranuleSandboxes, *orchestrator.K8sGranuleSandboxes:
+		return model.DefaultVMMHeadroom()
+	default:
+		return model.VMMHeadroom{}
+	}
+}
