@@ -137,6 +137,7 @@ const SETTING_LABELS = {
   upgradeCheckPausesPipeline: "Upgrade check pauses the pipeline",
   autoUpgradeChannel: "Automatic upgrade channel",
   autoUpgradeTime: "Automatic upgrade time of day",
+  autoUpgradeOn: "Automatic upgrades",
 };
 
 // settingLabel is what to call one setting, by its JSON name.

@@ -276,7 +276,7 @@ func raiseUpgradeFailed(ctx context.Context, deps Deps, key, target string, stat
 	stage, detail := failedUpgradeStage(status)
 	body := fmt.Sprintf("The automatic upgrade to `%s` failed at the **%s** stage, so this deployment is still on "+
 		"the build it was running. It is not tried again until a newer release is published; "+
-		"[Settings → Upgrade](/settings/general#updates) can retry it by hand.", target, stage)
+		"[Settings → Upgrade](/settings/upgrade) can retry it by hand.", target, stage)
 	if excerpt := logExcerpt(detail); excerpt != "" {
 		body += "\n\n```\n" + excerpt + "\n```"
 	}
