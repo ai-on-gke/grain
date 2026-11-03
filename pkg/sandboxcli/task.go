@@ -230,7 +230,7 @@ func (c *sandboxCLI) taskPropose(p sandboxArgs) error {
 		req.NotBefore = &t
 	}
 	if rawPri := strings.TrimSpace(p.get("priority")); rawPri != "" {
-		pri, err := strconv.Atoi(rawPri)
+		pri, err := model.ParseTaskPriority(rawPri)
 		if err != nil || pri < 1 {
 			return fmt.Errorf("--priority %q must be a positive integer (1 or more; leave it out for the default, 5)", rawPri)
 		}

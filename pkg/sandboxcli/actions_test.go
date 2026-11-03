@@ -303,7 +303,15 @@ func TestStage3SandboxCLICommands(t *testing.T) {
 	if gotPri, ok := proxy.bodies["POST /cli/proposals"]["priority"].(float64); !ok || gotPri != 8 {
 		t.Errorf("task propose priority in body = %v, want 8", proxy.bodies["POST /cli/proposals"]["priority"])
 	}
-	for _, bad := range []string{"-1", "0"} {
+	// Spelled as POST /api/tasks reads it (model.ParseTaskPriority).
+	for _, spelling := range []string{"1e3", "1000.0"} {
+		if _, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "t", "--body", "b", "--priority", spelling); code != 0 {
+			t.Errorf("task propose --priority %s: %d %s", spelling, code, errOut)
+		} else if gotPri, _ := proxy.bodies["POST /cli/proposals"]["priority"].(float64); gotPri != 1000 {
+			t.Errorf("task propose --priority %s sent %v, want 1000", spelling, proxy.bodies["POST /cli/proposals"]["priority"])
+		}
+	}
+	for _, bad := range []string{"-1", "0", "1.5", "1e20"} {
 		if _, errOut, code := runActionCLI(t, srv, nil, "task", "propose", "--title", "t", "--body", "b", "--priority", bad); code != 1 ||
 			!strings.Contains(errOut, "--priority") || !strings.Contains(errOut, "positive integer") {
 			t.Errorf("task propose --priority %s: %d %s", bad, code, errOut)
