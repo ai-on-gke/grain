@@ -69,6 +69,7 @@ import {
   repoUrl,
   unionCapabilities,
 } from "../state.js";
+import AppIcon from "./AppIcon.jsx";
 import BranchField from "./BranchField.jsx";
 import ItemGlyph, { GlyphLabel } from "./ItemGlyph.jsx";
 import MergeBatchPanel from "./MergeBatchPanel.jsx";
@@ -2069,8 +2070,14 @@ export default function RepoPage({
                                     )
                             }
                             deleteIcon={
-                              <span title={`Stop declaring ${check} unfixable`}>
-                                ×
+                              <span
+                                title={`Stop declaring ${check} unfixable`}
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                }}
+                              >
+                                <AppIcon name="close" size={14} />
                               </span>
                             }
                             sx={{ fontFamily: "monospace" }}

@@ -312,3 +312,58 @@ func TestGrantAdmitterClearsOnlyTheWaitsItOwns(t *testing.T) {
 		}
 	}
 }
+
+// A queued task local policy refused at dispatch (heldByPolicy's wait,
+// written by recordPolicyRefusal) reads as held by that policy, naming the
+// refused claim and the file to edit -- not as queued/ready, whose "Run
+// now" cannot help it.
+func TestTaskReasonReadsALocalPolicyHoldOffItsWait(t *testing.T) {
+	store, ctx := openTreeStore(t)
+	task := model.Task{ID: "3", Title: "t", Target: &model.RepoRef{Owner: "grain", Name: "config"}}
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	p, err := policy.Parse([]byte("repos: [acme/widgets]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := Deps{Store: store, Policy: p}
+	if why := policyHold(ctx, deps)("3"); why == "" {
+		t.Fatal("local policy allows a task targeting a repository it does not list")
+	}
+	wait, err := store.GrantWaitOf(ctx, "3")
+	if err != nil || wait == nil {
+		t.Fatalf("GrantWaitOf after a policy hold = %+v, %v; want the local-policy wait", wait, err)
+	}
+	const file = "/home/someone/.config/grain/grain_policy.yml"
+	got := TaskReason(task, model.StateQueued, nil, nil, wait, file)
+	if got.Reason != taskReasonLocalPolicy || got.Class != string(livenessAwaitingExternal) || got.Control != "" {
+		t.Errorf("TaskReason(queued, policy wait) = %+v, want %s, awaiting an external answer, with no control",
+			got, taskReasonLocalPolicy)
+	}
+	for _, want := range []string{"repository grain/config", file} {
+		if !strings.Contains(got.Resource, want) {
+			t.Errorf("TaskReason(queued, policy wait).Resource = %q, want it to name %q", got.Resource, want)
+		}
+	}
+	if got := TaskReason(task, model.StateQueued, nil, nil, wait, ""); !strings.Contains(got.Resource, "-policy") {
+		t.Errorf("TaskReason with no -policy file = %q, want it to point at the -policy flag", got.Resource)
+	}
+
+	// A policy that allows the task again clears the wait, and with it
+	// the hold: the task is ready.
+	deps.Policy, err = policy.Parse([]byte("repos: [grain/config]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if why := policyHold(ctx, deps)("3"); why != "" {
+		t.Fatalf("policy listing the repository still holds the task: %s", why)
+	}
+	wait, err = store.GrantWaitOf(ctx, "3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := TaskReason(task, model.StateQueued, nil, nil, wait, file).Reason; got != taskReasonReady {
+		t.Errorf("TaskReason once policy allows the task = %q, want %q", got, taskReasonReady)
+	}
+}

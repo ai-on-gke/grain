@@ -21,7 +21,7 @@
 # a person decided is the signed record it carries. This verifies the
 # record's signature against the deployment's public key and that the
 # record is for exactly this run: this repository, this version, this
-# decision and short-soak answer, the commit this repository's
+# decision and short-soak and allow-breaking answers, the commit this repository's
 # <version>-pending tag stages, and not expired. On success it prints the
 # person who decided, and nothing else, to stdout; on anything else it
 # says why on stderr and exits 1.
@@ -32,6 +32,7 @@
 #   APPROVAL_PUBLIC_KEY  the deployment's PEM public key
 #                        (vars.GRAIN_RELEASE_APPROVAL_KEY)
 #   EXPECT_REPO EXPECT_VERSION EXPECT_DECISION EXPECT_SHORT_SOAK_OK
+#   EXPECT_ALLOW_BREAKING
 #                        what this run was dispatched to do
 #   NOW                  seconds since the epoch; tests only (default: now)
 # Run in a checkout that has the repository's tags.
@@ -68,6 +69,7 @@ want repo "${EXPECT_REPO:-}"
 want version "${EXPECT_VERSION:-}"
 want decision "${EXPECT_DECISION:-}"
 want short_soak_ok "${EXPECT_SHORT_SOAK_OK:-false}"
+want allow_breaking "${EXPECT_ALLOW_BREAKING:-false}"
 
 now="${NOW:-$(date +%s)}"
 issued="$(field issued)"

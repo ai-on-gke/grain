@@ -64,6 +64,11 @@ type SandboxRequest struct {
 	// (model.IsCapabilityRef) the job declares, which Admission mints
 	// subject to the deployment's capability policy (jobCapabilities).
 	Capabilities []string
+	// ImplicitCapabilities reports that the job declared neither
+	// `capabilities:` nor `optional-capabilities:`, so Capabilities holds
+	// the repository's default set rather than grants the job itself asked
+	// for (workflows.Job.ImplicitCapabilities).
+	ImplicitCapabilities bool
 	// RunID and JobAttempt name this attempt at the job for the
 	// capability grants minted for it: the attempt_ids of its pass are
 	// <deployment>-<RunID>-<JobAttempt>-<index>. JobAttempt is the job's
@@ -134,6 +139,14 @@ type Sandbox interface {
 	// Release destroys the sandbox. Called exactly once per acquired
 	// sandbox, success or failure alike.
 	Release(ctx context.Context) error
+}
+
+// WarningSandbox is an optional Sandbox extension that reports non-fatal
+// job notes discovered when preparing the sandbox -- such as a declared
+// capability withheld by this run's event gate -- for JobRun.Warning.
+type WarningSandbox interface {
+	Sandbox
+	Warning() string
 }
 
 // StreamingSandbox is a Sandbox whose Exec can say what a command is

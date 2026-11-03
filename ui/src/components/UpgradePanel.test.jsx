@@ -1943,29 +1943,87 @@ describe("PostgresDatabaseUpgrade", () => {
   });
 });
 
-// The daily automatic upgrade: a channel, or Off, and a time of day on
-// the deployment's own clock, each saved through PUT /api/settings.
+// The automatic upgrade: Off, when a release is published, or once a day
+// onto a channel at a time of day on the deployment's own clock, each
+// saved through PUT /api/settings.
 describe("AutoUpgradeSettings", () => {
   const settings = {
+    autoUpgradeOn: "off",
     autoUpgradeChannel: "",
     autoUpgradeTime: "03:00",
     timeZone: "America/New_York",
   };
+  const modePicker = () =>
+    screen.getByRole("combobox", { name: /upgrade automatically/i });
 
-  it("is off, with the time disabled, until a channel is chosen", () => {
+  it("is off by default, recommending release mode", async () => {
+    const user = userEvent.setup();
     render(<AutoUpgradeSettings settings={settings} onSave={vi.fn()} />);
 
+    expect(modePicker()).toHaveTextContent(/off \(manual only\)/i);
+    expect(screen.queryByLabelText(/time of day/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/recommended/i)).toBeInTheDocument();
+    await user.click(modePicker());
     expect(
-      screen.getByRole("combobox", { name: /channel/i }),
-    ).toHaveTextContent(/off \(manual only\)/i);
-    expect(screen.getByLabelText(/time of day/i)).toBeDisabled();
+      screen.getByRole("option", {
+        name: "On each release (recommended)",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("reads a server without autoUpgradeOn as daily when a channel is set", () => {
+    render(
+      <AutoUpgradeSettings
+        settings={{
+          autoUpgradeChannel: "candidate",
+          autoUpgradeTime: "03:00",
+          timeZone: "America/New_York",
+        }}
+        onSave={vi.fn()}
+      />,
+    );
+    expect(modePicker()).toHaveTextContent(/once a day/i);
     expect(screen.getByText(/America\/New_York/)).toBeInTheDocument();
   });
 
-  it("saves a channel with its time, and turning it off saves only that", async () => {
+  it("turns on release mode following latest, and can pin the exact tag", async () => {
     const onSave = vi.fn();
     const user = userEvent.setup();
     render(<AutoUpgradeSettings settings={settings} onSave={onSave} />);
+
+    await user.click(modePicker());
+    await user.click(screen.getByRole("option", { name: /on each release/i }));
+    expect(onSave).toHaveBeenLastCalledWith({
+      autoUpgradeOn: "release",
+      autoUpgradeChannel: "latest",
+    });
+    expect(
+      screen.getByText(/release candidates are never followed/i),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("combobox", { name: /upgrade to/i }));
+    await user.click(
+      screen.getByRole("option", { name: /exact release tag/i }),
+    );
+    expect(onSave).toHaveBeenLastCalledWith({ autoUpgradeChannel: "" });
+
+    await user.click(modePicker());
+    await user.click(screen.getByRole("option", { name: /off/i }));
+    expect(onSave).toHaveBeenLastCalledWith({ autoUpgradeOn: "off" });
+  });
+
+  it("saves a daily channel with its time", async () => {
+    const onSave = vi.fn();
+    const user = userEvent.setup();
+    render(<AutoUpgradeSettings settings={settings} onSave={onSave} />);
+
+    await user.click(modePicker());
+    await user.click(screen.getByRole("option", { name: /once a day/i }));
+    expect(onSave).toHaveBeenLastCalledWith({
+      autoUpgradeOn: "daily",
+      autoUpgradeChannel: "latest",
+      autoUpgradeTime: "03:00",
+    });
 
     await user.click(screen.getByRole("combobox", { name: /channel/i }));
     for (const name of ["latest", "candidate", "main"]) {
@@ -1976,11 +2034,6 @@ describe("AutoUpgradeSettings", () => {
       autoUpgradeChannel: "candidate",
       autoUpgradeTime: "03:00",
     });
-    expect(screen.getByLabelText(/time of day/i)).toBeEnabled();
-
-    await user.click(screen.getByRole("combobox", { name: /channel/i }));
-    await user.click(screen.getByRole("option", { name: /off/i }));
-    expect(onSave).toHaveBeenLastCalledWith({ autoUpgradeChannel: "" });
   });
 
   it("saves a new time of day once the field is left", async () => {
@@ -1988,7 +2041,11 @@ describe("AutoUpgradeSettings", () => {
     const user = userEvent.setup();
     render(
       <AutoUpgradeSettings
-        settings={{ ...settings, autoUpgradeChannel: "latest" }}
+        settings={{
+          ...settings,
+          autoUpgradeOn: "daily",
+          autoUpgradeChannel: "latest",
+        }}
         onSave={onSave}
       />,
     );
@@ -2005,7 +2062,11 @@ describe("AutoUpgradeSettings", () => {
     const user = userEvent.setup();
     render(
       <AutoUpgradeSettings
-        settings={{ ...settings, autoUpgradeChannel: "release-2026" }}
+        settings={{
+          ...settings,
+          autoUpgradeOn: "daily",
+          autoUpgradeChannel: "release-2026",
+        }}
         onSave={vi.fn()}
       />,
     );

@@ -39,6 +39,12 @@ package ui
 // scripts/release-from-trunk.sh approve otherwise refuses. It reaches the
 // run as GRAIN_CI_RELEASE_SHORT_SOAK_OK, another variable no API caller
 // and no workflow env: can set, and only from a person on this route.
+//
+// It may carry allow_breaking the same way: the person's acceptance that
+// the release carries breaking changes without being the major release
+// RELEASE_MAJOR asks for, which `release-notes.sh check-breaking` otherwise
+// refuses. It reaches the run as GRAIN_CI_RELEASE_ALLOW_BREAKING, which
+// promote-release.yml passes on as RELEASE_ALLOW_BREAKING=<the release>.
 
 import (
 	"context"
@@ -66,9 +72,10 @@ var pendingReleasePattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 // ReleaseDecision is what approving or rejecting a pending release
 // answers: the CI run carrying it out.
 type ReleaseDecision struct {
-	Version     string `json:"version"`
-	Approve     bool   `json:"approve"`
-	ShortSoakOK bool   `json:"shortSoakOk,omitempty"`
+	Version       string `json:"version"`
+	Approve       bool   `json:"approve"`
+	ShortSoakOK   bool   `json:"shortSoakOk,omitempty"`
+	AllowBreaking bool   `json:"allowBreaking,omitempty"`
 	// Run is the grain CI run carrying the answer out, on a repository
 	// grain CI releases.
 	Run ci.Run `json:"run"`
@@ -80,22 +87,27 @@ type ReleaseDecision struct {
 
 // ReleaseApproval is the optional body of POST
 // .../pending-releases/{version}/approve (and of reject, which refuses
-// short_soak_ok).
+// both of its answers).
 type ReleaseApproval struct {
 	// ShortSoakOK accepts a release whose recorded staging soak is under
 	// the minimum (the -pending tag's Soak-Seconds; the notification says
 	// SHORT SOAK). Without it the approve job refuses such a release.
 	ShortSoakOK bool `json:"short_soak_ok,omitempty"`
+	// AllowBreaking accepts a release that carries breaking changes
+	// without being the major release RELEASE_MAJOR asks for. Without it
+	// the approve job refuses such a release.
+	AllowBreaking bool `json:"allow_breaking,omitempty"`
 }
 
 // DecideRelease starts the promote-release run that approves (approve)
-// or rejects version, a pending release of repo; shortSoakOK, for an
-// approval only, accepts a soak under the minimum. Only a person may: any
+// or rejects version, a pending release of repo; answers, for an
+// approval only, accepts a soak under the minimum or breaking changes.
+// Only a person may: any
 // other caller is refused with a ForbiddenError and nothing is started.
 // On a run started, the release's "ready to promote" notification is
 // cleared -- the run is what to watch now, and a run that fails leaves
 // the -pending tag, which the next daily train run raises again.
-func (c *Client) DecideRelease(ctx context.Context, repo, version string, approve, shortSoakOK bool) (ReleaseDecision, error) {
+func (c *Client) DecideRelease(ctx context.Context, repo, version string, approve bool, answers ReleaseApproval) (ReleaseDecision, error) {
 	verb := "reject"
 	if approve {
 		verb = "approve"
@@ -106,8 +118,11 @@ func (c *Client) DecideRelease(ctx context.Context, repo, version string, approv
 		return ReleaseDecision{}, forbiddenErrorf("only a person may %s a release: %q is a %s, and a release "+
 			"is made official by a person, never by an agent or a schedule", verb, actor.ID, kindName(actor.Kind))
 	}
-	if shortSoakOK && !approve {
+	if answers.ShortSoakOK && !approve {
 		return ReleaseDecision{}, validationErrorf("short_soak_ok is an approval's answer: rejecting %s needs no soak", version)
+	}
+	if answers.AllowBreaking && !approve {
+		return ReleaseDecision{}, validationErrorf("allow_breaking is an approval's answer: rejecting %s promotes nothing", version)
 	}
 	parsed, err := c.parseRepo(repo)
 	if err != nil {
@@ -119,12 +134,13 @@ func (c *Client) DecideRelease(ctx context.Context, repo, version string, approv
 	if onGitHub, err := c.publishesFromGitHub(ctx, parsed); err != nil {
 		return ReleaseDecision{}, err
 	} else if onGitHub {
-		d, err := c.dispatchGitHubRelease(ctx, parsed, version, actor.ID, approve, shortSoakOK)
+		d, err := c.dispatchGitHubRelease(ctx, parsed, version, actor.ID, approve, answers)
 		if err != nil {
 			return ReleaseDecision{}, err
 		}
 		c.clearReleasePending(ctx, version, actor, verb)
-		return ReleaseDecision{Version: version, Approve: approve, ShortSoakOK: shortSoakOK, Dispatched: &d}, nil
+		return ReleaseDecision{Version: version, Approve: approve, ShortSoakOK: answers.ShortSoakOK,
+			AllowBreaking: answers.AllowBreaking, Dispatched: &d}, nil
 	}
 	if c.Config.CI == nil {
 		return ReleaseDecision{}, fmt.Errorf("this deployment has no grain CI wired")
@@ -144,13 +160,14 @@ func (c *Client) DecideRelease(ctx context.Context, repo, version string, approv
 		Repo: parsed.String(), Ref: releaseTrunk,
 		Event: ci.EventManual, Workflow: PromoteReleaseWorkflow, Jobs: []string{job},
 		RequestedBy: actor.ID, RequestedByKind: string(model.PrincipalHuman), ReleaseVersion: version,
-		ReleaseShortSoakOK: shortSoakOK,
+		ReleaseShortSoakOK: answers.ShortSoakOK, ReleaseAllowBreaking: answers.AllowBreaking,
 	})
 	if err != nil {
 		return ReleaseDecision{}, &ValidationError{err: err}
 	}
 	c.clearReleasePending(ctx, version, actor, verb)
-	return ReleaseDecision{Version: version, Approve: approve, ShortSoakOK: shortSoakOK, Run: run}, nil
+	return ReleaseDecision{Version: version, Approve: approve,
+		ShortSoakOK: answers.ShortSoakOK, AllowBreaking: answers.AllowBreaking, Run: run}, nil
 }
 
 // clearReleasePending clears version's "ready to promote" notification
@@ -186,7 +203,7 @@ func (s *Server) decideRelease(w http.ResponseWriter, r *http.Request, approve b
 		return
 	}
 	out, err := s.tasks.DecideRelease(r.Context(), r.PathValue("owner")+"/"+r.PathValue("name"),
-		r.PathValue("version"), approve, req.ShortSoakOK)
+		r.PathValue("version"), approve, req)
 	if err != nil {
 		writeClientError(w, err)
 		return

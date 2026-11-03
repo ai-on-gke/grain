@@ -207,6 +207,13 @@ func JobCapabilities(job Job, provided []string, explicitOnly func(string) bool)
 	return append(append(declared, narrow(rest, deployment)...), optional...)
 }
 
+// ImplicitCapabilities reports whether job declared neither `capabilities:`
+// nor `optional-capabilities:`, so JobCapabilities hands it the deployment's
+// set by compatibility rather than anything the job itself asked for.
+func (j Job) ImplicitCapabilities() bool {
+	return len(j.Capabilities) == 0 && len(j.OptionalCapabilities) == 0 && !j.NoCapabilities
+}
+
 // JobSecrets is what release secret names a job's sandbox is given:
 // the provided set narrowed to what the job declared in `secrets:`.
 //

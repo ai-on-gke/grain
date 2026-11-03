@@ -301,6 +301,7 @@ var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 func withModelProxyDisplayNames(names map[string]string) map[string]string {
 	for _, vendor := range modelproxy.Vendors() {
 		names[modelproxycap.CapabilityName(vendor)] = vendor.Display + " proxy"
+		names[model.ModelProxyGrant(vendor.Name)] = vendor.Display + " proxy"
 	}
 	return names
 }
@@ -372,12 +373,6 @@ func capabilityProviderCatalog() []model.CapabilityProvider {
 		prioritydispatch.New(),
 		durable.New(),
 	)
-	// One per vendor grain proxies to, built with no endpoint at all --
-	// this catalog exists to read Spec() back out, and a spec is the
-	// same whether or not this process is serving that proxy.
-	for _, p := range modelproxycap.Providers(nil) {
-		providers = append(providers, p)
-	}
 	return providers
 }
 

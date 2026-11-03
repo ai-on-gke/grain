@@ -109,7 +109,7 @@ func (c *Client) publishesFromGitHub(ctx context.Context, repo model.RepoRef) (b
 // dispatches promote-release.yml with it. The caller has already
 // established that approver is a person.
 func (c *Client) dispatchGitHubRelease(ctx context.Context, repo model.RepoRef, version, approver string,
-	approve, shortSoakOK bool) (ReleaseDispatch, error) {
+	approve bool, answers ReleaseApproval) (ReleaseDispatch, error) {
 	if err := c.actionsRepoServed(ctx, repo); err != nil {
 		return ReleaseDispatch{}, err
 	}
@@ -144,7 +144,7 @@ func (c *Client) dispatchGitHubRelease(ctx context.Context, repo model.RepoRef, 
 	}
 	signed, err := signer.Sign(ctx, releaseapproval.Record{
 		Repo: repo.String(), Version: version, Decision: decision, Commit: commit, Approver: approver,
-		ShortSoakOK: shortSoakOK, Issued: now, Expires: now.Add(releaseapproval.Lifetime),
+		ShortSoakOK: answers.ShortSoakOK, AllowBreaking: answers.AllowBreaking, Issued: now, Expires: now.Add(releaseapproval.Lifetime),
 	})
 	if err != nil {
 		return ReleaseDispatch{}, err
@@ -158,7 +158,8 @@ func (c *Client) dispatchGitHubRelease(ctx context.Context, repo model.RepoRef, 
 		"approval_signature": signed.Signature,
 	}
 	if approve {
-		inputs["short_soak_ok"] = fmt.Sprint(shortSoakOK)
+		inputs["short_soak_ok"] = fmt.Sprint(answers.ShortSoakOK)
+		inputs["allow_breaking"] = fmt.Sprint(answers.AllowBreaking)
 	}
 	if err := dispatcher.DispatchWorkflow(repo.Owner, repo.Name, GitHubPromoteReleaseWorkflow, releaseTrunk, inputs); err != nil {
 		return ReleaseDispatch{}, fmt.Errorf("dispatching %s's %s: %w", repo, GitHubPromoteReleaseWorkflow, github.Readable(err))

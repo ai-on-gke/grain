@@ -226,7 +226,7 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		Stall: orchestrator.TaskStallNote,
 		// And the sub-case of that state, with its control
 		// (ui.Config.Reasons) -- joined here for the same reason.
-		Reasons: ReasonClassifier{},
+		Reasons: ReasonClassifier{PolicyFile: cfg.PolicyFile},
 		// The same action for the other kind of credential this
 		// deployment holds (ui.Config.AgentKeyChecks): the key each agent
 		// framework runs as, which the Agents tab can otherwise only
@@ -566,6 +566,13 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// version-derived default (k8sGranuleImageForSettings).
 		K8sGranuleImage: func(mc model.Config) string {
 			return k8sGranuleImageForSettings(live.Current(), mc)
+		},
+		// Which repository that image is mirrored into, and whether
+		// k8s_granule_image is read as it rather than as an image
+		// (sandboxImageMirrorForSettings), so the pane can say so and a
+		// save clearing such a pin keeps the mirror.
+		SandboxImageMirrorFor: func(mc model.Config) ui.SandboxImageMirrorInfo {
+			return sandboxImageMirrorForSettings(live.Current(), mc)
 		},
 		// The Settings pane's sandbox image check reads labels the way
 		// the daemon's own startup check does: local docker first, then

@@ -39,7 +39,8 @@ import {
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import api, { isUnreachable, unreachableReason } from "../api.js";
 import BranchField from "./BranchField.jsx";
-import ItemGlyph, { GlyphLabel } from "./ItemGlyph.jsx";
+import AppIcon, { NavGlyph } from "./AppIcon.jsx";
+import { GlyphLabel } from "./ItemGlyph.jsx";
 import { ListHeader } from "./ListPrimitives.jsx";
 import NarrowingBar from "./NarrowingBar.jsx";
 import { formatBytes } from "./PackageCachePanel.jsx";
@@ -2059,7 +2060,7 @@ export default function CIPage({
           divider as the other pages opened from the rail. */}
       <ListHeader
         title="CI"
-        icon={<ItemGlyph kind="ci" size={20} />}
+        icon={<NavGlyph kind="ci" size={20} />}
         action={
           data?.enabled && (
             <Box
@@ -2085,6 +2086,7 @@ export default function CIPage({
               <Button
                 size="small"
                 variant="outlined"
+                startIcon={<AppIcon name="refresh" size={16} />}
                 onClick={() => {
                   refreshList();
                   // The cache polls slowly on its own, so somebody who has

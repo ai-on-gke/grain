@@ -109,6 +109,9 @@ var retiredGrants = []struct {
 	{88, "repo-write:acme/tools", []string{model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
 	{96, "grain-ci", []string{model.GrainCIGrant}},
 	{97, "gcp-key", []string{model.GCPKeySandboxAgentGrant}},
+	{100, "claude-proxy", []string{model.ModelProxyGrant("claude")}},
+	{100, "openai-proxy", []string{model.ModelProxyGrant("openai")}},
+	{100, "gemini-proxy", []string{model.ModelProxyGrant("gemini")}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'

@@ -42,6 +42,7 @@ import {
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import api from "../api.js";
+import AppIcon from "./AppIcon.jsx";
 import { PRIORITY_REFUSAL, taskPriority, wholeNumber } from "../wholeNumber.js";
 import { useHeldIds } from "../useHeldIds.js";
 import fileToAttachment from "../attachments.js";
@@ -1821,7 +1822,12 @@ export default function NewTaskOverlay({
                   label={`${t.id} ${t.title}`}
                   onDelete={() => removeDependency(t.id)}
                   deleteIcon={
-                    <span title={`Remove dependency on ${t.id}`}>×</span>
+                    <span
+                      title={`Remove dependency on ${t.id}`}
+                      style={{ display: "inline-flex", alignItems: "center" }}
+                    >
+                      <AppIcon name="close" size={14} />
+                    </span>
                   }
                   sx={{
                     width: "100%",

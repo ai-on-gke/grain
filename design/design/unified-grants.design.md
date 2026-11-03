@@ -13,7 +13,7 @@ own checks and its own form control:
 |---|---|---|---|
 | Grain's own API | `api:<scope>`, `api:<preset>`, either `@owner/repo`-limited ([agent-api.md](../../docs/agent-api.md)) | `task_grant.capability` (the capabilities list) | "Grain API" accordion, `ApiGrantPicker` |
 | Capability server methods | `https://…#method` plus `with:`, stored as `<ref>=<normalized json>` ([capabilities.md](../../docs/capabilities.md), [capabilities-spec.md](../spec/capabilities/capabilities.spec.md)) | `task_grant.capability` | "Capability server methods", `CapabilityMethodGrants` |
-| In-process capabilities | bare names: `gcp-key`, `self-debug`, `<vendor>-proxy`, … (`pkg/capability/`) | `task_grant.capability` | the "Capabilities" checklist |
+| In-process capabilities | bare names: `gemini-key`, `self-debug`, … (`pkg/capability/`) | `task_grant.capability` | the "Capabilities" checklist |
 | Repository access | `Target`/`Base`, `Reads` (`task_read`), `Writes` (`task_write`, repo + base), a declared template's `push:` refs (`model.RefPush`), CI's `repo-read:<repo>` / `repo-write:<repo>` | their own columns and tables | Repo and Base branch fields, `ReadOnlyReposField`, `WriteReposField` |
 
 The first three already share one list and one table. `model.Grant` is
@@ -173,8 +173,8 @@ per-capability list, with what each one becomes:
 | In-process id | Becomes (proposed) | Kind of change |
 |---|---|---|
 | `gcp-key` | `https://grain.dev/capabilities/gcp#gcp-key` `{permission_set}` | **done** (task 2430): in-process `gcp-key` and `gcp-key:<name>` providers removed; schema migration 97 seeds `sandbox-agent` and `<name>` permission sets on `https://grain.dev/capabilities/gcp` from `grain_config` and `gcp_key` rows (keeping `/home/debian/.gcp-service-account-<name>.json` key placement) and rewrites stored grants across tasks, templates, schedules, default/CI capabilities, console sessions, catalogue, and policy (`gcp-key` and `gcp-key:<name>` remain one-release aliases; [gcp-key-permission-sets.md](../../docs/gcp-key-permission-sets.md)) |
-| `gemini-key` | `…/model-proxy#model-proxy` `{vendor: gemini}`, or a `gemini-key` method on `…/gcp` | existing server; Q6 decides which |
-| `<vendor>-proxy` (model proxies) | `…/model-proxy#model-proxy` `{vendor}` | existing server method |
+| `gemini-key` | `https://grain.dev/capabilities/gcp#gemini-key` (Q6) | **method added** (task 2431): `…/gcp` offers `#gemini-key` when configured with `gemini_key: {project, admin?}`, minting with that admin's credential and placing `/home/debian/.gemini-api-key` with the in-process prompt. Still to do: retire the in-process provider, seed `gemini_key` from `grain_config.gcp_project` and the `gcp-key-minter` secret, and rewrite stored `gemini-key` grants (a later schema migration) |
+| `<vendor>-proxy` (model proxies) | `https://grain.dev/capabilities/model-proxy#model-proxy` `{vendor}` | **done** (task 2431): the in-process `claude-proxy`, `openai-proxy` and `gemini-proxy` providers removed; `…/model-proxy` is now an in-process server (`pkg/capability/modelproxy.Method`, registered by the daemon over its own proxy endpoints), not the `grain capability model-proxy` built-in, so each mint still forwards with the run's own team connection (the run's agent connection, handed in the mint's context, `model.WithRunConnection`) with no deployment-wide key. Same token registry, same allowlist, same `/home/debian/.<vendor>-proxy-{url,token}` files and the same prompt. Stored grants rewritten to `…#model-proxy={"vendor":"<vendor>"}` by schema migration 100; the bare names remain one-release aliases |
 | `github-credential:<name>` | `…/git#git-repo` `{credential: <name>, repo}` | existing server, gains an argument |
 | `github-sandbox` | `…/github#sandbox-repo` | new method on existing `github` server |
 | `git-push-any-ref` | `…/repo#write` `{refs: ["refs/heads/*", "refs/tags/*"], force: true}` | **done** (task 1063): provider removed, `https://grain.dev/capabilities/repo#write` added on a new in-process `…/repo` server (`grainserver.RepoServer`); its schema validates only that one `refs`/`force` value (beside `{repo}`, a CI job's write access, since task 2365), the one the git proxy honours (`model.IsGitPushAnyRefGrant`), so a narrower task-level `refs` is refused rather than recorded as doing something (Q3). It stays a team grant, not dangerous, as `git-push-any-ref` was. `repo` is not an argument yet: like the bare grant it applies to every repository the task may write. Stored grants rewritten to `https://grain.dev/capabilities/repo#write={"force":true,"refs":["refs/heads/*","refs/tags/*"]}` by schema migration 85 |
@@ -298,6 +298,9 @@ should adopt `GrantsPicker` once 885 lands, which is a follow-up there.
   Recommended: yes.
 - **Q6.** `gemini-key`: model-proxy (`{vendor: gemini}`) or a `gcp`
   server method?
+  **Answered (task 1061, operator): a `gcp` server method.** Folding it
+  into model-proxy would hand the run a proxy token instead of a key,
+  which is a different placement.
 - **Q7.** Is `…/grain#host-exec` (today's `self-repair`) a grant at all,
   or should it stay an admin-only setting outside the picker?
   **Answered (task 2252, operator): a grant.** It is a dangerous method

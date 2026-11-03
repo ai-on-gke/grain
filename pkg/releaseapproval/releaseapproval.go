@@ -70,8 +70,11 @@ type Record struct {
 	Commit      string // the commit vX.Y.Z-pending tags
 	Approver    string // the person's principal id
 	ShortSoakOK bool
-	Issued      time.Time
-	Expires     time.Time
+	// AllowBreaking is the person's acceptance of breaking changes
+	// outside a RELEASE_MAJOR release (the allow_breaking input).
+	AllowBreaking bool
+	Issued        time.Time
+	Expires       time.Time
 }
 
 // safeValue is what a field may hold: one line, nothing a shell reading
@@ -89,6 +92,7 @@ func (r Record) Text() (string, error) {
 		{"commit", r.Commit},
 		{"approver", r.Approver},
 		{"short_soak_ok", strconv.FormatBool(r.ShortSoakOK)},
+		{"allow_breaking", strconv.FormatBool(r.AllowBreaking)},
 		{"issued", strconv.FormatInt(r.Issued.Unix(), 10)},
 		{"expires", strconv.FormatInt(r.Expires.Unix(), 10)},
 	}

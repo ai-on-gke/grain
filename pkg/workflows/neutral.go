@@ -233,16 +233,18 @@ func validateRequirementName(kind, name string) error {
 // the running deployment in, comma-separated (Request.DeployedImages).
 const DeployedImagesEnv = "GRAIN_DEPLOYED_IMAGES"
 
-// RequestedByKindEnv, RequestedByEnv, ReleaseVersionEnv and
-// ReleaseShortSoakOKEnv are the variables a job started by a person-only
-// route finds who asked, for which release, and whether they accepted a
-// short soak, in (Request.RequestedByKind, Request.ReleaseVersion,
-// Request.ReleaseShortSoakOK).
+// RequestedByKindEnv, RequestedByEnv, ReleaseVersionEnv,
+// ReleaseShortSoakOKEnv and ReleaseAllowBreakingEnv are the variables a
+// job started by a person-only route finds who asked, for which release,
+// and whether they accepted a short soak or breaking changes, in
+// (Request.RequestedByKind, Request.ReleaseVersion,
+// Request.ReleaseShortSoakOK, Request.ReleaseAllowBreaking).
 const (
-	RequestedByKindEnv    = "GRAIN_CI_REQUESTED_BY_KIND"
-	RequestedByEnv        = "GRAIN_CI_REQUESTED_BY"
-	ReleaseVersionEnv     = "GRAIN_CI_RELEASE_VERSION"
-	ReleaseShortSoakOKEnv = "GRAIN_CI_RELEASE_SHORT_SOAK_OK"
+	RequestedByKindEnv      = "GRAIN_CI_REQUESTED_BY_KIND"
+	RequestedByEnv          = "GRAIN_CI_REQUESTED_BY"
+	ReleaseVersionEnv       = "GRAIN_CI_RELEASE_VERSION"
+	ReleaseShortSoakOKEnv   = "GRAIN_CI_RELEASE_SHORT_SOAK_OK"
+	ReleaseAllowBreakingEnv = "GRAIN_CI_RELEASE_ALLOW_BREAKING"
 )
 
 // RunEnv is what grain tells every step about the run it is part of --
@@ -295,6 +297,9 @@ func RunEnv(req Request, workflow, jobID string) map[string]string {
 	}
 	if req.ReleaseShortSoakOK {
 		env[ReleaseShortSoakOKEnv] = "true"
+	}
+	if req.ReleaseAllowBreaking {
+		env[ReleaseAllowBreakingEnv] = "true"
 	}
 	return env
 }

@@ -209,7 +209,7 @@ func TestAPendingTagOnAGitHubActionsRepoIsApprovedFromTheInbox(t *testing.T) {
 		{Kind: model.PrincipalAutomation, ID: "schedule:release-train"},
 		{Kind: model.PrincipalService, ID: "steward"},
 	} {
-		if _, err := uic.DecideRelease(ui.WithPrincipal(ctx, p), repo.String(), "v1.2.0", true, false); err == nil ||
+		if _, err := uic.DecideRelease(ui.WithPrincipal(ctx, p), repo.String(), "v1.2.0", true, ui.ReleaseApproval{}); err == nil ||
 			!strings.Contains(err.Error(), "only a person may approve") {
 			t.Errorf("%s approving: %v, want refused", model.PrincipalString(p), err)
 		}
@@ -219,14 +219,14 @@ func TestAPendingTagOnAGitHubActionsRepoIsApprovedFromTheInbox(t *testing.T) {
 	}
 
 	// 3. A person's Approve dispatches promote-release.yml on main, once.
-	decision, err := uic.DecideRelease(ui.WithPrincipal(ctx, person), repo.String(), "v1.2.0", true, false)
+	decision, err := uic.DecideRelease(ui.WithPrincipal(ctx, person), repo.String(), "v1.2.0", true, ui.ReleaseApproval{})
 	if err != nil {
 		t.Fatalf("a person's approval: %v", err)
 	}
 	if decision.Dispatched == nil || decision.Dispatched.Commit != commit || decision.Dispatched.By != person.ID {
 		t.Errorf("decision = %+v, want a dispatch for %s by %s", decision, commit, person.ID)
 	}
-	if _, err := uic.DecideRelease(ui.WithPrincipal(ctx, person), repo.String(), "v1.2.0", true, false); err == nil {
+	if _, err := uic.DecideRelease(ui.WithPrincipal(ctx, person), repo.String(), "v1.2.0", true, ui.ReleaseApproval{}); err == nil {
 		t.Error("a second press was accepted; want it refused while the first dispatch's record is good")
 	}
 	d := forge.dispatched()
@@ -234,12 +234,13 @@ func TestAPendingTagOnAGitHubActionsRepoIsApprovedFromTheInbox(t *testing.T) {
 		t.Fatalf("dispatched %d times, want once", len(d))
 	}
 	inputs, _ := d[0]["inputs"].(map[string]any)
-	if d[0]["ref"] != "main" || inputs["version"] != "v1.2.0" || inputs["decision"] != "approve" || inputs["short_soak_ok"] != "false" {
+	if d[0]["ref"] != "main" || inputs["version"] != "v1.2.0" || inputs["decision"] != "approve" || inputs["short_soak_ok"] != "false" ||
+		inputs["allow_breaking"] != "false" {
 		t.Errorf("dispatch = %v, want v1.2.0 approve on main", d[0])
 	}
 	record := verifyDispatchedRecord(t, uic, inputs)
 	for _, want := range []string{"repo: example/widgets\n", "version: v1.2.0\n", "decision: approve\n",
-		"commit: " + commit + "\n", "approver: alice@example.com\n", "short_soak_ok: false\n"} {
+		"commit: " + commit + "\n", "approver: alice@example.com\n", "short_soak_ok: false\n", "allow_breaking: false\n"} {
 		if !strings.Contains(record, want) {
 			t.Errorf("the signed record does not say %q:\n%s", strings.TrimSpace(want), record)
 		}

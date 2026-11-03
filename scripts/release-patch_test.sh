@@ -141,6 +141,24 @@ check "guard refuses a release branch that is just main" 1 \
 run "$clone" patch-tag-guard.sh v1.5.1
 check "guard passes a fixes-only patch even off main" 0 "v1.5.1" "carries only fix: commits past v1.5.0; ok"
 
+# A main commit with fix:, refactor: and docs: since v1.5.0 is refused as a
+# patch tag (the train cuts v1.6.0 on main instead, which passes).
+(
+  cd "$work/seed"
+  git checkout -q -B trunk_mix "$main"
+  commit r "refactor(store): split the run queries" >/dev/null
+  mix_tip=$(commit doc "docs: say how to approve")
+  git tag -a v1.5.2 -m v1.5.2 "$mix_tip"
+  git tag -a v1.6.0 -m v1.6.0 "$mix_tip"
+  git push -q origin refs/tags/v1.5.2 refs/tags/v1.6.0
+  git checkout -q main
+)
+run "$clone" patch-tag-guard.sh v1.5.2
+check "guard refuses fix+refactor+docs tagged as a patch off main" 1 \
+  "refusing v1.5.2" "there is no release/v1.5.2 branch" "and 2 other commits that are not fix:"
+run "$clone" patch-tag-guard.sh v1.6.0
+check "guard passes the minor tag the train cuts on that commit" 0 "v1.6.0 is not a patch tag"
+
 run "$clone" patch-tag-guard.sh v1.9.1
 check "guard refuses a tag it cannot see" 1 "v1.9.1: no such tag here"
 

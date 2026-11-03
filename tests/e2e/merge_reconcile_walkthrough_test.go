@@ -384,10 +384,14 @@ func TestMergeReconcileSecondLaneMembersStallEscalatesWhileTheFirstMerges(t *tes
 // §7 item 3: a PR the queue gave up on, its task closed, then merged by
 // hand on the forge. The next cycle whose read is due records it merged,
 // takes the blocked stamp and the row's last words off it, and a wait on
-// the task until "merged" reads met as merged.
+// the task until "merged" reads met as merged. Between the close and the
+// merge that wait is not settled -- the PR can still land -- so a task
+// parked on it until "merged" is held rather than resumed at the close
+// (task 2757), and is dispatched once the merge is recorded.
 func TestMergeReconcileHandMergeAfterCloseIsRecordedThroughTheCycle(t *testing.T) {
 	r := newReconcileWorld(t, "hand-merge")
 	branch := r.openPullRequest("blocked", "BLOCKED.md", true)
+	r.parkUntilMerged("waiter", "blocked")
 	setMergeable(r.sim, branch, true)
 	r.sim.CheckRuns[branch] = claGreen(901)
 	r.sim.RefuseMerges = "Repository rule violations found\n\nAll comments must be resolved."
@@ -404,12 +408,22 @@ func TestMergeReconcileHandMergeAfterCloseIsRecordedThroughTheCycle(t *testing.T
 		t.Fatal(err)
 	}
 	r.at(4*time.Minute, "closed, PR still open")
-	target, err := r.w.store.WaitTargetOf(r.w.ctx, "blocked")
+	target, err := r.w.store.WaitTargetAt(r.w.ctx, "blocked", r.clock)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settled, met := target.Settled(true); !settled || met {
-		t.Fatalf("until-merged wait at close: settled=%v met=%v, want settled unmet (closed, not merged)", settled, met)
+	if !target.PullRequestOpen {
+		t.Fatalf("closed with its PR open: %+v, want PullRequestOpen", target)
+	}
+	if settled, met := target.Settled(true); settled || met {
+		t.Fatalf("until-merged wait at close: settled=%v met=%v, want still waiting (PR still open)", settled, met)
+	}
+	if settled, met := target.Settled(false); !settled || !met {
+		t.Fatalf("until-closed wait at close: settled=%v met=%v, want met", settled, met)
+	}
+	r.at(9*time.Minute, "closed, PR still open, a later cycle")
+	if n := r.runs("waiter"); n != 1 {
+		t.Fatalf("the waiter parked until merged has %d runs before the merge, want only the one that parked", n)
 	}
 
 	mergedAt := baseTime.Add(10 * time.Minute)
@@ -424,7 +438,7 @@ func TestMergeReconcileHandMergeAfterCloseIsRecordedThroughTheCycle(t *testing.T
 		t.Fatalf("still blocked after the hand merge: at %v state %q note %q",
 			o.MergeQueueBlockedAt, o.MergeQueueState, o.MergeQueueNote)
 	}
-	target, err = r.w.store.WaitTargetOf(r.w.ctx, "blocked")
+	target, err = r.w.store.WaitTargetAt(r.w.ctx, "blocked", r.clock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,6 +446,50 @@ func TestMergeReconcileHandMergeAfterCloseIsRecordedThroughTheCycle(t *testing.T
 		t.Fatalf("until-merged wait after the hand merge: settled=%v met=%v outcome %q, want met as merged",
 			settled, met, target.Outcome)
 	}
+	r.at(11*time.Minute+github.PollCap, "the cycle after the merge was recorded")
+	if n := r.runs("waiter"); n != 2 {
+		t.Fatalf("the waiter has %d runs after the hand merge, want it resumed once", n)
+	}
+}
+
+// parkUntilMerged files task id as parked on target until "merged", the
+// way a run's wait_for_task park leaves it: a depends-on link to target,
+// and the run that parked suspended with that ResumeOn. Its next run, if
+// one is dispatched, only says it resumed.
+func (r *reconcileWorld) parkUntilMerged(id, target string) {
+	r.w.t.Helper()
+	created := r.clock
+	if err := r.w.store.PutTask(r.w.ctx, model.Task{
+		ID: id, Intent: model.IntentImplement, Title: "task " + id,
+		Origin:   model.Origin{Attribution: model.Attribution{Actor: human("alice")}, Reason: model.ReasonDirect},
+		Approval: &model.Attribution{Actor: human("alice")},
+		Target:   &r.repo, Binding: model.BindingDirective, CreatedAt: &created,
+		Links: []model.Link{{Kind: model.LinkDependsOn, Target: target}},
+	}); err != nil {
+		r.w.t.Fatal(err)
+	}
+	runID := id + "-1"
+	if err := r.w.store.StartRun(r.w.ctx, model.Run{ID: runID, TaskID: id, Sandbox: "s-" + id, Attempt: 1, StartedAt: r.clock},
+		model.Limits{}); err != nil {
+		r.w.t.Fatal(err)
+	}
+	if err := r.w.store.Suspend(r.w.ctx, model.Suspension{RunID: runID, TaskID: id, Kind: model.SuspendRequested,
+		Detail:    model.ParkedDetail([]string{target}),
+		ResumeOn:  model.ResumeOn{Tasks: []string{target}, UntilMerged: true}.JSON(),
+		CreatedAt: r.clock}); err != nil {
+		r.w.t.Fatal(err)
+	}
+	r.deps.Framework = scriptedFramework([]antigravity.Step{finalText("resumed")})
+}
+
+// runs is how many runs task id has had.
+func (r *reconcileWorld) runs(id string) int {
+	r.w.t.Helper()
+	runs, err := r.w.store.Runs(r.w.ctx, id)
+	if err != nil {
+		r.w.t.Fatal(err)
+	}
+	return len(runs)
 }
 
 // §7 item 6: a run that calls comment_on_issue with a short report and then

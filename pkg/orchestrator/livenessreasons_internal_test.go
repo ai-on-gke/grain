@@ -175,11 +175,11 @@ func TestTaskReasonOfIsTotal(t *testing.T) {
 		for _, task := range tasks {
 			for _, obs := range observations {
 				for _, deps := range [][]string{nil, {"2"}} {
-					for _, paused := range []bool{false, true} {
-						reason := taskReasonOf(task, model.State(state), obs, deps, paused)
+					for _, hold := range []queuedHold{holdNone, holdUsagePaused, holdLocalPolicy} {
+						reason := taskReasonOf(task, model.State(state), obs, deps, hold)
 						if _, ok := taskReasons[reason]; !ok || reasonState(reason) != state {
-							t.Errorf("taskReasonOf(%q, obs %+v, deps %v, paused %v) = %q, which is not "+
-								"one of that state's classified reasons", state, obs, deps, paused, reason)
+							t.Errorf("taskReasonOf(%q, obs %+v, deps %v, hold %v) = %q, which is not "+
+								"one of that state's classified reasons", state, obs, deps, hold, reason)
 						}
 						reached[reason] = true
 					}
@@ -193,31 +193,33 @@ func TestTaskReasonOfIsTotal(t *testing.T) {
 		}
 	}
 	for _, c := range []struct {
-		state  model.State
-		task   model.Task
-		obs    *model.Observation
-		deps   []string
-		paused bool
-		want   string
+		state model.State
+		task  model.Task
+		obs   *model.Observation
+		deps  []string
+		hold  queuedHold
+		want  string
 	}{
-		{model.StateQueued, model.Task{}, nil, nil, false, taskReasonReady},
-		{model.StateQueued, model.Task{}, nil, nil, true, taskReasonUsagePaused},
-		{model.StateQueued, model.Task{}, nil, []string{"2"}, true, taskReasonBlocked},
-		{model.StateRunning, model.Task{}, nil, nil, false, taskReasonRunLive},
-		{model.StateCompleted, model.Task{}, nil, nil, false, taskReasonOnMergeQueue},
-		{model.StateCompleted, model.Task{}, &model.Observation{MergeQueueState: mergeStateMerging}, nil, false, taskReasonOnMergeQueue},
-		{model.StateCompleted, model.Task{}, &model.Observation{MergeQueueBlockedAt: &given}, nil, false, taskReasonMergeGaveUp},
-		{model.StateDeferred, model.Task{}, nil, nil, false, taskReasonDeferredNoWake},
-		{model.StateDeferred, model.Task{DeferredUntil: &wake}, nil, nil, false, taskReasonDeferredWake},
-		{model.StateDeferred, model.Task{GoalKind: model.GoalBaseGreen}, nil, nil, false, taskReasonGoalBaseGreen},
-		{model.StateDeferred, model.Task{GoalKind: model.GoalBaseGreen, DeferredUntil: &wake}, nil, nil, false, taskReasonDeferredWake},
+		{model.StateQueued, model.Task{}, nil, nil, holdNone, taskReasonReady},
+		{model.StateQueued, model.Task{}, nil, nil, holdUsagePaused, taskReasonUsagePaused},
+		{model.StateQueued, model.Task{}, nil, nil, holdLocalPolicy, taskReasonLocalPolicy},
+		{model.StateQueued, model.Task{}, nil, []string{"2"}, holdUsagePaused, taskReasonBlocked},
+		{model.StateQueued, model.Task{}, nil, []string{"2"}, holdLocalPolicy, taskReasonBlocked},
+		{model.StateRunning, model.Task{}, nil, nil, holdNone, taskReasonRunLive},
+		{model.StateCompleted, model.Task{}, nil, nil, holdNone, taskReasonOnMergeQueue},
+		{model.StateCompleted, model.Task{}, &model.Observation{MergeQueueState: mergeStateMerging}, nil, holdNone, taskReasonOnMergeQueue},
+		{model.StateCompleted, model.Task{}, &model.Observation{MergeQueueBlockedAt: &given}, nil, holdNone, taskReasonMergeGaveUp},
+		{model.StateDeferred, model.Task{}, nil, nil, holdNone, taskReasonDeferredNoWake},
+		{model.StateDeferred, model.Task{DeferredUntil: &wake}, nil, nil, holdNone, taskReasonDeferredWake},
+		{model.StateDeferred, model.Task{GoalKind: model.GoalBaseGreen}, nil, nil, holdNone, taskReasonGoalBaseGreen},
+		{model.StateDeferred, model.Task{GoalKind: model.GoalBaseGreen, DeferredUntil: &wake}, nil, nil, holdNone, taskReasonDeferredWake},
 	} {
-		if got := taskReasonOf(c.task, c.state, c.obs, c.deps, c.paused); got != c.want {
-			t.Errorf("taskReasonOf(%q, obs %+v, deps %v, paused %v) = %q, want %q",
-				c.state, c.obs, c.deps, c.paused, got, c.want)
+		if got := taskReasonOf(c.task, c.state, c.obs, c.deps, c.hold); got != c.want {
+			t.Errorf("taskReasonOf(%q, obs %+v, deps %v, hold %v) = %q, want %q",
+				c.state, c.obs, c.deps, c.hold, got, c.want)
 		}
 	}
-	if got := TaskReason(model.Task{}, model.StateQueued, nil, nil, nil); got.Control != "Run now" ||
+	if got := TaskReason(model.Task{}, model.StateQueued, nil, nil, nil, ""); got.Control != "Run now" ||
 		got.Class != string(livenessDriven) || got.Reason != taskReasonReady {
 		t.Errorf("TaskReason(queued) = %+v, want queued/ready, driven, with Run now", got)
 	}
@@ -246,7 +248,7 @@ func TestTaskReasonReadsAUsageLimitPauseOffItsWait(t *testing.T) {
 		{&model.GrantWait{Capability: model.QuotaWaitCapability, Resource: "2 worker runs are live of the 2 this cycle allows"}, taskReasonReady},
 		{&model.GrantWait{Capability: model.ModelWaitCapability, Resource: covered}, taskReasonReady},
 	} {
-		if got := TaskReason(model.Task{}, model.StateQueued, nil, nil, c.wait).Reason; got != c.want {
+		if got := TaskReason(model.Task{}, model.StateQueued, nil, nil, c.wait, "").Reason; got != c.want {
 			t.Errorf("TaskReason(queued, wait %+v) = %q, want %q", c.wait, got, c.want)
 		}
 	}
