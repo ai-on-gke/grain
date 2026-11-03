@@ -100,7 +100,7 @@ func CapabilityProviders(cfg Config, store *model.Store, _ map[string]*modelprox
 	)
 	// image-signing, registry-push and package-publish are no longer
 	// providers here: they were retired onto the in-process release
-	// server (pkg/capability/release, schema migration 102), whose
+	// server (pkg/capability/release, schema migration 101), whose
 	// methods place what they placed, on the events they answered. What
 	// package-publish resolves is this deployment's live credential
 	// ladder, so the server is handed it here, as the registry is built.
