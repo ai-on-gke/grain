@@ -557,7 +557,7 @@ func TestLoadConfigLogsEveryOverriddenFlag(t *testing.T) {
 		GcpProject: stored.GCPProject, GcpServiceAccountEmail: stored.GCPServiceAccountEmail,
 	}
 
-	var logs strings.Builder
+	var logs lockedBuffer
 	prevLog := log.Writer()
 	log.SetOutput(&logs)
 	defer log.SetOutput(prevLog)
