@@ -438,6 +438,12 @@ func SessionKeysForTest(ctx context.Context, deps Deps, task model.Task) (sandbo
 // WriteExecutableStub is writeExecutableStub for tests in orchestrator_test.
 var WriteExecutableStub = writeExecutableStub
 
+// ClosingNote exposes closingNote, the release-qualification verdict's
+// source (releasequalification.go).
+func ClosingNote(comments []model.Comment, taskID string) string {
+	return closingNote(comments, taskID)
+}
+
 // SessionTestRegistry is model.NewCapabilityRegistry with the agent API's
 // grants resolvable, as the daemon's own registry has them
 // (ui.AgentAPIDynamicProvider): every console session holds
