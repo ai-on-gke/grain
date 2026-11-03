@@ -671,6 +671,14 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     98,
+		Description: "add allowed_principal and allowed_principal_migration for verified-identity sign-in access",
+		Statements: []string{
+			allowedPrincipalTable,
+			allowedPrincipalMigrationTable,
+		},
+	},
+	{
+		Version:     99,
 		Description: "add the hostd selector a repository's tasks start pinned to",
 		Statements: []string{
 			"ALTER TABLE `repo_config` ADD COLUMN `default_hostd` TEXT NOT NULL DEFAULT ''",
