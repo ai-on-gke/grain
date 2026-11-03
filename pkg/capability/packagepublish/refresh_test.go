@@ -172,8 +172,12 @@ func TestTheHelperHandsEveryPushTheLaddersCurrentToken(t *testing.T) {
 			t.Errorf("get = %+v, want secret %q", got, want)
 		}
 	}
-	// The ladder is asked for the job's own repository, every time.
-	for _, call := range source.calls {
+	// The ladder is asked for the job's own repository, every time. Read
+	// under the fake's lock: the endpoint's handler goroutine writes calls.
+	source.mu.Lock()
+	calls := append([]string(nil), source.calls...)
+	source.mu.Unlock()
+	for _, call := range calls {
 		if call != " acme/widgets" {
 			t.Errorf("ladder asked %q, want the job's own repository", call)
 		}
@@ -192,8 +196,11 @@ func TestTheHelperHandsEveryPushTheLaddersCurrentToken(t *testing.T) {
 	if _, _, err := runHelper(t, helper, `{"ServerURL":"ghcr.io","Username":"u","Secret":"s"}`, "store"); err != nil {
 		t.Errorf("store: %v", err)
 	}
-	if len(source.calls) != 4 {
-		t.Errorf("ladder asked %d times, want 4", len(source.calls))
+	source.mu.Lock()
+	asked := len(source.calls)
+	source.mu.Unlock()
+	if asked != 4 {
+		t.Errorf("ladder asked %d times, want 4", asked)
 	}
 
 	// The log says who asked and which credential answered, and holds
