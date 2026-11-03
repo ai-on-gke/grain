@@ -215,6 +215,10 @@ const (
 	// FamilyCIWakeStalled is a task deferred on a resume_later CI wake past
 	// its stall bound with no CI activity on its branch, "<task>".
 	FamilyCIWakeStalled = "pipeline.ci-wake-stalled"
+	// FamilyStateRepoUnapplied is a configuration-repository commit the
+	// daemon could not apply across a schema migration and had to rewrite
+	// over, "<prior-head>".
+	FamilyStateRepoUnapplied = "pipeline.staterepo-unapplied"
 	// FamilyForceMergeRequest asks a person to force-merge "<task>".
 	FamilyForceMergeRequest = "request.force-merge"
 	// FamilyRevertRequest asks a person to revert "<task or sha>".
