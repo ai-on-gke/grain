@@ -16,6 +16,7 @@ package hostd
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -129,10 +130,15 @@ type EnsureResult struct {
 	Manual string
 }
 
-// differences says how have differs from want, the fields grain's own
-// entry sets; "" when it does not.
+// differences says how have differs from want, in every field an entry
+// has -- those grain's own entry sets, and those it leaves unset, which an
+// operator setting is as much a difference to be told of; "" when it does
+// not.
 func differences(have, want *Entry) string {
 	var out []string
+	if have.Path != want.Path {
+		out = append(out, fmt.Sprintf("path %q (default %q)", have.Path, want.Path))
+	}
 	if have.Command != want.Command {
 		out = append(out, fmt.Sprintf("command %q (default %q)", have.Command, want.Command))
 	}
@@ -147,6 +153,16 @@ func differences(have, want *Entry) string {
 	}
 	if !slices.Equal(have.PassEnv, want.PassEnv) {
 		out = append(out, fmt.Sprintf("pass_env %v (default %v)", have.PassEnv, want.PassEnv))
+	}
+	if !maps.Equal(have.SetEnv, want.SetEnv) {
+		keys := slices.Sorted(maps.Keys(have.SetEnv))
+		out = append(out, fmt.Sprintf("set_env %v (default %v)", keys, slices.Sorted(maps.Keys(want.SetEnv))))
+	}
+	if !slices.Equal(have.PathsUnder, want.PathsUnder) {
+		out = append(out, fmt.Sprintf("paths_under %v (default %v)", have.PathsUnder, want.PathsUnder))
+	}
+	if !slices.Equal(have.CwdUnder, want.CwdUnder) {
+		out = append(out, fmt.Sprintf("cwd_under %v (default %v)", have.CwdUnder, want.CwdUnder))
 	}
 	if have.maxDuration() != want.maxDuration() {
 		out = append(out, fmt.Sprintf("max_duration %v (default %v)", have.maxDuration(), want.maxDuration()))
