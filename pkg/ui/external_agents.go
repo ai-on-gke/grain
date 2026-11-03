@@ -433,7 +433,7 @@ func presentsExternalAgentToken(r *http.Request) bool {
 // revocation, rate limits, and concurrency caps, and returns the credential
 // along with its concurrency release callback.
 func (s *Server) authenticateExternalAgent(w http.ResponseWriter, r *http.Request) (*model.ExternalAgentToken, func(), bool) {
-	if r.URL.Path == "/mcp" && r.ContentLength > maxMCPRequestBytes {
+	if (r.URL.Path == "/mcp" || r.URL.Path == "/api/mcp") && r.ContentLength > maxMCPRequestBytes {
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Errorf("MCP request body exceeds maximum size of %d bytes", maxMCPRequestBytes))
 		return nil, nil, false
 	}

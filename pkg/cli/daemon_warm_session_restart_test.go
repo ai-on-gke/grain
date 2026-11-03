@@ -89,6 +89,17 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"turn '"$n"
 
 func freeLocalAddr(t *testing.T) string {
 	t.Helper()
+	// Pick a port below Linux's ephemeral range (32768-60999) so the
+	// daemon's own :0 cache and model-proxy listeners never grab uiAddr
+	// across the four restarts in this test.
+	for port := 19100; port < 29000; port++ {
+		addr := fmt.Sprintf("127.0.0.1:%d", port)
+		l, err := net.Listen("tcp", addr)
+		if err == nil {
+			_ = l.Close()
+			return addr
+		}
+	}
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

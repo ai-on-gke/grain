@@ -100,6 +100,28 @@ func (a *inProcessAPI) RoundTrip(req *http.Request) (*http.Response, error) {
 	return rec.Result(), nil
 }
 
+// LoopbackRoundTrip answers req with the published handler as an authenticated
+// loopback HTTP request rather than an owner-trusted in-process one:
+// RemoteAddr is 127.0.0.1:0 and request headers (including X-Grain-Access-Code
+// and X-Grain-Acting-Task) are preserved so singleTenantGate, extractPrincipal
+// and agentAPIGate all run identically to the TCP listener.
+func (a *inProcessAPI) LoopbackRoundTrip(req *http.Request) (*http.Response, error) {
+	h := a.handler.Load()
+	if h == nil {
+		return nil, errors.New("grain's API is not serving yet")
+	}
+	in := req.Clone(req.Context())
+	in.RequestURI = in.URL.RequestURI()
+	in.RemoteAddr = "127.0.0.1:0"
+	in.Host = "127.0.0.1"
+	if in.Body == nil {
+		in.Body = http.NoBody
+	}
+	rec := httptest.NewRecorder()
+	(*h).ServeHTTP(rec, in)
+	return rec.Result(), nil
+}
+
 // ServeHTTP answers r with the published handler in-process, for the sandbox
 // proxy's /api/ forwarding.
 func (a *inProcessAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {

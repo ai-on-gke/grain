@@ -355,5 +355,6 @@ var routeScopes = map[string]APIScope{
 	"GET /api/access/principals":                                           "access:read",
 	"POST /api/access/principals":                                          "access:write",
 	"DELETE /api/access/principals/{entry}":                                "access:write",
+	"POST /api/mcp":                                                        "internal",
 	"POST /mcp":                                                            "internal",
 }

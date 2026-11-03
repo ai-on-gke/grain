@@ -202,6 +202,15 @@ var capabilityActivityNotes = map[string]map[string]CapabilityToolNote{
 	"gchat": {
 		"post_message": {Fallback: "posting to Google Chat"},
 	},
+	// pkg/ui's controller MCP endpoint (/api/mcp).
+	ControllerToolNamespace: {
+		"grain_explore_scope":  {Format: "exploring %s API scope", Args: []NoteArg{{Key: "scope"}}, Fallback: "listing API scopes"},
+		"grain_invoke":         {Format: "calling %s", Args: []NoteArg{{Key: "tool"}}, Fallback: "calling controller API"},
+		"grain_filing_context": {Fallback: "reading task filing context"},
+		"grain_submit_task":    {Format: "filing task %s", Args: []NoteArg{QuotedArg("title")}, Fallback: "filing a task"},
+		"grain_list_tasks":     {Fallback: "listing tasks"},
+		"grain_get_task":       {Format: "reading task %s", Args: []NoteArg{{Key: "id"}}, Fallback: "reading a task"},
+	},
 }
 
 // capabilityActivityMu guards capabilityActivityNotes against a
