@@ -2335,7 +2335,7 @@ ui_firewall_note() {
       echo "ufw is active with no rule for $port, so the network URL is probably blocked (this script opens nothing: ufw allow $port/tcp would)"
     fi
   elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-    if firewall-cmd --list-ports 2>/dev/null | grep -qw "$port/tcp"; then
+    if out="$(firewall-cmd --list-ports 2>/dev/null)" && grep -qw "$port/tcp" <<<"$out"; then
       echo "firewalld is running and lists $port/tcp"
     else
       echo "firewalld is running without $port/tcp, so the network URL is probably blocked (this script opens nothing)"
@@ -3526,12 +3526,15 @@ pull_image() {
 # other, so what is verified is exactly what it names, never some other
 # digest the same repository also left on this host.
 image_digest_ref() {
-  local repo="${1%%@*}" want=""
+  local repo="${1%%@*}" want="" digests
   case "${repo##*/}" in *:*) repo="${repo%:*}" ;; esac
   case "$1" in *@sha256:*) want="$repo@${1#*@}" ;; esac
-  docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$1" 2>/dev/null \
-    | awk -v repo="$repo" -v want="$want" \
-      '(want == "" && index($0, repo "@sha256:") == 1) || (want != "" && $0 == want) {print; exit}'
+  # Read in full before awk sees it: awk exits at the first match, and
+  # docker still writing the rest into that closed pipe would die of
+  # SIGPIPE, failing the pipeline under pipefail.
+  digests="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$1" 2>/dev/null)" || return
+  awk -v repo="$repo" -v want="$want" \
+    '(want == "" && index($0, repo "@sha256:") == 1) || (want != "" && $0 == want) {print; exit}' <<<"$digests"
 }
 
 # verify_image_signature checks who published $1, already pulled, by
@@ -6296,7 +6299,10 @@ verify_daemon_flags() {
       *=*) attached=1 ;;
     esac
     name="${name%%=*}"
-    kind="$(printf '%s\n' "$spec" | awk -v n="$name" '$1 == n { print $2; exit }')"
+    # A here-string, not `printf | awk`: awk exits at the first match,
+    # and a printf still writing into the closed pipe dies of SIGPIPE,
+    # which pipefail and `set -e` turn into an aborted install.
+    kind="$(awk -v n="$name" '$1 == n { print $2; exit }' <<<"$spec")"
     if [ -z "$kind" ]; then
       unknown+=("-$name")
       continue
@@ -7584,7 +7590,7 @@ check_hostd_docker_access() {
     log "         daemon's container: a host-run agy's grain MCP server will fail every sandbox call"
     return 0
   fi
-  if ! id -nG "$GRAIN_USER" 2>/dev/null | tr ' ' '\n' | grep -qxF docker; then
+  if ! grep -qxF docker <<<"$(id -nG "$GRAIN_USER" 2>/dev/null | tr ' ' '\n')"; then
     log "WARNING: $GRAIN_USER is not in the docker group, so a host-run agy's grain MCP server"
     log "         cannot reach $sock: sudo usermod -aG docker $GRAIN_USER, then re-run this script"
     return 0
