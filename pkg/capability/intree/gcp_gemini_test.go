@@ -193,3 +193,50 @@ func TestGeminiKeyConfigurationIsValidated(t *testing.T) {
 		})
 	}
 }
+
+// A run granted the retired bare gemini-key and one granted the
+// gcp#gemini-key={} schema migration 101 rewrote it to reach the same
+// method with the same arguments, and get the same placement and prompt.
+func TestGeminiKeyLegacyGrantFidelity(t *testing.T) {
+	s, err := newConfigurableGCP(GCPConfig{GeminiMinter: (&fakeAPIKeys{}).factory})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps, err := attachConfigured(t, s, map[string]any{
+		"admin_credential_source": "configured",
+		"admin_credential":        "$secret:gcp-key-minter",
+		"gemini_key":              map[string]any{"project": "acme-ai"},
+	}, map[string]string{"gcp-key-minter": testMinterKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var placed []protocol.Placement
+	var prompts []string
+	for i, grant := range []string{"gemini-key", model.GCPGeminiKeyGrant} {
+		canonical := model.CanonicalLegacyGrant(grant)
+		if canonical != model.GCPGeminiKeyGrant {
+			t.Fatalf("%q is granted as %q, want %q", grant, canonical, model.GCPGeminiKeyGrant)
+		}
+		spec, err := protocol.ParseCLIGrant(canonical)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ref, method, _ := strings.Cut(spec.Capability, "#")
+		if ref != model.GCPCapabilityServerID || method != GeminiKeyMethod {
+			t.Fatalf("%q names %s#%s, want the gcp server's %s", grant, ref, method, GeminiKeyMethod)
+		}
+		resp := mint(t, ps, method, fmt.Sprintf("grain-42-%d-0", i+1), spec.With)
+		if resp.Status != protocol.StatusOK || len(resp.Placements) != 1 {
+			t.Fatalf("%q minted %+v", grant, resp)
+		}
+		placed = append(placed, resp.Placements[0])
+		prompts = append(prompts, resp.PromptSection)
+	}
+	if placed[0].Path != placed[1].Path || placed[0].Path != geminikey.KeyPath || placed[0].FileMode() != placed[1].FileMode() || placed[0].FileMode() != 0o600 {
+		t.Errorf("placed %s %o and %s %o, want both at %s 0600",
+			placed[0].Path, placed[0].FileMode(), placed[1].Path, placed[1].FileMode(), geminikey.KeyPath)
+	}
+	if prompts[0] != prompts[1] || prompts[0] != geminikey.Prompt() {
+		t.Errorf("prompts differ:\nlegacy:    %q\nrewritten: %q", prompts[0], prompts[1])
+	}
+}

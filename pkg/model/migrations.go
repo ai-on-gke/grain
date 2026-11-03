@@ -691,6 +691,11 @@ var Migrations = []Migration{
 		Description: "rewrite stored claude-proxy, openai-proxy and gemini-proxy grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/model-proxy#model-proxy={\"vendor\":\"<vendor>\"} (the in-process providers are retired)",
 		Up:          migrateModelProxyGrants,
 	},
+	{
+		Version:     101,
+		Description: "seed gcp#gemini-key on the gcp server where grain_config.gcp_project is set, minting with the gcp-key-minter secret, and rewrite stored gemini-key grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/gcp#gemini-key={} (the in-process gemini-key is retired)",
+		Up:          migrateGeminiKeyToCapabilityServer,
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as

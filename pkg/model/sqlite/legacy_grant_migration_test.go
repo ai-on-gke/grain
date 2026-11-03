@@ -112,6 +112,7 @@ var retiredGrants = []struct {
 	{100, "claude-proxy", []string{model.ModelProxyGrant("claude")}},
 	{100, "openai-proxy", []string{model.ModelProxyGrant("openai")}},
 	{100, "gemini-proxy", []string{model.ModelProxyGrant("gemini")}},
+	{101, "gemini-key", []string{model.GCPGeminiKeyGrant}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'
@@ -144,7 +145,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 	store, db, ctx := openStore(t)
 
 	cfg := testConfig()
-	cfg.DefaultCapabilities = []string{legacy, "gemini-key"}
+	cfg.DefaultCapabilities = []string{legacy, "read-issues"}
 	cfg.ConsoleSessions = []model.ConsoleSession{
 		{ID: "director", Title: "Director", Capabilities: []string{"self-debug", legacy}},
 		{ID: "steward", Title: "Steward", Capabilities: append(slices.Clone(replacements), legacy)},
@@ -165,7 +166,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 			"3": {"api:tasks:write"},
 		},
 		"template_grant": {"t": {legacy}},
-		"schedule_grant": {"s": {legacy, "gemini-key"}},
+		"schedule_grant": {"s": {legacy, "read-issues"}},
 	}
 	owners := map[string]string{"task_grant": "task_id", "template_grant": "template_id", "schedule_grant": "schedule_id"}
 	for table, byOwner := range fixture {
@@ -201,7 +202,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := append(slices.Clone(replacements), "gemini-key"); !slices.Equal(after.DefaultCapabilities, want) {
+	if want := append(slices.Clone(replacements), "read-issues"); !slices.Equal(after.DefaultCapabilities, want) {
 		t.Errorf("default capabilities = %v, want %v", after.DefaultCapabilities, want)
 	}
 	if len(after.ConsoleSessions) != len(cfg.ConsoleSessions) {
@@ -274,7 +275,7 @@ func TestMigration86RewritesCorpResearchIdempotently(t *testing.T) {
 	store, db, ctx := openStore(t)
 
 	cfg := testConfig()
-	cfg.DefaultCapabilities = []string{"self-debug", "corp-research", "gemini-key"}
+	cfg.DefaultCapabilities = []string{"self-debug", "corp-research", "read-issues"}
 	cfg.ConsoleSessions = []model.ConsoleSession{
 		{ID: "director", Title: "Director", Capabilities: []string{"corp-research", "self-debug"}},
 		{ID: "quiet", Title: "Quiet", Capabilities: []string{"self-debug"}},
@@ -301,7 +302,7 @@ func TestMigration86RewritesCorpResearchIdempotently(t *testing.T) {
 		{"task_grant", "task_id", "3", "api:tasks:write"},
 		{"template_grant", "template_id", "t", "corp-research"},
 		{"schedule_grant", "schedule_id", "s", "corp-research"},
-		{"schedule_grant", "schedule_id", "s", "gemini-key"},
+		{"schedule_grant", "schedule_id", "s", "read-issues"},
 	} {
 		if _, err := db.ExecContext(ctx, "INSERT INTO `"+row.table+"` (`"+row.owner+"`, `capability`, `via`) VALUES (?, ?, 'label')",
 			row.id, row.capability); err != nil {
@@ -326,14 +327,14 @@ func TestMigration86RewritesCorpResearchIdempotently(t *testing.T) {
 	if got, want := after["template_grant"], map[string][]string{"t": {corp}}; !equalRows(got.(map[string][]string), want) {
 		t.Errorf("template grants = %v, want %v", got, want)
 	}
-	if got, want := after["schedule_grant"], map[string][]string{"s": {"gemini-key", corp}}; !equalRows(got.(map[string][]string), want) {
+	if got, want := after["schedule_grant"], map[string][]string{"s": {"read-issues", corp}}; !equalRows(got.(map[string][]string), want) {
 		t.Errorf("schedule grants = %v, want %v", got, want)
 	}
 	gotCfg, err := store.GetConfig(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"self-debug", corp, "gemini-key"}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
+	if want := []string{"self-debug", corp, "read-issues"}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
 		t.Errorf("default capabilities = %v, want %v", gotCfg.DefaultCapabilities, want)
 	}
 	if got, want := gotCfg.ConsoleSessions[0].Capabilities, []string{corp, "self-debug"}; !slices.Equal(got, want) {
@@ -408,7 +409,7 @@ func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 		}
 		if err := store.PutRepoConfig(ctx, model.RepoConfig{
 			Repo:           dedup,
-			CICapabilities: append(append(slices.Clone(r.to), r.legacy), "gemini-key"),
+			CICapabilities: append(append(slices.Clone(r.to), r.legacy), "read-issues"),
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -449,12 +450,12 @@ func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 		}
 		sameGrantMeaning(t, r.legacy+" widgets CI capabilities", beforeWidgets, gotWidgets.CICapabilities)
 
-		beforeDedup := append(append(slices.Clone(r.to), r.legacy), "gemini-key")
+		beforeDedup := append(append(slices.Clone(r.to), r.legacy), "read-issues")
 		gotDedup, err := store.GetRepoConfig(ctx, dedup)
 		if err != nil || gotDedup == nil {
 			t.Fatalf("%s dedup: %v, %+v", r.legacy, err, gotDedup)
 		}
-		wantDedup := append(slices.Clone(r.to), "gemini-key")
+		wantDedup := append(slices.Clone(r.to), "read-issues")
 		if !slices.Equal(gotDedup.CICapabilities, wantDedup) {
 			t.Errorf("%s: dedup CI capabilities = %v, want %v", r.legacy, gotDedup.CICapabilities, wantDedup)
 		}

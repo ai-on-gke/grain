@@ -473,7 +473,13 @@ import "strconv"
 // tasks, templates, schedules, default_capabilities, ci_capabilities,
 // console_sessions and capability_policy become
 // https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"<vendor>"}.
-const SchemaVersion = 100
+//
+// 101 retires the in-process gemini-key onto the gcp server's
+// https://grain.dev/capabilities/gcp#gemini-key: where `gcp_project` is
+// set, seeds the gcp entry in `grain_config`.`mcp_servers` with
+// gemini_key: {project}, minting with the gcp-key-minter secret, and
+// rewrites stored gemini-key grants as 100 did the model proxies.
+const SchemaVersion = 101
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified
