@@ -79,3 +79,69 @@ test("searches the New task repo box anywhere in the name, and files against the
   expect(response.status()).toBe(201);
   expect(response.request().postDataJSON().repo).toBe("acme/widgets");
 });
+
+// The box is a plain input drawn to look like the <select> it replaced:
+// the repos ring in front of it, a caret inside its right edge that the
+// typed text never runs under, and the list hung off it inside the
+// viewport -- at a phone's width as much as a desktop's.
+for (const [width, height] of [
+  [1440, 900],
+  [390, 844],
+]) {
+  test(`lays the repo box and its list out at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    await page.goto("/");
+    await expect(page.locator(".task-row").first()).toBeVisible();
+    await page
+      .getByRole("button", { name: /New task/i })
+      .first()
+      .click();
+    const box = page.getByLabel(/^Repos/);
+    await expect(box).toBeVisible();
+
+    const field = page.locator(".repo-field-control").first();
+    const glyph = field.locator(".repo-field-icon");
+    const caret = field.locator(".repo-field-caret");
+    const b = await box.boundingBox();
+    const g = await glyph.boundingBox();
+    const c = await caret.boundingBox();
+    // The ring sits before the box, centred on it.
+    expect(g.x + g.width).toBeLessThanOrEqual(b.x);
+    expect(Math.abs(g.y + g.height / 2 - (b.y + b.height / 2))).toBeLessThan(3);
+    // The caret is inside the box's right edge, centred on it, and the
+    // box's own padding keeps text out from under it.
+    expect(c.x).toBeGreaterThan(b.x + b.width / 2);
+    expect(c.x + c.width).toBeLessThanOrEqual(b.x + b.width);
+    expect(Math.abs(c.y + c.height / 2 - (b.y + b.height / 2))).toBeLessThan(3);
+    const padRight = await box.evaluate((el) =>
+      parseFloat(getComputedStyle(el).paddingRight),
+    );
+    expect(b.x + b.width - padRight).toBeLessThanOrEqual(c.x);
+    // The box fills the row, and the row fits the viewport.
+    expect(b.x + b.width).toBeLessThanOrEqual(width);
+
+    await box.click();
+    await box.fill("dgets");
+    const id = await box.getAttribute("aria-controls");
+    const list = page.locator(`[id="${id}"]`);
+    await expect(list.locator('[role="option"]').first()).toBeVisible();
+    // Clicking scrolled the box into view; measure it where it is now.
+    // The list hangs under it, or -- when the drawer leaves no room
+    // below -- flips above it, but never covers it.
+    const bb = await box.boundingBox();
+    const l = await list.boundingBox();
+    expect(l.y >= bb.y + bb.height - 1 || l.y + l.height <= bb.y + 1).toBe(
+      true,
+    );
+    expect(l.x).toBeGreaterThanOrEqual(0);
+    expect(l.x + l.width).toBeLessThanOrEqual(width);
+    expect(l.y + l.height).toBeLessThanOrEqual(height);
+    // No row's text is cut off sideways.
+    const clipped = await list
+      .locator('[role="option"]')
+      .evaluateAll(
+        (rows) => rows.filter((r) => r.scrollWidth > r.clientWidth + 1).length,
+      );
+    expect(clipped).toBe(0);
+  });
+}
