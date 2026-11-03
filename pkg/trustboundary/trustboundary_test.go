@@ -368,3 +368,61 @@ func funcFiles(t *testing.T, dir string) map[string]string {
 	}
 	return out
 }
+
+// v12 (design/playbook/releases.playbook.md §0.3): the approval and what
+// decides who may act without it wait for a person; the release jobs and
+// scripts, which cannot reach the approval, are released by a clean review
+// that is told what to check on them.
+func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
+	human := map[string]string{
+		".grain/workflows/promote-release.yml":  "release-promotion",
+		".github/workflows/promote-release.yml": "release-promotion",
+		"pkg/ui/release_approval.go":            "release-promotion",
+		".grain/templates/release-train.yml":    "release-promotion",
+		"pkg/trustboundary/trustboundary.go":    "hold-policy",
+		".grain/triggers/release-promotion.yml": "path-triggers",
+		".grain/triggers/release-machinery.yml": "path-triggers",
+		".grain/merge-rules.yml":                "merge-rules",
+	}
+	for p, want := range human {
+		got := Classify([]string{p})
+		if ids := categoryIDs(got); !reflect.DeepEqual(ids, []string{want}) {
+			t.Errorf("Classify(%q) = %v, want [%s]", p, ids, want)
+		}
+		if !RequiresHuman(got) {
+			t.Errorf("%s no longer waits for a person", p)
+		}
+	}
+
+	reviewed := []string{
+		"scripts/release-images.sh", "scripts/release-from-trunk.sh",
+		"scripts/release-notes.sh", "scripts/candidate-gate.sh", "scripts/release.conf",
+		"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
+		".grain/workflows/release.yml", ".github/workflows/release.yml",
+		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
+		".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
+	}
+	for _, p := range reviewed {
+		got := Classify([]string{p})
+		if ids := categoryIDs(got); !reflect.DeepEqual(ids, []string{"release-machinery"}) {
+			t.Errorf("Classify(%q) = %v, want [release-machinery]", p, ids)
+		}
+		if RequiresHuman(got) {
+			t.Errorf("%s waits for a person; a clean security review should release it", p)
+		}
+	}
+
+	var machinery Category
+	for _, c := range Categories {
+		if c.ID == "release-machinery" {
+			machinery = c
+		}
+	}
+	brief := strings.Join(machinery.Review, "\n")
+	for _, want := range []string{"`vX.Y.Z` or `latest`", "`permissions:`", "secrets", "dispatch",
+		"anybody but a person", "RELEASE_MAJOR"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("release-machinery's review brief does not mention %s:\n%s", want, brief)
+		}
+	}
+}

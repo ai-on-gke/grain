@@ -682,7 +682,7 @@ func TestAssignServerNames(t *testing.T) {
 	if want := []string{"tools", "", "tools-3", "tools-2", "tools-4"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("AssignServerNames = %v, want %v", got, want)
 	}
-	for _, bad := range []string{"grain-sandbox", "Tools", "a b"} {
+	for _, bad := range []string{"grain-sandbox", "grain-controller", "Tools", "a b"} {
 		if _, err := AssignServerNames([]string{bad}); err == nil {
 			t.Errorf("server name %q accepted", bad)
 		}

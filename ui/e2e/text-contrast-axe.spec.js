@@ -19,7 +19,8 @@ import { expect, test } from "./fixtures.js";
 // axe-core over every page the plan names and found two light-theme
 // misses: the rail's build stamp (text.secondary at 75% opacity, 4.27:1,
 // on every page -- F1) and a report's thin percentiles (text.disabled,
-// 2.64:1 -- F2). textContrast.test.js checks the palette's tokens; this
+// 2.64:1 -- F2). A later CI run found a third, the Inbox's outlined
+// error button (4.22:1 -- F6). textContrast.test.js checks the palette's tokens; this
 // checks what a browser actually draws with them, so a token dimmed
 // again by opacity or swapped for MUI's disabled grey fails here.
 
@@ -73,6 +74,17 @@ for (const scheme of ["light", "dark"]) {
       const selectors = ["[data-testid=build-stamp]"];
       if (path.startsWith("/boards/")) {
         selectors.push("td span[aria-label^='Only ']");
+      }
+      if (path === "/inbox") {
+        // A proposal's outlined "decline" writes its label in
+        // error.main, which was 4.22:1 on the canvas (F6). axe skips
+        // what the inbox's own scroller has below the fold, so bring
+        // one into view when a row carries it.
+        selectors.push(".inbox-actions");
+        const decline = page.locator(".inbox-actions .MuiButton-outlinedError");
+        if (await decline.count()) {
+          await decline.first().scrollIntoViewIfNeeded();
+        }
       }
       expect(await violations(page, selectors), `${path} in ${scheme}`).toEqual(
         [],

@@ -21,7 +21,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 | Kind | Commands |
 |---|---|
 | Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume` |
-| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access …`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `declarations check` |
+| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|deny`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `declarations check` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
 | Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db [upgrade-postgres]`), `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
 | Modes: build information | `version`, `schema-version`, `release-notes`, `sandbox-image`, `container-sandbox-image`, `k8s-sandbox-image`, `image` |
@@ -672,10 +672,10 @@ Calls `POST /api/repos/{owner}/{name}/…` (`DecideRelease`). `-repo` defaults t
 Errors:
 - an unknown verb: `unknown release command "<v>": approve or reject`;
 - the wrong number of arguments: `grain release <verb> takes the pending release, vX.Y.Z`;
-- `-short-soak-ok` on reject: `-short-soak-ok is for grain release approve`.
+- `-short-soak-ok` on reject: `-short-soak-ok is for grain release approve`;
 - `-allow-breaking` on reject: `-allow-breaking is for grain release approve`.
 
-`-allow-breaking` approves a release that carries breaking changes without being the major release `RELEASE_MAJOR` asks for.
+`-allow-breaking` approves a release that carries breaking changes without being the major release `RELEASE_MAJOR` asks for; it reaches the approval as `allow_breaking: true`.
 
 With no arguments it prints the usage and returns `flag: help requested`. **Scope:** person; an agent is refused.
 
@@ -854,18 +854,15 @@ Reads a checkout's `.grain/templates`, `.grain/suites` and `.grain/schedules` an
 
 ### 4.14 `grain access list|allow|deny` {#CLI-107}
 
-This manages the verified-identity allowlist (Settings -> Access): the `user:<email>` and `group:<email>` entries that may sign in when authenticated by Cloud IAP or another registered IdentityVerifier.
-- `list` (`ls`, and the default with no subcommand) calls `GET /api/access/principals` and prints each entry with who added it and when. It also warns about any `-ui-allowed-principals` entry dropped on import because it was not `user:` or `group:`.
-- `allow <entry>` (`add`) calls `POST /api/access/principals`. Adding an existing entry is a no-op.
-- `deny <entry>` (`remove`, `rm`) calls `DELETE /api/access/principals/{entry}`.
-
-An unknown subcommand fails with `unknown access subcommand "<sub>"` and the usage. **Scope:** admin.
+Manages the allowed users and groups (Settings -> Access) through `/api/access/principals`: who may sign in when authenticated by Cloud IAP or another registered IdentityVerifier. `list` (the default, also `ls`) prints each entry with who added it and when, and warns about `-ui-allowed-principals` entries that were dropped on import. `allow <user:<email>|group:<email>>` (also `add`) adds one; adding an existing entry is a no-op. `deny` (also `remove`, `rm`) removes one.
 
 <!-- BEGIN GENERATED FLAGS: grain access -->
 _No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/access_test.go`: `TestGrainAccessCLI`.
+
+---
 
 ## 5. Service modes
 
