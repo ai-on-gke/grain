@@ -331,6 +331,16 @@ func (a CapabilityCheckAdapter) CheckCapability(ctx context.Context, id string) 
 		CapabilityProviders(a.Live.Current(), a.Live.store, ModelProxies, a.Live.GitHubTokens(), a.Live.gitHubCredentialSource())...)
 	provider, ok := registry.Lookup(id)
 	if !ok {
+		// A credential whose capability was retired onto a capability
+		// server method is still checked by its old provider.
+		for _, p := range credentialCheckers(a.Live.Current(), a.Live.store, a.Live.GitHubTokens(), a.Live.gitHubCredentialSource()) {
+			if p.Spec().Name == id {
+				provider, ok = p, true
+				break
+			}
+		}
+	}
+	if !ok {
 		// An answer about this deployment rather than a fault:
 		// capabilityProviders registers gcp-key and gemini-key only once
 		// a GCP project (and, for gcp-key, an agent service account) is

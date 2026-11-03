@@ -61,10 +61,15 @@ func TestEveryInTreeServerIsRegisteredUnderItsCanonicalID(t *testing.T) {
 	if len(ensured) != registered {
 		t.Errorf("registered %d entries for %d built-ins", len(ensured), registered)
 	}
-	for _, name := range []string{"gcp", "git", "config-map", "host-script"} {
+	for _, name := range []string{"gcp", "config-map", "host-script"} {
 		if _, ok := BuiltinNamed(name); !ok {
 			t.Errorf("%s is not a built-in", name)
 		}
+	}
+	// git's canonical id is answered by grain in-process now (git-repo
+	// {credential, repo}); the external server is still `grain capability git`.
+	if _, ok := BuiltinNamed("git"); ok {
+		t.Error("git is still registered as a built-in capability server")
 	}
 	if _, ok := BuiltinNamed("self-debug"); ok {
 		t.Error("self-debug is still registered as a built-in capability server")

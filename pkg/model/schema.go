@@ -482,7 +482,13 @@ import "strconv"
 // 102 adds `default_hostd` to `repo_config` (model.RepoConfig.DefaultHostd):
 // the hostd pin or label selector a task filed against the repository
 // starts with when neither the filing nor its template names one.
-const SchemaVersion = 102
+//
+// 103 retires the in-process github-credential:<name> and github-sandbox
+// providers: stored grants become
+// https://grain.dev/capabilities/git#git-repo={"credential":"<name>","repo":"*"}
+// (every repository the run reaches, the reach the bare grant had) and
+// https://grain.dev/capabilities/github#sandbox-repo={}.
+const SchemaVersion = 103
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified

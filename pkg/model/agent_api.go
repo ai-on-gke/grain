@@ -493,6 +493,9 @@ var legacyGrantReplacements = map[string]string{
 	"image-signing":          ImageSigningRef + "={}",
 	"registry-push":          RegistryPushRef + "={}",
 	CapabilityPackagePublish: PackagePublishRef + "={}",
+	// Retired by schema migration 103 onto the in-process github
+	// server, which creates the same repository with the same token.
+	GitHubSandboxCapability: GitHubSandboxRepoGrant,
 }
 
 // legacyGrantMultiReplacements maps retired bare capabilities that split into
@@ -546,6 +549,11 @@ func legacyGrantReplacement(name string) (string, bool) {
 		if validLegacyGCPKeyParam(keyName) {
 			return GCPKeyServerGrant(keyName), true
 		}
+	}
+	// Retired by schema migration 103 onto git#git-repo, with the reach
+	// the bare grant had: every repository the run reaches.
+	if credential, ok := GitCredentialName(name); ok && ValidGitCredentialName(credential) {
+		return GitCredentialServerGrant(credential, GitCredentialAnyRepo), true
 	}
 	registeredLegacyAliasesMu.RLock()
 	defer registeredLegacyAliasesMu.RUnlock()

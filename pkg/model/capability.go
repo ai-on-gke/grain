@@ -229,6 +229,24 @@ func MintRunID(ctx context.Context) string {
 	return id
 }
 
+type mintCredentialsKey struct{}
+
+// WithMintCredentials is ctx carrying creds, the resolver the run's
+// in-process providers resolved their secrets through
+// (CapabilityContext.Credentials), to a method of an in-process capability
+// server minting for it: the github server's sandbox-repo resolves the
+// GitHub App's two secrets through it, as the retired github-sandbox
+// provider did.
+func WithMintCredentials(ctx context.Context, creds CredentialResolver) context.Context {
+	return context.WithValue(ctx, mintCredentialsKey{}, creds)
+}
+
+// MintCredentials is the resolver WithMintCredentials put in ctx, or nil.
+func MintCredentials(ctx context.Context) CredentialResolver {
+	c, _ := ctx.Value(mintCredentialsKey{}).(CredentialResolver)
+	return c
+}
+
 // CapabilitySpec is a capability's fixed identity: what a grant of it
 // means, before any particular task holds one.
 type CapabilitySpec struct {

@@ -45,7 +45,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -147,22 +149,22 @@ func TestCapabilityProviders(t *testing.T) {
 		{
 			name: "no gcp project configured still registers the built-in capabilities",
 			cfg:  Config{},
-			want: []string{"github-sandbox", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
+			want: []string{"self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
 		},
 		{
 			name: "an agent service account without a gcp project does not add either gcp capability",
 			cfg:  Config{GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"},
-			want: []string{"github-sandbox", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
+			want: []string{"self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
 		},
 		{
 			name: "a gcp project with no agent service account only adds gemini-key to the built-in capabilities",
 			cfg:  Config{GcpProject: "proj"},
-			want: []string{"gemini-key", "github-sandbox", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
+			want: []string{"gemini-key", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
 		},
 		{
 			name: "a gcp project with an agent service account adds gemini-key to the built-in capabilities (gcp-key is served by the gcp capability server)",
 			cfg:  Config{GcpProject: "proj", GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"},
-			want: []string{"gemini-key", "github-sandbox", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
+			want: []string{"gemini-key", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
 		},
 	}
 	for _, tc := range cases {
@@ -201,6 +203,11 @@ func TestEveryLeakableCapabilityIsReaped(t *testing.T) {
 		if _, ok := p.(model.Reaper); ok {
 			reaped[p.Spec().Name] = true
 		}
+	}
+	// github#sandbox-repo's provider is no registry's since schema
+	// migration 103; the sweep reaps through githubsandbox.Current.
+	if _, ok := any(githubsandbox.Current()).(model.Reaper); ok {
+		reaped["github-sandbox"] = true
 	}
 	for _, name := range []string{"gemini-key", "github-sandbox"} {
 		if !reaped[name] {
@@ -251,29 +258,33 @@ func TestGitHubCredentialLadderNamesTheExtraTokens(t *testing.T) {
 	}
 }
 
-// A named GitHub token is a capability of its own (grain/task-117), and
-// the two ends of that -- the picker row a human ticks and the provider
-// a dispatch resolves it against -- are built from the same list of
-// names in startUIServer and capabilityProviders. This is that pairing:
-// the ids have to match exactly, or granting a token would be refused at
-// dispatch as a capability no provider is registered for.
+// A named GitHub token is a capability of its own (grain/task-117). Its
+// picker row's id is the retired github-credential:<name>, a one-release
+// alias (schema migration 103) for git#git-repo {credential: <name>,
+// repo: "*"}, which grain answers in-process: no provider is registered
+// for it any more, and the alias has to land on a grant admission can
+// mint without an external server.
 func TestCapabilityProvidersRegistersEachNamedGitHubToken(t *testing.T) {
 	t.Parallel()
 	names := []string{"release-bot", "docs-bot"}
-	var registered []string
+	registered := map[string]bool{}
 	for _, p := range CapabilityProviders(Config{}, nil, NewModelProxies(), names, nil) {
-		registered = append(registered, p.Spec().Name)
+		registered[p.Spec().Name] = true
 	}
-	for _, capability := range ui.GitHubTokenCapabilities(names) {
-		if !slices.Contains(registered, capability.ID) {
-			t.Errorf("the picker offers %q but no provider is registered for it (registered: %v)",
-				capability.ID, registered)
+	for i, capability := range ui.GitHubTokenCapabilities(names) {
+		if registered[capability.ID] {
+			t.Errorf("%q is still registered as an in-process provider", capability.ID)
+		}
+		grant := model.CanonicalLegacyGrant(capability.ID)
+		if want := model.GitCredentialServerGrant(names[i], model.GitCredentialAnyRepo); grant != want {
+			t.Errorf("%q is an alias for %q, want %q", capability.ID, grant, want)
+		}
+		if !grainserver.IsInProcessGrant(grant) {
+			t.Errorf("%q is not answered in-process", grant)
 		}
 	}
-	// And nothing extra: a deployment with no named tokens registers
-	// exactly what it did before this existed (TestCapabilityProviders).
-	if len(registered) != len(CapabilityProviders(Config{}, nil, NewModelProxies(), nil, nil))+len(names) {
-		t.Errorf("registered %v, want the fixed set plus one provider per name %v", registered, names)
+	if got, want := len(registered), len(CapabilityProviders(Config{}, nil, NewModelProxies(), nil, nil)); got != want {
+		t.Errorf("registered %d providers with named tokens, want the fixed %d", got, want)
 	}
 }
 
@@ -331,6 +342,12 @@ func TestEveryRegisteredCapabilityIsGrantable(t *testing.T) {
 		}
 	}
 	for _, id := range offered {
+		// A retired name the picker still offers for one release is an
+		// alias for the capability-server grant it became, which no
+		// provider answers (github-sandbox, schema migration 103).
+		if model.CanonicalLegacyGrant(id) != id {
+			continue
+		}
 		if !slices.Contains(registered, id) {
 			t.Errorf("ui.OfferedCapabilities offers %q but a fully configured deployment registers no provider for it: "+
 				"a task granted it is refused at dispatch (\"no provider is registered for capability\")", id)

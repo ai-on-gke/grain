@@ -5057,9 +5057,11 @@ func (e *NoTeamGitCredentialError) Is(target error) bool { return target == ErrN
 
 // GitCredentialOverride is the named credential a sandbox's currently
 // live task clones and pushes owner/repo with, resolving hierarchically:
-// 1. Task explicit grant (model.GitCredentialGrant / github-credential:<name>)
-// 2. The repository's own credential (RepoConfig.GitCredential)
-// 3. The deployment's git connections (Config.GitConnections)
+//  1. Task explicit grant (git#git-repo {credential, repo} for owner/repo or
+//     every repository, or the retired github-credential:<name>)
+//  2. The repository's own credential (RepoConfig.GitCredential)
+//  3. The deployment's git connections (Config.GitConnections)
+//
 // and stopping there. false, with a nil error, means the sandbox has no
 // live run at all -- grain's own use of the proxy rather than a team's
 // work -- and the proxy falls back to the deployment's own per-repo
@@ -5105,7 +5107,7 @@ func (s *Store) TaskGitCredentialOn(ctx context.Context, taskID, host, owner, re
 	if err != nil {
 		return "", fmt.Errorf("reading grants of task %s: %w", taskID, err)
 	}
-	if name, ok := gitCredentialOverride(grants); ok {
+	if name, ok := gitCredentialOverride(grants, owner, repo); ok {
 		return name, nil
 	}
 	// The task's team chooses nothing: every task resolves through the

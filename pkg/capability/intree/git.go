@@ -687,6 +687,13 @@ func init() {
 	register(Builder{
 		Name:    "git",
 		Summary: "repositories cloned through a per-attempt git proxy token (mint_git-repo)",
+		// No longer a built-in every deployment registers: its canonical
+		// id is answered by grain in-process (git-repo {credential, repo},
+		// pkg/capability/githubtoken.Method, schema migration 103), which
+		// routes the run's own git proxy traffic through a named
+		// credential. `grain capability git` still serves its per-attempt
+		// clone for an operator who registers it under an id of their own.
+		Internal: true,
 		Build: func(ctx context.Context, args []string, env Env, logger *log.Logger) (*Server, error) {
 			fs := newFlags("git", logOutput(logger))
 			listen := fs.String("listen", "127.0.0.1:"+strconv.Itoa(DefaultGitPort), "loopback address of the git proxy data-plane listener")

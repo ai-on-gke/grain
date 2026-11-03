@@ -485,6 +485,14 @@ func (c *Client) capabilityByID(id string) (Capability, bool) {
 		if _, ok := model.CIGrantRuleFor(id); ok {
 			return Capability{}, false
 		}
+		// git#git-repo {credential} names one of this deployment's
+		// credentials, as github-credential:<name> could only be one of
+		// the picker's rows (schema migration 103).
+		if name, _, ok := model.GitCredentialGrantTarget(id); ok {
+			if _, offered := c.capabilityByID(model.GitCredentialCapability(name)); !offered {
+				return Capability{}, false
+			}
+		}
 		ref := model.CapabilityGrantRef(id)
 		// repo#read and repo#write {repo} are CI-only repository access
 		// grants; only repo#write {refs, force} (git-push-any-ref) is a

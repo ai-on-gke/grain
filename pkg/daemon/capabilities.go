@@ -91,9 +91,11 @@ func CapabilityProviders(cfg Config, store *model.Store, _ map[string]*modelprox
 	if len(missingCapabilityProviderConfig(cfg, "gemini-key")) == 0 {
 		providers = append(providers, geminikey.New(cfg.GcpProject, model.CredentialRef{Name: gcpkey.DefaultMinterCredential}))
 	}
-	providers = append(providers, githubsandbox.NewProvider(githubsandbox.Config{
-		Host: cfg.GithubHost, InsecureHTTP: cfg.GithubInsecureHTTP,
-	}))
+	// github-sandbox is no longer a provider here: it was retired onto
+	// the in-process github server's sandbox-repo (schema migration 103),
+	// whose mint is this provider's own, so the server is handed the
+	// deployment's GitHub host here, as the registry is built.
+	githubsandbox.Configure(githubsandbox.Config{Host: cfg.GithubHost, InsecureHTTP: cfg.GithubInsecureHTTP})
 	providers = append(providers, admincaps.Providers()...)
 	providers = append(providers,
 		bootstrap.New(),
@@ -132,26 +134,32 @@ func CapabilityProviders(cfg Config, store *model.Store, _ map[string]*modelprox
 	// providers here: they were retired onto the in-process model-proxy
 	// server (modelProxyMethod below, schema migration 100), which mints
 	// the same token on the same endpoints with the run's connection.
-	// One per named GitHub token beyond this deployment's default one
-	// (grain/task-117). Registered last, and unconditionally on the names
-	// being there: a token is a capability because an operator's own file
-	// under secrets/github says so, not because anything in this build
-	// enumerates it -- so without these, granting one would be refused as
-	// a capability no provider is registered for (model.ResolveGrants),
-	// and the run would never dispatch.
-	providers = append(providers, githubtoken.Providers(githubTokens, githubtoken.Config{
+	// github-credential:<name> is no longer a provider here either: it
+	// was retired onto the git server's git-repo {credential, repo}
+	// (githubtoken.Method, schema migration 103), which grain answers
+	// in-process and the git proxy reads off the live task. What is left
+	// of the named tokens is their credential check (credentialCheckers).
+	return providers
+}
+
+// credentialCheckers are the standing credentials Settings can test
+// whose capabilities are no longer providers: the GitHub App behind
+// github#sandbox-repo (githubsandbox.Current) and each named GitHub token
+// git#git-repo {credential} routes through, under the ids their rows
+// still have. None of them is registered for dispatch; CheckCapability
+// looks an id up among them when the registry has no provider for it.
+func credentialCheckers(cfg Config, store *model.Store, githubTokens []string, githubCredentials githubCredentialLadder) []model.CapabilityProvider {
+	providers := []model.CapabilityProvider{githubsandbox.NewProvider(githubsandbox.Config{
+		Host: cfg.GithubHost, InsecureHTTP: cfg.GithubInsecureHTTP,
+	})}
+	return append(providers, githubtoken.Providers(githubTokens, githubtoken.Config{
 		Credentials: githubCredentials,
 		// What a check holds the token against beyond "is it alive":
-		// the repos this deployment's teams own, read per check rather
-		// than here, since teams change while the daemon runs and a
-		// registry is built once and kept. (Target repos moved from the
-		// deployment to its teams in a5c329900; this was
-		// cfg.targetRepos until then.)
+		// the repos this deployment's teams own, read per check.
 		Repos:        teamRepos(store),
 		Host:         cfg.GithubHost,
 		InsecureHTTP: cfg.GithubInsecureHTTP,
 	})...)
-	return providers
 }
 
 // teamRepos is githubtoken.Config.Repos over store: the deployment's
