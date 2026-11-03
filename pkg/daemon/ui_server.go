@@ -140,9 +140,10 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	gcpPoolSAs := ui.GCPKeyPoolEmails(cfg.GcpServiceAccountEmail, cfg.GcpServiceAccountCount, cfg.GcpProject)
 	combinedPoolSAs := append([]string(nil), gcpPoolSAs...)
 	if store != nil {
-		if mc, err := store.GetConfig(context.Background()); err == nil && mc != nil {
-			combinedPoolSAs = append(combinedPoolSAs, ui.GCPKeyPoolEmails(mc.GCPServiceAccountEmail, mc.GCPServiceAccountCount, mc.GCPProject)...)
-		}
+		ctx := context.Background()
+		mc, _ := store.GetConfig(ctx)
+		keys, _ := store.ListGCPKeys(ctx)
+		combinedPoolSAs = append(combinedPoolSAs, ui.ConfigGCPKeyServiceAccounts(mc, keys)...)
 	}
 	if err := checkUIAllowedPrincipalsWithPool(cfg, combinedPoolSAs); err != nil {
 		return nil, err

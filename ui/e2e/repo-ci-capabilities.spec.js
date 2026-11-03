@@ -38,13 +38,13 @@ test("walkthrough: RepoPage CI-only capability selection, persistence, and workf
   const registryPushOption = page.getByRole("option", {
     name: /Registry push/i,
   });
-  const gcpKeyOption = page.getByRole("option", {
-    name: /GCP key/i,
+  const geminiKeyOption = page.getByRole("option", {
+    name: /Gemini key/i,
   });
 
   await expect(packagePublishOption).toBeVisible();
   await expect(registryPushOption).toBeVisible();
-  await expect(gcpKeyOption).toBeVisible();
+  await expect(geminiKeyOption).toBeVisible();
 
   // Verify readiness/description details on CI-only capability options
   await expect(packagePublishOption).toContainText("Package publish");

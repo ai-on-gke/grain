@@ -666,6 +666,11 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     97,
+		Description: "seed gcp#gcp-key permission sets from grain_config pool and gcp_key rows, and rewrite stored gcp-key and gcp-key:<name> grants (in-process gcp-key is retired)",
+		Up:          migrateGCPKeyToCapabilityServer,
+	},
+	{
+		Version:     98,
 		Description: "add the hostd selector a repository's tasks start pinned to",
 		Statements: []string{
 			"ALTER TABLE `repo_config` ADD COLUMN `default_hostd` TEXT NOT NULL DEFAULT ''",

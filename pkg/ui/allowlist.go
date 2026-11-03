@@ -29,6 +29,8 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
+	"github.com/ai-on-gke/grain/pkg/capability/gcpsets"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -195,6 +197,130 @@ func ValidateAllowedPrincipals(entries []string, gcpPoolEmails []string) ([]Allo
 	return parsed, nil
 }
 
+// ConfigGCPKeyServiceAccounts returns every service-account email whose key
+// the deployment's stored gcp-key / gcp#gcp-key configuration can materialize
+// into a task sandbox: the legacy grain_config pool, stored gcp_key rows, and
+// https://grain.dev/capabilities/gcp permission sets (both explicit accounts
+// and dynamically created or adopted pool accounts).
+func ConfigGCPKeyServiceAccounts(mc *model.Config, keys []model.GCPKey) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(addr string) {
+		norm := normalizeIdentityEmail(addr)
+		norm = strings.TrimPrefix(norm, "serviceaccount:")
+		norm = strings.TrimSpace(norm)
+		if norm == "" || seen[norm] {
+			return
+		}
+		seen[norm] = true
+		out = append(out, norm)
+	}
+	addPool := func(email string, count int, proj string) {
+		for _, sa := range GCPKeyPoolEmails(email, count, proj) {
+			add(sa)
+		}
+	}
+	for _, k := range keys {
+		addPool(k.ServiceAccountEmail, k.ServiceAccountCount, k.ProjectID)
+	}
+	if mc == nil {
+		return out
+	}
+	addPool(mc.GCPServiceAccountEmail, mc.GCPServiceAccountCount, mc.GCPProject)
+	srv, ok := mc.MCPServers[model.GCPCapabilityServerID]
+	if !ok || srv.Config == nil {
+		return out
+	}
+	if rawSets, ok := srv.Config["permission_sets"].([]any); ok {
+		prefix, _ := srv.Config["account_prefix"].(string)
+		prefix = strings.ToLower(strings.TrimSpace(prefix))
+		if prefix == "" {
+			prefix = gcpsets.DefaultAccountPrefix
+		}
+		deployment, _ := srv.Config[protocol.DeploymentIDConfig].(string)
+		deployment = strings.ToLower(strings.TrimSpace(deployment))
+		if deployment == "" {
+			deployment = strings.ToLower(strings.TrimSpace(mc.DeploymentID))
+		}
+		for _, item := range rawSets {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			setName, _ := m["name"].(string)
+			setName = strings.TrimSpace(setName)
+			proj, _ := m["project"].(string)
+			proj = strings.ToLower(strings.TrimSpace(proj))
+			var explicit []string
+			switch accts := m["accounts"].(type) {
+			case []any:
+				for _, v := range accts {
+					if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+						explicit = append(explicit, s)
+					}
+				}
+			case []string:
+				for _, s := range accts {
+					if strings.TrimSpace(s) != "" {
+						explicit = append(explicit, s)
+					}
+				}
+			}
+			if len(explicit) > 0 {
+				for _, sa := range explicit {
+					add(sa)
+				}
+				continue
+			}
+			if setName == "" || proj == "" {
+				continue
+			}
+			poolMax := gcpsets.DefaultPoolMax
+			switch v := m["pool_max"].(type) {
+			case float64:
+				if int(v) > 0 {
+					poolMax = int(v)
+				}
+			case int:
+				if v > 0 {
+					poolMax = v
+				}
+			}
+			if poolMax > 99 {
+				poolMax = 99
+			}
+			adopt, _ := m["adopt_legacy"].(bool)
+			// Include up to maxNameTries (20) past pool_max so skipped collision numbers are covered too.
+			for n := 1; n <= poolMax+20; n++ {
+				if deployment != "" {
+					add(gcpsets.Email(gcpsets.AccountID(prefix, deployment, proj, setName, n), proj))
+				}
+				if adopt {
+					add(gcpsets.Email(gcpsets.LegacyAccountID(setName, n), proj))
+				}
+			}
+		}
+	} else if rawAccounts, ok := srv.Config["accounts"].([]any); ok {
+		proj, _ := srv.Config["project"].(string)
+		for _, item := range rawAccounts {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			email, _ := m["email"].(string)
+			count := 1
+			switch v := m["count"].(type) {
+			case float64:
+				count = int(v)
+			case int:
+				count = v
+			}
+			addPool(email, count, proj)
+		}
+	}
+	return out
+}
+
 func (c *Client) gcpKeyPoolEmailList(ctx context.Context) []string {
 	if c == nil {
 		return nil
@@ -215,9 +341,9 @@ func (c *Client) gcpKeyPoolEmailList(ctx context.Context) []string {
 	}
 	addAll(c.Config.GCPKeyServiceAccounts)
 	if c.Store != nil {
-		if mc, err := c.Store.GetConfig(ctx); err == nil && mc != nil {
-			addAll(GCPKeyPoolEmails(mc.GCPServiceAccountEmail, mc.GCPServiceAccountCount, mc.GCPProject))
-		}
+		mc, _ := c.Store.GetConfig(ctx)
+		keys, _ := c.Store.ListGCPKeys(ctx)
+		addAll(ConfigGCPKeyServiceAccounts(mc, keys))
 	}
 	return out
 }
