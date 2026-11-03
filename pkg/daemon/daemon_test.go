@@ -145,24 +145,24 @@ func TestCapabilityProviders(t *testing.T) {
 		want []string
 	}{
 		{
-			name: "no gcp project configured still registers the built-in capabilities and the three model proxies",
+			name: "no gcp project configured still registers the built-in capabilities",
 			cfg:  Config{},
-			want: []string{"github-sandbox", "self-debug", "bootstrap-playbooks", "registry-push", "console", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read", "claude-proxy", "openai-proxy", "gemini-proxy"},
+			want: []string{"github-sandbox", "self-debug", "bootstrap-playbooks", "registry-push", "console", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read"},
 		},
 		{
 			name: "an agent service account without a gcp project does not add either gcp capability",
 			cfg:  Config{GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"},
-			want: []string{"github-sandbox", "self-debug", "bootstrap-playbooks", "registry-push", "console", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read", "claude-proxy", "openai-proxy", "gemini-proxy"},
+			want: []string{"github-sandbox", "self-debug", "bootstrap-playbooks", "registry-push", "console", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read"},
 		},
 		{
 			name: "a gcp project with no agent service account only adds gemini-key to the built-in capabilities",
 			cfg:  Config{GcpProject: "proj"},
-			want: []string{"gemini-key", "github-sandbox", "self-debug", "bootstrap-playbooks", "registry-push", "console", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read", "claude-proxy", "openai-proxy", "gemini-proxy"},
+			want: []string{"gemini-key", "github-sandbox", "self-debug", "bootstrap-playbooks", "registry-push", "console", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read"},
 		},
 		{
-			name: "a gcp project with an agent service account adds both gcp capabilities to the built-in capabilities",
+			name: "a gcp project with an agent service account adds gemini-key to the built-in capabilities (gcp-key is served by the gcp capability server)",
 			cfg:  Config{GcpProject: "proj", GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"},
-			want: []string{"gcp-key", "gemini-key", "github-sandbox", "self-debug", "bootstrap-playbooks", "registry-push", "console", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read", "claude-proxy", "openai-proxy", "gemini-proxy"},
+			want: []string{"gemini-key", "github-sandbox", "self-debug", "bootstrap-playbooks", "registry-push", "console", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read"},
 		},
 	}
 	for _, tc := range cases {
@@ -188,10 +188,11 @@ func TestCapabilityProviders(t *testing.T) {
 // no caller outside a test, so a key minted for a run whose controller
 // died before the lease was written was never deleted by anything.
 //
-// The three named here each mint a bearer resource GCP or GitHub will
-// never expire on its own; a future MINT provider whose resource does
-// expire by itself needs no Reap, which is why this lists names rather
-// than asserting over every model.ProvisionMint spec.
+// The two in-process providers named here each mint a bearer resource GCP
+// or GitHub will never expire on its own (gcp#gcp-key reaps inside the gcp
+// capability server); a future MINT provider whose resource does expire by
+// itself needs no Reap, which is why this lists names rather than asserting
+// over every model.ProvisionMint spec.
 func TestEveryLeakableCapabilityIsReaped(t *testing.T) {
 	t.Parallel()
 	cfg := Config{GcpProject: "proj", GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"}
@@ -201,7 +202,7 @@ func TestEveryLeakableCapabilityIsReaped(t *testing.T) {
 			reaped[p.Spec().Name] = true
 		}
 	}
-	for _, name := range []string{"gcp-key", "gemini-key", "github-sandbox"} {
+	for _, name := range []string{"gemini-key", "github-sandbox"} {
 		if !reaped[name] {
 			t.Errorf("capability %q is registered but does not implement model.Reaper: "+
 				"reapCapabilities skips it entirely, so a resource it minted for a run whose record was "+
@@ -556,7 +557,7 @@ func TestLoadConfigLogsEveryOverriddenFlag(t *testing.T) {
 		GcpProject: stored.GCPProject, GcpServiceAccountEmail: stored.GCPServiceAccountEmail,
 	}
 
-	var logs strings.Builder
+	var logs lockedBuffer
 	prevLog := log.Writer()
 	log.SetOutput(&logs)
 	defer log.SetOutput(prevLog)

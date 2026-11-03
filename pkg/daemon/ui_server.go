@@ -140,9 +140,10 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	gcpPoolSAs := ui.GCPKeyPoolEmails(cfg.GcpServiceAccountEmail, cfg.GcpServiceAccountCount, cfg.GcpProject)
 	combinedPoolSAs := append([]string(nil), gcpPoolSAs...)
 	if store != nil {
-		if mc, err := store.GetConfig(context.Background()); err == nil && mc != nil {
-			combinedPoolSAs = append(combinedPoolSAs, ui.GCPKeyPoolEmails(mc.GCPServiceAccountEmail, mc.GCPServiceAccountCount, mc.GCPProject)...)
-		}
+		ctx := context.Background()
+		mc, _ := store.GetConfig(ctx)
+		keys, _ := store.ListGCPKeys(ctx)
+		combinedPoolSAs = append(combinedPoolSAs, ui.ConfigGCPKeyServiceAccounts(mc, keys)...)
 	}
 	if err := checkUIAllowedPrincipalsWithPool(cfg, combinedPoolSAs); err != nil {
 		return nil, err
@@ -334,7 +335,8 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// looks when a sandbox is behaving like an older commit's, and
 		// the startup warning about the two disagreeing has scrolled out
 		// of the journal by then (uiSandboxImage, grain/task-306).
-		SandboxImage: uiSandboxImage(cfg),
+		SandboxImage:     uiSandboxImage(cfg),
+		SandboxImageFunc: func() *ui.SandboxImage { return uiSandboxImage(live.Current()) },
 		// Whether the three sandbox-shape settings on that same pane
 		// actually shape anything here, which is a property of the
 		// backend built above rather than of the row they are stored in
@@ -565,6 +567,13 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		K8sGranuleImage: func(mc model.Config) string {
 			return k8sGranuleImageForSettings(live.Current(), mc)
 		},
+		// Which repository that image is mirrored into, and whether
+		// k8s_granule_image is read as it rather than as an image
+		// (sandboxImageMirrorForSettings), so the pane can say so and a
+		// save clearing such a pin keeps the mirror.
+		SandboxImageMirrorFor: func(mc model.Config) ui.SandboxImageMirrorInfo {
+			return sandboxImageMirrorForSettings(live.Current(), mc)
+		},
 		// The Settings pane's sandbox image check reads labels the way
 		// the daemon's own startup check does: local docker first, then
 		// the registry (FetchImageLabels), Google-authenticated for an
@@ -632,6 +641,9 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	}
 
 	uiClient := ui.NewClient(uiCfg, store)
+	if err := uiClient.MigrateAllowedPrincipals(context.Background()); err != nil {
+		log.Printf("grain daemon: WARNING: migrating allowed principals: %v", err)
+	}
 	// The sandbox proxy's acting /cli/ routes act through this same
 	// client (sandbox_cli.go).
 	liveSandboxCLI.Store(uiClient)

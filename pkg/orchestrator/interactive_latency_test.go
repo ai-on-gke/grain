@@ -99,6 +99,7 @@ func TestInteractiveInitialStartupLatencyAndBreakdown(t *testing.T) {
 		cfg.ConsoleSessions = []model.ConsoleSession{{
 			ID: model.DirectorSessionID, Title: "Director",
 			Capabilities: []string{selfdebug.CapabilityName}, NetworkAccess: model.NetworkOpen,
+			DeclinedDefaults: model.ConsoleSessionDefaultGrants(),
 		}}
 	})
 	runSessions(t, store, baseTime)
@@ -304,6 +305,7 @@ func TestInteractiveSubsequentTurnLatencyAndWarmReuse(t *testing.T) {
 			cfg.ConsoleSessions = []model.ConsoleSession{{
 				ID: model.DirectorSessionID, Title: "Director",
 				Capabilities: []string{selfdebug.CapabilityName}, NetworkAccess: model.NetworkOpen,
+				DeclinedDefaults: model.ConsoleSessionDefaultGrants(),
 			}}
 		})
 		runSessions(t, store, baseTime)
@@ -395,6 +397,7 @@ func TestInteractiveSubsequentTurnLatencyAndWarmReuse(t *testing.T) {
 			cfg.ConsoleSessions = []model.ConsoleSession{{
 				ID: model.DirectorSessionID, Title: "Director",
 				Capabilities: []string{}, NetworkAccess: model.NetworkOpen,
+				DeclinedDefaults: model.ConsoleSessionDefaultGrants(),
 			}}
 		})
 		runSessions(t, store, baseTime)

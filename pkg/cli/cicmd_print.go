@@ -421,6 +421,9 @@ func (p *printer) ciRun(run ci.Run, mode cicli.OutputMode) {
 			// built, a transport that stopped answering, a job timeout.
 			fmt.Printf("  error: %s\n", job.Error)
 		}
+		if job.Warning != "" {
+			fmt.Printf("  warning: %s\n", job.Warning)
+		}
 		for _, a := range job.Artifacts {
 			// Above the steps, not below them: the whole reason this
 			// exists is that the steps' output was not enough, and a

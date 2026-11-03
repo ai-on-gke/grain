@@ -172,6 +172,10 @@ func (c *sandboxCLI) ciWait(p sandboxArgs, single string) error {
 func (c *sandboxCLI) reportWait(ans sandboxWaitAnswer) error {
 	if ans.Report != "" {
 		fmt.Fprintln(c.out, strings.TrimRight(ans.Report, "\n"))
+		if ans.Status == "running" && ans.ResumeRunID != "" {
+			fmt.Fprintf(c.out, "To keep waiting in this run:  grain ci wait --resume %s\n", ans.ResumeRunID)
+			fmt.Fprintf(c.out, "To suspend and free the VM:   call resume_later with when: {\"ci\": \"%s\"}\n", ans.ResumeRunID)
+		}
 		if ans.Status == "failed" {
 			return errSandboxReported
 		}

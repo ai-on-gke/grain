@@ -371,6 +371,7 @@ var settingsDiffRows = []settingsDiffRow{
 		func(s ui.Settings) any { return s.UpgradeCheckPausesPipeline }},
 	{"autoUpgradeChannel", "automatic upgrade channel", func(s ui.Settings) any { return s.AutoUpgradeChannel }},
 	{"autoUpgradeTime", "automatic upgrade time", func(s ui.Settings) any { return s.AutoUpgradeTime }},
+	{"autoUpgradeOn", "automatic upgrade mode", func(s ui.Settings) any { return s.AutoUpgradeOn }},
 	{"timeZone", "time zone", func(s ui.Settings) any { return s.TimeZone }},
 	{"settingsLocked", "settings locked", func(s ui.Settings) any { return s.SettingsLocked }},
 }

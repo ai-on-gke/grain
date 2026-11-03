@@ -664,6 +664,33 @@ var Migrations = []Migration{
 				map[string][]string{GrainCICapability: {GrainCIGrant}})
 		},
 	},
+	{
+		Version:     97,
+		Description: "seed gcp#gcp-key permission sets from grain_config pool and gcp_key rows, and rewrite stored gcp-key and gcp-key:<name> grants (in-process gcp-key is retired)",
+		Up:          migrateGCPKeyToCapabilityServer,
+	},
+	{
+		Version:     98,
+		Description: "add allowed_principal and allowed_principal_migration for verified-identity sign-in access",
+		Statements: []string{
+			allowedPrincipalTable,
+			allowedPrincipalMigrationTable,
+		},
+	},
+	{
+		// The table itself is created by Statements, which Migrate
+		// applies after every rung; only the column needs saying here.
+		Version:     99,
+		Description: "add grain_config.auto_upgrade_on, which turns on upgrading when a release is published",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `auto_upgrade_on` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     100,
+		Description: "rewrite stored claude-proxy, openai-proxy and gemini-proxy grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/model-proxy#model-proxy={\"vendor\":\"<vendor>\"} (the in-process providers are retired)",
+		Up:          migrateModelProxyGrants,
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as

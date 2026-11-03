@@ -19,6 +19,7 @@ import (
 	"maps"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -93,6 +94,8 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "caches:write", Description: "Flush the CI, package and actions caches"},
 	{Scope: "settings:read", Description: "Read deployment settings and configuration"},
 	{Scope: "settings:write", Description: "Change deployment settings, the database and the state repository", Dangerous: true},
+	{Scope: "access:read", Description: "Read the allowed users and groups list"},
+	{Scope: "access:write", Description: "Add and remove allowed users and groups", Dangerous: true},
 	{Scope: "connections:read", Description: "Read git connections and model backends"},
 	{Scope: "connections:write", Description: "Change git connections and model backends", Dangerous: true},
 	{Scope: "capabilities:read", Description: "Read capability servers and policy, and check grants"},
@@ -201,6 +204,20 @@ const (
 	GrainHostExecRef    = GrainCapabilityServerID + "#" + GrainHostExecMethod
 	GrainHostExecGrant  = GrainHostExecRef + "={}"
 
+	// GCPCapabilityServerID is the canonical capability_id of the in-tree gcp
+	// server (design/design/unified-grants.design.md §1, §4).
+	GCPCapabilityServerID      = "https://grain.dev/capabilities/gcp"
+	GCPKeyMethod               = "gcp-key"
+	GCPKeyRef                  = GCPCapabilityServerID + "#" + GCPKeyMethod
+	GCPKeyDefaultPermissionSet = "sandbox-agent"
+	GCPKeySandboxAgentGrant    = GCPKeyRef + `={"permission_set":"` + GCPKeyDefaultPermissionSet + `","primary":true}`
+
+	// GCPGeminiKeyMethod mints a per-attempt Gemini API key on the gcp
+	// server, placed as the in-process gemini-key places one.
+	GCPGeminiKeyMethod = "gemini-key"
+	GCPGeminiKeyRef    = GCPCapabilityServerID + "#" + GCPGeminiKeyMethod
+	GCPGeminiKeyGrant  = GCPGeminiKeyRef + "={}"
+
 	// GrainCIMethod runs a repository's own .grain/workflows in grain's
 	// sandboxes for the branches a task pushes, and holds the merge
 	// queue until they pass (formerly grain-ci). grain grants it from a
@@ -215,7 +232,119 @@ const (
 	// repository's own .grain declaration, an older grain/config);
 	// schema migration 96 rewrote the stored rows.
 	GrainCICapability = "grain-ci"
+
+	// ModelProxyCapabilityServerID is the canonical capability_id of the
+	// in-process model-proxy server: a per-run token on grain's own proxy
+	// to one model vendor, forwarding with the run's team connection
+	// (formerly claude-proxy, openai-proxy and gemini-proxy).
+	ModelProxyCapabilityServerID = "https://grain.dev/capabilities/model-proxy"
+	ModelProxyMethod             = "model-proxy"
+	ModelProxyRef                = ModelProxyCapabilityServerID + "#" + ModelProxyMethod
 )
+
+// ModelProxyVendors are the vendors the model-proxy server proxies, in
+// pkg/modelproxy's Vendors order (which pkg/capability/modelproxy's tests
+// hold this to). Each one's retired bare grant is "<vendor>-proxy".
+var ModelProxyVendors = []string{"claude", "openai", "gemini"}
+
+// ModelProxyGrant is the recorded model-proxy grant for vendor.
+func ModelProxyGrant(vendor string) string {
+	return ModelProxyRef + `={"vendor":` + strconv.Quote(vendor) + `}`
+}
+
+// LegacyModelProxyCapability is the retired bare capability name of
+// vendor's model-proxy grant, such as claude-proxy.
+func LegacyModelProxyCapability(vendor string) string { return vendor + "-proxy" }
+
+// ModelProxyGrantVendor is the vendor a model-proxy grant names --
+// recorded or the retired bare <vendor>-proxy -- and false for any other
+// grant.
+func ModelProxyGrantVendor(grant string) (string, bool) {
+	grant = strings.TrimSpace(grant)
+	for _, v := range ModelProxyVendors {
+		if grant == LegacyModelProxyCapability(v) {
+			return v, true
+		}
+	}
+	spec, err := CapabilityGrantSpec(grant)
+	if err != nil || spec.Capability != ModelProxyRef {
+		return "", false
+	}
+	v, _ := spec.With["vendor"].(string)
+	return v, v != ""
+}
+
+// GCPKeyServerGrant returns the recorded gcp#gcp-key grant for the named
+// permission set (with primary: true, matching protocol.Normalize).
+func GCPKeyServerGrant(permissionSet string) string {
+	set := strings.TrimSpace(permissionSet)
+	if set == "" || set == "default" {
+		set = GCPKeyDefaultPermissionSet
+	}
+	s, err := EncodeCapabilityGrant(protocol.GrantSpec{
+		Capability: GCPKeyRef,
+		With:       map[string]any{"permission_set": set, "primary": true},
+	})
+	if err != nil {
+		panic(fmt.Sprintf("model: encoding gcp-key grant for %q: %v", set, err))
+	}
+	return s
+}
+
+func validLegacyGCPKeyParam(name string) bool {
+	return name != "" && !strings.ContainsAny(name, " \t\n\r/\\:*?[")
+}
+
+// ParseGCPKeyServerGrant reports whether grant names gcp#gcp-key (or a
+// retired gcp-key / gcp-key:<name> alias) and returns its permission set.
+func ParseGCPKeyServerGrant(grant string) (permissionSet string, ok bool) {
+	s := strings.TrimSpace(grant)
+	if keyName, isKey := GCPKeyName(s); isKey {
+		if keyName == "" || keyName == "default" {
+			return GCPKeyDefaultPermissionSet, true
+		}
+		if validLegacyGCPKeyParam(keyName) {
+			return keyName, true
+		}
+		return "", false
+	}
+	if !IsCapabilityRef(s) {
+		return "", false
+	}
+	spec, err := CapabilityGrantSpec(s)
+	if err != nil || spec.Capability != GCPKeyRef {
+		return "", false
+	}
+	set, _ := spec.With["permission_set"].(string)
+	if old, hasOld := spec.With["account"].(string); hasOld && old != "" {
+		set = old
+	}
+	if set == "" || set == "default" {
+		set = GCPKeyDefaultPermissionSet
+	}
+	return set, true
+}
+
+// GCPKeySetUnnamed reports whether grant is a gcp#gcp-key capability-server
+// grant that leaves its permission set to the server's first configured set:
+// no permission_set, or "default" in permission_set or the deprecated account
+// field. (Bare "gcp-key" is false: CanonicalLegacyGrant rewrites it to
+// GCPKeySandboxAgentGrant.)
+func GCPKeySetUnnamed(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if !IsCapabilityRef(s) {
+		return false
+	}
+	spec, err := CapabilityGrantSpec(s)
+	if err != nil || spec.Capability != GCPKeyRef {
+		return false
+	}
+	set, _ := spec.With["permission_set"].(string)
+	if old, _ := spec.With["account"].(string); old != "" {
+		set = old
+	}
+	return set == "" || set == "default"
+}
 
 func init() {
 	protocol.SetGrantPolicy(GrainCapabilityServerID, GrainSQLMethod, func(args map[string]any) protocol.GrantKind {
@@ -352,7 +481,13 @@ var legacyGrantReplacements = map[string]string{
 	"test-quarantine":  APIGrantPrefix + "test-quarantine",
 	"self-repair":      GrainHostExecGrant,
 	"git-push-any-ref": GitPushAnyRefGrant,
+	"gcp-key":          GCPKeySandboxAgentGrant,
 	GrainCICapability:  GrainCIGrant,
+	// Retired by schema migration 100 onto the in-process model-proxy
+	// server, which forwards with the same team connection.
+	"claude-proxy": ModelProxyGrant("claude"),
+	"openai-proxy": ModelProxyGrant("openai"),
+	"gemini-proxy": ModelProxyGrant("gemini"),
 }
 
 // legacyGrantMultiReplacements maps retired bare capabilities that split into
@@ -398,6 +533,14 @@ func RegisterLegacyGrantAlias(from, to string) (unregister func()) {
 func legacyGrantReplacement(name string) (string, bool) {
 	if to, ok := legacyGrantReplacements[name]; ok {
 		return to, true
+	}
+	if keyName, ok := GCPKeyName(name); ok {
+		if keyName == "" || keyName == "default" {
+			return GCPKeySandboxAgentGrant, true
+		}
+		if validLegacyGCPKeyParam(keyName) {
+			return GCPKeyServerGrant(keyName), true
+		}
 	}
 	registeredLegacyAliasesMu.RLock()
 	defer registeredLegacyAliasesMu.RUnlock()

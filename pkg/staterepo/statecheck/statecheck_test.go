@@ -285,3 +285,49 @@ func TestCountsTheTasksADeclarationWouldStrand(t *testing.T) {
 		}
 	}
 }
+
+// TestWarnsAboutAMirrorOnlyK8sGranuleImageKeeps is the 2026-10-30 trap
+// seen from a settings pull request: a kubernetes-granule row whose only
+// mirror is the one derived from a cross-project "sha-" guest pin in
+// k8s_granule_image. The pin is not booted, and clearing it would stop
+// the mirror, so a reviewer is told to move it into sandbox_image_mirror.
+func TestWarnsAboutAMirrorOnlyK8sGranuleImageKeeps(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, cleanup, err := ScratchStore()
+	if err != nil {
+		t.Fatalf("opening a store: %v", err)
+	}
+	defer cleanup()
+	store := model.New(db)
+
+	const pin = "us-docker.pkg.dev/example-mirror/grain/guest:sha-1234567@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	row := model.Config{
+		PollInterval:    30 * time.Second,
+		MaxWorkers:      1,
+		SandboxBackend:  model.SandboxBackendKubernetesGranule,
+		K8sGranuleImage: pin,
+	}
+	if err := store.PutConfig(ctx, row); err != nil {
+		t.Fatalf("putting a settings row: %v", err)
+	}
+	warnings, err := ImplicitSandboxImageMirror(ctx, db)
+	if err != nil {
+		t.Fatalf("checking: %v", err)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "k8s_granule_image") ||
+		!strings.Contains(warnings[0], "us-docker.pkg.dev/example-mirror/grain/guest") ||
+		!strings.Contains(warnings[0], "sandbox_image_mirror") {
+		t.Fatalf("warnings = %v, want one naming k8s_granule_image, the derived repository and sandbox_image_mirror", warnings)
+	}
+
+	// Once the mirror is explicit the pin carries nothing, and there is
+	// nothing to say.
+	row.SandboxImageMirror = "us-docker.pkg.dev/example-mirror/grain/guest"
+	if err := store.PutConfig(ctx, row); err != nil {
+		t.Fatalf("putting a settings row: %v", err)
+	}
+	if warnings, err = ImplicitSandboxImageMirror(ctx, db); err != nil || len(warnings) != 0 {
+		t.Fatalf("warnings = %v, %v; want none with sandbox_image_mirror set", warnings, err)
+	}
+}

@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 	"github.com/golang-jwt/jwt/v5"
@@ -391,9 +392,9 @@ func TestIAPPrincipalsNormalizationClockSkewAndServiceAccounts(t *testing.T) {
 	ui.SetIAPAudience(tunnelAudience)
 
 	srv, client := testServer(t)
-	client.Config.AllowedPrincipals = []string{
-		"user:alice.smith@example.com",
-		"serviceAccount:hostd-runner@my-proj.iam.gserviceaccount.com",
+	client.Config.ProvisionedServiceAccounts = []string{"hostd-runner@my-proj.iam.gserviceaccount.com"}
+	if _, err := client.AllowPrincipal(context.Background(), ui.AllowPrincipalRequest{Entry: "user:alice.smith@example.com"}); err != nil {
+		t.Fatal(err)
 	}
 	ui.SetAccessCodeForTest(srv, testAccessCode)
 
@@ -501,7 +502,7 @@ func TestAllowedPrincipalsDefaultsAndCloudIdentityGroups(t *testing.T) {
 		return signIAPToken(t, priv, tunnelKid, tunnelAudience, email, "sub", ui.GoogleIAPIssuer, time.Now().Add(10*time.Minute))
 	}
 
-	t.Run("default allowlist admits owner and provisioned service accounts only", func(t *testing.T) {
+	t.Run("database allowlist admits seeded users and provisioned service accounts only", func(t *testing.T) {
 		srv, client := testServer(t)
 		client.Config.Actor = ui.DefaultActor("owner@example.com")
 		client.Config.ProvisionedServiceAccounts = []string{"extra-sa@my-proj.iam.gserviceaccount.com"}
@@ -518,12 +519,25 @@ func TestAllowedPrincipalsDefaultsAndCloudIdentityGroups(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Record any Cloud Identity call: default allowlist has no group: entries, so 0 calls may occur.
+		// Record any Cloud Identity call: with no group: entries, 0 calls may occur.
 		var groupCalls atomic.Int32
 		client.Config.GroupChecker = groupCheckerFunc(func(ctx context.Context, g, m string) (bool, error) {
 			groupCalls.Add(1)
 			return true, nil
 		})
+
+		// Before seeding, even Config.Actor ("owner@example.com") is refused by verified identity.
+		recUnseeded := serveFrom(srv, "203.0.113.9:443", http.MethodGet, "/api/tasks", "", map[string]string{
+			ui.IAPAssertionHeader: mint("owner@example.com"),
+		})
+		if recUnseeded.Code != http.StatusForbidden || !strings.Contains(recUnseeded.Body.String(), "Settings") {
+			t.Fatalf("unseeded owner got %d %s, want 403 naming Settings -> Access", recUnseeded.Code, recUnseeded.Body)
+		}
+
+		// Seed owner@example.com into the DB allowlist; takes effect without restart.
+		if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: "user:owner@example.com"}); err != nil {
+			t.Fatal(err)
+		}
 
 		for _, admitted := range []string{
 			"owner@example.com",
@@ -534,7 +548,7 @@ func TestAllowedPrincipalsDefaultsAndCloudIdentityGroups(t *testing.T) {
 				ui.IAPAssertionHeader: mint(admitted),
 			})
 			if rec.Code != http.StatusOK {
-				t.Errorf("default allowlist refused %q: got %d: %s", admitted, rec.Code, rec.Body)
+				t.Errorf("database allowlist refused %q: got %d: %s", admitted, rec.Code, rec.Body)
 			}
 		}
 
@@ -604,23 +618,26 @@ func TestAllowedPrincipalsDefaultsAndCloudIdentityGroups(t *testing.T) {
 		}
 		client.Config.GroupChecker = checker
 
-		// 1. Direct entries (user:, serviceAccount:, domain:) succeed even while Cloud Identity is failing (500),
+		// 1. Direct user: entries succeed even while Cloud Identity is failing (500),
 		// and make ZERO Cloud Identity HTTP calls!
 		failAPI.Store(true)
-		for _, direct := range []string{
-			"direct@outside.org",
-			"bot@proj.iam.gserviceaccount.com",
-			"engineer@corp.example.com",
-		} {
-			rec := serveFrom(srv, "203.0.113.11:443", http.MethodGet, "/api/tasks", "", map[string]string{
-				ui.IAPAssertionHeader: mint(direct),
-			})
-			if rec.Code != http.StatusOK {
-				t.Fatalf("direct match %q failed during Cloud Identity outage: %d %s", direct, rec.Code, rec.Body)
-			}
+		recDirect := serveFrom(srv, "203.0.113.11:443", http.MethodGet, "/api/tasks", "", map[string]string{
+			ui.IAPAssertionHeader: mint("direct@outside.org"),
+		})
+		if recDirect.Code != http.StatusOK {
+			t.Fatalf("direct match failed during Cloud Identity outage: %d %s", recDirect.Code, recDirect.Body)
 		}
 		if lookupCalls.Load() != 0 || membershipCalls.Load() != 0 {
 			t.Fatalf("Cloud Identity called (%d, %d) for direct matches, want (0, 0)", lookupCalls.Load(), membershipCalls.Load())
+		}
+
+		// Unsupported serviceAccount: and domain: flag entries were dropped during one-time migration.
+		listResp, err := client.ListAllowedPrincipals(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(listResp.DroppedFlagEntries) != 2 {
+			t.Fatalf("DroppedFlagEntries = %v, want 2 dropped entries", listResp.DroppedFlagEntries)
 		}
 
 		// 2. While Cloud Identity is failing (500), a caller depending on group: is refused with 403 naming email.
@@ -882,6 +899,9 @@ func TestGCPKeyPoolAccountsAreNotAdmittedByDefault(t *testing.T) {
 				client.Config.Actor = ui.DefaultActor("owner@example.com")
 				storeSettingsRow(t, client)
 				ctx := context.Background()
+				if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: "user:owner@example.com"}); err != nil {
+					t.Fatal(err)
+				}
 				mc, err := client.Store.GetConfig(ctx)
 				if err != nil {
 					t.Fatal(err)
@@ -946,7 +966,7 @@ func TestGCPKeyPoolAccountsAreNotAdmittedByDefault(t *testing.T) {
 		}
 	})
 
-	t.Run("explicit serviceAccount entry naming gcp-key pool is rejected and explicit non-pool SA can mint", func(t *testing.T) {
+	t.Run("explicit serviceAccount entry naming gcp-key pool is rejected and dropped SA cannot mint", func(t *testing.T) {
 		pool := ui.GCPKeyPoolEmails("grain-agent@my-proj.iam.gserviceaccount.com", 2, "my-proj")
 		for _, bad := range []string{
 			"serviceAccount:grain-agent@my-proj.iam.gserviceaccount.com",
@@ -962,6 +982,7 @@ func TestGCPKeyPoolAccountsAreNotAdmittedByDefault(t *testing.T) {
 		srv, client := testServer(t)
 		client.Config.AllowedPrincipals = []string{
 			"user:owner@example.com",
+			"user:co-owner@example.com",
 			"serviceAccount:deployer@my-proj.iam.gserviceaccount.com",
 		}
 		storeSettingsRow(t, client)
@@ -978,13 +999,22 @@ func TestGCPKeyPoolAccountsAreNotAdmittedByDefault(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Explicitly listed non-pool service account can issue a dangerous external-agent token.
+		// Dropped serviceAccount: flag entry is refused with 403.
 		recDeployer := serveFrom(srv, "203.0.113.51:443", http.MethodPost, "/api/external-agents/tokens", dangerousTokenBody, map[string]string{
 			ui.IAPAssertionHeader: mint("deployer@my-proj.iam.gserviceaccount.com"),
 			"Content-Type":        "application/json",
 		})
-		if recDeployer.Code != http.StatusCreated {
-			t.Fatalf("explicitly allowed SA POST /api/external-agents/tokens: got %d, want 201: %s", recDeployer.Code, recDeployer.Body)
+		if recDeployer.Code != http.StatusForbidden {
+			t.Fatalf("dropped SA POST /api/external-agents/tokens: got %d, want 403: %s", recDeployer.Code, recDeployer.Body)
+		}
+
+		// Listed human user can issue a dangerous external-agent token.
+		recCoOwner := serveFrom(srv, "203.0.113.51:443", http.MethodPost, "/api/external-agents/tokens", dangerousTokenBody, map[string]string{
+			ui.IAPAssertionHeader: mint("co-owner@example.com"),
+			"Content-Type":        "application/json",
+		})
+		if recCoOwner.Code != http.StatusCreated {
+			t.Fatalf("allowed human POST /api/external-agents/tokens: got %d, want 201: %s", recCoOwner.Code, recCoOwner.Body)
 		}
 	})
 }
@@ -1021,6 +1051,9 @@ func TestRefusedPrincipalsAreLoggedOnce(t *testing.T) {
 	if err := client.Store.PutConfig(ctx, *mc); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: "user:owner@example.com"}); err != nil {
+		t.Fatal(err)
+	}
 
 	const pool = "logged-agent-1@made-up-proj.iam.gserviceaccount.com"
 	const stranger = "logged-stranger@example.com"
@@ -1044,11 +1077,84 @@ func TestRefusedPrincipalsAreLoggedOnce(t *testing.T) {
 	if !strings.Contains(out, "a sandbox's key was presented through the identity proxy") {
 		t.Errorf("pool refusal does not say a sandbox's key reached the proxy:\n%s", out)
 	}
-	strangerLine := `refused verified principal "` + stranger + `" (human): principal "` + stranger + `" is not allowed`
+	strangerLine := `refused verified principal "` + stranger + `" (human): principal "` + stranger + `" is not on the allowed users and groups list`
 	if n := strings.Count(out, strangerLine); n != 1 {
 		t.Errorf("stranger refusal logged %d times, want once:\n%s", n, out)
 	}
 	if strings.Contains(out, `refused verified principal "owner@example.com"`) {
 		t.Errorf("the admitted owner was logged as refused:\n%s", out)
+	}
+}
+
+func TestAllowedPrincipalsRefusesGCPPermissionSetServiceAccounts(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+	t.Setenv("GRAIN_ALLOWED_PRINCIPALS", "")
+
+	priv, pemStr := generateECDSATestKey(t)
+	assertionKeys(t, priv, pemStr, false)
+	ui.SetIAPAudience(tunnelAudience)
+	mint := func(email string) string {
+		return signIAPToken(t, priv, tunnelKid, tunnelAudience, email, "sub", ui.GoogleIAPIssuer, time.Now().Add(10*time.Minute))
+	}
+
+	srv, client := testServer(t)
+	storeSettingsRow(t, client)
+	ctx := context.Background()
+	mc, err := client.Store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Legacy GCPServiceAccountEmail is retired/empty; accounts live in gcp#gcp-key permission_sets and gcp_key rows.
+	mc.DeploymentID = "049f1e09"
+	mc.GCPProject = ""
+	mc.GCPServiceAccountEmail = ""
+	mc.MCPServers = map[string]protocol.ServerConfig{
+		model.GCPCapabilityServerID: {
+			Command: "grain",
+			Args:    []string{"capability", "gcp"},
+			Builtin: "gcp",
+			Config: map[string]any{
+				"permission_sets": []any{
+					map[string]any{
+						"name":     "sandbox-agent",
+						"project":  "acme-pool",
+						"accounts": []any{"retired-pool-0@acme-pool.iam.gserviceaccount.com"},
+					},
+					map[string]any{
+						"name":         "ci-dynamic",
+						"project":      "acme-dyn",
+						"adopt_legacy": true,
+					},
+				},
+			},
+		},
+	}
+	if err := client.Store.PutConfig(ctx, *mc); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Store.PutGCPKey(ctx, model.GCPKey{
+		Name:                "deploy",
+		ProjectID:           "acme-deploy",
+		ServiceAccountEmail: "deploy-sa@acme-deploy.iam.gserviceaccount.com",
+		ServiceAccountCount: 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, sandboxSA := range []string{
+		"retired-pool-0@acme-pool.iam.gserviceaccount.com",
+		"grain-049f1e09-ci-dynamic-1@acme-dyn.iam.gserviceaccount.com",
+		"grain-ci-dynamic-1@acme-dyn.iam.gserviceaccount.com",
+		"deploy-sa-0@acme-deploy.iam.gserviceaccount.com",
+	} {
+		// Even if an operator attempts to list the sandbox SA in AllowedPrincipals, it is refused.
+		client.Config.AllowedPrincipals = []string{"user:owner@example.com", "serviceAccount:" + sandboxSA}
+		rec := serveFrom(srv, "203.0.113.50:443", http.MethodGet, "/api/tasks", "", map[string]string{
+			ui.IAPAssertionHeader: mint(sandboxSA),
+		})
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("sandbox SA %s admitted with %d, want 403: %s", sandboxSA, rec.Code, rec.Body)
+		}
 	}
 }

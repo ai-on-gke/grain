@@ -71,8 +71,17 @@ const DefaultPoolMax = 3
 const DefaultMaxLease = 24 * time.Hour
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}$`)
+var migratedNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$`)
 var rolePattern = regexp.MustCompile(`^(roles/[A-Za-z0-9_.]+|projects/[a-z0-9-]+/roles/[A-Za-z0-9_.]+|organizations/[0-9]+/roles/[A-Za-z0-9_.]+)$`)
 var projectPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
+var migratedProjectPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.:-]{0,62}$`)
+var serviceAccountEmailPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}@[a-z0-9]([a-z0-9.-]{0,98}[a-z0-9])?\.gserviceaccount\.com$`)
+var credentialEnvPattern = regexp.MustCompile(`^(GCP_MINTER_KEY|GRAIN_GCP_MINTER_[A-Z0-9_]+)$`)
+
+// keyPathPattern is where a migrated gcp-key:<name> set may place its
+// key: the path the in-process provider used, and nowhere else in the
+// sandbox's home (a set's key must not overwrite another dotfile).
+var keyPathPattern = regexp.MustCompile(`^/home/debian/\.gcp-service-account-[a-zA-Z0-9_-]+\.json$`)
 
 // Admin is one admin account: the identity that creates a set's service
 // accounts, binds their roles and mints their keys.
@@ -82,7 +91,10 @@ type Admin struct {
 	// Credential is the configured credential's JSON; empty for ambient.
 	// It is a secret: never log it or put it in an error.
 	Credential string
-	Projects   []string
+	// CredentialEnv names a server environment variable holding the
+	// configured credential's JSON when Credential is empty.
+	CredentialEnv string
+	Projects      []string
 	// RoleCeiling is every role this admin may grant; a permission set
 	// naming this admin cannot ask for more.
 	RoleCeiling []string
@@ -103,6 +115,10 @@ type PermissionSet struct {
 	// keys for instead of creating its own: the migrated fixed pool. The
 	// server never changes them or their bindings, only their keys.
 	Accounts []string
+	// KeyPath overrides the primary sandbox key placement path for a
+	// migrated gcp-key:<name> set (for example
+	// /home/debian/.gcp-service-account-<name>.json).
+	KeyPath string
 	// AdoptLegacy makes the set's own also the accounts created for it
 	// before account names and markers carried the deployment
 	// (grain-<set>-<n>, [grain-gcp-key set=<set>]). Off unless the set
@@ -137,6 +153,28 @@ type Config struct {
 	// AccountPrefix starts every account name; DefaultAccountPrefix
 	// when the configuration says nothing.
 	AccountPrefix string
+	// GeminiKey configures the gemini-key method, nil for a server that
+	// offers none.
+	GeminiKey *GeminiKey
+}
+
+// GeminiKey is what the gemini-key method mints Gemini API keys with:
+// the project they are created in, and the admin whose credential
+// creates them (the formerly in-process gemini-key's minter credential).
+type GeminiKey struct {
+	Project string
+	// Admin names the admin minting; empty is the one admin, or
+	// DefaultAdmin among several.
+	Admin string
+}
+
+// GeminiAdmin is the admin the gemini-key method mints with, or nil when
+// it is not configured.
+func (c *Config) GeminiAdmin() *Admin {
+	if c.GeminiKey == nil {
+		return nil
+	}
+	return c.Admin(c.GeminiKey.Admin)
 }
 
 // AccountID is the id of set's n'th account under this configuration's
@@ -225,6 +263,7 @@ func Schema() map[string]any {
 					"properties": map[string]any{
 						"name":              map[string]any{"type": "string", "pattern": namePattern.String(), "description": "The name sets refer to this admin by."},
 						"credential_source": map[string]any{"type": "string", "enum": []any{SourceConfigured, SourceAmbient}, "description": "configured: a credential in admin_credentials; ambient: the identity the server already runs as."},
+						"credential_env":    map[string]any{"type": "string", "pattern": credentialEnvPattern.String(), "description": "Environment variable holding this admin's configured credential.", "deprecated": true},
 						"projects":          strs("Projects this admin acts in."),
 						"role_ceiling":      strs("Every role this admin may grant; a set cannot exceed it."),
 					},
@@ -244,18 +283,30 @@ func Schema() map[string]any {
 				"items": map[string]any{
 					"type":                 "object",
 					"additionalProperties": false,
-					"required":             []any{"name", "project", "roles"},
+					"required":             []any{"name", "project"},
 					"properties": map[string]any{
-						"name":           map[string]any{"type": "string", "pattern": namePattern.String()},
+						"name":           map[string]any{"type": "string", "pattern": migratedNamePattern.String()},
 						"admin":          map[string]any{"type": "string", "description": "The admin account that manages this set.", "deprecated": true},
 						"project":        str("The one project the set's service accounts live and are bound in."),
 						"roles":          strs("Roles bound to the set's service accounts within the project (e.g. roles/storage.objectViewer)."),
 						"resource_scope": str("Optional: bind on one resource instead of the project, e.g. buckets/<name>."),
 						"max_lease":      map[string]any{"type": "string", "pattern": `^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$`, "description": "Longest a key may live, as a Go duration (default 24h)."},
 						"pool_max":       map[string]any{"type": "integer", "minimum": 1, "maximum": 99, "description": "Most service accounts the set may create (default 3)."},
-						"accounts":       map[string]any{"type": "array", "description": "Existing service accounts to mint keys for instead of creating any (the migrated fixed pool).", "items": map[string]any{"type": "string", "minLength": 1}, "deprecated": true},
+						"accounts":       map[string]any{"type": "array", "description": "Existing service accounts to mint keys for instead of creating any (the migrated fixed pool).", "items": map[string]any{"type": "string", "pattern": serviceAccountEmailPattern.String()}, "deprecated": true},
+						"key_path":       map[string]any{"type": "string", "pattern": keyPathPattern.String(), "description": "Deprecated: primary sandbox key placement path for a migrated gcp-key:<name> set.", "deprecated": true},
 						"adopt_legacy":   map[string]any{"type": "boolean", "description": "Also use this set's accounts from before account names carried the deployment id (grain-<set>-<n>, marked [grain-gcp-key set=<set>]). Turn it on only in the one deployment that created them.", "deprecated": true},
 					},
+				},
+			},
+			"gemini_key": map[string]any{
+				"type":                 "object",
+				"title":                "Gemini API keys",
+				"description":          "Offer the gemini-key method: a per-attempt Gemini API key, created in project with admin's credential and deleted at release.",
+				"additionalProperties": false,
+				"required":             []any{"project"},
+				"properties": map[string]any{
+					"project": str("The project Gemini API keys are created in."),
+					"admin":   map[string]any{"type": "string", "description": "The admin whose credential creates them (default: the one admin, or default)."},
 				},
 			},
 			"account_prefix": map[string]any{
@@ -279,6 +330,12 @@ func Schema() map[string]any {
 // Parse reads a configure call's (already schema-validated) config and
 // validates it (Validate).
 func Parse(config map[string]any) (*Config, error) {
+	return ParseWithEnv(config, nil)
+}
+
+// ParseWithEnv is Parse with environment lookup for admins configured via
+// credential_env.
+func ParseWithEnv(config map[string]any, env func(string) string) (*Config, error) {
 	c := &Config{
 		AdminCredentialSource: str(config["admin_credential_source"]),
 		AdminCredential:       str(config["admin_credential"]),
@@ -303,10 +360,17 @@ func Parse(config map[string]any) (*Config, error) {
 		a := Admin{
 			Name:             str(item["name"]),
 			CredentialSource: str(item["credential_source"]),
+			CredentialEnv:    str(item["credential_env"]),
 			Projects:         strList(item["projects"]),
 			RoleCeiling:      strList(item["role_ceiling"]),
 		}
 		a.Credential = creds[a.Name]
+		if a.Credential == "" && a.CredentialEnv != "" && credentialEnvPattern.MatchString(a.CredentialEnv) && env != nil {
+			a.Credential = env(a.CredentialEnv)
+		}
+		if a.Credential == "" && a.Name == DefaultAdmin && a.CredentialSource == SourceConfigured && c.AdminCredential != "" {
+			a.Credential = c.AdminCredential
+		}
 		delete(creds, a.Name)
 		c.Admins = append(c.Admins, a)
 	}
@@ -330,6 +394,7 @@ func Parse(config map[string]any) (*Config, error) {
 			Roles:         strList(item["roles"]),
 			ResourceScope: str(item["resource_scope"]),
 			Accounts:      strList(item["accounts"]),
+			KeyPath:       str(item["key_path"]),
 		}
 		s.AdoptLegacy, _ = item["adopt_legacy"].(bool)
 		if v := str(item["max_lease"]); v != "" {
@@ -344,6 +409,9 @@ func Parse(config map[string]any) (*Config, error) {
 		}
 		c.Sets = append(c.Sets, s)
 	}
+	if g, ok := config["gemini_key"].(map[string]any); ok {
+		c.GeminiKey = &GeminiKey{Project: str(g["project"]), Admin: str(g["admin"])}
+	}
 	c.DeleteOrphans = strList(config["delete_orphans"])
 	c.AccountPrefix = str(config["account_prefix"])
 	c.Deployment = str(config[protocol.DeploymentIDConfig])
@@ -357,7 +425,7 @@ func Parse(config map[string]any) (*Config, error) {
 // Validate checks the configuration as a whole: names, credential
 // sources, each set's admin, project and role ceiling.
 func (c *Config) Validate() error {
-	if len(c.Sets) == 0 {
+	if len(c.Sets) == 0 && c.GeminiKey == nil {
 		return fmt.Errorf("at least one permission set is required")
 	}
 	if c.AccountPrefix != "" && !prefixPattern.MatchString(c.AccountPrefix) {
@@ -399,6 +467,9 @@ func (c *Config) Validate() error {
 		admins[a.Name] = a
 		explicitProjects[a.Name] = len(a.Projects) > 0
 		explicitCeiling[a.Name] = len(a.RoleCeiling) > 0
+		if a.CredentialEnv != "" && !credentialEnvPattern.MatchString(a.CredentialEnv) {
+			return fmt.Errorf("admin %q: credential_env %q does not match %s", a.Name, a.CredentialEnv, credentialEnvPattern)
+		}
 		switch a.CredentialSource {
 		case SourceConfigured:
 			if strings.TrimSpace(a.Credential) == "" {
@@ -408,7 +479,7 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("admin %q: %v", a.Name, err)
 			}
 		case SourceAmbient:
-			if a.Credential != "" {
+			if a.Credential != "" || a.CredentialEnv != "" {
 				return fmt.Errorf("admin %q: credential_source is ambient, so admin_credentials must not hold a credential for it", a.Name)
 			}
 		default:
@@ -428,8 +499,12 @@ func (c *Config) Validate() error {
 	seen := map[string]bool{}
 	for i := range c.Sets {
 		s := &c.Sets[i]
-		if !namePattern.MatchString(s.Name) {
-			return fmt.Errorf("permission set name %q does not match %s", s.Name, namePattern)
+		if len(s.Accounts) == 0 {
+			if !namePattern.MatchString(s.Name) {
+				return fmt.Errorf("permission set name %q does not match %s", s.Name, namePattern)
+			}
+		} else if !migratedNamePattern.MatchString(s.Name) {
+			return fmt.Errorf("permission set name %q does not match %s", s.Name, migratedNamePattern)
 		}
 		if seen[s.Name] {
 			return fmt.Errorf("permission set %q is configured twice", s.Name)
@@ -446,8 +521,15 @@ func (c *Config) Validate() error {
 		if a == nil {
 			return fmt.Errorf("permission set %q: no admin is called %q", s.Name, s.Admin)
 		}
-		if !projectPattern.MatchString(s.Project) {
+		if len(s.Accounts) == 0 {
+			if !projectPattern.MatchString(s.Project) {
+				return fmt.Errorf("permission set %q: %q is not a project id", s.Name, s.Project)
+			}
+		} else if !migratedProjectPattern.MatchString(s.Project) || strings.Contains(s.Project, "..") {
 			return fmt.Errorf("permission set %q: %q is not a project id", s.Name, s.Project)
+		}
+		if s.KeyPath != "" && !keyPathPattern.MatchString(s.KeyPath) {
+			return fmt.Errorf("permission set %q: key_path %q is not a sandbox key path", s.Name, s.KeyPath)
 		}
 		if explicitProjects[a.Name] {
 			if !contains(a.Projects, s.Project) {
@@ -487,7 +569,7 @@ func (c *Config) Validate() error {
 			}
 		}
 		for _, e := range s.Accounts {
-			if !strings.HasSuffix(e, "@"+s.Project+".iam.gserviceaccount.com") {
+			if !serviceAccountEmailPattern.MatchString(e) || strings.Contains(e, "..") {
 				return fmt.Errorf("permission set %q: account %q is not a service account in %s", s.Name, e, s.Project)
 			}
 		}
@@ -502,6 +584,29 @@ func (c *Config) Validate() error {
 			if len(s.Accounts) > 0 {
 				s.PoolMax = len(s.Accounts)
 			}
+		}
+	}
+	if g := c.GeminiKey; g != nil {
+		if g.Admin == "" {
+			if len(c.Admins) == 1 {
+				g.Admin = c.Admins[0].Name
+			} else if admins[DefaultAdmin] != nil {
+				g.Admin = DefaultAdmin
+			}
+		}
+		a := admins[g.Admin]
+		if a == nil {
+			return fmt.Errorf("gemini_key: no admin is called %q", g.Admin)
+		}
+		if !migratedProjectPattern.MatchString(g.Project) || strings.Contains(g.Project, "..") {
+			return fmt.Errorf("gemini_key: %q is not a project id", g.Project)
+		}
+		if explicitProjects[a.Name] {
+			if !contains(a.Projects, g.Project) {
+				return fmt.Errorf("gemini_key: project %q is not one of admin %q's projects", g.Project, a.Name)
+			}
+		} else if !contains(a.Projects, g.Project) {
+			a.Projects = append(a.Projects, g.Project)
 		}
 	}
 	for _, a := range c.Admins {

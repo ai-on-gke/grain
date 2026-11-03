@@ -158,6 +158,21 @@ func TestCheckCapabilityPatterns(t *testing.T) {
 		{"allow: [repo-write:*]", "self-debug", "does not allow capability"},
 		{"allow: [\"*\"]\n  deny: [gcp-key]", "self-debug", ""},
 		{"allow: [\"*\"]\n  deny: [gcp-key]", "gcp-key:x", "forbids capability"},
+		// gcp-key retired onto gcp#gcp-key {permission_set}: the old names
+		// in a policy file still reach the sets they became.
+		{"deny: [gcp-key:team-a]", model.GCPKeyServerGrant("team-a"), "forbids capability"},
+		{"deny: [gcp-key:team-a]", model.GCPKeyServerGrant("team-b"), ""},
+		{"deny: [gcp-key]", model.GCPKeyServerGrant("team-b"), "forbids capability"},
+		{"allow: [gcp-key:team-*]", model.GCPKeyServerGrant("team-a"), ""},
+		{"allow: [gcp-key:team-*]", model.GCPKeyServerGrant("other"), "does not allow capability"},
+		{"allow: [gcp-key:team-*]", model.GCPKeySandboxAgentGrant, "does not allow capability"},
+		// A grant naming no set gets whichever set the server lists
+		// first, so any gcp-key:<set> deny stops it and only an allow
+		// covering every set admits it.
+		{"deny: [gcp-key:team-a]", model.GCPKeyRef + "={}", "forbids capability"},
+		{"deny: [gcp-key:team-a]", model.GCPKeyRef + `={"account":"default"}`, "forbids capability"},
+		{"allow: [gcp-key:team-*]", model.GCPKeyRef + "={}", "does not allow capability"},
+		{"allow: [gcp-key]", model.GCPKeyRef + "={}", ""},
 		// A retired bare name in a policy file still reaches the grant
 		// it became: migration 85 rewrote git-push-any-ref on the task,
 		// not here.
@@ -365,5 +380,17 @@ func TestCheckUnisolated(t *testing.T) {
 	}
 	if err := lax.CheckUnisolated(false); err != nil {
 		t.Errorf("allow_external_on_host_sandboxes: %v", err)
+	}
+}
+
+func TestAllowNamedSandboxAgentPatternRefusesUnnamedGCPKey(t *testing.T) {
+	p := mustParse(t, "capabilities:\n  allow: [gcp-key:sandbox-*]\n")
+	if err := p.CheckClaims(model.Task{Grants: []model.Grant{{Capability: model.GCPKeySandboxAgentGrant}}}, ""); err != nil {
+		t.Fatalf("named sandbox-agent refused by allow [gcp-key:sandbox-*]: %v", err)
+	}
+	for _, unnamed := range []string{model.GCPKeyRef, model.GCPKeyRef + "={}", model.GCPKeyRef + `={"account":"default"}`} {
+		if err := p.CheckClaims(model.Task{Grants: []model.Grant{{Capability: unnamed}}}, ""); err == nil {
+			t.Errorf("unnamed %q admitted by allow [gcp-key:sandbox-*]", unnamed)
+		}
 	}
 }

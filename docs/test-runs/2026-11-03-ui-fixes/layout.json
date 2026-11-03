@@ -1,0 +1,674 @@
+[
+  {
+    "page": "/inbox",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/inbox",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/inbox",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/inbox",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/boards/board-1",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/boards/board-1",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/boards/board-1",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/boards/board-1",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/boards/board-3",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/boards/board-3",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/boards/board-3",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/boards/board-3",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/tasks/8",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/tasks/8",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/tasks/8",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/tasks/8",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/system/health",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/system/health",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/system/health",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/system/health",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/models",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/models",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/models",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/models",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/sandboxes",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/sandboxes",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/sandboxes",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/sandboxes",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/credentials",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/credentials",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/credentials",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/credentials",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/access",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/access",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/access",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/access",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/hostds",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/hostds",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/hostds",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/hostds",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/preferences",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/preferences",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/preferences",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/preferences",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/upgrade",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/upgrade",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/upgrade",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/upgrade",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/caches",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/caches",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/caches",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/caches",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/engine",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/engine",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/engine",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/engine",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/config-repo",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/config-repo",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/config-repo",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/config-repo",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/general",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/general",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/general",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/general",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/git",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/git",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/git",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/git",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/repositories",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/repositories",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/repositories",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/repositories",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/tasks",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/tasks",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/tasks",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/tasks",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/agents",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/agents",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/agents",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/agents",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/capabilities",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/capabilities",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/capabilities",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/capabilities",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/ci",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/ci",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/ci",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/ci",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/memory",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/memory",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/memory",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/settings/memory",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/session/new",
+    "width": "desktop",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/session/new",
+    "width": "desktop",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/session/new",
+    "width": "phone",
+    "theme": "light",
+    "sideways": false,
+    "cut": []
+  },
+  {
+    "page": "/session/new",
+    "width": "phone",
+    "theme": "dark",
+    "sideways": false,
+    "cut": []
+  }
+]

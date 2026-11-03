@@ -412,3 +412,37 @@ func TestTargetsRetractedRelease(t *testing.T) {
 		})
 	}
 }
+
+// TestLatestRelease: what the release-triggered automatic upgrade
+// follows is the newest promoted release in the deployment's own
+// edition -- never a release candidate, a discarded candidate, or a
+// retracted release.
+func TestLatestRelease(t *testing.T) {
+	tags := []string{
+		"main", "latest", "candidate", "sha-1234567",
+		"v3.7.0-rc.1", "v3.7.0-rc.1-discarded", "v3.7.0-rc.2",
+		"v3.6.1", "v3.6.1-retracted",
+		"v3.6.0",
+		"v3.6.2-google", "v3.6.0-google",
+	}
+	list := func(context.Context, string) ([]string, error) { return tags, nil }
+	for _, tc := range []struct{ edition, want string }{
+		{"oss", "v3.6.0"},
+		{"google", "v3.6.2-google"},
+	} {
+		up := New(Config{Edition: tc.edition, Image: &ImageConfig{Repository: "ghcr.io/example/grain"}, ListTags: list})
+		got, err := up.LatestRelease(context.Background())
+		if err != nil || got != tc.want {
+			t.Errorf("%s edition: LatestRelease = %q, %v; want %q", tc.edition, got, err, tc.want)
+		}
+	}
+
+	none := New(Config{Image: &ImageConfig{Repository: "ghcr.io/example/grain"},
+		ListTags: func(context.Context, string) ([]string, error) { return []string{"main", "v1.0.0-rc.1"}, nil }})
+	if got, err := none.LatestRelease(context.Background()); err != nil || got != "" {
+		t.Errorf("a registry with no release: LatestRelease = %q, %v; want none", got, err)
+	}
+	if _, err := New(Config{SrcDir: t.TempDir()}).LatestRelease(context.Background()); err == nil {
+		t.Error("the source pipeline answered a release to follow")
+	}
+}

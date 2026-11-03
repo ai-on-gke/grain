@@ -178,6 +178,9 @@ func (c *Client) CheckCapabilityGrants(ctx context.Context, grants []GrantReques
 			return nil, err
 		}
 		check := GrantCheck{Grant: s}
+		if c := model.CanonicalLegacyGrant(s); c != s {
+			s = c
+		}
 		if !model.IsCapabilityRef(s) {
 			if _, ok := c.capabilityByID(s); !ok {
 				check.Error = capabilityRefusal(s)

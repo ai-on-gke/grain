@@ -283,6 +283,47 @@ describe("SandboxesSection", () => {
     );
   });
 
+  it("says when k8s_granule_image is read as the mirror repository and names the image sandboxes boot", () => {
+    const repo = "us-docker.pkg.dev/example-project/grain/guest";
+    const s = {
+      settings: {
+        sandboxBackend: "kubernetes-granule",
+        sandboxBackends: ["kubernetes-granule"],
+        k8sGranuleImage: `${repo}:sha-31d0973@sha256:d210`,
+        k8sGranuleImageMirror: repo,
+        k8sGranuleImageEffective: `${repo}:sha-e5544d6`,
+        sandboxImageMirrorEffective: repo,
+        sandboxImageMirrorDerivedFrom: "k8s_granule_image",
+      },
+      saveChoice: vi.fn(),
+      onTextBlur: () => () => {},
+      onIntBlur: () => () => {},
+      onFloatBlur: () => () => {},
+      onEnterKey: () => {},
+      markDirty: () => {},
+    };
+    const { rerender } = render(<SandboxesSection s={s} />);
+    const note = screen.getByTestId("k8s-granule-image-mirror");
+    expect(note).toHaveTextContent(`Treated as mirror repository ${repo}`);
+    expect(note).toHaveTextContent(`sandboxes boot ${repo}:sha-e5544d6`);
+
+    // Cleared, with the mirror kept explicitly: the effective image stays
+    // named, and where its mirror comes from.
+    s.settings = {
+      ...s.settings,
+      k8sGranuleImage: "",
+      k8sGranuleImageMirror: "",
+      sandboxImageMirror: repo,
+      sandboxImageMirrorDerivedFrom: "",
+    };
+    rerender(<SandboxesSection s={{ ...s }} />);
+    expect(screen.queryByTestId("k8s-granule-image-mirror")).toBeNull();
+    const effective = screen.getByTestId("k8s-granule-image-effective");
+    expect(effective).toHaveTextContent(
+      `Sandboxes boot ${repo}:sha-e5544d6, mirrored into ${repo} (sandbox_image_mirror).`,
+    );
+  });
+
   it("renders unavailable backends disabled with their reasons and shows selected backend isolation help", () => {
     const s = {
       settings: {

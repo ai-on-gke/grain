@@ -19,7 +19,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/change"
 	"log"
 
-	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
@@ -174,13 +173,10 @@ func externalConfigRepo(dataDir string) bool {
 	return err == nil && settings.Remote != ""
 }
 
-// gcpKeyPool is the accounts the in-process gcp-key provider mints from,
-// or none where it is not registered.
-func gcpKeyPool(cfg Config) []string {
-	if len(missingCapabilityProviderConfig(cfg, "gcp-key")) > 0 {
-		return nil
-	}
-	return gcpkey.PoolEmails(cfg.GcpServiceAccountEmail, cfg.GcpServiceAccountCount, cfg.GcpProject)
+// gcpKeyPool returns nil now that the in-process gcp-key provider is retired
+// onto https://grain.dev/capabilities/gcp#gcp-key.
+func gcpKeyPool(_ Config) []string {
+	return nil
 }
 
 // capabilityServerStatuses is live's registry as the UI reads it: a nil

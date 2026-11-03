@@ -301,6 +301,7 @@ var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 func withModelProxyDisplayNames(names map[string]string) map[string]string {
 	for _, vendor := range modelproxy.Vendors() {
 		names[modelproxycap.CapabilityName(vendor)] = vendor.Display + " proxy"
+		names[model.ModelProxyGrant(vendor.Name)] = vendor.Display + " proxy"
 	}
 	return names
 }
@@ -358,7 +359,6 @@ func capabilityDisplayName(id string) string {
 // dispatch, so their specs can be read back out.
 func capabilityProviderCatalog() []model.CapabilityProvider {
 	providers := []model.CapabilityProvider{
-		gcpkey.NewProvider(gcpkey.Config{}),
 		geminikey.New("", model.CredentialRef{Name: gcpkey.DefaultMinterCredential}),
 		githubsandbox.NewProvider(githubsandbox.Config{}),
 	}
@@ -373,12 +373,6 @@ func capabilityProviderCatalog() []model.CapabilityProvider {
 		prioritydispatch.New(),
 		durable.New(),
 	)
-	// One per vendor grain proxies to, built with no endpoint at all --
-	// this catalog exists to read Spec() back out, and a spec is the
-	// same whether or not this process is serving that proxy.
-	for _, p := range modelproxycap.Providers(nil) {
-		providers = append(providers, p)
-	}
 	return providers
 }
 
@@ -506,15 +500,6 @@ func (c *Client) checkable(id string) bool {
 // mints under it.
 func missingConfigFor(name string, cfg model.Config) []string {
 	switch name {
-	case "gcp-key":
-		var missing []string
-		if cfg.GCPProject == "" {
-			missing = append(missing, "GCP project")
-		}
-		if cfg.GCPServiceAccountEmail == "" {
-			missing = append(missing, "GCP service account email")
-		}
-		return missing
 	case "gemini-key":
 		if cfg.GCPProject == "" {
 			return []string{"GCP project"}

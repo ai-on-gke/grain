@@ -109,7 +109,7 @@ export default function GeneralSection({ s, config }) {
       </SettingsCard>
       <SettingsCard title="Updates" anchor="updates">
         <UpgradeCheckSettings
-          key={`${settings.upgradeCheckMode}-${settings.upgradeCheckPausesPipeline}-${settings.autoUpgradeChannel}-${settings.autoUpgradeTime}`}
+          key={`${settings.upgradeCheckMode}-${settings.upgradeCheckPausesPipeline}-${settings.autoUpgradeOn}-${settings.autoUpgradeChannel}-${settings.autoUpgradeTime}`}
           settings={settings}
           onSave={saveChoice}
         />

@@ -98,10 +98,37 @@ type GCPConfig struct {
 	// FallbackErr is why flags and environment that tried to configure
 	// the server did not, reported when configure supplies nothing.
 	FallbackErr error
+	// Env reads server environment variables (used for migrated per-admin
+	// credential_env bindings).
+	Env Env
 	// Connector reaches GCP; nil is gcpsets.GoogleConnector{}.
 	Connector gcpsets.Connector
-	Now       func() time.Time
-	Log       *log.Logger
+	// GeminiMinter builds the gemini-key method's API Keys minter; nil is
+	// geminikey.NewKeyMinter.
+	GeminiMinter GeminiMinterFunc
+	Now          func() time.Time
+	Log          *log.Logger
+}
+
+// gcpMethods is the server's methods over m: gcp-key when a permission
+// set is configured, and gemini-key when gemini_key is.
+func gcpMethods(cfg GCPConfig, m *gcpsets.Manager, report string) ([]*protocol.Method, error) {
+	var methods []*protocol.Method
+	if len(m.Config.Sets) > 0 {
+		method, err := newGCPMethod(m, m.Now, report)
+		if err != nil {
+			return nil, err
+		}
+		methods = append(methods, method)
+	}
+	if m.Config.GeminiKey != nil {
+		method, err := newGeminiKeyMethod(m.Config, cfg.GeminiMinter, m.Now)
+		if err != nil {
+			return nil, err
+		}
+		methods = append(methods, method)
+	}
+	return methods, nil
 }
 
 // gcpConfigSchema is the gcp server's configure schema (§4.5): admins,
@@ -136,8 +163,8 @@ func gcpConfigSchema() map[string]any {
 // gcpConfigFrom is the configuration a configure call gives: its
 // permission sets when it has any, otherwise its old fields migrated over
 // the fallback's, otherwise the fallback itself.
-func gcpConfigFrom(fallback *gcpsets.Config, fallbackErr error, config map[string]any) (*gcpsets.Config, error) {
-	cfg, err := gcpConfigOf(fallback, fallbackErr, config)
+func gcpConfigFrom(fallback *gcpsets.Config, fallbackErr error, env Env, config map[string]any) (*gcpsets.Config, error) {
+	cfg, err := gcpConfigOf(fallback, fallbackErr, env, config)
 	if err != nil || cfg.Deployment != "" {
 		return cfg, err
 	}
@@ -149,9 +176,11 @@ func gcpConfigFrom(fallback *gcpsets.Config, fallbackErr error, config map[strin
 	return &c, nil
 }
 
-func gcpConfigOf(fallback *gcpsets.Config, fallbackErr error, config map[string]any) (*gcpsets.Config, error) {
-	if _, ok := config["permission_sets"]; ok {
-		return gcpsets.Parse(config)
+func gcpConfigOf(fallback *gcpsets.Config, fallbackErr error, env Env, config map[string]any) (*gcpsets.Config, error) {
+	_, hasSets := config["permission_sets"]
+	_, hasGemini := config["gemini_key"]
+	if hasSets || hasGemini {
+		return gcpsets.ParseWithEnv(config, env)
 	}
 	_, hasProject := config["project"]
 	_, hasAccounts := config["accounts"]
@@ -294,6 +323,8 @@ func newGCPMethod(m *gcpsets.Manager, now func() time.Time, report string) (*pro
 			keyPath := GCPKeyPath
 			if !primary {
 				keyPath = gcpSecondaryKeyPath(set)
+			} else if ps.KeyPath != "" {
+				keyPath = ps.KeyPath
 			}
 			aboutPath := gcpAboutPath(keyPath)
 			roles := ""
@@ -309,7 +340,7 @@ func newGCPMethod(m *gcpsets.Manager, now func() time.Time, report string) (*pro
 				PromptSection: fmt.Sprintf("GCP permission set %s: service account %s in project %s%s. Its key is at %s; its client_email is that account, and %s names the set, the account and the project.",
 					set, lease.Account, ps.Project, roles, keyPath, aboutPath),
 			}
-			if primary {
+			if primary && keyPath == GCPKeyPath {
 				resp.PromptSection += " gcloud is logged in as that account with the project selected, and GOOGLE_APPLICATION_CREDENTIALS-style clients find the key there."
 				script := "/home/debian/.gcp-key/" + attemptID + "/activate.sh"
 				resp.Placements = append(resp.Placements, protocol.Placement{
@@ -334,15 +365,16 @@ func NewGCP(cfg GCPConfig) (*Server, error) {
 		return nil, fmt.Errorf("gcp: no permission sets are configured")
 	}
 	m := newGCPManager(cfg, cfg.Fallback)
-	method, err := newGCPMethod(m, m.Now, "")
+	methods, err := gcpMethods(cfg, m, "")
 	if err != nil {
 		return nil, err
 	}
-	s, err := newServer("gcp", cfg.Log, method)
+	s, err := newServer("gcp", cfg.Log, methods...)
 	if err != nil {
 		return nil, err
 	}
 	s.onTick(reaper(s, func() *gcpsets.Manager { return m }))
+	s.onTick(geminiReaper(s, func() *gcpsets.Config { return m.Config }, cfg.GeminiMinter, m.Now))
 	return s, nil
 }
 
@@ -392,7 +424,7 @@ func init() {
 			if err := fs.Parse(args); err != nil {
 				return nil, err
 			}
-			cfg := GCPConfig{Log: logger}
+			cfg := GCPConfig{Log: logger, Env: env}
 			var legacy []gcpsets.LegacyAccount
 			for _, v := range accounts {
 				a, err := parseGCPAccount(v)
@@ -452,9 +484,8 @@ func newConfigurableGCP(cfg GCPConfig) (*Server, error) {
 	var methods []*protocol.Method
 	if cfg.Fallback != nil {
 		m := newGCPManager(cfg, cfg.Fallback)
-		method, err := newGCPMethod(m, m.Now, "")
-		if err == nil {
-			methods, current = append(methods, method), m
+		if built, err := gcpMethods(cfg, m, ""); err == nil {
+			methods, current = built, m
 		}
 	}
 	s, err := newServer("gcp", cfg.Log, methods...)
@@ -466,21 +497,36 @@ func newConfigurableGCP(cfg GCPConfig) (*Server, error) {
 		defer mu.Unlock()
 		return current
 	}))
+	now := time.Now
+	if cfg.Now != nil {
+		now = cfg.Now
+	}
+	s.onTick(geminiReaper(s, func() *gcpsets.Config {
+		mu.Lock()
+		defer mu.Unlock()
+		if current == nil {
+			return nil
+		}
+		return current.Config
+	}, cfg.GeminiMinter, now))
 	err = s.configurable(gcpConfigSchema(), func(ctx context.Context, config map[string]any) ([]*protocol.Method, error) {
-		c, err := gcpConfigFrom(cfg.Fallback, cfg.FallbackErr, config)
+		c, err := gcpConfigFrom(cfg.Fallback, cfg.FallbackErr, cfg.Env, config)
 		if err != nil {
 			return nil, err
 		}
 		m := newGCPManager(cfg, c)
-		report := gcpConfigureReport(ctx, m)
-		method, err := newGCPMethod(m, m.Now, report)
+		report := ""
+		if len(c.Sets) > 0 {
+			report = gcpConfigureReport(ctx, m)
+		}
+		methods, err := gcpMethods(cfg, m, report)
 		if err != nil {
 			return nil, err
 		}
 		mu.Lock()
 		current = m
 		mu.Unlock()
-		return []*protocol.Method{method}, nil
+		return methods, nil
 	})
 	if err != nil {
 		return nil, err

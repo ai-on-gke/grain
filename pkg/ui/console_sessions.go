@@ -77,8 +77,18 @@ type ConsoleSessionSetting struct {
 	// its run exits rather than parking until the next message.
 	KeepRunning bool `json:"keepRunning"`
 	// Reads is every repo this session may read but never push to --
-	// model.ConsoleSession.Reads, rendered as owner/name strings.
+	// model.ConsoleSession.Reads, rendered as owner/name strings, and,
+	// on a session whose task is open, every repo that task reads
+	// (AutoReads among them) other than the state repository.
 	Reads []string `json:"reads,omitempty"`
+	// ReadsAll is whether the session also reads every repository this
+	// deployment works in (model.ConsoleSession.ReadsAllRepos).
+	ReadsAll bool `json:"readsAll"`
+	// AutoReads is the repositories it reads because of ReadsAll
+	// (model.ConsoleSessionAutoReads), as owner/name strings: listed
+	// apart from Reads, so a pane saving Reads back does not turn them
+	// into reads the session names itself.
+	AutoReads []string `json:"autoReads,omitempty"`
 	// Writes is every repo this session may push to
 	// (model.ConsoleSession.Writes).
 	Writes []WriteTarget `json:"writes,omitempty"`
@@ -164,6 +174,11 @@ type UpdateConsoleSessionRequest struct {
 	// Model is the model the session runs on; "" puts it back on its
 	// team's default model.
 	Model *string `json:"model"`
+	// ReadsAll is model.ConsoleSession.ReadsAll: false opts the session
+	// out of reading every repository this deployment works in. It is a
+	// setting rather than a task edit -- the next cycle resolves the
+	// session's reads from it -- so it needs writable settings.
+	ReadsAll *bool `json:"readsAll"`
 
 	// renameByAgent marks a Title written by the session's own agent
 	// (RenameConsoleSessionOfTask) rather than by a person: it is
@@ -206,6 +221,9 @@ type CreateConsoleSessionRequest struct {
 	// Model is the model the session runs on, or "" for its team's
 	// default model.
 	Model string `json:"model,omitempty"`
+	// ReadsAll is model.ConsoleSession.ReadsAll; left out, the session
+	// reads every repository this deployment works in.
+	ReadsAll *bool `json:"readsAll,omitempty"`
 	// Message is the first thing said in the session, posted as the
 	// caller's comment on the session's task once it is filed; with
 	// Title blank it is also what the session is named from.
@@ -300,6 +318,16 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 				Base: w.Base,
 			})
 		}
+		var autoReads []string
+		if openTask == nil {
+			resolved, err := model.ConsoleSessionAutoReads(ctx, c.Store, s, c.stateRepoRef())
+			if err != nil {
+				return nil, err
+			}
+			for _, r := range resolved {
+				autoReads = append(autoReads, r.String())
+			}
+		}
 		if openTask != nil {
 			prev, hasPrev := model.LastSyncedConsoleSession(ctx, c.Store, openTask.ID)
 			if c.configRepoOnly(ctx) && hasPrev && strings.TrimSpace(openTask.Title) != "" &&
@@ -313,7 +341,8 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 						if g.Capability == "" || g.Capability == model.DurableCapability {
 							continue
 						}
-						if g.Via == model.GrantByDefault && !slices.Contains(s.Capabilities, g.Capability) {
+						if g.Via == model.GrantByDefault && !slices.Contains(s.Capabilities, g.Capability) &&
+							(!model.IsConsoleSessionDefaultGrant(g.Capability) || s.DeclinesDefault(g.Capability)) {
 							continue
 						}
 						if !slices.Contains(capabilities, g.Capability) {
@@ -335,6 +364,10 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 						if stateRepo.Owner != "" && r.Same(stateRepo) &&
 							!slices.ContainsFunc(s.Reads, func(sr model.RepoRef) bool { return sr.Same(stateRepo) }) {
 							continue
+						}
+						if slices.ContainsFunc(prev.AutoReads, func(a model.RepoRef) bool { return a.Same(r) }) &&
+							!slices.ContainsFunc(s.Reads, func(sr model.RepoRef) bool { return sr.Same(r) }) {
+							autoReads = append(autoReads, r.String())
 						}
 						reads = append(reads, r.String())
 					}
@@ -379,6 +412,8 @@ func (c *Client) ListConsoleSessions(ctx context.Context) ([]ConsoleSessionSetti
 			TasksApproved:   tasksApproved,
 			KeepRunning:     keepRunning,
 			Reads:           reads,
+			ReadsAll:        s.ReadsAllRepos(),
+			AutoReads:       autoReads,
 			Writes:          writes,
 			GoogleChatSpace: googleChatSpace,
 			Model:           modelChoice,
@@ -481,7 +516,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 		}
 	}
 	hasParamEdit := req.Capabilities != nil || req.NetworkAccess != nil || req.TasksApproved != nil ||
-		req.Reads != nil || req.Writes != nil || req.GoogleChatSpace != nil || req.Model != nil
+		req.Reads != nil || req.Writes != nil || req.GoogleChatSpace != nil || req.Model != nil || req.ReadsAll != nil
 	if openTask == nil || (!hasParamEdit && req.Title == nil) {
 		if err := c.checkSettingsWritable(ctx, "grain_config"); err != nil {
 			return nil, err
@@ -543,6 +578,32 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 			}
 		}
 		session.Capabilities = ids
+		// A default every session holds without naming it
+		// (model.ConsoleSessionDefaultGrants) is listed with the session's
+		// capabilities, so a set chosen without it is that default
+		// unticked: declined, so it stays off when the session's task is
+		// filed again, and ticked again, no longer.
+		declined := slices.DeleteFunc(slices.Clone(session.DeclinedDefaults), func(id string) bool {
+			return model.IsConsoleSessionDefaultGrant(id) && slices.Contains(ids, id)
+		})
+		for _, id := range model.ConsoleSessionDefaultGrants() {
+			if !slices.Contains(ids, id) && !slices.Contains(declined, id) {
+				declined = append(declined, id)
+			}
+		}
+		if len(declined) == 0 {
+			declined = nil
+		}
+		session.DeclinedDefaults = declined
+	}
+	if req.ReadsAll != nil {
+		// Resolved by every cycle from the settings row, so a change made
+		// only to the task would be undone a minute later.
+		if err := c.checkSettingsWritable(ctx, "grain_config"); err != nil {
+			return nil, err
+		}
+		readsAll := *req.ReadsAll
+		session.ReadsAll = &readsAll
 	}
 	if req.NetworkAccess != nil {
 		access := model.NetworkAccess(*req.NetworkAccess)
@@ -564,6 +625,20 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 		reads, err := c.parseReads(*req.Reads)
 		if err != nil {
 			return nil, err
+		}
+		// Reads lists the repositories the session reads by default
+		// (ConsoleSessionSetting.AutoReads) alongside the ones it names,
+		// so a pane saving the list back hands them over too. They are
+		// not the session naming them: kept as such, a repository retired
+		// later would stay readable for good.
+		if origSession.ReadsAllRepos() {
+			auto, err := model.ConsoleSessionAutoReads(ctx, c.Store, origSession, c.stateRepoRef())
+			if err != nil {
+				return nil, err
+			}
+			reads = slices.DeleteFunc(reads, func(r model.RepoRef) bool {
+				return slices.ContainsFunc(auto, func(a model.RepoRef) bool { return a.Same(r) })
+			})
 		}
 		session.Reads = reads
 	}
@@ -594,6 +669,13 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 	writable := !c.configRepoOnly(ctx)
 	if openTask != nil {
 		stateRepo := c.stateRepoRef()
+		var autoReads []model.RepoRef
+		if req.Reads != nil || req.ReadsAll != nil {
+			autoReads, err = model.ConsoleSessionAutoReads(ctx, c.Store, session, stateRepo)
+			if err != nil {
+				return nil, err
+			}
+		}
 		if err := c.Store.UpdateTask(ctx, openTask.ID, func(t *model.Task) error {
 			if req.Title != nil {
 				t.Title = model.ConsoleSessionTitle(session)
@@ -651,13 +733,18 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 					t.Tags = append(t.Tags, model.ConsoleSessionTasksUnapprovedTag)
 				}
 			}
-			if req.Reads != nil {
+			if req.Reads != nil || req.ReadsAll != nil {
 				var taskReads []model.RepoRef
 				if stateRepo.Owner != "" {
 					taskReads = append(taskReads, stateRepo)
 				}
 				for _, r := range session.Reads {
 					if r.Owner != "" && r.Name != "" && !r.Same(stateRepo) {
+						taskReads = append(taskReads, r)
+					}
+				}
+				for _, r := range autoReads {
+					if !slices.ContainsFunc(taskReads, func(e model.RepoRef) bool { return e.Same(r) }) {
 						taskReads = append(taskReads, r)
 					}
 				}
@@ -701,6 +788,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				TasksApproved:   session.TasksApproved,
 				KeepRunning:     session.KeepRunning,
 				GoogleChatSpace: session.GoogleChatSpace,
+				AutoReads:       autoReads,
 			}); err != nil {
 				return nil, err
 			}
@@ -735,6 +823,7 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 				TasksApproved:   origSession.TasksApproved,
 				KeepRunning:     prevKeepRunning,
 				GoogleChatSpace: origSession.GoogleChatSpace,
+				OfferedDefaults: consoleSessionHeldDefaults(openTask.Grants),
 			}); err != nil {
 				return nil, err
 			}
@@ -804,7 +893,23 @@ func (c *Client) ensureConsoleSessionSnapshot(ctx context.Context, task model.Ta
 		TasksApproved:   session.TasksApproved,
 		KeepRunning:     task.KeepRunning,
 		GoogleChatSpace: session.GoogleChatSpace,
+		OfferedDefaults: consoleSessionHeldDefaults(task.Grants),
 	})
+}
+
+// consoleSessionHeldDefaults is the model.ConsoleSessionDefaultGrants a
+// session's task holds, recorded as offered when a snapshot is seeded
+// from the task: given already, so one an operator then removes is not
+// given back, while one the task never had still reaches it on the next
+// sync.
+func consoleSessionHeldDefaults(grants []model.Grant) []string {
+	var out []string
+	for _, g := range grants {
+		if model.IsConsoleSessionDefaultGrant(g.Capability) && !slices.Contains(out, g.Capability) {
+			out = append(out, g.Capability)
+		}
+	}
+	return out
 }
 
 func slugifySessionID(title string) string {
@@ -1004,6 +1109,7 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 		Writes:          writes,
 		GoogleChatSpace: strings.TrimSpace(req.GoogleChatSpace),
 		Model:           chosenModel,
+		ReadsAll:        req.ReadsAll,
 	}
 
 	sessions = append(sessions, newSession)

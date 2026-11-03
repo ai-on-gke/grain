@@ -976,6 +976,12 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	ReclaimWith(disks, ctx, NewDiskReclaim(sandboxes, &DockerPruner{
 		ActiveSandboxImage: chooseSandboxImage(cfg).image,
 		ActiveGrainImage:   DefaultGrainImage,
+		KeepImages: func() []string {
+			if img := live.CurrentSandboxImage(); img != "" {
+				return []string{img}
+			}
+			return nil
+		},
 	}))
 
 	proxyURL, proxyHandler, stopProxy, err := startGitProxy(cfg.DataDir, store, cfg.GithubHost, cfg.GithubInsecureHTTP, fabric, forbidden, cfg.shutdownStarted)
@@ -1510,7 +1516,10 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// And whether the daily automatic upgrade's channel has
 			// anything new on it, asked of the registry or origin before
 			// the queue is held for it.
-			UpgradeUnchanged:   upgradeUnchanged(upgrader),
+			UpgradeUnchanged: upgradeUnchanged(upgrader),
+			// And the newest release on its image channel, which the
+			// release-triggered automatic upgrade follows.
+			LatestRelease:      latestRelease(upgrader),
 			UpgradeDrainWindow: cfg.UpgradeDrainWindow,
 		},
 		MintSandboxGrant:   tokens.EnsureGrant,

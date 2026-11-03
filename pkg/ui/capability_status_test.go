@@ -140,7 +140,7 @@ func TestCapabilitiesListsEveryKnownCapabilityOnAFreshStore(t *testing.T) {
 		ids = append(ids, s.ID)
 	}
 	sort.Strings(ids)
-	want := []string{"bootstrap-playbooks", "claude-proxy", "console", "durable", "gcp-key", "gemini-key", "gemini-proxy", "github-sandbox", "image-signing", "openai-proxy", "package-publish", "priority-dispatch", "read-issues", "registry-push", "self-debug"}
+	want := []string{"bootstrap-playbooks", "console", "durable", "gemini-key", "github-sandbox", "image-signing", "package-publish", "priority-dispatch", "read-issues", "registry-push", "self-debug"}
 	if !reflect.DeepEqual(ids, want) {
 		t.Fatalf("capability ids = %v, want %v", ids, want)
 	}
@@ -170,15 +170,6 @@ func TestCapabilitiesGcpKeyAndGeminiKeyAreNotReadyWithoutAGcpProject(t *testing.
 	got, err := c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	gcpKey := capabilityStatus(t, got.Capabilities, "gcp-key")
-	if gcpKey.Ready {
-		t.Fatalf("gcp-key: Ready = true with no GCP project configured, want false")
-	}
-	want := []string{"GCP project", "GCP service account email"}
-	if !reflect.DeepEqual(gcpKey.MissingConfig, want) {
-		t.Fatalf("gcp-key: MissingConfig = %v, want %v", gcpKey.MissingConfig, want)
 	}
 
 	geminiKey := capabilityStatus(t, got.Capabilities, "gemini-key")
@@ -213,14 +204,6 @@ func TestCapabilitiesGeminiKeyIsReadyOnceAGcpProjectAndItsMinterSecretAreSet(t *
 	geminiKey := capabilityStatus(t, got.Capabilities, "gemini-key")
 	if !geminiKey.Ready {
 		t.Fatalf("gemini-key: Ready = false, want true (status: %+v)", geminiKey)
-	}
-
-	// gcp-key still needs the service account email, and its own minter
-	// secret was never set under a different name -- unaffected by
-	// gemini-key becoming ready.
-	gcpKey := capabilityStatus(t, got.Capabilities, "gcp-key")
-	if gcpKey.Ready {
-		t.Fatalf("gcp-key: Ready = true, want false (status: %+v)", gcpKey)
 	}
 }
 
@@ -423,12 +406,12 @@ func TestCapabilitiesReportWhereEachRequiredSecretIsWritten(t *testing.T) {
 	// The bare "<secret>" form, with nothing stored under it yet: it
 	// gets the default key name, which is one Resolve's sole-key form
 	// finds.
-	minter := capabilityStatus(t, got.Capabilities, "gcp-key").Secrets
+	minter := capabilityStatus(t, got.Capabilities, "gemini-key").Secrets
 	wantMinter := []ui.CapabilitySecret{
 		{Name: gcpkey.DefaultMinterCredential, Secret: gcpkey.DefaultMinterCredential, Key: "value", Set: false},
 	}
 	if !reflect.DeepEqual(minter, wantMinter) {
-		t.Fatalf("gcp-key: Secrets = %+v, want %+v", minter, wantMinter)
+		t.Fatalf("gemini-key: Secrets = %+v, want %+v", minter, wantMinter)
 	}
 }
 
@@ -452,8 +435,8 @@ func TestCapabilitiesWriteABareSecretBackToTheKeyItAlreadyHas(t *testing.T) {
 	want := []ui.CapabilitySecret{
 		{Name: gcpkey.DefaultMinterCredential, Secret: gcpkey.DefaultMinterCredential, Key: "key.json", Set: true},
 	}
-	if status := capabilityStatus(t, got.Capabilities, "gcp-key"); !reflect.DeepEqual(status.Secrets, want) {
-		t.Fatalf("gcp-key: Secrets = %+v, want %+v", status.Secrets, want)
+	if status := capabilityStatus(t, got.Capabilities, "gemini-key"); !reflect.DeepEqual(status.Secrets, want) {
+		t.Fatalf("gemini-key: Secrets = %+v, want %+v", status.Secrets, want)
 	}
 }
 
@@ -462,8 +445,8 @@ func TestCapabilitiesWriteABareSecretBackToTheKeyItAlreadyHas(t *testing.T) {
 // (Config.Capabilities) offers the capability at all, since grantsFor
 // and SetCapability both reject an id it has no row for. A deployment
 // can have a capability fully configured -- Ready, nothing missing --
-// and still have no way to attach it to a task, which is exactly what a
-// gcp-key registered by pkg/cli/daemon.go's capabilityProviders but
+// and still have no way to attach it to a task, which is what a
+// provider registered by pkg/daemon's CapabilityProviders but
 // absent from OfferedCapabilities looks like from here.
 //
 // The picker listing is set explicitly rather than taken from
@@ -484,7 +467,6 @@ func TestCapabilityStatusReportsWhetherATaskCanBeGrantedIt(t *testing.T) {
 	for id, want := range map[string]bool{
 		"gemini-key":     true,
 		"self-debug":     true,
-		"gcp-key":        false,
 		"github-sandbox": false,
 	} {
 		if status := capabilityStatus(t, got.Capabilities, id); status.Grantable != want {

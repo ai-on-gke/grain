@@ -311,23 +311,23 @@ func TestUpdateSettingsRoundTripsDefaultCapabilities(t *testing.T) {
 
 	// Repeated deliberately: a picker can produce a duplicate, and this
 	// is a set.
-	defaults := []string{"gcp-key", "gcp-key"}
+	defaults := []string{"self-debug", "self-debug"}
 	saved, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &defaults})
 	if err != nil {
 		t.Fatalf("setting default capabilities: %v", err)
 	}
-	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{"gcp-key"}) {
-		t.Fatalf("DefaultCapabilities = %v, want [gcp-key] with the repeat dropped", saved.DefaultCapabilities)
+	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{"self-debug"}) {
+		t.Fatalf("DefaultCapabilities = %v, want [self-debug] with the repeat dropped", saved.DefaultCapabilities)
 	}
 	read, err = c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"gcp-key"}) {
-		t.Fatalf("DefaultCapabilities = %v after a re-read, want [gcp-key]", read.DefaultCapabilities)
+	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"self-debug"}) {
+		t.Fatalf("DefaultCapabilities = %v after a re-read, want [self-debug]", read.DefaultCapabilities)
 	}
 	for _, status := range read.Capabilities {
-		if want := status.ID == "gcp-key"; status.Default != want {
+		if want := status.ID == "self-debug"; status.Default != want {
 			t.Errorf("capability %s: Default = %t, want %t", status.ID, status.Default, want)
 		}
 	}
@@ -392,31 +392,31 @@ func TestUpdateSettingsAcceptsDroppingARetiredDefaultCapability(t *testing.T) {
 	// it can only be one that had a row when it was chosen and lost it to
 	// an upgrade since (OfferedCapabilities' own "scratch-repo", now
 	// github-sandbox).
-	putDefaultCapabilities(t, ctx, store, "gcp-key", "scratch-repo")
+	putDefaultCapabilities(t, ctx, store, "self-debug", "scratch-repo")
 
 	read, err := c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"gcp-key", "scratch-repo"}) {
+	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"self-debug", "scratch-repo"}) {
 		t.Fatalf("DefaultCapabilities = %v, want it reported as stored: an operator can only clear one they can see",
 			read.DefaultCapabilities)
 	}
 
-	kept := []string{"gcp-key"}
+	kept := []string{"self-debug"}
 	saved, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &kept})
 	if err != nil {
 		t.Fatalf("dropping a retired default capability: %v", err)
 	}
-	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{"gcp-key"}) {
-		t.Fatalf("DefaultCapabilities = %v, want [gcp-key] with the retired id gone", saved.DefaultCapabilities)
+	if !reflect.DeepEqual(saved.DefaultCapabilities, []string{"self-debug"}) {
+		t.Fatalf("DefaultCapabilities = %v, want [self-debug] with the retired id gone", saved.DefaultCapabilities)
 	}
 	read, err = c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"gcp-key"}) {
-		t.Fatalf("DefaultCapabilities = %v after a re-read, want [gcp-key]: the retired id is gone for good",
+	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"self-debug"}) {
+		t.Fatalf("DefaultCapabilities = %v after a re-read, want [self-debug]: the retired id is gone for good",
 			read.DefaultCapabilities)
 	}
 }
@@ -436,10 +436,10 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &deployment}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"gcp-key"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"self-debug"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/gadgets", []string{"gcp-key", "gemini-key"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/gadgets", []string{"self-debug", "gemini-key"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -459,15 +459,15 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	if got := byID["gemini-key"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets"}) {
 		t.Errorf("gemini-key DefaultRepos = %v, want [acme/gadgets]", got)
 	}
-	if got := byID["gcp-key"]; got.Default {
-		t.Errorf("gcp-key Default = true, want false: no task outside those two repos is filed with it")
+	if got := byID["self-debug"]; got.Default {
+		t.Errorf("self-debug Default = true, want false: no task outside those two repos is filed with it")
 	}
 	// Sorted by repo, the order Store.ListRepoConfigs returns.
-	if got := byID["gcp-key"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets", "acme/widgets"}) {
-		t.Errorf("gcp-key DefaultRepos = %v, want [acme/gadgets acme/widgets]", got)
+	if got := byID["self-debug"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets", "acme/widgets"}) {
+		t.Errorf("self-debug DefaultRepos = %v, want [acme/gadgets acme/widgets]", got)
 	}
-	if got := byID["self-debug"].DefaultRepos; len(got) != 0 {
-		t.Errorf("self-debug DefaultRepos = %v, want none", got)
+	if got := byID["github-sandbox"].DefaultRepos; len(got) != 0 {
+		t.Errorf("github-sandbox DefaultRepos = %v, want none", got)
 	}
 }
 
@@ -478,7 +478,7 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 func TestSettingsReportsRepoDefaultsBeforeAnythingIsSaved(t *testing.T) {
 	t.Parallel()
 	c, _, ctx := testClient(t)
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"gcp-key"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"self-debug"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -490,11 +490,11 @@ func TestSettingsReportsRepoDefaultsBeforeAnythingIsSaved(t *testing.T) {
 		t.Fatalf("Configured = true, want false: no settings row was ever saved")
 	}
 	for _, status := range read.Capabilities {
-		if status.ID != "gcp-key" {
+		if status.ID != "self-debug" {
 			continue
 		}
 		if !reflect.DeepEqual(status.DefaultRepos, []string{"acme/widgets"}) {
-			t.Fatalf("gcp-key DefaultRepos = %v, want [acme/widgets]", status.DefaultRepos)
+			t.Fatalf("self-debug DefaultRepos = %v, want [acme/widgets]", status.DefaultRepos)
 		}
 	}
 }
@@ -1153,6 +1153,23 @@ func TestUpdateSettingsRoundTripsTheAutomaticUpgrade(t *testing.T) {
 	if read.AutoUpgradeChannel != "candidate" || read.AutoUpgradeTime != "21:45" {
 		t.Fatalf("read back channel %q at %q, want candidate at 21:45", read.AutoUpgradeChannel, read.AutoUpgradeTime)
 	}
+	// A channel saved before autoUpgradeOn existed reads as daily.
+	if read.AutoUpgradeOn != model.AutoUpgradeDaily {
+		t.Errorf("a channel with no mode reads back as %q, want daily", read.AutoUpgradeOn)
+	}
+	release := " Release "
+	if got, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{AutoUpgradeOn: &release}); err != nil ||
+		got.AutoUpgradeOn != model.AutoUpgradeOnRelease {
+		t.Fatalf("turning on release upgrades: %q, %v", got.AutoUpgradeOn, err)
+	}
+	hourly := "hourly"
+	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{AutoUpgradeOn: &hourly}); err == nil {
+		t.Error("an unknown auto-upgrade mode was accepted")
+	}
+	daily := "daily"
+	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{AutoUpgradeOn: &daily}); err != nil {
+		t.Fatalf("going back to daily: %v", err)
+	}
 
 	for _, bad := range []string{"24:00", "9:30", "12:60", "noon", "-1:00", "12:5a"} {
 		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{AutoUpgradeTime: &bad}); err == nil {
@@ -1783,6 +1800,19 @@ func TestK8sSettingsSourcesWarningsAndPendingRestart(t *testing.T) {
 	}
 	if slices.Contains(reset.PendingRestart, "k8sSandboxImage") {
 		t.Errorf("PendingRestart after reset still contains k8sSandboxImage: %v", reset.PendingRestart)
+	}
+	rawJSON, err := json.Marshal(reset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rawMap map[string]any
+	if err := json.Unmarshal(rawJSON, &rawMap); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"sandboxImage", "sandboxImageWarning", "sandboxImageCheck", "k8sSandboxImageWarning", "k8sGranuleImageWarning"} {
+		if _, ok := rawMap[key]; !ok {
+			t.Errorf("marshaled Settings after reset omitted %q; frontend state merge requires explicit empty/null key", key)
+		}
 	}
 }
 

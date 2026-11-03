@@ -65,6 +65,7 @@ type (
 	SandboxRequest   = gritsteps.SandboxRequest
 	Sandboxes        = gritsteps.Sandboxes
 	StreamingSandbox = gritsteps.StreamingSandbox
+	WarningSandbox   = gritsteps.WarningSandbox
 )
 
 const (
