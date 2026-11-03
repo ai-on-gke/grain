@@ -316,6 +316,10 @@ type Deps struct {
 	// RepoConfig.Declarations decides that, per repo, and a deployment
 	// where no repository has it on spends one store read per cycle here.
 	Declarations DeclarationSource
+	// Refs, when non-nil, is where a git_ref schedule's watched ref is
+	// read from (reconcileGitRefSchedules): the daemon's own `git
+	// ls-remote`. nil makes that reconciler a no-op.
+	Refs RefSource
 	// StandingSandboxes, when non-nil, supervises long-standing sandboxes
 	// defined in grain/config (grain/task-126): starting them on boot,
 	// restarting them on failure, and keeping them running.
@@ -503,6 +507,10 @@ func Reconcilers() []Reconciler {
 		{Name: "standing-sandboxes", Reconcile: reconcileStandingSandboxes},
 		{Name: "persistent-sandboxes", Reconcile: reconcilePersistentSandboxes},
 		{Name: "schedule", Reconcile: reconcileSchedule},
+		// Beside "schedule": the schedules that fire when another
+		// repository's ref moves rather than when a clock comes round
+		// (reconcileGitRefSchedules).
+		{Name: "git-ref-schedules", Reconcile: reconcileGitRefSchedules},
 		// Immediately after "schedule", so that a workflow schedule which
 		// came due on this tick has its CI run started on this tick
 		// rather than on the next one -- and so that the run finishing

@@ -114,6 +114,7 @@ var tablePrimaryKeys = map[string][]string{
 	"repo_path_trigger":              {"owner", "name", "trigger"},
 	"repo_merge_rules":               {"owner", "name"},
 	"path_trigger_cursor":            {"owner", "name", "branch"},
+	"git_ref_cursor":            {"schedule_id"},
 	"memory":                         {"owner", "name"},
 	"memory_document":                {"owner", "name", "document"},
 	"release_note":                   {"period"},

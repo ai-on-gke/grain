@@ -1313,6 +1313,18 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	}
 	reservePersistentPorts(cfg)
 	defer persistentSandboxes.Close()
+	// Where a repository's `.grain` declarations, and the refs git_ref
+	// schedules watch, are read from (wired into deps below).
+	declarationSource := RepoDeclarationSource{Clone: CiWorkflowSource{
+		ConfigRepoDir:       StateRepoDir(cfg.DataDir),
+		Credentials:         credentials,
+		GitHubHost:          cfg.GithubHost,
+		InsecureHTTP:        cfg.GithubInsecureHTTP,
+		Forbidden:           forbidden,
+		TempDir:             filepath.Join(cfg.DataDir, "state"),
+		TeamGitCredential:   teamGitCredential,
+		TeamGitCredentialOn: teamGitCredentialOn,
+	}}
 	deps := orchestrator.Deps{
 		// The attached capability servers a task's capability
 		// references are minted through at admission.
@@ -1578,16 +1590,11 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		// unconditionally, unlike CI above, because it costs nothing at
 		// all until an operator turns a repository's declarations on:
 		// with none on, the reconciler reads repo_config and stops.
-		Declarations: RepoDeclarationSource{Clone: CiWorkflowSource{
-			ConfigRepoDir:       StateRepoDir(cfg.DataDir),
-			Credentials:         credentials,
-			GitHubHost:          cfg.GithubHost,
-			InsecureHTTP:        cfg.GithubInsecureHTTP,
-			Forbidden:           forbidden,
-			TempDir:             filepath.Join(cfg.DataDir, "state"),
-			TeamGitCredential:   teamGitCredential,
-			TeamGitCredentialOn: teamGitCredentialOn,
-		}},
+		Declarations: declarationSource,
+		// The same ls-remote, for the refs git_ref schedules watch
+		// (orchestrator.reconcileGitRefSchedules). Costs nothing until a
+		// schedule declares one.
+		Refs: declarationSource,
 	}
 	// The same gate the UI/API server was given, so the CI a branch is put
 	// through by the cycle (orchestrator.reconcileCI) is the CI an
