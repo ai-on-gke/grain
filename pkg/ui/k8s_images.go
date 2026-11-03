@@ -28,6 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/registryauth"
+	"github.com/ai-on-gke/grain/pkg/sandboximage"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
@@ -465,22 +466,105 @@ func (c *Client) resolveK8sImageDefaults(ctx context.Context, cfg *model.Config,
 }
 
 // k8sGranuleImageForWarn is the Granule VM pod image the Settings pane
-// probes: the one the daemon really creates pods from
-// (Config.K8sGranuleImage), and only where no daemon says so, cfg's own
-// image or granuleDefault mirrored into cfg's SandboxImageMirror.
-func (c *Client) k8sGranuleImageForWarn(cfg model.Config, granuleDefault string) string {
+// probes and reports as K8sGranuleImageEffective: the one the daemon
+// really creates pods from (Config.K8sGranuleImage), and only where no
+// daemon says so, cfg's own image -- unless mirror reads it as the
+// mirror rather than an image -- or granuleDefault, mirrored into
+// mirror's repository.
+func (c *Client) k8sGranuleImageForWarn(cfg model.Config, granuleDefault string, mirror SandboxImageMirrorInfo) string {
 	if c != nil && c.Config.K8sGranuleImage != nil {
 		if img := c.Config.K8sGranuleImage(cfg); img != "" {
 			return img
 		}
 	}
 	img := firstNonEmptyString(cfg.K8sGranuleImage, granuleDefault)
-	if mirror := strings.TrimSpace(cfg.SandboxImageMirror); mirror != "" {
-		if mirrored := upgrade.MirrorSandboxRef(img, mirror); mirrored != "" {
+	if mirror.K8sGranuleImageIsMirror {
+		img = granuleDefault
+	}
+	if repo := strings.TrimSpace(mirror.Repository); repo != "" {
+		if mirrored := upgrade.MirrorSandboxRef(img, repo); mirrored != "" {
 			img = mirrored
 		}
 	}
 	return img
+}
+
+// SandboxImageMirrorInfo is Config.SandboxImageMirrorFor's answer: the
+// repository the stamped guest is mirrored into under a configuration,
+// where it comes from, and which image settings it overrides.
+type SandboxImageMirrorInfo struct {
+	// Repository is the mirror repository, without tag or digest; ""
+	// mirrors nothing.
+	Repository string
+	// DerivedFrom names the setting Repository was derived from
+	// (sandboximage.MirrorHint.Field) when sandbox_image_mirror is empty;
+	// "" when it is that setting, or there is no mirror.
+	DerivedFrom string
+	// KubernetesGranule is whether the configuration runs the
+	// kubernetes-granule backend, the only one a mirror is derived on.
+	KubernetesGranule bool
+	// K8sGranuleImageIsMirror and SandboxImageIsMirror are whether
+	// k8s_granule_image and sandbox_image are read as Repository (a
+	// mirrored guest ref in it) rather than booted as images.
+	K8sGranuleImageIsMirror bool
+	SandboxImageIsMirror    bool
+}
+
+// sandboxImageMirrorFor is Config.SandboxImageMirrorFor, or where no
+// daemon answers it, sandboxImageMirrorFromConfig against
+// granuleDefault's repository as the stamped one.
+func (c *Client) sandboxImageMirrorFor(cfg model.Config, granuleDefault string) SandboxImageMirrorInfo {
+	if c != nil && c.Config.SandboxImageMirrorFor != nil {
+		return c.Config.SandboxImageMirrorFor(cfg)
+	}
+	return sandboxImageMirrorFromConfig(cfg, granuleDefault)
+}
+
+// sandboxImageMirrorFromConfig resolves the mirror from the stored row
+// alone, by the rule the daemon applies (sandboximage.DerivedMirror) --
+// all of it but the -sandbox-image flag, which no row carries.
+func sandboxImageMirrorFromConfig(cfg model.Config, granuleDefault string) SandboxImageMirrorInfo {
+	info := SandboxImageMirrorInfo{KubernetesGranule: cfg.SandboxBackend == model.SandboxBackendKubernetesGranule}
+	if explicit := strings.TrimSpace(cfg.SandboxImageMirror); explicit != "" {
+		info.Repository = sandboximage.ImageRepository(explicit)
+	} else if info.KubernetesGranule {
+		if hint, ok := sandboximage.DerivedMirror(cfg.K8sGranuleImage, "", sandboximage.ImageRepository(granuleDefault)); ok {
+			info.Repository, info.DerivedFrom = hint.Repository, hint.Field
+		}
+	}
+	if info.Repository != "" && info.KubernetesGranule {
+		stampedTag := sandboximage.ImageTag(granuleDefault)
+		info.K8sGranuleImageIsMirror = sandboximage.IsMirroredGuestRef(cfg.K8sGranuleImage, info.Repository, stampedTag)
+		info.SandboxImageIsMirror = sandboximage.IsMirroredGuestRef(cfg.SandboxImage, info.Repository, stampedTag)
+	}
+	return info
+}
+
+// keepDerivedSandboxImageMirror is the save's guard on a mirror derived
+// from k8s_granule_image: a pin that is a mirrored guest ref is ignored
+// as an image and load-bearing as the mirror target, so clearing it --
+// what anyone reading "k8s_granule_image: <old sha>" would do -- would
+// silently stop mirroring at the next restart. When before derived a
+// mirror that after, still on kubernetes-granule with no
+// sandbox_image_mirror of its own, would not, the repository is written
+// into sandbox_image_mirror in the same save, so the mirror becomes
+// explicit instead of disappearing. It is said nowhere but in the row:
+// a plan runs this too, and the save's own "changed ..." line names
+// SandboxImageMirror.
+func (c *Client) keepDerivedSandboxImageMirror(before, after model.Config) model.Config {
+	if strings.TrimSpace(after.SandboxImageMirror) != "" {
+		return after
+	}
+	was := c.sandboxImageMirrorFor(before, "")
+	if was.DerivedFrom == "" || was.Repository == "" {
+		return after
+	}
+	now := c.sandboxImageMirrorFor(after, "")
+	if !now.KubernetesGranule || now.Repository == was.Repository {
+		return after
+	}
+	after.SandboxImageMirror = was.Repository
+	return after
 }
 
 func (c *Client) resolveK8sImageWarnings(ctx context.Context, effectiveSandbox, effectiveGranule string) (sandboxWarn, granuleWarn string) {
