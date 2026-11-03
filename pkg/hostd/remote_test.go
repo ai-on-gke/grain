@@ -77,6 +77,49 @@ func TestRemoteLogsRefusedTokensRateLimited(t *testing.T) {
 	}
 }
 
+// A hostd retrying a stale token every few seconds does not hide a token
+// presented under another hostd's name: each kind of refusal has its own
+// line a minute (walkthrough 2026-11-03-hostd-registry, F2).
+func TestRemoteLogsANameMismatchBesideARetryingStaleToken(t *testing.T) {
+	var lines []string
+	clock := time.Date(2026, 11, 3, 8, 47, 0, 0, time.UTC)
+	r := &Remote{
+		Resolve: func(_ context.Context, token string) (string, string, bool, error) {
+			return "ws-a", "", token == "ws-a-token", nil
+		},
+		Logf: func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) },
+		now:  func() time.Time { return clock },
+	}
+	dial := func(token, name string, want int) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, RemotePath, nil)
+		req.RemoteAddr = "127.0.0.1:5555"
+		req.Header.Set(TokenHeader, token)
+		req.Header.Set(NameHeader, name)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != want {
+			t.Fatalf("ServeHTTP with token %q as %q: got %d, want %d", token, name, w.Code, want)
+		}
+	}
+	dial("rotated-away", "ws-a", http.StatusUnauthorized)
+	clock = clock.Add(2 * time.Second)
+	dial("rotated-away", "ws-a", http.StatusUnauthorized)
+	clock = clock.Add(2 * time.Second)
+	dial("ws-a-token", "ws-b", http.StatusForbidden)
+	if len(lines) != 2 {
+		t.Fatalf("logged %q; want the stale token's first line and the name mismatch's", lines)
+	}
+	if want := `it calls itself hostd "ws-b", but its token is hostd "ws-a"'s`; !strings.HasSuffix(lines[1], want) {
+		t.Errorf("logged %q; want it to end %q", lines[1], want)
+	}
+	clock = clock.Add(2 * time.Second)
+	dial("ws-a-token", "ws-b", http.StatusForbidden)
+	if len(lines) != 2 {
+		t.Fatalf("the same mismatch again inside a minute logged %q; want no new line", lines)
+	}
+}
+
 // A registry hostd named as the shared token's hostd is would share its
 // session slot, and work pinned to that name skips the registry's
 // revocation check: its token is refused instead.

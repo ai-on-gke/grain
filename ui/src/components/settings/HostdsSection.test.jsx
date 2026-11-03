@@ -74,6 +74,33 @@ describe("HostdsSection", () => {
     expect(screen.queryByTestId("hostd-owner-missing-local")).toBeNull();
   });
 
+  it("lists the deprecated shared token's hostd with no actions", async () => {
+    api.mockResolvedValueOnce([
+      LOCAL,
+      {
+        name: "remote",
+        owner: "",
+        shared: true,
+        connection: { ...WS.connection, name: "remote" },
+      },
+    ]);
+    render(<HostdsSection showError={vi.fn()} />);
+    const row = await screen.findByTestId("hostd-row-remote");
+    expect(within(row).getByTestId("hostd-shared-remote")).toHaveTextContent(
+      "Shared token (deprecated)",
+    );
+    expect(
+      within(row).getByText("Connected from cloudtop (v1)"),
+    ).toBeInTheDocument();
+    for (const action of ["Edit", "Rotate", "Revoke"]) {
+      expect(within(row).queryByText(action)).toBeNull();
+    }
+    // Its owner, too, is needed to dial in through IAP.
+    expect(
+      screen.getByTestId("hostd-owner-missing-remote"),
+    ).toBeInTheDocument();
+  });
+
   it("shows a created hostd's token once", async () => {
     api.mockResolvedValueOnce([LOCAL]);
     render(<HostdsSection showError={vi.fn()} />);
