@@ -69,7 +69,7 @@ func fidelityEndpoints(teamHasConnection bool) map[string]*modelproxy.Endpoint {
 
 // mintRewritten mints grant, as migration 100 rewrote it, on the
 // in-process model-proxy server for a run whose agent spends connection,
-// the way the orchestrator mints a capability pass.
+// the way the orchestrator mints a capability pass: for run 42-1.
 func mintRewritten(t *testing.T, grant, connection string) (*protocol.Pass, error) {
 	t.Helper()
 	lookup := func(id string) (*protocol.Server, error) {
@@ -90,7 +90,7 @@ func mintRewritten(t *testing.T, grant, connection string) (*protocol.Pass, erro
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := model.WithRunConnection(context.Background(), connection)
+	ctx := model.WithMintRunID(model.WithRunConnection(context.Background(), connection), "42-1")
 	return protocol.MintPass(ctx, grants, func(id string) (protocol.Minter, error) { return lookup(id) }, protocol.PassOptions{
 		Deployment: "grain", Task: "42", Attempt: 1, Deadline: time.Now().Add(time.Hour),
 	})
@@ -142,6 +142,7 @@ func TestModelProxyMigrationFidelity(t *testing.T) {
 					t.Fatalf("rewritten grant placed %d files, legacy %d", len(placements), len(mat.Placements))
 				}
 				var legacyConn, newConn modelproxy.Connection
+				var legacyOwner, newOwner string
 				for i, pl := range mat.Placements {
 					got := placements[i]
 					if got.Path != pl.Path || got.FileMode() != 0o600 || pl.EffectiveMode() != "600" {
@@ -149,10 +150,10 @@ func TestModelProxyMigrationFidelity(t *testing.T) {
 					}
 					if pl.Path == TokenPath(vendor) {
 						var ok bool
-						if _, legacyConn, ok = endpoints[vendor.Name].Tokens.Lookup(strings.TrimSpace(pl.Content)); !ok {
+						if legacyOwner, legacyConn, ok = endpoints[vendor.Name].Tokens.Lookup(strings.TrimSpace(pl.Content)); !ok {
 							t.Error("legacy token is not honoured")
 						}
-						if _, newConn, ok = endpoints[vendor.Name].Tokens.Lookup(strings.TrimSpace(got.Content)); !ok {
+						if newOwner, newConn, ok = endpoints[vendor.Name].Tokens.Lookup(strings.TrimSpace(got.Content)); !ok {
 							t.Error("rewritten grant's token is not honoured")
 						}
 						continue
@@ -163,6 +164,11 @@ func TestModelProxyMigrationFidelity(t *testing.T) {
 				}
 				if legacyConn.ID == "" || newConn != legacyConn {
 					t.Errorf("rewritten grant's token forwards with %+v, legacy with %+v", newConn, legacyConn)
+				}
+				// Owned by the run, not the attempt id, so a restarted
+				// daemon's revokeFinishedRunTokens still finds it.
+				if legacyOwner != "42-1" || newOwner != legacyOwner {
+					t.Errorf("rewritten grant's token is owned by %q, legacy by %q, want run 42-1", newOwner, legacyOwner)
 				}
 				if got := pass.Grants[0].Response.PromptSection; got != legacyPrompt {
 					t.Errorf("prompt differs:\nrewritten: %q\nlegacy:    %q", got, legacyPrompt)

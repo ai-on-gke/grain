@@ -100,8 +100,16 @@ func Method(endpoints map[string]*modelproxy.Endpoint) capability.Method {
 					return h.resp, nil
 				}
 				now := time.Now()
+				// The token's owner is the run, as the retired provider's
+				// was: a pass is not persisted, so after a restart only
+				// the daemon's sweep of finished runs' tokens
+				// (revokeFinishedRunTokens, keyed by run id) revokes it.
+				runID := model.MintRunID(ctx)
+				if runID == "" {
+					runID = attemptID
+				}
 				cc := model.CapabilityContext{
-					Run:        model.Run{ID: attemptID},
+					Run:        model.Run{ID: runID},
 					Now:        now,
 					Deadline:   deadline,
 					Connection: model.RunConnection(ctx),

@@ -406,9 +406,9 @@ func capabilityAdmitterFor(deps Deps, admit dispatch.Admitter, connectionOf func
 		mintDeps := deps
 		mintDeps.CapabilityServers = servers
 		deadline := capabilityDeadline(at, deps.Config.maxRunRuntime())
-		mintCtx := ctx
+		mintCtx := model.WithMintRunID(ctx, candidate.RunID)
 		if connectionOf != nil {
-			mintCtx = model.WithRunConnection(ctx, connectionOf(candidate.RunID))
+			mintCtx = model.WithRunConnection(mintCtx, connectionOf(candidate.RunID))
 		}
 		p, err := mintCapabilityPass(mintCtx, mintDeps, *task, candidate, at, deadline)
 		if err != nil {
