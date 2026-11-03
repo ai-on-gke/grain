@@ -2064,6 +2064,45 @@ func (c *Client) defaultCapabilities(ctx context.Context, teamID string, target 
 	return ids, nil
 }
 
+// ownerTrustApproves is the owner a filing is approved on behalf of by
+// the deployment's owner-trust policy (model.Config.OwnerTrust,
+// design/spec/external-cli/external-cli.spec.md#XC-17), or nil when the
+// policy does not approve it. Only an external agent credential's own
+// unapproved filing qualifies, and only when its owner is trusted on the
+// filing's repository and nothing holds the work for a person: a
+// catalogue or requires-person hold (held), or a setting only a person
+// may give -- keepRunning, or a priority above the default. The
+// X-Grain-Client label plays no part.
+func (c *Client) ownerTrustApproves(ctx context.Context, req CreateTaskRequest, proposedBy *model.Task,
+	target *model.RepoRef, held, keepRunning bool, priority int) (*model.Principal, error) {
+	tok := externalTokenFromContext(ctx)
+	if tok == nil || proposedBy != nil || req.Approved || held || keepRunning || priority > model.DefaultTaskPriority {
+		return nil, nil
+	}
+	if p, ok := PrincipalFromContext(ctx); !ok || p.Kind != model.PrincipalAgent || p.Source != model.SourceExternalToken {
+		return nil, nil
+	}
+	owner := tok.OwnerPrincipal()
+	if owner == nil {
+		return nil, nil
+	}
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil || len(cfg.OwnerTrust) == 0 {
+		return nil, nil
+	}
+	repo := ""
+	if target != nil {
+		repo = target.String()
+	}
+	if !model.OwnerTrusted(cfg.OwnerTrust, owner.ID, repo) {
+		return nil, nil
+	}
+	return owner, nil
+}
+
 // CreateTask files a task straight into the store.
 //
 // No GitHub issue is created, and none is needed: Store.NewTaskID
@@ -2665,8 +2704,10 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// task -- "Filed by: operator (human)" on work no operator had seen
 	// -- which is the one thing a provenance field must never say
 	// (grain/task-311).
+	// An owned external agent credential files on behalf of its owner
+	// (RequestActor, #XC-14).
 	origin := model.Origin{
-		Attribution: model.Attribution{Actor: c.requestActor(ctx).Actor},
+		Attribution: c.requestActor(ctx),
 		Reason:      model.ReasonDirect,
 	}
 	if proposedBy != nil {
@@ -2724,6 +2765,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		Tags:                 proposalTags(req.ProposalKey, heldNote != ""),
 		CreatedAt:            &now,
 		OrderKey:             orderKey,
+		FiledVia:             filedViaFromContext(ctx),
 	}
 	// A proposal is its proposer's root requester's work, whoever the
 	// request names: an agent's propose_task call cannot file as anybody,
@@ -2750,6 +2792,10 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	// can be interactive too, through an interactive template's
 	// templateId (fromTemplate), and that must not turn propose_task into
 	// a way to approve its own work.
+	ownerTrust, err := c.ownerTrustApproves(ctx, req, proposedBy, target, catalogueHold || needsPersonWhy != "", keepRunning, priority)
+	if err != nil {
+		return Task{}, err
+	}
 	switch {
 	case catalogueHold:
 		task.Body += "\n\n_Filed for a person to approve: " + needsPersonWhy + "._"
@@ -2761,6 +2807,9 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		task.ApprovedAt = &now
 	case autoSubmit:
 		task.Approval = &model.Attribution{Actor: model.AutoSubmitPrincipal}
+		task.ApprovedAt = &now
+	case ownerTrust != nil:
+		task.Approval = &model.Attribution{Actor: model.OwnerTrustPrincipal, OnBehalfOf: ownerTrust}
 		task.ApprovedAt = &now
 	}
 	if task.Approval == nil && proposedBy != nil {
@@ -5711,14 +5760,14 @@ func (c *Client) commentWithAuthor(ctx context.Context, id, body string, uploads
 	if err != nil {
 		return err
 	}
-	actor := c.requestActor(ctx).Actor
+	by := c.requestActor(ctx)
 	// An author naming the request's own principal keeps its kind: a
 	// verified *.gserviceaccount.com caller is a service principal, as it
 	// is on the tasks it files and closes, not a human.
-	if trimmed := strings.TrimSpace(author); trimmed != "" && trimmed != actor.ID {
-		actor = model.Principal{Kind: model.PrincipalHuman, ID: trimmed}
+	if trimmed := strings.TrimSpace(author); trimmed != "" && trimmed != by.Actor.ID {
+		by = model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: trimmed}}
 	}
-	return c.addAttributedComment(ctx, id, body, attachments, model.Attribution{Actor: actor}, now, reopenAck)
+	return c.addAttributedComment(ctx, id, body, attachments, by, now, reopenAck)
 }
 
 // addAttributedComment is AddCommentWithAuthor once the author is
@@ -5742,6 +5791,7 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 		Author:    by,
 		Body:      body,
 		CreatedAt: now,
+		FiledVia:  filedViaFromContext(ctx),
 	}, attachments); err != nil {
 		return err
 	}

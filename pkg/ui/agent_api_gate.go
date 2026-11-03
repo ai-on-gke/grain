@@ -157,6 +157,15 @@ func (c agentCall) source() model.AuthSource {
 	return model.SourceSandbox
 }
 
+// owner is the person an external agent credential's call is made on
+// behalf of (model.ExternalAgentToken.Owner), "" for none.
+func (c agentCall) owner() string {
+	if c.external == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.external.Owner)
+}
+
 func (c agentCall) principalID() string {
 	if c.external != nil {
 		return "external:" + c.external.Name
@@ -1484,12 +1493,18 @@ func agentDefaultRepo(acting *model.Task, granted []string, ciCap bool) string {
 // grain on the acting run's behalf.
 func (s *Server) recordAgentCall(ctx context.Context, call agentCall, status int, resultBytes int64) {
 	principal := call.principalID()
+	// who is the principal as the journal names it, with the person an
+	// owned external agent credential acts for (#XC-14).
+	who := principal
+	if owner := call.owner(); owner != "" {
+		who += " on behalf of " + owner
+	}
 	if call.channel != "" {
 		log.Printf("grain api: {agent, %s} %s scope=%s repo=%q channel=%q reason=%q -> %d",
-			principal, call.pattern, call.scope, call.repo, call.channel, call.reason, status)
+			who, call.pattern, call.scope, call.repo, call.channel, call.reason, status)
 	} else {
 		log.Printf("grain api: {agent, %s} %s scope=%s repo=%q reason=%q -> %d",
-			principal, call.pattern, call.scope, call.repo, call.reason, status)
+			who, call.pattern, call.scope, call.repo, call.reason, status)
 	}
 	if call.external == nil && s.tasks != nil && s.tasks.Store != nil {
 		bgCtx := context.WithoutCancel(ctx)
@@ -1516,8 +1531,12 @@ func (s *Server) recordAgentCall(ctx context.Context, call agentCall, status int
 	}
 	var body string
 	if call.external != nil {
-		body = fmt.Sprintf("External agent `%s` (`%s`) called `%s` through the agent API (scope `%s`).",
-			call.external.Name, principal, call.pattern, call.scope)
+		onBehalf := ""
+		if owner := call.owner(); owner != "" {
+			onBehalf = fmt.Sprintf(" on behalf of `%s`", owner)
+		}
+		body = fmt.Sprintf("External agent `%s` (`%s`)%s called `%s` through the agent API (scope `%s`).",
+			call.external.Name, principal, onBehalf, call.pattern, call.scope)
 	} else {
 		body = fmt.Sprintf("Task %s called `%s` through the agent API (scope `%s`).", call.taskID, call.pattern, call.scope)
 	}

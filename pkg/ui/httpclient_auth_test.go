@@ -338,3 +338,61 @@ func TestHTTPClient_DefaultClientHasResponseHeaderTimeout(t *testing.T) {
 		t.Fatalf("default client transport %#v has no ResponseHeaderTimeout", tr)
 	}
 }
+
+// #XC-15: the CLI names the tool and session it runs in on every request,
+// as one sanitized X-Grain-Client line built from $GRAIN_CLIENT and
+// $GRAIN_CLIENT_SESSION, and sends nothing when neither is set.
+func TestHTTPClient_XGrainClientFromEnvAndSession(t *testing.T) {
+	var got []string
+	var present []bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, ok := r.Header[http.CanonicalHeaderKey("X-Grain-Client")]
+		present = append(present, ok)
+		got = append(got, r.Header.Get("X-Grain-Client"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+
+	long := strings.Repeat("x", 400)
+	cases := []struct {
+		name, client, session, want string
+		sent                        bool
+	}{
+		{name: "neither", sent: false},
+		{name: "client and session", client: "jetski/1.4", session: "abc123", want: "jetski/1.4 session=abc123", sent: true},
+		{name: "client alone", client: "jetski/1.4", want: "jetski/1.4", sent: true},
+		{name: "session alone", session: "abc123", want: "session=abc123", sent: true},
+		{name: "client already names a session", client: "jetski/1.4 session=s1", session: "s2", want: "jetski/1.4 session=s1", sent: true},
+		{name: "control characters and newlines stripped", client: "jet\x01ski/1.4\r\nX-Evil: 1", session: "a\tb\x7f",
+			want: "jetski/1.4 X-Evil: 1 session=a b", sent: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, present = nil, nil
+			t.Setenv("GRAIN_CLIENT", tc.client)
+			t.Setenv("GRAIN_CLIENT_SESSION", tc.session)
+			c := NewHTTPClient(srv.URL)
+			c.Token = "tok"
+			if _, err := c.ListTasks(context.Background()); err != nil {
+				t.Fatalf("ListTasks: %v", err)
+			}
+			if len(got) != 1 || present[0] != tc.sent || got[0] != tc.want {
+				t.Fatalf("X-Grain-Client = %q (sent %v), want %q (sent %v)", got, present, tc.want, tc.sent)
+			}
+		})
+	}
+	t.Run("capped at 256 bytes", func(t *testing.T) {
+		got, present = nil, nil
+		t.Setenv("GRAIN_CLIENT", "tool/"+long)
+		t.Setenv("GRAIN_CLIENT_SESSION", "abc")
+		c := NewHTTPClient(srv.URL)
+		c.Token = "tok"
+		if _, err := c.ListTasks(context.Background()); err != nil {
+			t.Fatalf("ListTasks: %v", err)
+		}
+		if len(got) != 1 || len(got[0]) > 256 || !strings.HasPrefix(got[0], "tool/xxx") {
+			t.Fatalf("X-Grain-Client = %q (%d bytes), want a tool/... prefix of at most 256 bytes", got, len(got[0]))
+		}
+	})
+}

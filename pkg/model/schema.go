@@ -478,7 +478,15 @@ import "strconv"
 // package-publish providers onto the in-process release server: stored
 // grants, repo_config.ci_capabilities among them, become
 // https://grain.dev/capabilities/release#<method>={}.
-const SchemaVersion = 101
+//
+// 102 adds `external_agent_token`.`owner` (model.ExternalAgentToken.Owner,
+// the person a credential acts on behalf of), `filed_via` to `task` and
+// `task_comment` (the X-Grain-Client label of the tool that filed them,
+// model.Task.FiledVia and model.Comment.FiledVia) and
+// `grain_config`.`owner_trust` (model.Config.OwnerTrust, the owners whose
+// external agents' filings queue without a person's approval;
+// design/spec/external-cli/external-cli.spec.md#XC-14..#XC-17).
+const SchemaVersion = 102
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified
@@ -625,6 +633,7 @@ const externalAgentTokenTable = `CREATE TABLE IF NOT EXISTS ` + "`external_agent
   ` + "`revoked_at`" + `     DATETIME NULL,
   ` + "`last_used_at`" + `   DATETIME NULL,
   ` + "`created_by`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`owner`" + `          TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `),
   UNIQUE (` + "`token_hash`" + `)
 )`
@@ -782,6 +791,7 @@ var Tables = []string{
   ` + "`reviewers`" + `             TEXT     NOT NULL DEFAULT '',
   ` + "`priority`" + `              INTEGER  NOT NULL DEFAULT 5,
   ` + "`keep_running`" + `          INTEGER  NOT NULL DEFAULT 0,
+  ` + "`filed_via`" + `             TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -1641,7 +1651,8 @@ var Tables = []string{
   ` + "`body`" + `               TEXT     NOT NULL,
   ` + "`created_at`" + `         DATETIME NOT NULL,
   ` + "`handover`" + `           INTEGER  NOT NULL DEFAULT 0,
-  ` + "`summary`" + `            TEXT     NOT NULL DEFAULT ''
+  ` + "`summary`" + `            TEXT     NOT NULL DEFAULT '',
+  ` + "`filed_via`" + `          TEXT     NOT NULL DEFAULT ''
 )`,
 
 	`CREATE INDEX IF NOT EXISTS ` + "`task_comment_task`" + ` ON ` + "`task_comment`" + ` (` + "`task_id`" + `)`,
@@ -2373,6 +2384,7 @@ var Tables = []string{
   ` + "`settings_locked`" + `              INTEGER NOT NULL DEFAULT 0,
   ` + "`new_task_form`" + `                TEXT    NOT NULL DEFAULT '',
   ` + "`auto_upgrade_on`" + `              TEXT    NOT NULL DEFAULT '',
+  ` + "`owner_trust`" + `                  TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

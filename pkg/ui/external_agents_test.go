@@ -970,3 +970,283 @@ func TestExternalAgentViewKeepsPerScopeRepos(t *testing.T) {
 	}
 	check("list", views[0].ResolvedScopes)
 }
+
+// fileAsExternal posts body to path as the external agent holding token,
+// with headers, and returns the response.
+func fileAsExternal(t *testing.T, srv *ui.Server, token, path, body string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	return rec
+}
+
+// filedTask is the id and state of the task a POST /api/tasks answered.
+func filedTask(t *testing.T, rec *httptest.ResponseRecorder) ui.Task {
+	t.Helper()
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("filing answered %d, want 201: %s", rec.Code, rec.Body)
+	}
+	var task ui.Task
+	if err := json.Unmarshal(rec.Body.Bytes(), &task); err != nil {
+		t.Fatalf("decoding the filed task: %v (%s)", err, rec.Body)
+	}
+	return task
+}
+
+// #XC-14: a credential belongs to the person who issued it, and what it
+// does is recorded as external:<name> on behalf of that person -- in the
+// journal, in the audit note on the task it touched, and as the requester
+// of the work it files -- however the request itself names somebody else.
+func TestExternalAgentTokenOwnerAttributionOnJournalAuditAndTaskAuthor(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	enableExternalAgentAPI(t, client.Store)
+	jane := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "jane@example.com", Source: model.SourceIAP})
+
+	issued, err := client.CreateExternalAgentToken(jane, ui.CreateExternalAgentTokenRequest{
+		Name: "jane-laptop", ScopeSet: "grain/external-dev",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issued.Owner != "jane@example.com" {
+		t.Fatalf("owner = %q, want the issuing person jane@example.com", issued.Owner)
+	}
+	listed, err := client.ListExternalAgentTokens(ctx)
+	if err != nil || len(listed) != 1 || listed[0].Owner != "jane@example.com" {
+		t.Fatalf("listed credentials = %+v, %v; want one owned by jane@example.com", listed, err)
+	}
+	// An operator may issue one for somebody else; a person minting their
+	// own may not, and neither may an agent.
+	if other, err := client.CreateExternalAgentToken(jane, ui.CreateExternalAgentTokenRequest{
+		Name: "for-bob", ScopeSet: "grain/external-read", Owner: "bob@example.com",
+	}); err != nil || other.Owner != "bob@example.com" {
+		t.Fatalf("issuing for bob = %+v, %v; want owner bob@example.com", other, err)
+	}
+	if _, err := client.CreateExternalAgentToken(jane, ui.CreateExternalAgentTokenRequest{
+		Name: "self", ScopeSet: "grain/external-read", Owner: "bob@example.com", SelfService: true,
+	}); err == nil {
+		t.Fatal("a self-service credential was minted on behalf of somebody else")
+	}
+	agentCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: "42", Source: model.SourceSandbox})
+	if _, err := client.CreateExternalAgentToken(agentCtx, ui.CreateExternalAgentTokenRequest{
+		Name: "laundered", ScopeSet: "grain/external-read", Owner: "jane@example.com",
+	}); err == nil {
+		t.Fatal("an agent minted a credential on behalf of a person")
+	}
+
+	var logBuf bytes.Buffer
+	origOut := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(origOut) })
+
+	// The body may not name an author, and X-Forwarded-User is not
+	// believed from an external agent.
+	if rec := fileAsExternal(t, srv, issued.Token, "/api/tasks",
+		`{"title":"x","repo":"acme/widgets","author":"mallory@example.com"}`, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("filing with an author answered %d, want 403: %s", rec.Code, rec.Body)
+	}
+	task := filedTask(t, fileAsExternal(t, srv, issued.Token, "/api/tasks",
+		`{"title":"from the laptop","repo":"acme/widgets"}`,
+		map[string]string{"X-Forwarded-User": "mallory@example.com"}))
+	stored, err := client.Store.GetTask(ctx, task.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("reading task %s: %v", task.ID, err)
+	}
+	if stored.Creator != "jane@example.com" {
+		t.Errorf("task creator = %q, want the owner jane@example.com", stored.Creator)
+	}
+	if a := stored.Origin.Attribution; a.Actor.ID != "external:jane-laptop" || a.OnBehalfOf == nil ||
+		a.OnBehalfOf.Kind != model.PrincipalHuman || a.OnBehalfOf.ID != "jane@example.com" {
+		t.Errorf("task origin = %+v (on behalf of %+v), want external:jane-laptop on behalf of jane@example.com", a, a.OnBehalfOf)
+	}
+	if stored.Approval != nil {
+		t.Errorf("an unapproved filing landed approved by %+v", stored.Approval)
+	}
+
+	// A write to the task leaves an audit note naming the owner, and the
+	// journal line says the same.
+	if rec := fileAsExternal(t, srv, issued.Token, "/api/tasks/"+task.ID+"/comments", `{"body":"hello"}`, nil); rec.Code >= 300 {
+		t.Fatalf("commenting answered %d: %s", rec.Code, rec.Body)
+	}
+	comments, err := client.Store.Comments(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var audit, said bool
+	for _, c := range comments {
+		if strings.Contains(c.Body, "External agent `jane-laptop`") && strings.Contains(c.Body, "on behalf of `jane@example.com`") {
+			audit = true
+		}
+		if c.Body == "hello" {
+			said = c.Author.Actor.ID == "external:jane-laptop" && c.Author.OnBehalfOf != nil && c.Author.OnBehalfOf.ID == "jane@example.com"
+		}
+	}
+	if !audit {
+		t.Errorf("no audit note on behalf of jane@example.com among %+v", comments)
+	}
+	if !said {
+		t.Errorf("the agent's comment is not attributed on behalf of jane@example.com: %+v", comments)
+	}
+	if !strings.Contains(logBuf.String(), "{agent, external:jane-laptop on behalf of jane@example.com} POST /api/tasks") {
+		t.Errorf("journal does not name the owner:\n%s", logBuf.String())
+	}
+}
+
+// #XC-15: X-Grain-Client is stored, sanitized, as the filed_via of the
+// task and comments an agent posts, and shown as provenance -- but it is
+// a label: it reaches no repository, approval or scope the credential
+// does not already have.
+func TestXGrainClientHeaderStoredAsFiledViaWithoutGrantingAuthority(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	enableExternalAgentAPI(t, client.Store)
+	jane := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "jane@example.com", Source: model.SourceIAP})
+	issued, err := client.CreateExternalAgentToken(jane, ui.CreateExternalAgentTokenRequest{
+		Name: "jetski", Scopes: []string{"tasks:read@acme/widgets", "tasks:write@acme/widgets"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	label := map[string]string{"X-Grain-Client": "jetski/1.4\x01 session=abc123"}
+
+	task := filedTask(t, fileAsExternal(t, srv, issued.Token, "/api/tasks", `{"title":"x","repo":"acme/widgets"}`, label))
+	if task.FiledVia != "jetski/1.4 session=abc123" {
+		t.Errorf("filedVia = %q, want the sanitized label", task.FiledVia)
+	}
+	if task.Provenance != "filed from jetski/1.4 session=abc123 by jane@example.com" {
+		t.Errorf("provenance = %q", task.Provenance)
+	}
+	if task.State != model.StateProposed {
+		t.Errorf("state = %s, want proposed", task.State)
+	}
+	if rec := fileAsExternal(t, srv, issued.Token, "/api/tasks/"+task.ID+"/comments", `{"body":"progress"}`, label); rec.Code >= 300 {
+		t.Fatalf("commenting answered %d: %s", rec.Code, rec.Body)
+	}
+	detail, err := client.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, c := range detail.Comments {
+		if c.Body == "progress" {
+			found = c.FiledVia == "jetski/1.4 session=abc123" &&
+				c.Provenance == "filed from jetski/1.4 session=abc123 by jane@example.com"
+		}
+	}
+	if !found {
+		t.Errorf("the comment does not carry its filed_via: %+v", detail.Comments)
+	}
+
+	// Whatever the label claims, the credential's own limits hold.
+	for _, claim := range []string{"grain-operator", "owner-trust", "tasks:admin session=root"} {
+		h := map[string]string{"X-Grain-Client": claim}
+		if rec := fileAsExternal(t, srv, issued.Token, "/api/tasks", `{"title":"x","repo":"acme/gadgets"}`, h); rec.Code != http.StatusForbidden {
+			t.Errorf("label %q reached acme/gadgets: %d %s", claim, rec.Code, rec.Body)
+		}
+		if rec := fileAsExternal(t, srv, issued.Token, "/api/tasks", `{"title":"x","repo":"acme/widgets","approved":true}`, h); rec.Code != http.StatusForbidden {
+			t.Errorf("label %q approved its own filing: %d %s", claim, rec.Code, rec.Body)
+		}
+		if got := filedTask(t, fileAsExternal(t, srv, issued.Token, "/api/tasks", `{"title":"x","repo":"acme/widgets"}`, h)); got.State != model.StateProposed {
+			t.Errorf("label %q filed work %s, want proposed", claim, got.State)
+		}
+	}
+	// Nor does the body set it.
+	if got := filedTask(t, fileAsExternal(t, srv, issued.Token, "/api/tasks", `{"title":"x","repo":"acme/widgets","filedVia":"forged"}`, nil)); got.FiledVia != "" {
+		t.Errorf("a body's filedVia was stored: %q", got.FiledVia)
+	}
+}
+
+// #XC-17: the deployment's owner-trust policy queues an external agent's
+// unapproved filing only when the credential's owner is trusted on the
+// filing's repository (or on "*"); every other filing stays proposed.
+func TestOwnerTrustProposalPolicyAutoApprovesMatchingOwnerAndRepoOnly(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	enableExternalAgentAPI(t, client.Store)
+	operator := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP})
+	issue := func(name, owner string) string {
+		t.Helper()
+		issued, err := client.CreateExternalAgentToken(operator, ui.CreateExternalAgentTokenRequest{
+			Name: name, ScopeSet: "grain/external-dev", Owner: owner,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return issued.Token
+	}
+	janeTok, bobTok := issue("jane-laptop", "jane@example.com"), issue("bob-laptop", "bob@example.com")
+
+	// grain/external-dev cannot write the policy itself.
+	req := httptest.NewRequest(http.MethodPut, "/api/settings",
+		strings.NewReader(`{"ownerTrust":[{"owner":"jane@example.com","repo":"*"}]}`))
+	req.Header.Set("Authorization", "Bearer "+janeTok)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("an external-dev credential wrote settings: %d %s", rec.Code, rec.Body)
+	}
+
+	rules := []model.OwnerTrustRule{{Owner: "jane@example.com", Repo: "acme/widgets"}}
+	settings, err := client.UpdateSettings(operator, ui.UpdateSettingsRequest{OwnerTrust: &rules})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(settings.OwnerTrust) != 1 || settings.OwnerTrust[0] != rules[0] {
+		t.Fatalf("settings ownerTrust = %+v, want %+v", settings.OwnerTrust, rules)
+	}
+
+	file := func(token, repo string, headers map[string]string) *model.Task {
+		t.Helper()
+		got := filedTask(t, fileAsExternal(t, srv, token, "/api/tasks", `{"title":"x","repo":"`+repo+`"}`, headers))
+		stored, err := client.Store.GetTask(ctx, got.ID)
+		if err != nil || stored == nil {
+			t.Fatalf("reading task %s: %v", got.ID, err)
+		}
+		return stored
+	}
+	trusted := file(janeTok, "acme/widgets", nil)
+	if a := trusted.Approval; a == nil || a.Actor != model.OwnerTrustPrincipal || a.OnBehalfOf == nil || a.OnBehalfOf.ID != "jane@example.com" {
+		t.Fatalf("jane's filing on acme/widgets approval = %+v, want owner-trust on behalf of jane@example.com", a)
+	}
+	if detail, err := client.GetTask(ctx, trusted.ID); err != nil || detail.State != model.StateQueued {
+		t.Errorf("jane's filing on acme/widgets is %s (%v), want queued", detail.State, err)
+	}
+	for _, c := range []struct {
+		name, token, repo string
+		headers           map[string]string
+	}{
+		{"owner on another repository", janeTok, "acme/gadgets", nil},
+		{"another owner on the trusted repository", bobTok, "acme/widgets", nil},
+		{"another owner whose label claims the trusted one", bobTok, "acme/widgets",
+			map[string]string{"X-Grain-Client": "jane@example.com", "X-Forwarded-User": "jane@example.com"}},
+	} {
+		if got := file(c.token, c.repo, c.headers); got.Approval != nil {
+			t.Errorf("%s: filing approved by %+v, want proposed", c.name, got.Approval)
+		}
+	}
+
+	// (owner, "*") trusts that owner everywhere.
+	rules = []model.OwnerTrustRule{{Owner: "bob@example.com", Repo: model.OwnerTrustAnyRepo}}
+	if _, err := client.UpdateSettings(operator, ui.UpdateSettingsRequest{OwnerTrust: &rules}); err != nil {
+		t.Fatal(err)
+	}
+	if got := file(bobTok, "acme/gadgets", nil); got.Approval == nil || got.Approval.Actor != model.OwnerTrustPrincipal {
+		t.Errorf("bob's filing under (bob, *) approval = %+v, want owner-trust", got.Approval)
+	}
+	if got := file(janeTok, "acme/widgets", nil); got.Approval != nil {
+		t.Errorf("jane's filing after her rule was removed approved by %+v, want proposed", got.Approval)
+	}
+	// A rule with no repository is refused.
+	bad := []model.OwnerTrustRule{{Owner: "bob@example.com"}}
+	if _, err := client.UpdateSettings(operator, ui.UpdateSettingsRequest{OwnerTrust: &bad}); err == nil {
+		t.Error("a rule naming no repository was accepted")
+	}
+}

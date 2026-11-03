@@ -264,3 +264,66 @@ func TestScopeSetsDeclaredAfterStartupAreOfferedAndGrantable(t *testing.T) {
 		t.Error("a removed set was granted")
 	}
 }
+
+// #XC-16: grain/external-dev and grain/external-read are built-in scope
+// sets an external agent credential can be issued with by anybody who may
+// issue one -- neither holds a dangerous scope or needs a person -- and
+// each grants exactly what the spec lists.
+func TestExternalDevAndExternalReadScopeSetsHoldNoDangerousScopes(t *testing.T) {
+	client, _, ctx := testClient(t)
+	want := map[string][]string{
+		"grain/external-dev": {"tasks:read", "tasks:write", "ci:read", "ci:write", "merge:write",
+			"repos:read", "templates:read", "deployment:read"},
+		"grain/external-read": {"tasks:read", "ci:read", "repos:read", "templates:read", "deployment:read"},
+	}
+	forbidden := []string{"tasks:admin", "merge:force", "settings:read", "settings:write",
+		"secrets:read", "secrets:write", "connections:write", "capabilities:admin",
+		"deployment:write", "deployment:upgrade", "deployment:src"}
+	for name, scopes := range want {
+		var set model.APIScopeSet
+		for _, s := range model.BuiltinAPIScopeSets() {
+			if s.Name == name {
+				set = s
+			}
+		}
+		if set.Name == "" {
+			t.Fatalf("BuiltinAPIScopeSets has no %s", name)
+		}
+		if set.RequiresPerson {
+			t.Errorf("%s requires a person, want RequiresPerson false", name)
+		}
+		got := slices.Clone(set.Scopes)
+		slices.Sort(got)
+		sorted := slices.Clone(scopes)
+		slices.Sort(sorted)
+		if !slices.Equal(got, sorted) {
+			t.Errorf("%s scopes = %v, want %v", name, got, sorted)
+		}
+		for _, s := range set.Scopes {
+			if model.IsDangerousAPIScope(model.APIScope(s)) {
+				t.Errorf("%s holds dangerous scope %s", name, s)
+			}
+			if slices.Contains(forbidden, s) {
+				t.Errorf("%s holds %s, which it must not", name, s)
+			}
+			if name == "grain/external-read" && (strings.HasSuffix(s, ":write") ||
+				strings.HasSuffix(s, ":admin") || strings.HasSuffix(s, ":force")) {
+				t.Errorf("grain/external-read holds %s, want read-only", s)
+			}
+		}
+		_, _, _, _, _, dangerous, err := model.NormalizeExternalAgentSpec(name, nil, nil)
+		if err != nil || dangerous {
+			t.Errorf("NormalizeExternalAgentSpec(%s) = dangerous %v, %v; want a set anybody may issue", name, dangerous, err)
+		}
+	}
+	// And an agent can be issued one without a person.
+	issued, err := client.CreateExternalAgentToken(ctx, ui.CreateExternalAgentTokenRequest{
+		Name: "workstation", ScopeSet: "grain/external-dev",
+	})
+	if err != nil {
+		t.Fatalf("issuing a grain/external-dev credential: %v", err)
+	}
+	if issued.ScopeSet != "grain/external-dev" {
+		t.Errorf("issued scopeSet = %q, want grain/external-dev", issued.ScopeSet)
+	}
+}

@@ -696,6 +696,16 @@ var Migrations = []Migration{
 		Description: "rewrite stored image-signing, registry-push and package-publish grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/release#<method>={} (the in-process providers are retired)",
 		Up:          migrateReleaseGrants,
 	},
+	{
+		Version:     102,
+		Description: "add external_agent_token.owner, task.filed_via, task_comment.filed_via and grain_config.owner_trust (external agent owner attribution and owner-trust approval)",
+		Statements: []string{
+			"ALTER TABLE `external_agent_token` ADD COLUMN `owner` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `filed_via` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task_comment` ADD COLUMN `filed_via` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `grain_config` ADD COLUMN `owner_trust` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as
