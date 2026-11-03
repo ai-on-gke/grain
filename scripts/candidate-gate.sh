@@ -72,8 +72,15 @@
 #       Stage 2   the grain/release-qualification check run on SHA
 #                 (CHECK_QUALIFICATION_CHECK), from --checks-json, GitHub's
 #                 GET /repos/{owner}/{repo}/commits/{sha}/check-runs answer
-#                 (or a bare array of check runs). Only judged once Stage 1
-#                 passes; without --checks-json it is PENDING;
+#                 (or a bare array of check runs). Only a check run the
+#                 GitHub App CHECK_QUALIFICATION_APP names (its slug or
+#                 numeric id: grain's own forge connection) created
+#                 counts; one of the same name from any other app -- an
+#                 Actions workflow with checks: write, another installed
+#                 app -- is reported as IGNORED and never judged, and with
+#                 CHECK_QUALIFICATION_APP unset no check run is trusted at
+#                 all (exit 64). Only judged once Stage 1 passes; without
+#                 --checks-json it is PENDING;
 #       never     TAG, and the release it would become, are not in
 #                 RELEASE_NEVER_PROMOTE (scripts/release.conf).
 #     Every job (and the check run) is judged on its attempts in order:
@@ -122,6 +129,10 @@ upgrade-test=upgrade from previous versions}"
 # jobs above, which on a retry judges only the job retried.
 CHECK_QUALIFICATION_IGNORE="${CHECK_QUALIFICATION_IGNORE-stage-1=stage 1 qualification verdict}"
 CHECK_QUALIFICATION_CHECK="${CHECK_QUALIFICATION_CHECK-grain/release-qualification}"
+# The GitHub App (slug or numeric id) whose CHECK_QUALIFICATION_CHECK is
+# trusted: grain's own forge connection, which posts it. Anything else
+# that can write check runs on the repository can post one by that name.
+CHECK_QUALIFICATION_APP="${CHECK_QUALIFICATION_APP-}"
 CHECK_QUALIFICATION_MAX_FLAKES="${CHECK_QUALIFICATION_MAX_FLAKES:-2}"
 CHECK_QUALIFICATION_INFRA_STALL="${CHECK_QUALIFICATION_INFRA_STALL:-3}"
 
@@ -304,14 +315,21 @@ job_names_json() {
   printf '%s\n' "$1" | jq -Rn '[inputs | select(test("\\S")) | capture("^\\s*(?<id>[^=]+?)\\s*=\\s*(?<name>.*?)\\s*$")]'
 }
 
+# from_app: a check run posted by the app $app names (its slug or id);
+# sha_ok: a sha that is $rc's.
+# shellcheck disable=SC2016 # jq, not shell
+JQ_CHECK_RUN='
+  def from_app: $app != "" and (.app | type == "object")
+    and ((.app.slug // "") == $app or ((.app.id // "") | tostring) == $app);
+  def sha_ok: (. // "" | ascii_downcase) as $h | $h == "" or ($rc | startswith($h)) or ($h | startswith($rc));
+'
 # The attempts of every job in a listing, one line per job: stage, job
 # and the class of each attempt in order (pending, success, failure,
 # infra; skipped only when the job never ran at all), comma-separated.
 # shellcheck disable=SC2016 # jq, not shell
-JQ_ATTEMPTS='
+JQ_ATTEMPTS="$JQ_CHECK_RUN"'
   def known($n): ($names + $ignore | map(. as $e | select($e.id == $n or $e.name == $n or ($n | startswith($e.name + " (")) or ($n | startswith($e.id + " ("))))
     | first | .id) // ($n | sub(" \\(.*\\)$"; ""));
-  def sha_ok: (. // "" | ascii_downcase) as $h | $h == "" or ($rc | startswith($h)) or ($h | startswith($rc));
   def wf: ((.workflowPath // "") | split("/") | last | sub("\\.ya?ml$"; "")) as $p
     | if $p != "" then $p else (.workflow // .workflow_name // "") end;
   def stage1:
@@ -335,7 +353,7 @@ JQ_ATTEMPTS='
     end;
   def stage2:
     [ (if type == "array" then . else (.check_runs // []) end)[]
-      | select(.name == $check) | select(.head_sha | sha_ok)
+      | select(.name == $check) | select(.head_sha | sha_ok) | select(from_app)
       | {stage: "qualification", job: .name,
          key: [((.started_at // .startedAt) | epoch), (.id // 0), 1],
          c: (if (.status // "completed") != "completed" then "pending"
@@ -436,7 +454,7 @@ check_qualification() {
   # Stage 1: nightly.yml on the RC.
   local table stage job attempts id
   table="$(jq -r --arg rc "$rc" --arg which nightly --arg check "$CHECK_QUALIFICATION_CHECK" \
-    --argjson names "$names" --argjson ignore "$ignore" "$JQ_EPOCH$JQ_ATTEMPTS" "$runs")" ||
+    --arg app "$CHECK_QUALIFICATION_APP" --argjson names "$names" --argjson ignore "$ignore" "$JQ_EPOCH$JQ_ATTEMPTS" "$runs")" ||
     die "--runs-json $runs is not a CI run or job listing"
   declare -A seen=()
   if [ -z "$table" ]; then
@@ -463,9 +481,20 @@ check_qualification() {
     echo "PENDING $CHECK_QUALIFICATION_CHECK: waits for Stage 1 (nightly.yml) to pass"
   elif [ -z "$checks" ]; then
     wait_for "$CHECK_QUALIFICATION_CHECK" "no check run listing was given"
+  elif [ -z "$CHECK_QUALIFICATION_APP" ]; then
+    die "CHECK_QUALIFICATION_APP is unset, so no $CHECK_QUALIFICATION_CHECK check run can be trusted: set it to the slug or id of the GitHub App grain posts it as"
   else
+    local foreign
+    foreign="$(jq -r --arg rc "$rc" --arg check "$CHECK_QUALIFICATION_CHECK" --arg app "$CHECK_QUALIFICATION_APP" "$JQ_CHECK_RUN"'
+      [ (if type == "array" then . else (.check_runs // []) end)[]
+        | select(.name == $check) | select(.head_sha | sha_ok) | select(from_app | not)
+        | .app.slug // (.app.id // "no app" | tostring) ]
+      | select(length > 0) | "\(length) from \(unique | join(", "))"' "$checks")" ||
+      die "--checks-json $checks is not a check run listing"
+    [ -z "$foreign" ] ||
+      echo "IGNORED $CHECK_QUALIFICATION_CHECK: $foreign, not $CHECK_QUALIFICATION_APP; only grain's own app is trusted"
     table="$(jq -r --arg rc "$rc" --arg which qualification --arg check "$CHECK_QUALIFICATION_CHECK" \
-      --argjson names "[]" --argjson ignore "[]" "$JQ_EPOCH$JQ_ATTEMPTS" "$checks")" ||
+      --arg app "$CHECK_QUALIFICATION_APP" --argjson names "[]" --argjson ignore "[]" "$JQ_EPOCH$JQ_ATTEMPTS" "$checks")" ||
       die "--checks-json $checks is not a check run listing"
     if [ -z "$table" ]; then
       wait_for "$CHECK_QUALIFICATION_CHECK" "no $CHECK_QUALIFICATION_CHECK check run on ${rc:0:12} yet"

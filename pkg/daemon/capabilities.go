@@ -440,6 +440,24 @@ func (c credentialTokenSource) TokenRefused(token string) {
 	}
 }
 
+// AppSlugFor is github.AppSlugSource: the slug of the GitHub App behind
+// owner/repo's credential (gitproxy.CredentialSet.AppBotLogin), or ""
+// when that credential is not an App's.
+func (c credentialTokenSource) AppSlugFor(owner, repo string) (string, error) {
+	if c.credentials == nil {
+		return "", nil
+	}
+	cred, ok := c.selectCredential(owner, repo)
+	if !ok {
+		return "", nil
+	}
+	login, isApp, err := c.credentials.AppBotLogin(cred.Name)
+	if err != nil || !isApp {
+		return "", err
+	}
+	return strings.TrimSuffix(login, "[bot]"), nil
+}
+
 func (c credentialTokenSource) TokenFor(owner, repo string) *string {
 	cred, ok := c.selectCredential(owner, repo)
 	if !ok {
