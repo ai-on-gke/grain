@@ -1369,6 +1369,11 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 // with sandboxaccess.ErrChannelLost (design/design/grain-on-gke.design.md#GKE-3).
 const ChannelLostFaultPrefix = sandboxaccess.ChannelLostFault
 
+// SandboxLostFaultPrefix is the JobRun.Error prefix recorded when a step's
+// sandbox transport failed with anything other than ErrChannelLost: the
+// machine died under it (sandboxaccess.SandboxLostFault).
+const SandboxLostFaultPrefix = sandboxaccess.SandboxLostFault
+
 // OOMRetryReasonPrefix starts a job's RetryReason (and Error, Warning)
 // when its sandbox was OOM-killed, so a reader can tell an infrastructure
 // retry from a flaky one.
@@ -1631,10 +1636,21 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 			notSuccess = workflows.ConclusionErrored
 		}
 		channelLostStep := errors.Is(err, sandboxaccess.ErrChannelLost)
+		// Any other transport error, under a step whose bounds and run are
+		// all still live, is the machine going away under it
+		// (gritsteps.Sandbox.Exec): errored, like a lost channel, so the
+		// job carries an infra error rather than a verdict on the tree. A
+		// context's own error is a bound or a cancel, which are told apart
+		// below as they always were.
+		sandboxLostStep := !channelLostStep && err != nil && ctx.Err() == nil && !expired && !ownExpired &&
+			!errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled)
 		switch {
 		case channelLostStep:
 			record.Conclusion = workflows.ConclusionErrored
 			record.Error = fmt.Sprintf("%s: %v", ChannelLostFaultPrefix, err)
+		case sandboxLostStep:
+			record.Conclusion = workflows.ConclusionErrored
+			record.Error = fmt.Sprintf("%s: %v", SandboxLostFaultPrefix, err)
 		case err != nil:
 			record.Conclusion = notSuccess
 			record.Error = err.Error()
@@ -1643,7 +1659,7 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 		default:
 			record.Conclusion = notSuccess
 		}
-		if record.Conclusion != workflows.ConclusionSuccess && !channelLostStep {
+		if record.Conclusion != workflows.ConclusionSuccess && !channelLostStep && !sandboxLostStep {
 			switch {
 			case ctx.Err() != nil:
 				// The run ended under this job -- cancelled, superseded, a
@@ -1663,7 +1679,7 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 			progress(jobRunSnapshot(*result))
 		}
 
-		if channelLostStep {
+		if channelLostStep || sandboxLostStep {
 			failed = true
 			channelLost = record.Error
 			continue
@@ -1915,15 +1931,17 @@ func stepTimeout(ctx context.Context, step workflows.Step) time.Duration {
 // the bottom, then the workflow's, the job's and the step's, each
 // layering over the last -- GitHub's own precedence -- except for the
 // caller-identity variables (GRAIN_CI_REQUESTED_BY_KIND,
-// GRAIN_CI_REQUESTED_BY and GRAIN_CI_RELEASE_VERSION), which a
-// person-only release workflow reads to verify that a person started it
-// and which a workflow file's own env: may neither set nor replace.
+// GRAIN_CI_REQUESTED_BY, GRAIN_CI_RELEASE_VERSION and
+// GRAIN_CI_RELEASE_SHORT_SOAK_OK), which a person-only release workflow
+// reads to verify that a person started it, and what they decided, and
+// which a workflow file's own env: may neither set nor replace.
 func StepEnv(plan workflows.Plan, pj workflows.PlannedJob, step workflows.Step) map[string]string {
 	env := workflows.RunEnv(plan.Request, pj.Workflow, pj.Job.ID)
 	for _, layer := range []map[string]string{pj.WorkflowEnv, pj.Job.Env, step.Env} {
 		for k, v := range layer {
 			switch k {
-			case workflows.RequestedByKindEnv, workflows.RequestedByEnv, workflows.ReleaseVersionEnv:
+			case workflows.RequestedByKindEnv, workflows.RequestedByEnv, workflows.ReleaseVersionEnv,
+				workflows.ReleaseShortSoakOKEnv:
 				continue
 			}
 			env[k] = v

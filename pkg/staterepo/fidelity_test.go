@@ -487,6 +487,16 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	}); err != nil {
 		t.Fatalf("recording exec-tunnel failures: %v", err)
 	}
+	// Which hostd the run went to (task_run_hostd), and the task's own
+	// hostd pin (task_hostd).
+	if err := store.RecordTaskRunHostd(ctx, model.TaskRunHostd{
+		RunID: "a1b2-1", TaskID: "a1b2", Hostd: "laptop", Instance: "laptop.example.com", Owner: "owner@example.com", At: sub,
+	}); err != nil {
+		t.Fatalf("recording a run's hostd: %v", err)
+	}
+	if err := store.SetTaskHostd(ctx, "a1b2", "gpu=a100,zone=b"); err != nil {
+		t.Fatalf("pinning a task's hostd: %v", err)
+	}
 	// What a run's capability grants did for it
 	// (task_run_capability_audit): a capability server's own JSON
 	// record, verbatim -- argv out of a sandbox, so the awkward string
@@ -1200,6 +1210,10 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 		args []any
 	}{
 		{"INSERT INTO `task_tag` (`task_id`, `tag`) VALUES (?, ?)", []any{"a1b2", awkward}},
+		// The hostd registry (model.Hostd); its tokens stay local
+		// (LocalTables).
+		{"INSERT INTO `hostd` (`name`, `owner`, `labels`, `created_by`, `created_at`, `revoked_at`) VALUES (?, ?, ?, ?, ?, NULL)",
+			[]any{"ws-1", "alice@example.com", "gpu=yes,os=linux", "admin", time.Date(2026, 11, 2, 9, 0, 0, 123000000, time.UTC)}},
 		{"INSERT INTO `work_origin_comment` (`origin`, `comment_id`, `body`) VALUES (?, ?, ?)",
 			[]any{"owner/docs#7", 12345, awkward}},
 		{"INSERT INTO `task_link` (`task_id`, `kind`, `target`, `blocks`) VALUES (?, ?, ?, ?)",
@@ -1222,6 +1236,10 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 			[]any{"a1b2", "base-green", `{"repo":"owner/docs","branch":"main"}`, "close", "automation:task-goals", time.Now().UTC(), awkward, time.Now().UTC(), 6, 43200, "hold"}},
 		{"INSERT INTO `tuning_recommendation` (`target_parameter`, `proposed_value`, `cooldown_expiry`, `adopted`, `task_id`, `created_at`) VALUES (?, ?, ?, ?, ?, ?)",
 			[]any{"merge_batch_size", "4", "2026-10-12T00:00:00Z", 0, "a1b2", "2026-10-10T12:00:00Z"}},
+		{"INSERT INTO `allowed_principal` (`entry`, `added_by`, `added_at`) VALUES (?, ?, ?)",
+			[]any{"user:alice@example.com", "the access code", time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)}},
+		{"INSERT INTO `allowed_principal_migration` (`id`, `imported_at`, `source`, `dropped`) VALUES (?, ?, ?, ?)",
+			[]any{1, time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC), "-ui-allowed-principals", `["domain:example.com"]`}},
 	} {
 		if _, err := db.ExecContext(ctx, stmt.sql, stmt.args...); err != nil {
 			t.Fatalf("writing %s: %v", stmt.sql, err)

@@ -70,8 +70,8 @@ func TestHostQualifiedRepoRoutesKeepTheHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored == nil || !reflect.DeepEqual(stored.CICapabilities, []string{"gcp-key"}) {
-		t.Fatalf("stored config for %s = %+v, want gcp-key saved under the host-qualified repo", depotRepo, stored)
+	if stored == nil || !reflect.DeepEqual(stored.CICapabilities, []string{model.GCPKeySandboxAgentGrant}) {
+		t.Fatalf("stored config for %s = %+v, want %s saved under the host-qualified repo", depotRepo, stored, model.GCPKeySandboxAgentGrant)
 	}
 	if other, err := c.Store.GetRepoConfig(ctx, model.RepoRef{Owner: "experimental", Name: "bsalmon-test"}); err != nil || (other != nil && len(other.CICapabilities) > 0) {
 		t.Fatalf("the default-host experimental/bsalmon-test got the setting too: %+v, %v", other, err)
@@ -117,11 +117,11 @@ func TestHTTPClientRoutesAHostQualifiedRepo(t *testing.T) {
 		t.Fatal(err)
 	}
 	stored, err := c.Store.GetRepoConfig(ctx, depotRef)
-	if err != nil || stored == nil || !reflect.DeepEqual(stored.CICapabilities, []string{"gcp-key"}) {
+	if err != nil || stored == nil || !reflect.DeepEqual(stored.CICapabilities, []string{model.GCPKeySandboxAgentGrant}) {
 		t.Fatalf("stored config for %s = %+v, %v", depotRepo, stored, err)
 	}
 	got, err := hc.RepoDefaults(ctx, depotRepo)
-	if err != nil || !reflect.DeepEqual(got.CICapabilities, []string{"gcp-key"}) {
+	if err != nil || !reflect.DeepEqual(got.CICapabilities, []string{model.GCPKeySandboxAgentGrant}) {
 		t.Fatalf("RepoDefaults(%s) = %+v, %v", depotRepo, got, err)
 	}
 }

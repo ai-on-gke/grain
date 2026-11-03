@@ -63,3 +63,23 @@ func TestCiSandboxExecKeepsAnOrdinaryFailureAStepFailure(t *testing.T) {
 		t.Fatalf("exec = (%+v, %v), want exit 2 and no error", res, err)
 	}
 }
+
+// TestCiSandboxExecFailsAStepWithAnUnusableWorkingDirectory: a
+// `working-directory:` the step cannot be run in is the workflow's
+// mistake, so it fails the step rather than coming back as a transport
+// error, which the engine would read as the sandbox lost and re-run as
+// infra.
+func TestCiSandboxExecFailsAStepWithAnUnusableWorkingDirectory(t *testing.T) {
+	t.Parallel()
+	s := &CiSandbox{
+		SandboxName: "ci-bad-dir",
+		Run: func(context.Context, map[string]any) mcp.Result {
+			t.Fatal("the step was run")
+			return mcp.Result{}
+		},
+	}
+	res, err := s.exec(context.Background(), ci.Command{Script: "make build", Dir: "it's"}, nil)
+	if err != nil || res.ExitCode == 0 || !strings.Contains(res.Output, "not a usable working directory") {
+		t.Fatalf("exec = (%+v, %v), want a failed step saying why and no error", res, err)
+	}
+}

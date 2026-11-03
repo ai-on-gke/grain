@@ -163,6 +163,14 @@ func (s *scriptedSession) snapshot() []string {
 	return append([]string(nil), s.prompts...)
 }
 
+// taskCanceller is ui.Config.TaskCanceller over orchestrator.TaskCancellers,
+// as the daemon's taskCancellerAdapter is.
+type taskCanceller struct{ cancellers *orchestrator.TaskCancellers }
+
+func (c taskCanceller) CancelTask(_ context.Context, taskID string) bool {
+	return c.cancellers.Cancel(taskID, orchestrator.ErrTurnStopped)
+}
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -204,7 +212,13 @@ func run() error {
 	}
 	defaultRepo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	provider := &scriptedSession{store: store}
+	// Stop reaches a held run the way it does on a daemon
+	// (daemon.taskCancellerAdapter): the run's own context is cancelled
+	// with orchestrator.ErrTurnStopped, rather than only its stored row
+	// being finished while the scripted agent goes on holding the task.
+	cancellers := orchestrator.NewTaskCancellers()
 	handler := ui.NewServer(ui.Config{
+		TaskCanceller: taskCanceller{cancellers},
 		Actor:         model.Principal{Kind: model.PrincipalHuman, ID: "console-rest-e2e-operator"},
 		DefaultTarget: &defaultRepo, Capabilities: ui.OfferedCapabilities(),
 		SandboxShapeIgnored: true,
@@ -212,11 +226,17 @@ func run() error {
 		// loopback included, shows it, as on every grain daemon.
 		LocalAPIToken: os.Getenv("GRAIN_E2E_ACCESS_CODE"),
 	}, store)
+	// api grants resolve as on every grain daemon
+	// (ui.AgentAPIDynamicProvider): every console session holds
+	// model.ConsoleSessionCIReadGrant by default.
+	registry := model.NewCapabilityRegistry(bootstrap.New(), durable.New())
+	registry.RegisterDynamic(ui.AgentAPIDynamicProvider)
 	deps := orchestrator.Deps{
 		Store: store, Sandboxes: orchestrator.NewHostSandboxes(sandboxRoot),
 		Framework: orchestrator.StaticFramework(provider),
 		Config: orchestrator.Config{
-			Capabilities: model.NewCapabilityRegistry(bootstrap.New(), durable.New()),
+			Capabilities:   registry,
+			TaskCancellers: cancellers,
 		},
 		MaxWorkers: 2,
 	}

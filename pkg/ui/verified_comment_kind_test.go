@@ -36,7 +36,10 @@ func TestVerifiedServiceAccountCommentIsAServicePrincipal(t *testing.T) {
 	assertionKeys(t, priv, pemStr, true)
 	ui.SetIAPAudience(tunnelAudience)
 	srv, client := testServer(t)
-	client.Config.AllowedPrincipals = []string{"user:alice@example.com", "serviceAccount:bot@my-proj.iam.gserviceaccount.com"}
+	client.Config.ProvisionedServiceAccounts = []string{"bot@my-proj.iam.gserviceaccount.com"}
+	if _, err := client.AllowPrincipal(context.Background(), ui.AllowPrincipalRequest{Entry: "user:alice@example.com"}); err != nil {
+		t.Fatal(err)
+	}
 	ui.SetAccessCodeForTest(srv, testAccessCode)
 
 	exp := time.Now().Add(5 * time.Minute)

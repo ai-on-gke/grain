@@ -41,10 +41,13 @@
 #
 # approve refuses a pending release whose recorded staging soak is under
 # the minimum (24h less the slack; release-from-trunk.sh writes it on the
-# -pending tag, with whether FORCE was used). The approval route carries no
-# dispatch inputs, so this path never sets RELEASE_SHORT_SOAK_OK: a person
-# who means to ship a short soak passes short_soak_ok: true to
-# .github/workflows/promote-release.yml, or rejects it here.
+# -pending tag, with whether FORCE was used) unless RELEASE_SHORT_SOAK_OK
+# is true. Here that comes only from GRAIN_CI_RELEASE_SHORT_SOAK_OK, which
+# the approval route sets when the person approving passes short_soak_ok
+# (`grain release approve -short-soak-ok`, the SHORT SOAK approval in the
+# UI) and which, like the variables above, no API caller and no env:
+# block can set. .github/workflows/promote-release.yml takes the same
+# answer as its short_soak_ok input.
 #
 # The route selects one job: `promote` for an approval (which brings
 # `approve` in front of it) or `reject`. Dispatched whole, all three
@@ -66,7 +69,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Promote the pending release a person approved
-        run: bash ./scripts/release-from-trunk.sh approve "$GRAIN_CI_RELEASE_VERSION"
+        run: |
+          RELEASE_SHORT_SOAK_OK="${GRAIN_CI_RELEASE_SHORT_SOAK_OK:-false}" \
+            bash ./scripts/release-from-trunk.sh approve "$GRAIN_CI_RELEASE_VERSION"
 
   promote:
     # .grain/workflows/promote.yml's job, dispatched as the approval's last

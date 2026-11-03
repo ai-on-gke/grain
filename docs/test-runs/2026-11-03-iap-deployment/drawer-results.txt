@@ -1,0 +1,33 @@
+PASS  light 390 iap: drawer has the signed-in row: true
+PASS  light 390 iap: row shows the verified email: owner@example.com
+PASS  light 390 iap: row offers Access settings: 1
+PASS  light 390 iap: row offers Log out: 1
+PASS  light 390 iap: row and Log out inside the drawer: {"db":{"x":0,"y":0,"width":232,"height":844},"rb":{"x":11.1875,"y":706.890625,"width":208.625,"height":88.6875},"lb":{"x":164.765625,"y":751.578125,"width":55.046875,"height":44}}
+PASS  light 390 iap: no horizontal overflow: 0
+PASS  light 390 iap: email colour differs from its background: {"fg":"rgb(36, 34, 29)","bg":"rgb(255, 255, 255)"}
+PASS  light 390 iap: Access settings opens Settings -> Access: http://127.0.0.1:18443/settings/access
+PASS  light 390 iap: Log out goes to /_gcp_iap/clear_login_cookie: http://127.0.0.1:18443/_gcp_iap/clear_login_cookie
+PASS  light 390 code: no email badge in the header: 0
+PASS  light 390 code: drawer shows no signed-in email: 0
+PASS  light 1440 code: no email badge in the header: 0
+PASS  dark 390 iap: drawer has the signed-in row: true
+PASS  dark 390 iap: row shows the verified email: owner@example.com
+PASS  dark 390 iap: row offers Access settings: 1
+PASS  dark 390 iap: row offers Log out: 1
+PASS  dark 390 iap: row and Log out inside the drawer: {"db":{"x":0,"y":0,"width":232,"height":844},"rb":{"x":11.1875,"y":706.890625,"width":208.625,"height":88.6875},"lb":{"x":164.765625,"y":751.578125,"width":55.046875,"height":44}}
+PASS  dark 390 iap: no horizontal overflow: 0
+PASS  dark 390 iap: email colour differs from its background: {"fg":"rgb(233, 231, 225)","bg":"rgb(20, 22, 26)"}
+PASS  dark 390 iap: Access settings opens Settings -> Access: http://127.0.0.1:18443/settings/access
+PASS  dark 390 iap: Log out goes to /_gcp_iap/clear_login_cookie: http://127.0.0.1:18443/_gcp_iap/clear_login_cookie
+PASS  dark 390 code: no email badge in the header: 0
+PASS  dark 390 code: drawer shows no signed-in email: 0
+PASS  dark 1440 code: no email badge in the header: 0
+PASS  external 1440: Settings -> Access reads the sign-in: http://127.0.0.1:18443/settings/access
+PASS  external 1440: Access is not drawn read-only: 0
+PASS  external 1440: Access's Log out is enabled: 1
+PASS  external 1440: Tab skips the 2 locked select(s) in Settings -> general: 80 tabs, none on a locked select
+PASS  external 390: Settings -> Access reads the sign-in: http://127.0.0.1:18443/settings/access
+PASS  external 390: Access is not drawn read-only: 0
+PASS  external 390: Access's Log out is enabled: 1
+PASS  external 390: Tab skips the 2 locked select(s) in Settings -> general: 80 tabs, none on a locked select
+FAILS=0

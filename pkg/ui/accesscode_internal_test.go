@@ -322,3 +322,38 @@ func TestAccessCodeHeaderFallbackAndRateLimit(t *testing.T) {
 		t.Fatalf("rate-limited source got %d, want 429", rec.Code)
 	}
 }
+
+// task 2727: a sign-in sends the browser back to the page it was
+// trying to open, and only ever to a path on this origin.
+func TestLocalReturnPath(t *testing.T) {
+	for _, tc := range []struct{ next, want string }{
+		{"/settings/access", "/settings/access"},
+		{"/tasks/42?tab=runs&q=a%20b", "/tasks/42?tab=runs&q=a%20b"},
+		{"/", "/"},
+		{"", "/"},
+		{"//evil.example", "/"},
+		{"//evil.example/settings", "/"},
+		{"https://evil.example", "/"},
+		{"https://evil.example/settings", "/"},
+		{"javascript:alert(1)", "/"},
+		{"/\\evil", "/"},
+		{"/\\\\evil.example", "/"},
+		{"/a\\b", "/"},
+		{"settings/access", "/"},
+		{"/tasks/42#runs", "/"},
+		{"/tasks/42\r\nSet-Cookie: x=y", "/"},
+		{"/tasks/\t42", "/"},
+		{"/tasks/\x7f", "/"},
+		{"/api/tasks", "/"},
+		{"/" + strings.Repeat("a", maxAccessReturnPath), "/"},
+	} {
+		if got := localReturnPath(tc.next); got != tc.want {
+			t.Errorf("localReturnPath(%q) = %q, want %q", tc.next, got, tc.want)
+		}
+	}
+	// The longest path kept is kept whole.
+	long := "/" + strings.Repeat("a", maxAccessReturnPath-1)
+	if got := localReturnPath(long); got != long {
+		t.Errorf("localReturnPath of a %d-byte path = %d bytes, want it unchanged", len(long), len(got))
+	}
+}

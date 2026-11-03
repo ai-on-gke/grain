@@ -586,3 +586,82 @@ func TestRawScopeRulesBindDespiteAPresetEntry(t *testing.T) {
 		t.Fatalf("api:tasks:write with an empty presets entry = %v, want the raw scope's CI-only refusal", err)
 	}
 }
+
+func TestCatalogueGCPKeyAccountOverrideAndUnnamedGrants(t *testing.T) {
+	serverCat := &model.CapabilityCatalogue{
+		Servers: []model.CatalogueServer{{
+			ID: model.GCPCapabilityServerID,
+			Methods: []model.CatalogueMethod{{
+				Name: model.GCPKeyMethod,
+				Args: map[string]model.CatalogueArg{
+					"permission_set": {Allowed: []string{"sandbox-agent", "staging"}},
+				},
+				Restrictions: &model.CapabilityRestrictions{
+					RequiresPersonWhen: map[string][]string{"permission_set": {"staging"}},
+				},
+			}},
+		}},
+	}
+	// ValidateArgs populates permission_set="sandbox-agent" when a deprecated
+	// {"account":"prod"} grant omits permission_set; newGCPMethod.Mint overrides
+	// permission_set with account, so the catalogue must judge "prod".
+	if _, err := serverCat.ValidateGrants(model.GrantContext{
+		Kind:   "task",
+		Grants: []string{model.GCPKeyRef + `={"account":"prod","permission_set":"sandbox-agent","primary":true}`},
+	}); err == nil || !strings.Contains(err.Error(), `permission_set="prod"`) {
+		t.Fatalf("account=prod with default permission_set = %v, want allowed-values refusal on prod", err)
+	}
+	// Likewise for requires_person_when when account names "staging".
+	v, err := serverCat.ValidateGrants(model.GrantContext{
+		Kind:   "task",
+		Grants: []string{model.GCPKeyRef + `={"account":"staging","permission_set":"sandbox-agent","primary":true}`},
+	})
+	if err != nil || len(v.RequiresPerson) != 1 {
+		t.Fatalf("account=staging = (%+v, %v), want RequiresPerson", v, err)
+	}
+	// An unnormalized unnamed grant cannot skip args.permission_set.allowed.
+	for _, unnamed := range []string{model.GCPKeyRef, model.GCPKeyRef + `={}`, model.GCPKeyRef + `={"account":"default"}`} {
+		if _, err := serverCat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{unnamed}}); err == nil {
+			t.Errorf("unnamed %q admitted past args.permission_set.allowed", unnamed)
+		}
+	}
+	// When no Allowed list restricts permission_set, an unnamed grant still
+	// triggers requires_person_when.permission_set because the server picks Sets[0].
+	personCat := &model.CapabilityCatalogue{
+		Servers: []model.CatalogueServer{{
+			ID: model.GCPCapabilityServerID,
+			Methods: []model.CatalogueMethod{{
+				Name: model.GCPKeyMethod,
+				Restrictions: &model.CapabilityRestrictions{
+					RequiresPersonWhen: map[string][]string{"permission_set": {"prod"}},
+				},
+			}},
+		}},
+	}
+	if v, err := personCat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{model.GCPKeyRef + `={}`}}); err != nil || len(v.RequiresPerson) != 1 {
+		t.Fatalf("unnamed gcp#gcp-key={} under requires_person_when = (%+v, %v), want RequiresPerson", v, err)
+	}
+
+	// Retired in_process entries: gcp-key:prod refuses unnamed gcp#gcp-key
+	// (server's first set may be prod) while admitting named sandbox-agent;
+	// gcp-key:sandbox-agent binds named sandbox-agent too.
+	retiredProdDisabled := &model.CapabilityCatalogue{
+		InProcess: map[string]model.CatalogueInProcess{
+			"gcp-key:prod": {Enabled: boolp(false)},
+		},
+	}
+	if _, err := retiredProdDisabled.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{model.GCPKeyRef + `={}`}}); err == nil {
+		t.Fatal("unnamed gcp#gcp-key={} bypassed disabled in_process.gcp-key:prod")
+	}
+	if _, err := retiredProdDisabled.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{model.GCPKeySandboxAgentGrant}}); err != nil {
+		t.Fatalf("named sandbox-agent refused by in_process.gcp-key:prod: %v", err)
+	}
+	retiredSandboxDisabled := &model.CapabilityCatalogue{
+		InProcess: map[string]model.CatalogueInProcess{
+			"gcp-key:sandbox-agent": {Enabled: boolp(false)},
+		},
+	}
+	if _, err := retiredSandboxDisabled.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{model.GCPKeySandboxAgentGrant}}); err == nil {
+		t.Fatal("GCPKeySandboxAgentGrant bypassed disabled in_process.gcp-key:sandbox-agent")
+	}
+}

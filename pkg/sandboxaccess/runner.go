@@ -61,6 +61,15 @@ var ErrChannelLost = errors.New("sandbox access channel lost")
 // uncached rather than charge the tree (design/design/grain-on-gke.design.md#GKE-3).
 const ChannelLostFault = "infra: sandbox channel lost"
 
+// SandboxLostFault starts the error a CI step and its job conclude errored
+// with when the sandbox's transport failed under the step -- the machine
+// gone, the connection dropped, a command that came back with no exit
+// status at all -- on a backend with no channel to wait out (Sandbox.Exec
+// returned an error that is not ErrChannelLost). Before it, such a step
+// concluded an ordinary failure, so a VM that died mid-release read as a
+// red tree and filed triage instead of being re-run.
+const SandboxLostFault = "infra: sandbox lost"
+
 // ChannelLostError is the typed error returned for ErrChannelLost, carrying
 // the sandbox name and how long its channel was unreachable.
 type ChannelLostError struct {

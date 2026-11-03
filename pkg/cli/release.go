@@ -23,8 +23,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-// cmdRelease is `grain release approve|reject vX.Y.0`: a person's answer
-// to a trunk release the release train has staged as vX.Y.0-pending
+// cmdRelease is `grain release approve|reject vX.Y.Z`: a person's answer
+// to a trunk release the release train has staged as vX.Y.Z-pending
 // (design/design/release-from-trunk.design.md, §4). It starts
 // .grain/workflows/promote-release.yml through the person-only
 // pending-releases routes, which refuse an agent whatever it holds -- so
@@ -32,8 +32,9 @@ import (
 func cmdRelease(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain release", flag.ContinueOnError)
 	repo := fs.String("repo", model.GrainSourceRepo().String(), "the repository whose pending release this is")
+	shortSoakOK := fs.Bool("short-soak-ok", false, "approve only: accept a release whose staging soak was under the minimum (its notification says SHORT SOAK)")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "usage: grain release approve|reject [-repo owner/name] vX.Y.0")
+		fmt.Fprintln(fs.Output(), "usage: grain release approve|reject [-repo owner/name] [-short-soak-ok] vX.Y.Z")
 		fs.PrintDefaults()
 	}
 	if len(args) == 0 {
@@ -50,9 +51,12 @@ func cmdRelease(ctx context.Context, c *ui.HTTPClient, out *printer, args []stri
 	}
 	if fs.NArg() != 1 {
 		fs.Usage()
-		return fmt.Errorf("grain release %s takes the pending release, vX.Y.0", verb)
+		return fmt.Errorf("grain release %s takes the pending release, vX.Y.Z", verb)
 	}
-	decision, err := c.DecideRelease(ctx, *repo, fs.Arg(0), verb == "approve")
+	if *shortSoakOK && verb != "approve" {
+		return fmt.Errorf("-short-soak-ok is for grain release approve")
+	}
+	decision, err := c.DecideRelease(ctx, *repo, fs.Arg(0), verb == "approve", *shortSoakOK)
 	if err != nil {
 		return err
 	}
@@ -60,7 +64,9 @@ func cmdRelease(ctx context.Context, c *ui.HTTPClient, out *printer, args []stri
 		out.encode(decision)
 		return nil
 	}
-	if decision.Approve {
+	if decision.Approve && decision.ShortSoakOK {
+		fmt.Printf("approved %s, short soak accepted: promote-release is tagging it and moving latest onto it\n", decision.Version)
+	} else if decision.Approve {
 		fmt.Printf("approved %s: promote-release is tagging it and moving latest onto it\n", decision.Version)
 	} else {
 		fmt.Printf("rejected %s: promote-release is dropping it; the next train run cuts its next rc\n", decision.Version)

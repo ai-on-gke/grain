@@ -425,7 +425,65 @@ import "strconv"
 // behalf_kind/behalf_id/behalf_source), and the config_audit table
 // (operator-attribution spec §1.3, §4.4, §7.1). No row is rewritten: a row
 // written before reads back with an empty Principal.Source.
-const SchemaVersion = 91
+//
+// 92 adds the hostd registry: `hostd`, one row per grain hostd this
+// daemon takes host work through (the co-located one as `local`), and
+// `hostd_token`, the SHA-256 digests of each remote hostd's tokens.
+// `hostd` goes to the state repository; `hostd_token` never does
+// (staterepo.LocalTables).
+//
+// 93 routes host work per run: `task_hostd` (a task's hostd pin or label
+// selector), `task_run_hostd` (the hostd, instance and owner each run
+// went to) and a `hostd` column on `task_run_capability_audit`, ” for
+// every record written before.
+//
+// 94 adds `hostd` to `template` (model.Template.Hostd): the hostd pin or
+// label selector every task filed from it starts with.
+//
+// 95 raises `grain_config`.`max_merges_per_repo`'s column default from 1
+// to 5 (model.DefaultMaxMergesPerRepo). Stored values are left alone: the
+// row is always written whole, so a 1 written because it was the default
+// cannot be told from a 1 somebody chose, and both keep it.
+//
+// 96 rewrites stored `grain-ci` grants, `repo_config`.`ci_capabilities`
+// included, to `https://grain.dev/capabilities/grain#ci={}`: the
+// in-process `grain-ci` provider is retired for the `grain#ci` method.
+//
+// 97 retires the in-process `gcp-key` and `gcp-key:<name>` providers onto
+// `https://grain.dev/capabilities/gcp#gcp-key`: seeds `sandbox-agent` and
+// `<name>` permission sets in `grain_config`.`mcp_servers` from the
+// deployment's pool and `gcp_key` rows, and rewrites stored grants across
+// tasks, templates, schedules, default_capabilities, ci_capabilities,
+// console_sessions and capability_policy.
+//
+// 98 adds `allowed_principal` and `allowed_principal_migration`: the
+// database-backed list of `user:<email>` and `group:<email>` entries
+// admitted when authenticated by IAP or another IdentityVerifier, plus the
+// one-time startup migration record off `-ui-allowed-principals`. Kept off
+// SettingsTables so a config-repo pull request cannot lock operators out
+// or grant sign-in access (design/design/settings.design.md §1).
+const SchemaVersion = 98
+
+// allowedPrincipalTable is the `allowed_principal` table: one row per
+// `user:<email>` or `group:<email>` entry admitted through a verified
+// identity (model.AllowedPrincipal).
+const allowedPrincipalTable = `CREATE TABLE IF NOT EXISTS ` + "`allowed_principal`" + ` (
+  ` + "`entry`" + `    TEXT     NOT NULL PRIMARY KEY,
+  ` + "`added_by`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`added_at`" + ` DATETIME NOT NULL
+)`
+
+// allowedPrincipalMigrationTable records the one-time startup migration off
+// `-ui-allowed-principals` / `$GRAIN_ALLOWED_PRINCIPALS` so the deprecated
+// flag is imported at most once even if every entry is later removed, and
+// preserves any unsupported entries (`serviceAccount:`, `domain:`) dropped
+// during import so Settings -> Access can surface them.
+const allowedPrincipalMigrationTable = `CREATE TABLE IF NOT EXISTS ` + "`allowed_principal_migration`" + ` (
+  ` + "`id`" + `          INTEGER  NOT NULL PRIMARY KEY,
+  ` + "`imported_at`" + ` DATETIME NOT NULL,
+  ` + "`source`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`dropped`" + `     TEXT     NOT NULL DEFAULT ''
+)`
 
 // configAuditTable is the `config_audit` table: one row per change to the
 // deployment's configuration somebody made (model.ConfigAuditEntry,
@@ -491,6 +549,47 @@ const sandboxAccessTable = `CREATE TABLE IF NOT EXISTS ` + "`sandbox_access`" + 
   ` + "`token_hash`" + ` TEXT     NOT NULL,
   ` + "`not_after`" + `  DATETIME NOT NULL,
   PRIMARY KEY (` + "`sandbox`" + `)
+)`
+
+// hostdTable and hostdTokenTable are the hostd registry (model.Hostd),
+// named once for Tables and for the migration that adds them.
+const hostdTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd`" + ` (
+  ` + "`name`" + `       TEXT     NOT NULL,
+  ` + "`owner`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`labels`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`created_by`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + ` DATETIME NOT NULL,
+  ` + "`revoked_at`" + ` DATETIME NULL,
+  PRIMARY KEY (` + "`name`" + `)
+)`
+
+// taskHostdTable and taskRunHostdTable are a task's hostd selector and
+// the hostd each run resolved (model.SetTaskHostd, model.TaskRunHostd),
+// named once for Tables and for migration 93.
+const taskHostdTable = `CREATE TABLE IF NOT EXISTS ` + "`task_hostd`" + ` (
+  ` + "`task_id`" + `    TEXT     NOT NULL,
+  ` + "`selector`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`updated_at`" + ` DATETIME NOT NULL,
+  PRIMARY KEY (` + "`task_id`" + `)
+)`
+
+const taskRunHostdTable = `CREATE TABLE IF NOT EXISTS ` + "`task_run_hostd`" + ` (
+  ` + "`run_id`" + `   TEXT     NOT NULL,
+  ` + "`task_id`" + `  TEXT     NOT NULL,
+  ` + "`hostd`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`instance`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`owner`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`at`" + `       DATETIME NOT NULL,
+  PRIMARY KEY (` + "`run_id`" + `)
+)`
+
+const hostdTokenTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd_token`" + ` (
+  ` + "`token_hash`" + ` TEXT     NOT NULL,
+  ` + "`hostd`" + `      TEXT     NOT NULL,
+  ` + "`prefix`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + ` DATETIME NOT NULL,
+  ` + "`revoked_at`" + ` DATETIME NULL,
+  PRIMARY KEY (` + "`token_hash`" + `)
 )`
 
 // externalAgentTokenTable and externalAgentTokenSequenceTable are named
@@ -1453,8 +1552,15 @@ var Tables = []string{
   ` + "`at`" + `         DATETIME NOT NULL,
   ` + "`record`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`note`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`hostd`" + `      TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`run_id`" + `, ` + "`seq`" + `)
 )`,
+
+	// task_hostd and task_run_hostd: which grain hostd a task's host
+	// work is pinned or selected to, and which one each run went to
+	// (model.TaskRunHostd), beside the frozen task_run DDL.
+	taskHostdTable,
+	taskRunHostdTable,
 
 	// task_run_startup records the per-phase startup timestamps of a run
 	// (queued_at -> started_at -> sandbox_acquired_at -> sandbox_prepared_at -> first_turn_at)
@@ -1768,6 +1874,7 @@ var Tables = []string{
   ` + "`reviewers`" + `          TEXT NOT NULL DEFAULT '',
   ` + "`priority`" + `           INTEGER NOT NULL DEFAULT 0,
   ` + "`keep_running`" + `       INTEGER NOT NULL DEFAULT 0,
+  ` + "`hostd`" + `              TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2144,7 +2251,7 @@ var Tables = []string{
   ` + "`poll_interval_ms`" + `           INTEGER NOT NULL,
   ` + "`max_workers`" + `                 INTEGER NOT NULL DEFAULT 1,
   ` + "`max_mergers`" + `                 INTEGER NOT NULL DEFAULT 1,
-  ` + "`max_merges_per_repo`" + `         INTEGER NOT NULL DEFAULT 1,
+  ` + "`max_merges_per_repo`" + `         INTEGER NOT NULL DEFAULT 5,
   ` + "`merge_batch_size`" + `            INTEGER NOT NULL DEFAULT 3,
   ` + "`merge_gather_window_ms`" + `      INTEGER NOT NULL DEFAULT 0,
   ` + "`max_ci_jobs`" + `                 INTEGER NOT NULL DEFAULT 1,
@@ -3803,6 +3910,9 @@ var Tables = []string{
 	externalAgentTokenTable,
 	externalAgentTokenSequenceTable,
 
+	hostdTable,
+	hostdTokenTable,
+
 	`CREATE TABLE IF NOT EXISTS ` + "`secret_resolution_audit`" + ` (
   ` + "`id`" + `          INTEGER PRIMARY KEY AUTOINCREMENT,
   ` + "`timestamp`" + `   DATETIME NOT NULL,
@@ -3887,6 +3997,11 @@ var Tables = []string{
 	configAuditTable,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_event_task`" + ` ON ` + "`task_event`" + ` (` + "`task_id`" + `)`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_event_at`" + ` ON ` + "`task_event`" + ` (` + "`at`" + `)`,
+
+	// Verified-identity sign-in allowlist (`user:<email>` and `group:<email>`)
+	// and its one-time startup migration off `-ui-allowed-principals`.
+	allowedPrincipalTable,
+	allowedPrincipalMigrationTable,
 }
 
 // Views is the derivations, each a (name, DDL) pair so Init can drop and

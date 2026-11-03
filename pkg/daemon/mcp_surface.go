@@ -16,8 +16,8 @@ package daemon
 
 import (
 	"github.com/ai-on-gke/grain/pkg/agent"
-	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // The two rosters `grain mcpserver` can serve (-mcp-surface;
@@ -66,7 +66,7 @@ func ResolveMCPSurface(flag string, hasSandbox bool) string {
 // thread wakes tell it to call: `grain pr open` cannot carry the CL's
 // summary and body, and `grain pr reply`/`resolve` take a GitHub comment
 // number, never a CL thread's cl/<n>:<id>. So does a run without
-// grain-ci keep the checks tools, for the same reason: its checks are
+// grain#ci keep the checks tools, for the same reason: its checks are
 // GitHub's, which only the MCP tools read.
 func controlRoster(sandbox, local []mcp.Tool, grants GrantNames, changelist bool) map[string]bool {
 	keep := map[string]bool{}
@@ -84,7 +84,7 @@ func controlRoster(sandbox, local []mcp.Tool, grants GrantNames, changelist bool
 	for _, name := range agent.ModelOnlyGrantToolNames() {
 		keep[name] = true
 	}
-	if changelist || !grants.Has(grainci.CapabilityName) {
+	if changelist || !model.HasGrainCI(grants) {
 		keep["pull_request_status"] = true
 		keep["wait_for_checks"] = true
 	}
@@ -93,7 +93,7 @@ func controlRoster(sandbox, local []mcp.Tool, grants GrantNames, changelist bool
 		keep["reply_to_pull_request_comment"] = true
 		keep["resolve_review_thread"] = true
 	}
-	if !changelist && !grants.Has(grainci.CapabilityName) {
+	if !changelist && !model.HasGrainCI(grants) {
 		keep["base_branch_status"] = true
 	}
 	return keep

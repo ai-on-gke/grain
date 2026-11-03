@@ -53,6 +53,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -123,8 +124,15 @@ var (
 	// job's log. actionsRunsRe is also what ListWorkflowRuns reads when a
 	// credential cannot reach the Checks API.
 	actionsRunsRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs$`)
-	runJobsRe     = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs/(\d+)/jobs$`)
-	jobLogsRe     = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/jobs/(\d+)/logs$`)
+	// workflowRunsRe is GET .../actions/workflows/{workflow_id}/runs, the
+	// per-workflow listing (github.RESTClient.ListActionsRunsPage with a
+	// Workflow): seeded WorkflowRuns whose Path is that file.
+	workflowRunsRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/workflows/([^/]+)/runs$`)
+	runJobsRe      = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs/(\d+)/jobs$`)
+	jobLogsRe      = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/jobs/(\d+)/logs$`)
+	// rerunFailedJobsRe is POST .../actions/runs/{id}/rerun-failed-jobs
+	// (github.RESTClient.RerunFailedJobs).
+	rerunFailedJobsRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs/(\d+)/rerun-failed-jobs$`)
 	// And the fourth read hung off that walk, for a run whose jobs served
 	// no log: the check run behind one of them, which is where GitHub
 	// writes why a job it never started did not start. Its annotations
@@ -330,7 +338,10 @@ type WorkflowRun struct {
 	Conclusion string
 	RunAttempt int
 	HTMLURL    string
-	Jobs       []WorkflowJob
+	// CreatedAt, when set, is served as created_at and run_started_at and
+	// is what ?created=>=... filters on; a run without one always matches.
+	CreatedAt time.Time
+	Jobs      []WorkflowJob
 }
 
 // Sim is a github.Transport backed by an in-memory set of issues and pull
@@ -406,6 +417,13 @@ type Sim struct {
 	// WorkflowRuns is explicit workflow runs seeded for GET .../actions/runs
 	// and GET .../actions/runs/{id}/jobs.
 	WorkflowRuns []WorkflowRun
+	// RerunFailedJobs is every run id POST .../rerun-failed-jobs was
+	// asked about, in order. The sim starts no new attempt: a test that
+	// wants one moves the seeded run's RunAttempt and Jobs on itself.
+	RerunFailedJobs []int64
+	// RerunRefused, when non-zero, is the status that endpoint answers
+	// with instead of 201 -- 403 for a credential without `actions: write`.
+	RerunRefused int
 	// StartupFailures marks the commits (keyed exactly like WorkflowJobs)
 	// whose workflow run GitHub concluded before any job of it started:
 	// the run is there, it is `startup_failure`, and its jobs endpoint
@@ -1427,7 +1445,7 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			// (github.RESTClient.RecentRunStarts / CompletedWorkflowRuns):
 			// everything this repository has run lately, rather than one commit's runs.
 			if key == "" {
-				payload := s.repoRunsJSON(m[1], m[2])
+				payload, link := pageRuns(p, qs, s.repoRunsJSON(m[1], m[2]), "")
 				rawBytes, _ := json.Marshal(payload)
 				var h uint64 = 14695981039346656037
 				for _, b := range rawBytes {
@@ -1440,6 +1458,9 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 				}
 				resp := jsonResponse(200, payload)
 				resp.Headers = map[string]string{"ETag": etag}
+				if link != "" {
+					resp.Headers["Link"] = link
+				}
 				return resp, nil
 			}
 			if s.startupFailureFor(key) {
@@ -1447,6 +1468,19 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			}
 			jobs := s.workflowJobsFor(key)
 			return jsonResponse(200, workflowRunsJSON(m[1], m[2], s.runIDFor(key), jobs)), nil
+		}
+		if m := workflowRunsRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			workflow, _ := url.PathUnescape(m[3])
+			if !s.hasWorkflowFile(workflow) {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			payload, link := pageRuns(p, qs, s.repoRunsJSON(m[1], m[2]), workflow)
+			resp := jsonResponse(200, payload)
+			if link != "" {
+				resp.Headers = map[string]string{"Link": link}
+			}
+			return resp, nil
 		}
 		if m := runJobsRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
@@ -1652,6 +1686,14 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 		return s.graphql(body)
 	}
 	if method == "POST" {
+		if m := rerunFailedJobsRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			if s.RerunRefused != 0 {
+				return jsonResponse(s.RerunRefused, map[string]string{"message": "Resource not accessible by integration"}), nil
+			}
+			s.RerunFailedJobs = append(s.RerunFailedJobs, int64(mustAtoi(m[3])))
+			return jsonResponse(201, map[string]any{}), nil
+		}
 		if m := pullCommentRepliesRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
 			number, to := mustAtoi(m[3]), mustAtoi(m[4])
@@ -2940,6 +2982,11 @@ func (s *Sim) repoRunsJSON(owner, repo string) map[string]any {
 			"run_attempt":     attempt,
 			"html_url":        htmlURL,
 		})
+		if !wr.CreatedAt.IsZero() {
+			at := wr.CreatedAt.UTC().Format(time.RFC3339)
+			runs[len(runs)-1]["created_at"] = at
+			runs[len(runs)-1]["run_started_at"] = at
+		}
 	}
 	for _, key := range s.runCommits() {
 		id := s.runIDFor(key)
@@ -3128,4 +3175,78 @@ func mustAtoi(s string) int {
 		n = n*10 + int(c-'0')
 	}
 	return n
+}
+
+// hasWorkflowFile reports whether a seeded run comes from workflow, a file
+// name (or numeric id) the way GitHub's workflow_id takes one: the
+// per-workflow endpoint is a 404 for a workflow the repository lacks.
+func (s *Sim) hasWorkflowFile(workflow string) bool {
+	for _, wr := range s.WorkflowRuns {
+		if workflowFileMatches(wr.Path, wr.ID, workflow) {
+			return true
+		}
+	}
+	return false
+}
+
+func workflowFileMatches(runPath string, id int64, workflow string) bool {
+	return workflow != "" && (path.Base(runPath) == workflow || strconv.FormatInt(id, 10) == workflow)
+}
+
+// pageRuns narrows a runs listing the way GitHub's own query does --
+// ?branch=, ?created=>=..., the workflow a per-workflow listing is for --
+// and cuts it to ?per_page= (default 30, at most 100) at ?page=, with
+// total_count the whole match and a Link header naming the next page
+// when there is one. Runs are served in the order they were seeded, so a
+// test wanting GitHub's newest-first seeds newest first.
+func pageRuns(reqPath string, qs url.Values, payload map[string]any, workflow string) (map[string]any, string) {
+	all, _ := payload["workflow_runs"].([]map[string]any)
+	branch := qs.Get("branch")
+	var since time.Time
+	if c, ok := strings.CutPrefix(qs.Get("created"), ">="); ok {
+		since, _ = time.Parse(time.RFC3339, c)
+	}
+	matched := []map[string]any{}
+	for _, r := range all {
+		if workflow != "" {
+			p, _ := r["path"].(string)
+			id, _ := r["id"].(int64)
+			if !workflowFileMatches(p, id, workflow) {
+				continue
+			}
+		}
+		if branch != "" && r["head_branch"] != branch {
+			continue
+		}
+		if at, ok := r["created_at"].(string); ok && !since.IsZero() {
+			if t, err := time.Parse(time.RFC3339, at); err == nil && t.Before(since) {
+				continue
+			}
+		}
+		matched = append(matched, r)
+	}
+	perPage, page := 30, 1
+	if n, err := strconv.Atoi(qs.Get("per_page")); err == nil && n > 0 {
+		perPage = min(n, 100)
+	}
+	if n, err := strconv.Atoi(qs.Get("page")); err == nil && n > 0 {
+		page = n
+	}
+	// A listing that fits one page is served whole, as it always was: the
+	// callers that never asked for a page size read every seeded run.
+	if qs.Get("per_page") == "" && qs.Get("page") == "" {
+		perPage = max(perPage, len(matched))
+	}
+	start, end := min((page-1)*perPage, len(matched)), min(page*perPage, len(matched))
+	link := ""
+	if end < len(matched) {
+		next := url.Values{}
+		for k, v := range qs {
+			next[k] = v
+		}
+		next.Set("page", strconv.Itoa(page+1))
+		next.Set("per_page", strconv.Itoa(perPage))
+		link = fmt.Sprintf(`<https://api.github.example%s?%s>; rel="next"`, reqPath, next.Encode())
+	}
+	return map[string]any{"total_count": len(matched), "workflow_runs": matched[start:end]}, link
 }

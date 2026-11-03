@@ -1,0 +1,26 @@
+{"id":"sched-1","title":"Nightly CI review"}
+dump schema-version: 85
+15:    trigger:
+16-      github_workflow_run:
+17-        workflow: nightly.yml
+18-        conclusions: [failure, timed_out, startup_failure]
+19-        branches: [main]
+20-    overlap: skip
+== grain state check (this build)
+grain state: state repository was written by an older build of grain: repository is at schema 85, this build knows 93
+exit=1
+== grain state check -migrate (this build)
+schema:  85, migrated into the 93 this build of grain knows
+loaded:  29 rows across 6 tables
+  grain_config                 1
+  hostd                        1
+  schedule                     6
+  schedule_grant               15
+  schedule_read                5
+  schedule_sequence            1
+ok: grain can load this
+exit=0
+== import into a fresh data dir (this build)
+cat: /tmp/tmp.hR8LKheQu6/fresh/.grain/local-api-token: No such file or directory
+/home/debian/work/docs/test-runs/2026-11-03-config-state/migrate-85-dump.sh: 40: kill: No such process
+

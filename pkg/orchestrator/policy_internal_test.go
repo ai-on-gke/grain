@@ -97,6 +97,47 @@ func TestLineageTrailersCarryTheRequesterAndApprover(t *testing.T) {
 	}
 }
 
+// TestIdentityTrailersNameOnlyVerifiedPeopleOrTheOperator is
+// operator-attribution spec §7.5: a verified creator and approver are
+// named by email, the operator fallback keeps `operator`, and a
+// requester the operator only typed (`grain create -author`) is no
+// verified identity and gets no Requested-by:.
+func TestIdentityTrailersNameOnlyVerifiedPeopleOrTheOperator(t *testing.T) {
+	alice := model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceIAP}
+	bob := model.Principal{Kind: model.PrincipalHuman, ID: "bob@example.com", Source: "fake"}
+	operator := model.Principal{Kind: model.PrincipalHuman, ID: "operator", Source: model.SourceAccessCode}
+	filedBy := func(p model.Principal) model.Origin {
+		return model.Origin{Attribution: model.Attribution{Actor: p}}
+	}
+	for _, c := range []struct {
+		name string
+		task model.Task
+		want string
+	}{
+		{"a verified creator and approver", model.Task{
+			Creator: "alice@example.com", Origin: filedBy(alice), Approval: &model.Attribution{Actor: bob},
+		}, "Requested-by: alice@example.com\nApproved-by: bob@example.com"},
+		{"the operator fallback", model.Task{
+			Creator: "operator", Origin: filedBy(operator), Approval: &model.Attribution{Actor: operator},
+		}, "Requested-by: operator\nApproved-by: operator"},
+		{"an unverified grain create -author creator", model.Task{
+			Creator: "carol@example.com", Origin: filedBy(model.Principal{Kind: model.PrincipalHuman, ID: "operator", Source: model.SourceInProcess}),
+			Approval: &model.Attribution{Actor: alice},
+		}, "Approved-by: alice@example.com"},
+		{"an agent approver", model.Task{
+			Creator: "alice@example.com", Origin: filedBy(alice),
+			Approval: &model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: "12", Source: model.SourceSession}},
+		}, "Requested-by: alice@example.com"},
+		{"a task an agent filed for alice", model.Task{
+			Creator: "alice@example.com", Origin: filedBy(model.Principal{Kind: model.PrincipalAgent, ID: "12", Source: model.SourceSandbox}),
+		}, "Requested-by: alice@example.com"},
+	} {
+		if got := strings.Join(identityTrailers(c.task), "\n"); got != c.want {
+			t.Errorf("%s: trailers = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
 func TestIdentityTrailersRideOnlyWithLineageOnTheMergeCommit(t *testing.T) {
 	store, ctx, _ := plantTree(t)
 	approval := &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "lead@example.com"}}
@@ -237,7 +278,7 @@ func TestLocalPolicyHoldsATaskOnTheGrainCIGrantTheAdmitterAdds(t *testing.T) {
 	if admitOnce(t, ctx, deps, "1").Admitted {
 		t.Error("a task granted grain-ci by default was admitted under a policy that does not allow it")
 	}
-	wantPolicyWait(t, ctx, store, "1", grainci.CapabilityName)
+	wantPolicyWait(t, ctx, store, "1", grainci.Grant)
 }
 
 // The admitter clears the waits it owns and leaves a hold's own reason

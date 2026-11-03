@@ -1,0 +1,18 @@
+PASS  owner admitted: 200
+PASS  owner is iap-verified: {"authenticated":true,"user":"owner@example.com","tenancy":"single","authMethod":"iap"}
+PASS  gcp-key pool SA refused: 403
+PASS  refusal names the pool SA: {"error":"principal \"grain-sb-agent-0@grain-sandbox-dev.iam.gserviceaccount.com\" is a gcp-key agent service account whose key is materialized into task sandboxes and cannot be admitted by -ui-allowed-principals"}
+PASS  pool SA refusal logged: 1
+PASS  pool SA with mixed case refused: 403
+PASS  daemon SA (provisioned) admitted: 200
+PASS  stranger refused: 403
+PASS  stranger refusal logged: 1
+PASS  owner never logged as refused: 0
+PASS  expired assertion 401: 401
+PASS  forged assertion (unpublished key k2) 401: 401
+PASS  expired logged: 2
+PASS  forged logged after the expired one: 2
+PASS  a second forged one is still 401: 401
+PASS  forged logged once, not per request: 1
+PASS  own-audience refusals do not say to set the audience: 0
+FAILS=0

@@ -21,13 +21,32 @@
 
 name: nightly
 
+# Stage 1 of release-candidate qualification
+# (design/playbook/releases.playbook.md, "What pass means"): every
+# vX.Y.Z-rc.N tag runs this whole workflow on the RC's own ref, so a
+# candidate's verdict never waits on cron health. The -discarded,
+# -retracted and other suffixed markers a failed RC is given are excluded:
+# they name an RC that already has its verdict.
+#
+# A tag pushed with the default GITHUB_TOKEN fires no `push` workflows, so
+# a train pushing with it has to `workflow_dispatch` this file on the tag
+# instead (gh workflow run nightly.yml --ref vX.Y.Z-rc.N), which lands on
+# the same ref with the same jobs. The `jobs` input is how the train
+# re-runs only the job that failed on the same RC, once, as a flake retry
+# (playbook section 3).
+#
+# The schedule stays as a safety net on main.
 on:
+  push:
+    tags:
+      - "v*-rc.*"
+      - "!v*-rc.*-*"
   schedule:
     - cron: "11 2 * * *"
   workflow_dispatch:
     inputs:
       jobs:
-        description: "Optional comma-separated job IDs to run (for example: kvm-sandboxes,kvm-route-stress). Leave empty to run all jobs."
+        description: "Optional comma-separated job IDs to run (for example: upgrade-test or kvm-sandboxes,kvm-route-stress), such as one failed job re-run on the same RC. Leave empty to run all jobs."
         required: false
         default: ""
         type: string
@@ -56,9 +75,13 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
+    # Every job's group is keyed on the ref. A run on main or on an RC tag
+    # is never cancelled by the next one on the same ref: a flake retry
+    # dispatched on vX.Y.Z-rc.N queues behind the run it retries rather
+    # than killing it (playbook section 6). Branch runs still supersede.
     concurrency:
       group: ${{ github.workflow }}-go-long-${{ matrix.shard }}-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -250,7 +273,7 @@ jobs:
     timeout-minutes: 35
     concurrency:
       group: ${{ github.workflow }}-staterepo-soak-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -300,7 +323,7 @@ jobs:
     timeout-minutes: 35
     concurrency:
       group: ${{ github.workflow }}-loadtest-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -372,7 +395,7 @@ jobs:
     timeout-minutes: 35
     concurrency:
       group: ${{ github.workflow }}-scalability-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -444,7 +467,7 @@ jobs:
     timeout-minutes: 60
     concurrency:
       group: ${{ github.workflow }}-merge-stress-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -499,7 +522,7 @@ jobs:
     timeout-minutes: 60
     concurrency:
       group: ${{ github.workflow }}-long-term-test-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -554,7 +577,7 @@ jobs:
     timeout-minutes: 45
     concurrency:
       group: ${{ github.workflow }}-long-sim-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -609,7 +632,7 @@ jobs:
     timeout-minutes: 25
     concurrency:
       group: ${{ github.workflow }}-postgres-stress-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     services:
       postgres:
         image: postgres:16-bookworm
@@ -683,7 +706,7 @@ jobs:
     timeout-minutes: 45
     concurrency:
       group: ${{ github.workflow }}-tunnel-stress-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -729,7 +752,7 @@ jobs:
         pass: [1, 2, 3]
     concurrency:
       group: ${{ github.workflow }}-ui-e2e-long-${{ matrix.pass }}-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -822,7 +845,7 @@ jobs:
     timeout-minutes: 45
     concurrency:
       group: ${{ github.workflow }}-installer-variants-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     env:
       GRAIN_INSTALLER_SANDBOX_IMAGE: debian:trixie
       GRAIN_TEST_IMAGE: grain-installer:test
@@ -934,7 +957,7 @@ jobs:
     timeout-minutes: 15
     concurrency:
       group: ${{ github.workflow }}-vulns-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -976,7 +999,7 @@ jobs:
     timeout-minutes: 40
     concurrency:
       group: ${{ github.workflow }}-cmd-grain-stress-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -1092,7 +1115,7 @@ jobs:
     timeout-minutes: 60
     concurrency:
       group: ${{ github.workflow }}-kvm-sandboxes-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -1219,7 +1242,7 @@ jobs:
     timeout-minutes: 85
     concurrency:
       group: ${{ github.workflow }}-kvm-route-stress-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -1340,13 +1363,13 @@ jobs:
           fi
 
   upgrade-test:
-    name: upgrade from previous version
+    name: upgrade from previous versions
     if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',upgrade-test,')
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     concurrency:
       group: ${{ github.workflow }}-upgrade-test-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -1380,13 +1403,36 @@ jobs:
       - name: Build deployment image to test upgrade into
         run: bash scripts/ci-docker-build.sh -t grain-e2e:test .
 
+      # Two real upgrades onto this build as well as the self-built one
+      # (playbook section 10): from the newest promoted release below it
+      # (latest -> RC) and from the oldest supported release of its major
+      # (floor -> RC), both pulled from the published images. Each has to
+      # PASS; a skip means it proved nothing and fails the job.
       - name: Run upgrade tests
+        env:
+          RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO || 'bwsalmon/grain' }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set +e
+          export GRAIN_UPGRADE_RELEASE_IMAGE="ghcr.io/${RELEASE_IMAGE_REPO,,}/grain"
+          if [ "$REF_TYPE" = tag ]; then
+            export GRAIN_UPGRADE_TARGET="$REF_NAME"
+          fi
           make test-upgrade 2>&1 | tee /tmp/upgrade-test.log
           status=${PIPESTATUS[0]}
+          for want in TestUpgradeFromPreviousVersion TestUpgradeFromReleasedVersions/latest TestUpgradeFromReleasedVersions/floor; do
+            if ! grep -q -- "--- PASS: ${want} " /tmp/upgrade-test.log; then
+              echo "::error title=upgrade-test::${want} did not run and pass"
+              status=1
+            fi
+          done
+          if grep -q -- "--- SKIP:" /tmp/upgrade-test.log; then
+            echo "::error title=upgrade-test::an upgrade test skipped"
+            status=1
+          fi
           if [ "$status" -ne 0 ]; then
-            grep -aE -- '--- FAIL:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/upgrade-test.log | tail -n 10 | while IFS= read -r line; do
+            grep -aE -- '--- FAIL:|--- SKIP:|^FAIL[[:space:]]|_test\.go:[0-9]+:' /tmp/upgrade-test.log | tail -n 10 | while IFS= read -r line; do
               echo "::error title=upgrade-test::$line"
             done
             exit "$status"
@@ -1394,11 +1440,12 @@ jobs:
 
   real-kubernetes:
     name: real kubernetes
+    if: github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',real-kubernetes,')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     concurrency:
       group: ${{ github.workflow }}-real-kubernetes-${{ github.ref }}
-      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -1500,3 +1547,52 @@ jobs:
             done
             exit "$status"
           fi
+
+  # The one verdict Stage 1 hands the release train: every hosted job in
+  # the playbook's Stage 1 table ran and succeeded. GitHub calls a run
+  # with skipped jobs a success; this does not, so a job that never ran
+  # cannot qualify an RC. A dispatch naming `jobs` (a flake retry) is
+  # judged on the jobs it named. The KVM and real-kubernetes jobs are not
+  # required yet and are left out.
+  stage-1:
+    name: stage 1 qualification verdict
+    if: always()
+    needs:
+      - go-long
+      - staterepo-soak
+      - loadtest
+      - scalability
+      - merge-stress
+      - long-term-test
+      - long-sim
+      - postgres-stress
+      - tunnel-stress
+      - ui-e2e-long
+      - installer-variants
+      - vulns
+      - cmd-grain-stress
+      - upgrade-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every Stage 1 job to succeed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          SELECTED: ${{ inputs.jobs }}
+        run: |
+          failed=0
+          judged=0
+          for job in $(jq -r 'keys[]' <<<"$NEEDS"); do
+            if [ -n "$SELECTED" ] && [[ ",${SELECTED// /}," != *",${job},"* ]]; then
+              continue
+            fi
+            judged=$((judged + 1))
+            result="$(jq -r --arg j "$job" '.[$j].result' <<<"$NEEDS")"
+            echo "${job}: ${result}"
+            if [ "$result" != success ]; then
+              echo "::error title=stage-1::${job} ended ${result}, and Stage 1 requires success"
+              failed=1
+            fi
+          done
+          echo "judged ${judged} Stage 1 job(s)"
+          exit "$failed"

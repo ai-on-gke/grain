@@ -500,3 +500,72 @@ func TestBuildArgs_DiskSerial(t *testing.T) {
 		t.Errorf("override disk = %q, want it read-only with its serial", disks[1])
 	}
 }
+
+func TestBuildArgs_BalloonWithFreePageReporting(t *testing.T) {
+	cfg := baseConfig()
+	for _, a := range mustBuildArgs(t, cfg) {
+		if a == "--balloon" {
+			t.Fatal("--balloon attached with Balloon unset")
+		}
+	}
+	cfg.Balloon = true
+	if got := argValue(t, mustBuildArgs(t, cfg), "--balloon"); got != "size=0,deflate_on_oom=on,free_page_reporting=on" {
+		t.Errorf("--balloon = %q, want size=0,deflate_on_oom=on,free_page_reporting=on", got)
+	}
+}
+
+func TestBuildArgs_DiskDirect(t *testing.T) {
+	dir := t.TempDir()
+	img := filepath.Join(dir, "disk.img")
+	if err := os.WriteFile(img, make([]byte, 1<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Whether this test's own filesystem takes O_DIRECT decides what
+	// auto should say; asking the probe directly keeps the test honest
+	// on a tmpfs that refuses it.
+	autoWant := probeDirect(img) == nil
+
+	for _, tc := range []struct {
+		mode     string
+		path     string
+		readOnly bool
+		want     bool
+	}{
+		{config.DiskDirectOff, img, false, false},
+		{"", img, false, false},
+		{config.DiskDirectOn, img, false, true},
+		{config.DiskDirectOn, "/does/not/exist.img", false, true},
+		{config.DiskDirectAuto, img, false, autoWant},
+		{config.DiskDirectAuto, filepath.Join(dir, "missing.img"), false, false},
+		// A read-only disk is never written, so it never has dirty
+		// cache to charge, and its clean cache is shared by every VM
+		// reading the same image.
+		{config.DiskDirectOn, img, true, false},
+	} {
+		cfg := baseConfig()
+		cfg.DiskDirect = tc.mode
+		cfg.Disks = []config.Disk{{Path: tc.path, ReadOnly: tc.readOnly}}
+		got := strings.Contains(argValue(t, mustBuildArgs(t, cfg), "--disk"), ",direct=on")
+		if got != tc.want {
+			t.Errorf("DiskDirect=%q path=%s readonly=%v: direct=on is %v, want %v", tc.mode, tc.path, tc.readOnly, got, tc.want)
+		}
+	}
+}
+
+func TestProbeDirectWalksTheBackingChain(t *testing.T) {
+	dir := t.TempDir()
+	base := filepath.Join(dir, "base.img")
+	if err := os.WriteFile(base, make([]byte, 1<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ovl := filepath.Join(dir, "disk.qcow2")
+	if err := qcow2.WriteOverlay(ovl, base, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(base); err != nil {
+		t.Fatal(err)
+	}
+	if err := probeDirect(ovl); err == nil {
+		t.Error("probeDirect passed an overlay whose backing file is gone")
+	}
+}

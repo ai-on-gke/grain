@@ -1,0 +1,178 @@
+
+== 3a guard on the real v3.0.1: bash ~/work/scripts/patch-tag-guard.sh v3.0.1
+   | patch-tag-guard.sh: refusing v3.0.1 (425375a554dc): there is no release/v3.0.1 branch, and v3.0.0..v3.0.1 is not fixes only (120 commits).
+   | patch-tag-guard.sh: v3.0.1 carries these feat: commits:
+   |   feat(change,orchestrator): review CLs read-only and gate Submit on the reviews
+   |   feat(mcpserver): serve only the control roster to runs with a sandbox
+   |   feat(demo,ui): seed CLs to submit and sync, and pin the buttons in Playwright
+   |   feat(capability): deliver sandbox-callable capability tools through grain cap
+   |   feat(ui): draw a CL's Submit, Sync and behind-head badge, and refuse Sync to agents
+   |   feat(change,ui,orchestrator): submit and sync a task's CL, and close it when it lands
+   |   feat(scripts): migrate a local install to a GKE controller with local hostd
+   |   feat(ui,demo): show a CL's review badge, Mail and Publish replies
+   |   feat(change,mcp,ui): answer CL review threads as drafts, publish them, Mail
+   |   feat(change,orchestrator): wake a CL task for new Critique review threads
+   |   feat(demo): seed a changelist task in each presubmit state
+   |   feat(change): answer pull_request_status and wait_for_checks for CL tasks
+   |   feat(staterepo,model): add the settings/capabilities.yml capability catalogue and enforce it
+   |   feat(daemon,deploy): run the sandbox-access acceptor; Role, Service and NetworkPolicies
+   |   feat(k8s-granule): mint sandbox-access credentials into an owned Secret
+   |   feat(sandboxaccess): mTLS acceptor and per-sandbox credentials for granule dial-out
+   |   feat(api): serve generated agent API to external agents over MCP/HTTP
+   |   feat(deploy): add GKE deployment script, overlay manifests, and Terraform
+   |   feat(change,model,ui): add pkg/change seam, changelist state/work-tree handling, and CL chip
+   |   feat(ui): say in Settings when grain hostd dials in, and from which host
+   |   feat(daemon): take a grain hostd that dials in as the host executor, Kubernetes included
+   |   feat(hostd): let grain hostd dial out to a controller it cannot be reached from
+   |   feat(ci): wire ci.Runner to gritapi.Backend and add /v1/session support
+   |   feat(trustboundary): hold all config repo PRs for human Submit by default
+   |   feat(gitproxy,mcp): support SSH commit signing for ambient git credentials
+   | patch-tag-guard.sh: and 48 other commits that are not fix:
+   | patch-tag-guard.sh: a patch release is v3.0.0 plus cherry-picked fixes on release/v3.0.1: scripts/release-patch.sh v3.0.1 <sha>... (docs/release-candidate-management.md, section 9).
+== exit 1
+
+== 3a guard on the real v3.0.2: bash ~/work/scripts/patch-tag-guard.sh v3.0.2
+   | patch-tag-guard.sh: refusing v3.0.2 (7e1761c2dc31): there is no release/v3.0.2 branch, and v3.0.0..v3.0.2 is not fixes only (176 commits).
+   | patch-tag-guard.sh: v3.0.2 carries these feat: commits:
+   |   feat(ci): reattach running CI steps across a grain restart
+   |   feat(gke): wire -k8s-granule-access and re-run channel-lost CI jobs
+   |   feat(github): surface idle-poll backoff stats on /system/health and grain demo
+   |   feat(ui): show capability policy verdicts in grant pickers
+   |   feat(change,orchestrator): review CLs read-only and gate Submit on the reviews
+   |   feat(mcpserver): serve only the control roster to runs with a sandbox
+   |   feat(demo,ui): seed CLs to submit and sync, and pin the buttons in Playwright
+   |   feat(capability): deliver sandbox-callable capability tools through grain cap
+   |   feat(ui): draw a CL's Submit, Sync and behind-head badge, and refuse Sync to agents
+   |   feat(change,ui,orchestrator): submit and sync a task's CL, and close it when it lands
+   |   feat(scripts): migrate a local install to a GKE controller with local hostd
+   |   feat(ui,demo): show a CL's review badge, Mail and Publish replies
+   |   feat(change,mcp,ui): answer CL review threads as drafts, publish them, Mail
+   |   feat(change,orchestrator): wake a CL task for new Critique review threads
+   |   feat(demo): seed a changelist task in each presubmit state
+   |   feat(change): answer pull_request_status and wait_for_checks for CL tasks
+   |   feat(staterepo,model): add the settings/capabilities.yml capability catalogue and enforce it
+   |   feat(daemon,deploy): run the sandbox-access acceptor; Role, Service and NetworkPolicies
+   |   feat(k8s-granule): mint sandbox-access credentials into an owned Secret
+   |   feat(sandboxaccess): mTLS acceptor and per-sandbox credentials for granule dial-out
+   |   feat(api): serve generated agent API to external agents over MCP/HTTP
+   |   feat(deploy): add GKE deployment script, overlay manifests, and Terraform
+   |   feat(change,model,ui): add pkg/change seam, changelist state/work-tree handling, and CL chip
+   |   feat(ui): say in Settings when grain hostd dials in, and from which host
+   |   feat(daemon): take a grain hostd that dials in as the host executor, Kubernetes included
+   |   feat(hostd): let grain hostd dial out to a controller it cannot be reached from
+   |   feat(ci): wire ci.Runner to gritapi.Backend and add /v1/session support
+   |   feat(trustboundary): hold all config repo PRs for human Submit by default
+== exit 1
+
+== 3a guard on the real v3.1.0: bash ~/work/scripts/patch-tag-guard.sh v3.1.0
+   | patch-tag-guard.sh: v3.1.0 is not a patch tag (vX.Y.Z, Z >= 1); nothing to guard
+== exit 0
+
+== 3b guard on refs/tags/v3.0.2 as GITHUB_REF has it, under GitHub Actions: env GITHUB_ACTIONS=true bash ~/work/scripts/patch-tag-guard.sh refs/tags/v3.0.2
+   | patch-tag-guard.sh: refusing v3.0.2 (7e1761c2dc31): there is no release/v3.0.2 branch, and v3.0.0..v3.0.2 is not fixes only (176 commits).
+   | patch-tag-guard.sh: v3.0.2 carries these feat: commits:
+   |   feat(ci): reattach running CI steps across a grain restart
+   |   feat(gke): wire -k8s-granule-access and re-run channel-lost CI jobs
+   |   feat(github): surface idle-poll backoff stats on /system/health and grain demo
+   |   feat(ui): show capability policy verdicts in grant pickers
+   |   feat(change,orchestrator): review CLs read-only and gate Submit on the reviews
+   |   feat(mcpserver): serve only the control roster to runs with a sandbox
+   |   feat(demo,ui): seed CLs to submit and sync, and pin the buttons in Playwright
+   |   feat(capability): deliver sandbox-callable capability tools through grain cap
+   |   feat(ui): draw a CL's Submit, Sync and behind-head badge, and refuse Sync to agents
+   |   feat(change,ui,orchestrator): submit and sync a task's CL, and close it when it lands
+   |   feat(scripts): migrate a local install to a GKE controller with local hostd
+   |   feat(ui,demo): show a CL's review badge, Mail and Publish replies
+   |   feat(change,mcp,ui): answer CL review threads as drafts, publish them, Mail
+   |   feat(change,orchestrator): wake a CL task for new Critique review threads
+   |   feat(demo): seed a changelist task in each presubmit state
+   |   feat(change): answer pull_request_status and wait_for_checks for CL tasks
+   |   feat(staterepo,model): add the settings/capabilities.yml capability catalogue and enforce it
+   |   feat(daemon,deploy): run the sandbox-access acceptor; Role, Service and NetworkPolicies
+   |   feat(k8s-granule): mint sandbox-access credentials into an owned Secret
+   |   feat(sandboxaccess): mTLS acceptor and per-sandbox credentials for granule dial-out
+   |   feat(api): serve generated agent API to external agents over MCP/HTTP
+   |   feat(deploy): add GKE deployment script, overlay manifests, and Terraform
+   |   feat(change,model,ui): add pkg/change seam, changelist state/work-tree handling, and CL chip
+   |   feat(ui): say in Settings when grain hostd dials in, and from which host
+   |   feat(daemon): take a grain hostd that dials in as the host executor, Kubernetes included
+   |   feat(hostd): let grain hostd dial out to a controller it cannot be reached from
+   |   feat(ci): wire ci.Runner to gritapi.Backend and add /v1/session support
+   |   feat(trustboundary): hold all config repo PRs for human Submit by default
+== exit 1
+
+== 3c guard --latest (latest is v3.1.0): bash ~/work/scripts/patch-tag-guard.sh --latest
+   | patch-tag-guard.sh: v3.1.0 is not a patch tag (vX.Y.Z, Z >= 1); nothing to guard
+== exit 0
+
+== 3d guard on a branch ref and an empty ref (release.yml on main, a dispatch): bash ~/work/scripts/patch-tag-guard.sh refs/heads/main 
+== exit 0
+
+== 3e release-patch.sh refuses a feat: pick: bash ~/work/scripts/release-patch.sh --no-wait v3.1.1 eb12e842
+   | release-patch.sh: eb12e842 is a feature, not a fix: "feat(model): record how every stored principal was established" (a patch carries fixes; ALLOW_FEAT=1 to pick it anyway)
+== exit 1
+
+== 3f release-patch.sh with a commit v3.1.0 already has: bash ~/work/scripts/release-patch.sh --no-wait v3.1.1 8a740f996c22a8c5caeecc47b6cb80598d777676
+   | release-patch.sh: v3.1.0 already carries 8a740f996c22a8c5caeecc47b6cb80598d777676 ("Merge pull request #477 from ai-on-gke/grain/049f1e09/task-2510-test-iap-access-end-to-end")
+== exit 1
+
+== 3g release-patch.sh on a minor version: bash ~/work/scripts/release-patch.sh v3.2.0 65b9f5b0a
+   | release-patch.sh: v3.2.0 is not a patch release (vX.Y.Z with Z >= 1); minor releases come from the train
+== exit 1
+
+== 3h release-patch.sh v3.1.1 65b9f5b0a: env RELEASE_PATCH_POLL_SECONDS=1 bash ~/work/scripts/release-patch.sh v3.1.1 65b9f5b0a
+   | [release/v3.1.1 0865f4ef] fix(staterepo): import schedules triggered by a GitHub workflow run
+   |  Date: Mon Nov 2 20:32:04 2026 +0000
+   |  6 files changed, 353 insertions(+), 4 deletions(-)
+   |  create mode 100644 pkg/staterepo/recurrence_roundtrip_test.go
+   |  create mode 100644 pkg/staterepo/statecheck/trigger_schedule_test.go
+   |  create mode 100644 pkg/workflows/recurrence_kinds_test.go
+   | release-patch.sh: pushed release/v3.1.1 (0865f4ef182c): v3.1.0 plus 1 cherry-picks
+   | release-patch.sh: release.yml is green on release/v3.1.1 (0865f4ef182c)
+   | patch-tag-guard.sh: v3.1.1 (0865f4ef182c) was cut on release/v3.1.1 from v3.1.0; ok
+   | release-patch.sh: pushed v3.1.1 at 0865f4ef182c
+   | release-patch.sh: next (a person): move `latest` only if no newer release exists, dispatch promote.yml with version=v3.1.1, and land docs/releases/v3.1.1.md on main (docs/release-candidate-management.md, section 9)
+== exit 0
+-- release/v3.1.1 on origin: 0865f4ef182c
+-- v3.1.1 on origin: 0865f4ef182c
+-- latest on origin (must be unmoved, v3.1.0's 8a740f996c22): 8a740f996c22
+-- the v3.1.1 tag message:
+   | walkthrough <walkthrough@example.com>
+   | Release v3.1.1: v3.1.0 plus cherry-picked fixes from release/v3.1.1
+   | 
+-- the pick (git log v3.1.0..v3.1.1):
+   0865f4ef fix(staterepo): import schedules triggered by a GitHub workflow run
+      (cherry picked from commit 65b9f5b0a3ed6741b48820523c6585945dd0121e)
+      
+      )
+   (cherry picked from commit 65b9f5b0a3ed6741b48820523c6585945dd0121e)
+-- range-diff of the pick against 65b9f5b0a (empty apart from the cherry-pick line):
+   1:  65b9f5b0 ! 1:  0865f4ef fix(staterepo): import schedules triggered by a GitHub workflow run
+       @@ Commit message
+        
+            Origin: task 2167
+            Filed-by: task 2167
+       +    (cherry picked from commit 65b9f5b0a3ed6741b48820523c6585945dd0121e)
+        
+         ## pkg/model/schedule.go ##
+        @@ pkg/model/schedule.go: const (
+-- files the pick touches:
+    pkg/model/schedule.go                             |   3 +
+    pkg/staterepo/decl.go                             |  15 +-
+    pkg/staterepo/recurrence_roundtrip_test.go        | 162 ++++++++++++++++++++++
+    pkg/staterepo/statecheck/trigger_schedule_test.go |  92 ++++++++++++
+    pkg/workflows/recurrence.go                       |  13 ++
+    pkg/workflows/recurrence_kinds_test.go            |  72 ++++++++++
+    6 files changed, 353 insertions(+), 4 deletions(-)
+
+== 3i guard on the v3.1.1 it made: bash ~/work/scripts/patch-tag-guard.sh v3.1.1
+   | patch-tag-guard.sh: v3.1.1 (0865f4ef182c) was cut on release/v3.1.1 from v3.1.0; ok
+== exit 0
+
+== 3j release-patch.sh v3.1.1 again (the tag exists): bash ~/work/scripts/release-patch.sh v3.1.1
+   | release-patch.sh: origin already has the tag v3.1.1
+== exit 1
+-- gh was asked:
+   gh run list --workflow release.yml --branch release/v3.1.1 --json headSha,status,conclusion --limit 20
+-- the scratch clone's local git config:
+   (no user.* keys)

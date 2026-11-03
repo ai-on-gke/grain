@@ -118,7 +118,7 @@ func clearPipelineNotification(ctx context.Context, store *model.Store, subject,
 // does not pass through there.
 func raiseBaseRed(ctx context.Context, deps Deps, row model.BaseBranchCI, reason string, now time.Time) error {
 	key := model.BranchKey(row.Repo, row.Branch)
-	body := fmt.Sprintf("grain CI on `%s` %s is confirmed red: %s.", row.Branch, row.Repo, reason)
+	body := fmt.Sprintf("grain CI on %s `%s` is confirmed red: %s.", row.Repo, row.Branch, reason)
 	n := model.Notification{
 		Subject:  model.NotificationSubject(model.FamilyBaseRed, key),
 		Severity: model.NotificationWarning,

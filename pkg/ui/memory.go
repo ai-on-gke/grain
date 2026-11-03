@@ -81,18 +81,6 @@ type memoryRequest struct {
 	AuthorKind string `json:"authorKind,omitempty"`
 }
 
-// memoryAuthor is the principal a request names, and the zero Principal
-// for one that names nobody -- which Client.PutMemory and
-// Client.PutMemoryDocument read as "record this deployment's own actor".
-//
-// The validating is requestPrincipal's (principal.go), shared with the
-// other route an agent attributes a write through -- POST /api/upgrade's
-// own requester -- so that "a kind and an id together, and a kind grain
-// knows" is one rule rather than two spellings of it.
-func memoryAuthor(id, kind string) (model.Principal, error) {
-	return requestPrincipal("a memory's author", id, kind)
-}
-
 // errMemoryLong is how a memory too large to carry on every dispatch is
 // refused -- a ValidationError, so a 400 with a sentence the caller (in
 // practice a model, through update_memory) can act on in the same turn.
@@ -461,17 +449,9 @@ func memoryDocumentFrom(d model.MemoryDocument) MemoryDocument {
 // agent only from a task holding the memory capability, because it goes
 // into the prompt of every run this deployment dispatches.
 func (s *Server) memoryWriter(r *http.Request, id, kind, repo string) (model.Principal, error) {
-	p, hasPrincipal := PrincipalFromContext(r.Context())
-	if hasPrincipal && p.Kind == model.PrincipalHuman {
-		return p, nil
-	}
-
-	by, err := memoryAuthor(id, kind)
+	by, err := bodyAuthor(r.Context(), "a memory's author", id, kind)
 	if err != nil {
 		return model.Principal{}, err
-	}
-	if hasPrincipal {
-		by = p
 	}
 	if by.Kind == model.PrincipalAgent {
 		if err := s.tasks.requireMemoryGrant(r.Context(), by.ID, repo); err != nil {

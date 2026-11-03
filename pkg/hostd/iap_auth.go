@@ -179,3 +179,19 @@ func parseTokenExpiry(rawJWT string) time.Time {
 	}
 	return time.Now().Add(50 * time.Minute)
 }
+
+// IDTokenEmail is the email an ID token names, lowercased, read without
+// verifying it: what hostd says it dials in as, for its own log. The
+// controller verifies the identity IAP vouches for, never this; "" when
+// the token names no email.
+func IDTokenEmail(token string) string {
+	token = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(token), "Bearer "))
+	var claims struct {
+		Email string `json:"email"`
+		jwt.RegisteredClaims
+	}
+	if _, _, err := jwt.NewParser().ParseUnverified(token, &claims); err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(claims.Email))
+}

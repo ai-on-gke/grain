@@ -203,6 +203,50 @@ func TestGGHGraphQLGoesToTheToolsGraphQLEndpoint(t *testing.T) {
 	}
 }
 
+// A request bound for some other forge -- GraphQL built for
+// api.github.com, say -- is refused before the tool runs: handed the
+// whole URL, the tool would send its own host's login there. The error
+// names both hosts.
+func TestCommandForgeRefusesAnotherHostsURL(t *testing.T) {
+	state := fakeGGHAPI(t)
+	c := gghDepotSet(t, "")
+	writeRaw(t, state, "api-response", gghResponse("200 OK", nil, `{}`))
+	transport, err := c.ForgeTransport("depot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := transport.(*github.RealTransport).Client.Transport
+	for _, u := range []string{"https://api.github.com/graphql", "https://other.example.com/api/v3/repos/o/r"} {
+		req, err := http.NewRequest("POST", u, strings.NewReader(`{"query":"q"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = rt.RoundTrip(req)
+		if err == nil {
+			t.Fatalf("%s was sent through forgecli for %s", u, depotHost)
+		}
+		for _, want := range []string{req.URL.Hostname(), depotHost} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not name %s", err, want)
+			}
+		}
+	}
+	if runs := apiRuns(t, state); len(runs) != 0 {
+		t.Fatalf("forgecli ran: %q", runs)
+	}
+
+	// Its own host's GraphQL still goes, as the tool's own endpoint.
+	req, _ := http.NewRequest("POST", "https://"+depotHost+"/api/graphql", strings.NewReader(`{"query":"q"}`))
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if runs := apiRuns(t, state); len(runs) != 1 || runs[0][len(runs[0])-1] != "graphql" {
+		t.Fatalf("api runs = %q", runs)
+	}
+}
+
 func TestGGHPassesNon2xxThroughAndHonoursAProxy(t *testing.T) {
 	state := fakeGGHAPI(t)
 	c := gghDepotSet(t, "http://127.0.0.1:3128")

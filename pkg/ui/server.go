@@ -188,7 +188,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		ResponseWriter: w,
 		rehearsal:      rehearsal,
 		onSuccess: func() {
-			s.tasks.syncStateRepoAfterWrite(r.Context())
+			// Who made the write is who it was guarded as made by: an
+			// agent's principal is on the handler's context alone.
+			by := rehearsal.writer(r.Context())
+			s.tasks.recordConfigWrite(by, r)
+			s.tasks.syncStateRepoAfterWrite(by)
 		},
 	}
 	s.mux.ServeHTTP(rw, r)
@@ -263,6 +267,7 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/pause", s.handlePause)
 	s.route("POST /api/tasks/{id}/resume", s.handleResume)
 	s.route("PUT /api/tasks/{id}/goal", s.handleSetGoal)
+	s.route("PUT /api/tasks/{id}/hostd", s.handleSetTaskHostd)
 	s.route("DELETE /api/tasks/{id}/goal", s.handleClearGoal)
 	s.route("POST /api/tasks/{id}/reopen", s.handleReopen)
 	s.route("POST /api/tasks/{id}/retry", s.handleRetry)
@@ -635,6 +640,17 @@ func (s *Server) routes() {
 
 	// A grain hostd on another machine dialing in (hostd -server).
 	s.route("GET /api/hostd/connect", s.handleHostdConnect)
+	// The hostd registry (Settings -> Hostds).
+	s.route("GET /api/hostds", s.handleListHostds)
+	s.route("POST /api/hostds", s.handleCreateHostd)
+	s.route("PATCH /api/hostds/{name}", s.handleUpdateHostd)
+	s.route("POST /api/hostds/{name}/rotate", s.handleRotateHostdToken)
+	s.route("POST /api/hostds/{name}/revoke", s.handleRevokeHostd)
+
+	// Verified-identity sign-in allowlist (Settings -> Access).
+	s.route("GET /api/access/principals", s.handleListAccessPrincipals)
+	s.route("POST /api/access/principals", s.handleAllowPrincipal)
+	s.route("DELETE /api/access/principals/{entry}", s.handleDenyPrincipal)
 
 	// Controller MCP server (mcp_endpoint.go) shared by external BYO
 	// harnesses and built-in sessions/tasks holding api:* grants.

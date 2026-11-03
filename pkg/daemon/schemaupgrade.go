@@ -74,6 +74,12 @@ type schemaUpgrade struct {
 	Branch    string    `json:"branch,omitempty"`
 	Build     string    `json:"build,omitempty"`
 	WrittenAt time.Time `json:"writtenAt"`
+	// LoadedHead is the state repository's loaded-head marker at the moment
+	// this snapshot was exported. When openStoreForSchemaUpgrade rebuilds a
+	// fresh store from this dump (rather than migrating the live store in
+	// place), rewinding the marker to LoadedHead ensures commits synced into
+	// the archived store after WriteSchemaUpgrade are re-applied too.
+	LoadedHead string `json:"loadedHead,omitempty"`
 }
 
 // writeSchemaUpgrade exports db into a fresh schema-upgrade directory and
@@ -130,8 +136,14 @@ func WriteSchemaUpgrade(ctx context.Context, dataDir string, db *sql.DB, branch 
 	if err := staterepo.WriteSchemaVersion(dir, from); err != nil {
 		return "", err
 	}
-	note := schemaUpgrade{From: from, To: to, Branch: branch, WrittenAt: time.Now().UTC(),
-		Build: version.Get().Revision}
+	note := schemaUpgrade{
+		From:       from,
+		To:         to,
+		Branch:     branch,
+		WrittenAt:  time.Now().UTC(),
+		Build:      version.Get().Revision,
+		LoadedHead: staterepo.ReadLoadedHead(ctx, StateRepoDir(dataDir)),
+	}
 	data, err := json.MarshalIndent(note, "", "  ")
 	if err != nil {
 		return "", err
@@ -319,6 +331,9 @@ func openStoreForSchemaUpgrade(ctx context.Context, driver, dsn, dataDir string)
 		// dump it cannot read with nothing authorising a rewrite, and stop:
 		// the same restart loop this file exists to end, one step further along.
 		if note, ok := readSchemaUpgrade(dataDir); ok {
+			if migratedFrom > 0 {
+				writeInPlaceMigration(dataDir, migratedFrom, model.SchemaVersion)
+			}
 			log.Printf("grain: the store is already at schema %d and %s is still here, so the state "+
 				"repository has not been brought across yet -- doing that now", note.To,
 				SchemaUpgradeDir(dataDir))
@@ -405,6 +420,15 @@ func importSchemaUpgrade(ctx context.Context, dataDir string, db *sql.DB, note s
 	// same dump; this is the answer for an upgrade that skipped it.
 	if err := store.CheckSingleTenant(ctx); err != nil {
 		return err
+	}
+	if note.LoadedHead != "" {
+		stateDir := StateRepoDir(dataDir)
+		if cur := staterepo.ReadLoadedHead(ctx, stateDir); cur != "" && cur != note.LoadedHead {
+			if werr := staterepo.WriteLoadedHead(ctx, stateDir, note.LoadedHead); werr != nil {
+				log.Printf("grain: rewinding loaded-head marker in %s to %s for rebuilt store: %v",
+					stateDir, note.LoadedHead, werr)
+			}
+		}
 	}
 	log.Printf("grain: imported this deployment's rows from %s into a fresh store at schema %d",
 		dir, model.SchemaVersion)

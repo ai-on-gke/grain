@@ -228,10 +228,20 @@ func lineageTrailers(task model.Task) []string {
 
 // identityTrailers are the identity claims task carries, as pass-through
 // metadata a change can be traced back to the people behind it by:
-// `Requested-by:` for its requester (Task.Creator, as the UI or the
-// local CLI set it), and `Approved-by:` for the human who approved it. An
-// approval by grain itself (a schedule, auto-approval) names nobody and
-// adds nothing.
+// `Requested-by:` for its requester (Task.Creator), and `Approved-by:`
+// for the person who approved it (operator-attribution spec §4.6). An
+// approval by grain itself (a schedule, auto-approval) or by an agent
+// names nobody and adds nothing.
+//
+// A verified person (model.Principal.Verified) is named by the email
+// their verifier established. The operator fallback -- a caller nobody
+// named, filing or approving with the access code or from this host --
+// keeps the deployment actor's own id, `operator`, as it always has. A
+// requester a human caller only typed (`grain create -author`, which
+// sets Creator to somebody other than the caller who filed it) is
+// nobody's verified identity, and gets no `Requested-by:`. A task an
+// agent filed keeps the requester it inherited from the work it is
+// part of.
 //
 // They ride along with lineageTrailers wherever those are written, and
 // never on their own on a merge commit: a merge grain writes no message
@@ -239,13 +249,51 @@ func lineageTrailers(task model.Task) []string {
 // a requester is no reason to replace that.
 func identityTrailers(task model.Task) []string {
 	var out []string
-	if requester := strings.TrimSpace(task.Creator); requester != "" {
+	if requester := requestedBy(task); requester != "" {
 		out = append(out, "Requested-by: "+requester)
 	}
-	if a := task.Approval; a != nil && a.Actor.Kind == model.PrincipalHuman && strings.TrimSpace(a.Actor.ID) != "" {
+	if a := task.Approval; a != nil && namesAPerson(a.Actor) {
 		out = append(out, "Approved-by: "+strings.TrimSpace(a.Actor.ID))
 	}
 	return out
+}
+
+// requestedBy is task's `Requested-by:` value, or "" for none
+// (identityTrailers).
+func requestedBy(task model.Task) string {
+	requester := strings.TrimSpace(task.Creator)
+	if requester == "" {
+		return ""
+	}
+	filer := task.Origin.Attribution.Actor
+	if filer.Kind != model.PrincipalHuman && filer.Kind != model.PrincipalService {
+		return requester
+	}
+	if !strings.EqualFold(requester, strings.TrimSpace(filer.ID)) || !namesAPerson(filer) {
+		return ""
+	}
+	return requester
+}
+
+// namesAPerson reports whether p may be named in a commit trailer: a
+// verified person or service account, or the operator fallback (a human
+// with one of the sources nobody in particular is behind, or none, for
+// a row written before sources existed).
+func namesAPerson(p model.Principal) bool {
+	if strings.TrimSpace(p.ID) == "" {
+		return false
+	}
+	if p.Verified() {
+		return true
+	}
+	if p.Kind != model.PrincipalHuman {
+		return false
+	}
+	switch p.Source {
+	case "", model.SourceAccessCode, model.SourceLoopback, model.SourceInProcess:
+		return true
+	}
+	return false
 }
 
 // CommitTrailers are every trailer a task's commits are asked to end

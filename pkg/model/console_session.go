@@ -115,6 +115,16 @@ type ConsoleSession struct {
 	// (Task.Writes). The session's sandbox may clone, fetch, and push
 	// commits to them.
 	Writes []WriteTarget `json:"writes,omitempty"`
+	// ReadsAll is whether the session also reads every repository this
+	// deployment works in (ConsoleSessionWorkingRepos), resolved each
+	// cycle: nil, the default, and true say it does; false opts the
+	// session out, leaving it the state repository and Reads alone.
+	ReadsAll *bool `json:"readsAll,omitempty"`
+	// DeclinedDefaults is the default grants (ConsoleSessionDefaultGrants)
+	// this session is not to hold. An operator removing one from the
+	// session's own capabilities records it here, so it stays removed
+	// when the session's task is filed again.
+	DeclinedDefaults []string `json:"declinedDefaults,omitempty"`
 	// GoogleChatSpace is the Google Chat space resource name or URL
 	// linked to this session (Task.Links with LinkGoogleChat).
 	GoogleChatSpace string `json:"googleChatSpace,omitempty"`
@@ -132,7 +142,9 @@ func (s *ConsoleSession) UnmarshalJSON(data []byte) error {
 	type alias ConsoleSession
 	var raw struct {
 		alias
-		KeepRunningSnake *bool `json:"keep_running,omitempty"`
+		KeepRunningSnake      *bool    `json:"keep_running,omitempty"`
+		ReadsAllSnake         *bool    `json:"reads_all,omitempty"`
+		DeclinedDefaultsSnake []string `json:"declined_defaults,omitempty"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -140,6 +152,12 @@ func (s *ConsoleSession) UnmarshalJSON(data []byte) error {
 	*s = ConsoleSession(raw.alias)
 	if !s.KeepRunning && raw.KeepRunningSnake != nil {
 		s.KeepRunning = *raw.KeepRunningSnake
+	}
+	if s.ReadsAll == nil && raw.ReadsAllSnake != nil {
+		s.ReadsAll = raw.ReadsAllSnake
+	}
+	if s.DeclinedDefaults == nil && raw.DeclinedDefaultsSnake != nil {
+		s.DeclinedDefaults = raw.DeclinedDefaultsSnake
 	}
 	return nil
 }
@@ -332,7 +350,10 @@ func defaultConsoleSessionCapabilities() []string {
 // repository comes with
 // the task rather than from a grant (orchestrator.consoleSessionTask),
 // since that is grain's own database as text and it is what "what is
-// this deployment actually doing" is answered out of.
+// this deployment actually doing" is answered out of. So, for every
+// session and not only this one, does read access to every repository
+// the deployment works in, and CI read (ConsoleSessionDefaultGrants) --
+// see console_session_reach.go.
 //
 // Deliberately not granted, and both are one tick away in the UI for an
 // operator who wants them: self-repair, which lets a run change things
@@ -770,6 +791,20 @@ func DirectorSessionBody(stateRepo RepoRef, session ConsoleSession) string {
 		"actually have before promising anything: if you are asked to do something you have no " +
 		"capability for, say which one it would need rather than working around it.\n\n")
 
+	if session.ReadsAllRepos() {
+		b.WriteString("This session reads every repository this deployment works in: clone or " +
+			"fetch any of them through grain's git proxy, the way you would the state repository, " +
+			"rather than from anywhere else. ")
+		if !session.DeclinesDefault(ConsoleSessionCIReadGrant) {
+			b.WriteString("Unless it has been removed from this task, `" + ConsoleSessionCIReadGrant + "` also " +
+				"lets `grain ci list/show/log` and `grain pr status --task/--ref` read CI for all of them. ")
+		}
+		b.WriteString("Try a clone before saying a repository is out of reach.\n\n")
+	} else if !session.DeclinesDefault(ConsoleSessionCIReadGrant) {
+		b.WriteString("Unless it has been removed from this task, `" + ConsoleSessionCIReadGrant + "` lets " +
+			"`grain ci list/show/log` and `grain pr status --task/--ref` read CI for every repository.\n\n")
+	}
+
 	b.WriteString("Anything a person can do in grain's UI you can do through grain's own API, if " +
 		"you are granted its scope: an `api:<scope>` or `api:<preset>` capability on this task " +
 		"attaches the `grain-controller` MCP server (`grain_explore_scope` to list authorized " +
@@ -851,8 +886,12 @@ type FileConsoleSessionOptions struct {
 // creation time (ui.Client.CreateConsoleSession), so an operator who removes a
 // default capability from a session keeps it out across reconciles and
 // restarts (grain/task-2126).
+//
+// The one exception is ConsoleSessionDefaultGrants, which every session
+// holds GrantByDefault without its Capabilities naming them, unless it
+// declines them (ConsoleSession.DeclinedDefaults).
 func ConsoleSessionGrants(session ConsoleSession) []Grant {
-	grants := make([]Grant, 0, len(session.Capabilities)+1)
+	grants := make([]Grant, 0, len(session.Capabilities)+1+len(consoleSessionDefaultGrants))
 	grants = append(grants, Grant{Capability: DurableCapability, Via: GrantByGrain})
 	seen := map[string]bool{DurableCapability: true}
 	for _, name := range session.Capabilities {
@@ -862,6 +901,13 @@ func ConsoleSessionGrants(session ConsoleSession) []Grant {
 		}
 		seen[name] = true
 		grants = append(grants, Grant{Capability: name, Via: GrantByGrain})
+	}
+	for _, name := range consoleSessionDefaultGrantsFor(session) {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		grants = append(grants, Grant{Capability: name, Via: GrantByDefault})
 	}
 	return grants
 }
@@ -889,6 +935,18 @@ type ConsoleSessionConfigSnapshot struct {
 	TasksApproved   bool
 	KeepRunning     bool
 	GoogleChatSpace string
+	// OfferedDefaults is the ConsoleSessionDefaultGrants this task has
+	// already been given once. A default named here that the task no
+	// longer holds was removed from it, and is not given back. It only
+	// grows: RecordSyncedConsoleSession keeps every id an earlier
+	// snapshot named.
+	OfferedDefaults []string `json:",omitempty"`
+	// AutoReads is the repositories the task was last given because the
+	// session reads every working repository (ConsoleSessionAutoReads),
+	// so a sync can tell them from reads an operator added to the task
+	// and drop one that is retired or that the session stopped reading.
+	// Nil carries the previous snapshot's (RecordSyncedConsoleSession).
+	AutoReads []RepoRef `json:",omitempty"`
 }
 
 // LastSyncedConsoleSession returns the ConsoleSessionConfigSnapshot last synced
@@ -912,7 +970,22 @@ func LastSyncedConsoleSession(ctx context.Context, store *Store, taskID string) 
 
 // RecordSyncedConsoleSession stores the ConsoleSessionConfigSnapshot last synced
 // onto taskID in store.
+//
+// What an earlier snapshot recorded of OfferedDefaults is kept, and its
+// AutoReads are carried when snap has none of its own (nil), so a caller
+// recording only the declaration -- ui.Client.UpdateConsoleSession --
+// does not forget what the reconciler applied.
 func RecordSyncedConsoleSession(ctx context.Context, store *Store, taskID string, snap ConsoleSessionConfigSnapshot) error {
+	if prev, ok := LastSyncedConsoleSession(ctx, store, taskID); ok {
+		for _, id := range prev.OfferedDefaults {
+			if !slices.Contains(snap.OfferedDefaults, id) {
+				snap.OfferedDefaults = append(snap.OfferedDefaults, id)
+			}
+		}
+		if snap.AutoReads == nil {
+			snap.AutoReads = prev.AutoReads
+		}
+	}
 	raw, err := json.Marshal(snap)
 	if err != nil {
 		return err
@@ -973,6 +1046,15 @@ func FileConsoleSessionTask(ctx context.Context, store *Store, session ConsoleSe
 			task.Reads = append(task.Reads, r)
 		}
 	}
+	autoReads, err := ConsoleSessionAutoReads(ctx, store, session, stateRepo)
+	if err != nil {
+		return "", err
+	}
+	for _, r := range autoReads {
+		if !slices.ContainsFunc(task.Reads, func(e RepoRef) bool { return e.Same(r) }) {
+			task.Reads = append(task.Reads, r)
+		}
+	}
 	task.Writes = append([]WriteTarget{}, session.Writes...)
 	if opts.PreviousTaskID != "" {
 		task.Links = []Link{{Kind: LinkContinues, Target: opts.PreviousTaskID}}
@@ -993,6 +1075,8 @@ func FileConsoleSessionTask(ctx context.Context, store *Store, session ConsoleSe
 		TasksApproved:   session.TasksApproved,
 		KeepRunning:     session.KeepRunning,
 		GoogleChatSpace: session.GoogleChatSpace,
+		OfferedDefaults: ConsoleSessionDefaultGrants(),
+		AutoReads:       autoReads,
 	}); err != nil {
 		return "", err
 	}

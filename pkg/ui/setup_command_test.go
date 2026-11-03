@@ -24,6 +24,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -87,7 +88,7 @@ func TestSetupCommandSurvivesTheOtherRepoSaves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got.DefaultCapabilities, []string{"gcp-key"}) {
+	if !reflect.DeepEqual(got.DefaultCapabilities, []string{model.GCPKeySandboxAgentGrant}) {
 		t.Fatalf("defaultCapabilities = %v after saving a setup command, want them untouched",
 			got.DefaultCapabilities)
 	}
