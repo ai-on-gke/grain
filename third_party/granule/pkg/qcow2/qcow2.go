@@ -609,6 +609,13 @@ func ChainDepth(path string) (int, error) {
 	return len(chain), nil
 }
 
+// Chain returns path's backing chain, ordered from the root base to path
+// itself, walked with the same distrust ChainDepth's is. A path that is
+// not a qcow2 is a chain of one.
+func Chain(path string) ([]string, error) {
+	return backingChain(path)
+}
+
 // backingChain walks path's backing chain and returns it ordered from the
 // root base to path itself.
 //
