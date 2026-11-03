@@ -1535,6 +1535,18 @@ func (c Config) withLiveModelConfig(mc model.Config) Config {
 	live.GithubHost, live.GithubInsecureHTTP = c.GithubHost, c.GithubInsecureHTTP
 	live.K8sNamespace = c.K8sNamespace
 	live.K8sKubectl = c.K8sKubectl
+	// A stored Kubernetes image is live only on the backend that creates
+	// pods from it: applySandboxImage hands it to that backend on the next
+	// tick. Any other backend creates nothing from it until a restart
+	// adopts the backend too, so it stays what this process started with
+	// and Settings goes on reporting it as waiting for that restart.
+	if runningBackend != model.SandboxBackendKubernetes {
+		live.K8sImage = c.K8sImage
+		live.K8sSandboxImage = c.K8sSandboxImage
+	}
+	if runningBackend != model.SandboxBackendKubernetesGranule {
+		live.K8sGranuleImage = c.K8sGranuleImage
+	}
 	live.K8sWorkspace = c.K8sWorkspace
 	live.K8sGitProxyHost = c.K8sGitProxyHost
 	live.K8sSandboxService = c.K8sSandboxService
