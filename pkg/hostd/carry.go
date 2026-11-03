@@ -207,11 +207,18 @@ func (s *remoteSession) serveCarry(st net.Conn) {
 // The listener belongs to this session: a hostd that reconnects has
 // lost it, and a run that needs it again asks again.
 func (r *Remote) Carry(ctx context.Context, handle func(net.Conn)) (addr string, release func(), err error) {
+	return r.CarryHostd(ctx, r.DefaultName(), handle)
+}
+
+// CarryHostd is Carry on the hostd named name: the listener is on that
+// hostd's machine, the one a run routed there starts its CLI on. As with
+// DialHostd, another hostd being connected is no answer.
+func (r *Remote) CarryHostd(ctx context.Context, name string, handle func(net.Conn)) (addr string, release func(), err error) {
 	id, err := randomID()
 	if err != nil {
 		return "", nil, err
 	}
-	sess, conn, err := r.dialSession(ctx, r.DefaultName())
+	sess, conn, err := r.dialSession(ctx, name)
 	if err != nil {
 		return "", nil, err
 	}
@@ -268,12 +275,17 @@ func (r *Remote) Carry(ctx context.Context, handle func(net.Conn)) (addr string,
 // daemon's loopback, so a browser on the workstation cannot reach h
 // through cross-origin requests or DNS rebinding.
 func (r *Remote) CarryHTTP(ctx context.Context, h http.Handler) (url string, release func(), err error) {
+	return r.CarryHTTPHostd(ctx, r.DefaultName(), h)
+}
+
+// CarryHTTPHostd is CarryHTTP to the machine of the hostd named name.
+func (r *Remote) CarryHTTPHostd(ctx context.Context, name string, h http.Handler) (url string, release func(), err error) {
 	secret, err := randomID()
 	if err != nil {
 		return "", nil, err
 	}
 	l := newConnListener()
-	addr, stop, err := r.Carry(ctx, l.push)
+	addr, stop, err := r.CarryHostd(ctx, name, l.push)
 	if err != nil {
 		_ = l.Close()
 		return "", nil, err
@@ -384,4 +396,26 @@ func pipe(a, b io.ReadWriteCloser) {
 	go func() { _, _ = io.Copy(a, b); closeBoth() }()
 	_, _ = io.Copy(b, a)
 	closeBoth()
+}
+
+// Carrier is r's CarryHTTP bound to the hostd named name ("" for the
+// default), for a run whose CLI was routed there: its endpoints have to
+// be carried to the machine its CLI runs on, not the default hostd's.
+func (r *Remote) Carrier(name string) *HostdCarrier {
+	return &HostdCarrier{Remote: r, Name: name}
+}
+
+// HostdCarrier is Remote.Carrier.
+type HostdCarrier struct {
+	Remote *Remote
+	Name   string
+}
+
+// CarryHTTP is Remote.CarryHTTPHostd to c's hostd.
+func (c *HostdCarrier) CarryHTTP(ctx context.Context, h http.Handler) (string, func(), error) {
+	name := c.Name
+	if name == "" {
+		name = c.Remote.DefaultName()
+	}
+	return c.Remote.CarryHTTPHostd(ctx, name, h)
 }
