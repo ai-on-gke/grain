@@ -487,6 +487,16 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	}); err != nil {
 		t.Fatalf("recording exec-tunnel failures: %v", err)
 	}
+	// Which hostd the run went to (task_run_hostd), and the task's own
+	// hostd pin (task_hostd).
+	if err := store.RecordTaskRunHostd(ctx, model.TaskRunHostd{
+		RunID: "a1b2-1", TaskID: "a1b2", Hostd: "laptop", Instance: "laptop.example.com", Owner: "owner@example.com", At: sub,
+	}); err != nil {
+		t.Fatalf("recording a run's hostd: %v", err)
+	}
+	if err := store.SetTaskHostd(ctx, "a1b2", "gpu=a100,zone=b"); err != nil {
+		t.Fatalf("pinning a task's hostd: %v", err)
+	}
 	// What a run's capability grants did for it
 	// (task_run_capability_audit): a capability server's own JSON
 	// record, verbatim -- argv out of a sandbox, so the awkward string

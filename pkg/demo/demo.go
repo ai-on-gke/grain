@@ -1133,6 +1133,12 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	if err := store.FinishRun(ctx, firstRun, firstDone, "succeeded", "the run made 14 tool call(s)"); err != nil {
 		return fmt.Errorf("seeding a task under repair: %w", err)
 	}
+	// The hostd its host work went to (model.TaskRunHostd).
+	if err := store.RecordTaskRunHostd(ctx, model.TaskRunHostd{
+		RunID: firstRun, TaskID: repairing.ID, Hostd: "ws-a", Instance: "build-box", Owner: "dana@example.com", At: ago(48 * time.Minute),
+	}); err != nil {
+		return fmt.Errorf("seeding a task under repair: %w", err)
+	}
 	if err := store.AppendRunCapabilityAudit(ctx, firstRun, demoCapabilityAudit(repairing.ID, ago)); err != nil {
 		return fmt.Errorf("seeding a task under repair: %w", err)
 	}

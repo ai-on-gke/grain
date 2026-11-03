@@ -626,6 +626,19 @@ var Migrations = []Migration{
 		},
 		Up: ensureLocalHostd,
 	},
+	{
+		Version:     93,
+		Description: "route host work per run: task_hostd, task_run_hostd, and the hostd of each task_run_capability_audit record",
+		Statements: []string{
+			taskHostdTable,
+			taskRunHostdTable,
+			// task_run_capability_audit postdates the 2.0 baseline and
+			// Init made it in place, so a store this old may not have it
+			// yet: create it in schema 92's shape first.
+			schema92CapabilityAuditTable,
+			"ALTER TABLE `task_run_capability_audit` ADD COLUMN `hostd` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // principalSourceColumns are migration 91's ALTERs: `<p>_source` beside
@@ -655,6 +668,19 @@ func principalSourceColumns() []string {
 	}
 	return out
 }
+
+// schema92CapabilityAuditTable is task_run_capability_audit as schema
+// 92 created it, frozen for migration 93.
+const schema92CapabilityAuditTable = `CREATE TABLE IF NOT EXISTS ` + "`task_run_capability_audit`" + ` (
+  ` + "`run_id`" + `     TEXT     NOT NULL,
+  ` + "`seq`" + `        INTEGER  NOT NULL,
+  ` + "`capability`" + ` TEXT     NOT NULL,
+  ` + "`attempt_id`" + ` TEXT     NOT NULL,
+  ` + "`at`" + `         DATETIME NOT NULL,
+  ` + "`record`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`note`" + `       TEXT     NOT NULL DEFAULT '',
+  PRIMARY KEY (` + "`run_id`" + `, ` + "`seq`" + `)
+)`
 
 // schema90TaskPauseTable and schema90TaskEventTable are task_pause and
 // task_event as schema 90 created them, frozen for migration 91.

@@ -687,6 +687,15 @@ func (c Config) capabilityHostd() *hostd.Client {
 	return &client
 }
 
+// capabilityHostdName is the registry name of the hostd capabilityHostd
+// reaches, "" where there is none.
+func capabilityHostdName(c Config) string {
+	if c.capabilityHostd() == nil {
+		return ""
+	}
+	return c.DefaultHostd()
+}
+
 // storedHostWarned is the CLIs whose stored "host" this process has
 // already logged as moved to the container: once each, not once a run.
 var storedHostWarned sync.Map

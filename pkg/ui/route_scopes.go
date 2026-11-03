@@ -86,6 +86,7 @@ var routeScopes = map[string]APIScope{
 	"POST /api/tasks/{id}/pause":                                           "tasks:write",
 	"POST /api/tasks/{id}/resume":                                          "tasks:write",
 	"PUT /api/tasks/{id}/goal":                                             "tasks:write",
+	"PUT /api/tasks/{id}/hostd":                                            "tasks:write",
 	"DELETE /api/tasks/{id}/goal":                                          "tasks:write",
 	"POST /api/tasks/{id}/reopen":                                          "tasks:write",
 	"POST /api/tasks/{id}/retry":                                           "tasks:write",

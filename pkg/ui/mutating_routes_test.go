@@ -705,6 +705,7 @@ var notYetAttributedRoutes = map[string]bool{
 	"PUT /api/secrets/{secret}/{key}":                                      true,
 	"PUT /api/settings/cli-run":                                            true,
 	"PUT /api/tasks/{id}/goal":                                             true,
+	"PUT /api/tasks/{id}/hostd":                                            true,
 	"PUT /api/tasks/{id}/session-title":                                    true,
 }
 

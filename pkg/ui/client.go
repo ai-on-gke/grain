@@ -1224,9 +1224,21 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 		log.Printf("ui: task %s: counting its attempts' capability audit records: %v", id, err)
 		auditCounts = nil
 	}
+	runHostds, err := c.Store.TaskRunHostds(ctx, id)
+	if err != nil {
+		log.Printf("ui: task %s: reading its attempts' hostds: %v", id, err)
+		runHostds = nil
+	}
+	if detail.Hostd, err = c.Store.TaskHostd(ctx, id); err != nil {
+		log.Printf("ui: task %s: reading its hostd pin: %v", id, err)
+	}
 	detail.Attempts = make([]Attempt, 0, len(runs))
 	for _, r := range runs {
-		detail.Attempts = append(detail.Attempts, attemptFrom(r, promptBytes, auditCounts))
+		a := attemptFrom(r, promptBytes, auditCounts)
+		if h, ok := runHostds[r.ID]; ok {
+			a.Hostd = &h
+		}
+		detail.Attempts = append(detail.Attempts, a)
 	}
 
 	transitions := model.Transitions(*t, obs, runs, streak, askedAt(obs, comments))
@@ -1865,7 +1877,11 @@ type CreateTaskRequest struct {
 	// because provenance is what a proposal's authority is read off,
 	// decides how far AutoMerge and Approved above reach (CreateTask).
 	ProposalKey string `json:"proposalKey,omitempty"`
-	ProposedBy  string `json:"proposedBy,omitempty"`
+	// Hostd pins the task's host work to one grain hostd by name, or to
+	// any hostd carrying label=value[,label=value] (model.SetTaskHostd);
+	// "" is the default hostd.
+	Hostd      string `json:"hostd,omitempty"`
+	ProposedBy string `json:"proposedBy,omitempty"`
 	// HoldForApproval is propose_task's own `hold_for_approval`: file
 	// this proposal for a person to approve even if ProposedBy's
 	// permission would have queued it (model.HeldForApprovalTag). It can
@@ -2046,6 +2062,10 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	if strings.TrimSpace(req.Title) == "" {
 		return Task{}, validationErrorf("title is required")
+	}
+	hostdSelector, err := model.NormalizeHostdSelector(req.Hostd)
+	if err != nil {
+		return Task{}, validationErrorf("%v", err)
 	}
 	priority := model.DefaultTaskPriority
 	if req.Priority != nil {
@@ -2776,6 +2796,11 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	for i := range attachments {
 		attachments[i].TaskID = id
 		if _, err := c.Store.AddAttachment(ctx, attachments[i]); err != nil {
+			return Task{}, err
+		}
+	}
+	if hostdSelector != "" {
+		if err := c.Store.SetTaskHostd(ctx, id, hostdSelector); err != nil {
 			return Task{}, err
 		}
 	}

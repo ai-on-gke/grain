@@ -102,7 +102,13 @@ type Deps struct {
 	// and rewriting the choice it hands Framework -- and it deliberately
 	// does not do so today (docs/connections-and-models.md).
 	ModelAvailability func(ctx context.Context, choice AgentChoice) string
-	Config            Config
+	// CapabilityHostd is the grain hostd run: host capability servers
+	// are started through -- the deployment's default hostd, whichever
+	// hostd a run's own agent CLI was routed to -- recorded on each
+	// capability audit record (model.CapabilityAuditRecord.Hostd). ""
+	// where they have none.
+	CapabilityHostd string
+	Config          Config
 	// RequireTeamGitCredential holds back every task whose team has no
 	// GitHub credential for its target (model.Store.TaskGitCredential):
 	// its sandbox could neither clone nor push, since the git proxy has
@@ -619,6 +625,9 @@ type AgentChoice struct {
 	// back to the rest of the rotation only when unavailable or paused.
 	PreferFramework string
 	PreferModel     string
+	// TaskID is the task the run is for, whose hostd pin or selector
+	// (model.Store.TaskHostd) routes its host work.
+	TaskID string
 }
 
 // ChoiceFor is the AgentChoice task's own fields make: the one runOne
@@ -631,6 +640,7 @@ func ChoiceFor(task model.Task) AgentChoice {
 		Model:     task.Model,
 		Priority:  task.HasPriorityDispatch(),
 		Durable:   task.IsDurable(),
+		TaskID:    task.ID,
 	}
 }
 

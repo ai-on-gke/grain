@@ -138,6 +138,9 @@ func releaseRunCapabilities(ctx context.Context, deps Deps, taskID, runID string
 	if len(records) == 0 || deps.Store == nil {
 		return
 	}
+	for i := range records {
+		records[i].Hostd = deps.CapabilityHostd
+	}
 	if err := deps.Store.AppendRunCapabilityAudit(ctx, runID, records); err != nil {
 		log.Printf("orchestrator: run %s: recording its capability audit: %v", runID, err)
 	}
