@@ -448,7 +448,14 @@ import "strconv"
 // 96 rewrites stored `grain-ci` grants, `repo_config`.`ci_capabilities`
 // included, to `https://grain.dev/capabilities/grain#ci={}`: the
 // in-process `grain-ci` provider is retired for the `grain#ci` method.
-const SchemaVersion = 96
+//
+// 97 retires the in-process `gcp-key` and `gcp-key:<name>` providers onto
+// `https://grain.dev/capabilities/gcp#gcp-key`: seeds `sandbox-agent` and
+// `<name>` permission sets in `grain_config`.`mcp_servers` from the
+// deployment's pool and `gcp_key` rows, and rewrites stored grants across
+// tasks, templates, schedules, default_capabilities, ci_capabilities,
+// console_sessions and capability_policy.
+const SchemaVersion = 97
 
 // configAuditTable is the `config_audit` table: one row per change to the
 // deployment's configuration somebody made (model.ConfigAuditEntry,

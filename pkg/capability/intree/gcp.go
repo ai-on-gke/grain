@@ -98,6 +98,9 @@ type GCPConfig struct {
 	// FallbackErr is why flags and environment that tried to configure
 	// the server did not, reported when configure supplies nothing.
 	FallbackErr error
+	// Env reads server environment variables (used for migrated per-admin
+	// credential_env bindings).
+	Env Env
 	// Connector reaches GCP; nil is gcpsets.GoogleConnector{}.
 	Connector gcpsets.Connector
 	Now       func() time.Time
@@ -136,8 +139,8 @@ func gcpConfigSchema() map[string]any {
 // gcpConfigFrom is the configuration a configure call gives: its
 // permission sets when it has any, otherwise its old fields migrated over
 // the fallback's, otherwise the fallback itself.
-func gcpConfigFrom(fallback *gcpsets.Config, fallbackErr error, config map[string]any) (*gcpsets.Config, error) {
-	cfg, err := gcpConfigOf(fallback, fallbackErr, config)
+func gcpConfigFrom(fallback *gcpsets.Config, fallbackErr error, env Env, config map[string]any) (*gcpsets.Config, error) {
+	cfg, err := gcpConfigOf(fallback, fallbackErr, env, config)
 	if err != nil || cfg.Deployment != "" {
 		return cfg, err
 	}
@@ -149,9 +152,9 @@ func gcpConfigFrom(fallback *gcpsets.Config, fallbackErr error, config map[strin
 	return &c, nil
 }
 
-func gcpConfigOf(fallback *gcpsets.Config, fallbackErr error, config map[string]any) (*gcpsets.Config, error) {
+func gcpConfigOf(fallback *gcpsets.Config, fallbackErr error, env Env, config map[string]any) (*gcpsets.Config, error) {
 	if _, ok := config["permission_sets"]; ok {
-		return gcpsets.Parse(config)
+		return gcpsets.ParseWithEnv(config, env)
 	}
 	_, hasProject := config["project"]
 	_, hasAccounts := config["accounts"]
@@ -294,6 +297,8 @@ func newGCPMethod(m *gcpsets.Manager, now func() time.Time, report string) (*pro
 			keyPath := GCPKeyPath
 			if !primary {
 				keyPath = gcpSecondaryKeyPath(set)
+			} else if ps.KeyPath != "" {
+				keyPath = ps.KeyPath
 			}
 			aboutPath := gcpAboutPath(keyPath)
 			roles := ""
@@ -309,7 +314,7 @@ func newGCPMethod(m *gcpsets.Manager, now func() time.Time, report string) (*pro
 				PromptSection: fmt.Sprintf("GCP permission set %s: service account %s in project %s%s. Its key is at %s; its client_email is that account, and %s names the set, the account and the project.",
 					set, lease.Account, ps.Project, roles, keyPath, aboutPath),
 			}
-			if primary {
+			if primary && keyPath == GCPKeyPath {
 				resp.PromptSection += " gcloud is logged in as that account with the project selected, and GOOGLE_APPLICATION_CREDENTIALS-style clients find the key there."
 				script := "/home/debian/.gcp-key/" + attemptID + "/activate.sh"
 				resp.Placements = append(resp.Placements, protocol.Placement{
@@ -392,7 +397,7 @@ func init() {
 			if err := fs.Parse(args); err != nil {
 				return nil, err
 			}
-			cfg := GCPConfig{Log: logger}
+			cfg := GCPConfig{Log: logger, Env: env}
 			var legacy []gcpsets.LegacyAccount
 			for _, v := range accounts {
 				a, err := parseGCPAccount(v)
@@ -467,7 +472,7 @@ func newConfigurableGCP(cfg GCPConfig) (*Server, error) {
 		return current
 	}))
 	err = s.configurable(gcpConfigSchema(), func(ctx context.Context, config map[string]any) ([]*protocol.Method, error) {
-		c, err := gcpConfigFrom(cfg.Fallback, cfg.FallbackErr, config)
+		c, err := gcpConfigFrom(cfg.Fallback, cfg.FallbackErr, cfg.Env, config)
 		if err != nil {
 			return nil, err
 		}

@@ -43,8 +43,8 @@ func TestSetRepoSettingsAppliesCapabilitiesAndUnfixableChecks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetRepoSettings: %v", err)
 	}
-	if !reflect.DeepEqual(got.DefaultCapabilities, []string{"gcp-key"}) {
-		t.Errorf("defaultCapabilities = %v, want [gcp-key]", got.DefaultCapabilities)
+	if !reflect.DeepEqual(got.DefaultCapabilities, []string{model.GCPKeySandboxAgentGrant}) {
+		t.Errorf("defaultCapabilities = %v, want [%s]", got.DefaultCapabilities, model.GCPKeySandboxAgentGrant)
 	}
 	if want := []string{"gemini-key", "package-publish", model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"})}; !reflect.DeepEqual(got.CICapabilities, want) {
 		t.Errorf("ciCapabilities = %v, want %v", got.CICapabilities, want)
@@ -64,8 +64,8 @@ func TestSetRepoSettingsAppliesCapabilitiesAndUnfixableChecks(t *testing.T) {
 	if !reflect.DeepEqual(got.CICapabilities, []string{"gemini-key", "package-publish"}) {
 		t.Errorf("ciCapabilities after narrowing = %v, want [gemini-key package-publish]", got.CICapabilities)
 	}
-	if !reflect.DeepEqual(got.DefaultCapabilities, []string{"gcp-key"}) {
-		t.Errorf("defaultCapabilities = %v, want [gcp-key] preserved", got.DefaultCapabilities)
+	if !reflect.DeepEqual(got.DefaultCapabilities, []string{model.GCPKeySandboxAgentGrant}) {
+		t.Errorf("defaultCapabilities = %v, want [%s] preserved", got.DefaultCapabilities, model.GCPKeySandboxAgentGrant)
 	}
 	if !reflect.DeepEqual(got.UnfixableChecks, []string{"cla/google", "license/check"}) {
 		t.Errorf("unfixableChecks = %v, want [cla/google license/check] preserved", got.UnfixableChecks)
