@@ -26,7 +26,7 @@ Open Settings → Capabilities → Capability servers. The built-in **gcp** tab 
 
 1. Under **Admin accounts**, add `{name, credential_source, projects, role_ceiling}`. `role_ceiling` is every role this admin may hand out — keep it short.
 2. For a configured admin, paste into **Configured admin credentials** a JSON object from the admin's name to its credential: `{"minter": { …the key JSON… }}`. The field is write-only: grain stores it in its secrets store and never shows it again.
-3. Under **Permission sets**, add `{name, admin, project, roles}`, and optionally `resource_scope` (`buckets/<name>`), `max_lease` (default `24h`), `pool_max` (default 3) and `adopt_legacy` (see [Accounts from before deployment ids](#accounts-from-before-deployment-ids)). **Service account name prefix** (`account_prefix`, default `grain`) starts every account the sets create.
+3. Under **Permission sets**, add `{name, admin, project, roles}`, and optionally `resource_scope` (`buckets/<name>`), `max_lease` (default `24h`), `pool_max` (default 3) and `adopt_legacy` (see [Accounts from before deployment ids](#accounts-from-before-deployment-ids)) — or, to use an account you already have, `{name, admin, service_account}` (see [Using an existing service account](#using-an-existing-service-account)). **Service account name prefix** (`account_prefix`, default `grain`) starts every account the sets create.
 4. Press **Test**. The `gcp-key` method's description then says which deployment id the accounts are named after (`deployment 049f1e09 (instance …): new service accounts are named grain-049f1e09-<set>-<n>`), which identity each admin resolved to, and every permission it is missing on each project. Fix those before saving — an admin that cannot create service accounts will fail the first mint.
 5. Save.
 
@@ -43,6 +43,34 @@ Test reports, for each set, how many accounts it has against `pool_max` and how 
 ## 5. Remove a set
 
 Delete the set and save. Its service accounts are **not** deleted: the next Test lists them as `removed set <name> still has <email>`. To delete them, add the set's name to **Delete removed sets' service accounts** (`delete_orphans`) and save; grain removes their project bindings and deletes them. Only accounts carrying this deployment's marker (below) are ever listed or deleted.
+
+## Using an existing service account
+
+A set can act as a service account you already have — one with organization-level grants, say — instead of accounts grain creates. Give the set **`service_account: <email>`** in place of `pool_max` (the two are exclusive, as are `adopt_legacy`, `accounts` and `resource_scope`):
+
+```json
+{"name": "org-deploy", "admin": "default", "service_account": "deployer@my-project.iam.gserviceaccount.com",
+ "roles": ["roles/run.admin"], "max_lease": "8h"}
+```
+
+Then grain **never creates, changes or deletes that account, and never binds or removes a role** on it or on the project for it. `roles` is optional and only informational: Test reports any listed role the account lacks on the set's project, and changes nothing. The admin's `role_ceiling` does not apply, since grain grants nothing. **A task granted the set gets whatever the account may already do** — everything its own grants allow, wherever they were made — so you, configuring the set, are responsible for those permissions. The account must be in one of the admin's `projects`; the set's `project` (what gcloud selects) defaults to the account's own.
+
+**`credential: token` (the default — use it).** Grain impersonates the account: no key ever exists. The admin needs `roles/iam.serviceAccountTokenCreator` on that one account, and nothing on the project:
+
+```sh
+gcloud iam service-accounts add-iam-policy-binding deployer@my-project.iam.gserviceaccount.com \
+  --project=my-project \
+  --member=serviceAccount:ADMIN_EMAIL --role=roles/iam.serviceAccountTokenCreator
+# a user admin (ambient on a host): --member=user:you@example.com
+```
+
+The task's agent finds an `external_account` credential config at `~/.gcp-service-account.json` — not a key — with gcloud signed in with it and the project selected; ADC and the client libraries read it like any credential file. Whenever one of them needs an access token, it presents a per-attempt token (in `~/.gcp-token/<attempt_id>/<set>.token`) to the gcp server's data-plane listener, forwarded into the sandbox at `127.0.0.1:9734` (the server's `-listen` flag moves it), and gets a fresh access token the server minted with `generateAccessToken`, good until the grant's deadline and at most an hour. `~/.gcp-token/<attempt_id>/<set>-id-token AUDIENCE` prints an ID token for the account (the same role covers it). The per-attempt token works only on that listener, and only until the attempt is released or its deadline, which `max_lease` caps — nothing long-lived ever reaches the sandbox. There is no concurrency limit.
+
+**`credential: key`.** Grain mints a key for the account per attempt and deletes it at release, as for its own accounts. The admin needs `iam.serviceAccountKeys.create` and `iam.serviceAccountKeys.delete` on the account (`roles/iam.serviceAccountKeyAdmin` on it). GCP allows ten keys per account, so at most ten attempts hold the set at once; an eleventh waits (`resource_exhausted`). The reaper never deletes keys on an existing account. Prefer `token` unless something in the task truly needs a key file.
+
+**Who may grant it.** A set over an existing account is **person-granted** by default (`person_granted`, default on for these sets; off for every other): a person must give the grant, and an agent holding it cannot hand it on to a task or proposal it files — that waits for a person. We recommend leaving it on; turn it off only for an account whose permissions are narrow. The capability policy (Settings → Capabilities → Policy) applies as to any grant — use it to confine the set to the repositories that need it. Every grant and every token minted is logged with the attempt and the account (`gcp: audit: …` in the server's log).
+
+**Test** reports, for each such set, the account, whether the admin can impersonate it (or, for `key`, mint keys for it), which listed `roles` it lacks — grants inherited from a folder or the organization are not seen there, so a role held that way shows as lacking — and how many attempts hold it now (no cap for tokens, ten for keys). An admin whose sets all use existing accounts is not asked for the `grainGcpKeyAdmin` role on their projects.
 
 ## Account names and ownership
 

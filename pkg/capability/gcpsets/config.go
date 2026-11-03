@@ -138,6 +138,11 @@ type PermissionSet struct {
 	// tokens by impersonation and no key exists; CredentialKey mints a
 	// key, as created sets do.
 	Credential string
+	// PersonGranted makes the set one only a person may grant
+	// (protocol.PersonGrantedArgKey): an agent holding it cannot pass it
+	// on to a task it files. On by default for a set over an existing
+	// service account, whose existing permissions may be broad.
+	PersonGranted bool
 }
 
 // Credential modes of a set over an existing service account.
@@ -247,6 +252,18 @@ func (c *Config) Set(name string) *PermissionSet {
 	return nil
 }
 
+// PersonGrantedSets lists the sets only a person may grant, in
+// configured order.
+func (c *Config) PersonGrantedSets() []string {
+	var out []string
+	for _, s := range c.Sets {
+		if s.PersonGranted {
+			out = append(out, s.Name)
+		}
+	}
+	return out
+}
+
 // SetNames lists the permission sets in configured order: the grant
 // argument's enum, whose first entry is the default.
 func (c *Config) SetNames() []string {
@@ -323,6 +340,7 @@ func Schema() map[string]any {
 						"credential": map[string]any{"type": "string", "enum": []any{CredentialToken, CredentialKey},
 							"description": "With service_account: token (the default, recommended) gives the task short-lived access tokens by impersonation -- no key exists, the admin needs roles/iam.serviceAccountTokenCreator on the account; key mints a key deleted at release (GCP's 10 keys per account cap concurrent attempts at 10)."},
 						"admin":          map[string]any{"type": "string", "description": "The admin account that manages this set.", "deprecated": true},
+						"person_granted": map[string]any{"type": "boolean", "description": "Only a person may grant this set; an agent holding it cannot pass it on to a task it files. Default: on with service_account, off otherwise."},
 						"project":        str("The one project the set's service accounts live and are bound in (with service_account: the project gcloud selects, default the account's own)."),
 						"roles":          strs("Roles bound to the set's service accounts within the project (e.g. roles/storage.objectViewer)."),
 						"resource_scope": str("Optional: bind on one resource instead of the project, e.g. buckets/<name>."),
@@ -424,15 +442,22 @@ func ParseWithEnv(config map[string]any, env func(string) string) (*Config, erro
 	}
 	for _, item := range list(config["permission_sets"]) {
 		s := PermissionSet{
-			Name:          str(item["name"]),
-			Admin:         str(item["admin"]),
-			Project:       str(item["project"]),
-			Roles:         strList(item["roles"]),
-			ResourceScope: str(item["resource_scope"]),
-			Accounts:      strList(item["accounts"]),
-			KeyPath:       str(item["key_path"]),
+			Name:           str(item["name"]),
+			Admin:          str(item["admin"]),
+			Project:        str(item["project"]),
+			Roles:          strList(item["roles"]),
+			ResourceScope:  str(item["resource_scope"]),
+			Accounts:       strList(item["accounts"]),
+			KeyPath:        str(item["key_path"]),
+			ServiceAccount: str(item["service_account"]),
+			Credential:     str(item["credential"]),
 		}
 		s.AdoptLegacy, _ = item["adopt_legacy"].(bool)
+		if v, ok := item["person_granted"].(bool); ok {
+			s.PersonGranted = v
+		} else {
+			s.PersonGranted = s.ServiceAccount != ""
+		}
 		if v := str(item["max_lease"]); v != "" {
 			d, err := time.ParseDuration(v)
 			if err != nil || d <= 0 {
