@@ -1463,7 +1463,10 @@ func (s *CiSandbox) exec(ctx context.Context, cmd ci.Command, out func(string)) 
 	}
 	dir := strings.TrimSpace(cmd.Dir)
 	if strings.Contains(dir, "'") {
-		return ci.CommandResult{}, fmt.Errorf("%q is not a usable working directory", cmd.Dir)
+		// The workflow's own mistake, not the transport's: a failed step,
+		// never an error, which the engine reads as the sandbox lost
+		// (sandboxaccess.SandboxLostFault) and re-runs as infra.
+		return ci.CommandResult{ExitCode: 2, Output: fmt.Sprintf("%q is not a usable working directory\n", cmd.Dir)}, nil
 	}
 	if s.shell != nil {
 		// The checkout, then the step's own working directory inside it
