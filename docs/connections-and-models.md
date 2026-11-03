@@ -410,6 +410,17 @@ Some limits:
   file applied from the state repository sets it with the authority of
   whoever may write that repository, and the save-time check doesn't run.
 
+## A connection's hostd
+
+A connection may name the grain hostd its agent CLI runs on
+(`hostd`, Settings -> Models -> **Run on**): a hostd's name or a
+`label=value` selector, with an optional ordered `hostdFallback`. A run on
+it starts its CLI there, counts against that hostd's capacity, and keys a
+usage limit on an ambient credential to it. While the hostd is not
+connected the connection is unavailable and its runs wait; nothing falls
+back unless `hostdFallback` says where. No task, template or repository
+chooses a hostd. See [hostd-placement.md](hostd-placement.md).
+
 ## An Antigravity connection's model-turn deadline
 
 agy retries provider errors (429, 503, `RESOURCE_EXHAUSTED`) without saying so

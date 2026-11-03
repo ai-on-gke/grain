@@ -59,6 +59,15 @@ type TaskCapabilityServers interface {
 	ForTask(ctx context.Context, taskID string) (CapabilityServers, string, error)
 }
 
+// CapabilityHostdOf is what a run's CapabilityServers implement when its
+// servers are placed on more than one grain hostd: the hostd
+// capabilityID was reached on for the run, and whether it was one of
+// those placed, so each capability audit record names its own server's
+// hostd rather than the run's default.
+type CapabilityHostdOf interface {
+	HostdOf(capabilityID string) (string, bool)
+}
+
 // capabilityServersFor is the servers taskID's run mints through, and
 // the hostd their run: host servers started on.
 func (d Deps) capabilityServersFor(ctx context.Context, taskID string) (CapabilityServers, string, error) {
@@ -136,22 +145,22 @@ func (h *CapabilityPasses) take(runID string) *heldPass {
 // Release releases runID's pass, if it holds one (§4.4.1), and returns
 // the audit its grants' releases returned (§4.4.4).
 func (h *CapabilityPasses) Release(ctx context.Context, runID string) []protocol.GrantAudit {
-	audits, _ := h.release(ctx, runID)
+	audits, _, _ := h.release(ctx, runID)
 	return audits
 }
 
 // release is Release, with the hostd the pass's run: host servers
 // started on.
-func (h *CapabilityPasses) release(ctx context.Context, runID string) ([]protocol.GrantAudit, string) {
+func (h *CapabilityPasses) release(ctx context.Context, runID string) ([]protocol.GrantAudit, string, CapabilityServers) {
 	held := h.take(runID)
 	if held == nil {
-		return nil, ""
+		return nil, "", nil
 	}
 	audits, err := held.pass.Release(ctx)
 	if err != nil {
 		log.Printf("orchestrator: run %s: releasing its capability grants: %v", runID, err)
 	}
-	return audits, held.hostd
+	return audits, held.hostd, held.servers
 }
 
 // releaseRunCapabilities releases the pass runID ran with and records
@@ -163,14 +172,22 @@ func (h *CapabilityPasses) release(ctx context.Context, runID string) ([]protoco
 // task's own are linked to taskID (recordTaskChangelists).
 func releaseRunCapabilities(ctx context.Context, deps Deps, taskID, runID string) {
 	publishRunReplies(ctx, deps, taskID, runID)
-	audits, hostd := deps.capabilityPasses().release(ctx, runID)
+	audits, hostd, servers := deps.capabilityPasses().release(ctx, runID)
 	records := capabilityAuditRecords(audits, deps.Config.now())
 	if len(records) == 0 || deps.Store == nil {
 		return
 	}
-	// The hostd this run's pass was minted on (TaskCapabilityServers).
+	// The hostd each grant's server ran on: its own placement's
+	// (CapabilityHostdOf), or the hostd this run's pass was minted on.
+	placed, _ := servers.(CapabilityHostdOf)
 	for i := range records {
 		records[i].Hostd = hostd
+		if placed != nil {
+			id, _, _ := strings.Cut(records[i].Grant, "#")
+			if name, ok := placed.HostdOf(id); ok {
+				records[i].Hostd = name
+			}
+		}
 	}
 	if err := deps.Store.AppendRunCapabilityAudit(ctx, runID, records); err != nil {
 		log.Printf("orchestrator: run %s: recording its capability audit: %v", runID, err)

@@ -696,9 +696,6 @@ func attachmentFrom(a model.AttachmentMeta) Attachment {
 // attempts, last failure: reason").
 type TaskDetail struct {
 	Task
-	// Hostd is the task's hostd pin or label selector
-	// (model.SetTaskHostd), "" for the default hostd.
-	Hostd    string    `json:"hostd,omitempty"`
 	Comments []Comment `json:"comments"`
 	// LocalScriptApprovals is the local-script calls this task's run is
 	// waiting on a person for, and the ones answered recently

@@ -16,27 +16,37 @@ package daemon
 
 // Per-run hostd routing: which grain hostd one run's host work goes to.
 //
-// A task's hostd pin or label selector (model.SetTaskHostd) is resolved
-// for each run by SelectHostd. The run's framework is then built on a
-// copy of the config whose host executor is that hostd's, so the agent
-// CLI reaches it through its own client (HostExecutor.Hostd,
-// hostd.Remote.Dialer), and starts detached through that hostd's own
-// runhost.Hostd (newHostdRuns). Its run: host capability servers -- host
-// scripts among them -- are started on the same hostd
-// (hostdCapabilityServers), and its capability audit records say so. A
-// task with no pin goes to the default hostd exactly as before.
+// Where host work runs is a property of what does it, never of the
+// task. A run's agent CLI goes to the hostd its model connection names
+// (model.AgentBackend.Hostd, then its HostdFallback in order), resolved
+// for each run by SelectHostd once the pool has chosen the connection
+// (connectionRoutes). The run's framework is then built on a copy of the
+// config whose host executor is that hostd's, so the agent CLI reaches
+// it through its own client (HostExecutor.Hostd, hostd.Remote.Dialer),
+// and starts detached through that hostd's own runhost.Hostd
+// (newHostdRuns); task_run_hostd records it. Each run: hostd capability
+// server -- host scripts among them -- starts on the hostd its own entry
+// names (protocol.ServerConfig.Hostd, hostdCapabilityServers), and each
+// capability audit record says which. A run on a connection on hostd A
+// holding a grant of a server on hostd B so starts its CLI on A and
+// reaches the server on B. A connection with no placement goes where
+// the framework's run location says, through the default hostd, exactly
+// as before.
 //
 // The pool also holds each hostd to its allowlist's capacity: (Hello.
 // Capacity), counting the runs whose CLI starts there, and keys a usage
 // limit met on an ambient credential -- one that lives on the hostd's
 // machine, not in grain -- to that hostd, so a limit hit on one machine
-// does not pause the same connection on another.
+// does not pause the same connection on another. A connection whose
+// hostd is not connected (and has no fallback that is) is unavailable:
+// a run pinned to it waits, and the rotation passes it over.
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/hostd"
@@ -69,24 +79,11 @@ func (e *errHostdFull) Error() string {
 	return fmt.Sprintf("hostd %s is at its capacity (%d of %d runs); the run waits for one to finish", e.name, e.inUse, e.capcity)
 }
 
-// routeHostd is the hostd taskID's next run goes to: its pin or label
-// selector resolved now, or the default hostd. A pinned hostd that is
-// not connected is a *HostdWaitError; nothing falls back to another.
-func (p *AgentPool) routeHostd(ctx context.Context, live Config, taskID string) (hostdRoute, error) {
-	return resolveHostdRoute(ctx, live, p.Store, taskID)
-}
-
-// resolveHostdRoute is routeHostd with the store to read taskID's
-// selector from: what a run's agent CLI and its run: host capability
-// servers (hostdCapabilityServers) are both routed by.
-func resolveHostdRoute(ctx context.Context, live Config, store *model.Store, taskID string) (hostdRoute, error) {
-	selector := ""
-	if store != nil && taskID != "" {
-		var err error
-		if selector, err = store.TaskHostd(ctx, taskID); err != nil {
-			return hostdRoute{}, err
-		}
-	}
+// resolveHostdSelector is the route for one hostd selector
+// (model.ParseHostdSelector's form): the default hostd for "", or the
+// hostd SelectHostd resolves it to now. A pinned hostd that is not
+// connected is a *HostdWaitError.
+func resolveHostdSelector(ctx context.Context, live Config, store *model.Store, selector string) (hostdRoute, error) {
 	if selector == "" {
 		exec := live.hostExecutor()
 		if exec.Kind != HostExecutorHostd {
@@ -105,17 +102,108 @@ func resolveHostdRoute(ctx context.Context, live Config, store *model.Store, tas
 	return hostdRoute{Name: resolved, Exec: exec, Pinned: true}, nil
 }
 
+// connectionHostdRoute is the hostd a run on connection b starts its
+// agent CLI on: the first of b's HostdTargets that resolves, or the
+// default hostd for a connection that names none. When none resolves,
+// the first wait is the answer -- nothing falls back past the list b
+// itself gives -- wrapped to say whose hostd it is.
+func connectionHostdRoute(ctx context.Context, live Config, store *model.Store, b model.AgentBackend) (hostdRoute, error) {
+	targets := b.HostdTargets()
+	if len(targets) == 0 {
+		return resolveHostdSelector(ctx, live, store, "")
+	}
+	var wait error
+	for _, sel := range targets {
+		r, err := resolveHostdSelector(ctx, live, store, sel)
+		if err == nil {
+			return r, nil
+		}
+		var w *HostdWaitError
+		if !errors.As(err, &w) {
+			return hostdRoute{}, fmt.Errorf("connection %q's hostd %s: %w", b.ID, sel, err)
+		}
+		if wait == nil {
+			wait = err
+		}
+	}
+	return hostdRoute{}, fmt.Errorf("connection %q runs its CLI on %s, which is not connected; its runs wait (%w)",
+		b.ID, describeHostdTargets(targets), wait)
+}
+
+// describeHostdTargets says a connection's hostd list as a wait reason
+// does: "hostd ws-a", or "hostd ws-a (fallback ws-b)".
+func describeHostdTargets(targets []string) string {
+	out := "hostd " + targets[0]
+	if len(targets) > 1 {
+		out += " (fallback " + strings.Join(targets[1:], ", ") + ")"
+	}
+	return out
+}
+
+// connectionRoutes resolves the hostd of every connection in backends a
+// run may go to: routes by connection ID, and blocked, the connections
+// that cannot take a run now -- their hostd is not connected, or (for a
+// run that is not priority dispatch) at its capacity -- with why. Each
+// distinct placement is resolved once.
+func (p *AgentPool) connectionRoutes(ctx context.Context, live Config, backends []model.AgentBackend, priority bool) (map[string]hostdRoute, map[string]error) {
+	routes := map[string]hostdRoute{}
+	blocked := map[string]error{}
+	type resolved struct {
+		route hostdRoute
+		err   error
+	}
+	seen := map[string]resolved{}
+	for _, b := range backends {
+		key := strings.Join(b.HostdTargets(), "\x00")
+		res, ok := seen[key]
+		if !ok {
+			res.route, res.err = connectionHostdRoute(ctx, live, p.Store, b)
+			seen[key] = res
+		}
+		if res.err != nil {
+			blocked[b.ID] = res.err
+			continue
+		}
+		routes[b.ID] = res.route
+		if priority || !runsOnHostd(live, res.route, b.Framework) {
+			continue
+		}
+		capacity := p.hostdCapacity(ctx, res.route)
+		p.mu.Lock()
+		full := p.hostdFullLocked(res.route, capacity, time.Now())
+		p.mu.Unlock()
+		if full != nil {
+			blocked[b.ID] = full
+		}
+	}
+	return routes, blocked
+}
+
 // apply is live with r's hostd as its host executor. Its runs start
 // detached through that hostd's own runhost.Hostd (newHostdRuns), so a
 // drop is re-attached within -hostd-reattach-timeout, a run on any hostd
 // outlives a daemon upgrade, and it is re-adopted from the hostd it
 // recorded (adoptHostd).
-func (r hostdRoute) apply(live Config) Config {
+//
+// A connection placed on a hostd runs its CLI there: framework's run
+// location is the host for this run, unless it is already set to run on
+// the host or detached.
+func (r hostdRoute) apply(live Config, framework string) Config {
 	if !r.Pinned {
 		return live
 	}
 	exec := r.Exec
 	live.HostExec = &exec
+	if fw := model.NormalizeAgentFrameworkName(framework); fw != "" {
+		if location, _ := live.CLIRunSetting(fw); location != model.CLIRunHost && location != model.CLIRunDetached {
+			runs := make(map[string]model.CLIRunSetting, len(live.CLIRun)+1)
+			for k, v := range live.CLIRun {
+				runs[k] = v
+			}
+			runs[fw] = model.CLIRunSetting{Location: model.CLIRunHost}
+			live.CLIRun = runs
+		}
+	}
 	if r.Name != live.DefaultHostd() {
 		live.hostdRuns = live.hostdRunSet.forHostd(r.Name, exec)
 	}
@@ -157,10 +245,20 @@ func hostdPauseOwner(owner, hostdName string) string {
 	return owner + "@hostd/" + hostdName
 }
 
-// pauseOwner is hostdPauseOwner for b on req's hostd.
+// pauseHostdOf is the hostd a usage-limit pause on b's credential is
+// scoped to for a run on b: b's own hostd (connectionRoutes), when that
+// scopes pauses; "" for the connection's bare key.
+func (req poolRequest) pauseHostdOf(live Config, b model.AgentBackend) string {
+	if r, ok := req.routes[b.ID]; ok && r.scopesPauses(live) {
+		return r.Name
+	}
+	return ""
+}
+
+// pauseOwner is hostdPauseOwner for b on b's hostd.
 func (req poolRequest) pauseOwner(live Config, b model.AgentBackend) string {
-	if req.pauseHostd != "" && ambientCredential(live, b) {
-		return hostdPauseOwner(b.CredentialOwnerID(), req.pauseHostd)
+	if h := req.pauseHostdOf(live, b); h != "" && ambientCredential(live, b) {
+		return hostdPauseOwner(b.CredentialOwnerID(), h)
 	}
 	return b.CredentialOwnerID()
 }
@@ -172,7 +270,7 @@ func (req poolRequest) pauseOwner(live Config, b model.AgentBackend) string {
 func (req poolRequest) pausedConnection(live Config, b model.AgentBackend) string {
 	name := fmt.Sprintf("connection %q", b.ID)
 	if req.pauseOwner(live, b) != b.CredentialOwnerID() {
-		name += " on hostd " + req.pauseHostd
+		name += " on hostd " + req.pauseHostdOf(live, b)
 	}
 	return name
 }
@@ -226,8 +324,9 @@ func (p *AgentPool) hostdFullLocked(r hostdRoute, capacity int, now time.Time) *
 }
 
 // runsOnHostd is whether a run of framework on r starts its CLI through
-// r's hostd: always for a pinned task, whose pin says its work is that
-// hostd's, and otherwise when the framework is set to run on the host.
+// r's hostd: always for a connection placed on a hostd, whose placement
+// says its CLI runs there, and otherwise when the framework is set to
+// run on the host.
 func runsOnHostd(live Config, r hostdRoute, framework string) bool {
 	if r.Name == "" {
 		return false
@@ -240,12 +339,9 @@ func runsOnHostd(live Config, r hostdRoute, framework string) bool {
 // but a setup failure, said by Build.
 func hostdWaitReason(err error) string {
 	var wait *HostdWaitError
-	if errors.As(err, &wait) {
-		return wait.Error()
-	}
 	var full *errHostdFull
-	if errors.As(err, &full) {
-		return full.Error()
+	if errors.As(err, &wait) || errors.As(err, &full) {
+		return err.Error()
 	}
 	return ""
 }

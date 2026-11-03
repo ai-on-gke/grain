@@ -263,10 +263,12 @@ type poolRequest struct {
 	// (preferPrevious).
 	preferFramework string
 	preferModel     string
-	// pauseHostd is the hostd an ambient credential's usage-limit pause
-	// is scoped to for this run (hostdRoute.scopesPauses), "" for the
-	// connection's bare key.
-	pauseHostd string
+	// routes is the hostd each connection a run may go to starts its CLI
+	// on (AgentPool.connectionRoutes), which also scopes a usage-limit
+	// pause on its ambient credential (pauseOwner); blocked is the
+	// connections whose hostd cannot take a run now, with why.
+	routes  map[string]hostdRoute
+	blocked map[string]error
 }
 
 // frameworkFor is the framework a run of m on req is restricted to: m's
@@ -490,7 +492,9 @@ func (p *AgentPool) candidatesLocked(live Config, req poolRequest, now time.Time
 			// Nothing chose a model and this connection advertises none:
 			// grain does not guess one for it.
 			excluded.addNoModels(backend.ID)
-		case req.hostdDraining[model.NormalizeAgentFrameworkName(backend.Framework)]:
+		case req.blocked[backend.ID] != nil:
+			excluded.addHostdBlocked(req.blocked[backend.ID])
+		case req.hostdDraining[model.NormalizeAgentFrameworkName(backend.Framework)] && !req.routes[backend.ID].Pinned:
 			excluded.hostdDraining++
 		case now.Before(p.unavailable[backendUnavailableKey(backend)]),
 			p.Pause.ConnectionPaused(req.pauseOwner(live, backend), bTeam, now):
@@ -565,7 +569,11 @@ func (p *AgentPool) multiModelExclusionsLocked(live Config, req poolRequest, now
 			excluded.disabled++
 			continue
 		}
-		if req.hostdDraining[model.NormalizeAgentFrameworkName(backend.Framework)] {
+		if err := req.blocked[backend.ID]; err != nil {
+			excluded.addHostdBlocked(err)
+			continue
+		}
+		if req.hostdDraining[model.NormalizeAgentFrameworkName(backend.Framework)] && !req.routes[backend.ID].Pinned {
 			excluded.hostdDraining++
 			continue
 		}
@@ -607,28 +615,6 @@ func (p *AgentPool) multiModelExclusionsLocked(live Config, req poolRequest, now
 // Build as busy, the same as a connection that filled up between ticks.
 func (p *AgentPool) Availability(ctx context.Context, choice orchestrator.AgentChoice) string {
 	live := DispatchConfig(ctx, p.Store, p.cfg)
-	// A task pinned to a hostd that is not connected, or that is at its
-	// capacity, waits for it; nothing moves it to another hostd.
-	route, err := p.routeHostd(ctx, live, choice.TaskID)
-	if err != nil {
-		return hostdWaitReason(err)
-	}
-	live = route.apply(live)
-	if route.Name != "" && !choice.Priority {
-		framework := choice.Framework
-		if framework == "" {
-			framework = live.DefaultAgentFramework()
-		}
-		if runsOnHostd(live, route, framework) {
-			capacity := p.hostdCapacity(ctx, route)
-			p.mu.Lock()
-			full := p.hostdFullLocked(route, capacity, time.Now())
-			p.mu.Unlock()
-			if full != nil {
-				return full.Error()
-			}
-		}
-	}
 	if len(live.AgentBackends) == 0 {
 		// No connections at all is the single-framework deployment the
 		// daemon's own flags configure; Build reports what it lacks.
@@ -639,9 +625,6 @@ func (p *AgentPool) Availability(ctx context.Context, choice orchestrator.AgentC
 		return p.hostdHold(ctx, live, framework)
 	}
 	req, err := p.resolve(ctx, live, choice)
-	if route.scopesPauses(live) {
-		req.pauseHostd = route.Name
-	}
 	if err != nil {
 		// A connection pinned with a model its provider has stopped
 		// listing waits for the provider (or the operator) to bring it
@@ -659,6 +642,13 @@ func (p *AgentPool) Availability(ctx context.Context, choice orchestrator.AgentC
 		// model name nobody chose.
 		if req.model == "" {
 			return noModelsReason([]string{req.pinned.ID})
+		}
+		// A connection placed on a hostd that is not connected, or that
+		// is at its capacity, waits for it; nothing moves the run to
+		// another hostd its connection does not list.
+		req.routes, req.blocked = p.connectionRoutes(ctx, live, []model.AgentBackend{*req.pinned}, choice.Priority)
+		if why := hostdWaitReason(req.blocked[req.pinned.ID]); why != "" {
+			return why
 		}
 		// A pin bypasses the rotation, but not a usage-limit pause on the
 		// pinned connection's credential for the model it would run:
@@ -682,6 +672,7 @@ func (p *AgentPool) Availability(ctx context.Context, choice orchestrator.AgentC
 	// in the container -- further down the default models, or elsewhere
 	// in the rotation -- and waits on hostd only when there is none.
 	req.hostdDraining, req.hostdWhy = p.hostdDrainingFrameworks(ctx, live)
+	req.routes, req.blocked = p.connectionRoutes(ctx, live, live.AgentBackends, choice.Priority)
 	p.mu.Lock()
 	_, candidates, excluded := p.selectCandidateLocked(live, req, time.Now())
 	p.mu.Unlock()
@@ -690,6 +681,9 @@ func (p *AgentPool) Availability(ctx context.Context, choice orchestrator.AgentC
 	}
 	if excluded.hostdDraining > 0 {
 		return req.hostdWhy
+	}
+	if excluded.hostdBlocked > 0 && excluded.busy+excluded.coolingOff+excluded.modelPaused == 0 {
+		return excluded.hostdBlockedWhy
 	}
 	reason := waitReason(req, excluded)
 	if req.pinnedModel {
@@ -737,6 +731,14 @@ func (p *AgentPool) fallbackReasonLocked(live Config, req poolRequest, picked st
 		}
 	}
 	return strings.Join(why, ", and ")
+}
+
+// addHostdBlocked counts one connection whose hostd cannot take a run.
+func (e *backendExclusions) addHostdBlocked(err error) {
+	e.hostdBlocked++
+	if e.hostdBlockedWhy == "" {
+		e.hostdBlockedWhy = err.Error()
+	}
 }
 
 // waitReason is the sentence a held task shows: either nothing enabled
@@ -819,17 +821,9 @@ func (p *AgentPool) Build(ctx context.Context, choice orchestrator.AgentChoice) 
 	// holds such a team's tasks (orchestrator.Deps.TeamHasAgentBackend), so a
 	// dispatch that finds none is a race with its admin removing the last
 	// one, and fails naming what is missing.
-	route, err := p.routeHostd(ctx, live, choice.TaskID)
-	if err != nil {
-		return nil, err
-	}
-	live = route.apply(live)
 	req, err := p.resolve(ctx, live, choice)
 	if err != nil {
 		return nil, err
-	}
-	if route.scopesPauses(live) {
-		req.pauseHostd = route.Name
 	}
 	settings = req.settings
 	chosenModel = req.model
@@ -840,12 +834,19 @@ func (p *AgentPool) Build(ctx context.Context, choice orchestrator.AgentChoice) 
 		// A task that named a connection gets that connection, and none
 		// of the rotation's reasons skip it: it is used while disabled
 		// (model.Task.AgentBackendID), and it does not advance rotation.
+		// Its hostd is not skipped either: one that cannot take the run
+		// now is a wait (agent.ErrHostdWaiting), not another hostd.
 		selected = req.pinned
+		req.routes, req.blocked = p.connectionRoutes(ctx, live, []model.AgentBackend{*selected}, choice.Priority)
+		if err := req.blocked[selected.ID]; err != nil {
+			return nil, err
+		}
 	} else {
 		// Availability's rule: a draining hostd's connections are not
 		// candidates, so a run that may go elsewhere never meets its
 		// refusal.
 		req.hostdDraining, req.hostdWhy = p.hostdDrainingFrameworks(ctx, live)
+		req.routes, req.blocked = p.connectionRoutes(ctx, live, live.AgentBackends, choice.Priority)
 		p.mu.Lock()
 		now := time.Now()
 		pickedModel, candidates, excluded := p.selectCandidateLocked(live, req, now)
@@ -871,6 +872,9 @@ func (p *AgentPool) Build(ctx context.Context, choice orchestrator.AgentChoice) 
 		p.mu.Unlock()
 		selected = &backend
 	}
+	// The run's host work goes to its connection's hostd.
+	route := req.routes[selected.ID]
+	live = route.apply(live, selected.Framework)
 	// The hostd's own capacity holds every run whose CLI starts there,
 	// priority dispatch included: it is the machine's, not a
 	// connection's.
@@ -899,10 +903,7 @@ func (p *AgentPool) Build(ctx context.Context, choice orchestrator.AgentChoice) 
 		hostdLease.Release()
 		return built, err
 	}
-	credential := selected.CredentialOwnerID()
-	if route.scopesPauses(live) && ambientCredential(live, *selected) {
-		credential = hostdPauseOwner(credential, route.Name)
-	}
+	credential := req.pauseOwner(live, *selected)
 	var instance, owner string
 	if route.Name != "" {
 		instance, owner = p.hostdAudit(ctx, live, route)
@@ -1019,6 +1020,11 @@ type backendExclusions struct {
 	// hostdDraining counts the connections passed over because their CLI
 	// runs on the host and grain hostd is draining (poolRequest.hostdDraining).
 	hostdDraining int
+	// hostdBlocked counts the connections passed over because the hostd
+	// they run their CLI on cannot take a run now (poolRequest.blocked),
+	// and hostdBlockedWhy is the first one's reason.
+	hostdBlocked    int
+	hostdBlockedWhy string
 	// busyRuns and busyLimit are the runs the busy connections are
 	// carrying and the concurrency they allow between them, so the
 	// sentence a held task shows says the limit that is full rather than
@@ -1103,6 +1109,9 @@ func noBackendError(team, framework, targetModel string, configured int, e backe
 	}
 	if e.hostdDraining > 0 {
 		why = append(why, fmt.Sprintf("%d running its CLI on the host while grain hostd updates", e.hostdDraining))
+	}
+	if e.hostdBlocked > 0 {
+		why = append(why, fmt.Sprintf("%d whose hostd cannot take a run now (%s)", e.hostdBlocked, e.hostdBlockedWhy))
 	}
 	if e.coolingOff > 0 {
 		why = append(why, fmt.Sprintf("%d cooling off after a recent refusal", e.coolingOff))

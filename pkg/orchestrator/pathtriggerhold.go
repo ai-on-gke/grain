@@ -268,7 +268,6 @@ func filePullRequestTrigger(ctx context.Context, store *model.Store, task model.
 			"(human: `%s`).\n", ref, rule.Trigger.Human)
 	}
 
-	var hostd string
 	filed, err := fileCoalesced(ctx, store, tag, now, func(prev *model.Task, superseding bool) (model.Task, error) {
 		tags := []string{model.PathTriggerMarkerTag, tag, pathTriggerRuleTag(rule.Commit)}
 		if !rule.Trigger.Gate {
@@ -276,7 +275,6 @@ func filePullRequestTrigger(ctx context.Context, store *model.Store, task model.
 			if err != nil {
 				return model.Task{}, fmt.Errorf("orchestrator: composing trigger %s's task for %s: %w", rule.Trigger.Name, ref, err)
 			}
-			hostd = comp.Hostd
 			comp.Title = model.SubstituteFields(comp.Title, vars)
 			if strings.TrimSpace(comp.Title) == "" {
 				comp.Title = fmt.Sprintf("Trigger %s: %s", rule.Trigger.Name, ref)
@@ -326,7 +324,7 @@ func filePullRequestTrigger(ctx context.Context, store *model.Store, task model.
 		}
 		return review, nil
 	})
-	return pinFiledHostd(ctx, store, filed, hostd, err)
+	return filed, err
 }
 
 // applyPathTriggerGate records that task's head was judged, and holds or

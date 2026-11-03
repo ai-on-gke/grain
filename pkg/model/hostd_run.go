@@ -14,16 +14,17 @@
 
 package model
 
-// Which grain hostd a task's host work goes to, and which one each of
-// its runs went to.
+// Hostd selectors, and which grain hostd each run went to.
 //
-// A task's pin (task_hostd) is a hostd selector: one hostd's registry
-// name, or a comma-separated list of label=value pairs any hostd
-// carrying every one of them matches. No row is the default hostd --
-// local, or the deprecated shared token's hostd. Each run that resolved
-// a hostd records it in task_run_hostd beside the frozen task_run row:
-// the hostd's name, the machine it ran on (its instance) and its
-// registry owner.
+// A hostd selector is one hostd's registry name, or a comma-separated
+// list of label=value pairs any hostd carrying every one of them
+// matches. It is what a model connection (AgentBackend.Hostd) and a
+// run: hostd capability server (protocol.ServerConfig.Hostd) name to
+// place their work; no task carries one (schema 103 dropped the task,
+// template and repository selectors). Each run that resolved a hostd
+// for its agent CLI records it in task_run_hostd beside the frozen
+// task_run row: the hostd's name, the machine it ran on (its instance)
+// and its registry owner. That record is read-only history.
 
 import (
 	"context"
@@ -85,86 +86,6 @@ func NormalizeHostdSelector(s string) (string, error) {
 		parts = append(parts, k+"="+labels[k])
 	}
 	return strings.Join(parts, ","), nil
-}
-
-// SetTaskHostd pins taskID's host work to selector; "" clears the pin,
-// back to the default hostd.
-func (s *Store) SetTaskHostd(ctx context.Context, taskID, selector string) error {
-	selector, err := NormalizeHostdSelector(selector)
-	if err != nil {
-		return err
-	}
-	return s.write(ctx, "pin task "+taskID+"'s hostd", func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM `task_hostd` WHERE `task_id` = ?", taskID); err != nil {
-			return err
-		}
-		if selector == "" {
-			return nil
-		}
-		_, err := tx.ExecContext(ctx,
-			"INSERT INTO `task_hostd` (`task_id`,`selector`,`updated_at`) VALUES (?,?,?)",
-			taskID, selector, time.Now().UTC())
-		return err
-	})
-}
-
-// putTaskHostd is SetTaskHostd inside a transaction that is filing the
-// task, for a filing whose composition carries a pin (Composition.Hostd);
-// "" writes nothing.
-func putTaskHostd(ctx context.Context, tx *sql.Tx, taskID, selector string) error {
-	selector, err := NormalizeHostdSelector(selector)
-	if err != nil || selector == "" {
-		return err
-	}
-	_, err = tx.ExecContext(ctx,
-		"REPLACE INTO `task_hostd` (`task_id`,`selector`,`updated_at`) VALUES (?,?,?)",
-		taskID, selector, time.Now().UTC())
-	return err
-}
-
-// RepoDefaultHostd is the hostd pin or label selector repo's tasks start
-// with when neither their filing nor their template names one
-// (RepoConfig.DefaultHostd), "" for a repository that names none.
-func (s *Store) RepoDefaultHostd(ctx context.Context, repo RepoRef) (string, error) {
-	return repoDefaultHostd(ctx, s.db, repo)
-}
-
-func repoDefaultHostd(ctx context.Context, q querier, repo RepoRef) (string, error) {
-	cfg, err := getRepoConfig(ctx, q, repo)
-	if err != nil || cfg == nil {
-		return "", err
-	}
-	return cfg.DefaultHostd, nil
-}
-
-// applyRepoDefaultHostd fills a composition its template left on the
-// default hostd with its target repository's own default
-// (RepoConfig.DefaultHostd): the template's pin wins, and the repo's
-// beats the deployment's default hostd -- the same precedence
-// ui.(*Client).CreateTask applies to a filing.
-func applyRepoDefaultHostd(ctx context.Context, q querier, comp *Composition) error {
-	if comp.Hostd != "" || comp.Target == nil {
-		return nil
-	}
-	hostd, err := repoDefaultHostd(ctx, q, *comp.Target)
-	if err != nil || hostd == "" {
-		return err
-	}
-	comp.Hostd, comp.Sources.Hostd = hostd, LayerRepo
-	return nil
-}
-
-// TaskHostd is taskID's hostd selector, "" for the default hostd.
-func (s *Store) TaskHostd(ctx context.Context, taskID string) (string, error) {
-	var selector string
-	err := s.db.QueryRowContext(ctx, "SELECT `selector` FROM `task_hostd` WHERE `task_id` = ?", taskID).Scan(&selector)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("reading task %s's hostd: %w", taskID, err)
-	}
-	return selector, nil
 }
 
 // TaskRunHostd is which grain hostd one run's host work went to: its

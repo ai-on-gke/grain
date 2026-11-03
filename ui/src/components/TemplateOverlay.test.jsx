@@ -139,25 +139,13 @@ describe("TemplateOverlay task priority", () => {
 describe("TemplateOverlay hostd", () => {
   afterEach(() => api.mockReset());
 
-  it("sends the hostd every task the template files starts pinned to", async () => {
+  it("offers no hostd and sends none: a template's tasks have no hostd", async () => {
     api.mockResolvedValue(saved);
     const onSaved = overlay(null);
-    const box = screen.getByRole("textbox", { name: "Hostd" });
-    fireEvent.change(box, { target: { value: " gpu=yes " } });
-    fireEvent.submit(box.closest("form"));
+    expect(screen.queryByRole("textbox", { name: "Hostd" })).toBeNull();
+    fireEvent.submit(screen.getAllByRole("textbox")[0].closest("form"));
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
-    expect(sentBody("POST")).toMatchObject({ hostd: "gpu=yes" });
-  });
-
-  it("clears a saved hostd when the box is emptied on an edit", async () => {
-    api.mockResolvedValue(saved);
-    const onSaved = overlay({ ...saved, hostd: "laptop" });
-    const box = screen.getByRole("textbox", { name: "Hostd" });
-    expect(box.value).toBe("laptop");
-    fireEvent.change(box, { target: { value: "" } });
-    fireEvent.submit(box.closest("form"));
-    await waitFor(() => expect(onSaved).toHaveBeenCalled());
-    expect(sentBody("PATCH")).toMatchObject({ hostd: "" });
+    expect(sentBody("POST")).not.toHaveProperty("hostd");
   });
 });
 

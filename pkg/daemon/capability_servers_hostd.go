@@ -16,6 +16,8 @@ package daemon
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
@@ -25,19 +27,23 @@ import (
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
-// hostdCapabilityServers starts run: host capability servers -- host
-// scripts among them -- on the grain hostd each task's run is routed to
-// (resolveHostdRoute), rather than only on the default hostd.
+// hostdCapabilityServers starts run: hostd capability servers -- host
+// scripts among them -- on the grain hostd each one's own entry names
+// (protocol.ServerConfig.Hostd), rather than only on the default hostd.
+// Which hostd a server runs on is the server's placement: it is the same
+// for every run that holds a grant of it, whatever hostd that run's
+// agent CLI went to (connectionHostdRoute).
 //
 // The deployment's registry (startCapabilityServers) attaches every
-// server, its run: host ones through the default hostd, and is what a
-// run on the default hostd -- every task with no pin -- mints through. A
-// run routed to another hostd mints through that hostd's own registry
-// for its run: host servers: one per hostd name, holding only the run:
-// host entries, built with the deployment registry's options but that
-// hostd's client the first time a run is routed there, and kept in step
-// with grain_config.mcp_servers from then on (update). Every other
-// server is the deployment registry's, wherever the run went.
+// server but the placed ones (deploymentCapabilityServers), its run:
+// hostd ones through the default hostd. A placed server is attached in
+// the registry of the hostd its placement resolves to: one per hostd
+// name, holding the placed entries that may resolve there (its name's,
+// and every label selector's), built with the deployment registry's
+// options but that hostd's client the first time a placement resolves
+// there, and kept in step with grain_config.mcp_servers from then on
+// (update). While a placed server's hostd is not connected, a grant of
+// it cannot be minted: the run waits, and says needs-hostd:<selector>.
 type hostdCapabilityServers struct {
 	ctx  context.Context
 	base *servers.Registry
@@ -64,33 +70,59 @@ func newHostdCapabilityServers(ctx context.Context, base *servers.Registry, opts
 	return &hostdCapabilityServers{ctx: ctx, base: base, opts: opts, store: store, regs: map[string]*hostdRegistry{}}
 }
 
-// update hands every hostd's registry the run: host entries of
-// configured, as LiveConfig.Refresh hands the deployment's registry all
-// of them.
+// update hands every hostd's registry the placed run: hostd entries of
+// configured that may resolve to it, as LiveConfig.Refresh hands the
+// deployment's registry the rest (deploymentCapabilityServers).
 func (h *hostdCapabilityServers) update(configured map[string]protocol.ServerConfig) {
 	if h == nil {
 		return
 	}
-	onHost := hostCapabilityServers(configured)
+	placed := placedCapabilityServers(configured)
 	h.mu.Lock()
-	h.configured = onHost
-	regs := make([]*servers.Registry, 0, len(h.regs))
-	for _, r := range h.regs {
-		regs = append(regs, r.reg)
+	h.configured = placed
+	regs := make(map[string]*servers.Registry, len(h.regs))
+	for name, r := range h.regs {
+		regs[name] = r.reg
 	}
 	h.mu.Unlock()
-	for _, reg := range regs {
-		reg.Update(onHost)
+	for name, reg := range regs {
+		reg.Update(placedOn(placed, name))
 	}
 }
 
-// hostCapabilityServers is configured's run: host entries.
-func hostCapabilityServers(configured map[string]protocol.ServerConfig) map[string]protocol.ServerConfig {
+// placedCapabilityServers is configured's run: hostd entries that name a
+// hostd of their own.
+func placedCapabilityServers(configured map[string]protocol.ServerConfig) map[string]protocol.ServerConfig {
 	out := map[string]protocol.ServerConfig{}
 	for id, cfg := range configured {
-		if cfg.OnHost() {
+		if cfg.OnHost() && cfg.Hostd != "" {
 			out[id] = cfg
 		}
+	}
+	return out
+}
+
+// placedOn is the placed entries hostd name's registry holds: those
+// naming it, and those selecting by labels, which may resolve to it.
+func placedOn(placed map[string]protocol.ServerConfig, name string) map[string]protocol.ServerConfig {
+	out := map[string]protocol.ServerConfig{}
+	for id, cfg := range placed {
+		if sel := string(cfg.Hostd); sel == name || strings.Contains(sel, "=") {
+			out[id] = cfg
+		}
+	}
+	return out
+}
+
+// deploymentCapabilityServers is configured without its placed entries:
+// what the deployment's registry attaches.
+func deploymentCapabilityServers(configured map[string]protocol.ServerConfig) map[string]protocol.ServerConfig {
+	out := make(map[string]protocol.ServerConfig, len(configured))
+	for id, cfg := range configured {
+		if cfg.OnHost() && cfg.Hostd != "" {
+			continue
+		}
+		out[id] = cfg
 	}
 	return out
 }
@@ -114,7 +146,7 @@ func (h *hostdCapabilityServers) registry(ctx context.Context, name string, clie
 		r = &hostdRegistry{reg: servers.New(opts), ready: make(chan struct{})}
 		h.regs[name] = r
 	}
-	configured := h.configured
+	configured := placedOn(h.configured, name)
 	h.mu.Unlock()
 	if creating {
 		// Attached now rather than on the registry's first tick, so the
@@ -133,28 +165,21 @@ func (h *hostdCapabilityServers) registry(ctx context.Context, name string, clie
 }
 
 // ForTask is orchestrator.TaskCapabilityServers: the deployment's
-// registry for a run on the default hostd, and otherwise one whose run:
-// host servers are the routed hostd's.
+// registry when no server is placed on a hostd of its own, and otherwise
+// one that reaches each placed server on its hostd. taskID does not
+// route anything: a task has no hostd.
 func (h *hostdCapabilityServers) ForTask(ctx context.Context, taskID string) (orchestrator.CapabilityServers, string, error) {
 	if h.live == nil {
 		return h.base, "", nil
 	}
 	cfg := h.live()
-	route, err := resolveHostdRoute(ctx, cfg, h.store, taskID)
-	if err != nil {
-		return nil, "", err
-	}
-	if !route.Pinned || route.Name == cfg.DefaultHostd() {
+	h.mu.Lock()
+	placed := h.configured
+	h.mu.Unlock()
+	if len(placed) == 0 {
 		return h.base, capabilityHostdName(cfg), nil
 	}
-	reg, err := h.registry(ctx, route.Name, route.Exec.hostdClient())
-	if err != nil {
-		return nil, "", err
-	}
-	h.mu.Lock()
-	onHost := h.configured
-	h.mu.Unlock()
-	return hostdRoutedServers{base: h.base, host: reg, onHost: onHost}, route.Name, nil
+	return &hostdRoutedServers{h: h, ctx: ctx, cfg: cfg, placed: placed, hostdOf: map[string]string{}}, capabilityHostdName(cfg), nil
 }
 
 // Lookup is the deployment registry's, for whatever is not minting for
@@ -163,33 +188,61 @@ func (h *hostdCapabilityServers) Lookup(capabilityID string) (*protocol.Server, 
 	return h.base.Lookup(capabilityID)
 }
 
-// hostdRoutedServers is a run's capability servers on a hostd other than
-// the default: its run: host servers from that hostd's registry, every
-// other from the deployment's.
+// hostdRoutedServers is one run's capability servers when some are
+// placed on hostds of their own: each placed server from the registry of
+// the hostd its placement resolves to now, every other from the
+// deployment's. hostdOf records which hostd each placed one was reached
+// on, for its audit records (HostdOf).
 type hostdRoutedServers struct {
-	base, host *servers.Registry
-	onHost     map[string]protocol.ServerConfig
+	h      *hostdCapabilityServers
+	ctx    context.Context
+	cfg    Config
+	placed map[string]protocol.ServerConfig
+
+	mu      sync.Mutex
+	hostdOf map[string]string
 }
 
-func (s hostdRoutedServers) Lookup(capabilityID string) (*protocol.Server, error) {
-	if isHostCapability(s.onHost, capabilityID) {
-		return s.host.Lookup(capabilityID)
+func (s *hostdRoutedServers) Lookup(capabilityID string) (*protocol.Server, error) {
+	entry, ok := placedEntry(s.placed, capabilityID)
+	if !ok {
+		return s.h.base.Lookup(capabilityID)
 	}
-	return s.base.Lookup(capabilityID)
+	route, err := resolveHostdSelector(s.ctx, s.cfg, s.h.store, string(entry.Hostd))
+	if err != nil {
+		return nil, fmt.Errorf("needs-hostd:%s: capability %s runs on hostd %s: %w", entry.Hostd, capabilityID, entry.Hostd, err)
+	}
+	reg, err := s.h.registry(s.ctx, route.Name, route.Exec.hostdClient())
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.hostdOf[capabilityID] = route.Name
+	s.mu.Unlock()
+	return reg.Lookup(capabilityID)
 }
 
-// isHostCapability reports whether capabilityID names one of onHost's
-// entries, by its id or by an alias it adopted.
-func isHostCapability(onHost map[string]protocol.ServerConfig, capabilityID string) bool {
-	if _, ok := onHost[capabilityID]; ok {
-		return true
+// HostdOf is orchestrator.CapabilityHostdOf: the hostd capabilityID was
+// reached on for this run, and whether it was a placed one.
+func (s *hostdRoutedServers) HostdOf(capabilityID string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	name, ok := s.hostdOf[capabilityID]
+	return name, ok
+}
+
+// placedEntry is the entry of placed capabilityID names, by its id or by
+// an alias it adopted.
+func placedEntry(placed map[string]protocol.ServerConfig, capabilityID string) (protocol.ServerConfig, bool) {
+	if cfg, ok := placed[capabilityID]; ok {
+		return cfg, true
 	}
-	for _, cfg := range onHost {
+	for _, cfg := range placed {
 		for _, a := range cfg.Aliases {
 			if a == capabilityID {
-				return true
+				return cfg, true
 			}
 		}
 	}
-	return false
+	return protocol.ServerConfig{}, false
 }

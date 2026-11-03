@@ -595,12 +595,11 @@ func templateSchema() Schema {
 			// work may touch.
 			{Model: "Interactive", Keys: carried("interactive"), Columns: []string{"interactive"}},
 			{Model: "KeepRunning", Keys: carried("keep-running"), Columns: []string{"keep_running"}},
-			// The hostd every task it files starts pinned to
-			// (model.Template.Hostd). Settings only: which machine runs
-			// the work's host side, under whose credentials, is the
-			// deployment's to say -- a repository naming one would be
-			// routing its own work onto somebody's hostd.
-			{Model: "Hostd", Keys: []Key{settingsOnly("hostd", Authority)}, Columns: []string{"hostd"}},
+			// `hostd`, which a template once carried (schema 94 to 102):
+			// which grain hostd host work runs on is a model connection's
+			// or a capability server's, never what a template files, so
+			// the key is answered and kept nowhere.
+			{Keys: []Key{nowhere("hostd", Authority)}},
 			{Model: "CustomFields", Keys: carried("custom-fields"), Table: "template_custom_field"},
 
 			// The refusals. Each of these would be perfectly natural to
@@ -1149,16 +1148,10 @@ func RepoSettingsSchema() Schema {
 				Columns: []string{"git_credential"},
 			},
 
-			// The hostd a task filed here starts pinned to when neither
-			// the filing nor its template names one
-			// (model.RepoConfig.DefaultHostd). Authority, for the
-			// template `hostd` key's reason: a repository naming one
-			// would be routing its own work onto somebody's hostd.
-			{
-				Model:   "DefaultHostd",
-				Keys:    []Key{settingsOnly("default-hostd", Authority)},
-				Columns: []string{"default_hostd"},
-			},
+			// `default-hostd`, a repository's tasks' hostd until schema
+			// 103: answered and kept nowhere, for the template `hostd`
+			// key's reason.
+			{Keys: []Key{nowhere("default-hostd", Authority)}},
 
 			// Which repository these settings are about. Grain read the
 			// file out of a repository it already had in hand, and a file

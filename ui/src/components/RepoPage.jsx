@@ -424,9 +424,6 @@ export default function RepoPage({
   const [caps, setCaps] = useState(null);
   const [capsSelection, setCapsSelection] = useState([]);
   const [ciCapsSelection, setCICapsSelection] = useState([]);
-  // hostdText is the default hostd box as typed (ui.RepoDefaults.
-  // DefaultHostd, read with caps above), saved on blur.
-  const [hostdText, setHostdText] = useState("");
   // prompt/promptText are that same shape again, for this repo's own
   // prompt extension (grain/task-114): what GET /api/repos/{owner}/
   // {name}/prompt-extension last said -- the repo's own text, the
@@ -581,7 +578,6 @@ export default function RepoPage({
       setCaps(loaded);
       setCapsSelection(loaded.defaultCapabilities || []);
       setCICapsSelection(loaded.ciCapabilities || []);
-      setHostdText(loaded.defaultHostd || "");
     } catch (err) {
       showError(err);
     }
@@ -676,7 +672,6 @@ export default function RepoPage({
   // a blur that changed something from one that did not.
   const storedPromptText = prompt?.promptExtension || "";
   const storedSetupText = setup?.setupCommand || "";
-  const storedHostd = caps?.defaultHostd || "";
 
   // capsEffective is what a task filed against this repo would actually
   // start out holding -- the line the capabilities form ends on. The
@@ -871,26 +866,6 @@ export default function RepoPage({
       setCapsSelection(updated.defaultCapabilities || []);
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
-    }
-  };
-
-  // saveDefaultHostd sets the hostd a task filed here starts pinned to
-  // when neither the filing nor its template names one
-  // (model.RepoConfig.DefaultHostd) through PUT .../settings, which leaves
-  // every field it is not sent alone. The server normalizes the selector
-  // and refuses one no hostd in the registry answers; a refused value is
-  // put back to the stored one rather than left looking saved.
-  const saveDefaultHostd = async (selector) => {
-    try {
-      const updated = await api(`${root}/settings`, {
-        method: "PUT",
-        body: JSON.stringify({ defaultHostd: selector }),
-      });
-      setCaps(updated);
-      setHostdText(updated.defaultHostd || "");
-    } catch (err) {
-      setHostdText(storedHostd);
       showError(err);
     }
   };
@@ -2328,66 +2303,6 @@ export default function RepoPage({
                     : capsEffective
                         .map((id) => capabilityName(config, id))
                         .join(", ")}
-                </Typography>
-              </Stack>
-            )}
-          </Box>
-
-          <Box data-testid="repo-default-hostd">
-            <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-              Default hostd
-            </Typography>
-            {caps === null ? (
-              <Typography variant="body2" color="text.secondary">
-                Loading default hostd…
-              </Typography>
-            ) : (
-              <Stack spacing={1}>
-                <TextField
-                  id={`${refusalId}-hostd`}
-                  name="repoDefaultHostd"
-                  label={`Default hostd for ${repo}`}
-                  placeholder="gpu=yes"
-                  helperText="Where the host work of a task filed against this repo runs when neither the task nor its template names a hostd: a hostd's name, or label=value[,label=value]. Leave empty for the default hostd."
-                  value={hostdText}
-                  onChange={(e) => setHostdText(e.target.value)}
-                  onBlur={(e) => {
-                    const trimmed = e.target.value.trim();
-                    if (trimmed !== storedHostd) {
-                      saveDefaultHostd(trimmed);
-                    }
-                  }}
-                  autoComplete="off"
-                  inputProps={{
-                    ...identifierField,
-                    "data-testid": "repo-default-hostd-input",
-                    "aria-describedby": refusedBy(
-                      readOnly,
-                      `${refusalId}-hostd-helper-text`,
-                    ),
-                  }}
-                  fullWidth
-                  size="small"
-                  disabled={readOnly}
-                />
-                <Typography
-                  variant="body2"
-                  color="text.secondary"
-                  data-testid="repo-default-hostd-summary"
-                >
-                  A task filed against {repo} runs its host work on{" "}
-                  {storedHostd ? (
-                    <>
-                      hostd{" "}
-                      <code style={{ overflowWrap: "anywhere" }}>
-                        {storedHostd}
-                      </code>
-                      , unless it or its template names another
-                    </>
-                  ) : (
-                    "the default hostd, unless it or its template names one"
-                  )}
-                  .
                 </Typography>
               </Stack>
             )}

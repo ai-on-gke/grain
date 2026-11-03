@@ -114,7 +114,7 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 				configured = stored.MCPServers
 			}
 			configured = registerBuiltinCapabilityServers(ctx, store, dataDir, configured)
-			reg.Update(configured)
+			reg.Update(deploymentCapabilityServers(configured))
 			onHostd.update(configured)
 		}
 	}

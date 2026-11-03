@@ -293,7 +293,6 @@ var routeBodies = map[string]any{
 	"POST /api/sandbox-probe":                                        SandboxProbeRequest{},
 	"POST /api/tasks/{id}/pause":                                     pauseRequest{},
 	"PUT /api/tasks/{id}/goal":                                       setGoalRequest{},
-	"PUT /api/tasks/{id}/hostd":                                      setHostdRequest{},
 	"POST /api/tasks/{id}/run-now":                                   runNowRequest{},
 	"POST /api/tasks/{id}/comments":                                  addCommentRequest{},
 	"POST /api/tasks/{id}/change-mail":                               MailChangeRequest{},

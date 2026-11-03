@@ -537,32 +537,23 @@ describe("NewTaskOverlay", () => {
   // A task's host work can be pinned to one grain hostd, or to any hostd
   // carrying some labels (ui.CreateTaskRequest.Hostd); left empty it
   // sends nothing, which is the default hostd.
-  it("files a task pinned to a hostd when one is written, and none otherwise", async () => {
+  it("offers no hostd and files none: a task has no hostd", async () => {
     const user = userEvent.setup();
-    const fill = async (hostd) => {
-      api.mockResolvedValueOnce({ id: "42" });
-      const view = render(
-        <NewTaskOverlay
-          config={{}}
-          onClose={() => {}}
-          onCreated={() => Promise.resolve()}
-          showError={() => {}}
-        />,
-      );
-      await user.type(screen.getByLabelText(/Title/), "Train");
-      await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
-      await user.click(
-        screen.getByRole("button", { name: "Advanced options" }),
-      );
-      if (hostd) await user.type(screen.getByLabelText(/^Hostd/), hostd);
-      await user.click(screen.getByRole("button", { name: "Create task" }));
-      const body = JSON.parse(createCall()[1].body);
-      view.unmount();
-      api.mockClear();
-      return body;
-    };
-    expect((await fill(" gpu=yes,zone=b ")).hostd).toBe("gpu=yes,zone=b");
-    expect(await fill("")).not.toHaveProperty("hostd");
+    api.mockResolvedValueOnce({ id: "42" });
+    render(
+      <NewTaskOverlay
+        config={{}}
+        onClose={() => {}}
+        onCreated={() => Promise.resolve()}
+        showError={() => {}}
+      />,
+    );
+    await user.type(screen.getByLabelText(/Title/), "Train");
+    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await user.click(screen.getByRole("button", { name: "Advanced options" }));
+    expect(screen.queryByLabelText(/^Hostd/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Create task" }));
+    expect(JSON.parse(createCall()[1].body)).not.toHaveProperty("hostd");
   });
 
   // grain/task-284: attaching a review to a task is picking the template

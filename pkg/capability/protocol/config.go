@@ -46,6 +46,15 @@ type ServerConfig struct {
 	// binary: the daemon names an entry, and the allowlist says what that
 	// starts.
 	Run string `json:"run,omitempty"`
+	// Hostd pins a run: host server to one grain hostd: a registered
+	// hostd's name, or a label selector any connected hostd carrying
+	// every label satisfies ("k=v,k2=v2"; {"labels": {...}} in
+	// grain/config). Empty is the deployment's default hostd. It is the
+	// server's own placement, not a run's: every run that holds a grant
+	// of this server reaches it on this hostd, whatever hostd its agent
+	// CLI's connection runs on. Two entries of the same server type on
+	// two hostds are two entries, under two capability_ids.
+	Hostd HostdTarget `json:"hostd,omitempty"`
 	// Config is the server's own configuration, for a server that
 	// advertises the configure tool (§4.5): validated against that tool's
 	// config schema and sent to it after every initialize. A secret field
@@ -67,15 +76,64 @@ type ServerConfig struct {
 }
 
 // RunHost is the ServerConfig.Run of a stdio server started through grain
-// hostd.
-const RunHost = "host"
+// hostd. RunHostd is the same placement under the name Settings ->
+// Capabilities writes now; both are read alike.
+const (
+	RunHost  = "host"
+	RunHostd = "hostd"
+)
+
+// HostdTarget is ServerConfig.Hostd: a hostd's registry name, or a
+// label selector "k=v[,k=v]". It reads from a JSON string, or from an
+// object {"name": "ws-a"} or {"labels": {"pool": "gpu"}}, and is always
+// written back as the string.
+type HostdTarget string
+
+// UnmarshalJSON reads a HostdTarget from either of its JSON forms.
+func (t *HostdTarget) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*t = HostdTarget(strings.TrimSpace(s))
+		return nil
+	}
+	var obj struct {
+		Name   string            `json:"name"`
+		Labels map[string]string `json:"labels"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&obj); err != nil {
+		return fmt.Errorf("hostd: want a hostd name, a k=v selector, or {\"name\": ...} / {\"labels\": {...}}: %v", err)
+	}
+	switch {
+	case obj.Name != "" && len(obj.Labels) > 0:
+		return fmt.Errorf("hostd: names both a hostd and labels; pick one")
+	case obj.Name != "":
+		*t = HostdTarget(strings.TrimSpace(obj.Name))
+	default:
+		keys := make([]string, 0, len(obj.Labels))
+		for k := range obj.Labels {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, k+"="+obj.Labels[k])
+		}
+		*t = HostdTarget(strings.Join(parts, ","))
+	}
+	return nil
+}
+
+// RunsOnHost reports whether run is a placement through grain hostd.
+func RunsOnHost(run string) bool { return run == RunHost || run == RunHostd }
 
 // Stdio reports whether the entry is a stdio server.
 func (c ServerConfig) Stdio() bool { return c.Command != "" }
 
 // OnHost reports whether the entry is a stdio server started through
 // grain hostd.
-func (c ServerConfig) OnHost() bool { return c.Stdio() && c.Run == RunHost }
+func (c ServerConfig) OnHost() bool { return c.Stdio() && RunsOnHost(c.Run) }
 
 // ParseServers decodes an mcpServers object -- the value of the
 // "mcpServers" key, or a whole document holding one -- and validates every
@@ -126,11 +184,15 @@ func (c ServerConfig) Validate(id string) error {
 		return fmt.Errorf("mcpServers[%q]: args and env belong to a stdio server, not an HTTP one", id)
 	}
 	switch {
-	case c.Run != "" && c.Run != RunHost:
-		return fmt.Errorf("mcpServers[%q]: run %q: the only run is %q, through grain hostd", id, c.Run, RunHost)
-	case c.Run == RunHost && c.Command == "":
-		return fmt.Errorf("mcpServers[%q]: run: host is for a stdio server; an HTTP server on the host is reached at its serverUrl", id)
-	case c.Run == RunHost:
+	case c.Run != "" && !RunsOnHost(c.Run):
+		return fmt.Errorf("mcpServers[%q]: run %q: the only run is %q, through grain hostd", id, c.Run, RunHostd)
+	case c.Hostd != "" && !RunsOnHost(c.Run):
+		return fmt.Errorf("mcpServers[%q]: hostd %q places a run: hostd server; set run: hostd beside it", id, c.Hostd)
+	case c.Hostd != "" && strings.ContainsAny(string(c.Hostd), " \t\n"):
+		return fmt.Errorf("mcpServers[%q]: hostd %q: a hostd name or k=v selector holds no spaces", id, c.Hostd)
+	case RunsOnHost(c.Run) && c.Command == "":
+		return fmt.Errorf("mcpServers[%q]: run: hostd is for a stdio server; an HTTP server on the host is reached at its serverUrl", id)
+	case RunsOnHost(c.Run):
 		if !validHostdEntryName(c.Command) {
 			return fmt.Errorf("mcpServers[%q]: with run: host, command names grain hostd's capability entry "+
 				"(letters, digits, '-', '_' and '.'), not a path: got %q", id, c.Command)

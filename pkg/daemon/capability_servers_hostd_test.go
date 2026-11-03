@@ -45,12 +45,13 @@ func (c hostScriptCaller) CallTool(context.Context, string, map[string]any) ([]b
 
 func (c hostScriptCaller) Close() error { return nil }
 
-// A pinned task's run: host capability server -- its host scripts --
-// is started on the hostd the task is pinned to, and a call through the
-// servers its run mints with lands there, while its other servers, and
-// an unpinned task's host scripts, stay the deployment's on the default
-// hostd. Each says which hostd for the run's audit records.
-func TestAPinnedTasksHostScriptsRunOnItsHostd(t *testing.T) {
+// A run: hostd capability server placed on a hostd of its own -- its
+// host scripts -- is started on that hostd, whichever task's run holds a
+// grant of it, while an unplaced run: host server stays on the default
+// hostd and an in-container one the deployment's. Each audit record says
+// which hostd its own server ran on, and a server whose hostd is not
+// connected cannot be minted, saying needs-hostd.
+func TestAPlacedCapabilityServerRunsOnItsOwnHostd(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	store, closeStore := openTestStore(t, t.TempDir())
@@ -62,6 +63,9 @@ func TestAPinnedTasksHostScriptsRunOnItsHostd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, _, err := store.CreateHostd(ctx, model.Hostd{Name: "ws-off"}); err != nil {
+		t.Fatal(err)
+	}
 	sock := startTestHostd(t, "clis:\n  only-local:\n    path: %[1]s\n    paths_under: [%[2]s]\n")
 	cfg := withExecutor(Config{HostdSocket: sock}, whererun.Detection{Signal: "/.dockerenv"}, nil)
 	cfg.HostdHub = newHostdHub(cfg, store)
@@ -69,12 +73,9 @@ func TestAPinnedTasksHostScriptsRunOnItsHostd(t *testing.T) {
 	t.Cleanup(ctl.Close)
 	startDialingHostd(t, ctl.URL, tokA, "clis:\n  only-a:\n    path: %[1]s\n    paths_under: [%[2]s]\n")
 	waitFor(t, func() bool { return cfg.HostdHub.HostdStatus("ws-a").Connected })
-	if err := store.SetTaskHostd(ctx, "pinned", "ws-a"); err != nil {
-		t.Fatal(err)
-	}
 
 	// Every server is attached to a hostScriptCaller saying where it
-	// runs: a run: host one on the hostd its options reach, as
+	// runs: a run: hostd one on the hostd its options reach, as
 	// protocol.Attach starts it.
 	attach := func(ctx context.Context, id string, cfg protocol.ServerConfig, _ protocol.SecretLookup, opts protocol.DialOptions) (*protocol.Server, error) {
 		where := "the container"
@@ -92,23 +93,31 @@ func TestAPinnedTasksHostScriptsRunOnItsHostd(t *testing.T) {
 		return protocol.NewServer(ctx, id, hostScriptCaller{hostd: where})
 	}
 	const (
-		hostScripts = "https://example.com/caps/host-scripts"
-		inContainer = "https://example.com/caps/in-container"
+		hostScripts  = "https://example.com/caps/host-scripts"
+		hostScriptsA = "https://example.com/caps/host-scripts-ws-a"
+		offScripts   = "https://example.com/caps/host-scripts-ws-off"
+		inContainer  = "https://example.com/caps/in-container"
 	)
 	configured := map[string]protocol.ServerConfig{
-		hostScripts: {Command: "grain-host-scripts", Run: protocol.RunHost},
-		inContainer: {Command: "in-container"},
+		hostScripts:  {Command: "grain-host-scripts", Run: protocol.RunHost},
+		hostScriptsA: {Command: "grain-host-scripts", Run: protocol.RunHostd, Hostd: "ws-a"},
+		offScripts:   {Command: "grain-host-scripts", Run: protocol.RunHostd, Hostd: "ws-off"},
+		inContainer:  {Command: "in-container"},
+	}
+	deployment := deploymentCapabilityServers(configured)
+	if _, ok := deployment[hostScriptsA]; ok {
+		t.Fatal("the deployment's registry attaches a server placed on ws-a")
 	}
 	client := cfg.capabilityHostd()
 	opts := servers.Options{Hostd: client, Attach: attach}
 	base := servers.New(opts)
-	base.Sync(ctx, configured)
+	base.Sync(ctx, deployment)
 	h := newHostdCapabilityServers(ctx, base, opts, store)
 	h.update(configured)
 	live := NewLiveConfig(store, nil, cfg, nil).WithCapabilityServers(base).withHostdCapabilityServers(h)
 	routed, ok := capabilityServerLookup(live).(orchestrator.TaskCapabilityServers)
 	if !ok {
-		t.Fatal("the daemon's capability servers do not route each task's to its hostd")
+		t.Fatal("the daemon's capability servers do not route placed servers to their hostd")
 	}
 
 	call := func(srvs orchestrator.CapabilityServers, id string) string {
@@ -123,33 +132,44 @@ func TestAPinnedTasksHostScriptsRunOnItsHostd(t *testing.T) {
 		}
 		return string(out)
 	}
-	for _, tc := range []struct{ task, hostd, scripts string }{
-		{"unpinned", model.LocalHostd, "ran on only-local"},
-		{"pinned", "ws-a", "ran on only-a"},
-	} {
-		srvs, hostd, err := routed.ForTask(ctx, tc.task)
-		if err != nil {
-			t.Fatalf("%s: ForTask = %v", tc.task, err)
-		}
-		if hostd != tc.hostd {
-			t.Errorf("%s: its capability audit would say hostd %q, want %s", tc.task, hostd, tc.hostd)
-		}
-		if got := call(srvs, hostScripts); got != tc.scripts {
-			t.Errorf("%s: its host-script call %s, want %s", tc.task, got, tc.scripts)
-		}
-		if got := call(srvs, inContainer); got != "ran on the container" {
-			t.Errorf("%s: its in-container server %s, want the deployment's", tc.task, got)
-		}
+	// Any task: the placement is the server's, not the task's.
+	srvs, hostd, err := routed.ForTask(ctx, "any-task")
+	if err != nil {
+		t.Fatalf("ForTask = %v", err)
+	}
+	if hostd != model.LocalHostd {
+		t.Errorf("the run's default capability hostd is %q, want %s", hostd, model.LocalHostd)
+	}
+	if got := call(srvs, hostScripts); got != "ran on only-local" {
+		t.Errorf("the unplaced host-script server %s, want the default hostd", got)
+	}
+	if got := call(srvs, hostScriptsA); got != "ran on only-a" {
+		t.Errorf("the server placed on ws-a %s, want ws-a", got)
+	}
+	if got := call(srvs, inContainer); got != "ran on the container" {
+		t.Errorf("the in-container server %s, want the deployment's", got)
+	}
+	of, ok := srvs.(orchestrator.CapabilityHostdOf)
+	if !ok {
+		t.Fatal("a run with placed servers cannot say which hostd each ran on")
+	}
+	if name, ok := of.HostdOf(hostScriptsA); !ok || name != "ws-a" {
+		t.Errorf("HostdOf(placed on ws-a) = %q, %v; want ws-a", name, ok)
+	}
+	if _, ok := of.HostdOf(hostScripts); ok {
+		t.Error("HostdOf names a hostd for an unplaced server; want the run's default")
+	}
+	if _, err := srvs.Lookup(offScripts); err == nil || !strings.Contains(err.Error(), "needs-hostd:ws-off") {
+		t.Errorf("a server on a disconnected hostd: Lookup = %v, want needs-hostd:ws-off", err)
 	}
 
 	// A server dropped from mcp_servers goes from the hostd's registry too.
 	h.update(map[string]protocol.ServerConfig{inContainer: configured[inContainer]})
-	srvs, _, err := routed.ForTask(ctx, "pinned")
-	if err != nil {
-		t.Fatal(err)
-	}
+	h.mu.Lock()
+	regA := h.regs["ws-a"].reg
+	h.mu.Unlock()
 	waitFor(t, func() bool {
-		_, err := srvs.(hostdRoutedServers).host.Lookup(hostScripts)
+		_, err := regA.Lookup(hostScriptsA)
 		return err != nil
 	})
 }

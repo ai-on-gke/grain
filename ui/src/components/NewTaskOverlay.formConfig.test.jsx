@@ -120,7 +120,6 @@ describe("NewTaskOverlay with settings/new-task-form.yml", () => {
         "nothingNeededAction",
         "reviewTemplateId",
         "promptExtension",
-        "hostd",
         "sandboxShape",
       ].map((id) => [id, { visibility: "hidden" }]),
     );

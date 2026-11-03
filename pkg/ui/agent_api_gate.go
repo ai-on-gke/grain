@@ -1056,26 +1056,6 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 			if json.Unmarshal(raw, &access) == nil && s.networkAccessWidens(ctx, acting.NetworkAccess, access) {
 				return errors.New("an agent with networkAccess \"none\" cannot widen networkAccess")
 			}
-		case "hostd", "defaulthostd":
-			// Which grain hostd a task's agent CLI runs on (a filing's
-			// hostd, PUT /api/tasks/{id}/hostd, or a repository's
-			// default for every task filed against it, PUT
-			// /api/repos/{owner}/{name}/settings' defaultHostd): another
-			// machine, and whatever CLI login lives on it. An agent may
-			// hand out only the default hostd or the selector its own
-			// task runs under.
-			//
-			// A filing that names none is not asked about the default
-			// its repository resolves it to (ui.Client.CreateTask):
-			// that one was set by whoever may set repository settings,
-			// which this case holds an agent to, and not by the filer.
-			var sel string
-			if json.Unmarshal(raw, &sel) != nil {
-				continue // the handler refuses a body it cannot read
-			}
-			if err := s.agentMayRouteHostd(ctx, acting, sel); err != nil {
-				return err
-			}
 		case "approved", "interactive":
 			var on bool
 			if json.Unmarshal(raw, &on) == nil && on && !set.Allows("tasks:admin", repo) {
@@ -1106,14 +1086,6 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 			}
 			if err := model.TemplateWithinTask(*acting, *tmpl); err != nil {
 				return err
-			}
-			// A template's hostd pin (model.Template.Hostd) is what the
-			// filing gets unless the body names its own, which the
-			// "hostd" case above holds to the same rule.
-			if tmpl.Hostd != "" && !bodyNamesHostd(fields) {
-				if err := s.agentMayRouteHostd(ctx, acting, tmpl.Hostd); err != nil {
-					return fmt.Errorf("template %s pins its tasks' hostd: %w", tmpl.ID, err)
-				}
 			}
 			if tmpl.AutoMerge {
 				return fmt.Errorf("template %s is auto-merge: %w", tmpl.ID, errAgentAutoMerge)
@@ -1155,38 +1127,6 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 				return fmt.Errorf("the agent's %s does not reach %s", scope, strings.TrimSpace(to))
 			}
 		}
-	}
-	return nil
-}
-
-// bodyNamesHostd is whether a filing's body names a hostd of its own,
-// which wins over its template's (ui.Client.fromTemplate).
-func bodyNamesHostd(fields map[string]json.RawMessage) bool {
-	for key, raw := range fields {
-		var sel string
-		if gateKey(key) == "hostd" && json.Unmarshal(raw, &sel) == nil && strings.TrimSpace(sel) != "" {
-			return true
-		}
-	}
-	return false
-}
-
-// agentMayRouteHostd refuses sel, a hostd pin or label selector an agent
-// is setting on work, unless it is the default hostd ("") or the very
-// selector acting's own task carries (model.Store.TaskHostd).
-func (s *Server) agentMayRouteHostd(ctx context.Context, acting *model.Task, sel string) error {
-	want, err := model.NormalizeHostdSelector(sel)
-	if err != nil || want == "" {
-		return nil // the handler refuses a selector it cannot read
-	}
-	own := ""
-	if acting != nil && s.tasks != nil && s.tasks.Store != nil {
-		if own, err = s.tasks.Store.TaskHostd(ctx, acting.ID); err != nil {
-			return fmt.Errorf("reading the acting task's own hostd: %v", err)
-		}
-	}
-	if own != want {
-		return fmt.Errorf("an agent cannot route work to hostd %s, which its own task does not run on: ask a person to set it", want)
 	}
 	return nil
 }

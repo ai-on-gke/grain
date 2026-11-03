@@ -482,7 +482,13 @@ import "strconv"
 // 102 adds `default_hostd` to `repo_config` (model.RepoConfig.DefaultHostd):
 // the hostd pin or label selector a task filed against the repository
 // starts with when neither the filing nor its template names one.
-const SchemaVersion = 102
+//
+// 103 drops `task_hostd`, `template`.`hostd` and
+// `repo_config`.`default_hostd`: which grain hostd host work runs on is
+// the model connection's (model.AgentBackend.Hostd) or the capability
+// server's (protocol.ServerConfig.Hostd), never a task's. `task_run_hostd`
+// stays, the read-only record of where each run's agent CLI ran.
+const SchemaVersion = 103
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified
@@ -583,8 +589,9 @@ const hostdTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd`" + ` (
   PRIMARY KEY (` + "`name`" + `)
 )`
 
-// taskHostdTable and taskRunHostdTable are a task's hostd selector and
-// the hostd each run resolved (model.SetTaskHostd, model.TaskRunHostd),
+// taskHostdTable and taskRunHostdTable are a task's hostd selector (only
+// migrations 93 to 102 had one; 103 drops it) and the hostd each run
+// resolved (model.TaskRunHostd),
 // named once for Tables and for migration 93.
 const taskHostdTable = `CREATE TABLE IF NOT EXISTS ` + "`task_hostd`" + ` (
   ` + "`task_id`" + `    TEXT     NOT NULL,
@@ -1576,10 +1583,9 @@ var Tables = []string{
   PRIMARY KEY (` + "`run_id`" + `, ` + "`seq`" + `)
 )`,
 
-	// task_hostd and task_run_hostd: which grain hostd a task's host
-	// work is pinned or selected to, and which one each run went to
-	// (model.TaskRunHostd), beside the frozen task_run DDL.
-	taskHostdTable,
+	// task_run_hostd: which grain hostd each run's agent CLI went to
+	// (model.TaskRunHostd), beside the frozen task_run DDL. Its
+	// task_hostd companion, a task's own selector, is dropped by 103.
 	taskRunHostdTable,
 
 	// task_run_startup records the per-phase startup timestamps of a run
@@ -1894,7 +1900,6 @@ var Tables = []string{
   ` + "`reviewers`" + `          TEXT NOT NULL DEFAULT '',
   ` + "`priority`" + `           INTEGER NOT NULL DEFAULT 0,
   ` + "`keep_running`" + `       INTEGER NOT NULL DEFAULT 0,
-  ` + "`hostd`" + `              TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -3093,10 +3098,6 @@ var Tables = []string{
 	// issue importer (schema 65). DEFAULT 0 / '' imports nothing, and
 	// issue_import_approved DEFAULT 0 files what it does import
 	// unapproved.
-	//
-	// default_hostd is RepoConfig.DefaultHostd: the hostd pin or label
-	// selector a task filed here starts with when neither the filing nor
-	// its template names one (schema 102). DEFAULT '' is the default hostd.
 	`CREATE TABLE IF NOT EXISTS ` + "`repo_config`" + ` (
   ` + "`owner`" + `                TEXT NOT NULL,
   ` + "`name`" + `                 TEXT NOT NULL,
@@ -3133,7 +3134,6 @@ var Tables = []string{
   ` + "`issue_import_label`" + `       TEXT NOT NULL DEFAULT '',
   ` + "`issue_import_approved`" + `    INTEGER NOT NULL DEFAULT 0,
   ` + "`issue_import_interval_seconds`" + ` INTEGER NOT NULL DEFAULT 0,
-  ` + "`default_hostd`" + `            TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 
