@@ -212,6 +212,103 @@ describe("UpgradePanel", () => {
     );
   });
 
+  // grain/task-2656: a release rolled back with release-from-trunk.sh
+  // rollback carries <running>-retracted in the registry. The deployment
+  // stays put -- going back is only safe when the schema has not moved --
+  // and the pane offers both ways off it.
+  it("warns when the running release was retracted and offers the fix-forward release or latest", async () => {
+    api.mockImplementation((path) => {
+      if (String(path).startsWith("/api/upgrade/release-notes")) {
+        return Promise.resolve({ branch: "v3.6.0", notes: [] });
+      }
+      return Promise.resolve({
+        enabled: true,
+        mode: "image",
+        channel: "latest",
+        running: { image: "ghcr.io/bwsalmon/grain/grain:v3.5.0" },
+        retractedRelease: {
+          running: "v3.5.0",
+          latest: "v3.4.0",
+          newer: "v3.6.0",
+        },
+        phase: "",
+      });
+    });
+    const user = userEvent.setup();
+    render(<UpgradePanel showError={() => {}} />);
+
+    expect(
+      await screen.findByText(/Release v3\.5\.0 was retracted\./),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/it will never downgrade on its own/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/only safe if the database schema has not changed/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Move back to latest (v3.4.0)" }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Upgrade to v3.6.0" }));
+    expect(screen.getByLabelText(/Branch/)).toHaveValue("v3.6.0");
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith(
+        "/api/upgrade/release-notes?branch=v3.6.0",
+      ),
+    );
+  });
+
+  it("offers only latest for a retracted release when no fix-forward has been published, reading it from the targets", async () => {
+    fetchUpgradeTargets.mockResolvedValue({
+      targets: [],
+      allowedBranches: ["main"],
+      retractedRelease: { running: "v3.5.0", latest: "v3.4.0" },
+    });
+    api.mockImplementation((path) => {
+      if (String(path).startsWith("/api/upgrade/release-notes")) {
+        return Promise.resolve({ branch: "latest", notes: [] });
+      }
+      return Promise.resolve({
+        enabled: true,
+        mode: "image",
+        channel: "latest",
+        running: { image: "ghcr.io/bwsalmon/grain/grain:v3.5.0" },
+        phase: "",
+      });
+    });
+    const user = userEvent.setup();
+    try {
+      render(<UpgradePanel showError={() => {}} />);
+
+      // The targets are read when the list is first opened.
+      expect(
+        screen.queryByText(/Release v3\.5\.0 was retracted\./),
+      ).not.toBeInTheDocument();
+      await user.click(await screen.findByLabelText(/Branch/));
+      expect(
+        await screen.findByText(/Release v3\.5\.0 was retracted\./),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/No release after it has been published yet\./),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /^Upgrade to v/ }),
+      ).not.toBeInTheDocument();
+
+      await user.click(
+        screen.getByRole("button", { name: "Move back to latest (v3.4.0)" }),
+      );
+      expect(screen.getByLabelText(/Branch/)).toHaveValue("latest");
+    } finally {
+      fetchUpgradeTargets.mockReset();
+      fetchUpgradeTargets.mockImplementation(async () => ({
+        targets: [],
+        allowedBranches: ["main"],
+      }));
+    }
+  });
+
   // grain/task-1914: the standard places to upgrade to are a pick from a
   // list, and the box still takes any other branch typed into it.
 
