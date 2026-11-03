@@ -401,11 +401,14 @@ func seedGCPServerPermissionSets(rawMCP string, seeds []seededGCPSet) (string, b
 					}
 				}
 			}
-		} else if hadExistingSets || hadAdminCred || hadAdminSrc {
+		} else if hadExistingSets {
 			src := "ambient"
+			cred, _ := entry.Config["admin_credential"].(string)
+			cred = strings.TrimSpace(cred)
 			if v, ok := entry.Config["admin_credential_source"].(string); ok && strings.TrimSpace(v) != "" {
 				src = strings.TrimSpace(v)
-			} else if v, ok := entry.Config["admin_credential"].(string); ok && strings.TrimSpace(v) != "" {
+			}
+			if (src == "" || src == "ambient") && cred != "" {
 				src = "configured"
 			}
 			admins = append(admins, map[string]any{

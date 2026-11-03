@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/gcpsets"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
@@ -846,4 +847,106 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		t.Fatalf("staterepo.Import of schema-95 export: %v", err)
 	}
 	assertMigrated(t, importedStore, importedDB)
+}
+
+func TestMigration96HandlesPreexistingAdminConfigShapes(t *testing.T) {
+	t.Run("ambient admin_credential_source with no existing sets omits unused default admin", func(t *testing.T) {
+		store, db, ctx := openStore(t)
+		cfg := model.Config{
+			GCPProject:             "acme-pool",
+			GCPServiceAccountEmail: "sandbox-agent@acme-pool.iam.gserviceaccount.com",
+			GCPServiceAccountCount: 1,
+			MCPServers: map[string]protocol.ServerConfig{
+				model.GCPCapabilityServerID: {
+					Command: "grain",
+					Args:    []string{"capability", "gcp"},
+					Builtin: "gcp",
+					Config: map[string]any{
+						"admin_credential_source": "ambient",
+					},
+				},
+			},
+		}
+		if err := store.PutConfig(ctx, cfg); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 95 WHERE `id` = 1"); err != nil {
+			t.Fatal(err)
+		}
+		if err := model.New(db).Init(ctx); err != nil {
+			t.Fatalf("migrating 95 -> 96: %v", err)
+		}
+		gotCfg, err := store.GetConfig(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := gotCfg.MCPServers[model.GCPCapabilityServerID]
+		resolvedEnv := map[string]string{}
+		for k := range srv.Env {
+			resolvedEnv[k] = `{"type": "service_account", "client_email": "minter@acme.iam.gserviceaccount.com"}`
+		}
+		if _, err := gcpsets.ParseWithEnv(srv.Config, func(k string) string { return resolvedEnv[k] }); err != nil {
+			t.Fatalf("gcpsets.ParseWithEnv after migration: %v (config=%#v)", err, srv.Config)
+		}
+	})
+
+	t.Run("existing sets with ambient source and admin_credential preserve configured default admin", func(t *testing.T) {
+		store, db, ctx := openStore(t)
+		cfg := model.Config{
+			GCPProject:             "acme-pool",
+			GCPServiceAccountEmail: "sandbox-agent@acme-pool.iam.gserviceaccount.com",
+			GCPServiceAccountCount: 1,
+			MCPServers: map[string]protocol.ServerConfig{
+				model.GCPCapabilityServerID: {
+					Command: "grain",
+					Args:    []string{"capability", "gcp"},
+					Builtin: "gcp",
+					Config: map[string]any{
+						protocol.DeploymentIDConfig: "049f1e09",
+						"admin_credential_source":   "ambient",
+						"admin_credential":          "$secret:existing-admin",
+						"permission_sets": []any{
+							map[string]any{
+								"name":    "ci-readers",
+								"project": "acme-ci",
+								"roles":   []any{"roles/storage.objectViewer"},
+							},
+						},
+					},
+				},
+			},
+		}
+		if err := store.PutConfig(ctx, cfg); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 95 WHERE `id` = 1"); err != nil {
+			t.Fatal(err)
+		}
+		if err := model.New(db).Init(ctx); err != nil {
+			t.Fatalf("migrating 95 -> 96: %v", err)
+		}
+		gotCfg, err := store.GetConfig(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := gotCfg.MCPServers[model.GCPCapabilityServerID]
+		// Resolve top-level $secret: reference as protocol.Attach does.
+		cfgCopy := map[string]any{}
+		for k, v := range srv.Config {
+			cfgCopy[k] = v
+		}
+		cfgCopy["admin_credential"] = `{"type": "service_account", "client_email": "existing@acme.iam.gserviceaccount.com"}`
+		resolvedEnv := map[string]string{}
+		for k := range srv.Env {
+			resolvedEnv[k] = `{"type": "service_account", "client_email": "minter@acme.iam.gserviceaccount.com"}`
+		}
+		parsed, err := gcpsets.ParseWithEnv(cfgCopy, func(k string) string { return resolvedEnv[k] })
+		if err != nil {
+			t.Fatalf("gcpsets.ParseWithEnv after migration: %v (config=%#v)", err, srv.Config)
+		}
+		defAdmin := parsed.Admin("default")
+		if defAdmin == nil || defAdmin.CredentialSource != gcpsets.SourceConfigured {
+			t.Fatalf("default admin = %+v, want configured credential_source", defAdmin)
+		}
+	})
 }
