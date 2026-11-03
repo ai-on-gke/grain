@@ -911,8 +911,11 @@ describe("NewTaskOverlay", () => {
     await user.click(screen.getByRole("button", { name: "Create task" }));
     // The create request is sent after an await; read it once it has
     // gone rather than in the same tick, which a loaded CI host loses.
-    await waitFor(() => expect(api).toHaveBeenCalled());
-    const payload = JSON.parse(api.mock.calls[0][1].body);
+    // Picking a repo may itself fetch (its branches), so the create is
+    // found by its method rather than by being the first call.
+    const posted = () => api.mock.calls.find(([, o]) => o?.method === "POST");
+    await waitFor(() => expect(posted()).toBeTruthy());
+    const payload = JSON.parse(posted()[1].body);
     expect(payload.base).toBe("");
   });
 });
