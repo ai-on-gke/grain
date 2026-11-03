@@ -60,9 +60,9 @@ func (r *rotating) PackageCredential(registry, owner, repo string) (Credential, 
 		Token: fmt.Sprintf("token-%d", len(r.calls)), Name: "default"}, nil
 }
 
-// asked is a copy of the calls made so far. The calls arrive on the
-// listener's goroutines, by way of a helper process the race detector
-// cannot see through, so the test reads them under the same lock.
+// asked is what the ladder has been asked so far. The calls come in on
+// the listener's goroutines, from a helper process the race detector
+// cannot see synchronise with the test, so they are read under the lock.
 func (r *rotating) asked() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
