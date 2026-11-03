@@ -84,6 +84,12 @@
     0 16px 40px rgba(26, 24, 19, 0.16), 0 2px 8px rgba(26, 24, 19, 0.08);
   --shadow-toast: 0 10px 28px rgba(26, 24, 19, 0.28);
 
+  /* Shared height for the top tray's controls, the logo box and the
+     New task split button: 36px on pointer viewports, and 40px under
+     coarse pointer (@media (pointer: coarse) below) so touch targets
+     stay at least 40px. */
+  --header-control-size: 36px;
+
   /* The gap between a list page's toolbar and its first row, for the
      four pages with no "Select all" row to provide it -- see .select-all
      below for the whole of the argument. */
@@ -541,6 +547,75 @@ samp,
   padding-left: 1rem;
   padding-right: 1rem;
   gap: 0.5rem;
+}
+
+@media (max-width: 960px) {
+  .page-header {
+    padding-left: 1rem;
+    padding-right: 1rem;
+    gap: 0.5rem;
+  }
+  .page-header-title {
+    max-width: 30%;
+  }
+  .page-header-slot .content-header {
+    gap: 0.5rem;
+  }
+  .page-header-slot .list-search-field {
+    flex-basis: 5.5rem;
+    min-width: 5.5rem;
+  }
+}
+
+/* Shared sizing and baseline rules across the sidebar brand header, the
+   page header rail's top tray and PhoneNav's toolbar: the logo box,
+   every icon button in the tray and the New task button share one
+   height (--header-control-size) and one vertical centreline. */
+.sidebar-header {
+  height: 77px;
+  box-sizing: border-box;
+  flex: none;
+}
+:root[data-phone="true"] .sidebar-header {
+  height: 56px;
+}
+.header-logo-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--header-control-size);
+  height: var(--header-control-size);
+  flex: none;
+  box-sizing: border-box;
+}
+.header-control-icon.header-control-icon {
+  width: var(--header-control-size);
+  height: var(--header-control-size);
+  min-width: var(--header-control-size);
+  min-height: var(--header-control-size);
+  padding: 0;
+  box-sizing: border-box;
+}
+.header-split-button.header-split-button {
+  height: var(--header-control-size);
+  box-sizing: border-box;
+}
+.header-split-button.header-split-button .MuiButton-root {
+  height: var(--header-control-size);
+  min-height: var(--header-control-size);
+  padding-top: 0;
+  padding-bottom: 0;
+  box-sizing: border-box;
+}
+.header-split-button.header-split-button .MuiButtonGroup-lastButton {
+  min-width: 32px;
+  width: 32px;
+}
+.page-header-slot .MuiOutlinedInput-root {
+  min-height: var(--header-control-size);
+}
+.page-header-slot .MuiButton-sizeSmall {
+  min-height: var(--header-control-size);
 }
 
 /* Sidebar's own layout (width, padding, nav rows) now comes from
@@ -1215,6 +1290,9 @@ main,
    MUI's own emotion classes, which are one class each and injected
    after this sheet, so a single .task-select never wins. */
 @media (pointer: coarse) {
+  :root {
+    --header-control-size: 40px;
+  }
   .task-drag-handle {
     position: relative;
   }

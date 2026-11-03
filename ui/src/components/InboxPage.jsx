@@ -32,7 +32,7 @@ import {
 } from "../state.js";
 import { forceMergeOffered, promptForceMerge } from "../taskWrites.js";
 import { useNotificationSetting } from "../inboxNotifications.js";
-import ItemGlyph from "./ItemGlyph.jsx";
+import { NavGlyph } from "./AppIcon.jsx";
 import ClChip from "./ClChip.jsx";
 import PresubmitBadge from "./PresubmitBadge.jsx";
 import ReviewBadge from "./ClReview.jsx";
@@ -987,7 +987,7 @@ export default function InboxPage({
           notifications.length +
           (syncFailure ? 1 : 0)
         }
-        icon={<ItemGlyph kind="inbox" size={20} />}
+        icon={<NavGlyph kind="inbox" size={20} />}
         action={<NotificationSwitch />}
       />
       {/* Deliberately the same sentence it always was, and about tasks

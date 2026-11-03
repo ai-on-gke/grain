@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { Box, Button, Typography } from "@mui/material";
+import AppIcon from "../AppIcon.jsx";
 import SettingsCard from "./SettingsCard.jsx";
 
 // actorName is the server-reported actor (GET /api/config's actor) as a
@@ -60,6 +61,7 @@ export default function AccessSection({ config, onLogout }) {
               variant="outlined"
               color="error"
               size="small"
+              startIcon={<AppIcon name="signOut" size={16} />}
               onClick={onLogout}
             >
               Log out
@@ -75,6 +77,7 @@ export default function AccessSection({ config, onLogout }) {
                 variant="outlined"
                 color="error"
                 size="small"
+                startIcon={<AppIcon name="signOut" size={16} />}
                 onClick={onLogout}
               >
                 Log out
@@ -90,6 +93,7 @@ export default function AccessSection({ config, onLogout }) {
               variant="outlined"
               color="error"
               size="small"
+              startIcon={<AppIcon name="signOut" size={16} />}
               onClick={onLogout}
             >
               Log out
