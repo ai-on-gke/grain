@@ -178,6 +178,12 @@ netstat -ltn | grep -q ":::80 "'
 # The guest's v6 address, without its prefix length.
 has_addr6() { "${GX[@]}" "ip -6 addr show dev eth0 scope global" 2>/dev/null | grep -qF "inet6 $1/"; }
 
+# has_route6_default: the guest's eth0 has its v6 default route. The
+# address arrives first (granule-net-ip6, with noprefixroute) and its
+# routes a moment later (granule-net-routes), so a check run as soon as
+# the address shows can find the guest with no v6 route at all.
+has_route6_default() { "${GX[@]}" "ip -6 route show default dev eth0" 2>/dev/null | grep -q '^default'; }
+
 # One host-side HTTP GET, curl or busybox wget on the host network.
 host_get() {
   if command -v curl >/dev/null 2>&1; then
@@ -242,6 +248,8 @@ docker_network() {
     docker logs --tail 40 "$guest" 2>&1 | sed 's/^/     | /'
     return
   fi
+  retry 30 has_route6_default || fail "the guest installs its v6 default route" \
+    "$("${GX[@]}" 'ip -6 route show dev eth0' 2>&1 | tr '\n' ';')"
   note "guest v6 routes: $("${GX[@]}" 'ip -6 route show dev eth0' 2>&1 | tr '\n' ';')"
 
   check "the guest pings the gateway $gw6 over v6" " 0% packet loss" \
@@ -425,6 +433,8 @@ k8s_checks() {
     kubectl logs --tail=40 granule-e2e6 2>&1 | sed 's/^/     | /'
     return
   fi
+  retry 30 has_route6_default || fail "the guest installs its v6 default route" \
+    "$("${GX[@]}" 'ip -6 route show dev eth0' 2>&1 | tr '\n' ';')"
   note "guest v6 routes: $("${GX[@]}" 'ip -6 route show dev eth0' 2>&1 | tr '\n' ';')"
   if ! out=$("${GX[@]}" "$LISTENER" 2>&1); then
     fail "start a listener on [::]:80 in the guest" "$out"
