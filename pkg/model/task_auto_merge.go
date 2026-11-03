@@ -253,9 +253,19 @@ func guardAutoMergeChange(ctx context.Context, tx *sql.Tx, t *Task) (*TaskEvent,
 // to merging itself -- unless it was declined, a hold ended in a person's
 // decision, approvals are still owed, or its merge rules say `never`. It
 // returns the reason to record, or "" when it left t alone.
+//
+// Nor without a clearance (LinkTrustBoundaryCleared) left on t: a change
+// with auto-merge on and no clearance is one a person let through, and
+// is merged as it stands rather than classified again
+// (orchestrator.clearedForHead). Every hold that clears through a
+// classification of the head records one; a write that drops the
+// clearance along with the hold -- a retarget dropping what was pinned
+// to the old pull request -- leaves the next head to be classified
+// before anything turns auto-merge on.
 func restoreAfterHolds(ctx context.Context, tx *sql.Tx, t *Task) (string, error) {
 	if t.AutoMerge || AutoMergeDeclined(*t) || AutoMergeAwaitsPerson(*t) || len(heldBy(t.Links)) > 0 ||
 		len(PendingApprovals(*t)) > 0 ||
+		!slices.ContainsFunc(t.Links, func(l Link) bool { return l.Kind == LinkTrustBoundaryCleared && l.Target != "" }) ||
 		slices.ContainsFunc(t.Links, func(l Link) bool { return l.Kind == LinkMergePolicyWithdrawn }) {
 		return "", nil
 	}

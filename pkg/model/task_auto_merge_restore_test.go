@@ -26,7 +26,8 @@ import (
 // A write that drops the last of grain's holds on a change hands back
 // the auto-merge the hold took, whichever writer drops it -- unless the
 // change is somebody's explicit "no", a hold ended in a person's
-// decision, or approvals are still owed.
+// decision, approvals are still owed, or the write took the change's
+// trust-boundary clearance away with the hold.
 func TestDroppingTheLastHoldHandsAutoMergeBack(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -37,6 +38,7 @@ func TestDroppingTheLastHoldHandsAutoMergeBack(t *testing.T) {
 	security := model.Link{Kind: model.LinkSecurityHold, Target: "v1"}
 	humanOnly := model.Link{Kind: model.LinkHumanOnlyHold, Target: "v1"}
 	path := model.Link{Kind: model.LinkPathTriggerHold, Target: "on-findings"}
+	cleared := model.Link{Kind: model.LinkTrustBoundaryCleared, Target: "abc123@v1"}
 
 	cases := []struct {
 		name   string
@@ -44,8 +46,13 @@ func TestDroppingTheLastHoldHandsAutoMergeBack(t *testing.T) {
 		mutate func(*model.Task)
 		want   bool
 	}{
-		{"last hold cleared", held("1", security), func(t *model.Task) { t.Links = nil }, true},
-		{"human-only hold lifted by a carried clearance", held("2", humanOnly), func(t *model.Task) { t.Links = nil }, true},
+		{"last hold cleared", held("1", security, cleared), func(t *model.Task) { t.Links = []model.Link{cleared} }, true},
+		{"human-only hold lifted by a carried clearance", held("2", humanOnly),
+			func(t *model.Task) { t.Links = []model.Link{cleared} }, true},
+		// A retarget drops what was pinned to the old pull request, its
+		// classification included: with no clearance left, auto-merge on
+		// would merge the next head unclassified (clearedForHead).
+		{"hold dropped with its clearance", held("8", security, cleared), func(t *model.Task) { t.Links = nil }, false},
 		{"another hold remains", held("3", security, path),
 			func(t *model.Task) { t.Links = []model.Link{path} }, false},
 		{"ended for a person", held("4", security), func(t *model.Task) {
