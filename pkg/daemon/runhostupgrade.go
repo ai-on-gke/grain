@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
 
@@ -29,7 +30,7 @@ import (
 )
 
 // runHostUpgrade is the daemon's half of the upgrade protocol for runs in
-// run hosts (docs/non-disruptive-upgrade.md, piece 6): the flush an
+// run hosts (design/design/non-disruptive-upgrade.design.md, piece 6): the flush an
 // upgrade makes before it restarts this daemon (upgrade.Config.Flush),
 // the re-adoption if that restart leaves this process running, and the
 // report of what the startup adoption pass did, for the post-upgrade
@@ -42,7 +43,7 @@ import (
 // grain hostd -- flushes nothing and reports nothing.
 type runHostUpgrade struct {
 	host     *runhost.Host
-	hostd    *runhost.Hostd
+	hostd    *hostdRunSet
 	stopping <-chan struct{}
 
 	mu sync.Mutex
@@ -53,7 +54,7 @@ type runHostUpgrade struct {
 	readopt func()
 }
 
-func newRunHostUpgrade(host *runhost.Host, hd *runhost.Hostd, ci bool) *runHostUpgrade {
+func newRunHostUpgrade(host *runhost.Host, hd *hostdRunSet, ci bool) *runHostUpgrade {
 	if host == nil && hd == nil && !ci {
 		return nil
 	}
@@ -215,18 +216,29 @@ func adoptRunHosts(ctx context.Context, store *model.Store, client github.Client
 // adoptionPass is what one adoption pass took, by where each run's CLI is
 // still running.
 type adoptionPass struct {
-	// runHost are resumed through the run-host Host, hostd through
-	// runhost.Hostd (orchestrator.ResumeAdoptedRun).
-	runHost, hostd []orchestrator.AdoptedRun
+	// runHost are resumed through the run-host Host, hostd through the
+	// runhost.Hostd of the grain hostd each ran on
+	// (orchestrator.ResumeAdoptedRun).
+	runHost []orchestrator.AdoptedRun
+	hostd   []hostdAdopted
 	// took is every adopted run, for RecoverOrphanedRunsExcept to spare.
 	took map[string]bool
 }
 
+// hostdAdopted is the runs one grain hostd's adoption took, and the
+// runhost.Hostd they are resumed through.
+type hostdAdopted struct {
+	name string
+	host *runhost.Hostd
+	runs []orchestrator.AdoptedRun
+}
+
 // adoptAll is the whole adoption pass: run hosts (adoptRunHosts) when this
 // deployment has them, and grain hostd's detached host CLIs
-// (adoptHostd) when it has that, with one report for the post-upgrade
-// check. A pass that errs still returns what it adopted.
-func adoptAll(ctx context.Context, store *model.Store, client github.Client, host *runhost.Host, hd *runhost.Hostd,
+// (adoptHostd) on every hostd a live run ran on when it has that, with
+// one report for the post-upgrade check. A pass that errs still returns
+// what it adopted.
+func adoptAll(ctx context.Context, store *model.Store, client github.Client, host *runhost.Host, hd *hostdRunSet,
 	sandboxes orchestrator.Sandboxes) (adoptionPass, *orchestrator.AdoptionReport, error) {
 	out := adoptionPass{took: map[string]bool{}}
 	if host == nil && hd == nil {
@@ -244,32 +256,144 @@ func adoptAll(ctx context.Context, store *model.Store, client github.Client, hos
 		report = r
 	}
 	if hd != nil {
-		adopted, took, r, err := adoptHostd(ctx, store, client, hd, sandboxes)
+		targets, err := hostdAdoptionTargets(ctx, store, hd)
 		errs = append(errs, err)
-		out.hostd = adopted
-		for run := range took {
-			out.took[run] = true
+		for _, t := range targets {
+			adopted, took, r, err := adoptHostd(ctx, store, client, t, sandboxes)
+			errs = append(errs, err)
+			if len(adopted) > 0 {
+				out.hostd = append(out.hostd, hostdAdopted{name: t.name, host: t.host, runs: adopted})
+			}
+			for run := range took {
+				out.took[run] = true
+			}
+			report.Adopted = append(report.Adopted, r.Adopted...)
+			report.Lost = append(report.Lost, r.Lost...)
+			report.Freed += r.Freed
 		}
-		report.Adopted = append(report.Adopted, r.Adopted...)
-		report.Lost = append(report.Lost, r.Lost...)
-		report.Freed += r.Freed
 	}
 	return out, report, errors.Join(errs...)
 }
 
-// adoptHostd is adoptRunHosts for grain hostd (orchestrator.RecoverHostd):
-// a detached host CLI whose run's sandbox this backend can claim back is
-// adopted, for the caller to resume through hd.
-func adoptHostd(ctx context.Context, store *model.Store, client github.Client, hd *runhost.Hostd,
+// hostdAdoptWait bounds how long the adoption pass waits for the grain
+// hostds its live runs ran on to dial in again after a restart, all of
+// them together, before deciding without the ones still away.
+const hostdAdoptWait = 30 * time.Second
+
+// hostdAdoptionTarget is one grain hostd an adoption pass asks, and the
+// live runs it decides there: those whose recorded hostd
+// (model.TaskRunHostd) is this one, or -- for the default hostd -- that
+// recorded none, as every run did before runs were routed.
+type hostdAdoptionTarget struct {
+	name string
+	host *runhost.Hostd
+	owns func(runID string) bool
+}
+
+// hostdAdoptionTargets is every hostd hd's adoption pass asks: the
+// default hostd, where the host executor is one, and each other hostd a
+// live run driven through grain hostd recorded, waited for (hostdAdoptWait)
+// where it dials in. A hostd that cannot be reached at all is left out,
+// its runs to RecoverOrphanedRuns, and the error says so.
+func hostdAdoptionTargets(ctx context.Context, store *model.Store, hd *hostdRunSet) ([]hostdAdoptionTarget, error) {
+	owner, err := liveRunHostds(ctx, store, hd.defaultName)
+	if err != nil {
+		return nil, err
+	}
+	names := map[string]bool{}
+	if hd.defaultRuns() != nil {
+		names[hd.defaultName] = true
+	}
+	for _, name := range owner {
+		names[name] = true
+	}
+	sorted := make([]string, 0, len(names))
+	for name := range names {
+		sorted = append(sorted, name)
+	}
+	sort.Strings(sorted)
+
+	var errs []error
+	waitCtx, cancel := context.WithTimeout(ctx, hostdAdoptWait)
+	defer cancel()
+	var out []hostdAdoptionTarget
+	for _, name := range sorted {
+		host, ok := hd.named(name)
+		if !ok {
+			errs = append(errs, fmt.Errorf("grain hostd %s, which a live run ran on, cannot be reached from this daemon; its runs are recovered as any other", name))
+			continue
+		}
+		if hd.wait != nil && hasOwned(owner, name) {
+			if err := hd.wait(waitCtx, name); err != nil {
+				log.Printf("grain daemon: grain hostd %s has not dialed in again after %s; deciding its runs without it", name, hostdAdoptWait)
+			}
+		}
+		name := name
+		out = append(out, hostdAdoptionTarget{name: name, host: host, owns: func(run string) bool {
+			if got, ok := owner[run]; ok {
+				return got == name
+			}
+			return name == hd.defaultName
+		}})
+	}
+	return out, errors.Join(errs...)
+}
+
+// hasOwned reports whether any run in owner ran on name.
+func hasOwned(owner map[string]string, name string) bool {
+	for _, n := range owner {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+// liveRunHostds is the hostd each live run driven through grain hostd (a
+// hostd cursor) recorded it ran on, by run id; a run that recorded none
+// ran on the default hostd, named defaultName.
+func liveRunHostds(ctx context.Context, store *model.Store, defaultName string) (map[string]string, error) {
+	cursors, err := store.HostdCursors(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reading hostd cursors: %w", err)
+	}
+	runs, err := store.LiveRuns(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reading live runs: %w", err)
+	}
+	out := map[string]string{}
+	for _, r := range runs {
+		if _, ok := cursors[r.ID]; !ok {
+			continue
+		}
+		rec, err := store.RunHostd(ctx, r.ID)
+		if err != nil {
+			return nil, err
+		}
+		if rec != nil && rec.Hostd != "" {
+			out[r.ID] = rec.Hostd
+		} else {
+			out[r.ID] = defaultName
+		}
+	}
+	return out, nil
+}
+
+// adoptHostd is adoptRunHosts for one grain hostd
+// (orchestrator.RecoverHostdRuns): a detached host CLI of a run t owns
+// whose sandbox this backend can claim back is adopted, for the caller to
+// resume through t.host.
+func adoptHostd(ctx context.Context, store *model.Store, client github.Client, t hostdAdoptionTarget,
 	sandboxes orchestrator.Sandboxes) ([]orchestrator.AdoptedRun, map[string]bool, *orchestrator.AdoptionReport, error) {
 	var adopted []orchestrator.AdoptedRun
 	took := map[string]bool{}
 	now := time.Now().UTC()
-	plan, err := orchestrator.RecoverHostd(ctx, store, client, hd.Client, hd.Client.Build, now,
+	hd := t.host
+	plan, err := orchestrator.RecoverHostdRuns(ctx, store, client, hd.Client, hd.Client.Build, now, t.owns,
 		func(a runhost.Adoption, cursor int64) bool {
 			sb, err := orchestrator.ReadoptSandbox(ctx, sandboxes, a.Claim.SandboxName())
 			if err != nil {
-				log.Printf("grain daemon: not adopting run %s from grain hostd: its sandbox: %v", a.Claim.Run, err)
+				log.Printf("grain daemon: not adopting run %s from grain hostd %s: its sandbox: %v", a.Claim.Run, t.name, err)
 				return false
 			}
 			adopted = append(adopted, orchestrator.AdoptedRun{Adoption: a, Cursor: cursor, Sandbox: sb})
@@ -277,10 +401,10 @@ func adoptHostd(ctx context.Context, store *model.Store, client github.Client, h
 			return true
 		})
 	if err != nil {
-		err = fmt.Errorf("recovering grain hostd's host CLIs: %w", err)
+		err = fmt.Errorf("recovering grain hostd %s's host CLIs: %w", t.name, err)
 	}
 	report := orchestrator.NewAdoptionReport(now, plan, took)
-	log.Printf("grain daemon: grain hostd adoption: %d adopted, %d lost, %d unclaimed process(es) released",
-		len(report.Adopted), len(report.Lost), report.Freed)
+	log.Printf("grain daemon: grain hostd %s adoption: %d adopted, %d lost, %d unclaimed process(es) released",
+		t.name, len(report.Adopted), len(report.Lost), report.Freed)
 	return adopted, took, report, err
 }

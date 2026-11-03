@@ -22,7 +22,7 @@ repository, is still a row an operator writes, in grain's UI or as a pull reques
 repository. What a repository declares is the subset that is genuinely
 about that repository.
 
-[grainfile-format.md](grainfile-format.md) describes how grain plans to
+[`design/design/grainfiles.design.md`](../design/design/grainfiles.design.md) describes how grain plans to
 read the same declarations written in the Grainfile Format, which `settings:`
 keys it reads, and the execution records it writes back.
 
@@ -472,7 +472,7 @@ name: Every night
 template: nightly                  # a declared template, by stem...
 # suite: sweep                     # ...or a declared suite...
 # workflow: nightly                # ...or a .grain/workflows file, by stem or path; exactly one
-base: main                         # optional
+base: main                         # optional with template: or workflow:; required with suite:
 enabled: true                      # optional; default true
 overlap: skip                      # optional; "skip" (default) or "allow"; "skip" only with workflow:
                                    # "skip" holds a firing that overlaps the last one and fires it once
@@ -492,6 +492,13 @@ every:                             # every N hours from the last firing
 #   day: 1
 #   at: "09:00"
 ```
+
+A `suite:` schedule must name a `base:` branch, matching `POST /api/suite-runs`
+and `POST /api/schedules`: a suite run stacks its tasks against one named
+branch and has no default branch to fall back to. Leaving `base:` out on a
+`suite:` schedule is refused when the declarations are read, naming the
+schedule file in `repo_declaration_sync.last_error` and keeping the last good
+commit's declarations running.
 
 
 #### Skipped firings
@@ -585,7 +592,7 @@ back into the change's branch, `no` once every one has finished whatever
 it said, and `required` never -- that one waits for a human's Submit,
 however clean its reviews were. A gating task that left findings holds the
 change as questions to its owner, and the owner's reply sends another run
-to carry the decision out (docs/implementation-notes.md, "What a review
+to carry the decision out ("What a review
 does with what it finds"). Several gating triggers matching one change
 all have to finish, under the strictest `human` among them. A change whose
 file list cannot be read in full is held by every gating trigger.
@@ -1023,6 +1030,7 @@ template nightly  .grain/templates/nightly.yml
 schedule nightly  .grain/schedules/nightly.yml
   fires:      suite sweep
   cadence:    every 6h
+  base:       main
   next:       Fri 2026-09-18 13:29 UTC
               Fri 2026-09-18 19:29 UTC
               Sat 2026-09-19 01:29 UTC

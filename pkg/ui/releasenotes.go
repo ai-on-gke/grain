@@ -306,13 +306,10 @@ func (s *Server) handlePutReleaseNote(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
-	by, err := memoryAuthor(req.Author, req.AuthorKind)
+	by, err := bodyAuthor(r.Context(), "a release note's author", req.Author, req.AuthorKind)
 	if err != nil {
 		writeClientError(w, err)
 		return
-	}
-	if p, hasPrincipal := PrincipalFromContext(r.Context()); hasPrincipal && by == (model.Principal{}) {
-		by = p
 	}
 	note, err := s.tasks.PutReleaseNote(r.Context(), req.Period, req.Title, req.Text, by)
 	if err != nil {

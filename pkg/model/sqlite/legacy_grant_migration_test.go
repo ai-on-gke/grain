@@ -17,6 +17,7 @@ package sqlite_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -51,7 +52,7 @@ func grantRows(t *testing.T, ctx context.Context, db *sql.DB, table, owner strin
 // sameGrantMeaning fails t unless before and after grant the same api
 // scopes, on the model's and the sandbox's channel alike, are equally
 // dangerous, and hold the same names other than the renamed ones -- the
-// fidelity docs/design/unified-grants.md §3 asks of every migrated row.
+// fidelity design/design/unified-grants.design.md §3 asks of every migrated row.
 func sameGrantMeaning(t *testing.T, what string, before, after []string) {
 	t.Helper()
 	for _, s := range model.APIScopes() {
@@ -66,7 +67,7 @@ func sameGrantMeaning(t *testing.T, what string, before, after []string) {
 		t.Errorf("%s: dangerous %v before the migration and %v after", what, b, a)
 	}
 	for _, name := range before {
-		to := model.CanonicalLegacyGrants(name)
+		to := retiredAs(name)
 		retired := len(to) != 1 || to[0] != name
 		if !retired && !slices.Contains(after, name) {
 			t.Errorf("%s: %q, which is not retired, was lost (%v -> %v)", what, name, before, after)
@@ -98,6 +99,23 @@ var retiredGrants = []struct {
 	{82, "db-write", []string{model.GrainSQLWriteGrant}},
 	{84, "self-repair", []string{model.GrainHostExecGrant}},
 	{85, "git-push-any-ref", []string{model.GitPushAnyRefGrant}},
+	{88, "repo-read:acme/tools", []string{model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
+	{88, "repo-write:acme/tools", []string{model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
+	// corp-research is the Google build's: core has no alias for it, which
+	// that build registers with capability.Register (retiredAs).
+	{86, "corp-research", []string{model.CorpResearchGrant}},
+}
+
+// retiredAs is what a store migration rewrote name to: retiredGrants'
+// entry for it, which covers the names only a build outside core makes an
+// alias, or else model.CanonicalLegacyGrants.
+func retiredAs(name string) []string {
+	for _, r := range retiredGrants {
+		if r.legacy == name {
+			return r.to
+		}
+	}
+	return model.CanonicalLegacyGrants(name)
 }
 
 // Each retiring migration rewrites every stored grant of its capability
@@ -199,7 +217,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 	if want := append([]string{"self-debug"}, replacements...); !slices.Equal(repo.DefaultCapabilities, want) {
 		t.Errorf("repo default capabilities = %v, want %v", repo.DefaultCapabilities, want)
 	}
-	// Migrations 83 and 84 rewrite retired names in repo_config.ci_capabilities as well.
+	// Migrations 83 to 86 rewrite retired names in repo_config.ci_capabilities as well.
 	if want := append([]string{"package-publish"}, replacements...); !slices.Equal(repo.CICapabilities, want) {
 		t.Errorf("repo CI capabilities = %v, want %v", repo.CICapabilities, want)
 	}
@@ -210,6 +228,161 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 // repo_config.ci_capabilities for stores already at schema 82, preserving
 // non-retired entries, collapsing duplicates where the canonical grant is
 // already held, and handling both CSV and JSON-array column encodings.
+// storedGrantState is every place a store migration retiring a capability
+// rewrites, read back raw: the three grant tables and the stored text of
+// each capability-list column.
+func storedGrantState(t *testing.T, ctx context.Context, db *sql.DB) map[string]any {
+	t.Helper()
+	out := map[string]any{
+		"task_grant":     grantRows(t, ctx, db, "task_grant", "task_id"),
+		"template_grant": grantRows(t, ctx, db, "template_grant", "template_id"),
+		"schedule_grant": grantRows(t, ctx, db, "schedule_grant", "schedule_id"),
+	}
+	var defaults, sessions string
+	if err := db.QueryRowContext(ctx, "SELECT `default_capabilities`, `console_sessions` FROM `grain_config` WHERE `id` = 1").Scan(&defaults, &sessions); err != nil {
+		t.Fatal(err)
+	}
+	out["grain_config.default_capabilities"], out["grain_config.console_sessions"] = defaults, sessions
+	rows, err := db.QueryContext(ctx, "SELECT `owner`, `name`, `default_capabilities`, `ci_capabilities` FROM `repo_config`")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var owner, name, def, ci string
+		if err := rows.Scan(&owner, &name, &def, &ci); err != nil {
+			t.Fatal(err)
+		}
+		out["repo_config "+owner+"/"+name] = [2]string{def, ci}
+	}
+	return out
+}
+
+// Migration 86 rewrites corp-research in every stored location and nothing
+// else, leaves a store already holding only the method grant untouched, and
+// changes nothing when it runs a second time.
+func TestMigration86RewritesCorpResearchIdempotently(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+
+	cfg := testConfig()
+	cfg.DefaultCapabilities = []string{"self-debug", "corp-research", "gcp-key"}
+	cfg.ConsoleSessions = []model.ConsoleSession{
+		{ID: "director", Title: "Director", Capabilities: []string{"corp-research", "self-debug"}},
+		{ID: "quiet", Title: "Quiet", Capabilities: []string{"self-debug"}},
+	}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets,
+		DefaultCapabilities: []string{"corp-research"},
+		CICapabilities:      []string{"package-publish", "corp-research", model.CorpResearchGrant}}); err != nil {
+		t.Fatal(err)
+	}
+	other := model.RepoRef{Owner: "acme", Name: "other"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: other,
+		DefaultCapabilities: []string{"self-debug"}, CICapabilities: []string{"package-publish"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []struct{ table, owner, id, capability string }{
+		{"task_grant", "task_id", "1", "corp-research"},
+		{"task_grant", "task_id", "1", "self-debug"},
+		{"task_grant", "task_id", "2", "corp-research"},
+		{"task_grant", "task_id", "2", model.CorpResearchGrant},
+		{"task_grant", "task_id", "3", "api:tasks:write"},
+		{"template_grant", "template_id", "t", "corp-research"},
+		{"schedule_grant", "schedule_id", "s", "corp-research"},
+		{"schedule_grant", "schedule_id", "s", "gcp-key"},
+	} {
+		if _, err := db.ExecContext(ctx, "INSERT INTO `"+row.table+"` (`"+row.owner+"`, `capability`, `via`) VALUES (?, ?, 'label')",
+			row.id, row.capability); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := storedGrantState(t, ctx, db)
+
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 85 WHERE `id` = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("migrating a version-85 store: %v", err)
+	}
+	after := storedGrantState(t, ctx, db)
+
+	corp := model.CorpResearchGrant
+	wantTasks := map[string][]string{"1": {corp, "self-debug"}, "2": {corp}, "3": {"api:tasks:write"}}
+	if got := after["task_grant"]; !equalRows(got.(map[string][]string), wantTasks) {
+		t.Errorf("task grants = %v, want %v", got, wantTasks)
+	}
+	if got, want := after["template_grant"], map[string][]string{"t": {corp}}; !equalRows(got.(map[string][]string), want) {
+		t.Errorf("template grants = %v, want %v", got, want)
+	}
+	if got, want := after["schedule_grant"], map[string][]string{"s": {"gcp-key", corp}}; !equalRows(got.(map[string][]string), want) {
+		t.Errorf("schedule grants = %v, want %v", got, want)
+	}
+	gotCfg, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"self-debug", corp, "gcp-key"}; !slices.Equal(gotCfg.DefaultCapabilities, want) {
+		t.Errorf("default capabilities = %v, want %v", gotCfg.DefaultCapabilities, want)
+	}
+	if got, want := gotCfg.ConsoleSessions[0].Capabilities, []string{corp, "self-debug"}; !slices.Equal(got, want) {
+		t.Errorf("director capabilities = %v, want %v", got, want)
+	}
+	gotRepo, err := store.GetRepoConfig(ctx, widgets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{corp}; !slices.Equal(gotRepo.DefaultCapabilities, want) {
+		t.Errorf("repo default capabilities = %v, want %v", gotRepo.DefaultCapabilities, want)
+	}
+	if want := []string{"package-publish", corp}; !slices.Equal(gotRepo.CICapabilities, want) {
+		t.Errorf("repo CI capabilities = %v, want %v", gotRepo.CICapabilities, want)
+	}
+
+	// Nothing that did not hold corp-research changed at all.
+	if key := "repo_config acme/other"; before[key] != after[key] {
+		t.Errorf("%s changed from %v to %v, holding no corp-research", key, before[key], after[key])
+	}
+	if got, want := gotCfg.ConsoleSessions[1], cfg.ConsoleSessions[1]; got.ID != want.ID || got.Title != want.Title ||
+		!slices.Equal(got.Capabilities, want.Capabilities) {
+		t.Errorf("quiet session = %+v, want it unchanged from %+v", got, want)
+	}
+	if got := after["task_grant"].(map[string][]string)["3"]; !slices.Equal(got, before["task_grant"].(map[string][]string)["3"]) {
+		t.Errorf("task 3, holding no corp-research, holds %v after the migration", got)
+	}
+
+	// Running it again is a no-op.
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 85 WHERE `id` = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("migrating the store a second time: %v", err)
+	}
+	again := storedGrantState(t, ctx, db)
+	for key, v := range after {
+		if fmt.Sprint(again[key]) != fmt.Sprint(v) {
+			t.Errorf("a second migration changed %s from %v to %v", key, v, again[key])
+		}
+	}
+}
+
+func equalRows(got, want map[string][]string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for id, names := range want {
+		w := slices.Clone(names)
+		sort.Strings(w)
+		if !slices.Equal(got[id], w) {
+			return false
+		}
+	}
+	return true
+}
+
 func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
@@ -221,7 +394,7 @@ func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 
 		if err := store.PutRepoConfig(ctx, model.RepoConfig{
 			Repo:           widgets,
-			CICapabilities: []string{"package-publish", r.legacy, "repo-read:acme/tools"},
+			CICapabilities: []string{"package-publish", r.legacy, "release-gate-read"},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -257,12 +430,12 @@ func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 		dedup := model.RepoRef{Owner: "dedup", Name: r.legacy}
 		jsonEncoded := model.RepoRef{Owner: "json", Name: r.legacy}
 
-		beforeWidgets := []string{"package-publish", r.legacy, "repo-read:acme/tools"}
+		beforeWidgets := []string{"package-publish", r.legacy, "release-gate-read"}
 		gotWidgets, err := store.GetRepoConfig(ctx, widgets)
 		if err != nil || gotWidgets == nil {
 			t.Fatalf("%s widgets: %v, %+v", r.legacy, err, gotWidgets)
 		}
-		wantWidgets := append(append([]string{"package-publish"}, r.to...), "repo-read:acme/tools")
+		wantWidgets := append(append([]string{"package-publish"}, r.to...), "release-gate-read")
 		if !slices.Equal(gotWidgets.CICapabilities, wantWidgets) {
 			t.Errorf("%s: widgets CI capabilities = %v, want %v", r.legacy, gotWidgets.CICapabilities, wantWidgets)
 		}
@@ -294,6 +467,106 @@ func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 	}
 	if len(gotEmpty.CICapabilities) != 0 {
 		t.Errorf("empty CI capabilities = %v, want empty", gotEmpty.CICapabilities)
+	}
+}
+
+// A store written before migration 90 whose capability_policy carries a
+// catalogue with retired in-process entries (memory, release-notes,
+// test-quarantine, ...) folds them into api_scopes.presets.<name>, merges
+// restrictions conservatively when both exist, and rewrites retired task
+// defaults inside the catalogue.
+func TestMigrationFoldsRetiredCatalogueInProcess(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+	off := false
+	on := true
+
+	cfg := testConfig()
+	cfg.CapabilityPolicy = model.CapabilityPolicy{
+		Catalogue: &model.CapabilityCatalogue{
+			Defaults: model.CatalogueDefaults{
+				Task: []string{"pipeline-control", "self-debug"},
+				Repos: map[string]model.CatalogueRepoDefaults{
+					"acme/widgets": {
+						Task: []string{"release-notes", "memory"},
+						CI:   []string{"gcp-key"},
+					},
+				},
+			},
+			InProcess: map[string]model.CatalogueInProcess{
+				"memory": {Enabled: &off},
+				"release-notes": {Restrictions: &model.CapabilityRestrictions{
+					Repos:          model.Patterns{"acme/*"},
+					RequiresPerson: true,
+				}},
+				"test-quarantine": {Restrictions: &model.CapabilityRestrictions{
+					Repos: model.Patterns{"acme/*"},
+					Kinds: model.Patterns{"task", "session"},
+				}},
+				"self-debug": {Restrictions: &model.CapabilityRestrictions{
+					Repos: model.Patterns{"ai-on-gke/grain"},
+				}},
+			},
+			APIScopes: model.CatalogueAPIScopes{
+				Presets: map[string]model.CataloguePreset{
+					"test-quarantine": {
+						Enabled: &on,
+						Restrictions: &model.CapabilityRestrictions{
+							Repos: model.Patterns{"acme/widgets"},
+							Kinds: model.Patterns{"task"},
+						},
+					},
+				},
+			},
+		},
+	}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 65 WHERE `id` = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.New(db).Init(ctx); err != nil {
+		t.Fatalf("migrating a version-65 store: %v", err)
+	}
+
+	after, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat := after.CapabilityPolicy.Catalogue
+	if cat == nil {
+		t.Fatal("catalogue lost after migration")
+	}
+	for _, retired := range []string{"memory", "release-notes", "test-quarantine"} {
+		if _, exists := cat.InProcess[retired]; exists {
+			t.Errorf("inProcess[%q] survived migration: %+v", retired, cat.InProcess)
+		}
+	}
+	if _, exists := cat.InProcess["self-debug"]; !exists {
+		t.Error("inProcess[self-debug] was dropped")
+	}
+	mem, ok := cat.APIScopes.Presets["memory"]
+	if !ok || mem.Enabled == nil || *mem.Enabled {
+		t.Fatalf("apiScopes.presets[memory] = %+v, want disabled", mem)
+	}
+	rn, ok := cat.APIScopes.Presets["release-notes"]
+	if !ok || rn.Restrictions == nil || !rn.Restrictions.RequiresPerson || !slices.Equal([]string(rn.Restrictions.Repos), []string{"acme/*"}) {
+		t.Fatalf("apiScopes.presets[release-notes] = %+v", rn)
+	}
+	tq, ok := cat.APIScopes.Presets["test-quarantine"]
+	if !ok || tq.Restrictions == nil || !slices.Equal([]string(tq.Restrictions.Repos), []string{"acme/widgets"}) ||
+		!slices.Equal([]string(tq.Restrictions.Kinds), []string{"task"}) {
+		t.Fatalf("apiScopes.presets[test-quarantine] = %+v, want conservative intersection", tq)
+	}
+	if want := []string{"api:pipeline-control", "self-debug"}; !slices.Equal(cat.Defaults.Task, want) {
+		t.Errorf("catalogue.defaults.task = %v, want %v", cat.Defaults.Task, want)
+	}
+	if want := []string{"api:release-notes", "api:memory"}; !slices.Equal(cat.Defaults.Repos["acme/widgets"].Task, want) {
+		t.Errorf("catalogue.defaults.repos[acme/widgets].task = %v, want %v", cat.Defaults.Repos["acme/widgets"].Task, want)
+	}
+	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{"api:memory"}}); err == nil {
+		t.Error("migrated catalogue admitted api:memory, want disabled refusal")
 	}
 }
 

@@ -52,7 +52,7 @@ type externalConfigRepoError struct {
 	// Internal is set when the repository is this deployment's own
 	// controller-local grain/config rather than an external mirror:
 	// non-bootstrap configuration is written only through it in either
-	// mode (docs/design/config-repo-settings.md, section 4.1).
+	// mode (design/design/config-repo-settings.design.md, section 4.1).
 	Internal bool
 	// Paths are the repository files holding the setting: the files the
 	// rehearsed write changed, or the files of the tables the route
@@ -111,6 +111,9 @@ func (e *externalConfigRepoError) Error() string {
 			b.WriteString(c.Patch)
 		}
 		b.WriteString("\n" + e.openPullRequest())
+		if e.Description != "" {
+			b.WriteString(" Note: " + e.Description + ".")
+		}
 	case len(e.Paths) > 0:
 		fmt.Fprintf(&b, " Configuration here is managed in %s. Make this change in %s instead", where, strings.Join(e.Paths, ", "))
 		if e.Description != "" {
@@ -262,6 +265,12 @@ type configWriteRehearsal struct {
 	// so configRefusalWriter can export the updated tables immediately to
 	// grain/config once the handler succeeds.
 	wroteSettings bool
+	// writerCtx is the context the first permitted write was guarded
+	// under: the handler's own, which carries the principal the agent
+	// API gate attached where ServeHTTP's request does not. It is who
+	// the write is recorded as made by (recordConfigWrite,
+	// writeCommitNote).
+	writerCtx context.Context
 }
 
 // pending is the refusal an armed request still owes its caller: armed,
@@ -340,10 +349,24 @@ func (r *configWriteRehearsal) markRefused() {
 	r.mu.Unlock()
 }
 
-func (r *configWriteRehearsal) markWroteSettings() {
+func (r *configWriteRehearsal) markWroteSettings(ctx context.Context) {
 	r.mu.Lock()
 	r.wroteSettings = true
+	if r.writerCtx == nil {
+		r.writerCtx = ctx
+	}
 	r.mu.Unlock()
+}
+
+// writer is the context the write was guarded under, or fallback where
+// no write was.
+func (r *configWriteRehearsal) writer(fallback context.Context) context.Context {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.writerCtx == nil {
+		return fallback
+	}
+	return r.writerCtx
 }
 
 func (r *configWriteRehearsal) didWriteSettings() bool {
@@ -354,9 +377,11 @@ func (r *configWriteRehearsal) didWriteSettings() bool {
 
 // StateRepoWriteSyncer is what a StateRepoManager implements when it can
 // export a direct UI/API settings write immediately to grain/config
-// (pkg/daemon's StateManager does).
+// (pkg/daemon's StateManager does). note is the whole commit message
+// that export is to carry -- naming who made the write
+// (writeCommitNote) -- or "" for the plain one.
 type StateRepoWriteSyncer interface {
-	SyncAfterWrite(ctx context.Context) error
+	SyncAfterWrite(ctx context.Context, note string) error
 }
 
 func (c *Client) syncStateRepoAfterWrite(ctx context.Context) {
@@ -364,7 +389,7 @@ func (c *Client) syncStateRepoAfterWrite(ctx context.Context) {
 		return
 	}
 	if syncer, ok := c.Config.StateRepo.(StateRepoWriteSyncer); ok {
-		if err := syncer.SyncAfterWrite(ctx); err != nil {
+		if err := syncer.SyncAfterWrite(ctx, writeCommitNote(ctx)); err != nil {
 			log.Printf("grain api: syncing config repository after settings write: %v", err)
 		}
 	}
@@ -383,7 +408,7 @@ func (c *Client) settingsWritable(ctx context.Context) bool {
 
 // checkSettingsWritable guards a write of non-bootstrap configuration
 // to tables. The config repository is the only write path for such
-// configuration (docs/design/config-repo-settings.md, section 2.2): an
+// configuration (design/design/config-repo-settings.design.md, section 2.2): an
 // external one, and -- for a request that came through the HTTP API --
 // this deployment's own grain/config too. It refuses the write at once,
 // with the files those tables are exported to, when the request carries
@@ -502,12 +527,24 @@ func (c *Client) directConfigWrites() bool {
 	return err == nil && s.DirectConfigWrites
 }
 
+// noteConfigWrite marks ctx's request as having changed configuration
+// by a write guardConfigWrite did not guard -- an open console
+// session's settings, which are written to its task -- so that it is
+// audited (recordConfigWrite) and exported like any other.
+func noteConfigWrite(ctx context.Context) {
+	if r, ok := model.WriteRehearsalFrom(ctx); ok {
+		if cr, ok := r.(*configWriteRehearsal); ok {
+			cr.markWroteSettings(ctx)
+		}
+	}
+}
+
 func (c *Client) guardConfigWrite(ctx context.Context, rehearse, bootstrap bool, tables []string) error {
 	remote, branch, managed := c.configRepoFor(ctx, bootstrap)
 	if !managed {
 		if r, ok := model.WriteRehearsalFrom(ctx); ok {
 			if cr, ok := r.(*configWriteRehearsal); ok {
-				cr.markWroteSettings()
+				cr.markWroteSettings(ctx)
 			}
 		}
 		return nil

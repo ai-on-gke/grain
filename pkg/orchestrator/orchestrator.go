@@ -400,11 +400,11 @@ type Config struct {
 	CapabilityPortsURL string
 	// CapabilitySandboxServers is where a run's sandbox-callable
 	// capability tools are registered for the sandbox proxy's /cap/
-	// (grain cap, docs/capabilities-spec.md §5.2.6). Nil reaches none of
+	// (grain cap, design/spec/capabilities/capabilities.spec.md §5.2.6). Nil reaches none of
 	// them from the sandbox; model-only tools are unaffected.
 	CapabilitySandboxServers *gitproxy.CapRegistry
 	// CapabilitySetupTimeout bounds each capability setup command
-	// (docs/capabilities-spec.md §5.5.3); zero is
+	// (design/spec/capabilities/capabilities.spec.md §5.5.3); zero is
 	// DefaultCapabilitySetupTimeout.
 	CapabilitySetupTimeout time.Duration
 	// PreparedCapabilities are finite resources reserved before dispatch
@@ -528,7 +528,7 @@ type Config struct {
 	// instead of switching this off.
 	MaxRunRuntime time.Duration
 	// MaxDurableRuns is how many runs of durable tasks (model.Task.IsDurable,
-	// docs/design/durable-tasks.md#DT-1) may be live at once. They are
+	// design/design/durable-tasks.design.md#DT-1) may be live at once. They are
 	// admitted outside every worker and merger count, as every task with
 	// priority dispatch is, so this is the one count that holds them:
 	// a safety ceiling, not a queue (model.Limits.Durable). Zero uses
@@ -628,8 +628,11 @@ type Config struct {
 	// agent.RunConfig.Tools, whose only consumer was the in-process
 	// Gemini runtime agent/antigravity replaced; every Framework left
 	// forks a CLI that manages its own MCP connection and cannot be
-	// handed an in-process registry. See selfrepair.Confirm's own doc
-	// comment for what closing that gap would take.
+	// handed an in-process registry. grain#host-exec's run_host_command,
+	// the tool this field was built for, no longer comes this way: the
+	// forked "grain mcpserver" serves it (runGrants passes the grant for
+	// an Interactive task) and asks for each confirmation over the
+	// daemon -- see selfrepair.Confirm's own doc comment.
 	//
 	// self-debug and bootstrap-playbooks are the capabilities that no
 	// longer depend on this, and it is worth reading why: their tools are
@@ -638,9 +641,9 @@ type Config struct {
 	// them for itself out of an argument (agent.GrantArgs) plus, for
 	// self-debug's task half, a REST client of the daemon. What travels
 	// is the name of the grant, not the tools --
-	// agent.RunConfig.Grants, set by RunDispatch. selfrepair cannot
-	// follow them: its one tool blocks on a human reply in the task's own
-	// chat, which is a store handle that process deliberately lacks.
+	// agent.RunConfig.Grants, set by RunDispatch. host-exec followed them
+	// last, once that process could ask the daemon for the human reply
+	// its one tool blocks on, as the chat tool does.
 	GrantTools map[string]func(store *model.Store, taskID string) []mcp.Tool
 	// PackageCache answers where a sandbox reaches this deployment's
 	// apt, PyPI and Docker Hub cache (pkg/pkgcache) -- "http://host:port" -- or ""
@@ -1443,7 +1446,7 @@ func (s *hostSandbox) Release(ctx context.Context) error {
 // SandboxReadopter is a Sandboxes backend that can take back a sandbox a
 // previous process created and never released: the sandbox of a run this
 // daemon adopted from the one that started it (ResumeAdoptedRun,
-// docs/non-disruptive-upgrade.md, Stage 2). Readopt claims it -- it is
+// design/design/non-disruptive-upgrade.design.md, Stage 2). Readopt claims it -- it is
 // live from then on, so ReapOrphans and SweepOrphans spare it exactly as
 // they spare one Acquire built -- and returns a Sandbox whose Release
 // destroys it. It builds nothing: a sandbox that is not there is an

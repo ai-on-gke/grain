@@ -44,6 +44,10 @@ if [ "$1" = "--version" ]; then
 	echo "codex-cli REVIEWED_VERSION"
 	exit 0
 fi
+if [ "$1 $2" = "debug models" ]; then
+	echo '{"models":[{"slug":"gpt-test"}]}'
+	exit 0
+fi
 model=
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "--model" ]; then

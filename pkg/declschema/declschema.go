@@ -585,7 +585,7 @@ func templateSchema() Schema {
 			// filing team already has.
 			{Model: "Model", Keys: carried("model"), Columns: []string{"agent_model"}},
 			// The goal every task it files is declared with
-			// (model.Template.Goal, docs/design/durable-tasks.md#DT-4): JSON
+			// (model.Template.Goal, design/design/durable-tasks.design.md#DT-4): JSON
 			// model.GoalDecl. Settings only: a goal decides when grain
 			// closes the work, which is the deployment's to say.
 			{Model: "Goal", Keys: []Key{settingsOnly("goal", Inline)}, Columns: []string{"goal"}},
@@ -595,6 +595,12 @@ func templateSchema() Schema {
 			// work may touch.
 			{Model: "Interactive", Keys: carried("interactive"), Columns: []string{"interactive"}},
 			{Model: "KeepRunning", Keys: carried("keep-running"), Columns: []string{"keep_running"}},
+			// The hostd every task it files starts pinned to
+			// (model.Template.Hostd). Settings only: which machine runs
+			// the work's host side, under whose credentials, is the
+			// deployment's to say -- a repository naming one would be
+			// routing its own work onto somebody's hostd.
+			{Model: "Hostd", Keys: []Key{settingsOnly("hostd", Authority)}, Columns: []string{"hostd"}},
 			{Model: "CustomFields", Keys: carried("custom-fields"), Table: "template_custom_field"},
 
 			// The refusals. Each of these would be perfectly natural to

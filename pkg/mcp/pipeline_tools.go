@@ -15,7 +15,7 @@
 package mcp
 
 // pipeline_tools.go is read_pipeline_changes: the delta feed a judgement
-// agent starts each wake from (docs/design/durable-tasks.md#DT-13). One
+// agent starts each wake from (design/design/durable-tasks.design.md#DT-13). One
 // line per thing that changed since a cursor -- a task's transition, a
 // merge-queue move, a stall, a base-branch verdict, a merge batch's
 // result -- and the cursor to read on from, so a wake reads what moved

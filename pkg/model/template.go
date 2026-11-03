@@ -129,7 +129,7 @@ type Template struct {
 	// once rather than at each filing. Empty, the default, means close.
 	NothingNeededAction NothingNeededAction
 	// Goal is the goal every task filed from this template is declared
-	// with (TaskGoal, docs/design/durable-tasks.md#DT-4); nil for none.
+	// with (TaskGoal, design/design/durable-tasks.design.md#DT-4); nil for none.
 	Goal *GoalDecl
 
 	// Model is the model every task filed from this template asks for
@@ -167,6 +167,13 @@ type Template struct {
 	// until somebody replies, the same as any other interactive task.
 	Interactive bool
 	KeepRunning bool
+
+	// Hostd is the hostd pin or label selector every task filed from
+	// this template starts with (Store.SetTaskHostd): a hostd's name, or
+	// label=value[,label=value] for any hostd carrying them all. Empty,
+	// the default, leaves its tasks on the default hostd. A filing that
+	// names its own hostd wins.
+	Hostd string
 
 	// Priority is the optional default numeric priority for tasks filed from
 	// this template (nil or 0 leaves the task on DefaultTaskPriority).

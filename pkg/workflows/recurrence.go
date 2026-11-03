@@ -29,7 +29,7 @@ import (
 
 // The schedule types a workflow's `on: schedule:` translates into
 // (cron.go). They live here rather than in pkg/model so the parser stays
-// neutral (docs/design/grit-split.md, "Neutral packages"); pkg/model
+// neutral (design/design/grit-split.design.md, "Neutral packages"); pkg/model
 // re-exports them under their old names for grain's scheduler.
 
 // RecurrenceKind is which of the cadences a Recurrence expresses --
@@ -61,6 +61,19 @@ const (
 	// concludes matching GitHubWorkflowRunTrigger.
 	RecurrenceGitHubWorkflowRun RecurrenceKind = "github_workflow_run"
 )
+
+// RecurrenceKinds is every RecurrenceKind, in declaration order. Tests
+// that have to cover each kind -- the state repository's export/import
+// round trip above all -- range over it, and a test in this package
+// fails when a kind is declared without being listed here.
+var RecurrenceKinds = []RecurrenceKind{
+	RecurrenceEveryNHours,
+	RecurrenceEveryNMinutes,
+	RecurrenceDaily,
+	RecurrenceWeekly,
+	RecurrenceMonthly,
+	RecurrenceGitHubWorkflowRun,
+}
 
 // GitHubWorkflowRunTrigger configures a schedule that fires when a GitHub
 // Actions workflow run concludes.

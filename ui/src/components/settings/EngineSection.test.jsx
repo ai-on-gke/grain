@@ -24,12 +24,9 @@ vi.mock("../../api.js", () => ({ default: vi.fn() }));
 
 const saved = {
   pollInterval: "10s",
+  pollIntervalDefault: "10s",
   maxWorkers: 4,
   maxMergesPerRepo: 1,
-  mergeBatchSize: 4,
-  mergeBatchSizeChosen: 4,
-  mergeGatherWindow: "",
-  mergeGatherWindowDefault: "5m0s",
 };
 
 const showError = () => {};
@@ -66,34 +63,46 @@ describe("EngineSection", () => {
     ).toHaveValue(1);
   });
 
-  // The 2026-11-01 walkthrough: a merge batch size the daemon refused
-  // (21, over its ceiling of 20) stayed in the box after the refusal, as
-  // though it had been saved, because the box was keyed on the chosen
-  // size alone and a rollback never changes that.
-  it("puts a merge batch size the daemon refused back to the saved one", async () => {
+  // The 2026-11-02 walkthrough: a cleared Poll interval was sent as ""
+  // and refused with `time: invalid duration ""`; now the box shows
+  // grain's default as its placeholder, and clearing it saves that.
+  it("shows grain's poll interval as the placeholder a cleared box saves", async () => {
+    let stored = "25s";
     api.mockImplementation(async (path, opts) => {
-      if (!opts) return saved;
-      const body = JSON.parse(opts.body);
-      if (body.mergeBatchSize > 20)
-        throw new Error("mergeBatchSize cannot be more than 20");
-      return { ...saved, ...body, mergeBatchSizeChosen: body.mergeBatchSize };
+      if (opts) {
+        const body = JSON.parse(opts.body);
+        stored = body.pollInterval.trim() || "10s";
+      }
+      return { ...saved, pollInterval: stored };
     });
     const user = userEvent.setup();
     render(<Page />);
-    const box = await screen.findByLabelText("Merge batch size");
-    expect(box).toHaveValue(4);
+    const box = await screen.findByLabelText("Poll interval");
+    expect(box).toHaveValue("25s");
+    expect(box).toHaveAttribute("placeholder", "10s");
+    expect(
+      screen.getByText("Go duration, e.g. 10s. Blank uses grain's default"),
+    ).toBeInTheDocument();
 
     await user.clear(box);
-    await user.type(box, "21{Enter}");
+    await user.tab();
     await waitFor(() =>
-      expect(screen.getByLabelText("Merge batch size")).toHaveValue(4),
+      expect(screen.getByLabelText("Poll interval")).toHaveValue("10s"),
     );
+    expect(JSON.parse(api.mock.calls.at(-1)[1].body)).toEqual({
+      pollInterval: "",
+    });
+  });
 
-    const again = screen.getByLabelText("Merge batch size");
-    await user.clear(again);
-    await user.type(again, "6{Enter}");
-    await waitFor(() =>
-      expect(screen.getByLabelText("Merge batch size")).toHaveValue(6),
-    );
+  // Merge batching went in grain/task-1023, and its two settings with
+  // it: the merge queue card holds only the per-branch merge limit.
+  it("offers no merge batch size or gather window", async () => {
+    api.mockImplementation(async () => saved);
+    render(<Page />);
+    expect(
+      await screen.findByLabelText("Max merges per repo branch"),
+    ).toHaveValue(1);
+    expect(screen.queryByLabelText("Merge batch size")).toBeNull();
+    expect(screen.queryByLabelText("Merge gather window")).toBeNull();
   });
 });

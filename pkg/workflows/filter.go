@@ -16,6 +16,7 @@ package workflows
 
 import (
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -185,6 +186,10 @@ type RunFilter struct {
 	// top of it, and MatchingJobs is how a reader gets the job's own
 	// result and duration onto the row.
 	Job string
+	// Workflow keeps runs of one workflow, matched without regard to case
+	// by workflow name, file name ("nightly.yml"), stem ("nightly"), or
+	// repository path (".github/workflows/nightly.yml", ".grain/workflows/tests.yml").
+	Workflow string
 	// Since drops runs that started before it. A run that has not
 	// started at all is kept: it is queued, so it cannot be older than
 	// any window a reader is asking about, and dropping it would hide
@@ -220,7 +225,7 @@ type RunFilter struct {
 // aside, which is an order rather than a question. It is what tells an
 // empty answer whether to say "nothing matched" or "nothing has run".
 func (f RunFilter) Narrowed() bool {
-	return f.Repo != "" || f.Ref != "" || len(f.States) > 0 || f.Job != "" || !f.Since.IsZero() || !f.Until.IsZero() || f.Provider != ""
+	return f.Repo != "" || f.Ref != "" || len(f.States) > 0 || f.Job != "" || f.Workflow != "" || !f.Since.IsZero() || !f.Until.IsZero() || f.Provider != ""
 }
 
 // Describe is the filter as a reader's own sentence, for the line an
@@ -240,6 +245,9 @@ func (f RunFilter) Describe() string {
 	}
 	if f.Job != "" {
 		parts = append(parts, fmt.Sprintf("job %q", f.Job))
+	}
+	if f.Workflow != "" {
+		parts = append(parts, fmt.Sprintf("workflow %q", f.Workflow))
 	}
 	if f.Provider != "" {
 		parts = append(parts, "provider "+f.Provider)
@@ -283,6 +291,9 @@ func (f RunFilter) Matches(run Run) bool {
 	if f.Job != "" && len(MatchingJobs(run, f.Job)) == 0 {
 		return false
 	}
+	if f.Workflow != "" && !MatchesRunWorkflow(run, f.Workflow) {
+		return false
+	}
 	if !f.Since.IsZero() && run.StartedAt != nil && run.StartedAt.Before(f.Since) {
 		return false
 	}
@@ -320,6 +331,60 @@ func MatchingJobs(run Run, name string) []JobRun {
 		}
 	}
 	return out
+}
+
+// MatchesRunWorkflow reports whether run belongs to workflow, matched by
+// workflow name, file name, stem, or repository path.
+func MatchesRunWorkflow(run Run, workflow string) bool {
+	want := strings.TrimSpace(workflow)
+	if want == "" {
+		return true
+	}
+	if run.Actions != nil && MatchesWorkflowNameOrPath(run.Actions.WorkflowName, run.Actions.Workflow, want) {
+		return true
+	}
+	for _, job := range run.Jobs {
+		if MatchesWorkflowNameOrPath(job.Workflow, job.WorkflowPath, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// MatchesWorkflowNameOrPath reports whether workflowName or workflowPath
+// matches want across GitHub Actions (.github/workflows/*) and grain CI
+// (.grain/workflows/*) conventions.
+func MatchesWorkflowNameOrPath(workflowName, workflowPath, want string) bool {
+	want = strings.TrimSpace(want)
+	if want == "" {
+		return true
+	}
+	wantClean := cleanWorkflowFilterPath(want)
+	if workflowName != "" && strings.EqualFold(workflowName, want) {
+		return true
+	}
+	if workflowPath != "" {
+		if strings.EqualFold(workflowPath, want) {
+			return true
+		}
+		pathClean := cleanWorkflowFilterPath(workflowPath)
+		if strings.EqualFold(pathClean, wantClean) || strings.EqualFold(path.Base(pathClean), wantClean) {
+			return true
+		}
+		stem := strings.TrimSuffix(path.Base(pathClean), path.Ext(pathClean))
+		if strings.EqualFold(stem, wantClean) {
+			return true
+		}
+	}
+	wantStem := strings.TrimSuffix(path.Base(wantClean), path.Ext(wantClean))
+	return workflowName != "" && strings.EqualFold(workflowName, wantStem)
+}
+
+func cleanWorkflowFilterPath(p string) string {
+	clean := strings.TrimPrefix(path.Clean(strings.TrimSpace(p)), "./")
+	clean = strings.TrimPrefix(clean, ".github/workflows/")
+	clean = strings.TrimPrefix(clean, ".grain/workflows/")
+	return clean
 }
 
 // FilterRuns is Matches over a list, in the order they arrived.

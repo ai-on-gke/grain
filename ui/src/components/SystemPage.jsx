@@ -27,7 +27,6 @@ import {
 import api from "../api.js";
 import LogsPage from "./LogsPage.jsx";
 import SandboxHealthPage from "./SandboxHealthPage.jsx";
-import ConnectedExecutors from "./ConnectedExecutors.jsx";
 import CachesPage from "./CachesPage.jsx";
 import TopPage from "./TopPage.jsx";
 import PipelineControl from "./PipelineControl.jsx";
@@ -39,6 +38,9 @@ import { revealFocusedTab, useRevealSelectedTab } from "../tabStrip.js";
 import { useIsPhone } from "../phone.js";
 
 export { SYSTEM_TABS };
+
+// SYSTEM_TABPANEL_ID is the open tab's panel, which its tab controls.
+const SYSTEM_TABPANEL_ID = "system-tabpanel";
 
 export const POWER_ACTIONS = [
   {
@@ -127,7 +129,7 @@ function PowerTab({ config, showError }) {
   );
 }
 
-// SystemPage is the System view (docs/design/settings-panel.md §2.1):
+// SystemPage is the System view (design/design/settings-panel.design.md §2.1):
 // status and operations only -- every setting is in Settings. It opens
 // from the System icon beside the gear (the foot of the drawer on a
 // phone), on Health.
@@ -171,7 +173,15 @@ export default function SystemPage({
       sx={{ borderBottom: 1, borderColor: "divider", mb: 2 }}
     >
       {SYSTEM_TABS.map((t) => (
-        <Tab key={t.id} value={t.id} label={t.label} />
+        <Tab
+          key={t.id}
+          value={t.id}
+          label={t.label}
+          id={`system-tab-${t.id}`}
+          // Only the open tab's panel is in the document, so only it
+          // names one.
+          aria-controls={t.id === current ? SYSTEM_TABPANEL_ID : undefined}
+        />
       ))}
     </Tabs>
   );
@@ -224,15 +234,10 @@ export default function SystemPage({
       break;
     case "sandboxes":
       body = (
-        <>
-          <SandboxHealthPage
-            showError={showError}
-            onOpenSession={onOpenSession}
-          />
-          <Box sx={{ mt: 3 }}>
-            <ConnectedExecutors />
-          </Box>
-        </>
+        <SandboxHealthPage
+          showError={showError}
+          onOpenSession={onOpenSession}
+        />
       );
       break;
     case "caches":
@@ -303,7 +308,21 @@ export default function SystemPage({
           </Typography>
         </Box>
         {tabs}
-        {body}
+        {/* The open tab's panel, named by its tab, so a screen reader
+            leaving the tab strip lands in a region tied to it (WAI-ARIA
+            tabs pattern). A phone has no tab strip: the heading above
+            names the section instead. */}
+        {isPhone ? (
+          body
+        ) : (
+          <Box
+            role="tabpanel"
+            id={SYSTEM_TABPANEL_ID}
+            aria-labelledby={`system-tab-${current}`}
+          >
+            {body}
+          </Box>
+        )}
       </Box>
     </div>
   );

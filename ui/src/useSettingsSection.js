@@ -23,7 +23,7 @@ import {
 import { guardLeaving } from "./unsavedEdits.js";
 
 // useSettingsSection is the Settings view's one save and dirty-state
-// model (docs/design/settings-panel.md §3.4). It holds GET /api/settings
+// model (design/design/settings-panel.design.md §3.4). It holds GET /api/settings
 // for every section, and the gestures that commit a field:
 //
 //   - checkboxes, radios and selects through saveChoice, on change;
@@ -198,9 +198,8 @@ export function useSettingsSection({ showError, dismissError, onSaved } = {}) {
   };
 
   // readFrom names the settings field the box shows, when that is not
-  // the one it saves: the merge batch size box shows what was chosen
-  // (mergeBatchSizeChosen, blank for grain's default) and saves
-  // mergeBatchSize.
+  // the one it saves (a box that shows what was chosen, blank for
+  // grain's default, and saves the effective value).
   const onIntBlur =
     (key, { defaultVal = 0, emptyVal = 0, readFrom = key } = {}) =>
     (evt) => {

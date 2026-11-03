@@ -168,7 +168,7 @@ func (s *Server) handleUpgradeDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	principal := s.tasks.actor(r.Context()).ID
+	principal := s.tasks.requestActor(r.Context()).Actor.ID
 	binding := databaseConfirmBinding(principal, dsn, req.MigrateData, req.Restart)
 	if strings.TrimSpace(req.ConfirmationToken) == "" {
 		token, expires, err := s.dbConfirm.issue(binding, s.tasks.now())

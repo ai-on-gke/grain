@@ -27,6 +27,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -458,6 +459,34 @@ func TestCreateTaskReportsADefaultThePolicyDrops(t *testing.T) {
 	}
 	if _, ok := out["droppedDefaults"]; ok {
 		t.Fatalf("droppedDefaults on a filing that dropped nothing: %v", out["droppedDefaults"])
+	}
+}
+
+// `grain task propose` (SandboxCLIActions.ProposeTask) answers with the
+// defaults the policy dropped as well, so the run that filed the
+// proposal is told the follow-up lacks them (docs/test-runs/
+// 2026-11-02-security-fixes-live.md, F3).
+func TestSandboxProposeTaskReportsADefaultThePolicyDrops(t *testing.T) {
+	ts, client := grantTestServer(t)
+	ctx := context.Background()
+	var parent map[string]any
+	if code := postJSON(t, ts, "POST", "/api/tasks", map[string]any{"title": "parent", "repo": "acme/widgets"}, &parent); code != 201 {
+		t.Fatalf("filing the parent: %d %v", code, parent)
+	}
+	if _, err := client.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{grantTestCap + "#viewer"}); err != nil {
+		t.Fatal(err)
+	}
+	setDenyViewerFor(t, client)
+	parentID, _ := parent["id"].(string)
+	res, err := ui.SandboxCLIActions{Client: client}.ProposeTask(ctx, parentID, "run-1", gitproxy.CLIProposeRequest{
+		Title: "follow-up", Body: "b",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.DroppedDefaults) != 1 || res.DroppedDefaults[0].Grant != grantTestCap+"#viewer" ||
+		!strings.Contains(res.DroppedDefaults[0].Reason, "rule 1: deny") {
+		t.Fatalf("DroppedDefaults = %+v, want the denied default and the rule", res.DroppedDefaults)
 	}
 }
 

@@ -67,6 +67,25 @@ and fill in every `CHANGE-ME`. At minimum: `project_id`,
 `deployer_member`, and `iap_members` -- an empty `iap_members` is a valid
 plan, but nobody can reach the UI until it names someone.
 
+`iap_members` is who IAP lets reach the daemon; `allowed_principals` is
+who grain then admits as themselves, without the access code. They are
+separate lists. When `expose_ui_publicly` is on (the default), `iap.tf`
+passes the backend service's `/projects/NUMBER/global/backendServices/ID`
+audience to `-ui-iap-audience` so verified IAP assertions sign allowed
+principals in directly; when `expose_ui_publicly` is off, no IAP backend
+exists and everyone signs in over `tunnel_command` with the access code.
+
+Left unset, `allowed_principals` is `[deployer_member]` when that is a
+`user:` -- so the person installing the deployment, signed in through
+IAP, is the owner -- and otherwise empty, which leaves the daemon's own
+default (its OS account and grain's service accounts) that no IAP email
+matches. Set it explicitly when `deployer_member` is a service account,
+as it is for CI deploys, or every IAP sign-in will be refused with 403.
+Anyone in `iap_members` who is not in `allowed_principals` still reaches
+the daemon, where IAP's verified identity takes precedence over the
+access code (403 on the IAP URL; `tunnel_command` reaches the daemon
+directly for break-glass access-code sign-in).
+
 **3. No OAuth client needed.** IAP uses a Google-managed OAuth client
 when none is configured, which is why the IAP OAuth Admin API was
 deprecated in January 2025 -- there is normally no client to create any
@@ -239,7 +258,9 @@ Two things differ from a by-hand deploy:
 - **`deployer_member` must be the CI service account**, not a human --
   `push-secrets.sh` mints the minter's key, which needs
   `deployer_manages_minter_keys` (iam.tf) on whoever runs it, and writes
-  the secrets `secrets.tf` grants it `secretVersionManager` on.
+  the secrets `secrets.tf` grants it `secretVersionManager` on. That
+  also means `allowed_principals` seeds nobody by default, so name the
+  owner there explicitly.
 - **The workflow supplies `deploy_generation`**, so a manual re-run
   redeploys rather than no-oping. `wait-for-host` then blocks on the host
   reporting *that* generation, and CI goes green only once the rollout
@@ -946,7 +967,7 @@ other too.
   accordingly if you do that.
 - **The Cloud Run proxy and rendezvous relay are gone.** `cloudrun-proxy.tf`,
   `use_cloudrun_iap_proxy`, the `cloudrun_proxy_*` variables, and
-  `relay.tf` / `relay-daemon.tf` (`docs/relay-removed.md`) were removed.
+  `relay.tf` / `relay-daemon.tf` were removed.
   To reach a daemon from outside its host, either forward `ui_port` over
   IAP's TCP tunnel (`terraform output tunnel_command`, the default in
   `staging.tfvars` with `expose_ui_publicly = false`) or turn on the

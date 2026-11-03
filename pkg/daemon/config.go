@@ -35,7 +35,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/iapreconciler"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/modelexec"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
@@ -150,7 +149,13 @@ type Config struct {
 	// is no per-run commitment to add up and the budget charges agent
 	// runs nothing.
 	SandboxShapeIgnored bool
-	PollInterval        time.Duration
+	// VMMHeadroom is what each sandbox's cgroup is allowed beyond its
+	// guest's RAM, and so what the budget charges on top of each shape:
+	// model.DefaultVMMHeadroom under a granule backend
+	// (sandboxVMMHeadroom), nothing under any other. Set with
+	// SandboxShapeIgnored, from the backend itself.
+	VMMHeadroom  model.VMMHeadroom
+	PollInterval time.Duration
 	// Backup settings remain host-side rather than store-backed: the Google
 	// credential path describes this process's filesystem, and a schedule
 	// must be known before the UI is available to edit anything.
@@ -263,20 +268,9 @@ type Config struct {
 	// antigravity connection's model-turn limits (model.AgentBackend's
 	// TurnLimits; zero for the default) and the name its timeout
 	// messages call it by.
-	agyTurnTimeout    time.Duration
-	agyRetryCutoff    time.Duration
-	agyConnection     string
-	ExecutorAddr      string
-	ExecutorTokenFile string
-	ExecutorWait      time.Duration
-	ExecutorCertFile  string
-	ExecutorKeyFile   string
-	executorServer    *modelexec.Server
-	// executorListenAddr is where the remote executor listener actually
-	// bound (ExecutorAddr resolved, so ":0" says which port it got), or
-	// "" when this daemon runs none. It is what the UI's bootstrap
-	// command points a worker at (ui.Config.ExecutorAddr).
-	executorListenAddr string
+	agyTurnTimeout time.Duration
+	agyRetryCutoff time.Duration
+	agyConnection  string
 
 	// restartGaps measures how long this process's restart left each of
 	// its listeners unreachable (upgrade.GapRecorder), set by run() and
@@ -287,9 +281,13 @@ type Config struct {
 	// flushes and reports nothing -- without one.
 	runHostUpgrade *runHostUpgrade
 	// hostdRuns drives runs' host CLIs through grain hostd, detached
-	// (hostdruns.go): set by run() where the host executor is hostd, nil
-	// -- every host CLI a plain start -- elsewhere.
+	// (hostdruns.go): the host executor's hostd's, set by run() where the
+	// host executor is hostd and by hostdRoute.apply for a pinned run,
+	// nil -- every host CLI a plain start -- elsewhere.
 	hostdRuns *runhost.Hostd
+	// hostdRunSet is every hostd's hostdRuns, by name (newHostdRuns):
+	// set by run(), nil outside it.
+	hostdRunSet *hostdRunSet
 	// shuttingDown is set once run()'s context is cancelled: the process
 	// is draining and its API is about to stop answering. GET
 	// /api/config reports it as restarting. nil outside run().
@@ -336,12 +334,23 @@ type Config struct {
 	// (hostexec.go).
 	HostdSocket string
 	HostExec    *HostExecutor
+	// HostdReattachTimeout is -hostd-reattach-timeout: how long a run's
+	// CLI, running detached on a grain hostd whose connection drops, waits
+	// for that same hostd to reconnect and be re-attached from its cursor
+	// before the run fails as an infrastructure failure, with no strike
+	// (agent.ErrHostdLost). Zero fails it at once.
+	HostdReattachTimeout time.Duration
 	// HostdRemote is set by -hostd-token-file (or $GRAIN_HOSTD_TOKEN):
 	// the session of a grain hostd on another machine that dials in to
 	// /api/hostd/connect with that token (hostd -server), through which
 	// host CLIs and run: host capability servers start where the daemon
 	// has no hostd socket of its own -- on Kubernetes, say.
 	HostdRemote *hostd.Remote
+	// HostdHub takes every grain hostd that dials in: the registry's,
+	// each named by its own token (model.Hostd), and HostdRemote's shared
+	// token's when that is set, which is then the same Remote. Built once
+	// the store is open (newHostdHub); nil before.
+	HostdHub *hostd.Remote
 
 	// modelProxyUnrestricted is -model-proxy-unrestricted: the model
 	// proxies forward every vendor path rather than only the
@@ -425,7 +434,7 @@ type Config struct {
 	GritClientToken string
 	// GritExperimental is -grit-experimental: the opt-in -grit-url is
 	// refused without, because the remote grit path runs no workflows
-	// yet (docs/design/grit-split.md, GS-3 to GS-5 deferred).
+	// yet (design/design/grit-split.design.md, GS-3 to GS-5 deferred).
 	GritExperimental bool
 
 	// ciCacheMaxAge, ciCacheMaxBytes, ciCacheMaxEntries and
@@ -799,7 +808,7 @@ type Config struct {
 	// channel, which needs SandboxAccessAddr and an in-cluster daemon).
 	// K8sGranuleReattachTimeout is how long a step waits for a dropped
 	// channel to come back (DefaultK8sGranuleReattachTimeout when zero).
-	// docs/design/grain-on-gke.md#GKE-3. Startup-only.
+	// design/design/grain-on-gke.design.md#GKE-3. Startup-only.
 	K8sGranuleAccess          string
 	K8sGranuleReattachTimeout time.Duration
 
@@ -1255,6 +1264,7 @@ func (c Config) Budget() model.Budget {
 	budget.DiskFloor = c.DiskFloor()
 	budget.RepairReserve = c.RepairReserve()
 	budget.ClusterFit = c.ClusterFit
+	budget.VMMHeadroom = c.VMMHeadroom
 	return budget
 }
 
@@ -1383,6 +1393,7 @@ func (c Config) AgentShape() model.Commitment {
 // were briefly unreadable at startup gets its budget without a restart.
 func (c Config) withHostCapacity(sandboxes orchestrator.Sandboxes) Config {
 	c.SandboxShapeIgnored = SandboxShapeIgnored(sandboxes)
+	c.VMMHeadroom = sandboxVMMHeadroom(sandboxes)
 	if fit, ok := sandboxes.(model.ClusterFit); ok {
 		c.ClusterFit = fit
 	}

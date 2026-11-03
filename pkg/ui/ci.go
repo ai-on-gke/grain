@@ -36,7 +36,7 @@ import (
 )
 
 // Config.CI is grain CI as these routes take it: ci.Runner, the whole of
-// what the CI service answers (docs/design/grit-split.md#GS-1) --
+// what the CI service answers (design/design/grit-split.design.md#GS-1) --
 // cmd/grain's ciGate in a real deployment.
 //
 // An interface so a test can drive these routes with no sandbox
@@ -532,7 +532,7 @@ func taskCIJobName(job ci.JobRun) string {
 }
 
 func taskCIDetail(run ci.Run) string {
-	if strings.TrimSpace(run.Error) != "" || strings.TrimSpace(run.CancelReason) != "" || run.CancelledBy == ci.CancelByOperator {
+	if strings.TrimSpace(run.Error) != "" || strings.TrimSpace(run.CancelReason) != "" || run.CancelledBy.ByHand() {
 		return ""
 	}
 	var failed []string
@@ -720,7 +720,7 @@ func (c *Client) resolveRecheckTarget(task *model.Task, previous *model.Observat
 	if first.Commit != run.Commit || first.RunID == "" || first.RunID == run.ID {
 		return model.CIStatus{}, false
 	}
-	if first.CancelledBy == string(ci.CancelByOperator) || !isRecheckableConclusion(first.Conclusion) {
+	if ci.CancelSource(first.CancelledBy).ByHand() || !isRecheckableConclusion(first.Conclusion) {
 		return model.CIStatus{}, false
 	}
 	if !rechecksAnyOf(run, opt.Jobs, first.Detail) {
@@ -735,7 +735,7 @@ func (c *Client) hydrateRecheckTarget(st model.CIStatus) model.CIStatus {
 		return st
 	}
 	if prior, ok := c.Config.CI.Get(st.RunID); ok {
-		if prior.Interrupted || strings.TrimSpace(prior.CancelReason) != "" || prior.CancelledBy == ci.CancelByOperator {
+		if prior.Interrupted || strings.TrimSpace(prior.CancelReason) != "" || prior.CancelledBy.ByHand() {
 			st.CancelledBy = string(ci.CancelByOperator)
 			return st
 		}
@@ -1112,7 +1112,7 @@ func (s *Server) handleStartCIRun(w http.ResponseWriter, r *http.Request) {
 		Ref:                    strings.TrimSpace(ref),
 		Commit:                 strings.TrimSpace(req.Commit),
 		Event:                  event,
-		RequestedBy:            s.tasks.actor(r.Context()).ID,
+		RequestedBy:            s.tasks.requestActor(r.Context()).Actor.ID,
 		Workflow:               strings.TrimSpace(req.Workflow),
 		Jobs:                   req.Jobs,
 		Recheck:                req.Recheck,
@@ -1157,7 +1157,7 @@ func (c *Client) withholdReleaseSecrets(ctx context.Context, repo model.RepoRef,
 	if event != ci.EventManual && event != ci.EventRelease {
 		return "", nil
 	}
-	if c.actor(ctx).Kind == model.PrincipalHuman {
+	if c.requestActor(ctx).Actor.Kind == model.PrincipalHuman {
 		return "", nil
 	}
 	return fmt.Sprintf("a %s run of %s started by a caller that is not a person places no capabilities or release secrets",
@@ -1297,9 +1297,10 @@ func (s *Server) writeCIRuns(w http.ResponseWriter, r *http.Request, page ci.Run
 		page = ci.RunPage{}
 	}
 	var actions []ci.Run
+	var actionsMatched int
 	var note string
 	if filter.Provider == "" || strings.EqualFold(filter.Provider, ci.ProviderGitHubActions) {
-		actions, note = s.tasks.listActionsRuns(r.Context(), repo, filter, limit)
+		actions, actionsMatched, note = s.tasks.listActionsRunsCounted(r.Context(), repo, filter, limit)
 	}
 	merged := make([]ci.Run, 0, len(page.Runs)+len(actions))
 	for _, run := range page.Runs {
@@ -1317,8 +1318,8 @@ func (s *Server) writeCIRuns(w http.ResponseWriter, r *http.Request, page ci.Run
 		merged = merged[:limit]
 	}
 	page.Runs = merged
-	page.Matched += len(actions)
-	page.Stored += len(actions)
+	page.Matched += actionsMatched
+	page.Stored += actionsMatched
 	faults := s.tasks.CISharedFaults(r.Context())
 	if compact {
 		resp := ciCompactRuns(page, faults)
@@ -1426,6 +1427,7 @@ func ciRunFilterFrom(query url.Values, now time.Time) (ci.RunFilter, error) {
 		Repo:       strings.TrimSpace(query.Get("repo")),
 		Ref:        strings.TrimSpace(query.Get("ref")),
 		Job:        strings.TrimSpace(query.Get("job")),
+		Workflow:   strings.TrimSpace(query.Get("workflow")),
 		Descending: true,
 	}
 	for _, value := range query["conclusion"] {
@@ -1722,14 +1724,13 @@ func (s *Server) handleCancelCIRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	// The one door a person cancels through, and therefore the one place
-	// ci.CancelByOperator is said, so the run records whose hand was on
-	// it. It stops this run, not the task: the merge queue's reconciler
+	// The one door a person cancels a run alone through, so the run
+	// records whose hand was on it: their ID (ci.CancelByPrincipal). It stops this run, not the task: the merge queue's reconciler
 	// replaces it with another run for the same commit after
 	// ciRetryDelay, as it does any cancellation (orchestrator's
 	// ciReplacementFor). Stopping the task is withdrawing auto-merge or
 	// closing it.
-	if !runner.Cancel(id, strings.TrimSpace(req.Reason), ci.CancelByOperator) {
+	if !runner.Cancel(id, strings.TrimSpace(req.Reason), ci.CancelByPrincipal(s.tasks.requestActor(r.Context()).Actor.ID)) {
 		// Either it finished or it never existed; both are "there is
 		// nothing here to cancel", and telling them apart would mean
 		// reporting a 200 for a run that ignored the request.

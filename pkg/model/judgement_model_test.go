@@ -18,7 +18,7 @@ import "testing"
 
 // The judgement model resolves to the deployment's own choice when it has
 // one, and otherwise to the strongest model its enabled connections offer,
-// whatever each connection calls it (docs/design/durable-tasks.md#DT-11).
+// whatever each connection calls it (design/design/durable-tasks.design.md#DT-11).
 func TestTheJudgementModelResolvesToTheStrongestOfferedModel(t *testing.T) {
 	t.Parallel()
 	gemini := AgentBackend{ID: "agy", Framework: AgentFrameworkAntigravity, Models: []string{"gemini-pro-coordinator", "opus-5.5-medium"}}

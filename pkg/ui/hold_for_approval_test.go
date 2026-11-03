@@ -332,3 +332,50 @@ func TestPersonMayFileKeepRunningAtAnyPriority(t *testing.T) {
 		t.Errorf("KeepRunning = %v, Priority = %d; want true, %d", stored.KeepRunning, stored.Priority, n)
 	}
 }
+
+// A run that asks to hold a proposal that sets keep_running, or a priority
+// above its own, is told -- and so is the person approving it -- that the
+// setting is why it waits: its permission would not have queued it, so it
+// is not tagged held and neither note says it could have been queued.
+func TestHeldProposalAskingForAPersonOnlySettingSaysWhyItWaits(t *testing.T) {
+	prio := func(n int) *int { return &n }
+	for _, tc := range []struct {
+		name        string
+		keepRunning bool
+		priority    *int
+		reason      string
+	}{
+		{"keep running", true, nil, "keep_running"},
+		{"priority above the proposer's", false, prio(1000000), "priority 1000000"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, store, ctx := testClient(t)
+			parent, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+				Title: "the whole job", Approved: true, AutoMerge: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			filed, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+				Title: "a piece of it", Description: "d", ProposedBy: parent.ID, HoldForApproval: true,
+				AutoMerge: true, KeepRunning: tc.keepRunning, Priority: tc.priority,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if filed.State != model.StateProposed {
+				t.Fatalf("state = %s, want proposed", filed.State)
+			}
+			if strings.Contains(filed.ApprovalNote, "would otherwise have queued") || !strings.Contains(filed.ApprovalNote, tc.reason) {
+				t.Errorf("approvalNote = %q, want it to say %q and not that the permission would have queued it", filed.ApprovalNote, tc.reason)
+			}
+			if strings.Contains(filed.Description, "could have queued it") ||
+				!strings.Contains(filed.Description, "Filed for a person to approve") || !strings.Contains(filed.Description, tc.reason) {
+				t.Errorf("body = %q, want the person-only note and not the held-for-approval one", filed.Description)
+			}
+			if model.HeldForApproval(mustGetTask(t, ctx, store, filed.ID)) {
+				t.Error("held tag set, want none: the permission would not have queued it")
+			}
+		})
+	}
+}

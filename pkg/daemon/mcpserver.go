@@ -39,6 +39,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
+	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -192,7 +193,7 @@ func (d DaemonTasks) Task(ctx context.Context, id string) (mcp.TaskRecord, error
 	if err != nil {
 		return mcp.TaskRecord{}, err
 	}
-	record := mcp.TaskRecord{TaskSummary: taskSummary(detail.Task), Description: detail.Description, Author: detail.Author, AuthorKind: detail.AuthorKind, Base: detail.Base, Capabilities: detail.Capabilities, PullRequest: detail.PullRequest, FailedAttempts: detail.FailedAttempts, LastFailureAt: detail.LastFailureAt, LastFailureReason: detail.LastFailureReason, Activity: mcp.TaskActivity{Note: detail.Activity, At: detail.ActivityAt, BySetup: detail.ActivityBySetup}}
+	record := mcp.TaskRecord{TaskSummary: taskSummary(detail.Task), Description: detail.Description, Author: detail.Author, AuthorKind: detail.AuthorKind, Base: detail.Base, Capabilities: detail.Capabilities, PullRequest: detail.PullRequest, PullRequestMergedAt: detail.PrMergedAt, PullRequestClosedAt: detail.PrClosedAt, FailedAttempts: detail.FailedAttempts, LastFailureAt: detail.LastFailureAt, LastFailureReason: detail.LastFailureReason, Activity: mcp.TaskActivity{Note: detail.Activity, At: detail.ActivityAt, BySetup: detail.ActivityBySetup}}
 	for _, a := range detail.Attempts {
 		record.Attempts = append(record.Attempts, mcp.TaskAttempt{Number: a.Number, StartedAt: a.StartedAt, FinishedAt: a.FinishedAt, Outcome: a.Outcome, Detail: a.Detail, PromptBytes: a.PromptBytes, PromptTokens: a.PromptTokens, Model: a.Model, AgentFramework: a.AgentFramework})
 	}
@@ -552,8 +553,15 @@ func (d daemonConfigChanges) ProposeConfigChange(ctx context.Context, p mcp.Conf
 	})
 }
 
-// writesConfigRepo reports whether t may push grain/config.
+// writesConfigRepo reports whether t may push grain/config from the
+// grain-state checkout propose_config_change's script starts in. That
+// checkout is made only for a task with no repo of its own
+// (orchestrator.wantsStateCheckout): one with a Repo is checked out into
+// that repo instead, so it is not offered a tool that could only fail.
 func writesConfigRepo(t ui.Task) bool {
+	if t.Repo != "" {
+		return false
+	}
 	for _, w := range t.Writes {
 		if ref, err := model.ParseRepo(w.Repo); err == nil && model.IsConfigRepo(ref) {
 			return true
@@ -1091,7 +1099,7 @@ func (d daemonChat) Chat(ctx context.Context, message, summary string, attachmen
 			// moments away and will most likely succeed, where treating
 			// one dropped request as "nobody is there" would end a
 			// conversation over a blip. That covers a daemon restart too
-			// (docs/non-disruptive-upgrade.md): this process is the CLI's,
+			// (design/design/non-disruptive-upgrade.design.md): this process is the CLI's,
 			// not the daemon's, so it outlives an upgrade with the CLI,
 			// and the first poll the new daemon answers reads everything
 			// said since the run's own message, a reply posted after the
@@ -1431,6 +1439,7 @@ var servedGrants = []string{
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
+	selfrepair.CapabilityName, grainserver.HostExecRef, grainserver.HostExecGrant,
 }
 
 func warnUnknownGrants(grants GrantNames) {
@@ -1713,7 +1722,8 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 	}
 	created, err := f.client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: p.Title, Description: p.Body, Repo: repo, NoRepo: p.NoRepo, ChangeTarget: p.ChangeTarget, Base: base, Priority: priority, AutoMerge: auto,
-		TemplateID: p.TemplateID, Fields: p.TemplateFields, AtFront: p.AtFront,
+		DeclineAutoMerge: p.AutoMerge != nil && !*p.AutoMerge,
+		TemplateID:       p.TemplateID, Fields: p.TemplateFields, AtFront: p.AtFront,
 		DependsOn: deps, CustomFields: fields, Supersedes: supersedes,
 		Reads: p.Reads, Writes: writes, ReviewTemplateID: p.ReviewTemplateID,
 		ProposedBy: f.parent, ProposalKey: key, Capabilities: caps,
@@ -1753,9 +1763,10 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		Queued: filedApproved(created),
 		// The daemon's own account of why it is not queued, which only it
 		// can give: it is the side that read the parent's permission.
-		Held:         created.HeldBy != "",
-		ApprovalNote: created.ApprovalNote,
-		Parked:       filedParked(created),
+		Held:            created.HeldBy != "",
+		ApprovalNote:    created.ApprovalNote,
+		Parked:          filedParked(created),
+		DroppedDefaults: droppedDefaults(created.DroppedDefaults),
 	}, nil
 }
 
@@ -1787,49 +1798,9 @@ func filedParked(created ui.Task) string {
 	return ""
 }
 
-// mcpGitHubPins is the daemon's own answer to where a tunnelled MCP
-// server may send this deployment's GitHub credential: the data directory
-// the credential ladder is loaded from, the git host the REST client is
-// built against, and whether it may be reached without TLS.
-//
-// A server forked locally (mcpserver, reading stdin) takes its flags from
-// the Framework that forked it, which built them from the daemon's own
-// config. One arriving over the executor tunnel (modelexec.Config.ServeMCP)
-// takes them from whoever holds an executor token, and its first
-// pull_request_status call sends the real credential in an Authorization
-// header -- so without these pins, -github-host pointed at a server of the
-// caller's choosing plus -github-insecure-http was enough to read the
-// credential straight off the wire (bwsalmon/grain#2383).
-type mcpGitHubPins struct {
-	dataDir            string
-	githubHost         string
-	githubInsecureHTTP bool
-}
-
-// check refuses any value the daemon did not configure itself. It runs on
-// the parsed flags rather than the raw args, so every spelling the flag
-// package accepts (-x v, --x=v, -x=true) is held to the same rule.
-// An unset -data-dir stays allowed: it loads no credential at all.
-func (p mcpGitHubPins) check(dataDir, githubHost string, insecureHTTP bool) error {
-	wantHost := p.githubHost
-	if wantHost == "" {
-		wantHost = "github.com"
-	}
-	if !strings.EqualFold(strings.TrimSpace(githubHost), wantHost) {
-		return fmt.Errorf("grain mcpserver: -github-host %q is not this deployment's GitHub host", githubHost)
-	}
-	if insecureHTTP && !p.githubInsecureHTTP {
-		return errors.New("grain mcpserver: -github-insecure-http is not enabled on this deployment")
-	}
-	if dataDir != "" && (p.dataDir == "" || filepath.Clean(dataDir) != filepath.Clean(p.dataDir)) {
-		return fmt.Errorf("grain mcpserver: -data-dir %q is not this deployment's data directory", dataDir)
-	}
-	return nil
-}
-
-// serveMCPServerPinned is serveMCPServer with the GitHub-credential flags
-// held to pins when pins is non-nil; a mismatch refuses to serve at all.
-func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpGitHubPins) error {
+// ServeMCPServer is `grain mcpserver`: it parses args and serves the
+// run's MCP tools over in and out.
+func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 	fs := flag.NewFlagSet("grain mcpserver", flag.ContinueOnError)
 	root := fs.String("sandbox-root", "",
 		"directory the local sandbox tools are confined to (mutually exclusive with -granule-vm)")
@@ -1976,7 +1947,7 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 			"otherwise would.")
 	toolBudget := fs.Bool("tool-budget", false,
 		"count this run's tool calls and result bytes against a durable judgement task's per-wake "+
-			"budget (mcp.ToolBudgetSoftCalls and the rest, docs/design/durable-tasks.md#DT-13), passed "+
+			"budget (mcp.ToolBudgetSoftCalls and the rest, design/design/durable-tasks.design.md#DT-13), passed "+
 			"on by the Framework that forked this process (agent.GrantArgs, for "+
 			"agent.RunConfig.ToolBudget). Unset, nothing is counted.")
 	toolBudgetPipelineCursor := fs.Bool("tool-budget-pipeline-cursor", false,
@@ -1995,7 +1966,7 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 		"which tools to serve: \"control\" (the sandbox tools, the run-ending and escalation tools and the "+
 			"model-only grants' tools; everything else is a `grain` CLI command inside the sandbox) or \"full\" "+
 			"(every tool, for a client that cannot shell out and for tests). Empty is control when a sandbox "+
-			"flag is set, full otherwise (docs/design/sandbox-first-agent-surface.md §6)")
+			"flag is set, full otherwise (design/design/sandbox-first-agent-surface.design.md §6)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -2006,11 +1977,6 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 	case "", MCPSurfaceControl, MCPSurfaceFull:
 	default:
 		return fmt.Errorf("grain mcpserver: -mcp-surface %q is neither %q nor %q", *surface, MCPSurfaceControl, MCPSurfaceFull)
-	}
-	if pins != nil {
-		if err := pins.check(*dataDir, *githubHost, *githubInsecureHTTP); err != nil {
-			return err
-		}
 	}
 
 	if (len(sandboxEnvList) > 0 || *sandboxEnvFile != "") && *root == "" {
@@ -2191,8 +2157,8 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 		// task), and this gate is so an ordinary run is not shown a
 		// tool that could only ever refuse.
 		// propose_config_change is a grain/config writer's: the director,
-		// as grain_config.console_sessions declares it, or any task
-		// somebody granted grain/config as a write target.
+		// as grain_config.console_sessions declares it, or any repo-less
+		// task somebody granted grain/config as a write target.
 		if writesConfigRepo(taskDetail.Task) {
 			registry.Register(mcp.NewProposeConfigChangeTools(
 				daemonConfigChanges{client: client, taskID: *taskID}, *taskID, tools)...)
@@ -2385,6 +2351,18 @@ func ServeMCPServerPinned(in io.Reader, out io.Writer, args []string, pins *mcpG
 			registry.Register(mcp.NewChatTools(daemonChat{client: client, taskID: *taskID, writeFile: writeFile,
 				delivered: delivered}, mcp.SandboxFileReaderOf(tools))...)
 			liveFiler = proposals
+			// run_host_command waits on the same person chat does, for
+			// each command it is asked to run, and so is gated the same
+			// way: a background run is given no tool rather than one
+			// whose every call would time out unanswered.
+			if grainserver.HasHostExec(grants) {
+				registry.Register(selfrepair.ConfirmedHostCommandTools(daemonHostExecConfirm{client: client, taskID: *taskID,
+					timeout: selfrepair.DefaultConfirmTimeout, delivered: delivered}.Confirm)...)
+			}
+		}
+		if grainserver.HasHostExec(grants) && !*interactive {
+			fmt.Fprintln(os.Stderr, "grain mcpserver: run_host_command is not served to this run: "+
+				"grain#host-exec confirms every command with a person in the task's chat, and this run is not -interactive")
 		}
 		registry.Register(mcp.NewLiveProposalTools(escapeSink, proposeRepoList.Nameable(), *taskID,
 			liveFiler)...)
@@ -2759,6 +2737,17 @@ func granuleSandboxTools(granuleVM, sshUser, execKey, workspace string) ([]mcp.T
 }
 
 // supersedeKept is ui.Task.SupersedeKept as mcp reports it.
+func droppedDefaults(dropped []ui.DroppedDefault) []mcp.DroppedDefault {
+	if len(dropped) == 0 {
+		return nil
+	}
+	out := make([]mcp.DroppedDefault, len(dropped))
+	for i, d := range dropped {
+		out[i] = mcp.DroppedDefault{Grant: d.Grant, Reason: d.Reason}
+	}
+	return out
+}
+
 func supersedeKept(kept []ui.SupersedeKeptEntry) []mcp.SupersedeKept {
 	var out []mcp.SupersedeKept
 	for _, k := range kept {

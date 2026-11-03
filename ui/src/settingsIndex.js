@@ -16,7 +16,7 @@ import { fuzzyScore } from "./fuzzy.js";
 import { isConfigRepoSection } from "./settingsSections.js";
 
 // settingsIndex is what the Settings filter searches
-// (docs/design/settings-panel.md §3.3): one entry per field and per
+// (design/design/settings-panel.design.md §3.3): one entry per field and per
 // card. A field entry's id is the field's data-setting-id, which is its
 // /api/settings key (or, for Models' default model, its /api/deployment
 // one); a card entry ("card": true) names a card whose
@@ -121,20 +121,6 @@ export const SETTINGS_INDEX = [
     section: "engine",
     anchor: "merge-queue",
     label: "Max merges per repo branch",
-    keywords: [],
-  },
-  {
-    id: "mergeBatchSize",
-    section: "engine",
-    anchor: "merge-queue",
-    label: "Merge batch size",
-    keywords: [],
-  },
-  {
-    id: "mergeGatherWindow",
-    section: "engine",
-    anchor: "merge-queue",
-    label: "Merge gather window",
     keywords: [],
   },
   {
@@ -575,6 +561,22 @@ export const SETTINGS_INDEX = [
     card: true,
   },
   {
+    id: "card:hostds:hostds",
+    section: "hostds",
+    anchor: "hostds",
+    label: "Hostds",
+    keywords: ["hostd", "token", "rotate", "revoke", "owner", "labels"],
+    card: true,
+  },
+  {
+    id: "card:hostds:add-hostd",
+    section: "hostds",
+    anchor: "add-hostd",
+    label: "Add a hostd",
+    keywords: ["hostd", "register", "token"],
+    card: true,
+  },
+  {
     id: "card:config-repo:config-repo",
     section: "config-repo",
     anchor: "config-repo",
@@ -737,14 +739,6 @@ export const SETTINGS_INDEX = [
     anchor: "api-scope-sets",
     label: "API scope sets",
     keywords: ["api", "scope set", "preset", "scopes", "requires person"],
-    card: true,
-  },
-  {
-    id: "card:executors:executors",
-    section: "executors",
-    anchor: "executors",
-    label: "Executor join tokens",
-    keywords: ["remote executor", "join token"],
     card: true,
   },
   {

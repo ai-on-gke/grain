@@ -14,7 +14,7 @@
 
 package ui
 
-// A task's goal (model.TaskGoal, docs/design/durable-tasks.md#DT-4), as
+// A task's goal (model.TaskGoal, design/design/durable-tasks.design.md#DT-4), as
 // the task page's goal editor sets and clears it: PUT and DELETE
 // /api/tasks/{id}/goal.
 
@@ -55,7 +55,7 @@ func (c *Client) SetGoal(ctx context.Context, id string, goal model.GoalDecl) er
 	if err != nil {
 		return err
 	}
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
 	now := c.now()
 	if err := c.Store.SetTaskGoal(ctx, id, goal, model.PrincipalString(actor), now); err != nil {
 		return err
@@ -91,7 +91,7 @@ func (c *Client) ClearGoal(ctx context.Context, id string) error {
 	if err := c.Store.ClearTaskGoal(ctx, id); err != nil {
 		return err
 	}
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
 	now := c.now()
 	_, _ = c.Store.ClearNotification(ctx, model.NotificationSubject(model.FamilyNoProgress, id), model.PrincipalString(actor))
 	if task.DeferredAt != nil && deferredByGoal(ctx, c.Store, id, *goal) {

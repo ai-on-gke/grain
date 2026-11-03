@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
@@ -37,11 +38,12 @@ type fixedStatuses []servers.Status
 func (f fixedStatuses) Statuses() []servers.Status { return f }
 
 // own is list without the built-ins grain registers itself
-// (intree.EnsureBuiltins), which every listing carries.
+// (intree.EnsureBuiltins) and the in-process servers
+// (grainserver.Statuses), which every listing carries.
 func own(list []ui.CapabilityServer) []ui.CapabilityServer {
 	var out []ui.CapabilityServer
 	for _, s := range list {
-		if s.Builtin == nil {
+		if s.Builtin == nil && s.InProcess == nil {
 			out = append(out, s)
 		}
 	}
@@ -298,8 +300,14 @@ func TestBuiltinCapabilityServersAreListedDisableOnlyAndGrantNothing(t *testing.
 		t.Fatal(err)
 	}
 	builtins := intree.Builtins()
-	if len(list) != len(builtins)+1 || list[len(list)-1].ID != "https://example.com/caps/own" {
-		t.Fatalf("list = %+v, want every built-in first, then the operator's own", list)
+	inProcess := len(grainserver.Statuses())
+	if len(list) != len(builtins)+inProcess+1 || list[len(list)-1].ID != "https://example.com/caps/own" {
+		t.Fatalf("list = %+v, want every built-in first, then the in-process servers, then the operator's own", list)
+	}
+	for _, s := range list[len(builtins) : len(builtins)+inProcess] {
+		if s.InProcess == nil {
+			t.Errorf("row %s = %+v, want an in-process server", s.ID, s)
+		}
 	}
 	for i, b := range builtins {
 		if list[i].ID != b.ID || list[i].Builtin == nil || list[i].Builtin.Name != b.Name {
@@ -377,6 +385,58 @@ func TestBindingASecretWhileLockedStoresNothing(t *testing.T) {
 	}
 	if !strings.Contains(patch.String(), "$secret:gcp-minter") {
 		t.Errorf("the refusal's change does not bind the reference: %+v", refusal.Change)
+	}
+	if v, err := store.Resolve(context.Background(), "gcp-minter"); err == nil && v != "" {
+		t.Errorf("a refused binding stored its value %q", v)
+	}
+	cfg, err := client.Store.GetConfig(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env := cfg.MCPServers[id].Env; env["GCP_MINTER_KEY"] != "" {
+		t.Errorf("a refused binding was written: %v", env)
+	}
+}
+
+// The same binding on a deployment managed by an external config
+// repository is refused with the same edit -- the mcp_servers entry
+// carrying the $secret: reference -- rather than with no change at all,
+// and with a note that the value, which nothing stored, has to be set
+// as a secret separately.
+func TestBindingASecretUnderAnExternalConfigRepoGivesTheEdit(t *testing.T) {
+	t.Parallel()
+	_, client := testServer(t)
+	storeSettingsRow(t, client)
+	store := secrets.New(t.TempDir())
+	client.Config.Secrets = store
+	srv := ui.NewServerWithClient(client)
+	const id = "https://github.com/bwsalmon/grain/capabilities/gcp"
+	if rec := do(t, srv, http.MethodPut, "/api/capability-servers", `{"id":"`+id+`","config":{"command":"gcp-cap"}}`); rec.Code >= 300 {
+		t.Fatalf("adding the server: %d %s", rec.Code, rec.Body)
+	}
+	client.Config.StateRepo = &fakeStateRepo{status: ui.StateRepoStatus{Remote: "https://github.com/example/grain-config", Branch: "main"}}
+
+	rec := do(t, srv, http.MethodPost, "/api/capability-servers/bind-secret",
+		`{"id":"`+id+`","kind":"env","name":"GCP_MINTER_KEY","secret":"gcp-minter","value":"super-secret-key-material"}`)
+	var refusal configRefusalBody
+	if rec.Code != http.StatusConflict || json.Unmarshal(rec.Body.Bytes(), &refusal) != nil || refusal.Code != ui.ConfigManagedExternallyCode {
+		t.Fatalf("binding under an external config repository: %d %s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "super-secret") {
+		t.Errorf("the refusal carries the secret value: %s", rec.Body)
+	}
+	if len(refusal.Change) == 0 {
+		t.Fatalf("the refusal carries no change: %s", rec.Body)
+	}
+	var patch strings.Builder
+	for _, c := range refusal.Change {
+		patch.WriteString(c.Patch)
+	}
+	if !strings.Contains(patch.String(), "$secret:gcp-minter") || !strings.Contains(patch.String(), "GCP_MINTER_KEY") {
+		t.Errorf("the refusal's change does not bind the reference: %+v", refusal.Change)
+	}
+	if !strings.Contains(refusal.Description, "gcp-minter") || !strings.Contains(refusal.Description, "separately") {
+		t.Errorf("the refusal does not say to set the value as a secret: %q", refusal.Description)
 	}
 	if v, err := store.Resolve(context.Background(), "gcp-minter"); err == nil && v != "" {
 		t.Errorf("a refused binding stored its value %q", v)

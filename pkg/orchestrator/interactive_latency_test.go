@@ -310,9 +310,7 @@ func TestInteractiveSubsequentTurnLatencyAndWarmReuse(t *testing.T) {
 		director := sessionTasks(t, store)[0]
 
 		fakeGrainBin := filepath.Join(t.TempDir(), "grain-sandbox")
-		if err := os.WriteFile(fakeGrainBin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		orchestrator.WriteExecutableStub(t, fakeGrainBin, "#!/bin/sh\nexit 0\n")
 
 		sbx := &packageCacheRecordingSandboxes{inner: orchestrator.NewHostSandboxes(t.TempDir())}
 		var turnStartAt time.Time
@@ -410,7 +408,23 @@ func TestInteractiveSubsequentTurnLatencyAndWarmReuse(t *testing.T) {
 				turnReachedAt[turn] = time.Now()
 				if turn < 3 {
 					go func(nextTurn int) {
-						time.Sleep(15 * time.Millisecond)
+						// Not until the session is parked waiting for
+						// the message: it marks the question pending
+						// once it has relayed this turn's answer and
+						// found nothing new. Behind a fixed sleep a
+						// loaded -race run posted while the answer was
+						// still being relayed, and timed that relay and
+						// its store writes rather than the wake.
+						for {
+							o, err := store.GetObservation(ctx, director.ID)
+							if err == nil && o != nil && o.PendingQuestionCommentID != nil {
+								break
+							}
+							if ctx.Err() != nil {
+								return
+							}
+							time.Sleep(time.Millisecond)
+						}
 						msgSentAt[nextTurn] = time.Now()
 						_, _ = store.AddComment(ctx, model.Comment{
 							TaskID:    director.ID,
@@ -435,7 +449,7 @@ func TestInteractiveSubsequentTurnLatencyAndWarmReuse(t *testing.T) {
 			Config: orchestrator.Config{
 				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
 				Capabilities:          model.NewCapabilityRegistry(durable.New()),
-				SessionSandboxIdleTTL: 300 * time.Millisecond,
+				SessionSandboxIdleTTL: time.Second,
 				WaitForSessionReply:   true,
 				CancelPollInterval:    5 * time.Millisecond,
 			},

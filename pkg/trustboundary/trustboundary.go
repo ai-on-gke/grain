@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v9"
+const Version = "trust-boundary/v11"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -75,6 +75,20 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v11 added the hostd registry, the host-exec confirmation and CI
+// repository access (grain/task-2723, 2026-11-03 security review finding 2):
+// hostd admission, token lookup, routing and the host executor, and the
+// human-only message filter a host command's approval is read through
+// (auth-routes); the host-exec confirmation, CI's repository-access grants,
+// event gate and pull-request refusal, and the daemon's capability wiring
+// (capabilities-secrets). The repo-access gate moved out of
+// pkg/model/task.go into pkg/model/repo_access.go so it could be held
+// without holding every change to tasks.
+//
+// v10 added the single-tenant access gate, verified-identity seam and
+// principal allowlist (grain/task-2434, 2026-11-02 security review finding 1):
+// pkg/ui/accesscode.go, single_tenant.go, verifier.go and allowlist.go.
 //
 // v8 added release-promotion (grain/task-1236): the person-only step
 // that makes a pending release official -- .grain/workflows/promote-release.yml,
@@ -136,6 +150,8 @@ var Categories = []Category{
 		prefixes:    []string{"pkg/access/", "pkg/iapreconciler/", "pkg/policy/", "pkg/jwks/"},
 		files: []string{
 			"pkg/ui/server.go", "pkg/ui/principal.go", "pkg/ui/access.go",
+			"pkg/ui/accesscode.go", "pkg/ui/single_tenant.go",
+			"pkg/ui/allowlist.go", "pkg/ui/verifier.go",
 			"pkg/ui/auth.go", "pkg/ui/agent_keys.go", "pkg/ui/github_tokens.go",
 			"pkg/ui/csrf.go", "pkg/ui/hostguard.go", "pkg/ui/security_headers.go",
 			"pkg/ui/team_scope.go",
@@ -144,12 +160,29 @@ var Categories = []Category{
 			"pkg/ui/agent_api_gate.go", "pkg/ui/route_scopes.go", "pkg/ui/agent_api.go",
 			"pkg/ui/agent_api_tools.go", "pkg/model/agent_api.go",
 			"pkg/ui/config_refusal.go", "pkg/ui/persistent_sandboxes.go",
+			// The hostd registry: whether a dialing hostd is local or must
+			// present its owner's identity, token -> hostd/owner, revocation,
+			// and which hostd a run is routed to.
+			"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/taskhostd.go",
+			"pkg/daemon/hostd_registry.go", "pkg/daemon/hostd_route.go",
+			"pkg/daemon/hostexec.go", "pkg/model/hostd.go",
+			// messagesSince's human-only filter is what makes the answer a
+			// host-exec confirmation reads a person's.
+			"pkg/ui/messages.go",
 		},
 	},
 	{
 		ID:          "capabilities-secrets",
 		Description: "capability grants, secret storage and the cloud identities credentials are minted from",
 		prefixes:    []string{"pkg/capability/", "pkg/secrets/", "pkg/secretsrepo/", "pkg/gcpsetup/", "pkg/redact/"},
+		files: []string{
+			// Running a command on grain's own host once a person approves.
+			"pkg/daemon/mcpserver_hostexec.go",
+			// What a CI sandbox is handed on other repositories, on which
+			// events, and the refusal of untrusted pull-request runs.
+			"pkg/model/repo_access.go", "pkg/daemon/ci.go", "pkg/daemon/ci_policy.go",
+			"pkg/daemon/ci_capability_pass.go", "pkg/daemon/capabilities.go",
+		},
 	},
 	{
 		ID:          "exec-sandbox",

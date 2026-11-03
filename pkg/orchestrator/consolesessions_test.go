@@ -254,7 +254,7 @@ func replacementOf(t *testing.T, store *model.Store, closed string) model.Task {
 // the last one's runs wrote. Everything else stays on the closed task,
 // which is the whole of the bargain -- carrying more would be carrying
 // exactly what the conversation bound exists to stop carrying
-// (docs/implementation-notes.md, "A chat that never ends is not split
+// (grain's former implementation notes, "A chat that never ends is not split
 // for you").
 func TestAClosedSessionsReplacementCarriesItsHandoverAndNothingElse(t *testing.T) {
 	t.Parallel()
@@ -2479,7 +2479,7 @@ func (s *testOrchestratorStateRepo) Sync(ctx context.Context) (ui.StateRepoStatu
 	}
 	return s.status, nil
 }
-func (s *testOrchestratorStateRepo) SyncAfterWrite(ctx context.Context) error {
+func (s *testOrchestratorStateRepo) SyncAfterWrite(ctx context.Context, _ string) error {
 	_, err := s.Sync(ctx)
 	return err
 }
@@ -2550,7 +2550,7 @@ func TestUIEditsWithStateRepoUnlockedPersistAcrossOrchestratorAndStateRepoCycles
 	}
 
 	// Sync to state repo and run both state-repo reconcile and orchestrator RunCycle.
-	if err := sr.SyncAfterWrite(ctx); err != nil {
+	if err := sr.SyncAfterWrite(ctx, ""); err != nil {
 		t.Fatalf("SyncAfterWrite: %v", err)
 	}
 	runSessions(t, store, baseTime.Add(time.Minute))

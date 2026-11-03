@@ -478,7 +478,7 @@ func TestAgentAPIAttributesTheCall(t *testing.T) {
 	}
 	var sawComment, sawRecord bool
 	for _, c := range comments {
-		if c.Body == "from the director" && c.Author.Actor == (model.Principal{Kind: model.PrincipalAgent, ID: "1"}) {
+		if c.Body == "from the director" && c.Author.Actor == (model.Principal{Kind: model.PrincipalAgent, ID: "1", Source: model.SourceSandbox}) {
 			sawComment = true
 		}
 		if strings.Contains(c.Body, "Task 1 called") && strings.Contains(c.Body, "triage") &&
@@ -593,7 +593,7 @@ func TestAgentAPIPassesRepoPersonGateWhenConfigIsStored(t *testing.T) {
 
 // TestAgentAPIWriteRefusesAStaleExpectation is a task-admin write made
 // through the generated tool with an expect argument
-// (docs/design/durable-tasks.md#DT-13): the tool reads the task first and
+// (design/design/durable-tasks.design.md#DT-13): the tool reads the task first and
 // refuses, changing nothing, when the record disagrees.
 func TestAgentAPIWriteRefusesAStaleExpectation(t *testing.T) {
 	srv, client := testServer(t)

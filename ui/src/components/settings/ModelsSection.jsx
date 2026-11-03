@@ -32,7 +32,7 @@ import CLIRunLocations from "./CLIRunLocations.jsx";
 import ModelDefaults from "./ModelDefaults.jsx";
 import SettingsCard, { SettingsReadOnlyContext } from "./SettingsCard.jsx";
 
-// ModelsSection is Settings → Models (docs/design/settings-panel.md
+// ModelsSection is Settings → Models (design/design/settings-panel.design.md
 // §3.2): the deployment's provider connections, then the default model
 // and per-model settings (ModelDefaults). A connection is
 // PUT/DELETE /api/deployment/agent-backends/{id}; the default model and
@@ -592,7 +592,7 @@ export default function ModelsSection({ config, onSaved, showError }) {
           {/* The config pull request suite refuses this state
               (staterepo.CheckDispatchLiveness); a direct write here is
               the escape hatch and is not refused, so it is said here
-              (docs/design/config-repo-settings.md, section 2.2). */}
+              (design/design/config-repo-settings.design.md, section 2.2). */}
           {agentBackends.length > 0 &&
             agentBackends.every((backend) => backend.disabled) && (
               <Alert severity="warning" data-testid="all-connections-disabled">
@@ -617,11 +617,9 @@ export default function ModelsSection({ config, onSaved, showError }) {
       </SettingsCard>
       <SettingsCard title="Where each agent CLI runs" anchor="cli-run">
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-          Model servers (<code>grain model-server</code>) run agent model CLIs (
-          <code>agy</code>, <code>claude</code>, <code>codex</code>) on a remote
-          host with local ambient credentials and connect outbound to{" "}
-          <code>grain</code>; see Settings &rarr; Executors for join tokens and
-          System &rarr; Sandboxes for connected model servers.
+          A CLI set to run on the host runs through <code>grain hostd</code>: on
+          this machine over its socket, or on another machine that dials in to
+          this daemon (<code>grain hostd -server</code>).
         </Typography>
         <CLIRunLocations
           showError={showError}

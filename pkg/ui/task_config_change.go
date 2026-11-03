@@ -27,7 +27,7 @@ import (
 )
 
 // A config change a session proposed in its own chat
-// (docs/design/config-repo-settings.md, section 4.3). The session's
+// (design/design/config-repo-settings.design.md, section 4.3). The session's
 // propose_config_change tool pushes a branch of grain/config and asks the
 // daemon here to diff and validate it (POST /api/tasks/{id}/config-change,
 // grain's own plumbing, called by the mcpserver for the run's own task);
@@ -141,7 +141,7 @@ func (c *Client) ProposeConfigChange(ctx context.Context, id string, proposal Co
 // pendingConfigChangeFor is the change task id is parked on, refusing a
 // caller that is not a person and a decision about any other commit.
 func (c *Client) pendingConfigChangeFor(ctx context.Context, id, headSHA, verb string) (*model.PendingConfigChange, error) {
-	if c.actor(ctx).Kind != model.PrincipalHuman {
+	if c.requestActor(ctx).Actor.Kind != model.PrincipalHuman {
 		return nil, forbiddenErrorf("only a human operator may %s a configuration change", verb)
 	}
 	task, err := c.Store.GetTask(ctx, id)

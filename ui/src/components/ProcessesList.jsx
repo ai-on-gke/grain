@@ -47,6 +47,7 @@ import UseTemplateOverlay from "./UseTemplateOverlay.jsx";
 import SuiteOverlay from "./SuiteOverlay.jsx";
 import SuiteRunOverlay from "./SuiteRunOverlay.jsx";
 import SuiteRunPane, {
+  RunBaseChip,
   RunStatusChip,
   ScheduledChip,
   describeMode,
@@ -67,7 +68,7 @@ import ChipStrip from "./ChipStrip.jsx";
 const DECLARATIONS_DOC =
   "https://github.com/ai-on-gke/grain/blob/main/docs/declarations.md";
 
-// ProcessesList is the Processes page (docs/design/settings-panel.md §5):
+// ProcessesList is the Processes page (design/design/settings-panel.design.md §5):
 // one table of every schedule, workflow schedule, template, suite and
 // trigger, where there used to be a Schedules, a Templates and a Suites
 // page. Each row carries a kind chip, and the toolbar has a kind filter
@@ -434,7 +435,7 @@ export default function ProcessesList({
                 <ChipStrip>
                   <RunStatusChip run={run} />
                   <Chip size="small" label={run.repo} />
-                  <Chip size="small" variant="outlined" label={run.base} />
+                  <RunBaseChip run={run} />
                   {run.scheduleId && (
                     <ScheduledChip
                       scheduleId={run.scheduleId}
@@ -524,7 +525,20 @@ export default function ProcessesList({
           onSaved={() =>
             Promise.all([onRefreshTemplates?.(), onRefreshSchedules?.()])
           }
-          onNewTask={onNewTaskFromTemplate}
+          // New Task has nowhere to fill a template's input fields, so
+          // one that declares them was opened on a form whose filing
+          // could only be refused ('field "Who" is required', 2026-11-02
+          // walkthrough). It goes through Use…, which asks for them, as
+          // the Template picker's own filter already says.
+          onNewTask={
+            onNewTaskFromTemplate &&
+            ((t) => {
+              if ((t?.fields || []).length === 0)
+                return onNewTaskFromTemplate(t);
+              onOpenTemplate(null);
+              setUsing(t.id);
+            })
+          }
           showError={showError}
         />
       )}

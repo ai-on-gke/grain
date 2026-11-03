@@ -1,7 +1,7 @@
 # The pipeline steward
 
 grain/task-461: a standing job that keeps this deployment's merge
-pipeline moving. Since DT-S9 (`docs/design/durable-tasks.md#DT-6`) it is
+pipeline moving. Since DT-S9 (`design/design/durable-tasks.design.md#DT-6`) it is
 one durable judgement task, woken by `pipeline.*` notifications.
 Reconcilers do the mechanical work -- filing repairs, parking work behind
 them, retriggering flakes, re-running CI, raising stalls and stale ports
@@ -157,7 +157,7 @@ enforces this list.
 ### Compact reads and the tool budget
 
 A wake is meant to fit in context with no compaction
-(docs/design/durable-tasks.md#DT-13). The tools it reads with answer
+(design/design/durable-tasks.design.md#DT-13). The tools it reads with answer
 compactly by default: `read_pipeline_changes(after, limit)` is one line per
 change since a cursor (task transitions, merge-queue moves, stalls,
 base-branch verdicts, merge-batch results; `GET /api/pipeline/changes`) and
@@ -224,7 +224,7 @@ release watchdog's to report (`.grain/templates/release-watchdog.yml`).
 ## What it is told
 
 The prompt is `pipelineStewardBody`, written around the four rules of
-`docs/design/durable-tasks.md#DT-12`:
+`design/design/durable-tasks.design.md#DT-12`:
 
 1. **Work from deltas.** Read the handover's cursor and run
    `grain read deploy://pipeline-changes --cursor <cursor>`, paging on with

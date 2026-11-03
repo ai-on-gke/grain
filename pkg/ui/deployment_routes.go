@@ -78,7 +78,7 @@ func (s *Server) handleDeploymentReachableRepos(w http.ResponseWriter, r *http.R
 }
 
 func (s *Server) handleListDeploymentGitConnections(w http.ResponseWriter, r *http.Request) {
-	conns, err := s.tasks.ListTeamGitConnections(r.Context(), model.DefaultTeamID, requestUser(r))
+	conns, err := s.tasks.ListTeamGitConnections(r.Context(), model.DefaultTeamID, requestPerson(r.Context()))
 	writeDeploymentResult(w, conns, err)
 }
 
@@ -87,12 +87,12 @@ func (s *Server) handleCreateDeploymentGitConnection(w http.ResponseWriter, r *h
 	if !readJSON(w, r, &req) {
 		return
 	}
-	team, err := s.tasks.AddTeamGitConnection(r.Context(), model.DefaultTeamID, req, actingUser(r, req.User))
+	team, err := s.tasks.AddTeamGitConnection(r.Context(), model.DefaultTeamID, req, requestPerson(r.Context()))
 	writeDeploymentResult(w, team, err)
 }
 
 func (s *Server) handleDeleteDeploymentGitConnection(w http.ResponseWriter, r *http.Request) {
-	team, err := s.tasks.DeleteTeamGitConnection(r.Context(), model.DefaultTeamID, r.PathValue("cred"), requestUser(r))
+	team, err := s.tasks.DeleteTeamGitConnection(r.Context(), model.DefaultTeamID, r.PathValue("cred"), requestPerson(r.Context()))
 	writeDeploymentResult(w, team, err)
 }
 
@@ -101,7 +101,7 @@ func (s *Server) handleCheckDeploymentGitConnection(w http.ResponseWriter, r *ht
 	if !readOptionalJSON(w, r, &req) {
 		return
 	}
-	res, err := s.tasks.CheckTeamGitConnection(r.Context(), model.DefaultTeamID, req, actingUser(r, req.User))
+	res, err := s.tasks.CheckTeamGitConnection(r.Context(), model.DefaultTeamID, req, requestPerson(r.Context()))
 	writeDeploymentResult(w, res, err)
 }
 
@@ -118,12 +118,12 @@ func (s *Server) handlePutDeploymentAgentBackend(w http.ResponseWriter, r *http.
 	if !readJSON(w, r, &req) {
 		return
 	}
-	saved, err := s.tasks.PutTeamAgentBackend(r.Context(), model.DefaultTeamID, r.PathValue("backendId"), req.AgentBackend, actingUser(r, req.User))
+	saved, err := s.tasks.PutTeamAgentBackend(r.Context(), model.DefaultTeamID, r.PathValue("backendId"), req.AgentBackend, requestPerson(r.Context()))
 	writeDeploymentResult(w, saved, err)
 }
 
 func (s *Server) handleDeleteDeploymentAgentBackend(w http.ResponseWriter, r *http.Request) {
-	if err := s.tasks.DeleteTeamAgentBackend(r.Context(), model.DefaultTeamID, r.PathValue("backendId"), requestUser(r)); err != nil {
+	if err := s.tasks.DeleteTeamAgentBackend(r.Context(), model.DefaultTeamID, r.PathValue("backendId"), requestPerson(r.Context())); err != nil {
 		writeClientError(w, err)
 		return
 	}
@@ -131,7 +131,7 @@ func (s *Server) handleDeleteDeploymentAgentBackend(w http.ResponseWriter, r *ht
 }
 
 func (s *Server) handleGetDeploymentRepoConfig(w http.ResponseWriter, r *http.Request) {
-	res, err := s.tasks.GetDeploymentRepoConfigWithUser(r.Context(), deploymentRepo(r), requestUser(r))
+	res, err := s.tasks.GetDeploymentRepoConfigWithUser(r.Context(), deploymentRepo(r), requestPerson(r.Context()))
 	writeDeploymentResult(w, res, err)
 }
 
@@ -140,7 +140,7 @@ func (s *Server) handleSetDeploymentRepoConfig(w http.ResponseWriter, r *http.Re
 	if !readJSON(w, r, &req) {
 		return
 	}
-	res, err := s.tasks.SetDeploymentRepoConfigWithUser(r.Context(), deploymentRepo(r), req, actingUser(r, req.User))
+	res, err := s.tasks.SetDeploymentRepoConfigWithUser(r.Context(), deploymentRepo(r), req, requestPerson(r.Context()))
 	writeDeploymentResult(w, res, err)
 }
 
@@ -150,7 +150,7 @@ func (s *Server) handleSetDeploymentRepoGitConnection(w http.ResponseWriter, r *
 		return
 	}
 	team, err := s.tasks.SetTeamRepoGitConnection(r.Context(), model.DefaultTeamID,
-		r.PathValue("owner"), r.PathValue("name"), req, actingUser(r, req.User))
+		r.PathValue("owner"), r.PathValue("name"), req, requestPerson(r.Context()))
 	writeDeploymentResult(w, team, err)
 }
 
@@ -164,7 +164,7 @@ func (s *Server) handleDeploymentBroadcast(w http.ResponseWriter, r *http.Reques
 	if !readJSON(w, r, &req) {
 		return
 	}
-	req.Author = actingUser(r, req.Author)
+	req.Author = requestPerson(r.Context())
 	if p, ok := PrincipalFromContext(r.Context()); ok {
 		req.Task = ""
 		if p.Kind == model.PrincipalAgent {
@@ -178,7 +178,7 @@ func (s *Server) handleDeploymentBroadcast(w http.ResponseWriter, r *http.Reques
 // handleGetDeploymentSecretAudit is the deployment's newest secret
 // resolutions.
 func (s *Server) handleGetDeploymentSecretAudit(w http.ResponseWriter, r *http.Request) {
-	entries, err := s.tasks.ListTeamSecretAuditWithUser(r.Context(), model.DefaultTeamID, requestUser(r), 100)
+	entries, err := s.tasks.ListTeamSecretAuditWithUser(r.Context(), model.DefaultTeamID, requestPerson(r.Context()), 100)
 	writeDeploymentResult(w, entries, err)
 }
 
@@ -194,7 +194,7 @@ func (s *Server) handleGetDeploymentAuditLogs(w http.ResponseWriter, r *http.Req
 		}
 		limit = min(n, maxTeamAuditLogs)
 	}
-	entries, err := s.tasks.ListTeamAuditLogsWithUser(r.Context(), model.DefaultTeamID, requestUser(r), limit)
+	entries, err := s.tasks.ListTeamAuditLogsWithUser(r.Context(), model.DefaultTeamID, requestPerson(r.Context()), limit)
 	writeDeploymentResult(w, entries, err)
 }
 
@@ -228,7 +228,7 @@ func (s *Server) handleUpdateDeployment(w http.ResponseWriter, r *http.Request) 
 		AgentGitName:  req.AgentGitName,
 		AgentGitEmail: req.AgentGitEmail,
 		TargetRepos:   req.TargetRepos,
-		User:          actingUser(r, req.User),
+		User:          requestPerson(r.Context()),
 	})
 	writeDeploymentResult(w, team, err)
 }

@@ -57,7 +57,7 @@ type SupersedeKeptEntry struct {
 // task nobody proposed.
 type Task struct {
 	// Goal is the task's goal and grain's progress towards it
-	// (model.TaskGoal, docs/design/durable-tasks.md#DT-4); filled on a
+	// (model.TaskGoal, design/design/durable-tasks.design.md#DT-4); filled on a
 	// single task's read, nil in a list and for a task with none.
 	Goal        *model.TaskGoal `json:"goal,omitempty"`
 	ID          string          `json:"id"`
@@ -675,6 +675,9 @@ func attachmentFrom(a model.AttachmentMeta) Attachment {
 // attempts, last failure: reason").
 type TaskDetail struct {
 	Task
+	// Hostd is the task's hostd pin or label selector
+	// (model.SetTaskHostd), "" for the default hostd.
+	Hostd    string    `json:"hostd,omitempty"`
 	Comments []Comment `json:"comments"`
 	// LocalScriptApprovals is the local-script calls this task's run is
 	// waiting on a person for, and the ones answered recently
@@ -946,6 +949,10 @@ type Attempt struct {
 	// (model.CapabilityAuditRecord). The records are their own fetch
 	// (AttemptCapabilityAudit), for the transcript's reason.
 	CapabilityAuditCount int `json:"capabilityAuditCount,omitempty"`
+	// Hostd is the grain hostd this attempt's host work went to, the
+	// machine it ran on and its owner (model.TaskRunHostd); nil for an
+	// attempt that resolved none.
+	Hostd *model.TaskRunHostd `json:"hostd,omitempty"`
 	// QueuedAt, SandboxAcquiredAt, SandboxPreparedAt, AgentStartedAt and
 	// FirstTurnAt are the startup phase timestamps of this attempt
 	// (model.RunStartup, model.Run.AgentStartedAt), and Startup is the
@@ -1461,7 +1468,7 @@ type configResponse struct {
 	// for a restart, or an upgrade that ends in one is running. The
 	// frontend remembers it, so that when the next poll cannot reach
 	// the API it says "grain is restarting" rather than that the
-	// deployment cannot be reached (docs/non-disruptive-upgrade.md,
+	// deployment cannot be reached (design/design/non-disruptive-upgrade.design.md,
 	// Stage 1).
 	Restarting bool `json:"restarting,omitempty"`
 	// SandboxCount is the number of live agent and CI sandboxes the
@@ -1470,13 +1477,6 @@ type configResponse struct {
 	// Config.Sandboxes counts its live set without the per-guest probes
 	// GET /api/sandboxes performs for the health pane.
 	SandboxCount int `json:"sandboxCount"`
-	// ExecutorAddr is where this deployment's remote executor listener
-	// accepts workers (Config.ExecutorAddr), with a wildcard host left
-	// off (":8422") since only the browser knows which name reaches this
-	// machine. Absent when remote execution is off, and from anybody who
-	// has not signed in. ExecutorTLS says the listener wants --tls.
-	ExecutorAddr string `json:"executorAddr,omitempty"`
-	ExecutorTLS  bool   `json:"executorTLS,omitempty"`
 	// PackageCacheEntries is how many packages this deployment's proxy
 	// cache is holding, across every ecosystem. It rides here for the
 	// reason SandboxCount above does: the sidebar shows it beside its
@@ -1738,13 +1738,13 @@ type configResponse struct {
 	// external config repository, or the internal grain/config with
 	// settings_locked enabled and without the directConfigWrites opt-out.
 	// The UI draws the config-repo-only settings read-only exactly then
-	// (docs/design/config-repo-settings.md §2.1).
+	// (design/design/config-repo-settings.design.md §2.1).
 	ConfigRepoOnly bool `json:"configRepoOnly,omitempty"`
 	SettingsLocked bool `json:"settingsLocked,omitempty"`
 	// NewTaskForm is settings/new-task-form.yml as stored
 	// (model.NewTaskForm), which the New Task form resolves for the
 	// repository, template and board it is filled in for; nil draws the
-	// form as built (docs/design/config-repo-settings.md §6).
+	// form as built (design/design/config-repo-settings.design.md §6).
 	NewTaskForm *model.NewTaskForm `json:"newTaskForm,omitempty"`
 }
 
@@ -1914,7 +1914,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
-	actor := s.tasks.actor(r.Context())
+	actor := s.tasks.requestActor(r.Context()).Actor
 	_, authenticated := PrincipalFromContext(r.Context())
 	// /api/config is served to callers nobody has vouched for, since it
 	// is what the sign-in page reads. Only a trusted source runs as the
@@ -1955,10 +1955,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.tasks.Config.Sandboxes != nil {
 		resp.SandboxCount = s.tasks.Config.Sandboxes.SandboxCount()
-	}
-	if actor.ID != "" {
-		resp.ExecutorAddr = executorDialAddr(s.tasks.Config.ExecutorAddr)
-		resp.ExecutorTLS = resp.ExecutorAddr != "" && s.tasks.Config.ExecutorTLS
 	}
 	if s.tasks.Config.PackageCache != nil {
 		entries := s.tasks.Config.PackageCache.PackageCacheEntryCount()
@@ -2288,10 +2284,7 @@ func (s *Server) handleGetTaskPrompt(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
-	user := requestUser(r)
-	if user == "" && s.tasks.Config.Actor.Kind == model.PrincipalHuman {
-		user = strings.TrimSpace(s.tasks.Config.Actor.ID)
-	}
+	user := s.tasks.requestPersonOrOperator(r.Context())
 	if user == "" {
 		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
 		return
@@ -2311,7 +2304,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	// A requester the body names (CreateTaskRequest.Author) is the
 	// operator's word about who asked, and only the operator's: a
 	// signed-in person may name nobody but themselves.
-	if author := strings.TrimSpace(req.Author); author != "" && requestUser(r) != "" && !strings.EqualFold(author, user) {
+	if author := strings.TrimSpace(req.Author); author != "" && requestPerson(r.Context()) != "" && !strings.EqualFold(author, user) {
 		writeError(w, http.StatusForbidden, fmt.Errorf("a signed-in user files tasks as themselves, not as %q", author))
 		return
 	}
@@ -2545,7 +2538,7 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	if !readAttachmentJSON(w, r, &req, func(req *addCommentRequest) []AttachmentUpload { return req.Attachments }) {
 		return
 	}
-	req.Author = actingUser(r, req.Author)
+	req.Author = requestPerson(r.Context())
 	id := r.PathValue("id")
 	if req.Reviewers != nil {
 		if _, err := s.tasks.UpdateTask(r.Context(), id, UpdateTaskRequest{Reviewers: req.Reviewers}); err != nil {

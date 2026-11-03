@@ -166,7 +166,7 @@ func (s *Store) RestingTask(ctx context.Context, id string) (bool, error) {
 }
 
 // applyStandingDeclarations gives a standing template's task what the
-// template declares beyond its content (docs/design/durable-tasks.md's
+// template declares beyond its content (design/design/durable-tasks.design.md's
 // Migration): its goal, when the task has none -- one a person changed
 // is kept -- and its notification subscriptions
 // (StandingTemplateSubscriptions), added to any the task already has.

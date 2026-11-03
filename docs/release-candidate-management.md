@@ -1,9 +1,9 @@
 # Releasing grain from trunk
 
-This document describes how `bwsalmon/grain` is released: from `main`, by a
+This document describes how this repository (`ai-on-gke/grain`) is released: from `main`, by a
 daily release train, after a staging soak, with a person's approval as the
 last step. The design and the reasons for it are in
-`docs/design/release-from-trunk.md`. This document is the operating manual.
+`design/design/release-from-trunk.design.md`. This document is the operating manual.
 
 There is no stabilization branch. Nothing is merged into `candidate`, nothing
 is back-merged from it, and no fix is ported between branches. Every release
@@ -37,7 +37,7 @@ Reject  ──▶ the failed-soak path; the next run cuts vX.Y.0-rc.(N+1)
 
 | Piece | What it does |
 | --- | --- |
-| `.grain/workflows/release-train.yml` | Runs the train daily at 04:15 UTC (and on `workflow_dispatch`). Holds `repo-write:bwsalmon/grain`, `release-gate-read` and `package-publish`, and optionally `image-signing`. Never pushes `vX.Y.0` and never moves `latest`. |
+| `.grain/workflows/release-train.yml` | Runs the train daily at 04:15 UTC (and on `workflow_dispatch`). Holds `repo-write:ai-on-gke/grain`, `release-gate-read` and `package-publish`, and optionally `image-signing`. Never pushes `vX.Y.0` and never moves `latest`. |
 | `scripts/release-from-trunk.sh` | The train: Phase 1 (judge the soaking rc) and Phase 2 (cut the next rc). Also has `approve` and `reject` modes, which only `promote-release.yml` runs, for a person. |
 | `scripts/candidate-gate.sh` | `select-lkg` (which `main` commit is known-good) and `check-soak` (is the rc on staging healthy). |
 | `scripts/release-images.sh` | `rc`, `discard-rc`, `pending`, `discard-pending` and `promote`: what each step publishes to GHCR. |
@@ -49,7 +49,7 @@ Each train run is idempotent. A run that finds nothing to do does nothing, so
 running it again by hand is always safe:
 
 ```
-grain ci run -repo bwsalmon/grain -branch main -event workflow_dispatch \
+grain ci run -repo ai-on-gke/grain -branch main -event workflow_dispatch \
   -job .grain/workflows/release-train.yml:train -watch
 ```
 
@@ -90,7 +90,7 @@ release just staged or promoted, so a new rc is always newer than the last.
   regression. Grain re-runs `infra` verdicts of `main`'s gates on its own
   (up to two uncached re-runs) before filing a failure review, and trunk
   release gates run at `PriorityReleaseGate`, ahead of the merge queue for
-  sandbox capacity (`docs/design/release-from-trunk.md`, RFT-2).
+  sandbox capacity (`design/design/release-from-trunk.design.md`, RFT-2).
 
 If no commit after the floor qualifies, the run cuts nothing. A `main` that
 stays red for a week ships nothing, and `latest` stays where it is.
@@ -176,7 +176,7 @@ for the commit before it is cut (section 2).
 ## 5. The `vX.Y.0-pending` stage and a person's approval
 
 **The pipeline does everything up to the final tag, and a person makes the
-release official** (task 1236, `docs/design/release-from-trunk.md` RFT-8).
+release official** (task 1236, `design/design/release-from-trunk.design.md` RFT-8).
 
 1. **The soak passes, so the release is staged, not promoted.** When
    `vX.Y.0-rc.N` passes its soak, the train:
@@ -298,10 +298,9 @@ only re-stamp the daemon images with the release name and retag.
 
 - **Two daemon images** share the `guest` and `k8s-sandbox` images.
   `ghcr.io/bwsalmon/grain/grain` is the core build (`./cmd/grain`, the
-  `oss` install track). `ghcr.io/bwsalmon/grain/google-grain` is the Google
-  build (`./google/cmd/grain`, the `google` track; `pkg/installtrack`).
-  Both get the same tags. A Google-track deployment that still names
-  `grain/grain` upgrades onto `google-grain`.
+  `oss` install track). A wrapper distribution's
+  build is published beside it under its own image name and install track
+  (`pkg/installtrack`), with the same tags.
 - **What the tags mean:** `latest` is the last promoted release and never
   `main`'s head. `main` is the head of `main`. `candidate`/`rc` is the
   current rc. `vX.Y.Z` is one release, kept forever by the GHCR pruner.
@@ -311,9 +310,9 @@ only re-stamp the daemon images with the release name and retag.
   of `main`, after each release-train run, and as the last job of an
   approval. When nothing changed it costs a few manifest copies. It fails,
   moving nothing, if any `sha-<short>` image it needs is missing.
-- **By hand** (to republish): `grain ci run -repo bwsalmon/grain -branch main
+- **By hand** (to republish): `grain ci run -repo ai-on-gke/grain -branch main
   -event workflow_dispatch -job .grain/workflows/promote.yml:latest -watch`,
-  or, as a repository admin, `POST /api/repos/bwsalmon/grain/release-runs`
+  or, as a repository admin, `POST /api/repos/ai-on-gke/grain/release-runs`
   with `{"branch":"main","jobs":[".grain/workflows/promote.yml:latest"]}`.
   Both republish whatever the git `latest` tag names. Moving `latest` to
   another release is a person's act, through Approve or a patch release
@@ -321,7 +320,7 @@ only re-stamp the daemon images with the release name and retag.
 
 ### What the release workflows may push
 
-`repo-write:bwsalmon/grain`, held by a CI job of this repository, lets grain's
+`repo-write:ai-on-gke/grain`, held by a CI job of this repository, lets grain's
 git proxy (`pkg/gitproxy/ciref.go`) take any tag or branch update except a
 rewrite of trunk. `refs/heads/main` may only be fast-forwarded and never
 deleted. These are the refs the release workflows push:
@@ -349,6 +348,18 @@ head. A patch is made by hand and is a person's act from start to finish.
 The first one was `v2.1.1` (task 4984): `v2.1.0` plus #4980's header-rail
 fixes.
 
+`scripts/release-patch.sh` does steps 2, 5 and the tagging half of 6, and
+refuses to tag until `release.yml` is green on the branch head:
+
+```bash
+scripts/release-patch.sh vX.Y.Z <sha>...   # cut, pick, push, wait, tag
+scripts/release-patch.sh --no-wait vX.Y.Z <sha>...   # cut, pick, push
+scripts/release-patch.sh vX.Y.Z            # later: wait for green, tag
+```
+
+It refuses a `feat:` pick unless `ALLOW_FEAT=1`. It asks GitHub through
+`gh run list` whether `release.yml` is green, and it never moves `latest`.
+
 1. **Pick the commits.** Find the fix's commits on `main`. For each
    prerequisite, check whether the release already carries it
    (`git log vX.Y.<Z-1> --grep '<subject>'`).
@@ -366,25 +377,53 @@ fixes.
 4. **Long suites.** A task cannot dispatch `nightly` or the live suites, so
    a person runs them on the release branch, or decides the picks do not
    need them and says so in the notes.
-5. **Release run (person).** `.grain/workflows/release.yml` answers
-   `release` on `release/v*`. It builds both daemon images, runs
-   `tests/container` and `tests/installer` against them, and publishes
-   `sha-<short>`. A repository admin starts it:
-   `POST /api/repos/bwsalmon/grain/release-runs` with
-   `{"branch":"release/vX.Y.Z","jobs":[".grain/workflows/release.yml:images"]}`.
-   Don't tag until this is green.
+5. **Release run.** `.github/workflows/release.yml` runs on every push to
+   `release/v*`. It builds both daemon images, runs `tests/container` and
+   `tests/installer` against them, and publishes `sha-<short>`. Don't tag
+   until this is green.
 6. **Tag and promote.** Tag the release commit `vX.Y.Z` and push the tag.
    Move `latest` onto it (`git tag -fa latest`) only if no newer release
-   exists, then dispatch `promote.yml:latest` as in section 8. Don't move
-   `latest` before step 5 publishes, because promotion fails while the
-   `sha-` images are missing.
+   exists, then dispatch `promote.yml` (with `version: vX.Y.Z`, or as in
+   section 8). Don't move `latest` before step 5 publishes, because
+   promotion fails while the `sha-` images are missing.
 7. **Notes and GitHub release.** Hand-write `docs/releases/vX.Y.Z.md`,
    listing only the picked fixes, and land it on `main` in a normal PR. The
    GitHub release is `gh release create vX.Y.Z --notes-file …`, run by
    somebody with GitHub credentials, since task sandboxes have none.
-8. **Clean up.** Delete `release/vX.Y.Z` once the tag and its images exist.
-   The tag is the release's permanent record. The fixes are already on
-   `main`, and the next minor carries them. Nothing is ported anywhere.
+8. **Keep the branch.** Leave `release/vX.Y.Z` on the remote. It is what
+   the patch-tag guard below checks the tag against, and `promote.yml`
+   runs that guard on every merge while `latest` names the patch. The
+   fixes are already on `main`, and the next minor carries them. Nothing is
+   ported anywhere.
+
+### The patch-tag guard
+
+A tag on `main`'s head is not a patch. `v3.0.1` and `v3.0.2` were
+hand-tagged on `main`, carrying 215 and then 117 more commits past `v3.0.0`.
+Dozens of them were `feat:`, and there was no rc, soak or release notes.
+`scripts/patch-tag-guard.sh` stops that. `release.yml` and `promote.yml`, in
+both `.github/` and `.grain/`, run it before they build or publish. It
+looks at the tag the run is for, at the `version` a promote dispatch names,
+and (`--latest`) at the `vX.Y.Z` tags on the commit the git tag `latest`
+names. A tag `vX.Y.Z` with `Z >= 1` passes only if one of these holds:
+
+- **It came from its release branch.** `release/vX.Y.Z` contains the
+  tagged commit and `vX.Y.<Z-1>` is an ancestor of it. Also, none of the
+  commits in `vX.Y.<Z-1>..vX.Y.Z` is on `main`. Cherry-picks have SHAs of
+  their own, so a release branch that is just `main` fails.
+- **It carries only fixes.** Every non-merge commit in `vX.Y.0..vX.Y.Z`
+  has a `fix:` or `fix(<scope>):` subject.
+
+Otherwise the run fails before it publishes anything, and it names the
+`feat:` subjects and counts the other non-fix commits the tag carries. To
+check a tag by hand, run `bash scripts/patch-tag-guard.sh vX.Y.Z`.
+`vX.Y.0`, rc, `-pending` tags and branch refs pass without a look.
+
+The guard works at publish time. It cannot stop somebody pushing the tag.
+A GitHub tag ruleset on `v*.*.*` (restrict creation to release managers,
+or require the tagged commit on a `release/v*` branch) is the stronger
+guard. That is a repository setting for an operator to make, and it is not
+in this tree.
 
 ## 10. Build versions
 
@@ -407,7 +446,7 @@ release from trunk. `v2.5.0` is an annotated placeholder tag on `main`, a
 version number and not a release: nothing is published for it, and
 `RELEASE_NEVER_PROMOTE` names it so the train writes the next release's notes
 from `v2.4.0`. Because of it, `main` builds `v2.6.0-dev`, and the first
-release from trunk is `v2.6.0` (`docs/design/release-from-trunk.md`, "Version
+release from trunk is `v2.6.0` (`design/design/release-from-trunk.design.md`, "Version
 Numbering Rules").
 
 Semver orders these correctly:
@@ -512,7 +551,7 @@ schedules are gone.
 **Before approving** a pending release, check the soak summary in the
 notification, merge the release-notes pull request, and look at the newest
 `post-reset-e2e` run. `docs/test-plans/2026-10-20-post-reset-e2e.md` lists
-the manual rows a sandbox cannot do (Cloudtop install, depot, real
+the manual rows a sandbox cannot do (Workstation install, depot, real
 github.com, a real upgrade through the Upgrade pane, live agents). Do these
 after any change to the installers or the git-host code.
 

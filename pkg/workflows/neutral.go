@@ -28,7 +28,7 @@ import (
 // types a Request and a Job carry, the name checks the parser applies,
 // the environment a step is given (which is part of a job's key), and
 // the guest-cache key. They moved here with the parser so that it stays
-// neutral (docs/design/grit-split.md, "Neutral packages"); pkg/ci
+// neutral (design/design/grit-split.design.md, "Neutral packages"); pkg/ci
 // re-exports each of them under its old name.
 
 // LifecycleImageEnv is model.LifecycleImageEnv, restated because this
@@ -49,6 +49,9 @@ type CapabilitySyntax struct {
 	// IsRepoAccess reports whether a name is `repo-read:` or
 	// `repo-write:` repository access (ci.IsRepoAccessCapability).
 	IsRepoAccess func(id string) bool
+	// IsRepoRead reports whether a name is read-only repository access
+	// (`repo-read:` or `repo#read`, ci.IsRepoReadCapability).
+	IsRepoRead func(id string) bool
 	// DeclaredOnly reports whether a job's declaring id is what grants
 	// it, subject to an authority other than the repository's CI
 	// capabilities list (pkg/ci's declaredOnly): repository access,
@@ -61,7 +64,7 @@ type CapabilitySyntax struct {
 // installs grain's when it is linked, which every grain binary does.
 // What it holds before then accepts plain names only and checks nothing
 // of a reference's grammar: deciding what a capability means is grain's
-// business, not the executor's (docs/design/grit-split.md, "Secrets and
+// business, not the executor's (design/design/grit-split.design.md, "Secrets and
 // trust").
 var Capabilities = CapabilitySyntax{
 	CheckGrant: func(string) error { return nil },
@@ -73,11 +76,18 @@ var Capabilities = CapabilitySyntax{
 		return list, nil
 	},
 	IsRepoAccess: isRepoAccess,
+	IsRepoRead:   isRepoRead,
 	DeclaredOnly: func(id string) bool { return isRepoAccess(id) || IsCapabilityRef(id) },
 }
 
+func isRepoRead(id string) bool {
+	return strings.HasPrefix(id, "repo-read:") ||
+		strings.HasPrefix(id, "https://grain.dev/capabilities/repo#read=")
+}
+
 func isRepoAccess(id string) bool {
-	return strings.HasPrefix(id, "repo-read:") || strings.HasPrefix(id, "repo-write:")
+	return isRepoRead(id) || strings.HasPrefix(id, "repo-write:") ||
+		(strings.HasPrefix(id, "https://grain.dev/capabilities/repo#write=") && strings.Contains(id, `"repo":`))
 }
 
 // IsCapabilityRef is model.IsCapabilityRef: a capability reference rather
@@ -160,7 +170,7 @@ const (
 	// release-train). Their verdicts are what a release candidate is
 	// selected on, and on 2026-10-22 a nightly at PriorityNormal was
 	// starved and then OOM-cancelled by ordinary task load
-	// (docs/design/release-from-trunk.md, RFT-2). It ranks above a
+	// (design/design/release-from-trunk.design.md, RFT-2). It ranks above a
 	// merge-queue head and below a repair, and it is the lowest rank that
 	// may spend the repair reserve (MaySpendReserve) and that has a hole
 	// held for it the moment the budget refuses it (ReservesAtOnce). It
@@ -223,13 +233,16 @@ func validateRequirementName(kind, name string) error {
 // the running deployment in, comma-separated (Request.DeployedImages).
 const DeployedImagesEnv = "GRAIN_DEPLOYED_IMAGES"
 
-// RequestedByKindEnv, RequestedByEnv and ReleaseVersionEnv are the
-// variables a job started by a person-only route finds who asked, and
-// for which release, in (Request.RequestedByKind, Request.ReleaseVersion).
+// RequestedByKindEnv, RequestedByEnv, ReleaseVersionEnv and
+// ReleaseShortSoakOKEnv are the variables a job started by a person-only
+// route finds who asked, for which release, and whether they accepted a
+// short soak, in (Request.RequestedByKind, Request.ReleaseVersion,
+// Request.ReleaseShortSoakOK).
 const (
-	RequestedByKindEnv = "GRAIN_CI_REQUESTED_BY_KIND"
-	RequestedByEnv     = "GRAIN_CI_REQUESTED_BY"
-	ReleaseVersionEnv  = "GRAIN_CI_RELEASE_VERSION"
+	RequestedByKindEnv    = "GRAIN_CI_REQUESTED_BY_KIND"
+	RequestedByEnv        = "GRAIN_CI_REQUESTED_BY"
+	ReleaseVersionEnv     = "GRAIN_CI_RELEASE_VERSION"
+	ReleaseShortSoakOKEnv = "GRAIN_CI_RELEASE_SHORT_SOAK_OK"
 )
 
 // RunEnv is what grain tells every step about the run it is part of --
@@ -279,6 +292,9 @@ func RunEnv(req Request, workflow, jobID string) map[string]string {
 	}
 	if req.ReleaseVersion != "" {
 		env[ReleaseVersionEnv] = req.ReleaseVersion
+	}
+	if req.ReleaseShortSoakOK {
+		env[ReleaseShortSoakOKEnv] = "true"
 	}
 	return env
 }

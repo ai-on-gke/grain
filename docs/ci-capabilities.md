@@ -7,7 +7,8 @@ including runs requested manually or through an agent. No daemon restart is
 needed. Clearing the list returns CI to a read-only checkout without capability
 material. Agent task defaults do not grant anything to CI.
 
-Repository access (`repo-read:` / `repo-write:`) is not granted here. A
+Repository access (`repo#read` / `repo#write` `{repo}`, formerly
+`repo-read:` / `repo-write:`) is not granted here. A
 job declares it in its own workflow file, and its team's GitHub
 credential decides whether it holds. See
 [Repository access](#repository-access-declared-in-the-repository-enforced-by-the-teams-credential).
@@ -77,7 +78,8 @@ that uses none, and `gcp-smoke.yml`'s `smoke` job is the one that asks for
 a GCP key -- as the gcp server's reference
 `https://grain.dev/capabilities/gcp#gcp-key`, not the legacy `gcp-key`.
 
-Repository access (`repo-read:` / `repo-write:`) and capability references
+Repository access (`repo#read` / `repo#write` `{repo}`, or `repo-read:` /
+`repo-write:`) and capability references
 are unaffected by all three: they are granted by being declared, never by
 this list ([below](#repository-access-declared-in-the-repository-enforced-by-the-teams-credential)).
 A grain build older than the empty-list rule reads `capabilities: []` as an
@@ -87,7 +89,7 @@ absent key and hands the job the whole set, as before.
 
 The providers on this page are the in-process ones in `pkg/capability/`, and
 CI keeps using them until runs are moved over to capability servers
-([docs/capabilities-spec.md](capabilities-spec.md)). Their capability-server
+([design/spec/capabilities/capabilities.spec.md](../design/spec/capabilities/capabilities.spec.md)). Their capability-server
 equivalents are already in the binary, served by `grain capability <name>`:
 `gcp` (`#gcp-key`, for `gcp-key` and `gcp-key:<name>`), `model-proxy`
 (`#model-proxy`, for the `<vendor>-proxy` capabilities), `git`
@@ -157,6 +159,28 @@ trusted post-merge release or an operator-triggered `workflow_dispatch` run.
 Pull-request and ordinary push runs cannot obtain it, and an agent's
 task-scoped CI request remains an ordinary push. The repository whose
 credential is resolved is the job's own, never one a workflow file names.
+
+That token is whatever the ladder answered when the job's sandbox was made,
+and most of what it answers with -- an App installation token, an OAuth access
+token -- lasts an hour. So a job is also handed a way to ask again, for the
+same repository and registry and through the same gate
+(`pkg/capability/packagepublish/refresh.go`):
+
+- `~/.docker/config.json` names `docker-credential-grain` in `credHelpers` for
+  the registry, and the helper is placed in `~/.grain/bin`, which every step
+  has on its `PATH`. Every `docker push` (and `docker buildx ... --push`) asks
+  it, and it asks grain, so a push two hours into a release is handed a token
+  that is valid then. `docker login` with the static token still succeeds and
+  stores nothing.
+- `docker-credential-grain refresh` rewrites `~/.package-publish-token` with a
+  current token, for a script that reads the file rather than going through
+  docker.
+
+The helper reaches grain's CI API listener with a per-job token at
+`~/.package-publish-refresh-{url,token}`, which works only for this job's
+repository and stops working when the job ends. Grain's log records each
+re-mint by run, repository and credential name, never the token. A daemon
+that is not serving its CI API listener places the static login alone.
 
 One `workflow_dispatch` run is started by Grain rather than typed by
 anybody, and it is worth naming here because it carries this credential:
@@ -419,7 +443,7 @@ against grain's CI API listener, held to the routes of the scopes the job
 holds and to the job's own repository.
 
 `release-gate-read` gives a release workflow
-(`.grain/workflows/release-train.yml`, docs/design/release-from-trunk.md
+(`.grain/workflows/release-train.yml`, design/design/release-from-trunk.design.md
 §6) the deployment state it needs to choose a commit and judge a soak.
 It is the built-in preset `api:release-gate-read` (`ci:read`,
 `tasks:read`, `sandboxes:read`, and `tasks:from-template` limited to
@@ -435,7 +459,7 @@ It is the built-in preset `api:release-gate-read` (`ci:read`,
 
 No request it allows approves a release: that is
 `POST /api/repos/{owner}/{name}/pending-releases/{version}/approve`, which
-only a person may call (docs/design/release-from-trunk.md §4).
+only a person may call (design/design/release-from-trunk.design.md §4).
 
 The job finds the listener in `/home/debian/.grain-api/`:
 
@@ -458,8 +482,15 @@ outright.
 
 ## Repository access: declared in the repository, enforced by the team's credential
 
-`repo-read:<owner>/<repo>` and `repo-write:<owner>/<repo>` are not
-granted from this list. **The declaration in the repository is the
+`https://grain.dev/capabilities/repo#read={"repo":"<owner>/<repo>"}` and
+`https://grain.dev/capabilities/repo#write={"repo":"<owner>/<repo>"}`, or
+their older spellings `repo-read:<owner>/<repo>` and
+`repo-write:<owner>/<repo>`, are not granted from this list. Both spellings
+are accepted in a job's `capabilities:` and will stay accepted, since those
+files live in other people's repositories. No provider stands behind either
+one: the grant carries its own rules (`model.IsRepoAccessGrant`). It is
+CI-only, so a task that holds it is refused. Write access has the event gate
+described below (`model.RepoAccessAdmitsCIEvent`). **The declaration in the repository is the
 allowance; the team's GitHub credential is the authority.** A job gets
 read or write access to a repository only when both of these hold:
 
@@ -501,8 +532,9 @@ workflow's `on: schedule` cron (`ci.Request.TrustedSchedule`, set only by
 `push` or `pull_request` run, and a caller's own
 `grain ci run -event schedule`, still never hold write, whatever the job
 declares. A provider opts in to trusted schedules with
-`model.TrustedScheduleCapability`. `repo-write`, `release-gate-read` and
-`package-publish` have opted in, so the daily `release-train` cron
+`model.TrustedScheduleCapability`. Repository write access is no
+provider's: its gate, `model.RepoAccessAdmitsCIEvent`, admits trusted
+schedules itself. `release-gate-read` and `package-publish` have opted in, so the daily `release-train` cron
 publishes its rc and pending images itself; `registry-push` has not, so a
 cron still can't publish with it. Once a `release-train` schedule's run on
 the default branch finishes, the orchestrator also starts
@@ -541,8 +573,9 @@ Both are gone:
 
 - A `repo-read:` or `repo-write:` entry in `repo_config.ci_capabilities`
   is now a no-op. It no longer satisfies a job's declaration, and it no
-  longer reaches a job that did not declare it. Existing rows are left
-  as they are rather than rewritten, and can be removed at leisure.
+  longer reaches a job that did not declare it. Schema migration 88
+  rewrote existing entries, and every stored grant, to the
+  `repo#read` / `repo#write` `{repo}` form. They can be removed at leisure.
 - A job that relied on such an entry without declaring it must now
   declare it in its workflow file. Its team must also have a credential
   that can reach the repository.

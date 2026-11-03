@@ -252,18 +252,26 @@ type TaskTransition struct {
 // for, what happened on every attempt, and everything said about it.
 type TaskRecord struct {
 	TaskSummary
-	Description       string
-	Author            string
-	AuthorKind        string
-	Base              string
-	Capabilities      []string
-	PullRequest       string
-	FailedAttempts    int
-	LastFailureAt     *time.Time
-	LastFailureReason string
-	Attempts          []TaskAttempt
-	Transitions       []TaskTransition
-	Comments          []TaskComment
+	Description  string
+	Author       string
+	AuthorKind   string
+	Base         string
+	Capabilities []string
+	PullRequest  string
+	// PullRequestMergedAt and PullRequestClosedAt are when grain saw that
+	// pull request merge, or close without merging (model.Observation's
+	// PrMergedAt and PrClosedAt): nil for both while it is open, or while
+	// grain has not read it settle. A task closed before its pull request
+	// merged says so here and nowhere else in the record -- its one close
+	// transition predates the merge (task 2350).
+	PullRequestMergedAt *time.Time
+	PullRequestClosedAt *time.Time
+	FailedAttempts      int
+	LastFailureAt       *time.Time
+	LastFailureReason   string
+	Attempts            []TaskAttempt
+	Transitions         []TaskTransition
+	Comments            []TaskComment
 	// Activity is what this task's live run is saying it is doing, for
 	// the reason the merge queue's own state is on the summary above: it
 	// is a question asked of a task that looks stuck, and until now the
@@ -376,7 +384,7 @@ var listTasksInputSchema = map[string]any{
 
 // taskListFilter is list_grain_tasks' narrowing beyond state: the filters
 // that let a judgement agent ask for what moved instead of sweeping the
-// whole list (docs/design/durable-tasks.md#DT-13).
+// whole list (design/design/durable-tasks.design.md#DT-13).
 //
 // State may name several states, comma-separated ("proposed,queued"),
 // and a task in any of them matches. Repo and Search are grain task
@@ -701,7 +709,7 @@ var taskIDInputSchema = map[string]any{
 // The views read_grain_task answers in. Summary is the default: about a
 // kilobyte that says what the task is and what last happened to it, which
 // is what a judgement agent re-reads before acting on or naming a task
-// (docs/design/durable-tasks.md#DT-13). Full is the whole record, and
+// (design/design/durable-tasks.design.md#DT-13). Full is the whole record, and
 // conversation pages the thread by comment id.
 const (
 	TaskViewSummary      = "summary"
@@ -835,7 +843,14 @@ func renderTaskRecord(t TaskRecord, now time.Time) string {
 		fmt.Fprintf(&b, "Capabilities: %s\n", strings.Join(t.Capabilities, ", "))
 	}
 	if t.PullRequest != "" {
-		fmt.Fprintf(&b, "Pull request: %s\n", t.PullRequest)
+		fmt.Fprintf(&b, "Pull request: %s", t.PullRequest)
+		switch {
+		case t.PullRequestMergedAt != nil:
+			b.WriteString(sinceWords(t.PullRequestMergedAt, now, " -- merged "))
+		case t.PullRequestClosedAt != nil:
+			b.WriteString(sinceWords(t.PullRequestClosedAt, now, " -- closed without merging "))
+		}
+		b.WriteByte('\n')
 	}
 	writeMergeQueue(&b, t.MergeQueue, t.State, now)
 	writeActivity(&b, t.Activity, now)

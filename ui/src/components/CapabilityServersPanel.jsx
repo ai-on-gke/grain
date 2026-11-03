@@ -56,7 +56,7 @@ export const CAPABILITY_SERVERS_GUIDE =
   "https://github.com/ai-on-gke/grain/blob/main/docs/capability-servers-ui.md";
 
 // CapabilityServersPanel is the deployment's mcpServers
-// (docs/capabilities-spec.md §3.1): the capability servers grain attaches,
+// (design/spec/capabilities/capabilities.spec.md §3.1): the capability servers grain attaches,
 // keyed by capability_id, with each one's attach status. Everything here
 // is plain configuration that is exported to grain/config; a credential
 // is bound to a secret in the encrypted store, so what the entry holds is
@@ -138,10 +138,25 @@ const kindHelp = {
   builtin:
     "Ships with grain and is listed on every deployment. Its capability ID is fixed; disable it if you do not want it.",
   custom: "Added on this deployment, by hand or through grain/config.",
+  inProcess:
+    "Ships inside grain itself and is listed on every deployment. It has nothing to configure and cannot be disabled or removed: what holds its methods is up to grants and the Capability policy.",
 };
 
+// inProcessRuns is runsAt's answer for a server grain runs inside its
+// own process (pkg/capability/grainserver), which has no entry to read.
+export const inProcessRuns = {
+  key: "in-process",
+  label: "in-process",
+  help: "Runs inside grain's own process: there is no command, URL or configuration, and it is always attached.",
+};
+
+// serverRuns is where a server runs, as runsAt says.
+function serverRuns(server) {
+  return server.inProcess ? inProcessRuns : runsAt(server.config);
+}
+
 const grantedHelp =
-  "How many open tasks, templates, schedules and Settings-declared workflow jobs grant one of this server's methods.";
+  "How many open tasks, templates, schedules, Settings-declared workflow jobs and default grants (the deployment's, or a repository's) grant one of this server's methods.";
 
 // HelpChip is a chip whose meaning is its tooltip.
 function HelpChip({ help, ...props }) {
@@ -214,6 +229,7 @@ function Glossary() {
     ["beside grain", runsAt({ command: "x" }).help],
     ["on the host", runsAt({ command: "x", run: "host" }).help],
     ["remote (HTTP)", runsAt({}).help],
+    [inProcessRuns.label, inProcessRuns.help],
     ["granted by N", grantedHelp],
     [
       "capability ID",
@@ -400,17 +416,34 @@ export function UsageList({ holders }) {
           key={`${h.kind}:${h.id}:${h.grant}`}
           data-holder={`${h.kind}:${h.id}`}
         >
-          {h.kind === "task" ? (
-            // A task is the one holder with a page of its own to open,
-            // where its grant is changed (2026-11-01 walkthrough).
-            <Link href={`/tasks/${encodeURIComponent(h.id)}`}>
-              Task #{h.id}
+          {h.kind === "default" ? (
+            // Default grants are seeded onto every new task: the
+            // deployment's on Settings → Tasks, a repository's on its
+            // page.
+            <Link
+              href={
+                h.repo
+                  ? `/repos/${h.repo}/settings/agents`
+                  : "/settings/tasks#task-defaults"
+              }
+            >
+              {h.repo ? `Default grants of ${h.repo}` : "Deployment defaults"}
             </Link>
           ) : (
-            holderKind[h.kind] || h.kind
-          )}{" "}
-          {h.name ? `“${h.name}”` : h.id}
-          {h.repo ? ` on ${h.repo}` : ""}
+            <>
+              {h.kind === "task" ? (
+                // A task is the one holder with a page of its own to open,
+                // where its grant is changed (2026-11-01 walkthrough).
+                <Link href={`/tasks/${encodeURIComponent(h.id)}`}>
+                  Task #{h.id}
+                </Link>
+              ) : (
+                holderKind[h.kind] || h.kind
+              )}{" "}
+              {h.name ? `“${h.name}”` : h.id}
+              {h.repo ? ` on ${h.repo}` : ""}
+            </>
+          )}
           <Typography
             component="span"
             variant="caption"
@@ -920,6 +953,7 @@ function ServerConfigForm({ server, readOnly, onSaved, showError }) {
 // serverName is what a server is called on this page: a built-in's own
 // name, or a custom server's capability_id without its scheme.
 function serverName(server) {
+  if (server.inProcess) return server.inProcess.name;
   return server.builtin
     ? server.builtin.name
     : server.id.replace(/^https?:\/\//, "");
@@ -927,6 +961,7 @@ function serverName(server) {
 
 // serverSummary is a row's one line on what the server gives a task.
 function serverSummary(server) {
+  if (server.inProcess?.summary) return server.inProcess.summary;
   if (server.builtin?.summary) return server.builtin.summary;
   if (server.status?.summary) return server.status.summary;
   if (server.config?.summary) return server.config.summary;
@@ -1028,8 +1063,8 @@ function StatusDot({ server }) {
 // show, each with its meaning as a tooltip.
 function ServerChips({ server, holders }) {
   const state = serverState(server);
-  const builtin = Boolean(server.builtin);
-  const where = runsAt(server.config);
+  const builtin = Boolean(server.builtin || server.inProcess);
+  const where = serverRuns(server);
   return (
     <Stack
       direction="row"
@@ -1038,7 +1073,13 @@ function ServerChips({ server, holders }) {
       sx={{ flexWrap: "wrap", rowGap: 0.75 }}
     >
       <HelpChip
-        help={builtin ? kindHelp.builtin : kindHelp.custom}
+        help={
+          server.inProcess
+            ? kindHelp.inProcess
+            : builtin
+              ? kindHelp.builtin
+              : kindHelp.custom
+        }
         variant="outlined"
         color={builtin ? "primary" : "default"}
         label={builtin ? "built-in" : "custom"}
@@ -1071,7 +1112,7 @@ function ServerChips({ server, holders }) {
 // its full name, what it gives a task and the chips saying what state
 // it is in. It is a link to the server's own page.
 function ServerRow({ server, holders, onOpen }) {
-  const builtin = Boolean(server.builtin);
+  const builtin = Boolean(server.builtin || server.inProcess);
   return (
     <ButtonBase
       component="a"
@@ -1083,7 +1124,8 @@ function ServerRow({ server, holders, onOpen }) {
         onOpen(server.id);
       }}
       data-capability-server-row={server.id}
-      data-builtin-row={builtin ? server.builtin.name : undefined}
+      data-builtin-row={server.builtin ? server.builtin.name : undefined}
+      data-in-process-row={server.inProcess ? server.inProcess.name : undefined}
       sx={{
         display: "grid",
         gridTemplateColumns: {
@@ -1214,8 +1256,16 @@ export default function CapabilityServersPanel({
   // with no status at all is one no registry here reports (grain demo's
   // built-ins, say), which more reads will not change: it is read again
   // only a few times after loading or saving, not forever.
+  // A server just disabled is in the same position: the answer to
+  // Disable still carries the state it had before the daemon let go of
+  // it (attached, or pending), so it is read again until it says
+  // disabled rather than showing that state until a reload.
   const live = (servers || []).filter((s) => !s.config.disabled);
-  const pending = live.some((s) => s.status?.state === "pending");
+  const pending =
+    live.some((s) => s.status?.state === "pending") ||
+    (servers || []).some(
+      (s) => s.config.disabled && s.status && s.status.state !== "disabled",
+    );
   const unreported = live.some((s) => !s.status);
   const unreportedReads = useRef(0);
   const settling = unreported && unreportedReads.current < unreportedReadLimit;
@@ -1330,7 +1380,87 @@ export default function CapabilityServersPanel({
     </Button>
   );
 
+  // renderInProcessDetail is the page of a server grain runs inside its
+  // own process: what it gives a task and what holds it, with no
+  // connection, settings or actions, since it has none.
+  const renderInProcessDetail = (server) => {
+    const state = serverState(server);
+    const name = `${server.inProcess.name} server`;
+    const holders = usage[server.id] || [];
+    return (
+      <Paper
+        key={server.id}
+        variant="outlined"
+        data-capability-server={server.id}
+        data-in-process={server.inProcess.name}
+        sx={{ p: { xs: 1.5, sm: 2 }, minWidth: 0 }}
+      >
+        <Box sx={{ minWidth: 0, overflowWrap: "anywhere" }}>
+          <Typography variant="h6" component="h4">
+            {name}
+          </Typography>
+          {server.inProcess.summary && (
+            <ServerSummaryLine text={server.inProcess.summary} label={name} />
+          )}
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            sx={{ mb: 1 }}
+            title="The capability ID: the name grants use for this server's methods, as <capability ID>#<method>."
+          >
+            Capability ID: <code>{server.id}</code>
+          </Typography>
+          <ServerChips server={server} holders={holders} />
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            data-testid="capability-server-state-help"
+            sx={{ mt: 0.75 }}
+          >
+            {stateHelp[state]}
+          </Typography>
+        </Box>
+        <Section
+          title="What it gives a task"
+          caption="Each method is one capability a task, template, schedule or CI job can be granted, named <capability ID>#<method>."
+          testid="capability-server-methods"
+        >
+          {server.status?.methodDetails?.length > 0 ? (
+            <CapabilityMethodTable details={server.status.methodDetails} />
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              No methods reported.
+            </Typography>
+          )}
+        </Section>
+        <Section
+          title="Connection"
+          caption="Where this server runs."
+          testid="capability-server-connection"
+        >
+          <Typography
+            variant="body2"
+            data-testid="capability-server-in-process"
+          >
+            Built into grain and run inside its own process: there is no
+            command, URL, secret or server setting to change, and it cannot be
+            disabled or removed. Who may hold its methods is decided by grants
+            and the Capability policy below.
+          </Typography>
+        </Section>
+        <Section
+          title="Granted by"
+          caption="The open tasks, templates, schedules, Settings-declared workflow jobs and default grants that name one of this server's methods."
+          testid="capability-server-usage"
+        >
+          <UsageList holders={holders} />
+        </Section>
+      </Paper>
+    );
+  };
+
   const renderServerDetail = (server) => {
+    if (server.inProcess) return renderInProcessDetail(server);
     const state = serverState(server);
     const builtin = Boolean(server.builtin);
     const isStdio = Boolean(server.config.command);
@@ -1339,7 +1469,7 @@ export default function CapabilityServersPanel({
       : server.config.headers || {};
     const holders = usage[server.id] || [];
     const tested = testing[server.id];
-    const where = runsAt(server.config);
+    const where = serverRuns(server);
     const hasSettings =
       Boolean(server.status?.configSchema) ||
       Boolean(builtin && server.status?.error) ||
@@ -1697,7 +1827,7 @@ export default function CapabilityServersPanel({
 
         <Section
           title="Granted by"
-          caption="The open tasks, templates, schedules and Settings-declared workflow jobs whose grants name one of this server's methods."
+          caption="The open tasks, templates, schedules, Settings-declared workflow jobs and default grants that name one of this server's methods."
           testid="capability-server-usage"
         >
           <UsageList holders={holders} />

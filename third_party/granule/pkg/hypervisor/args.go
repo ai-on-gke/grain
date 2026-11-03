@@ -49,6 +49,9 @@ func BuildArgs(cfg config.Config) ([]string, error) {
 
 	args = append(args, "--cpus", cpusArg(cfg))
 	args = append(args, "--memory", memoryArg(cfg))
+	if cfg.Balloon {
+		args = append(args, "--balloon", balloonArg)
+	}
 
 	for _, d := range cfg.Disks {
 		// cloud-hypervisor is told each disk's format explicitly rather
@@ -101,6 +104,9 @@ func BuildArgs(cfg config.Config) ([]string, error) {
 		extra := ",image_type=raw,sparse=on"
 		if isQcow2Disk(d.Path) {
 			extra = ",image_type=qcow2,backing_files=on,sparse=on"
+		}
+		if !d.ReadOnly && diskDirect(cfg.DiskDirect, d.Path) {
+			extra += ",direct=on"
 		}
 		if numQueues > 0 {
 			extra += fmt.Sprintf(",num_queues=%d", numQueues)
@@ -159,6 +165,11 @@ func BuildArgs(cfg config.Config) ([]string, error) {
 
 	return args, nil
 }
+
+// balloonArg is --balloon's value when config.Config.Balloon is set: an
+// empty balloon that is only ever a channel for free page reporting. See
+// Balloon's own comment for why.
+const balloonArg = "size=0,deflate_on_oom=on,free_page_reporting=on"
 
 // memoryArg builds --memory's value: a fixed starting size, plus (when
 // MemoryHotplug is set and there's actually room to grow into) a

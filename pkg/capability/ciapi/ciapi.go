@@ -39,7 +39,7 @@
 //     only the templates its grant names (model.APIPreset.Templates).
 //
 // release-gate-read, the release train's capability
-// (docs/design/release-from-trunk.md, RFT-3), is the built-in preset
+// (design/design/release-from-trunk.design.md, RFT-3), is the built-in preset
 // api:release-gate-read, and the bare name a workflow declares is an
 // alias for it (NewAlias).
 //
@@ -244,6 +244,7 @@ type Endpoint struct {
 	mu       sync.RWMutex
 	url      string
 	upstream Upstream
+	mounts   map[string]http.Handler
 }
 
 // NewEndpoint returns an endpoint with an empty registry, no address and
@@ -274,6 +275,38 @@ func (e *Endpoint) SetUpstream(h Upstream) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.upstream = h
+}
+
+// Mount serves h for every path under prefix (which ends in "/") on
+// this listener, ahead of grain's API and outside its token registry: a
+// capability whose sandbox side has to call back into grain for more
+// than grain's API -- package-publish re-minting a job's registry login
+// (pkg/capability/packagepublish) -- reaches the job through the same
+// address rather than a fabric port of its own. h authenticates every
+// request itself, with tokens of its own; this listener's never reach
+// it as anything more than a header.
+func (e *Endpoint) Mount(prefix string, h http.Handler) {
+	if !strings.HasPrefix(prefix, "/") || !strings.HasSuffix(prefix, "/") || strings.HasPrefix(prefix, "/api/") {
+		panic(fmt.Sprintf("ciapi: Mount(%q): a mount is a path prefix ending in / and outside /api/", prefix))
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.mounts == nil {
+		e.mounts = map[string]http.Handler{}
+	}
+	e.mounts[prefix] = h
+}
+
+// mounted is the handler Mount gave path's prefix, if any.
+func (e *Endpoint) mounted(path string) (http.Handler, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for prefix, h := range e.mounts {
+		if strings.HasPrefix(path, prefix) {
+			return h, true
+		}
+	}
+	return nil, false
 }
 
 func (e *Endpoint) handler() Upstream {
@@ -384,7 +417,7 @@ func (*Provider) SupportsCIEvent(event string) bool {
 
 // SupportsTrustedSchedule admits the cron grain itself fired from a
 // workflow on the default branch: release-train.yml is one
-// (docs/design/release-from-trunk.md §6). A caller's own `-event
+// (design/design/release-from-trunk.design.md §6). A caller's own `-event
 // schedule` run is still refused (ci.Request.TrustedSchedule).
 func (*Provider) SupportsTrustedSchedule() bool { return true }
 

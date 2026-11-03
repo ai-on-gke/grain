@@ -258,7 +258,7 @@ func TestSetupScriptRunsInTheRootWithACleanEnvironment(t *testing.T) {
 	dir := t.TempDir()
 	root := filepath.Join(dir, "root")
 	script := filepath.Join(dir, "setup")
-	os.WriteFile(script, []byte("#!/bin/sh\npwd\necho \"token=${GRAIN_TOKEN:-none}\"\nread x && echo stdin-open\nexit 7\n"), 0o700)
+	writeExecutableStub(t, script, "#!/bin/sh\npwd\necho \"token=${GRAIN_TOKEN:-none}\"\nread x && echo stdin-open\nexit 7\n")
 	cmd := exec.Command("sh", "-c", setupScript, "sh", script, "30", root, "65536")
 	cmd.Env = append(os.Environ(), "GRAIN_TOKEN=leaked")
 	out, err := cmd.CombinedOutput()
@@ -275,7 +275,7 @@ func TestSetupScriptRunsInTheRootWithACleanEnvironment(t *testing.T) {
 		t.Error("the setup command's stdin was not closed")
 	}
 
-	os.WriteFile(script, []byte("#!/bin/sh\nsleep 30\n"), 0o700)
+	writeExecutableStub(t, script, "#!/bin/sh\nsleep 30\n")
 	out, err = exec.Command("sh", "-c", setupScript, "sh", script, "1", root, "65536").CombinedOutput()
 	if !errors.As(err, &exit) || exit.ExitCode() != 124 {
 		t.Fatalf("a command past its timeout exited %v: %s", err, out)
@@ -306,8 +306,8 @@ func (s *channelSandbox) ForwardCapabilityPort(_ context.Context, sandboxPort in
 // A port forward carried over the dial-out channel goes through the
 // relay's forward rather than straight to host_port: no guest forwarder or
 // token is placed, and the grant's Close cuts a connection the channel is
-// carrying, as it does a guest forwarder's (docs/capabilities-spec.md
-// §5.3.4, docs/design/grain-on-gke.md#GKE-3).
+// carrying, as it does a guest forwarder's (design/spec/capabilities/capabilities.spec.md
+// §5.3.4, design/design/grain-on-gke.design.md#GKE-3).
 func TestMaterializePassForwardsChannelPortsThroughTheRelaysForward(t *testing.T) {
 	if _, err := os.Stat("/proc/net/tcp"); err != nil {
 		t.Skip("socket ownership is read from /proc")

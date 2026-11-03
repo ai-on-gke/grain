@@ -64,6 +64,10 @@ type deliveryWorld struct {
 
 	mu      sync.Mutex
 	prompts map[string][]string // task ID -> each run's assembled prompt
+
+	// mcpArgs, when set, adds to each run's mcpserver command line what
+	// a Framework would pass from the run (-run-deadline, say).
+	mcpArgs func(cfg agent.RunConfig) []string
 }
 
 // deliveryScript is one run's agent side: what it calls on the real MCP
@@ -197,6 +201,9 @@ func (w *deliveryWorld) run(ctx context.Context, cfg agent.RunConfig) (*agent.Re
 		"-addenda-after", strconv.FormatInt(cfg.AddendaAfter, 10)}
 	if cfg.Interactive {
 		args = append(args, "-interactive")
+	}
+	if w.mcpArgs != nil {
+		args = append(args, w.mcpArgs(cfg)...)
 	}
 	cmd := exec.CommandContext(ctx, w.bin, args...)
 	stdin, err := cmd.StdinPipe()

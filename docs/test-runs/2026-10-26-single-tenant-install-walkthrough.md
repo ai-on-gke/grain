@@ -4,7 +4,7 @@ Task 1058, the first weekly run of
 `.grain/schedules/install-walkthrough-single-tenant.yml`
 (`docs/test-plans/install-walkthroughs.md`). The baseline is task 4344's
 [2026-10-16 report](2026-10-16-single-tenant-install-walkthrough.md). That run
-used `scripts/cloudtop-install.sh` on the task sandbox. This one uses core
+used a wrapper distribution's own installer on the task sandbox. This one uses core
 `scripts/setup.sh` on a throwaway GCE VM, so several of last week's bugs
 (B2, B4, B5, B6, B8) were in code paths this run reaches differently. The
 table says where that matters.
@@ -26,7 +26,7 @@ exactly `origin/main`. No `GRAIN_HOST_BINARY` pass was needed.
 | B2 `grain sync` ignores `cli.env` (model seed 401) | **Not reachable.** setup.sh no longer seeds models through `grain sync`. It runs `grain connections import`, which seeded a connection with exit 0 (step 7) |
 | B3 re-run drops `-policy`, no knob | **Fixed.** `GRAIN_POLICY` exists. A plain re-run logs "Local policy: keeping … from the installed unit" and keeps it |
 | B4 closing text wrong about single mode | **Fixed for setup.sh.** "every visitor, localhost included, enters the access code", and `access: single-tenant … there are no accounts or passwords`. The password-account branch survives only for a pre-tenancy daemon |
-| B5 hints name a `grain` account that isn't there | **Not applicable** here: setup.sh runs as `grain`, so the hint is right. A different hint was wrong (N1, fixed in this PR). The Cloudtop case is now the Google walkthrough's |
+| B5 hints name a `grain` account that isn't there | **Not applicable** here: setup.sh runs as `grain`, so the hint is right. A different hint was wrong (N1, fixed in this PR). The Workstation case is now the Google walkthrough's |
 | B6 installer key advice configures no connection | **Partly fixed, partly unverified.** `GRAIN_GEMINI_API_KEY` now creates a `gemini` connection. It advertises no models, so the default model is "served by no connection". This run had no real key, so it can't tell whether discovery would fill the list in (N4) |
 | B7 policy holds the owner's own task, "paused or busy" | **Fixed.** The daemon logs `local requesters: operator -- … the UI and CLI file tasks as`. The owner's task on the allowed repo wasn't held, and the log says `held by local policy: …` |
 | B8 plain-HTTP git host accepted, branch check calls GitHub | **Not reached.** The connection was on loopback and no run dispatched. Creating a task on that host still says "give the credential access on GitHub" (N2) |
@@ -127,7 +127,7 @@ Noted, not filed:
 
 ## Human checklist
 
-Updated from last week's. Cloudtop items moved to the Google walkthrough.
+Updated from last week's. Workstation items moved to the Google walkthrough.
 These need a real host, a real key or a real forge:
 
 1. **A real Gemini key.** `sudo GRAIN_GEMINI_API_KEY=… GRAIN_CHANNEL=main ./scripts/setup.sh`

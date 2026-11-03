@@ -24,6 +24,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // A made-up host-tool grant, so that the seam is tested without any real
@@ -268,4 +269,39 @@ func TestRegisterHostToolGrantRefusesADuplicate(t *testing.T) {
 		}
 	}()
 	RegisterHostToolGrant(HostToolGrant{Capability: madeUpGrant, Tools: []string{"x"}})
+}
+
+// A host-tool grant registered for a capability server method is held by a
+// run holding that method -- recorded, bare, or under the retired bare name
+// that is an alias of it -- and one registered under the retired bare name
+// is held by a run holding the method; in each case the hook command carries
+// the grant as registered and the hook reads it back to admit the tools.
+func TestHostToolGrantIsMatchedByMethod(t *testing.T) {
+	const (
+		ref   = "https://grain.example/capabilities/made-up#lookup"
+		grant = ref + "={}"
+	)
+	t.Cleanup(model.RegisterLegacyGrantAlias(madeUpGrant, grant))
+	for _, registered := range []string{grant, madeUpGrant} {
+		t.Run(registered, func(t *testing.T) {
+			t.Cleanup(RegisterHostToolGrant(HostToolGrant{Capability: registered, Tools: madeUpTools}))
+			for _, held := range []string{grant, ref, madeUpGrant} {
+				args := hookArgs(agent.RunConfig{Grants: []string{"self-debug", held}}, "/h")
+				if len(args) < 2 || args[0] != "-grant" || args[1] != registered {
+					t.Errorf("holding %s: hookArgs = %q, want -grant %s", held, args, registered)
+					continue
+				}
+				opts, ignored := ParseHookArgs(args)
+				if len(ignored) != 0 {
+					t.Fatalf("ParseHookArgs ignored %q", ignored)
+				}
+				if _, ok := opts.allowsHostTool(madeUpTools[0]); !ok {
+					t.Errorf("holding %s: the hook does not admit %s from %q", held, madeUpTools[0], args)
+				}
+			}
+			if args := hookArgs(agent.RunConfig{Grants: []string{"https://grain.example/capabilities/made-up#other={}"}}, "/h"); args != nil {
+				t.Errorf("another method of the same server opened the host tools: %q", args)
+			}
+		})
+	}
 }

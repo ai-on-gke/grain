@@ -41,7 +41,7 @@ func (f *fakeCI) finishAt(id string, conclusion ci.Conclusion, at time.Time, job
 // A release of trunk that ends with an `infra` verdict is re-run -- the
 // jobs that did not pass, uncached, after the retry delay -- before it is
 // counted as a failed release or anybody is filed to triage it
-// (docs/design/release-from-trunk.md, RFT-2). Once the re-runs are spent
+// (design/design/release-from-trunk.design.md, RFT-2). Once the re-runs are spent
 // it is the failed release it always was.
 func TestAnInfraReleaseIsReRunBeforeItIsTriaged(t *testing.T) {
 	t.Parallel()

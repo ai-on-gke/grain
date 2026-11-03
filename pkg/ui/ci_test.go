@@ -1099,8 +1099,8 @@ func TestCancelCIRun(t *testing.T) {
 	// merge queue's reconciler would start again behind them
 	// (orchestrator's ciReplacementFor). The note cannot carry that --
 	// there is no note here at all.
-	if len(runner.sources) != 1 || runner.sources[0] != ci.CancelByOperator {
-		t.Errorf("sources %q, want a person's own cancellation", runner.sources)
+	if len(runner.sources) != 1 || runner.sources[0] != ci.CancelByPrincipal("alice") || !runner.sources[0].ByHand() {
+		t.Errorf("sources %q, want alice's own cancellation", runner.sources)
 	}
 
 	// And one with a note carries it through to the runner, trimmed.
@@ -1438,8 +1438,8 @@ func TestCloseCancelsInFlightTaskCIRuns(t *testing.T) {
 		}
 	}
 	for i, source := range runner.sources {
-		if source != ci.CancelByOperator {
-			t.Errorf("source[%d] = %q, want %q", i, source, ci.CancelByOperator)
+		if source != ci.CancelByPrincipal("alice") {
+			t.Errorf("source[%d] = %q, want alice, who closed the task", i, source)
 		}
 	}
 

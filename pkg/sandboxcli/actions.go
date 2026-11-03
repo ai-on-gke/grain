@@ -15,7 +15,7 @@
 package sandboxcli
 
 // sandboxcli_actions.go is the acting half of the sandbox CLI
-// (docs/design/sandbox-first-agent-surface.md, Stage 2): grain ci wait,
+// (design/design/sandbox-first-agent-surface.design.md, Stage 2): grain ci wait,
 // run-job and retrigger, grain pr open, reply, resolve and
 // review-comment, which POST to the sandbox proxy's /cli/ routes
 // (pkg/gitproxy's cli_actions.go), and grain git revert, which asks the
@@ -133,6 +133,12 @@ type sandboxWaitAnswer struct {
 	CreditMS    int64 `json:"credit_used_ms"`
 	CreditCapMS int64 `json:"credit_cap_ms"`
 	CreditLive  bool  `json:"credit_live"`
+	// CancelReason, CancelledByHand, SupersededBy and SupersededByCommit
+	// say why a cancelled run was (gitproxy.CLIWaitResponse).
+	CancelReason       string `json:"cancel_reason"`
+	CancelledByHand    bool   `json:"cancelled_by_hand"`
+	SupersededBy       string `json:"superseded_by"`
+	SupersededByCommit string `json:"superseded_by_commit"`
 }
 
 // ciWait runs grain ci wait (single == "") or grain ci run-job <single>.
@@ -213,6 +219,19 @@ func (c *sandboxCLI) reportWait(ans sandboxWaitAnswer) error {
 	if ans.Error != "" {
 		fmt.Fprintf(c.out, "  %s\n", ans.Error)
 	}
+	switch {
+	case ans.CancelReason != "" && ans.CancelledByHand:
+		fmt.Fprintf(c.out, "This run was cancelled by hand. The reason given: %s\n", ans.CancelReason)
+	case ans.CancelReason != "":
+		fmt.Fprintf(c.out, "Grain cancelled this run itself: %s\n", ans.CancelReason)
+	}
+	if ans.SupersededBy != "" {
+		next := ans.SupersededByCommit
+		if len(next) > 12 {
+			next = next[:12]
+		}
+		fmt.Fprintf(c.out, "That run is on %s, a newer commit on this branch, and its verdict is the branch's: run 'grain ci wait' again for it.\n", next)
+	}
 	if len(failed) > 0 {
 		fmt.Fprintf(c.out, "Failing: %s\n", strings.Join(failed, ", "))
 		fmt.Fprintf(c.out, "Read a failing job's steps: grain ci log %s --job <job>\n", ans.RunID)
@@ -265,7 +284,7 @@ func (c *sandboxCLI) textArg(p sandboxArgs, what string) (string, error) {
 	}
 	text := strings.Join(p.positional, " ")
 	if strings.TrimSpace(text) == "" {
-		return "", fmt.Errorf("missing <%s> (or --file): run with --help for usage", what)
+		return "", p.missing("<" + what + "> (or --file)")
 	}
 	return text, nil
 }

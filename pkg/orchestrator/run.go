@@ -1440,7 +1440,7 @@ func sandboxToolingSection(hasTarget, grainCI bool) string {
 }
 
 // grainCLISection is the short reference to the `grain` CLI every run with
-// a sandbox has (docs/design/sandbox-first-agent-surface.md §4): the MCP
+// a sandbox has (design/design/sandbox-first-agent-surface.design.md §4): the MCP
 // roster is the control set alone, so this is the only place the rest of
 // what grain offers a run -- the namespace, CI, the pull request, the
 // collaboration helpers -- is named at all. `grain help` and `grain <cmd>
@@ -1840,8 +1840,7 @@ func stateCheckCommand(prepared checkout, image string) string {
 }
 
 func directorStateSection(prepared checkout, task model.Task) string {
-	id, ok := model.ConsoleSessionIDOf(task)
-	if !ok || id != model.DirectorSessionID {
+	if !wantsStateCheckout(task) {
 		return ""
 	}
 	path := DirectorStateDir
@@ -2404,7 +2403,7 @@ func previousAttempts(ctx context.Context, store *model.Store, taskID string, at
 
 // suspensionNoteSection is the line a prompt opens with when the run
 // before this one was suspended (model.SuspensionNote,
-// docs/design/durable-tasks.md#DT-2), followed by the blank line that
+// design/design/durable-tasks.design.md#DT-2), followed by the blank line that
 // separates it from the rest, and "" otherwise. Only the most recent
 // attempt is read: a suspension further back has been followed by a run
 // that was not one, and that run's ending is what the attempts section
@@ -3051,7 +3050,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	}
 	// Each capability grant's prompt_section, as a block naming the grant,
 	// its attempt_id and its MCP server, and saying a capability server
-	// wrote it rather than the task's author (docs/capabilities-spec.md
+	// wrote it rather than the task's author (design/spec/capabilities/capabilities.spec.md
 	// §5.4.2).
 	if section := cfg.capabilityPromptSections; section != "" && prompt != "" {
 		prompt += "\n\n" + section
@@ -4191,9 +4190,10 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 // rather than holding anything of their own. None of them puts a
 // credential in the subprocess.
 //
-// selfrepair's own grant is absent because its one tool blocks on a
-// human's reply in the task's chat, and that needs a store handle the
-// mcpserver process deliberately does not have.
+// grain#host-exec (once self-repair) is absent because it does not
+// travel on every run holding it: its one tool blocks on a human's reply
+// in the task's chat, so runGrants passes it only for an Interactive
+// task, where somebody is there to answer.
 //
 // A fixed order, so that a run's own arguments read the same way twice
 // for the same task rather than following whatever order the grants were
@@ -4209,11 +4209,6 @@ var toolGrants = []string{
 	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
 }
 
-// runGrants is the subset of toolGrants task holds, which is what a
-// Framework passes on to the mcpserver it forks
-// (agent.RunConfig.Grants). Nothing outside that list travels: a run's
-// tools are the only thing this is for, and a capability that mints
-// credentials has no business being named in a subprocess's arguments.
 // localScriptsFor is the local-scripts declarations task's
 // local-scripts:<name> capabilities grant this run (cfg.LocalScripts),
 // and a 0600 file of the secrets their scripts name, resolved as the
@@ -4253,11 +4248,29 @@ func localScriptsFor(ctx context.Context, cfg Config, task model.Task, runID str
 	return out, file, nil
 }
 
+// runGrants is the subset of toolGrants task holds, which is what a
+// Framework passes on to the mcpserver it forks
+// (agent.RunConfig.Grants), plus an Interactive task's grain#host-exec.
+// Nothing else travels: a run's tools are the only thing this is for,
+// and a capability that mints credentials has no business being named
+// in a subprocess's arguments.
 func runGrants(task model.Task) []string {
 	var grants []string
 	for _, grant := range append(slices.Clone(toolGrants), capability.RunGrants()...) {
 		if hasGrant(task, grant) {
 			grants = append(grants, grant)
+		}
+	}
+	// run_host_command asks a person in the task's chat before every
+	// command it runs (selfrepair.Confirm, and the forked mcpserver's
+	// daemonHostExecConfirm), so the grant that serves it travels only
+	// on a task somebody is sitting with -- the gate the mcpserver
+	// applies again with -interactive.
+	if task.Interactive {
+		for _, g := range task.Grants {
+			if grainserver.IsHostExecGrant(g.Capability) && !slices.Contains(grants, g.Capability) {
+				grants = append(grants, g.Capability)
+			}
 		}
 	}
 	return grants
@@ -4768,6 +4781,16 @@ func classifyRunEndArms(ctx context.Context, store *model.Store, cfg Config, tas
 		outcome = model.InterruptedOutcome
 		detail = runErr.Error()
 		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
+	case runErr != nil && errors.Is(runErr, agent.ErrHostdLost):
+		// The hostd the CLI ran on dropped and was not back within
+		// -hostd-reattach-timeout (runhost.Hostd.ReattachTimeout): an
+		// infrastructure failure, the machine's and not the task's.
+		// Interrupted, as a drain's refusal is: no strike, and the task
+		// is queued again, where it waits for its hostd if it is
+		// pinned to one.
+		outcome = model.InterruptedOutcome
+		detail = runErr.Error() + partialWorkSuffix(result)
+		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
 	case hitCapacity:
 		// The provider had no capacity for this run: overloaded,
 		// unavailable, a gateway that gave up. Recorded as
@@ -5019,7 +5042,7 @@ func recordRunEnd(ctx, finishCtx context.Context, store *model.Store, cfg Config
 			resumableSession = recordedEarly
 		}
 		// A suspension is not an ending: the next run joins this one's
-		// conversation (docs/design/durable-tasks.md#DT-2, Continuity),
+		// conversation (design/design/durable-tasks.design.md#DT-2, Continuity),
 		// so a suspended run whose framework named no session of its own
 		// leaves the one it was in -- what its stream named, or failing
 		// that the one it was resumed from -- rather than clearing it.

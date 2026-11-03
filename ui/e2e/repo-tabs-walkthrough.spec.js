@@ -51,7 +51,7 @@ async function onTab(page, id, label) {
 }
 
 // A tab's own address is /repos/<o>/<n>/settings/<tab>, Overview's the
-// page's (docs/design/settings-panel.md §2.3).
+// page's (design/design/settings-panel.design.md §2.3).
 const tabURL = (id) =>
   new RegExp(`/repos/${repo}${id === "overview" ? "" : `/settings/${id}`}$`);
 

@@ -338,6 +338,10 @@ func (a SandboxCLIActions) ProposeTask(ctx context.Context, callerTaskID, runID 
 	if err != nil {
 		return gitproxy.CLIProposeResult{}, cliActionError(err)
 	}
+	var dropped []gitproxy.CLIDroppedDefault
+	for _, d := range created.DroppedDefaults {
+		dropped = append(dropped, gitproxy.CLIDroppedDefault{Grant: d.Grant, Reason: d.Reason})
+	}
 	return gitproxy.CLIProposeResult{
 		ID:              created.ID,
 		URL:             "/tasks/" + created.ID,
@@ -346,6 +350,7 @@ func (a SandboxCLIActions) ProposeTask(ctx context.Context, callerTaskID, runID 
 		Queued:          false,
 		Held:            true,
 		ApprovalNote:    created.ApprovalNote,
+		DroppedDefaults: dropped,
 	}, nil
 }
 
@@ -384,7 +389,7 @@ var sandboxGuardReadsBody = map[string]bool{
 }
 
 // ModelOnlyAgentAPIToolNames is the api_* tools grants reach that stay on
-// the model's control roster (docs/design/sandbox-first-agent-surface.md
+// the model's control roster (design/design/sandbox-first-agent-surface.design.md
 // §1B): every granted route the sandbox CLI cannot reach -- dangerous and
 // model-only scopes, scope sets that need a person, the model-only control
 // routes -- and those whose sandbox guard depends on the body, so the

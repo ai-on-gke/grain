@@ -682,7 +682,7 @@ func (s *StoredRunStore) Find(f RunFilter, limit int) RunPage {
 // should send one: both readers parse the vocabulary first
 // (ParseRunState).
 func ciRunQueryOf(f RunFilter) model.CIRunQuery {
-	q := model.CIRunQuery{Repo: f.Repo, Ref: f.Ref, Job: f.Job, Since: f.Since, Until: f.Until}
+	q := model.CIRunQuery{Repo: f.Repo, Ref: f.Ref, Job: f.Job, Workflow: f.Workflow, Since: f.Since, Until: f.Until}
 	for _, state := range f.States {
 		switch {
 		case strings.EqualFold(state, StateRunning):
@@ -760,7 +760,7 @@ func (s *StoredRunStore) LiveRuns(ctx context.Context) ([]Run, error) {
 //
 // attached names the runs the adoption pass took back -- every run with
 // a step to reattach by exec id, or a readopted sandbox whose step runner
-// is still there (docs/design/grain-on-gke.md#GKE-4) -- and those are
+// is still there (design/design/grain-on-gke.design.md#GKE-4) -- and those are
 // still going. What is left has nothing to attach: a run that was queued
 // and had no sandbox yet, or one on a backend that cannot give a sandbox
 // back. Those are stamped cancelled-and-interrupted rather than deleted.

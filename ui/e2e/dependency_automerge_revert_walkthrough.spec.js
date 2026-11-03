@@ -269,10 +269,10 @@ test.describe("Multi-Task Dependency Chains, Auto-Merge Lifecycle and Revert Wor
     // GET /api/merge-batches -- single-change overlap re-check on the
     // throwaway ref.
     await expect(
-      page.getByRole("heading", { name: "Merge batches" }),
+      page.getByRole("heading", { name: "Merge re-checks" }),
     ).toBeVisible();
     const batchPanel = page
-      .getByRole("heading", { name: "Merge batches" })
+      .getByRole("heading", { name: "Merge re-checks" })
       .locator("xpath=..");
     const countLabel = batchPanel.getByText(/1 change on main/i);
     const statusChip = batchPanel.getByText("Testing", { exact: true });
@@ -288,7 +288,9 @@ test.describe("Multi-Task Dependency Chains, Auto-Merge Lifecycle and Revert Wor
       ),
     ).toBeLessThanOrEqual(4);
     await expect(
-      batchPanel.getByText(/grain-merge-queue\/[a-z0-9-]+\/main/i),
+      batchPanel.getByText(
+        /grain-merge-queue\/[a-z0-9-]+\/recheck\/[^/\s]+\/main/i,
+      ),
     ).toBeVisible();
     await expect(
       batchPanel.getByText("Rotate the Gemini signing key"),

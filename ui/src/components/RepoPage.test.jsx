@@ -1556,7 +1556,7 @@ describe("RepoPage", () => {
 
     // Opening one run opens an overlay over RepoPage without unmounting it,
     // so it does not ask.
-    await user.click(screen.getByRole("button", { name: "main" }));
+    await user.click(screen.getByRole("button", { name: /^main, / }));
     expect(confirm).toHaveBeenCalledTimes(3);
     expect(props.onOpenCIRun).toHaveBeenCalledWith("run-1", "acme/widgets");
     confirm.mockRestore();
@@ -1838,11 +1838,13 @@ describe("RepoPage", () => {
     const { onOpenCIRun } = renderPage();
 
     expect(
-      await screen.findByRole("button", { name: "grain/task-1" }),
+      await screen.findByRole("button", { name: /^grain\/task-1, / }),
     ).toBeInTheDocument();
     expect(api).toHaveBeenCalledWith("/api/ci/runs?repo=acme%2Fwidgets");
 
-    await userEvent.click(screen.getByRole("button", { name: "grain/task-1" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /^grain\/task-1, / }),
+    );
     expect(onOpenCIRun).toHaveBeenCalledWith("9f2c1a", "acme/widgets");
   });
 
@@ -2830,7 +2832,7 @@ describe("RepoPage", () => {
     );
   });
 
-  // docs/design/config-repo-settings.md §2.1, §7.4: when the API sends
+  // design/design/config-repo-settings.design.md §2.1, §7.4: when the API sends
   // a repo's settings to the config repo (configRepoOnly), even an admin
   // sees them read-only, with the files to change them in, and the
   // default and CI grants as chips; the operational actions stay theirs.

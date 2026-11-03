@@ -14,7 +14,7 @@
 
 package model
 
-// The New Task form's configuration (docs/design/config-repo-settings.md
+// The New Task form's configuration (design/design/config-repo-settings.design.md
 // §6): which fields the form shows, in what order, under what labels,
 // with what defaults, deployment-wide and per board, repository and
 // template. settings/new-task-form.yml is where it is written
@@ -44,7 +44,7 @@ var NewTaskFormFieldIDs = []string{
 	"title", "description", "attachments", "customFields", "repo", "newBranch", "base",
 	"writes", "reads", "autoMerge", "noPort", "fixesBaseBranch", "grants", "legacyCapabilities",
 	"model", "dependsOn", "agentBackendId", "networkAccess", "nothingNeededAction",
-	"reviewTemplateId", "promptExtension", "sandboxShape", "approved", "atFront",
+	"reviewTemplateId", "promptExtension", "hostd", "sandboxShape", "approved", "atFront",
 }
 
 // IsNewTaskFormField reports whether id names a field of the form.
@@ -383,7 +383,15 @@ func (c *CapabilityCatalogue) Defines(g string) bool {
 		return ok
 	case strings.HasPrefix(g, APIGrantPrefix):
 		what, _, _ := strings.Cut(strings.TrimPrefix(g, APIGrantPrefix), "@")
-		if _, ok := c.APIScopes.Presets[what]; ok || strings.Contains(what, ":") {
+		for _, key := range presetLookupKeys(what) {
+			if _, ok := c.APIScopes.Presets[key]; ok {
+				return true
+			}
+		}
+		if strings.Contains(what, ":") {
+			return true
+		}
+		if _, ok := APIPresetNamed(canonicalPresetKey(what)); ok {
 			return true
 		}
 		for _, s := range BuiltinAPIScopeSets() {

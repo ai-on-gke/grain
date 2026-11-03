@@ -1,0 +1,23 @@
+// fwd: a logging reverse proxy in front of grain's git proxy, so a
+// walkthrough can see which sandbox CLI calls reached it.
+package main
+
+import (
+	"log"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"os"
+)
+
+func main() {
+	target, _ := url.Parse(os.Args[2])
+	rp := httputil.NewSingleHostReverseProxy(target)
+	rp.FlushInterval = -1
+	f, _ := os.OpenFile(os.Args[3], os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	l := log.New(f, "", log.LstdFlags)
+	log.Fatal(http.ListenAndServe(os.Args[1], http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		l.Printf("%s %s", r.Method, r.URL.RequestURI())
+		rp.ServeHTTP(w, r)
+	})))
+}

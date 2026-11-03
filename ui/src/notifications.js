@@ -17,7 +17,7 @@ import api from "./api.js";
 import { repoApiRoot } from "./repoApi.js";
 
 // notifications.js is operator notifications in the UI
-// (docs/design/durable-tasks.md, DT-5): the open ones, read from
+// (design/design/durable-tasks.design.md, DT-5): the open ones, read from
 // GET /api/notifications?open=1, joining the alerts bell's list
 // (notificationAlerts) and the Inbox's Notifications section.
 //
@@ -69,11 +69,23 @@ export function notificationAlerts(notifications) {
         scope: { kind: "deployment" },
         since: n.raisedAt,
         actions: [
+          // The task the notification is about -- a red base branch's
+          // repair -- as the Inbox's row offers it ("Open task"); its
+          // body names it only as a markdown link the bell draws as text.
+          ...(n.taskId
+            ? [
+                {
+                  kind: "open-task",
+                  label: `Open #${n.taskId}`,
+                  taskId: n.taskId,
+                },
+              ]
+            : []),
           ...(release
             ? [
                 {
                   kind: "approve-release",
-                  label: "Approve",
+                  label: release.shortSoak ? "Approve short soak" : "Approve",
                   notification: n,
                   release,
                 },
@@ -98,40 +110,68 @@ export function notificationAlerts(notifications) {
 
 // PENDING_RELEASE_FAMILY is the family the release train raises a
 // release whose soak passed under ("release.pending:vX.Y.0",
-// docs/design/release-from-trunk.md §4).
+// design/design/release-from-trunk.design.md §4).
 const PENDING_RELEASE_FAMILY = "release.pending";
 
 // pendingReleaseOf is the release a notification asks a person to
-// approve, { repo, version }, or null when it asks nothing of the kind.
+// approve, { repo, version, soak, shortSoak }, or null when it asks
+// nothing of the kind. soak is how long it soaked ("soaked 1h00m of 24h
+// (FORCE=true)") and shortSoak the SHORT SOAK warning, both as the
+// release train wrote them into the body from the -pending tag's
+// Soak-Seconds and Soak-Forced trailers; either is null when the body
+// does not say.
 export function pendingReleaseOf(n) {
   const family = n?.family || (n?.subject || "").split(":")[0];
   if (family !== PENDING_RELEASE_FAMILY) return null;
   if (!(n.actions || []).includes("approve-release")) return null;
   const version = (n.subject || "").slice(PENDING_RELEASE_FAMILY.length + 1);
   if (!/^v\d+\.\d+\.0$/.test(version)) return null;
-  return { repo: n.repo || "ai-on-gke/grain", version };
+  const lines = (n.body || "").split("\n").map((l) => l.trim());
+  const soak =
+    lines
+      .find((l) => l.startsWith("Soak: "))
+      ?.match(/soaked \d+h\d{2}m of \d+h(?: \(FORCE=true\))?/)?.[0] || null;
+  const shortSoak = lines.find((l) => l.startsWith("SHORT SOAK:")) || null;
+  return { repo: n.repo || "ai-on-gke/grain", version, soak, shortSoak };
 }
 
 // decideRelease approves (or rejects) a pending release, after asking:
 // approving makes it official -- vX.Y.0 tagged, `latest` moved -- and
 // rejecting drops its release candidate. The daemon refuses anybody but
-// a person. Resolves to false when the person thought better of it.
+// a person. A release whose soak was short is approved with
+// short_soak_ok, and only after a question that says so: without it the
+// approve job refuses the release. Resolves to false when the person
+// thought better of it.
 export async function decideRelease(release, approve) {
-  const question = approve
-    ? `Approve ${release.version}? This tags ${release.version}, moves latest onto it and publishes its images.`
-    : `Reject ${release.version}? Its release candidate is dropped, and the next release train run cuts the next one.`;
+  const shortSoakOk = approve && !!release.shortSoak;
+  const question = !approve
+    ? `Reject ${release.version}? Its release candidate is dropped, and the next release train run cuts the next one.`
+    : shortSoakOk
+      ? `Approve ${release.version} on a SHORT SOAK? It ${release.soak || "has no recorded soak"}, under the minimum. ` +
+        `This accepts the short soak (short_soak_ok), tags ${release.version}, moves latest onto it and publishes its images.`
+      : `Approve ${release.version}? This tags ${release.version}, moves latest onto it and publishes its images.`;
   if (!window.confirm(question)) return false;
   await api(
     `${repoApiRoot(release.repo)}/pending-releases/${encodeURIComponent(release.version)}/${approve ? "approve" : "reject"}`,
-    { method: "POST" },
+    shortSoakOk
+      ? { method: "POST", body: JSON.stringify({ short_soak_ok: true }) }
+      : { method: "POST" },
   );
   return true;
 }
 
 // notificationSentence is a notification's body as one line under its
 // title, with how often it has been raised when that is more than once.
+// A body is written as markdown (the base-branch reconciler's names the
+// branch as `main` and its repair as [Task #5](/tasks/5)), but the bell
+// and the Inbox draw this line as text, so a link is reduced to its text
+// and inline code to its contents rather than shown as markup.
 export function notificationSentence(n) {
-  const body = (n.body || "").trim().split("\n")[0];
+  const body = (n.body || "")
+    .trim()
+    .split("\n")[0]
+    .replace(/\[([^\]\n]+)\]\([^)\s]+\)/g, "$1")
+    .replace(/`([^`\n]+)`/g, "$1");
   const again = n.raiseCount > 1 ? ` Raised ${n.raiseCount} times.` : "";
   return `${body || n.subject}${again}`;
 }

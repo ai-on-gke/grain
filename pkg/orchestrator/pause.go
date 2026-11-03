@@ -73,8 +73,7 @@ const (
 // CredentialBackendID) or itself (model.AgentBackend.CredentialOwnerID)
 // -- and Connection names it. Teams cannot share connections, so such a
 // pause never reaches another team's work, nor the same team's other
-// connections on other keys. Remote executors' connections
-// ("executor-...") are connections like any other here.
+// connections on other keys.
 //
 // A run on no connection -- the deployment-level credentials a
 // deployment with no connections configured runs on (the legacy

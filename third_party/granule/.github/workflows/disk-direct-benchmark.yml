@@ -1,0 +1,92 @@
+name: CHV_DISK_DIRECT benchmark
+
+# Runs benchmarks/storage/gce-bench.sh --disk-direct on a dedicated
+# n2-standard-16 GCE VM: the fio suite on the raw disk.img and on the qcow2
+# overlay with CHV_DISK_DIRECT=on and off, then test/oom-pagecache.sh for
+# each disk and setting, twice. It took 26 minutes: 5 to build the guest, 5
+# of fio and 13 for the eight oom-pagecache runs. The results are in the job
+# log between STORAGE-BENCH-* and OOM-PAGECACHE-* markers; the last set that
+# was checked in is in benchmarks/storage/disk-direct.md. The GitHub Actions
+# port of .grain/workflows/disk-direct-benchmark.yml.
+#
+# On demand only, with no pull_request trigger: like storage-benchmark.yml it
+# authenticates to GCP through Workload Identity Federation
+# (vars.GCP_WIF_PROVIDER, vars.GCP_SA_EMAIL), and is skipped with a notice
+# until those are set.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  gcp-credentials:
+    name: GCP credentials
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - name: are GCP_WIF_PROVIDER and GCP_SA_EMAIL set
+        id: check
+        env:
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          GCP_SA_EMAIL: ${{ vars.GCP_SA_EMAIL }}
+        run: |
+          if [ -n "$GCP_WIF_PROVIDER" ] && [ -n "$GCP_SA_EMAIL" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            msg="Repository variables GCP_WIF_PROVIDER and GCP_SA_EMAIL are not both set, so the CHV_DISK_DIRECT benchmark is skipped, not run. See docs/github-actions-ci.md."
+            echo "::notice title=CHV_DISK_DIRECT benchmark skipped::$msg"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  disk-direct:
+    name: CHV_DISK_DIRECT on vs off on a dedicated GCE VM
+    needs: [gcp-credentials]
+    if: needs.gcp-credentials.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SA_EMAIL }}
+
+      - name: install gcloud if the runner has none
+        run: |
+          set -euo pipefail
+          if command -v gcloud >/dev/null; then
+            gcloud --version | head -n 1
+            exit 0
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apt-transport-https ca-certificates curl gnupg openssh-client
+          curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg |
+            sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" |
+            sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq google-cloud-cli
+          gcloud --version | head -n 1
+
+      # GCE_KEY_FILE names nothing on purpose: see gce-build.yml.
+      - name: CHV_DISK_DIRECT on vs off on a dedicated GCE VM
+        env:
+          GCE_KEY_FILE: /nonexistent/no-service-account-key
+          GCE_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          GCE_MAX_RUN: 3h
+        run: benchmarks/storage/gce-bench.sh --disk-direct

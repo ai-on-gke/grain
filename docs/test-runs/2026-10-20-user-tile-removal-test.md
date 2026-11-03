@@ -1,6 +1,6 @@
 # 2026-10-20: settings-panel SET-3 test pass (user tile removal, storage migration)
 
-The test task for stage (c) of `docs/design/settings-panel.md` (SET-3,
+The test task for stage (c) of `design/design/settings-panel.design.md` (SET-3,
 Design-Rev e4761b54). Stage (c) itself was built by task 4884 (90ef49a44,
 ffb1ac1b5), whose run is in `2026-10-20-user-tile-removal.md`. This run
 checks the stage's tests against the section's test bullets, fills the one

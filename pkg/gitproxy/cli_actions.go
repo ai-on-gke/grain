@@ -17,7 +17,7 @@ package gitproxy
 // cli_actions.go serves the /cli/ routes that act rather than read: the
 // in-sandbox grain CLI's grain ci wait, run-job and retrigger, grain pr
 // open, reply, resolve and review-comment, and the metadata grain git
-// revert reverts by (docs/design/sandbox-first-agent-surface.md, Stage 2).
+// revert reverts by (design/design/sandbox-first-agent-surface.design.md, Stage 2).
 //
 // Every one of them acts on the task the sandbox's token belongs to and
 // on nothing else. No request names a repository, a branch or a pull
@@ -295,6 +295,17 @@ type CLIProposeResult struct {
 	Queued          bool   `json:"queued"`
 	Held            bool   `json:"held"`
 	ApprovalNote    string `json:"approval_note,omitempty"`
+	// DroppedDefaults is the default grants the capability policy kept
+	// off the proposal, each with the policy's reason
+	// (ui.Task.DroppedDefaults).
+	DroppedDefaults []CLIDroppedDefault `json:"dropped_defaults,omitempty"`
+}
+
+// CLIDroppedDefault is one default grant the capability policy kept off
+// a proposal, and why.
+type CLIDroppedDefault struct {
+	Grant  string `json:"grant"`
+	Reason string `json:"reason"`
 }
 
 // CLIQuarantineRequest is POST /cli/quarantine's body.
@@ -590,6 +601,17 @@ type CLIWaitResponse struct {
 	CreditMS    int64           `json:"credit_used_ms"`
 	CreditCapMS int64           `json:"credit_cap_ms,omitempty"`
 	CreditLive  bool            `json:"credit_live"`
+	// CancelReason is the note a cancelled run was left with, and
+	// CancelledByHand whether a person (not grain) wrote it -- what
+	// wait_for_checks says of a cancellation (pkg/mcp's ciRunReport).
+	CancelReason    string `json:"cancel_reason,omitempty"`
+	CancelledByHand bool   `json:"cancelled_by_hand,omitempty"`
+	// SupersededBy is the run grain cancelled this one for, when that run
+	// is on another commit of this task's branch -- a newer push, which
+	// followSuperseded does not follow -- and SupersededByCommit its
+	// commit: the verdict the wait's asker most likely wants next.
+	SupersededBy       string `json:"superseded_by,omitempty"`
+	SupersededByCommit string `json:"superseded_by_commit,omitempty"`
 }
 
 func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope namespace.Scope, single bool) {
@@ -771,6 +793,16 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 	default:
 		resp.Status = "failed"
 		verdict = mcp.WaitVerdictFailed
+		if run.Conclusion == ci.ConclusionCancelled {
+			resp.CancelReason = strings.TrimSpace(run.CancelReason)
+			resp.CancelledByHand = run.CancelledBy.ByHand()
+			if id, ok := ci.SupersedingRun(run); ok {
+				if next, found := p.CLIActions.CIRun(ctx, id); found && next.ID == id && next.Commit != run.Commit &&
+					strings.EqualFold(next.Repo, scope.TaskRepo) && next.Ref == scope.TaskBranch {
+					resp.SupersededBy, resp.SupersededByCommit = next.ID, next.Commit
+				}
+			}
+		}
 	}
 	p.recordCheckWait(ctx, scope.RunID, verdict, waited)
 	writeCLIJSON(w, http.StatusOK, resp)

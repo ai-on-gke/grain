@@ -50,7 +50,7 @@ import (
 // (orchestrator.Deps.PolicyAudit). No HTTP route reads, writes or
 // removes it (TestLocalAuditLogIsReachedByNoRoute). The file keeps the
 // name it had when a Silo hub's messages were logged there too
-// (docs/hub-removed.md), so a deployment's existing log is appended to
+// (the Silo hub connection has since been removed), so a deployment's existing log is appended to
 // rather than left behind.
 func LocalAuditPath(dataDir string) string {
 	return filepath.Join(dataDir, "hub-audit.log")
@@ -88,7 +88,7 @@ func LogIgnoredRelaySettings(dataDir string, secretStore *secrets.Store, logf fu
 	if logf == nil {
 		logf = log.Printf
 	}
-	logf("grain daemon: ignoring stored %s -- the rendezvous relay has been removed (docs/relay-removed.md)", strings.Join(found, " and "))
+	logf("grain daemon: ignoring stored %s -- the rendezvous relay has been removed", strings.Join(found, " and "))
 }
 
 // run wires every piece pkg/orchestrator needs from real, on-disk material
@@ -106,7 +106,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// Before anything binds: how long the restart that started this
 	// process left each listener unreachable is measured from the times
 	// the previous process wrote down, against when each is bound below
-	// (upgrade.GapRecorder, docs/non-disruptive-upgrade.md Stage 1).
+	// (upgrade.GapRecorder, design/design/non-disruptive-upgrade.design.md Stage 1).
 	// Opened here so its start time is this process's, but it writes
 	// nothing until the first listener is up: a start refused before then
 	// -- the store guard, a bad flag -- leaves restart-gap.json as the
@@ -162,6 +162,12 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := RecordDatabaseConfig(cfg.DataDir, cfg.DbDriver, cfg.DbDSN); err != nil {
 		log.Printf("grain daemon: recording the database in %s: %v", cfg.DataDir, err)
 	}
+	// The hostd registry: the co-located hostd is always in it as local,
+	// and any hostd it names may dial in alongside it.
+	if err := store.EnsureLocalHostd(ctx); err != nil {
+		log.Printf("grain daemon: %v", err)
+	}
+	cfg.HostdHub = newHostdHub(cfg, store)
 
 	// Run hosts (pkg/runhost), when this deployment asks for them. Built
 	// here, as soon as the store is, because every framework built below
@@ -177,11 +183,13 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	// Host CLIs through grain hostd, started detached so a daemon
-	// upgrade leaves them running (hostdruns.go).
-	cfg.hostdRuns = newHostdRuns(cfg, store)
+	// upgrade leaves them running (hostdruns.go): the default hostd's,
+	// and each pinned hostd's as a run is routed to it.
+	cfg.hostdRunSet = newHostdRuns(cfg, store)
+	cfg.hostdRuns = cfg.hostdRunSet.defaultRuns()
 	// And the upgrade protocol's hold on them: flushed before an
 	// upgrade's restart, reported on by the check after it.
-	cfg.runHostUpgrade = newRunHostUpgrade(cfg.RunHost, cfg.hostdRuns, cfg.Ci).withStopping(cfg.shutdownStarted)
+	cfg.runHostUpgrade = newRunHostUpgrade(cfg.RunHost, cfg.hostdRunSet, cfg.Ci).withStopping(cfg.shutdownStarted)
 
 	// The state repository is opened and loaded into the database before
 	// anything reads a row out of it: what is in the repository is what
@@ -357,7 +365,7 @@ func Run(ctx context.Context, cfg Config) error {
 	servicePorts := &SandboxServicePorts{}
 	if cfg.DisableNativeSandboxes {
 		sandboxes = orchestrator.NewDisabledSandboxes()
-		log.Print("grain daemon: native sandboxes are disabled -- only remote execution sandboxes can exist")
+		log.Print(`grain daemon: sandbox backend "none" -- this daemon runs the control plane only and creates no sandboxes, so no task will run`)
 	} else if cfg.GranuleSandboxes {
 		// The image chooseSandboxImage settled on -- this build's own
 		// stamp, an operator's -sandbox-image, or a pin kept -- with a
@@ -404,6 +412,7 @@ func Run(ctx context.Context, cfg Config) error {
 			DefaultCPUs:     cfg.SandboxCPUs,
 			DefaultMemoryMB: cfg.SandboxMemoryMB,
 			DefaultDiskGB:   cfg.SandboxDiskGB,
+			HostMemoryMB:    granuleHostMemoryMB(),
 			// The deployment-wide network default, in force from the
 			// first sandbox this process builds rather than from the
 			// first reconcile tick (liveConfig only hands on what
@@ -589,6 +598,12 @@ func Run(ctx context.Context, cfg Config) error {
 	if cfg.Ledger != nil && cfg.Ledger.Wake == nil {
 		cfg.Ledger.Wake = wakeCycle
 	}
+	// Set once, before anything admits a sandbox: every live sum the
+	// ledger gives the budget adds each VM's cgroup headroom, the other
+	// half of config.Budget's (model.Budget.VMMHeadroom).
+	if cfg.Ledger != nil {
+		cfg.Ledger.VMMHeadroom = cfg.VMMHeadroom
+	}
 	LogSandboxBudget(cfg)
 
 	// This deployment's GitHub credential ladder, read once here and
@@ -621,9 +636,11 @@ func Run(ctx context.Context, cfg Config) error {
 	if localHostSandboxes(sandboxes) {
 		cfg.Overcommit = model.NewOvercommitController(cfg.SandboxOvercommit, cfg.CpuOvercommit, cfg.MemoryOvercommit)
 	}
+	capabilityServers, hostdCapabilityServers := startCapabilityServers(ctx, store, secretStore, cfg.DataDir, cfg.capabilityHostd(), gcpKeyPool(cfg))
 	live := NewLiveConfig(store, sandboxes, cfg, githubCredentials).
 		WithSandboxImages(sandboxImages, stockSandboxImage, sandboxImageLabels()).
-		WithCapabilityServers(startCapabilityServers(ctx, store, secretStore, cfg.DataDir, cfg.capabilityHostd(), gcpKeyPool(cfg)))
+		WithCapabilityServers(capabilityServers).
+		withHostdCapabilityServers(hostdCapabilityServers)
 	if cfg.Overcommit != nil {
 		go runOvercommit(ctx, live, cfg.Overcommit)
 	}
@@ -816,17 +833,6 @@ func Run(ctx context.Context, cfg Config) error {
 		cfg.Volumes = hostDisks(cfg)
 	}
 
-	execSrv, execAddr, stopExecutor, err := startExecutorServer(cfg, store)
-	if err != nil {
-		return fmt.Errorf("starting remote executor listener: %w", err)
-	}
-	defer stopWithGrace(stopExecutor)
-	cfg.executorServer = execSrv
-	cfg.executorListenAddr = execAddr
-	if live != nil {
-		live.SetExecutorServer(execSrv)
-	}
-
 	// The UI/API server starts here, as early as its own dependencies (the
 	// store, sandboxes, and transcriptDir above) allow -- deliberately
 	// before the git proxy, the Gemini agent
@@ -989,7 +995,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	cfg.gitProxyHandler = proxyHandler
 
 	// The relay a capability grant's ports reach a sandbox through
-	// (docs/capabilities-spec.md §5.3), on the same fabric as the git
+	// (design/spec/capabilities/capabilities.spec.md §5.3), on the same fabric as the git
 	// proxy, so a sandbox with no network reaches it as it reaches that.
 	// Not fatal: without it, a run whose grants return ports is refused
 	// at materialization, and every other run is unaffected.
@@ -1165,7 +1171,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	// Host CLIs a previous daemon left running detached in grain hostd
 	// go through the same pass beside them (orchestrator.RecoverHostd),
 	// so an upgrade never re-dispatches a run hostd is still running.
-	adopted, report, err := adoptAll(ctx, store, githubClient, cfg.RunHost, cfg.hostdRuns, sandboxes)
+	adopted, report, err := adoptAll(ctx, store, githubClient, cfg.RunHost, cfg.hostdRunSet, sandboxes)
 	if err != nil {
 		log.Printf("grain daemon: %v", err)
 	}
@@ -1305,6 +1311,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		// The attached capability servers a task's capability
 		// references are minted through at admission.
 		CapabilityServers: capabilityServerLookup(live),
+		CapabilityHostd:   capabilityHostdName(cfg),
 		Policy:            localPolicy,
 		Store:             store, Client: githubClient, Sandboxes: sandboxes,
 		// Sandbox reconciliation sweeps the run hosts no live run
@@ -1598,7 +1605,10 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			}
 		}
 		resume(cfg.RunHost, adopted.runHost)
-		resume(cfg.hostdRuns, adopted.hostd)
+		// Each through the hostd it ran on (task_run_hostd).
+		for _, h := range adopted.hostd {
+			resume(h.host, h.runs)
+		}
 	}
 	resumeAdopted(adopted)
 	// And the same again if an upgrade flushed these runs for a restart
@@ -1608,7 +1618,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		if ctx.Err() != nil {
 			return
 		}
-		again, _, err := adoptAll(ctx, store, githubClient, cfg.RunHost, cfg.hostdRuns, sandboxes)
+		again, _, err := adoptAll(ctx, store, githubClient, cfg.RunHost, cfg.hostdRunSet, sandboxes)
 		if err != nil {
 			log.Printf("grain daemon: %v", err)
 		}

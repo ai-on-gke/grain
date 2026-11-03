@@ -287,7 +287,7 @@ func (s Schedule) Location() *time.Location {
 
 // Recurrence and WorkflowReviewPolicy moved to pkg/workflows with the
 // workflow parser that produces them from a cron line, so that it does
-// not import this package (docs/design/grit-split.md, GS-2).
+// not import this package (design/design/grit-split.design.md, GS-2).
 type (
 	RecurrenceKind           = workflows.RecurrenceKind
 	Recurrence               = workflows.Recurrence
@@ -309,6 +309,9 @@ const (
 	WorkflowReviewOnFailure = workflows.ReviewOnFailure
 	WorkflowReviewAlways    = workflows.ReviewAlways
 )
+
+// RecurrenceKinds re-exports workflows.RecurrenceKinds: every kind.
+var RecurrenceKinds = workflows.RecurrenceKinds
 
 // ParseStoredRecurrenceKind re-exports workflows.ParseStoredRecurrenceKind.
 var ParseStoredRecurrenceKind = workflows.ParseStoredRecurrenceKind

@@ -314,3 +314,40 @@ func TestCapabilityPolicyVerdictsByRunKind(t *testing.T) {
 		t.Errorf("repoDependent.Verdicts = %v, want %v", got, wantRepoDependent)
 	}
 }
+
+func TestCapabilityPolicyEnforcesCIOnlyForRepoAccessGrants(t *testing.T) {
+	acme := &RepoRef{Owner: "acme", Name: "widgets"}
+	readGrant := RepoReadGrant(*acme)
+	writeRepoGrant := RepoWriteGrant(*acme)
+	branchPushGrant := RepoWriteRef + `={"refs":["refs/tags/v*"]}`
+
+	p := CapabilityPolicy{}
+	for _, kind := range []string{CapabilityRunTask, CapabilityRunProcess} {
+		for _, g := range []string{RepoReadRef, readGrant, writeRepoGrant} {
+			if err := p.Permits(g, CapabilitySubject{Repo: acme, Kind: kind}); err == nil || !strings.Contains(err.Error(), "CI capability") {
+				t.Errorf("Permits(%q, kind=%s) = %v, want CI-only refusal", g, kind, err)
+			}
+		}
+		if err := p.Permits(branchPushGrant, CapabilitySubject{Repo: acme, Kind: kind}); err != nil {
+			t.Errorf("Permits(branchPushGrant, kind=%s) = %v, want nil", kind, err)
+		}
+		if got := p.VerdictForKind(RepoReadRef, kind); got != CapabilityPolicyCIOnly {
+			t.Errorf("VerdictForKind(RepoReadRef, %s) = %q, want ci_only", kind, got)
+		}
+	}
+	// A read grant's refusal says it reads; only the write grant's says
+	// it writes to the repository.
+	for _, g := range []string{RepoReadRef, readGrant} {
+		if got := CIOnlyRefusal(g); strings.Contains(got, "writes") || !strings.Contains(got, "read access") {
+			t.Errorf("CIOnlyRefusal(%q) = %q, want the read wording", g, got)
+		}
+	}
+	if got := CIOnlyRefusal(writeRepoGrant); !strings.Contains(got, "writes to the repository") {
+		t.Errorf("CIOnlyRefusal(%q) = %q, want the write wording", writeRepoGrant, got)
+	}
+	for _, g := range []string{readGrant, writeRepoGrant} {
+		if err := p.Permits(g, CapabilitySubject{Repo: acme, Kind: CapabilityRunCI, Event: "release"}); err != nil {
+			t.Errorf("Permits(%q, ci) = %v, want nil", g, err)
+		}
+	}
+}

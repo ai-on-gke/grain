@@ -63,7 +63,7 @@ FROM ${BASE_IMAGE} AS k8s-sandbox-base
 # python3-minimal is not a convenience: grain's own guest port forwarder
 # (pkg/capability/portforward.GuestForwarder) is a python3 script, started in
 # the sandbox before the agent is, for every capability grant that forwards a
-# port (docs/capabilities-spec.md §5.3). Without it that grant fails at
+# port (design/spec/capabilities/capabilities.spec.md §5.3). Without it that grant fails at
 # dispatch, and an apt-get the run could make comes too late. The minimal
 # package carries every module the forwarder imports, which the build checks
 # below; it is about 5MB where python3 with its standard library is about 25MB.
@@ -88,7 +88,7 @@ RUN install -d -m0755 /etc/grain \
 COPY --from=grain_sandbox_builder /out/grain /usr/local/bin/grain
 
 # The sandbox user is debian, uid 1000, in /home/debian: the user and home
-# capability materialization writes into (docs/capabilities-spec.md §5.1,
+# capability materialization writes into (design/spec/capabilities/capabilities.spec.md §5.1,
 # pkg/orchestrator/capability_materialize.go) and the granule guest
 # already has. It was agent in /home/agent, and every capability grant
 # with a port or a placement then failed before the agent started --
@@ -201,9 +201,9 @@ RUN printf 'Acquire::ForceIPv4 "true";\nAcquire::Retries "3";\nAcquire::http::Ti
 # checked, not through claude.ai/install.sh -- which always runs the
 # *latest* release before installing the one asked for -- for the reason
 # the main Dockerfile's block gives at length.
-ARG CLAUDE_CLI_VERSION=2.1.286
-ARG CLAUDE_CLI_SHA256_AMD64=fe503f65c6289d59c23e5b21ae44f03583f997dd33a2cbfc75ab4f96fb8fc73f
-ARG CLAUDE_CLI_SHA256_ARM64=0292fa22ac2fd43e16be9d0e511ddd8347280d6e0ebaca744ef5b27e05d8d0f8
+ARG CLAUDE_CLI_VERSION=2.1.316
+ARG CLAUDE_CLI_SHA256_AMD64=fd13c70000fec3f2116dfbcbb6121210b4a29328bf0e46210a59dd594a67d824
+ARG CLAUDE_CLI_SHA256_ARM64=55cdb8e162d190432696ea54010e0fca2e18d06fa7a7127fd563b9ffd4f22624
 ARG INSTALL_CLAUDE_CLI=1
 RUN if [ "$INSTALL_CLAUDE_CLI" = "1" ]; then \
         set -eu; mkdir -p /opt/claude; arch="$(uname -m)"; \
@@ -222,7 +222,7 @@ RUN if [ "$INSTALL_CLAUDE_CLI" = "1" ]; then \
 
 # agy updates itself in place during an ordinary run ("The Antigravity
 # CLI automatically self-updates in the background during regular runs",
-# says its own installer; docs/hand-runs/2026-09-17-agy-self-update.md is
+# says its own installer; the 2026-09-17 agy-self-update hand run is
 # the measurement). Here that cannot succeed -- the install below is
 # root-owned and a+rX and this image's USER is unprivileged -- so what
 # the variable buys is an image that carries the agy it says it carries
@@ -238,7 +238,7 @@ ENV AGY_CLI_DISABLE_AUTO_UPDATE=true
 # manifest, so installing through it put whatever agy was current on
 # build day into this image -- two builds of the same grain commit
 # carrying two different agys, with nothing in the tree saying which.
-# That was the half task 185 left open (docs/hand-runs/2026-09-17-agy-self-update.md,
+# That was the half task 185 left open (the 2026-09-17 agy-self-update hand run,
 # "Still owed"): disabling the updater stopped the binary changing under
 # a running task, and settled nothing about which binary the image
 # started with.
@@ -247,10 +247,10 @@ ENV AGY_CLI_DISABLE_AUTO_UPDATE=true
 # build happens to run on: install.sh served amd64 and arm64 users alike,
 # and the published default image is built for both.
 ARG INSTALL_AGY_CLI=1
-ARG AGY_CLI_VERSION=1.4.9
-ARG AGY_CLI_BUILD=4962164969177088
-ARG AGY_CLI_SHA256_AMD64=3d84e3a461b9cbf9ffc9deede155a01921380e964f51a82c0bc505db80ae8525
-ARG AGY_CLI_SHA256_ARM64=0e75190d5aa48b0f7623b201cfef542cd36a1279b3d28afa7fa099983a073493
+ARG AGY_CLI_VERSION=1.4.12
+ARG AGY_CLI_BUILD=4768735748292608
+ARG AGY_CLI_SHA256_AMD64=3368d1923fc869f21ec8fce83252a8c96c89283aac9393958ac91fbf7a3949e4
+ARG AGY_CLI_SHA256_ARM64=30dd61ebe1f0a8829057ea2de29dad08c710dd972ce4c02949f51e632135a86b
 RUN if [ "$INSTALL_AGY_CLI" = "1" ]; then \
         set -eu; mkdir -p /opt/antigravity; arch="$(uname -m)"; \
         case "$arch" in \
@@ -273,11 +273,11 @@ RUN if [ "$INSTALL_AGY_CLI" = "1" ]; then \
 # Codex's two archives are checked against their release digests before
 # either is unpacked, as in the main Dockerfile.
 ARG INSTALL_CODEX_CLI=1
-ARG CODEX_CLI_VERSION=rust-v0.153.0
-ARG CODEX_CLI_SHA256_AMD64=35a82c153d83959de09c2cb84ac70ba69d05788aeeb08d4a95ca68e39f86680e
-ARG CODEX_CLI_SHA256_ARM64=cc2c0c365d4d51c18163bba93cce5b922836900ca867f5bcf89b0e714a952a53
-ARG CODEX_CODE_MODE_HOST_SHA256_AMD64=2b817a495e35a53333e94b35af9ed879e180f9b28fd57ef15ace9a857ba86f2c
-ARG CODEX_CODE_MODE_HOST_SHA256_ARM64=269d6006fb55c95f876454fc03ed3755c367c1c376b77a985d0029395a5a7736
+ARG CODEX_CLI_VERSION=rust-v0.166.0
+ARG CODEX_CLI_SHA256_AMD64=a0bf572d2f93f056c6712a6da348e96078dc84f3885fd7be67807ef389cb3978
+ARG CODEX_CLI_SHA256_ARM64=94eb707605ec2646b2e05b7edf7c4e7b3ccf02b16237c34ae9beb8cfb7f810a9
+ARG CODEX_CODE_MODE_HOST_SHA256_AMD64=7588334fd47bc4003d970b70dfd4d1e4578491b1e9baa72976a4c2d7e97590da
+ARG CODEX_CODE_MODE_HOST_SHA256_ARM64=ac98d1f878e353a16cba711fd47bfef2f6c814109bdd819ee2b6b6d6a19701e7
 RUN if [ "$INSTALL_CODEX_CLI" = "1" ]; then \
         set -eu; mkdir -p /opt/codex; arch="$(uname -m)"; \
         case "$arch" in \

@@ -373,6 +373,12 @@ func statusOf(e queueEntry, isMergeHead, blocked bool, review reviewState, lane 
 		}
 		return queueStatus{state: mergeStateRepairNeeded, note: repairNeededNote(e)}
 	case model.PrPending:
+		if note, ok := externalPendingRowNote(e); ok {
+			return queueStatus{
+				state: mergeStateWaitingCI,
+				note:  note,
+			}
+		}
 		// Every way CI can fail to produce a verdict, including the ones
 		// that will never produce one now: a check GitHub cancelled, a
 		// grain CI run that was cancelled, a run that could not be done

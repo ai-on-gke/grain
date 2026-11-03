@@ -247,3 +247,19 @@ func fakeKubectlByArgs(t *testing.T, responses map[string]string) (string, func(
 		return strings.Split(strings.Trim(string(data), "\x1e"), "\x1e")
 	}
 }
+
+func TestLargestAllocatableMemoryIsTheBiggestSingleNode(t *testing.T) {
+	f := &FitChecker{Reader: &fakeUsage{usage: ClusterUsage{Nodes: []NodeUsage{
+		node("a", 16, 0, 30, 0), node("b", 16, 0, 62, 10), node("c", 16, 0, 14, 0),
+	}}}}
+	if got := f.LargestAllocatableMemoryMB(); got != 0 {
+		t.Errorf("LargestAllocatableMemoryMB before any reading = %d, want 0 (unknown)", got)
+	}
+	f.Refresh(context.Background())
+	if got := f.LargestAllocatableMemoryMB(); got != 62*1024 {
+		t.Errorf("LargestAllocatableMemoryMB = %d, want %d -- node b's allocatable, whatever is requested on it", got, 62*1024)
+	}
+	if got := (*FitChecker)(nil).LargestAllocatableMemoryMB(); got != 0 {
+		t.Errorf("nil FitChecker = %d, want 0", got)
+	}
+}

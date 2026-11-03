@@ -319,6 +319,17 @@ describe("InboxPage", () => {
     expect(container.querySelectorAll(".inbox-item")).toHaveLength(0);
   });
 
+  // 2026-11-03 walkthrough: with GET /api/tasks failing on a cold load the
+  // list App hands over is the empty one it started with, and the page
+  // promised that nothing was waiting.
+  it("does not say nothing is waiting before the task list has been read", () => {
+    renderInbox({ tasks: [], tasksLoaded: false });
+    expect(screen.queryByText(/Nothing is waiting on you/)).toBeNull();
+    expect(
+      screen.getByText(/The task list could not be read/),
+    ).toBeInTheDocument();
+  });
+
   it("approves a proposal from its own row", async () => {
     const onAct = vi.fn((mutate) => mutate());
     const user = userEvent.setup();
@@ -655,7 +666,7 @@ describe("InboxPage", () => {
   });
 
   // grain's own escalations are raised as notifications now
-  // (docs/design/durable-tasks.md, DT-5), but the rows they map keep
+  // (design/design/durable-tasks.design.md, DT-5), but the rows they map keep
   // appearing until they are removed: a stalled merge shows both its
   // pipeline.merge-stalled notification and its "Unblock a merge" row.
   it("keeps a stalled merge's row beside its merge-stalled notification", async () => {

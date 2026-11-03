@@ -147,6 +147,14 @@ const RANK = {
 // events. A requeue model.Transitions could only infer stands at the
 // finish of the attempt before it, so it goes after that attempt rather
 // than ahead of it.
+// The timeline's titles for a change to a task's auto-merge, each a
+// transition of its own (model.MergeTaskEvents).
+const AUTO_MERGE_STEPS = {
+  auto_merge_on: "Auto-merge turned on",
+  auto_merge_off: "Auto-merge turned off",
+  auto_merge_kept_off: "Auto-merge kept off",
+};
+
 function transitionRank(tr) {
   if (tr.state === "queued" && tr.inferred) return RANK.requeue;
   return RANK[tr.state] ?? RANK.comment;
@@ -227,7 +235,12 @@ function timelineEvents(t, zone, now = Date.now()) {
     attempts.length > 0
       ? transitions.filter((tr) => tr.state !== "running")
       : transitions;
-  const lastTransitionIndex = shownTransitions.length - 1;
+  // Only a lifecycle step can be the task's current state: an auto-merge
+  // change (model.TaskEventAutoMergeOn/Off/KeptOff) is a note about one
+  // setting, not a state the task moved into.
+  const lastTransitionIndex = shownTransitions.findLastIndex(
+    (tr) => !AUTO_MERGE_STEPS[tr.state],
+  );
 
   const transitionEvents = shownTransitions.map((tr, i) => {
     const at = timelineTime(tr.at);
@@ -239,7 +252,11 @@ function timelineEvents(t, zone, now = Date.now()) {
       // A reopen is not a state of its own (model.TransitionReopened):
       // the task is back to waiting on whatever its record implies, so it
       // takes the waiting dot.
-      badge: tr.state === "reopened" ? "queued" : tr.state,
+      badge: AUTO_MERGE_STEPS[tr.state]
+        ? "comment"
+        : tr.state === "reopened"
+          ? "queued"
+          : tr.state,
       inferred: Boolean(tr.inferred),
       lifecycle: true,
       // Only the most recent transition can still be "now" -- a running
@@ -253,7 +270,9 @@ function timelineEvents(t, zone, now = Date.now()) {
           <div className="timeline-title">
             {tr.state === "reopened"
               ? "Reopened"
-              : STATE_LABELS[tr.state] || tr.state}
+              : AUTO_MERGE_STEPS[tr.state] ||
+                STATE_LABELS[tr.state] ||
+                tr.state}
           </div>
           {/* Who closed or reopened it, why, and what the close cancelled
               (model.TaskEvent) -- set only on a step somebody asked for. */}
@@ -359,6 +378,25 @@ function timelineEvents(t, zone, now = Date.now()) {
               same overlay the entry opens (CapabilityAudit). A line of its
               own: on the meta line it pushed a phone's "finished" time
               onto two lines. */}
+          {/* Which grain hostd its host work went to, the machine that
+              hostd ran on and its owner (ui.Attempt.Hostd), on a line of
+              its own for the same reason. */}
+          {a.hostd?.hostd && (
+            <div
+              className="timeline-meta timeline-attempt-hostd"
+              title={[
+                `Host work on grain hostd ${a.hostd.hostd}`,
+                a.hostd.instance && `on ${a.hostd.instance}`,
+                a.hostd.owner && `owned by ${a.hostd.owner}`,
+              ]
+                .filter(Boolean)
+                .join(", ")}
+            >
+              hostd {a.hostd.hostd}
+              {a.hostd.instance && <> on {a.hostd.instance}</>}
+              {a.hostd.owner && <> · {a.hostd.owner}</>}
+            </div>
+          )}
           {a.capabilityAuditCount > 0 && (
             <div className="timeline-meta">
               {a.capabilityAuditCount} capability audit record

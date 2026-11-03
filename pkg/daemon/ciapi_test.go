@@ -26,7 +26,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/ciapi"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
-	"github.com/ai-on-gke/grain/pkg/capability/repowrite"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
@@ -49,12 +48,12 @@ func ciAPIRegistry(gate *ciapi.Endpoint) *model.CapabilityRegistry {
 			ciapi.Aliases[model.ReleaseGateReadCapability]),
 		packagepublish.New(packagepublish.Config{Credentials: stubPackageCredentials{}}),
 	)
-	reg.RegisterDynamic(repowrite.DynamicProvider, ui.AgentAPIDynamicProvider)
+	reg.RegisterDynamic(ui.AgentAPIDynamicProvider)
 	reg.RegisterCIDynamic(ciapi.DynamicProvider(gate, ciapi.Config{}))
 	return reg
 }
 
-// release-gate-read (docs/design/release-from-trunk.md §6, RFT-3) and
+// release-gate-read (design/design/release-from-trunk.design.md §6, RFT-3) and
 // any other api grant a job declares are granted to the cron grain
 // itself fires and to trusted events, and to nothing an untrusted tree
 // can ask for: a pull request's, an ordinary push's, or an agent's
@@ -148,6 +147,7 @@ func TestEventGatedCapabilitiesAreWithheldFromNonHumanDispatches(t *testing.T) {
 		trustedSchedule bool
 	}{
 		{"repo-write:bwsalmon/grain", true},
+		{model.RepoWriteGrant(model.RepoRef{Owner: "bwsalmon", Name: "grain"}), true},
 		{packagepublish.CapabilityName, true},
 	} {
 		t.Run(tc.id, func(t *testing.T) {
@@ -167,29 +167,34 @@ func TestEventGatedCapabilitiesAreWithheldFromNonHumanDispatches(t *testing.T) {
 				{"push", ci.EventPush, false, false, false},
 				{"pull_request", ci.EventPullRequest, false, false, false},
 			} {
-				_, resolved, err := ResolveCICapabilities(context.Background(), reg, nil, repo, "c1234-0",
-					c.event, c.trusted, []string{tc.id}, c.withhold)
-				if err != nil {
-					t.Fatalf("%s: %v", c.name, err)
-				}
 				var granted bool
-				for _, r := range resolved {
-					if r.Grant.Capability == tc.id && !r.Resolution.Refused {
-						granted = true
+				if model.IsRepoAccessGrant(tc.id) {
+					// No provider: the grant's own gate decides the
+					// proxy scope grantRepoAccess widens.
+					granted = ciRepoAccessAdmitted(tc.id, c.event, c.trusted, c.withhold)
+				} else {
+					_, resolved, err := ResolveCICapabilities(context.Background(), reg, nil, repo, "c1234-0",
+						c.event, c.trusted, []string{tc.id}, c.withhold)
+					if err != nil {
+						t.Fatalf("%s: %v", c.name, err)
+					}
+					for _, r := range resolved {
+						if r.Grant.Capability == tc.id && !r.Resolution.Refused {
+							granted = true
+						}
 					}
 				}
 				if granted != c.want {
-					t.Errorf("%s: granted=%v (%+v), want %v", c.name, granted, resolved, c.want)
+					t.Errorf("%s: granted=%v, want %v", c.name, granted, c.want)
 				}
 			}
 		})
 	}
 
-	regFn := func() *model.CapabilityRegistry { return reg }
-	if ciHoldsRepoAccess(regFn, ci.EventManual, false, []string{"repo-write:bwsalmon/grain"}, true) {
+	if ciHoldsRepoAccess(ci.EventManual, false, []string{"repo-write:bwsalmon/grain"}, true) {
 		t.Error("ciHoldsRepoAccess admitted repo-write on a withheld manual run")
 	}
-	if !ciHoldsRepoAccess(regFn, ci.EventManual, false, []string{"repo-write:bwsalmon/grain"}, false) {
+	if !ciHoldsRepoAccess(ci.EventManual, false, []string{"repo-write:bwsalmon/grain"}, false) {
 		t.Error("ciHoldsRepoAccess refused repo-write on a human manual run")
 	}
 }

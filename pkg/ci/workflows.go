@@ -22,7 +22,7 @@ import (
 )
 
 // The workflow parser and planner moved to pkg/workflows, the neutral
-// library grain and grit both link (docs/design/grit-split.md, GS-2).
+// library grain and grit both link (design/design/grit-split.design.md, GS-2).
 // These aliases keep this package's own callers and its importers
 // compiling while they move over in their own time.
 
@@ -69,6 +69,7 @@ const (
 	RecurrenceEveryNMinutes = workflows.RecurrenceEveryNMinutes
 	RecurrenceMonthly       = workflows.RecurrenceMonthly
 	RecurrenceWeekly        = workflows.RecurrenceWeekly
+	ReleaseShortSoakOKEnv   = workflows.ReleaseShortSoakOKEnv
 	ReleaseVersionEnv       = workflows.ReleaseVersionEnv
 	RequestedByEnv          = workflows.RequestedByEnv
 	RequestedByKindEnv      = workflows.RequestedByKindEnv
@@ -112,6 +113,7 @@ func init() {
 			return list, nil
 		},
 		IsRepoAccess: IsRepoAccessCapability,
+		IsRepoRead:   IsRepoReadCapability,
 		DeclaredOnly: declaredOnly,
 	}
 }

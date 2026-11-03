@@ -738,7 +738,7 @@ func TestAgentFrameworksSaysHowToInstallAMissingCodexCLI(t *testing.T) {
 func codexVersionStub(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "codex")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\necho 'codex-cli "+codex.ReviewedCLIVersion+"'\n"), 0o700); err != nil {
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+`if [ "$1 $2" = "debug models" ]; then echo '{"models":[{"slug":"gpt-test"}]}'; exit 0; fi`+"\necho 'codex-cli "+codex.ReviewedCLIVersion+"'\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return path

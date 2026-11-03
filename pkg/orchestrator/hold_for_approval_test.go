@@ -163,3 +163,45 @@ func TestProcessResultFilesKeepRunningOrHigherPriorityForAPerson(t *testing.T) {
 		t.Error("the settings were not filed as asked")
 	}
 }
+
+// A run that also asks to hold a keep_running or high-priority proposal
+// is not told -- nor is the person approving it -- that its permission
+// could have queued it: the setting is why it waits, and the body says so.
+func TestProcessResultHeldKeepRunningIsNotMarkedHeldByTheRun(t *testing.T) {
+	store, ctx := openStore(t)
+	_, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	task := filedTask(t, ctx, store, "t1", repo)
+	task.AutoMerge = true
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+
+	result := toolResult(
+		agent.ToolCall{Name: "propose_task", Arguments: map[string]any{
+			"title": "forever", "body": "b", "keep_running": true, "hold_for_approval": true,
+		}},
+		agent.ToolCall{Name: "propose_task", Arguments: map[string]any{
+			"title": "first in line", "body": "b", "priority": 1000000, "hold_for_approval": true,
+		}},
+	)
+	if err := orchestrator.ProcessResult(ctx, store, client, task, result, "t1-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult: %v", err)
+	}
+	filed := proposalsByTitle(t, ctx, store, "t1")
+	for title, want := range map[string]string{"forever": "keep_running", "first in line": "priority 1000000"} {
+		p, ok := filed[title]
+		if !ok {
+			t.Fatalf("%q was never filed", title)
+		}
+		if p.Approval != nil {
+			t.Errorf("%q approved by %+v, want nobody", title, p.Approval)
+		}
+		if model.HeldForApproval(p) || strings.Contains(p.Body, "could have queued it") {
+			t.Errorf("%q marked as held back by the run, but its permission would not have queued it:\n%s", title, p.Body)
+		}
+		if !strings.Contains(p.Body, "Filed for a person to approve") || !strings.Contains(p.Body, want) {
+			t.Errorf("%q body does not say why it waits:\n%s", title, p.Body)
+		}
+	}
+}

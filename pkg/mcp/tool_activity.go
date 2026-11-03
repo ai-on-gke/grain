@@ -233,7 +233,7 @@ func capabilityToolNote(server, tool string) (CapabilityToolNote, bool) {
 // declaredWaitTools are the tools that block on something outside the
 // run -- CI, another task, a person -- for as long as that takes. A
 // durable run inside one is not idle however quiet it is
-// (orchestrator's idle watchdog, docs/design/durable-tasks.md#DT-1).
+// (orchestrator's idle watchdog, design/design/durable-tasks.design.md#DT-1).
 var declaredWaitTools = []string{"wait_for_checks", "run_ci_job", "wait_for_task", "chat", "run_host_command"}
 
 // IsDeclaredWait reports whether note, a run's activity phrase as

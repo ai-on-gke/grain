@@ -169,6 +169,53 @@ describe("DetailOverlay timeline", () => {
     );
   });
 
+  // Each attempt says which grain hostd its host work went to, the
+  // machine that hostd ran on and its owner (ui.Attempt.Hostd); one that
+  // recorded none says nothing.
+  it("shows the hostd each attempt's host work went to", () => {
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          attempts: [
+            {
+              number: 1,
+              startedAt: "2026-08-28T12:00:00Z",
+              finishedAt: "2026-08-28T12:10:00Z",
+              outcome: "failed",
+              hostd: {
+                hostd: "ws-a",
+                instance: "cloudtop",
+                owner: "alice@example.com",
+                at: "2026-08-28T12:00:01Z",
+              },
+            },
+            {
+              number: 2,
+              startedAt: "2026-08-28T13:00:00Z",
+              outcome: "failed",
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+
+    const lines = document.querySelectorAll(".timeline-attempt-hostd");
+    expect(lines).toHaveLength(1);
+    expect(lines[0].textContent).toBe(
+      "hostd ws-a on cloudtop · alice@example.com",
+    );
+    expect(lines[0]).toHaveAttribute(
+      "title",
+      "Host work on grain hostd ws-a, on cloudtop, owned by alice@example.com",
+    );
+  });
+
   // bwsalmon/agents#503: a "running" transition and the attempt it started
   // both landing on the timeline read as two nodes for the same moment.
   it("shows a single node for a running transition and its first attempt, not two", () => {
@@ -340,6 +387,51 @@ describe("DetailOverlay timeline", () => {
     expect(
       screen.getByText(
         "by human bob@example.com · cycling in-flight tasks · cancelled run 1920-1 (attempt 1) and CI run b8d940e14a9aef1d",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  // A change to the task's auto-merge (model.TaskEventAutoMergeOn/Off/
+  // KeptOff) is a step of its own, saying who made it and which writer it
+  // was -- and, being a note about one setting, never the task's current
+  // state.
+  it("shows who turned auto-merge on or off, and a write that was kept off", () => {
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          transitions: [
+            { state: "queued", at: "2026-08-28T09:00:00Z" },
+            {
+              state: "auto_merge_on",
+              at: "2026-08-28T10:00:00Z",
+              by: "human bob@example.com",
+              reason: "edited",
+            },
+            {
+              state: "auto_merge_kept_off",
+              at: "2026-08-28T11:00:00Z",
+              by: "automation grain",
+              detail: "orchestrator.settleSecurityHold (securityhold.go:548)",
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Auto-merge turned on")).toBeInTheDocument();
+    expect(screen.getByText("Auto-merge kept off")).toBeInTheDocument();
+    expect(
+      screen.getByText("by human bob@example.com · edited"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "by automation grain · orchestrator.settleSecurityHold (securityhold.go:548)",
       ),
     ).toBeInTheDocument();
   });

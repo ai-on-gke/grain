@@ -34,7 +34,9 @@ network listener takes depends on two settings:
   issuer, audience and expiry. A caller whose assertion verifies is
   signed in as the email it names, if `-ui-allowed-principals` admits
   it, with no access code. An assertion that is present but does not
-  verify is refused with a `401` and never falls back to the code. The
+  verify is refused with a `401` and never falls back to the code (a
+  browser loading the UI is shown a "Sign-in could not be verified" page
+  with the reason, an API caller the JSON error). The
   code keeps working beside it, so this is the state to migrate in.
 - **IAP required.** `-ui-require-iap` (or `GRAIN_REQUIRE_IAP=true`) as
   well. The network listener no longer takes the code at all, neither
@@ -48,7 +50,7 @@ network listener takes depends on two settings:
 
 `-ui-require-iap` governs IAP only. A wrapper build's own
 `IdentityVerifier` that declares the access code wins over it
-(`AccessCodeWins()`, as the Google layer's ÜberProxy verifier does) keeps
+(`AccessCodeWins()`, as a verifier behind an identity-aware proxy may) keeps
 taking the code over its proxy, so break-glass through that proxy still
 works with the flag set.
 
@@ -140,8 +142,8 @@ out:
   source that hasn't sent a wrong code is never affected.
 - **Which attempts count:** codes typed into the login form, and bearer
   tokens that could be the code. A bearer of a different length, or
-  containing characters no code has (a JWT, a session, an executor's
-  `gxt_` token), isn't a guess. It is refused with a `401` and not
+  containing characters no code has (a JWT, a session, a GitHub
+  token), isn't a guess. It is refused with a `401` and not
   counted. The length and alphabet aren't secret, since every generated
   code shares them.
 
@@ -166,29 +168,47 @@ any remote source.
 Codes are compared in constant time (hashed first). A wrong code gets the
 same answer as any other wrong code.
 
-### Remote executors
+### A grain hostd dialing in
 
-The daemon accepts remote executors on routes served without the access
-code:
+The daemon serves `GET /api/hostd/connect` without the access code. A
+`grain hostd -server` on another machine upgrades it and presents its
+hostd token, which says which hostd it is (the hostd registry,
+`/api/hostds`, or the deprecated shared `-hostd-token-file`). A bearer
+on that route (the hostd token, or an IAP token) is never counted as an
+access-code guess.
 
-- `GET /_grain/executor`, `/api/executors/connect` and
-  `/api/executors/stream`;
-- the bootstrap: `/install-executor.sh`, `/api/executors/install.sh`,
-  `/api/executors/bin/{binary}` and `/install/{os}/{arch}`.
+What else the hostd needs depends on how it reaches the daemon:
 
-They carry their own authentication. A connection is admitted only for a
-valid, unrevoked executor token (or the `-executor-token-file` token) in
-the executor's hello frame, whatever its HTTP headers say. The script and
-binaries are grain's own, the same bytes `/install-executor.sh` and
-`/install/{os}/{arch}` have always served to anybody. Opening these
-routes therefore exposes nothing the access code protects, and a
-`-executor-addr` listener exposes the same protocol anyway. A bearer
-token on these routes (`pkg/modelexec` sends the executor token or an
-IAP token) is never counted as an access-code guess. The `/api/executors/`
-twins are open too, so the UI's `curl …/api/executors/install.sh`
-command works from the executor's host.
-Every other `/api/executors/` route, such as listing executors or minting
-and revoking tokens, still needs the access code.
+- **Remote**: it dials in through the IAP Gateway or another registered
+  identity verifier's proxy, so the request carries a verified identity.
+  The daemon records that identity as the connection's principal and
+  checks it against the allowlist (`-ui-allowed-principals`). The
+  identity must also equal the hostd row's owner, compared as full,
+  lowercased emails. A stolen hostd token is no use without its
+  owner's identity. Service accounts may be owners, so a hostd running
+  under Workload Identity or a key needs its service account as the
+  owner. The daemon refuses, and logs, a remote hostd that connects as
+  somebody else, a remote hostd whose row has no owner, and a request
+  that came through a proxy, or from another host to a daemon with a
+  verifier configured, with no verified identity. It never falls back to
+  the token alone.
+- **Local**: over loopback with no forwarding headers and no assertion,
+  such as through `kubectl port-forward`. The token alone names it, as
+  it always has, and it needs no owner. The same goes for every hostd
+  of a daemon that has no identity verifier configured. The co-located
+  hostd at `/run/grain-hostd/hostd.sock` does not dial in at all.
+
+Set the owner when you register the hostd (Settings → Hostds,
+`grain hostds register -owner <email> <name>`, or `POST /api/hostds`),
+or later (`grain hostds set-owner <name> <email>`, or `PATCH
+/api/hostds/{name}`). For the shared token, use `-hostd-token-owner`.
+Start the hostd with `-iap-audience <IAP client ID>` so that it sends an
+ID token from its service account or its user's login. At startup it
+logs the email that token names, which is the owner the daemon expects.
+
+The remote executor routes that were open the same way, including the
+executor bootstrap routes (`executorBootstrapRoute`), were removed with
+remote executors ([executors-removed.md](executors-removed.md)).
 
 ## The CLI and the processes grain starts
 

@@ -127,7 +127,7 @@ func (c *sandboxCLI) taskWait(p sandboxArgs) error {
 		return fmt.Errorf("parking a task ends the run and is a model-only control operation: call the wait_for_task (park: true) or resume_later MCP tool instead")
 	}
 	if len(p.positional) == 0 {
-		return fmt.Errorf("missing <id>...: name at least one task to wait on")
+		return p.missing("<id>...: name at least one task to wait on")
 	}
 	timeout, err := parseWaitTimeout(p.get("timeout"), c.getenv)
 	if err != nil {
@@ -252,6 +252,13 @@ func (c *sandboxCLI) taskPropose(p sandboxArgs) error {
 	fmt.Fprintf(c.out, "Proposed task #%s (%s) — held for human approval (auto_merge=false).\n", res.ID, res.URL)
 	if res.ApprovalNote != "" {
 		fmt.Fprintln(c.out, res.ApprovalNote)
+	}
+	// The capability policy's own account of a default it kept off the
+	// proposal: nobody asked for a default, so nothing else tells the run
+	// that the task it filed starts without one.
+	for _, d := range res.DroppedDefaults {
+		fmt.Fprintf(c.out, "Default grant %s was not attached to it: %s.\n",
+			d.Grant, strings.TrimSuffix(strings.TrimSpace(d.Reason), "."))
 	}
 	return nil
 }
@@ -500,7 +507,7 @@ func (c *sandboxCLI) quarantine(p sandboxArgs) error {
 	var testName string
 	switch len(p.positional) {
 	case 0:
-		return fmt.Errorf("missing <test-name>: run 'grain quarantine --help' for usage")
+		return p.missing("<test-name>")
 	case 1:
 		testName = strings.TrimSpace(p.positional[0])
 	default:

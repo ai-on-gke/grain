@@ -499,9 +499,6 @@ type Config struct {
 	// left empty and the daemon's own PATH decides. Only shown, as the
 	// connection page's hint; nil leaves the hint saying PATH.
 	AgentCLIDefaults map[string]string
-	// Executors, when set, is what GET /api/executors calls to snapshot
-	// connected remote executor nodes -- modelexec.Server in pkg/cli/daemon.go.
-	Executors ExecutorLister
 	// StateRepo is set only when this UI runs inside the daemon that owns
 	// the state repository its store is exported to (pkg/staterepo) --
 	// nil means it does not, and the bootstrap pane and its API routes
@@ -528,22 +525,10 @@ type Config struct {
 	// there is none -- an honest answer for a deployment whose state is
 	// local-only, and for any UI not colocated with a daemon at all.
 	StateRepoRef func() model.RepoRef
-	// ExecutorServer, when set, is what the UI calls to disconnect active
-	// sessions when an executor token is revoked.
-	ExecutorServer ExecutorServer
 	// HostdRemote, when set, takes the upgrades of a grain hostd on
 	// another machine dialing in to /api/hostd/connect (hostd.Remote,
 	// which checks the hostd token itself); nil refuses them.
 	HostdRemote http.Handler
-	// ExecutorAddr is the address this deployment's remote executor
-	// listener bound (grain daemon -executor-addr), and ExecutorTLS
-	// whether it serves TLS there. /api/config reports both so the
-	// bootstrap command a pane offers points a worker at a port something
-	// listens on. "" -- `grain demo`, a daemon started without
-	// -executor-addr -- means remote execution is off, and the pane says
-	// so instead of offering a command.
-	ExecutorAddr string
-	ExecutorTLS  bool
 	// Upgrader is set only when this deployment was told how it
 	// upgrades itself: which image to pull per branch
 	// (pkg/cli/daemon.go's -upgrade-image, the shape scripts/setup.sh
@@ -824,7 +809,7 @@ type Config struct {
 	// all happens -- measured at 29.6-29.9s of a 29.9s exchange on the
 	// shipped 30s interval, against 0.04-0.44s for everything grain does
 	// between that decision and the agent's first turn
-	// (docs/hand-runs/2026-09-08-director-latency.md).
+	// (the 2026-09-08 director-latency hand run).
 	//
 	// A hint, never a guarantee, and deliberately so: the loop coalesces
 	// wakes and spaces them out, and the periodic tick is still what
@@ -1192,10 +1177,14 @@ type Config struct {
 	// (-ui-allowed-principals). When empty, defaults to $GRAIN_ALLOWED_PRINCIPALS,
 	// or the deployment owner (Actor) plus provisioned service accounts.
 	AllowedPrincipals []string
-	// ProvisionedServiceAccounts lists GCP service accounts grain itself
-	// provisions for this deployment, included in the default allowlist when
-	// AllowedPrincipals is unset.
+	// ProvisionedServiceAccounts lists daemon-owned GCP service accounts grain
+	// itself provisions for this deployment (never gcp-key sandbox agent
+	// accounts), included in the default allowlist when AllowedPrincipals is unset.
 	ProvisionedServiceAccounts []string
+	// GCPKeyServiceAccounts lists the gcp-key agent service account pool
+	// configured by daemon flags, if any. Merged with the store's gcp-key pool
+	// so those accounts are never admitted by default or by -ui-allowed-principals.
+	GCPKeyServiceAccounts []string
 	// GroupChecker, when set, resolves group: entries in AllowedPrincipals;
 	// nil uses CloudIdentityGroupChecker lazily when at least one group: entry
 	// is configured.

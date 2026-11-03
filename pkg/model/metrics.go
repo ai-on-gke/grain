@@ -148,8 +148,13 @@ type TaskTiming struct {
 	// report groups wake telemetry by (metrics.Agents).
 	TemplateID string
 	// Interactive is whether the task is an interactive session (task.interactive),
-	// so startup latency SLOs can be reported separately for interactive vs batch tasks.
+	// so startup latency SLOs can be reported separately for interactive vs batch tasks
+	// and live chats can be left out of the task backlog (metrics.backlogOf).
 	Interactive bool
+	// ConsoleSession is whether the task holds a standing console session's
+	// conversation (ConsoleSessionIDOf), so backlogOf leaves it out alongside
+	// Interactive tasks just as taskFilters.js's isSessionTask does.
+	ConsoleSession bool
 }
 
 // The two values TaskTiming.Port takes for a port.
@@ -236,11 +241,13 @@ func (s *Store) TaskTimings(ctx context.Context) ([]TaskTiming, error) {
 			"(SELECT SUBSTR(`st`.`tag`, 10) FROM `task_tag` AS `st` WHERE `st`.`task_id` = `t`.`id` AND `st`.`tag` LIKE 'schedule:%' LIMIT 1), ''), "+
 			// Whether the work is a CL rather than a pull request.
 			"EXISTS (SELECT 1 FROM `task_link` AS `cl` WHERE `cl`.`task_id` = `t`.`id` AND `cl`.`kind` IN (?, ?)), "+
-			"`t`.`interactive` "+
+			"`t`.`interactive`, "+
+			"EXISTS (SELECT 1 FROM `task_tag` AS `cst` WHERE `cst`.`task_id` = `t`.`id` AND `cst`.`tag` LIKE ? AND `cst`.`tag` <> ?) "+
 			"FROM `task` AS `t` "+
 			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `t`.`id` "+
 			"ORDER BY `t`.`id`", []any{string(LinkFixTask), string(LinkPortOf), TagMechanicalPort,
-			string(LinkChangelist), string(LinkChangelistSubmitted)},
+			string(LinkChangelist), string(LinkChangelistSubmitted),
+			ConsoleSessionTagPrefix + "%", ConsoleSessionTagPrefix},
 		func(rows *sql.Rows) error {
 			var t TaskTiming
 			var owner, name sql.NullString
@@ -251,7 +258,7 @@ func (s *Store) TaskTimings(ctx context.Context) ([]TaskTiming, error) {
 			var isPort, mechanical, isCL bool
 			if err := rows.Scan(&t.TaskID, &created, &approved, &undeferred, &completed, &closed,
 				&prOpened, &prMerged, &queueEntered, &owner, &name, &t.Author, &t.FixTaskFiled,
-				&repairAt, &repairNote, &isPort, &mechanical, &t.TemplateID, &isCL, &t.Interactive); err != nil {
+				&repairAt, &repairNote, &isPort, &mechanical, &t.TemplateID, &isCL, &t.Interactive, &t.ConsoleSession); err != nil {
 				return err
 			}
 			t.Targeted = owner.Valid

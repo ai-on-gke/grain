@@ -94,7 +94,7 @@ printf '%s\\n' \
   await writeAccessCode(path.join(dataDir, "local-api-token"));
   // These specs configure the daemon through its API, which a deployment
   // with a grain/config repository otherwise answers with a config pull
-  // request to open (docs/design/config-repo-settings.md, section
+  // request to open (design/design/config-repo-settings.design.md, section
   // 4.1.1); the host-local opt-out keeps those writes direct.
   await fs.writeFile(
     path.join(dataDir, "state-repo.json"),

@@ -46,7 +46,7 @@ $secret:<name>, or bind them with bind-secret, which can store the value
 read from stdin as it binds it. A value is never printed back.`
 
 // cmdCapabilityServers is `grain capability-servers`: the deployment's
-// mcpServers (docs/capabilities-spec.md §3.1), through
+// mcpServers (design/spec/capabilities/capabilities.spec.md §3.1), through
 // /api/capability-servers.
 func cmdCapabilityServers(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	if len(args) == 0 {
@@ -191,11 +191,16 @@ func printCapabilityServers(out *printer, list []ui.CapabilityServer) {
 		if s.Builtin != nil {
 			label += " (built-in " + s.Builtin.Name + ")"
 		}
+		if s.InProcess != nil {
+			label += " (built-in " + s.InProcess.Name + ", in-process)"
+		}
 		fmt.Printf("- %s\n    state: %s\n", label, state)
 		if len(s.Config.Aliases) > 0 {
 			fmt.Printf("    also answers to: %s\n", strings.Join(s.Config.Aliases, ", "))
 		}
-		if s.Config.Stdio() {
+		if s.InProcess != nil {
+			fmt.Printf("    runs: inside grain, nothing to configure\n")
+		} else if s.Config.Stdio() {
 			fmt.Printf("    command: %s %s\n", s.Config.Command, strings.Join(s.Config.Args, " "))
 		} else {
 			fmt.Printf("    serverUrl: %s\n", s.Config.ServerURL)

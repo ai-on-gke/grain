@@ -44,6 +44,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
@@ -138,6 +139,7 @@ func PublishedToolNames() []string {
 	add(deploymenthealth.Tools(deploymenthealth.Config{}))
 	add(bootstrap.PlaybookTools())
 	add(dbaccess.Tools(dbaccess.Config{AllowWrite: true}))
+	add(selfrepair.ConfirmedHostCommandTools(nil))
 
 	// The agent API's generated tools, one per scoped route, which the
 	// package that owns the route table registers (pkg/ui imports this
@@ -187,7 +189,7 @@ func dedupeToolNames(names []string) []string {
 }
 
 // The two surfaces of a run with a sandbox
-// (docs/design/sandbox-first-agent-surface.md §4-§6).
+// (design/design/sandbox-first-agent-surface.design.md §4-§6).
 //
 // `grain mcpserver` serves the model only its control set: the four
 // sandbox tools, the tools that end, park or escalate a run, and the
@@ -234,14 +236,15 @@ func SandboxToolNames() []string {
 func IsControlTool(name string) bool { return controlTools[name] }
 
 // ModelOnlyGrantToolNames is the tools of the grants a sandbox process
-// must never reach -- db-write -- which stay on the MCP
+// must never reach -- db-write and host-exec -- which stay on the MCP
 // roster of a run holding them. (self-upgrade's, dispatch-control's,
 // pipeline-control's and team-broadcast's are api tools now, kept off the
 // sandbox by their scopes, deployment:upgrade, dispatch:write and
 // teams:broadcast: model.IsSandboxDeniedAPIScope.) db-read's query_grain_db
-// is `grain db query`, so only execute_grain_db is here.
+// is `grain db query`, so only execute_grain_db is here; run_host_command
+// runs on grain's own host, which a sandbox process must never reach.
 func ModelOnlyGrantToolNames() []string {
-	return []string{"execute_grain_db"}
+	return []string{"execute_grain_db", "run_host_command"}
 }
 
 var (
