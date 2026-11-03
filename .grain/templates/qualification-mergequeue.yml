@@ -94,8 +94,9 @@ body: |
     Any pull request fails qualification, including a real fix. Report a bug
     you find in the closing note with `Qualification-Verdict: FAIL`. The
     pipeline steward files the fix.
-  - Finish with `comment_on_issue` (or `nothing_needed`), never
-    `ask_question`.
+  - Finish with `comment_on_issue`, never `nothing_needed` or
+    `ask_question`: `nothing_needed` closes the task, and a closed
+    qualification task fails whatever its note says.
   - End the closing note with exactly these three lines, the commit in full:
 
     ```text
