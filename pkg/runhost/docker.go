@@ -167,17 +167,27 @@ func (d Docker) List(ctx context.Context, deployment string) ([]Info, error) {
 		return nil, nil
 	}
 	out, err = d.exec(ctx, append([]string{"inspect"}, ids...)...)
-	// A run host that exits and is removed between the ps and the inspect
-	// fails the inspect with "no such object", while its stdout still holds
-	// every container that is left: the vanished one is gone, so listing the
-	// rest is the right answer, and failing the whole list would skip that
-	// cycle's orphan sweep.
-	if err != nil && !(strings.Contains(strings.ToLower(err.Error()), "no such object") && json.Valid(out)) {
-		return nil, err
+	missing := 0
+	if err != nil {
+		// A run host that exits and is removed between the ps and the inspect
+		// fails the inspect with "no such object", while its stdout still holds
+		// every container that is left: the vanished one is gone, so listing the
+		// rest is the right answer, and failing the whole list would skip that
+		// cycle's orphan sweep. Any other stderr line -- or an ID neither
+		// inspected nor reported missing -- is a real failure and must not hand
+		// back a partial list as complete.
+		var ok bool
+		missing, ok = onlyMissingObjects(err)
+		if !ok || ctx.Err() != nil || !json.Valid(out) {
+			return nil, err
+		}
 	}
 	var all []inspected
 	if err := json.Unmarshal(out, &all); err != nil {
 		return nil, fmt.Errorf("runhost: reading docker inspect: %w", err)
+	}
+	if err != nil && len(all)+missing != len(ids) {
+		return nil, err
 	}
 	var infos []Info
 	for _, c := range all {
@@ -188,6 +198,31 @@ func (d Docker) List(ctx context.Context, deployment string) ([]Info, error) {
 		infos = append(infos, Info{Name: strings.TrimPrefix(c.Name, "/"), Labels: l, Running: c.State.Running})
 	}
 	return infos, nil
+}
+
+// onlyMissingObjects reports whether err is a `docker inspect` failure whose
+// stderr holds nothing but "error: no such object: ..." lines, and how many
+// vanished objects it named. A mixed failure -- one vanished container plus a
+// daemon error on the next -- still prints valid JSON for whatever came first,
+// and treating that partial array as the whole listing would tell Host.gone
+// and RecoverRunHosts that a still-running container has disappeared.
+func onlyMissingObjects(err error) (int, bool) {
+	msg := err.Error()
+	open := strings.IndexByte(msg, '(')
+	if open < 0 || !strings.HasSuffix(msg, ")") {
+		return 0, false
+	}
+	stderr := strings.TrimSpace(msg[open+1 : len(msg)-1])
+	if stderr == "" {
+		return 0, false
+	}
+	lines := strings.Split(stderr, "\n")
+	for _, line := range lines {
+		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "error: no such object:") {
+			return 0, false
+		}
+	}
+	return len(lines), true
 }
 
 // Destroy implements Driver.

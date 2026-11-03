@@ -206,7 +206,8 @@ func TestDockerListSkipsARunHostRemovedBeforeItsInspect(t *testing.T) {
 		t.Fatalf("List = %+v, want the one run host still there", infos)
 	}
 
-	// Any other inspect failure is still a failure.
+	// Any other inspect failure is still a failure, even when another ID in
+	// the same batch vanished and docker inspect still wrote valid JSON.
 	d.run = func(_ context.Context, args ...string) ([]byte, error) {
 		if args[0] == "ps" {
 			return []byte("abc\n"), nil
@@ -215,6 +216,26 @@ func TestDockerListSkipsARunHostRemovedBeforeItsInspect(t *testing.T) {
 	}
 	if _, err := d.List(context.Background(), "grain"); err == nil {
 		t.Fatal("List hid an inspect failure that was not a vanished container")
+	}
+
+	d.run = func(_ context.Context, args ...string) ([]byte, error) {
+		if args[0] == "ps" {
+			return []byte("gone\nlive\n"), nil
+		}
+		return []byte("[]"), errors.New("docker inspect: exit status 1 (error: no such object: gone\nCannot connect to the Docker daemon)")
+	}
+	if _, err := d.List(context.Background(), "grain"); err == nil {
+		t.Fatal("List hid a daemon failure alongside a vanished container")
+	}
+
+	d.run = func(_ context.Context, args ...string) ([]byte, error) {
+		if args[0] == "ps" {
+			return []byte("gone\nlive\n"), nil
+		}
+		return []byte("[]"), errors.New("docker inspect: signal: killed (error: no such object: gone)")
+	}
+	if _, err := d.List(context.Background(), "grain"); err == nil {
+		t.Fatal("List accepted a partial inspect output with an unaccounted container")
 	}
 }
 
