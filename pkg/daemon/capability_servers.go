@@ -16,6 +16,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"log"
 
@@ -94,6 +95,10 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 		},
 	}
 	if store != nil {
+		// A server that falls out of use says so where people look, not
+		// only in this log: the 2026-11-03 role-ceiling refusal sat in
+		// needs-config with nobody told.
+		opts.OnDrop, opts.OnAttach = capabilityServerAlerts(ctx, store)
 		// A server declaring grain's identity fields is sent the same
 		// deployment id the branch names carry (§4.5.7).
 		opts.Identity = servers.StoreIdentity(store, logf)
@@ -200,4 +205,43 @@ func capabilityServerLookup(live *LiveConfig) orchestrator.CapabilityServers {
 		return live.hostdCapabilityServers
 	}
 	return reg
+}
+
+// capabilityServerAlerts raises model.FamilyCapabilityServerDown for a
+// server the registry reports dropped (servers.Options.OnDrop), naming it
+// and why, and clears it when the server attaches again.
+func capabilityServerAlerts(ctx context.Context, store *model.Store) (func(servers.Status), func(string)) {
+	onDrop := func(st servers.Status) {
+		reason := st.Reason
+		if reason == "" {
+			reason = st.Error
+		}
+		title := fmt.Sprintf("Capability server %s is %s", st.ID, st.State)
+		body := fmt.Sprintf("Capability server %s is no longer attached (%s): %s\n\n", st.ID, st.State, reason)
+		if st.ConfigRefused {
+			title = fmt.Sprintf("Capability server %s refused its configuration", st.ID)
+			body += "Its configuration was saved but the server will not run under it. "
+		}
+		body += "No new grant can be minted from it until it attaches again, and grants it issued earlier cannot be released meanwhile. " +
+			"Fix it in Settings → Capability servers; this clears itself once the server attaches."
+		if _, err := store.RaiseNotification(ctx, model.Notification{
+			Subject:  model.NotificationSubject(model.FamilyCapabilityServerDown, st.ID),
+			Severity: model.NotificationWarning,
+			Title:    title,
+			Body:     body,
+			RaisedBy: "automation:" + capabilityServerPrincipal,
+		}); err != nil {
+			log.Printf("grain daemon: raising capability server %s's drop: %v", st.ID, err)
+		}
+	}
+	onAttach := func(id string) {
+		subject := model.NotificationSubject(model.FamilyCapabilityServerDown, id)
+		if n, err := store.OpenNotification(ctx, subject); err != nil || n == nil {
+			return
+		}
+		if _, err := store.ClearNotification(ctx, subject, "automation:"+capabilityServerPrincipal); err != nil {
+			log.Printf("grain daemon: clearing capability server %s's drop: %v", id, err)
+		}
+	}
+	return onDrop, onAttach
 }

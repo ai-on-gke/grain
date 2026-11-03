@@ -238,6 +238,12 @@ const (
 	// cleared by orchestrator's automatic upgrades: the next one that
 	// succeeds clears every open instance.
 	FamilyUpgradeFailed = "upgrade.failed"
+	// FamilyCapabilityServerDown is a capability server that fell out of
+	// use -- attached, then failed or needs-config, or refusing the config
+	// it was saved with -- "<capability_id>". Raised and cleared by the
+	// daemon's capability-server registry: the server attaching again
+	// clears it.
+	FamilyCapabilityServerDown = "capability.server-down"
 )
 
 // ReleasePendingActions are the actions a FamilyReleasePending

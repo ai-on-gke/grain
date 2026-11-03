@@ -470,6 +470,25 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 			return validationErrorf("%s", err)
 		}
 	}
+	// The server's own configure is run against what would be saved, the
+	// way Test runs it, so a config it refuses -- a gcp permission set over
+	// its admin's role ceiling, 2026-11-03 -- is refused here rather than
+	// stored to leave the server needs-config with nobody told. A server
+	// that cannot be reached at all says nothing about the config: that
+	// save goes ahead, with a warning, so an entry for a host that is down
+	// can still be edited.
+	if p := c.prober(); p != nil && len(cfg.Config) > 0 && !cfg.Disabled {
+		res := p.Probe(ctx, id, cfg, func(name string) (string, bool) {
+			v, ok := writes[name]
+			return v, ok
+		})
+		switch {
+		case res.ConfigRefused:
+			return configRefusal(id, cfg.Config, res.Error)
+		case !res.OK:
+			log.Printf("ui: capability server %s: saving a configuration it could not be asked to check: %s", id, res.Error)
+		}
+	}
 	if len(writes) > 0 {
 		// Unrehearsed: the secrets below are set before the store write
 		// a rehearsal would stop at, and would outlive its refusal.
@@ -713,6 +732,47 @@ func configValidationError(err error) error {
 		ve.fields = map[string]string{strings.TrimPrefix(m[1], "."): m[2]}
 	}
 	return ve
+}
+
+// configRefusal is the save refused because the server's own configure
+// refused the config (msg, ProbeResult.Error): shown at the top of the
+// config form, and on the field it is about where the message says.
+func configRefusal(id string, config map[string]any, msg string) error {
+	msg = strings.TrimPrefix(msg, "capability server "+id+": configure: ")
+	ve := &ValidationError{
+		err:    fmt.Errorf("capability server %s refused this configuration, so it was not saved: %s", id, msg),
+		fields: map[string]string{"": msg},
+	}
+	if field := refusedConfigField(config, msg); field != "" {
+		ve.fields[field] = msg
+	}
+	return ve
+}
+
+// refusedPermissionSet is how the gcp server names the permission set a
+// refusal is about (gcpsets.Config.Validate).
+var refusedPermissionSet = regexp.MustCompile(`permission set "([^"]+)"`)
+
+// refusedConfigField is the config form's path for what a configure
+// refusal is about, "" when it cannot tell: a gcp permission set's roles,
+// for one over its admin's role ceiling, or the set itself.
+func refusedConfigField(config map[string]any, msg string) string {
+	m := refusedPermissionSet.FindStringSubmatch(msg)
+	if m == nil {
+		return ""
+	}
+	sets, _ := config["permission_sets"].([]any)
+	for i, item := range sets {
+		set, _ := item.(map[string]any)
+		if name, _ := set["name"].(string); name != m[1] {
+			continue
+		}
+		if strings.Contains(msg, "role ceiling") {
+			return fmt.Sprintf("permission_sets[%d].roles", i)
+		}
+		return fmt.Sprintf("permission_sets[%d]", i)
+	}
+	return ""
 }
 
 // capabilityConfigSchema is the configure schema the registry last
