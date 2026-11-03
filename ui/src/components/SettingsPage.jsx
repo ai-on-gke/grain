@@ -31,6 +31,7 @@ import {
   useMediaQuery,
 } from "@mui/material";
 import { DISCARD_PROMPT } from "./Overlay.jsx";
+import { keepInView } from "../keepInView.js";
 import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
 import GeneralSection from "./settings/GeneralSection.jsx";
 import AccessSection from "./settings/AccessSection.jsx";
@@ -205,6 +206,10 @@ export default function SettingsPage({
   useEffect(() => {
     if (anchor) setFocusTarget(anchor);
   }, [anchor]);
+  // What still holds the last revealed card in view while the section
+  // around it draws (keepInView); revealing another, or leaving, lets go.
+  const settling = useRef(null);
+  useEffect(() => () => settling.current?.(), []);
   useEffect(() => {
     if (!focusTarget) return;
     const reveal = () => {
@@ -217,7 +222,10 @@ export default function SettingsPage({
       // centring it scrolls past its heading and the first field, which is
       // the one focused below without scrolling.
       const tall = el.getBoundingClientRect?.().height > window.innerHeight;
-      el.scrollIntoView?.({ block: tall ? "start" : "center" });
+      const scrollOptions = { block: tall ? "start" : "center" };
+      el.scrollIntoView?.(scrollOptions);
+      settling.current?.();
+      settling.current = keepInView(el, scrollOptions);
       const input = el.matches?.("input,textarea,select,button")
         ? el
         : el.querySelector?.("input:not([type=hidden]),textarea,select,button");
