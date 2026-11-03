@@ -2579,6 +2579,18 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		child.Reads = reads
 		escalated = model.EscalatedCapabilities(child, *proposedBy)
 		autoSubmit = model.AutoSubmits(child, *proposedBy)
+		// A fixture on the proposer's own qualification scratch branch,
+		// queued and merged there on the proposer's own permission to
+		// push that branch (model.ScratchFixture) -- the end-of-run
+		// relay's rule for the identical call.
+		pushesScratch, err := c.Store.PushesOwnScratchBranch(ctx, *proposedBy)
+		if err != nil {
+			return Task{}, err
+		}
+		if changeTarget == nil && model.ScratchFixture(child, *proposedBy, pushesScratch) {
+			autoSubmit = true
+			autoMerge = !req.DeclineAutoMerge
+		}
 		ungrantedWrites := model.UngrantedWrites(child, *proposedBy)
 		ungrantedReads := model.UngrantedReads(child, *proposedBy)
 		if len(ungrantedWrites) > 0 {
@@ -2593,7 +2605,9 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		if len(escalated) > 0 || len(ungrantedWrites) > 0 || len(ungrantedReads) > 0 {
 			sessionQueued = false
 		}
-		refusal = model.AutoApprovalRefusal(child, *proposedBy, sessionQueued)
+		if !autoSubmit {
+			refusal = model.AutoApprovalRefusal(child, *proposedBy, sessionQueued)
+		}
 		// A target only a person may approve: grain's own hold, not the
 		// run's, so it is neither tagged nor told to the run as one it
 		// asked for (heldNote) -- and asked before hold_for_approval, so a
