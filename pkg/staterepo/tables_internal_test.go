@@ -338,6 +338,10 @@ var notSettings = []string{
 	// reason: importing an older one would have a deployment schedule a
 	// day's upgrade it has already applied.
 	"auto_upgrade_run",
+	// What the release-triggered automatic upgrade has seen and
+	// scheduled (model.AutoUpgradeRelease), for auto_upgrade_run's
+	// reason.
+	"auto_upgrade_release",
 	// The usage-limit pauses in force (model.StoredUsageLimitPause,
 	// grain/task-1259): runtime state, a provider's refusal of one
 	// credential as this deployment met it. Importing one would stop a

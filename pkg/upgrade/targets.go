@@ -448,6 +448,30 @@ func discardedRCFromTags(running string, tags []string, edition string) *Discard
 	}
 }
 
+// LatestRelease is the newest promoted release tag ("v3.6.0", or
+// "v3.6.0-google" on that edition) in the registry this deployment's
+// upgrades pull from, filtered to its own edition the way the selector's
+// versions are: what the release-triggered automatic upgrade follows
+// (orchestrator's reconcileReleaseUpgrade). Release candidates are not
+// releases, and a retracted release is never offered again
+// (releasedVersions), so neither is ever the answer. "" with no error is
+// a registry that has no release yet. The source pipeline has no
+// registry to watch, and says so.
+func (u *Upgrader) LatestRelease(ctx context.Context) (string, error) {
+	repository := u.registryRepository()
+	if repository == "" {
+		return "", errors.New("this deployment upgrades from source, which publishes no release tags to follow")
+	}
+	tags, err := u.registryTags(ctx, repository)
+	if err != nil {
+		return "", fmt.Errorf("listing released versions in %s: %w", repository, err)
+	}
+	if versions := releasedVersions(tags, u.edition()); len(versions) > 0 {
+		return versions[0], nil
+	}
+	return "", nil
+}
+
 // registryRepository is the image repository this deployment's upgrades
 // pull from, or "" on the source pipeline.
 func (u *Upgrader) registryRepository() string {

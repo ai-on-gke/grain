@@ -100,6 +100,7 @@ var tablePrimaryKeys = map[string][]string{
 	"force_merge_history":            {"id"},
 	"scheduled_upgrade":              {"id"},
 	"auto_upgrade_run":               {"id"},
+	"auto_upgrade_release":           {"id"},
 	"usage_limit_pause":              {"scope_key"},
 	"tuning_recommendation":          {"id"},
 	"release":                        {"id"},
