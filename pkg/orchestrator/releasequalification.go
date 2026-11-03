@@ -39,8 +39,9 @@ package orchestrator
 // There is no table of its own. Every attempt is a suite run tagged
 // model.ReleaseQualificationTag(repo, rc_tag), so the attempts of one
 // candidate are Store.SuiteRunsTagged's answer; and the verdict, once
-// reached, is the completed check run itself, so a candidate whose
-// check run is completed is never looked at again: a candidate is
+// reached, is the completed check run itself -- grain's own, posted by
+// the GitHub App its forge connection is (latestCheckRun) -- so a
+// candidate whose check run is completed is never looked at again: a candidate is
 // qualified again by cutting rc.(N+1), the ordinary path after a red one.
 
 import (
@@ -64,6 +65,9 @@ type ReleaseQualificationForge interface {
 	github.TagLister
 	github.CheckRunWriter
 	ListCheckRuns(owner, repo, ref string) ([]github.CheckRun, error)
+	// CheckRunApp is the GitHub App grain posts check runs on owner/repo
+	// as (github.RESTClient.CheckRunApp), or "" when it cannot tell.
+	CheckRunApp(owner, repo string) (string, error)
 	ListWorkflowRuns(owner, repo, headSHA string) ([]github.CheckRun, error)
 	BranchExists(owner, repo, branch string) (bool, error)
 	DefaultBranch(owner, repo string) (string, error)
@@ -154,11 +158,14 @@ func newestCandidate(tags []github.Tag) (model.RCTag, string, bool) {
 	return best, sha, found
 }
 
-// latestCheckRun is the newest check run named name, or nil.
-func latestCheckRun(runs []github.CheckRun, name string) *github.CheckRun {
+// latestCheckRun is the newest check run named name that app posted, or
+// nil. One of the same name from anything else -- an Actions workflow
+// with checks: write, another installed app -- is not grain's verdict,
+// and neither ends qualification nor is updated as if it were.
+func latestCheckRun(runs []github.CheckRun, name, app string) *github.CheckRun {
 	var out *github.CheckRun
 	for i := range runs {
-		if runs[i].Name == name && (out == nil || runs[i].ID > out.ID) {
+		if runs[i].Name == name && runs[i].App == app && (out == nil || runs[i].ID > out.ID) {
 			out = &runs[i]
 		}
 	}
@@ -193,11 +200,19 @@ func syncRepoReleaseQualification(ctx context.Context, store *model.Store, forge
 		return nil
 	}
 	rcTag := rc.String()
+	app, err := forge.CheckRunApp(repo.Owner, repo.Name)
+	if err != nil {
+		return fmt.Errorf("reading which GitHub App posts %s on %s: %w", model.ReleaseQualificationCheckName, rcTag, err)
+	}
+	if app == "" {
+		return fmt.Errorf("not qualifying %s: its forge connection is not a GitHub App grain can name, so its own %s could not be told from one anything else posted",
+			rcTag, model.ReleaseQualificationCheckName)
+	}
 	checks, err := forge.ListCheckRuns(repo.Owner, repo.Name, sha)
 	if err != nil {
 		return fmt.Errorf("reading checks on %s: %w", rcTag, err)
 	}
-	check := latestCheckRun(checks, model.ReleaseQualificationCheckName)
+	check := latestCheckRun(checks, model.ReleaseQualificationCheckName, app)
 	if check != nil && check.Status == "completed" {
 		return nil
 	}
