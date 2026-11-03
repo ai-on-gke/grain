@@ -624,6 +624,8 @@ allowlist on every connect and on `SIGHUP`:
   equal to today's executor `Concurrency`;
 - `labels`: from the allowlist's `labels:`, such as
   `corp-identity: bsalmon` or `region: us-west`.
+  These are what the hostd says about itself, carried in its hello for
+  display; they never select it for host work (see *Routing*).
 
 ### Many hostds: registration, routing, quota
 
@@ -662,6 +664,11 @@ server start names its hostd in one of two ways:
 - **a pool selector**, `hostd: {labels: {corp-identity: bsalmon}}`. Grain
   chooses among connected hostds that match, offer the entry and have
   free capacity, by least load, and records which one it chose.
+  A selector matches the labels on the hostd's **registry row** only,
+  which an admin sets; the labels a hostd's own allowlist asserts in its
+  hello are display only. Otherwise any registered hostd's operator
+  could claim a label and draw in the host work, and the task tokens,
+  pinned by it.
 
 A selector that matches nothing connected is treated exactly like a pin
 whose hostd is disconnected.
