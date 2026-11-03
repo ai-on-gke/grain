@@ -1,0 +1,38 @@
+{
+  "repoUrl": "http://127.0.0.1:18742/repos/acme/widgets/settings/advanced",
+  "repoPage": {
+    "showsRefusal": true,
+    "showsFile": true,
+    "lines": [
+      "declarations",
+      "Read the templates, suites, schedules and path triggers acme/widgets declares in its own .grain/templates, .grain/suites, .grain/schedules and .grain/triggers. Grain re-reads them within a couple of minutes of every change, and they cannot be edited here -- the files are. A declaration files work in acme/widgets on a cadence; it can never widen what that work reads, writes, or holds.",
+      "Last read failed: reading acme/widgets's declarations: .grain/schedules/sweep.yml: a schedule that runs a suite needs `base:` -- a suite run has no default branch to fall back to"
+    ]
+  },
+  "settings": {
+    "engine": {
+      "batching": [],
+      "recheck": []
+    },
+    "general": {
+      "batching": [],
+      "recheck": []
+    },
+    "repositories": {
+      "batching": [],
+      "recheck": []
+    },
+    "config-repo": {
+      "batching": [],
+      "recheck": []
+    },
+    "models": {
+      "batching": [],
+      "recheck": []
+    },
+    "sandboxes": {
+      "batching": [],
+      "recheck": []
+    }
+  }
+}

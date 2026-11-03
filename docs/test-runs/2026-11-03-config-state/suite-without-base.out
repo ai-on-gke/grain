@@ -1,0 +1,10 @@
+# GET /api/repos/acme/widgets/declarations after pushing .grain/schedules/sweep.yml (suite: sweep, no base:) and turning declarations on
+{
+  "declarations": true,
+  "declarationsStatus": {
+    "checkedAt": "2026-11-03T05:32:52.453983787Z",
+    "error": "reading acme/widgets's declarations: .grain/schedules/sweep.yml: a schedule that runs a suite needs `base:` -- a suite run has no default branch to fall back to"
+  }
+}
+# demo log
+2026/11/03 05:22:46 grain demo: reconcile cycle: declarations: orchestrator: reading acme/widgets's declarations: .grain/schedules/sweep.yml: a schedule that runs a suite needs `base:` -- a suite run has no default branch to fall back to

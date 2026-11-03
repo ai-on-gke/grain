@@ -148,6 +148,35 @@ func APICapabilities() []Capability {
 	return out
 }
 
+// pickerCapabilities is Config.Capabilities with its api rows read again
+// now rather than when the Config was built. The daemon and grain demo
+// append APICapabilities() once at startup, but a deployment's own scope
+// sets change underneath a running process -- PUT and DELETE
+// /api/api-scope-sets and a state import all call
+// model.LoadAPIScopeSets -- and a set declared after that snapshot was
+// never offered by any picker, while one since removed or edited went on
+// being offered (and accepted) as it was at startup.
+//
+// A Config with no api rows at all offers none here either: whether the
+// picker lists the agent API is the Config's to say, and only which sets
+// it lists is read live. The rows keep their place after every other
+// one, which is where both callers put them.
+func (c *Client) pickerCapabilities() []Capability {
+	out := make([]Capability, 0, len(c.Config.Capabilities))
+	offersAPI := false
+	for _, row := range c.Config.Capabilities {
+		if strings.HasPrefix(row.ID, APIGrantPrefix) {
+			offersAPI = true
+			continue
+		}
+		out = append(out, row)
+	}
+	if offersAPI {
+		out = append(out, APICapabilities()...)
+	}
+	return out
+}
+
 // apiProvider is the capability provider for one api grant name. It is a
 // pure grant: nothing is minted or placed, and what it lets a run do is
 // decided call by call, by agentAPIGate, from the task's grants -- so

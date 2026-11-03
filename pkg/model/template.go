@@ -168,6 +168,13 @@ type Template struct {
 	Interactive bool
 	KeepRunning bool
 
+	// Hostd is the hostd pin or label selector every task filed from
+	// this template starts with (Store.SetTaskHostd): a hostd's name, or
+	// label=value[,label=value] for any hostd carrying them all. Empty,
+	// the default, leaves its tasks on the default hostd. A filing that
+	// names its own hostd wins.
+	Hostd string
+
 	// Priority is the optional default numeric priority for tasks filed from
 	// this template (nil or 0 leaves the task on DefaultTaskPriority).
 	Priority *int `json:"priority,omitempty"`

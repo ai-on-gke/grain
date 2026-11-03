@@ -535,6 +535,42 @@ describe("DetailOverlay actions", () => {
     expect(api).toHaveBeenCalledWith("/api/tasks/12/retry", { method: "POST" });
   });
 
+  it("shows Retry for a turn an operator stopped, wired to the retry endpoint", async () => {
+    const act = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, state: "awaiting_reply", turnStopped: true }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    act.mock.calls[0][0]();
+    expect(api).toHaveBeenCalledWith("/api/tasks/12/retry", { method: "POST" });
+  });
+
+  it("shows no Retry for a task asking an ordinary question", () => {
+    render(
+      <DetailOverlay
+        task={{ ...baseTask, state: "awaiting_reply" }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Retry" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows Retry merge once the queue has given up, wired to the retry-merge endpoint", async () => {
     const act = vi.fn();
     const user = userEvent.setup();

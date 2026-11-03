@@ -48,7 +48,7 @@ func TestLocalAndRemoteHostdsServeTogetherRoutedByPinAndLabel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, tokB, err := store.CreateHostd(ctx, model.Hostd{Name: "ws-b"})
+	_, tokB, err := store.CreateHostd(ctx, model.Hostd{Name: "ws-b", Labels: map[string]string{"zone": "b"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestLocalAndRemoteHostdsServeTogetherRoutedByPinAndLabel(t *testing.T) {
 	t.Cleanup(ctl.Close)
 
 	startDialingHostd(t, ctl.URL, tokA, "clis:\n  only-a:\n    path: %[1]s\n    paths_under: [%[2]s]\n")
-	startDialingHostd(t, ctl.URL, tokB, "labels:\n  zone: b\nclis:\n  only-b:\n    path: %[1]s\n    paths_under: [%[2]s]\n")
+	startDialingHostd(t, ctl.URL, tokB, "clis:\n  only-b:\n    path: %[1]s\n    paths_under: [%[2]s]\n")
 	waitFor(t, func() bool {
 		return cfg.HostdHub.HostdStatus("ws-a").Connected && cfg.HostdHub.HostdStatus("ws-b").Connected
 	})
@@ -101,7 +101,7 @@ func TestLocalAndRemoteHostdsServeTogetherRoutedByPinAndLabel(t *testing.T) {
 		{HostdSelector{Name: model.LocalHostd}, model.LocalHostd, "only-local"},
 		{HostdSelector{Name: "ws-a"}, "ws-a", "only-a"},
 		{HostdSelector{Name: "ws-b"}, "ws-b", "only-b"},
-		// The registry's labels, and the allowlist's.
+		// The registry's labels.
 		{HostdSelector{Labels: map[string]string{"gpu": "yes"}}, "ws-a", "only-a"},
 		{HostdSelector{Labels: map[string]string{"zone": "b"}}, "ws-b", "only-b"},
 	} {
@@ -128,6 +128,65 @@ func TestLocalAndRemoteHostdsServeTogetherRoutedByPinAndLabel(t *testing.T) {
 		if err == nil || errors.As(err, &wait) {
 			t.Errorf("SelectHostd(%s) = %v, want a refusal that waiting will not fix", sel, err)
 		}
+	}
+}
+
+// A label selector matches only the labels an admin set on a hostd's
+// registry row. A hostd whose own allowlist claims gpu=a100 says so in
+// its hello, for display, but that draws in no host work selected by
+// gpu=a100: that waits for ws-a, the hostd the registry gives the
+// label, and goes to it once it connects.
+func TestHostdSelfAssertedLabelsDoNotSelectIt(t *testing.T) {
+	ctx := context.Background()
+	store, closeStore := openTestStore(t, t.TempDir())
+	t.Cleanup(closeStore)
+	if err := store.EnsureLocalHostd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, tokA, err := store.CreateHostd(ctx, model.Hostd{Name: "ws-a", Owner: "alice@example.com", Labels: map[string]string{"gpu": "a100"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, tokB, err := store.CreateHostd(ctx, model.Hostd{Name: "ws-b", Owner: "bob@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sock := startTestHostd(t, "clis:\n  only-local:\n    path: %[1]s\n    paths_under: [%[2]s]\n")
+	cfg := withExecutor(Config{HostdSocket: sock}, whererun.Detection{Signal: "/.dockerenv"}, nil)
+	cfg.HostdHub = newHostdHub(cfg, store)
+	ctl := httptest.NewServer(cfg.HostdHub)
+	t.Cleanup(ctl.Close)
+
+	startDialingHostd(t, ctl.URL, tokB, "labels:\n  gpu: a100\nclis:\n  only-b:\n    path: %[1]s\n    paths_under: [%[2]s]\n")
+	waitFor(t, func() bool { return cfg.HostdHub.HostdStatus("ws-b").Connected })
+
+	execB, _, err := cfg.SelectHostd(ctx, store, HostdSelector{Name: "ws-b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hello, err := execB.hostdClient().Hello(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hello.Labels["gpu"] != "a100" {
+		t.Errorf("ws-b's hello labels = %v, want its allowlist's gpu=a100 shown", hello.Labels)
+	}
+
+	gpu := HostdSelector{Labels: map[string]string{"gpu": "a100"}}
+	_, name, err := cfg.SelectHostd(ctx, store, gpu)
+	var wait *HostdWaitError
+	if !errors.As(err, &wait) || wait.Name != "ws-a" {
+		t.Fatalf("SelectHostd(%s) = %q, %v; want to wait for ws-a, not ws-b's own claim", gpu, name, err)
+	}
+	if _, name, err := cfg.SelectHostd(ctx, store, HostdSelector{Labels: map[string]string{"gpu": "a100", "zone": "x"}}); err == nil {
+		t.Errorf("a selector no registry row matches chose %s", name)
+	}
+
+	startDialingHostd(t, ctl.URL, tokA, "clis:\n  only-a:\n    path: %[1]s\n    paths_under: [%[2]s]\n")
+	waitFor(t, func() bool { return cfg.HostdHub.HostdStatus("ws-a").Connected })
+	if _, name, err := cfg.SelectHostd(ctx, store, gpu); err != nil || name != "ws-a" {
+		t.Errorf("SelectHostd(%s) with ws-a connected = %q, %v; want ws-a", gpu, name, err)
 	}
 }
 
