@@ -46,6 +46,15 @@ func migrateModelProxyGrants(ctx context.Context, tx *sql.Tx) error {
 	if err := rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", modelProxyRenames); err != nil {
 		return err
 	}
+	return rewritePolicyRenames(ctx, tx, modelProxyRenames, ModelProxyRef)
+}
+
+// rewritePolicyRenames rewrites grain_config.capability_policy for a
+// retirement: a rule naming one of renames' old names names ruleRef, the
+// method it became (a rule names a method, never its arguments), and the
+// catalogue's task and CI defaults, the deployment's and each
+// repository's, are renamed as every other stored list is.
+func rewritePolicyRenames(ctx context.Context, tx *sql.Tx, renames map[string][]string, ruleRef string) error {
 	var stored string
 	err := tx.QueryRowContext(ctx, "SELECT `capability_policy` FROM `grain_config` WHERE `id` = 1").Scan(&stored)
 	if err == sql.ErrNoRows || (err == nil && strings.TrimSpace(stored) == "") {
@@ -62,16 +71,14 @@ func migrateModelProxyGrants(ctx context.Context, tx *sql.Tx) error {
 	}
 	changed := false
 	for i := range policy.Rules {
-		// A rule names a method, never its arguments, so a rule for one
-		// vendor's proxy becomes one for the model-proxy method.
-		if _, ok := modelProxyRenames[strings.TrimSpace(policy.Rules[i].Capability)]; ok {
-			policy.Rules[i].Capability = ModelProxyRef
+		if _, ok := renames[strings.TrimSpace(policy.Rules[i].Capability)]; ok {
+			policy.Rules[i].Capability = ruleRef
 			changed = true
 		}
 	}
 	if cat := policy.Catalogue; cat != nil {
 		rename := func(names []string) ([]string, bool) {
-			if next, did := renameCapabilityListMulti(names, modelProxyRenames); did {
+			if next, did := renameCapabilityListMulti(names, renames); did {
 				return next, true
 			}
 			return names, false

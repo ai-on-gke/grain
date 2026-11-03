@@ -153,6 +153,28 @@ type Config struct {
 	// AccountPrefix starts every account name; DefaultAccountPrefix
 	// when the configuration says nothing.
 	AccountPrefix string
+	// GeminiKey configures the gemini-key method, nil for a server that
+	// offers none.
+	GeminiKey *GeminiKey
+}
+
+// GeminiKey is what the gemini-key method mints Gemini API keys with:
+// the project they are created in, and the admin whose credential
+// creates them (the formerly in-process gemini-key's minter credential).
+type GeminiKey struct {
+	Project string
+	// Admin names the admin minting; empty is the one admin, or
+	// DefaultAdmin among several.
+	Admin string
+}
+
+// GeminiAdmin is the admin the gemini-key method mints with, or nil when
+// it is not configured.
+func (c *Config) GeminiAdmin() *Admin {
+	if c.GeminiKey == nil {
+		return nil
+	}
+	return c.Admin(c.GeminiKey.Admin)
 }
 
 // AccountID is the id of set's n'th account under this configuration's
@@ -276,6 +298,17 @@ func Schema() map[string]any {
 					},
 				},
 			},
+			"gemini_key": map[string]any{
+				"type":                 "object",
+				"title":                "Gemini API keys",
+				"description":          "Offer the gemini-key method: a per-attempt Gemini API key, created in project with admin's credential and deleted at release.",
+				"additionalProperties": false,
+				"required":             []any{"project"},
+				"properties": map[string]any{
+					"project": str("The project Gemini API keys are created in."),
+					"admin":   map[string]any{"type": "string", "description": "The admin whose credential creates them (default: the one admin, or default)."},
+				},
+			},
 			"account_prefix": map[string]any{
 				"type":        "string",
 				"title":       "Service account name prefix",
@@ -376,6 +409,9 @@ func ParseWithEnv(config map[string]any, env func(string) string) (*Config, erro
 		}
 		c.Sets = append(c.Sets, s)
 	}
+	if g, ok := config["gemini_key"].(map[string]any); ok {
+		c.GeminiKey = &GeminiKey{Project: str(g["project"]), Admin: str(g["admin"])}
+	}
 	c.DeleteOrphans = strList(config["delete_orphans"])
 	c.AccountPrefix = str(config["account_prefix"])
 	c.Deployment = str(config[protocol.DeploymentIDConfig])
@@ -389,7 +425,7 @@ func ParseWithEnv(config map[string]any, env func(string) string) (*Config, erro
 // Validate checks the configuration as a whole: names, credential
 // sources, each set's admin, project and role ceiling.
 func (c *Config) Validate() error {
-	if len(c.Sets) == 0 {
+	if len(c.Sets) == 0 && c.GeminiKey == nil {
 		return fmt.Errorf("at least one permission set is required")
 	}
 	if c.AccountPrefix != "" && !prefixPattern.MatchString(c.AccountPrefix) {
@@ -548,6 +584,29 @@ func (c *Config) Validate() error {
 			if len(s.Accounts) > 0 {
 				s.PoolMax = len(s.Accounts)
 			}
+		}
+	}
+	if g := c.GeminiKey; g != nil {
+		if g.Admin == "" {
+			if len(c.Admins) == 1 {
+				g.Admin = c.Admins[0].Name
+			} else if admins[DefaultAdmin] != nil {
+				g.Admin = DefaultAdmin
+			}
+		}
+		a := admins[g.Admin]
+		if a == nil {
+			return fmt.Errorf("gemini_key: no admin is called %q", g.Admin)
+		}
+		if !migratedProjectPattern.MatchString(g.Project) || strings.Contains(g.Project, "..") {
+			return fmt.Errorf("gemini_key: %q is not a project id", g.Project)
+		}
+		if explicitProjects[a.Name] {
+			if !contains(a.Projects, g.Project) {
+				return fmt.Errorf("gemini_key: project %q is not one of admin %q's projects", g.Project, a.Name)
+			}
+		} else if !contains(a.Projects, g.Project) {
+			a.Projects = append(a.Projects, g.Project)
 		}
 	}
 	for _, a := range c.Admins {

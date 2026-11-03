@@ -212,6 +212,12 @@ const (
 	GCPKeyDefaultPermissionSet = "sandbox-agent"
 	GCPKeySandboxAgentGrant    = GCPKeyRef + `={"permission_set":"` + GCPKeyDefaultPermissionSet + `","primary":true}`
 
+	// GCPGeminiKeyMethod mints a per-attempt Gemini API key on the gcp
+	// server, placed as the in-process gemini-key places one.
+	GCPGeminiKeyMethod = "gemini-key"
+	GCPGeminiKeyRef    = GCPCapabilityServerID + "#" + GCPGeminiKeyMethod
+	GCPGeminiKeyGrant  = GCPGeminiKeyRef + "={}"
+
 	// GrainCIMethod runs a repository's own .grain/workflows in grain's
 	// sandboxes for the branches a task pushes, and holds the merge
 	// queue until they pass (formerly grain-ci). grain grants it from a
