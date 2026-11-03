@@ -158,7 +158,11 @@ const lightPalette = {
   palette: {
     mode: "light",
     primary: { main: "#856629", dark: "#6d5324", contrastText: "#ffffff" },
-    error: { main: "#d0453a" },
+    // #b93a30 rather than the #d0453a it replaced: an outlined error
+    // button (the Inbox's "decline") writes its label in main, and
+    // #d0453a was 4.22:1 on the canvas (docs/test-runs/2026-11-03-ui-fixes.md
+    // F6). style.css's --danger is the same colour.
+    error: { main: "#b93a30" },
     // success is deep enough to carry a filled chip's white label at
     // 4.7:1 (the brighter #1a9c53 it replaced managed 3.5:1); warning is
     // pulled off MUI's own bright orange to a burnt one that reads as the accent's louder

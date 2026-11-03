@@ -593,7 +593,7 @@ func TestControlRoster(t *testing.T) {
 	if !control(true, "grain-ci")["chat"] {
 		t.Errorf("an interactive run's control roster has no chat")
 	}
-	if up := control(false, "grain-ci", "api:self-upgrade"); !up["api_start_upgrade"] || !up["api_cancel_scheduled_upgrade"] || up["api_get_upgrade_status"] {
-		t.Errorf("api:self-upgrade's deployment:upgrade tools are model-only on the control roster while deployment:read stays on the CLI; got %v", up)
+	if up := control(false, "grain-ci", "api:self-upgrade"); up["api_start_upgrade"] || up["api_cancel_scheduled_upgrade"] || up["api_get_upgrade_status"] {
+		t.Errorf("grain-sandbox serves no api_* tools (api:* grants are served on grain-controller /api/mcp); got %v", up)
 	}
 }

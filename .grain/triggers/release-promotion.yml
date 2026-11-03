@@ -1,13 +1,14 @@
 # Path trigger protecting the person-only release promotion
-# (design/design/release-from-trunk.design.md, §4): the workflow that pushes vX.Y.0
-# and `latest`, and the scripts it runs. A change to any of them could let
-# a release become official without a person, so it waits for one.
+# (design/playbook/releases.playbook.md §0.3): the approval workflow that
+# pushes vX.Y.0 and `latest`, in both its grain and GitHub Actions copies,
+# and the route that starts it. A change to either could let a release
+# become official without a person, so it waits for one. The release jobs
+# and scripts that cannot reach the approval are release-machinery.yml's.
 on: pull_request
 paths:
   - .grain/workflows/promote-release.yml
-  - .grain/workflows/promote.yml
-  - scripts/release-from-trunk.sh
-  - scripts/release-images.sh
+  - .github/workflows/promote-release.yml
+  - pkg/ui/release_approval.go
 gate: true
 human: required
 sensitive: true

@@ -1547,9 +1547,10 @@ func grainCLIGrantBullets(grants []model.Grant) string {
 		}
 	}
 	if api {
-		b.WriteString("- **api grants:** `grain api routes` lists the agent API routes they reach; " +
-			"`grain api <METHOD> <path> [--body '<json>']` calls one. Routes a sandbox process may " +
-			"not call stay `api_*` tool calls.\n")
+		b.WriteString("- **api grants:** `grain api routes` lists the agent API routes they reach from the sandbox, " +
+			"and `grain api <METHOD> <path> [--body '<json>']` calls one; the `grain-controller` MCP server " +
+			"(`grain_explore_scope`, `grain_invoke`, `grain_list_tasks`, `grain_get_task`, `grain_filing_context`, `grain_submit_task`) " +
+			"calls any authorized route, including model-only scopes.\n")
 	}
 	return b.String()
 }
@@ -3292,6 +3293,13 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		if localScriptsEnvFile != "" {
 			defer os.Remove(localScriptsEnvFile)
 		}
+		capabilityMCPServers, controllerEP, err := wireControllerMCP(ctx, cfg, store, task)
+		if err != nil {
+			return unprepared(fmt.Errorf("serving grain-controller MCP: %w", err))
+		}
+		if controllerEP != nil {
+			defer controllerEP.Close()
+		}
 
 		// The repositories a propose_task call from this run may name,
 		// which the forked mcpserver folds into that tool's own `repo`
@@ -3421,7 +3429,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			SandboxHide:    cfg.sandboxHide,
 			// The MCP servers this run's capability grants expose, each
 			// registered beside grain-sandbox (§5.2.4).
-			CapabilityMCPServers: cfg.capabilityMCPServers,
+			CapabilityMCPServers: capabilityMCPServers,
 			Repo:                 repo, Branch: task.BranchName(),
 			// The branch that branch merges into, which is what
 			// base_branch_status reads CI for. Passed as the task wrote

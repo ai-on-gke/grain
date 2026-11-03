@@ -27,6 +27,12 @@ import "strings"
 // server under, and the two have never had to agree.
 const ToolNamespace = "grain-sandbox"
 
+// ControllerToolNamespace is the name the controller MCP server (pkg/ui's
+// POST /api/mcp) reports in its initialize handshake and is attached
+// under beside ToolNamespace for a run holding api:* grants; the one
+// capability server name no mcp_endpoint grant may claim.
+const ControllerToolNamespace = "grain-controller"
+
 // QualifiedToolName renders a tool this package registers the way a CLI
 // that loaded it from an MCP config reports and admits it:
 // "mcp__<namespace>__<tool>". Both frameworks' allowedTools build their

@@ -42,7 +42,9 @@
   --on-accent: #ffffff;
   --accent-subtle: #f6eeda;
 
-  --danger: #d0453a;
+  /* theme.js's error.main: text on every ground and on --danger-subtle
+     holds 4.5:1, and so does white on it. */
+  --danger: #b93a30;
   --danger-subtle: #fbebe9;
 
   --state-proposed: #b45309;

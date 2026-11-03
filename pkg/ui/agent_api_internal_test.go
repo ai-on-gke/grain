@@ -29,7 +29,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -203,15 +202,6 @@ func TestGeneratedToolsMatchTheRouteTable(t *testing.T) {
 	}
 	for pattern := range want {
 		t.Errorf("route %s is scoped but has no generated tool", pattern)
-	}
-
-	// Every generated name is published to the frameworks' allowed-tool
-	// lists, or a run granted the scope would be refused its own tool.
-	published := agent.PublishedToolNames()
-	for name := range names {
-		if !slices.Contains(published, name) {
-			t.Errorf("agent.PublishedToolNames does not name generated tool %s", name)
-		}
 	}
 
 	// The tools a grant gets are exactly the routes of its scopes.

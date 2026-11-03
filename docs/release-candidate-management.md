@@ -207,9 +207,12 @@ release official** (task 1236, `design/design/release-from-trunk.design.md` RFT-
    under the release-manager scope `releases:write`) refuses an agent
    whatever it holds. The workflow's jobs refuse any run grain did not
    start for a person (`GRAIN_CI_REQUESTED_BY_KIND=human`). The workflow
-   and the release scripts are `human: required`
+   and the approval route are `human: required`
    (`.grain/triggers/release-promotion.yml`, and the `release-promotion`
-   trust-boundary category).
+   trust-boundary category). The release scripts and jobs clear on grain's
+   security review alone, which checks they cannot move `vX.Y.Z` or
+   `latest` without the approval (`.grain/triggers/release-machinery.yml`,
+   and the `release-machinery` category).
 3. **Reject**: the Reject button, or `grain release reject vX.Y.0`. This
    takes the failed-soak path: `vX.Y.0-rc.N-discarded` and the
    `discard-rc` image marker, the staged images marked `:vX.Y.0-rejected`
@@ -336,9 +339,13 @@ deleted. These are the refs the release workflows push:
 
 The proxy does not stop the train from pushing `vX.Y.0` or `latest`. The
 workflow and the review of changes to it do. `release-train.yml` has no step
-that pushes them, every `.grain/**` change waits for a person
-(`.grain/triggers/grain-declarations.yml`), and the scripts that push those
-tags are `human: required` (`.grain/triggers/release-promotion.yml`).
+that pushes them, the approval workflow and every other `.grain/**` change
+but the release jobs wait for a person (`.grain/triggers/release-promotion.yml`,
+`.grain/triggers/grain-declarations.yml`), and a change to the release jobs
+or the scripts that push those tags is held for grain's security review,
+which reports as a finding -- leaving the change for a person -- any way it
+could push them other than as a result of the approval
+(`.grain/triggers/release-machinery.yml`).
 
 ## 9. Patch releases (`release/vX.Y.Z`)
 
