@@ -90,13 +90,19 @@ func (f *fakeChat) RoundTrip(req *http.Request) (*http.Response, error) {
 	}, nil
 }
 
-// demoGCPConfig is the demo gcp server's starting configuration: one
-// permission set using the default ambient admin.
+// demoGCPExistingAccount is the existing service account the demo's
+// org-deploy set acts as.
+const demoGCPExistingAccount = "deployer@demo-project.iam.gserviceaccount.com"
+
+// demoGCPConfig is the demo gcp server's starting configuration, using
+// the default ambient admin: a set whose accounts grain creates, and one
+// over an existing service account, impersonated for short-lived tokens.
 func demoGCPConfig() map[string]any {
 	return map[string]any{
-		"permission_sets": []any{map[string]any{
-			"name": "sandbox-agent", "project": "demo-project", "roles": []any{"roles/logging.viewer"},
-		}},
+		"permission_sets": []any{
+			map[string]any{"name": "sandbox-agent", "project": "demo-project", "roles": []any{"roles/logging.viewer"}},
+			map[string]any{"name": "org-deploy", "service_account": demoGCPExistingAccount, "roles": []any{"roles/run.admin"}},
+		},
 	}
 }
 
@@ -255,7 +261,9 @@ func configureCapabilityServerDemo(ctx context.Context, stored *model.Config, lo
 
 	cloud := gcpfake.New()
 	cloud.DefaultIdentity = "you@demo.grain.example"
-	gcp, err := intree.NewConfigurableGCP(intree.GCPConfig{Connector: cloud})
+	cloud.AddAccount("demo-project", demoGCPExistingAccount, "made by hand")
+	cloud.Bind("projects/demo-project", "roles/run.admin", "serviceAccount:"+demoGCPExistingAccount)
+	gcp, err := intree.NewConfigurableGCP(intree.GCPConfig{Connector: cloud, Listen: "127.0.0.1:0"})
 	if err != nil {
 		return nil, err
 	}

@@ -43,9 +43,8 @@ import (
 // GCP never sees it.
 
 // DefaultGCPTokenPort is the gcp server's data-plane port unless -listen
-// says otherwise: beside the git proxy's 9728, the model proxy's 9729 and
-// the host-script server's 9733.
-const DefaultGCPTokenPort = 9734
+// says otherwise: beside the gchat server's 4251 (docs/ports.md).
+const DefaultGCPTokenPort = 4252
 
 // gcpTokenDir is where a token-mode grant's per-attempt files live.
 func gcpTokenDir(attemptID string) string { return "/home/debian/.gcp-token/" + attemptID }
