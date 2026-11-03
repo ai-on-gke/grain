@@ -1089,6 +1089,14 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 			if err := model.TemplateWithinTask(*acting, *tmpl); err != nil {
 				return err
 			}
+			// A template's hostd pin (model.Template.Hostd) is what the
+			// filing gets unless the body names its own, which the
+			// "hostd" case above holds to the same rule.
+			if tmpl.Hostd != "" && !bodyNamesHostd(fields) {
+				if err := s.agentMayRouteHostd(ctx, acting, tmpl.Hostd); err != nil {
+					return fmt.Errorf("template %s pins its tasks' hostd: %w", tmpl.ID, err)
+				}
+			}
 			if tmpl.AutoMerge {
 				return fmt.Errorf("template %s is auto-merge: %w", tmpl.ID, errAgentAutoMerge)
 			}
@@ -1131,6 +1139,18 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 		}
 	}
 	return nil
+}
+
+// bodyNamesHostd is whether a filing's body names a hostd of its own,
+// which wins over its template's (ui.Client.fromTemplate).
+func bodyNamesHostd(fields map[string]json.RawMessage) bool {
+	for key, raw := range fields {
+		var sel string
+		if gateKey(key) == "hostd" && json.Unmarshal(raw, &sel) == nil && strings.TrimSpace(sel) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // agentMayRouteHostd refuses sel, a hostd pin or label selector an agent

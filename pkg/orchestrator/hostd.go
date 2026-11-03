@@ -56,6 +56,16 @@ var _ HostdLister = hostd.Client{}
 // RecoverOrphanedRuns, and the error says why.
 func RecoverHostd(ctx context.Context, store *model.Store, client github.Client, hd HostdLister, build string,
 	now time.Time, adopted func(runhost.Adoption, int64) bool) (runhost.Plan, error) {
+	return RecoverHostdRuns(ctx, store, client, hd, build, now, nil, adopted)
+}
+
+// RecoverHostdRuns is RecoverHostd for one of several grain hostds: only
+// the live rows owns says ran on hd are decided against hd's processes,
+// so a row whose CLI runs on another hostd is neither finished as gone
+// here nor claims a process here. A process hd lists for a row it does
+// not own is released as unclaimed. A nil owns owns every row.
+func RecoverHostdRuns(ctx context.Context, store *model.Store, client github.Client, hd HostdLister, build string,
+	now time.Time, owns func(runID string) bool, adopted func(runhost.Adoption, int64) bool) (runhost.Plan, error) {
 	cursors, err := store.HostdCursors(ctx)
 	if err != nil {
 		return runhost.Plan{}, fmt.Errorf("orchestrator: reading hostd cursors: %w", err)
@@ -86,6 +96,9 @@ func RecoverHostd(ctx context.Context, store *model.Store, client github.Client,
 	for _, r := range runs {
 		c, hasCursor := cursors[r.ID]
 		if !hasCursor && !named[r.ID] {
+			continue
+		}
+		if owns != nil && !owns(r.ID) {
 			continue
 		}
 		byID[r.ID] = r

@@ -97,11 +97,12 @@ func hostdConnectionNotifier(store *model.Store, hub *hostd.Remote) func(name st
 
 // releaseFinishedHostdRuns cancels each detached process hostd name
 // still holds for a run the store has finished. A pinned hostd's runs
-// start detached so a drop can be re-attached (newPinnedHostdRuns), but
-// only the default hostd's are listed at startup (RecoverHostd): a CLI a
-// crashed daemon left there, or one whose run gave up waiting while its
-// hostd was away (runhost.Hostd.cancelWhenBack, which does not outlive
-// the daemon), would otherwise run on until its own deadline. A process
+// start detached (newHostdRuns) and are re-adopted at startup from the
+// hostd each recorded (adoptHostd), but a hostd that was away then is
+// left out of that pass: a CLI it still runs for a run that has since
+// been recovered, or one whose run gave up waiting while its hostd was
+// away (runhost.Hostd.cancelWhenBack, which does not outlive the
+// daemon), would otherwise run on until its own deadline. A process
 // whose run is live, or that names no run the store knows, is left
 // alone.
 func releaseFinishedHostdRuns(ctx context.Context, store *model.Store, c hostd.Client, name string) {
