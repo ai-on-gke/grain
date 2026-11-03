@@ -147,22 +147,22 @@ func TestCapabilityProviders(t *testing.T) {
 		{
 			name: "no gcp project configured still registers the built-in capabilities",
 			cfg:  Config{},
-			want: []string{"github-sandbox", "self-debug", "bootstrap-playbooks", "registry-push", "console", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read"},
+			want: []string{"github-sandbox", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
 		},
 		{
 			name: "an agent service account without a gcp project does not add either gcp capability",
 			cfg:  Config{GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"},
-			want: []string{"github-sandbox", "self-debug", "bootstrap-playbooks", "registry-push", "console", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read"},
+			want: []string{"github-sandbox", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
 		},
 		{
 			name: "a gcp project with no agent service account only adds gemini-key to the built-in capabilities",
 			cfg:  Config{GcpProject: "proj"},
-			want: []string{"gemini-key", "github-sandbox", "self-debug", "bootstrap-playbooks", "registry-push", "console", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read"},
+			want: []string{"gemini-key", "github-sandbox", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
 		},
 		{
 			name: "a gcp project with an agent service account adds gemini-key to the built-in capabilities (gcp-key is served by the gcp capability server)",
 			cfg:  Config{GcpProject: "proj", GcpServiceAccountEmail: "agent@proj.iam.gserviceaccount.com"},
-			want: []string{"gemini-key", "github-sandbox", "self-debug", "bootstrap-playbooks", "registry-push", "console", "read-issues", "priority-dispatch", "durable", "package-publish", "image-signing", "release-gate-read"},
+			want: []string{"gemini-key", "github-sandbox", "self-debug", "bootstrap-playbooks", "console", "read-issues", "priority-dispatch", "durable", "release-gate-read"},
 		},
 	}
 	for _, tc := range cases {
@@ -557,7 +557,7 @@ func TestLoadConfigLogsEveryOverriddenFlag(t *testing.T) {
 		GcpProject: stored.GCPProject, GcpServiceAccountEmail: stored.GCPServiceAccountEmail,
 	}
 
-	var logs strings.Builder
+	var logs lockedBuffer
 	prevLog := log.Writer()
 	log.SetOutput(&logs)
 	defer log.SetOutput(prevLog)

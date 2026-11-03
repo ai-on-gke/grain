@@ -227,6 +227,32 @@ func TestPlanEnsureAddsARegisteredEntryWithItsMaxDurationAndLeavesAnEditedOne(t 
 	}
 }
 
+// An operator's edit to a field grain's own entry leaves unset -- set_env,
+// path, paths_under, cwd_under -- is kept and reported like any other, and
+// set_env is reported by its names, never its values (walkthrough
+// 2026-11-03-hostd-registry, F5).
+func TestPlanEnsureReportsEditsToFieldsTheBuiltinLeavesUnset(t *testing.T) {
+	in := "clis: {}\ncapabilities:\n  host-git:\n    command: /usr/local/bin/grain\n    args: [capability, host-git]\n" +
+		"    pass_env: [HTTP_PROXY, HTTPS_PROXY, NO_PROXY, http_proxy, https_proxy, no_proxy]\n" +
+		"    set_env: {GIT_TRACE: \"1\", GIT_SSH_COMMAND: \"ssh -i /root/secret-key\"}\n    cwd_under: [/srv]\n"
+	b := BuiltinEntry{Name: "host-git", Args: []string{"capability", "host-git"}}
+	out, res, err := PlanEnsure([]byte(in), cmd, []BuiltinEntry{b})
+	if err != nil || len(res.Added) != 0 || string(out) != in {
+		t.Fatalf("an edited entry was changed: added %v (%v)\n%s", res.Added, err, out)
+	}
+	if len(res.Differs) != 1 {
+		t.Fatalf("differs = %q, want one line for host-git", res.Differs)
+	}
+	for _, want := range []string{"set_env [GIT_SSH_COMMAND GIT_TRACE] (default [])", "cwd_under [/srv] (default [])"} {
+		if !strings.Contains(res.Differs[0], want) {
+			t.Errorf("differs = %q, want it to say %q", res.Differs[0], want)
+		}
+	}
+	if strings.Contains(res.Differs[0], "secret-key") {
+		t.Errorf("differs = %q carries a set_env value", res.Differs[0])
+	}
+}
+
 func TestCheckInstallerEntries(t *testing.T) {
 	good := "capabilities:\n" + uptickBuiltin.YAML(cmd, "  ", "  ")
 	if bad := CheckInstallerEntries(good, cmd, []BuiltinEntry{uptickBuiltin}); len(bad) != 0 {

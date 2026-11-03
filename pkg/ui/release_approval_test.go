@@ -160,3 +160,43 @@ func TestAPersonMayAcceptAShortSoakOnTheApproval(t *testing.T) {
 		t.Errorf("started %d runs, want 2: a refused decision starts nothing", len(runner.started))
 	}
 }
+
+// Breaking changes outside a RELEASE_MAJOR release are accepted the same
+// way: allow_breaking reaches the run in a field no API caller can set,
+// an approval without it carries nothing, and a rejection refuses it.
+func TestAPersonMayAcceptBreakingChangesOnTheApproval(t *testing.T) {
+	srv, _, _, runner := approvalServer(t)
+	path := "/api/repos/ai-on-gke/grain/pending-releases/v2.4.0/"
+
+	if rec := do(t, srv, http.MethodPost, path+"approve", ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("a plain approval: %d %s, want 202", rec.Code, rec.Body)
+	}
+	if runner.started[0].ReleaseAllowBreaking {
+		t.Errorf("an approval without allow_breaking accepted breaking changes")
+	}
+
+	rec := do(t, srv, http.MethodPost, path+"approve", `{"allow_breaking":true}`)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"allowBreaking":true`) ||
+		strings.Contains(rec.Body.String(), `"shortSoakOk"`) {
+		t.Fatalf("an approval accepting breaking changes: %d %s, want 202 saying so and nothing else", rec.Code, rec.Body)
+	}
+	if got := runner.started[1]; !got.ReleaseAllowBreaking || got.ReleaseShortSoakOK || got.RequestedByKind != "human" ||
+		got.ReleaseVersion != "v2.4.0" {
+		t.Errorf("approval with allow_breaking started %+v, want a person's run of v2.4.0 accepting breaking changes only", got)
+	}
+
+	rec = do(t, srv, http.MethodPost, path+"approve", `{"allow_breaking":true,"short_soak_ok":true}`)
+	if got := runner.started[2]; rec.Code != http.StatusAccepted || !got.ReleaseAllowBreaking || !got.ReleaseShortSoakOK {
+		t.Errorf("an approval accepting both: %d %s, started %+v; want both answers on the run", rec.Code, rec.Body, got)
+	}
+
+	if rec := do(t, srv, http.MethodPost, path+"reject", `{"allow_breaking":true}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("a rejection with allow_breaking: %d %s, want 400", rec.Code, rec.Body)
+	}
+	if rec := do(t, srv, http.MethodPost, path+"approve", `{"allow_breaking":"v2.4.0"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("a malformed allow_breaking: %d %s, want 400", rec.Code, rec.Body)
+	}
+	if len(runner.started) != 3 {
+		t.Errorf("started %d runs, want 3: a refused decision starts nothing", len(runner.started))
+	}
+}

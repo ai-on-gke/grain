@@ -1,10 +1,25 @@
 name: Release qualification
+# Stage 2 of release-candidate qualification
+# (design/playbook/releases.playbook.md §2). grain's release-qualification
+# reconciler (pkg/orchestrator/releasequalification.go) starts this suite
+# against each vX.Y.Z-rc.N tag once its Stage 1 `nightly` run is green,
+# filling rc_tag and rc_sha into every template, and posts the verdict as
+# check run grain/release-qualification on rc_sha.
+#
+# Order matters: the last template runs only after every one before it has
+# passed, so qualification-system-smoke stays last.
 templates:
   - qualification-mergequeue
   - qualification-ci-diagnostics
   - qualification-base-triage
   - qualification-system-smoke
-mode: count
-count: 1
+# One pass, and a pass that changes anything is not clean: any pull request
+# a task opens, or any follow-up it proposes on a branch other than its own
+# qualification/<task-id> scratch branch, fails qualification (PassChanged).
+mode: until_clean
+max-passes: 1
 require-approval: false
-auto-merge: true
+auto-merge: false
+# The fixture tasks a template files against its own scratch branch have to
+# run unattended for the item to finish.
+auto-approve-proposals: true

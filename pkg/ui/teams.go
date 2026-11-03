@@ -761,7 +761,11 @@ func (c *Client) SetDeploymentRepoConfigWithUser(ctx context.Context, repo strin
 			t := strings.TrimSpace(capID)
 			if t != "" && !seen[t] {
 				canonicalID := t
-				if model.IsCapabilityRef(t) || t == "gcp-key" || strings.HasPrefix(t, "gcp-key:") {
+				if _, ok := model.CIGrantRuleFor(t); ok {
+					// The release server's methods, in either spelling
+					// (cleanRepoCICapabilities).
+					canonicalID = model.CanonicalLegacyGrant(t)
+				} else if model.IsCapabilityRef(t) || t == "gcp-key" || strings.HasPrefix(t, "gcp-key:") {
 					normalized, err := c.normalizeCapabilityID(t)
 					if err != nil {
 						return DeploymentRepoConfigResponse{}, err
