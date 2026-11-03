@@ -848,6 +848,14 @@ type Config struct {
 	// reconcileAutoUpgrade), so this is when the queue shuts, not
 	// necessarily when the restart happens.
 	AutoUpgradeTime string
+	// AutoUpgradeOn is what makes this deployment upgrade itself:
+	// AutoUpgradeOff, AutoUpgradeDaily (AutoUpgradeChannel at
+	// AutoUpgradeTime each day) or AutoUpgradeOnRelease (as soon as its
+	// image channel publishes a new release tag, orchestrator's
+	// reconcileReleaseUpgrade). "" is a row written before the setting
+	// existed, which AutoUpgradeMode reads the way that grain did: daily
+	// when a channel is set, off when not.
+	AutoUpgradeOn string
 	// JudgementModel is the model the symbolic model JudgementModelName
 	// ("judgement") resolves to: the model a durable judgement agent --
 	// the pipeline steward -- runs on (design/design/durable-tasks.design.md#DT-11,
@@ -1014,6 +1022,55 @@ func ParseAutoUpgradeTime(hhmm string) (hour, minute int, err error) {
 		return 0, 0, fmt.Errorf("auto-upgrade time %q is not a time of day between 00:00 and 23:59", hhmm)
 	}
 	return h, m, nil
+}
+
+// The values of Config.AutoUpgradeOn.
+const (
+	// AutoUpgradeOff upgrades only when somebody presses Upgrade.
+	AutoUpgradeOff = "off"
+	// AutoUpgradeDaily schedules an upgrade onto AutoUpgradeChannel
+	// once a day, at AutoUpgradeTime (orchestrator's reconcileAutoUpgrade).
+	AutoUpgradeDaily = "daily"
+	// AutoUpgradeOnRelease schedules an upgrade once the deployment's
+	// image channel publishes a new release tag (orchestrator's
+	// reconcileReleaseUpgrade): onto "latest" when AutoUpgradeChannel is
+	// "latest", onto the exact vX.Y.Z otherwise.
+	AutoUpgradeOnRelease = "release"
+)
+
+// AutoUpgradeModes is Config.AutoUpgradeOn's vocabulary, in the order a
+// picker offers it.
+func AutoUpgradeModes() []string {
+	return []string{AutoUpgradeOff, AutoUpgradeDaily, AutoUpgradeOnRelease}
+}
+
+// AutoUpgradeMode is the mode c is in, one of AutoUpgradeModes. A row
+// with no AutoUpgradeOn is read as the grain before the setting read it:
+// daily when it names a channel, off when it does not. An unknown value
+// -- a hand-edited row -- is off.
+func (c Config) AutoUpgradeMode() string {
+	switch on := strings.ToLower(strings.TrimSpace(c.AutoUpgradeOn)); on {
+	case AutoUpgradeOff, AutoUpgradeDaily, AutoUpgradeOnRelease:
+		return on
+	case "":
+		if strings.TrimSpace(c.AutoUpgradeChannel) != "" {
+			return AutoUpgradeDaily
+		}
+	}
+	return AutoUpgradeOff
+}
+
+// ParseAutoUpgradeOn reads a Config.AutoUpgradeOn a person typed:
+// one of AutoUpgradeModes, any case, or "" for AutoUpgradeOff.
+func ParseAutoUpgradeOn(raw string) (string, error) {
+	on := strings.ToLower(strings.TrimSpace(raw))
+	if on == "" {
+		return AutoUpgradeOff, nil
+	}
+	if slices.Contains(AutoUpgradeModes(), on) {
+		return on, nil
+	}
+	return "", fmt.Errorf("auto-upgrade mode %q: want one of %s", raw, strings.Join(AutoUpgradeModes(), ", "))
 }
 
 // UpgradeCheckModes is the vocabulary as a list, in the order a picker

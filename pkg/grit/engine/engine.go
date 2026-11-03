@@ -895,21 +895,22 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		// tidiness: this same list is what Admission reserves finite
 		// credentials from, so a job that does not use the scarce one no
 		// longer queues for it.
-		Capabilities:       workflows.JobCapabilities(pj.Job, plan.Request.Capabilities, e.ExplicitOnlyCapability),
-		ReleaseSecrets:     workflows.JobSecrets(pj.Job, plan.Request.ReleaseSecrets),
-		Event:              plan.Request.Event,
-		TrustedSchedule:    plan.Request.TrustedSchedule,
-		WithholdEventGated: plan.Request.WithholdEventGated,
-		Name:               SandboxName(runID, plan, pj),
-		RunID:              runID,
-		JobAttempt:         jobIndex(plan, pj),
-		Untrusted:          plan.Request.UntrustedCommit() != "",
-		Repo:               plan.Request.Repo,
-		Ref:                plan.Request.Ref,
-		Commit:             plan.Request.Commit,
-		Shape:              pj.Job.Sandbox,
-		Builtin:            pj.Job.Builtin,
-		Timeout:            pj.Job.Timeout(),
+		Capabilities:         workflows.JobCapabilities(pj.Job, plan.Request.Capabilities, e.ExplicitOnlyCapability),
+		ImplicitCapabilities: pj.Job.ImplicitCapabilities(),
+		ReleaseSecrets:       workflows.JobSecrets(pj.Job, plan.Request.ReleaseSecrets),
+		Event:                plan.Request.Event,
+		TrustedSchedule:      plan.Request.TrustedSchedule,
+		WithholdEventGated:   plan.Request.WithholdEventGated,
+		Name:                 SandboxName(runID, plan, pj),
+		RunID:                runID,
+		JobAttempt:           jobIndex(plan, pj),
+		Untrusted:            plan.Request.UntrustedCommit() != "",
+		Repo:                 plan.Request.Repo,
+		Ref:                  plan.Request.Ref,
+		Commit:               plan.Request.Commit,
+		Shape:                pj.Job.Sandbox,
+		Builtin:              pj.Job.Builtin,
+		Timeout:              pj.Job.Timeout(),
 	}
 	if adopted == nil && e.GuestCache != nil && pj.GuestKey != "" {
 		warmCtx, cancel := context.WithTimeout(queueCtx, pj.Job.Timeout())
@@ -1046,6 +1047,9 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 			e.log("ci: run %s: job %s: resumed in sandbox %s", runID, pj.ID, sandbox.Name())
 		}
 		result.Sandbox = sandbox.Name()
+		if warner, ok := sandbox.(gritsteps.WarningSandbox); ok {
+			result.Warning = joinJobWarning(result.Warning, warner.Warning())
+		}
 	} else {
 		if e.stopping(ctx) {
 			return NewJobRun(pj)
@@ -1085,6 +1089,9 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 			return result
 		}
 		result.Sandbox = sandbox.Name()
+		if warner, ok := sandbox.(gritsteps.WarningSandbox); ok {
+			result.Warning = joinJobWarning(result.Warning, warner.Warning())
+		}
 		if progress != nil && !e.stopping(ctx) {
 			progress(jobRunSnapshot(result))
 		}
@@ -1214,6 +1221,9 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 			return NewJobRun(pj)
 		}
 		result.Sandbox = sandbox2.Name()
+		if ws, ok := sandbox2.(gritsteps.WarningSandbox); ok {
+			result.Warning = joinJobWarning(result.Warning, ws.Warning())
+		}
 		// The job is running again, so it must not read as finished: a
 		// conclusion left over from the first attempt makes every reader
 		// (the CI page, wait_for_checks, the merge queue) draw a job that
@@ -1256,19 +1266,19 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 			// Infrastructure, not a flake: nothing about the tree
 			// failed the first time, so nothing is recorded against it.
 			result.Status = "passed (retry after OOM kill)"
-			result.Warning = "infrastructure: " + firstFailureSummary + "; passed in a fresh sandbox"
+			result.Warning = joinJobWarning(result.Warning, "infrastructure: "+firstFailureSummary+"; passed in a fresh sandbox")
 			e.log("ci: run %s: job %s: passed on retry after its sandbox was OOM-killed", runID, pj.ID)
 		case preempted && result.Conclusion == workflows.ConclusionSuccess:
 			// The same: the first attempt lost its machine, not a test.
 			result.Status = "passed (retry after preemption)"
-			result.Warning = "infrastructure: " + firstFailureSummary + "; passed in a fresh sandbox"
+			result.Warning = joinJobWarning(result.Warning, "infrastructure: "+firstFailureSummary+"; passed in a fresh sandbox")
 			e.log("ci: run %s: job %s: passed on retry after its sandbox was preempted", runID, pj.ID)
 		case secondPreempted:
 			// Taken away again: errored, which the CI layer re-runs
 			// (ciReplacementFor) rather than reading as a red verdict.
 			result.Conclusion = conclusionFor(jobCtx, workflows.ConclusionErrored)
 			result.Status = "errored (preempted)"
-			result.Warning = "infrastructure: " + firstFailureSummary
+			result.Warning = joinJobWarning(result.Warning, "infrastructure: "+firstFailureSummary)
 			result.Error = PreemptedRetryReasonPrefix + secondPreemptHow + " (on retry, too)"
 			e.log("ci: run %s: job %s: %s", runID, pj.ID, result.Error)
 		case secondOOM:
@@ -1276,13 +1286,13 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 			// tree's, so errored rather than a red verdict.
 			result.Conclusion = conclusionFor(retryCtx, workflows.ConclusionErrored)
 			result.Status = "errored (OOM-killed)"
-			result.Warning = "infrastructure: " + firstFailureSummary
+			result.Warning = joinJobWarning(result.Warning, "infrastructure: "+firstFailureSummary)
 			result.Error = OOMRetryReasonPrefix + secondHow + " (on retry, too)"
 			e.log("ci: run %s: job %s: %s", runID, pj.ID, result.Error)
 		case result.Conclusion == workflows.ConclusionSuccess:
 			result.Flake = true
 			result.Status = "passed (retry)"
-			result.Warning = fmt.Sprintf("passed (retry): flaky failure on initial attempt: %s", firstFailureSummary)
+			result.Warning = joinJobWarning(result.Warning, fmt.Sprintf("passed (retry): flaky failure on initial attempt: %s", firstFailureSummary))
 			e.log("ci: run %s: job %s: passed on retry (flake: %s)", runID, pj.ID, firstFailureSummary)
 		default:
 			e.log("ci: run %s: job %s: retry failed with definitive failure (%s)", runID, pj.ID, SummarizeFailure(result))
@@ -1307,24 +1317,24 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 			switch {
 			case strings.HasPrefix(firstFailureSummary, OOMRetryReasonPrefix) && result.Conclusion == workflows.ConclusionSuccess:
 				result.Status = "passed (retry after OOM kill)"
-				result.Warning = "infrastructure: " + firstFailureSummary + "; passed in a fresh sandbox"
+				result.Warning = joinJobWarning(result.Warning, "infrastructure: "+firstFailureSummary+"; passed in a fresh sandbox")
 			case strings.HasPrefix(firstFailureSummary, PreemptedRetryReasonPrefix) && result.Conclusion == workflows.ConclusionSuccess:
 				result.Status = "passed (retry after preemption)"
-				result.Warning = "infrastructure: " + firstFailureSummary + "; passed in a fresh sandbox"
+				result.Warning = joinJobWarning(result.Warning, "infrastructure: "+firstFailureSummary+"; passed in a fresh sandbox")
 			case preempted:
 				result.Conclusion = conclusionFor(jobCtx, workflows.ConclusionErrored)
 				result.Status = "errored (preempted)"
-				result.Warning = "infrastructure: " + firstFailureSummary
+				result.Warning = joinJobWarning(result.Warning, "infrastructure: "+firstFailureSummary)
 				result.Error = PreemptedRetryReasonPrefix + preemptHow + " (on retry, too)"
 			case oomKilled:
 				result.Conclusion = conclusionFor(jobCtx, workflows.ConclusionErrored)
 				result.Status = "errored (OOM-killed)"
-				result.Warning = "infrastructure: " + firstFailureSummary
+				result.Warning = joinJobWarning(result.Warning, "infrastructure: "+firstFailureSummary)
 				result.Error = OOMRetryReasonPrefix + oomHow + " (on retry, too)"
 			case result.Conclusion == workflows.ConclusionSuccess:
 				result.Flake = true
 				result.Status = "passed (retry)"
-				result.Warning = fmt.Sprintf("passed (retry): flaky failure on initial attempt: %s", firstFailureSummary)
+				result.Warning = joinJobWarning(result.Warning, fmt.Sprintf("passed (retry): flaky failure on initial attempt: %s", firstFailureSummary))
 			}
 		}
 		if !channelLost {
@@ -1721,7 +1731,7 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 				if result.Status == "" {
 					result.Status = "passed (quarantined)"
 				}
-				result.Warning = fmt.Sprintf("passed (quarantined): %d test(s) failed but are quarantined: %s", len(quarantinedNames), strings.Join(quarantinedNames, ", "))
+				result.Warning = joinJobWarning(result.Warning, fmt.Sprintf("passed (quarantined): %d test(s) failed but are quarantined: %s", len(quarantinedNames), strings.Join(quarantinedNames, ", ")))
 				// The tests still failed, and the summary (its tests
 				// marked Quarantined by EvaluateQuarantine) is what
 				// QueryTestHistory reads once the step output is gone:
@@ -1931,17 +1941,18 @@ func stepTimeout(ctx context.Context, step workflows.Step) time.Duration {
 // the bottom, then the workflow's, the job's and the step's, each
 // layering over the last -- GitHub's own precedence -- except for the
 // caller-identity variables (GRAIN_CI_REQUESTED_BY_KIND,
-// GRAIN_CI_REQUESTED_BY, GRAIN_CI_RELEASE_VERSION and
-// GRAIN_CI_RELEASE_SHORT_SOAK_OK), which a person-only release workflow
-// reads to verify that a person started it, and what they decided, and
-// which a workflow file's own env: may neither set nor replace.
+// GRAIN_CI_REQUESTED_BY, GRAIN_CI_RELEASE_VERSION,
+// GRAIN_CI_RELEASE_SHORT_SOAK_OK and GRAIN_CI_RELEASE_ALLOW_BREAKING),
+// which a person-only release workflow reads to verify that a person
+// started it, and what they decided, and which a workflow file's own
+// env: may neither set nor replace.
 func StepEnv(plan workflows.Plan, pj workflows.PlannedJob, step workflows.Step) map[string]string {
 	env := workflows.RunEnv(plan.Request, pj.Workflow, pj.Job.ID)
 	for _, layer := range []map[string]string{pj.WorkflowEnv, pj.Job.Env, step.Env} {
 		for k, v := range layer {
 			switch k {
 			case workflows.RequestedByKindEnv, workflows.RequestedByEnv, workflows.ReleaseVersionEnv,
-				workflows.ReleaseShortSoakOKEnv:
+				workflows.ReleaseShortSoakOKEnv, workflows.ReleaseAllowBreakingEnv:
 				continue
 			}
 			env[k] = v
@@ -2071,4 +2082,15 @@ var ExtractFailureSummary = func(string) *workflows.FailureSummary { return nil 
 // after a restart exactly what it was given before one.
 func (e *Engine) JobCapabilities(job workflows.Job, provided []string) []string {
 	return workflows.JobCapabilities(job, provided, e.ExplicitOnlyCapability)
+}
+
+func joinJobWarning(existing, next string) string {
+	switch {
+	case existing == "":
+		return next
+	case next == "" || strings.Contains(existing, next):
+		return existing
+	default:
+		return existing + "; " + next
+	}
 }

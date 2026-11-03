@@ -125,6 +125,19 @@ test.describe("IAP signed-in header badge and logout", () => {
     const badgeBox = await badge.boundingBox();
     expect(badgeBox).not.toBeNull();
     expect(badgeBox.width).toBeLessThanOrEqual(201);
-    expect(badgeBox.height).toBeLessThanOrEqual(30);
+    // The badge is one of the top tray's controls, so it takes their
+    // shared height (--header-control-size), and the email inside it
+    // stays on a single line rather than wrapping the rail taller.
+    const settingsBox = await page
+      .getByTestId("top-bar-settings")
+      .boundingBox();
+    expect(Math.abs(badgeBox.height - settingsBox.height)).toBeLessThanOrEqual(
+      1,
+    );
+    const lines = await badge.locator(".MuiTypography-root").evaluate((el) => {
+      const lh = parseFloat(getComputedStyle(el).lineHeight) || 16;
+      return Math.round(el.getBoundingClientRect().height / lh);
+    });
+    expect(lines).toBe(1);
   });
 });

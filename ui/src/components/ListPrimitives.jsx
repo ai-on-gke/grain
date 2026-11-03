@@ -23,7 +23,7 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import CloseIcon from "@mui/icons-material/Close";
+import AppIcon from "./AppIcon.jsx";
 import {
   MoveHandle,
   MoveSlot,
@@ -160,6 +160,11 @@ export function ListSearchField({ value, onChange, placeholder }) {
         // the two are the same prop under two names (identifierField.js).
         htmlInput: identifierField,
         input: {
+          startAdornment: (
+            <InputAdornment position="start" sx={{ color: "text.secondary" }}>
+              <AppIcon name="search" size={16} />
+            </InputAdornment>
+          ),
           endAdornment: value ? (
             <InputAdornment position="end">
               <IconButton
@@ -172,7 +177,7 @@ export function ListSearchField({ value, onChange, placeholder }) {
                   input.current?.focus();
                 }}
               >
-                <CloseIcon fontSize="small" />
+                <AppIcon name="close" size={16} />
               </IconButton>
             </InputAdornment>
           ) : null,

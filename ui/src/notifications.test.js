@@ -120,7 +120,10 @@ const pending = {
 };
 
 describe("pending releases", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    api.mockClear();
+  });
 
   it("offer Approve and Reject before anything else", () => {
     const [row] = notificationAlerts([pending]);
@@ -148,11 +151,52 @@ describe("pending releases", () => {
     });
   });
 
+  it("offer Approve and Reject for a patch release the train stages (vX.Y.Z)", async () => {
+    const patch = {
+      ...pending,
+      subject: "release.pending:v2.4.1",
+      title: "v2.4.1 is ready to promote (v2.4.1-rc.1 passed its soak)",
+      body:
+        "v2.4.1-rc.1 passed qualification (Stage 1 nightly.yml, Stage 2 grain/release-qualification) and is staged as v2.4.1-pending.\n\n" +
+        "Qualification: PASS",
+    };
+    expect(pendingReleaseOf(patch)).toEqual({
+      repo: "ai-on-gke/grain",
+      version: "v2.4.1",
+      soak: null,
+      shortSoak: null,
+    });
+    const [row] = notificationAlerts([patch]);
+    expect(row.actions.map((a) => a.label)).toEqual([
+      "Approve",
+      "Reject",
+      "Acknowledge",
+      "Investigate",
+    ]);
+
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+    expect(await decideRelease(pendingReleaseOf(patch), true)).toBe(true);
+    expect(confirm.mock.calls.at(-1)[0]).toContain("Approve v2.4.1?");
+    expect(api).toHaveBeenCalledWith(
+      "/api/repos/ai-on-gke/grain/pending-releases/v2.4.1/approve",
+      { method: "POST" },
+    );
+  });
+
   it("are only the release.pending family with its actions", () => {
     expect(pendingReleaseOf(open)).toBeNull();
     expect(pendingReleaseOf({ ...pending, actions: [] })).toBeNull();
     expect(
       pendingReleaseOf({ ...pending, subject: "release.pending:latest" }),
+    ).toBeNull();
+    expect(
+      pendingReleaseOf({ ...pending, subject: "release.pending:v2.4" }),
+    ).toBeNull();
+    expect(
+      pendingReleaseOf({
+        ...pending,
+        subject: "release.pending:v2.4.1-rc.1",
+      }),
     ).toBeNull();
   });
 

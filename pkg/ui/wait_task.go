@@ -18,9 +18,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -74,7 +76,7 @@ func (c *Client) WaitOn(ctx context.Context, id string, ids []string, park bool)
 	}
 	targets := make([]model.WaitTarget, 0, len(links))
 	for _, l := range links {
-		target, err := c.Store.WaitTargetOf(ctx, l.Target)
+		target, err := c.Store.WaitTargetAt(ctx, l.Target, c.now())
 		if err != nil {
 			return nil, err
 		}
@@ -311,8 +313,10 @@ func (c *Client) ResumeLater(ctx context.Context, id string, when model.ResumeOn
 		}
 		when.At = &at
 	}
-	if when.CI != "" && when.CI != model.ResumeOnMyBranch && strings.ContainsAny(when.CI, " \t\n") {
-		return when, validationErrorf("ci %q: want a grain CI run id or %q", when.CI, model.ResumeOnMyBranch)
+	if when.CI != "" {
+		if err := c.validateCIResume(ctx, *self, &when); err != nil {
+			return when, err
+		}
 	}
 	if err := c.Store.SetDeferred(ctx, self.ID, &now, when.At, now); err != nil {
 		return when, err
@@ -353,4 +357,161 @@ func (c *HTTPClient) ResumeLater(ctx context.Context, id string, when model.Resu
 		return when, err
 	}
 	return resp.When, nil
+}
+
+// validateCIResume refuses a CI wake condition that can never be satisfied:
+// a task with no repository branch, a repository with CI disabled, a run ID
+// for the wrong CI provider or that does not exist, an unpushed branch, or a
+// GitHub-gated repository with no Actions workflows or check runs configured.
+func (c *Client) validateCIResume(ctx context.Context, self model.Task, when *model.ResumeOn) error {
+	target := strings.TrimSpace(when.CI)
+	if target != model.ResumeOnMyBranch && strings.ContainsAny(target, " \t\n") {
+		return validationErrorf("ci %q: want a CI run id (grain CI or gha:<owner>:<name>:<run-id>) or %q",
+			when.CI, model.ResumeOnMyBranch)
+	}
+	repo, branch, mode, err := c.Store.TaskCIMode(ctx, self)
+	if err != nil {
+		return err
+	}
+	if repo == (model.RepoRef{}) || strings.TrimSpace(branch) == "" {
+		return validationErrorf("cannot wait on CI: this task has no repository branch for CI to run on")
+	}
+	switch mode {
+	case model.CIModeNone:
+		return validationErrorf("cannot wait on CI: %s has no CI configured (ci_mode: none)", repo)
+
+	case model.CIModeGrain:
+		if IsActionsRunID(target) {
+			return validationErrorf("cannot wait on GitHub Actions run %q: %s uses grain CI (ci_mode: grain)", target, repo)
+		}
+		if target == model.ResumeOnMyBranch {
+			return nil
+		}
+		if c.Config.CI != nil {
+			if _, ok := c.Config.CI.Get(target); ok {
+				return nil
+			}
+		}
+		exists, err := c.Store.HasCIRun(ctx, target)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return validationErrorf("cannot wait on CI: grain CI run %q does not exist", target)
+		}
+		return nil
+
+	case model.CIModeGitHub:
+		actionsReader := c.actionsReader()
+		prReader := SandboxCLIActions{Client: c}.githubCheckReader()
+		if target != model.ResumeOnMyBranch {
+			runRepoStr, runID, ok := ParseActionsRunID(target)
+			if !ok {
+				if n, nerr := strconv.ParseInt(target, 10, 64); nerr == nil && n > 0 {
+					runRepoStr = repo.String()
+					runID = n
+					target = ActionsRunID(repo.String(), n)
+					when.CI = target
+					ok = true
+				}
+			}
+			if !ok {
+				return validationErrorf("cannot wait on CI: %q is not a GitHub Actions run id on %s (pass %q or gha:%s:<run-id>)",
+					target, repo, model.ResumeOnMyBranch, strings.ReplaceAll(repo.String(), "/", ":"))
+			}
+			runRepo, perr := c.parseRepo(runRepoStr)
+			if perr != nil || !strings.EqualFold(runRepo.String(), repo.String()) {
+				return validationErrorf("cannot wait on CI: GitHub Actions run %q is not on %s", target, repo)
+			}
+			if actionsReader != nil {
+				wfRun, gerr := actionsReader.GetActionsRun(repo.StoredOwner(), repo.Name, runID)
+				if gerr == nil && wfRun != nil {
+					return nil
+				}
+				if gerr != nil {
+					// Transient forge error or low budget: allow if recorded in store, or fall through.
+					if jobs, jerr := c.Store.ListGitHubCIJobs(ctx, model.GitHubCIFilter{Repo: repo.String(), RunID: runID, Limit: 1}); jerr == nil && len(jobs) > 0 {
+						return nil
+					}
+					return nil
+				}
+			}
+			jobs, jerr := c.Store.ListGitHubCIJobs(ctx, model.GitHubCIFilter{Repo: repo.String(), RunID: runID, Limit: 1})
+			if jerr != nil {
+				return jerr
+			}
+			if len(jobs) == 0 {
+				return validationErrorf("cannot wait on CI: GitHub Actions run %q does not exist", target)
+			}
+			return nil
+		}
+
+		// target == "my-branch" on ci_mode: github.
+		if prReader == nil && actionsReader == nil {
+			jobs, jerr := c.Store.ListGitHubCIJobs(ctx, model.GitHubCIFilter{Repo: repo.String(), Limit: 1})
+			if jerr != nil {
+				return jerr
+			}
+			if len(jobs) == 0 {
+				return validationErrorf("cannot wait on CI: no GitHub connection or CI is configured for %s", repo)
+			}
+			return nil
+		}
+		if prReader != nil {
+			head, herr := prReader.GetBranchHead(repo.Owner, repo.Name, branch)
+			if herr != nil {
+				// Transient forge read error: do not refuse a potentially valid wait.
+				return nil
+			}
+			if head == nil || strings.TrimSpace(head.SHA) == "" {
+				return validationErrorf("cannot wait on CI: branch %q does not exist on %s (push the branch first)", branch, repo)
+			}
+			if checks, cerr := prReader.ListCheckRuns(repo.Owner, repo.Name, head.SHA); cerr != nil || hasExternalCheckRuns(checks) {
+				return nil
+			}
+			if state, serr := prReader.ActionsState(repo.Owner, repo.Name, head.SHA); serr == nil && state.Runs > 0 {
+				return nil
+			}
+		}
+		if actionsReader != nil {
+			if runs, rerr := actionsReader.ListActionsRuns(repo.StoredOwner(), repo.Name, github.ActionsRunsQuery{Branch: branch, Limit: 5}); rerr != nil || len(runs) > 0 {
+				return nil
+			}
+		}
+		// Branch head just pushed may not have registered check suites yet; check
+		// whether the repository itself has any configured CI (recorded jobs,
+		// repository workflow runs, or base-branch checks).
+		if jobs, jerr := c.Store.ListGitHubCIJobs(ctx, model.GitHubCIFilter{Repo: repo.String(), Limit: 1}); jerr == nil && len(jobs) > 0 {
+			return nil
+		}
+		if actionsReader != nil {
+			if repoRuns, rerr := actionsReader.ListActionsRuns(repo.StoredOwner(), repo.Name, github.ActionsRunsQuery{Limit: 1}); rerr != nil || len(repoRuns) > 0 {
+				return nil
+			}
+		}
+		if prReader != nil {
+			base := strings.TrimSpace(self.Base)
+			if base == "" {
+				base = "main"
+			}
+			if baseChecks, bcerr := prReader.ListCheckRuns(repo.Owner, repo.Name, base); bcerr == nil && hasExternalCheckRuns(baseChecks) {
+				return nil
+			}
+		}
+		return validationErrorf("cannot wait on CI: no GitHub Actions workflows or checks are configured for %s (%s)", repo, branch)
+
+	default:
+		return validationErrorf("cannot wait on CI: unsupported CI mode %q for %s", mode, repo)
+	}
+}
+
+func hasExternalCheckRuns(checks []github.CheckRun) bool {
+	for _, ch := range checks {
+		n := strings.ToLower(strings.TrimSpace(ch.Name))
+		if n == "grain" || strings.HasPrefix(n, "grain/") || strings.HasPrefix(n, "grain ci") {
+			continue
+		}
+		return true
+	}
+	return false
 }

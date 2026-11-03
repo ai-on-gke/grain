@@ -174,7 +174,10 @@ func waitForChecksTool(client PullRequestReader, grainCI GrainCIReader, scope Pu
 			"time this run has left before grain cancels it once that "+
 			"credit runs out, and the report says so when that is what "+
 			"bounded it -- so you never have to "+
-			"budget the wait against the run yourself.%s This only reads; "+
+			"budget the wait against the run yourself. To free the sandbox across a "+
+			"longer GitHub Actions / check run instead of blocking here, push your "+
+			"branch and call resume_later with when: {\"ci\": \"my-branch\"} (or a "+
+			"gha:<owner>:<name>:<run-id> Actions run id).%s This only reads; "+
 			"it pushes nothing and changes nothing.",
 			int(DefaultWaitForChecksTimeout.Seconds()), int(MaxWaitForChecksTimeout.Seconds()),
 			grainCIWaitClause(grainCI)),

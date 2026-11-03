@@ -24,9 +24,11 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// reconcileAutoUpgrade is the daily automatic upgrade: once a day, at
-// Config.AutoUpgradeTime on the deployment's own clock, it schedules an
-// upgrade onto Config.AutoUpgradeChannel.
+// reconcileAutoUpgrade is the daily automatic upgrade
+// (model.AutoUpgradeDaily): once a day, at Config.AutoUpgradeTime on the
+// deployment's own clock, it schedules an upgrade onto
+// Config.AutoUpgradeChannel. reconcileReleaseUpgrade is the other mode,
+// which upgrades when a release is published instead.
 //
 // It schedules rather than starts. The upgrade goes through the same
 // row an operator's "upgrade once idle" writes (model.ScheduledUpgrade),
@@ -60,7 +62,7 @@ func reconcileAutoUpgrade(ctx context.Context, deps Deps, now time.Time) error {
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading the automatic upgrade settings: %w", err)
 	}
-	if cfg == nil {
+	if cfg == nil || cfg.AutoUpgradeMode() != model.AutoUpgradeDaily {
 		return nil
 	}
 	branch := strings.TrimSpace(cfg.AutoUpgradeChannel)
@@ -125,6 +127,11 @@ func reconcileAutoUpgrade(ctx context.Context, deps Deps, now time.Time) error {
 	}
 	if err := deps.Store.SetAutoUpgradeRun(ctx, record); err != nil {
 		return fmt.Errorf("orchestrator: %w", err)
+	}
+	// So a failure is reported (watchAutoUpgrade). Logged rather than
+	// returned: the day's upgrade is scheduled and recorded either way.
+	if err := recordDailyAutoUpgrade(ctx, deps, branch, now); err != nil {
+		log.Printf("orchestrator: noting the automatic upgrade to %s to report how it ends: %v", branch, err)
 	}
 	log.Printf("orchestrator: scheduled the automatic upgrade to %s for %s (%s %s)",
 		branch, day, at, model.TimeZoneOrDefault(cfg.TimeZone))

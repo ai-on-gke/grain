@@ -15,6 +15,7 @@
 import { Box, Button, Chip, Typography } from "@mui/material";
 import { boardKindLabel } from "../boards.js";
 import BoardList from "./BoardList.jsx";
+import AppIcon from "./AppIcon.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
 import {
   focusRowLink,
@@ -114,6 +115,7 @@ export default function BoardsPage({
           <Button
             size="small"
             variant="contained"
+            startIcon={<AppIcon name="add" size={16} />}
             sx={{ ml: "auto" }}
             onClick={() => onNewBoard()}
           >

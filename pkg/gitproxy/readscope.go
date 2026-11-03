@@ -190,13 +190,17 @@ func (s *ReadScopes) allows(sandbox, owner, repo, action string) bool {
 //
 // Every method is safe on a nil *WriteScopes, which reads as an empty registry.
 type WriteScopes struct {
-	mu    sync.RWMutex
-	repos map[string]map[model.RepoRef]struct{}
+	mu       sync.RWMutex
+	repos    map[string]map[model.RepoRef]struct{}
+	withheld map[string]map[model.RepoRef]string
 }
 
 // NewWriteScopes returns an empty write scope registry.
 func NewWriteScopes() *WriteScopes {
-	return &WriteScopes{repos: make(map[string]map[model.RepoRef]struct{})}
+	return &WriteScopes{
+		repos:    make(map[string]map[model.RepoRef]struct{}),
+		withheld: make(map[string]map[model.RepoRef]string),
+	}
 }
 
 // Grant records that sandbox may push to (and fetch from) repo.
@@ -217,7 +221,54 @@ func (s *WriteScopes) Grant(sandbox string, repo model.RepoRef) {
 	set[repo] = struct{}{}
 }
 
-// Drop forgets all write grants for sandbox.
+// NoteWithheld records why sandbox was not handed a declared write grant for
+// repo on this CI event. It grants no git action: Authorize still answers
+// false, and HandleRequest reads the note only when writing its 403 refusal
+// so the job's author can tell an event-gated grant from an undeclared repo.
+func (s *WriteScopes) NoteWithheld(sandbox string, repo model.RepoRef, reason string) {
+	if s == nil || reason == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.withheld == nil {
+		s.withheld = make(map[string]map[model.RepoRef]string)
+	}
+	notes := s.withheld[sandbox]
+	if notes == nil {
+		notes = make(map[model.RepoRef]string)
+		s.withheld[sandbox] = notes
+	}
+	notes[repo] = reason
+}
+
+// WithheldReason returns the note recorded by NoteWithheld for sandbox and
+// owner/repo when sandbox holds no active write grant for that repository.
+func (s *WriteScopes) WithheldReason(sandbox, owner, repo string) (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	notes := s.withheld[sandbox]
+	if len(notes) == 0 {
+		return "", false
+	}
+	cOwner, cRepo := canonicalizeRepo(owner, repo)
+	for granted := range s.repos[sandbox] {
+		if canonicalMatches(granted, cOwner, cRepo) {
+			return "", false
+		}
+	}
+	for target, reason := range notes {
+		if canonicalMatches(target, cOwner, cRepo) {
+			return reason, true
+		}
+	}
+	return "", false
+}
+
+// Drop forgets all write grants and withheld notes for sandbox.
 func (s *WriteScopes) Drop(sandbox string) {
 	if s == nil {
 		return
@@ -225,6 +276,7 @@ func (s *WriteScopes) Drop(sandbox string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.repos, sandbox)
+	delete(s.withheld, sandbox)
 }
 
 // Repos returns all repositories sandbox has write access to.
@@ -325,6 +377,15 @@ func (a *ReadOnlyScopeAuthorizer) Refusal(owner, repo string) (string, bool) {
 		return refuser.Refusal(owner, repo)
 	}
 	return "", false
+}
+
+// WithheldReason reports why a request that Authorize refused was withheld by
+// the CI event gate on a grant sandbox declared, if WriteScopes recorded one.
+func (a *ReadOnlyScopeAuthorizer) WithheldReason(sandbox, owner, repo string) (string, bool) {
+	if a.Forbidden.forbids(canonicalizeRepo(owner, repo)) {
+		return "", false
+	}
+	return a.WriteScopes.WithheldReason(sandbox, owner, repo)
 }
 
 // AuthorizeRefUpdates implements RefAuthorizer. It has to: Handle only

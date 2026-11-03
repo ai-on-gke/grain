@@ -33,8 +33,9 @@ func cmdRelease(ctx context.Context, c *ui.HTTPClient, out *printer, args []stri
 	fs := flag.NewFlagSet("grain release", flag.ContinueOnError)
 	repo := fs.String("repo", model.GrainSourceRepo().String(), "the repository whose pending release this is")
 	shortSoakOK := fs.Bool("short-soak-ok", false, "approve only: accept a release whose staging soak was under the minimum (its notification says SHORT SOAK)")
+	allowBreaking := fs.Bool("allow-breaking", false, "approve only: accept a release that carries breaking changes without being the major release RELEASE_MAJOR asks for")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "usage: grain release approve|reject [-repo owner/name] [-short-soak-ok] vX.Y.Z")
+		fmt.Fprintln(fs.Output(), "usage: grain release approve|reject [-repo owner/name] [-short-soak-ok] [-allow-breaking] vX.Y.Z")
 		fmt.Fprintln(fs.Output(), "       grain release approval-key   (the value for GitHub's GRAIN_RELEASE_APPROVAL_KEY variable)")
 		fs.PrintDefaults()
 	}
@@ -65,7 +66,11 @@ func cmdRelease(ctx context.Context, c *ui.HTTPClient, out *printer, args []stri
 	if *shortSoakOK && verb != "approve" {
 		return fmt.Errorf("-short-soak-ok is for grain release approve")
 	}
-	decision, err := c.DecideRelease(ctx, *repo, fs.Arg(0), verb == "approve", *shortSoakOK)
+	if *allowBreaking && verb != "approve" {
+		return fmt.Errorf("-allow-breaking is for grain release approve")
+	}
+	decision, err := c.DecideRelease(ctx, *repo, fs.Arg(0), verb == "approve",
+		ui.ReleaseApproval{ShortSoakOK: *shortSoakOK, AllowBreaking: *allowBreaking})
 	if err != nil {
 		return err
 	}
@@ -73,10 +78,15 @@ func cmdRelease(ctx context.Context, c *ui.HTTPClient, out *printer, args []stri
 		out.encode(decision)
 		return nil
 	}
-	if decision.Approve && decision.ShortSoakOK {
-		fmt.Printf("approved %s, short soak accepted: promote-release is tagging it and moving latest onto it\n", decision.Version)
-	} else if decision.Approve {
-		fmt.Printf("approved %s: promote-release is tagging it and moving latest onto it\n", decision.Version)
+	if decision.Approve {
+		var accepted string
+		if decision.ShortSoakOK {
+			accepted += ", short soak accepted"
+		}
+		if decision.AllowBreaking {
+			accepted += ", breaking changes accepted"
+		}
+		fmt.Printf("approved %s%s: promote-release is tagging it and moving latest onto it\n", decision.Version, accepted)
 	} else {
 		fmt.Printf("rejected %s: promote-release is dropping it; the next train run cuts its next rc\n", decision.Version)
 	}

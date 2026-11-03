@@ -97,7 +97,7 @@ func TestTheWorkflowsVerifierAcceptsWhatTheDeploymentSignsAndNothingElse(t *test
 		e := map[string]string{
 			"APPROVAL": signed.Record, "APPROVAL_SIGNATURE": signed.Signature, "APPROVAL_PUBLIC_KEY": pub,
 			"EXPECT_REPO": "example/widgets", "EXPECT_VERSION": "v1.2.0", "EXPECT_DECISION": "approve",
-			"EXPECT_SHORT_SOAK_OK": "false", "NOW": strconv.FormatInt(now.Add(time.Minute).Unix(), 10),
+			"EXPECT_SHORT_SOAK_OK": "false", "EXPECT_ALLOW_BREAKING": "false", "NOW": strconv.FormatInt(now.Add(time.Minute).Unix(), 10),
 		}
 		for k, v := range over {
 			e[k] = v
@@ -115,15 +115,16 @@ func TestTheWorkflowsVerifierAcceptsWhatTheDeploymentSignsAndNothingElse(t *test
 	forged, _ := other.Sign(context.Background(), rec)
 	tampered := strings.Replace(mustDecode(t, signed.Record), "alice@example.com", "mallory@example.com", 1)
 	for name, over := range map[string]map[string]string{
-		"no public key":            {"APPROVAL_PUBLIC_KEY": ""},
-		"no record":                {"APPROVAL": ""},
-		"another key's signature":  {"APPROVAL_SIGNATURE": forged.Signature},
-		"a tampered record":        {"APPROVAL": base64.StdEncoding.EncodeToString([]byte(tampered))},
-		"another repository":       {"EXPECT_REPO": "example/other"},
-		"another version":          {"EXPECT_VERSION": "v1.3.0"},
-		"the other decision":       {"EXPECT_DECISION": "reject"},
-		"a short soak not granted": {"EXPECT_SHORT_SOAK_OK": "true"},
-		"expired":                  {"NOW": strconv.FormatInt(now.Add(Lifetime+time.Second).Unix(), 10)},
+		"no public key":                 {"APPROVAL_PUBLIC_KEY": ""},
+		"no record":                     {"APPROVAL": ""},
+		"another key's signature":       {"APPROVAL_SIGNATURE": forged.Signature},
+		"a tampered record":             {"APPROVAL": base64.StdEncoding.EncodeToString([]byte(tampered))},
+		"another repository":            {"EXPECT_REPO": "example/other"},
+		"another version":               {"EXPECT_VERSION": "v1.3.0"},
+		"the other decision":            {"EXPECT_DECISION": "reject"},
+		"a short soak not granted":      {"EXPECT_SHORT_SOAK_OK": "true"},
+		"breaking changes not accepted": {"EXPECT_ALLOW_BREAKING": "true"},
+		"expired":                       {"NOW": strconv.FormatInt(now.Add(Lifetime+time.Second).Unix(), 10)},
 	} {
 		if by, _, ok := verify(t, dir, env(over)); ok {
 			t.Errorf("%s: verified (approver %q); want refused", name, by)

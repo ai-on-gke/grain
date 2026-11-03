@@ -166,7 +166,10 @@ const lightPalette = {
     // the app, gold's complement, which is what an Alert that is only
     // telling you something should be next to all this warmth.
     success: { main: "#158446" },
-    warning: { main: "#a8621c" },
+    // #975716 rather than the #a8621c it replaced: an outlined warning
+    // chip ("behind head", "keeps running") writes its label in main, and
+    // #a8621c was 4.38:1 on the canvas (docs/test-runs/2026-11-03-ui-fixes.md F5).
+    warning: { main: "#975716" },
     info: { main: "#3f6b8a" },
     background: { default: "#f7f6f3", paper: "#ffffff" },
     text: { primary: "#24221d", secondary: "#524e46" },

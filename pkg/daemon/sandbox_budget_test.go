@@ -15,7 +15,6 @@
 package daemon
 
 import (
-	"bytes"
 	"context"
 	"log"
 	"os"
@@ -124,7 +123,7 @@ func TestWithHostCapacityPopulatesBudgetFromClusterNodesOnKubernetes(t *testing.
 }
 
 func TestLogSandboxBudgetReportsClusterBudgetWhenKnownAndSchedulerFallbackWhenUnknown(t *testing.T) {
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	origOut := log.Writer()
 	origFlags := log.Flags()
 	log.SetOutput(&buf)

@@ -260,3 +260,79 @@ func TestCreateHostdRefusesTheSharedTokensName(t *testing.T) {
 		t.Errorf("POST /api/hostds ws-1 = %d %s, want 201", rec.Code, rec.Body.String())
 	}
 }
+
+// Changing a connected hostd's owner drops a session admitted as anyone
+// else, so its redial is judged against the new owner; a session admitted
+// by its token alone, or as the new owner, stays (walkthrough
+// 2026-11-03-hostd-registry, F3).
+func TestChangingAHostdsOwnerDropsASessionConnectedAsTheOldOne(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	hub := &fakeHostdHub{statuses: map[string]hostd.RemoteStatus{
+		"ws-iap":  {Connected: true, RemotePeer: hostd.RemotePeer{Name: "ws-iap", Principal: "ops@example.com"}},
+		"ws-same": {Connected: true, RemotePeer: hostd.RemotePeer{Name: "ws-same", Principal: "ops@example.com"}},
+		"ws-tok":  {Connected: true, RemotePeer: hostd.RemotePeer{Name: "ws-tok"}},
+	}}
+	client.Config.HostdRemote = hub
+	for _, name := range []string{"ws-iap", "ws-same", "ws-tok"} {
+		if _, _, err := client.Store.CreateHostd(ctx, model.Hostd{Name: name, Owner: "ops@example.com"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, body := range map[string]string{
+		"/api/hostds/ws-iap":  `{"owner":"owner-b@example.com"}`,
+		"/api/hostds/ws-same": `{"owner":"OPS@example.com","labels":{"gpu":"yes"}}`,
+		"/api/hostds/ws-tok":  `{"owner":"owner-b@example.com"}`,
+	} {
+		if rec := do(t, srv, http.MethodPatch, path, body); rec.Code != http.StatusOK {
+			t.Fatalf("PATCH %s = %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	if len(hub.disconnected) != 1 || hub.disconnected[0] != "ws-iap" {
+		t.Errorf("disconnected = %v, want only [ws-iap]", hub.disconnected)
+	}
+	hub.disconnected = nil
+	if rec := do(t, srv, http.MethodPatch, "/api/hostds/ws-same", `{"labels":{"gpu":"no"}}`); rec.Code != http.StatusOK {
+		t.Fatalf("PATCH labels = %d %s", rec.Code, rec.Body.String())
+	}
+	if len(hub.disconnected) != 0 {
+		t.Errorf("a labels-only edit disconnected %v", hub.disconnected)
+	}
+}
+
+// The deprecated shared token's hostd is listed beside the registry's,
+// marked shared, with its -hostd-token-owner and its connection
+// (walkthrough 2026-11-03-hostd-registry, F4).
+func TestListHostdsShowsTheSharedTokensHostd(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	if err := client.Store.EnsureLocalHostd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	client.Config.HostdRemote = &hostd.Remote{Token: "s3cret-shared-token", SharedName: "edge", SharedOwner: "Shared@Example.com"}
+	rec := do(t, srv, http.MethodGet, "/api/hostds", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/hostds = %d %s", rec.Code, rec.Body.String())
+	}
+	var got []ui.HostdView
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	var edge *ui.HostdView
+	for i := range got {
+		if got[i].Name == "edge" {
+			edge = &got[i]
+		}
+	}
+	if edge == nil || !edge.Shared || edge.Owner != "shared@example.com" {
+		t.Fatalf("GET /api/hostds = %+v, want a shared edge row owned by shared@example.com", got)
+	}
+	if strings.Contains(rec.Body.String(), "s3cret-shared-token") {
+		t.Errorf("the listing carries the shared token: %s", rec.Body.String())
+	}
+	client.Config.HostdRemote = &hostd.Remote{}
+	rec = do(t, srv, http.MethodGet, "/api/hostds", "")
+	if strings.Contains(rec.Body.String(), `"shared":true`) {
+		t.Errorf("with no shared token, GET /api/hostds = %s, want no shared row", rec.Body.String())
+	}
+}

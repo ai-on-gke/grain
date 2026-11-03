@@ -232,6 +232,7 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		UpgradeCheckPausesPipeline:  ptr(true),
 		AutoUpgradeChannel:          ptr("main"),
 		AutoUpgradeTime:             ptr("04:30"),
+		AutoUpgradeOn:               ptr("release"),
 		AgentBackends:               ptr([]model.AgentBackend{{ID: "backend-1", Name: "Primary", Framework: model.AgentFrameworks()[0], Models: []string{"gemini-3.1-pro"}}}),
 		DefaultModel:                ptr("gemini-3.1-pro"),
 		PromptExtension:             ptr("be brief"),

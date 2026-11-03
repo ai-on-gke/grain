@@ -108,7 +108,7 @@ for (const [name, viewport] of [
 
 for (const [section, label] of [
   ["tasks", "Default legacy capabilities"],
-  ["general", "Channel"],
+  ["general", "Upgrade automatically"],
 ]) {
   test(`a locked ${section} card's ${label} select is out of reach of the keyboard`, async ({
     page,
