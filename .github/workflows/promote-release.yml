@@ -93,6 +93,12 @@ jobs:
     concurrency:
       group: ${{ github.workflow }}-approve-${{ inputs.version }}
       cancel-in-progress: false
+    outputs:
+      # The person the signed approval record named, once
+      # scripts/verify-release-approval.sh accepted it; empty on a run a
+      # person dispatched by hand. `promote` reads it: by then this job
+      # has deleted vX.Y.Z-pending, so the record cannot be checked again.
+      approved_by: ${{ steps.person.outputs.approved_by }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -108,6 +114,7 @@ jobs:
           cache: false
 
       - name: Refuse anybody but a person and resolve context
+        id: person
         env:
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
@@ -128,6 +135,7 @@ jobs:
             # signed record names the person, whoever the actor is.
             by="$(EXPECT_REPO="${GITHUB_REPOSITORY}" EXPECT_VERSION="${INPUT_VERSION}" bash ./scripts/verify-release-approval.sh)"
             echo "promote-release: ${by} approved ${INPUT_VERSION} in grain's Inbox (dispatched as ${GITHUB_ACTOR:-})"
+            echo "approved_by=${by}" >>"$GITHUB_OUTPUT"
           else
             case "${GITHUB_ACTOR:-}" in
               ""|*"[bot]"|grain-ci*)
@@ -281,18 +289,32 @@ jobs:
         env:
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           GH_REF_NAME: ${{ github.head_ref || github.ref_name }}
+          APPROVAL: ${{ inputs.approval }}
+          APPROVAL_SIGNATURE: ${{ inputs.approval_signature }}
+          APPROVED_BY: ${{ needs.approve.outputs.approved_by }}
         run: |
           set -euo pipefail
           if [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
             echo "promote-release: only a person approves a release" >&2
             exit 1
           fi
-          case "${GITHUB_ACTOR:-}" in
-            ""|*"[bot]"|grain-ci*)
-              echo "promote-release: only a person approves a release" >&2
+          if [ -n "${APPROVAL:-}${APPROVAL_SIGNATURE:-}" ]; then
+            # Dispatched by grain on a person's Inbox Approve: `approve`,
+            # in this same run, verified the signed record and names the
+            # person; without that name this job does not run as anybody.
+            if [ -z "${APPROVED_BY:-}" ]; then
+              echo "promote-release: the approval record was not verified by the approve job" >&2
               exit 1
-              ;;
-          esac
+            fi
+            echo "promote-release: publishing for ${APPROVED_BY}'s Inbox approval (dispatched as ${GITHUB_ACTOR:-})"
+          else
+            case "${GITHUB_ACTOR:-}" in
+              ""|*"[bot]"|grain-ci*)
+                echo "promote-release: only a person approves a release" >&2
+                exit 1
+                ;;
+            esac
+          fi
 
           case "${GITHUB_REF:-}" in
             refs/heads/main)
@@ -434,7 +456,7 @@ jobs:
             # Dispatched by grain on a person's answer in its Inbox: the
             # signed record names the person, whoever the actor is.
             by="$(EXPECT_REPO="${GITHUB_REPOSITORY}" EXPECT_VERSION="${INPUT_VERSION}" bash ./scripts/verify-release-approval.sh)"
-            echo "promote-release: ${by} rejectd ${INPUT_VERSION} in grain's Inbox (dispatched as ${GITHUB_ACTOR:-})"
+            echo "promote-release: ${by} rejected ${INPUT_VERSION} in grain's Inbox (dispatched as ${GITHUB_ACTOR:-})"
           else
             case "${GITHUB_ACTOR:-}" in
               ""|*"[bot]"|grain-ci*)
