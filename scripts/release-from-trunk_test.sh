@@ -134,15 +134,17 @@ runs() {
   } > "$work/runs.json"
 }
 
-# qualification <none|pass|flake|infra|fail> [<commit>]: what
+# qualification <none|pass|flake|infra|fail> [<commit>] [<app>]: what
 # check-qualification reads for the rc on commit -- nightly.yml's jobs
 # (grain CI runs, one per attempt: the first runs every Stage 1 job, a
 # retry only upgrade-test, which is the one that fails) and the
-# grain/release-qualification check run.
+# grain/release-qualification check run, posted by app (grain's own,
+# grain-test, unless it names another).
 stage1_ids=(go-long staterepo-soak loadtest scalability merge-stress long-term-test long-sim postgres-stress
   tunnel-stress ui-e2e-long installer-variants vulns cmd-grain-stress upgrade-test)
 qualification() {
-  local sha="${2:-}" check=success attempts=() a id t jobs runs=() ids
+  local sha="${2:-}" app="${3:-grain-test}" app_id=42 check=success attempts=() a id t jobs runs=() ids
+  [ "$app" = grain-test ] || app_id=15368
   case "$1" in
     none) check="" ;;
     pass) attempts=(success) ;;
@@ -164,8 +166,8 @@ qualification() {
   done
   printf '{"enabled":true,"runs":[%s]}' "$(IFS=,; echo "${runs[*]}")" > "$work/qual-runs.json"
   if [ -n "$check" ]; then
-    printf '{"check_runs":[{"id":1,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"%s","started_at":"%s"}]}' \
-      "$sha" "$check" "$(iso "$now")" > "$work/qual-checks.json"
+    printf '{"check_runs":[{"id":1,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"%s","started_at":"%s","app":{"id":%s,"slug":"%s"}}]}' \
+      "$sha" "$check" "$(iso "$now")" "$app_id" "$app" > "$work/qual-checks.json"
   else
     echo '{"check_runs":[]}' > "$work/qual-checks.json"
   fi
@@ -175,7 +177,8 @@ train() { # train [VAR=value...]: run the train in the clone
   status=0
   out="$(cd "$work/clone" && env RELEASE_RUNS_JSON="$work/runs.json" \
     RELEASE_QUALIFICATION_RUNS_JSON="$work/qual-runs.json" RELEASE_QUALIFICATION_CHECKS_JSON="$work/qual-checks.json" \
-    RELEASE_IMAGES="$work/images.sh" RELEASE_NOTES_TASK=off RELEASE_NOW="$now" "$@" bash "$train" 2>&1)" || status=$?
+    RELEASE_IMAGES="$work/images.sh" RELEASE_NOTES_TASK=off RELEASE_NOW="$now" RELEASE_QUALIFICATION_APP=grain-test \
+    "$@" bash "$train" 2>&1)" || status=$?
 }
 
 remote_tag() { git -C "$work/remote.git" rev-parse -q --verify "refs/tags/$1^{commit}" 2>/dev/null || true; }
@@ -360,6 +363,25 @@ expect "nothing newer" "exits 0" eq "$status" 0
 expect "nothing newer" "says there is nothing to cut" has "no new LKG commit on main since ${c3:0:12}; nothing to cut"
 expect "nothing newer" "cuts no rc.2 on an older green commit" eq "$(remote_tag v2.3.0-rc.2)" ""
 expect "nothing newer" "only marks the dropped rc" images_were "discard-rc v2.3.0-rc.1"
+
+# --- a same-named check run from another app qualifies nothing ---
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+git -C "$work/seed" push -q --force origin "$c2:refs/heads/candidate"
+qualification pass "$c2" github-actions
+runs "$c2" "$c4"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "foreign check run" "exits 0" eq "$status" 0
+expect "foreign check run" "says it ignored it" has "IGNORED grain/release-qualification: 1 from github-actions, not grain-test"
+expect "foreign check run" "still waits for grain's own" has "Qualification: PENDING"
+expect "foreign check run" "stages no release" eq "$(remote_tag v2.3.0-pending)" ""
+expect "foreign check run" "publishes nothing" images_were ""
+qualification pass "$c2"
+train RELEASE_QUALIFICATION_APP=
+expect "no app configured" "exits 1" eq "$status" 1
+expect "no app configured" "says why" has "CHECK_QUALIFICATION_APP is unset"
+expect "no app configured" "stages no release" eq "$(remote_tag v2.3.0-pending)" ""
 
 # --- qualification passes: staged as a pending release ---
 setup ""
@@ -706,7 +728,7 @@ if [ -n "$api" ]; then
     printf ',{"run_id":7,"run_attempt":2,"workflow_name":"nightly","head_sha":"%s","name":"govulncheck","status":"completed","conclusion":"success","created_at":"%s"}' "$c2" "$(iso $((now - 1800)))"
     printf ']}'
   } > "$work/www/gh/repos/o/r/actions/runs/7/jobs"
-  printf '{"check_runs":[{"id":9,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"success","started_at":"%s"}]}' \
+  printf '{"check_runs":[{"id":9,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"success","started_at":"%s","app":{"id":42,"slug":"grain-test"}}]}' \
     "$c2" "$(iso $((now - 600)))" > "$work/www/gh/repos/o/r/commits/$c2/check-runs"
   : > "$work/images.log"
   train RELEASE_RUNS_JSON= RELEASE_QUALIFICATION_RUNS_JSON= RELEASE_QUALIFICATION_CHECKS_JSON= GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$api/gh"
