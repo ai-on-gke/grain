@@ -183,11 +183,13 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	// Host CLIs through grain hostd, started detached so a daemon
-	// upgrade leaves them running (hostdruns.go).
-	cfg.hostdRuns = newHostdRuns(cfg, store)
+	// upgrade leaves them running (hostdruns.go): the default hostd's,
+	// and each pinned hostd's as a run is routed to it.
+	cfg.hostdRunSet = newHostdRuns(cfg, store)
+	cfg.hostdRuns = cfg.hostdRunSet.defaultRuns()
 	// And the upgrade protocol's hold on them: flushed before an
 	// upgrade's restart, reported on by the check after it.
-	cfg.runHostUpgrade = newRunHostUpgrade(cfg.RunHost, cfg.hostdRuns, cfg.Ci).withStopping(cfg.shutdownStarted)
+	cfg.runHostUpgrade = newRunHostUpgrade(cfg.RunHost, cfg.hostdRunSet, cfg.Ci).withStopping(cfg.shutdownStarted)
 
 	// The state repository is opened and loaded into the database before
 	// anything reads a row out of it: what is in the repository is what
@@ -1167,7 +1169,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	// Host CLIs a previous daemon left running detached in grain hostd
 	// go through the same pass beside them (orchestrator.RecoverHostd),
 	// so an upgrade never re-dispatches a run hostd is still running.
-	adopted, report, err := adoptAll(ctx, store, githubClient, cfg.RunHost, cfg.hostdRuns, sandboxes)
+	adopted, report, err := adoptAll(ctx, store, githubClient, cfg.RunHost, cfg.hostdRunSet, sandboxes)
 	if err != nil {
 		log.Printf("grain daemon: %v", err)
 	}
@@ -1601,7 +1603,10 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			}
 		}
 		resume(cfg.RunHost, adopted.runHost)
-		resume(cfg.hostdRuns, adopted.hostd)
+		// Each through the hostd it ran on (task_run_hostd).
+		for _, h := range adopted.hostd {
+			resume(h.host, h.runs)
+		}
 	}
 	resumeAdopted(adopted)
 	// And the same again if an upgrade flushed these runs for a restart
@@ -1611,7 +1616,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		if ctx.Err() != nil {
 			return
 		}
-		again, _, err := adoptAll(ctx, store, githubClient, cfg.RunHost, cfg.hostdRuns, sandboxes)
+		again, _, err := adoptAll(ctx, store, githubClient, cfg.RunHost, cfg.hostdRunSet, sandboxes)
 		if err != nil {
 			log.Printf("grain daemon: %v", err)
 		}

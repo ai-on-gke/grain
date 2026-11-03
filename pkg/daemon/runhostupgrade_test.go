@@ -70,7 +70,7 @@ func TestRunHostUpgradeNilAndFlushResumeLifecycle(t *testing.T) {
 
 	// 2. Active runHostUpgrade preserves CI adoption across setReport and honours stopping on resume.
 	stopping := make(chan struct{})
-	hd := &runhost.Hostd{}
+	hd := testHostdRunSet(model.LocalHostd, map[string]*runhost.Hostd{model.LocalHostd: {}})
 	u := newRunHostUpgrade(nil, hd, true).withStopping(stopping)
 	u.setCIAdoption(
 		[]orchestrator.AdoptedCIJobNote{{Run: "ci-1", Job: "go"}},
@@ -217,12 +217,12 @@ func TestAdoptAllWithHostdClaimsLiveSandboxAndMarksMissingSandboxLost(t *testing
 		t.Fatal(err)
 	}
 
-	next := &runhost.Hostd{Client: client}
+	next := testHostdRunSet(model.LocalHostd, map[string]*runhost.Hostd{model.LocalHostd: {Client: client}})
 	pass, report, err := adoptAll(ctx, store, nil, nil, next, sandboxes)
 	if err != nil {
 		t.Fatalf("adoptAll: %v", err)
 	}
-	if len(pass.hostd) != 1 || pass.hostd[0].Adoption.Claim.Run != "kept-1" || !pass.took["kept-1"] {
+	if len(pass.hostd) != 1 || len(pass.hostd[0].runs) != 1 || pass.hostd[0].runs[0].Adoption.Claim.Run != "kept-1" || !pass.took["kept-1"] {
 		t.Fatalf("pass = %+v, want kept-1 adopted", pass)
 	}
 	if pass.took["missing-sb-1"] {
@@ -231,4 +231,11 @@ func TestAdoptAllWithHostdClaimsLiveSandboxAndMarksMissingSandboxLost(t *testing
 	if report == nil || len(report.Adopted) != 1 || len(report.Lost) != 1 {
 		t.Fatalf("report = %+v, want 1 Adopted (kept-1) and 1 Lost (missing-sb-1)", report)
 	}
+}
+
+// testHostdRunSet is a hostdRunSet holding byName, whose default hostd is
+// defaultName, and which reaches no other.
+func testHostdRunSet(defaultName string, byName map[string]*runhost.Hostd) *hostdRunSet {
+	return &hostdRunSet{defaultName: defaultName, byName: byName,
+		newHostd: func(c hostd.Client) *runhost.Hostd { return &runhost.Hostd{Client: c} }}
 }

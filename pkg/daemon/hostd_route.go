@@ -98,10 +98,10 @@ func (p *AgentPool) routeHostd(ctx context.Context, live Config, taskID string) 
 	return hostdRoute{Name: resolved, Exec: exec, Pinned: true}, nil
 }
 
-// apply is live with r's hostd as its host executor. The default hostd's
-// runs keep starting detached (newHostdRuns), so they outlive a daemon
-// upgrade; another hostd's runs are attached to this daemon, since only
-// the default hostd's runs are re-adopted at start.
+// apply is live with r's hostd as its host executor. Its runs start
+// detached through that hostd's own runhost.Hostd (newHostdRuns), so a
+// run on any hostd outlives a daemon upgrade and is re-adopted from the
+// hostd it recorded (adoptHostd).
 func (r hostdRoute) apply(live Config) Config {
 	if !r.Pinned {
 		return live
@@ -109,7 +109,7 @@ func (r hostdRoute) apply(live Config) Config {
 	exec := r.Exec
 	live.HostExec = &exec
 	if r.Name != live.DefaultHostd() {
-		live.hostdRuns = nil
+		live.hostdRuns = live.hostdRunSet.forHostd(r.Name, exec.hostdClient())
 	}
 	return live
 }
