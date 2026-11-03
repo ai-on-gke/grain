@@ -60,7 +60,10 @@ export default function ConnectionHostdField({
   const [hostds, setHostds] = useState(null);
   useEffect(() => {
     let live = true;
-    api("/api/hostds")
+    // Promise.resolve: a page drawn without the registry (a test's bare
+    // api mock) lists none rather than failing.
+    Promise.resolve()
+      .then(() => api("/api/hostds"))
       .then((rows) => live && setHostds(Array.isArray(rows) ? rows : []))
       .catch(() => live && setHostds([]));
     return () => {
