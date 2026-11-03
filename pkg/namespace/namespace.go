@@ -1886,6 +1886,16 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 	var out strings.Builder
 	totalMatches := 0
 	truncated := false
+	// One redactor for the whole request (NewRedactor reads the secrets
+	// directory), and only the lines grep prints go through it: running
+	// every line of every file through the credential shapes first made
+	// a grep of src://pkg take 15s and src:// 45s, nearly all of it in
+	// redact (docs/test-runs/2026-11-03-sandbox-cli-edges.md). A line
+	// whose raw text matches is a match only if its redacted text still
+	// does, so a pattern spelling a secret finds nothing; the cost is
+	// that a pattern matching only the "[redacted: ...]" placeholder no
+	// longer finds a line this pass would have redacted.
+	redactor := s.redactor()
 
 	for _, tf := range files {
 		if totalMatches >= maxMatches {
@@ -1907,12 +1917,17 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 		afterRemaining := 0
 		lastPrintedLine := 0
 		lineNum := 0
-		redactor := s.redactor()
 
 		for scanner.Scan() {
 			lineNum++
-			line := redactLine(redactor, scanner.Text())
-			if re.MatchString(line) {
+			raw := scanner.Text()
+			line := raw
+			matched := re.MatchString(raw)
+			if matched || afterRemaining > 0 {
+				line = redactLine(redactor, raw)
+				matched = matched && re.MatchString(line)
+			}
+			if matched {
 				if totalMatches >= maxMatches {
 					truncated = true
 					break
@@ -1920,7 +1935,7 @@ func (s *Server) Grep(ctx context.Context, scope Scope, scheme, relPath string, 
 				totalMatches++
 				for _, bLine := range beforeBuf {
 					if bLine.num > lastPrintedLine {
-						writeGrepLine(&out, tf.label, bLine.num, '-', bLine.text, showLineNum)
+						writeGrepLine(&out, tf.label, bLine.num, '-', redactLine(redactor, bLine.text), showLineNum)
 						lastPrintedLine = bLine.num
 					}
 				}

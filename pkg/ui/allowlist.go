@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -357,12 +358,28 @@ func (s *Server) effectiveAllowedPrincipals(ctx context.Context) ([]AllowedPrinc
 // direct entry matched, so deployments without group: entries never touch
 // Cloud Identity and a failed group lookup refuses only callers that depend on
 // a group: entry to be admitted.
+//
+// A refusal is logged (logRefusedPrincipal), so an operator can see who was
+// turned away -- above all a gcp-key pool account, whose key reaching the
+// UI through the proxy means one handed to a sandbox was used outside it.
 func (s *Server) checkAllowedPrincipal(ctx context.Context, id VerifiedIdentity) error {
+	err := s.allowedPrincipalErr(ctx, id)
+	if err != nil {
+		logRefusedPrincipal(id, err)
+	}
+	return err
+}
+
+// errGCPKeyPoolPrincipal marks allowedPrincipalErr's refusal of a gcp-key
+// pool account, for logRefusedPrincipal.
+var errGCPKeyPoolPrincipal = errors.New("gcp-key agent service account")
+
+func (s *Server) allowedPrincipalErr(ctx context.Context, id VerifiedIdentity) error {
 	email := normalizeIdentityEmail(id.Email)
 	if id.Kind == model.PrincipalService && s.tasks != nil && s.tasks.gcpKeyPoolSet(ctx)[email] {
 		return fmt.Errorf(
-			"principal %q is a gcp-key agent service account whose key is materialized into task sandboxes and cannot be admitted by -ui-allowed-principals",
-			id.Email,
+			"principal %q is a %w whose key is materialized into task sandboxes and cannot be admitted by -ui-allowed-principals",
+			id.Email, errGCPKeyPoolPrincipal,
 		)
 	}
 	entries, err := s.effectiveAllowedPrincipals(ctx)
@@ -410,6 +427,36 @@ func (s *Server) checkAllowedPrincipal(ctx context.Context, id VerifiedIdentity)
 		}
 	}
 	return fmt.Errorf("principal %q is not allowed by -ui-allowed-principals", id.Email)
+}
+
+// refusedPrincipalsLogged is which principals have been logged as refused
+// already, and why, so a person retrying (or a browser polling) is logged
+// once rather than on every request. Bounded like refusedAssertionsLogged.
+var (
+	refusedPrincipalsMu     sync.Mutex
+	refusedPrincipalsLogged = map[string]bool{}
+)
+
+// logRefusedPrincipal logs, once per principal and kind of refusal, a
+// verified identity checkAllowedPrincipal turned away.
+func logRefusedPrincipal(id VerifiedIdentity, err error) {
+	pool := errors.Is(err, errGCPKeyPoolPrincipal)
+	key := normalizeIdentityEmail(id.Email) + "\x00" + fmt.Sprint(pool)
+	refusedPrincipalsMu.Lock()
+	seen := refusedPrincipalsLogged[key]
+	if !seen && len(refusedPrincipalsLogged) < 64 {
+		refusedPrincipalsLogged[key] = true
+	}
+	refusedPrincipalsMu.Unlock()
+	if seen {
+		return
+	}
+	if pool {
+		log.Printf("ui: refused verified principal %q: it is a gcp-key agent service account, whose key is handed to task sandboxes -- "+
+			"a sandbox's key was presented through the identity proxy; take it off the proxy's access list (iap_members) and rotate the pool's keys", id.Email)
+		return
+	}
+	log.Printf("ui: refused verified principal %q (%s): %v", id.Email, id.Kind, err)
 }
 
 func (s *Server) groupChecker() GroupMemberChecker {

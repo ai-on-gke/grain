@@ -22,10 +22,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -299,15 +297,11 @@ const errPriorityNotPositive = "priority must be a positive integer (1 or more; 
 // digits past int -- is refused in errPriorityNotPositive's words. The
 // caller checks the 1-or-more bound.
 func decodeTaskPriority(raw json.RawMessage) (int, error) {
-	if n, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil {
-		return n, nil
-	}
-	const exact = 1 << 53
-	var x float64
-	if json.Unmarshal(raw, &x) != nil || x != math.Trunc(x) || math.Abs(x) > exact {
+	n, err := model.ParseTaskPriority(string(raw))
+	if err != nil {
 		return 0, errors.New(errPriorityNotPositive)
 	}
-	return int(x), nil
+	return n, nil
 }
 
 // UnmarshalJSON reads Priority with decodeTaskPriority; every other field
@@ -2066,6 +2060,9 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	hostdSelector, err := model.NormalizeHostdSelector(req.Hostd)
 	if err != nil {
 		return Task{}, validationErrorf("%v", err)
+	}
+	if err := c.checkHostdSelector(ctx, hostdSelector); err != nil {
+		return Task{}, err
 	}
 	priority := model.DefaultTaskPriority
 	if req.Priority != nil {

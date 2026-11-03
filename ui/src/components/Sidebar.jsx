@@ -307,14 +307,17 @@ function FooterItem({ kind, label, active, onClick, children }) {
 // SignedInRow is the phone's stand-in for the header rail's email badge
 // (PageHeader.jsx's GlobalButtons): who the deployment's identity
 // verifier says this browser is, as a row that opens Settings -> Access,
-// and Log out beside it rather than behind a menu -- the drawer is
-// already the menu. A long address is ellipsized inside the row, never
+// and Log out under it rather than behind a menu -- the drawer is
+// already the menu. Log out sits below the address, not beside it: in
+// the 232px drawer a button beside it left the address ~110px, which cut
+// even owner@example.com to "owner@example..." (2026-11-03 IAP deployment
+// walkthrough). A long address is still ellipsized inside the row, never
 // widening the drawer; the full address is its title.
 function SignedInRow({ email, onOpenAccess, onLogout }) {
   return (
     <Box
       data-testid="phone-signed-in"
-      sx={{ display: "flex", alignItems: "center", gap: 0.5, minWidth: 0 }}
+      sx={{ display: "flex", flexDirection: "column", minWidth: 0 }}
     >
       <ListItemButton
         onClick={onOpenAccess}
@@ -355,7 +358,7 @@ function SignedInRow({ email, onOpenAccess, onLogout }) {
           size="small"
           color="error"
           onClick={onLogout}
-          sx={{ flex: "none", minWidth: 0, px: 1 }}
+          sx={{ alignSelf: "flex-end", minWidth: 0, px: 1, py: 0.25 }}
         >
           Log out
         </Button>

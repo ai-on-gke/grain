@@ -1,0 +1,2 @@
+grain: forbidden: src://: that tool belongs to the "self-debug" capability, and this run does not hold it (this run does not hold the "self-debug" capability). Nothing you can do from inside this run will add it -- a human attaches it to the task.
+exit=1

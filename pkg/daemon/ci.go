@@ -1219,6 +1219,15 @@ func ResolveCICapabilities(ctx context.Context, reg *model.CapabilityRegistry, c
 		// event to be judged on.
 		CI: true,
 	}
+	// The job's own ceiling (ci.Service.MaxRunTime, carried as ctx's
+	// deadline) and its teardown, as its capability pass is bounded
+	// (ciPassDeadline): what a provider mints for the job -- the
+	// package-publish refresh token, a CI API or model proxy token --
+	// then dies with the job even if no Revoke comes, rather than at the
+	// provider's own longest lease. No deadline is no bound, as before.
+	if end, ok := ctx.Deadline(); ok {
+		cc.Deadline = end.Add(ciReleaseTimeout).UTC()
+	}
 	for _, id := range ids {
 		// A capability reference has no in-process provider: it is
 		// minted through its capability server by the grant admission

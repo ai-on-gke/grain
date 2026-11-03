@@ -89,7 +89,11 @@ func TestKillStepRunnerKillsItsOwnRunner(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("bash", "-c", "sleep 30", "_", dir)
+	// Not a lone `sleep 30`: bash runs a -c body's single command by
+	// exec'ing it, after which the process is `sleep 30` and no longer
+	// names dir, and whether the kill below saw it before or after that
+	// was a race. The runner stepRunnerScript starts stays bash.
+	cmd := exec.Command("bash", "-c", "sleep 30 & wait", "_", dir)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
