@@ -622,6 +622,15 @@ type Settings struct {
 	// without a time would save.
 	AutoUpgradeChannel string `json:"autoUpgradeChannel"`
 	AutoUpgradeTime    string `json:"autoUpgradeTime"`
+	// AutoUpgradeOn is what makes this deployment upgrade itself
+	// (model.Config.AutoUpgradeMode): "off", "daily" (AutoUpgradeChannel
+	// at AutoUpgradeTime) or "release" (once its image channel publishes
+	// a new release, orchestrator's reconcileReleaseUpgrade, onto
+	// "latest" when AutoUpgradeChannel is "latest" and the exact tag
+	// otherwise). Never empty coming out of here. AutoUpgradeModes is the
+	// vocabulary, in a picker's order.
+	AutoUpgradeOn    string   `json:"autoUpgradeOn"`
+	AutoUpgradeModes []string `json:"autoUpgradeModes"`
 	// TimeZone is model.Config.TimeZone: the IANA zone every timestamp the
 	// frontend prints is shown in. Never empty coming out of here -- an
 	// unset stored value reads back as model.DefaultTimeZone.
@@ -1141,6 +1150,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		UpgradeCheckPausesPipeline:         cfg.UpgradeCheckPausesPipeline,
 		AutoUpgradeChannel:                 cfg.AutoUpgradeChannel,
 		AutoUpgradeTime:                    autoUpgradeTimeOrDefault(cfg.AutoUpgradeTime),
+		AutoUpgradeOn:                      cfg.AutoUpgradeMode(),
+		AutoUpgradeModes:                   model.AutoUpgradeModes(),
 		TimeZone:                           model.TimeZoneOrDefault(cfg.TimeZone),
 		AgentBackends:                      cfg.AgentBackends,
 		AgentCLIDefaults:                   c.Config.AgentCLIDefaults,
@@ -1411,6 +1422,8 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			UpgradeCheckPausesPipeline:         def.UpgradeCheckPausesPipeline,
 			AutoUpgradeChannel:                 def.AutoUpgradeChannel,
 			AutoUpgradeTime:                    autoUpgradeTimeOrDefault(def.AutoUpgradeTime),
+			AutoUpgradeOn:                      def.AutoUpgradeMode(),
+			AutoUpgradeModes:                   model.AutoUpgradeModes(),
 			TimeZone:                           model.TimeZoneOrDefault(def.TimeZone),
 			NetworkAccess:                      string(model.NormalizeNetworkAccess(def.NetworkAccess)),
 			NetworkAccesses:                    networkAccessNames(),
@@ -1513,8 +1526,10 @@ type UpdateSettingsRequest struct {
 	UpgradeCheckPausesPipeline *bool   `json:"upgradeCheckPausesPipeline"`
 	// AutoUpgradeChannel is the branch to upgrade onto daily, "" to turn
 	// automatic upgrades off; AutoUpgradeTime is when, as "HH:MM".
-	AutoUpgradeChannel  *string               `json:"autoUpgradeChannel"`
-	AutoUpgradeTime     *string               `json:"autoUpgradeTime"`
+	AutoUpgradeChannel *string `json:"autoUpgradeChannel"`
+	AutoUpgradeTime    *string `json:"autoUpgradeTime"`
+	// AutoUpgradeOn is "off", "daily" or "release" (Settings.AutoUpgradeOn).
+	AutoUpgradeOn       *string               `json:"autoUpgradeOn"`
 	AgentBackends       *[]model.AgentBackend `json:"agentBackends"`
 	DefaultModel        *string               `json:"defaultModel"`
 	PromptExtension     *string               `json:"promptExtension"`
@@ -2224,6 +2239,13 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			}
 		}
 		cfg.AutoUpgradeTime = at
+	}
+	if req.AutoUpgradeOn != nil {
+		on, err := model.ParseAutoUpgradeOn(*req.AutoUpgradeOn)
+		if err != nil {
+			return model.Config{}, validationErrorf("autoUpgradeOn: %v", err)
+		}
+		cfg.AutoUpgradeOn = on
 	}
 	// A channel is a daily upgrade at some time; one saved without a
 	// time gets the default rather than a schedule that never fires.

@@ -677,6 +677,15 @@ var Migrations = []Migration{
 			allowedPrincipalMigrationTable,
 		},
 	},
+	{
+		// The table itself is created by Statements, which Migrate
+		// applies after every rung; only the column needs saying here.
+		Version:     99,
+		Description: "add grain_config.auto_upgrade_on, which turns on upgrading when a release is published",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `auto_upgrade_on` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as

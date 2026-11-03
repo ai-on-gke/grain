@@ -229,6 +229,12 @@ const (
 	// (design/design/release-from-trunk.design.md, §4). Raised by the release
 	// train through the release gate, with ReleasePendingActions.
 	FamilyReleasePending = "release.pending"
+	// FamilyUpgradeFailed is an automatic upgrade that failed, "<target>"
+	// -- the release tag it was for, or the branch a daily upgrade
+	// follows -- with the step that failed and its output. Raised and
+	// cleared by orchestrator's automatic upgrades: the next one that
+	// succeeds clears every open instance.
+	FamilyUpgradeFailed = "upgrade.failed"
 )
 
 // ReleasePendingActions are the actions a FamilyReleasePending
