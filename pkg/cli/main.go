@@ -398,6 +398,8 @@ Commands:
   broadcast [-all] <message...>        send a notice to all running task agents (or with -all, all active tasks)
   release approve|reject vX.Y.0        make a pending trunk release official, or drop it -- a person's act;
                                        an agent is refused
+  release approval-key                 the public key GitHub's promote-release.yml verifies an Inbox approval
+                                       with (repository variable GRAIN_RELEASE_APPROVAL_KEY)
 `
 
 // defaultServerURL is loopback on the port every installer binds the

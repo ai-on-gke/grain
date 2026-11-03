@@ -20,6 +20,17 @@
 #
 # On non-main refs, `dry_run` defaults to and is enforced as `true`.
 #
+# The person who decides is either the run's own actor -- somebody who
+# pressed "Run workflow" here -- or, when grain dispatched the run on a
+# person's Approve or Reject in its Inbox, the person named in the signed
+# `approval` record: grain's own forge identity is a bot, which is refused
+# as an actor, and the record is the proof a person decided. It is
+# verified against the deployment's public key in the repository variable
+# GRAIN_RELEASE_APPROVAL_KEY (`grain release approval-key`) by
+# scripts/verify-release-approval.sh, and is bound to this repository,
+# version, decision, short-soak answer and the commit vX.Y.Z-pending
+# stages, for 15 minutes. No schedule and no other event runs this.
+#
 # `approve` refuses a pending release whose recorded staging soak is under
 # the minimum (scripts/release-from-trunk.sh records it on the -pending tag)
 # unless `short_soak_ok` is true; the vX.Y.0 tag message then says so.
@@ -51,6 +62,16 @@ on:
         required: false
         default: false
         type: boolean
+      approval:
+        description: "Set by grain only: the signed record of a person's Approve or Reject in grain's Inbox (base64). Leave empty when dispatching by hand"
+        required: false
+        default: ""
+        type: string
+      approval_signature:
+        description: "Set by grain only: the record's signature (base64), verified against vars.GRAIN_RELEASE_APPROVAL_KEY"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -91,20 +112,33 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           GH_REF_NAME: ${{ github.head_ref || github.ref_name }}
+          APPROVAL: ${{ inputs.approval }}
+          APPROVAL_SIGNATURE: ${{ inputs.approval_signature }}
+          APPROVAL_PUBLIC_KEY: ${{ vars.GRAIN_RELEASE_APPROVAL_KEY }}
+          EXPECT_DECISION: approve
+          EXPECT_SHORT_SOAK_OK: ${{ inputs.short_soak_ok }}
         run: |
           set -euo pipefail
           if [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
             echo "promote-release: only workflow_dispatch by a person may approve a release" >&2
             exit 1
           fi
-          case "${GITHUB_ACTOR:-}" in
-            ""|*"[bot]"|grain-ci*)
-              echo "promote-release: only a person approves a release (actor=${GITHUB_ACTOR:-})" >&2
-              exit 1
-              ;;
-          esac
-          git config --global user.name "${GITHUB_ACTOR}"
-          git config --global user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          if [ -n "${APPROVAL:-}${APPROVAL_SIGNATURE:-}" ]; then
+            # Dispatched by grain on a person's answer in its Inbox: the
+            # signed record names the person, whoever the actor is.
+            by="$(EXPECT_REPO="${GITHUB_REPOSITORY}" EXPECT_VERSION="${INPUT_VERSION}" bash ./scripts/verify-release-approval.sh)"
+            echo "promote-release: ${by} approved ${INPUT_VERSION} in grain's Inbox (dispatched as ${GITHUB_ACTOR:-})"
+          else
+            case "${GITHUB_ACTOR:-}" in
+              ""|*"[bot]"|grain-ci*)
+                echo "promote-release: only a person approves a release (actor=${GITHUB_ACTOR:-})" >&2
+                exit 1
+                ;;
+            esac
+            by="${GITHUB_ACTOR}"
+          fi
+          git config --global user.name "${by}"
+          git config --global user.email "${by%%@*}@users.noreply.github.com"
 
           case "${GITHUB_REF:-}" in
             refs/heads/main)
@@ -123,7 +157,7 @@ jobs:
           fi
           {
             echo "GRAIN_CI_REQUESTED_BY_KIND=human"
-            echo "GRAIN_CI_REQUESTED_BY=${GITHUB_ACTOR}"
+            echo "GRAIN_CI_REQUESTED_BY=${by}"
             echo "GRAIN_CI_RELEASE_VERSION=${INPUT_VERSION}"
             echo "GRAIN_CI_REPO=${GITHUB_REPOSITORY}"
             echo "GRAIN_CI_COMMIT=${GITHUB_SHA}"
@@ -385,20 +419,33 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           GH_REF_NAME: ${{ github.head_ref || github.ref_name }}
+          APPROVAL: ${{ inputs.approval }}
+          APPROVAL_SIGNATURE: ${{ inputs.approval_signature }}
+          APPROVAL_PUBLIC_KEY: ${{ vars.GRAIN_RELEASE_APPROVAL_KEY }}
+          EXPECT_DECISION: reject
+          EXPECT_SHORT_SOAK_OK: false
         run: |
           set -euo pipefail
           if [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
             echo "promote-release: only workflow_dispatch by a person may reject a release" >&2
             exit 1
           fi
-          case "${GITHUB_ACTOR:-}" in
-            ""|*"[bot]"|grain-ci*)
-              echo "promote-release: only a person rejects a release (actor=${GITHUB_ACTOR:-})" >&2
-              exit 1
-              ;;
-          esac
-          git config --global user.name "${GITHUB_ACTOR}"
-          git config --global user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+          if [ -n "${APPROVAL:-}${APPROVAL_SIGNATURE:-}" ]; then
+            # Dispatched by grain on a person's answer in its Inbox: the
+            # signed record names the person, whoever the actor is.
+            by="$(EXPECT_REPO="${GITHUB_REPOSITORY}" EXPECT_VERSION="${INPUT_VERSION}" bash ./scripts/verify-release-approval.sh)"
+            echo "promote-release: ${by} rejectd ${INPUT_VERSION} in grain's Inbox (dispatched as ${GITHUB_ACTOR:-})"
+          else
+            case "${GITHUB_ACTOR:-}" in
+              ""|*"[bot]"|grain-ci*)
+                echo "promote-release: only a person rejects a release (actor=${GITHUB_ACTOR:-})" >&2
+                exit 1
+                ;;
+            esac
+            by="${GITHUB_ACTOR}"
+          fi
+          git config --global user.name "${by}"
+          git config --global user.email "${by%%@*}@users.noreply.github.com"
 
           case "${GITHUB_REF:-}" in
             refs/heads/main)
@@ -417,7 +464,7 @@ jobs:
           fi
           {
             echo "GRAIN_CI_REQUESTED_BY_KIND=human"
-            echo "GRAIN_CI_REQUESTED_BY=${GITHUB_ACTOR}"
+            echo "GRAIN_CI_REQUESTED_BY=${by}"
             echo "GRAIN_CI_RELEASE_VERSION=${INPUT_VERSION}"
             echo "GRAIN_CI_REPO=${GITHUB_REPOSITORY}"
             echo "GRAIN_CI_COMMIT=${GITHUB_SHA}"

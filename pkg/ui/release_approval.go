@@ -18,7 +18,10 @@ package ui
 // (design/playbook/releases.playbook.md): the release train stops a
 // release whose candidate qualified at vX.Y.Z-pending -- a minor release,
 // vX.Y.0, or a patch the train cut from fixes alone, vX.Y.Z -- and a
-// person approves or rejects it here. Approving runs .grain/workflows/promote-release.yml's
+// person approves or rejects it here. On a repository that publishes
+// from GitHub Actions (ci_mode: github) the answer is a signed dispatch
+// of .github/workflows/promote-release.yml instead
+// (release_approval_github.go). Otherwise approving runs .grain/workflows/promote-release.yml's
 // `promote` job (which needs `approve`), rejecting its `reject` job; both
 // are workflow_dispatch runs of the repository's trunk that carry
 // GRAIN_CI_REQUESTED_BY_KIND=human and GRAIN_CI_RELEASE_VERSION, which no
@@ -66,7 +69,13 @@ type ReleaseDecision struct {
 	Version     string `json:"version"`
 	Approve     bool   `json:"approve"`
 	ShortSoakOK bool   `json:"shortSoakOk,omitempty"`
-	Run         ci.Run `json:"run"`
+	// Run is the grain CI run carrying the answer out, on a repository
+	// grain CI releases.
+	Run ci.Run `json:"run"`
+	// Dispatched is the GitHub Actions dispatch carrying it out instead,
+	// on a repository that publishes from GitHub Actions (ci_mode:
+	// github; release_approval_github.go).
+	Dispatched *ReleaseDispatch `json:"dispatched,omitempty"`
 }
 
 // ReleaseApproval is the optional body of POST
@@ -100,15 +109,25 @@ func (c *Client) DecideRelease(ctx context.Context, repo, version string, approv
 	if shortSoakOK && !approve {
 		return ReleaseDecision{}, validationErrorf("short_soak_ok is an approval's answer: rejecting %s needs no soak", version)
 	}
-	if c.Config.CI == nil {
-		return ReleaseDecision{}, fmt.Errorf("this deployment has no grain CI wired")
-	}
 	parsed, err := c.parseRepo(repo)
 	if err != nil {
 		return ReleaseDecision{}, validationErrorf("repo: %v", err)
 	}
 	if !pendingReleasePattern.MatchString(version) {
 		return ReleaseDecision{}, validationErrorf("%q is not a release a person is asked about: name it vX.Y.Z", version)
+	}
+	if onGitHub, err := c.publishesFromGitHub(ctx, parsed); err != nil {
+		return ReleaseDecision{}, err
+	} else if onGitHub {
+		d, err := c.dispatchGitHubRelease(ctx, parsed, version, actor.ID, approve, shortSoakOK)
+		if err != nil {
+			return ReleaseDecision{}, err
+		}
+		c.clearReleasePending(ctx, version, actor, verb)
+		return ReleaseDecision{Version: version, Approve: approve, ShortSoakOK: shortSoakOK, Dispatched: &d}, nil
+	}
+	if c.Config.CI == nil {
+		return ReleaseDecision{}, fmt.Errorf("this deployment has no grain CI wired")
 	}
 	enabled, err := c.ciEnabledFor(ctx, parsed)
 	if err != nil {
@@ -130,13 +149,20 @@ func (c *Client) DecideRelease(ctx context.Context, repo, version string, approv
 	if err != nil {
 		return ReleaseDecision{}, &ValidationError{err: err}
 	}
-	if c.Store != nil {
-		subject := model.NotificationSubject(model.FamilyReleasePending, version)
-		if _, err := c.Store.ClearNotification(ctx, subject, model.PrincipalString(actor)); err != nil {
-			log.Printf("grain: clearing %s after %s's %s: %v", subject, actor.ID, verb, err)
-		}
-	}
+	c.clearReleasePending(ctx, version, actor, verb)
 	return ReleaseDecision{Version: version, Approve: approve, ShortSoakOK: shortSoakOK, Run: run}, nil
+}
+
+// clearReleasePending clears version's "ready to promote" notification
+// once a person's answer is on its way.
+func (c *Client) clearReleasePending(ctx context.Context, version string, actor model.Principal, verb string) {
+	if c.Store == nil {
+		return
+	}
+	subject := model.NotificationSubject(model.FamilyReleasePending, version)
+	if _, err := c.Store.ClearNotification(ctx, subject, model.PrincipalString(actor)); err != nil {
+		log.Printf("grain: clearing %s after %s's %s: %v", subject, actor.ID, verb, err)
+	}
 }
 
 func kindName(k model.PrincipalKind) string {

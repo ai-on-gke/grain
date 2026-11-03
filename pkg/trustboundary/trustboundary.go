@@ -268,6 +268,11 @@ var Categories = []Category{
 			".grain/workflows/promote-release.yml", ".grain/workflows/promote.yml",
 			"scripts/release-from-trunk.sh", "scripts/release-images.sh",
 			"pkg/ui/release_approval.go",
+			// The Inbox approval of a release on GitHub Actions (gap 4):
+			// the signed record, the route that signs and dispatches it,
+			// and the check the workflow verifies it with.
+			".github/workflows/promote-release.yml", "pkg/ui/release_approval_github.go",
+			"pkg/releaseapproval/releaseapproval.go", "scripts/verify-release-approval.sh",
 		},
 	},
 	{

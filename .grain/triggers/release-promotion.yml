@@ -8,6 +8,7 @@ paths:
   - .grain/workflows/promote.yml
   - scripts/release-from-trunk.sh
   - scripts/release-images.sh
+  - scripts/verify-release-approval.sh
 gate: true
 human: required
 sensitive: true
