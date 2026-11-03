@@ -31,7 +31,7 @@ package orchestrator
 // once (capabilityNeedsSandbox). An added scope whose routes no sandbox
 // process may call needs a restart only when the run started with no
 // `api:*` grant at all and so has no `grain-controller` MCP server
-// attached yet (toolOnlyScopesAdded).
+// attached yet (controllerOnlyScopesAdded).
 //
 // An interactive run blocked in chat on a person is different twice
 // over. Its chat wait reads only what a person says, so no addendum can
@@ -111,28 +111,30 @@ func capabilityNeedsSandbox(old, now []string) bool {
 			return true
 		}
 	}
-	return len(toolOnlyScopesAdded(old, now)) > 0
+	return len(controllerOnlyScopesAdded(old, now)) > 0
 }
 
-// toolOnlyScopesAdded is every scope the grants in now reach that those
-// in old did not, and that the sandbox channel refuses
-// (model.IsSandboxDeniedAPIScope, or a scope set only a person may
-// grant), when the run started with no `api:*` grant at all (so
-// `grain-controller` was not attached at run start). Once a run starts
-// with any `api:*` grant, `grain-controller` (/api/mcp) is already
-// attached and evaluates the task's live grants per request.
+// controllerOnlyScopesAdded is every scope the grants in now reach that
+// the sandbox channel refuses (model.IsSandboxDeniedAPIScope, or a scope
+// set only a person may grant) -- reachable only through
+// `grain-controller` -- when the run started with no `api:*` grant at
+// all, and so without `grain-controller` attached (wireControllerMCP).
+// Once a run starts with any `api:*` grant, `grain-controller`
+// (/api/mcp) is attached and evaluates the task's live grants per
+// request, so nothing added later needs a restart. (A run adopted from
+// a build that served `api_*` tools on grain-sandbox is the one
+// exception, and lasts only until it ends.)
 //
 // A scope removed needs nothing of the kind: the gate refuses a call the
 // task no longer holds, whichever way the call arrives.
-func toolOnlyScopesAdded(old, now []string) []model.APIScope {
-	before := model.APIGrantsOf(old)
-	if !before.Empty() {
+func controllerOnlyScopesAdded(old, now []string) []model.APIScope {
+	if !model.APIGrantsOf(old).Empty() {
 		return nil
 	}
 	sandbox := model.SandboxAPIGrantsOf(now)
 	var added []model.APIScope
 	for _, scope := range model.APIGrantsOf(now).Scopes() {
-		if !before.Has(scope) && !sandbox.Has(scope) {
+		if !sandbox.Has(scope) {
 			added = append(added, scope)
 		}
 	}

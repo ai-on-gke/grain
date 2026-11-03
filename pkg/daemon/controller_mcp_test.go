@@ -72,6 +72,10 @@ func TestSandboxMCPExposesNoAPIToolsAndControllerMCPServesAPIGrants(t *testing.T
 	uiSrv := ui.NewServer(uiCfg, store)
 	srv := httptest.NewServer(uiSrv)
 	defer srv.Close()
+	// As startUIServer does: grain-controller reaches /api/mcp through
+	// LiveAPI, in process, not over the listener.
+	LiveAPI.Set(uiSrv)
+	t.Cleanup(func() { LiveAPI.handler.Store(nil) })
 
 	// 1. grain-sandbox must not include any api_* tools even when api:* grants are passed.
 	sandboxTools := GrantedDaemonTools(
@@ -113,10 +117,7 @@ func TestSandboxMCPExposesNoAPIToolsAndControllerMCPServesAPIGrants(t *testing.T
 		}
 	}
 
-	daemonCfg := Config{
-		DataDir: dataDir,
-		UiAddr:  strings.TrimPrefix(srv.URL, "http://"),
-	}
+	daemonCfg := Config{DataDir: dataDir}
 	orchCfg := orchestrator.Config{
 		ControllerMCP: controllerMCPProxy(daemonCfg),
 		Now:           func() time.Time { return now },

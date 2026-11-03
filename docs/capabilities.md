@@ -469,9 +469,11 @@ A durable run holds a sandbox for as long as it lasts.
 ## The agent API (`api:<scope>`)
 
 Grain's own routes are a capability too. A task granted `api:<scope>` or
-`api:<preset>` is served one `api_*` tool per route of grain's REST API
-under that scope. Each tool calls the same handler the UI does. Append
-`@<owner>/<name>` to limit a grant to one repository.
+`api:<preset>` has the `grain-controller` MCP server attached, whose
+`grain_explore_scope` and `grain_invoke` reach every route of grain's
+REST API under that scope (and whose `grain` CLI, in the sandbox,
+reaches the non-dangerous ones). Each call runs the same handler the UI
+does. Append `@<owner>/<name>` to limit a grant to one repository.
 
 Scopes marked dangerous (`capabilities:admin`, `secrets:write`,
 `settings:write`, `connections:write`, `merge:force`, `tasks:admin`,
@@ -488,4 +490,4 @@ policy and the rails. `self-upgrade` is now an alias for the preset of
 the same name, and keeps its own tools. `team-broadcast`,
 `dispatch-control` and `pipeline-control` are aliases whose in-process
 capabilities are retired: they are recorded as `api:<preset>` and
-served only as `api_*` tools.
+served only through `grain-controller`.

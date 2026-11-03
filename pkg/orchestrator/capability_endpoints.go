@@ -262,7 +262,7 @@ func wireControllerMCP(ctx context.Context, cfg Config, store *model.Store, task
 		return cfg.capabilityMCPServers, nil, nil
 	}
 	for _, existing := range cfg.capabilityMCPServers {
-		if existing.Name == "grain-controller" {
+		if existing.Name == mcp.ControllerToolNamespace {
 			return cfg.capabilityMCPServers, nil, nil
 		}
 	}
@@ -286,7 +286,7 @@ func wireControllerMCP(ctx context.Context, cfg Config, store *model.Store, task
 	}
 	serverName := roster.ServerName
 	if serverName == "" {
-		serverName = "grain-controller"
+		serverName = mcp.ControllerToolNamespace
 	}
 	if store != nil {
 		narrator := mcp.NewCapabilityNarrator(taskActivityReporter{store: store, taskID: task.ID, now: cfg.now})

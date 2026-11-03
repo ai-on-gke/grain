@@ -68,11 +68,13 @@ type Server struct {
 	// access is the single-tenant access gate's rate limiter, and
 	// accessCode the token file it checks codes against
 	// (localAPITokenNow) -- both accesscode.go's.
-	access               accessLimiter
-	accessCode           atomic.Pointer[accessCodeFile]
-	externalLimiter      *externalAgentLimiter
-	defaultGroupsOnce    sync.Once
-	defaultGroups        *CloudIdentityGroupChecker
+	access            accessLimiter
+	accessCode        atomic.Pointer[accessCodeFile]
+	externalLimiter   *externalAgentLimiter
+	defaultGroupsOnce sync.Once
+	defaultGroups     *CloudIdentityGroupChecker
+	// controllerMCPHandler serves POST /api/mcp (mcp_endpoint.go), built
+	// once on first use.
 	controllerMCPOnce    sync.Once
 	controllerMCPHandler http.Handler
 }

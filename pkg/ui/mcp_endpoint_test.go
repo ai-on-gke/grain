@@ -358,3 +358,156 @@ func TestControllerMCPTaskWorkflowTools(t *testing.T) {
 		t.Fatalf("unexpected full view (isError=%v): %d bytes", isErr, len(fullView))
 	}
 }
+
+// An external agent token is the credential on POST /api/mcp as it is on
+// every other route: X-Grain-Acting-Task on its request names nothing,
+// so a token holder cannot read or act with a task's grants by naming
+// the task.
+func TestControllerMCPExternalTokenIgnoresActingTaskHeader(t *testing.T) {
+	t.Parallel()
+	srv, client, _ := newSingleTenantControllerMCPServer(t)
+	enableExternalAgentAPI(t, client.Store)
+	seedAPITask(t, client, "30", "acme/widgets", "api:settings:read", "api:tasks:read")
+
+	humanCtx := ui.WithPrincipal(context.Background(), model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:     "byo-harness",
+		ScopeSet: "grain/ci-read",
+	})
+	if err != nil {
+		t.Fatalf("CreateExternalAgentToken: %v", err)
+	}
+	spoofed := map[string]string{
+		"Authorization":     "Bearer " + issued.Token,
+		ui.ActingTaskHeader: "30",
+	}
+
+	overview, isErr := callControllerTool(t, srv, spoofed, ui.ToolGrainExploreScope, map[string]any{})
+	if isErr {
+		t.Fatalf("explore as external token failed: %s", overview)
+	}
+	if !strings.Contains(overview, `"ci:read"`) || strings.Contains(overview, `"settings:read"`) || strings.Contains(overview, `"tasks:read"`) {
+		t.Fatalf("external token naming task 30 saw the task's scopes, not its own: %s", overview)
+	}
+	if text, isErr := callControllerTool(t, srv, spoofed, ui.ToolGrainFilingContext, map[string]any{}); !isErr || !strings.Contains(text, "403") {
+		t.Fatalf("grain_filing_context on a ci-read token naming task 30: isError=%v %s", isErr, text)
+	}
+	if text, isErr := callControllerTool(t, srv, spoofed, ui.ToolGrainInvoke, map[string]any{"tool": "api_get_settings"}); !isErr || !strings.Contains(text, "403") {
+		t.Fatalf("api_get_settings on a ci-read token naming task 30: isError=%v %s", isErr, text)
+	}
+}
+
+// grain_filing_context serves each part of the context only to a caller
+// holding the scope of the route that serves the same data.
+func TestControllerMCPFilingContextIsGatedPerSection(t *testing.T) {
+	t.Parallel()
+	srv, client, code := newSingleTenantControllerMCPServer(t)
+	if _, err := client.AddTargetRepo(context.Background(), "acme/widgets"); err != nil {
+		t.Fatal(err)
+	}
+	seedAPITask(t, client, "40", "acme/widgets", "api:tasks:write")
+
+	decode := func(text string) map[string]any {
+		var out map[string]any
+		if err := json.Unmarshal([]byte(text), &out); err != nil {
+			t.Fatalf("decoding filing context: %v (%s)", err, text)
+		}
+		return out
+	}
+	human, isErr := callControllerTool(t, srv, map[string]string{ui.AccessCodeHeader: code}, ui.ToolGrainFilingContext, map[string]any{})
+	if isErr {
+		t.Fatalf("human filing context failed: %s", human)
+	}
+	for _, key := range []string{"targetRepos", "templates", "boards", "capabilities", "apiPresets", "defaultModel", "models", "defaultNetwork", "defaultCapabilities"} {
+		if _, ok := decode(human)[key]; !ok {
+			t.Errorf("a person's filing context has no %q: %s", key, human)
+		}
+	}
+
+	writer, isErr := callControllerTool(t, srv, map[string]string{ui.AccessCodeHeader: code, ui.ActingTaskHeader: "40"}, ui.ToolGrainFilingContext, map[string]any{})
+	if isErr {
+		t.Fatalf("tasks:write filing context failed: %s", writer)
+	}
+	got := decode(writer)
+	if repos, _ := got["targetRepos"].([]any); len(repos) != 1 {
+		t.Errorf("tasks:write filing context targetRepos = %v, want acme/widgets", got["targetRepos"])
+	}
+	for _, key := range []string{"capabilities", "apiPresets", "defaultModel", "models", "defaultNetwork", "defaultCapabilities"} {
+		if _, ok := got[key]; ok {
+			t.Errorf("a task holding only api:tasks:write was served %q, which capabilities:read / settings:read gate: %s", key, writer)
+		}
+	}
+	if boards, ok := got["boards"]; !ok || boards != nil {
+		t.Errorf("a task holding only api:tasks:write was served boards %v, which boards:read gates", boards)
+	}
+}
+
+// grain_invoke refuses an expect it would not check rather than run the
+// mutation unguarded.
+func TestControllerMCPInvokeRefusesUnknownExpectFields(t *testing.T) {
+	t.Parallel()
+	srv, client, code := newSingleTenantControllerMCPServer(t)
+	seedAPITask(t, client, "50", "acme/widgets", "api:tasks:read")
+	headers := map[string]string{ui.AccessCodeHeader: code}
+
+	text, isErr := callControllerTool(t, srv, headers, ui.ToolGrainInvoke, map[string]any{
+		"tool":      "api_add_comment",
+		"arguments": map[string]any{"id": "50", "body": map[string]any{"body": "guarded"}, "expect": map[string]any{"merge_queue_state": "idle"}},
+	})
+	if !isErr || !strings.Contains(text, "merge_queue_state") || !strings.Contains(text, "title_prefix") {
+		t.Fatalf("unknown expect field: isError=%v %s", isErr, text)
+	}
+	if text, isErr := callControllerTool(t, srv, headers, ui.ToolGrainInvoke, map[string]any{
+		"tool":      "api_add_comment",
+		"arguments": map[string]any{"id": "50", "body": map[string]any{"body": "guarded"}, "expect": "queued"},
+	}); !isErr || !strings.Contains(text, "object") {
+		t.Fatalf("expect that is not an object: isError=%v %s", isErr, text)
+	}
+	// A numeric id with an expect reads the task it names, not /api/tasks/.
+	text, isErr = callControllerTool(t, srv, headers, ui.ToolGrainInvoke, map[string]any{
+		"tool":      "api_add_comment",
+		"arguments": map[string]any{"id": 50, "body": map[string]any{"body": "guarded"}, "expect": map[string]any{"state": "running"}},
+	})
+	if !isErr || !strings.Contains(text, "state is") {
+		t.Fatalf("expect against a numeric id: isError=%v %s", isErr, text)
+	}
+	text, isErr = callControllerTool(t, srv, headers, ui.ToolGrainInvoke, map[string]any{
+		"tool":      "api_add_comment",
+		"arguments": map[string]any{"id": 50, "body": map[string]any{"body": "guarded"}, "expect": map[string]any{"title_prefix": "task 50"}},
+	})
+	if isErr {
+		t.Fatalf("expect that holds: %s", text)
+	}
+}
+
+// A configuration write made through grain_invoke is recorded in the
+// config audit as made by the acting task's agent, as the same write
+// over the REST route is -- not as the person whose request carried it,
+// and not left off the audit.
+func TestControllerMCPInvokeRecordsConfigWritesAsTheActingTask(t *testing.T) {
+	t.Parallel()
+	srv, client, code := newSingleTenantControllerMCPServer(t)
+	if _, err := client.AddTargetRepo(context.Background(), "acme/widgets"); err != nil {
+		t.Fatal(err)
+	}
+	seedAPITask(t, client, "60", "acme/widgets", "api:repos:write")
+
+	text, isErr := callControllerTool(t, srv, map[string]string{ui.AccessCodeHeader: code, ui.ActingTaskHeader: "60"}, ui.ToolGrainInvoke, map[string]any{
+		"tool":      "api_set_repo_settings",
+		"reason":    "tighten the merge gate",
+		"arguments": map[string]any{"owner": "acme", "name": "widgets", "body": map[string]any{"requireBranchUpToDate": true}},
+	})
+	if isErr {
+		t.Fatalf("api_set_repo_settings via grain_invoke: %s", text)
+	}
+	audit, err := client.Store.ConfigAudit(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(audit) != 1 || audit[0].By.Kind != model.PrincipalAgent || audit[0].By.ID != "60" {
+		t.Fatalf("config audit after a grain_invoke settings write = %+v, want one row by {agent, 60}", audit)
+	}
+	if audit[0].Surface != "repo:acme/widgets" && !strings.Contains(audit[0].Summary, "/api/repos/acme/widgets/settings") {
+		t.Fatalf("config audit row = %+v, want it to name acme/widgets' settings", audit[0])
+	}
+}

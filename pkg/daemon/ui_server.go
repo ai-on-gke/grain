@@ -741,22 +741,26 @@ func restartAdoption(report *orchestrator.AdoptionReport) *ui.RestartAdoption {
 	return &ui.RestartAdoption{At: report.At, Adopted: notes(report.Adopted), Lost: notes(report.Lost), Freed: report.Freed}
 }
 
+// controllerMCPTransport carries a run's grain-controller calls to this
+// daemon's own POST /api/mcp as the daemon itself: in-process through
+// LiveAPI (which startUIServer publishes whether or not -ui-addr opens a
+// listener), as an authenticated loopback request that runs the same
+// gates a TCP one does (LoopbackRoundTrip) -- so it needs no listener to
+// be reachable, no IAP to admit it, and sends the access code nowhere.
 type controllerMCPTransport struct {
 	dataDir string
-	network bool
 }
 
 func (t controllerMCPTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	out := req.Clone(req.Context())
+	// Read per request rather than once: the access code rotates
+	// (RotateLocalAPIToken) and a run outlives a rotation.
 	if t.dataDir != "" {
 		if raw, err := os.ReadFile(ui.LocalAPITokenPath(t.dataDir)); err == nil {
 			if tok := strings.TrimSpace(string(raw)); tok != "" {
 				out.Header.Set(ui.AccessCodeHeader, tok)
 			}
 		}
-	}
-	if t.network {
-		return http.DefaultTransport.RoundTrip(out)
 	}
 	return LiveAPI.LoopbackRoundTrip(out)
 }
@@ -765,24 +769,15 @@ func (t controllerMCPTransport) RoundTrip(req *http.Request) (*http.Response, er
 // a host-side capability proxy targeting POST /api/mcp with daemon auth
 // (X-Grain-Access-Code) and X-Grain-Acting-Task: <taskID> injected.
 func controllerMCPProxy(cfg Config) func(taskID string) (*protocol.Proxy, error) {
-	server := daemonServerURL(cfg.UiAddr)
-	targetURL := "http://127.0.0.1/api/mcp"
-	network := false
-	if server != "" {
-		targetURL = strings.TrimRight(server, "/") + "/api/mcp"
-		network = true
-	}
-	client := &http.Client{
-		Transport: controllerMCPTransport{
-			dataDir: cfg.DataDir,
-			network: network,
-		},
-	}
+	client := &http.Client{Transport: controllerMCPTransport{dataDir: cfg.DataDir}}
 	return func(taskID string) (*protocol.Proxy, error) {
-		headers := map[string]string{}
-		if strings.TrimSpace(taskID) != "" {
-			headers[ui.ActingTaskHeader] = strings.TrimSpace(taskID)
+		taskID = strings.TrimSpace(taskID)
+		if taskID == "" {
+			// Without an acting task the endpoint would answer as the
+			// deployment's own actor, with every scope.
+			return nil, errors.New("grain-controller needs the task it acts for")
 		}
-		return protocol.NewEndpointProxy(targetURL, headers, client)
+		// The URL's host is nominal: the transport never dials it.
+		return protocol.NewEndpointProxy("http://127.0.0.1/api/mcp", map[string]string{ui.ActingTaskHeader: taskID}, client)
 	}
 }

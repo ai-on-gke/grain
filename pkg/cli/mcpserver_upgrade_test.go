@@ -249,7 +249,7 @@ func TestTheUpgradeToolsNeedTheirOwnGrant(t *testing.T) {
 func TestSchedulingAnUpgradeThroughTheToolHoldsTheQueueAndWaitsForTheAgentItself(t *testing.T) {
 	t.Parallel()
 	fake := &fakeDeploymentUpgrader{}
-	roster, store := upgradeToolDeployment(t, fake, "api:self-upgrade")
+	serverURL, store := upgradeToolDeployment(t, fake, "api:self-upgrade")
 	ctx := context.Background()
 	now := time.Now().UTC()
 
@@ -260,7 +260,7 @@ func TestSchedulingAnUpgradeThroughTheToolHoldsTheQueueAndWaitsForTheAgentItself
 	}
 
 	// Dangerous scope requires a reason.
-	noReason := callUpgradeTool(t, roster, "api_start_upgrade", map[string]any{
+	noReason := callUpgradeTool(t, serverURL, "api_start_upgrade", map[string]any{
 		"body": map[string]any{"branch": "main", "afterTasksFinish": true},
 	})
 	if !noReason.IsError {
@@ -268,7 +268,7 @@ func TestSchedulingAnUpgradeThroughTheToolHoldsTheQueueAndWaitsForTheAgentItself
 	}
 
 	// Spoofing another task's principal is refused.
-	spoofed := callUpgradeTool(t, roster, "api_start_upgrade", map[string]any{
+	spoofed := callUpgradeTool(t, serverURL, "api_start_upgrade", map[string]any{
 		"reason": "upgrade to latest main",
 		"body": map[string]any{
 			"branch": "main", "afterTasksFinish": true,
@@ -279,7 +279,7 @@ func TestSchedulingAnUpgradeThroughTheToolHoldsTheQueueAndWaitsForTheAgentItself
 		t.Fatalf("api_start_upgrade with spoofed requestedBy succeeded: %s", spoofed.Text)
 	}
 
-	got := callUpgradeTool(t, roster, "api_start_upgrade", map[string]any{
+	got := callUpgradeTool(t, serverURL, "api_start_upgrade", map[string]any{
 		"reason": "upgrade to latest main",
 		"body":   map[string]any{"branch": "main", "afterTasksFinish": true},
 	})
@@ -325,11 +325,11 @@ func TestSchedulingAnUpgradeThroughTheToolHoldsTheQueueAndWaitsForTheAgentItself
 
 func TestTheStatusToolReportsTheLiveCIRunsAnUpgradeIsWaitingFor(t *testing.T) {
 	t.Parallel()
-	roster, store := upgradeToolDeployment(t, &fakeDeploymentUpgrader{}, "self-upgrade")
+	serverURL, store := upgradeToolDeployment(t, &fakeDeploymentUpgrader{}, "self-upgrade")
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	if got := callUpgradeTool(t, roster, "api_start_upgrade", map[string]any{
+	if got := callUpgradeTool(t, serverURL, "api_start_upgrade", map[string]any{
 		"reason": "schedule upgrade",
 		"body":   map[string]any{"branch": "main", "afterTasksFinish": true},
 	}); got.IsError {
@@ -342,7 +342,7 @@ func TestTheStatusToolReportsTheLiveCIRunsAnUpgradeIsWaitingFor(t *testing.T) {
 		t.Fatalf("recording a live CI run: %v", err)
 	}
 
-	got := callUpgradeTool(t, roster, "api_get_upgrade_status", nil)
+	got := callUpgradeTool(t, serverURL, "api_get_upgrade_status", nil)
 	if got.IsError {
 		t.Fatalf("api_get_upgrade_status = %+v", got)
 	}
@@ -362,11 +362,11 @@ func TestTheStatusToolReportsTheLiveCIRunsAnUpgradeIsWaitingFor(t *testing.T) {
 func TestCancellingThroughTheToolOpensTheQueueAgain(t *testing.T) {
 	t.Parallel()
 	fake := &fakeDeploymentUpgrader{}
-	roster, store := upgradeToolDeployment(t, fake, "api:self-upgrade")
+	serverURL, store := upgradeToolDeployment(t, fake, "api:self-upgrade")
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	if got := callUpgradeTool(t, roster, "api_start_upgrade", map[string]any{
+	if got := callUpgradeTool(t, serverURL, "api_start_upgrade", map[string]any{
 		"reason": "schedule upgrade",
 		"body":   map[string]any{"branch": "main", "afterTasksFinish": true},
 	}); got.IsError {
@@ -394,7 +394,7 @@ func TestCancellingThroughTheToolOpensTheQueueAgain(t *testing.T) {
 		t.Fatalf("the queue was not held for the scheduled upgrade: (%+v, %v)", pause, err)
 	}
 
-	got := callUpgradeTool(t, roster, "api_cancel_scheduled_upgrade", map[string]any{
+	got := callUpgradeTool(t, serverURL, "api_cancel_scheduled_upgrade", map[string]any{
 		"reason": "calling off the upgrade",
 	})
 	if got.IsError {
@@ -420,9 +420,9 @@ func TestCancellingThroughTheToolOpensTheQueueAgain(t *testing.T) {
 func TestAnImmediateUpgradeThroughTheToolStartsTheUpgraderAtOnce(t *testing.T) {
 	t.Parallel()
 	fake := &fakeDeploymentUpgrader{}
-	roster, store := upgradeToolDeployment(t, fake, "api:self-upgrade")
+	serverURL, store := upgradeToolDeployment(t, fake, "api:self-upgrade")
 
-	got := callUpgradeTool(t, roster, "api_start_upgrade", map[string]any{
+	got := callUpgradeTool(t, serverURL, "api_start_upgrade", map[string]any{
 		"reason": "emergency rollback",
 		"body":   map[string]any{"branch": "main", "afterTasksFinish": false},
 	})

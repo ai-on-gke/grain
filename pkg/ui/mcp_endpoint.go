@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,9 +36,11 @@ import (
 
 // ControllerMCPServerName is serverInfo.name advertised by POST /api/mcp and
 // the capability server name built-in sessions attach it under.
-const ControllerMCPServerName = "grain-controller"
+const ControllerMCPServerName = mcp.ControllerToolNamespace
 
-// Controller MCP tool names (6 fixed tools instead of ~277 per-route schemas).
+// Controller MCP tool names: six fixed tools, whatever the caller's
+// grants, in place of one tool per route of the agent API (a few hundred
+// schemas for a caller holding many scopes; mcp_token_benchmark_test.go).
 const (
 	ToolGrainExploreScope  = "grain_explore_scope"
 	ToolGrainInvoke        = "grain_invoke"
@@ -47,7 +50,7 @@ const (
 	ToolGrainGetTask       = "grain_get_task"
 )
 
-// ControllerMCPToolNames returns the 6 fixed tool names served on POST /api/mcp.
+// ControllerMCPToolNames returns the six fixed tool names served on POST /api/mcp.
 func ControllerMCPToolNames() []string {
 	return []string{
 		ToolGrainExploreScope,
@@ -59,22 +62,22 @@ func ControllerMCPToolNames() []string {
 	}
 }
 
-// controllerMCPInstructions is the ~20-line workflow guide returned on MCP
+// controllerMCPInstructions is the workflow guide returned on MCP
 // initialize so external harnesses and built-in sessions know how to discover
-// and invoke controller routes without loading ~277 schemas into context.
+// and invoke controller routes without loading every route's schema into context.
 const controllerMCPInstructions = `Grain Controller MCP workflow guide:
-1. Everyday task operations have dedicated compact tools — prefer these first:
-   - grain_list_tasks(repo?, state?, q?, limit?) to browse tasks (compact summary rows by default).
+1. Everyday task operations have dedicated compact tools -- prefer these first:
+   - grain_list_tasks(repo?, state?, q?, limit?, summary?) to browse tasks (compact summary rows by default).
    - grain_get_task(id, view?) to inspect one task (~1 KB "summary" by default, "conversation" to page comments, "full" for raw JSON).
    - grain_filing_context(repo?) to read target repositories, templates, boards, custom fields, and grantable capabilities before filing work.
    - grain_submit_task(...) to file a task. approve defaults to false (filed as "proposed" awaiting human approval); only set approve=true when explicitly authorized.
-2. All other Grain controller operations (~270+ routes across CI, merge queue, repos, releases, schedules, templates, settings, secrets, capabilities, deployment) use progressive discovery:
+2. All other Grain controller operations (a few hundred routes across CI, merge queue, repos, releases, schedules, templates, settings, secrets, capabilities, deployment) use progressive discovery:
    - Call grain_explore_scope() with no arguments to list the scope groups you are authorized to use.
    - Call grain_explore_scope(scope="<group>", tool="<word>") (e.g. scope="tasks", tool="comment") to get the exact JSON input schemas of just the routes you need; a whole group (scope alone) can run to tens of KB, so name the tool whenever you know what you are after.
    - Call grain_invoke(tool="api_...", arguments={...}, reason?="...") to execute an authorized route.
 3. Safety & authorization rules:
    - Destructive (DELETE) and dangerous-scope routes require a non-empty reason explaining why the change is being made.
-   - Task-admin mutations accept arguments.expect ({state?, merge_queue_state?, has_pull_request?}) to guard against stale reads.
+   - Task mutations accept arguments.expect ({state?, title_prefix?, kind?}): the call reads the task first and refuses, changing nothing, if the record disagrees.
    - Calls run under your authenticated identity (and X-Grain-Acting-Task grants when present); if a scope is refused, ask a human to grant api:<scope> rather than working around it.`
 
 var controllerAlwaysLoadMeta = map[string]any{
@@ -87,6 +90,9 @@ func withControllerMCPRequest(ctx context.Context, r *http.Request) context.Cont
 	return context.WithValue(ctx, controllerMCPRequestKey{}, r)
 }
 
+// controllerMCPRequestFromContext is the POST /api/mcp request a tool
+// call arrived on (handleControllerMCP), or nil for a handler called
+// outside the endpoint.
 func controllerMCPRequestFromContext(ctx context.Context) *http.Request {
 	if ctx == nil {
 		return nil
@@ -94,6 +100,18 @@ func controllerMCPRequestFromContext(ctx context.Context) *http.Request {
 	r, _ := ctx.Value(controllerMCPRequestKey{}).(*http.Request)
 	return r
 }
+
+// toolFailure is the error result every controller tool answers with:
+// "<tool> failed: <why>", flagged isError so the harness shows it as one.
+func toolFailure(tool string, err error) mcp.Result {
+	return mcp.Result{Text: tool + " failed: " + err.Error(), IsError: true}
+}
+
+func toolFailuref(tool, format string, args ...any) mcp.Result {
+	return toolFailure(tool, fmt.Errorf(format, args...))
+}
+
+var errNoOuterRequest = errors.New("missing outer HTTP request context")
 
 // handleControllerMCP serves the single stateless HTTP MCP endpoint at POST /api/mcp.
 func (s *Server) handleControllerMCP(w http.ResponseWriter, r *http.Request) {
@@ -131,9 +149,29 @@ type mcpCallerAccess struct {
 	repoLimits    []string
 }
 
-func (s *Server) resolveMCPCallerAccess(ctx context.Context, outerReq *http.Request) (mcpCallerAccess, error) {
+// resolveMCPCallerAccess is who is calling POST /api/mcp and what routes
+// they reach: the acting task's grants when X-Grain-Acting-Task names
+// one, an external agent token's scopes when the request carries one,
+// and otherwise every non-internal route, for a person or BYO harness
+// the server already admitted.
+func (s *Server) resolveMCPCallerAccess(ctx context.Context) (mcpCallerAccess, error) {
+	outerReq := controllerMCPRequestFromContext(ctx)
 	if outerReq == nil {
-		return mcpCallerAccess{}, fmt.Errorf("missing outer HTTP request context")
+		return mcpCallerAccess{}, errNoOuterRequest
+	}
+	// An external agent token is the credential, as it is for agentAPIGate:
+	// X-Grain-Acting-Task on a token's request is ignored rather than let
+	// widen the token's scopes to a task's grants.
+	if tok := externalTokenFromContext(ctx); tok != nil {
+		_, set, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
+		if err != nil {
+			return mcpCallerAccess{externalToken: tok}, err
+		}
+		return mcpCallerAccess{
+			externalToken: tok,
+			grantSet:      set,
+			repoLimits:    slices.Clone(tok.Repos),
+		}, nil
 	}
 	taskID := strings.TrimSpace(outerReq.Header.Get(ActingTaskHeader))
 	channel := strings.TrimSpace(outerReq.Header.Get(ChannelHeader))
@@ -159,18 +197,14 @@ func (s *Server) resolveMCPCallerAccess(ctx context.Context, outerReq *http.Requ
 			channel:      channel,
 		}, nil
 	}
-	if tok := externalTokenFromContext(ctx); tok != nil {
-		_, set, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
-		if err != nil {
-			return mcpCallerAccess{externalToken: tok}, err
-		}
-		return mcpCallerAccess{
-			externalToken: tok,
-			grantSet:      set,
-			repoLimits:    slices.Clone(tok.Repos),
-		}, nil
-	}
 	return mcpCallerAccess{fullAccess: true}, nil
+}
+
+// reads reports whether the caller holds scope outright: what each part
+// of grain_filing_context is gated on, as the route serving the same
+// data is (route_scopes.go).
+func (a mcpCallerAccess) reads(scope APIScope) bool {
+	return a.fullAccess || a.grantSet.Has(scope)
 }
 
 func (a mcpCallerAccess) allowsRoute(rt APIRoute) bool {
@@ -238,9 +272,12 @@ var domainGuidance = map[string]string{
 // preserving the outer request's RemoteAddr, Host, TLS, Context() (principal,
 // auth method, external token), auth headers, and X-Grain-Acting-Task so
 // empty-RemoteAddr owner trust is never synthesized for a remote caller.
-func (s *Server) dispatchSubrequest(ctx context.Context, outerReq *http.Request, method, pathWithQuery string, bodyBytes []byte, reason string) (int, []byte, error) {
+// It returns the status and body of a 2xx answer, and an error naming
+// the status and the route's own message for anything else.
+func (s *Server) dispatchSubrequest(ctx context.Context, method, pathWithQuery string, bodyBytes []byte, reason string) (int, []byte, error) {
+	outerReq := controllerMCPRequestFromContext(ctx)
 	if outerReq == nil {
-		return 0, nil, fmt.Errorf("missing outer HTTP request")
+		return 0, nil, errNoOuterRequest
 	}
 	rehearsal := &configWriteRehearsal{}
 	subCtx := model.WithWriteRehearsal(ctx, rehearsal)
@@ -287,30 +324,24 @@ func (s *Server) dispatchSubrequest(ctx context.Context, outerReq *http.Request,
 	rw := &configRefusalWriter{
 		ResponseWriter: rec,
 		rehearsal:      rehearsal,
+		// As serveHTTP's onSuccess: a configuration write is recorded
+		// and exported as made by whoever the handler guarded it as --
+		// the acting task's agent principal, which is on the handler's
+		// context alone -- not as the person whose request carried it.
 		onSuccess: func() {
 			if s.tasks != nil {
-				s.tasks.syncStateRepoAfterWrite(subCtx)
+				by := rehearsal.writer(subCtx)
+				s.tasks.recordConfigWrite(by, innerReq)
+				s.tasks.syncStateRepoAfterWrite(by)
 			}
 		},
 	}
 	s.mux.ServeHTTP(rw, innerReq)
 	rw.finish()
+	if rec.Code < 200 || rec.Code > 299 {
+		return rec.Code, nil, routeError(rec.Code, rec.Body.Bytes())
+	}
 	return rec.Code, rec.Body.Bytes(), nil
-}
-
-func formatSubrequestError(code int, body []byte) error {
-	var errBody struct {
-		Error string `json:"error"`
-		Code  string `json:"code"`
-	}
-	if json.Unmarshal(body, &errBody) == nil && errBody.Error != "" && errBody.Code == "" {
-		return fmt.Errorf("HTTP %d: %s", code, errBody.Error)
-	}
-	trimmed := strings.TrimSpace(string(body))
-	if trimmed == "" {
-		trimmed = http.StatusText(code)
-	}
-	return fmt.Errorf("HTTP %d: %s", code, trimmed)
 }
 
 func (s *Server) exploreScopeTool() mcp.Tool {
@@ -332,10 +363,9 @@ func (s *Server) exploreScopeTool() mcp.Tool {
 			},
 		},
 		Handler: func(ctx context.Context, args map[string]any) mcp.Result {
-			outerReq := controllerMCPRequestFromContext(ctx)
-			access, err := s.resolveMCPCallerAccess(ctx, outerReq)
+			access, err := s.resolveMCPCallerAccess(ctx)
 			if err != nil {
-				return mcp.Result{Text: ToolGrainExploreScope + " failed: " + err.Error(), IsError: true}
+				return toolFailure(ToolGrainExploreScope, err)
 			}
 			authorized := access.authorizedRoutes()
 			rawScope, _ := args["scope"].(string)
@@ -517,16 +547,17 @@ func renderScopeDetail(access mcpCallerAccess, authorized []APIRoute, query, too
 		}
 	}
 
-	domain, _, _ := strings.Cut(query, ":")
-	guidance := domainGuidance[domain]
-	if guidance == "" && len(matched) > 0 {
+	guidance := domainGuidance[scopeDomainGroup(APIScope(query))]
+	if guidance == "" {
 		guidance = domainGuidance[scopeDomainGroup(matched[0].Scope)]
 	}
 	payload := map[string]any{
 		"scope":      query,
-		"guidance":   guidance,
 		"routeCount": len(matched),
 		"routes":     matched,
+	}
+	if guidance != "" {
+		payload["guidance"] = guidance
 	}
 	if toolQuery != "" {
 		payload["tool"] = toolQuery
@@ -564,11 +595,10 @@ func (s *Server) invokeRouteTool() mcp.Tool {
 		},
 		ElisionAdvice: "narrow the route call with query parameters, or read one item by its id",
 		Handler: func(ctx context.Context, args map[string]any) mcp.Result {
-			outerReq := controllerMCPRequestFromContext(ctx)
 			rawTool, _ := args["tool"].(string)
 			toolName := strings.TrimSpace(rawTool)
 			if toolName == "" {
-				return mcp.Result{Text: ToolGrainInvoke + " failed: tool is required", IsError: true}
+				return toolFailuref(ToolGrainInvoke, "tool is required")
 			}
 			if !strings.HasPrefix(toolName, APIToolPrefix) {
 				toolName = APIToolPrefix + toolName
@@ -583,21 +613,15 @@ func (s *Server) invokeRouteTool() mcp.Tool {
 				}
 			}
 			if route == nil {
-				return mcp.Result{
-					Text:    fmt.Sprintf("%s failed: unknown route tool %q (use %s to discover valid tool names)", ToolGrainInvoke, rawTool, ToolGrainExploreScope),
-					IsError: true,
-				}
+				return toolFailuref(ToolGrainInvoke, "unknown route tool %q (use %s to discover valid tool names)", rawTool, ToolGrainExploreScope)
 			}
 
-			access, err := s.resolveMCPCallerAccess(ctx, outerReq)
+			access, err := s.resolveMCPCallerAccess(ctx)
 			if err != nil {
-				return mcp.Result{Text: route.Tool + " failed: " + err.Error(), IsError: true}
+				return toolFailure(route.Tool, err)
 			}
 			if !access.allowsRoute(*route) {
-				return mcp.Result{
-					Text:    fmt.Sprintf("%s failed: HTTP 403: caller holds no grant for scope %s (%s)", route.Tool, route.Scope, route.Pattern),
-					IsError: true,
-				}
+				return toolFailuref(route.Tool, "HTTP 403: caller holds no grant for scope %s (%s)", route.Scope, route.Pattern)
 			}
 
 			routeArgs, _ := args["arguments"].(map[string]any)
@@ -619,113 +643,58 @@ func (s *Server) invokeRouteTool() mcp.Tool {
 				}
 			}
 			if route.NeedsReason && reason == "" {
-				return mcp.Result{
-					Text:    fmt.Sprintf("%s failed: reason is required: %s is destructive (scope %s)", route.Tool, route.Pattern, route.Scope),
-					IsError: true,
-				}
+				return toolFailuref(route.Tool, "reason is required: %s is destructive (scope %s)", route.Pattern, route.Scope)
 			}
 
-			path := route.Path
-			for _, p := range route.Params {
-				v, _ := routeArgs[p].(string)
-				v = strings.TrimSpace(v)
-				if v == "" {
-					if raw, ok := routeArgs[p]; ok && raw != nil {
-						v = strings.TrimSpace(fmt.Sprint(raw))
-					}
-				}
-				if v == "" {
-					return mcp.Result{Text: fmt.Sprintf("%s failed: %s is required", route.Tool, p), IsError: true}
-				}
-				escaped := url.PathEscape(v)
-				path = strings.Replace(path, "{"+p+"...}", escaped, 1)
-				path = strings.Replace(path, "{"+p+"}", escaped, 1)
+			rc, err := route.buildCall(routeArgs)
+			if err != nil {
+				return toolFailure(route.Tool, err)
 			}
-
+			if err := checkExpectFields(routeArgs); err != nil {
+				return toolFailure(route.Tool, err)
+			}
 			if expect, ok := expectation(routeArgs); ok && route.takesExpect() {
-				id, _ := routeArgs["id"].(string)
-				id = strings.TrimSpace(id)
-				code, data, err := s.dispatchSubrequest(ctx, outerReq, http.MethodGet, "/api/tasks/"+url.PathEscape(id), nil, "")
+				id := rc.params["id"]
+				_, data, err := s.dispatchSubrequest(ctx, http.MethodGet, "/api/tasks/"+url.PathEscape(id), nil, "")
 				if err != nil {
-					return mcp.Result{Text: fmt.Sprintf("%s failed: reading task %s to check expect: %v", route.Tool, id, err), IsError: true}
-				}
-				if code < 200 || code > 299 {
-					return mcp.Result{
-						Text:    fmt.Sprintf("%s failed: reading task %s to check expect: %v", route.Tool, id, formatSubrequestError(code, data)),
-						IsError: true,
-					}
+					return toolFailuref(route.Tool, "reading task %s to check expect: %w", id, err)
 				}
 				var detail TaskDetail
 				if err := json.Unmarshal(data, &detail); err != nil {
-					return mcp.Result{Text: fmt.Sprintf("%s failed: reading task %s: %v", route.Tool, id, err), IsError: true}
+					return toolFailuref(route.Tool, "reading task %s: %w", id, err)
 				}
 				if err := expect.Check(detail.Task); err != nil {
-					return mcp.Result{Text: route.Tool + " failed: " + err.Error(), IsError: true}
+					return toolFailure(route.Tool, err)
 				}
 			}
 
-			if q, ok := routeArgs["query"].(map[string]any); ok && len(q) > 0 {
-				values := url.Values{}
-				for k, v := range q {
-					if v == nil {
-						continue
-					}
-					values.Set(k, fmt.Sprint(v))
-				}
-				if encodedQuery := values.Encode(); encodedQuery != "" {
-					path += "?" + encodedQuery
-				}
-			}
-
-			var encodedBody []byte
-			if route.Method != http.MethodGet {
-				if body, ok := routeArgs["body"]; ok && body != nil {
-					b, err := json.Marshal(body)
-					if err != nil {
-						return mcp.Result{Text: fmt.Sprintf("%s failed: encoding body: %v", route.Tool, err), IsError: true}
-					}
-					encodedBody = b
-				} else if route.body != nil {
-					fallback := map[string]any{}
-					for k, v := range routeArgs {
-						if k == "reason" || k == "query" || k == "expect" || k == "body" || slices.Contains(route.Params, k) {
-							continue
-						}
-						fallback[k] = v
-					}
-					if len(fallback) > 0 {
-						b, err := json.Marshal(fallback)
-						if err != nil {
-							return mcp.Result{Text: fmt.Sprintf("%s failed: encoding body: %v", route.Tool, err), IsError: true}
-						}
-						encodedBody = b
-					}
-				}
-			}
-
-			code, data, err := s.dispatchSubrequest(ctx, outerReq, route.Method, path, encodedBody, reason)
+			code, data, err := s.dispatchSubrequest(ctx, route.Method, rc.path, rc.body, reason)
 			if err != nil {
-				return mcp.Result{Text: route.Tool + " failed: " + err.Error(), IsError: true}
-			}
-			if code < 200 || code > 299 {
-				return mcp.Result{Text: route.Tool + " failed: " + formatSubrequestError(code, data).Error(), IsError: true}
+				return toolFailure(route.Tool, err)
 			}
 			if len(bytes.TrimSpace(data)) == 0 {
-				return mcp.Result{Text: fmt.Sprintf("%s %s: %d %s", route.Method, path, code, http.StatusText(code))}
+				return mcp.Result{Text: emptyRouteAnswer(route.Method, rc.path, code)}
 			}
 			return mcp.Result{Text: string(data)}
 		},
 	}
 }
 
+// filingContextScopes are the scopes any one of which lets a caller read
+// grain_filing_context: those that file or read tasks, and those that
+// read the repositories, templates, boards and settings the context is
+// assembled from. The context names things (repositories, capability
+// ids, model ids) and holds no secret, so one such scope is enough.
+var filingContextScopes = []APIScope{
+	"tasks:write", "tasks:from-template", "tasks:read", "tasks:admin",
+	"repos:read", "templates:read", "boards:read", "settings:read", "deployment:read",
+}
+
 func (a mcpCallerAccess) allowsFilingContext() bool {
 	if a.fullAccess {
 		return true
 	}
-	for _, sc := range []APIScope{
-		"tasks:write", "tasks:from-template", "tasks:read", "tasks:admin",
-		"repos:read", "templates:read", "boards:read", "settings:read", "deployment:read",
-	} {
+	for _, sc := range filingContextScopes {
 		if a.grantSet.Has(sc) {
 			return true
 		}
@@ -763,19 +732,15 @@ func (s *Server) filingContextTool() mcp.Tool {
 			},
 		},
 		Handler: func(ctx context.Context, args map[string]any) mcp.Result {
-			outerReq := controllerMCPRequestFromContext(ctx)
-			access, err := s.resolveMCPCallerAccess(ctx, outerReq)
+			access, err := s.resolveMCPCallerAccess(ctx)
 			if err != nil {
-				return mcp.Result{Text: ToolGrainFilingContext + " failed: " + err.Error(), IsError: true}
+				return toolFailure(ToolGrainFilingContext, err)
 			}
 			if !access.allowsFilingContext() {
-				return mcp.Result{
-					Text:    ToolGrainFilingContext + " failed: HTTP 403: caller holds no task, template, repo, or deployment read/write scope",
-					IsError: true,
-				}
+				return toolFailuref(ToolGrainFilingContext, "HTTP 403: caller holds no task, template, repo, or deployment read/write scope")
 			}
 			if s.tasks == nil || s.tasks.Store == nil {
-				return mcp.Result{Text: ToolGrainFilingContext + " failed: task store is not configured", IsError: true}
+				return toolFailuref(ToolGrainFilingContext, "task store is not configured")
 			}
 
 			repoFilter, _ := args["repo"].(string)
@@ -783,11 +748,11 @@ func (s *Server) filingContextTool() mcp.Tool {
 
 			cfg, err := s.tasks.Store.GetConfig(ctx)
 			if err != nil {
-				return mcp.Result{Text: ToolGrainFilingContext + " failed: " + err.Error(), IsError: true}
+				return toolFailure(ToolGrainFilingContext, err)
 			}
 			team, err := s.tasks.GetTeam(ctx, model.DefaultTeamID)
 			if err != nil {
-				return mcp.Result{Text: ToolGrainFilingContext + " failed: " + err.Error(), IsError: true}
+				return toolFailure(ToolGrainFilingContext, err)
 			}
 
 			var targetRepos []string
@@ -805,7 +770,7 @@ func (s *Server) filingContextTool() mcp.Tool {
 
 			customFields, err := s.tasks.Store.ListCustomFields(ctx)
 			if err != nil {
-				return mcp.Result{Text: ToolGrainFilingContext + " failed: " + err.Error(), IsError: true}
+				return toolFailure(ToolGrainFilingContext, err)
 			}
 
 			type compactTemplateField struct {
@@ -824,7 +789,7 @@ func (s *Server) filingContextTool() mcp.Tool {
 				Fields      []compactTemplateField `json:"fields,omitempty"`
 			}
 			var templates []compactTemplate
-			if listedTemplates, err := s.tasks.ListTemplates(ctx); err == nil {
+			if listedTemplates, err := s.tasks.ListTemplates(ctx); err == nil && (access.reads("templates:read") || access.reads("tasks:from-template")) {
 				for _, tmpl := range listedTemplates {
 					if !access.repoAllowedForContext(tmpl.Repo) {
 						continue
@@ -858,55 +823,53 @@ func (s *Server) filingContextTool() mcp.Tool {
 				Name string `json:"name"`
 			}
 			var boards []compactBoard
-			if listedBoards, err := s.tasks.ListBoards(ctx); err == nil {
+			if listedBoards, err := s.tasks.ListBoards(ctx); err == nil && access.reads("boards:read") {
 				for _, b := range listedBoards {
 					boards = append(boards, compactBoard{ID: b.ID, Name: b.Name})
 				}
 			}
 
-			repoConfigs, _ := s.tasks.Store.ListRepoConfigs(ctx)
-			var capabilityIDs []string
-			var apiPresets []string
-			for _, capRow := range s.tasks.capabilitiesWithReadiness(cfg, repoConfigs) {
-				if strings.HasPrefix(capRow.ID, APIGrantPrefix) {
-					if capRow.Preset {
-						apiPresets = append(apiPresets, capRow.ID)
-					}
-					continue
-				}
-				capabilityIDs = append(capabilityIDs, capRow.ID)
+			// Each part is gated as the route serving the same data is
+			// (route_scopes.go); a caller without the scope gets the key
+			// absent rather than empty, so it can tell "none" from "not
+			// yours to read".
+			out := map[string]any{
+				"targetRepos":  targetRepos,
+				"customFields": customFieldDeclarations(customFields),
+				"templates":    templates,
+				"boards":       boards,
+				"submitDefaults": map[string]any{
+					"approve": false,
+					"note":    "grain_submit_task defaults approve=false so tasks land in 'proposed' state awaiting human approval unless approve=true is explicitly passed.",
+				},
 			}
-
-			var defaultCaps []string
-			var defaultModel string
-			var models any
-			networkAccess := string(model.NetworkOpen)
-			if cfg != nil {
-				defaultModel = cfg.EffectiveDefaultModel()
-				models = allDistinctModels(*cfg)
-				networkAccess = string(model.NormalizeNetworkAccess(cfg.NetworkAccess))
+			if access.reads("capabilities:read") {
+				repoConfigs, _ := s.tasks.Store.ListRepoConfigs(ctx)
+				capabilityIDs := []string{}
+				apiPresets := []string{}
+				for _, capRow := range s.tasks.capabilitiesWithReadiness(cfg, repoConfigs) {
+					if strings.HasPrefix(capRow.ID, APIGrantPrefix) {
+						if capRow.Preset {
+							apiPresets = append(apiPresets, capRow.ID)
+						}
+						continue
+					}
+					capabilityIDs = append(capabilityIDs, capRow.ID)
+				}
+				out["capabilities"] = capabilityIDs
+				out["apiPresets"] = apiPresets
+			}
+			if access.reads("settings:read") && cfg != nil {
+				defaultCaps := []string{}
 				for _, id := range cfg.DefaultCapabilities {
 					if _, ok := s.tasks.capabilityByID(id); ok {
 						defaultCaps = append(defaultCaps, id)
 					}
 				}
-			}
-
-			out := map[string]any{
-				"targetRepos":         targetRepos,
-				"defaultCapabilities": defaultCaps,
-				"capabilities":        capabilityIDs,
-				"apiPresets":          apiPresets,
-				"defaultModel":        defaultModel,
-				"models":              models,
-				"defaultNetwork":      networkAccess,
-				"customFields":        customFieldDeclarations(customFields),
-				"templates":           templates,
-				"boards":              boards,
-				"submitDefaults": map[string]any{
-					"approve": false,
-					"note":    "grain_submit_task defaults approve=false so tasks land in 'proposed' state awaiting human approval unless approve=true is explicitly passed.",
-				},
+				out["defaultCapabilities"] = defaultCaps
+				out["defaultModel"] = cfg.EffectiveDefaultModel()
+				out["models"] = allDistinctModels(*cfg)
+				out["defaultNetwork"] = string(model.NormalizeNetworkAccess(cfg.NetworkAccess))
 			}
 			encoded, _ := json.Marshal(out)
 			return mcp.Result{Text: string(encoded)}
@@ -1009,7 +972,6 @@ func (s *Server) submitTaskTool() mcp.Tool {
 			},
 		},
 		Handler: func(ctx context.Context, args map[string]any) mcp.Result {
-			outerReq := controllerMCPRequestFromContext(ctx)
 			approve := false
 			if v, ok := args["approve"].(bool); ok {
 				approve = v
@@ -1092,14 +1054,11 @@ func (s *Server) submitTaskTool() mcp.Tool {
 			reason, _ := args["reason"].(string)
 			encoded, err := json.Marshal(body)
 			if err != nil {
-				return mcp.Result{Text: ToolGrainSubmitTask + " failed: " + err.Error(), IsError: true}
+				return toolFailure(ToolGrainSubmitTask, err)
 			}
-			code, data, err := s.dispatchSubrequest(ctx, outerReq, http.MethodPost, "/api/tasks", encoded, reason)
+			_, data, err := s.dispatchSubrequest(ctx, http.MethodPost, "/api/tasks", encoded, reason)
 			if err != nil {
-				return mcp.Result{Text: ToolGrainSubmitTask + " failed: " + err.Error(), IsError: true}
-			}
-			if code < 200 || code > 299 {
-				return mcp.Result{Text: ToolGrainSubmitTask + " failed: " + formatSubrequestError(code, data).Error(), IsError: true}
+				return toolFailure(ToolGrainSubmitTask, err)
 			}
 			var created Task
 			if json.Unmarshal(data, &created) == nil && created.ID != "" {
@@ -1119,7 +1078,7 @@ func (s *Server) submitTaskTool() mcp.Tool {
 				if created.ApprovalNote != "" {
 					compact["approvalNote"] = created.ApprovalNote
 				}
-				if out, err := json.MarshalIndent(compact, "", "  "); err == nil {
+				if out, err := json.Marshal(compact); err == nil {
 					return mcp.Result{Text: string(out)}
 				}
 			}
@@ -1160,7 +1119,6 @@ func (s *Server) listTasksTool() mcp.Tool {
 		},
 		ElisionAdvice: "filter with state, repo, q, or a smaller limit, then inspect one task with grain_get_task",
 		Handler: func(ctx context.Context, args map[string]any) mcp.Result {
-			outerReq := controllerMCPRequestFromContext(ctx)
 			values := url.Values{}
 			if repo, _ := args["repo"].(string); strings.TrimSpace(repo) != "" {
 				values.Set("repo", strings.TrimSpace(repo))
@@ -1187,17 +1145,23 @@ func (s *Server) listTasksTool() mcp.Tool {
 			}
 
 			path := "/api/tasks?" + values.Encode()
-			code, data, err := s.dispatchSubrequest(ctx, outerReq, http.MethodGet, path, nil, "")
+			_, data, err := s.dispatchSubrequest(ctx, http.MethodGet, path, nil, "")
 			if err != nil {
-				return mcp.Result{Text: ToolGrainListTasks + " failed: " + err.Error(), IsError: true}
-			}
-			if code < 200 || code > 299 {
-				return mcp.Result{Text: ToolGrainListTasks + " failed: " + formatSubrequestError(code, data).Error(), IsError: true}
+				return toolFailure(ToolGrainListTasks, err)
 			}
 			return mcp.Result{Text: string(data)}
 		},
 	}
 }
+
+// The views grain_get_task renders a task in.
+const (
+	taskViewSummary      = "summary"
+	taskViewConversation = "conversation"
+	taskViewFull         = "full"
+)
+
+var taskViews = []string{taskViewSummary, taskViewConversation, taskViewFull}
 
 func (s *Server) getTaskTool() mcp.Tool {
 	return mcp.Tool{
@@ -1213,7 +1177,7 @@ func (s *Server) getTaskTool() mcp.Tool {
 				},
 				"view": map[string]any{
 					"type":        "string",
-					"enum":        []string{"summary", "conversation", "full"},
+					"enum":        taskViews,
 					"description": "Output view: 'summary' (~1 KB default), 'conversation' (paged comments), or 'full' (complete JSON).",
 				},
 				"after": map[string]any{
@@ -1225,50 +1189,38 @@ func (s *Server) getTaskTool() mcp.Tool {
 		},
 		ElisionAdvice: "use view='summary' or page comments with view='conversation' and after",
 		Handler: func(ctx context.Context, args map[string]any) mcp.Result {
-			outerReq := controllerMCPRequestFromContext(ctx)
-			rawID, _ := args["id"].(string)
-			if rawID == "" {
-				if v, ok := args["id"]; ok && v != nil {
-					rawID = fmt.Sprint(v)
-				}
+			rawID, ok := stringArg(args, "id")
+			if !ok {
+				return toolFailuref(ToolGrainGetTask, "id is required")
 			}
-			id := model.NormalizeTaskID(strings.TrimSpace(rawID))
+			id := model.NormalizeTaskID(rawID)
 			if id == "" {
-				id = strings.TrimSpace(rawID)
-			}
-			if id == "" {
-				return mcp.Result{Text: ToolGrainGetTask + " failed: id is required", IsError: true}
+				id = rawID
 			}
 
 			view, _ := args["view"].(string)
 			view = strings.ToLower(strings.TrimSpace(view))
 			if view == "" {
-				view = "summary"
+				view = taskViewSummary
 			}
-			if view != "summary" && view != "conversation" && view != "full" {
-				return mcp.Result{
-					Text:    fmt.Sprintf("%s failed: unknown view %q (want 'summary', 'conversation', or 'full')", ToolGrainGetTask, view),
-					IsError: true,
-				}
+			if !slices.Contains(taskViews, view) {
+				return toolFailuref(ToolGrainGetTask, "unknown view %q (want one of %s)", view, strings.Join(taskViews, ", "))
 			}
 
-			code, data, err := s.dispatchSubrequest(ctx, outerReq, http.MethodGet, "/api/tasks/"+url.PathEscape(id), nil, "")
+			_, data, err := s.dispatchSubrequest(ctx, http.MethodGet, "/api/tasks/"+url.PathEscape(id), nil, "")
 			if err != nil {
-				return mcp.Result{Text: ToolGrainGetTask + " failed: " + err.Error(), IsError: true}
+				return toolFailure(ToolGrainGetTask, err)
 			}
-			if code < 200 || code > 299 {
-				return mcp.Result{Text: ToolGrainGetTask + " failed: " + formatSubrequestError(code, data).Error(), IsError: true}
-			}
-			if view == "full" {
+			if view == taskViewFull {
 				return mcp.Result{Text: string(data)}
 			}
 
 			var detail TaskDetail
 			if err := json.Unmarshal(data, &detail); err != nil {
-				return mcp.Result{Text: fmt.Sprintf("%s failed: decoding task %s: %v", ToolGrainGetTask, id, err), IsError: true}
+				return toolFailuref(ToolGrainGetTask, "decoding task %s: %w", id, err)
 			}
 			rec := taskDetailToMCPRecord(detail)
-			if view == "conversation" {
+			if view == taskViewConversation {
 				after := int64(-1)
 				if n, ok := intArg(args, "after"); ok {
 					after = int64(n)
@@ -1368,6 +1320,33 @@ func taskDetailToMCPRecord(detail TaskDetail) mcp.TaskRecord {
 		})
 	}
 	return rec
+}
+
+// expectFields are the keys arguments.expect takes (expectation): every
+// other key is refused rather than ignored, since an expectation a model
+// believes it set and the call never checked is worse than none.
+var expectFields = []string{"state", "title_prefix", "kind"}
+
+func checkExpectFields(args map[string]any) error {
+	raw, ok := args["expect"]
+	if !ok || raw == nil {
+		return nil
+	}
+	expect, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("expect must be an object with any of %s", strings.Join(expectFields, ", "))
+	}
+	var unknown []string
+	for k := range expect {
+		if !slices.Contains(expectFields, k) {
+			unknown = append(unknown, k)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	return fmt.Errorf("expect has no field %s; it takes %s", strings.Join(unknown, ", "), strings.Join(expectFields, ", "))
 }
 
 func intArg(args map[string]any, key string) (int, bool) {

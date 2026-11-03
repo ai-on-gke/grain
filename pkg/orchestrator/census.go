@@ -215,7 +215,7 @@ const (
 	waitForChecksToolName  = "wait_for_checks"
 	runCIJobToolName       = "run_ci_job"
 	retriggerCIToolName    = "retrigger_ci"
-	controllerMCPNamespace = "grain-controller"
+	controllerMCPNamespace = mcp.ControllerToolNamespace
 )
 
 // unwrapControllerToolCall normalises tool calls made against grain-controller
