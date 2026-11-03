@@ -335,7 +335,8 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// looks when a sandbox is behaving like an older commit's, and
 		// the startup warning about the two disagreeing has scrolled out
 		// of the journal by then (uiSandboxImage, grain/task-306).
-		SandboxImage: uiSandboxImage(cfg),
+		SandboxImage:     uiSandboxImage(cfg),
+		SandboxImageFunc: func() *ui.SandboxImage { return uiSandboxImage(live.Current()) },
 		// Whether the three sandbox-shape settings on that same pane
 		// actually shape anything here, which is a property of the
 		// backend built above rather than of the row they are stored in
@@ -633,6 +634,9 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	}
 
 	uiClient := ui.NewClient(uiCfg, store)
+	if err := uiClient.MigrateAllowedPrincipals(context.Background()); err != nil {
+		log.Printf("grain daemon: WARNING: migrating allowed principals: %v", err)
+	}
 	// The sandbox proxy's acting /cli/ routes act through this same
 	// client (sandbox_cli.go).
 	liveSandboxCLI.Store(uiClient)
