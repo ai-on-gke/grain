@@ -58,6 +58,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/console"
 	"github.com/ai-on-gke/grain/pkg/forge"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -444,6 +445,12 @@ type Config struct {
 	// sandboxPod.
 	capabilityMCPServers     []agent.CapabilityMCPServer
 	capabilityPromptSections string
+	// ControllerMCP builds a host-side proxy targeting POST /api/mcp for a
+	// run holding api:* grants, injecting daemon authentication and
+	// X-Grain-Acting-Task: <taskID> so built-in sessions and tasks reach
+	// grain-controller through the same CapabilityMCPServer loopback relay
+	// external capability servers use. Nil attaches none.
+	ControllerMCP func(taskID string) (*protocol.Proxy, error)
 	// Credentials resolves the named credentials a capability provider
 	// asks for by name, e.g. gcpkey's minter service account.
 	Credentials model.CredentialResolver

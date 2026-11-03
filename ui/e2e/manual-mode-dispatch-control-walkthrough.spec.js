@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { execFileSync } from "node:child_process";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { test, expect } from "./fixtures.js";
 import { alertRow, openAlerts } from "./alerts.js";
 
@@ -25,10 +21,10 @@ import { alertRow, openAlerts } from "./alerts.js";
 // shipped is docs/manual-mode.md: pause the deployment, then Run now (the
 // pane's button, the list's "Run selected now") starts exactly the tasks
 // picked. dispatch-control is the agent's half: the api:dispatch-control
-// preset, whose model-only routes `grain mcpserver` serves as
+// preset, whose model-only routes `POST /api/mcp` (grain-controller) serves as
 // api_pause_pipeline, api_resume_pipeline and api_run_now (defer is
 // tasks:write, which a run reaches through `grain api` in its sandbox),
-// driven over stdio here the way a run's agent drives it.
+// driven over stateless HTTP MCP here the way a run's agent drives it.
 //
 // demo has no orchestrator, so nothing is dispatched: what these assert
 // is the request (runNowAt) and every page that reports it.
@@ -174,78 +170,89 @@ test("Run now and Run selected now under a pause, and the rows that say so", asy
   }
 });
 
-// mcpCalls runs one `grain mcpserver` for task taskID holding
-// api:dispatch-control and makes each of calls over JSON-RPC stdio, returning
-// each call's result.
-function mcpCalls({ url, code, taskID, sandboxRoot, calls }) {
-  const lines = [
-    {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "manual-mode-walkthrough", version: "1" },
-      },
+// mcpCalls drives POST /api/mcp (grain-controller) for task taskID holding
+// api:dispatch-control, exploring the "dispatch" scope and executing each
+// route via grain_invoke.
+async function mcpCalls({ url, code, taskID, calls }) {
+  const endpoint = `${url.replace(/\/$/, "")}/api/mcp`;
+  const headers = {
+    "Content-Type": "application/json",
+    "X-Grain-Access-Code": code,
+    "X-Grain-Acting-Task": String(taskID),
+  };
+  const rpc = async (payload, expectAccepted = false) => {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+    if (expectAccepted) {
+      expect(res.status).toBe(202);
+      return null;
+    }
+    expect(
+      res.ok,
+      `POST /api/mcp: ${res.status} ${await res.clone().text()}`,
+    ).toBe(true);
+    return res.json();
+  };
+
+  await rpc({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-03-26",
+      capabilities: {},
+      clientInfo: { name: "manual-mode-walkthrough", version: "1" },
     },
-    { jsonrpc: "2.0", method: "notifications/initialized" },
-    { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
-    ...calls.map(([name, args], i) => ({
+  });
+  await rpc({ jsonrpc: "2.0", method: "notifications/initialized" }, true);
+
+  const explored = await rpc({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/call",
+    params: {
+      name: "grain_explore_scope",
+      arguments: { scope: "dispatch" },
+    },
+  });
+  expect(
+    explored.result.isError,
+    explored.result.content?.[0]?.text,
+  ).toBeFalsy();
+  const tools = JSON.parse(explored.result.content[0].text).routes.map(
+    (r) => r.tool,
+  );
+
+  const results = [];
+  for (let i = 0; i < calls.length; i++) {
+    const [name, args] = calls[i];
+    const invokeParams = { tool: name, arguments: args };
+    if (args?.reason) invokeParams.reason = args.reason;
+    const msg = await rpc({
       jsonrpc: "2.0",
       id: 10 + i,
       method: "tools/call",
-      params: { name, arguments: args },
-    })),
-  ];
-  const stdout = execFileSync(
-    process.env.GRAIN_E2E_DEMO_BIN,
-    [
-      "mcpserver",
-      "-sandbox-root",
-      sandboxRoot,
-      "-server",
-      url,
-      "-task",
-      String(taskID),
-      "-grant",
-      "api:dispatch-control",
-    ],
-    {
-      input: lines.map((l) => JSON.stringify(l)).join("\n") + "\n",
-      env: { ...process.env, GRAIN_TOKEN: code },
-      encoding: "utf8",
-      timeout: 30_000,
-    },
-  );
-  const byID = new Map(
-    stdout
-      .split("\n")
-      .filter((l) => l.trim())
-      .map((l) => JSON.parse(l))
-      .map((m) => [m.id, m]),
-  );
-  const tools = byID.get(2).result.tools.map((t) => t.name);
-  const results = calls.map((_, i) => {
-    const r = byID.get(10 + i).result;
-    return {
+      params: { name: "grain_invoke", arguments: invokeParams },
+    });
+    const r = msg.result;
+    results.push({
       isError: Boolean(r.isError),
       text: r.content.map((c) => c.text).join(" "),
-    };
-  });
+    });
+  }
   return { tools, results };
 }
 
-test("dispatch-control over a live grain mcpserver, and the pages that show it", async ({
+test("dispatch-control over POST /api/mcp, and the pages that show it", async ({
   page,
   request,
   demoServer,
   accessCode,
 }) => {
   const stamp = Date.now();
-  const sandboxRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "grain-e2e-dispatch-control-"),
-  );
   const steward = await queued(request, `Steward ${stamp}`, {
     capabilities: ["api:dispatch-control"],
   });
@@ -263,11 +270,10 @@ test("dispatch-control over a live grain mcpserver, and the pages that show it",
   const running = await seededIn(request, "running");
   const reason = `steward hand-picking ${stamp}`;
   try {
-    const { tools, results } = mcpCalls({
+    const { tools, results } = await mcpCalls({
       url: demoServer,
       code: accessCode,
       taskID: steward.id,
-      sandboxRoot,
       calls: [
         ["api_pause_pipeline", { body: { reason } }],
         ["api_run_now", { id: String(target.id) }],
@@ -319,13 +325,14 @@ test("dispatch-control over a live grain mcpserver, and the pages that show it",
     expect(detail.comments.map((c) => c.author)).toContain(steward.id);
 
     // api_resume_pipeline lifts it (the agent's own pause), and the alert goes.
-    const resumed = mcpCalls({
-      url: demoServer,
-      code: accessCode,
-      taskID: steward.id,
-      sandboxRoot,
-      calls: [["api_resume_pipeline", { reason: "done hand-picking" }]],
-    }).results[0];
+    const resumed = (
+      await mcpCalls({
+        url: demoServer,
+        code: accessCode,
+        taskID: steward.id,
+        calls: [["api_resume_pipeline", { reason: "done hand-picking" }]],
+      })
+    ).results[0];
     expect(resumed.isError, resumed.text).toBe(false);
     await page.goto("/system/pipeline");
     await expect(
@@ -333,6 +340,5 @@ test("dispatch-control over a live grain mcpserver, and the pages that show it",
     ).toHaveCount(0);
   } finally {
     await request.delete("/api/pipeline-pause");
-    await fs.rm(sandboxRoot, { recursive: true, force: true });
   }
 });

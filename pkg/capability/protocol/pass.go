@@ -337,8 +337,8 @@ func (p *Pass) SetupCommands() []SetupCommand {
 // AssignServerNames gives each granted MCP endpoint its final name
 // (§5.2.3): reported holds serverInfo.name per grant index ("" for a grant
 // with no endpoint). Each must match the method grammar and must not be
-// grain-sandbox; when several share a name the lowest index keeps it and
-// the rest become <name>-2, <name>-3, ... in index order.
+// grain-sandbox or grain-controller; when several share a name the lowest
+// index keeps it and the rest become <name>-2, <name>-3, ... in index order.
 func AssignServerNames(reported []string) ([]string, error) {
 	out := make([]string, len(reported))
 	count := map[string]int{}
@@ -347,8 +347,8 @@ func AssignServerNames(reported []string) ([]string, error) {
 		if name == "" {
 			continue
 		}
-		if !methodPattern.MatchString(name) || name == "grain-sandbox" {
-			return nil, fmt.Errorf("mcp_endpoint of grant %d reports server name %q, which must match %s and not be grain-sandbox", i, name, methodPattern)
+		if !methodPattern.MatchString(name) || name == "grain-sandbox" || name == "grain-controller" {
+			return nil, fmt.Errorf("mcp_endpoint of grant %d reports server name %q, which must match %s and not be grain-sandbox or grain-controller", i, name, methodPattern)
 		}
 		taken[name] = true
 	}

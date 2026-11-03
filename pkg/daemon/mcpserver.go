@@ -1446,13 +1446,13 @@ func warnUnknownGrants(grants GrantNames) {
 	served := append(slices.Clone(servedGrants), capability.RunGrants()...)
 	for _, name := range grants {
 		if _, isAPI, err := ui.ParseAPIGrant(name); isAPI && err == nil {
-			continue // served as generated tools (ui.AgentAPITools)
+			continue // served by grain-controller on POST /api/mcp
 		}
 		if grainserver.IsInProcessGrant(name) {
 			continue
 		}
 		if model.APIAliasPreset(name) != "" {
-			continue // bare alias for an api preset (ui.AgentAPITools)
+			continue // bare alias for an api preset (served by grain-controller on POST /api/mcp)
 		}
 		if !slices.Contains(served, name) {
 			fmt.Fprintf(os.Stderr,
@@ -1496,16 +1496,6 @@ func GrantedDaemonTools(grants GrantNames, srcDir, secretsDir, stateDir, taskID 
 			AllowWrite: grainserver.HasSQLWrite(grants),
 			Executor:   executor,
 		})...)
-	}
-	// The agent API: one tool per route of grain's own API whose scope
-	// the task's api grants reach (docs/agent-api.md). Each call goes to
-	// the daemon naming this task, which holds it to those same grants
-	// (ui.ActingTaskHeader) -- so a tool listed here is an offer, and
-	// the daemon is what decides. Registered last, so a hand-written
-	// tool of the same name could never be shadowed by one, though the
-	// api_ prefix keeps them apart anyway.
-	if client != nil && taskID != "" {
-		tools = append(tools, ui.AgentAPITools(client, taskID, grants)...)
 	}
 	return tools
 }

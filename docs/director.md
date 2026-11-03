@@ -247,8 +247,10 @@ not the same one**.
 
 The director can do anything a person can do in the UI if its session
 holds the scope. It asks for scopes as `api:<scope>` or `api:<preset>`
-capabilities, granted in the session's capability pane, and each grant
-serves it one `api_*` tool per route under that scope. For example:
+capabilities, granted in the session's capability pane, and any such
+grant attaches the `grain-controller` MCP server, whose
+`grain_explore_scope` and `grain_invoke` reach every route under the
+scopes it holds. For example:
 
 - `api:task-admin` to reorder, edit, retry and close tasks and re-run
   their CI;

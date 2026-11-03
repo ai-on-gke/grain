@@ -77,6 +77,7 @@ func runTelemetryAt(result *agent.Result, at time.Time) model.RunTelemetry {
 	red, narrowSinceRed := false, false
 
 	for i, call := range result.ToolCalls {
+		call = unwrapControllerToolCall(call)
 		use, seen := byTool[call.Name]
 		if !seen {
 			use = &model.RunToolUse{
@@ -210,11 +211,74 @@ func execTransportFailures(result *agent.Result) int {
 // comment gives: these are pkg/mcp's bare names, matched exactly, and a
 // mismatch is silent.
 const (
-	runCommandToolName    = "run_command"
-	waitForChecksToolName = "wait_for_checks"
-	runCIJobToolName      = "run_ci_job"
-	retriggerCIToolName   = "retrigger_ci"
+	runCommandToolName     = "run_command"
+	waitForChecksToolName  = "wait_for_checks"
+	runCIJobToolName       = "run_ci_job"
+	retriggerCIToolName    = "retrigger_ci"
+	controllerMCPNamespace = mcp.ControllerToolNamespace
 )
+
+// unwrapControllerToolCall normalises tool calls made against grain-controller
+// (/api/mcp): CLI server prefixes (mcp__grain-controller__, mcp_grain-controller_,
+// grain-controller/, and agy's call_mcp_tool wrapper) are stripped, and
+// grain_invoke(tool, arguments) is unwrapped to the underlying api_* route name
+// and arguments so run telemetry logs which api_* routes were called.
+func unwrapControllerToolCall(call agent.ToolCall) agent.ToolCall {
+	if call.Name == "call_mcp_tool" && call.Arguments != nil {
+		if server, _ := call.Arguments["ServerName"].(string); server == controllerMCPNamespace {
+			if tool, _ := call.Arguments["ToolName"].(string); tool != "" {
+				call.Name = tool
+				inner, _ := call.Arguments["Arguments"].(map[string]any)
+				call.Arguments = inner
+			}
+		}
+	}
+	for _, prefix := range []string{
+		"mcp__" + controllerMCPNamespace + "__",
+		"mcp_" + controllerMCPNamespace + "_",
+		controllerMCPNamespace + "/",
+		controllerMCPNamespace + "__",
+	} {
+		if after, ok := strings.CutPrefix(call.Name, prefix); ok {
+			call.Name = after
+			break
+		}
+	}
+	if call.Name != "grain_invoke" || call.Arguments == nil {
+		return call
+	}
+	rawTool, _ := call.Arguments["tool"].(string)
+	rawTool = strings.TrimSpace(rawTool)
+	if rawTool == "" {
+		return call
+	}
+	if !strings.HasPrefix(rawTool, "api_") {
+		rawTool = "api_" + rawTool
+	}
+	call.Name = rawTool
+	merged := map[string]any{}
+	if inner, ok := call.Arguments["arguments"].(map[string]any); ok {
+		for k, v := range inner {
+			merged[k] = v
+		}
+		for _, subKey := range []string{"body", "query"} {
+			if sub, ok := inner[subKey].(map[string]any); ok {
+				for k, v := range sub {
+					if _, exists := merged[k]; !exists {
+						merged[k] = v
+					}
+				}
+			}
+		}
+	}
+	if reason, ok := call.Arguments["reason"].(string); ok && reason != "" {
+		if _, exists := merged["reason"]; !exists {
+			merged["reason"] = reason
+		}
+	}
+	call.Arguments = merged
+	return call
+}
 
 // selectsJobs reports whether a wait_for_checks call named the jobs it
 // wanted rather than asking for the whole suite.
@@ -299,10 +363,21 @@ func isAgentAPITool(name string) bool {
 	return true
 }
 
+func isTaskIDAPIRoute(name string) bool {
+	switch name {
+	case "api_reorder", "api_approve", "api_close", "api_reopen", "api_hold", "api_release_hold",
+		"api_retry_merge", "api_force_merge", "api_stop", "api_retry", "api_defer", "api_run_now":
+		return true
+	}
+	return false
+}
+
 var (
-	batchTaskTokenRe = regexp.MustCompile(`(?i)\b(?:task[- ])?#?([0-9]+)\b`)
-	batchTaskLineRe  = regexp.MustCompile(`^([0-9]+)\s+\[`)
-	batchRunIDRe     = regexp.MustCompile(`\b(ci-[a-zA-Z0-9_-]+|run-[a-zA-Z0-9_-]+)\b`)
+	batchTaskTokenRe  = regexp.MustCompile(`(?i)\b(?:task[- ])?#?([0-9]+)\b`)
+	batchTaskLineRe   = regexp.MustCompile(`^([0-9]+)\s+\[`)
+	batchRunIDRe      = regexp.MustCompile(`\b(ci-[a-zA-Z0-9_-]+|run-[a-zA-Z0-9_-]+)\b`)
+	jsonTaskIDFieldRe = regexp.MustCompile(`"id"\s*:\s*"([0-9]+)"`)
+	jsonCIRunIDRe     = regexp.MustCompile(`"id"\s*:\s*"(ci-[a-zA-Z0-9_-]+)"`)
 )
 
 // extractAPICallTargetIDs extracts comma-separated task or CI run IDs targeted
@@ -365,9 +440,14 @@ func extractAPICallTargetIDs(call agent.ToolCall) string {
 				addArgAny(v, true)
 			}
 		}
+		if call.Name == "grain_get_task" {
+			if v, ok := call.Arguments["id"]; ok {
+				addArgAny(v, true)
+			}
+		}
 		if strings.HasPrefix(call.Name, "api_") {
 			if v, ok := call.Arguments["id"]; ok {
-				if strings.Contains(call.Name, "task") {
+				if strings.Contains(call.Name, "task") || isTaskIDAPIRoute(call.Name) {
 					addArgAny(v, true)
 				} else if strings.Contains(call.Name, "ci_run") {
 					addArgAny(v, false)
@@ -386,7 +466,7 @@ func extractAPICallTargetIDs(call agent.ToolCall) string {
 
 	switch call.Name {
 	case "list_grain_tasks", "read_pipeline_changes", "query_merge_queue", "list_ci_runs",
-		"api_list_tasks", "api_list_ci_runs":
+		"api_list_tasks", "api_list_ci_runs", "grain_list_tasks":
 		for _, id := range extractBatchOutputIDs(call.Name, call.Text) {
 			if !seen[id] {
 				seen[id] = true
@@ -405,6 +485,20 @@ func extractBatchOutputIDs(tool, text string) []string {
 		if id != "" && !seen[id] {
 			seen[id] = true
 			ids = append(ids, id)
+		}
+	}
+	if tool == "api_list_tasks" || tool == "grain_list_tasks" {
+		for _, m := range jsonTaskIDFieldRe.FindAllStringSubmatch(text, -1) {
+			if len(m) == 2 {
+				add(model.NormalizeTaskID(m[1]))
+			}
+		}
+	}
+	if tool == "api_list_ci_runs" {
+		for _, m := range jsonCIRunIDRe.FindAllStringSubmatch(text, -1) {
+			if len(m) == 2 {
+				add(m[1])
+			}
 		}
 	}
 	for _, line := range strings.Split(text, "\n") {

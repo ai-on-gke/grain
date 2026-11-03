@@ -132,6 +132,7 @@ const maxProxiedBody = 32 << 20
 type Proxy struct {
 	dp        DataPlane
 	attemptID string
+	targetURL string
 	client    *http.Client
 
 	mu      sync.RWMutex
@@ -168,8 +169,33 @@ func NewProxy(dp DataPlane, attemptID string, client *http.Client) (*Proxy, erro
 	return &Proxy{dp: dp, attemptID: attemptID, client: hc}, nil
 }
 
+// NewEndpointProxy returns a Proxy that forwards every request to targetURL
+// (an http:// or https:// URL) with headers injected and redirects refused.
+func NewEndpointProxy(targetURL string, headers map[string]string, client *http.Client) (*Proxy, error) {
+	u, err := url.Parse(targetURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, fmt.Errorf("endpoint URL %q is not an http(s) URL with a host", targetURL)
+	}
+	hc := &http.Client{}
+	if client != nil {
+		copied := *client
+		hc = &copied
+	}
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &Proxy{
+		dp:        DataPlane{Headers: copyHeaders(headers)},
+		targetURL: targetURL,
+		client:    hc,
+	}, nil
+}
+
 // Target is the one URL every request is sent to.
-func (p *Proxy) Target() string { return p.dp.Origin + EndpointPath(p.attemptID) }
+func (p *Proxy) Target() string {
+	if p.targetURL != "" {
+		return p.targetURL
+	}
+	return p.dp.Origin + EndpointPath(p.attemptID)
+}
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {

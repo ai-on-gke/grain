@@ -74,8 +74,8 @@ func TestExternalAgentTokenReachesNoInternalRoute(t *testing.T) {
 		if !ok {
 			method, path = http.MethodGet, pattern
 		}
-		if pattern == "POST /mcp" {
-			continue // the endpoint itself, which the credential is for
+		if pattern == "POST /mcp" || pattern == "POST /api/mcp" {
+			continue // the MCP endpoints themselves, which the credential is for
 		}
 		req := httptest.NewRequest(method, param.ReplaceAllString(path, "x"), strings.NewReader("{}"))
 		req.Header.Set("Authorization", "Bearer "+issued.Token)
