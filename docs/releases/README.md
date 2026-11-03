@@ -15,7 +15,10 @@ Each file has:
   `scripts/release-notes.sh check-breaking` refuses a release that has
   them unless it is the major release `RELEASE_MAJOR` in
   `scripts/release.conf` asks for, or a person sets
-  `RELEASE_ALLOW_BREAKING=<version>` for it.
+  `RELEASE_ALLOW_BREAKING=<version>` for it: `grain release approve
+  -allow-breaking vX.Y.Z` (`allow_breaking: true` on the approve route),
+  or the `allow_breaking` input of the GitHub Actions `promote-release`
+  workflow.
 - **Features**, **Fixes** and **Other changes**: every pull request merged
   into the release, by title and number, sorted by its Conventional Commits
   type (`feat`, `fix`, everything else).
