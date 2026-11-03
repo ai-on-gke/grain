@@ -633,7 +633,8 @@ func TestMigration95SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 	}
 	cfg.CapabilityPolicy = model.CapabilityPolicy{
 		Rules: []model.CapabilityPolicyRule{
-			{Capability: "gcp-key:deploy", Repos: []string{"acme/widgets"}},
+			{Capability: "gcp-key:deploy", Repos: []string{"acme/widgets"}, AllowUntrusted: true},
+			{Capability: "gcp-key", Repos: []string{"acme/public"}, AllowUntrusted: true},
 		},
 		Catalogue: &model.CapabilityCatalogue{
 			Defaults: model.CatalogueDefaults{
@@ -781,8 +782,10 @@ func TestMigration95SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		if want := []string{sandboxGrant, stagingGrant, "self-debug"}; !slices.Equal(gotCfg.ConsoleSessions[0].Capabilities, want) {
 			t.Errorf("ConsoleSessions[0].Capabilities = %v, want %v", gotCfg.ConsoleSessions[0].Capabilities, want)
 		}
-		if len(gotCfg.CapabilityPolicy.Rules) != 1 || gotCfg.CapabilityPolicy.Rules[0].Capability != model.GCPKeyRef {
-			t.Errorf("CapabilityPolicy.Rules = %+v, want capability %s", gotCfg.CapabilityPolicy.Rules, model.GCPKeyRef)
+		if len(gotCfg.CapabilityPolicy.Rules) != 2 ||
+			gotCfg.CapabilityPolicy.Rules[0].Capability != model.GCPKeyRef || gotCfg.CapabilityPolicy.Rules[0].AllowUntrusted ||
+			gotCfg.CapabilityPolicy.Rules[1].Capability != model.GCPKeyRef || !gotCfg.CapabilityPolicy.Rules[1].AllowUntrusted {
+			t.Errorf("CapabilityPolicy.Rules = %+v, want named rule AllowUntrusted=false and bare rule AllowUntrusted=true on %s", gotCfg.CapabilityPolicy.Rules, model.GCPKeyRef)
 		}
 		if gotCfg.CapabilityPolicy.Catalogue == nil {
 			t.Fatalf("CapabilityPolicy.Catalogue nil")

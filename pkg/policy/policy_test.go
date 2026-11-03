@@ -382,3 +382,15 @@ func TestCheckUnisolated(t *testing.T) {
 		t.Errorf("allow_external_on_host_sandboxes: %v", err)
 	}
 }
+
+func TestAllowNamedSandboxAgentPatternRefusesUnnamedGCPKey(t *testing.T) {
+	p := mustParse(t, "capabilities:\n  allow: [gcp-key:sandbox-*]\n")
+	if err := p.CheckClaims(model.Task{Grants: []model.Grant{{Capability: model.GCPKeySandboxAgentGrant}}}, ""); err != nil {
+		t.Fatalf("named sandbox-agent refused by allow [gcp-key:sandbox-*]: %v", err)
+	}
+	for _, unnamed := range []string{model.GCPKeyRef, model.GCPKeyRef + "={}", model.GCPKeyRef + `={"account":"default"}`} {
+		if err := p.CheckClaims(model.Task{Grants: []model.Grant{{Capability: unnamed}}}, ""); err == nil {
+			t.Errorf("unnamed %q admitted by allow [gcp-key:sandbox-*]", unnamed)
+		}
+	}
+}

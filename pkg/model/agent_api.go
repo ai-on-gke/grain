@@ -261,6 +261,27 @@ func ParseGCPKeyServerGrant(grant string) (permissionSet string, ok bool) {
 	return set, true
 }
 
+// GCPKeySetUnnamed reports whether grant is a gcp#gcp-key capability-server
+// grant that leaves its permission set to the server's first configured set:
+// no permission_set, or "default" in permission_set or the deprecated account
+// field. (Bare "gcp-key" is false: CanonicalLegacyGrant rewrites it to
+// GCPKeySandboxAgentGrant.)
+func GCPKeySetUnnamed(grant string) bool {
+	s := strings.TrimSpace(grant)
+	if !IsCapabilityRef(s) {
+		return false
+	}
+	spec, err := CapabilityGrantSpec(s)
+	if err != nil || spec.Capability != GCPKeyRef {
+		return false
+	}
+	set, _ := spec.With["permission_set"].(string)
+	if old, _ := spec.With["account"].(string); old != "" {
+		set = old
+	}
+	return set == "" || set == "default"
+}
+
 func init() {
 	protocol.SetGrantPolicy(GrainCapabilityServerID, GrainSQLMethod, func(args map[string]any) protocol.GrantKind {
 		if w, _ := args["write"].(bool); w {

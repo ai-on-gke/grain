@@ -72,7 +72,7 @@ type seededGCPSet struct {
 	secret   string
 }
 
-// migrateGCPKeyToCapabilityServer is schema migration 88's Up:
+// migrateGCPKeyToCapabilityServer is schema migration 95's Up:
 //  1. Seeds https://grain.dev/capabilities/gcp permission sets in
 //     grain_config.mcp_servers from the deployment's in-process pool
 //     (grain_config.gcp_project / gcp_service_account_email /
@@ -533,6 +533,12 @@ func rewriteCapabilityPolicyGCPKey(rawPolicy string, renames map[string][]string
 	for i := range pol.Rules {
 		c := strings.TrimSpace(pol.Rules[i].Capability)
 		if c == "gcp-key" || strings.HasPrefix(c, "gcp-key:") {
+			if name, ok := strings.CutPrefix(c, "gcp-key:"); ok {
+				name = strings.TrimSpace(name)
+				if name != "" && !strings.EqualFold(name, "default") {
+					pol.Rules[i].AllowUntrusted = false
+				}
+			}
 			pol.Rules[i].Capability = GCPKeyRef
 			changed = true
 		}
