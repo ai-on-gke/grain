@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -159,6 +160,7 @@ func (s *Store) PutGitHubCIJob(ctx context.Context, j GitHubCIJob) error {
 }
 
 func mergeGitHubCIJob(prev *GitHubCIJob, j GitHubCIJob) GitHubCIJob {
+	fillGitHubCIRunID(&j)
 	if j.Source == "" {
 		j.Source = GitHubCISource
 	}
@@ -215,6 +217,50 @@ func mergeGitHubCIJob(prev *GitHubCIJob, j GitHubCIJob) GitHubCIJob {
 		out.TailFetched = true
 	}
 	return out
+}
+
+// fillGitHubCIRunID gives a job its workflow run id, and the run's page,
+// out of its own page when the report that brought it named neither. A
+// polled check run is such a report -- the checks listing carries no run
+// id -- and on a host whose webhooks never reach grain it is the only one,
+// which left every one of that host's jobs at run 0 and out of everything
+// that reads runs by id (ci:read's Actions listing among them).
+func fillGitHubCIRunID(j *GitHubCIJob) {
+	if j.RunID == 0 {
+		j.RunID = ActionsRunIDFromURL(j.JobURL)
+		if j.RunID == 0 {
+			j.RunID = ActionsRunIDFromURL(j.RunURL)
+		}
+	}
+	if j.RunID != 0 && j.RunURL == "" {
+		if i := strings.Index(j.JobURL, "/job/"); i > 0 && ActionsRunIDFromURL(j.JobURL[:i]) == j.RunID {
+			j.RunURL = j.JobURL[:i]
+		}
+	}
+}
+
+// ActionsRunIDFromURL is the workflow run id in an Actions run's or job's
+// page (https://<host>/<owner>/<name>/actions/runs/<run>[/job/<job>]), on
+// any host, or 0 for a URL that is neither.
+func ActionsRunIDFromURL(u string) int64 {
+	const marker = "/actions/runs/"
+	i := strings.LastIndex(u, marker)
+	if i < 0 {
+		return 0
+	}
+	rest := u[i+len(marker):]
+	end := 0
+	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+		end++
+	}
+	if end == 0 || (end < len(rest) && !strings.ContainsRune("/?#", rune(rest[end]))) {
+		return 0
+	}
+	n, err := strconv.ParseInt(rest[:end], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 func clampGitHubCIText(s string) string {

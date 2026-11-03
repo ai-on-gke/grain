@@ -558,7 +558,7 @@ func pollConcludedGitHubWorkflowRuns(ctx context.Context, deps Deps, now time.Ti
 		if gitHubCIBudgetLow(now) {
 			break
 		}
-		runs, err := reader.CompletedWorkflowRuns(repo.Owner, repo.Name, gitHubCompletedRunsPollLimit)
+		runs, err := reader.CompletedWorkflowRuns(repo.StoredOwner(), repo.Name, gitHubCompletedRunsPollLimit)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("polling completed GitHub workflow runs on %s: %w", repo, err))
 			continue
@@ -707,7 +707,7 @@ func ensureGitHubWorkflowRunJobs(ctx context.Context, deps Deps, run ConcludedGi
 		return nil, nil
 	}
 	if reader, ok := deps.Client.(github.WorkflowRunsReader); ok && deps.Client != nil {
-		ghJobs, err := reader.ListWorkflowRunJobs(run.Repo.Owner, run.Repo.Name, run.RunID)
+		ghJobs, err := reader.ListWorkflowRunJobs(run.Repo.StoredOwner(), run.Repo.Name, run.RunID)
 		if err != nil {
 			return nil, err
 		}
@@ -749,7 +749,7 @@ func ensureGitHubWorkflowRunJobs(ctx context.Context, deps Deps, run ConcludedGi
 			if j.Failed() && hasTailer && !gitHubCIBudgetLow(now) {
 				existing, _ := deps.Store.GetGitHubCIJob(ctx, j.Repo, j.CheckRunID)
 				if existing == nil || (!existing.TailFetched && existing.FailureTail == "") {
-					if tail, err := tailer.JobLogTail(run.Repo.Owner, run.Repo.Name, gj.ID); err == nil {
+					if tail, err := tailer.JobLogTail(run.Repo.StoredOwner(), run.Repo.Name, gj.ID); err == nil {
 						source := ""
 						if tail != "" {
 							source = "log"
@@ -798,7 +798,7 @@ func ensureGitHubWorkflowRunJobs(ctx context.Context, deps Deps, run ConcludedGi
 		if hasTailer && deps.Client != nil && !gitHubCIBudgetLow(now) {
 			for i := range jobs {
 				if jobs[i].Failed() && !jobs[i].TailFetched && jobs[i].FailureTail == "" {
-					if tail, err := tailer.JobLogTail(run.Repo.Owner, run.Repo.Name, jobs[i].CheckRunID); err == nil {
+					if tail, err := tailer.JobLogTail(run.Repo.StoredOwner(), run.Repo.Name, jobs[i].CheckRunID); err == nil {
 						source := ""
 						if tail != "" {
 							source = "log"

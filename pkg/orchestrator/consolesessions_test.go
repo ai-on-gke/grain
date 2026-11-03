@@ -106,7 +106,7 @@ func TestTheDirectorIsFiledOnTheFirstCycleAndParkedOnItsOwnOpening(t *testing.T)
 		grants = append(grants, g.Capability)
 	}
 	slices.Sort(grants)
-	if !slices.Equal(grants, []string{"api:deployment:read", "bootstrap-playbooks", "durable", model.GrainHealthGrant, model.GrainJournalGrant, "self-debug"}) {
+	if !slices.Equal(grants, []string{model.ConsoleSessionCIReadGrant, "api:deployment:read", "bootstrap-playbooks", "durable", model.GrainHealthGrant, model.GrainJournalGrant, "self-debug"}) {
 		t.Errorf("Grants = %v, want the shipped default set plus durable", grants)
 	}
 	goal, err := store.TaskGoal(ctx, director.ID)
@@ -645,8 +645,8 @@ func TestChangingASessionsCapabilitiesReachesItsTask(t *testing.T) {
 		grants = append(grants, g.Capability)
 	}
 	slices.Sort(grants)
-	if !slices.Equal(grants, []string{"durable", "self-debug", "self-repair"}) {
-		t.Errorf("Grants = %v, want what the settings now say plus durable", grants)
+	if !slices.Equal(grants, []string{model.ConsoleSessionCIReadGrant, "durable", "self-debug", "self-repair"}) {
+		t.Errorf("Grants = %v, want what the settings now say plus durable and the session defaults", grants)
 	}
 	if updated.NetworkAccess != model.NetworkOpen {
 		t.Errorf("NetworkAccess = %q, want the configured one", updated.NetworkAccess)
@@ -1124,7 +1124,7 @@ func TestASessionsAnswerIsStampedAfterTheReplyItAnswers(t *testing.T) {
 		Framework: orchestrator.StaticFramework(textAnswer("the answer")),
 		Config: orchestrator.Config{
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities: model.NewCapabilityRegistry(durable.New()),
+			Capabilities: orchestrator.SessionTestRegistry(durable.New()),
 		},
 		MaxWorkers: 1,
 	}
@@ -1506,7 +1506,7 @@ func TestSessionSandboxReusedWithinIdleTTLFallbackAndReclaimedAfterTTL(t *testin
 		MaxWorkers: 2,
 		Config: orchestrator.Config{
 			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          model.NewCapabilityRegistry(durable.New()),
+			Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
 			SessionSandboxIdleTTL: 30 * time.Minute,
 		},
 	}
@@ -1606,7 +1606,7 @@ func TestParkedSessionSandboxIsReclaimedOnAShortenedTTL(t *testing.T) {
 		MaxWorkers: 2,
 		Config: orchestrator.Config{
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities: model.NewCapabilityRegistry(durable.New()),
+			Capabilities: orchestrator.SessionTestRegistry(durable.New()),
 		},
 	}
 
@@ -1661,7 +1661,7 @@ func TestClosingOrPausingSessionReleasesWarmSandbox(t *testing.T) {
 				MaxWorkers: 2,
 				Config: orchestrator.Config{
 					StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-					Capabilities:          model.NewCapabilityRegistry(durable.New()),
+					Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
 					SessionSandboxIdleTTL: 30 * time.Minute,
 				},
 			}
@@ -1742,7 +1742,7 @@ func TestSessionWarmSandboxCapacityEvictionEvictsOldestIdleFirst(t *testing.T) {
 		MaxWorkers: 2,
 		Config: orchestrator.Config{
 			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          model.NewCapabilityRegistry(durable.New()),
+			Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
 			SessionSandboxIdleTTL: 30 * time.Minute,
 		},
 	}
@@ -1838,7 +1838,7 @@ func TestInProcessSessionContinuationKeepsRunAliveAcrossTurns(t *testing.T) {
 		MaxWorkers: 1,
 		Config: orchestrator.Config{
 			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          model.NewCapabilityRegistry(durable.New()),
+			Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
 			SessionSandboxIdleTTL: 350 * time.Millisecond,
 			WaitForSessionReply:   true,
 			CancelPollInterval:    20 * time.Millisecond,
@@ -1967,7 +1967,7 @@ func TestMeasureSessionTurnLatencyBeforeAndAfter(t *testing.T) {
 			MaxWorkers: 1,
 			Config: orchestrator.Config{
 				StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-				Capabilities:          model.NewCapabilityRegistry(durable.New()),
+				Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
 				SessionSandboxIdleTTL: idleTTL,
 				WaitForSessionReply:   inProcess,
 				CancelPollInterval:    5 * time.Millisecond,
@@ -2041,7 +2041,7 @@ func TestSessionSandboxNotReusedWhenTheTaskChangedBetweenTurns(t *testing.T) {
 		MaxWorkers: 2,
 		Config: orchestrator.Config{
 			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          model.NewCapabilityRegistry(durable.New()),
+			Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
 			SessionSandboxIdleTTL: 30 * time.Minute,
 		},
 	}
@@ -2117,7 +2117,7 @@ func TestWarmSessionSandboxReleasedWhenItsGrantsChange(t *testing.T) {
 		MaxWorkers: 2,
 		Config: orchestrator.Config{
 			StateRepo:             func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities:          model.NewCapabilityRegistry(durable.New()),
+			Capabilities:          orchestrator.SessionTestRegistry(durable.New()),
 			SessionSandboxIdleTTL: 30 * time.Minute,
 		},
 	}
@@ -2348,7 +2348,7 @@ func TestActiveConsoleSessionPermissionChangesApplyImmediatelyToProposals(t *tes
 		MaxWorkers: 1,
 		Config: orchestrator.Config{
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities: model.NewCapabilityRegistry(durable.New()),
+			Capabilities: orchestrator.SessionTestRegistry(durable.New()),
 		},
 	}
 	if err := orchestrator.RunCycle(ctx, deps, t1.Add(time.Second)); err != nil {
@@ -2410,7 +2410,7 @@ func TestFirstReplyWakesConsoleSessionRestingWithRequestedSuspension(t *testing.
 		})),
 		Config: orchestrator.Config{
 			StateRepo:    func() model.RepoRef { return model.RepoRef{Owner: "acme", Name: "grain-home"} },
-			Capabilities: model.NewCapabilityRegistry(durable.New()),
+			Capabilities: orchestrator.SessionTestRegistry(durable.New()),
 		},
 		MaxWorkers: 1,
 	}
@@ -2574,12 +2574,16 @@ func declareDirector(t *testing.T, store *model.Store, reads []model.RepoRef, wr
 	t.Helper()
 	settings(t, store, func(cfg *model.Config) {
 		cfg.TargetRepos = []string{"acme/widgets", "acme/docs", "acme/infra"}
+		// Opted out of reading every working repository, so the reads
+		// these tests watch are the declared ones alone.
+		readsAll := false
 		cfg.ConsoleSessions = []model.ConsoleSession{{
 			ID:            model.DirectorSessionID,
 			Title:         "Director",
 			NetworkAccess: model.NetworkOpen,
 			Reads:         reads,
 			Writes:        writes,
+			ReadsAll:      &readsAll,
 		}}
 	})
 }

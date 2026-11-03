@@ -112,8 +112,8 @@ func TestSeededDefaultReferenceIsReportedAsADefault(t *testing.T) {
 	for _, g := range seeded.Grants {
 		vias = append(vias, g.Via)
 	}
-	want := []model.GrantSource{model.GrantByGrain, model.GrantByGrain, model.GrantByGrain, model.GrantByGrain}
+	want := []model.GrantSource{model.GrantByGrain, model.GrantByGrain, model.GrantByGrain, model.GrantByGrain, model.GrantByDefault}
 	if !slices.Equal(vias, want) {
-		t.Errorf("session grants = %+v, want durable and each configured capability once by grain", seeded.Grants)
+		t.Errorf("session grants = %+v, want durable and each configured capability once by grain, then the session defaults", seeded.Grants)
 	}
 }
