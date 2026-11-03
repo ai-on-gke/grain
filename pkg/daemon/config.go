@@ -284,6 +284,10 @@ type Config struct {
 	// (hostdruns.go): set by run() where the host executor is hostd, nil
 	// -- every host CLI a plain start -- elsewhere.
 	hostdRuns *runhost.Hostd
+	// pinnedHostdRuns builds hostdRuns for a run routed to a hostd other
+	// than the default (hostdRoute.apply, newPinnedHostdRuns): set by
+	// run(), nil -- every such CLI a plain start -- elsewhere.
+	pinnedHostdRuns func(HostExecutor) *runhost.Hostd
 	// shuttingDown is set once run()'s context is cancelled: the process
 	// is draining and its API is about to stop answering. GET
 	// /api/config reports it as restarting. nil outside run().
@@ -330,6 +334,12 @@ type Config struct {
 	// (hostexec.go).
 	HostdSocket string
 	HostExec    *HostExecutor
+	// HostdReattachTimeout is -hostd-reattach-timeout: how long a run's
+	// CLI, running detached on a grain hostd whose connection drops, waits
+	// for that same hostd to reconnect and be re-attached from its cursor
+	// before the run fails as an infrastructure failure, with no strike
+	// (agent.ErrHostdLost). Zero fails it at once.
+	HostdReattachTimeout time.Duration
 	// HostdRemote is set by -hostd-token-file (or $GRAIN_HOSTD_TOKEN):
 	// the session of a grain hostd on another machine that dials in to
 	// /api/hostd/connect with that token (hostd -server), through which

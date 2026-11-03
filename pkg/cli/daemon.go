@@ -380,6 +380,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		hostd.RemotePath+" with (grain hostd -server <this daemon's URL> -token-file ...), as the one hostd -hostd-token-name names: its host CLIs and run: host capability "+
 		"servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each hostd in the hostd registry (/api/hostds) instead, "+
 		"which gives it a token of its own")
+	hostdReattachTimeout := fs.Duration("hostd-reattach-timeout", 15*time.Minute, "how long a run's agent CLI, running detached on a grain hostd whose "+
+		"connection drops, waits for that same hostd to reconnect before the run fails as an infrastructure failure (no strike against the task); "+
+		"re-attached in time, it carries on from where its output stood. Runs queued for a hostd that is not connected wait for it whatever this is. 0 fails at once")
 	hostdTokenName := fs.String("hostd-token-name", hostd.DefaultSharedName, "the hostd name a hostd dialing in with -hostd-token-file's shared token is known by")
 	hostdTokenOwner := fs.String("hostd-token-owner", "", "the owner of -hostd-token-name's hostd: the email or service account a hostd dialing in with the shared token "+
 		"through IAP (or another identity verifier's proxy) must be verified as. A remote hostd with no owner is refused; one over loopback is not")
@@ -1208,8 +1211,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		ModelProxyUnrestricted: *modelProxyUnrestricted, ModelProxyMaxConcurrent: *modelProxyMaxConcurrent, ModelProxySlotWait: *modelProxySlotWait,
 		CodexPath: *codexPath, OpenAIAPIKeyFile: *openAIAPIKeyFile, CodexAuthFile: *codexAuthFile,
 		ClaudeRun: *claudeRun, CodexRun: *codexRun, AgyRun: *agyRun,
-		HostdSocket: *hostdSocket,
-		GithubHost:  *githubHost, GithubInsecureHTTP: *githubInsecureHTTP,
+		HostdSocket:          *hostdSocket,
+		HostdReattachTimeout: *hostdReattachTimeout,
+		GithubHost:           *githubHost, GithubInsecureHTTP: *githubInsecureHTTP,
 		CheckpostURL: *checkpostURL, CheckpostExpect: *checkpostExpect,
 		GithubWebhookURL: *githubWebhookURL, GithubWebhookAddr: *githubWebhookAddr,
 		GcpProject: *gcpProject, GcpServiceAccountEmail: *gcpServiceAccountEmail, GcpServiceAccountCount: *gcpServiceAccountCount,

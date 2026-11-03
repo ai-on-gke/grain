@@ -185,6 +185,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// Host CLIs through grain hostd, started detached so a daemon
 	// upgrade leaves them running (hostdruns.go).
 	cfg.hostdRuns = newHostdRuns(cfg, store)
+	cfg.pinnedHostdRuns = newPinnedHostdRuns(cfg, store)
 	// And the upgrade protocol's hold on them: flushed before an
 	// upgrade's restart, reported on by the check after it.
 	cfg.runHostUpgrade = newRunHostUpgrade(cfg.RunHost, cfg.hostdRuns, cfg.Ci).withStopping(cfg.shutdownStarted)
