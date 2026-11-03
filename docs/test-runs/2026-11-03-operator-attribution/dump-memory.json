@@ -1,0 +1,2 @@
+[{"owner":"acme","name":"widgets","text":"This repo's CI needs `make frontend` before `go vet` -- the vet step reads the embedded assets and fails confusingly without them.","updated_at":"2026-10-25 06:25:35.284413952 +0000 UTC","updated_by_kind":"human","updated_by_id":"owner@example.com","updated_by_source":""},
+{"owner":"","name":"","text":"memory by iap","updated_at":"2026-11-03 06:25:35.832369842 +0000 UTC","updated_by_kind":"human","updated_by_id":"alice@example.com","updated_by_source":"iap"}]

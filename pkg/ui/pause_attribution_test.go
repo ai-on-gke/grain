@@ -107,3 +107,63 @@ func TestAutoMergeEventNamesTheEditNotTheMutateWrapper(t *testing.T) {
 		t.Fatalf("event = %s %q, want auto-merge-off by ui.(*Client).UpdateTask", last.Kind, last.Detail)
 	}
 }
+
+// F3 of the same report: the task API carried each actor's bare id, so a
+// task filed, commented on and closed with the access code read as the
+// deployment's own address -- as if that person had done it. Task,
+// comment and transition now carry the label PrincipalLabel gives, and
+// a row from before sources were recorded carries none, so it reads as
+// it always has rather than as "(unverified)".
+func TestTaskViewLabelsEachActorByHowItWasEstablished(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := testClient(t)
+	accessCode := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "owner@example.com", Source: model.SourceAccessCode})
+	agent := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: "external:ext1", Source: model.SourceExternalToken})
+
+	task, err := client.CreateTask(accessCode, ui.CreateTaskRequest{Title: "labelled", Description: "d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.AddComment(accessCode, task.ID, "from the code", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.AddComment(agent, task.ID, "from ext1", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddComment(ctx, model.Comment{TaskID: task.ID, Body: "before sources",
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Close(accessCode, task.ID, ui.CloseOptions{Reason: "done"}); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := client.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.AuthorLabel != "operator (access code)" {
+		t.Errorf("authorLabel = %q, want operator (access code)", detail.AuthorLabel)
+	}
+	labels := map[string]string{}
+	for _, c := range detail.Comments {
+		labels[c.Body] = c.AuthorLabel
+	}
+	for body, want := range map[string]string{
+		"from the code":  "operator (access code)",
+		"from ext1":      "external agent ext1",
+		"before sources": "",
+	} {
+		if got := labels[body]; got != want {
+			t.Errorf("comment %q authorLabel = %q, want %q", body, got, want)
+		}
+	}
+	var closed *ui.Transition
+	for i := range detail.Transitions {
+		if detail.Transitions[i].State == model.StateClosed {
+			closed = &detail.Transitions[i]
+		}
+	}
+	if closed == nil || closed.ByLabel != "operator (access code)" {
+		t.Fatalf("close transition = %+v, want byLabel operator (access code)", closed)
+	}
+}
