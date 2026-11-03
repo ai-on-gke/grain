@@ -799,7 +799,7 @@ func defaultRepoGrants(ctx context.Context, store *model.Store, repo model.RepoR
 		return nil, fmt.Errorf("checking CI mode for %s: %w", repo, err)
 	}
 	if usesGrainCI {
-		return []model.Grant{{Capability: grainci.CapabilityName, Via: model.GrantByDefault}}, nil
+		return []model.Grant{{Capability: grainci.Grant, Via: model.GrantByDefault}}, nil
 	}
 	return nil, nil
 }

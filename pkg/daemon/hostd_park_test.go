@@ -259,21 +259,13 @@ func TestAHostdThatConnectsIsRidOfCLIsForFinishedRuns(t *testing.T) {
 	ctx := context.Background()
 	store := pool.Store
 	client := hostd.Client{Dial: cfg.HostdHub.Dialer("ws-a"), Build: daemonBuild()}
-	// The live run's CLI is left running on purpose, and hostd keeps a
-	// detached process past its own Serve: release every one before the
-	// hostd stops (cleanups run last-registered first), or its spool is
-	// still being written while t.TempDir removes it.
 	t.Cleanup(func() {
-		waitFor(t, func() bool {
-			procs, err := client.Processes(ctx)
-			if err != nil {
-				return false
-			}
-			for _, p := range procs {
+		procs, _ := client.Processes(ctx)
+		for _, p := range procs {
+			if p.Detached && !p.Exited {
 				_ = client.Cancel(ctx, p.ID)
 			}
-			return len(procs) == 0
-		})
+		}
 	})
 	// The daemon that started them is gone: its streams let go, and
 	// nothing re-attaches.
@@ -301,7 +293,7 @@ func TestAHostdThatConnectsIsRidOfCLIsForFinishedRuns(t *testing.T) {
 	if err := store.FinishRun(ctx, "finished", time.Now().UTC(), model.InterruptedOutcome, "the daemon stopped"); err != nil {
 		t.Fatal(err)
 	}
-	tryRunning := func() (map[string]bool, error) {
+	running := func() (map[string]bool, error) {
 		procs, err := client.Processes(ctx)
 		if err != nil {
 			return nil, err
@@ -314,26 +306,25 @@ func TestAHostdThatConnectsIsRidOfCLIsForFinishedRuns(t *testing.T) {
 		}
 		return out, nil
 	}
-	running := func() map[string]bool {
-		out, err := tryRunning()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return out
-	}
-	if got := running(); !got["finished"] || !got["live"] {
-		t.Fatalf("before ws-a reconnects, running = %v, want both CLIs", got)
+	if got, err := running(); err != nil || !got["finished"] || !got["live"] {
+		t.Fatalf("before ws-a reconnects, running = %v (%v), want both CLIs", got, err)
 	}
 
+	prev := cfg.HostdHub.HostdStatus("ws-a").Sessions
 	ws.drop()
-	// A call made while ws-a is dropping and reconnecting can land on
-	// the connection being closed ("use of closed network connection");
-	// that is the reconnect in progress, not an answer, so ask again.
 	waitFor(t, func() bool {
-		got, err := tryRunning()
+		st := cfg.HostdHub.HostdStatus("ws-a")
+		if !st.Connected || st.Sessions <= prev {
+			return false
+		}
+		got, err := running()
 		return err == nil && !got["finished"]
 	})
-	if !running()["live"] {
+	got, err := running()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got["live"] {
 		t.Error("ws-a reconnecting cancelled the CLI of a run that is still live")
 	}
 }

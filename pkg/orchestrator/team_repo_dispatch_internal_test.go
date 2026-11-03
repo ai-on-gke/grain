@@ -60,7 +60,7 @@ func TestDefaultTaskGrantsMergesRepoCapabilities(t *testing.T) {
 		for _, g := range grants {
 			caps = append(caps, g.Capability)
 		}
-		want := []string{"global-cap", "repo-cap", "grain-ci"}
+		want := []string{"global-cap", "repo-cap", model.GrainCIGrant}
 		if !reflect.DeepEqual(caps, want) {
 			t.Errorf("team %s: caps = %v, want %v", team, caps, want)
 		}

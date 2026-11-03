@@ -779,7 +779,7 @@ func TestProposalGetsAutoGrantedGrainCIWhenTargetHasWorkflows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(proposal.Capabilities, "grain-ci") {
+	if !slices.Contains(proposal.Capabilities, model.GrainCIGrant) {
 		t.Errorf("proposal capabilities = %v, want grain-ci auto-granted", proposal.Capabilities)
 	}
 }

@@ -35,7 +35,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/geminikey"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
-	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
@@ -105,7 +104,6 @@ func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*mod
 	providers = append(providers, admincaps.Providers()...)
 	providers = append(providers,
 		bootstrap.New(),
-		grainci.New(),
 		registrypush.NewWithConfig(registrypush.Config{}),
 		consolecap.New(),
 		readissues.New(),

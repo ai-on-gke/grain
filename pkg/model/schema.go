@@ -444,7 +444,11 @@ import "strconv"
 // to 5 (model.DefaultMaxMergesPerRepo). Stored values are left alone: the
 // row is always written whole, so a 1 written because it was the default
 // cannot be told from a 1 somebody chose, and both keep it.
-const SchemaVersion = 95
+//
+// 96 rewrites stored `grain-ci` grants, `repo_config`.`ci_capabilities`
+// included, to `https://grain.dev/capabilities/grain#ci={}`: the
+// in-process `grain-ci` provider is retired for the `grain#ci` method.
+const SchemaVersion = 96
 
 // configAuditTable is the `config_audit` table: one row per change to the
 // deployment's configuration somebody made (model.ConfigAuditEntry,

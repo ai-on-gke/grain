@@ -163,7 +163,7 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 		return ci.Run{}, validationErrorf("task %s has no target repository", id)
 	}
 	if !grainci.Granted(task.Grants) {
-		return ci.Run{}, forbiddenErrorf("task %s does not hold the %q capability", id, grainci.CapabilityName)
+		return ci.Run{}, forbiddenErrorf("task %s does not hold the %q grant", id, grainci.Grant)
 	}
 	// A review working on the reviewed change's own branch owns no CI of
 	// its own (model.Task.CIOwner): what it asks for is asked as the
@@ -1002,14 +1002,14 @@ func (c *Client) ciEnabledFor(ctx context.Context, repo model.RepoRef) (bool, er
 
 // ciNotEnabledMessage is the refusal for a repo ciEnabledFor says no
 // to. It names the switch that does turn grain CI on -- the repo's CI
-// mode -- and says outright that the grain-ci capability does not: this
+// mode -- and says outright that the grain#ci grant does not: this
 // message once told operators to attach it, and somebody remembering
 // that advice should not be sent round the same loop again. Every
 // picker refuses the capability itself with grainci.Refusal.
 func ciNotEnabledMessage(repo model.RepoRef) string {
 	return fmt.Sprintf("grain CI is not enabled for %s: set its CI Mode to \"Use Grain CI\" on the repo's page (Settings, Repos). "+
-		"Attaching the %q capability does not turn it on by itself: the CI mode decides that, and grants %q to the repo's tasks",
-		repo, grainci.CapabilityName, grainci.CapabilityName)
+		"Attaching the %q grant does not turn it on by itself: the CI mode decides that, and grants it to the repo's tasks",
+		repo, model.GrainCIRef)
 }
 
 // ciEnabledAnywhere is the same question ciEnabledFor asks, for an
@@ -1677,8 +1677,7 @@ func (s *Server) handleClearCICache(w http.ResponseWriter, r *http.Request) {
 	}
 	if !enabled {
 		writeError(w, http.StatusForbidden, fmt.Errorf(
-			"grain CI is not enabled anywhere on this deployment, so there is no job cache to clear: attach the %q capability to a repo (Settings, Repos) or to this deployment's default capabilities",
-			grainci.CapabilityName))
+			"grain CI is not enabled anywhere on this deployment, so there is no job cache to clear: set a repo's CI Mode to \"Use Grain CI\" (Settings, Repos)"))
 		return
 	}
 	removed, ok, err := runner.ClearCache(r.Context())
