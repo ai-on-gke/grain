@@ -1,0 +1,19 @@
+spelling	POST /api/tasks	stored	PATCH /api/tasks/<id>	stored	grain create -priority	stored	grain update -priority	stored
+1e3	201 accepted	1000	200 accepted	1000	exit=0 accepted	1000	exit=0 accepted	1000
+1000.0	201 accepted	1000	200 accepted	1000	exit=0 accepted	1000	exit=0 accepted	1000
+1.5e2	201 accepted	150	200 accepted	150	exit=0 accepted	150	exit=0 accepted	150
+-1	400 {"error":"priority must be a positive integer (1 or more; leave it out for the default, 5)"}	-	400 {"error":"priority must be a positive integer (1 or more; leave it out for the default, 5)"}	-	exit=1 grain: priority must be a positive integer (1 or more; leave it out for the default, 5)	-	exit=1 grain: priority must be a positive integer (1 or more; leave it out for the default, 5)	-
+1e10	201 accepted	10000000000	200 accepted	10000000000	exit=0 accepted	10000000000	exit=0 accepted	10000000000
+"1000"	400 {"error":"priority must be a positive integer (1 or more; leave it out for the default, 5)"}	-	400 {"error":"priority must be a positive integer (1 or more; leave it out for the default, 5)"}	-	exit=0 accepted	1000	exit=0 accepted	1000
+
+GET /api/tasks (the board's list):
+10	"priority 1e10"	priority=10000000000
+11	"cli priority 1e10"	priority=10000000000
+3	"priority edit target"	priority=1000
+4	"priority 1e3"	priority=1000
+5	"cli priority 1e3"	priority=1000
+6	"priority 1000.0"	priority=1000
+7	"cli priority 1000.0"	priority=1000
+12	"cli priority 1000"	priority=1000
+8	"priority 1.5e2"	priority=150
+9	"cli priority 1.5e2"	priority=150
