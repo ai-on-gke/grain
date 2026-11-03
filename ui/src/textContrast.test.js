@@ -103,8 +103,9 @@ for (const [name, t, theme] of [
 
 // The light accent is link text as well as a button's ground, and a link
 // can sit in an Alert's tint (Settings -> Credentials' "How the two tabs
-// differ"); a filled success chip ("ready") puts white on success.main.
-describe("light theme accent and success contrast", () => {
+// differ"); a filled success chip ("ready") puts white on success.main;
+// an outlined error button ("decline") writes its label in error.main.
+describe("light theme accent, success and error contrast", () => {
   it("gives MUI the same accent as style.css", () => {
     expect(lightTheme.palette.primary.main).toBe(lightTokens["--accent"]);
   });
@@ -129,6 +130,25 @@ describe("light theme accent and success contrast", () => {
         `warning on ${bg}`,
       ).toBeGreaterThanOrEqual(4.5);
     }
+  });
+
+  it("gives MUI the same error colour as style.css", () => {
+    expect(lightTheme.palette.error.main).toBe(lightTokens["--danger"]);
+  });
+
+  it("holds 4.5:1 for an outlined error button's label on every ground", () => {
+    for (const bg of [...grounds, "--danger-subtle"]) {
+      expect(
+        contrast(lightTheme.palette.error.main, lightTokens[bg]),
+        `error on ${bg}`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("holds 4.5:1 for a filled error button's label", () => {
+    const { main, contrastText } = lightTheme.palette.error;
+    const label = contrastText.replace(/^#(\w)(\w)(\w)$/, "#$1$1$2$2$3$3");
+    expect(contrast(label, main)).toBeGreaterThanOrEqual(4.5);
   });
 
   it("holds 4.5:1 for a filled success chip's label", () => {
