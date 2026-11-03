@@ -42,7 +42,7 @@ func TestAMergeQueueRuleHandsThePullRequestToGitHubsQueue(t *testing.T) {
 	sim.RequireMergeQueue = true
 	firstPR := prNumber(t, sim, firstBranch)
 
-	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err != nil {
+	if err := syncOneMergePerCycle(ctx, store, client, baseTime); err != nil {
 		t.Fatalf("SyncPullRequests: %v", err)
 	}
 	if len(sim.MergeQueue) != 1 || sim.MergeQueue[0] != firstPR {
@@ -60,7 +60,7 @@ func TestAMergeQueueRuleHandsThePullRequestToGitHubsQueue(t *testing.T) {
 	// repository's slot, and GitHub is only polled.
 	merges := mergeCalls(sim)
 	for _, at := range []time.Duration{30 * time.Second, 3 * time.Minute, 6 * time.Minute} {
-		if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(at)); err != nil {
+		if err := syncOneMergePerCycle(ctx, store, client, baseTime.Add(at)); err != nil {
 			t.Fatalf("SyncPullRequests: %v", err)
 		}
 	}
@@ -83,7 +83,7 @@ func TestAMergeQueueRuleHandsThePullRequestToGitHubsQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 1; i <= 3 && len(sim.MergeQueue) == 0; i++ {
-		if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(10*time.Minute+time.Duration(i)*10*time.Second)); err != nil {
+		if err := syncOneMergePerCycle(ctx, store, client, baseTime.Add(10*time.Minute+time.Duration(i)*10*time.Second)); err != nil {
 			t.Fatalf("SyncPullRequests: %v", err)
 		}
 	}

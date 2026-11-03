@@ -4891,6 +4891,7 @@ func classifyRunEndArms(ctx context.Context, store *model.Store, cfg Config, tas
 				detail = usageLimitDetail(limit, scope, until) + partialWorkSuffix(result)
 				burstRuns = burst[:len(burst)-1]
 				burstDetail = usageLimitDetail(limit, scope, until)
+				cfg.Pause.claimBurst(cfg.now(), burstRuns, burstDetail)
 				runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
 				break
 			}
@@ -4951,6 +4952,17 @@ func recordRunEnd(ctx, finishCtx context.Context, store *model.Store, cfg Config
 	}
 	if finishErr == nil && failover {
 		noteFailedOverModels(finishCtx, store, task, cfg.now())
+	}
+	// A burst that this run's failure was part of may have been declared
+	// by a later run while this one was still on its way here; that run's
+	// re-record (below, in its own call) then landed before this write
+	// and was undone by it. The claim it left says so.
+	if finishErr == nil && outcome == "failed" && end.suspend == "" {
+		if claimed, ok := cfg.Pause.claimedByBurst(runID); ok {
+			if err := store.SetRunOutcome(finishCtx, runID, model.PausedOutcome, claimed); err != nil {
+				log.Printf("orchestrator: run %s: re-recording it as paused by a refusal burst: %v", runID, err)
+			}
+		}
 	}
 	// The earlier runs of the burst this one completed were recorded as
 	// failed, because one of them alone was indistinguishable from an
