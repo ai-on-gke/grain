@@ -790,6 +790,10 @@ trigger:
 	if msg := loadErr(t, files); !strings.Contains(msg, "repo: owner/name") {
 		t.Fatalf("no repo: error = %q", msg)
 	}
+	files[".grain/schedules/sync.yml"] = "template: sync\ntrigger:\n  git_ref:\n    repo: grain/config\n    ref: refs/heads/main\n"
+	if msg := loadErr(t, files); !strings.Contains(msg, "grain's own configuration") {
+		t.Fatalf("watching grain/config: error = %q", msg)
+	}
 	files[".grain/schedules/sync.yml"] = "trigger:\n  git_ref:\n    repo: upstream/core\n    ref: refs/tags/latest\n"
 	if msg := loadErr(t, files); !strings.Contains(msg, "needs a `template:`") {
 		t.Fatalf("no template: error = %q", msg)

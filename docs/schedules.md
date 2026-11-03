@@ -309,8 +309,11 @@ trigger:
 ```
 
 - **`repo`** (required): `owner/name`, or `host/owner/name` for a repository
-  on another git host. It has to be on the deployment's target repo list, and
-  it is read with the git credential the deployment already holds for it.
+  on another git host. It has to be on the deployment's target repo list
+  (when that list is empty, as everywhere else, every repository is on it),
+  and it is read with the git credential the deployment already holds for
+  it. A schedule a repository declares may not watch `grain/config`: no
+  repository's file may reach grain's own configuration.
 - **`ref`** (required): a full ref name such as `refs/tags/latest` or
   `refs/heads/main`.
 

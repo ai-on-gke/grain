@@ -95,6 +95,15 @@ func reconcileGitRefSchedules(ctx context.Context, deps Deps, now time.Time) err
 				"orchestrator: schedule %s watches %q, which is not a repository: %v", sched.ID, trig.Repo, err)
 			continue
 		}
+		if model.IsConfigRepo(repo) && model.IsRepoDeclaredID(sched.ID) {
+			// The parser refuses this (repodecl.parseRecurrence); this is
+			// for a row that got past it. grain/config is answered off
+			// grain's own disk, and no repository's file may reach it.
+			sayOnce("git-ref-config:"+sched.ID,
+				"orchestrator: schedule %s is declared by a repository and watches %s, grain's own "+
+					"configuration; it is not looked at", sched.ID, repo)
+			continue
+		}
 		if !loadedTargets {
 			if targets, err = deps.Store.TargetRepos(ctx); err != nil {
 				return errors.Join(append(errs, fmt.Errorf("orchestrator: reading target repos for git_ref triggers: %w", err))...)

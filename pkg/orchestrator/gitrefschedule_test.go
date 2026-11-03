@@ -236,6 +236,37 @@ func TestGitRefScheduleIgnoresARepositoryOffTheTargetList(t *testing.T) {
 	}
 }
 
+// A schedule a repository declares may not watch grain/config: no
+// repository's file may reach grain's own configuration, which the
+// RefSource would answer off grain's disk with no credential in front of
+// it.
+func TestGitRefScheduleDeclaredByARepositoryNeverReadsGrainConfig(t *testing.T) {
+	t.Parallel()
+	store, _ := openStore(t)
+	sched := model.Schedule{
+		ID:     model.RepoDeclaredID(model.DeclaredSchedule, model.RepoRef{Owner: "acme", Name: "edition"}, "sync"),
+		Title:  "Watch grain's settings",
+		Body:   "Report where grain/config is.",
+		Target: model.RepoRef{Owner: "acme", Name: "edition"},
+		Recurrence: model.Recurrence{Kind: model.RecurrenceGitRef,
+			GitRef: &model.GitRefTrigger{Repo: "grain/config", Ref: "refs/heads/main"}},
+		Overlap:   model.OverlapAllow,
+		Enabled:   true,
+		NextRunAt: baseTime,
+		CreatedAt: baseTime,
+	}
+	if err := store.PutSchedule(t.Context(), sched); err != nil {
+		t.Fatalf("filing schedule: %v", err)
+	}
+	refs := &fakeRefs{}
+	refs.set("grain/config", "refs/heads/main", refCommitA)
+
+	runWithRefs(t, store, refs, baseTime)
+	if got := refs.askCount(); got != 0 {
+		t.Fatalf("a repository's schedule read grain/config's ref %d times, want 0", got)
+	}
+}
+
 func TestDueSchedulesLeavesGitRefSchedulesOut(t *testing.T) {
 	t.Parallel()
 	store, ctx := openStore(t)
