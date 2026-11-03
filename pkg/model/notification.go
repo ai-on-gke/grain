@@ -212,6 +212,9 @@ const (
 	// FamilyRepairFailing is a base-branch repair that is not getting
 	// the branch green, "<task>".
 	FamilyRepairFailing = "pipeline.repair-failing"
+	// FamilyCIWakeStalled is a task deferred on a resume_later CI wake past
+	// its stall bound with no CI activity on its branch, "<task>".
+	FamilyCIWakeStalled = "pipeline.ci-wake-stalled"
 	// FamilyForceMergeRequest asks a person to force-merge "<task>".
 	FamilyForceMergeRequest = "request.force-merge"
 	// FamilyRevertRequest asks a person to revert "<task or sha>".

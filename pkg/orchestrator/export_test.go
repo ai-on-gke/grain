@@ -398,6 +398,11 @@ func RecordPolledChecks(ctx context.Context, store *model.Store, repo model.Repo
 	recordPolledChecks(ctx, store, repo, ref, sha, checks, now)
 }
 
+// ReconcileWake is reconcileWake, for tests of deferred and CI wakes.
+func ReconcileWake(ctx context.Context, deps Deps, now time.Time) error {
+	return reconcileWake(ctx, deps, now)
+}
+
 // GitHubCITailsPerHour is the hourly cap on failed-job log reads.
 const GitHubCITailsPerHour = gitHubCITailsPerHour
 
