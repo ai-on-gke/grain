@@ -3730,7 +3730,7 @@ func requestedSuspension(ctx context.Context, store *model.Store, taskID string,
 		if reason = strings.TrimSpace(reason); reason != "" {
 			susp.Detail += ": " + reason
 		}
-		susp.ResumeOn = model.ResumeOn{Tasks: targets, UntilMerged: when.UntilMerged}.JSON()
+		susp.ResumeOn = model.ResumeOn{Tasks: targets, UntilMerged: when.UntilMerged || parkedUntilMerged(result)}.JSON()
 		return susp, true, nil
 	}
 	if until, ok := parkedUntil(result); ok {
@@ -3801,6 +3801,24 @@ func parkedUntil(result *agent.Result) (time.Time, bool) {
 		}
 	}
 	return until, found
+}
+
+// parkedUntilMerged reports whether the last wait_for_task call in result
+// that parked asked for until "merged", which the park's ResumeOn keeps:
+// model.Store.UntilMergedParkWaitsOn reads it back to hold the task past
+// a target that closed with its pull request still open.
+func parkedUntilMerged(result *agent.Result) bool {
+	if result == nil {
+		return false
+	}
+	merged := false
+	for _, c := range result.ToolCalls {
+		if c.Name != "wait_for_task" || c.IsError || !mcp.WaitForTaskParked(c.Arguments, c.Text) {
+			continue
+		}
+		merged = mcp.WaitForTaskUntilMerged(c.Arguments)
+	}
+	return merged
 }
 
 // parkedOn is the tasks a run parked its task on through wait_for_task,

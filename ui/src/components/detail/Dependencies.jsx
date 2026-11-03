@@ -15,6 +15,7 @@
 import { Chip, Stack, Tooltip } from "@mui/material";
 import api from "../../api.js";
 import { STATE_LABELS } from "../../state.js";
+import AppIcon from "../AppIcon.jsx";
 import TaskPicker from "../TaskPicker.jsx";
 
 // What a chip cannot fit -- the depended-on task's state, and the tail
@@ -119,7 +120,14 @@ export default function Dependencies({ t, tasks, act, onOpenTask }) {
                     t.id,
                   )
                 }
-                deleteIcon={<span title={`Remove dependency on ${id}`}>×</span>}
+                deleteIcon={
+                  <span
+                    title={`Remove dependency on ${id}`}
+                    style={{ display: "inline-flex", alignItems: "center" }}
+                  >
+                    <AppIcon name="close" size={14} />
+                  </span>
+                }
                 sx={{
                   width: "100%",
                   justifyContent: "space-between",

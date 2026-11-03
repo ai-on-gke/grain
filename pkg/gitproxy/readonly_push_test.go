@@ -104,3 +104,57 @@ func TestAnAgentRunsPushAdvertisementFollowsItsTasksScope(t *testing.T) {
 		t.Errorf("push advertisement to a Reads repo = %d %q, want the read-only refusal", resp.Status, resp.Body)
 	}
 }
+
+func TestAWithheldWriteGrantNamesItselfAndAllowedEventsInTheRefusal(t *testing.T) {
+	p, forwarder, audit := newTestProxy(t)
+	scopes := NewReadScopes()
+	scopes.Grant("sandbox-0", model.RepoRef{Owner: "owner", Name: "repo"})
+	writes := NewWriteScopes()
+	reason := `this job's https://grain.dev/capabilities/repo#write={"repo":"owner/other"} grant is withheld on pull_request runs (released only to release, workflow_dispatch, and grain's scheduled runs)`
+	writes.NoteWithheld("sandbox-0", model.RepoRef{Owner: "owner", Name: "other"}, reason)
+	selfReason := `this job's repo-write:owner/repo grant is withheld on pull_request runs (released only to release, workflow_dispatch, and grain's scheduled runs)`
+	writes.NoteWithheld("sandbox-0", model.RepoRef{Owner: "owner", Name: "repo"}, selfReason)
+	p.Authorizer = &ReadOnlyScopeAuthorizer{
+		Scopes:      scopes,
+		WriteScopes: writes,
+		Next:        &ModelAuthorizer{Store: stubScopeLookup{}},
+	}
+
+	// Cloning or pushing to owner/other (where only repo#write was declared)
+	// stays 403, never reaches upstream, and names the withheld grant instead
+	// of calling the repository unscoped.
+	for _, service := range []string{"git-upload-pack", "git-receive-pack"} {
+		resp := advertise(t, p, "other", service)
+		if resp.Status != 403 {
+			t.Fatalf("%s advertisement for owner/other = %d, want 403", service, resp.Status)
+		}
+		if want := "owner/other: " + reason; !strings.Contains(string(resp.Body), want) {
+			t.Errorf("%s refusal = %q, want it to contain %q", service, resp.Body, want)
+		}
+		if strings.Contains(string(resp.Body), "is not in scope") {
+			t.Errorf("%s refusal still says not in scope: %q", service, resp.Body)
+		}
+	}
+	if last := audit.Entries[len(audit.Entries)-1]; last.Outcome != "denied: withheld capability" {
+		t.Errorf("audit outcome = %q, want denied: withheld capability", last.Outcome)
+	}
+
+	// Fetching the repository under test still succeeds, while pushing to it
+	// reports the withheld repo-write grant rather than generic read-only.
+	if resp := advertise(t, p, "repo", "git-upload-pack"); resp.Status != 200 {
+		t.Fatalf("fetch advertisement for owner/repo = %d %q, want 200", resp.Status, resp.Body)
+	}
+	pushSelf := advertise(t, p, "repo", "git-receive-pack")
+	if pushSelf.Status != 403 || !strings.Contains(string(pushSelf.Body), "owner/repo: "+selfReason) {
+		t.Errorf("push advertisement for owner/repo = %d %q, want withheld reason", pushSelf.Status, pushSelf.Body)
+	}
+	if len(forwarder.Calls) != 1 {
+		t.Errorf("forwarded %d requests, want only the fetch of owner/repo", len(forwarder.Calls))
+	}
+
+	// An undeclared third repository still gets the generic out-of-scope refusal.
+	unscoped := advertise(t, p, "undeclared", "git-upload-pack")
+	if unscoped.Status != 403 || !strings.Contains(string(unscoped.Body), "owner/undeclared is not in scope for this sandbox") {
+		t.Errorf("undeclared advertisement = %d %q, want not in scope", unscoped.Status, unscoped.Body)
+	}
+}

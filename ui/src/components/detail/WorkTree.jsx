@@ -15,6 +15,7 @@
 import { useEffect, useState } from "react";
 import api from "../../api.js";
 import { doneLine } from "../../workTree.js";
+import AppIcon from "../AppIcon.jsx";
 import TaskTree from "../TaskTree.jsx";
 
 // WorkTree is the tree of work this task belongs to, on its own page
@@ -110,8 +111,12 @@ export default function WorkTree({
           aria-expanded={expanded}
           onClick={() => setExpanded((open) => !open)}
         >
-          <span className="provenance-toggle-caret" aria-hidden="true">
-            {expanded ? "▾" : "▸"}
+          <span
+            className="provenance-toggle-caret"
+            aria-hidden="true"
+            style={{ display: "inline-flex", verticalAlign: "-0.18em" }}
+          >
+            <AppIcon name={expanded ? "expand" : "collapse"} size={15} />
           </span>{" "}
           {hasWorkTree ? (
             <>

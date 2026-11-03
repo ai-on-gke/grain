@@ -18,6 +18,7 @@ import {
   Alert,
   Button,
   FormControl,
+  InputAdornment,
   InputLabel,
   MenuItem,
   Select,
@@ -25,6 +26,7 @@ import {
   Typography,
 } from "@mui/material";
 import api from "../api.js";
+import AppIcon from "./AppIcon.jsx";
 
 // REFRESH_MS is how often this panel re-fetches the selected source's log
 // lines while the System overlay is open -- the same order of magnitude
@@ -220,6 +222,15 @@ export default function LogsPage({ showError }) {
                 size="small"
                 sx={{ flex: "1 1 12rem" }}
                 value={query}
+                slotProps={{
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start" sx={{ mr: 0.5 }}>
+                        <AppIcon name="search" size={16} />
+                      </InputAdornment>
+                    ),
+                  },
+                }}
                 onChange={(event) => {
                   const next = event.target.value;
                   if (!query.trim() && next.trim()) {
@@ -231,7 +242,12 @@ export default function LogsPage({ showError }) {
                 }}
               />
               <PageHeaderPageActions>
-                <Button size="small" variant="outlined" onClick={refresh}>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<AppIcon name="refresh" size={16} />}
+                  onClick={refresh}
+                >
                   Refresh
                 </Button>
               </PageHeaderPageActions>

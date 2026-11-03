@@ -3373,6 +3373,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const sidebar = (
     <Sidebar
       pinFooter={isPhone}
+      hideCreateButton={!isPhone}
       collapsed={sidebarCollapsed}
       onToggleCollapsed={isPhone ? undefined : toggleSidebarCollapsed}
       config={config}
@@ -3493,6 +3494,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
       onOpenSettings={() => openSettings()}
       onOpenAccess={() => openSettings("access")}
       onLogout={handleLogout}
+      onOpenNewTask={openNewTask}
+      onNewSession={openNewSession}
+      onNewBoard={openNewBoardTask}
     />
   );
 

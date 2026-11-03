@@ -151,7 +151,7 @@ Upgrading the deployment that runs grain is part of the release, not a separate 
 | 5. The Google edition doesn't follow releases | Tasks 2533 (sync template) and 2315, and the gap 5 task in the edition's repository |
 | 6. Edition merges don't start `release` | Gap 6 task |
 | 7. Release-job flakes need a re-run | Tasks 2558, 2590, 2621 (fixes), and the gap 7 task (automatic infra retry) |
-| 8. Upgrading the deployment is manual | Gap 8 task |
+| 8. Upgrading the deployment is manual | Task 2670 (`autoUpgradeOn: release`, `reconcileReleaseUpgrade`, `upgrade.failed` notifications); each deployment turns it on in its own config |
 | 9. Edition review threads need a person | Task 2634 |
 
 ### 1. Promotion gate
@@ -331,6 +331,9 @@ Continuous releases mean `latest` moves several times a day while individual dep
 - **Auto-upgrade follows `latest` on the deployment's own daily clock:**
   - Deployments configured with `autoUpgradeChannel: "latest"` continue using `reconcileAutoUpgrade` (`pkg/orchestrator/autoupgrade.go`), which schedules at most **one non-disruptive drain-and-upgrade per calendar day at `autoUpgradeTime`** (skipping the drain altogether via `UpgradeUnchanged` when `latest` has not moved since yesterday).
   - Thus rapid upstream promotions never bounce a deployment multiple times an hour; operators still get a fresh, fully qualified `latest` target immediately whenever they click **Upgrade now** in Settings.
+- **Or upgrade on each release (recommended, gap 8):**
+  - `autoUpgradeOn: release` (Settings → General → Updates, "On each release") runs `reconcileReleaseUpgrade` (`pkg/orchestrator/releaseupgrade.go`) instead of the daily clock. It watches the newest release tag on the deployment's image channel (`Upgrader.LatestRelease`: own edition, never `-rc.N`, `-discarded` or `-retracted`), waits until a tag has stood for an hour, and schedules one drain-and-upgrade onto `latest` or the exact tag. An automatic drain that is still waiting is re-pointed at a newer release instead of being followed by a second one, so releases close together give one drain.
+  - A failed automatic upgrade (either mode) raises one `upgrade.failed:<release>` notification naming the stage and quoting its output. The release isn't retried until a newer one appears, and the next successful automatic upgrade clears it.
 
 ---
 

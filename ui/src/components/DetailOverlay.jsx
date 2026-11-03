@@ -14,6 +14,7 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import api from "../api.js";
+import AppIcon, { ExternalLinkIcon } from "./AppIcon.jsx";
 import ClChip from "./ClChip.jsx";
 import PresubmitBadge from "./PresubmitBadge.jsx";
 import ReviewBadge from "./ClReview.jsx";
@@ -310,7 +311,11 @@ export default function DetailOverlay({
                 <Button size="small" onClick={() => setShowPrompt(true)}>
                   Prompt
                 </Button>
-                <Button size="small" onClick={() => setEditing(true)}>
+                <Button
+                  size="small"
+                  startIcon={<AppIcon name="edit" size={15} />}
+                  onClick={() => setEditing(true)}
+                >
                   Edit
                 </Button>
               </div>
@@ -327,6 +332,7 @@ export default function DetailOverlay({
                       rel="noopener noreferrer"
                     >
                       {t.pullRequest}
+                      <ExternalLinkIcon />
                     </Link>
                   </>
                 ) : (
@@ -340,6 +346,7 @@ export default function DetailOverlay({
                         rel="noopener noreferrer"
                       >
                         Internal PR
+                        <ExternalLinkIcon />
                       </Link>
                     </>
                   )

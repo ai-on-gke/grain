@@ -48,6 +48,21 @@ export default function CapabilitiesSection({
         <code>.grain</code> declarations and external configs to{" "}
         <code>gcp#gcp-key</code>.
       </Alert>
+      <Alert
+        severity="info"
+        data-testid="model-proxy-deprecation-notice"
+        sx={{ mb: 2 }}
+      >
+        Deprecated: the in-process <code>claude-proxy</code>,{" "}
+        <code>openai-proxy</code> and <code>gemini-proxy</code> grants were
+        retired onto{" "}
+        <code>
+          https://grain.dev/capabilities/model-proxy#model-proxy {"{vendor}"}
+        </code>
+        , which forwards with the same team connection. They remain readable as
+        aliases for one release; update <code>.grain</code> declarations and
+        external configs to <code>model-proxy#model-proxy</code>.
+      </Alert>
       {/* The servers panel draws its own read-only form (readOnly), and
           keeps its list clickable so one server's page can still be
           opened; the card's disabled fieldset would stop that too. */}

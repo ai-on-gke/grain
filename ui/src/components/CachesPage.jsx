@@ -23,7 +23,7 @@ import {
   Typography,
 } from "@mui/material";
 import api from "../api.js";
-import ItemGlyph from "./ItemGlyph.jsx";
+import AppIcon, { NavGlyph } from "./AppIcon.jsx";
 import { ListHeader } from "./ListPrimitives.jsx";
 import PackageCachePanel, { formatBytes } from "./PackageCachePanel.jsx";
 
@@ -129,6 +129,7 @@ export default function CachesPage({ showError, standalone = false }) {
     <Button
       size="small"
       variant="outlined"
+      startIcon={<AppIcon name="refresh" size={16} />}
       sx={{ ml: "auto" }}
       onClick={refresh}
     >
@@ -144,7 +145,7 @@ export default function CachesPage({ showError, standalone = false }) {
       {standalone ? (
         <ListHeader
           title="Caches"
-          icon={<ItemGlyph kind="cache" size={20} />}
+          icon={<NavGlyph kind="cache" size={20} />}
           action={refreshButton}
         />
       ) : (

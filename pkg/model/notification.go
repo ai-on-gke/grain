@@ -216,6 +216,9 @@ const (
 	// FamilyRepairFailing is a base-branch repair that is not getting
 	// the branch green, "<task>".
 	FamilyRepairFailing = "pipeline.repair-failing"
+	// FamilyCIWakeStalled is a task deferred on a resume_later CI wake past
+	// its stall bound with no CI activity on its branch, "<task>".
+	FamilyCIWakeStalled = "pipeline.ci-wake-stalled"
 	// FamilyStateRepoUnapplied is a configuration-repository commit the
 	// daemon could not apply across a schema migration and had to rewrite
 	// over, "<prior-head>".
@@ -229,6 +232,12 @@ const (
 	// (design/design/release-from-trunk.design.md, §4). Raised by the release
 	// train through the release gate, with ReleasePendingActions.
 	FamilyReleasePending = "release.pending"
+	// FamilyUpgradeFailed is an automatic upgrade that failed, "<target>"
+	// -- the release tag it was for, or the branch a daily upgrade
+	// follows -- with the step that failed and its output. Raised and
+	// cleared by orchestrator's automatic upgrades: the next one that
+	// succeeds clears every open instance.
+	FamilyUpgradeFailed = "upgrade.failed"
 )
 
 // ReleasePendingActions are the actions a FamilyReleasePending

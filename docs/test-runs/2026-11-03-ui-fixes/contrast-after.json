@@ -1,0 +1,565 @@
+{
+  "scanned": [
+    {
+      "page": "/inbox",
+      "theme": "light",
+      "checked": 124,
+      "failing": 0,
+      "incomplete": 0,
+      "reasons": {},
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/boards/board-1",
+      "theme": "light",
+      "checked": 135,
+      "failing": 0,
+      "incomplete": 1,
+      "reasons": {
+        "bgOverlap": 1
+      },
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/boards/board-3",
+      "theme": "light",
+      "checked": 115,
+      "failing": 0,
+      "incomplete": 2,
+      "reasons": {
+        "bgOverlap": 2
+      },
+      "computedChecked": 1,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/tasks/8",
+      "theme": "light",
+      "checked": 207,
+      "failing": 0,
+      "incomplete": 5,
+      "reasons": {
+        "bgOverlap": 3,
+        "elmPartiallyObscuring": 1,
+        "nonBmp": 1
+      },
+      "computedChecked": 2,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/system/health",
+      "theme": "light",
+      "checked": 93,
+      "failing": 0,
+      "incomplete": 0,
+      "reasons": {},
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/models",
+      "theme": "light",
+      "checked": 91,
+      "failing": 0,
+      "incomplete": 3,
+      "reasons": {
+        "bgOverlap": 3
+      },
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/sandboxes",
+      "theme": "light",
+      "checked": 102,
+      "failing": 0,
+      "incomplete": 8,
+      "reasons": {
+        "bgOverlap": 8
+      },
+      "computedChecked": 3,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/credentials",
+      "theme": "light",
+      "checked": 89,
+      "failing": 0,
+      "incomplete": 1,
+      "reasons": {
+        "bgOverlap": 1
+      },
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/access",
+      "theme": "light",
+      "checked": 64,
+      "failing": 0,
+      "incomplete": 1,
+      "reasons": {
+        "bgOverlap": 1
+      },
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/hostds",
+      "theme": "light",
+      "checked": 95,
+      "failing": 0,
+      "incomplete": 8,
+      "reasons": {
+        "bgOverlap": 4,
+        "elmPartiallyObscured": 4
+      },
+      "computedChecked": 4,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/preferences",
+      "theme": "light",
+      "checked": 74,
+      "failing": 0,
+      "incomplete": 2,
+      "reasons": {
+        "bgOverlap": 2
+      },
+      "computedChecked": 1,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/upgrade",
+      "theme": "light",
+      "checked": 71,
+      "failing": 0,
+      "incomplete": 2,
+      "reasons": {
+        "bgOverlap": 2
+      },
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/caches",
+      "theme": "light",
+      "checked": 74,
+      "failing": 0,
+      "incomplete": 3,
+      "reasons": {
+        "bgOverlap": 3
+      },
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/engine",
+      "theme": "light",
+      "checked": 69,
+      "failing": 0,
+      "incomplete": 4,
+      "reasons": {
+        "bgOverlap": 4
+      },
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/config-repo",
+      "theme": "light",
+      "checked": 62,
+      "failing": 0,
+      "incomplete": 1,
+      "reasons": {
+        "bgOverlap": 1
+      },
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/general",
+      "theme": "light",
+      "checked": 77,
+      "failing": 0,
+      "incomplete": 4,
+      "reasons": {
+        "bgOverlap": 4
+      },
+      "computedChecked": 2,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/git",
+      "theme": "light",
+      "checked": 85,
+      "failing": 0,
+      "incomplete": 2,
+      "reasons": {
+        "bgOverlap": 2
+      },
+      "computedChecked": 1,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/repositories",
+      "theme": "light",
+      "checked": 78,
+      "failing": 0,
+      "incomplete": 1,
+      "reasons": {
+        "bgOverlap": 1
+      },
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/tasks",
+      "theme": "light",
+      "checked": 81,
+      "failing": 0,
+      "incomplete": 4,
+      "reasons": {
+        "bgOverlap": 4
+      },
+      "computedChecked": 3,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/agents",
+      "theme": "light",
+      "checked": 75,
+      "failing": 0,
+      "incomplete": 4,
+      "reasons": {
+        "bgOverlap": 4
+      },
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/capabilities",
+      "theme": "light",
+      "checked": 100,
+      "failing": 0,
+      "incomplete": 1,
+      "reasons": {
+        "bgOverlap": 1
+      },
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/ci",
+      "theme": "light",
+      "checked": 82,
+      "failing": 0,
+      "incomplete": 6,
+      "reasons": {
+        "bgOverlap": 6
+      },
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/memory",
+      "theme": "light",
+      "checked": 83,
+      "failing": 0,
+      "incomplete": 3,
+      "reasons": {
+        "bgOverlap": 3
+      },
+      "computedChecked": 2,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/inbox",
+      "theme": "dark",
+      "checked": 124,
+      "failing": 0,
+      "incomplete": 0,
+      "reasons": {},
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/boards/board-1",
+      "theme": "dark",
+      "checked": 135,
+      "failing": 0,
+      "incomplete": 1,
+      "reasons": {
+        "bgOverlap": 1
+      },
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/boards/board-3",
+      "theme": "dark",
+      "checked": 115,
+      "failing": 0,
+      "incomplete": 2,
+      "reasons": {
+        "bgOverlap": 2
+      },
+      "computedChecked": 1,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/tasks/8",
+      "theme": "dark",
+      "checked": 157,
+      "failing": 0,
+      "incomplete": 55,
+      "reasons": {
+        "bgOverlap": 3,
+        "elmPartiallyObscuring": 1,
+        "bgGradient": 48,
+        "nonBmp": 1,
+        "shortTextContent": 2
+      },
+      "computedChecked": 52,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/system/health",
+      "theme": "dark",
+      "checked": 75,
+      "failing": 0,
+      "incomplete": 18,
+      "reasons": {
+        "bgGradient": 18
+      },
+      "computedChecked": 18,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/models",
+      "theme": "dark",
+      "checked": 90,
+      "failing": 0,
+      "incomplete": 4,
+      "reasons": {
+        "bgOverlap": 3,
+        "bgGradient": 1
+      },
+      "computedChecked": 1,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/sandboxes",
+      "theme": "dark",
+      "checked": 102,
+      "failing": 0,
+      "incomplete": 8,
+      "reasons": {
+        "bgOverlap": 8
+      },
+      "computedChecked": 3,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/credentials",
+      "theme": "dark",
+      "checked": 84,
+      "failing": 0,
+      "incomplete": 6,
+      "reasons": {
+        "bgOverlap": 1,
+        "bgGradient": 5
+      },
+      "computedChecked": 5,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/access",
+      "theme": "dark",
+      "checked": 64,
+      "failing": 0,
+      "incomplete": 1,
+      "reasons": {
+        "bgOverlap": 1
+      },
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/hostds",
+      "theme": "dark",
+      "checked": 95,
+      "failing": 0,
+      "incomplete": 8,
+      "reasons": {
+        "bgOverlap": 4,
+        "elmPartiallyObscured": 4
+      },
+      "computedChecked": 4,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/preferences",
+      "theme": "dark",
+      "checked": 74,
+      "failing": 0,
+      "incomplete": 2,
+      "reasons": {
+        "bgOverlap": 2
+      },
+      "computedChecked": 1,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/upgrade",
+      "theme": "dark",
+      "checked": 70,
+      "failing": 0,
+      "incomplete": 3,
+      "reasons": {
+        "bgOverlap": 2,
+        "bgGradient": 1
+      },
+      "computedChecked": 1,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/caches",
+      "theme": "dark",
+      "checked": 74,
+      "failing": 0,
+      "incomplete": 3,
+      "reasons": {
+        "bgOverlap": 3
+      },
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/engine",
+      "theme": "dark",
+      "checked": 69,
+      "failing": 0,
+      "incomplete": 4,
+      "reasons": {
+        "bgOverlap": 4
+      },
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/config-repo",
+      "theme": "dark",
+      "checked": 62,
+      "failing": 0,
+      "incomplete": 1,
+      "reasons": {
+        "bgOverlap": 1
+      },
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/general",
+      "theme": "dark",
+      "checked": 77,
+      "failing": 0,
+      "incomplete": 4,
+      "reasons": {
+        "bgOverlap": 4
+      },
+      "computedChecked": 2,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/git",
+      "theme": "dark",
+      "checked": 85,
+      "failing": 0,
+      "incomplete": 2,
+      "reasons": {
+        "bgOverlap": 2
+      },
+      "computedChecked": 1,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/repositories",
+      "theme": "dark",
+      "checked": 78,
+      "failing": 0,
+      "incomplete": 1,
+      "reasons": {
+        "bgOverlap": 1
+      },
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/tasks",
+      "theme": "dark",
+      "checked": 81,
+      "failing": 0,
+      "incomplete": 4,
+      "reasons": {
+        "bgOverlap": 4
+      },
+      "computedChecked": 3,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/agents",
+      "theme": "dark",
+      "checked": 73,
+      "failing": 0,
+      "incomplete": 6,
+      "reasons": {
+        "bgOverlap": 4,
+        "bgGradient": 2
+      },
+      "computedChecked": 2,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/capabilities",
+      "theme": "dark",
+      "checked": 97,
+      "failing": 0,
+      "incomplete": 4,
+      "reasons": {
+        "bgOverlap": 1,
+        "bgGradient": 3
+      },
+      "computedChecked": 3,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/ci",
+      "theme": "dark",
+      "checked": 82,
+      "failing": 0,
+      "incomplete": 6,
+      "reasons": {
+        "bgOverlap": 6
+      },
+      "computedChecked": 0,
+      "computedUnderAA": 0
+    },
+    {
+      "page": "/settings/memory",
+      "theme": "dark",
+      "checked": 83,
+      "failing": 0,
+      "incomplete": 3,
+      "reasons": {
+        "bgOverlap": 3
+      },
+      "computedChecked": 2,
+      "computedUnderAA": 0
+    }
+  ],
+  "failing": [],
+  "undetermined": []
+}
