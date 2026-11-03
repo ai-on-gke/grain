@@ -57,7 +57,7 @@ export function parseLabels(text) {
 // column shows it.
 export function connectionText(h) {
   if (h.revoked_at) return "Revoked";
-  if (h.name === "local") return "Co-located (socket)";
+  if (h.name === "local" && !h.shared) return "Co-located (socket)";
   const c = h.connection;
   if (!c) return "Never connected";
   if (c.connected) {
@@ -184,7 +184,10 @@ export default function HostdsSection({ showError }) {
             <TableBody>
               {(hostds || []).map((h) => {
                 const isEditing = editing?.name === h.name;
-                const remote = h.name !== "local" && !h.revoked_at;
+                // The deprecated shared token's hostd is not in the
+                // registry: it is shown, and changed only by the daemon's
+                // -hostd-token-* flags.
+                const remote = h.name !== "local" && !h.revoked_at && !h.shared;
                 return (
                   <TableRow key={h.name} data-testid={`hostd-row-${h.name}`}>
                     <TableCell>{h.name}</TableCell>
@@ -200,7 +203,7 @@ export default function HostdsSection({ showError }) {
                         />
                       ) : h.owner ? (
                         h.owner
-                      ) : remote ? (
+                      ) : remote || h.shared ? (
                         <Typography
                           variant="body2"
                           color="text.secondary"
@@ -238,7 +241,20 @@ export default function HostdsSection({ showError }) {
                     </TableCell>
                     <TableCell>{connectionText(h)}</TableCell>
                     <TableCell>
-                      {h.token_prefix ? <code>{h.token_prefix}…</code> : "—"}
+                      {h.shared ? (
+                        <Typography
+                          variant="body2"
+                          color="text.secondary"
+                          data-testid={`hostd-shared-${h.name}`}
+                          sx={{ whiteSpace: "nowrap" }}
+                        >
+                          Shared token (deprecated)
+                        </Typography>
+                      ) : h.token_prefix ? (
+                        <code>{h.token_prefix}…</code>
+                      ) : (
+                        "—"
+                      )}
                     </TableCell>
                     <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
                       {isEditing ? (
@@ -252,7 +268,7 @@ export default function HostdsSection({ showError }) {
                         </>
                       ) : (
                         <>
-                          {!h.revoked_at ? (
+                          {!h.revoked_at && !h.shared ? (
                             <Button
                               size="small"
                               onClick={() =>

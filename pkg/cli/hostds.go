@@ -161,6 +161,9 @@ func printHostds(out *printer, list []ui.HostdView) {
 		case h.Connection == nil:
 			state = "-"
 		}
+		if h.Shared {
+			state += " (deprecated shared -hostd-token-file)"
+		}
 		var labels []string
 		for k, v := range h.Labels {
 			labels = append(labels, k+"="+v)

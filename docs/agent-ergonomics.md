@@ -487,6 +487,19 @@ and `force`, and works in two modes:
   (`parkedResumeSection`). The sandbox does not survive a park, so a park
   with unpushed commits or uncommitted changes is refused unless
   `force: true` is set.
+- **`until: merged` past a close with the PR still open** (task 2757).
+  A task can be closed while its pull request is still open, for example
+  after the merge queue gave up on it, and a person can then merge that
+  PR by hand. `syncClosedPullRequests` reads such a PR for
+  `model.ClosedPullRequestWindow` (30 days) after the close. While it does,
+  the target reads `PullRequestOpen` and `WaitTarget.Settled(true)` is not
+  settled: a blocking wait keeps waiting. A park records `until_merged` in
+  its suspension's `ResumeOn`, and the dispatch hold
+  `untilMergedParkHold` keeps the parked task back past the close
+  (`Store.UntilMergedParkWaitsOn`). The wait ends when the PR merges
+  (met) or closes (unmet), when the window lapses, when the dependency is
+  removed, or when a person asks to run the task now. `until: closed` is
+  unchanged.
 - **Park until a time** when the hold is only a clock ("hold off for 1
   hour while we do repairs"): `resume_at`, a duration (`"1h"`) or an RFC
   3339 time at most a week away, with no `task_id`. The daemon defers the

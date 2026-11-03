@@ -15,6 +15,7 @@
 import { Button, Chip, Stack, Typography } from "@mui/material";
 import { PageHeaderActions, PageHeaderPageActions } from "./PageHeader.jsx";
 import { boardKindLabel } from "../boards.js";
+import AppIcon from "./AppIcon.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
 
 // BoardPage is one saved board: its name and what it is for, the two
@@ -75,10 +76,19 @@ export default function BoardPage({
                 className="board-page-actions"
                 sx={{ ml: "auto" }}
               >
-                <Button size="small" onClick={() => onEditBoard(board)}>
+                <Button
+                  size="small"
+                  startIcon={<AppIcon name="edit" size={15} />}
+                  onClick={() => onEditBoard(board)}
+                >
                   Edit board
                 </Button>
-                <Button size="small" variant="contained" onClick={onNewBoard}>
+                <Button
+                  size="small"
+                  variant="contained"
+                  startIcon={<AppIcon name="add" size={16} />}
+                  onClick={onNewBoard}
+                >
                   New board
                 </Button>
               </Stack>

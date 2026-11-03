@@ -595,12 +595,26 @@ export default function TaskChat({
     evt.preventDefault();
   };
 
+  // On a phone the Send button below the message box is the way to send
+  // (a touch keyboard has no convenient Enter), and on a short one --
+  // 390×640 -- focusing the box left that row under the fold of the
+  // scrolling session pane (docs/test-runs/2026-11-03-ui-fixes.md F3).
+  // Bring the row into view with the box, scrolling no further than it
+  // takes; on a desktop the row is already beside the box.
+  const composeRef = useRef(null);
+  const handleFocus = (evt) => {
+    if (document.documentElement.dataset.phone !== "true") return;
+    if (!windowRef.current?.contains(evt.target)) return;
+    composeRef.current?.scrollIntoView?.({ block: "nearest" });
+  };
+
   return (
     <div
       className="task-chat"
       onPaste={handlePaste}
       onDrop={handleDrop}
       onDragOver={handleDragOver}
+      onFocus={handleFocus}
     >
       <Box
         sx={{
@@ -655,7 +669,7 @@ export default function TaskChat({
           </ChatContainer>
         </MainContainer>
       </div>
-      <div className="task-chat-compose">
+      <div className="task-chat-compose" ref={composeRef}>
         <AttachmentPicker files={attachments} onChange={setAttachments} />
         {busy && (
           <Button variant="outlined" color="error" onClick={stop}>

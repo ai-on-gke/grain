@@ -590,6 +590,9 @@ func Run(opts Options) error {
 		}
 	}
 	client := ui.NewClient(cfg, store)
+	if err := client.MigrateAllowedPrincipals(ctx); err != nil {
+		log.Printf("grain demo: WARNING: migrating allowed principals: %v", err)
+	}
 	if opts.ModelCatalog != "" {
 		interval := opts.ModelDiscoveryInterval
 		if interval <= 0 {
@@ -1531,6 +1534,9 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	if err := seedDemoHostds(ctx, store); err != nil {
 		return err
 	}
+	if err := seedDemoAllowedPrincipals(ctx, store, cfg, ago); err != nil {
+		return err
+	}
 	if err := seedDemoMemory(ctx, store, cfg, ago); err != nil {
 		return err
 	}
@@ -2035,6 +2041,29 @@ func seedDemoHostds(ctx context.Context, store *model.Store) error {
 	}
 	if _, err := store.RevokeHostd(ctx, "old-laptop"); err != nil {
 		return fmt.Errorf("seeding a revoked hostd: %w", err)
+	}
+	return nil
+}
+
+// seedDemoAllowedPrincipals populates Settings -> Access with a user and a
+// group when no explicit -ui-allowed-principals flag or environment variable
+// was given (so tests passing the deprecated flag still exercise its one-time
+// migration into an empty allowlist).
+func seedDemoAllowedPrincipals(ctx context.Context, store *model.Store, cfg ui.Config, ago func(time.Duration) time.Time) error {
+	if len(cfg.AllowedPrincipals) > 0 || strings.TrimSpace(os.Getenv("GRAIN_ALLOWED_PRINCIPALS")) != "" {
+		return nil
+	}
+	for _, item := range []struct {
+		entry   string
+		addedBy string
+		at      time.Time
+	}{
+		{"user:alice@example.com", "the access code", ago(48 * time.Hour)},
+		{"group:eng-oncall@example.com", "alice@example.com", ago(12 * time.Hour)},
+	} {
+		if _, _, err := store.AddAllowedPrincipal(ctx, item.entry, item.addedBy, item.at); err != nil {
+			return fmt.Errorf("seeding allowed principal %s: %w", item.entry, err)
+		}
 	}
 	return nil
 }

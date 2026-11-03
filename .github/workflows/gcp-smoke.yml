@@ -16,8 +16,17 @@
 # runners (ubuntu-latest).
 #
 # Authenticates to Google Cloud via Workload Identity Federation using the
-# repository variables GCP_WIF_PROVIDER and GCP_SA_EMAIL. If either variable
-# is unset, the workflow emits a clear notice and skips the smoke steps.
+# repository variables GCP_WIF_PROVIDER and GCP_SA_EMAIL (provisioned by
+# scripts/setup-gcp-smoke-wif.sh; see docs/github-actions-ci.md).
+#
+# Scheduled and workflow_dispatch only (never pull_request or push, so required
+# PR checks are unaffected). When both variables are unset, the job-level `if:`
+# skips the job (and therefore the workflow run) with conclusion `skipped`
+# instead of reporting a misleading green `success`. (In GitHub Actions v2, any
+# job that runs a step and exits 0 turns the workflow run's overall conclusion
+# into `success`; gating at the job level keeps unconfigured runs `skipped`,
+# while a half-configured pair runs the first step, emits a `::warning`, and
+# fails.)
 
 name: gcp-smoke
 
@@ -36,6 +45,7 @@ env:
 jobs:
   smoke:
     name: GCE and GKE lifecycle
+    if: vars.GCP_WIF_PROVIDER != '' || vars.GCP_SA_EMAIL != ''
     runs-on: ubuntu-latest
     timeout-minutes: 45
     concurrency:
@@ -43,34 +53,29 @@ jobs:
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
     steps:
       - name: Check GCP Workload Identity Federation variables
-        id: check-creds
         env:
           GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
           GCP_SA_EMAIL: ${{ vars.GCP_SA_EMAIL }}
         run: |
           set -euo pipefail
           if [ -z "$GCP_WIF_PROVIDER" ] || [ -z "$GCP_SA_EMAIL" ]; then
-            echo "::notice title=gcp-smoke skipped::Repository variables GCP_WIF_PROVIDER and/or GCP_SA_EMAIL are not set; skipping GCE and GKE lifecycle smoke tests."
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "::warning title=gcp-smoke unconfigured::Both repository variables GCP_WIF_PROVIDER and GCP_SA_EMAIL must be set (run scripts/setup-gcp-smoke-wif.sh <project>; see docs/github-actions-ci.md)."
+            exit 1
           fi
 
       - name: Checkout
-        if: steps.check-creds.outputs.configured == 'true'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
       - name: Authenticate to Google Cloud
-        if: steps.check-creds.outputs.configured == 'true'
+        id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_SA_EMAIL }}
 
       - name: Configure gcloud project
-        if: steps.check-creds.outputs.configured == 'true'
         env:
           GCP_SA_EMAIL: ${{ vars.GCP_SA_EMAIL }}
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
@@ -80,13 +85,14 @@ jobs:
           if [ -z "$project" ]; then
             project="$(printf '%s' "$GCP_SA_EMAIL" | sed -n 's/.*@\([^.]*\)\.iam\.gserviceaccount\.com$/\1/p')"
           fi
-          if [ -n "$project" ]; then
-            gcloud config set project "$project"
+          if [ -z "$project" ]; then
+            echo "::warning title=gcp-smoke missing project::Could not infer GCP project from GCP_SA_EMAIL; set repository variable GCP_PROJECT_ID."
+            exit 1
           fi
+          gcloud config set project "$project"
           echo "active account: $(gcloud config get-value account), project: $(gcloud config get-value project)"
 
       - name: Install GKE prerequisites
-        if: steps.check-creds.outputs.configured == 'true'
         run: |
           set -euo pipefail
           sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
@@ -99,41 +105,51 @@ jobs:
           gke-gcloud-auth-plugin --version
 
       - name: GCE VM lifecycle
-        if: steps.check-creds.outputs.configured == 'true'
         run: |
           set -euo pipefail
           args=(--iap)
           if [ "${SERVICE_ACCOUNT_SHAPE:-self}" = "default" ]; then
             args+=(--service-account=default)
           fi
-          ./scripts/gce-vm-smoke.sh "${args[@]}"
+          ./scripts/gce-vm-smoke.sh "${args[@]}" 2>&1 | tee "$RUNNER_TEMP/gce-smoke.log"
 
       - name: GKE cluster lifecycle
-        if: steps.check-creds.outputs.configured == 'true'
         run: |
           set -euo pipefail
           args=()
           if [ "${SERVICE_ACCOUNT_SHAPE:-self}" = "default" ]; then
             args+=(--node-service-account=default)
           fi
-          ./scripts/gke-cluster-smoke.sh "${args[@]}"
+          ./scripts/gke-cluster-smoke.sh "${args[@]}" 2>&1 | tee "$RUNNER_TEMP/gke-smoke.log"
 
       - name: Delete anything left behind
-        if: always() && steps.check-creds.outputs.configured == 'true'
+        if: always() && steps.auth.outcome == 'success'
         run: |
           set -uo pipefail
           cutoff=7200
           now="$(date -u +%s)"
+          our_vm=""
+          if [ -f "$RUNNER_TEMP/gce-smoke.log" ]; then
+            our_vm="$(sed -n 's/^=== create \(gce-smoke-[0-9]*-[0-9]*\) .*/\1/p' "$RUNNER_TEMP/gce-smoke.log" | head -n 1)"
+          fi
+          our_cluster=""
+          if [ -f "$RUNNER_TEMP/gke-smoke.log" ]; then
+            our_cluster="$(sed -n 's/^=== create cluster \(gke-smoke-[0-9]*-[0-9]*\) .*/\1/p' "$RUNNER_TEMP/gke-smoke.log" | head -n 1)"
+          fi
           ours_or_stale() {
-            local created
-            created="$(date -u -d "$1" +%s)" || return 1
+            local name="$1" ours="$2" created_ts="$3" created
+            if [ -n "$ours" ] && [ "$name" = "$ours" ]; then
+              return 0
+            fi
+            created="$(date -u -d "$created_ts" +%s)" || return 1
             [ $(( now - created )) -ge "$cutoff" ]
           }
           gcloud compute instances list \
             --filter='labels.purpose=gce-vm-smoke' \
             --format='value(name,zone.basename(),creationTimestamp)' |
           while read -r name zone created; do
-            if ours_or_stale "$created"; then
+            [ -n "$name" ] || continue
+            if ours_or_stale "$name" "$our_vm" "$created"; then
               echo "sweeping VM $name ($created)"
               gcloud compute instances delete "$name" --zone="$zone" --quiet || true
             fi
@@ -143,7 +159,8 @@ jobs:
             --filter='resourceLabels.purpose=gke-cluster-smoke' \
             --format='value(name,location,createTime)' |
           while read -r name zone created; do
-            if ours_or_stale "$created"; then
+            [ -n "$name" ] || continue
+            if ours_or_stale "$name" "$our_cluster" "$created"; then
               echo "sweeping cluster $name ($created)"
               gcloud container clusters delete "$name" --zone="$zone" --quiet || true
             fi

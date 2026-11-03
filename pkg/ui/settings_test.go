@@ -1153,6 +1153,23 @@ func TestUpdateSettingsRoundTripsTheAutomaticUpgrade(t *testing.T) {
 	if read.AutoUpgradeChannel != "candidate" || read.AutoUpgradeTime != "21:45" {
 		t.Fatalf("read back channel %q at %q, want candidate at 21:45", read.AutoUpgradeChannel, read.AutoUpgradeTime)
 	}
+	// A channel saved before autoUpgradeOn existed reads as daily.
+	if read.AutoUpgradeOn != model.AutoUpgradeDaily {
+		t.Errorf("a channel with no mode reads back as %q, want daily", read.AutoUpgradeOn)
+	}
+	release := " Release "
+	if got, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{AutoUpgradeOn: &release}); err != nil ||
+		got.AutoUpgradeOn != model.AutoUpgradeOnRelease {
+		t.Fatalf("turning on release upgrades: %q, %v", got.AutoUpgradeOn, err)
+	}
+	hourly := "hourly"
+	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{AutoUpgradeOn: &hourly}); err == nil {
+		t.Error("an unknown auto-upgrade mode was accepted")
+	}
+	daily := "daily"
+	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{AutoUpgradeOn: &daily}); err != nil {
+		t.Fatalf("going back to daily: %v", err)
+	}
 
 	for _, bad := range []string{"24:00", "9:30", "12:60", "noon", "-1:00", "12:5a"} {
 		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{AutoUpgradeTime: &bad}); err == nil {

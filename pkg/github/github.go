@@ -3815,6 +3815,35 @@ type WorkflowRunsReader interface {
 
 var _ WorkflowRunsReader = (*RESTClient)(nil)
 
+// WorkflowRunRerunner is the optional Client capability for asking GitHub
+// Actions to run a concluded run's failed jobs again, as a new attempt of
+// the same run: POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs.
+// The credential needs `actions: write` on the repository; one without it
+// is answered 403, which the caller reads as "not re-run" rather than a
+// fault.
+type WorkflowRunRerunner interface {
+	RerunFailedJobs(owner, repo string, runID int64) error
+}
+
+var _ WorkflowRunRerunner = (*RESTClient)(nil)
+
+// RerunFailedJobs asks GitHub to re-run the failed jobs of runID (and the
+// jobs that depend on them) as the run's next attempt.
+func (c *RESTClient) RerunFailedJobs(owner, repo string, runID int64) error {
+	if runID <= 0 {
+		return fmt.Errorf("re-running the failed jobs of %s/%s: no run id", owner, repo)
+	}
+	resp, err := c.request("POST", fmt.Sprintf("/repos/%s/%s/actions/runs/%d/rerun-failed-jobs", owner, repo, runID),
+		c.headers(owner, repo, true), []byte("{}"))
+	if err != nil {
+		return err
+	}
+	if resp.Status != http.StatusCreated && resp.Status != http.StatusOK && resp.Status != http.StatusNoContent {
+		return &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	return nil
+}
+
 // completedRunsETags caches the last ETag seen per (Transport, owner, repo) for
 // CompletedWorkflowRuns so unchanged polls cost 304 Not Modified. Keyed in a
 // package-level sync.Map because RESTClient.As makes a shallow copy of RESTClient.

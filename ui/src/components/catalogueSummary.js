@@ -89,6 +89,21 @@ export const RETIRED_IN_PROCESS = {
     grant: "https://grain.dev/capabilities/gcp#gcp-key",
     moveTo: "servers (https://grain.dev/capabilities/gcp#gcp-key)",
   },
+  "claude-proxy": {
+    grant:
+      'https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"claude"}',
+    moveTo: "servers (https://grain.dev/capabilities/model-proxy#model-proxy)",
+  },
+  "openai-proxy": {
+    grant:
+      'https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"openai"}',
+    moveTo: "servers (https://grain.dev/capabilities/model-proxy#model-proxy)",
+  },
+  "gemini-proxy": {
+    grant:
+      'https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"gemini"}',
+    moveTo: "servers (https://grain.dev/capabilities/model-proxy#model-proxy)",
+  },
 };
 
 export function describeRestrictions(r) {

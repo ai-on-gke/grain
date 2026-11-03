@@ -58,7 +58,7 @@ describe("AlertsButton (grain/task-4008)", () => {
   it("is quiet with no alerts, and says so when opened", () => {
     renderBell(config());
     const bell = screen.getByTestId("alerts-button");
-    expect(bell.querySelector('svg[data-glyph="alerts"]')).toBeInTheDocument();
+    expect(bell.querySelector('svg[data-icon="alerts"]')).toBeInTheDocument();
     expect(bell).toHaveAttribute("data-severity", "none");
     expect(bell).toHaveAccessibleName("Alerts: none");
     expect(within(bell).queryByText("0")).not.toBeInTheDocument();

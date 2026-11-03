@@ -24,14 +24,18 @@ import {
 import { createPortal } from "react-dom";
 import {
   Box,
+  Button,
   ButtonBase,
+  ButtonGroup,
   IconButton,
+  ListItemIcon,
+  ListItemText,
   Menu,
   MenuItem,
   Tooltip,
   Typography,
 } from "@mui/material";
-import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
+import AppIcon, { NavGlyph } from "./AppIcon.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
 import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
 import { verifiedUserEmail } from "./settings/AccessSection.jsx";
@@ -151,8 +155,13 @@ export function GlobalButtons({
   onOpenSettings,
   onOpenAccess,
   onLogout,
+  onOpenNewTask,
+  onNewSession,
+  onNewBoard,
 }) {
   const [userAnchor, setUserAnchor] = useState(null);
+  const [createMenuAnchor, setCreateMenuAnchor] = useState(null);
+  const createMenuOpen = Boolean(createMenuAnchor);
   const email = verifiedUserEmail(config);
   const selectedSx = (on) => ({
     color: on ? "primary.main" : "text.secondary",
@@ -162,20 +171,21 @@ export function GlobalButtons({
     <Box
       data-testid="page-header-globals"
       className="page-header-globals"
-      sx={{ display: "flex", alignItems: "center", gap: 0.5, flex: "none" }}
+      sx={{ display: "flex", alignItems: "center", gap: 1, flex: "none" }}
     >
       {alerts}
       {onOpenSystem && (
         <Tooltip title="System">
           <IconButton
             size="small"
+            className="header-control-icon"
             aria-label="System"
             aria-pressed={view === "system"}
             data-testid="top-bar-system"
             onClick={onOpenSystem}
             sx={selectedSx(view === "system")}
           >
-            <ItemGlyph kind="system" size={18} />
+            <AppIcon name="system" size={18} />
             {stateDot(config) ? (
               <UnbackedStateDot {...stateDot(config)} />
             ) : null}
@@ -186,13 +196,14 @@ export function GlobalButtons({
         <Tooltip title="Settings">
           <IconButton
             size="small"
+            className="header-control-icon"
             aria-label="Settings"
             aria-pressed={view === "settings"}
             data-testid="top-bar-settings"
             onClick={onOpenSettings}
             sx={selectedSx(view === "settings")}
           >
-            <ItemGlyph kind="settings" size={18} />
+            <AppIcon name="settings" size={18} />
           </IconButton>
         </Tooltip>
       )}
@@ -201,6 +212,7 @@ export function GlobalButtons({
           <Tooltip title={`Signed in as ${email}`}>
             <ButtonBase
               data-testid="top-bar-user"
+              className="header-user-pill"
               aria-label={`Signed in as ${email}`}
               aria-haspopup={onLogout || onOpenAccess ? "menu" : undefined}
               aria-expanded={Boolean(userAnchor) || undefined}
@@ -212,10 +224,11 @@ export function GlobalButtons({
                 }
               }}
               sx={{
-                px: 1,
-                height: 28,
-                borderRadius: 1,
-                maxWidth: 200,
+                px: 1.25,
+                gap: 0.75,
+                height: "var(--header-control-size)",
+                borderRadius: 1.5,
+                maxWidth: { xs: 120, md: 200 },
                 fontSize: "0.75rem",
                 fontWeight: 500,
                 color: "text.secondary",
@@ -227,6 +240,7 @@ export function GlobalButtons({
                 },
               }}
             >
+              <AppIcon name="user" size={16} />
               <Typography
                 component="span"
                 variant="caption"
@@ -252,7 +266,10 @@ export function GlobalButtons({
                   (onOpenAccess || onOpenSettings)();
                 }}
               >
-                Access settings
+                <ListItemIcon sx={{ minWidth: 28 }}>
+                  <AppIcon name="user" size={16} />
+                </ListItemIcon>
+                <ListItemText>Access settings</ListItemText>
               </MenuItem>
             )}
             {onLogout && (
@@ -263,10 +280,104 @@ export function GlobalButtons({
                   onLogout();
                 }}
               >
-                Log out
+                <ListItemIcon sx={{ minWidth: 28 }}>
+                  <AppIcon name="signOut" size={16} />
+                </ListItemIcon>
+                <ListItemText>Log out</ListItemText>
               </MenuItem>
             )}
           </Menu>
+        </>
+      )}
+      {onOpenNewTask && (
+        <>
+          <ButtonGroup
+            size="small"
+            variant="contained"
+            className="header-split-button"
+            data-testid="header-new-task-group"
+            sx={{ flex: "none" }}
+          >
+            <Button
+              aria-label="+ New task"
+              onClick={onOpenNewTask}
+              startIcon={<AppIcon name="add" size={16} />}
+              sx={{
+                px: 1.25,
+                whiteSpace: "nowrap",
+                "& .MuiButton-startIcon": { mr: 0.5, ml: 0 },
+              }}
+            >
+              New task
+            </Button>
+            {(onNewSession || onNewBoard) && (
+              <Button
+                aria-label="Create options"
+                aria-controls={
+                  createMenuOpen ? "create-options-menu" : undefined
+                }
+                aria-haspopup="true"
+                aria-expanded={createMenuOpen ? "true" : undefined}
+                onClick={(e) => setCreateMenuAnchor(e.currentTarget)}
+                sx={{
+                  px: 0,
+                  width: 32,
+                  minWidth: 32,
+                  flex: "0 0 32px",
+                }}
+              >
+                <AppIcon name="dropdown" size={18} />
+              </Button>
+            )}
+          </ButtonGroup>
+          {(onNewSession || onNewBoard) && (
+            <Menu
+              id="create-options-menu"
+              anchorEl={createMenuAnchor}
+              open={createMenuOpen}
+              onClose={() => setCreateMenuAnchor(null)}
+              anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+              transformOrigin={{ vertical: "top", horizontal: "right" }}
+            >
+              <MenuItem
+                onClick={() => {
+                  setCreateMenuAnchor(null);
+                  onOpenNewTask();
+                }}
+              >
+                <ListItemIcon sx={{ minWidth: 28 }}>
+                  <ItemGlyph kind="tasks" />
+                </ListItemIcon>
+                <ListItemText>New task</ListItemText>
+              </MenuItem>
+              {onNewSession && (
+                <MenuItem
+                  onClick={() => {
+                    setCreateMenuAnchor(null);
+                    onNewSession();
+                  }}
+                >
+                  <ListItemIcon sx={{ minWidth: 28 }}>
+                    <ItemGlyph kind="sessions" />
+                  </ListItemIcon>
+                  <ListItemText>New session</ListItemText>
+                </MenuItem>
+              )}
+              {onNewBoard && (
+                <MenuItem
+                  onClick={() => {
+                    setCreateMenuAnchor(null);
+                    onNewBoard();
+                  }}
+                >
+                  <ListItemIcon sx={{ minWidth: 28 }}>
+                    <ItemGlyph kind="boards" />
+                  </ListItemIcon>
+                  <ListItemText>New board</ListItemText>
+                </MenuItem>
+              )}
+            </Menu>
+          )}
         </>
       )}
     </Box>
@@ -436,14 +547,14 @@ export default function PageHeader({
   const resolvedIcon =
     icon !== undefined ? (
       typeof icon === "string" ? (
-        <ItemGlyph kind={icon} size={20} />
+        <NavGlyph kind={icon} size={20} />
       ) : (
         icon
       )
     ) : segments ? (
       (() => {
         const kind = glyphForSegments(segments);
-        return kind ? <ItemGlyph kind={kind} size={20} /> : null;
+        return kind ? <NavGlyph kind={kind} size={20} /> : null;
       })()
     ) : null;
 
@@ -506,6 +617,7 @@ export default function PageHeader({
         <Tooltip title={expanded ? "Fewer" : "More"}>
           <IconButton
             size="small"
+            className="header-control-icon"
             ref={moreRef}
             aria-label="More page actions"
             aria-expanded={expanded}
@@ -517,7 +629,7 @@ export default function PageHeader({
               ml: expanded ? "auto" : undefined,
             }}
           >
-            <MoreHorizIcon fontSize="small" />
+            <AppIcon name="more" size={18} />
           </IconButton>
         </Tooltip>
       )}

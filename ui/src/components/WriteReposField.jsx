@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { Box, IconButton, Stack, Typography } from "@mui/material";
+import AppIcon from "./AppIcon.jsx";
 import BranchField from "./BranchField.jsx";
 import RepoPicker from "./RepoPicker.jsx";
 
@@ -126,7 +127,7 @@ export default function WriteReposField({
                 title={`Remove ${w.repo}`}
                 onClick={() => remove(index)}
               >
-                ×
+                <AppIcon name="close" size={16} />
               </IconButton>
             </Stack>
           ))}

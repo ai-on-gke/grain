@@ -191,6 +191,9 @@ is relayed.
    settled-unmet at the close. Changing this means deciding how long a
    waiter may sit on a closed task's open PR (the closed-PR pass watches
    for 30 days), so it is filed as a follow-up and not changed here.
+   *Since resolved (task 2757):* an `until: merged` wait now keeps waiting
+   while grain still reads the closed task's open PR, and the item 3 test
+   pins that instead.
 3. **Observation: `effectiveCommentOnIssue` prefers the final text whenever
    the comment ends in `...` or `…`.** A short report that ends in an
    ellipsis on purpose ("Waiting on #12...") is then replaced by whatever
