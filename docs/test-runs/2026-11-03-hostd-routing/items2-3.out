@@ -1,0 +1,22 @@
+=== item 2: labels
+06:28:02 {"id":"12","state":"queued","pin":"gpu=yes","activity":null,"attempts":[]}
+06:28:05 {"id":"12","state":"awaiting_reply","pin":"gpu=yes","activity":null,"attempts":[{"outcome":"succeeded","hostd":"ws-a"}]}
+ran in: ws-a/home/.grain/hostd-stage/sessions/antigravity/12
+gpu=no (matches none) -> {"error":"no hostd in the registry is labelled gpu=no (Settings -> Hostds)"}
+ws-nope (unknown name) -> {"error":"hostd ws-nope is not in the registry (Settings -> Hostds)"}
+PUT /api/tasks/12/hostd gpu=no -> {"error":"no hostd in the registry is labelled gpu=no (Settings -\u003e Hostds)"}
+
+=== item 3a: a pin on a disconnected hostd waits, and starts on reconnect
+06:28:08 {"id":"13","state":"queued","pin":"ws-b","activity":null,"attempts":[]}
+06:28:09 {"id":"13","state":"queued","pin":"ws-b","activity":"waiting for hostd ws-b","attempts":[]}
+the board's view of it (GET /api/tasks?state=queued):
+[{"id":"13","activity":"waiting for hostd ws-b","reason":"queued/ready"}]
+06:28:20 restarting ws-b
+06:28:21 {"id":"13","state":"queued","pin":"ws-b","activity":"waiting for hostd ws-b","attempts":[]}
+06:28:21 {"id":"13","state":"awaiting_reply","pin":"ws-b","activity":null,"attempts":[{"outcome":"succeeded","hostd":"ws-b"}]}
+ran in: ws-b/home/.grain/hostd-stage/sessions/antigravity/13
+=== item 3b: capacity: 1 on ws-a holds a second task
+06:28:22 {"id":"15","state":"queued","pin":"ws-a","activity":null,"attempts":[]}
+06:28:25 {"id":"15","state":"queued","pin":"ws-a","activity":"waiting: hostd ws-a is at its capacity (1 of 1 runs); the run waits for one to finish","attempts":[]}
+06:28:33 {"id":"15","state":"running","pin":"ws-a","activity":null,"attempts":[{"outcome":null,"hostd":"ws-a"}]}
+06:28:33 {"id":"15","state":"awaiting_reply","pin":"ws-a","activity":null,"attempts":[{"outcome":"succeeded","hostd":"ws-a"}]}

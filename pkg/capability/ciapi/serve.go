@@ -346,7 +346,7 @@ func templateList(grant Grant) string {
 }
 
 // ReleasePendingRequest is the body of POST
-// /api/notifications/release-pending: the release staged (vX.Y.0), the rc
+// /api/notifications/release-pending: the release staged (vX.Y.Z), the rc
 // it came from, and what the notification says.
 type ReleasePendingRequest struct {
 	Version string `json:"version"`
@@ -354,8 +354,9 @@ type ReleasePendingRequest struct {
 	Body    string `json:"body,omitempty"`
 }
 
-// releaseVersion is a release a person is asked to approve.
-var releaseVersion = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.0$`)
+// releaseVersion is a release a person is asked to approve: a minor
+// release, vX.Y.0, or a patch the train staged from fixes alone, vX.Y.Z.
+var releaseVersion = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
 // maxNotificationBody bounds what the caller may say.
 const maxNotificationBody = 4096
@@ -382,7 +383,7 @@ func releasePendingBody(r *http.Request, repo model.RepoRef) ([]byte, string) {
 		return nil, "reading the request: trailing data after JSON object"
 	}
 	if !releaseVersion.MatchString(req.Version) {
-		return nil, fmt.Sprintf("%q is not a release (vX.Y.0)", req.Version)
+		return nil, fmt.Sprintf("%q is not a release (vX.Y.Z)", req.Version)
 	}
 	if len(req.Body) > maxNotificationBody {
 		return nil, fmt.Sprintf("the body is longer than %d bytes", maxNotificationBody)

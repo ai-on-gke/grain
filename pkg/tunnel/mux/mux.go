@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -79,9 +80,22 @@ var (
 	ErrStreamClosed  = errors.New("tunnel mux: stream closed")
 	ErrStreamReset   = errors.New("tunnel mux: stream reset by peer")
 	ErrFrameTooLarge = errors.New("tunnel mux: frame payload exceeds max size")
-	ErrTimeout       = errors.New("tunnel mux: i/o timeout")
 	ErrBufferFull    = errors.New("tunnel mux: stream receive buffer full")
+	// ErrTimeout is a Stream's deadline passing. It is a net.Error whose
+	// Timeout is true, and os.ErrDeadlineExceeded to errors.Is, as a
+	// net.Conn's is: net/http's server aborts its background read
+	// between keep-alive requests by setting a deadline in the past, and
+	// reads any other error as the client gone -- cancelling the next
+	// request on the connection (a 502 from a reverse proxy behind it).
+	ErrTimeout error = timeoutError{}
 )
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string        { return "tunnel mux: i/o timeout" }
+func (timeoutError) Timeout() bool        { return true }
+func (timeoutError) Temporary() bool      { return true }
+func (timeoutError) Is(target error) bool { return target == os.ErrDeadlineExceeded }
 
 // Config configures a Mux session.
 type Config struct {

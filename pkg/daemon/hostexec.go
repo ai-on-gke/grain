@@ -536,7 +536,7 @@ func (c Config) cliHostdHost(r CLIRunResolution) (agent.Host, error) {
 	}
 	h.Path = r.HostPath
 	if exec := c.hostExecutor(); exec.Remote != nil {
-		if err := remoteHostdHost(&h, exec.Remote); err != nil {
+		if err := remoteHostdHost(&h, exec.Remote.Carrier(exec.Hostd)); err != nil {
 			return nil, fmt.Errorf("%s is set to run on the host, through the grain hostd that dials in: %w", cliBinaryName(r.Framework), err)
 		}
 	}
@@ -549,8 +549,10 @@ const remoteHostdHostTimeout = 10 * time.Second
 // remoteHostdHost makes h a host on the machine of the grain hostd that
 // dialed in over remote: one that shares neither this daemon's
 // filesystem nor its loopback, so h stages there and carries grain's
-// endpoints there (agent/hostd_remote.go). Its hello says where.
-func remoteHostdHost(h *agent.HostdHost, remote *hostd.Remote) error {
+// endpoints there (agent/hostd_remote.go). Its hello says where. remote
+// is bound to the hostd h's Client reaches, so the carried endpoints
+// listen on the machine the CLI runs on, not the default hostd's.
+func remoteHostdHost(h *agent.HostdHost, remote *hostd.HostdCarrier) error {
 	ctx, cancel := context.WithTimeout(context.Background(), remoteHostdHostTimeout)
 	defer cancel()
 	hello, err := h.Client.Hello(ctx)

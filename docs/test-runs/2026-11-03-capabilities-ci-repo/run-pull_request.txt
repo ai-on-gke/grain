@@ -1,0 +1,19 @@
+pull_request failure
+== publish failure 
+    ls: cannot access '/home/debian/.package-publish-*': No such file or directory
+ls: cannot access '/home/debian/.grain/bin': No such file or directory
+ls: cannot access '/home/debian/.docker': No such file or directory
+cat: /home/debian/.package-publish-refresh-url: No such file or directory
+
+== read-other success 
+    proxy base: http://10.240.0.1:44413/
+Cloning into '/tmp/other'...
+other repo
+
+== write-other failure 
+    Cloning into '/tmp/other'...
+remote: other/repo is not in scope for this sandbox
+fatal: unable to access 'http://10.240.0.1:44413/other/repo/': The requested URL returned error: 403
+remote: acme/widgets is read-only for this sandbox: it may fetch it but not push to it
+fatal: unable to access 'http://10.240.0.1:44413/acme/widgets.git/': The requested URL returned error: 403
+

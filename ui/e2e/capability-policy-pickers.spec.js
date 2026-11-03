@@ -176,8 +176,10 @@ test("judges a held grant, a repo-conditional rule and a repo's CI grants by the
 
 // repo#read is refused every task and process by grain's own CI-only
 // rule, before the policy's rules are looked at: the listing says
-// ci_only, not denied, and the pickers say CI only and point at the
-// repository's CI capabilities, not at a policy with no rule to change.
+// ci_only, not denied, and the pickers say CI only and point at how a
+// CI job declares it (its workflow's capabilities:), not at a policy with
+// no rule to change nor at the repository's CI capabilities list, which
+// does not grant it.
 test("words repo#read as CI-only, not as denied by the capability policy", async ({
   page,
   request,
@@ -205,10 +207,13 @@ test("words repo#read as CI-only, not as denied by the capability policy", async
     expect(created.ok()).toBeTruthy();
     taskID = (await created.json()).id;
 
-    for (const [label, viewport] of VIEWPORTS) {
+    for (const [label, viewport, theme] of VIEWPORTS.flatMap(([l, v]) =>
+      ["light", "dark"].map((th) => [`${l}-${th}`, v, th]),
+    )) {
+      await page.emulateMedia({ colorScheme: theme });
       await page.setViewportSize(viewport);
 
-      // A new template names no repo: the row points at the repos page.
+      // A new template names no repo: the row points at the docs.
       await page.goto("/processes");
       await page.getByRole("button", { name: "+ New", exact: true }).click();
       await page
@@ -221,16 +226,17 @@ test("words repo#read as CI-only, not as denied by the capability policy", async
       await expect(row).toHaveAttribute("data-policy-verdict", "ci_only");
       await expect(row).toContainText("CI only: not a grant for agent tasks");
       await expect(row).not.toContainText("capability policy");
+      await expect(row).toContainText("declares it in its workflow");
       await expect(
-        row.getByRole("link", { name: "Repos → CI capabilities" }),
-      ).toHaveAttribute("href", "/repos");
+        row.getByRole("link", { name: "Repository access docs" }),
+      ).toHaveAttribute("href", /docs\/ci-capabilities\.md#repository-access/);
       await expectInside(menu, row);
       await page.screenshot({
         path: testInfo.outputPath(`template-repo-read-${label}.png`),
       });
       await page.keyboard.press("Escape");
 
-      // A task on acme/widgets: the row points at that repo's CI tab.
+      // A task on acme/widgets: the same, since no repo's CI tab grants it.
       await page.goto(`/tasks/${taskID}`);
       menu = await openGrantMenu(
         page,
@@ -240,8 +246,11 @@ test("words repo#read as CI-only, not as denied by the capability policy", async
       await expect(row).toHaveAttribute("aria-disabled", "true");
       await expect(row).not.toContainText("capability policy");
       await expect(
-        row.getByRole("link", { name: "acme/widgets → CI capabilities" }),
-      ).toHaveAttribute("href", "/repos/acme/widgets/settings/ci");
+        row.getByRole("link", { name: "Repository access docs" }),
+      ).toHaveAttribute("href", /docs\/ci-capabilities\.md#repository-access/);
+      await page.screenshot({
+        path: testInfo.outputPath(`task-repo-read-${label}.png`),
+      });
       await expectInside(menu, row);
       await page.keyboard.press("Escape");
     }

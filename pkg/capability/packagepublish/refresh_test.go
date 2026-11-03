@@ -208,10 +208,19 @@ func TestTheHelperHandsEveryPushTheLaddersCurrentToken(t *testing.T) {
 	// The log says who asked and which credential answered, and holds
 	// no material: no token, and not the job's refresh token.
 	refreshToken, _ := placed(m, RefreshTokenPath)
+	named := false
 	for _, line := range lines {
 		if strings.Contains(line, "token-") || strings.Contains(line, strings.TrimSpace(refreshToken.Content)) {
 			t.Errorf("log line holds material: %q", line)
 		}
+		// It names the registry the login is for, which is the
+		// ladder's answer when the provider names none (the default):
+		// the walk's daemon logged "re-minted its  login"
+		// (docs/test-runs/2026-11-03-capabilities-ci-repo.md, F2).
+		named = named || strings.Contains(line, "re-minted its ghcr.io login from default")
+	}
+	if !named {
+		t.Errorf("no log line names the registry the login was re-minted for: %q", lines)
 	}
 
 	// The job ends; its refresh token ends with it.

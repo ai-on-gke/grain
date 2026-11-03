@@ -1,0 +1,29 @@
+workflow_dispatch failure
+== legacy-read success 
+    Cloning into '/tmp/other'...
+other repo
+== publish success 
+    -rw------- 1 debian debian   86 Nov  3 06:23 /home/debian/.package-publish-refresh-token
+/home/debian/.docker:
+/home/debian/.grain/bin:
+refresh url: http://10.240.0.1:45003
+refresh 1: HTTP 200
+  secret sha256 107e91dbc451; query ignored: 200
+refresh 2: HTTP 200
+  secret sha256 107e91dbc451; query ignored: 200
+refresh 3: HTTP 200
+  secret sha256 107e91dbc451; query ignored: 200
+{"ServerURL":"ghcr.io","Username":"x-access-token","Secret":"<redacted>"}
+held token: gpp_<redacted>
+== read-other success 
+    proxy base: http://10.240.0.1:44413/
+Cloning into '/tmp/other'...
+other repo
+== undeclared failure 
+    Cloning into '/tmp/other'...
+remote: other/repo is not in scope for this sandbox
+fatal: unable to access 'http://10.240.0.1:44413/other/repo/': The requested URL returned error: 403
+== write-other success 
+    Cloning into '/tmp/other'...
+To http://10.240.0.1:44413/other/repo
+ * [new branch]      HEAD -> candidate-1793687022

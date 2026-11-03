@@ -15,9 +15,10 @@
 package ui
 
 // The person-only last step of a trunk release
-// (design/design/release-from-trunk.design.md, §4): the release train stops a
-// release whose soak passed at vX.Y.0-pending, and a person approves or
-// rejects it here. Approving runs .grain/workflows/promote-release.yml's
+// (design/playbook/releases.playbook.md): the release train stops a
+// release whose candidate qualified at vX.Y.Z-pending -- a minor release,
+// vX.Y.0, or a patch the train cut from fixes alone, vX.Y.Z -- and a
+// person approves or rejects it here. Approving runs .grain/workflows/promote-release.yml's
 // `promote` job (which needs `approve`), rejecting its `reject` job; both
 // are workflow_dispatch runs of the repository's trunk that carry
 // GRAIN_CI_REQUESTED_BY_KIND=human and GRAIN_CI_RELEASE_VERSION, which no
@@ -54,8 +55,10 @@ const PromoteReleaseWorkflow = ci.WorkflowDir + "/promote-release.yml"
 // workflow is read at: releases are cut from trunk and nowhere else.
 const releaseTrunk = "main"
 
-// pendingReleasePattern is a release a person can be asked about: vX.Y.0.
-var pendingReleasePattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.0$`)
+// pendingReleasePattern is a release a person can be asked about: vX.Y.Z,
+// the train staging patch releases (vX.Y.Z-pending, Z >= 1) as well as
+// minor ones.
+var pendingReleasePattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
 // ReleaseDecision is what approving or rejecting a pending release
 // answers: the CI run carrying it out.
@@ -105,7 +108,7 @@ func (c *Client) DecideRelease(ctx context.Context, repo, version string, approv
 		return ReleaseDecision{}, validationErrorf("repo: %v", err)
 	}
 	if !pendingReleasePattern.MatchString(version) {
-		return ReleaseDecision{}, validationErrorf("%q is not a release a person is asked about: name it vX.Y.0", version)
+		return ReleaseDecision{}, validationErrorf("%q is not a release a person is asked about: name it vX.Y.Z", version)
 	}
 	enabled, err := c.ciEnabledFor(ctx, parsed)
 	if err != nil {

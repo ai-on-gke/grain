@@ -40,7 +40,7 @@ test("A task's hostd pin is edited on its page", async ({ page }) => {
   try {
     for (const [viewport, pin] of [
       [DESKTOP, "gpu=yes"],
-      [PHONE, "laptop"],
+      [PHONE, "build-runner"],
     ]) {
       await page.setViewportSize(viewport);
       await page.goto("/tasks/9");

@@ -48,6 +48,9 @@ func (c *Client) SetTaskHostd(ctx context.Context, id, selector string) error {
 	if err != nil {
 		return validationErrorf("%v", err)
 	}
+	if err := c.checkHostdSelector(ctx, normalized); err != nil {
+		return err
+	}
 	prev, err := c.Store.TaskHostd(ctx, id)
 	if err != nil || prev == normalized {
 		return err
@@ -63,6 +66,59 @@ func (c *Client) SetTaskHostd(ctx context.Context, id, selector string) error {
 		TaskID: id, Author: model.Attribution{Actor: c.requestActor(ctx).Actor}, CreatedAt: c.now(), Body: body,
 	})
 	return err
+}
+
+// checkHostdSelector refuses a selector that no hostd in the registry
+// can answer -- an unknown or revoked name, or labels no unrevoked
+// hostd carries -- as the daemon's SelectHostd would at the task's
+// first run, so whoever set it is told now rather than every run
+// failing its setup and retrying. A registered hostd that is not
+// connected is accepted: the task waits for it.
+func (c *Client) checkHostdSelector(ctx context.Context, selector string) error {
+	if selector == "" || c.Store == nil {
+		return nil
+	}
+	name, labels, err := model.ParseHostdSelector(selector)
+	if err != nil {
+		return validationErrorf("%v", err)
+	}
+	if name != "" {
+		if s, ok := c.Config.HostdRemote.(hostdSharedNamer); ok && s.SharedTokenName() == name {
+			return nil
+		}
+		h, err := c.Store.GetHostd(ctx, name)
+		if err != nil {
+			return err
+		}
+		if h == nil {
+			return validationErrorf("hostd %s is not in the registry (Settings -> Hostds)", name)
+		}
+		if h.Revoked() {
+			return validationErrorf("hostd %s is revoked", name)
+		}
+		return nil
+	}
+	rows, err := c.Store.ListHostds(ctx)
+	if err != nil {
+		return err
+	}
+	for _, h := range rows {
+		if !h.Revoked() && hostdLabelled(h.Labels, labels) {
+			return nil
+		}
+	}
+	return validationErrorf("no hostd in the registry is labelled %s (Settings -> Hostds)", selector)
+}
+
+// hostdLabelled is whether a hostd's registry labels carry every one
+// of want's.
+func hostdLabelled(have, want map[string]string) bool {
+	for k, v := range want {
+		if have[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) handleSetTaskHostd(w http.ResponseWriter, r *http.Request) {
