@@ -1015,7 +1015,7 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		Enabled:              true,
 		StateRepoSync:        syncFailure,
 		HostCredentials:      hostCredentials,
-		SandboxImage:         s.tasks.Config.SandboxImage,
+		SandboxImage:         s.tasks.sandboxImage(),
 		SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()),
 		SandboxGuest:         s.tasks.sandboxGuestPublishing(r.Context()),
 		BaseBranchGates:      s.tasks.baseBranchGates(r.Context()),

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Alert, Box, Link, TextField, Typography } from "@mui/material";
+import { Alert, Box, Button, Link, TextField, Typography } from "@mui/material";
 import SettingsCard from "./SettingsCard.jsx";
 
 export const SANDBOX_CONTRACT_DOC =
@@ -75,8 +75,29 @@ export default function CustomSandboxImageCard({ s }) {
         fullWidth
         margin="normal"
         inputProps={{ style: mono }}
+        InputProps={
+          settings.sandboxImage
+            ? {
+                endAdornment: (
+                  <Button
+                    size="small"
+                    onMouseDown={(evt) => evt.preventDefault()}
+                    onClick={() => s.saveChoice?.({ sandboxImage: "" })}
+                    data-testid="sandboxImage-reset"
+                    sx={{
+                      whiteSpace: "nowrap",
+                      textTransform: "none",
+                      flexShrink: 0,
+                    }}
+                  >
+                    Reset to default
+                  </Button>
+                ),
+              }
+            : undefined
+        }
       />
-      {settings.sandboxImageWarning ? (
+      {settings.sandboxImage && settings.sandboxImageWarning ? (
         <Alert
           severity="warning"
           data-testid="sandbox-image-warning"

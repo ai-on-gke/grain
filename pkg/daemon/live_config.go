@@ -173,6 +173,7 @@ func NewLiveConfig(store *model.Store, sandboxes orchestrator.Sandboxes, cfg Con
 	return &LiveConfig{
 		store: store, sandboxes: sandboxes,
 		githubCredentials: github, githubTokens: tokens, Applied: cfg,
+		customSandboxImage: customSandboxImageFor(cfg),
 	}
 }
 
@@ -441,6 +442,7 @@ func (l *LiveConfig) Refresh(ctx context.Context, deps *orchestrator.Deps) (poll
 	// tick rather than only on the tick that changed it: it is a
 	// comparison when the image is what it already was.
 	l.applySandboxImage(ctx, now)
+	deps.Config.SandboxGuestImage = sandboxGuestImage(now)
 	// And the instance label a Kubernetes backend's next pod is given,
 	// for the same reason.
 	l.applySandboxInstance(ctx)
@@ -595,16 +597,14 @@ func (l *LiveConfig) applySandboxInstance(ctx context.Context) {
 // image via CurrentSandboxImage, so jobs planned under another image get a
 // distinct cache key without wiping existing entries.
 func (l *LiveConfig) applySandboxImage(ctx context.Context, cfg Config) {
+	if nextStock := stockSandboxImageFor(cfg); nextStock != "" {
+		l.stockSandboxImage = nextStock
+	} else if l.baseStockImage != "" {
+		l.stockSandboxImage = l.baseStockImage
+	}
+	l.stockMirrorRepo = sandboxImageMirrorRepo(cfg)
 	if l.stockSandboxImage == "" {
 		return
-	}
-	// A mirror set, changed or cleared moves the stock image itself, so
-	// it is worked out again from cfg either way: baseStockImage, what
-	// this process started with, is the mirrored image on a daemon that
-	// started with a mirror, and is only the answer when cfg gives none.
-	if mirrorRepo := sandboxImageMirrorRepo(cfg); mirrorRepo != l.stockMirrorRepo {
-		l.stockMirrorRepo = mirrorRepo
-		l.stockSandboxImage = firstNonEmpty(stockSandboxImageFor(cfg), l.baseStockImage)
 	}
 	custom := customSandboxImageFor(cfg)
 	hadCustom := l.customSandboxImage != ""
@@ -613,6 +613,9 @@ func (l *LiveConfig) applySandboxImage(ctx context.Context, cfg Config) {
 	switch setter, ok := l.sandboxes.(orchestrator.SandboxImageSetter); {
 	case l.sandboxImages != nil:
 		_, changed = l.sandboxImages.Set(l.stockSandboxImage, custom)
+		if ok {
+			setter.SetImage(firstNonEmpty(custom, l.stockSandboxImage))
+		}
 	case ok:
 		image := firstNonEmpty(custom, l.stockSandboxImage)
 		changed = setter.CurrentImage() != image
@@ -644,8 +647,8 @@ func (l *LiveConfig) CurrentSandboxImage() string {
 	if l.sandboxImages != nil {
 		return l.sandboxImages.Current()
 	}
-	if setter, ok := l.sandboxes.(orchestrator.SandboxImageSetter); ok {
-		if img := setter.CurrentImage(); img != "" {
+	if current, ok := l.sandboxes.(interface{ CurrentImage() string }); ok {
+		if img := current.CurrentImage(); img != "" {
 			return img
 		}
 	}

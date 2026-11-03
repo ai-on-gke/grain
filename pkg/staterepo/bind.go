@@ -515,6 +515,10 @@ func Apply(ctx context.Context, r *Repo, db *sql.DB, version int) (bool, error) 
 		}
 	}
 	if err := applySettings(ctx, r, db, head, marker); err != nil {
+		if pending, perr := r.unappliedCommits(ctx, marker, head); perr == nil && len(pending) > 0 {
+			return false, fmt.Errorf("%w (unapplied commits %s..%s: %s): %w",
+				ErrNotApplied, short(marker), short(head), formatUnappliedInline(pending), err)
+		}
 		return false, fmt.Errorf("%w: %w", ErrNotApplied, err)
 	}
 	if err := r.setLoadedHead(ctx, head); err != nil {

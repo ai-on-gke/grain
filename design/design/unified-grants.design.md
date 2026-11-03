@@ -172,7 +172,7 @@ per-capability list, with what each one becomes:
 
 | In-process id | Becomes (proposed) | Kind of change |
 |---|---|---|
-| `gcp-key` | `https://grain.dev/capabilities/gcp#gcp-key` `{permission_set}` | existing server method ([gcp-key-permission-sets.md](../../docs/gcp-key-permission-sets.md)) |
+| `gcp-key` | `https://grain.dev/capabilities/gcp#gcp-key` `{permission_set}` | **done** (task 2430): in-process `gcp-key` and `gcp-key:<name>` providers removed; schema migration 97 seeds `sandbox-agent` and `<name>` permission sets on `https://grain.dev/capabilities/gcp` from `grain_config` and `gcp_key` rows (keeping `/home/debian/.gcp-service-account-<name>.json` key placement) and rewrites stored grants across tasks, templates, schedules, default/CI capabilities, console sessions, catalogue, and policy (`gcp-key` and `gcp-key:<name>` remain one-release aliases; [gcp-key-permission-sets.md](../../docs/gcp-key-permission-sets.md)) |
 | `gemini-key` | `…/model-proxy#model-proxy` `{vendor: gemini}`, or a `gemini-key` method on `…/gcp` | existing server; Q6 decides which |
 | `<vendor>-proxy` (model proxies) | `…/model-proxy#model-proxy` `{vendor}` | existing server method |
 | `github-credential:<name>` | `…/git#git-repo` `{credential: <name>, repo}` | existing server, gains an argument |

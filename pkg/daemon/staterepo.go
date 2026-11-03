@@ -385,18 +385,19 @@ func migrateStateRepo(ctx context.Context, repo *staterepo.Repo, db *sql.DB, err
 	if !errors.Is(err, staterepo.ErrSchemaTooOld) && !errors.Is(err, staterepo.ErrSchemaTooNew) {
 		return false
 	}
-	committed, merr := staterepo.Migrated(ctx, repo, db, model.SchemaVersion)
-	if !committed && merr == nil {
-		log.Printf("grain: the state repository's dump has been rewritten at schema %d from the database it "+
-			"was imported into, but produced no changes to commit", model.SchemaVersion)
-		return true
-	}
-	if !committed {
+	report, merr := staterepo.MigrateRepo(ctx, repo, db, model.SchemaVersion)
+	if !report.Committed && merr != nil {
 		log.Printf("grain: this deployment's store was migrated to schema %d and its state repository "+
 			"could not be brought with it: %v. Nothing here is lost -- the repository still holds the "+
 			"dump the store was rebuilt from -- and the next start tries again",
 			model.SchemaVersion, merr)
 		return false
+	}
+	reportMigratedUnappliedCommits(ctx, repo, db, report)
+	if !report.Committed && merr == nil {
+		log.Printf("grain: the state repository's dump has been rewritten at schema %d from the database it "+
+			"was imported into, but produced no changes to commit", model.SchemaVersion)
+		return true
 	}
 	if merr != nil {
 		log.Printf("grain: the config repository was migrated onto schema %d but its export reported: %v", model.SchemaVersion, merr)
@@ -404,6 +405,74 @@ func migrateStateRepo(ctx context.Context, repo *staterepo.Repo, db *sql.DB, err
 	}
 	log.Printf("grain: the config repository's dump was rewritten at schema %d from the database it was imported into; the prior dump is the preceding commit in %s", model.SchemaVersion, repo.Dir())
 	return true
+}
+
+func reportMigratedUnappliedCommits(ctx context.Context, repo *staterepo.Repo, db *sql.DB, report staterepo.MigratedReport) {
+	if len(report.Applied) > 0 {
+		summaries := make([]string, 0, len(report.Applied))
+		for _, c := range report.Applied {
+			summaries = append(summaries, c.String())
+		}
+		log.Printf("grain: applied %d previously unapplied config commit(s) (%s..%s) before rewriting %s at schema %d: %s",
+			len(report.Applied), shortCommit(report.LoadedHead), shortCommit(report.PriorHead),
+			repo.Dir(), model.SchemaVersion, strings.Join(summaries, "; "))
+	}
+	if len(report.Dropped) == 0 {
+		return
+	}
+	summaries := make([]string, 0, len(report.Dropped))
+	bulletLines := make([]string, 0, len(report.Dropped))
+	for _, c := range report.Dropped {
+		summaries = append(summaries, c.String())
+		bulletLines = append(bulletLines, "- "+c.String())
+	}
+	log.Printf("grain: WARNING: %d unapplied config commit(s) (%s..%s) failed to apply (%v) and were overwritten when rewriting %s at schema %d: %s",
+		len(report.Dropped), shortCommit(report.LoadedHead), shortCommit(report.PriorHead),
+		report.ApplyErr, repo.Dir(), model.SchemaVersion, strings.Join(summaries, "; "))
+
+	if db == nil {
+		return
+	}
+	store := model.New(db)
+	key := shortCommit(report.PriorHead)
+	if key == "" {
+		key = fmt.Sprintf("schema-%d", model.SchemaVersion)
+	}
+	title := fmt.Sprintf("Schema %d migration overwrote %d unapplied config commit(s) in grain/config",
+		model.SchemaVersion, len(report.Dropped))
+	var body strings.Builder
+	fmt.Fprintf(&body, "The state repository (%s) held %d commit(s) past the last loaded commit (%s..%s) "+
+		"that the database had never applied, and re-applying them during the migration to schema %d failed:\n\n%s\n",
+		repo.Dir(), len(report.Dropped), shortCommit(report.LoadedHead), shortCommit(report.PriorHead),
+		model.SchemaVersion, strings.Join(bulletLines, "\n"))
+	if report.ApplyErr != nil {
+		fmt.Fprintf(&body, "\nApply error: %v\n", report.ApplyErr)
+	}
+	if report.Head != "" {
+		fmt.Fprintf(&body, "\nThe migrated dump was written to commit %s; the prior dump is its parent (%s). "+
+			"Re-apply or cherry-pick the dropped commit(s) onto grain/config.",
+			shortCommit(report.Head), shortCommit(report.PriorHead))
+	}
+	now := time.Now().UTC()
+	raised, nerr := store.RaiseNotification(ctx, model.Notification{
+		Subject:  model.NotificationSubject(model.FamilyStateRepoUnapplied, key),
+		Severity: model.NotificationWarning,
+		Title:    title,
+		Body:     body.String(),
+		Repo:     "grain/config",
+		RaisedBy: model.PrincipalString(model.Principal{Kind: model.PrincipalAutomation, ID: "staterepo"}),
+		RaisedAt: now,
+		Actions:  []string{"investigate"},
+	})
+	if nerr != nil {
+		log.Printf("grain: raising notification for overwritten config commit(s): %v", nerr)
+		return
+	}
+	if raised.New {
+		if _, werr := store.WakeNotificationSubscribers(ctx, raised.Notification, now); werr != nil {
+			log.Printf("grain: waking subscribers of notification %d: %v", raised.Notification.ID, werr)
+		}
+	}
 }
 
 // reformatStateRepo answers the other question a failed load can raise:

@@ -53,9 +53,9 @@ func testLiveConfig(cfg daemon.Config) *daemon.LiveConfig {
 }
 
 // The GCP providers are part of this build but deliberately absent from
-// the active registry until their deployment settings are filled in.
-// Name those gates rather than sending an operator looking for another
-// binary, and keep gcp-key's two independent gates distinct.
+// gemini-key stays out of the active registry until its deployment GCP project
+// setting is filled in. Name that gate rather than sending an operator looking
+// for another binary.
 func TestCapabilityCheckNamesMissingProviderConfiguration(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -70,26 +70,6 @@ func TestCapabilityCheckNamesMissingProviderConfiguration(t *testing.T) {
 			id:       "gemini-key",
 			want:     []string{"gemini-key", "GCP project ID", "blank", "Settings -> Capabilities"},
 			dontWant: []string{"service-account", "in this build"},
-		},
-		{
-			name:     "gcp-key with only an email needs a project",
-			id:       "gcp-key",
-			cfg:      daemon.Config{GcpServiceAccountEmail: "agent@example-project.iam.gserviceaccount.com"},
-			want:     []string{"gcp-key", "GCP project ID", "blank", "Settings -> Capabilities"},
-			dontWant: []string{"agent service-account email setting is blank", "in this build"},
-		},
-		{
-			name:     "gcp-key with only a project needs an email",
-			id:       "gcp-key",
-			cfg:      daemon.Config{GcpProject: "example-project"},
-			want:     []string{"gcp-key", "agent service-account email", "blank", "Settings -> Capabilities"},
-			dontWant: []string{"GCP project ID", "in this build"},
-		},
-		{
-			name:     "gcp-key names both empty settings",
-			id:       "gcp-key",
-			want:     []string{"gcp-key", "GCP project ID", "agent service-account email", "blank", "Settings -> Capabilities"},
-			dontWant: []string{"in this build"},
 		},
 	}
 	for _, tc := range tests {
@@ -121,13 +101,12 @@ func TestCapabilityCheckCarriesTheProvidersOwnAnswer(t *testing.T) {
 	t.Parallel()
 	adapter := daemon.CapabilityCheckAdapter{
 		Live: testLiveConfig(daemon.Config{
-			GcpProject:             "example-project",
-			GcpServiceAccountEmail: "agent@example-project.iam.gserviceaccount.com",
+			GcpProject: "example-project",
 		}),
 		Creds: noCredentials{},
 	}
 
-	result, err := adapter.CheckCapability(context.Background(), "gcp-key")
+	result, err := adapter.CheckCapability(context.Background(), "gemini-key")
 	if err == nil {
 		t.Fatal("expected a check with no minter secret stored to fail")
 	}
