@@ -149,6 +149,24 @@ type OpenRequest struct {
 	// "Filed-by: task 1401").
 	Trailers []string
 	TaskURL  string
+	// RequestedBy is the person the task was filed by, for a backend
+	// with a requester of its own (a CL's): VerifiedRequester, "" when
+	// nobody verified filed it (operator-attribution spec §4.6).
+	RequestedBy string
+}
+
+// VerifiedRequester is task's Creator when a verified person or service
+// filed it as themselves (model.Principal.Verified), and "" otherwise:
+// the operator fallback, an agent's filing and a Creator named by `grain
+// create -author` are never a change's requester (operator-attribution
+// spec §4.6).
+func VerifiedRequester(task model.Task) string {
+	creator := strings.TrimSpace(task.Creator)
+	filer := task.Origin.Attribution.Actor
+	if creator == "" || !filer.Verified() || !strings.EqualFold(creator, strings.TrimSpace(filer.ID)) {
+		return ""
+	}
+	return creator
 }
 
 // OpenResult is one open_pull_request on a non-git task: the change now

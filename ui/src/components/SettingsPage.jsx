@@ -118,6 +118,8 @@ const READS_SETTINGS = new Set([
 // leaving one asks first.
 export default function SettingsPage({
   config,
+  // GET /api/whoami's answer, for Settings -> Access (App.jsx).
+  whoami = null,
   section,
   anchor = "",
   item = "",
@@ -562,7 +564,14 @@ export default function SettingsPage({
         body = <GeneralSection s={s} config={config} />;
         break;
       case "access":
-        body = <AccessSection s={s} {...common} onLogout={onLogout} />;
+        body = (
+          <AccessSection
+            s={s}
+            {...common}
+            whoami={whoami}
+            onLogout={onLogout}
+          />
+        );
         break;
       case "hostds":
         body = <HostdsSection {...common} />;
