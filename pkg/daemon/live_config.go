@@ -150,6 +150,10 @@ type LiveConfig struct {
 	// (startCapabilityServers); Refresh hands it each mcp_servers it
 	// reads. Nil where nothing attaches them (tests, `grain demo`).
 	capabilityServers *servers.Registry
+	// hostdCapabilityServers starts run: host servers on the hostd a
+	// pinned task's run is routed to; Refresh hands it each mcp_servers
+	// too. Nil beside a nil capabilityServers.
+	hostdCapabilityServers *hostdCapabilityServers
 
 	Mu      sync.Mutex
 	Applied Config
@@ -169,6 +173,7 @@ func NewLiveConfig(store *model.Store, sandboxes orchestrator.Sandboxes, cfg Con
 	return &LiveConfig{
 		store: store, sandboxes: sandboxes,
 		githubCredentials: github, githubTokens: tokens, Applied: cfg,
+		customSandboxImage: customSandboxImageFor(cfg),
 	}
 }
 
@@ -190,6 +195,17 @@ func (l *LiveConfig) WithSandboxImages(src *sandboximage.Source, stock string, l
 // grain_config.mcp_servers.
 func (l *LiveConfig) WithCapabilityServers(r *servers.Registry) *LiveConfig {
 	l.capabilityServers = r
+	return l
+}
+
+// withHostdCapabilityServers hands Refresh the hostds' registries of run:
+// host servers (hostdCapabilityServers) beside the deployment's.
+func (l *LiveConfig) withHostdCapabilityServers(h *hostdCapabilityServers) *LiveConfig {
+	if h != nil {
+		// Each run routed by the configuration as it stands.
+		h.live = l.Current
+	}
+	l.hostdCapabilityServers = h
 	return l
 }
 
@@ -426,6 +442,7 @@ func (l *LiveConfig) Refresh(ctx context.Context, deps *orchestrator.Deps) (poll
 	// tick rather than only on the tick that changed it: it is a
 	// comparison when the image is what it already was.
 	l.applySandboxImage(ctx, now)
+	deps.Config.SandboxGuestImage = sandboxGuestImage(now)
 	// And the instance label a Kubernetes backend's next pod is given,
 	// for the same reason.
 	l.applySandboxInstance(ctx)
@@ -434,7 +451,9 @@ func (l *LiveConfig) Refresh(ctx context.Context, deps *orchestrator.Deps) (poll
 	// unchanged one and attaches, refreshes and detaches off this
 	// goroutine (pkg/capability/servers).
 	if l.capabilityServers != nil {
-		l.capabilityServers.Update(registerBuiltinCapabilityServers(ctx, l.store, now.DataDir, stored.MCPServers))
+		configured := registerBuiltinCapabilityServers(ctx, l.store, now.DataDir, stored.MCPServers)
+		l.capabilityServers.Update(configured)
+		l.hostdCapabilityServers.update(configured)
 	}
 
 	wasCPUOvercommit, wasMemOvercommit := was.overcommitRatios()
@@ -578,16 +597,14 @@ func (l *LiveConfig) applySandboxInstance(ctx context.Context) {
 // image via CurrentSandboxImage, so jobs planned under another image get a
 // distinct cache key without wiping existing entries.
 func (l *LiveConfig) applySandboxImage(ctx context.Context, cfg Config) {
+	if nextStock := stockSandboxImageFor(cfg); nextStock != "" {
+		l.stockSandboxImage = nextStock
+	} else if l.baseStockImage != "" {
+		l.stockSandboxImage = l.baseStockImage
+	}
+	l.stockMirrorRepo = sandboxImageMirrorRepo(cfg)
 	if l.stockSandboxImage == "" {
 		return
-	}
-	// A mirror set, changed or cleared moves the stock image itself, so
-	// it is worked out again from cfg either way: baseStockImage, what
-	// this process started with, is the mirrored image on a daemon that
-	// started with a mirror, and is only the answer when cfg gives none.
-	if mirrorRepo := sandboxImageMirrorRepo(cfg); mirrorRepo != l.stockMirrorRepo {
-		l.stockMirrorRepo = mirrorRepo
-		l.stockSandboxImage = firstNonEmpty(stockSandboxImageFor(cfg), l.baseStockImage)
 	}
 	custom := customSandboxImageFor(cfg)
 	hadCustom := l.customSandboxImage != ""
@@ -596,6 +613,9 @@ func (l *LiveConfig) applySandboxImage(ctx context.Context, cfg Config) {
 	switch setter, ok := l.sandboxes.(orchestrator.SandboxImageSetter); {
 	case l.sandboxImages != nil:
 		_, changed = l.sandboxImages.Set(l.stockSandboxImage, custom)
+		if ok {
+			setter.SetImage(firstNonEmpty(custom, l.stockSandboxImage))
+		}
 	case ok:
 		image := firstNonEmpty(custom, l.stockSandboxImage)
 		changed = setter.CurrentImage() != image
@@ -627,8 +647,8 @@ func (l *LiveConfig) CurrentSandboxImage() string {
 	if l.sandboxImages != nil {
 		return l.sandboxImages.Current()
 	}
-	if setter, ok := l.sandboxes.(orchestrator.SandboxImageSetter); ok {
-		if img := setter.CurrentImage(); img != "" {
+	if current, ok := l.sandboxes.(interface{ CurrentImage() string }); ok {
+		if img := current.CurrentImage(); img != "" {
 			return img
 		}
 	}

@@ -102,8 +102,13 @@ type Template struct {
 	// live chat with whoever is watching it (model.Template.Interactive).
 	// Omitted when false, like Repo, so a template saved before the
 	// switch existed keeps the revision it had.
-	Interactive  bool                        `json:"interactive,omitempty"`
-	KeepRunning  bool                        `json:"keepRunning,omitempty"`
+	Interactive bool `json:"interactive,omitempty"`
+	KeepRunning bool `json:"keepRunning,omitempty"`
+	// Hostd is the hostd pin or label selector every task filed from
+	// this template starts with (model.Template.Hostd), "" for the
+	// default hostd. Omitted when empty, so a template saved before it
+	// existed keeps the revision it had.
+	Hostd        string                      `json:"hostd,omitempty"`
 	Reads        []string                    `json:"reads,omitempty"`
 	Writes       []WriteTarget               `json:"writes,omitempty"`
 	CustomFields map[string]CustomFieldValue `json:"customFields,omitempty"`
@@ -191,6 +196,7 @@ func templateFrom(t model.Template) Template {
 		AutoMerge:     t.AutoMerge,
 		Interactive:   t.Interactive,
 		KeepRunning:   t.KeepRunning,
+		Hostd:         t.Hostd,
 		NetworkAccess: string(t.NetworkAccess),
 		Model:         t.Model,
 		CustomFields:  customFieldValues(t.CustomFields),
@@ -336,13 +342,16 @@ type CreateTemplateRequest struct {
 	// (model.Template.Model), or "" to leave it to the team's default.
 	Model string `json:"model"`
 	// Interactive sets model.Template.Interactive.
-	Interactive      bool                        `json:"interactive"`
-	KeepRunning      bool                        `json:"keepRunning,omitempty"`
-	KeepRunningSnake *bool                       `json:"keep_running,omitempty"`
-	Capabilities     []string                    `json:"capabilities"`
-	Reads            []string                    `json:"reads"`
-	Writes           []WriteTarget               `json:"writes"`
-	CustomFields     map[string]CustomFieldValue `json:"customFields"`
+	Interactive      bool  `json:"interactive"`
+	KeepRunning      bool  `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool `json:"keep_running,omitempty"`
+	// Hostd sets model.Template.Hostd: a hostd name,
+	// label=value[,label=value], or "" for the default hostd.
+	Hostd        string                      `json:"hostd,omitempty"`
+	Capabilities []string                    `json:"capabilities"`
+	Reads        []string                    `json:"reads"`
+	Writes       []WriteTarget               `json:"writes"`
+	CustomFields map[string]CustomFieldValue `json:"customFields"`
 }
 
 // parseBinding turns a request's repo/base pair into the binding
@@ -394,6 +403,10 @@ func (c *Client) CreateTemplate(ctx context.Context, req CreateTemplateRequest) 
 	chosenModel, err := c.declaredModelChoice(ctx, req.Model)
 	if err != nil {
 		return Template{}, err
+	}
+	hostd, err := model.NormalizeHostdSelector(req.Hostd)
+	if err != nil {
+		return Template{}, validationErrorf("%v", err)
 	}
 	grants, err := c.grantsFor(req.Capabilities, model.GrantByLabel)
 	if err != nil {
@@ -449,6 +462,7 @@ func (c *Client) CreateTemplate(ctx context.Context, req CreateTemplateRequest) 
 		AutoMerge:     req.AutoMerge,
 		Interactive:   req.Interactive,
 		KeepRunning:   req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
+		Hostd:         hostd,
 		NetworkAccess: model.NetworkAccess(req.NetworkAccess),
 		Model:         chosenModel,
 		Reads:         reads,
@@ -586,6 +600,11 @@ func (c *Client) fromTemplate(ctx context.Context, req CreateTaskRequest) (Creat
 	if strings.TrimSpace(req.Model) == "" && strings.TrimSpace(req.AgentBackendID) == "" {
 		req.Model = comp.Model
 		req.modelFromTemplate = comp.Model
+	}
+	// The template's hostd pin (model.Template.Hostd) fills a request
+	// that named none; one that names its own wins.
+	if strings.TrimSpace(req.Hostd) == "" {
+		req.Hostd = comp.Hostd
 	}
 	if req.Capabilities == nil {
 		capabilities := make([]string, 0, len(comp.Grants))
@@ -726,13 +745,16 @@ type UpdateTemplateRequest struct {
 	// clears it, so the template's tasks go back to the team's default.
 	Model *string `json:"model,omitempty"`
 	// Interactive edits CreateTemplateRequest.Interactive's own field.
-	Interactive      *bool                        `json:"interactive,omitempty"`
-	KeepRunning      *bool                        `json:"keepRunning,omitempty"`
-	KeepRunningSnake *bool                        `json:"keep_running,omitempty"`
-	Capabilities     *[]string                    `json:"capabilities,omitempty"`
-	Reads            *[]string                    `json:"reads,omitempty"`
-	Writes           *[]WriteTarget               `json:"writes,omitempty"`
-	CustomFields     *map[string]CustomFieldValue `json:"customFields,omitempty"`
+	Interactive      *bool `json:"interactive,omitempty"`
+	KeepRunning      *bool `json:"keepRunning,omitempty"`
+	KeepRunningSnake *bool `json:"keep_running,omitempty"`
+	// Hostd edits CreateTemplateRequest.Hostd; an empty string puts the
+	// template's tasks back on the default hostd.
+	Hostd        *string                      `json:"hostd,omitempty"`
+	Capabilities *[]string                    `json:"capabilities,omitempty"`
+	Reads        *[]string                    `json:"reads,omitempty"`
+	Writes       *[]WriteTarget               `json:"writes,omitempty"`
+	CustomFields *map[string]CustomFieldValue `json:"customFields,omitempty"`
 	// Revision, given, is the template's Revision as the caller last read
 	// it, and the edit is refused (staleEditError) if the template has been
 	// saved since. Absent applies the edit regardless.
@@ -781,6 +803,14 @@ func (c *Client) UpdateTemplate(ctx context.Context, id string, req UpdateTempla
 			return Template{}, err
 		}
 		chosenModel = &m
+	}
+	var hostd *string
+	if req.Hostd != nil {
+		h, err := model.NormalizeHostdSelector(*req.Hostd)
+		if err != nil {
+			return Template{}, validationErrorf("%v", err)
+		}
+		hostd = &h
 	}
 	var grants []model.Grant
 	if req.Capabilities != nil {
@@ -929,6 +959,9 @@ func (c *Client) UpdateTemplate(ctx context.Context, id string, req UpdateTempla
 		}
 		if chosenModel != nil {
 			t.Model = *chosenModel
+		}
+		if hostd != nil {
+			t.Hostd = *hostd
 		}
 		if req.Capabilities != nil {
 			t.Grants = grants

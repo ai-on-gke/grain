@@ -279,6 +279,31 @@ describe("lanes", () => {
     expect(lanes.map((l) => l.label)).toEqual(["Waiting", "Running"]);
   });
 
+  // Both asked states share one "Asked" lane, which sits where the rail
+  // and the kanban put it -- after Running -- and not after Closed, where
+  // ranking its "asked" key against the raw states left it.
+  it("puts the shared Asked lane after Running, not after Closed", () => {
+    const lanes = groupIntoLanes(
+      [
+        task({ id: "1", state: "closed" }),
+        task({ id: "2", state: "awaiting_submit" }),
+        task({ id: "3", state: "deferred" }),
+        task({ id: "4", state: "running" }),
+        task({ id: "5", state: "awaiting_reply" }),
+        task({ id: "6", state: "completed" }),
+      ],
+      "state",
+    );
+    expect(lanes.map((l) => l.key)).toEqual([
+      "running",
+      "asked",
+      "completed",
+      "deferred",
+      "closed",
+    ]);
+    expect(lanes[1].tasks.map((t) => t.id)).toEqual(["2", "5"]);
+  });
+
   it("names the lane a task belongs to", () => {
     expect(laneOf(tasks[0], "author")).toEqual({ key: "bob", label: "bob" });
     expect(laneOf(tasks[2], "repo")).toEqual({ key: "", label: "No repo" });

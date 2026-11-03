@@ -1,0 +1,11 @@
+{
+ "/repos/acme/widgets": [
+  "merge re-checks",
+  "grain-merge-queue/829d3842/recheck/5/main at abcdef012345"
+ ],
+ "/repos/acme/widgets/settings/merge-queue": [],
+ "/repos/acme/widgets/settings/advanced": [],
+ "/repos/acme/widgets/settings/ci": [],
+ "/merge-queue": [],
+ "/settings/repositories": []
+}

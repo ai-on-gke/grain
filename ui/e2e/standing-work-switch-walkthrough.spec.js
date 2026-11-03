@@ -128,12 +128,15 @@ test("3. off: a due schedule records a skip and files nothing; main is not judge
   // The loopback hook asks for a run the way that button does, then runs
   // the real reconciler: nothing is judged, no run starts, nothing is
   // filed to repair it.
+  const runsBefore = (
+    await ok(await page.request.get("/api/ci/runs"), "ci runs")
+  ).runs.map((r) => r.id);
   const red = await page.request.post("/api/e2e/base-branch/red", {
     data: { branch: "main" },
   });
   expect(red.status()).toBe(409);
   const runs = await ok(await page.request.get("/api/ci/runs"), "ci runs");
-  expect(runs.runs).toEqual([]);
+  expect(runs.runs.map((r) => r.id)).toEqual(runsBefore);
 
   const at = nextMinute();
   await dueAt(page.request, ["sched-1", "sched-2"], at);
@@ -166,8 +169,10 @@ test("3. off: a due schedule records a skip and files nothing; main is not judge
   await page.waitForTimeout(6_000);
   expect((await tasks(page.request)).length).toBe(before);
   expect(
-    (await ok(await page.request.get("/api/ci/runs"), "ci runs")).runs,
-  ).toEqual([]);
+    (await ok(await page.request.get("/api/ci/runs"), "ci runs")).runs.map(
+      (r) => r.id,
+    ),
+  ).toEqual(runsBefore);
 });
 
 test("4. a hand-filed task is still accepted while standing work is off", async ({

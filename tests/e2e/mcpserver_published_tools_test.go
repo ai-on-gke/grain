@@ -48,7 +48,7 @@ var everyToolGrant = []string{
 	"https://grain.dev/capabilities/grain#journal",
 	"https://grain.dev/capabilities/grain#health",
 	bootstrap.CapabilityName,
-	grainci.CapabilityName,
+	grainci.Grant,
 	readissues.CapabilityName,
 	`https://grain.dev/capabilities/grain#sql={"write":false}`,
 	`https://grain.dev/capabilities/grain#sql={"write":true}`,

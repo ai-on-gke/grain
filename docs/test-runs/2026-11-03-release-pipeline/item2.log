@@ -1,0 +1,129 @@
+== scratch/breaking at a6eb853085a7, 448 commits past v3.1.0
+
+== 2a notes:  release-notes.sh v3.2.0 v3.1.0 HEAD
+   | # v3.2.0
+   | 
+   | Released 2026-11-03 from commit `a6eb85308`. Changes since `v3.1.0` (`8a740f996`):
+   | https://github.com/ai-on-gke/grain/compare/v3.1.0...v3.2.0
+   | 
+   | ## Breaking changes
+   | 
+   | - feat(api)!: drop the v1 task API (5e6bd04b1)
+   | - refactor(store): rename the run table (#9001)
+   |   - a v3.1 state dump no longer imports without grain state migrate.
+   | 
+   | ## Features
+   | 
+   | - feat(ui): mark keep_running tasks on Inbox rows and board cards (#466)
+== exit 0
+
+== 2b check-breaking, minor bump:  release-notes.sh check-breaking v3.2.0 v3.1.0 HEAD
+   | v3.2.0: breaking changes since v3.1.0:
+   | - feat(api)!: drop the v1 task API (5e6bd04b1)
+   | - refactor(store): rename the run table (#9001)
+   |   - a v3.1 state dump no longer imports without grain state migrate.
+   ! ~/work/scripts/release-notes.sh: refusing to promote v3.2.0: it carries breaking changes, and it is not a major release.
+   !   v3.1.0 is major 3, v3.2.0 is major 3, and scripts/release.conf at HEAD has RELEASE_MAJOR=3.
+   !   To release them, raise RELEASE_MAJOR in scripts/release.conf above 3 and cut again,
+   !   or have a person set RELEASE_ALLOW_BREAKING=v3.2.0 for this one promotion.
+== exit 3
+
+== 2c check-breaking, RELEASE_ALLOW_BREAKING=v3.2.0: RELEASE_ALLOW_BREAKING=v3.2.0 release-notes.sh check-breaking v3.2.0 v3.1.0 HEAD
+   | v3.2.0: breaking changes since v3.1.0:
+   | - feat(api)!: drop the v1 task API (5e6bd04b1)
+   | - refactor(store): rename the run table (#9001)
+   |   - a v3.1 state dump no longer imports without grain state migrate.
+   | v3.2.0: promoting with breaking changes: RELEASE_ALLOW_BREAKING=v3.2.0 overrides the gate
+== exit 0
+
+== 2d check-breaking, RELEASE_ALLOW_BREAKING for another version: RELEASE_ALLOW_BREAKING=v3.3.0 release-notes.sh check-breaking v3.2.0 v3.1.0 HEAD
+   | v3.2.0: breaking changes since v3.1.0:
+   | - feat(api)!: drop the v1 task API (5e6bd04b1)
+   | - refactor(store): rename the run table (#9001)
+   |   - a v3.1 state dump no longer imports without grain state migrate.
+   ! ~/work/scripts/release-notes.sh: refusing to promote v3.2.0: it carries breaking changes, and it is not a major release.
+   !   v3.1.0 is major 3, v3.2.0 is major 3, and scripts/release.conf at HEAD has RELEASE_MAJOR=3.
+   !   To release them, raise RELEASE_MAJOR in scripts/release.conf above 3 and cut again,
+   !   or have a person set RELEASE_ALLOW_BREAKING=v3.2.0 for this one promotion.
+== exit 3
+
+== 2e check-breaking, major bump with RELEASE_MAJOR=3 in release.conf:  release-notes.sh check-breaking v4.0.0 v3.1.0 HEAD
+   | v4.0.0: breaking changes since v3.1.0:
+   | - feat(api)!: drop the v1 task API (5e6bd04b1)
+   | - refactor(store): rename the run table (#9001)
+   |   - a v3.1 state dump no longer imports without grain state migrate.
+   ! ~/work/scripts/release-notes.sh: refusing to promote v4.0.0: it carries breaking changes, and it is not a major release.
+   !   v3.1.0 is major 3, v4.0.0 is major 4, and scripts/release.conf at HEAD has RELEASE_MAJOR=3.
+   !   To release them, raise RELEASE_MAJOR in scripts/release.conf above 3 and cut again,
+   !   or have a person set RELEASE_ALLOW_BREAKING=v4.0.0 for this one promotion.
+== exit 3
+
+== 2f check-breaking, major bump, RELEASE_MAJOR=4: RELEASE_MAJOR=4 release-notes.sh check-breaking v4.0.0 v3.1.0 HEAD
+   | v4.0.0: breaking changes since v3.1.0:
+   | - feat(api)!: drop the v1 task API (5e6bd04b1)
+   | - refactor(store): rename the run table (#9001)
+   |   - a v3.1 state dump no longer imports without grain state migrate.
+   | v4.0.0: promoting with breaking changes: a major release over v3.1.0, as RELEASE_MAJOR=4 asks
+== exit 0
+
+== 2g check-breaking, minor bump, RELEASE_MAJOR=4: RELEASE_MAJOR=4 release-notes.sh check-breaking v3.2.0 v3.1.0 HEAD
+   | v3.2.0: breaking changes since v3.1.0:
+   | - feat(api)!: drop the v1 task API (5e6bd04b1)
+   | - refactor(store): rename the run table (#9001)
+   |   - a v3.1 state dump no longer imports without grain state migrate.
+   ! ~/work/scripts/release-notes.sh: refusing to promote v3.2.0: it carries breaking changes, and it is not a major release.
+   !   v3.1.0 is major 3, v3.2.0 is major 3, and scripts/release.conf at HEAD has RELEASE_MAJOR=4.
+   !   To release them, raise RELEASE_MAJOR in scripts/release.conf above 3 and cut again,
+   !   or have a person set RELEASE_ALLOW_BREAKING=v3.2.0 for this one promotion.
+== exit 3
+
+== 2h check-breaking, from the latest tag (latest = v3.1.0): RELEASE_MAJOR=4 release-notes.sh check-breaking v4.0.0 latest HEAD
+   | v4.0.0: breaking changes since latest:
+   | - feat(api)!: drop the v1 task API (5e6bd04b1)
+   | - refactor(store): rename the run table (#9001)
+   |   - a v3.1 state dump no longer imports without grain state migrate.
+   | v4.0.0: promoting with breaking changes: a major release over latest, as RELEASE_MAJOR=4 asks
+== exit 0
+
+== 2i check-breaking on origin/main's real history:  release-notes.sh check-breaking v3.2.0 v3.1.0 origin/main
+   | v3.2.0: no breaking changes since v3.1.0
+== exit 0
+
+== 2j write:  release-notes.sh write --body ~/scratch2/body.md v3.2.0 v3.1.0 HEAD
+   | ~/scratch2/clone/docs/releases/v3.2.0.md
+   | ~/scratch2/body.md
+== exit 0
+-- the notes file without its title and blank line, against the body:
+   identical
+-- the body's first lines:
+   | Released 2026-11-03 from commit `a6eb85308`. Changes since `v3.1.0` (`8a740f996`):
+   | https://github.com/ai-on-gke/grain/compare/v3.1.0...v3.2.0
+   | 
+   | ## Breaking changes
+   | 
+   | - feat(api)!: drop the v1 task API (5e6bd04b1)
+   | - refactor(store): rename the run table (#9001)
+   |   - a v3.1 state dump no longer imports without grain state migrate.
+   | 
+   | ## Features
+-- the body's breaking section:
+   | ## Breaking changes
+   | 
+   | - feat(api)!: drop the v1 task API (5e6bd04b1)
+   | - refactor(store): rename the run table (#9001)
+   |   - a v3.1 state dump no longer imports without grain state migrate.
+   | 
+   | ## Features
+
+== 2k write again (the file is kept):  release-notes.sh write --body ~/scratch2/body2.md v3.2.0 v3.1.0 HEAD
+   | ~/scratch2/clone/docs/releases/v3.2.0.md
+   | ~/scratch2/body2.md
+   ! ~/work/scripts/release-notes.sh: ~/scratch2/clone/docs/releases/v3.2.0.md is already there; keeping it, and taking the release body from it
+== exit 0
+   the second body is the same
+
+== 2l write with the default body path (TMPDIR): TMPDIR=~/scratch2/tmp release-notes.sh write --notes ~/scratch2/notes-l.md v3.2.0 v3.1.0 HEAD
+   | ~/scratch2/notes-l.md
+   | ~/scratch2/tmp/release-body-v3.2.0.md
+== exit 0
+   release-body-v3.2.0.md

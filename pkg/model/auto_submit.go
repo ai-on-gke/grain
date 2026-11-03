@@ -238,8 +238,18 @@ func EscalatedCapabilities(child, parent Task) []string {
 	}
 	// A capability reference the parent's recorded grants do not cover
 	// is an escalation however it came to be on the child, a default
-	// included (design/spec/capabilities/capabilities.spec.md §2.3.4).
-	return append(out, UncoveredCapabilityRefs(child.Grants, parent.Grants)...)
+	// included (design/spec/capabilities/capabilities.spec.md §2.3.4) --
+	// except grain#ci attached by default from the target repository's CI
+	// Mode, which mints no credential and cannot be held by a standing
+	// session or a task on a GitHub-mode repository (ui.Client.capabilityByID).
+	childRefs := make([]Grant, 0, len(child.Grants))
+	for _, g := range child.Grants {
+		if g.Via == GrantByDefault && IsGrainCIGrant(g.Capability) {
+			continue
+		}
+		childRefs = append(childRefs, g)
+	}
+	return append(out, UncoveredCapabilityRefs(childRefs, parent.Grants)...)
 }
 
 // CapabilityEscalationNote is the line appended to a proposal's body when

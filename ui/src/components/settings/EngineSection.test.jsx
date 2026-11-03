@@ -45,6 +45,24 @@ function Page() {
 describe("EngineSection", () => {
   afterEach(() => api.mockReset());
 
+  // grain's default is 5 merges per lane per cycle
+  // (model.DefaultMaxMergesPerRepo): a deployment that stored none is
+  // shown 5, and a stored 1 stays 1.
+  it("shows 5 merges per repo branch where nothing is stored, and keeps a stored 1", async () => {
+    api.mockImplementation(async () => ({ ...saved, maxMergesPerRepo: 0 }));
+    const { unmount } = render(<Page />);
+    const box = await screen.findByLabelText("Max merges per repo branch");
+    expect(box).toHaveValue(5);
+    expect(box).toHaveAttribute("placeholder", "5");
+    unmount();
+
+    api.mockImplementation(async () => saved);
+    render(<Page />);
+    expect(
+      await screen.findByLabelText("Max merges per repo branch"),
+    ).toHaveValue(1);
+  });
+
   // The 2026-11-02 walkthrough: a cleared Poll interval was sent as ""
   // and refused with `time: invalid duration ""`; now the box shows
   // grain's default as its placeholder, and clearing it saves that.

@@ -61,6 +61,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/bwsalmon/granule/pkg/cgroupmem"
 	"github.com/bwsalmon/granule/pkg/execwire"
 )
 
@@ -407,6 +408,12 @@ func run(ctx context.Context, cfg Config, req execwire.Request, stdin io.Reader,
 		cfg.CancelGrace = DefaultCancelGrace
 	}
 
+	// "granule exec" runs inside the VM's own container (docker or
+	// kubectl exec puts it there), so it shares the VMM's cgroup and can
+	// tell a connection that closed because the VMM was OOM-killed from
+	// one that closed for any other reason. See pkg/cgroupmem.
+	oomKilled := cgroupmem.Watch()
+
 	conn, err := dialWithRetry(ctx, cfg)
 	if err != nil {
 		return 0, err
@@ -517,8 +524,18 @@ func run(ctx context.Context, cfg Config, req execwire.Request, stdin io.Reader,
 		go pumpStdin(stdin, writeFrame)
 	}
 
-	return readSession(br, stdout, stderr)
+	code, err := readSession(br, stdout, stderr)
+	if errors.Is(err, errClosedEarly) {
+		if oom := oomKilled(); oom != nil {
+			return 0, oom
+		}
+	}
+	return code, err
 }
+
+// errClosedEarly is readSession's answer for a stream that ended without
+// an exit frame.
+var errClosedEarly = errors.New("the guest closed the connection before the command reported an exit status")
 
 // ProbeCommand is what Ready runs inside the guest to decide the guest
 // is up, when no ReadyFile is configured. It is deliberately the same
@@ -684,7 +701,7 @@ func readSession(br *bufio.Reader, stdout, stderr io.Writer) (int, error) {
 		typ, payload, err := execwire.ReadFrame(br)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return 0, errors.New("the guest closed the connection before the command reported an exit status")
+				return 0, errClosedEarly
 			}
 			return 0, err
 		}

@@ -145,7 +145,7 @@ headers:{"Content-Type":"text/plain"},body:JSON.stringify({title:"csrf-browser-f
     const who = (await page.locator("#refused-principal").innerText().catch(() => "")) || "";
     check("allowlist", "refusal page names bob", /bob@example\.com/.test(who), who);
     const advice = (await page.locator("#refused-advice").innerText().catch(() => "")) || "";
-    check("allowlist", "refusal page says how the owner adds bob", /user:bob@example\.com/.test(advice) && /-ui-allowed-principals/.test(advice), advice);
+    check("allowlist", "refusal page says how the owner adds bob", /user:bob@example\.com/.test(advice) && /Settings/.test(advice), advice);
     const form = await page.locator("input#code").count();
     const prec = (await page.locator("#refused-precedence").innerText().catch(() => "")) || "";
     check("allowlist", "refusal page offers the access-code form", form === 1, form ? "form shown" : `no form; says: ${prec}`,

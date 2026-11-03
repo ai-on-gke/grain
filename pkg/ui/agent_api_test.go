@@ -240,7 +240,7 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, g := range task.Grants {
-		if !slices.Contains([]string{"api:tasks:read", "api:tasks:read@acme/widgets", "gcp-key"}, g.Capability) {
+		if !slices.Contains([]string{"api:tasks:read", "api:tasks:read@acme/widgets", model.GCPKeySandboxAgentGrant}, g.Capability) {
 			t.Errorf("task 2 was granted %s by an agent", g.Capability)
 		}
 	}
@@ -254,14 +254,16 @@ func TestAgentAPICapabilitiesAdminMayDetachUnheldCapability(t *testing.T) {
 	srv, client := testServer(t)
 	seedAPITask(t, client, "1", "acme/widgets", "api:capabilities:admin")
 	capRef := `https://github.com/acme/caps/gcp#key={"project":"p"}`
-	seedAPITask(t, client, "2", "acme/widgets", "grain-ci", "self-debug", capRef)
+	seedAPITask(t, client, "2", "acme/widgets", model.GrainCIGrant, "self-debug", capRef)
 
 	for _, body := range []string{
 		`{"id":"grain-ci","attach":true}`,
+		`{"capability":"https://grain.dev/capabilities/grain#ci","attach":true}`,
 		`{"grant":"self-debug","attach":true}`,
 		`{"capability":"https://github.com/acme/caps/gcp#key","with":{"project":"p"},"attach":true}`,
 		`{"id":"grain-ci","attach":false,"replace":"self-debug"}`,
 		`{"grant":"grain-ci","attach":false,"replace":"self-debug"}`,
+		`{"capability":"https://grain.dev/capabilities/grain#ci","attach":false,"replace":"self-debug"}`,
 	} {
 		if code, resp := asAgent(t, srv, "1", http.MethodPost, "/api/tasks/2/capabilities", body, "testing"); code != http.StatusForbidden {
 			t.Errorf("POST /api/tasks/2/capabilities with %s answered an agent %d, want 403: %s", body, code, resp)
@@ -269,7 +271,7 @@ func TestAgentAPICapabilitiesAdminMayDetachUnheldCapability(t *testing.T) {
 	}
 
 	for _, body := range []string{
-		`{"id":"grain-ci","attach":false}`,
+		`{"grant":"https://grain.dev/capabilities/grain#ci={}","attach":false}`,
 		`{"grant":"self-debug","attach":false}`,
 		`{"capability":"https://github.com/acme/caps/gcp#key","with":{"project":"p"},"attach":false}`,
 	} {

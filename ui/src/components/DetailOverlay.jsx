@@ -73,6 +73,7 @@ import LocalScriptApprovals from "./detail/LocalScriptApprovals.jsx";
 import ReadOnlyRepos from "./detail/ReadOnlyRepos.jsx";
 import SuspendedSession from "./detail/SuspendedSession.jsx";
 import GoalSection from "./detail/GoalSection.jsx";
+import HostdSection from "./detail/HostdSection.jsx";
 import Target from "./detail/Target.jsx";
 import MergePolicy from "./detail/MergePolicy.jsx";
 import TaskLink from "./detail/TaskLink.jsx";
@@ -803,6 +804,9 @@ export default function DetailOverlay({
           {/* What grain checks to close this task, rather than its agent's
               word (design/design/durable-tasks.design.md#DT-4). */}
           <GoalSection t={t} act={act} />
+          {/* Which grain hostd its host work goes to, and the control
+              that changes it (PUT /api/tasks/{id}/hostd). */}
+          <HostdSection t={t} act={act} />
           {/* The repos this task may change, in one section
               (grain/task-202): the one it is filed against, then the
               others under it, rather than a "Target" pane and a second

@@ -1,0 +1,20 @@
+== the train on main (fix:, refactor:, docs: since v3.2.0)
+release-from-trunk: fetching origin's main, candidate and tags
+release-from-trunk: major 3 (floor minor 0); newest promoted release v3.2.0; next minor v3.3.0, next patch v3.2.1; notes from v3.2.0
+release-from-trunk: phase 1: nothing in qualification; the next rc must be after v3.2.0 (dd4f459082b7)
+  Selecting the newest known-good commit on refs/remotes/origin/main after dd4f459082b7 (required: tests release).
+    4c8cdbc72f0d: tests.yml success release.yml success; known-good.
+  LKG 4c8cdbc72f0d98459ebfb16df3d81f43222de0cc
+release-from-trunk: phase 2: the commits since v3.2.0 make a patch release: v3.2.1
+release-from-trunk: phase 2: cutting v3.2.1-rc.1 on 4c8cdbc72f0d
+release-from-trunk: output rc_tag=v3.2.1-rc.1
+release-from-trunk: RELEASE_IMAGES=off: not running release-images.sh rc v3.2.1-rc.1
+release-from-trunk: phase 2: v3.2.1-rc.1 is cut and candidate is on it; nightly.yml qualifies it (Stage 1), then grain/release-qualification (Stage 2)
+== exit 0
+-- the rc it cut: v3.2.1-rc.1
+
+== patch-tag-guard.sh v3.2.1 (as release.yml runs it on the tag, and promote.yml on latest)
+patch-tag-guard.sh: refusing v3.2.1 (4c8cdbc72f0d): there is no release/v3.2.1 branch, and v3.2.0..v3.2.1 is not fixes only (3 commits).
+patch-tag-guard.sh: and 2 other commits that are not fix:
+patch-tag-guard.sh: a patch release is v3.2.0 plus cherry-picked fixes on release/v3.2.1: scripts/release-patch.sh v3.2.1 <sha>... (docs/release-candidate-management.md, section 9).
+== exit 1

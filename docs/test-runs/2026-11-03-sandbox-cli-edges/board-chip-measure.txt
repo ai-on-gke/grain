@@ -1,0 +1,10 @@
+# chip.mjs.txt against `grain demo` (this branch's binary, UI embedded) after
+# POST /api/tasks with priority 1e10, 1e3 and 1.5e2 (stored 10000000000, 1000, 150).
+desktop P10000000000 {"chip":{"x":915,"w":101,"right":1016},"row":{"tag":"LI","left":232,"right":1440},"insideRow":true,"insideViewport":true,"textClipped":false}
+desktop P1000 {"chip":{"x":966,"w":50,"right":1016},"row":{"tag":"LI","left":232,"right":1440},"insideRow":true,"insideViewport":true,"textClipped":false}
+desktop P150 {"chip":{"x":973,"w":43,"right":1016},"row":{"tag":"LI","left":232,"right":1440},"insideRow":true,"insideViewport":true,"textClipped":false}
+desktop document scrollWidth 1440 viewport 1440
+phone P10000000000 {"chip":{"x":17,"w":101,"right":118},"row":{"tag":"LI","left":0,"right":390},"insideRow":true,"insideViewport":true,"textClipped":false}
+phone P1000 {"chip":{"x":17,"w":50,"right":67},"row":{"tag":"LI","left":0,"right":390},"insideRow":true,"insideViewport":true,"textClipped":false}
+phone P150 {"chip":{"x":17,"w":43,"right":60},"row":{"tag":"LI","left":0,"right":390},"insideRow":true,"insideViewport":true,"textClipped":false}
+phone document scrollWidth 390 viewport 390

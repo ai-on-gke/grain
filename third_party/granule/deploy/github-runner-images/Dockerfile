@@ -3,6 +3,7 @@ FROM ${GRANULE_RUNTIME_IMAGE}
 
 ARG GITHUB_RUNNER_LABEL
 ARG RUNNER_IMAGES_REVISION
+ARG ACTIONS_RUNNER_VERSION
 # The guest-side contract version the rootfs below implements, supplied
 # by build.sh out of the overlay it laid into that rootfs rather than
 # written down here -- see pkg/guestimage. It is only needed for the
@@ -26,9 +27,19 @@ COPY guest-contract /var/lib/granule/guest/guest-contract
 COPY vmlinuz /var/lib/granule/guest/vmlinuz
 COPY initrd.img /var/lib/granule/guest/initrd.img
 
+# The guest's workload is the GitHub Actions runner (see
+# guest/etc/granule/container.json), and Actions Runner Controller hands
+# it its just-in-time registration as a plain variable on this container.
+# Naming it here is what carries it into the guest: granule forwards the
+# listed variables that are set into the workload's environment, and
+# leaves the guest's runner waiting when it is not. See README.md's
+# "Running under Actions Runner Controller".
+ENV GRANULE_WORKLOAD_ENV=ACTIONS_RUNNER_INPUT_JITCONFIG
+
 LABEL org.opencontainers.image.title="Granule GitHub runner environment (${GITHUB_RUNNER_LABEL})" \
       org.opencontainers.image.description="GitHub's ${GITHUB_RUNNER_LABEL} x86-64 environment packaged as a Granule guest" \
       org.opencontainers.image.source="https://github.com/gke-labs/granule" \
       io.granule.github-runner.label="${GITHUB_RUNNER_LABEL}" \
       io.granule.github-runner.runner-images-revision="${RUNNER_IMAGES_REVISION}" \
+      io.granule.github-runner.actions-runner-version="${ACTIONS_RUNNER_VERSION}" \
       dev.granule.guest.contract="${GRANULE_GUEST_CONTRACT}"

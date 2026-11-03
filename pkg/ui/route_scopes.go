@@ -86,6 +86,7 @@ var routeScopes = map[string]APIScope{
 	"POST /api/tasks/{id}/pause":                                           "tasks:write",
 	"POST /api/tasks/{id}/resume":                                          "tasks:write",
 	"PUT /api/tasks/{id}/goal":                                             "tasks:write",
+	"PUT /api/tasks/{id}/hostd":                                            "tasks:write",
 	"DELETE /api/tasks/{id}/goal":                                          "tasks:write",
 	"POST /api/tasks/{id}/reopen":                                          "tasks:write",
 	"POST /api/tasks/{id}/retry":                                           "tasks:write",
@@ -351,5 +352,8 @@ var routeScopes = map[string]APIScope{
 	"PATCH /api/hostds/{name}":                                             "capabilities:admin",
 	"POST /api/hostds/{name}/rotate":                                       "capabilities:admin",
 	"POST /api/hostds/{name}/revoke":                                       "capabilities:admin",
+	"GET /api/access/principals":                                           "access:read",
+	"POST /api/access/principals":                                          "access:write",
+	"DELETE /api/access/principals/{entry}":                                "access:write",
 	"POST /mcp":                                                            "internal",
 }

@@ -283,7 +283,7 @@ id. `/settings/engine#ci-queue` scrolls to it.
 | Group | Section (path) | Holds | From |
 |---|---|---|---|
 | **Deployment** | General (`general`) | Environment name; show closed tasks by default; **Updates** card (upgrade check mode, pauses pipeline); **About** card (version, build stamp) | `general`, `upgrade` (settings part), `SettingsOverlay` version |
-| | Access (`access`) | **This browser** card ("Signed in with the access code", or "through IAP as \<actor\>", and Sign out); **Relay** card (`RelayPanel`) | `access`, `SettingsOverlay` account |
+| | Access (`access`) | **This browser** card ("Signed in with the access code", or "through IAP as \<actor\>", and Sign out); **Allowed users and groups** card (`user:<email>` and `group:<email>` entries admitted by verified-identity sign-in, live add/remove with validation, warning when removing yourself or the last entry, and warning when one-time flag migration dropped unsupported entries); **Relay** card (`RelayPanel`) | `access`, `SettingsOverlay` account |
 | | Config repo (`config-repo`) | `StateRepoPanel` | `state` |
 | | Upgrade (`upgrade`) | `UpgradePanel` without the two upgrade-check settings, and Database. An action, not a setting: no save state, never read-only under an external config repo | System's `upgrade` tab |
 | **Agents** | Models (`models`) | Provider connections; default model; per-model settings, pauses and effort | `models` |
@@ -713,7 +713,9 @@ access-code session has no identity to show and gets no row. It reads
 "Signed in as" over the email, which is ellipsized on one line (the full
 address is the row's title) so a long service-account address never
 widens the 232px drawer. Tapping the row opens Settings → Access; a
-**Log out** button on its right does what the badge menu's Log out does
+**Log out** button under it, at its right (not beside the address, which
+left the address too little of the drawer to show even
+`owner@example.com` whole), does what the badge menu's Log out does
 (`POST /api/auth/logout`, then `/_gcp_iap/clear_login_cookie` under
 IAP). The drawer is already a menu, so the badge's own menu is not
 repeated. `phone-signed-in-logout.spec.js` checks the row at 390px.

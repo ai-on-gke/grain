@@ -35,7 +35,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/geminikey"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
-	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
@@ -52,9 +51,9 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-func newCapabilityRegistryWithStore(store *model.Store, local localscripts.Config, providers ...model.CapabilityProvider) *model.CapabilityRegistry {
+func newCapabilityRegistryWithStore(_ *model.Store, local localscripts.Config, providers ...model.CapabilityProvider) *model.CapabilityRegistry {
 	reg := model.NewCapabilityRegistry(providers...)
-	reg.RegisterDynamic(gcpkey.DynamicProvider(store),
+	reg.RegisterDynamic(
 		localscripts.DynamicProvider(local), ui.AgentAPIDynamicProvider)
 	// A CI job's api grants are a token for CIAPI rather than routes an
 	// agent may call (pkg/capability/ciapi).
@@ -90,12 +89,6 @@ func newCapabilityRegistryWithStore(store *model.Store, local localscripts.Confi
 // gemini-proxy providers resolve against (modelproxycap.Providers).
 func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*modelproxy.Endpoint, githubTokens []string, githubCredentials githubCredentialLadder) []model.CapabilityProvider {
 	var providers []model.CapabilityProvider
-	if len(missingCapabilityProviderConfig(cfg, "gcp-key")) == 0 {
-		providers = append(providers, gcpkey.NewProvider(gcpkey.Config{
-			ProjectID: cfg.GcpProject, ServiceAccountEmail: cfg.GcpServiceAccountEmail,
-			ServiceAccountCount: cfg.GcpServiceAccountCount,
-		}))
-	}
 	if len(missingCapabilityProviderConfig(cfg, "gemini-key")) == 0 {
 		providers = append(providers, geminikey.New(cfg.GcpProject, model.CredentialRef{Name: gcpkey.DefaultMinterCredential}))
 	}
@@ -105,7 +98,6 @@ func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*mod
 	providers = append(providers, admincaps.Providers()...)
 	providers = append(providers,
 		bootstrap.New(),
-		grainci.New(),
 		registrypush.NewWithConfig(registrypush.Config{}),
 		consolecap.New(),
 		readissues.New(),
@@ -217,13 +209,8 @@ func teamRepos(store *model.Store) func(context.Context) ([]string, error) {
 // prerequisite, a credential check must name the same prerequisite.
 func missingCapabilityProviderConfig(cfg Config, id string) []string {
 	var missing []string
-	if id == "gcp-key" || id == "gemini-key" {
-		if cfg.GcpProject == "" {
-			missing = append(missing, "GCP project ID")
-		}
-	}
-	if id == "gcp-key" && cfg.GcpServiceAccountEmail == "" {
-		missing = append(missing, "agent service-account email")
+	if id == "gemini-key" && cfg.GcpProject == "" {
+		missing = append(missing, "GCP project ID")
 	}
 	return missing
 }

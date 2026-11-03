@@ -1,129 +1,184 @@
-# Authentication: IAP as a first-class sign-in
+# Authentication behind IAP
 
-A grain controller on GKE sits behind Google Cloud Identity-Aware Proxy (`design/design/grain-on-gke.design.md`, *UI and API ingress*). IAP already knows who every caller is. Grain does not use that. This doc proposes that a verified IAP assertion authenticates the caller on its own, as a named principal, for the browser, the `grain` CLI, external agents and `grain hostd`. The access code stays for deployments without IAP.
+**Owner:** @bwsalmon
 
-## What exists today
+**Specified by:** [`authentication.spec.md`](../spec/authentication/authentication.spec.md)
 
-- **The access code is the only credential.** `pkg/ui/accesscode.go`: the single-tenant daemon's one secret is `local-api-token`. A browser trades it for the `grain_access` session cookie on the "Enter access code" page. The CLI (`pkg/cli/accesscode.go`, `pkg/cli/cliconn.go`) sends it as `Authorization: Bearer`. `singleTenantGate` lets nobody else in, loopback included (`docs/access-code.md`). Callers that have it run as the deployment's own actor (`AuthMethodTrusted`), and nobody is named.
-- **IAP assertions are verified, then thrown away.** With `-ui-iap-audience` / `GRAIN_IAP_AUDIENCE` set (plus `-ui-iap-issuer` and `-ui-iap-keys-url`), `identifyCaller` in `pkg/ui/principal.go` checks `X-Goog-IAP-JWT-Assertion` against IAP's keys, issuer, audience and expiry. `extractPrincipal` then drops the person it names. `singleTenantRefusesIdentity` uses the verified assertion only to refuse an API call that has no access code, with a better error (`singleTenantProxiedRefusal`).
-- **Programmatic IAP clients already exist.** `pkg/modelexec/iap_auth.go` (`IAPTokenProvider`) mints ID tokens for the IAP audience, so executors and hostd can get through the Gateway. They then present an executor or hostd token in the hello frame.
-- **Seams for wrapper builds.** A wrapper distribution (such as Google's internal build) imports this module and extends it only through registries (`pkg/change.Register`, `ui.RegisterHostFamily`) and through `IAPConfig.Validator`. Nothing lets it plug in a different signed-header proxy.
+**The core rule:** A cryptographic assertion verified by a registered `IdentityVerifier` authenticates the caller directly as a named human or service principal; a present assertion that fails verification refuses the request with `401` and never falls back to the access code, plaintext identity headers name nobody, and deployments with no active verifier keep the single-tenant access code unchanged.
 
-Behind IAP, this means every teammate has to share a second password on top of their Google login. Every action is attributed to one anonymous holder of that code. Setting up the CLI, hostd and external agents needs both an IAP token and the access code.
+A grain controller on GKE sits behind Google Cloud Identity-Aware Proxy ([`grain-on-gke.design.md`](grain-on-gke.design.md), *UI and API ingress*). When IAP is configured (`-ui-iap-audience` / `$GRAIN_IAP_AUDIENCE`), `singleTenantGate` (`pkg/ui/accesscode.go`) admits verified, allowlisted callers directly from `X-Goog-IAP-JWT-Assertion` as named principals—for the browser UI, the `grain` CLI, external agents, and remote `grain hostd` instances—without a shared access code. Wrapper distributions fronted by a different signed-header proxy plug into the same gate through `ui.RegisterIdentityVerifier` (`pkg/ui/verifier.go`). Companion designs cover how verified principals are recorded on mutations ([`operator-attribution.design.md`](operator-attribution.design.md)), how multi-instance registry proxies sign assertions for replaceable VMs ([`registry.design.md`](registry.design.md)), how simplified configuration layers database-backed allowed users on top ([`simple-config.design.md`](simple-config.design.md)), and how fine-grained authorization roles (`admin`, `writer`, `reader`) layer on top (`rbac.design.md`, task 2764).
 
-## Proposal
+## 1. Verified assertions and the `IdentityVerifier` seam
 
-### 1. A verified assertion authenticates the caller
+### `IdentityVerifier` (`pkg/ui/verifier.go`)
 
-When IAP authentication is enabled (`-ui-iap-audience` set), a request whose `X-Goog-IAP-JWT-Assertion` verifies is let through by `singleTenantGate` without the access code. The checks are signature against the configured keys, `iss`, `aud` (one of the configured audiences, which pins the backend service) and `exp`/`iat` with a small skew.
-
-The rules:
-
-- **A bad assertion is final.** If the assertion is present but fails to verify, the request is refused (401, logged by `logRefusedAssertion`). It does not fall back to the access code or to an anonymous route. A request that bypasses the Gateway and reaches the pod directly cannot forge the assertion, so the network path no longer matters.
-- **Plaintext identity headers never authenticate.** This includes `X-Goog-Authenticated-User-Email`. They stay logged and ignored, as today.
-- **Precedence over the access code is per verifier.** For IAP, the assertion wins over the access code: if a request carries both, the caller is the IAP principal, and the access code does not make a named person anonymous again. A wrapper's `IdentityVerifier` whose proxy attaches a signed header to every proxied request may instead declare that the access code beats it (`AccessCodeWins() bool`, see *IdentityVerifier* below), so an operator can break glass with the access code when the allowlist or group lookup is broken. Even then, a present assertion that fails to verify still fails closed with a 401 and no fallback.
-
-### 2. Who is admitted: an allowlist on top of IAP
-
-IAP's IAM binding (managed by `pkg/iapreconciler`) is the perimeter. Grain adds an optional check of its own, so a mistake in the project's IAM does not hand the deployment to everyone in the organisation:
-
-```
--ui-allowed-principals=user:alice@example.com,group:grain-admins@example.com,serviceAccount:hostd@proj.iam.gserviceaccount.com,domain:example.com
-```
-
-- **Default.** The deployment owner (the email `grain init` records for the operator) plus the service accounts grain itself provisions. A new deployment admits only its owner until somebody widens the list.
-- **`group:`.** IAP assertions carry no group claims. `group:` entries in `-ui-allowed-principals` are resolved by grain through the Cloud Identity groups API, with results cached for a few minutes. The lookup is **optional**: grain calls Cloud Identity only when at least one `group:` entry is configured, so a deployment with no `group:` entries never makes the call and never needs Cloud Identity read access for `grain-daemon@…`. Direct entries (`user:`, `serviceAccount:`, `domain:`) are checked first, so a failed lookup refuses only requests that depend on a `group:` entry to be admitted.
-- **No roles in v1 (same powers for everyone).** Grain is single-tenant (`docs/access-code.md`): every admitted principal is an operator with the access the access code gives today, including minting `gma_` external-agent tokens and hostd tokens. Roles (such as read-only viewers, or restricting who may mint tokens) come later in a separate authorization (RBAC) design.
-
-A verified caller that is not on the list gets a 403. The response names the email, so the operator knows what to add.
-
-### 3. The verified email is the principal
-
-The `email` claim becomes the request's principal, with `AuthMethodIAP`:
-
-- `{human, alice@example.com}` for a person;
-- `{service, hostd@proj.iam.gserviceaccount.com}` for an address ending in `.gserviceaccount.com`. This needs a new `model.PrincipalService` kind. Today there are only `automation`, `agent` and `human`.
-
-`extractPrincipal` stops dropping human principals that came from a verifier. Task creation, approvals, comments, merge-queue submissions and audit logs then record who acted, rather than the deployment's actor. `GET /api/auth/user` (`pkg/ui/auth.go`) already returns `authMethod` and `user`, so the UI header shows the signed-in email. This is the identity `attribution.design.md` needs to credit reviewers who act through grain.
-
-## How each client signs in
-
-### Browser UI
-
-Opening the grain URL goes through IAP's Google sign-in, as it does now. Each request then carries the assertion, so the "Enter access code" page is never shown and grain sets no `grain_access` cookie. Logging out sends the browser to IAP's `/_gcp_iap/clear_login_cookie`.
-
-Every request is now authenticated by a cookie the browser sends on its own: IAP's cookie, which grain does not control and which is not `SameSite=Strict` the way `grain_access` is. So a state-changing request (any method other than GET or HEAD, or anything under `/api/` that writes) that was authenticated by IAP must also pass a CSRF check. It must carry `Sec-Fetch-Site: same-origin`, or a matching `Origin`. The UI's fetches already meet this.
-
-### `grain` CLI and external agents
-
-The CLI gets an IAP mode, configured in `/etc/grain/cli.env` or by environment (`GRAIN_SERVER=https://grain.example.com`, `GRAIN_IAP_AUDIENCE=<iap-client-id>`). It gets an ID token from the first of these sources that works:
-
-1. `gcloud auth print-identity-token --audiences=<iap-client-id>`, for a service account or an impersonated one;
-2. `gcloud auth print-identity-token` with the user's own login. This works only if gcloud's OAuth client is on the IAP resource's programmatic-access allowlist. Otherwise the CLI's own OAuth desktop/device flow is used, with the token cached under `~/.config/grain/`;
-3. the metadata server or Workload Identity, through `modelexec.IAPTokenProvider`, which already caches and refreshes these tokens.
-
-The CLI sends the token as `Proxy-Authorization: Bearer <id-token>`. IAP accepts it there and leaves `Authorization` to the application. Grain authenticates the caller from the assertion IAP adds, never from the bearer token. This leaves `Authorization` free for a grain credential when one is wanted.
-
-An external agent can do the same with its own service account. It can also present a minted grain API token (`gma_…`, `pkg/ui/external_agents.go`) in `Authorization`, as today. That token still decides the principal (`{agent, external:<name>}`) and its scopes, and the IAP identity that carried it is recorded alongside in the audit log. `grain access-code` reports that the code is not needed when the CLI is in IAP mode.
-
-### `grain hostd`
-
-hostd dials `/api/hostd/connect` through the Gateway with an ID token from its service account (Workload Identity or a key on the workstation) or from the user's login. It uses the token sources above, through `IAPTokenProvider`, as it does now. The hello frame still carries the hostd token. That token names which hostd this is, and it is what GKE-5 makes per hostd.
-
-What changes is that the verified IAP principal is recorded as the connection's principal and checked against the allowlist. A **remote** hostd (one that dials `/api/hostd/connect` through the IAP Gateway or another verifier's proxy) must present a verified identity equal to its hostd row's `owner`, so a stolen hostd token is useless without its owner's Google identity. Service accounts may be owners. A hostd reached locally (over its socket, with no proxy and no assertion) is unchanged and keeps using its token. The executor bootstrap routes (`executorBootstrapRoute`) stay open, as `docs/access-code.md` describes.
-
-## Fallback and the `IdentityVerifier` seam
-
-### Without IAP
-
-- **No IAP configured.** Local and standalone deployments are unchanged. The access code, the login page and `grain_access` work as they do now.
-- **`-ui-require-iap`** (`GRAIN_REQUIRE_IAP`). This replaces the unused `Config.IAPMode`. With it set, the network listener no longer accepts the access code at all, neither the bearer token nor the cookie, and the login page is gone. The code still works over loopback when the request carries no forwarding headers (`relayedByProxy`). That keeps `kubectl exec deploy/grain -- grain …` as a break-glass path that does not depend on IAP. The daemon refuses to start with the flag and no IAP audience.
-- **The flag governs IAP only.** A verifier that declares `AccessCodeWins() == true`, such as the Google layer's ÜberProxy verifier, keeps accepting the code over its own proxy with `-ui-require-iap` set, so break-glass through that proxy still works. `accessCodeAccepted` in `pkg/ui/accesscode.go` is the one place the flag is checked, and it lets such a verifier's requests through.
-- **IAP configured but `-ui-require-iap` not set.** Both are accepted. This is the migration state.
-
-### `IdentityVerifier`
-
-IAP becomes one implementation of a seam in `pkg/ui`, so that a wrapper build can add a different signed-header proxy. A wrapper build fronted by its own corporate proxy, with a companion design doc in that wrapper's repository, plugs in through this seam rather than by patching the gate.
+IAP is the built-in implementation of `ui.IdentityVerifier`, the extension seam through which core and wrapper distributions verify proxy-signed identity headers:
 
 ```go
 // An IdentityVerifier turns a signed header a trusted proxy adds into a verified identity.
 type IdentityVerifier interface {
-	Name() string     // "iap", or a wrapper's proxy; becomes the AuthMethod
-	Headers() []string // the headers it reads; also treated as proxy headers (relayedByProxy)
-	// Verify returns ok=false when none of its headers is present, and an
-	// error when one is present but does not verify.
+	Name() string      // "iap", or a wrapper's proxy; becomes AuthMethod and Principal.Source
+	Headers() []string // headers read by Verify; also treated as proxy headers in relayedByProxy
 	Verify(r *http.Request) (id VerifiedIdentity, ok bool, err error)
 }
 
 // AccessCodePrecedence may be implemented by an IdentityVerifier whose proxy
 // attaches a signed header to every proxied request, so a valid access code
-// can still be used as break-glass recovery. Verifiers that do not implement
-// it default to false (the verified identity wins over the access code).
+// still works as break-glass recovery. Verifiers that do not implement it
+// default to false (the verified identity takes precedence over the code).
 type AccessCodePrecedence interface {
 	AccessCodeWins() bool
 }
 
 type VerifiedIdentity struct {
-	Email string              // the principal's ID
-	Kind  model.PrincipalKind // human or service
+	Email string              // normalized lower-case email; becomes Principal.ID
+	Kind  model.PrincipalKind // model.PrincipalHuman or model.PrincipalService
 }
 
 func RegisterIdentityVerifier(v IdentityVerifier) (unregister func())
 ```
 
-`identifyCaller` asks each registered verifier in turn, with IAP registered by default when its audience is set. The first verifier whose header is present decides the request. Its error refuses the request; it never falls through to the next verifier. By default (including IAP), a verified identity beats the access code when a request carries both; if the deciding verifier implements `AccessCodePrecedence` with `AccessCodeWins() == true`, a request carrying a valid access code is instead judged by the code alone, as today, while a request without the code uses the verified identity (and a failed verification still fails closed with a 401 and no fallback). Whatever identity is used goes through the same allowlist, CSRF check, principal attribution and audit logging, so a wrapper only supplies the cryptography. `IAPConfig.Validator` becomes the IAP verifier's own option. A test in this tree, using a fake verifier, pins the contract the wrapper relies on.
+`Server.activeVerifiers` (`pkg/ui/verifier.go`) places `NewIAPVerifier` (`Name() == "iap"`, `Headers() == ["X-Goog-IAP-JWT-Assertion"]`) first whenever `IAPConfig.Enabled()` is true, followed by verifiers registered via `RegisterIdentityVerifier` in registration order.
 
-### In-sandbox calls do not change
+`Server.verifyCallerNow` (`pkg/ui/server.go`, `pkg/ui/verifier.go`) runs once per HTTP request before external-agent token authentication and `singleTenantGate`, caching its `callerVerification` in the request context:
 
-Agent calls from inside a sandbox never pass IAP and never carry a person's identity. That covers the git and API proxy at `127.0.0.1:9728` and `grain mcpserver` with `X-Grain-Acting-Task`. They keep the per-attempt scoped token model they have now. The sandbox acceptor is not on the Gateway, and assertion headers arriving on it are ignored.
+- **First present header decides.** `verifyCaller` inspects active verifiers in order. Verifiers with none of their `Headers()` set on the request are skipped. The first verifier with a non-empty header decides the request; later verifiers are never consulted, even on error.
+- **A bad assertion fails closed (`401`).** When a verifier's header is present and `Verify` returns an error, the request is refused with `401` (`writeAssertionRefused` in `pkg/ui/principalrefusal.go`). It never falls back to the access code, to a `gma_…` external-agent token, to a session cookie, or to an unauthenticated open route (including `/api/hostd/connect`). A caller that reaches the pod directly past the Gateway cannot forge the signature, so network topology is not trusted on its own.
+- **Bounded diagnostic logging (`pkg/ui/assertion_diagnostics.go`).** Refused IAP assertions are logged by `logRefusedAssertion` with the unverified `iss`, unverified `aud`, configured audience(s), and failure reason, deduplicated by `(iss, aud, refusalKind)` across nine failure categories (`malformed`, `signature`, `unverifiable`, `expired`, `not-yet-valid`, `issued-in-future`, `issuer`, `claim-missing`, `other`) up to 64 distinct keys (`maxLoggedRefusedAssertions`). When the unverified `aud` already matches a configured audience (and the failure is not `issuer`), the log line notes that the audience is this deployment's own—pointing to clock skew, a replayed header, or an untrusted signer rather than telling the operator to change `-ui-iap-audience`. Raw tokens and signatures are never logged. If `X-Goog-IAP-JWT-Assertion` arrives when no IAP audience is configured, grain logs a one-time configuration hint naming `-ui-iap-audience`. Non-IAP verifier failures log once per `(verifier.Name(), header)` via `logRefusedVerifierHeader` (also capped at 64 entries).
+- **Plaintext identity headers never authenticate.** Unsigned headers (`PlaintextIdentityHeaders` in `pkg/ui/principal.go`: `X-Goog-Authenticated-User-Email`, `X-User-LDAP`, `X-Forwarded-User`, `X-Goog-Authenticated-User-Id`, `X-Grain-User`, `Grain-User`) never establish a principal or satisfy `singleTenantGate`, whether from the network or loopback. Proxy-sent headers outside grain's own client headers (`X-Grain-User`, `Grain-User`, `X-Forwarded-User`) are logged once per header name (`logIgnoredIdentityHeader`) and ignored.
 
-## Rollout
+### IAP JWT checks (`pkg/ui/principal.go`)
 
-1. `IdentityVerifier` and the registry, with IAP as the first implementation. No behaviour change.
-2. Verified IAP callers pass `singleTenantGate` and become principals: `PrincipalService`, the allowlist, the CSRF check, and the UI header and logout.
-3. IAP mode for the CLI, and recording hostd's IAP principal (including matching a remote hostd's verified identity to its row's `owner`).
-4. `-ui-require-iap`, and `docs/access-code.md` rewritten for the three modes. **Done** (task 2318).
+`IAPConfig` configures `NewIAPVerifier` from daemon flags (`pkg/cli/daemon.go`) and environment fallbacks:
 
-## Open questions
+- **Audience:** `-ui-iap-audience` (`$GRAIN_IAP_AUDIENCE`, falling back to `$GRAIN_AUDIENCE` and `$IAP_AUDIENCE`), accepting one or more comma-separated expected audiences (for example `/projects/<number>/global/backendServices/<id>`).
+- **Issuer:** `-ui-iap-issuer` (`$GRAIN_IAP_ISSUER`), defaulting to `https://cloud.google.com/iap`.
+- **Public keys:** `-ui-iap-keys-url` (`$GRAIN_IAP_KEYS_URL`), defaulting to `https://www.gstatic.com/iap/verify/public_key` (or overridden in tests via `IAPConfig.Validator`). `fetchGoogleIAPKeys` accepts both IAP's `{kid: pem}` JSON map and RFC 7517 JWKS (`{"keys": […]}`), supporting ECDSA P-256 (`ES256`) and RSA (`RS256`) keys with a `5s` HTTP timeout, a `1h` cache TTL (`iapKeysTTL`), a `10s` minimum refetch interval (`iapKeysRefetchFloor`) when an unknown `kid` arrives, and stale-cache fallback if a background refresh fails.
+- **Claims and skew:** `verifyIAPAssertion` pins the JWT signing algorithm to the matched key's type (`ES256` for ECDSA, `RS256` for RSA—never `none` or HMAC), checks exact `iss` equality, requires `aud` to intersect the configured audiences, requires `exp`, and validates `exp`, `iat`, and `nbf` with `30s` clock-skew leeway (`iapClockSkew`).
 
-- In the future authorization/RBAC design, who should be allowed to mint `gma_` tokens and hostd tokens? (In v1, any admitted principal can mint both.)
+## 2. Principals, attribution, and UI session state
+
+`verifyIAPAssertion` extracts the `email` claim (falling back to `sub` when `email` is empty) and normalizes it with `normalizeIdentityEmail` (`pkg/ui/principal.go`): stripping `https://accounts.google.com:` or `accounts.google.com:`, trimming whitespace, and lower-casing. An assertion with no resulting email is rejected (`401`).
+
+`verifiedIdentityForEmail` (`pkg/ui/verifier.go`) classifies the verified address into `model.Principal` (`pkg/model/task.go`):
+
+- `{Kind: model.PrincipalService, ID: "<sa>@<proj>.iam.gserviceaccount.com", Source: "<verifier>"}` when the address ends in `.gserviceaccount.com` (`isServiceAccountEmail`);
+- `{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: "<verifier>"}` for every other address.
+
+`Principal.Source` (`model.AuthSource`) records `"iap"` for IAP or `verifier.Name()` for a registered verifier, distinguishing cryptographic sign-ins (`Principal.Verified() == true`) from `"access-code"`, `"token"`, `"loopback"`, `"in-process"`, `"session"`, `"sandbox"`, `"external-token"`, and `"internal"`.
+
+`extractPrincipal` (`pkg/ui/principal.go`) and `Server.serveHTTP` (`pkg/ui/server.go`) attach this `model.Principal` to the request context. Every mutating UI and API handler reads the actor through `ui.RequestActor(ctx)` (`pkg/ui/request_actor.go`, enforced across routes by `TestEveryMutatingRouteIsAttributed`), recording `(kind, id, source)` on task filings, approvals, comments, state transitions, merge-queue actions, settings writes, and audit logs ([`operator-attribution.design.md`](operator-attribution.design.md)). Unverified access-code and loopback callers continue to record `{human, operator, access-code}` (or `loopback`), rendered by `ui.PrincipalLabel` (`pkg/ui/principal_label.go`) as `operator (access code)`.
+
+In the UI:
+
+- `GET /api/config` (`pkg/ui/server.go`) and `GET /api/auth/user` (`pkg/ui/auth.go`, `AuthUserResponse`) return `authMethod` (`"iap"` or verifier name) and `user`/`actor` (`user:<email>` for humans, `service:<email>` for service accounts).
+- At desktop widths, `PageHeader.jsx` (`ui/src/components/PageHeader.jsx`) shows the signed-in email badge (`top-bar-user`) with a menu linking to `Settings → Access` (`ui/src/components/settings/AccessSection.jsx`) and `Log out`. At phone widths (`390 px`), `Sidebar.jsx` (`ui/src/components/Sidebar.jsx`) renders `"Signed in as <email>"` and `Log out` in the pinned drawer footer.
+- `POST /api/auth/logout` (`pkg/ui/accesscode.go`) clears any `grain_access` cookie and, when `identifyCaller` reports `AuthMethodIAP`, returns `{"loggedOut": true, "redirect": "/_gcp_iap/clear_login_cookie"}` so the browser clears IAP's login cookie.
+
+## 3. Admission: the database allowlist, groups, and roles
+
+IAP's IAM binding (`pkg/iapreconciler`) is the perimeter. Grain enforces an application-level **Allowed users and groups** list in the database (`allowed_principal` table: `entry`, `added_by`, `added_at`; `pkg/model/allowed_principals.go`, `pkg/ui/access_principals.go`, `pkg/ui/allowlist.go`) on every verified principal so an overly broad IAM binding on the GCP project does not grant deployment access to an entire organisation, and changes take effect immediately without restarting the daemon:
+
+```
+user:alice@example.com
+group:grain-admins@example.com
+```
+
+- **Entry kinds and seeding (`pkg/model/allowed_principals.go`, `pkg/ui/allowlist.go`):**
+  - `user:<email>` — matches `model.PrincipalHuman` only (case-insensitive exact email; `*.gserviceaccount.com` addresses are rejected).
+  - `group:<group-email>` — matches `model.PrincipalHuman` callers who are transitive members of `<group-email>` in Cloud Identity (`*.gserviceaccount.com` addresses are rejected and `model.PrincipalService` callers never resolve through `group:` entries).
+  - Daemon-provisioned service accounts (`Config.ProvisionedServiceAccounts` and `grain-daemon@<gcp-project>.iam.gserviceaccount.com`, excluding `gcp-key` sandbox pool accounts) remain admitted in memory (`serviceAccount:<email>`), and dedicated non-pool GCP service accounts registered as active `hostd` owners (`isRegisteredHostdServiceOwner`) are admitted on `GET /api/hostd/connect`.
+  - Installers seed the installing operator with `grain access allow user:<email>` (idempotent). Keeping `allowed_principal` and `allowed_principal_migration` outside `staterepo.SettingsTables` preserves them in cold backups while preventing `grain/config` pull requests from locking operators out or granting sign-in access.
+- **One-time migration off `-ui-allowed-principals` (`pkg/ui/access_principals.go`, `pkg/model/allowed_principals.go`).** If `-ui-allowed-principals` / `$GRAIN_ALLOWED_PRINCIPALS` is set on start when `allowed_principal` is empty and has not yet migrated (`allowed_principal_migration`), grain imports its `user:` and `group:` entries once (excluding `*.gserviceaccount.com` and `gcp-key` pool accounts) and logs the import. Unsupported entries (`serviceAccount:`, `domain:`, or service-account emails) are dropped, logged individually, and surfaced in `Settings → Access` (`droppedFlagEntries`). Thereafter the flag and environment variable are deprecated: grain logs a warning when set and ignores them, even if all database entries are later removed.
+- **Sandbox `gcp-key` pool exclusion and refused-principal logging.** Service accounts belonging to the `gcp-key` sandbox credential pool (`GCPKeyPoolEmails`: the configured base account and numbered `<prefix>-0@…` / `<prefix>-1@…` pool accounts whose keys enter task sandboxes) are never admitted as provisioned daemon accounts or `hostd` owners, are rejected at startup by `daemon.CheckUIAllowedPrincipals` and dropped during flag migration if listed in `-ui-allowed-principals`, and are unconditionally refused (`403`) at request time. Every verified principal turned away by `checkAllowedPrincipal` is logged once per `(email, isGCPKeyPool)` up to 64 entries (`logRefusedPrincipal` in `pkg/ui/allowlist.go`), with a dedicated warning when a `gcp-key` pool account reaches the proxy instructing the operator to remove it from `iap_members` and rotate the pool's keys.
+- **Decision — Group resolution (`CloudIdentityGroupChecker`).** IAP assertions carry no group claims. Grain calls the Cloud Identity Groups API (`groups:lookup` followed by `memberships:checkTransitiveMembership`, OAuth scope `https://www.googleapis.com/auth/cloud-identity.groups.readonly`) **only** for `model.PrincipalHuman` callers when at least one `group:` entry is present in `allowed_principal` and no direct `user:` entry matched; deployments without `group:` entries never contact Cloud Identity and need no Cloud Identity IAM permission on `grain-daemon@…`. Positive and negative membership answers are cached for `5m` (`DefaultGroupMembershipCacheTTL`); lookup errors are never cached and fail closed (`403`), with `10s` bounds on both OAuth token headers and API calls (`cloudIdentityTimeout`).
+- **Decision — Equal operator powers, agent scopes, and token minting (until RBAC lands).** Grain is single-tenant ([`docs/access-code.md`](../../docs/access-code.md)): every verified user admitted via `allowed_principal` has the same full operator powers as an access-code holder, including viewing, adding, and removing allowlist entries (`Settings → Access`, `GET`/`POST`/`DELETE /api/access/principals`, and `grain access list|allow|deny`), minting `gma_…` external-agent tokens, and registering `hostd` rows (`POST /api/hostds`). Every allowlist change is recorded in `config_audit` (`surface = "access"`). For external or task agents, `api:access:read` reads the list and dangerous `api:access:write` (grantable only by a person, requiring `X-Grain-Acting-Reason` recorded in `config_audit`, and refused on `sandbox-cli`) modifies it. Minting or rotating a `gma_…` credential (`POST /api/external-agents/tokens`, `POST /api/external-agents/tokens/{id}/rotate`) that grants a dangerous scope (`model.IsDangerousAPIScope`) or a `requires_person` scope set requires a `model.PrincipalHuman` caller (`canIssuePersonExternalAgentToken`); `model.PrincipalService` and `model.PrincipalAgent` callers are refused with `403`. Finer-grained roles are deferred to `rbac.design.md` (task 2764).
+
+## 4. Access-code modes, precedence, CSRF, and refusal pages
+
+### Three access modes (`pkg/ui/accesscode.go`, [`docs/access-code.md`](../../docs/access-code.md))
+
+1. **No verifier active (standalone / local default).** `local-api-token` (`$GRAIN_ACCESS_CODE`) is the sole credential: browsers exchange it at `POST /api/auth/access-code` for the `grain_access` cookie (`HttpOnly`, `SameSite=Strict`), and the CLI sends it as `Authorization: Bearer`.
+2. **Migration mode (`-ui-iap-audience` set, `-ui-require-iap` unset).** Verified, allowlisted IAP callers pass `singleTenantGate` without the access code; requests carrying no assertion may still authenticate with the access code.
+3. **IAP required (`-ui-require-iap` / `$GRAIN_REQUIRE_IAP`).** `daemon.CheckUIRequireIAP` (`pkg/cli/daemon.go`) refuses to start if `-ui-require-iap` is set without an IAP audience. Over the network—and over loopback whenever any proxy or verifier header is present (`relayedByProxy` in `pkg/ui/accesscode.go`)—neither the bearer access code, nor `grain_access`, nor `POST /api/auth/access-code` is accepted (`accessCodeAccepted` returns `false`). Over **unproxied loopback** (`127.0.0.0/8`, `::1`, or Unix socket with no forwarding headers), the access code remains accepted so `kubectl exec deploy/grain -- grain …` always works as break-glass recovery.
+
+### Per-verifier access-code precedence
+
+- **Verified identity wins by default (`AccessCodeWins() == false`, including IAP).** When a request carries both an IAP assertion and a bearer access code or `grain_access` cookie, the assertion governs: the caller must pass `checkAllowedPrincipal` and `checkVerifiedIdentityCSRF`, and acts as their named email rather than anonymous `operator`.
+- **Access code wins for always-attached wrapper proxies (`AccessCodeWins() == true`).** A wrapper distribution whose corporate proxy attaches a signed identity header to every proxied request may return `AccessCodeWins() == true`. When such a request also carries a valid access code (or a valid `gma_…` token), `singleTenantGate` and `accessCodeAccepted` honour that credential—even under `-ui-require-iap`—so an operator can still break glass through the corporate proxy when the allowlist or group directory is broken. A present header that fails cryptographic verification still returns `401` with no fallback.
+
+### CSRF protection (`pkg/ui/csrf.go`)
+
+IAP authenticates browser requests with IAP's own cookie rather than grain's `SameSite=Strict` `grain_access` cookie. Grain enforces two layers of cross-origin protection:
+
+1. `ServeHTTP` runs Go's `http.CrossOriginProtection` (`checkCrossOrigin`) across all routes (`GET`, `HEAD`, and `OPTIONS` allowed; browser cross-site requests rejected via `Sec-Fetch-Site` and `Origin`).
+2. `singleTenantGate` runs `checkVerifiedIdentityCSRF` on every request admitted through a verified identity whose HTTP method is neither `GET` nor `HEAD`:
+   - `Sec-Fetch-Site: same-origin` or `Sec-Fetch-Site: none` is allowed; any other non-empty `Sec-Fetch-Site` is refused with `403`.
+   - When `Sec-Fetch-Site` is absent, `Origin` is parsed and its `host[:port]` is compared case-insensitively against `r.Host` and comma-separated `X-Forwarded-Host` values (`403` on mismatch or malformed `Origin`).
+   - When both `Sec-Fetch-Site` and `Origin` are absent, requests carrying a non-empty `Cookie` header are refused with `403`, while cookie-less programmatic requests (`Authorization: Bearer`, `X-Grain-Hostd-Token`) pass.
+
+### Refusal pages (`pkg/ui/principalrefusal.go`, `pkg/ui/accesscode.go`)
+
+Browser navigations (`GET` or `HEAD` outside `/api/`) receive self-contained HTML pages (`Cache-Control: no-store`), while `/api/*` and non-`GET`/`HEAD` requests receive JSON errors:
+
+- **`403` `"Not allowed on this grain"` (`writePrincipalRefusedPage`).** Rendered when a caller's assertion verifies (`cv.err == nil`) but `checkAllowedPrincipal` refuses admission. The page displays the verified email and verifier name, any underlying lookup error (for example a Cloud Identity timeout), remediation guidance from `ui.RegisterPrincipalAdvice` (defaulting to `Settings → Access` and `grain access allow user:<email>` for human callers, or `grain hostds register --owner <email>` for service accounts), and an `"Owner: sign in with the access code"` section that renders `<form method="post" action="/api/auth/access-code">` **only** when `AccessCodeWins()` is true—otherwise explaining that the verifier's identity takes precedence over the access code and instructing the owner to connect directly or over an SSH tunnel.
+- **`401` `"Sign-in could not be verified"` (`writeAssertionRefused`).** Rendered when a verifier header is present on a browser navigation but fails verification, naming the failure reason and configuration/clock checklist with no access-code fallback.
+- **`401` `"Sign in through IAP"` (`writeIAPRequiredPage`).** Rendered when `-ui-require-iap` refuses an unauthenticated network browser navigation, in place of the `"Enter access code"` login form.
+
+## 5. How each client signs in
+
+### Browser UI
+
+Opening the deployment URL signs the user in through IAP's Google login flow. Every proxied request carries `X-Goog-IAP-JWT-Assertion`, bypassing the access-code page without setting `grain_access`. Same-origin browser `fetch` calls carry `Sec-Fetch-Site: same-origin` and pass `checkVerifiedIdentityCSRF` unchanged. Clicking `Log out` posts `/api/auth/logout` and follows the returned redirect to `/_gcp_iap/clear_login_cookie`.
+
+### `grain` CLI (`pkg/cli/cliconn.go`, `pkg/cli/accesscode.go`, `pkg/ui/httpclient.go`)
+
+The CLI loads `GRAIN_SERVER` and `GRAIN_DATA_DIR` from `/etc/grain/cli.env` when unset in the environment. `ui.HTTPClient` selects a bearer token from the first available source:
+
+1. Explicit `-token` (`HTTPClient.Token`) or `HTTPClient.TokenProvider`;
+2. Environment variables `GRAIN_TOKEN`, `GRAIN_AUTH_TOKEN`, `GRAIN_ID_TOKEN`, or `GRAIN_TUNNEL_TOKEN`;
+3. Local `<data-dir>/local-api-token` when `BaseURL` targets a loopback host (`127.0.0.1`, `::1`, `localhost`);
+4. Google OIDC ID token resolution (`getGoogleIDToken`, cached in memory until `1m` before `exp`) when `BaseURL` uses `https://`, ends in `.run.app`, or an explicit `-audience` (`$GRAIN_AUDIENCE` / `$GRAIN_TUNNEL_AUDIENCE`) is set:
+   - Application Default Credentials (`idtoken.NewTokenSource(ctx, audience)`, where `audience` defaults to `BaseURL`);
+   - `gcloud auth print-identity-token --audiences=<audience>` (for service accounts or impersonated service accounts);
+   - bare `gcloud auth print-identity-token` **only** when the target host ends in `.run.app`.
+
+`HTTPClient` sends the token in `Authorization: Bearer <token>` (and `X-Grain-Tunnel-Token`). Behind IAP, IAP validates the Google ID token at the edge and attaches `X-Goog-IAP-JWT-Assertion`; grain authenticates the caller from `X-Goog-IAP-JWT-Assertion` without needing `local-api-token`. Running `grain access-code` prints the local token and checks `GET /api/auth/access-code`, warning on stderr when the server reports `requireIAP: true`.
+
+### External agents (`pkg/ui/external_agents.go`)
+
+External agents behind IAP authenticate with a scoped `gma_…` credential (`Authorization: Bearer gma_…`, sending their Google OIDC ID token in `Proxy-Authorization: Bearer <id-token>` when traversing IAP so `Authorization` reaches grain intact). `verifyCallerNow` still validates any present proxy assertion (`401` on invalid signature) and, for verifiers where `AccessCodeWins() == false` (including IAP), `singleTenantGate` still requires the proxy identity to pass `checkAllowedPrincipal` (`403` on disallow). `authenticateExternalAgent` sets the request's principal to `{agent, external:<name>, external-token}`, enforcing the credential's scopes, repository list, rate limit, and concurrency cap. (General GCP service accounts outside the daemon's own provisioned accounts are not admitted as single-tenant operators.)
+
+### Decision — `grain hostd` and owner matching (`pkg/hostd/`, `pkg/ui/hostd_connect.go`, `pkg/ui/hostds.go`)
+
+Operators register per-hostd credentials in the hostd registry (`POST /api/hostds`, `grain hostds register --owner <email>`, `grain hostds set-owner`, `pkg/ui/hostds.go`, `pkg/cli/hostds.go`), receiving a `ghd_…` token bound to that hostd row and its `owner` email (human or service account). A deprecated single-file fallback (`-hostd-token-file` paired with `-hostd-token-owner` / `$GRAIN_HOSTD_TOKEN_OWNER`) remains supported for legacy setups. Remote model executors (`pkg/modelexec`, `executorBootstrapRoute`) were removed (`docs/executors-removed.md`).
+
+`grain hostd` dials `GET /api/hostd/connect` (`pkg/hostd/dialout.go`) sending its hostd token in `X-Grain-Hostd-Token` (plus optional `X-Grain-Hostd-Name`). When `-iap-audience` (`$GRAIN_IAP_AUDIENCE`) is set on `grain hostd`, `hostd.NewIAPTokenProvider` (`pkg/hostd/iap_auth.go`) mints and caches an OIDC ID token from the GCE metadata server (`…/instance/service-accounts/default/identity?audience=<aud>&format=full`) with fallback to Application Default Credentials (`idtoken.NewTokenSource`), sending `Authorization: Bearer <id-token>` for IAP while `X-Grain-Hostd-Token` carries the hostd credential.
+
+Although `/api/hostd/connect` is in `singleTenantOpenRoute` (requiring no deployment access code), `serveHTTP` runs `verifyCallerNow` first (`401` on bad assertion) and `hostdConnectIdentity` (`pkg/ui/hostd_connect.go`) admits a present verified identity only when it is an active registered non-pool `hostd` service-account owner (`isRegisteredHostdServiceOwner`) or passes `checkAllowedPrincipal` (`403` on disallow):
+
+- **Local `hostd` (`Remote: false`):** Only connections with no verifier header arriving either when no verifiers are active or over unproxied loopback (`isLoopbackRequest && !relayedByProxy`)—plus the local Unix socket `/run/grain-hostd/hostd.sock`—are treated as local and authenticate by hostd token alone.
+- **Remote `hostd` (`Remote: true`):** Every connection carrying a verifier header, arriving from the network when any verifier is active, or carrying proxy forwarding headers is remote. `hostd.Remote.ServeHTTP` (`pkg/hostd/remote.go`, `pkg/hostd/connect_identity.go`) refuses with `401` if `Principal == ""` (preventing direct-to-pod bypass when IAP is configured) and refuses with `403` unless the hostd's configured `owner` is non-empty and matches `Principal` case-insensitively (`strings.EqualFold`). A stolen `ghd_…` token therefore cannot connect without its owner's verified identity.
+
+### In-sandbox calls
+
+Agent calls from inside a task sandbox never traverse IAP and never carry a person's identity. Both the sandbox git/API proxy (`127.0.0.1:9728`) and `grain mcpserver` (`X-Grain-Acting-Task`) run off the Gateway using per-attempt scoped sandbox tokens, and proxy assertion headers never authenticate them.
+
+## 6. Rollout status
+
+### Done
+
+- **`IdentityVerifier` seam and `NewIAPVerifier`** (`pkg/ui/verifier.go`, `pkg/ui/principal.go`, `pkg/ui/assertion_diagnostics.go`): verifier registry, per-verifier `AccessCodePrecedence`, ECDSA/RSA key fetching, `30s` clock skew, fail-closed `401`, and bounded deduplicated assertion logging (tasks 2309, 2443).
+- **Database allowlist, CSRF, UI identity, and refusal pages** (`pkg/model/allowed_principals.go`, `pkg/ui/access_principals.go`, `pkg/ui/allowlist.go`, `pkg/ui/csrf.go`, `pkg/ui/principalrefusal.go`, `pkg/ui/accesscode.go`, `pkg/cli/access.go`, `pkg/daemon/ui_server.go`): `PrincipalHuman` and `PrincipalService`, database-backed `allowed_principal` list (`user:` and `group:`) with one-time `-ui-allowed-principals` startup migration, optional Cloud Identity `group:` lookup, `gcp-key` sandbox pool exclusion, `Settings → Access` UI and `grain access list|allow|deny` CLI, `api:access:read` and dangerous `api:access:write` scopes, `checkVerifiedIdentityCSRF`, HTML refusal pages (`403` principal refused with `RegisterPrincipalAdvice`, `401` assertion refused, `401` IAP required), desktop and phone signed-in identity UI, and `/_gcp_iap/clear_login_cookie` logout (tasks 2309, 2383, 2443, 2510, 2741).
+- **`-ui-require-iap` and loopback break-glass** (`pkg/ui/accesscode.go`, `pkg/cli/daemon.go`, `pkg/cli/accesscode.go`, [`docs/access-code.md`](../../docs/access-code.md)): network access-code disablement, startup audience check, and unproxied loopback break-glass (task 2318).
+- **Per-hostd registry and remote `hostd` owner verification** (`pkg/ui/hostds.go`, `pkg/ui/hostd_connect.go`, `pkg/hostd/connect_identity.go`, `pkg/hostd/remote.go`, `pkg/hostd/iap_auth.go`, `pkg/cli/hostds.go`): `/api/hostds`, `grain hostds`, `hostd.ConnectIdentity`, and `-hostd-token-owner` (tasks 2164, 2316).
+- **Operator attribution foundation** (`pkg/model/task.go`, `pkg/ui/request_actor.go`, `pkg/ui/principal_label.go`): `Principal.Source`, `Principal.Verified()`, `ui.RequestActor(ctx)`, and `*_source` database columns across mutating routes (tasks 2310, 2311).
+- **Simulated IAP end-to-end and deployment verification:** 112 checks passed, 0 failed across browser UI, CLI, external agents, and remote `hostd` (`docs/test-runs/2026-11-02-iap-end-to-end.md`, task 2510), plus Terraform/script flag rendering, refused-principal and own-audience logging, phone drawer stacked layout, and external-config-repo walkthroughs (`docs/test-runs/2026-11-03-iap-deployment.md`, task 2710).
+
+### Remaining
+
+- **Dedicated CLI IAP ergonomics:** teaching `ui.HTTPClient` and the `grain` CLI to send the IAP OIDC token in `Proxy-Authorization: Bearer` (freeing `Authorization` when pairing IAP with a `gma_…` token), reading `GRAIN_IAP_AUDIENCE` from `/etc/grain/cli.env`, and adding a user OAuth desktop/device flow when `gcloud` cannot mint an audience-bound ID token without service-account impersonation.
+- **Live GKE Gateway + Cloud IAP rollout check:** verifying a live cluster deployment behind Google's managed IAP edge alongside the simulated proxy suite.
+- **Remaining operator-attribution items** ([`operator-attribution.design.md`](operator-attribution.design.md)): `GET /api/whoami` (`OA-5`) and `OnBehalfOf` dual-identity recording when an external or in-grain agent acts on a verified person's behalf (`OA-13`).
+- **Registry verifier and generalised verifier requirement** ([`registry.design.md`](registry.design.md)): core `registry` `IdentityVerifier` (`X-Grain-Registry-Assertion`) and generalising `-ui-require-iap` to `-ui-require-verifier`.
+- **Role-based access control** (`rbac.design.md`, task 2764): roles and scoped permissions beyond single-tenant operator equivalence.

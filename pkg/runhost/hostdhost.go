@@ -60,8 +60,30 @@ type Hostd struct {
 	Detach func(ctx context.Context) bool
 	// Logf is where Hostd logs; log.Printf when nil.
 	Logf func(format string, args ...any)
+	// ReattachTimeout is how long a detached run's CLI is waited for when
+	// the connection to hostd drops mid-stream -- hostd restarting, or a
+	// hostd that dials in losing its session -- before the run fails as
+	// agent.ErrHostdLost. The process runs on in hostd meanwhile, and
+	// once hostd answers again it is re-attached from the cursor the
+	// stream reached. Zero never waits: the drop fails the run at once.
+	ReattachTimeout time.Duration
+	// Reconnected, when set, blocks until hostd is reachable again or
+	// ctx is done (hostd.Remote.WaitHostd for a hostd that dials in), so
+	// a re-attach is tried the moment it is back; nil polls.
+	Reconnected func(ctx context.Context) error
+	// Name is the hostd's name in what Hostd logs and fails with; "" says
+	// "grain hostd".
+	Name string
 
 	tails tails
+}
+
+// hostdName is d's hostd as a sentence names it.
+func (d *Hostd) hostdName() string {
+	if d.Name == "" {
+		return "grain hostd"
+	}
+	return "grain hostd " + d.Name
 }
 
 // Host is the agent.Host a run's CLI named entry on hostd's allowlist
@@ -125,16 +147,59 @@ func (d *Hostd) Start(ctx context.Context, req hostd.Request, stdin io.Reader, s
 		req.Deadline = r.Deadline.Add(allowance)
 	}
 	started := make(chan struct{})
-	return d.stream(ctx, r.Run, 0, stdout, nil, started, func(sctx context.Context, c hostd.Client, out io.Writer) (hostd.Exit, error) {
+	proc := &procRef{}
+	return d.stream(ctx, r.Run, proc, 0, stdout, nil, stderr, started, func(sctx context.Context, c hostd.Client, out, errOut io.Writer) (hostd.Exit, error) {
 		c.OnStarted = func(st hostd.Started) {
 			defer close(started)
+			proc.set(st.ID)
 			d.logf("runhost: run %s's CLI %q started detached through grain hostd as %s (pid %d)", r.Run, req.Name, st.ID, st.PID)
 			if d.OnCursor != nil {
 				d.OnCursor(context.WithoutCancel(ctx), r.Run, 0)
 			}
 		}
-		return c.Run(sctx, req, stdin, out, stderr)
+		return c.Run(sctx, req, stdin, out, errOut)
 	})
+}
+
+// procRef is the hostd process a stream follows, once hostd has named it.
+type procRef struct {
+	mu sync.Mutex
+	id string
+}
+
+func (p *procRef) set(id string) {
+	p.mu.Lock()
+	p.id = id
+	p.mu.Unlock()
+}
+
+func (p *procRef) get() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.id
+}
+
+// countingWriter counts what passes through it to w (which may be nil).
+type countingWriter struct {
+	w  io.Writer
+	mu sync.Mutex
+	n  int64
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	c.n += int64(len(p))
+	c.mu.Unlock()
+	if c.w != nil {
+		_, _ = c.w.Write(p)
+	}
+	return len(p), nil
+}
+
+func (c *countingWriter) count() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
 }
 
 // Attach re-attaches to the hostd process info names (HostdInfos) for an
@@ -151,8 +216,8 @@ func (d *Hostd) Attach(ctx context.Context, info Info, cursor int64, tee io.Writ
 	var whole, stderr bytes.Buffer
 	started := make(chan struct{})
 	close(started)
-	exit, err := d.stream(ctx, info.Labels.Run, cursor, &whole, tee, started, func(sctx context.Context, c hostd.Client, out io.Writer) (hostd.Exit, error) {
-		e, _, err := c.Attach(sctx, id, hostd.Cursor{}, out, &stderr)
+	exit, err := d.stream(ctx, info.Labels.Run, &procRef{id: id}, cursor, &whole, tee, &stderr, started, func(sctx context.Context, c hostd.Client, out, errOut io.Writer) (hostd.Exit, error) {
+		e, _, err := c.Attach(sctx, id, hostd.Cursor{}, out, errOut)
 		return e, err
 	})
 	if errors.Is(err, ErrDetached) {
@@ -193,8 +258,13 @@ func (d *Hostd) Release(ctx context.Context, info Info, reason string) {
 // go of it, and stream then returns ErrDetached. A Flush is acted on once
 // started is closed: a start already under way when it comes is let go
 // of as soon as hostd has it, for the next daemon to adopt.
-func (d *Hostd) stream(ctx context.Context, run string, skip int64, whole, tee io.Writer, started <-chan struct{},
-	call func(context.Context, hostd.Client, io.Writer) (hostd.Exit, error)) (hostd.Exit, error) {
+//
+// A connection that drops before the process's exit arrives
+// (hostd.ErrNoExit) leaves the process running in hostd; with a
+// ReattachTimeout, stream waits for hostd to answer again and re-attaches
+// to proc from where stdout and stderr stood (reattach).
+func (d *Hostd) stream(ctx context.Context, run string, proc *procRef, skip int64, whole, tee, stderr io.Writer, started <-chan struct{},
+	call func(context.Context, hostd.Client, io.Writer, io.Writer) (hostd.Exit, error)) (hostd.Exit, error) {
 	flush, untrack := d.tails.track(run)
 	defer untrack()
 	// Not ctx's deadline: hostd holds the process to the request's own
@@ -232,7 +302,11 @@ func (d *Hostd) stream(ctx context.Context, run string, skip int64, whole, tee i
 				d.OnCursor(context.WithoutCancel(ctx), run, n)
 			}
 		}}
-	exit, err := call(sctx, c, w)
+	ew := &countingWriter{w: stderr}
+	exit, err := call(sctx, c, w, ew)
+	if errors.Is(err, hostd.ErrNoExit) && d.ReattachTimeout > 0 && proc.get() != "" {
+		exit, err = d.reattach(sctx, c, run, proc.get(), w, ew)
+	}
 	w.flush()
 	if errors.Is(err, hostd.ErrDetached) {
 		why := "daemon stopping"
@@ -246,6 +320,112 @@ func (d *Hostd) stream(ctx context.Context, run string, skip int64, whole, tee i
 		err = context.Cause(ctx)
 	}
 	return exit, err
+}
+
+// reattachBackoff bounds how long reattach waits between two tries at a
+// hostd that has not answered yet.
+var reattachBackoff = 5 * time.Second
+
+// reattach is stream's answer to the connection dropping under process
+// id: within ReattachTimeout of the drop, the same hostd is attached to
+// again from where stdout and stderr stood, so nothing is written twice
+// and nothing skipped; a drop after that starts the clock again. Past
+// the timeout the run fails as agent.ErrHostdLost, and the process is
+// cancelled should hostd come back after all. ctx done while waiting is
+// the daemon stopping (c.Detach, hostd.ErrDetached), or the run's own
+// cancellation, which cancels the process once hostd is back.
+func (d *Hostd) reattach(ctx context.Context, c hostd.Client, run, id string, out *cursorWriter, errOut *countingWriter) (hostd.Exit, error) {
+	lost := func() (hostd.Exit, error) {
+		d.cancelWhenBack(id)
+		return hostd.Exit{Code: -1}, fmt.Errorf("%w: %s dropped run %s's CLI (%s) at cursor %d and did not reconnect within %s",
+			agent.ErrHostdLost, d.hostdName(), run, id, out.cursor(), d.ReattachTimeout)
+	}
+	stopped := func() (hostd.Exit, error) {
+		if c.Detach != nil && c.Detach(ctx) {
+			return hostd.Exit{Code: -1}, hostd.ErrDetached
+		}
+		d.cancelWhenBack(id)
+		return hostd.Exit{Code: -1}, ctx.Err()
+	}
+	give := time.Now().Add(d.ReattachTimeout)
+	d.logf("runhost: lost %s while streaming run %s's CLI (%s) at cursor %d; it keeps running, and is re-attached if hostd is back within %s",
+		d.hostdName(), run, id, out.cursor(), d.ReattachTimeout)
+	wait := 100 * time.Millisecond
+	for {
+		if d.Reconnected != nil {
+			wctx, cancel := context.WithDeadline(ctx, give)
+			_ = d.Reconnected(wctx)
+			cancel()
+		}
+		if ctx.Err() != nil {
+			return stopped()
+		}
+		if !time.Now().Before(give) {
+			return lost()
+		}
+		actx, cancel := context.WithDeadline(ctx, give)
+		exit, _, err := c.Attach(actx, id, hostd.Cursor{Stdout: out.cursor(), Stderr: errOut.count()}, out, errOut)
+		cancel()
+		switch {
+		case err == nil, errors.Is(err, hostd.ErrDetached):
+			return exit, err
+		case ctx.Err() != nil:
+			return stopped()
+		case errors.Is(err, hostd.ErrNoExit):
+			// Re-attached, then dropped again: a new drop, a new clock.
+			give = time.Now().Add(d.ReattachTimeout)
+			d.logf("runhost: lost %s again while streaming run %s's CLI (%s) at cursor %d; waiting up to %s once more",
+				d.hostdName(), run, id, out.cursor(), d.ReattachTimeout)
+			wait = 100 * time.Millisecond
+			continue
+		}
+		var refused *hostd.RefusedError
+		if errors.As(err, &refused) {
+			// hostd answered, and has no such process to attach to: it
+			// is gone (hostd restarted without it), and so is the run.
+			return exit, fmt.Errorf("%s is back, but run %s's CLI (%s) is not: %w", d.hostdName(), run, id, err)
+		}
+		if !time.Now().Before(give) {
+			return lost()
+		}
+		select {
+		case <-ctx.Done():
+			return stopped()
+		case <-time.After(min(wait, time.Until(give))):
+		}
+		wait = min(wait*2, reattachBackoff)
+	}
+}
+
+// cancelWhenBack cancels hostd process id once hostd answers, trying for
+// ReattachTimeout and at least a minute: a run that stopped waiting for
+// it must not leave its CLI running there until the process's own
+// deadline.
+func (d *Hostd) cancelWhenBack(id string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), max(d.ReattachTimeout, time.Minute))
+		defer cancel()
+		wait := 100 * time.Millisecond
+		for {
+			if d.Reconnected != nil {
+				_ = d.Reconnected(ctx)
+			}
+			err := d.Client.Cancel(ctx, id)
+			if err == nil {
+				return
+			}
+			var refused *hostd.RefusedError
+			if errors.As(err, &refused) || ctx.Err() != nil {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+			wait = min(wait*2, reattachBackoff)
+		}
+	}()
 }
 
 // cursorWriter counts the stdout bytes a hostd stream delivers from the

@@ -179,6 +179,10 @@ var notSettings = []string{
 	// record of what happened, written after the run finished.
 	"task_run_capability_audit",
 	"task_run_startup",
+	// Which hostd each run went to (model.TaskRunHostd), and a task's own
+	// hostd pin, written with the task like task_tag.
+	"task_run_hostd",
+	"task_hostd",
 	"task_run_sandbox_key",
 	// A run's suspension (model.Suspension): grain's record of how a run
 	// stopped, written in the transaction that finished it.
@@ -403,6 +407,13 @@ var notSettings = []string{
 	// (LocalTables).
 	"hostd",
 	"hostd_token",
+	// Verified-identity sign-in access (model.AllowedPrincipal) and its
+	// one-time flag migration record: managed live in Settings -> Access
+	// and `grain access`, and intentionally kept out of `grain/config` so
+	// a bad or compromised config-repo pull request can neither lock
+	// operators out nor grant sign-in access (design/design/settings.design.md §1).
+	"allowed_principal",
+	"allowed_principal_migration",
 	// Security audit log. Dynamic runtime records, not state repo
 	// declarative settings.
 	"secret_resolution_audit",

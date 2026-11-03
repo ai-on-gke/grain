@@ -471,10 +471,32 @@ func deniesCapability(patterns []string, capability string) bool {
 	if matchesCapability(patterns, capability) {
 		return true
 	}
+	if set, ok := model.ParseGCPKeyServerGrant(capability); ok {
+		legacy := "gcp-key:" + set
+		if matchesCapability(patterns, legacy) {
+			return true
+		}
+		if set == model.GCPKeyDefaultPermissionSet && matchesCapability(patterns, "gcp-key") {
+			return true
+		}
+	}
+	unnamedGCPKey := model.GCPKeySetUnnamed(capability)
 	if to, ok := retiredAs(capability); ok {
 		capability = to
 	}
 	for _, pattern := range patterns {
+		trimmedPattern := strings.ToLower(strings.TrimSpace(pattern))
+		if strings.HasPrefix(trimmedPattern, "gcp-key:") {
+			// The server, not the policy, picks the set of a grant that
+			// names none, so any gcp-key:<set> deny may be the one it picks.
+			if unnamedGCPKey {
+				return true
+			}
+			if to, ok := retiredAs(trimmedPattern); ok && strings.EqualFold(to, strings.TrimSpace(capability)) {
+				return true
+			}
+			continue
+		}
 		if to, ok := retiredAs(pattern); ok && model.IsCapabilityRef(to) {
 			pattern = model.CapabilityGrantRef(to)
 		}
@@ -517,6 +539,18 @@ func allowsCapability(patterns []string, capability string) bool {
 		return true
 	}
 	want := strings.TrimSpace(capability)
+	if set, ok := model.ParseGCPKeyServerGrant(want); ok {
+		if set == model.GCPKeyDefaultPermissionSet {
+			if matchesCapability(patterns, "gcp-key") {
+				return true
+			}
+			if !model.GCPKeySetUnnamed(want) && matchesCapability(patterns, "gcp-key:"+set) {
+				return true
+			}
+		} else if matchesCapability(patterns, "gcp-key:"+set) {
+			return true
+		}
+	}
 	if to, ok := retiredAs(want); ok {
 		want = to
 	}

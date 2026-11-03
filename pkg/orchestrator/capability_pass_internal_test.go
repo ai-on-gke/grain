@@ -463,3 +463,60 @@ func TestAdmissionPassesTaskReviewersToWorkspaceGrant(t *testing.T) {
 		t.Errorf("workspace mint reviewers = %#v, want [alice bob]", caller.args[0]["reviewers"])
 	}
 }
+
+// hostdServers routes task 7's capability servers to the hostd ws-a, as
+// the daemon routes a pinned task's run: host servers
+// (TaskCapabilityServers), and every other task's to the default.
+type hostdServers struct {
+	oneServer
+	pinned oneServer
+}
+
+func (h hostdServers) ForTask(_ context.Context, taskID string) (CapabilityServers, string, error) {
+	if taskID == "7" {
+		return h.pinned, "ws-a", nil
+	}
+	return h.oneServer, "local", nil
+}
+
+// A task whose run is routed to another hostd mints, and releases,
+// through that hostd's servers -- not the default's -- and its run's
+// capability audit records name that hostd rather than Deps'.
+func TestAPinnedTasksPassIsMintedOnItsHostdAndItsAuditSaysSo(t *testing.T) {
+	onDefault, onPinned := &mintCaller{}, &mintCaller{releaseReply: `{"status":"ok","audit":[` +
+		`{"time":"2026-10-22T12:05:00Z","attempt_id":"grain-7-1-0","script":"deploy","argv":[],"exit_code":0}]}`}
+	deps, store, ctx, now := passHarness(t, onDefault)
+	pinnedSrv, err := protocol.NewServer(ctx, passTestCap, onPinned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps.CapabilityServers = hostdServers{oneServer: deps.CapabilityServers.(oneServer), pinned: oneServer{pinnedSrv}}
+	deps.CapabilityHostd = "local"
+	if adm, err := capabilityAdmitter(deps, admitAll)(ctx, dispatch.Candidate{TaskID: "7", RunID: "7-1", Attempt: 1}); err != nil || !adm.Admitted {
+		t.Fatalf("admit = %+v, %v", adm, err)
+	}
+	if got := onPinned.called(); len(got) != 1 || got[0] != "mint_gcp-key grain-7-1-0" {
+		t.Fatalf("ws-a's server was called %q, want the mint", got)
+	}
+	if got := onDefault.called(); len(got) != 0 {
+		t.Fatalf("the default hostd's server was called %q, want nothing", got)
+	}
+	// The run's endpoints and ports are the servers that minted its pass.
+	if srv, err := deps.capabilityPasses().heldDeps("7-1", deps).CapabilityServers.Lookup(passTestCap); err != nil || srv != pinnedSrv {
+		t.Fatalf("the run's servers look up %v, %v; want ws-a's", srv, err)
+	}
+	if err := store.StartRun(ctx, model.Run{ID: "7-1", TaskID: "7", Attempt: 1, StartedAt: *now}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	releaseRunCapabilities(ctx, deps, "7", "7-1")
+	if got := onPinned.called(); len(got) != 2 || got[1] != "release_gcp-key grain-7-1-0" {
+		t.Fatalf("ws-a's server was called %q, want the release too", got)
+	}
+	recs, ok, err := store.RunCapabilityAudit(ctx, "7", 1)
+	if err != nil || !ok || len(recs) != 1 {
+		t.Fatalf("audit = %+v, %v, %v; want the record", recs, ok, err)
+	}
+	if recs[0].Hostd != "ws-a" {
+		t.Errorf("the audit record says hostd %q, want ws-a", recs[0].Hostd)
+	}
+}

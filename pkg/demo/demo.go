@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/change"
+	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/ghwebhook"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -387,7 +388,7 @@ func Run(opts Options) error {
 	storedCfg.DefaultModel = "gemini-2.5-pro"
 	storedCfg.GCPProject = "grain-sandbox-dev"
 	storedCfg.GCPServiceAccountEmail = "grain-sb-agent-0@grain-sandbox-dev.iam.gserviceaccount.com"
-	storedCfg.DefaultCapabilities = []string{"self-debug", "gcp-key", "gemini-key"}
+	storedCfg.DefaultCapabilities = []string{"self-debug", "gemini-key"}
 	storedCfg.TargetRepos = []string{"acme/widgets"}
 	// The deployment's git connection to the fake credential above, as
 	// `grain connections import` would record it.
@@ -549,7 +550,7 @@ func Run(opts Options) error {
 		}
 	}
 	if opts.Qualification {
-		if err := seedQualificationDemo(ctx, store, repo); err != nil {
+		if err := seedQualificationDemo(ctx, store, repo, githubSimRepo); err != nil {
 			return fmt.Errorf("grain demo: -qualification: %v", err)
 		}
 	}
@@ -589,6 +590,9 @@ func Run(opts Options) error {
 		}
 	}
 	client := ui.NewClient(cfg, store)
+	if err := client.MigrateAllowedPrincipals(ctx); err != nil {
+		log.Printf("grain demo: WARNING: migrating allowed principals: %v", err)
+	}
 	if opts.ModelCatalog != "" {
 		interval := opts.ModelDiscoveryInterval
 		if interval <= 0 {
@@ -986,13 +990,36 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	}
 	batchStartedAt := ago(5 * time.Minute)
 	batchRef := model.MergeRecheckRef(deploymentID, completed.ID, "main")
+	const batchCommit = "abcdef0123456789abcdef0123456789abcdef01"
+	var batchRunID string
+	if ciStore, ok := cfg.CI.(ci.RunStore); ok {
+		batchRunID = "demo-recheck-1"
+		ciStore.Put(ci.Run{
+			ID:          batchRunID,
+			Repo:        cfg.DefaultTarget.String(),
+			Ref:         batchRef,
+			Commit:      batchCommit,
+			Event:       ci.EventPullRequest,
+			RequestedBy: "merge-recheck:" + cfg.DefaultTarget.String() + ":main",
+			StartedAt:   &batchStartedAt,
+			Jobs: []ci.JobRun{
+				{
+					JobID:        ".grain/workflows/ci.yml:test",
+					Name:         "test",
+					WorkflowPath: ".grain/workflows/ci.yml",
+					StartedAt:    &batchStartedAt,
+				},
+			},
+		})
+	}
 	if err := store.PutMergeBatch(ctx, model.MergeBatch{
 		Repo:       *cfg.DefaultTarget,
 		Branch:     "main",
 		TaskID:     completed.ID,
 		Ref:        batchRef,
 		BaseCommit: "1234567890abcdef1234567890abcdef12345678",
-		Commit:     "abcdef0123456789abcdef0123456789abcdef01",
+		Commit:     batchCommit,
+		RunID:      batchRunID,
 		StartedAt:  batchStartedAt,
 		Queued:     1,
 		Members: []model.MergeBatchMember{
@@ -1131,6 +1158,12 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	}
 	firstDone := ago(40 * time.Minute)
 	if err := store.FinishRun(ctx, firstRun, firstDone, "succeeded", "the run made 14 tool call(s)"); err != nil {
+		return fmt.Errorf("seeding a task under repair: %w", err)
+	}
+	// The hostd its host work went to (model.TaskRunHostd).
+	if err := store.RecordTaskRunHostd(ctx, model.TaskRunHostd{
+		RunID: firstRun, TaskID: repairing.ID, Hostd: "ws-a", Instance: "build-box", Owner: "dana@example.com", At: ago(48 * time.Minute),
+	}); err != nil {
 		return fmt.Errorf("seeding a task under repair: %w", err)
 	}
 	if err := store.AppendRunCapabilityAudit(ctx, firstRun, demoCapabilityAudit(repairing.ID, ago)); err != nil {
@@ -1499,6 +1532,9 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		return err
 	}
 	if err := seedDemoHostds(ctx, store); err != nil {
+		return err
+	}
+	if err := seedDemoAllowedPrincipals(ctx, store, cfg, ago); err != nil {
 		return err
 	}
 	if err := seedDemoMemory(ctx, store, cfg, ago); err != nil {
@@ -1988,13 +2024,15 @@ func syncDemoDeclarations(ctx context.Context, store *model.Store, repo model.Re
 // which is the one place in this seed that matters: the client stamps
 // UpdatedAt with the current time, and every age here is the point.
 // seedDemoHostds fills Settings -> Hostds: local, a workstation with an
-// owner and labels, and one revoked.
+// owner and labels, a runner registered with no owner (which may dial in
+// over loopback but not through IAP), and one revoked.
 func seedDemoHostds(ctx context.Context, store *model.Store) error {
 	if err := store.EnsureLocalHostd(ctx); err != nil {
 		return err
 	}
 	for _, h := range []model.Hostd{
 		{Name: "cloudtop-alice", Owner: "alice@example.com", Labels: map[string]string{"gpu": "yes", "os": "linux"}, CreatedBy: "operator"},
+		{Name: "build-runner", CreatedBy: "operator"},
 		{Name: "old-laptop", Owner: "bob@example.com", CreatedBy: "operator"},
 	} {
 		if _, _, err := store.CreateHostd(ctx, h); err != nil {
@@ -2003,6 +2041,29 @@ func seedDemoHostds(ctx context.Context, store *model.Store) error {
 	}
 	if _, err := store.RevokeHostd(ctx, "old-laptop"); err != nil {
 		return fmt.Errorf("seeding a revoked hostd: %w", err)
+	}
+	return nil
+}
+
+// seedDemoAllowedPrincipals populates Settings -> Access with a user and a
+// group when no explicit -ui-allowed-principals flag or environment variable
+// was given (so tests passing the deprecated flag still exercise its one-time
+// migration into an empty allowlist).
+func seedDemoAllowedPrincipals(ctx context.Context, store *model.Store, cfg ui.Config, ago func(time.Duration) time.Time) error {
+	if len(cfg.AllowedPrincipals) > 0 || strings.TrimSpace(os.Getenv("GRAIN_ALLOWED_PRINCIPALS")) != "" {
+		return nil
+	}
+	for _, item := range []struct {
+		entry   string
+		addedBy string
+		at      time.Time
+	}{
+		{"user:alice@example.com", "the access code", ago(48 * time.Hour)},
+		{"group:eng-oncall@example.com", "alice@example.com", ago(12 * time.Hour)},
+	} {
+		if _, _, err := store.AddAllowedPrincipal(ctx, item.entry, item.addedBy, item.at); err != nil {
+			return fmt.Errorf("seeding allowed principal %s: %w", item.entry, err)
+		}
 	}
 	return nil
 }
