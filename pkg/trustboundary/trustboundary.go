@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v11"
+const Version = "trust-boundary/v12"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -221,6 +221,25 @@ var Categories = []Category{
 		bases:       []string{"*.tf", "*.tfvars"},
 	},
 	{
+		ID: "release-promotion",
+		Description: "the person-only approval that makes a pending release official: the workflow that " +
+			"pushes vX.Y.0 and latest, the release scripts it runs, and the route that starts it",
+		RequiresHuman: true,
+		// Ahead of github-workflows, whose .github/workflows/ prefix would
+		// otherwise claim .github/workflows/promote-release.yml first: a
+		// path belongs to the first category that names it.
+		files: []string{
+			".grain/workflows/promote-release.yml", ".grain/workflows/promote.yml",
+			"scripts/release-from-trunk.sh", "scripts/release-images.sh",
+			"pkg/ui/release_approval.go",
+			// The Inbox approval of a release on GitHub Actions (gap 4):
+			// the signed record, the route that signs and dispatches it,
+			// and the check the workflow verifies it with.
+			".github/workflows/promote-release.yml", "pkg/ui/release_approval_github.go",
+			"pkg/releaseapproval/releaseapproval.go", "scripts/verify-release-approval.sh",
+		},
+	},
+	{
 		ID:          "github-workflows",
 		Description: "GitHub Actions workflows",
 		prefixes:    []string{".github/workflows/"},
@@ -258,22 +277,6 @@ var Categories = []Category{
 		// Read from the base like the triggers, so a change cannot loosen
 		// the rules judging it; once merged it judges everything after it.
 		files: []string{".grain/merge-rules.yml", ".grain/merge-rules.yaml", ".grain/sensitive.yml"},
-	},
-	{
-		ID: "release-promotion",
-		Description: "the person-only approval that makes a pending release official: the workflow that " +
-			"pushes vX.Y.0 and latest, the release scripts it runs, and the route that starts it",
-		RequiresHuman: true,
-		files: []string{
-			".grain/workflows/promote-release.yml", ".grain/workflows/promote.yml",
-			"scripts/release-from-trunk.sh", "scripts/release-images.sh",
-			"pkg/ui/release_approval.go",
-			// The Inbox approval of a release on GitHub Actions (gap 4):
-			// the signed record, the route that signs and dispatches it,
-			// and the check the workflow verifies it with.
-			".github/workflows/promote-release.yml", "pkg/ui/release_approval_github.go",
-			"pkg/releaseapproval/releaseapproval.go", "scripts/verify-release-approval.sh",
-		},
 	},
 	{
 		ID:          "grain-config",

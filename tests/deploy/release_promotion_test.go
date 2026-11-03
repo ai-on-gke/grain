@@ -106,7 +106,10 @@ func TestPromoteReleaseIsDeclaredHumanRequired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("this repository's declarations do not load: %v", err)
 	}
-	guarded := []string{promoteReleasePath, ".grain/workflows/promote.yml", "scripts/release-from-trunk.sh", "scripts/release-images.sh"}
+	guarded := []string{promoteReleasePath, ".grain/workflows/promote.yml", "scripts/release-from-trunk.sh", "scripts/release-images.sh",
+		// The Inbox approval on GitHub Actions repos (gap 4): the workflow
+		// that accepts a signed record and the script that verifies it.
+		".github/workflows/promote-release.yml", "scripts/verify-release-approval.sh"}
 	var trigger *model.PathTrigger
 	for i, tr := range decl.Triggers {
 		if tr.Name == "release-promotion" {
@@ -126,6 +129,14 @@ func TestPromoteReleaseIsDeclaredHumanRequired(t *testing.T) {
 		}
 		matches := trustboundary.Classify([]string{p})
 		if !trustboundary.RequiresHuman(matches) {
+			t.Errorf("%s is not on a human-required trust-boundary category: %+v", p, matches)
+		}
+	}
+	// The deployment side of that approval -- the route that signs and
+	// dispatches it and the record it signs -- is grain's code rather than
+	// this repository's workflow, so only the built-in list need hold it.
+	for _, p := range []string{"pkg/ui/release_approval.go", "pkg/ui/release_approval_github.go", "pkg/releaseapproval/releaseapproval.go"} {
+		if matches := trustboundary.Classify([]string{p}); !trustboundary.RequiresHuman(matches) {
 			t.Errorf("%s is not on a human-required trust-boundary category: %+v", p, matches)
 		}
 	}
