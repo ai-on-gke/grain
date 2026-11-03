@@ -16,9 +16,11 @@
 # grain hostd's installer for a machine that dials in to a grain daemon
 # (`grain hostd -server`), served by that daemon at /api/hostd/install.sh
 # (pkg/ui/hostd_install.go). Register the hostd first in Settings -> Hostds,
-# which shows its token once, then run this on the machine as root:
+# which shows its token once and the command to run on the machine as
+# root:
 #
-#   sudo sh -c "$(curl -fsSL <daemon>/api/hostd/install.sh)" grain-hostd-install --name <name>
+#   sudo sh -c "$(curl -fsSL <daemon>/api/hostd/install.sh)" grain-hostd-install \
+#     --name <name> --release <daemon's version> [--image <daemon's image>]
 #
 # and paste the token when it asks. Unattended, give the token on stdin
 # or in $GRAIN_HOSTD_TOKEN instead -- never on the command line or in the
@@ -44,8 +46,9 @@ set -eu
 set -f
 
 # Filled in by the daemon that served this script: the URL it was asked
-# for it at, its own build, and the image it runs from ("" when it does
-# not know one).
+# for it at, and -- only for a caller it trusts -- its own build and the
+# image it runs from. Anybody else's copy has them blank, and the command
+# Settings -> Hostds shows passes them as --release and --image.
 GRAIN_DAEMON_URL='@GRAIN_DAEMON_URL@'
 GRAIN_DAEMON_RELEASE='@GRAIN_DAEMON_RELEASE@'
 GRAIN_DAEMON_IMAGE='@GRAIN_DAEMON_IMAGE@'
@@ -82,7 +85,8 @@ Options:
   --image REF          the grain image to take grain out of (default: ${GRAIN_DAEMON_IMAGE:-none})
   --binary-url URL     download grain from URL instead; needs --sha256
   --sha256 HEX         the SHA-256 the downloaded binary must have
-  --any-version        accept a grain whose version is not the daemon's (${GRAIN_DAEMON_RELEASE:-unstamped})
+  --release VERSION    the daemon's version, the grain to install (default: ${GRAIN_DAEMON_RELEASE:-none})
+  --any-version        accept a grain of any version, not only the daemon's
   --iap-audience AUD   the OAuth client ID of an Identity-Aware Proxy in front of the daemon
   --ca-file PATH       a PEM CA to verify the daemon's certificate against
   --no-start           write everything but do not start grain-hostd.service
@@ -115,6 +119,7 @@ GRAIN_BIN="${GRAIN_BIN:-}"
 IMAGE="${GRAIN_IMAGE:-$GRAIN_DAEMON_IMAGE}"
 BINARY_URL="${GRAIN_BINARY_URL:-}"
 BINARY_SHA256="${GRAIN_BINARY_SHA256:-}"
+RELEASE="${GRAIN_RELEASE:-$GRAIN_DAEMON_RELEASE}"
 ANY_VERSION=0
 IAP_AUDIENCE=""
 CA_FILE=""
@@ -133,6 +138,7 @@ parse_args() {
       --image) need_arg "$1" $#; IMAGE="$2"; shift 2 ;;
       --binary-url) need_arg "$1" $#; BINARY_URL="$2"; shift 2 ;;
       --sha256) need_arg "$1" $#; BINARY_SHA256="$2"; shift 2 ;;
+      --release) need_arg "$1" $#; RELEASE="$2"; shift 2 ;;
       --any-version) ANY_VERSION=1; shift ;;
       --iap-audience) need_arg "$1" $#; IAP_AUDIENCE="$2"; shift 2 ;;
       --ca-file) need_arg "$1" $#; CA_FILE="$2"; shift 2 ;;
@@ -175,6 +181,15 @@ check_request() {
   id -u "$HOSTD_USER" >/dev/null 2>&1 || die "no user $HOSTD_USER on this machine"
   [ "$(id -u "$HOSTD_USER")" != 0 ] || die "--user $HOSTD_USER is root, and grain hostd refuses to run as root"
   HOSTD_GROUP="$(id -gn "$HOSTD_USER")"
+
+  # A version this copy was not told is not a version it may skip
+  # checking: without one, it installs nothing until it is given one.
+  if [ "$ANY_VERSION" != 1 ]; then
+    [ -n "$RELEASE" ] || die "this copy of the script does not know the daemon's version (the daemon tells only a signed-in caller): run the command Settings -> Hostds shows, which passes --release, or pass --release VERSION (or --any-version)"
+    case "$RELEASE" in
+      *[!A-Za-z0-9.+-]*) die "--release $RELEASE is not a grain version" ;;
+    esac
+  fi
 
   case "$CAPACITY" in
     "") ;;
@@ -238,15 +253,14 @@ build_of() {
 }
 
 # usable reports whether grain binary $1 is one to install: a grain hostd
-# of the daemon's version, or any grain hostd with --any-version or a
-# daemon that carries no version of its own.
+# of the daemon's version ($RELEASE), or any grain hostd with --any-version.
 usable() {
   [ -x "$1" ] || return 1
   build="$(build_of "$1")" || return 1
-  if [ "$ANY_VERSION" = 1 ] || [ -z "$GRAIN_DAEMON_RELEASE" ] || [ "$build" = "$GRAIN_DAEMON_RELEASE" ]; then
+  if [ "$ANY_VERSION" = 1 ] || [ "$build" = "$RELEASE" ]; then
     return 0
   fi
-  log "$1 is grain ${build:-(unstamped)}, not the daemon's $GRAIN_DAEMON_RELEASE"
+  log "$1 is grain ${build:-(unstamped)}, not the daemon's $RELEASE"
   return 1
 }
 
@@ -323,7 +337,7 @@ find_grain() {
     FOUND="$WORK/grain"
     return 0
   fi
-  die "found no grain ${GRAIN_DAEMON_RELEASE:-hostd} to install: name one with --grain-bin, an image with --image, or --binary-url with --sha256"
+  die "found no grain ${RELEASE:-hostd} to install: name one with --grain-bin, an image with --image, or --binary-url with --sha256"
 }
 
 install_grain() {

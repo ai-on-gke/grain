@@ -278,9 +278,13 @@ logs the email that token names, which is the owner the daemon expects.
 (Settings → Hostds shows the command when it issues a token), is served
 without the access code too: the machine fetching it holds no credential
 yet, and the script carries none. It holds the daemon's URL as the
-request reached it, its release and its image, and reads the hostd token
-on the machine itself, from stdin or `$GRAIN_HOSTD_TOKEN`
-(`--iap-audience` for a hostd that dials in through IAP).
+request reached it, and reads the hostd token on the machine itself, from
+stdin or `$GRAIN_HOSTD_TOKEN`. The daemon's release and the image it runs
+are filled in only for a caller the gate would let through elsewhere (the
+access code or its session, or an admitted identity); anybody else's copy
+leaves them blank and refuses to guess a version. The command Settings →
+Hostds shows passes them as `--release` and `--image`; add
+`--iap-audience` for a hostd that dials in through IAP.
 
 The remote executor routes that were open the same way, including the
 executor bootstrap routes (`executorBootstrapRoute`), were removed with

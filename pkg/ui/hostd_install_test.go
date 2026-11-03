@@ -22,6 +22,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
 // hostdInstallVariants are the script as the daemon serves it with
@@ -145,5 +147,73 @@ func TestHostdInstallRoute(t *testing.T) {
 		if hostdInstallRoute(r) {
 			t.Errorf("POST %s counted as the install script", target)
 		}
+	}
+}
+
+// runningImageUpgrader is an Upgrader that says only which image it runs.
+type runningImageUpgrader struct{ ref string }
+
+func (runningImageUpgrader) Start(string) error                      { return nil }
+func (runningImageUpgrader) ValidateBranch(b string) (string, error) { return b, nil }
+func (runningImageUpgrader) Status() (upgrade.Status, error)         { return upgrade.Status{}, nil }
+func (runningImageUpgrader) Mode() upgrade.Mode                      { return upgrade.ModeImage }
+func (u runningImageUpgrader) Running() (upgrade.Running, error) {
+	return upgrade.Running{Ref: u.ref}, nil
+}
+
+// TestHostdInstallScriptTellsOnlyACallerWithAccessTheImage: the script
+// answers anybody, but the daemon's release and the image it runs are
+// filled in only for a caller the daemon trusts -- an in-process one
+// here -- and left blank for a stranger, who gets them from the command
+// Settings -> Hostds shows (HostdInstall).
+func TestHostdInstallScriptTellsOnlyACallerWithAccessTheImage(t *testing.T) {
+	const image = "registry.example.com/private/grain:v1.2.3"
+	s := &Server{tasks: &Client{Config: Config{Upgrader: runningImageUpgrader{ref: image}}}}
+	for _, tc := range []struct {
+		name, from string
+		want       string
+	}{
+		{name: "stranger", from: "203.0.113.9:4242", want: "GRAIN_DAEMON_IMAGE=''"},
+		{name: "in-process", from: "", want: "GRAIN_DAEMON_IMAGE='" + image + "'"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, hostdInstallPath, nil)
+			r.RemoteAddr = tc.from
+			w := httptest.NewRecorder()
+			s.handleHostdInstallScript(w, r)
+			body := w.Body.String()
+			if !strings.Contains(body, tc.want) {
+				t.Errorf("script does not hold %s", tc.want)
+			}
+			if tc.from != "" && !strings.Contains(body, "GRAIN_DAEMON_RELEASE=''") {
+				t.Error("a stranger's script names the daemon's release")
+			}
+		})
+	}
+	if got := s.hostdInstallInfo(); got.Image != image {
+		t.Errorf("hostdInstallInfo().Image = %q, want %q", got.Image, image)
+	}
+}
+
+// TestHostdInstallScriptRefusesAnUnknownVersion: a copy of the script
+// that was not told the daemon's version installs nothing rather than
+// taking whatever grain it finds, unless told --release or --any-version.
+func TestHostdInstallScriptRefusesAnUnknownVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "install.sh")
+	if err := os.WriteFile(path, []byte(renderHostdInstallScript("https://grain.example.com", "", "")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// check_request's version check comes after the root check, so this
+	// reads the script for it rather than running it as root.
+	script, _ := os.ReadFile(path)
+	if !strings.Contains(string(script), `[ -n "$RELEASE" ] || die "this copy of the script does not know the daemon's version`) {
+		t.Error("the script no longer refuses to install without the daemon's version")
+	}
+	out, err := exec.Command("sh", path, "--help").CombinedOutput()
+	if err != nil {
+		t.Fatalf("--help: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "--release VERSION") {
+		t.Errorf("--help does not offer --release:\n%s", out)
 	}
 }

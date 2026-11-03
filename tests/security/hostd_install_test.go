@@ -28,7 +28,8 @@ import (
 // access code and no session -- the machine it installs a hostd on has
 // nothing to sign in with yet -- and what it answers holds neither the
 // access code nor any hostd's token, which the script reads on the
-// machine instead.
+// machine instead, nor the daemon's release or the image it runs, which
+// only a caller with access is told (Settings -> Hostds passes them).
 func TestHostdInstallScriptIsPublicAndHoldsNoSecret(t *testing.T) {
 	f := newRouteFixtureFor(t, true)
 	_, token, err := f.store.CreateHostd(context.Background(), model.Hostd{Name: "build-box", CreatedBy: "operator"})
@@ -50,6 +51,11 @@ func TestHostdInstallScriptIsPublicAndHoldsNoSecret(t *testing.T) {
 	}
 	if !strings.Contains(body, "GRAIN_DAEMON_URL='http://grain.example.com'") {
 		t.Error("the script does not name the daemon it was fetched from")
+	}
+	for _, blank := range []string{"GRAIN_DAEMON_RELEASE=''", "GRAIN_DAEMON_IMAGE=''"} {
+		if !strings.Contains(body, blank) {
+			t.Errorf("a caller without access was told what %s holds", strings.TrimSuffix(blank, "=''"))
+		}
 	}
 	if strings.Contains(body, token) {
 		t.Error("the install script holds a hostd's token")

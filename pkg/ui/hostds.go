@@ -62,6 +62,9 @@ type UpdateHostdRequest struct {
 type IssuedHostdToken struct {
 	Hostd model.Hostd `json:"hostd"`
 	Token string      `json:"token"`
+	// Install is what the command that installs the hostd on its machine
+	// passes /api/hostd/install.sh (HostdInstall).
+	Install *HostdInstall `json:"install,omitempty"`
 }
 
 // hostdStatuses is what Config.HostdRemote can say about the hostds
@@ -218,6 +221,7 @@ func (s *Server) handleCreateHostd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("grain hostd: registered hostd %s (owner %q)", issued.Hostd.Name, issued.Hostd.Owner)
+	issued.Install = s.hostdInstallInfo()
 	writeJSON(w, http.StatusCreated, issued)
 }
 
@@ -228,6 +232,7 @@ func (s *Server) handleRotateHostdToken(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	log.Printf("grain hostd: rotated hostd %s's token", issued.Hostd.Name)
+	issued.Install = s.hostdInstallInfo()
 	writeJSON(w, http.StatusOK, issued)
 }
 

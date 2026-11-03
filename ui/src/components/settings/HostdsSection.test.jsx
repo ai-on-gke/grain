@@ -79,7 +79,11 @@ describe("HostdsSection", () => {
     api.mockResolvedValueOnce([LOCAL]);
     render(<HostdsSection showError={vi.fn()} />);
     await screen.findByTestId("hostd-row-local");
-    api.mockResolvedValueOnce({ hostd: { name: "ws-2" }, token: "ghd_secret" });
+    api.mockResolvedValueOnce({
+      hostd: { name: "ws-2" },
+      token: "ghd_secret",
+      install: { release: "v2.3.0" },
+    });
     api.mockResolvedValueOnce([
       LOCAL,
       { ...WS, name: "ws-2", connection: null },
@@ -94,7 +98,7 @@ describe("HostdsSection", () => {
     expect(install).toHaveTextContent(
       `${window.location.origin}/api/hostd/install.sh`,
     );
-    expect(install).toHaveTextContent("--name ws-2");
+    expect(install).toHaveTextContent("--name ws-2 --release v2.3.0");
     expect(install).not.toHaveTextContent("ghd_secret");
     expect(api).toHaveBeenCalledWith("/api/hostds", {
       method: "POST",
@@ -105,8 +109,17 @@ describe("HostdsSection", () => {
 
 describe("hostd helpers", () => {
   it("builds an install command that names the daemon and not the token", () => {
-    expect(installCommand("https://grain.example.com", "ws-2")).toBe(
-      `sudo sh -c "$(curl -fsSL 'https://grain.example.com/api/hostd/install.sh')" grain-hostd-install --name ws-2`,
+    expect(
+      installCommand("https://grain.example.com", "ws-2", {
+        release: "v2.3.0",
+        image: "ghcr.io/example/grain:v2.3.0",
+      }),
+    ).toBe(
+      `sudo sh -c "$(curl -fsSL 'https://grain.example.com/api/hostd/install.sh')" grain-hostd-install --name ws-2 --release v2.3.0 --image ghcr.io/example/grain:v2.3.0`,
+    );
+    // An unstamped daemon has no version for the script to check.
+    expect(installCommand("https://grain.example.com", "ws-2", {})).toBe(
+      `sudo sh -c "$(curl -fsSL 'https://grain.example.com/api/hostd/install.sh')" grain-hostd-install --name ws-2 --any-version`,
     );
   });
 

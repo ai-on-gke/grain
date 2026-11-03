@@ -57,9 +57,14 @@ export function parseLabels(text) {
 // installCommand is the one line that installs hostd name on another
 // machine from this daemon's /api/hostd/install.sh (pkg/ui/hostd_install.sh).
 // The token is not in it: the script asks for it on the terminal, so it
-// stays out of the URL and the shell's history.
-export function installCommand(origin, name) {
-  return `sudo sh -c "$(curl -fsSL '${origin}/api/hostd/install.sh')" grain-hostd-install --name ${name}`;
+// stays out of the URL and the shell's history. The daemon's release and
+// image are (install, the issued token's HostdInstall): the script tells
+// a caller without access neither, and the machine running it has none.
+export function installCommand(origin, name, install) {
+  let cmd = `sudo sh -c "$(curl -fsSL '${origin}/api/hostd/install.sh')" grain-hostd-install --name ${name}`;
+  cmd += install?.release ? ` --release ${install.release}` : " --any-version";
+  if (install?.image) cmd += ` --image ${install.image}`;
+  return cmd;
 }
 
 // connectionText says whether a hostd is connected, as the status
@@ -188,12 +193,17 @@ export default function HostdsSection({ showError }) {
                 sx={{ mt: 0.5 }}
               >
                 <Box component="code" sx={{ flex: 1, minWidth: 0 }}>
-                  {installCommand(window.location.origin, issued.hostd.name)}
+                  {installCommand(
+                    window.location.origin,
+                    issued.hostd.name,
+                    issued.install,
+                  )}
                 </Box>
                 <CopyButton
                   text={installCommand(
                     window.location.origin,
                     issued.hostd.name,
+                    issued.install,
                   )}
                   label="Copy install command"
                 />
