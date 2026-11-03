@@ -18,7 +18,7 @@ Every normative requirement below is derived from the implementation on `main` a
 - [6. Cross-Origin and CSRF Protection](#6-cross-origin-and-csrf-protection)
 - [7. Refusal Responses and Browser Pages](#7-refusal-responses-and-browser-pages)
 - [8. `grain hostd` Connection Identity and Owner Matching](#8-grain-hostd-connection-identity-and-owner-matching)
-- [9. Diagnostic Logging of Refused Assertions](#9-diagnostic-logging-of-refused-assertions)
+- [9. Diagnostic Logging of Refused Assertions and Principals](#9-diagnostic-logging-of-refused-assertions-and-principals)
 - [10. Plaintext Identity Headers and Sandbox Isolation](#10-plaintext-identity-headers-and-sandbox-isolation)
 - [11. Requirement Traceability Summary](#11-requirement-traceability-summary)
 - [12. Sources](#12-sources)
@@ -129,7 +129,7 @@ Every normative requirement below is derived from the implementation on `main` a
    - be unconditionally refused (`403`) at request time by `checkAllowedPrincipal`, before consulting direct or `group:` entries.
 
 **Pinned by:**
-- `pkg/ui/verifier_allowlist_test.go`: `TestAllowedPrincipalsDefaultsAndCloudIdentityGroups`, `TestGCPKeyPoolAccountsAreNotAdmittedByDefault`
+- `pkg/ui/verifier_allowlist_test.go`: `TestAllowedPrincipalsDefaultsAndCloudIdentityGroups`, `TestGCPKeyPoolAccountsAreNotAdmittedByDefault`, `TestRefusedPrincipalsAreLoggedOnce`
 - `pkg/daemon/allowed_principals_test.go`: `TestCheckUIAllowedPrincipalsRefusesGCPKeyPoolAccounts`
 
 ### 3.4 Optional Cloud Identity `group:` lookup, caching, and timeouts {#AU-9}
@@ -283,17 +283,19 @@ Every normative requirement below is derived from the implementation on `main` a
 
 ---
 
-## 9. Diagnostic Logging of Refused Assertions
+## 9. Diagnostic Logging of Refused Assertions and Principals
 
-### 9.1 Bounded deduplicated logging of refused assertions {#AU-19}
+### 9.1 Bounded deduplicated logging of refused assertions and principals {#AU-19}
 
-1. When `X-Goog-IAP-JWT-Assertion` fails verification, `logRefusedAssertion` (`pkg/ui/assertion_diagnostics.go`) MUST log the unverified `iss` claim, unverified `aud` claim, configured audience(s), and verification error, deduplicating log entries by `(iss, aud, refusalKind(err))` across the nine refusal kinds (`malformed`, `signature`, `unverifiable`, `expired`, `not-yet-valid`, `issued-in-future`, `issuer`, `claim-missing`, `other`) and capping the deduplication table at `64` entries (`maxLoggedRefusedAssertions`).
+1. When `X-Goog-IAP-JWT-Assertion` fails verification, `logRefusedAssertion` (`pkg/ui/assertion_diagnostics.go`) MUST log the unverified `iss` claim, unverified `aud` claim, configured audience(s), and verification error, deduplicating log entries by `(iss, aud, refusalKind(err))` across the nine refusal kinds (`malformed`, `signature`, `unverifiable`, `expired`, `not-yet-valid`, `issued-in-future`, `issuer`, `claim-missing`, `other`) and capping the deduplication table at `64` entries (`maxLoggedRefusedAssertions`). When the unverified `aud` already matches one of the configured audiences and `refusalKind(err) != "issuer"`, the log line MUST note that the audience is this deployment's own rather than instructing the operator to change `-ui-iap-audience`.
 2. Raw JWT strings and cryptographic signatures MUST NOT be written to logs.
 3. If `X-Goog-IAP-JWT-Assertion` is present on a request when `IAPConfig.Enabled()` is `false`, the server MUST log a one-time warning naming `-ui-iap-audience`.
 4. When a non-IAP `IdentityVerifier` fails verification, `logRefusedVerifierHeader` MUST log the failure at most once per `(verifier.Name(), header)` pair, capped at `64` entries.
+5. When `checkAllowedPrincipal` refuses a verified caller (`403`), `logRefusedPrincipal` (`pkg/ui/allowlist.go`) MUST log the refusal at most once per `(normalizeIdentityEmail(id.Email), isGCPKeyPool)` up to `64` entries, emitting a dedicated warning naming `iap_members` and key rotation when `id` is a `gcp-key` sandbox pool account.
 
 **Pinned by:**
-- `pkg/ui/refused_assertion_log_test.go`: `TestRefusedAssertionLoggedOncePerKindNotOncePerAudience`
+- `pkg/ui/refused_assertion_log_test.go`: `TestRefusedAssertionLoggedOncePerKindNotOncePerAudience`, `TestRefusedAssertionForOwnAudienceDoesNotSayToSetTheAudience`
+- `pkg/ui/verifier_allowlist_test.go`: `TestRefusedPrincipalsAreLoggedOnce`
 - **Untested:** Saturation behaviour past `maxLoggedRefusedAssertions` (`64`), the one-time warning when `X-Goog-IAP-JWT-Assertion` arrives with no audience configured, and `logRefusedVerifierHeader` deduplication for non-IAP verifiers.
 
 ---
@@ -344,7 +346,7 @@ Every normative requirement below is derived from the implementation on `main` a
 | `AU-16` | `401` `"Sign-in could not be verified"` and `"Sign in through IAP"` pages | Implemented | `TestUnverifiedAssertionGetsAPageForABrowserAndJSONForTheAPI`, `TestRequireIAPRefusesTheAccessCodeOverTheNetwork` |
 | `AU-17` | Local vs remote `hostd` classification and allowlist gate | Implemented | `TestRemoteHostdMustConnectAsItsOwner`, `TestHostdConnectEndpoint`, `TestASingleTenantDaemonAcceptsARemoteHostd` |
 | `AU-18` | `X-Grain-Hostd-Token`, `IAPTokenProvider`, and remote owner match | Implemented | `TestOwnerRefusal`, `TestRemoteHostdMustConnectAsItsOwner`, `TestRemoteSharedTokenHostdMustConnectAsItsOwner`, `TestHostdRegistryRoutes`, `TestHostdsRegisterAndSetOwner`, `TestIAPTokenProviderFromMetadataServer` |
-| `AU-19` | Bounded deduplicated logging of refused assertions | Implemented | `TestRefusedAssertionLoggedOncePerKindNotOncePerAudience` (*64-cap saturation, unconfigured-audience warning, and `logRefusedVerifierHeader` untested*) |
+| `AU-19` | Bounded deduplicated logging of refused assertions and principals | Implemented | `TestRefusedAssertionLoggedOncePerKindNotOncePerAudience`, `TestRefusedAssertionForOwnAudienceDoesNotSayToSetTheAudience`, `TestRefusedPrincipalsAreLoggedOnce` (*64-cap saturation, unconfigured-audience warning, and `logRefusedVerifierHeader` untested*) |
 | `AU-20` | Plaintext identity headers never trusted | Implemented | `TestExtractPrincipalNamesNobodyFromAnIdentityHeader`, `TestPlaintextIdentityHeadersIgnoredFromUntrustedSource`, `TestIAPModeIgnoresPlaintextIdentityHeaders`, `TestASingleTenantDaemonRefusesWhoeverAProxyNames` (*`logIgnoredIdentityHeader` dedup untested*) |
 | `AU-21` | In-sandbox listeners isolated from proxy assertions | Implemented | `TestGitProxyScopesEachSandboxToItsOwnRepositories`, `TestSandboxGrainLogReadIsAuditedAsItsTask`, `TestSandboxTokenMintedAfterGitProxyStartsAuthenticates` |
 
@@ -353,6 +355,6 @@ Every normative requirement below is derived from the implementation on `main` a
 ## 12. Sources
 
 - Design document: [`design/design/authentication.design.md`](../../design/authentication.design.md)
-- Companion designs & specs: [`design/design/operator-attribution.design.md`](../../design/operator-attribution.design.md), [`design/spec/operator-attribution/operator-attribution.spec.md`](../operator-attribution/operator-attribution.spec.md), [`design/design/registry.design.md`](../../design/registry.design.md), [`docs/access-code.md`](../../../docs/access-code.md)
-- Walkthrough evidence: [`docs/test-runs/2026-11-02-verified-identity.md`](../../../docs/test-runs/2026-11-02-verified-identity.md), [`docs/test-runs/2026-11-02-iap-end-to-end.md`](../../../docs/test-runs/2026-11-02-iap-end-to-end.md)
+- Companion designs & specs: [`design/design/operator-attribution.design.md`](../../design/operator-attribution.design.md), [`design/spec/operator-attribution/operator-attribution.spec.md`](../operator-attribution/operator-attribution.spec.md), [`design/design/registry.design.md`](../../design/registry.design.md), [`design/design/simple-config.design.md`](../../design/simple-config.design.md), [`docs/access-code.md`](../../../docs/access-code.md)
+- Walkthrough evidence: [`docs/test-runs/2026-11-02-verified-identity.md`](../../../docs/test-runs/2026-11-02-verified-identity.md), [`docs/test-runs/2026-11-02-iap-end-to-end.md`](../../../docs/test-runs/2026-11-02-iap-end-to-end.md), [`docs/test-runs/2026-11-03-iap-deployment.md`](../../../docs/test-runs/2026-11-03-iap-deployment.md)
 - Implementation packages: `pkg/ui` (`verifier.go`, `principal.go`, `assertion_diagnostics.go`, `allowlist.go`, `accesscode.go`, `csrf.go`, `principalrefusal.go`, `auth.go`, `server.go`, `request_actor.go`, `principal_label.go`, `external_agents.go`, `httpclient.go`, `hostd_connect.go`, `hostds.go`), `pkg/model/task.go`, `pkg/hostd` (`connect_identity.go`, `remote.go`, `dialout.go`, `iap_auth.go`), `pkg/daemon/ui_server.go`, `pkg/cli` (`daemon.go`, `cliconn.go`, `accesscode.go`, `hostd.go`, `hostds.go`)
