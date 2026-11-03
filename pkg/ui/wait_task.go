@@ -74,7 +74,7 @@ func (c *Client) WaitOn(ctx context.Context, id string, ids []string, park bool)
 	}
 	targets := make([]model.WaitTarget, 0, len(links))
 	for _, l := range links {
-		target, err := c.Store.WaitTargetOf(ctx, l.Target)
+		target, err := c.Store.WaitTargetAt(ctx, l.Target, c.now())
 		if err != nil {
 			return nil, err
 		}
