@@ -212,6 +212,10 @@ const (
 	// FamilyRepairFailing is a base-branch repair that is not getting
 	// the branch green, "<task>".
 	FamilyRepairFailing = "pipeline.repair-failing"
+	// FamilyStateRepoUnapplied is a configuration-repository commit the
+	// daemon could not apply across a schema migration and had to rewrite
+	// over, "<prior-head>".
+	FamilyStateRepoUnapplied = "pipeline.staterepo-unapplied"
 	// FamilyForceMergeRequest asks a person to force-merge "<task>".
 	FamilyForceMergeRequest = "request.force-merge"
 	// FamilyRevertRequest asks a person to revert "<task or sha>".

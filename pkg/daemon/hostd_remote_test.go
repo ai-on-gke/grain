@@ -49,7 +49,13 @@ func startDialingHostd(t *testing.T, url, token, allowlist string) {
 		t.Skipf("no shell: %v", err)
 	}
 	sh, _ = filepath.EvalSymlinks(sh)
-	dir := t.TempDir()
+	// Not t.TempDir: a test that leaves a detached process running on a
+	// disconnected hostd can race its exit.json write against RemoveAll.
+	dir, err := os.MkdirTemp("", "hostd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
 	allow := filepath.Join(dir, "hostd.yaml")
 	if err := os.WriteFile(allow, []byte(fmt.Sprintf(allowlist, sh, dir)), 0o644); err != nil {
 		t.Fatal(err)
@@ -66,26 +72,7 @@ func startDialingHostd(t *testing.T, url, token, allowlist string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { srv.Serve(ctx); close(done) }()
-	t.Cleanup(func() {
-		cancel()
-		<-done
-		// Detached process reaper goroutines write exit.json under StateDir
-		// after Serve returns; wait for them before t.TempDir's RemoveAll.
-		deadline := time.Now().Add(10 * time.Second)
-		for time.Now().Before(deadline) {
-			exited := true
-			for _, p := range srv.Processes() {
-				if !p.Exited {
-					exited = false
-					break
-				}
-			}
-			if exited {
-				return
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-	})
+	t.Cleanup(func() { cancel(); <-done })
 }
 
 // A daemon on Kubernetes has no host of its own, but one taking a hostd

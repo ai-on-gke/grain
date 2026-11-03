@@ -151,8 +151,20 @@ func TestADetachedProcessIsKilledAtItsOwnDeadlineWhileNoDaemonIsAttached(t *test
 	cancel()
 	<-done
 	waitGone(t, st.PID, 10*time.Second)
-	p := listed(t, ts, st.ID)
-	if !p.Exited || p.Exit == nil || !p.Exit.Deadline {
+	// waitGone sees the zombie in /proc before hostd's cmd.Wait goroutine
+	// writes exit.json and records Exited; poll listed as the restart test
+	// below does.
+	var p Process
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		p = listed(t, ts, st.ID)
+		if p.Exited {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("listing 5s after pid %d exited = %+v, want Exited", st.PID, p)
+		}
+	}
+	if p.Exit == nil || !p.Exit.Deadline {
 		t.Fatalf("listing after the deadline = %+v, want exited at its deadline", p)
 	}
 	// exit.json is a run host's: code, error, finished_at.
