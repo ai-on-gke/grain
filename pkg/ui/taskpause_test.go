@@ -134,8 +134,8 @@ func TestPauseAndResumeRestoreEachStateExactly(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if view.Paused == nil || view.Paused.By != "alice" || view.Paused.FromState != before.State || view.Stall != "" {
-				t.Fatalf("the paused task's view = paused %+v, stall %q; want paused by alice from %s, no stall",
+			if view.Paused == nil || view.Paused.By != "operator (local)" || view.Paused.FromState != before.State || view.Stall != "" {
+				t.Fatalf("the paused task's view = paused %+v, stall %q; want paused by operator (local) (the in-process caller, PrincipalLabel) from %s, no stall",
 					view.Paused, view.Stall, before.State)
 			}
 			if ready, _ := store.IsReady(ctx, id); ready {
