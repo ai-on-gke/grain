@@ -436,7 +436,10 @@ import "strconv"
 // selector), `task_run_hostd` (the hostd, instance and owner each run
 // went to) and a `hostd` column on `task_run_capability_audit`, ” for
 // every record written before.
-const SchemaVersion = 93
+//
+// 94 adds `hostd` to `template` (model.Template.Hostd): the hostd pin or
+// label selector every task filed from it starts with.
+const SchemaVersion = 94
 
 // configAuditTable is the `config_audit` table: one row per change to the
 // deployment's configuration somebody made (model.ConfigAuditEntry,
@@ -1827,6 +1830,7 @@ var Tables = []string{
   ` + "`reviewers`" + `          TEXT NOT NULL DEFAULT '',
   ` + "`priority`" + `           INTEGER NOT NULL DEFAULT 0,
   ` + "`keep_running`" + `       INTEGER NOT NULL DEFAULT 0,
+  ` + "`hostd`" + `              TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

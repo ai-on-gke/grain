@@ -56,7 +56,10 @@ const capabilityServerPrincipal = "capability-servers"
 //
 // A stdio server set to run: host is started through grain hostd where
 // that is this deployment's host executor (hostdClient non-nil,
-// Config.capabilityHostd), and refused anywhere else.
+// Config.capabilityHostd), and refused anywhere else. A run routed to
+// another hostd has its run: host servers started there instead, through
+// the hostdCapabilityServers returned beside the registry, which
+// LiveConfig.Refresh keeps in step with it.
 //
 // The first configuration is handed over from the stored row here; after
 // that LiveConfig.Refresh hands over each one it reads, so a merged
@@ -67,7 +70,7 @@ const capabilityServerPrincipal = "capability-servers"
 // gcpPool is the accounts the in-process gcp-key provider mints from
 // (gcpkey.PoolEmails of the deployment's gcp settings): Test on a gcp
 // server warns when one of its permission sets shares them.
-func startCapabilityServers(ctx context.Context, store *model.Store, secretStore *secrets.Store, dataDir string, hostdClient *hostd.Client, gcpPool []string) *servers.Registry {
+func startCapabilityServers(ctx context.Context, store *model.Store, secretStore *secrets.Store, dataDir string, hostdClient *hostd.Client, gcpPool []string) (*servers.Registry, *hostdCapabilityServers) {
 	var lookup func(name string) (string, bool)
 	if secretStore != nil {
 		auditCtx := secrets.WithPrincipal(context.Background(), capabilityServerPrincipal)
@@ -102,6 +105,7 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 		opts.Managed = secretStore
 	}
 	reg := servers.New(opts)
+	onHostd := newHostdCapabilityServers(ctx, reg, opts, store)
 	if store != nil {
 		if stored, err := store.GetConfig(ctx); err != nil {
 			log.Printf("grain daemon: reading capability servers: %v", err)
@@ -110,7 +114,9 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 			if stored != nil {
 				configured = stored.MCPServers
 			}
-			reg.Update(registerBuiltinCapabilityServers(ctx, store, dataDir, configured))
+			configured = registerBuiltinCapabilityServers(ctx, store, dataDir, configured)
+			reg.Update(configured)
+			onHostd.update(configured)
 		}
 	}
 	go reg.Run(ctx, 0)
@@ -128,7 +134,7 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 		// for the task view's presubmit badge (changelists.md §3).
 		go orchestrator.PollChanges(ctx, store)
 	}
-	return reg
+	return reg, onHostd
 }
 
 // registerBuiltinCapabilityServers is configured with an entry for every
@@ -189,8 +195,13 @@ func capabilityServerStatuses(live *LiveConfig) ui.CapabilityServerStatuses {
 // capabilityServerLookup is live's registry as admission mints through
 // it: a nil interface, not a typed nil, when there is none.
 func capabilityServerLookup(live *LiveConfig) orchestrator.CapabilityServers {
-	if reg := live.CapabilityServers(); reg != nil {
-		return reg
+	reg := live.CapabilityServers()
+	if reg == nil {
+		return nil
 	}
-	return nil
+	// Each run's run: host servers on the hostd it is routed to.
+	if live.hostdCapabilityServers != nil {
+		return live.hostdCapabilityServers
+	}
+	return reg
 }

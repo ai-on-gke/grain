@@ -668,7 +668,11 @@ export default function Actions({ t, config, act, onOpenTask }) {
             Force merge
           </Button>
         )}
-      {t.state === "failed" && (
+      {/* Retry also resumes a turn an operator stopped (ui.Client.Retry),
+          which is what the stopped task's status line and its merge-queue
+          row ("reply or press Retry to resume") offer. */}
+      {(t.state === "failed" ||
+        (t.state === "awaiting_reply" && t.turnStopped)) && (
         <Button
           variant="contained"
           onClick={() =>

@@ -281,13 +281,13 @@ type Config struct {
 	// flushes and reports nothing -- without one.
 	runHostUpgrade *runHostUpgrade
 	// hostdRuns drives runs' host CLIs through grain hostd, detached
-	// (hostdruns.go): set by run() where the host executor is hostd, nil
-	// -- every host CLI a plain start -- elsewhere.
+	// (hostdruns.go): the host executor's hostd's, set by run() where the
+	// host executor is hostd and by hostdRoute.apply for a pinned run,
+	// nil -- every host CLI a plain start -- elsewhere.
 	hostdRuns *runhost.Hostd
-	// pinnedHostdRuns builds hostdRuns for a run routed to a hostd other
-	// than the default (hostdRoute.apply, newPinnedHostdRuns): set by
-	// run(), nil -- every such CLI a plain start -- elsewhere.
-	pinnedHostdRuns func(HostExecutor) *runhost.Hostd
+	// hostdRunSet is every hostd's hostdRuns, by name (newHostdRuns):
+	// set by run(), nil outside it.
+	hostdRunSet *hostdRunSet
 	// shuttingDown is set once run()'s context is cancelled: the process
 	// is draining and its API is about to stop answering. GET
 	// /api/config reports it as restarting. nil outside run().
