@@ -520,3 +520,81 @@ func TestAPinnedTasksPassIsMintedOnItsHostdAndItsAuditSaysSo(t *testing.T) {
 		t.Errorf("the audit record says hostd %q, want ws-a", recs[0].Hostd)
 	}
 }
+
+// downableServer is oneServer that can be taken out of use, the way the
+// registry refuses a server that is needs-config.
+type downableServer struct {
+	oneServer
+	down bool
+}
+
+func (d *downableServer) Lookup(id string) (*protocol.Server, error) {
+	if d.down {
+		return nil, &protocol.RefusedError{Reason: "capability server " + id + " needs configuring"}
+	}
+	return d.oneServer.Lookup(id)
+}
+
+// A grant whose release finds its server needs-config is kept, not
+// dropped for the reaper, and released once the server attaches again
+// (2026-11-03: a gcp key left behind by a rejected config save).
+func TestAReleaseThatFindsItsServerOutOfUseIsRetriedOnceItIsBack(t *testing.T) {
+	caller := &mintCaller{releaseReply: `{"status":"ok","audit":[` +
+		`{"time":"2026-10-22T12:05:00Z","attempt_id":"grain-7-1-0","script":"deploy"}]}`}
+	deps, store, ctx, now := passHarness(t, caller)
+	srv := &downableServer{oneServer: deps.CapabilityServers.(oneServer)}
+	deps.CapabilityServers = srv
+	deps.CapabilityPasses.now = func() time.Time { return *now }
+	if adm, err := capabilityAdmitter(deps, admitAll)(ctx, dispatch.Candidate{TaskID: "7", RunID: "7-1", Attempt: 1}); err != nil || !adm.Admitted {
+		t.Fatalf("admit = %+v, %v", adm, err)
+	}
+	if err := store.StartRun(ctx, model.Run{ID: "7-1", TaskID: "7", Attempt: 1, StartedAt: *now}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+
+	srv.down = true
+	releaseRunCapabilities(ctx, deps, "7", "7-1")
+	if got := caller.called(); len(got) != 1 {
+		t.Fatalf("calls = %q, want no release while the server is out of use", got)
+	}
+	// Still out of use: kept again, not released.
+	if got := deps.CapabilityPasses.RetryReleases(ctx); len(got) != 0 {
+		t.Errorf("retry while still down returned %v", got)
+	}
+
+	srv.down = false
+	got := deps.CapabilityPasses.RetryReleases(ctx)
+	if calls := caller.called(); len(calls) != 2 || calls[1] != "release_gcp-key grain-7-1-0" {
+		t.Fatalf("calls = %q, want the kept grant released once the server is back", calls)
+	}
+	if len(got["7-1"].Audits) != 1 {
+		t.Errorf("retried release returned %+v, want its audit", got)
+	}
+	// Released once: nothing is kept for another retry.
+	deps.CapabilityPasses.RetryReleases(ctx)
+	if calls := caller.called(); len(calls) != 2 {
+		t.Errorf("calls = %q, want no second release", calls)
+	}
+}
+
+// A kept grant whose lease has run out is the reaper's: it is dropped
+// rather than released late.
+func TestAKeptReleasePastItsDeadlineIsLeftToTheReaper(t *testing.T) {
+	caller := &mintCaller{}
+	deps, _, ctx, now := passHarness(t, caller)
+	srv := &downableServer{oneServer: deps.CapabilityServers.(oneServer)}
+	deps.CapabilityServers = srv
+	deps.CapabilityPasses.now = func() time.Time { return *now }
+	if adm, err := capabilityAdmitter(deps, admitAll)(ctx, dispatch.Candidate{TaskID: "7", RunID: "7-1", Attempt: 1}); err != nil || !adm.Admitted {
+		t.Fatalf("admit = %+v, %v", adm, err)
+	}
+	srv.down = true
+	deps.CapabilityPasses.Release(ctx, "7-1")
+	*now = now.Add(48 * time.Hour)
+	deps.CapabilityPasses.RetryReleases(ctx)
+	srv.down = false
+	deps.CapabilityPasses.RetryReleases(ctx)
+	if calls := caller.called(); len(calls) != 1 {
+		t.Errorf("calls = %q, want a grant past its deadline never released late", calls)
+	}
+}

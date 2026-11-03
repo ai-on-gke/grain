@@ -86,6 +86,14 @@ type CapabilityPasses struct {
 	mu      sync.Mutex
 	passes  map[string]*heldPass
 	backoff map[string]*passBackoff
+	// unreleased are the grants of ended runs whose release could not
+	// reach their server -- needs-config or failed -- by run id, kept to
+	// be released once it attaches again (RetryReleases) rather than
+	// left to the server's reaper.
+	unreleased map[string]*heldPass
+	// now is the clock unreleased grants' deadlines are read against;
+	// nil is time.Now.
+	now func() time.Time
 }
 
 type heldPass struct {
@@ -106,7 +114,7 @@ type passBackoff struct {
 
 // NewCapabilityPasses returns an empty holder.
 func NewCapabilityPasses() *CapabilityPasses {
-	return &CapabilityPasses{passes: map[string]*heldPass{}, backoff: map[string]*passBackoff{}}
+	return &CapabilityPasses{passes: map[string]*heldPass{}, backoff: map[string]*passBackoff{}, unreleased: map[string]*heldPass{}}
 }
 
 // defaultCapabilityPasses serves a Deps that names none.
@@ -147,11 +155,99 @@ func (h *CapabilityPasses) release(ctx context.Context, runID string) ([]protoco
 	if held == nil {
 		return nil, ""
 	}
-	audits, err := held.pass.Release(ctx)
+	audits, rest, err := held.pass.ReleaseReachable(ctx)
 	if err != nil {
 		log.Printf("orchestrator: run %s: releasing its capability grants: %v", runID, err)
 	}
+	h.keepUnreleased(runID, held, rest, h.clock())
 	return audits, held.hostd
+}
+
+func (h *CapabilityPasses) clock() time.Time {
+	if h.now != nil {
+		return h.now()
+	}
+	return time.Now()
+}
+
+// keepUnreleased keeps rest, the grants of runID's pass that release
+// could not reach, for RetryReleases -- or, once the pass's deadline has
+// passed and the server's own reaper has them, says so and drops them.
+func (h *CapabilityPasses) keepUnreleased(runID string, held *heldPass, rest *protocol.Pass, now time.Time) {
+	if rest == nil {
+		return
+	}
+	grants := make([]string, 0, len(rest.Grants))
+	for _, g := range rest.Grants {
+		grants = append(grants, fmt.Sprintf("%s (%s)", g.Ref, g.AttemptID))
+	}
+	if !held.deadline.IsZero() && !now.Before(held.deadline) {
+		log.Printf("orchestrator: run %s: grants %s were never released: their server is not attached and their lease has run out, so they wait on its reaper",
+			runID, strings.Join(grants, ", "))
+		return
+	}
+	log.Printf("orchestrator: run %s: grants %s could not be released while their server is not attached: kept, to be released when it attaches again (else by its reaper after %s)",
+		runID, strings.Join(grants, ", "), held.deadline.UTC().Format(time.RFC3339))
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.unreleased[runID] = &heldPass{pass: rest, deadline: held.deadline, servers: held.servers, hostd: held.hostd}
+}
+
+// RetryReleases releases again every pass kept because its server was
+// not attached when its run ended (keepUnreleased) -- called when a
+// capability server attaches -- and returns, by run id, the audits the
+// releases that now went through returned. Grants still unreachable are
+// kept for the next call, until their deadline hands them to the reaper.
+func (h *CapabilityPasses) RetryReleases(ctx context.Context) map[string]RetriedRelease {
+	h.mu.Lock()
+	pending := h.unreleased
+	h.unreleased = map[string]*heldPass{}
+	h.mu.Unlock()
+	out := map[string]RetriedRelease{}
+	for runID, held := range pending {
+		audits, rest, err := held.pass.ReleaseReachable(ctx)
+		if err != nil {
+			log.Printf("orchestrator: run %s: releasing its kept capability grants again: %v", runID, err)
+		}
+		released := len(held.pass.Grants)
+		if rest != nil {
+			released -= len(rest.Grants)
+		}
+		if released > 0 {
+			log.Printf("orchestrator: run %s: released %d kept capability grant(s) now that their server is attached", runID, released)
+		}
+		h.keepUnreleased(runID, held, rest, h.clock())
+		if len(audits) > 0 {
+			out[runID] = RetriedRelease{Audits: audits, Hostd: held.hostd}
+		}
+	}
+	return out
+}
+
+// RetriedRelease is what one run's kept grants returned when
+// RetryReleases released them.
+type RetriedRelease struct {
+	Audits []protocol.GrantAudit
+	Hostd  string
+}
+
+// RetryCapabilityReleases is RetryReleases on the passes of a daemon
+// whose Deps name no holder of their own, recording each run's audit the
+// way releaseRunCapabilities does. The daemon calls it whenever a
+// capability server attaches.
+func RetryCapabilityReleases(ctx context.Context, store *model.Store) {
+	for runID, r := range defaultCapabilityPasses.RetryReleases(ctx) {
+		records := capabilityAuditRecords(r.Audits, time.Now())
+		if len(records) == 0 || store == nil {
+			continue
+		}
+		for i := range records {
+			records[i].Hostd = r.Hostd
+		}
+		if err := store.AppendRunCapabilityAudit(ctx, runID, records); err != nil {
+			log.Printf("orchestrator: run %s: recording its capability audit: %v", runID, err)
+		}
+	}
 }
 
 // releaseRunCapabilities releases the pass runID ran with and records

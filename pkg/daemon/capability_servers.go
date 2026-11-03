@@ -98,7 +98,14 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 		// A server that falls out of use says so where people look, not
 		// only in this log: the 2026-11-03 role-ceiling refusal sat in
 		// needs-config with nobody told.
-		opts.OnDrop, opts.OnAttach = capabilityServerAlerts(ctx, store)
+		var clearDrop func(string)
+		opts.OnDrop, clearDrop = capabilityServerAlerts(ctx, store)
+		opts.OnAttach = func(id string) {
+			clearDrop(id)
+			// Grants whose release found their server out of use are
+			// released now it is back (orchestrator.CapabilityPasses).
+			go orchestrator.RetryCapabilityReleases(ctx, store)
+		}
 		// A server declaring grain's identity fields is sent the same
 		// deployment id the branch names carry (§4.5.7).
 		opts.Identity = servers.StoreIdentity(store, logf)
