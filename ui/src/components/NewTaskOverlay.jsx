@@ -2068,6 +2068,10 @@ export default function NewTaskOverlay({
       margin="normal"
       size="small"
       value={hostd}
+      // Left empty, a task filed from a template takes the template's
+      // hostd (ui.Client.fromTemplate), so the box says which.
+      placeholder={pickedTemplate?.hostd || undefined}
+      InputLabelProps={pickedTemplate?.hostd ? { shrink: true } : undefined}
       onChange={(e) => edit("hostd", setHostd)(e.target.value)}
     />
   );

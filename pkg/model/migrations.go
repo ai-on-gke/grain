@@ -639,6 +639,13 @@ var Migrations = []Migration{
 			"ALTER TABLE `task_run_capability_audit` ADD COLUMN `hostd` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     94,
+		Description: "add the hostd selector a template's tasks start pinned to",
+		Statements: []string{
+			"ALTER TABLE `template` ADD COLUMN `hostd` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // principalSourceColumns are migration 91's ALTERs: `<p>_source` beside

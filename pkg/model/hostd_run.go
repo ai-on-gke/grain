@@ -108,6 +108,20 @@ func (s *Store) SetTaskHostd(ctx context.Context, taskID, selector string) error
 	})
 }
 
+// putTaskHostd is SetTaskHostd inside a transaction that is filing the
+// task, for a filing whose composition carries a pin (Composition.Hostd);
+// "" writes nothing.
+func putTaskHostd(ctx context.Context, tx *sql.Tx, taskID, selector string) error {
+	selector, err := NormalizeHostdSelector(selector)
+	if err != nil || selector == "" {
+		return err
+	}
+	_, err = tx.ExecContext(ctx,
+		"REPLACE INTO `task_hostd` (`task_id`,`selector`,`updated_at`) VALUES (?,?,?)",
+		taskID, selector, time.Now().UTC())
+	return err
+}
+
 // TaskHostd is taskID's hostd selector, "" for the default hostd.
 func (s *Store) TaskHostd(ctx context.Context, taskID string) (string, error) {
 	var selector string
