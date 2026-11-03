@@ -51,12 +51,14 @@ var (
 )
 
 // hostdInstallRoute reports whether r asks for the install script. It
-// is grain's own script and the URL it was asked for at -- the daemon's
-// build and the image it runs, which GET /api/config already tells
-// anybody, and never a token or the access code -- so like a hostd
-// dialing in (hostdConnectRoute) it does not ask who the caller is: the
-// machine fetching it has nothing to sign in with until it holds its
-// hostd token.
+// is grain's own script, the URL it was asked for at, the daemon's
+// release and the image it runs -- never a token or the access code --
+// so like a hostd dialing in (hostdConnectRoute) it does not ask who the
+// caller is: the machine fetching it has nothing to sign in with until
+// it holds its hostd token. That does tell a caller nobody has vouched
+// for more than GET /api/config does: /api/config carries the release
+// but never the image, and a single-tenant daemon gates /api/config
+// behind its access code, where this route tells anybody both.
 func hostdInstallRoute(r *http.Request) bool {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false
