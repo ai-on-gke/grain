@@ -124,7 +124,8 @@ export function releaseActionReasons({
 // reload, Back, or a link somebody sent opens the release that was on
 // screen rather than whichever is newest. A pane opened without one shows
 // the newest and leaves the address alone. One naming a release this
-// repo does not have shows the newest too, and calls
+// repo does not have shows the newest too, says so in place above the
+// picker until another release is picked, and calls
 // onSelectRelease(null, name) so the address stops naming it.
 export default function RepoReleases({
   repo,
@@ -164,6 +165,13 @@ export default function RepoReleases({
   // of "Loading releases…" when there is nothing loaded to show instead.
   // The poll keeps retrying, and the next read that lands clears it.
   const [loadError, setLoadError] = useState(null);
+  // missingRelease is a release the address named that this repo does
+  // not have. The pane falls back to the newest and the address drops
+  // the name, so without this notice a stale bookmark or a deleted
+  // release's link read as the release on screen
+  // (docs/test-runs/2026-11-03-repository-release-memory-ui.md, 4). It
+  // stays until the reader dismisses it or picks a release.
+  const [missingRelease, setMissingRelease] = useState(null);
   const polling = useRef(false);
   const refreshSeq = useRef(0);
   const selectedRef = useRef(release);
@@ -206,6 +214,7 @@ export default function RepoReleases({
       if (asked && current !== asked) {
         shownRelease.current = null;
         if (fromUrl) {
+          setMissingRelease(asked);
           onSelectReleaseRef.current(null, asked);
         } else {
           onSelectReleaseRef.current(null);
@@ -247,6 +256,7 @@ export default function RepoReleases({
   useEffect(() => {
     if (shownRelease.current === release) return;
     shownRelease.current = release;
+    setMissingRelease(null);
     if (release !== null && release === selectedRef.current) return;
     urlReleaseRef.current = release;
     const next = release ?? releasesRef.current?.[0]?.name ?? null;
@@ -299,6 +309,7 @@ export default function RepoReleases({
         body: JSON.stringify({ name: releaseName }),
       });
       setCreateRefusal("");
+      setMissingRelease(null);
       form.reset();
       selectedRef.current = created.name;
       setSelected(created.name);
@@ -532,6 +543,19 @@ export default function RepoReleases({
           </Alert>
         ))}
 
+        {missingRelease !== null && (
+          <Alert
+            severity="warning"
+            sx={{ mt: 1, overflowWrap: "anywhere" }}
+            onClose={() => setMissingRelease(null)}
+          >
+            {repo} has no release named &ldquo;{missingRelease}&rdquo;
+            {current
+              ? ` -- showing ${current.name} instead. The link may be stale, or the release deleted; pick another below.`
+              : " -- the link may be stale, or the release deleted."}
+          </Alert>
+        )}
+
         {creationRefused ? (
           <Alert severity="warning" sx={{ mt: 1 }}>
             {creation.reason}
@@ -589,6 +613,7 @@ export default function RepoReleases({
               onChange={(e) => {
                 selectedRef.current = e.target.value;
                 setSelected(e.target.value);
+                setMissingRelease(null);
                 onSelectRelease(e.target.value);
                 refresh();
               }}

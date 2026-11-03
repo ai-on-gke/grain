@@ -147,8 +147,9 @@ func registryResolver(store *model.Store) func(ctx context.Context, token string
 }
 
 // HostdSelector says which hostd a piece of host work goes to: Name pins
-// one hostd; Labels select any hostd carrying every one of them (the
-// registry's labels and its allowlist's, merged); neither is the
+// one hostd; Labels select any hostd whose registry row carries every
+// one of them (never the labels a hostd's allowlist asserts about
+// itself, which are for display); neither is the
 // default hostd -- local, or the deprecated shared token's hostd on a
 // daemon configured with one.
 type HostdSelector struct {
@@ -207,8 +208,8 @@ func (c Config) DefaultHostd() string {
 	return model.LocalHostd
 }
 
-// hostdLabelsTimeout bounds asking a connected hostd for its allowlist's
-// labels while selecting one.
+// hostdLabelsTimeout bounds asking a connected hostd for its hello (its
+// capacity, for holding runs to it).
 const hostdLabelsTimeout = 2 * time.Second
 
 // SelectHostd is the host executor sel routes host work to, and that
@@ -238,22 +239,13 @@ func (c Config) SelectHostd(ctx context.Context, store *model.Store, sel HostdSe
 		}
 		exec, err := c.hostdExecutor(ctx, store, h.Name)
 		connected := err == nil
-		labels := map[string]string{}
-		if connected {
-			lctx, cancel := context.WithTimeout(hostd.ForDisplay(ctx), hostdLabelsTimeout)
-			if hello, err := exec.hostdClient().Hello(lctx); err == nil {
-				for k, v := range hello.Labels {
-					labels[k] = v
-				}
-			}
-			cancel()
-		}
-		// The registry's labels win over the allowlist's: they are what
-		// the operator set for this hostd in grain.
-		for k, v := range h.Labels {
-			labels[k] = v
-		}
-		if !labelsMatch(labels, sel.Labels) {
+		// Only the registry's labels select a hostd: they are what an
+		// admin set for it in grain. The labels a hostd asserts about
+		// itself (its allowlist's labels:, in its hello) are its
+		// operator's word alone, so they are shown and never matched --
+		// or any hostd's operator could claim a label and draw in the
+		// host work, and the task tokens, selected by it.
+		if !labelsMatch(h.Labels, sel.Labels) {
 			continue
 		}
 		if connected {
