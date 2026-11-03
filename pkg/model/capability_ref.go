@@ -433,6 +433,9 @@ type CapabilitySubject struct {
 	Event string
 	// Untrusted is a trigger carrying untrusted input (§4.2.2).
 	Untrusted bool
+	// TrustedSchedule is a CI run grain itself fired from a workflow's
+	// cron (ci.Request.TrustedSchedule), which a CIGrantRule may admit.
+	TrustedSchedule bool
 }
 
 // Validate reports a rule that can never match as written.
@@ -467,12 +470,24 @@ func (p CapabilityPolicy) Validate() error {
 // either, so adopting a hand-added entry under its canonical id keeps
 // every allow and deny rule that named the old id in effect.
 func (p CapabilityPolicy) Permits(g string, s CapabilitySubject, servers ...map[string]protocol.ServerConfig) error {
+	// A retired name whose reference carries a CI rule is judged as
+	// that reference: the rule is the whole of when it may be held.
+	if _, ok := CIGrantRuleFor(g); ok {
+		g = CanonicalLegacyGrant(g)
+	}
 	if !IsCapabilityRef(g) {
 		return nil
 	}
 	ref := CapabilityGrantRef(g)
 	if s.Kind != "" && s.Kind != CapabilityRunCI && (ref == RepoReadRef || IsRepoAccessGrant(g)) {
 		return fmt.Errorf("%s", CIOnlyRefusal(g))
+	}
+	// The rule a capability's own server declared (CIGrantRule) comes
+	// before every policy rule: a policy may narrow it, never widen it.
+	if s.Kind != "" {
+		if reason := CIGrantRuleRefusal(g, s); reason != "" {
+			return fmt.Errorf("%s", reason)
+		}
 	}
 	refs := equivalentCapabilityRefs(ref, servers)
 	for i, r := range p.Rules {
@@ -515,6 +530,9 @@ func (p CapabilityPolicy) VerdictForKind(ref, kind string, servers ...map[string
 	}
 	ref = CapabilityGrantRef(ref)
 	if kind != "" && kind != CapabilityRunCI && ref == RepoReadRef {
+		return CapabilityPolicyCIOnly
+	}
+	if _, ok := CIGrantRuleFor(ref); ok && kind != "" && kind != CapabilityRunCI {
 		return CapabilityPolicyCIOnly
 	}
 	refs := equivalentCapabilityRefs(ref, servers)

@@ -121,7 +121,7 @@ func GuestCacheFollowsBaseBranch(cfg RepoConfig, guestImage string) bool {
 	if RunsWorkItem(&cfg, ReleaseItem) {
 		return false // the release run fills it on every merge
 	}
-	if !slices.Contains(cfg.CICapabilities, CapabilityPackagePublish) {
+	if !slices.ContainsFunc(cfg.CICapabilities, IsPackagePublishGrant) {
 		return false // a job that cannot push is not worth dispatching
 	}
 	publisher, ok := GuestImageRepo(guestImage)
@@ -183,4 +183,12 @@ func GuestImageRepo(image string) (RepoRef, bool) {
 		}
 	}
 	return RepoRef{Owner: parts[1], Name: parts[2]}, true
+}
+
+// IsPackagePublishGrant reports whether capability is package-publish in
+// either spelling: the retired bare name or the release server's
+// method it was rewritten to (schema migration 101).
+func IsPackagePublishGrant(capability string) bool {
+	c := CanonicalLegacyGrant(strings.TrimSpace(capability))
+	return CapabilityGrantRef(c) == PackagePublishRef
 }

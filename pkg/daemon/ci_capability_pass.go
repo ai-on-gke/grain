@@ -98,10 +98,22 @@ func WithCICapabilityServers(service *ci.Service, servers func() orchestrator.Ca
 // (ResolveCICapabilities adds it to the job's context), and repository
 // access mints nothing and is honoured, through its own event gate, by the
 // proxy scope CiSandbox.grantRepoAccess widens.
-func ciCapabilityRefs(ids []string) []model.Grant {
+//
+// A reference whose server declared a CI rule (model.CIGrantRule, the
+// release server's methods) is among them only on an event the rule
+// admits: on any other it is not handed to the job at all, as the
+// retired providers' event gate skipped them (ResolveCICapabilities),
+// rather than refusing the job; nor on a run that withholds event-gated
+// capabilities (ci.Request.WithholdEventGated), as the providers' gate
+// withheld them, even though ci.Service.Start already hands such a run
+// no capability list.
+func ciCapabilityRefs(ids []string, event ci.Event, trustedSchedule, withholdEventGated bool) []model.Grant {
 	var out []model.Grant
 	for _, id := range ids {
 		c := model.CanonicalLegacyGrant(id)
+		if rule, ok := model.CIGrantRuleFor(c); ok && (withholdEventGated || !rule.Admits(string(event), trustedSchedule)) {
+			continue
+		}
 		if model.IsCapabilityRef(c) && !model.IsGrainCIGrant(c) && !model.IsRepoAccessGrant(c) {
 			out = append(out, model.Grant{Capability: c, Via: model.GrantByDefault})
 		}
@@ -293,7 +305,8 @@ func (g *CiGrantReservations) mintCIPass(ctx context.Context, req ci.SandboxRequ
 		}
 	}
 	configured, _ = intree.EnsureBuiltins(configured)
-	subject := model.CapabilitySubject{Repo: &repo, Kind: model.CapabilityRunCI, Event: string(req.Event), Untrusted: req.Untrusted}
+	subject := model.CapabilitySubject{Repo: &repo, Kind: model.CapabilityRunCI, Event: string(req.Event), Untrusted: req.Untrusted,
+		TrustedSchedule: req.TrustedSchedule}
 	for _, grant := range grants {
 		if err := policy.Permits(model.RecordedCapabilityGrant(grant), subject, configured); err != nil {
 			return nil, time.Time{}, err
@@ -301,6 +314,10 @@ func (g *CiGrantReservations) mintCIPass(ctx context.Context, req ci.SandboxRequ
 	}
 	at := g.now()
 	deadline := ciPassDeadline(ctx, at)
+	// The job an in-process method (the release server's) mints for, as
+	// the retired providers read it off their CapabilityContext.
+	ctx = model.WithCIMint(ctx, model.CIMint{Repo: repo, RunID: req.Name, Credentials: g.Credentials,
+		Event: string(req.Event), TrustedSchedule: req.TrustedSchedule, WithholdEventGated: req.WithholdEventGated})
 	pass, err := protocol.MintPass(ctx, grants, func(id string) (protocol.Minter, error) {
 		srv, err := lookup(id)
 		if err != nil {
