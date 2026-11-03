@@ -27,7 +27,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -792,28 +791,4 @@ func cmdRunNow(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		return err
 	}
 	return respond(ctx, c, out, id)
-}
-
-// taskPriority is a -priority value, read as the task API reads one
-// (model.ParseTaskPriority): -priority 1e3 is 1000 here as it is in a
-// POST, rather than a flag.Int parse error.
-type taskPriority int
-
-func (p *taskPriority) String() string { return strconv.Itoa(int(*p)) }
-
-func (p *taskPriority) Set(s string) error {
-	n, err := model.ParseTaskPriority(s)
-	if err != nil {
-		return errors.New("not a whole number")
-	}
-	*p = taskPriority(n)
-	return nil
-}
-
-// priorityFlag defines -priority on fs, defaulting to
-// model.DefaultTaskPriority.
-func priorityFlag(fs *flag.FlagSet, usage string) *taskPriority {
-	p := taskPriority(model.DefaultTaskPriority)
-	fs.Var(&p, "priority", usage)
-	return &p
 }
