@@ -636,9 +636,11 @@ func Run(ctx context.Context, cfg Config) error {
 	if localHostSandboxes(sandboxes) {
 		cfg.Overcommit = model.NewOvercommitController(cfg.SandboxOvercommit, cfg.CpuOvercommit, cfg.MemoryOvercommit)
 	}
+	capabilityServers, hostdCapabilityServers := startCapabilityServers(ctx, store, secretStore, cfg.DataDir, cfg.capabilityHostd(), gcpKeyPool(cfg))
 	live := NewLiveConfig(store, sandboxes, cfg, githubCredentials).
 		WithSandboxImages(sandboxImages, stockSandboxImage, sandboxImageLabels()).
-		WithCapabilityServers(startCapabilityServers(ctx, store, secretStore, cfg.DataDir, cfg.capabilityHostd(), gcpKeyPool(cfg)))
+		WithCapabilityServers(capabilityServers).
+		withHostdCapabilityServers(hostdCapabilityServers)
 	if cfg.Overcommit != nil {
 		go runOvercommit(ctx, live, cfg.Overcommit)
 	}

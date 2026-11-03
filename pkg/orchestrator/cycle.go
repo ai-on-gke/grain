@@ -103,10 +103,10 @@ type Deps struct {
 	// does not do so today (docs/connections-and-models.md).
 	ModelAvailability func(ctx context.Context, choice AgentChoice) string
 	// CapabilityHostd is the grain hostd run: host capability servers
-	// are started through -- the deployment's default hostd, whichever
-	// hostd a run's own agent CLI was routed to -- recorded on each
-	// capability audit record (model.CapabilityAuditRecord.Hostd). ""
-	// where they have none.
+	// are started through where CapabilityServers does not route them
+	// per task (TaskCapabilityServers), recorded on each capability
+	// audit record (model.CapabilityAuditRecord.Hostd). "" where they
+	// have none.
 	CapabilityHostd string
 	Config          Config
 	// RequireTeamGitCredential holds back every task whose team has no
@@ -2817,7 +2817,8 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// forwards close when this run ends, before the pass is released.
 	if pass, deadline := deps.capabilityPasses().held(d.RunID); pass != nil {
 		notes.say(ctx, capabilityGrantsNote)
-		mat, err := materializePass(ctx, cfg, sandbox, pass, deadline, deps.capabilityService)
+		passDeps := deps.capabilityPasses().heldDeps(d.RunID, deps)
+		mat, err := materializePass(ctx, cfg, sandbox, pass, deadline, passDeps.capabilityService)
 		if err == nil {
 			// Then every grant's mcp_endpoint proxied, handshaken and
 			// named, and its prompt_section rendered (§5.2, §5.4), each
@@ -2825,7 +2826,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 			if deps.Store != nil {
 				mat.narrator = mcp.NewCapabilityNarrator(taskActivityReporter{store: deps.Store, taskID: d.TaskID, now: cfg.now})
 			}
-			if err = mat.wireEndpoints(ctx, deps.capabilityDataPlane); err != nil {
+			if err = mat.wireEndpoints(ctx, passDeps.capabilityDataPlane); err != nil {
 				mat.Close()
 			}
 		}
