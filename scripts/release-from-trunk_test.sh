@@ -492,6 +492,40 @@ out="$(git -C "$work/remote.git" for-each-ref --format='%(contents)' refs/tags/v
 expect "approve, short_soak_ok" "the release tag records the override" \
   has "approved by alice@example.com; short soak (soaked 2h00m of 24h, under the 22h minimum) accepted with short_soak_ok: true"
 
+# --- approving a minor release that carries a breaking change ---
+setup "" c1 "feat(api)!: drop the v1 endpoints" c3
+tag_remote v2.3.0-rc.1 "$c2" 3
+qualification pass "$c2"
+runs "$c2" "$c3"
+train
+expect "breaking" "v2.3.0 is staged" eq "$(remote_tag v2.3.0-pending)" "$c2"
+: > "$work/images.log"
+approve approve v2.3.0 GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=alice@example.com
+expect "approve, breaking" "is refused" eq "$status" 1
+expect "approve, breaking" "names the change" has "feat(api)!: drop the v1 endpoints"
+expect "approve, breaking" "says what would let it through" has "approve it with RELEASE_ALLOW_BREAKING=v2.3.0; nothing was done"
+expect "approve, breaking" "tags nothing" eq "$(remote_tag v2.3.0)" ""
+expect "approve, breaking" "moves no latest" eq "$(remote_tag latest)" "$c0"
+expect "approve, breaking" "publishes nothing" images_were ""
+approve approve v2.3.0 GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=alice@example.com RELEASE_ALLOW_BREAKING=v2.3.0
+expect "approve, RELEASE_ALLOW_BREAKING" "exits 0" eq "$status" 0
+expect "approve, RELEASE_ALLOW_BREAKING" "tags v2.3.0" eq "$(remote_tag v2.3.0)" "$c2"
+out="$(git -C "$work/remote.git" for-each-ref --format='%(contents)' refs/tags/v2.3.0)"
+expect "approve, RELEASE_ALLOW_BREAKING" "the release tag records the override" \
+  has "approved by alice@example.com; breaking changes since v2.1.0 accepted with RELEASE_ALLOW_BREAKING=v2.3.0"
+
+# --- a breaking change in the major release RELEASE_MAJOR asks for ---
+setup "" c1 "feat(api)!: drop the v1 endpoints" c3
+tag_remote v3.0.0-rc.1 "$c2" 3
+(cd "$work/seed" && git tag -a v3.0.0-pending "$c2" -m "Release v3.0.0 pending approval" -m "Qualification: PASS" &&
+  git push -q origin refs/tags/v3.0.0-pending)
+approve approve v3.0.0 GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=alice@example.com
+expect "approve, unasked major" "is refused while release.conf says RELEASE_MAJOR=2" eq "$status" 1
+approve approve v3.0.0 GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=alice@example.com RELEASE_MAJOR=3
+expect "approve, major" "exits 0" eq "$status" 0
+expect "approve, major" "says why" has "a major release over v2.1.0, as RELEASE_MAJOR=3 asks"
+expect "approve, major" "tags v3.0.0" eq "$(remote_tag v3.0.0)" "$c2"
+
 # --- after a drop, the next cut must be strictly after the dropped commit ---
 setup ""
 tag_remote v2.3.0-rc.1 "$c3" 3
