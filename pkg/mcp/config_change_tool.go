@@ -130,6 +130,14 @@ func NewProposeConfigChangeTools(proposer ConfigChangeProposer, taskID string, t
 				verdict = "It FAILED config validation, so the person cannot approve it as it stands: " +
 					pending.Validation.Error + ". You may fix it and call propose_config_change again now, " +
 					"or end your turn and let the person read it."
+			} else if len(pending.Validation.Warnings) > 0 {
+				// A warning is on the person's card (a system:* schedule
+				// edit the next reconcile undoes, say); the agent that
+				// wrote the change is told the same, so it can revise
+				// rather than describe it as all green.
+				verdict = "It passed config validation with warnings the person also sees: " +
+					strings.Join(pending.Validation.Warnings, "; ") + ". If a warning means the change " +
+					"will not do what you intended, fix it and call propose_config_change again now."
 			}
 			return Result{Text: fmt.Sprintf("Proposed %s (%s, %d file(s)). %s The person sees the diff with "+
 				"Approve and Reject in this chat. This ends your turn: stop here and take no further "+
