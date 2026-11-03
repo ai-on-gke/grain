@@ -82,7 +82,11 @@ func newTestAcceptor(t *testing.T, ctx context.Context, now func() time.Time) (*
 // exactly as granule-shim does, with the guest agent run in-process over
 // a pipe instead of inside a VM -- granule's fake wrapper.
 type wrapper struct {
-	done chan error
+	done     chan error
+	cancel   context.CancelFunc
+	acceptor *Acceptor
+	// refusals is what acceptor had counted before this wrapper dialled.
+	refusals uint64
 }
 
 func currentUser(t *testing.T) string {
@@ -136,16 +140,31 @@ func startWrapper(t *testing.T, ctx context.Context, a *Acceptor, sandboxID, tok
 	if _, err := os.Stat(filepath.Join(dir, KeyKey)); err == nil {
 		opts.KeyFile = filepath.Join(dir, KeyKey)
 	}
-	w := &wrapper{done: make(chan error, 1)}
-	go func() { w.done <- srv.DialOut(ctx, a.Addr().String(), opts) }()
+	dialCtx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	w := &wrapper{done: make(chan error, 1), cancel: cancel, acceptor: a, refusals: a.Refusals()}
+	go func() { w.done <- srv.DialOut(dialCtx, a.Addr().String(), opts) }()
 	return w
 }
 
-// refused waits for a wrapper's dial-out to be turned away: granule's
-// DialOut gives up with ErrAuthFailed when the acceptor answers the
-// handshake with a refusal.
+// refused waits for a wrapper's dial-out to be turned away. granule's
+// DialOut keeps retrying a refused handshake until its context ends
+// (gke-labs/granule#230, so a restarting controller does not strand a
+// live sandbox), so this waits for the acceptor to count two refusals,
+// stops the wrapper, and checks DialOut's last error was ErrAuthFailed.
+// Two, because the acceptor counts a refusal as it sends it: stopping the
+// wrapper then could cut its read of the answer short, while a wrapper
+// that has dialled again has already read the first one.
 func (w *wrapper) refused(t *testing.T) error {
 	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for w.acceptor.Refusals() < w.refusals+2 {
+		if time.Now().After(deadline) {
+			t.Fatal("wrapper was not refused")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	w.cancel()
 	select {
 	case err := <-w.done:
 		if !errors.Is(err, sandbox.ErrAuthFailed) {
@@ -153,7 +172,7 @@ func (w *wrapper) refused(t *testing.T) error {
 		}
 		return err
 	case <-time.After(10 * time.Second):
-		t.Fatal("wrapper was not refused")
+		t.Fatal("DialOut did not return once cancelled")
 		return nil
 	}
 }

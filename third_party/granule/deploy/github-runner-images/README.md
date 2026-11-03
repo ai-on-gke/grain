@@ -70,3 +70,68 @@ The imported image keeps GitHub's `runner` user, tool cache and installed
 software. Conversion removes Azure-specific network and machine
 identity, rewrites the root mount for Granule's `/dev/vda`, and regenerates
 the initramfs after installing Granule's stable `eth0` naming rule.
+
+## Running under Actions Runner Controller
+
+Each image boots straight into the GitHub Actions runner agent, so it can
+be the `runner` container of an
+[Actions Runner Controller](https://github.com/actions/actions-runner-controller)
+(`gha-runner-scale-set`) runner pod. The contract between the two:
+
+- **ARC's side.** ARC registers each ephemeral runner just in time and
+  hands the registration to the pod's `runner` container as the
+  `ACTIONS_RUNNER_INPUT_JITCONFIG` environment variable. It expects that
+  container to run the agent and to exit when the job is done, at which
+  point it deletes the pod and its runner.
+- **The VM container.** The image's entrypoint is granule's, which boots
+  the guest; keep it. ARC's default runner template sets
+  `command: ["/home/runner/run.sh"]`, a path that exists only inside the
+  guest, so override it: leave `command` unset and give
+  `args: ["run"]`. The container needs `/dev/kvm` and `/dev/net/tun`
+  (for example the `devic.es/kvm` and `devic.es/tun` device-plugin
+  resources) and `NET_ADMIN`. experimental/grain's
+  `deploy/terraform/github-runner-cluster` module sets all of this.
+- **Into the guest.** The image sets
+  `GRANULE_WORKLOAD_ENV=ACTIONS_RUNNER_INPUT_JITCONFIG`. Granule passes
+  each variable that list names, when it is set on the VM container, into
+  the guest workload's environment, on the same read-only override disk
+  that carries `CHV_CONTAINER_OVERRIDE`. The disk's image lives in the
+  container's writable layer and the merged spec in the guest's
+  `/run/granule/container.json` (mode 0600, root), so the registration
+  stays inside the pod and the VM. Neither granule nor the runner prints it.
+- **In the guest.** The workload is `/etc/granule/container.json`, run by
+  `granule-container` as the `runner` user. Its entrypoint,
+  `/usr/local/libexec/granule-actions-runner`, loads GitHub's
+  `/etc/environment` (the tool cache, `ImageOS` and the full `PATH`),
+  waits up to a minute for the Docker daemon, and execs
+  `/home/runner/actions-runner/run.sh`. The runner reads the JIT config
+  from its environment, registers, runs one job and exits.
+  `RUNNER_MANUALLY_TRAP_SIG=1` makes `run.sh` pass the shutdown signal on
+  to the runner when the pod is deleted mid-job.
+- **Ending.** The workload has `haltOnExit`, so the VM powers off when
+  `run.sh` exits. The VM container then exits with `run.sh`'s status, and
+  so does the pod.
+
+Started without `ACTIONS_RUNNER_INPUT_JITCONFIG`, for example by
+`docker run` or by `test-image.sh`'s first boot, the workload logs that it
+is not starting the runner and waits. The VM stays up for `granule exec`,
+as it did before the image had a workload.
+
+The agent is the [actions/runner](https://github.com/actions/runner)
+release named by `ACTIONS_RUNNER_VERSION` at build time. It defaults to the
+latest release, because GitHub refuses runners that fall too far behind,
+and is recorded in the `io.granule.github-runner.actions-runner-version`
+label. GitHub's own images do not include it: a hosted VM receives it when
+it is provisioned. It is unpacked at `/home/runner/actions-runner`, owned
+by `runner`, and its `installdependencies.sh` adds any native libraries
+the environment lacks.
+
+`test-image.sh` checks both sides. On the first boot it requires the
+runner to be installed, startable as `runner` (`Runner.Listener
+--version`) and waiting under an active `granule-container.service`. It
+then starts a second container with a placeholder
+`ACTIONS_RUNNER_INPUT_JITCONFIG`. The runner rejects that config without
+contacting GitHub, and `run.sh` exits 0 as it does after a finished job.
+The check requires the guest to log that it started the runner, `run.sh`
+to run to its end, and the container to stop by itself with status 0
+within five minutes.

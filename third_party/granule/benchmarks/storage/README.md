@@ -223,6 +223,13 @@ layers. Flat `persistent` is still the simplest for a single long-lived VM
 that is never committed, but it pays a full copy-up on first boot. Boot
 assembly only helps on a reflink-capable host filesystem.
 
+## Direct disk I/O
+
+[`disk-direct.md`](disk-direct.md) compares `CHV_DISK_DIRECT=on` with `off` on
+the raw disk and the qcow2 overlay, on the same kind of dedicated VM, using
+fio and `test/oom-pagecache.sh`. It also explains why `auto` stays the
+default.
+
 ## Running it
 
 The whole run happens on a fresh VM that is deleted afterwards:
