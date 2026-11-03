@@ -1883,9 +1883,10 @@ func TestEverythingTheGateDoesNotRunTheNightlyDoes(t *testing.T) {
 	}
 }
 
-// releaseTrainPath is the daily release train (design/design/release-from-trunk.design.md,
-// RFT-6): it cuts, soaks and stages releases from main, and a person's
-// approval through promote-release.yml is what makes one official.
+// releaseTrainPath is the continuous release train
+// (design/playbook/releases.playbook.md): it cuts, qualifies and stages
+// releases from main, and a person's approval through promote-release.yml
+// is what makes one official.
 const releaseTrainPath = ".grain/workflows/release-train.yml"
 
 func releaseTrainWorkflow(t *testing.T) ci.Workflow {
@@ -1903,20 +1904,38 @@ func releaseTrainWorkflow(t *testing.T) ci.Workflow {
 	return ci.Workflow{}
 }
 
-// The train runs daily at 04:15 UTC from grain's own cron, and on an
-// operator's dispatch, with what scripts/release-from-trunk.sh needs and
-// nothing else: repo-write for the rc, -discarded and -pending tags and
-// refs/heads/candidate, release-gate-read for main's runs, staging and the
-// release-notes task, and package-publish for the rc and pending images.
-// Signing is optional, as in release.yml.
-func TestTheReleaseTrainRunsDailyWithTheCapabilitiesItUses(t *testing.T) {
+// The train is event-driven on GitHub Actions (playbook "Daily cron
+// bottleneck", §14): a finished release or nightly run and a finished
+// grain/release-qualification check run wake it, an hourly cron is only a
+// safety wake, and it holds actions: write to dispatch, re-run and cancel
+// nightly.yml. No staging endpoint or grain API is required of a hosted
+// runner any more. grain's own copy answers an operator's dispatch with
+// what scripts/release-from-trunk.sh needs and nothing else: repo-write
+// for the rc, -discarded and -pending tags and refs/heads/candidate,
+// release-gate-read for the CI runs and the release-notes task, and
+// package-publish for the rc and pending images. Signing is optional, as
+// in release.yml.
+func TestTheReleaseTrainRunsOnEventsWithTheCapabilitiesItUses(t *testing.T) {
 	w := releaseTrainWorkflow(t)
 	if len(w.On.Schedule) != 0 {
 		t.Errorf("%s still declares `on: schedule` (%v); automatic scheduling moved to .github/workflows/release-train.yml", releaseTrainPath, w.On.Schedule)
 	}
-	ghTrain := upTo(t, stripComments(read(t, ".github", "workflows", "release-train.yml")), "jobs:")
+	ghText := stripComments(read(t, ".github", "workflows", "release-train.yml"))
+	ghTrain := upTo(t, ghText, "jobs:")
 	contains(t, ghTrain, "schedule:")
-	contains(t, ghTrain, `cron: "15 4 * * *"`)
+	contains(t, ghTrain, `cron: "17 * * * *"`)
+	contains(t, ghTrain, "workflow_run:")
+	contains(t, ghTrain, "workflows: [release, nightly]")
+	contains(t, ghTrain, "check_run:")
+	contains(t, ghTrain, "actions: write")
+	contains(t, ghText, "github.event.check_run.name == 'grain/release-qualification'")
+	contains(t, ghText, "bash ./scripts/release-train-actions.sh")
+	contains(t, ghText, "secrets.REPO_WRITE_TOKEN")
+	for _, gone := range []string{"RELEASE_STAGING_URL", "Require the grain API", "RELEASE_TASKS_JSON", `cron: "15 4 * * *"`} {
+		if strings.Contains(ghText, gone) {
+			t.Errorf(".github/workflows/release-train.yml still has %q: the staging soak and its endpoints are retired", gone)
+		}
+	}
 	if !w.On.Matches(ci.EventManual, "main") {
 		t.Errorf("%s does not answer workflow_dispatch on main (%s)", releaseTrainPath, w.On.Describe())
 	}
@@ -2021,16 +2040,28 @@ func TestTheReleaseTrainsCapabilitiesAreGrantedOnGrainsOwnRepository(t *testing.
 	}
 }
 
-// The train stops at vX.Y.0-pending (task 1236): nothing it runs may push
-// vX.Y.0, move `latest`, or call the approve or promote modes that do. Only
-// .grain/workflows/promote-release.yml, which a person starts, makes a
-// release official.
+// The train stops at vX.Y.0-pending (task 1236; the one person action of
+// design/playbook/releases.playbook.md §0): nothing it runs -- grain's copy,
+// the GitHub Actions copy, or the Actions helper that re-runs and cancels
+// qualification -- may push vX.Y.0, move `latest`, or call the approve,
+// rollback or promote modes that do. Only promote-release.yml, which a
+// person starts, makes a release official or moves `latest` back.
 func TestTheReleaseTrainNeverPromotesARelease(t *testing.T) {
 	w := releaseTrainWorkflow(t)
 	forbidden := []string{
-		"release-from-trunk.sh approve", "release-from-trunk.sh reject",
+		"release-from-trunk.sh approve", "release-from-trunk.sh reject", "release-from-trunk.sh rollback",
 		"release-images.sh promote", "promote-release.yml", "promote.yml",
 		"refs/tags/latest", "git tag", "git push",
+	}
+	for _, f := range []struct{ path, text string }{
+		{".github/workflows/release-train.yml", stripComments(read(t, ".github", "workflows", "release-train.yml"))},
+		{"scripts/release-train-actions.sh", stripComments(read(t, "scripts", "release-train-actions.sh"))},
+	} {
+		for _, bad := range append(forbidden, "release-images.sh", "/git/refs", "/git/tags") {
+			if strings.Contains(f.text, bad) {
+				t.Errorf("%s runs %q: the train never promotes a release; a person approves it through promote-release.yml", f.path, bad)
+			}
+		}
 	}
 	for _, job := range w.Jobs {
 		for _, step := range job.Steps {

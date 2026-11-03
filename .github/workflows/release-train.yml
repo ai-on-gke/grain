@@ -12,50 +12,81 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# GitHub Actions port of .grain/workflows/release-train.yml.
+# GitHub Actions port of .grain/workflows/release-train.yml: the continuous
+# release train (design/playbook/releases.playbook.md). Each run drives
+# `scripts/release-from-trunk.sh` one step around the loop and stops:
+#   1. Judges the release candidate in qualification, if there is one,
+#      through `candidate-gate.sh check-qualification`: Stage 1 is
+#      nightly.yml on `vX.Y.Z-rc.N`, Stage 2 the grain/release-qualification
+#      check run grain posts on its commit. PASS stages `vX.Y.Z-pending`
+#      (images published as `:vX.Y.Z-pending`) for the one person action of
+#      a release, the Approve that runs promote-release.yml (playbook §0);
+#      FAIL tags `vX.Y.Z-rc.N-discarded`; PENDING and INFRA say which jobs
+#      to re-run. An rc RELEASE_NEVER_PROMOTE names is dropped unqualified.
+#   2. With nothing qualifying, selects the newest known-good `main` commit
+#      (`select-lkg`: tests.yml and release.yml green), past
+#      RELEASE_MIN_INTERVAL_MINUTES since the last release, tags
+#      `vX.Y.Z-rc.N`, force-moves `refs/heads/candidate`, and publishes
+#      `:vX.Y.Z-rc.N`, `:candidate`, and `:rc` images. After
+#      RELEASE_MAX_RC_ATTEMPTS dropped rcs of a version it cuts no more.
+# Then `scripts/release-train-actions.sh` does what the run asked of
+# GitHub Actions (`actions: write`): starts Stage 1 on a new rc when its tag
+# push could not, dispatches the one flake retry and the infra re-runs of
+# nightly.yml jobs on the rc, and cancels a dropped rc's runs (§6).
 #
-# Runs daily at 04:15 UTC (and on demand via workflow_dispatch) to drive
-# `scripts/release-from-trunk.sh`:
-#   1. Judges any release candidate currently soaking on staging (`:4280`).
-#      A passing 24h soak tags `vX.Y.0-pending`, publishes `:vX.Y.0-pending`
-#      images, files the release-notes task, and sends the operator approval
-#      notification. A failing soak tags `vX.Y.0-rc.N-discarded`.
-#   2. With nothing soaking, selects the newest known-good `main` commit, tags
-#      `vX.Y.0-rc.N`, force-moves `refs/heads/candidate`, and publishes
-#      `:vX.Y.0-rc.N`, `:candidate`, and `:rc` images.
+# The train never pushes vX.Y.Z and never moves `latest`, as a git tag or
+# an image: only a person's approval through promote-release.yml does
+# (TestTheReleaseTrainNeverPromotesARelease, tests/deploy).
+#
+# It is event-driven: a finished release.yml run (a new LKG candidate), a
+# finished nightly.yml run (Stage 1 on an rc) and a finished
+# grain/release-qualification check run (Stage 2) each wake it, and an
+# hourly cron is a safety wake for an event that never came. Every wake is
+# idempotent, and the concurrency group runs one at a time.
+#
+# Tags are pushed with a GitHub App installation token (vars.RELEASE_APP_ID
+# and secrets.RELEASE_APP_PRIVATE_KEY) or secrets.REPO_WRITE_TOKEN, either
+# of which fires nightly.yml's `push: tags` (§14). With neither, tags go
+# out with GITHUB_TOKEN, which fires nothing, so the train dispatches
+# Stage 1 itself.
+#
+# Nothing here needs the grain deployment: verdicts come from this
+# repository's own workflow runs and check runs (RELEASE_CI_SOURCE=github,
+# GITHUB_TOKEN), and grain watches for the rc and -pending tags outbound.
+# vars.GRAIN_API_URL with secrets.GRAIN_API_TOKEN are optional, for a
+# deployment a hosted runner can reach (the release.pending notification).
 #
 # On non-main refs, `dry_run` defaults to and is enforced as `true`.
-#
-# This repository's gate is GitHub Actions (ci_mode: github), so the train
-# reads main's tests.yml, release.yml and nightly.yml verdicts from this
-# repository's own workflow runs (RELEASE_CI_SOURCE=github, through
-# GITHUB_TOKEN with `actions: read`); grain CI has none. The soak and the
-# task list still come from the grain deployment and grain-candidate, which
-# a GitHub-hosted runner can only reach at the URLs vars.GRAIN_API_URL and
-# vars.RELEASE_STAGING_URL name (with secrets.GRAIN_API_TOKEN): a live run
-# without them is refused before anything is tagged. A dry run without
-# them still selects the LKG from GitHub's runs, with an empty task list.
 
 name: release-train
 
 on:
   schedule:
-    - cron: "15 4 * * *"
+    - cron: "17 * * * *"
+  # A workflow_run or check_run run is a run of the default branch: it
+  # checks out main, never the triggering run's head, and reads nothing
+  # from its artifacts.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: [release, nightly]
+    types: [completed]
+  check_run:
+    types: [completed]
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Run release-from-trunk in dry-run mode without pushing git refs or images (always true on non-main refs)"
+        description: "Run release-from-trunk in dry-run mode without pushing git refs or images, or calling the Actions API (always true on non-main refs)"
         required: false
         default: false
         type: boolean
       force:
-        description: "Bypass the 24h soak elapsed-time gate (--force)"
+        description: "Cut an rc.1 inside RELEASE_MIN_INTERVAL_MINUTES of the last release (FORCE=true)"
         required: false
         default: false
         type: boolean
 
 permissions:
-  actions: read
+  actions: write
+  checks: read
   contents: write
   packages: write
   id-token: write
@@ -66,19 +97,63 @@ env:
 
 jobs:
   train:
-    name: cut, soak and stage a release from trunk
+    name: cut, qualify and stage a release from trunk
+    # Wake on what moves the loop and nothing else: release.yml on main or
+    # a convergence branch, nightly.yml on an rc tag, and the Stage 2
+    # check run.
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && (
+        (github.event.workflow_run.name == 'release' &&
+          (github.event.workflow_run.head_branch == 'main' || startsWith(github.event.workflow_run.head_branch, 'release/'))) ||
+        (github.event.workflow_run.name == 'nightly' && contains(github.event.workflow_run.head_branch, '-rc.')))) ||
+      (github.event_name == 'check_run' && github.event.check_run.name == 'grain/release-qualification')
     runs-on: ubuntu-latest
     timeout-minutes: 120
     concurrency:
       group: ${{ github.workflow }}-train
       cancel-in-progress: false
     steps:
+      - name: Mint the release App's token
+        id: app
+        if: vars.RELEASE_APP_ID != ''
+        env:
+          APP_ID: ${{ vars.RELEASE_APP_ID }}
+          APP_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          API: ${{ github.api_url }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_KEY:-}" ]; then
+            echo "release-train: vars.RELEASE_APP_ID is set but secrets.RELEASE_APP_PRIVATE_KEY is not; tags fall back to REPO_WRITE_TOKEN or GITHUB_TOKEN" >&2
+            exit 0
+          fi
+          b64() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+          key="${RUNNER_TEMP}/release-app.pem"
+          printf '%s\n' "$APP_KEY" > "$key"
+          chmod 600 "$key"
+          now="$(date +%s)"
+          unsigned="$(printf '{"alg":"RS256","typ":"JWT"}' | b64).$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$((now - 60))" "$((now + 540))" "$APP_ID" | b64)"
+          jwt="${unsigned}.$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$key" -binary | b64)"
+          rm -f "$key"
+          installation="$(curl -fsS -H "Authorization: Bearer $jwt" -H "Accept: application/vnd.github+json" \
+            "$API/repos/$REPO/installation" | jq -r .id)"
+          token="$(curl -fsS -X POST -H "Authorization: Bearer $jwt" -H "Accept: application/vnd.github+json" \
+            -d "$(jq -cn --arg r "${REPO#*/}" '{repositories: [$r], permissions: {contents: "write"}}')" \
+            "$API/app/installations/$installation/access_tokens" | jq -r .token)"
+          if [ -z "$token" ] || [ "$token" = null ]; then
+            echo "release-train: could not mint the release App's installation token" >&2
+            exit 1
+          fi
+          echo "::add-mask::${token}"
+          echo "token=${token}" >> "$GITHUB_OUTPUT"
+
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
           persist-credentials: true
-          token: ${{ secrets.REPO_WRITE_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app.outputs.token || secrets.REPO_WRITE_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Cache Go modules and build cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -115,6 +190,9 @@ jobs:
         env:
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           GH_REF_NAME: ${{ github.head_ref || github.ref_name }}
+          # Whether the tags this run pushes start workflows of their own:
+          # only an App token's or REPO_WRITE_TOKEN's do.
+          TAGS_FIRE: ${{ (steps.app.outputs.token != '' || secrets.REPO_WRITE_TOKEN != '') && 'true' || 'false' }}
         run: |
           set -euo pipefail
           git config --global user.name "grain-ci"
@@ -141,8 +219,14 @@ jobs:
             echo "GRAIN_CI_REF=${GH_REF_NAME}"
             echo "GRAIN_CI_EVENT=${GITHUB_EVENT_NAME}"
             echo "DRY_RUN=${dry_run}"
+            echo "RELEASE_TAGS_FIRE=${TAGS_FIRE}"
+            echo "RELEASE_TRAIN_OUTPUT=${RUNNER_TEMP}/release-train.out"
           } >> "$GITHUB_ENV"
-          echo "Resolved GRAIN_CI_REF=${GH_REF_NAME} DRY_RUN=${dry_run}"
+          : > "${RUNNER_TEMP}/release-train.out"
+          if [ "$dry_run" != true ] && [ "$TAGS_FIRE" != true ]; then
+            echo "::warning::release-train: no release App token or REPO_WRITE_TOKEN; tags are pushed with GITHUB_TOKEN, which tag rulesets may refuse and which starts no workflow, so this run dispatches Stage 1 itself"
+          fi
+          echo "Resolved GRAIN_CI_EVENT=${GITHUB_EVENT_NAME} GRAIN_CI_REF=${GH_REF_NAME} DRY_RUN=${dry_run} RELEASE_TAGS_FIRE=${TAGS_FIRE}"
 
       - name: Authenticate to Google Cloud (WIF)
         if: vars.GCP_WIF_PROVIDER != '' && vars.GCP_SA_EMAIL != ''
@@ -233,31 +317,13 @@ jobs:
             exit 1
           fi
 
-      - name: Require the grain API and staging endpoints
-        env:
-          GRAIN_API_URL: ${{ vars.GRAIN_API_URL }}
-          GRAIN_API_TOKEN: ${{ secrets.GRAIN_API_TOKEN }}
-          RELEASE_STAGING_URL: ${{ vars.RELEASE_STAGING_URL }}
-        run: |
-          if [ "${DRY_RUN}" = "true" ]; then
-            echo "Dry-run mode enabled: skipping the grain API and staging endpoint requirement"
-            exit 0
-          fi
-          missing=""
-          [ -n "${GRAIN_API_URL:-}" ] || missing="$missing vars.GRAIN_API_URL"
-          [ -n "${GRAIN_API_TOKEN:-}" ] || missing="$missing secrets.GRAIN_API_TOKEN"
-          [ -n "${RELEASE_STAGING_URL:-}" ] || missing="$missing vars.RELEASE_STAGING_URL"
-          if [ -n "$missing" ]; then
-            echo "release-train: a GitHub-hosted runner cannot reach the grain deployment or grain-candidate on localhost; set${missing} to URLs it can reach; nothing was tagged." >&2
-            echo "release-train: see docs/github-actions-ci.md." >&2
-            exit 1
-          fi
-
       - name: Run the release train
         env:
+          # Optional: a deployment a hosted runner can reach takes the
+          # release.pending notification here; without one, grain sees the
+          # -pending tag outbound.
           GRAIN_API_URL: ${{ vars.GRAIN_API_URL }}
           GRAIN_API_TOKEN: ${{ secrets.GRAIN_API_TOKEN }}
-          RELEASE_STAGING_URL: ${{ vars.RELEASE_STAGING_URL }}
           RELEASE_CI_SOURCE: ${{ vars.RELEASE_CI_SOURCE || 'github' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_IMAGES: ${{ vars.RELEASE_IMAGES }}
@@ -269,11 +335,17 @@ jobs:
           FORCE: ${{ inputs.force || false }}
         run: |
           set -euo pipefail
-          if [ "${DRY_RUN}" = "true" ] && [ -z "${GRAIN_API_TOKEN:-}" ]; then
+          if [ "${RELEASE_CI_SOURCE}" != github ] && [ -z "${GRAIN_API_TOKEN:-}" ] && [ "${DRY_RUN}" = "true" ]; then
             echo '[]' > "${RUNNER_TEMP}/dry-run-empty.json"
-            if [ "${RELEASE_CI_SOURCE}" != github ]; then
-              export RELEASE_RUNS_JSON="${RUNNER_TEMP}/dry-run-empty.json"
-            fi
-            export RELEASE_TASKS_JSON="${RUNNER_TEMP}/dry-run-empty.json"
+            export RELEASE_RUNS_JSON="${RUNNER_TEMP}/dry-run-empty.json"
           fi
           bash ./scripts/release-from-trunk.sh
+
+      - name: Start Stage 1, re-run qualification jobs and cancel superseded runs
+        # Also after a train that stopped with an error: an rc it dropped,
+        # or a version it escalated, still has to be acted on.
+        if: ${{ !cancelled() }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_GITHUB_REPO: ${{ github.repository }}
+        run: bash ./scripts/release-train-actions.sh "$RELEASE_TRAIN_OUTPUT"

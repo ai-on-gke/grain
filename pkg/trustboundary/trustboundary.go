@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v12"
+const Version = "trust-boundary/v13"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -267,6 +267,9 @@ var Categories = []Category{
 			// version every published image is tagged with, and the host
 			// setup the publishing job sources.
 			"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
+			// The train's Actions API calls: Stage 1 dispatches, re-runs
+			// and cancelling a dropped rc's runs.
+			"scripts/release-train-actions.sh",
 			".grain/workflows/release.yml", ".github/workflows/release.yml",
 			".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 			".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
