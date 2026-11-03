@@ -1692,7 +1692,6 @@ export default function Sidebar({
             evt.preventDefault();
             onOpenUpgrade();
           }}
-          color="text.secondary"
           noWrap
           title={buildStampTitle(config.version, zone)}
           sx={{
@@ -1705,7 +1704,10 @@ export default function Sidebar({
             mt: pinFooter ? 0 : "auto",
             pt: 0.6,
             fontSize: "0.68rem",
-            opacity: 0.75,
+            // Muted by the tertiary token rather than by opacity over
+            // text.secondary, which drew it at 4.27:1 in light
+            // (docs/test-runs/2026-11-03-ui-fixes.md F1).
+            color: "var(--text-tertiary)",
             flex: "none",
             fontVariantNumeric: "tabular-nums",
           }}
