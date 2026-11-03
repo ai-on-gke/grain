@@ -171,8 +171,18 @@ func guardAutoMerge(ctx context.Context, tx *sql.Tx, t *Task) (*TaskEvent, error
 // the store's own machinery shares.
 const modelPackage = "github.com/ai-on-gke/grain/pkg/model"
 
+// autoMergeWrappers are functions outside this package that only pass an
+// edit through to UpdateTask on their callers' behalf. Naming one would
+// name every write the same (ui.(*Client).mutate, which every Client
+// edit goes through), so autoMergeWriter looks past them to the function
+// that made the change.
+var autoMergeWrappers = map[string]bool{
+	"github.com/ai-on-gke/grain/pkg/ui.(*Client).mutate": true,
+}
+
 // autoMergeWriter is the first function outside the store -- the caller
-// of UpdateTask or PutTask -- that is writing, as "pkg.Func (file.go:N)".
+// of UpdateTask or PutTask -- that is writing, as "pkg.Func (file.go:N)",
+// past any of autoMergeWrappers.
 func autoMergeWriter() string {
 	pcs := make([]uintptr, 48)
 	n := runtime.Callers(2, pcs)
@@ -181,7 +191,7 @@ func autoMergeWriter() string {
 		f, more := frames.Next()
 		fn := f.Function
 		if fn != "" && !strings.HasPrefix(fn, modelPackage) && !strings.HasPrefix(fn, "database/sql") &&
-			!strings.HasPrefix(fn, "runtime.") {
+			!strings.HasPrefix(fn, "runtime.") && !autoMergeWrappers[fn] {
 			if i := strings.LastIndex(fn, "/"); i >= 0 {
 				fn = fn[i+1:]
 			}
