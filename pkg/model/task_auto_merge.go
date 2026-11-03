@@ -51,6 +51,26 @@ import (
 //     over, anything else grain does on its own account, leaves it off
 //     and records that it tried (TaskEventAutoMergeKeptOff).
 //
+// The other direction is sticky too: a "yes" -- the filer's
+// auto_merge: true, or the default a task filed without one got -- comes
+// back when the holds that took it away clear. Each of grain's own holds
+// names itself on the task with a link (autoMergeHolds), and holds are
+// only ever put on a change that was merging itself, so a write that
+// drops the last of those links is the hold that turned auto-merge off
+// clearing. putTask turns it back on in that same write
+// (restoreAfterHolds), whatever writer it was: before this, each release
+// path handed auto-merge back on its own account, and the ones that
+// dropped a hold without doing so (a carried clearance lifting a
+// human-only hold, a head re-read clean) left a change filed to merge
+// itself waiting for a Submit nobody had been asked for.
+//
+// Not every hold ending is the change going through. One that ends in a
+// person's decision -- a review that left findings, fixes that never
+// landed, a gating trigger that requires a human -- says so
+// (AwaitPersonForAutoMerge), and only auto-merge turning on (Submit, an
+// approval, a person's PATCH, a review's answered questions) lifts that.
+// Outstanding approvals and a merge policy of `never` keep it off too.
+//
 // The guard lives in the store rather than in each writer because the
 // writers are many and keep growing: one forgotten path is exactly the
 // bug.
@@ -101,6 +121,50 @@ func AllowAutoMerge(t *Task) {
 	t.Links = slices.DeleteFunc(t.Links, func(l Link) bool { return l.Kind == LinkAutoMergeDeclined })
 }
 
+// LinkAutoMergeAwaitsPerson marks a change one of grain's holds let go of
+// for a person to decide, rather than for it to merge itself: putTask
+// does not hand auto-merge back to it when its last hold clears. Its
+// target is why. It is dropped by whatever turns auto-merge back on.
+const LinkAutoMergeAwaitsPerson LinkKind = "auto-merge-awaits-person"
+
+// autoMergeHolds are the links grain's own holds put on a change that was
+// merging itself when they take its auto-merge away. The last of them
+// going is that change's hold clearing (restoreAfterHolds).
+var autoMergeHolds = []LinkKind{LinkSecurityHold, LinkBrokenRulesHold, LinkPathTriggerHold, LinkHumanOnlyHold}
+
+// AutoMergeAwaitsPerson reports whether a hold on t ended in a person's
+// decision (LinkAutoMergeAwaitsPerson).
+func AutoMergeAwaitsPerson(t Task) bool {
+	return slices.ContainsFunc(t.Links, func(l Link) bool { return l.Kind == LinkAutoMergeAwaitsPerson })
+}
+
+// AwaitPersonForAutoMerge turns t's auto-merge off and leaves it for a
+// person: the hold that is ending, for reason, did not clear.
+func AwaitPersonForAutoMerge(t *Task, reason string) {
+	t.AutoMerge = false
+	if AutoMergeAwaitsPerson(*t) {
+		return
+	}
+	t.Links = append(t.Links, Link{Kind: LinkAutoMergeAwaitsPerson, Target: strings.TrimSpace(reason)})
+}
+
+// ClearAutoMergeAwaitsPerson drops AwaitPersonForAutoMerge's mark, for a
+// writer that has put the decision somewhere else (a review's questions,
+// which hand auto-merge back themselves once answered).
+func ClearAutoMergeAwaitsPerson(t *Task) {
+	t.Links = slices.DeleteFunc(t.Links, func(l Link) bool { return l.Kind == LinkAutoMergeAwaitsPerson })
+}
+
+func heldBy(links []Link) []string {
+	var out []string
+	for _, l := range links {
+		if slices.Contains(autoMergeHolds, l.Kind) && !slices.Contains(out, string(l.Kind)) {
+			out = append(out, string(l.Kind))
+		}
+	}
+	return out
+}
+
 type autoMergeChangeKey struct{}
 
 type autoMergeChange struct {
@@ -131,6 +195,15 @@ func autoMergeChangeFrom(ctx context.Context) (Principal, string) {
 // and returns the event to record (nil for none). A new task records
 // nothing: what it was filed with is on the task itself.
 func guardAutoMerge(ctx context.Context, tx *sql.Tx, t *Task) (*TaskEvent, error) {
+	e, err := guardAutoMergeChange(ctx, tx, t)
+	if err == nil && t.AutoMerge {
+		// Whatever turned it on settled what a person was asked.
+		ClearAutoMergeAwaitsPerson(t)
+	}
+	return e, err
+}
+
+func guardAutoMergeChange(ctx context.Context, tx *sql.Tx, t *Task) (*TaskEvent, error) {
 	var before bool
 	err := tx.QueryRowContext(ctx, "SELECT `auto_merge` FROM `task` WHERE `id` = ?", t.ID).Scan(&before)
 	if err == sql.ErrNoRows {
@@ -139,10 +212,17 @@ func guardAutoMerge(ctx context.Context, tx *sql.Tx, t *Task) (*TaskEvent, error
 	if err != nil {
 		return nil, fmt.Errorf("reading %s's auto-merge: %w", t.ID, err)
 	}
+	restored, err := restoreAfterHolds(ctx, tx, t)
+	if err != nil {
+		return nil, err
+	}
 	if before == t.AutoMerge {
 		return declinedWhileOff(ctx, tx, t)
 	}
 	by, reason := autoMergeChangeFrom(ctx)
+	if restored != "" {
+		reason = strings.TrimSpace(restored + " " + reason)
+	}
 	e := &TaskEvent{TaskID: t.ID, Kind: TaskEventAutoMergeOff, At: time.Now().UTC(), By: by, Reason: reason,
 		Detail: autoMergeWriter()}
 	if t.AutoMerge {
@@ -165,6 +245,57 @@ func guardAutoMerge(ctx context.Context, tx *sql.Tx, t *Task) (*TaskEvent, error
 		}
 	}
 	return e, nil
+}
+
+// restoreAfterHolds is putTask's other half (see this file's doc
+// comment): a write that leaves t's auto-merge off but drops the last of
+// the hold links the row holds now is that hold clearing, and t goes back
+// to merging itself -- unless it was declined, a hold ended in a person's
+// decision, approvals are still owed, or its merge rules say `never`. It
+// returns the reason to record, or "" when it left t alone.
+//
+// Nor without a clearance (LinkTrustBoundaryCleared) left on t: a change
+// with auto-merge on and no clearance is one a person let through, and
+// is merged as it stands rather than classified again
+// (orchestrator.clearedForHead). Every hold that clears through a
+// classification of the head records one; a write that drops the
+// clearance along with the hold -- a retarget dropping what was pinned
+// to the old pull request -- leaves the next head to be classified
+// before anything turns auto-merge on.
+func restoreAfterHolds(ctx context.Context, tx *sql.Tx, t *Task) (string, error) {
+	if t.AutoMerge || AutoMergeDeclined(*t) || AutoMergeAwaitsPerson(*t) || len(heldBy(t.Links)) > 0 ||
+		len(PendingApprovals(*t)) > 0 ||
+		!slices.ContainsFunc(t.Links, func(l Link) bool { return l.Kind == LinkTrustBoundaryCleared && l.Target != "" }) ||
+		slices.ContainsFunc(t.Links, func(l Link) bool { return l.Kind == LinkMergePolicyWithdrawn }) {
+		return "", nil
+	}
+	args := []any{t.ID}
+	for _, k := range autoMergeHolds {
+		args = append(args, string(k))
+	}
+	rows, err := tx.QueryContext(ctx, "SELECT `kind` FROM `task_link` WHERE `task_id` = ? AND `kind` IN (?"+
+		strings.Repeat(",?", len(autoMergeHolds)-1)+")", args...)
+	if err != nil {
+		return "", fmt.Errorf("reading %s's holds: %w", t.ID, err)
+	}
+	defer rows.Close()
+	var cleared []Link
+	for rows.Next() {
+		var kind string
+		if err := rows.Scan(&kind); err != nil {
+			return "", fmt.Errorf("reading %s's holds: %w", t.ID, err)
+		}
+		cleared = append(cleared, Link{Kind: LinkKind(kind)})
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("reading %s's holds: %w", t.ID, err)
+	}
+	if len(cleared) == 0 {
+		return "", nil
+	}
+	t.AutoMerge = true
+	return fmt.Sprintf("back on: the hold that turned it off (%s) cleared, so it merges itself as it was filed to.",
+		strings.Join(heldBy(cleared), ", ")), nil
 }
 
 // declinedWhileOff is guardAutoMerge's event for a write that leaves

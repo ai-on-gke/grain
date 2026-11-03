@@ -545,6 +545,9 @@ func noteFindingsOnReviewedTask(ctx context.Context, store *model.Store, review,
 	}
 	if err := store.UpdateTask(ctx, reviewed.ID, func(t *model.Task) error {
 		t.AutoMerge = false
+		// The questions are the person's decision now, and they hand
+		// auto-merge back themselves once answered (RestoreAutoMerge).
+		model.ClearAutoMergeAwaitsPerson(t)
 		t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
 		t.Links = append(t.Links, model.Link{Kind: model.LinkReviewQuestions, Target: questions.Target()})
 		if draftID != 0 {

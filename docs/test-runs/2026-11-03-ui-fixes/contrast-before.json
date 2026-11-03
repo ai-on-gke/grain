@@ -1,0 +1,724 @@
+{
+  "scanned": [
+    {
+      "page": "/inbox",
+      "theme": "light",
+      "checked": 124,
+      "failing": 1,
+      "incomplete": 0
+    },
+    {
+      "page": "/boards/board-1",
+      "theme": "light",
+      "checked": 135,
+      "failing": 1,
+      "incomplete": 1
+    },
+    {
+      "page": "/boards/board-3",
+      "theme": "light",
+      "checked": 115,
+      "failing": 11,
+      "incomplete": 2
+    },
+    {
+      "page": "/tasks/8",
+      "theme": "light",
+      "checked": 207,
+      "failing": 1,
+      "incomplete": 5
+    },
+    {
+      "page": "/system/health",
+      "theme": "light",
+      "checked": 93,
+      "failing": 1,
+      "incomplete": 0
+    },
+    {
+      "page": "/settings/models",
+      "theme": "light",
+      "checked": 91,
+      "failing": 1,
+      "incomplete": 3
+    },
+    {
+      "page": "/settings/sandboxes",
+      "theme": "light",
+      "checked": 102,
+      "failing": 1,
+      "incomplete": 8
+    },
+    {
+      "page": "/settings/credentials",
+      "theme": "light",
+      "checked": 89,
+      "failing": 1,
+      "incomplete": 1
+    },
+    {
+      "page": "/settings/access",
+      "theme": "light",
+      "checked": 64,
+      "failing": 1,
+      "incomplete": 1
+    },
+    {
+      "page": "/settings/hostds",
+      "theme": "light",
+      "checked": 95,
+      "failing": 1,
+      "incomplete": 8
+    },
+    {
+      "page": "/settings/preferences",
+      "theme": "light",
+      "checked": 74,
+      "failing": 1,
+      "incomplete": 2
+    },
+    {
+      "page": "/settings/upgrade",
+      "theme": "light",
+      "checked": 71,
+      "failing": 1,
+      "incomplete": 2
+    },
+    {
+      "page": "/settings/caches",
+      "theme": "light",
+      "checked": 74,
+      "failing": 1,
+      "incomplete": 3
+    },
+    {
+      "page": "/settings/engine",
+      "theme": "light",
+      "checked": 69,
+      "failing": 1,
+      "incomplete": 4
+    },
+    {
+      "page": "/settings/config-repo",
+      "theme": "light",
+      "checked": 62,
+      "failing": 1,
+      "incomplete": 1
+    },
+    {
+      "page": "/settings/general",
+      "theme": "light",
+      "checked": 77,
+      "failing": 1,
+      "incomplete": 4
+    },
+    {
+      "page": "/settings/git",
+      "theme": "light",
+      "checked": 85,
+      "failing": 1,
+      "incomplete": 2
+    },
+    {
+      "page": "/settings/repositories",
+      "theme": "light",
+      "checked": 78,
+      "failing": 1,
+      "incomplete": 1
+    },
+    {
+      "page": "/settings/tasks",
+      "theme": "light",
+      "checked": 81,
+      "failing": 1,
+      "incomplete": 4
+    },
+    {
+      "page": "/settings/agents",
+      "theme": "light",
+      "checked": 75,
+      "failing": 1,
+      "incomplete": 4
+    },
+    {
+      "page": "/settings/capabilities",
+      "theme": "light",
+      "checked": 100,
+      "failing": 1,
+      "incomplete": 1
+    },
+    {
+      "page": "/settings/ci",
+      "theme": "light",
+      "checked": 82,
+      "failing": 1,
+      "incomplete": 6
+    },
+    {
+      "page": "/settings/memory",
+      "theme": "light",
+      "checked": 83,
+      "failing": 1,
+      "incomplete": 3
+    },
+    {
+      "page": "/inbox",
+      "theme": "dark",
+      "checked": 124,
+      "failing": 0,
+      "incomplete": 0
+    },
+    {
+      "page": "/boards/board-1",
+      "theme": "dark",
+      "checked": 135,
+      "failing": 0,
+      "incomplete": 1
+    },
+    {
+      "page": "/boards/board-3",
+      "theme": "dark",
+      "checked": 115,
+      "failing": 0,
+      "incomplete": 2
+    },
+    {
+      "page": "/tasks/8",
+      "theme": "dark",
+      "checked": 157,
+      "failing": 0,
+      "incomplete": 55
+    },
+    {
+      "page": "/system/health",
+      "theme": "dark",
+      "checked": 75,
+      "failing": 0,
+      "incomplete": 18
+    },
+    {
+      "page": "/settings/models",
+      "theme": "dark",
+      "checked": 90,
+      "failing": 0,
+      "incomplete": 4
+    },
+    {
+      "page": "/settings/sandboxes",
+      "theme": "dark",
+      "checked": 102,
+      "failing": 0,
+      "incomplete": 8
+    },
+    {
+      "page": "/settings/credentials",
+      "theme": "dark",
+      "checked": 84,
+      "failing": 0,
+      "incomplete": 6
+    },
+    {
+      "page": "/settings/access",
+      "theme": "dark",
+      "checked": 64,
+      "failing": 0,
+      "incomplete": 1
+    },
+    {
+      "page": "/settings/hostds",
+      "theme": "dark",
+      "checked": 95,
+      "failing": 0,
+      "incomplete": 8
+    },
+    {
+      "page": "/settings/preferences",
+      "theme": "dark",
+      "checked": 74,
+      "failing": 0,
+      "incomplete": 2
+    },
+    {
+      "page": "/settings/upgrade",
+      "theme": "dark",
+      "checked": 70,
+      "failing": 0,
+      "incomplete": 3
+    },
+    {
+      "page": "/settings/caches",
+      "theme": "dark",
+      "checked": 74,
+      "failing": 0,
+      "incomplete": 3
+    },
+    {
+      "page": "/settings/engine",
+      "theme": "dark",
+      "checked": 69,
+      "failing": 0,
+      "incomplete": 4
+    },
+    {
+      "page": "/settings/config-repo",
+      "theme": "dark",
+      "checked": 62,
+      "failing": 0,
+      "incomplete": 1
+    },
+    {
+      "page": "/settings/general",
+      "theme": "dark",
+      "checked": 77,
+      "failing": 0,
+      "incomplete": 4
+    },
+    {
+      "page": "/settings/git",
+      "theme": "dark",
+      "checked": 85,
+      "failing": 0,
+      "incomplete": 2
+    },
+    {
+      "page": "/settings/repositories",
+      "theme": "dark",
+      "checked": 78,
+      "failing": 0,
+      "incomplete": 1
+    },
+    {
+      "page": "/settings/tasks",
+      "theme": "dark",
+      "checked": 81,
+      "failing": 0,
+      "incomplete": 4
+    },
+    {
+      "page": "/settings/agents",
+      "theme": "dark",
+      "checked": 73,
+      "failing": 0,
+      "incomplete": 6
+    },
+    {
+      "page": "/settings/capabilities",
+      "theme": "dark",
+      "checked": 97,
+      "failing": 0,
+      "incomplete": 4
+    },
+    {
+      "page": "/settings/ci",
+      "theme": "dark",
+      "checked": 82,
+      "failing": 0,
+      "incomplete": 6
+    },
+    {
+      "page": "/settings/memory",
+      "theme": "dark",
+      "checked": 83,
+      "failing": 0,
+      "incomplete": 3
+    }
+  ],
+  "failing": [
+    {
+      "page": "/inbox",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": ".css-1vf52mz",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/boards/board-1",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": ".css-1vf52mz",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/boards/board-3",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": ".css-1vf52mz",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/boards/board-3",
+      "theme": "light",
+      "ratio": 2.64,
+      "expected": "4.5:1",
+      "fg": "#999997",
+      "bg": "#f7f6f3",
+      "fontSize": "10.5pt (14px)",
+      "fontWeight": "normal",
+      "target": "tr:nth-child(2) > .css-1hmr28q.MuiTableCell-alignRight:nth-child(4) > span",
+      "html": "<span aria-label=\"Only 2 samples: at this n a p90 is the maximum under another name.\" class=\"\">1h 24m*</span>"
+    },
+    {
+      "page": "/boards/board-3",
+      "theme": "light",
+      "ratio": 2.64,
+      "expected": "4.5:1",
+      "fg": "#999997",
+      "bg": "#f7f6f3",
+      "fontSize": "10.5pt (14px)",
+      "fontWeight": "normal",
+      "target": "tr:nth-child(2) > .css-1hmr28q.MuiTableCell-alignRight:nth-child(5) > span",
+      "html": "<span aria-label=\"Only 2 samples: at this n a p99 is the maximum under another name.\" class=\"\">1h 24m*</span>"
+    },
+    {
+      "page": "/boards/board-3",
+      "theme": "light",
+      "ratio": 2.64,
+      "expected": "4.5:1",
+      "fg": "#999997",
+      "bg": "#f7f6f3",
+      "fontSize": "10.5pt (14px)",
+      "fontWeight": "normal",
+      "target": "tr:nth-child(5) > .css-1hmr28q.MuiTableCell-alignRight:nth-child(3) > span",
+      "html": "<span aria-label=\"Only 1 sample: at this n a p50 is the maximum under another name.\" class=\"\">8m 0s*</span>"
+    },
+    {
+      "page": "/boards/board-3",
+      "theme": "light",
+      "ratio": 2.64,
+      "expected": "4.5:1",
+      "fg": "#999997",
+      "bg": "#f7f6f3",
+      "fontSize": "10.5pt (14px)",
+      "fontWeight": "normal",
+      "target": "tr:nth-child(5) > .css-1hmr28q.MuiTableCell-alignRight:nth-child(4) > span",
+      "html": "<span aria-label=\"Only 1 sample: at this n a p90 is the maximum under another name.\" class=\"\">8m 0s*</span>"
+    },
+    {
+      "page": "/boards/board-3",
+      "theme": "light",
+      "ratio": 2.64,
+      "expected": "4.5:1",
+      "fg": "#999997",
+      "bg": "#f7f6f3",
+      "fontSize": "10.5pt (14px)",
+      "fontWeight": "normal",
+      "target": "tr:nth-child(5) > .css-1hmr28q.MuiTableCell-alignRight:nth-child(5) > span",
+      "html": "<span aria-label=\"Only 1 sample: at this n a p99 is the maximum under another name.\" class=\"\">8m 0s*</span>"
+    },
+    {
+      "page": "/boards/board-3",
+      "theme": "light",
+      "ratio": 2.64,
+      "expected": "4.5:1",
+      "fg": "#999997",
+      "bg": "#f7f6f3",
+      "fontSize": "10.5pt (14px)",
+      "fontWeight": "normal",
+      "target": "tr:nth-child(6) > .css-1hmr28q.MuiTableCell-alignRight:nth-child(3) > span",
+      "html": "<span aria-label=\"Only 1 sample: at this n a p50 is the maximum under another name.\" class=\"\">10m 0s*</span>"
+    },
+    {
+      "page": "/boards/board-3",
+      "theme": "light",
+      "ratio": 2.64,
+      "expected": "4.5:1",
+      "fg": "#999997",
+      "bg": "#f7f6f3",
+      "fontSize": "10.5pt (14px)",
+      "fontWeight": "normal",
+      "target": "tr:nth-child(6) > .css-1hmr28q.MuiTableCell-alignRight:nth-child(4) > span",
+      "html": "<span aria-label=\"Only 1 sample: at this n a p90 is the maximum under another name.\" class=\"\">10m 0s*</span>"
+    },
+    {
+      "page": "/boards/board-3",
+      "theme": "light",
+      "ratio": 2.64,
+      "expected": "4.5:1",
+      "fg": "#999997",
+      "bg": "#f7f6f3",
+      "fontSize": "10.5pt (14px)",
+      "fontWeight": "normal",
+      "target": "tr:nth-child(6) > .css-1hmr28q.MuiTableCell-alignRight:nth-child(5) > span",
+      "html": "<span aria-label=\"Only 1 sample: at this n a p99 is the maximum under another name.\" class=\"\">10m 0s*</span>"
+    },
+    {
+      "page": "/boards/board-3",
+      "theme": "light",
+      "ratio": 2.64,
+      "expected": "4.5:1",
+      "fg": "#999997",
+      "bg": "#f7f6f3",
+      "fontSize": "10.5pt (14px)",
+      "fontWeight": "normal",
+      "target": "tr:nth-child(8) > .css-1hmr28q.MuiTableCell-alignRight:nth-child(4) > span",
+      "html": "<span aria-label=\"Only 9 samples: at this n a p90 is the maximum under another name.\" class=\"\">1h 0m*</span>"
+    },
+    {
+      "page": "/boards/board-3",
+      "theme": "light",
+      "ratio": 2.64,
+      "expected": "4.5:1",
+      "fg": "#999997",
+      "bg": "#f7f6f3",
+      "fontSize": "10.5pt (14px)",
+      "fontWeight": "normal",
+      "target": "tr:nth-child(8) > .css-1hmr28q.MuiTableCell-alignRight:nth-child(5) > span",
+      "html": "<span aria-label=\"Only 9 samples: at this n a p99 is the maximum under another name.\" class=\"\">1h 0m*</span>"
+    },
+    {
+      "page": "/tasks/8",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": ".css-1vf52mz",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/system/health",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": "a",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/settings/models",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": "a",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/settings/sandboxes",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": ".css-1vf52mz",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/settings/credentials",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": ".css-1vf52mz",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/settings/access",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": "a",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/settings/hostds",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": "a",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/settings/preferences",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": "a",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/settings/upgrade",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": "a",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/settings/caches",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": "a",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/settings/engine",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": "a",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/settings/config-repo",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": "a",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/settings/general",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": "a",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/settings/git",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": "a",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/settings/repositories",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": ".css-1vf52mz",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/settings/tasks",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": "a",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/settings/agents",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": ".css-1vf52mz",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/settings/capabilities",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": ".css-1vf52mz",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/settings/ci",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": "a",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    },
+    {
+      "page": "/settings/memory",
+      "theme": "light",
+      "ratio": 4.27,
+      "expected": "4.5:1",
+      "fg": "#7d7a74",
+      "bg": "#ffffff",
+      "fontSize": "8.2pt (10.88px)",
+      "fontWeight": "normal",
+      "target": "a",
+      "html": "<a class=\"MuiTypography-root MuiTypography-caption MuiTypography-noWrap css-1vf52mz\" href=\"/settings/upgrade\" data-testid=\"build-stamp\" title=\"Running commit 3d"
+    }
+  ]
+}

@@ -71,3 +71,79 @@ func (s *Store) SetAutoUpgradeRun(ctx context.Context, r AutoUpgradeRun) error {
 // records, so the pane and the journal say the schedule did it rather
 // than naming an operator who was asleep.
 var AutoUpgradePrincipal = Principal{Kind: PrincipalAutomation, ID: "auto-upgrade"}
+
+// AutoUpgradeRelease is what the release-triggered automatic upgrade
+// (Config.AutoUpgradeOn = AutoUpgradeOnRelease, orchestrator's
+// reconcileReleaseUpgrade) has seen and done: the newest release tag on
+// the deployment's image channel and since when, and the release it last
+// acted on, with the upgrade it scheduled for it and how that ended.
+//
+// Grain's note to itself, like AutoUpgradeRun: the auto_upgrade_release
+// table is off SettingsTables.
+type AutoUpgradeRelease struct {
+	// Newest is the newest release tag seen ("v3.6.0"), and SeenAt when
+	// it was first seen as newest. A release is acted on only once it
+	// has stayed newest for a while, so two releases close together
+	// give one upgrade rather than two drains.
+	Newest string
+	SeenAt time.Time
+	// Release is the release tag last acted on, and Target what was
+	// scheduled for it ("latest", or Release itself). Once Release is
+	// the newest tag nothing more is scheduled -- a failed upgrade is
+	// retried only when a newer release arrives.
+	Release string
+	Target  string
+	// ScheduledAt is when that upgrade was scheduled; nil when nothing
+	// was (the deployment already ran it).
+	ScheduledAt *time.Time
+	// Outcome is how it ended: one of the AutoUpgradeOutcome values.
+	Outcome string
+}
+
+// The values of AutoUpgradeRelease.Outcome.
+const (
+	// AutoUpgradeScheduled is an upgrade scheduled and not yet ended.
+	AutoUpgradeScheduled = "scheduled"
+	// AutoUpgradeUnchanged is a release the deployment already ran.
+	AutoUpgradeUnchanged = "unchanged"
+	// AutoUpgradeSucceeded is an upgrade that finished.
+	AutoUpgradeSucceeded = "ok"
+	// AutoUpgradeFailed is an upgrade that failed; a notification
+	// (FamilyUpgradeFailed) says where.
+	AutoUpgradeFailed = "failed"
+)
+
+// GetAutoUpgradeRelease reads the record, or nil (with no error) for a
+// deployment whose release-triggered upgrade has never looked.
+func (s *Store) GetAutoUpgradeRelease(ctx context.Context) (*AutoUpgradeRelease, error) {
+	row := s.db.QueryRowContext(ctx,
+		"SELECT `newest`,`seen_at`,`release_tag`,`target`,`scheduled_at`,`outcome` FROM `auto_upgrade_release` WHERE `id` = 1")
+	var r AutoUpgradeRelease
+	var scheduled sql.NullTime
+	if err := row.Scan(&r.Newest, &r.SeenAt, &r.Release, &r.Target, &scheduled, &r.Outcome); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading the release-triggered upgrade's record: %w", err)
+	}
+	r.SeenAt = r.SeenAt.UTC()
+	if scheduled.Valid {
+		t := scheduled.Time.UTC()
+		r.ScheduledAt = &t
+	}
+	return &r, nil
+}
+
+// SetAutoUpgradeRelease writes the record, replacing the one before it.
+func (s *Store) SetAutoUpgradeRelease(ctx context.Context, r AutoUpgradeRelease) error {
+	var scheduled any
+	if r.ScheduledAt != nil {
+		scheduled = r.ScheduledAt.UTC()
+	}
+	return s.write(ctx, "record the release-triggered upgrade for "+r.Newest, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			"REPLACE INTO `auto_upgrade_release` (`id`,`newest`,`seen_at`,`release_tag`,`target`,`scheduled_at`,`outcome`) VALUES (1,?,?,?,?,?,?)",
+			r.Newest, r.SeenAt.UTC(), r.Release, r.Target, scheduled, r.Outcome)
+		return err
+	})
+}

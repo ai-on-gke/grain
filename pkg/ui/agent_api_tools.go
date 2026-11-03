@@ -124,7 +124,7 @@ var routeDocs = map[string]string{
 	"PUT /api/repos/{owner}/{name}/release-secrets/{secret}":               "Set the value of one of a repository's release secrets.",
 	"DELETE /api/repos/{owner}/{name}/release-secrets/{secret}":            "Delete one of a repository's release secrets.",
 	"POST /api/repos/{owner}/{name}/release-runs":                          "Start a release run of a repository, at a branch, ref or commit, optionally only some jobs.",
-	"POST /api/repos/{owner}/{name}/pending-releases/{version}/approve":    "Approve a pending trunk release (vX.Y.Z), making it official; short_soak_ok accepts a soak under the minimum, which is otherwise refused. Only a person may; an agent is refused.",
+	"POST /api/repos/{owner}/{name}/pending-releases/{version}/approve":    "Approve a pending trunk release (vX.Y.Z), making it official; short_soak_ok accepts a soak under the minimum and allow_breaking breaking changes outside a RELEASE_MAJOR release, each otherwise refused. Only a person may; an agent is refused.",
 	"POST /api/repos/{owner}/{name}/pending-releases/{version}/reject":     "Reject a pending trunk release (vX.Y.Z), dropping its release candidate. Only a person may; an agent is refused.",
 	"POST /api/repos/{owner}/{name}/base-branch-runs":                      "Start a grain CI run of one of a repository's base branches.",
 	"PUT /api/repos/{owner}/{name}/work-ownership":                         "Set who owns a repository's work: its default, or one work item's override.",
@@ -261,6 +261,9 @@ var routeDocs = map[string]string{
 	"POST /api/external-agents/tokens/{id}/revoke":                         "Revoke an external agent credential immediately.",
 	"DELETE /api/external-agents/tokens/{id}":                              "Delete an external agent credential record.",
 	"POST /api/external-agents/tokens/revoke-all":                          "Emergency kill switch: revoke every active external agent credential immediately.",
+	"GET /api/access/principals":                                           "List the allowed users and groups admitted through verified-identity sign-in.",
+	"POST /api/access/principals":                                          "Add a user:<email> or group:<email> entry to the allowed users and groups list (idempotent when already present).",
+	"DELETE /api/access/principals/{entry}":                                "Remove a user:<email> or group:<email> entry from the allowed users and groups list.",
 }
 
 // routeBodies is the request type a route reads its body into, which
@@ -388,6 +391,7 @@ var routeBodies = map[string]any{
 	"POST /api/tests/quarantine":                                     QuarantineTestRequest{},
 	"POST /api/pipeline-pause":                                       pausePipelineRequest{},
 	"POST /api/external-agents/tokens":                               CreateExternalAgentTokenRequest{},
+	"POST /api/access/principals":                                    AllowPrincipalRequest{},
 }
 
 // routeQueries is the query parameters a route's handler reads, each

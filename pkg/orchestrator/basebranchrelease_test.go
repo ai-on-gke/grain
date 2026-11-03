@@ -1223,3 +1223,99 @@ func TestTheBaseBranchReconcilerForgetsTaskBranches(t *testing.T) {
 		}
 	}
 }
+
+// A release in flight while merges land hands on to the newest tip once it
+// concludes, however it concludes. TestOnlyOneReleaseIsInFlightPerBranch
+// pins this for a release that published; this pins it for the other
+// endings too, each of which takes its own path through
+// collectBaseBranchRelease -- a failure files triage, a cancelled or
+// errored run is an infra verdict that would otherwise be re-run -- and
+// none of which may leave the commits merged during the run unreleased
+// (grain/task-2674: two merges into a repository's main landed during one
+// release, and no release followed).
+func TestAReleaseInFlightHandsOnToTheNewestTipHoweverItEnds(t *testing.T) {
+	t.Parallel()
+	release := func(c ci.Conclusion, detail string) ci.JobRun {
+		return ci.JobRun{WorkflowPath: ".grain/workflows/release.yml", JobID: "images", Conclusion: c, Error: detail}
+	}
+	for _, c := range []struct {
+		name string
+		end  ci.Conclusion
+		job  ci.JobRun
+	}{
+		{"published", ci.ConclusionSuccess, release(ci.ConclusionSuccess, "")},
+		{"failed", ci.ConclusionFailure, release(ci.ConclusionFailure, "")},
+		{"cancelled", ci.ConclusionCancelled, release(ci.ConclusionCancelled, "")},
+		{"errored", ci.ConclusionErrored, release(ci.ConclusionErrored, "HTTP 429 Too Many Requests")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			store, ctx := openStore(t)
+			sim, client := newSim(t, "acme", "widgets", "main")
+			repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+			runner := newFakeCI()
+			releasingRepo(t, ctx, store, repo)
+			var branches []string
+			for _, id := range []string{"t1", "t2", "t3"} {
+				task, branch := queuedTaskWithPullRequest(t, ctx, store, sim, client, id, repo)
+				task = grantCI(t, ctx, store, task)
+				greenGrainCI(t, ctx, store, client, runner, task, repo, branch)
+				branches = append(branches, branch)
+			}
+			setMergeable(sim, true)
+
+			// The first merge, and its release.
+			at := baseTime
+			syncWithCIOneMergePerCycle(t, ctx, store, client, runner, at)
+			runBaseBranchReleaseReconciler(t, ctx, store, client, runner, at.Add(time.Second))
+			inFlight, err := store.GetBaseBranchRelease(ctx, repo, "main")
+			if err != nil || inFlight == nil || !inFlight.InFlight() {
+				t.Fatalf("the first merge's release is %+v (%v), want it in flight", inFlight, err)
+			}
+
+			// Two more merge while it runs, each judged green.
+			var middle string
+			for i := 0; i < 2; i++ {
+				at = at.Add(time.Minute)
+				if err := runBaseBranchCIReconciler(t, ctx, store, client, runner, at); err != nil {
+					t.Fatal(err)
+				}
+				judging, err := store.GetBaseBranchCI(ctx, repo, "main")
+				if err != nil || judging == nil {
+					t.Fatalf("main was judged by nothing: %+v (%v)", judging, err)
+				}
+				runner.finish(judging.RunID, ci.ConclusionSuccess, ci.JobRun{
+					WorkflowPath: ".grain/workflows/tests.yml", JobID: "go", Conclusion: ci.ConclusionSuccess,
+				})
+				syncWithCIOneMergePerCycle(t, ctx, store, client, runner, at.Add(time.Second))
+				if i == 0 {
+					middle = headSHA(t, client, repo, "main")
+				}
+				runBaseBranchReleaseReconciler(t, ctx, store, client, runner, at.Add(2*time.Second))
+			}
+			if !mergedBranch(sim, branches[2]) {
+				t.Fatal("the third change did not merge, so this test never asked the question")
+			}
+			if got := len(runner.releaseRuns()); got != 1 {
+				t.Fatalf("%d release runs while the first was in flight, want still the one", got)
+			}
+
+			// It ends, and the cycles after it release main's tip.
+			runner.finishAt(inFlight.RunID, c.end, at.Add(time.Minute), c.job)
+			for i := 0; i < 3; i++ {
+				at = at.Add(time.Minute)
+				runBaseBranchReleaseReconciler(t, ctx, store, client, runner, at)
+			}
+			tip := headSHA(t, client, repo, "main")
+			runs := runner.releaseRuns()
+			if len(runs) != 2 || runs[1].Commit != tip {
+				row, _ := store.GetBaseBranchRelease(ctx, repo, "main")
+				t.Fatalf("after a release that ended %s, %d release runs (%+v) and the row reads %+v; "+
+					"want a second one against main's tip %s", c.end, len(runs), runs, row, tip)
+			}
+			if runs[1].Commit == middle {
+				t.Fatalf("the commit merged in between (%s) was released instead of the tip", middle)
+			}
+		})
+	}
+}

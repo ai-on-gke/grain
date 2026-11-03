@@ -51,6 +51,16 @@
 # block can set. .github/workflows/promote-release.yml takes the same
 # answer as its short_soak_ok input.
 #
+# approve also refuses a release carrying breaking changes that is not the
+# major release RELEASE_MAJOR asks for (release-notes.sh check-breaking)
+# unless RELEASE_ALLOW_BREAKING names it. Here that comes only from
+# GRAIN_CI_RELEASE_ALLOW_BREAKING, which the approval route sets when the
+# person approving passes allow_breaking (`grain release approve
+# -allow-breaking`) and which no API caller and no env: block can set
+# either; the step turns it into RELEASE_ALLOW_BREAKING=<the release>.
+# .github/workflows/promote-release.yml takes it as its allow_breaking
+# input.
+#
 # The route selects one job: `promote` for an approval (which brings
 # `approve` in front of it) or `reject`. Dispatched whole, all three
 # refuse.
@@ -72,7 +82,12 @@ jobs:
     steps:
       - name: Promote the pending release a person approved
         run: |
+          allow_breaking=""
+          if [ "${GRAIN_CI_RELEASE_ALLOW_BREAKING:-}" = true ]; then
+            allow_breaking="$GRAIN_CI_RELEASE_VERSION"
+          fi
           RELEASE_SHORT_SOAK_OK="${GRAIN_CI_RELEASE_SHORT_SOAK_OK:-false}" \
+          RELEASE_ALLOW_BREAKING="$allow_breaking" \
             bash ./scripts/release-from-trunk.sh approve "$GRAIN_CI_RELEASE_VERSION"
 
   promote:

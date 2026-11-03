@@ -25,7 +25,7 @@ import {
   Popover,
   Typography,
 } from "@mui/material";
-import ItemGlyph from "./ItemGlyph.jsx";
+import AppIcon from "./AppIcon.jsx";
 import { useTimeZone } from "../TimeZoneContext.jsx";
 import { formatTime } from "../time.js";
 import {
@@ -86,6 +86,7 @@ export default function AlertsButton({
     <>
       <IconButton
         size="small"
+        className="header-control-icon"
         data-testid="alerts-button"
         data-severity={worst || "none"}
         aria-label={label}
@@ -101,7 +102,7 @@ export default function AlertsButton({
           invisible={count === 0}
           data-testid="alerts-count"
         >
-          <ItemGlyph kind="alerts" size={18} />
+          <AppIcon name="alerts" size={18} />
         </Badge>
       </IconButton>
       {/* aria-live alone rather than role="status": a page may have a

@@ -360,6 +360,18 @@ func (h *CapabilityPasses) exhausted(taskID, grant string, retryAt, now time.Tim
 // be started. A pass that cannot be minted gives back whatever admit
 // reserved and leaves the candidate queued, backing off, or refused.
 func capabilityAdmitter(deps Deps, admit dispatch.Admitter) dispatch.Admitter {
+	return capabilityAdmitterFor(deps, admit, nil)
+}
+
+// capabilityAdmitterFor is capabilityAdmitter told, by connectionOf, the
+// connection each admitted run's own agent spends (the framework admit
+// reserved for it, as RunDispatch reads CredentialConnection). The pass is
+// minted with it in its context (model.WithRunConnection), so an
+// in-process method spending a model credential on the run's behalf --
+// model-proxy -- forwards with the run's own team connection exactly as
+// the retired in-process <vendor>-proxy providers did. A nil connectionOf
+// is a run on no connection.
+func capabilityAdmitterFor(deps Deps, admit dispatch.Admitter, connectionOf func(runID string) string) dispatch.Admitter {
 	passes := deps.capabilityPasses()
 	return func(ctx context.Context, candidate dispatch.Candidate) (dispatch.Admission, error) {
 		// Read before admit rather than after it, so that nothing admit
@@ -394,7 +406,11 @@ func capabilityAdmitter(deps Deps, admit dispatch.Admitter) dispatch.Admitter {
 		mintDeps := deps
 		mintDeps.CapabilityServers = servers
 		deadline := capabilityDeadline(at, deps.Config.maxRunRuntime())
-		p, err := mintCapabilityPass(ctx, mintDeps, *task, candidate, at, deadline)
+		mintCtx := model.WithMintRunID(ctx, candidate.RunID)
+		if connectionOf != nil {
+			mintCtx = model.WithRunConnection(mintCtx, connectionOf(candidate.RunID))
+		}
+		p, err := mintCapabilityPass(mintCtx, mintDeps, *task, candidate, at, deadline)
 		if err != nil {
 			if serr := admissionMintFailed(ctx, deps, passes, *task, err, at); serr != nil {
 				log.Printf("orchestrator: task %s: recording its failed capability admission: %v", task.ID, serr)

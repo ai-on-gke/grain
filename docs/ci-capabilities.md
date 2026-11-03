@@ -91,8 +91,7 @@ The providers on this page are the in-process ones in `pkg/capability/`, and
 CI keeps using them until runs are moved over to capability servers
 ([design/spec/capabilities/capabilities.spec.md](../design/spec/capabilities/capabilities.spec.md)). Their capability-server
 equivalents are already in the binary, served by `grain capability <name>`:
-`gcp` (`#gcp-key`, for `gcp-key` and `gcp-key:<name>`), `model-proxy`
-(`#model-proxy`, for the `<vendor>-proxy` capabilities), `git`
+`gcp` (`#gcp-key`, for `gcp-key` and `gcp-key:<name>`), `git`
 (`#git-repo`, for repository access), `self-debug` and `skill`. In a
 `.grain/workflows` job they will be granted as references such as
 `https://github.com/ai-on-gke/grain/capabilities/gcp#gcp-key` with `with:`
@@ -116,6 +115,14 @@ the job over the sandbox fabric, so they stay reachable under
 `network_access: "none"` (spec §5.3.3). The job's automatic retry gets the
 same grants in its fresh sandbox, its endpoint proxies re-pointed there,
 without minting again.
+
+
+The model proxies are retired onto grain's in-process
+`https://grain.dev/capabilities/model-proxy#model-proxy` `{vendor}`
+(schema migration 100 rewrote stored `claude-proxy`, `openai-proxy` and
+`gemini-proxy`, `repo_config.ci_capabilities` included). It forwards with
+the run's own team connection, as the in-process providers did; the bare
+names remain one-release aliases.
 
 ## Which trees are trusted with them
 

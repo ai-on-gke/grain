@@ -104,7 +104,7 @@ func TestResumeOnRoundTrips(t *testing.T) {
 		t.Fatal("the empty ResumeOn is not stored as NULL")
 	}
 	want := "parked: resume_later until " + at.Format(time.RFC3339) +
-		" has passed, or grain CI (my-branch) has a verdict, or anybody posts to this task: waiting on review"
+		" has passed, or CI (my-branch) has a verdict, or anybody posts to this task: waiting on review"
 	if got := model.RequestedDetail("waiting on review", r); got != want {
 		t.Fatalf("RequestedDetail = %q, want %q", got, want)
 	}

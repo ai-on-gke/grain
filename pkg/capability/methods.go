@@ -21,6 +21,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -119,6 +120,7 @@ func Register(m Method) (unregister func()) {
 	}
 	registeredMethods[ref] = m
 	registered = true
+	forgetMethodServer(m.Server)
 	if m.DefaultOn {
 		undo = append(undo, model.RegisterDefaultConsoleSessionCapability(m.Grant()))
 	}
@@ -126,6 +128,7 @@ func Register(m Method) (unregister func()) {
 		mu.Lock()
 		defer mu.Unlock()
 		delete(registeredMethods, ref)
+		forgetMethodServer(m.Server)
 		for _, f := range undo {
 			f()
 		}
@@ -162,11 +165,55 @@ func IsMethodServer(id string) bool {
 	return slices.Contains(MethodServers(), id)
 }
 
-// MethodServer builds the in-process server id names from the methods
-// registered on it, or reports false when none is. Like
-// grainserver.Lookup's, the server is built afresh on each call, so it
-// always serves what is registered now.
+// MethodServer is the in-process server id names, built from the methods
+// registered on it, or false when none is. It is built once for as long
+// as what is registered on it stays the same -- Register and its
+// unregister drop it, so it always serves what is registered now -- and
+// the one server answers every mint and release in between: a method's
+// leases, which its release_ and deadline sweep revoke, are the server's
+// own (protocol.Method), so a release built afresh would know of no
+// lease to revoke.
 func MethodServer(id string) (*protocol.Server, bool, error) {
+	builtMu.Lock()
+	srv, gen := built[id], builtGen
+	builtMu.Unlock()
+	if srv != nil {
+		return srv, true, nil
+	}
+	// Built outside builtMu, which Register takes while holding mu:
+	// building reads the registered methods under mu.
+	srv, ok, err := buildMethodServer(id)
+	if !ok || err != nil {
+		return srv, ok, err
+	}
+	builtMu.Lock()
+	defer builtMu.Unlock()
+	if cached := built[id]; cached != nil {
+		return cached, true, nil
+	}
+	// A registration since the build began may have changed id's methods.
+	if gen == builtGen {
+		built[id] = srv
+	}
+	return srv, true, nil
+}
+
+var (
+	builtMu  sync.Mutex
+	built    = map[string]*protocol.Server{}
+	builtGen int
+)
+
+// forgetMethodServer drops id's built server, for the next MethodServer
+// to build from what is registered then.
+func forgetMethodServer(id string) {
+	builtMu.Lock()
+	defer builtMu.Unlock()
+	delete(built, id)
+	builtGen++
+}
+
+func buildMethodServer(id string) (*protocol.Server, bool, error) {
 	var methods []*protocol.Method
 	for _, m := range Methods() {
 		if m.Server != id {

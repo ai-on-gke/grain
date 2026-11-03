@@ -131,7 +131,11 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading %s before classifying its diff: %w", task.ID, err)
 	}
-	if current == nil || (!current.AutoMerge && !hasSecurityHold(*current) && !hasBrokenRulesHold(*current)) {
+	// A change on a hold only a human may release is classified again
+	// too: a head that no longer touches what held it is let go
+	// (model.restoreAfterHolds), and one that still does stays held.
+	if current == nil || (!current.AutoMerge && !hasSecurityHold(*current) && !hasBrokenRulesHold(*current) &&
+		(linkTarget(*current, model.LinkHumanOnlyHold) == "" || model.AutoMergeDeclined(*current))) {
 		return nil
 	}
 	if !holdIsAbout(*current, ref) {
@@ -337,7 +341,10 @@ func dropSecurityHoldOnFindings(ctx context.Context, store *model.Store, client 
 		if !hasSecurityHold(*t) && !hasBrokenRulesHold(*t) {
 			return nil
 		}
-		t.AutoMerge, dropped = false, true
+		// For a person to decide, not for the hold's clearing to hand
+		// auto-merge back (model.AwaitPersonForAutoMerge).
+		model.AwaitPersonForAutoMerge(t, "review "+review.ID+" left findings")
+		dropped = true
 		t.Links = withoutLinks(t.Links, model.LinkSecurityHold, model.LinkTrustBoundaryCleared,
 			model.LinkBrokenRulesHold)
 		return nil
@@ -552,6 +559,7 @@ func settleSecurityHold(ctx context.Context, store *model.Store, client github.C
 			// The decision is a human's now, and their Submit is about
 			// the head they read, review commits included.
 			t.Links = withoutLinks(t.Links, model.LinkTrustBoundaryCleared)
+			model.AwaitPersonForAutoMerge(t, "security review "+reviewID+"'s fixes were closed without merging")
 		}
 		return nil
 	}); err != nil {
@@ -928,8 +936,13 @@ func hasSecurityHold(task model.Task) bool {
 // waits for their Submit. The store refuses the write regardless
 // (model.guardAutoMerge); saying so here is what keeps each release from
 // announcing a merge that is not going to happen.
+//
+// So is one a hold let go of for a person to decide
+// (model.AutoMergeAwaitsPerson): a review's findings, fixes that never
+// landed.
 func heldForHuman(task model.Task) bool {
-	return linkTarget(task, model.LinkHumanOnlyHold) != "" || model.AutoMergeDeclined(task)
+	return linkTarget(task, model.LinkHumanOnlyHold) != "" || model.AutoMergeDeclined(task) ||
+		model.AutoMergeAwaitsPerson(task)
 }
 
 // linkTarget is the target of task's last link of kind, or "".
