@@ -21,6 +21,13 @@ import (
 	"github.com/bwsalmon/granule/pkg/workloadio"
 )
 
+// The values of Config.DiskDirect.
+const (
+	DiskDirectAuto = "auto"
+	DiskDirectOn   = "on"
+	DiskDirectOff  = "off"
+)
+
 const (
 	envDiskImage                 = "CHV_DISK_IMAGE"
 	envDiskReadonly              = "CHV_DISK_READONLY"
@@ -45,6 +52,8 @@ const (
 	envMemoryMaxMB               = "CHV_MEMORY_MAX_MB"
 	envMemoryHotplug             = "CHV_MEMORY_HOTPLUG"
 	envMemoryShared              = "CHV_MEMORY_SHARED"
+	envBalloon                   = "CHV_BALLOON"
+	envDiskDirect                = "CHV_DISK_DIRECT"
 	envNet                       = "CHV_NET"
 	envAPISocket                 = "CHV_API_SOCKET"
 	envVsockSocket               = "CHV_VSOCK_SOCKET"
@@ -67,6 +76,12 @@ const (
 	// VM's wrapped container runs with instead of the ones its image was
 	// wrapped with. See Config.ContainerOverride.
 	envContainerOverride = "CHV_CONTAINER_OVERRIDE"
+
+	// envWorkloadEnv names variables of this container's own environment
+	// that are passed on to the wrapped container's: a comma-separated
+	// list of names, each one that is set here added to the override's
+	// env. See Config.ContainerOverride.
+	envWorkloadEnv = "GRANULE_WORKLOAD_ENV"
 
 	// envWorkloadStdout and envWorkloadStderr name where a wrapped
 	// container's own stdout and stderr are written, apart from the VM's
@@ -361,6 +376,42 @@ type Config struct {
 
 	MemoryShared bool
 
+	// Balloon attaches a virtio-balloon device with free page reporting
+	// (CHV_BALLOON, on by default): the guest kernel hands back every
+	// 2 MiB run of memory it frees -- an exited process's, a dropped page
+	// cache's -- and cloud-hypervisor punches it out of the guest's RAM,
+	// so the VMM's resident size follows what the guest is using rather
+	// than the most it has ever touched. Without it a guest that has once
+	// filled its RAM with page cache keeps all of it resident for good,
+	// which is what left no room in the container's memory limit for
+	// anything else (see pkg/cgroupmem). The balloon itself starts, and
+	// stays, empty; deflate_on_oom is set so that one inflated through
+	// cloud-hypervisor's API gives memory back before the guest OOMs.
+	//
+	// Needs CONFIG_VIRTIO_BALLOON and CONFIG_PAGE_REPORTING in the guest
+	// kernel, both of which the bundled kernel (ch_defconfig) and
+	// Debian's have; a guest without them just never reports anything.
+	Balloon bool
+
+	// DiskDirect is whether cloud-hypervisor opens the VM's disk images
+	// with O_DIRECT (CHV_DISK_DIRECT: DiskDirectAuto, the default,
+	// DiskDirectOn or DiskDirectOff). Without it every write the guest
+	// makes lands in the host's page cache first, and that page cache is
+	// charged to the VM's own container: a guest that writes a few GB at
+	// once -- mke2fs, a disk image COPY -- puts that much dirty cache on
+	// top of the guest's RAM, against the same limit, and the kernel
+	// OOM-kills the VMM. With it the guest's own page cache is the only
+	// one (the guest already caches everything it reads), and the
+	// container's memory is the guest's RAM plus the VMM's own overhead.
+	//
+	// Auto turns it on for each disk whose image (and backing chain) can
+	// be opened with O_DIRECT, and leaves it off for one that cannot --
+	// a file on a filesystem without O_DIRECT support, or one that does
+	// not exist yet -- since cloud-hypervisor would otherwise refuse to
+	// boot. Disks served over vhost-user are not opened by
+	// cloud-hypervisor at all and are unaffected.
+	DiskDirect string
+
 	// Nets holds one --net value per guest NIC, each passed through
 	// verbatim, e.g. "tap=eth0,mac=02:00:00:00:00:01". CHV_NET supplies
 	// a single entry; a netshim-managed sandbox (see cmd/granule-shim)
@@ -595,6 +646,21 @@ func FromEnv() (Config, error) {
 	}
 
 	var err error
+	cfg.Balloon, err = getEnvBool(envBalloon, true)
+	if err != nil {
+		return Config{}, err
+	}
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv(envDiskDirect))); v {
+	case "", DiskDirectAuto:
+		cfg.DiskDirect = DiskDirectAuto
+	case DiskDirectOn, "true", "yes", "1":
+		cfg.DiskDirect = DiskDirectOn
+	case DiskDirectOff, "false", "no", "0":
+		cfg.DiskDirect = DiskDirectOff
+	default:
+		return Config{}, fmt.Errorf("%s must be %q, %q or %q, got %q", envDiskDirect, DiskDirectAuto, DiskDirectOn, DiskDirectOff, v)
+	}
+
 	cfg.DiskNumQueues, err = getEnvInt(envDiskNumQueues, 0)
 	if err != nil {
 		return Config{}, err
@@ -861,6 +927,31 @@ func FromEnv() (Config, error) {
 		}
 		cfg.ContainerOverride = &o
 		cfg.ContainerOverrideDisk = defaultContainerOverrideDisk
+	}
+	// GRANULE_WORKLOAD_ENV is for a value something else puts in this
+	// container's environment at start time and the workload in the
+	// guest has to see -- a scheduler's per-pod token, say, injected as
+	// a plain variable by a controller that knows nothing of
+	// CHV_CONTAINER_OVERRIDE's JSON. An image sets the list; whoever
+	// starts it sets the values. They go first, so an env entry
+	// CHV_CONTAINER_OVERRIDE gives for the same name still wins.
+	if raw := os.Getenv(envWorkloadEnv); strings.TrimSpace(raw) != "" {
+		var forwarded []string
+		for _, name := range splitNonEmpty(raw, ",") {
+			if !validEnvName(name) {
+				return Config{}, fmt.Errorf("%s: %q is not an environment variable name", envWorkloadEnv, name)
+			}
+			if value, ok := os.LookupEnv(name); ok {
+				forwarded = append(forwarded, name+"="+value)
+			}
+		}
+		if len(forwarded) > 0 {
+			if cfg.ContainerOverride == nil {
+				cfg.ContainerOverride = &containerspec.Override{}
+				cfg.ContainerOverrideDisk = defaultContainerOverrideDisk
+			}
+			cfg.ContainerOverride.Env = append(forwarded, cfg.ContainerOverride.Env...)
+		}
 	}
 
 	cfg.WorkloadStdout = strings.TrimSpace(os.Getenv(envWorkloadStdout))
@@ -1153,6 +1244,20 @@ func parseExtraDisk(spec string) (path string, readonly bool, err error) {
 		}
 	}
 	return path, readonly, nil
+}
+
+// validEnvName reports whether name is a portable environment variable
+// name: a letter or underscore, then letters, digits and underscores.
+func validEnvName(name string) bool {
+	for i, r := range name {
+		switch {
+		case r == '_', r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return name != ""
 }
 
 func splitNonEmpty(s, sep string) []string {

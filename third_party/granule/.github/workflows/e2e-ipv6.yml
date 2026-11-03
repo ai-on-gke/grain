@@ -1,0 +1,110 @@
+name: IPv6 end to end
+
+# test/e2e-ipv6.sh's docker and kind targets, every night: a granule guest
+# built from this tree, booted on a dual-stack docker network, a v6-only
+# one, a dual-stack kind cluster and a v6-only one, and checked for the
+# address, gateway, peer, published-port, Service, DNS and pod-to-pod
+# reachability section 8.3 of docs/ipv6-dual-stack-design.md asks for.
+# The script's own header says what each check is. The GitHub Actions port
+# of .grain/workflows/e2e-ipv6.yml; see docs/github-actions-ci.md.
+#
+# Why a schedule and not part of ci.yml: one run is a guest image build
+# (the kernel is compiled from source, which is most of it, on a cold
+# cache) and four real VMs on two kind clusters. That is too slow and
+# too heavy for every push. What it guards -- that the guest scripts,
+# netshim's derivation and a real CNI still agree -- moves with commits,
+# though, so nightly rather than weekly, after the 02:00 nightly suite.
+#
+# A pull request runs it only when it edits the test or this workflow,
+# which is the change this lane is the only check of. A change to the IPv6
+# path itself is worth running by hand from its branch first
+# (workflow_dispatch).
+#
+# On a hosted runner nothing sits between the kind nodes and their
+# registries: grain's sandbox proxy, whose CA a kind node does not trust,
+# is what failed kind image pulls with x509 errors there.
+#
+# GKE is in e2e-ipv6-gke.yml, by hand only: it needs GCP credentials and
+# costs a cluster.
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  pull_request:
+    paths:
+      - test/e2e-ipv6.sh
+      - .github/workflows/e2e-ipv6.yml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-ipv6:
+    name: IPv6 on docker and kind
+    runs-on: ubuntu-latest
+    # A cold guest build is most of it: the kernel compiled on four cores.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # A hosted runner starts with about 14 GB free. The guest build
+      # (kernel source and objects, the Go build, three image layers) and
+      # two kind clusters' node images need more than that, so drop the
+      # toolchains this job never uses.
+      - name: free disk
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
+          docker image prune -af >/dev/null || true
+          df -h /
+
+      - name: Configure /dev/kvm udev permissions
+        run: |
+          set -euo pipefail
+          if [ ! -e /dev/kvm ]; then
+            echo "::error::this runner has no /dev/kvm, so no guest can boot"
+            exit 1
+          fi
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+          sudo chmod 0666 /dev/kvm
+          sudo modprobe tun || true
+          ls -ln /dev/kvm /dev/net/tun
+
+      # Said up front, so a red run on a host that cannot boot a guest
+      # reads as that rather than as the first check that needed one.
+      - name: the host can boot guests and run kind
+        run: |
+          set -euo pipefail
+          ok=true
+          for c in docker kind kubectl; do
+            if command -v "$c" >/dev/null; then
+              echo "ok      $c $(command -v "$c")"
+            else
+              echo "::error::no $c on this runner"; ok=false
+            fi
+          done
+          if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+            echo "ok      /dev/kvm"
+          else
+            echo "::error::no usable /dev/kvm on this runner"; ok=false
+          fi
+          docker version -f 'docker {{.Server.Version}}'
+          kind version
+          $ok
+
+      # No GRANULE_IMAGE: the script builds the alpine guest from this
+      # tree, so what is tested is this commit rather than whatever was
+      # last published.
+      - name: test/e2e-ipv6.sh
+        run: test/e2e-ipv6.sh docker kind

@@ -1,0 +1,106 @@
+name: IPv6 end to end on GKE
+
+# test/e2e-ipv6.sh gke: a dual-stack (--stack-type=ipv4-ipv6) GKE cluster
+# with Dataplane V2, in a VPC of its own, with the same checks as kind.
+# The script creates everything and deletes it again, cluster first,
+# whether the checks pass or not. GKE has no IPv6-only stack type
+# (`gcloud container clusters create --stack-type` takes ipv4 or
+# ipv4-ipv6), so there is nothing v6-only to run here. The GitHub Actions
+# port of .grain/workflows/e2e-ipv6-gke.yml.
+#
+# By hand only. It runs a two-node n2-standard-4 cluster for about half an
+# hour, and what it adds over the nightly kind run (e2e-ipv6.yml) is
+# Dataplane V2's routes, which change with GKE rather than with this tree.
+# Run it when the IPv6 path changes, or when GKE's networking does. GCP
+# credentials come from Workload Identity Federation (vars.GCP_WIF_PROVIDER,
+# vars.GCP_SA_EMAIL); until both are set the job is skipped with a notice.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  gcp-credentials:
+    name: GCP credentials
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - name: are GCP_WIF_PROVIDER and GCP_SA_EMAIL set
+        id: check
+        env:
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          GCP_SA_EMAIL: ${{ vars.GCP_SA_EMAIL }}
+        run: |
+          if [ -n "$GCP_WIF_PROVIDER" ] && [ -n "$GCP_SA_EMAIL" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            msg="Repository variables GCP_WIF_PROVIDER and GCP_SA_EMAIL are not both set, so the GKE IPv6 run is skipped, not run. See docs/github-actions-ci.md."
+            echo "::notice title=GKE IPv6 skipped::$msg"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  e2e-ipv6-gke:
+    name: IPv6 on dual-stack GKE
+    needs: [gcp-credentials]
+    if: needs.gcp-credentials.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # The script builds the alpine guest here, kernel and all, before it
+      # ships the image to the nodes; a hosted runner's ~14 GB free is not
+      # enough for that without dropping toolchains it never uses.
+      - name: free disk
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
+          docker image prune -af >/dev/null || true
+          df -h /
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SA_EMAIL }}
+
+      - name: gcloud, its GKE auth plugin and kubectl
+        run: |
+          set -euo pipefail
+          if ! command -v gcloud >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq apt-transport-https ca-certificates curl gnupg
+            curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg |
+              sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+            echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" |
+              sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list >/dev/null
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq google-cloud-cli
+          fi
+          if ! command -v gke-gcloud-auth-plugin >/dev/null; then
+            gcloud components install gke-gcloud-auth-plugin --quiet 2>/dev/null ||
+              sudo apt-get install -y -qq google-cloud-cli-gke-gcloud-auth-plugin
+          fi
+          gcloud --version | head -n 1
+          kubectl version --client
+
+      - name: test/e2e-ipv6.sh gke
+        env:
+          GKE_PROJECT: ${{ vars.GCP_PROJECT_ID || 'grain-sandbox-dev' }}
+        run: |
+          set -euo pipefail
+          gcloud config set project "$GKE_PROJECT"
+          test/e2e-ipv6.sh gke
