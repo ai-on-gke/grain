@@ -130,4 +130,39 @@ describe("CustomSandboxImageCard", () => {
       "v1 (current)",
     );
   });
+
+  it("reverts to the default image when cleared or reset", () => {
+    const { s, saveChoice } = section({
+      sandboxBackend: "kubernetes-granule",
+      sandboxImage: "registry.example/team/guest:v1",
+      sandboxImageDefault: "ghcr.io/bwsalmon/grain/guest:sha-abc",
+      sandboxImageWarning: "Custom sandbox image warning",
+    });
+    const { rerender } = render(<CustomSandboxImageCard s={s} />);
+
+    const resetBtn = screen.getByTestId("sandboxImage-reset");
+    expect(resetBtn).toHaveTextContent("Reset to default");
+    fireEvent.click(resetBtn);
+    expect(saveChoice).toHaveBeenCalledWith({ sandboxImage: "" });
+
+    // Clearing the text input and blurring also saves "".
+    saveChoice.mockClear();
+    const box = screen.getByLabelText("Custom sandbox image (OCI reference)");
+    fireEvent.change(box, { target: { value: "   " } });
+    fireEvent.blur(box);
+    expect(saveChoice).toHaveBeenCalledWith({ sandboxImage: "" });
+
+    // Once sandboxImage is empty, the reset button and stale warnings are hidden.
+    const cleared = section({
+      sandboxBackend: "kubernetes-granule",
+      sandboxImage: "",
+      sandboxImageDefault: "ghcr.io/bwsalmon/grain/guest:sha-abc",
+      sandboxImageWarning: "",
+      sandboxImageCheck: null,
+    });
+    rerender(<CustomSandboxImageCard s={cleared.s} />);
+    expect(screen.queryByTestId("sandboxImage-reset")).toBeNull();
+    expect(screen.queryByTestId("sandbox-image-warning")).toBeNull();
+    expect(screen.queryByTestId("sandbox-image-contract-ok")).toBeNull();
+  });
 });
