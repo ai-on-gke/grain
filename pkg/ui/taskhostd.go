@@ -63,7 +63,7 @@ func (c *Client) SetTaskHostd(ctx context.Context, id, selector string) error {
 		body = fmt.Sprintf("Host work for this task goes to hostd %s from its next run on; it waits for that hostd rather than running anywhere else.", normalized)
 	}
 	_, err = c.Store.AddComment(ctx, model.Comment{
-		TaskID: id, Author: model.Attribution{Actor: c.requestActor(ctx).Actor}, CreatedAt: c.now(), Body: body,
+		TaskID: id, Author: c.requestActor(ctx), CreatedAt: c.now(), Body: body,
 	})
 	return err
 }

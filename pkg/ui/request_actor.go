@@ -34,6 +34,7 @@ import (
 
 type requestSourceContextKey struct{}
 type operatorActorContextKey struct{}
+type onBehalfOfContextKey struct{}
 
 // withRequestSource records how serveHTTP admitted a request that names
 // nobody: the access code, break-glass over loopback, or in-process.
@@ -49,6 +50,18 @@ func withOperatorActor(ctx context.Context, p model.Principal) context.Context {
 		return ctx
 	}
 	return context.WithValue(ctx, operatorActorContextKey{}, p)
+}
+
+// withOnBehalfOf records who the agent the gate admitted acts for (spec
+// §2.4). Only agentAPIGate calls it, with what agentOnBehalfOf read from
+// the store: nothing a caller sends -- a header, a body field -- ever
+// reaches it, so an agent cannot claim a person (§6.2). nil leaves ctx
+// as it was.
+func withOnBehalfOf(ctx context.Context, p *model.Principal) context.Context {
+	if p == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, onBehalfOfContextKey{}, *p)
 }
 
 // operatorActor is the deployment's own actor withOperatorActor recorded,
@@ -73,10 +86,18 @@ func operatorActor(ctx context.Context) model.Principal {
 //     admitted the request by (access-code, loopback), or in-process for
 //     a caller that never went through serveHTTP at all.
 //
-// OnBehalfOf is always nil until spec §2.4 lands.
+// OnBehalfOf is the person an agent principal acts for, as the agent
+// API gate derived it from grain's own records (withOnBehalfOf, spec
+// §2.4), and nil for anybody else.
 func RequestActor(ctx context.Context) model.Attribution {
 	if p, ok := PrincipalFromContext(ctx); ok {
-		return model.Attribution{Actor: p}
+		who := model.Attribution{Actor: p}
+		if p.Kind == model.PrincipalAgent {
+			if b, ok := ctx.Value(onBehalfOfContextKey{}).(model.Principal); ok && b.Verified() {
+				who.OnBehalfOf = &b
+			}
+		}
+		return who
 	}
 	op := operatorActor(ctx)
 	op.Source = model.SourceInProcess

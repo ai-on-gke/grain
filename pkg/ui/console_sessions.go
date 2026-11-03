@@ -1138,7 +1138,7 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 		// makes, so it lifts the opening park the task was filed on and
 		// queues the session's first exchange exactly as a message typed
 		// into an existing session would.
-		by := model.Attribution{Actor: c.requestActor(ctx).Actor}
+		by := c.requestActor(ctx)
 		if err := c.addAttributedComment(ctx, taskID, message, attachments, by, now, true); err != nil {
 			return "", nil, err
 		}
