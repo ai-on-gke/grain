@@ -531,12 +531,13 @@ func (p *GitProxy) serveCIRunRepo(w http.ResponseWriter, q url.Values, scope nam
 		return
 	}
 	run, ok := p.Namespace.CIStore.Get(id)
+	var extErr error
 	if !ok && p.Namespace.ExternalCI != nil && externalRunPermitted(scope, id) {
-		run, ok, _ = p.Namespace.ExternalCI.ExternalRun(context.Background(), id)
+		run, ok, extErr = p.Namespace.ExternalCI.ExternalRun(context.Background(), id)
 	}
 	if !ok || run.Repo == "" || !scope.PermitsCI(run.Repo) {
 		// A run outside the scope is answered as one nobody remembers.
-		cliError(w, fmt.Errorf("%w: no CI run %s in a repository this sandbox may read", namespace.ErrNotFound, id))
+		cliError(w, noCIRunError(id, extErr))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -561,14 +562,14 @@ func (p *GitProxy) serveCIShow(w http.ResponseWriter, r *http.Request, scope nam
 		return
 	}
 	run, ok := p.Namespace.CIStore.Get(id)
+	var extErr error
 	if !ok && p.Namespace.ExternalCI != nil && externalRunPermitted(scope, id) {
-		var err error
-		if run, ok, err = p.Namespace.ExternalCI.ExternalRun(r.Context(), id); err != nil {
+		if run, ok, extErr = p.Namespace.ExternalCI.ExternalRun(r.Context(), id); extErr != nil {
 			ok = false
 		}
 	}
 	if !ok || run.Repo == "" || !scope.PermitsCI(run.Repo) {
-		cliError(w, fmt.Errorf("%w: no CI run %s in a repository this sandbox may read", namespace.ErrNotFound, id))
+		cliError(w, noCIRunError(id, extErr))
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -596,6 +597,18 @@ func (p *GitProxy) serveCIShow(w http.ResponseWriter, r *http.Request, scope nam
 			fmt.Fprintf(w, "  %d. %s: %s\n", i+1, step.Name, verdict)
 		}
 	}
+}
+
+// noCIRunError is the answer for a run id the sandbox gets no run for. A
+// GitHub Actions run the forge and grain's record could not produce says
+// why (extErr, only ever set for a run in the sandbox's scope), so the
+// next failure is one somebody can act on rather than a bare not-found.
+func noCIRunError(id string, extErr error) error {
+	if extErr != nil {
+		return fmt.Errorf("%w: no CI run %s in a repository this sandbox may read: reading it as a GitHub Actions run: %v",
+			namespace.ErrNotFound, id, extErr)
+	}
+	return fmt.Errorf("%w: no CI run %s in a repository this sandbox may read", namespace.ErrNotFound, id)
 }
 
 // externalRunPermitted reports whether scope may read the repository a
