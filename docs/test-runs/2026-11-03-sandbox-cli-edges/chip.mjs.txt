@@ -1,0 +1,21 @@
+import { chromium } from 'playwright';
+const code = process.argv[2];
+const browser = await chromium.launch();
+for (const [name, width] of [['desktop', 1440], ['phone', 390]]) {
+  const ctx = await browser.newContext({ viewport: { width, height: 900 }, extraHTTPHeaders: { Authorization: 'Bearer ' + code } });
+  const page = await ctx.newPage();
+  await page.goto('http://127.0.0.1:7900/');
+  await page.waitForTimeout(2500);
+  for (const label of ['P10000000000', 'P1000', 'P150']) {
+    const chip = page.getByText(label, { exact: true }).first();
+    if (!(await chip.count())) { console.log(name, label, 'not on the page'); continue; }
+    const box = await chip.boundingBox();
+    const row = await chip.evaluate((el) => { let r = el; for (let i = 0; i < 6 && r.parentElement; i++) { r = r.parentElement; if (r.tagName === 'LI' || r.getAttribute('role') === 'row' || r.tagName === 'TR') break; } const b = r.getBoundingClientRect(); const s = getComputedStyle(el); return { tag: r.tagName, left: b.left, right: b.right, width: b.width, overflow: el.scrollWidth > el.clientWidth, ws: s.whiteSpace }; });
+    const vw = width;
+    console.log(name, label, JSON.stringify({ chip: box && { x: Math.round(box.x), w: Math.round(box.width), right: Math.round(box.x + box.width) }, row: { tag: row.tag, left: Math.round(row.left), right: Math.round(row.right) }, insideRow: box && box.x + box.width <= row.right + 0.5, insideViewport: box && box.x + box.width <= vw, textClipped: row.overflow }));
+  }
+  const docW = await page.evaluate(() => document.documentElement.scrollWidth);
+  console.log(name, 'document scrollWidth', docW, 'viewport', width);
+  await ctx.close();
+}
+await browser.close();

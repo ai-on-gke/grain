@@ -310,5 +310,8 @@ const (
 	WorkflowReviewAlways    = workflows.ReviewAlways
 )
 
+// RecurrenceKinds re-exports workflows.RecurrenceKinds: every kind.
+var RecurrenceKinds = workflows.RecurrenceKinds
+
 // ParseStoredRecurrenceKind re-exports workflows.ParseStoredRecurrenceKind.
 var ParseStoredRecurrenceKind = workflows.ParseStoredRecurrenceKind

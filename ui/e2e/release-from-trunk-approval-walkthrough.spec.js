@@ -39,7 +39,12 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
     return res.json();
   };
   const ciRuns = async () =>
-    (await ok(await page.request.get("/api/ci/runs"), "ci runs")).runs;
+    (
+      await ok(
+        await page.request.get("/api/ci/runs?repo=ai-on-gke%2Fgrain"),
+        "ci runs",
+      )
+    ).runs;
   const notificationBySubject = async (subject) => {
     const list = await ok(
       await page.request.get("/api/notifications"),

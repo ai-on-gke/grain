@@ -119,11 +119,20 @@ const RUN_KIND_LABELS = {
   ci: "CI jobs",
 };
 
+// Where a CI job's repository access is explained: it is declared in the
+// job's workflow file, which is the one place that grants it.
+const REPO_ACCESS_DOC =
+  "https://github.com/ai-on-gke/grain/blob/main/docs/ci-capabilities.md#repository-access-declared-in-the-repository-enforced-by-the-teams-credential";
+const REPO_ACCESS_DOC_LABEL = "Repository access docs";
+
 function policyVerdictText(verdict, runKind) {
   if (!verdict) return "";
   const forKind = RUN_KIND_LABELS[runKind]
     ? ` for ${RUN_KIND_LABELS[runKind]}`
     : "";
+  if (verdict === "ci_only") {
+    return `CI only: not a grant${forKind}; a CI job declares it in its workflow's capabilities:`;
+  }
   if (verdict === "denied") {
     return `denied by the capability policy${forKind}`;
   }
@@ -200,6 +209,12 @@ export default function GrantsPicker({
   // job's trigger event is still unknown, so it keeps the kind's verdict.
   const kindVerdictShown =
     Boolean(runKind) && (!subjectRepo || runKind === "ci");
+  // A CI-only method (repo#read) is refused this run by grain's own rule,
+  // not by the capability policy, so it is worded as that and points at
+  // how a CI job gets it -- declared in the job's own workflow file. The
+  // repository's CI capabilities list does not grant it, and neither does
+  // the policy, which has no rule to change.
+  const ciOnly = (m) => Boolean(runKind) && m?.policy?.[runKind] === "ci_only";
   const load = useCallback(
     (fresh) => {
       const subject = subjectRepo ? { kind: runKind, repo: subjectRepo } : null;
@@ -369,6 +384,25 @@ export default function GrantsPicker({
   };
 
   const policyState = (ref) => {
+    if (ciOnly(byRef[ref])) {
+      const policyNote = policyVerdictText("ci_only", runKind);
+      return {
+        severity: "warning",
+        badge: "CI only",
+        suffix: " (CI only)",
+        textNote: `This grant is ${policyNote}. Remove this grant: a CI job that needs it declares it in its own .grain/workflows file (${REPO_ACCESS_DOC_LABEL}).`,
+        note: (
+          <>
+            This grant is {policyNote}. Remove this grant: a CI job that needs
+            it declares it in its own .grain/workflows file (
+            <Link href={REPO_ACCESS_DOC} target="_blank" rel="noreferrer">
+              {REPO_ACCESS_DOC_LABEL}
+            </Link>
+            ).
+          </>
+        ),
+      };
+    }
     const refused = byRef[ref]?.policyRefusal;
     if (refused)
       return {
@@ -645,13 +679,20 @@ export default function GrantsPicker({
   // is known: policyRepo) is listed disabled, with the policy's own
   // reason; one it may deny some run of the kind carries the verdict.
   const methodItem = (m) => {
-    const refused = m.policyRefusal || "";
-    const verdict = refused
-      ? "denied"
-      : kindVerdictShown
-        ? m.policy?.[runKind]
-        : undefined;
-    const policyNote = refused || policyVerdictText(verdict, runKind);
+    const isCIOnly = ciOnly(m);
+    const refused = isCIOnly
+      ? m.policyRefusal || policyVerdictText("ci_only", runKind)
+      : m.policyRefusal || "";
+    const verdict = isCIOnly
+      ? "ci_only"
+      : refused
+        ? "denied"
+        : kindVerdictShown
+          ? m.policy?.[runKind]
+          : undefined;
+    const policyNote = isCIOnly
+      ? policyVerdictText("ci_only", runKind)
+      : refused || policyVerdictText(verdict, runKind);
     const refSummary = `${splitRef(m.ref).capability.replace(/^https:\/\//, "")}${m.requiresArgs ? " · needs arguments" : ""}`;
     return (
       <MenuItem
@@ -659,8 +700,11 @@ export default function GrantsPicker({
         className="method-grant-row"
         data-method={m.ref}
         data-policy-verdict={verdict || undefined}
-        data-policy-denied={refused ? "true" : undefined}
-        title={policyNote ? `${m.ref} — ${policyNote}` : m.ref}
+        data-policy-denied={refused && !isCIOnly ? "true" : undefined}
+        data-ci-only={isCIOnly ? "true" : undefined}
+        title={
+          refused || policyNote ? `${m.ref} — ${refused || policyNote}` : m.ref
+        }
         disabled={Boolean(refused)}
         onClick={refused ? undefined : () => addMethod(m)}
         sx={{
@@ -703,11 +747,20 @@ export default function GrantsPicker({
                 >
                   {policyNote} (
                   <Link
-                    href="/settings/capabilities#capability-policy"
+                    href={
+                      isCIOnly
+                        ? REPO_ACCESS_DOC
+                        : "/settings/capabilities#capability-policy"
+                    }
+                    {...(isCIOnly
+                      ? { target: "_blank", rel: "noreferrer" }
+                      : {})}
                     onClick={(e) => e.stopPropagation()}
                     onKeyDown={(e) => e.stopPropagation()}
                   >
-                    Settings → Capabilities
+                    {isCIOnly
+                      ? REPO_ACCESS_DOC_LABEL
+                      : "Settings → Capabilities"}
                   </Link>
                   )
                 </Typography>

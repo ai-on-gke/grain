@@ -60,7 +60,7 @@ func TestTheInfraReviewCanSuggestAndCannotApply(t *testing.T) {
 	for _, g := range tmpl.Grants {
 		granted[g.Capability] = true
 	}
-	for _, want := range []string{"self-debug", "grain-ci"} {
+	for _, want := range []string{"self-debug", model.GrainCIGrant} {
 		if !granted[want] {
 			t.Errorf("the infrastructure review does not hold %q; its grants are %+v",
 				want, tmpl.Grants)
@@ -271,5 +271,32 @@ func TestTheInfraReviewWithoutAStateRepositorySaysWhatItCannotSee(t *testing.T) 
 	if !strings.Contains(withRepo.Body, "propose_task") {
 		t.Error("the prompt does not say how a change is actually filed, which leaves the " +
 			"run with a recommendation and nowhere to put it")
+	}
+}
+
+// Every dial the review is told is in scope is one a tuning
+// recommendation may name (model.ValidateTuningParameter): merge batching
+// was retired (#443) and merge_batch_size refused as a target, but the
+// scope paragraph still offered it
+// (docs/test-runs/2026-11-03-config-state.md, finding 5).
+func TestTheInfraReviewsScopeNamesOnlyTunableDials(t *testing.T) {
+	t.Parallel()
+	body := infraReview(t).Body
+	start := strings.Index(body, "In scope:")
+	if start < 0 {
+		t.Fatal("the infrastructure review names no scope")
+	}
+	scope := body[start:]
+	if end := strings.Index(scope, "The general rule"); end >= 0 {
+		scope = scope[:end]
+	}
+	parts := strings.Split(scope, "`")
+	if len(parts) < 3 {
+		t.Fatalf("no dials in the scope paragraph: %q", scope)
+	}
+	for i := 1; i < len(parts); i += 2 {
+		if err := model.ValidateTuningParameter(parts[i]); err != nil {
+			t.Errorf("the scope offers %q, which a recommendation may not name: %v", parts[i], err)
+		}
 	}
 }

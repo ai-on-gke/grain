@@ -149,7 +149,13 @@ type Config struct {
 	// is no per-run commitment to add up and the budget charges agent
 	// runs nothing.
 	SandboxShapeIgnored bool
-	PollInterval        time.Duration
+	// VMMHeadroom is what each sandbox's cgroup is allowed beyond its
+	// guest's RAM, and so what the budget charges on top of each shape:
+	// model.DefaultVMMHeadroom under a granule backend
+	// (sandboxVMMHeadroom), nothing under any other. Set with
+	// SandboxShapeIgnored, from the backend itself.
+	VMMHeadroom  model.VMMHeadroom
+	PollInterval time.Duration
 	// Backup settings remain host-side rather than store-backed: the Google
 	// credential path describes this process's filesystem, and a schedule
 	// must be known before the UI is available to edit anything.
@@ -275,9 +281,13 @@ type Config struct {
 	// flushes and reports nothing -- without one.
 	runHostUpgrade *runHostUpgrade
 	// hostdRuns drives runs' host CLIs through grain hostd, detached
-	// (hostdruns.go): set by run() where the host executor is hostd, nil
-	// -- every host CLI a plain start -- elsewhere.
+	// (hostdruns.go): the host executor's hostd's, set by run() where the
+	// host executor is hostd and by hostdRoute.apply for a pinned run,
+	// nil -- every host CLI a plain start -- elsewhere.
 	hostdRuns *runhost.Hostd
+	// hostdRunSet is every hostd's hostdRuns, by name (newHostdRuns):
+	// set by run(), nil outside it.
+	hostdRunSet *hostdRunSet
 	// shuttingDown is set once run()'s context is cancelled: the process
 	// is draining and its API is about to stop answering. GET
 	// /api/config reports it as restarting. nil outside run().
@@ -324,6 +334,12 @@ type Config struct {
 	// (hostexec.go).
 	HostdSocket string
 	HostExec    *HostExecutor
+	// HostdReattachTimeout is -hostd-reattach-timeout: how long a run's
+	// CLI, running detached on a grain hostd whose connection drops, waits
+	// for that same hostd to reconnect and be re-attached from its cursor
+	// before the run fails as an infrastructure failure, with no strike
+	// (agent.ErrHostdLost). Zero fails it at once.
+	HostdReattachTimeout time.Duration
 	// HostdRemote is set by -hostd-token-file (or $GRAIN_HOSTD_TOKEN):
 	// the session of a grain hostd on another machine that dials in to
 	// /api/hostd/connect with that token (hostd -server), through which
@@ -899,8 +915,8 @@ func (c Config) ChangesFrom(prev Config) []string {
 	note("actions-cache", prev.ActionsCacheEnabled, c.ActionsCacheEnabled)
 	note("k8s-namespace", prev.K8sNamespace, c.K8sNamespace)
 	note("k8s-kubectl", prev.K8sKubectl, c.K8sKubectl)
-	note("k8s-sandbox-image", firstNonEmpty(prev.K8sSandboxImage, prev.K8sImage), firstNonEmpty(c.K8sSandboxImage, c.K8sImage))
-	note("k8s-granule-image", prev.K8sGranuleImage, c.K8sGranuleImage)
+	note("k8s-sandbox-image", firstNonEmpty(prev.K8sSandboxImage, prev.K8sImage, DefaultK8sSandboxImage), firstNonEmpty(c.K8sSandboxImage, c.K8sImage, DefaultK8sSandboxImage))
+	note("k8s-granule-image", firstNonEmpty(prev.K8sGranuleImage, DefaultSandboxImage), firstNonEmpty(c.K8sGranuleImage, DefaultSandboxImage))
 	note("k8s-workspace", prev.K8sWorkspace, c.K8sWorkspace)
 	note("k8s-git-proxy-host", prev.K8sGitProxyHost, c.K8sGitProxyHost)
 	note("k8s-sandbox-service", prev.K8sSandboxService, c.K8sSandboxService)
@@ -1248,6 +1264,7 @@ func (c Config) Budget() model.Budget {
 	budget.DiskFloor = c.DiskFloor()
 	budget.RepairReserve = c.RepairReserve()
 	budget.ClusterFit = c.ClusterFit
+	budget.VMMHeadroom = c.VMMHeadroom
 	return budget
 }
 
@@ -1376,6 +1393,7 @@ func (c Config) AgentShape() model.Commitment {
 // were briefly unreadable at startup gets its budget without a restart.
 func (c Config) withHostCapacity(sandboxes orchestrator.Sandboxes) Config {
 	c.SandboxShapeIgnored = SandboxShapeIgnored(sandboxes)
+	c.VMMHeadroom = sandboxVMMHeadroom(sandboxes)
 	if fit, ok := sandboxes.(model.ClusterFit); ok {
 		c.ClusterFit = fit
 	}
@@ -1465,6 +1483,7 @@ func (c Config) ToModelConfig() model.Config {
 	if c.K8sGranuleImage != DefaultSandboxImage && c.K8sGranuleImage != model.DefaultSandboxImage {
 		mc.K8sGranuleImage = c.K8sGranuleImage
 	}
+	mc.SandboxImage = c.CustomSandboxImage
 	mc.SandboxImageMirror = c.SandboxImageMirror
 	if c.K8sWorkspace != model.DefaultK8sWorkspace {
 		mc.K8sWorkspace = c.K8sWorkspace
@@ -1516,9 +1535,18 @@ func (c Config) withLiveModelConfig(mc model.Config) Config {
 	live.GithubHost, live.GithubInsecureHTTP = c.GithubHost, c.GithubInsecureHTTP
 	live.K8sNamespace = c.K8sNamespace
 	live.K8sKubectl = c.K8sKubectl
-	live.K8sImage = c.K8sImage
-	live.K8sSandboxImage = c.K8sSandboxImage
-	live.K8sGranuleImage = c.K8sGranuleImage
+	// A stored Kubernetes image is live only on the backend that creates
+	// pods from it: applySandboxImage hands it to that backend on the next
+	// tick. Any other backend creates nothing from it until a restart
+	// adopts the backend too, so it stays what this process started with
+	// and Settings goes on reporting it as waiting for that restart.
+	if runningBackend != model.SandboxBackendKubernetes {
+		live.K8sImage = c.K8sImage
+		live.K8sSandboxImage = c.K8sSandboxImage
+	}
+	if runningBackend != model.SandboxBackendKubernetesGranule {
+		live.K8sGranuleImage = c.K8sGranuleImage
+	}
 	live.K8sWorkspace = c.K8sWorkspace
 	live.K8sGitProxyHost = c.K8sGitProxyHost
 	live.K8sSandboxService = c.K8sSandboxService

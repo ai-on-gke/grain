@@ -24,7 +24,7 @@ import (
 // The release train's scripts (design/design/release-from-trunk.design.md, RFT-4)
 // carry their own unit tests as shell, beside them, because what they
 // test is shell: scripts/candidate-gate_test.sh drives select-lkg and
-// check-soak against JSON shaped like the release gate's answers, and
+// check-qualification against JSON shaped like the CI answers, and
 // scripts/release-from-trunk_test.sh drives both phases of the train
 // against a bare remote, scripts/release-patch_test.sh drives the
 // patch-release script and the guard release.yml and promote.yml run

@@ -121,13 +121,21 @@
 #           a later `pending` or `promote` reuses a stamped build only
 #           when its revision label is the commit it is publishing.
 #
-#   discard-rc <vX.Y.0-rc.N>
-#           mark a release candidate that failed its staging soak:
+#   discard-rc <vX.Y.Z-rc.N>
+#           mark a release candidate that failed qualification:
 #           `:vX.Y.0-rc.N-discarded` beside each image's `:vX.Y.0-rc.N`,
 #           so a deployment on the candidate channel can tell that the rc
 #           it runs was dropped. `:candidate` and `:rc` stay where they
 #           are -- the next rc moves them forward; nothing moves them
 #           back.
+#
+#   retract <vX.Y.Z>
+#           mark a promoted release a person rolled back
+#           (scripts/release-from-trunk.sh rollback):
+#           `:vX.Y.Z-retracted` beside each image's `:vX.Y.Z`, so a
+#           deployment running it is told to move (pkg/upgrade's
+#           RetractedRelease). `:vX.Y.Z` itself is never deleted or moved;
+#           `promote <the earlier release>` moves `:latest` back.
 #
 # And one that publishes nothing:
 #
@@ -280,6 +288,7 @@ phase="all"
 promote_request=""
 rc_request=""
 pending_request=""
+retract_request=""
 # stamp_tag is the release name stamped into a rebuilt daemon image when
 # it is not the name it is published under: `pending` publishes
 # vX.Y.0-pending stamped vX.Y.0. Empty means promote_tag.
@@ -321,6 +330,16 @@ while [ $# -gt 0 ]; do
       rc_request="$1"
       shift
       ;;
+    retract)
+      phase="$1"
+      shift
+      if [ $# -eq 0 ] || [[ "$1" == -* ]]; then
+        echo "release-images.sh: usage: release-images.sh retract <vX.Y.Z>" >&2
+        exit 2
+      fi
+      retract_request="$1"
+      shift
+      ;;
     pending | discard-pending)
       phase="$1"
       shift
@@ -342,7 +361,7 @@ while [ $# -gt 0 ]; do
       exit "$status"
       ;;
     *)
-      echo "release-images.sh: usage: release-images.sh [--dry-run|-n] [build|push|all|guest-cache|promote [vX.Y.Z]|rc [vX.Y.0-rc.N]|pending <vX.Y.0>|discard-pending <vX.Y.0>|discard-rc <vX.Y.0-rc.N>|may-move <image:branch-tag> <commit> <branch>]" >&2
+      echo "release-images.sh: usage: release-images.sh [--dry-run|-n] [build|push|all|guest-cache|promote [vX.Y.Z]|rc [vX.Y.0-rc.N]|pending <vX.Y.0>|discard-pending <vX.Y.0>|discard-rc <vX.Y.Z-rc.N>|retract <vX.Y.Z>|may-move <image:branch-tag> <commit> <branch>]" >&2
       exit 1
       ;;
   esac
@@ -472,7 +491,7 @@ ensure_direct_registry_route() {
 # tests, which hand it a repository of their own.
 remote="${RELEASE_IMAGES_REMOTE:-origin}"
 release_tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+$'
-rc_tag_pattern='^v[0-9]+\.[0-9]+\.0-rc\.[0-9]+$'
+rc_tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$'
 
 # The version this build carries -- stamped into both daemon binaries
 # (pkg/version.Release, which `grain version --json` and the UI report)
@@ -774,6 +793,13 @@ if [ "$dry_run" = true ]; then
         exit 1
       fi
       echo "release-images.sh: [dry-run] phase 'discard-rc': would tag $root/{grain,guest,k8s-sandbox}:$rc_request as $rc_request-discarded, and leave candidate and rc where they are"
+      ;;
+    retract)
+      if ! [[ "$retract_request" =~ $release_tag_pattern ]]; then
+        echo "release-images.sh: $retract_request is not a release tag (vX.Y.Z)" >&2
+        exit 1
+      fi
+      echo "release-images.sh: [dry-run] phase 'retract': would tag $root/{grain,guest,k8s-sandbox}:$retract_request as $retract_request-retracted, and leave $retract_request where it is"
       ;;
   esac
   exit 0
@@ -1490,6 +1516,30 @@ discard_rc() {
   echo "release-images.sh: $rc_request is discarded${marked[*]:+: ${marked[*]} now also carry $rc_request-discarded}; candidate and rc stay where they are"
 }
 
+# Mark a promoted release a person rolled back: <image>:vX.Y.Z-retracted
+# beside every image it was published as. :vX.Y.Z is never deleted or
+# moved; `promote` of the earlier release moves :latest back.
+retract_release() {
+  local image images=(grain guest k8s-sandbox) marked=() unpublished=()
+  if ! [[ "$retract_request" =~ $release_tag_pattern ]]; then
+    echo "release-images.sh: $retract_request is not a release tag (vX.Y.Z)" >&2
+    return 1
+  fi
+  ensure_direct_registry_route "$registry"
+  for image in "${images[@]}"; do
+    if image_exists "$root/$image:$retract_request"; then
+      retag_image "$root/$image:$retract_request" "$root/$image:$retract_request-retracted"
+      marked+=("$image")
+    else
+      unpublished+=("$image")
+    fi
+  done
+  if [ "${#unpublished[@]}" -gt 0 ]; then
+    echo "release-images.sh: $retract_request was never published as ${unpublished[*]}, so there is nothing of theirs to mark"
+  fi
+  echo "release-images.sh: $retract_request is retracted${marked[*]:+: ${marked[*]} now also carry $retract_request-retracted}; $retract_request itself stays where it is"
+}
+
 # The release a published grain image was stamped with, from its
 # org.opencontainers.image.version label: asked of the registry where
 # buildx is here, and of a pulled copy where it is not or the registry's
@@ -1736,6 +1786,7 @@ case "$phase" in
   pending) pending_images ;;
   discard-pending) discard_pending ;;
   discard-rc) discard_rc ;;
+  retract) retract_release ;;
   all)
     build_images
     publish_images

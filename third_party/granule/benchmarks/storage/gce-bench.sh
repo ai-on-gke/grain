@@ -21,7 +21,14 @@
 # STORAGE-BENCH-MARKDOWN-BEGIN/END markers, so a CI log is enough to
 # harvest them; with --out DIR they are also copied back to DIR.
 #
-# Usage: benchmarks/storage/gce-bench.sh [--keep] [--out DIR] [-- run_storage_benchmark.py args]
+# --disk-direct runs the CHV_DISK_DIRECT comparison instead: the fio suite
+# on the raw disk.img (persistent) and on granule's own qcow2 overlay, each
+# with CHV_DISK_DIRECT=on and off, then test/oom-pagecache.sh for both disks
+# with both settings, DIRECT_REPS times each (default 2), interleaved so a
+# slow patch of the disk does not land on one setting only. Each
+# oom-pagecache run is printed between OOM-PAGECACHE-BEGIN/END markers.
+#
+# Usage: benchmarks/storage/gce-bench.sh [--keep] [--out DIR] [--disk-direct] [-- run_storage_benchmark.py args]
 #
 # Environment: as test/gce-build.sh (GCE_PROJECT, GCE_ZONE, GCE_NETWORK,
 # GCE_KEY_FILE, GCE_IMAGE_FAMILY, GCE_IMAGE_PROJECT), plus
@@ -37,11 +44,13 @@ set -euo pipefail
 
 keep=false
 out=
+disk_direct=false
 bench_args=()
 while [[ $# -gt 0 ]]; do
   case $1 in
     --keep) keep=true ;;
     --out) out=$2; shift ;;
+    --disk-direct) disk_direct=true ;;
     --) shift; bench_args=("$@"); break ;;
     -h|--help) sed -n '3,/^$/s/^# \{0,1\}//p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -175,6 +184,37 @@ if ! vm "cd granule && sudo docker build --file Dockerfile --tag granule-bench:f
   die "building the guest failed after $(( ($(date +%s) - start) / 60 ))m"
 fi
 log "guest built in $(( ($(date +%s) - start) / 60 ))m"
+
+if [[ $disk_direct == true ]]; then
+  log "running fio with CHV_DISK_DIRECT on and off"
+  start=$(date +%s)
+  vm "cd granule && sudo python3 -u benchmarks/storage/run_storage_benchmark.py --live --fio-only \
+    --variants flat+direct_on,flat+direct_off,qcow_2m+direct_on,qcow_2m+direct_off \
+    --out-dir ../bench-results ${bench_args[*]:-}" || die "run_storage_benchmark.py failed after $(( ($(date +%s) - start) / 60 ))m"
+  log "fio finished in $(( ($(date +%s) - start) / 60 ))m"
+
+  failed=0
+  for rep in $(seq 1 "${DIRECT_REPS:-2}"); do
+    for disk in overlay raw; do
+      for direct in on off; do
+        log "oom-pagecache.sh DISK=$disk CHV_DISK_DIRECT=$direct (run $rep)"
+        echo "===== OOM-PAGECACHE-BEGIN disk=$disk direct=$direct rep=$rep ====="
+        vm "set -o pipefail && sync && echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null && cd granule && \
+          sudo GRANULE_IMAGE=granule-bench:flat DISK=$disk CHV_DISK_DIRECT=$direct bash test/oom-pagecache.sh 2>&1 |
+            grep -v '^sample:' | tail -n 20" || failed=$((failed + 1))
+        echo "===== OOM-PAGECACHE-END ====="
+      done
+    done
+  done
+  if [[ -n $out ]]; then
+    mkdir -p "$out"
+    vm 'tar -czf - -C bench-results .' | tar -xzf - -C "$out"
+    log "results copied to $out"
+  fi
+  # A VM that was OOM-killed is a result here, not a broken benchmark.
+  [[ $failed == 0 ]] || echo "::warning::$failed oom-pagecache.sh run(s) did not survive" >&2
+  exit 0
+fi
 
 log "deriving the extent images"
 vm 'set -euo pipefail

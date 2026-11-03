@@ -321,11 +321,11 @@ in_process:
 func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 	t.Parallel()
 	w := newHoldWorld(t, false)
-	parent := w.create("auto-merging parent", true, []string{"self-debug", "gcp-key"})
-	if !holds(parent, "self-debug") || !holds(parent, "gcp-key") {
+	parent := w.create("auto-merging parent", true, []string{"self-debug", "gemini-key"})
+	if !holds(parent, "self-debug") || !holds(parent, "gemini-key") {
 		t.Fatalf("the parent does not hold both grants: %+v", parent.Grants)
 	}
-	// The parent was filed from the template the catalogue keeps gcp-key
+	// The parent was filed from the template the catalogue keeps gemini-key
 	// to; its proposals are filed from none.
 	if err := w.store.UpdateTask(w.ctx, parent.ID, func(t *model.Task) error { t.TemplateID = "walk-ops"; return nil }); err != nil {
 		t.Fatal(err)
@@ -333,7 +333,7 @@ func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 	importCatalogue(t, w.store, `in_process:
   self-debug:
     restrictions: {requires_person: true}
-  gcp-key:
+  gemini-key:
     restrictions: {templates: [walk-ops]}
 `)
 	propose := func(title string, caps ...string) antigravity.Step {
@@ -350,7 +350,7 @@ func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 		steps := w.changeScript(task, "echo 'typo' >> docs/guide.md")
 		return append([]antigravity.Step{
 			propose("needs self-debug", "self-debug"),
-			propose("needs gcp-key", "gcp-key"),
+			propose("needs gemini-key", "gemini-key"),
 			propose("needs nothing"),
 		}, steps...)
 	})
@@ -372,7 +372,7 @@ func TestCatalogueProposalReplayWalkthrough(t *testing.T) {
 		note         string
 	}{
 		{"needs self-debug", "self-debug", model.StateProposed, model.CatalogueRequiresPersonNote([]string{"self-debug"})},
-		{"needs gcp-key", "gcp-key", model.StateProposed, "settings/capabilities.yml refuses what it asked for"},
+		{"needs gemini-key", "gemini-key", model.StateProposed, "settings/capabilities.yml refuses what it asked for"},
 		{"needs nothing", "", model.StateQueued, ""},
 	} {
 		p, ok := byTitle[tc.title]

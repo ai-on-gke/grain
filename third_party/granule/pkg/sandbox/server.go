@@ -96,6 +96,13 @@ type DialOutOptions struct {
 	// connection drops. Defaults to 50ms and 5s.
 	MinBackoff time.Duration
 	MaxBackoff time.Duration
+
+	// AuthMaxBackoff bounds the reconnect delay when the controller
+	// refuses the handshake with ErrAuthFailed (for example, while a
+	// restarting controller is still restoring live sandbox registrations,
+	// or after a sandbox has been released and is awaiting pod deletion).
+	// Defaults to 30s (or MaxBackoff when MaxBackoff is larger).
+	AuthMaxBackoff time.Duration
 }
 
 // Server serves the granule sandbox access API in the pod-side wrapper
@@ -308,9 +315,10 @@ func (s *Server) ServeListenConn(ctx context.Context, conn net.Conn) error {
 
 // DialOut connects out to controllerAddr over TLS 1.3, authenticates with the
 // sandbox's ID and token, and serves multiplexed streams opened by the
-// controller. Whenever the connection drops, DialOut reconnects with
-// exponential backoff until ctx is cancelled, preserving in-flight exec
-// sessions across reconnects.
+// controller. Whenever the connection drops or the controller refuses the
+// handshake (such as during a controller restart before live sandboxes have
+// been re-registered), DialOut reconnects with exponential backoff until ctx
+// is cancelled, preserving in-flight exec sessions across reconnects.
 func (s *Server) DialOut(ctx context.Context, controllerAddr string, opts DialOutOptions) error {
 	tlsCfg, hostPort, err := buildDialOutTLS(controllerAddr, opts)
 	if err != nil {
@@ -324,67 +332,104 @@ func (s *Server) DialOut(ctx context.Context, controllerAddr string, opts DialOu
 	if maxBackoff <= 0 {
 		maxBackoff = 5 * time.Second
 	}
+	if maxBackoff < minBackoff {
+		maxBackoff = minBackoff
+	}
+	authMaxBackoff := opts.AuthMaxBackoff
+	if authMaxBackoff <= 0 {
+		authMaxBackoff = 30 * time.Second
+		if authMaxBackoff < maxBackoff {
+			authMaxBackoff = maxBackoff
+		}
+	} else if authMaxBackoff < minBackoff {
+		authMaxBackoff = minBackoff
+	}
 
 	backoff := minBackoff
+	var lastErr error
+	finishOnCtx := func() error {
+		if lastErr != nil && !errors.Is(lastErr, ctx.Err()) {
+			return fmt.Errorf("%w: %w", lastErr, ctx.Err())
+		}
+		return ctx.Err()
+	}
 	for {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return finishOnCtx()
 		}
 		connectedAt := time.Now()
-		err := s.dialOutOnce(ctx, hostPort, tlsCfg)
+		authenticated, err := s.dialOutOnce(ctx, hostPort, tlsCfg)
+		if authenticated {
+			if errors.Is(lastErr, ErrAuthFailed) || time.Since(connectedAt) > 2*maxBackoff {
+				backoff = minBackoff
+			}
+			lastErr = nil
+		} else if err != nil && (lastErr == nil || ctx.Err() == nil || errors.Is(err, ErrAuthFailed)) {
+			lastErr = err
+		}
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return finishOnCtx()
 		}
+		capBackoff := maxBackoff
 		if errors.Is(err, ErrAuthFailed) {
-			return err
+			capBackoff = authMaxBackoff
 		}
-		if time.Since(connectedAt) > 2*maxBackoff {
-			backoff = minBackoff
+		if backoff > capBackoff {
+			backoff = capBackoff
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return finishOnCtx()
 		case <-time.After(backoff):
 		}
 		backoff *= 2
-		if backoff > maxBackoff {
-			backoff = maxBackoff
+		if backoff > capBackoff {
+			backoff = capBackoff
 		}
 	}
 }
 
-func (s *Server) dialOutOnce(ctx context.Context, hostPort string, tlsCfg *tls.Config) error {
+func (s *Server) dialOutOnce(ctx context.Context, hostPort string, tlsCfg *tls.Config) (authenticated bool, err error) {
 	dialer := &tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: 10 * time.Second},
 		Config:    tlsCfg,
 	}
 	conn, err := dialer.DialContext(ctx, "tcp", hostPort)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer conn.Close()
 
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	stopDeadline := context.AfterFunc(ctx, func() {
+		_ = conn.SetDeadline(time.Now())
+	})
 	if err := writeJSONLine(conn, HandshakeRequest{
 		Version:   ProtocolVersion,
 		SandboxID: s.cfg.SandboxID,
 		Token:     s.cfg.Token,
 	}); err != nil {
-		return err
+		stopDeadline()
+		return false, err
 	}
 	br := bufio.NewReader(conn)
 	var resp HandshakeResponse
 	if err := readJSONLine(br, &resp); err != nil {
-		return err
+		stopDeadline()
+		return false, err
 	}
 	if !resp.OK {
-		return fmt.Errorf("%w: %s", ErrAuthFailed, resp.Error)
+		stopDeadline()
+		return false, fmt.Errorf("%w: %s", ErrAuthFailed, resp.Error)
+	}
+	if !stopDeadline() {
+		return false, ctx.Err()
 	}
 	_ = conn.SetDeadline(time.Time{})
 
 	// Pass client=false so the controller (which passes client=true) uses odd
 	// stream IDs and the wrapper uses even stream IDs without collision.
-	return s.serveMux(ctx, &bufferedConn{Reader: br, Conn: conn}, false)
+	return true, s.serveMux(ctx, &bufferedConn{Reader: br, Conn: conn}, false)
 }
 
 func buildDialOutTLS(controllerAddr string, opts DialOutOptions) (*tls.Config, string, error) {

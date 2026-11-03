@@ -184,6 +184,17 @@ check "breaking changes in the major release RELEASE_MAJOR asks for promote" 0 \
 run check-breaking v4.0.0 "$(git -C "$work/repo" rev-parse v3.2.0)" v4.0.0
 check "the previous release named by commit is read from its tag" 0 "RELEASE_MAJOR=4 asks"
 
+# latest (and an rc) on the previous release's commit, as on v3.1.0 in
+# this repository: git describe would name latest, which has no major.
+g tag -a latest -m "Latest release v3.2.0" v3.2.0
+g tag -a v3.2.0-rc.1 -m "rc" v3.2.0
+run check-breaking v4.0.0 "$(git -C "$work/repo" rev-parse v3.2.0)" v4.0.0
+check "the previous release named by commit is read past latest on it" 0 "RELEASE_MAJOR=4 asks"
+run check-breaking v4.0.0 latest v4.0.0
+check "the previous release named as latest is read from its release tag" 0 "RELEASE_MAJOR=4 asks"
+g tag -d latest
+g tag -d v3.2.0-rc.1
+
 run check-breaking v3.4.0 v3.2.0 v4.0.0
 check "RELEASE_MAJOR raised does not let a minor release through" 3 "refusing to promote v3.4.0"
 

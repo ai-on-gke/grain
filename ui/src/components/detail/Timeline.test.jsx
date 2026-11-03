@@ -169,6 +169,53 @@ describe("DetailOverlay timeline", () => {
     );
   });
 
+  // Each attempt says which grain hostd its host work went to, the
+  // machine that hostd ran on and its owner (ui.Attempt.Hostd); one that
+  // recorded none says nothing.
+  it("shows the hostd each attempt's host work went to", () => {
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          attempts: [
+            {
+              number: 1,
+              startedAt: "2026-08-28T12:00:00Z",
+              finishedAt: "2026-08-28T12:10:00Z",
+              outcome: "failed",
+              hostd: {
+                hostd: "ws-a",
+                instance: "cloudtop",
+                owner: "alice@example.com",
+                at: "2026-08-28T12:00:01Z",
+              },
+            },
+            {
+              number: 2,
+              startedAt: "2026-08-28T13:00:00Z",
+              outcome: "failed",
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+
+    const lines = document.querySelectorAll(".timeline-attempt-hostd");
+    expect(lines).toHaveLength(1);
+    expect(lines[0].textContent).toBe(
+      "hostd ws-a on cloudtop · alice@example.com",
+    );
+    expect(lines[0]).toHaveAttribute(
+      "title",
+      "Host work on grain hostd ws-a, on cloudtop, owned by alice@example.com",
+    );
+  });
+
   // bwsalmon/agents#503: a "running" transition and the attempt it started
   // both landing on the timeline read as two nodes for the same moment.
   it("shows a single node for a running transition and its first attempt, not two", () => {
@@ -348,6 +395,60 @@ describe("DetailOverlay timeline", () => {
   // KeptOff) is a step of its own, saying who made it and which writer it
   // was -- and, being a note about one setting, never the task's current
   // state.
+  // docs/test-runs/2026-11-03-operator-attribution.md F3: a change made
+  // with the access code is stored under the deployment's own address, so
+  // the timeline showed it as that person. It shows the label the API
+  // sends (byLabel, authorLabel) instead, and the bare id only for rows
+  // from before sources were recorded.
+  it("names an access-code holder as the operator, not the deployment's address", () => {
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          transitions: [
+            { state: "queued", at: "2026-08-28T09:00:00Z" },
+            {
+              state: "closed",
+              at: "2026-08-28T10:00:00Z",
+              by: "human owner@example.com",
+              byLabel: "operator (access code)",
+              reason: "done",
+            },
+          ],
+          comments: [
+            {
+              author: "owner@example.com",
+              authorKind: "human",
+              authorLabel: "operator (access code)",
+              body: "a comment from code",
+              createdAt: "2026-08-28T09:30:00Z",
+            },
+            {
+              author: "alice",
+              authorKind: "human",
+              body: "an old comment",
+              createdAt: "2026-08-28T09:40:00Z",
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText("by operator (access code) · done"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("operator (access code) · human"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("alice · human")).toBeInTheDocument();
+    expect(screen.queryByText(/owner@example\.com/)).toBeNull();
+  });
+
   it("shows who turned auto-merge on or off, and a write that was kept off", () => {
     render(
       <DetailOverlay

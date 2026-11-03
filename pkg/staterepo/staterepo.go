@@ -940,6 +940,83 @@ func (r *Repo) HasSecrets(ctx context.Context) (bool, error) {
 // the repository, and a clone onto a new machine must arrive without one.
 const loadedHeadFile = "grain-loaded-head"
 
+// LoadedHead returns the commit this host last loaded or exported, or "" when
+// no marker has been recorded yet.
+func (r *Repo) LoadedHead(ctx context.Context) (string, error) {
+	return r.loadedHead(ctx)
+}
+
+// SetLoadedHead records commit as the commit this host's database reflects.
+func (r *Repo) SetLoadedHead(ctx context.Context, commit string) error {
+	return r.setLoadedHead(ctx, commit)
+}
+
+// ReadLoadedHead reads the loaded-head marker of the repository at dir, or ""
+// when dir is not a repository or holds no marker yet.
+func ReadLoadedHead(ctx context.Context, dir string) string {
+	gitDir, err := resolveGitDir(ctx, dir)
+	if err != nil {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(gitDir, loadedHeadFile))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// WriteLoadedHead writes commit to the loaded-head marker of the repository at
+// dir when dir is already an initialised git repository.
+func WriteLoadedHead(ctx context.Context, dir, commit string) error {
+	commit, err := validateLoadedHeadCommit(commit)
+	if err != nil {
+		return err
+	}
+	gitDir, err := resolveGitDir(ctx, dir)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(gitDir, loadedHeadFile)
+	if err := os.WriteFile(path, []byte(commit+"\n"), 0o600); err != nil {
+		return fmt.Errorf("staterepo: writing %s: %w", path, err)
+	}
+	return nil
+}
+
+func resolveGitDir(ctx context.Context, dir string) (string, error) {
+	exists, err := isRepo(dir)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", fmt.Errorf("staterepo: %s is not a git repository", dir)
+	}
+	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--absolute-git-dir")
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "GIT_CONFIG_NOSYSTEM=1"}
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	gitDir := strings.TrimSpace(string(out))
+	if gitDir == "" {
+		return "", fmt.Errorf("staterepo: empty git-dir for %s", dir)
+	}
+	return gitDir, nil
+}
+
+func validateLoadedHeadCommit(commit string) (string, error) {
+	commit = strings.TrimSpace(commit)
+	if commit == "" {
+		return "", errors.New("staterepo: loaded-head commit must not be empty")
+	}
+	if strings.HasPrefix(commit, "-") || strings.ContainsAny(commit, " \t\r\n") {
+		return "", fmt.Errorf("staterepo: invalid loaded-head commit %q", commit)
+	}
+	return commit, nil
+}
+
 // loadedHead reads the marker, reporting "" when there is none.
 func (r *Repo) loadedHead(ctx context.Context) (string, error) {
 	path, err := r.loadedHeadPath(ctx)
@@ -957,6 +1034,10 @@ func (r *Repo) loadedHead(ctx context.Context) (string, error) {
 }
 
 func (r *Repo) setLoadedHead(ctx context.Context, commit string) error {
+	commit, err := validateLoadedHeadCommit(commit)
+	if err != nil {
+		return err
+	}
 	path, err := r.loadedHeadPath(ctx)
 	if err != nil {
 		return err

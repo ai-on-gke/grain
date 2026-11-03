@@ -477,6 +477,23 @@ var attributedRoutes = map[string]attributedRoute{
 		agentGrants: []string{"api:capabilities:admin"},
 		recorded:    lastConfigAudit,
 	},
+	"POST /api/access/principals": {
+		body:        `{"entry":"user:newbie@example.com"}`,
+		agentGrants: []string{"api:access:write"},
+		recorded:    lastConfigAudit,
+	},
+	"DELETE /api/access/principals/{entry}": {
+		setup: func(t *testing.T, client *ui.Client, _ sender) string {
+			t.Helper()
+			if _, err := client.AllowPrincipal(context.Background(), ui.AllowPrincipalRequest{Entry: "user:temp@example.com"}); err != nil {
+				t.Fatalf("seeding allowed principal: %v", err)
+			}
+			return "user:temp@example.com"
+		},
+		path:        "/api/access/principals/{id}",
+		agentGrants: []string{"api:access:write"},
+		recorded:    lastConfigAudit,
+	},
 	"POST /api/pipeline-pause": {
 		body: `{"reason":"maintenance"}`,
 		recorded: func(t *testing.T, ctx context.Context, client *ui.Client, _, _ string) model.Principal {
@@ -705,6 +722,7 @@ var notYetAttributedRoutes = map[string]bool{
 	"PUT /api/secrets/{secret}/{key}":                                      true,
 	"PUT /api/settings/cli-run":                                            true,
 	"PUT /api/tasks/{id}/goal":                                             true,
+	"PUT /api/tasks/{id}/hostd":                                            true,
 	"PUT /api/tasks/{id}/session-title":                                    true,
 }
 

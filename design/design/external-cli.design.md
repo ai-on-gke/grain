@@ -1,5 +1,11 @@
 # Driving grain from an external CLI
 
+**Owner:** @bwsalmon
+**Status:** being implemented
+**Spec:** [`design/spec/external-cli/external-cli.spec.md`](../spec/external-cli/external-cli.spec.md)
+
+**The core rule:** the `grain` CLI is the external agent contract — interactive workstation agents and humans run the same `grain` verbs over the daemon's scoped HTTP API, with the skill file and optional local `grain mcp` server layered thinly on top.
+
 `contributions.playbook.md` says designs are written "in interactive sessions between PMs, engineers and agents", outside grain, "with any interactive coding agent or by hand". After that, grain takes over: it generates specs and tasks, implements, reviews and merges. In practice the engineer's interactive agent keeps working after the design merges. That agent is Jetski / Antigravity, Claude Code, Codex CLI or Gemini CLI, running on a workstation or a laptop. The engineer uses it to hand work to grain, check on that work, answer grain's questions, and sometimes write the code themselves and ask grain to review and land it.
 
 Today all of that is possible, but it takes effort. This design makes it effortless. An engineer should be able to tell their agent "have grain do these three things and tell me when they've merged", and the agent should know how to do it without being taught each time.
@@ -8,12 +14,12 @@ Today all of that is possible, but it takes effort. This design makes it effortl
 
 Grain already has nearly all the pieces. They just don't fit together for someone working from a workstation.
 
-- **The task CLI** (`pkg/cli/main.go`, `taskcmd.go`, `cicmd.go`) runs on any machine. Its verbs are `list`, `get`, `create` (with `-depends-on`, `-position front|end`, `-repo`, `-base`, `-field`), `comment` (which also answers a parked question), `ci list|show|watch|run`, `ci faults`, `retry`, `retry-merge`, `settings` and more. Global flags are `-server`, `-token`, `-audience`, `-as` and `-json`.
-- **Finding the server** (`cliconn.go`). The CLI takes `-server`, then `$GRAIN_SERVER`, then `/etc/grain/cli.env`, then `http://127.0.0.1:4242`. That fits a CLI on the daemon's own host. It does not fit an engineer with two deployments and neither of them local.
+- **The task CLI** (`pkg/cli/main.go`, `taskcmd.go`, `cicmd.go`) runs on any machine. Its verbs are `list`, `get`, `create` (with `-depends-on`, `-position front|end`, `-priority`, `-repo`, `-base`, `-field`, filing unapproved proposals by default unless `-approve` is passed), `comment` (which also answers a parked question), `ci list|show|watch|run|cancel|cache|artifact|faults`, `retry`, `retry-merge`, `settings` and more. Global flags are `-server`, `-token`, `-audience`, `-as`, `-json`, `-connect-timeout` and `-timeout` (currently parsed only before the verb).
+- **Finding the server** (`cliconn.go`). The CLI takes `-server`, then `$GRAIN_SERVER`, then `/etc/grain/cli.env` (`$GRAIN_CLI_ENV`), then `http://127.0.0.1:4242`. That fits a CLI on the daemon's own host. It does not fit an engineer with two deployments and neither of them local.
 - **Credentials** (`pkg/ui/httpclient.go`). The CLI tries `-token` / `$GRAIN_TOKEN` (and its aliases), then the local API token for a loopback server, then a Google ID token from ADC or `gcloud auth print-identity-token --audiences=<url>` for an `https://` or `*.run.app` server. Nothing is saved between commands, so a remote user either exports the access code in every shell or passes `-token` on every call.
-- **External agents** (`docs/agent-api.md` § External agents, `pkg/ui/external_agents.go`). An operator can enable `POST /mcp` and issue per-agent `gma_…` tokens. Each token carries a scope set, a repository limit, an expiry, a rate limit and a concurrency cap. Calls run as `{agent, external:<name>}`, are journaled, and leave an audit comment on any task they change. The same escalation rails apply as for in-grain agents: an external agent cannot grant itself capabilities, enable auto-merge, or merge without review.
+- **External agents** (`docs/agent-api.md` § External agents, `pkg/ui/external_agents.go`, `pkg/ui/server.go`). An operator can enable `externalAgentApi` and issue per-agent `gma_…` tokens, which authenticate both `POST /mcp` and HTTP `/api/...` routes through `agentAPIGate`. Each token carries a scope set, a repository limit, an expiry, a rate limit and a concurrency cap. Calls run as `{agent, external:<name>}`, are journaled, and leave an audit comment on any task they change. The same escalation rails (`externalAgentFilingEscalation`) apply as for in-grain agents: an external agent cannot grant itself capabilities, approve its own filing without `tasks:admin`, raise priority above default, enable auto-merge, or merge without review.
 - **The namespace** (`design/design/grain-namespace.design.md`). `ci://`, `src://`, `task://`, `config://`, `memory://` and `deploy://` are served at `/fs/<scheme>/<path>`, with `?list`, `?glob`, `?grep`, `?tail` and `?follow`. They are only mounted on the in-sandbox git proxy (`127.0.0.1:9728`), not on the daemon's main API.
-- **The in-sandbox CLI** (`design/design/sandbox-first-agent-surface.design.md`). It covers the same verbs an external agent wants: `grain ls|read|grep`, `grain ci wait` with resumable long-polls, `grain task wait`, `grain merge-queue`, `grain pr status`. It is scoped to one task's branch and authenticated by the sandbox's proxy credential.
+- **The in-sandbox CLI** (`design/design/sandbox-first-agent-surface.design.md`, `pkg/sandboxcli`). Compiled into the same `grain` binary (`cmd/grain`), it intercepts calls when `/etc/grain/sandbox.env` is present unless an explicit external server is targeted (`$GRAIN_SERVER`, `-server`, `--context`, `$GRAIN_CONTEXT`, or `GRAIN_SANDBOX_CLI=0`). Inside the sandbox it covers `grain ls|read|grep`, `grain ci wait` with resumable 9-minute slices and wait credit, `grain task list|read|wait|message|propose`, `grain merge-queue`, and own-branch `grain pr status|open|reply|resolve|review-comment`, authenticated by the sandbox's proxy credential.
 - **Adopting someone else's PR** (`docs/github-bot.md`, `pkg/orchestrator/takeover.go`). Commenting `@<slug> take over` on a PR, or adding the `grain:take-over` label, files a shepherd task. Grain files a code review (and a security review when needed) for every head, holds the merge queue until those reviews pass, and carries the PR to merge. `@<slug> review` asks for a review only.
 - **Reaching a deployment.** Behind IAP, the CLI's ID-token path works. A single-tenant deployment takes the access code as a bearer token from any address (`docs/access-code.md`). Deployments behind a corporate identity-aware proxy are reached through a wrapper distribution, which imports this module. Core has no doc for that path and must not name corp tooling (`tests/hygiene/boundary_test.go`), so this design leaves it to a credential-source hook that a wrapper distribution registers (below).
 
@@ -87,10 +93,10 @@ The verbs an external agent needs, existing and new:
 | `grain inbox` | new | the same rows as the UI Inbox: parked questions, warning/critical notifications, held merges, unapproved proposals |
 | `grain wait` | new | see below |
 | `grain logs <id> [--follow]` | new | the live transcript or status line of a task's current run |
-| `grain ci …` | exists | `list`, `show`, `watch`, `run`, `faults`, `cache`; gains `ci wait`, `ci retrigger` and `ci test-history`, sharing code with the in-sandbox versions |
-| `grain merge-queue` | new outside the sandbox | batches, queued PRs, held gates (`GET /api/merge-batches`, `/api/pipeline/changes`) |
+| `grain ci …` | exists | `list`, `show`, `watch`, `run`, `cancel`, `faults`, `cache`, `artifact`; gains `ci wait`, `ci retrigger` and `ci test-history`, sharing code with the in-sandbox versions |
+| `grain merge-queue` | new outside the sandbox | queued PRs, active CI/review checks, held gates (`GET /api/pipeline/changes`, `deploy://merge-queue`) |
 | `grain pr adopt\|review\|status <pr-url\|owner/name#n>` | new | see CUJ 3 |
-| `grain fs ls\|cat\|grep <uri>` | new outside the sandbox | see below |
+| `grain fs ls\|cat\|read\|grep <uri>` | new outside the sandbox | `read` aliases `cat` to match the in-sandbox verb; see below |
 
 **`grain wait <id…> --until=<cond> [--timeout=30m]`.** This blocks until every named task reaches the condition, then prints each task's state, outcome, PR URL and closing note, and exits `0`. If the timeout runs out first, it exits `5` and prints a resumable command line.
 
@@ -101,10 +107,10 @@ The verbs an external agent needs, existing and new:
 
 **`grain fs` over the main API.** The namespace server is mounted a second time on the daemon's own listener, at `GET /api/fs/<scheme>/<path>`. It supports the same `?list`, `?glob`, `?grep`, `?tail`, `?follow` and `Range` as the sandbox proxy, so `grain fs cat ci://ai-on-gke/grain/ci-1942/go/gotest.log?grep=FAIL` works from a laptop.
 
-- Grants are mapped to scopes: `ci://` needs `ci:read`, `task://` needs `tasks:read`, `deploy://` needs `deployment:read`, and `config://` needs `settings:read`.
+- Grants are mapped to scopes: `ci://` needs `ci:read`, `task://` needs `tasks:read`, `deploy://` needs `deployment:read` (with `deploy://merge-queue` also readable under `ci:read`), `config://` needs `settings:read`, and `memory://` needs `memory:read`.
 - `src://` (grain's own source) needs `deployment:read` and is off for external tokens unless the scope set names it explicitly.
 - Secret redaction and size limits are the namespace server's own, unchanged.
-- `grain fs` and the in-sandbox `grain ls|read|grep` are one implementation with two transports.
+- `grain fs` (`ls|cat|read|grep`) and the in-sandbox `grain ls|read|grep` are one implementation with two transports.
 
 ### Teaching the external agent: `grain skill` and the optional `grain mcp`
 
@@ -139,11 +145,11 @@ The **tool and session** come from a new `X-Grain-Client: <tool>/<version> sessi
 
 **Scopes.** A new built-in scope set, `grain/external-dev`, is what `grain login --issue-token` uses by default:
 
-- `tasks:read`, `tasks:write`, `ci:read`, `ci:write`, `merge:write`, `repos:read`, `templates:read`, `deployment:read` (for `deploy://merge-queue.md` and health).
+- `tasks:read`, `tasks:write`, `ci:read`, `ci:write`, `merge:write`, `repos:read`, `templates:read`, `deployment:read` (for `deploy://merge-queue` and health).
 - Explicitly not: `tasks:admin` (approving proposals), `merge:force`, `settings:write`, `secrets:*`, `connections:write`, `capabilities:admin`, or the dangerous `deployment:*` scopes.
 - It needs no person to grant and is normally limited to the repos named at login.
 
-Tasks filed through it land **proposed** unless the deployment's proposal trust gate (`externalAgentFilingEscalation`) auto-approves that owner's filings. A team that wants its engineers' agents to queue work directly configures that once, for those owners and repos. An agent cannot grant it to itself. A `read-only` variant (`grain/external-read`: the `:read` scopes only) suits an agent that should watch but not act.
+Today `grain create` defaults `-approve=false` and `externalAgentFilingEscalation` refuses `approved: true` without `tasks:admin`, so tasks filed through `grain/external-dev` land **proposed**. In addition, a deployment can configure an **owner-trust proposal gate** (for named human owners and target repos, under `settings:write`) that auto-approves unapproved external filings from a trusted owner without granting the token `tasks:admin`. An agent cannot grant that trust to itself. A `read-only` variant (`grain/external-read`: the `:read` scopes only) suits an agent that should watch but not act.
 
 ## CUJs
 

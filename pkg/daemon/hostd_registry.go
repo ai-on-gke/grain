@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -38,7 +39,7 @@ func newHostdHub(cfg Config, store *model.Store) *hostd.Remote {
 	}
 	if store != nil {
 		hub.Resolve = registryResolver(store)
-		hub.OnChange = hostdConnectionNotifier(store)
+		hub.OnChange = hostdConnectionNotifier(store, hub)
 	}
 	return hub
 }
@@ -47,19 +48,30 @@ func newHostdHub(cfg Config, store *model.Store) *hostd.Remote {
 func hostdDisconnectedSubject(name string) string { return "hostd-disconnected:" + name }
 
 // hostdConnectionNotifier raises hostd-disconnected:<name> when a hostd
-// that dials in drops, and clears it when that hostd connects again.
-// Work pinned to it waits meanwhile (HostdWaitError); nothing moves to
-// another hostd.
-func hostdConnectionNotifier(store *model.Store) func(name string, connected bool) {
+// that dials in drops, and clears it when that hostd connects again,
+// waking dispatch so the work parked on it resumes at once. Work pinned
+// to it waits meanwhile (HostdWaitError): a queued run is parked saying
+// "waiting for hostd <name>", and a CLI running there detached is
+// re-attached if it is back within -hostd-reattach-timeout
+// (runhost.Hostd.ReattachTimeout). Nothing moves to another hostd.
+// A hostd that connects is also rid of the CLIs it still runs for
+// finished runs (releaseFinishedHostdRuns) when hub is set.
+func hostdConnectionNotifier(store *model.Store, hub *hostd.Remote) func(name string, connected bool) {
 	return func(name string, connected bool) {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			subject := hostdDisconnectedSubject(name)
 			if connected {
+				if hub != nil {
+					releaseFinishedHostdRuns(ctx, store, hostd.Client{Dial: hub.Dialer(name), Build: daemonBuild()}, name)
+				}
 				if _, err := store.ClearNotification(ctx, subject, "automation:hostd"); err != nil {
 					log.Printf("grain daemon: clearing %s: %v", subject, err)
 				}
+				// Tasks parked waiting for it are admitted on the next
+				// cycle; wake it rather than wait out -poll-interval.
+				wakeCycle()
 				return
 			}
 			if h, err := store.GetHostd(ctx, name); err == nil && h != nil && h.Revoked() {
@@ -83,6 +95,41 @@ func hostdConnectionNotifier(store *model.Store) func(name string, connected boo
 	}
 }
 
+// releaseFinishedHostdRuns cancels each detached process hostd name
+// still holds for a run the store has finished. A pinned hostd's runs
+// start detached (newHostdRuns) and are re-adopted at startup from the
+// hostd each recorded (adoptHostd), but a hostd that was away then is
+// left out of that pass: a CLI it still runs for a run that has since
+// been recovered, or one whose run gave up waiting while its hostd was
+// away (runhost.Hostd.cancelWhenBack, which does not outlive the
+// daemon), would otherwise run on until its own deadline. A process
+// whose run is live, or that names no run the store knows, is left
+// alone.
+func releaseFinishedHostdRuns(ctx context.Context, store *model.Store, c hostd.Client, name string) {
+	procs, err := c.Processes(ctx)
+	if err != nil {
+		log.Printf("grain daemon: listing grain hostd %s's processes for finished runs: %v", name, err)
+		return
+	}
+	for _, p := range procs {
+		if !p.Detached || p.Run == "" {
+			continue
+		}
+		finished, found, err := store.RunFinished(ctx, p.Run)
+		if err != nil {
+			log.Printf("grain daemon: grain hostd %s's process %s: reading run %s: %v", name, p.ID, p.Run, err)
+			continue
+		}
+		if !found || !finished {
+			continue
+		}
+		log.Printf("grain daemon: releasing grain hostd %s's process %s: its run %s has finished", name, p.ID, p.Run)
+		if err := c.Cancel(ctx, p.ID); err != nil {
+			log.Printf("grain daemon: cancelling grain hostd %s's process %s: %v", name, p.ID, err)
+		}
+	}
+}
+
 // registryResolver names a hostd token from the registry: the live hostd
 // it belongs to, and that hostd's owner.
 func registryResolver(store *model.Store) func(ctx context.Context, token string) (string, string, bool, error) {
@@ -100,8 +147,9 @@ func registryResolver(store *model.Store) func(ctx context.Context, token string
 }
 
 // HostdSelector says which hostd a piece of host work goes to: Name pins
-// one hostd; Labels select any hostd carrying every one of them (the
-// registry's labels and its allowlist's, merged); neither is the
+// one hostd; Labels select any hostd whose registry row carries every
+// one of them (never the labels a hostd's allowlist asserts about
+// itself, which are for display); neither is the
 // default hostd -- local, or the deprecated shared token's hostd on a
 // daemon configured with one.
 type HostdSelector struct {
@@ -146,6 +194,11 @@ func (e *HostdWaitError) Error() string {
 	return "waiting for " + e.Selector.String()
 }
 
+// Is makes a HostdWaitError agent.ErrHostdWaiting, so a run whose
+// framework build meets one goes back to the queue rather than failing
+// setup (orchestrator's setupFailedEnding), and waits there.
+func (e *HostdWaitError) Is(target error) bool { return target == agent.ErrHostdWaiting }
+
 // DefaultHostd is the hostd host work goes to when nothing pins or
 // selects one.
 func (c Config) DefaultHostd() string {
@@ -155,8 +208,8 @@ func (c Config) DefaultHostd() string {
 	return model.LocalHostd
 }
 
-// hostdLabelsTimeout bounds asking a connected hostd for its allowlist's
-// labels while selecting one.
+// hostdLabelsTimeout bounds asking a connected hostd for its hello (its
+// capacity, for holding runs to it).
 const hostdLabelsTimeout = 2 * time.Second
 
 // SelectHostd is the host executor sel routes host work to, and that
@@ -186,22 +239,13 @@ func (c Config) SelectHostd(ctx context.Context, store *model.Store, sel HostdSe
 		}
 		exec, err := c.hostdExecutor(ctx, store, h.Name)
 		connected := err == nil
-		labels := map[string]string{}
-		if connected {
-			lctx, cancel := context.WithTimeout(hostd.ForDisplay(ctx), hostdLabelsTimeout)
-			if hello, err := exec.hostdClient().Hello(lctx); err == nil {
-				for k, v := range hello.Labels {
-					labels[k] = v
-				}
-			}
-			cancel()
-		}
-		// The registry's labels win over the allowlist's: they are what
-		// the operator set for this hostd in grain.
-		for k, v := range h.Labels {
-			labels[k] = v
-		}
-		if !labelsMatch(labels, sel.Labels) {
+		// Only the registry's labels select a hostd: they are what an
+		// admin set for it in grain. The labels a hostd asserts about
+		// itself (its allowlist's labels:, in its hello) are its
+		// operator's word alone, so they are shown and never matched --
+		// or any hostd's operator could claim a label and draw in the
+		// host work, and the task tokens, selected by it.
+		if !labelsMatch(h.Labels, sel.Labels) {
 			continue
 		}
 		if connected {

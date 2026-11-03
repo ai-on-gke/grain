@@ -1,0 +1,44 @@
+#!/bin/bash
+# The workload of a granule GitHub runner image: granule-container starts
+# this as the runner user (see /etc/granule/container.json), and the VM
+# powers off when it exits.
+#
+# Under Actions Runner Controller the pod's runner container carries the
+# runner's just-in-time registration as ACTIONS_RUNNER_INPUT_JITCONFIG.
+# The image's GRANULE_WORKLOAD_ENV passes it from that container's
+# environment into this one, and the Actions runner reads it from here: it
+# registers, runs one job, and exits -- and with it the VM, the container
+# and the pod, which is the ephemeral-runner lifecycle ARC expects.
+#
+# Without it there is nothing to register as, so this waits instead of
+# exiting: the image still boots into a machine that stays up for
+# `granule exec`, the way it did before it ran a workload at all.
+set -eo pipefail
+
+runner_dir=/home/runner/actions-runner
+
+if [[ -z ${ACTIONS_RUNNER_INPUT_JITCONFIG:-} ]]; then
+  echo "granule-actions-runner: ACTIONS_RUNNER_INPUT_JITCONFIG is not set; not starting the Actions runner" >&2
+  exec sleep infinity
+fi
+
+# GitHub's images keep their tool environment -- the full PATH,
+# AGENT_TOOLSDIRECTORY, ImageOS and the rest -- in /etc/environment, which
+# a hosted runner's session reads and a process granule-container starts
+# does not. ubuntu-slim's own entrypoint loads it the same way.
+set -a
+. /etc/environment
+set +a
+
+# GitHub's environments run the Docker daemon, and a job's first `docker`
+# command should not race its start.
+if systemctl -q is-enabled docker.service 2>/dev/null; then
+  for _ in $(seq 60); do
+    systemctl -q is-active docker.service && break
+    sleep 1
+  done
+fi
+
+cd "$runner_dir"
+echo "granule-actions-runner: starting the Actions runner with its just-in-time configuration" >&2
+exec ./run.sh

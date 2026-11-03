@@ -206,6 +206,18 @@ through who is not on it is refused unless they present the access code.
 A non-empty list also replaces the daemon's default rather than adding
 to it, so list any service account that reaches the UI through IAP too.
 
+A `grain hostd` on another machine that dials in through the Gateway
+(`grain hostd -server https://<grain host> -token-file <file>
+-iap-audience <IAP client ID>`) is held to the same allowlist. It must
+also connect as its hostd row's owner: register it with `grain hostds
+register -owner <email> <name>`, where the owner is the service account
+or login it gets its ID token from, and put that identity in
+`GRAIN_ALLOWED_PRINCIPALS` too. A hostd through `kubectl port-forward`
+reaches the pod over loopback and still needs only its token
+([docs/access-code.md](../../docs/access-code.md#a-grain-hostd-dialing-in)).
+`scripts/migrate-local-to-gke.sh --server-url <Gateway URL>` takes the
+owner as `--hostd-owner` and the audience as `--iap-audience`.
+
 `grain.yaml` carries both IAP flags commented out; `-ui-require-iap` is off
 unless you add it. With it on, the code still works from inside the pod,
 over loopback, with no forwarding headers. That is the break-glass path

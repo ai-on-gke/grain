@@ -26,8 +26,9 @@ import (
 // created rather than the next restart. A sandbox already running keeps
 // the image it was created from.
 //
-// The granule backend does not implement it: it asks
-// GranuleConfig.SandboxImage on each create instead.
+// The granule backend asks GranuleConfig.SandboxImage on each create
+// when that is wired, and only falls back to the image SetImage last
+// gave it when it is not.
 type SandboxImageSetter interface {
 	SetImage(image string)
 	CurrentImage() string

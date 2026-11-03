@@ -65,7 +65,7 @@ func TestDispatchAsksForTheTaskOwnAgentFramework(t *testing.T) {
 		t.Fatalf("RunCycle: %v", err)
 	}
 
-	if len(asked) != 1 || !reflect.DeepEqual(asked[0], orchestrator.AgentChoice{Framework: model.AgentFrameworkClaude}) {
+	if len(asked) != 1 || !reflect.DeepEqual(asked[0], orchestrator.AgentChoice{Framework: model.AgentFrameworkClaude, TaskID: "t1"}) {
 		t.Fatalf("Deps.Framework was asked for %v, want one call for %q (team default)", asked, model.AgentFrameworkClaude)
 	}
 }
@@ -104,7 +104,7 @@ func TestDispatchAsksForTheModelTheTaskWasPinnedTo(t *testing.T) {
 		t.Fatalf("RunCycle: %v", err)
 	}
 
-	want := orchestrator.AgentChoice{Framework: model.AgentFrameworkClaude, BackendID: "claude-deep"}
+	want := orchestrator.AgentChoice{Framework: model.AgentFrameworkClaude, BackendID: "claude-deep", TaskID: "t1"}
 	if len(asked) != 1 || !reflect.DeepEqual(asked[0], want) {
 		t.Fatalf("Deps.Framework was asked for %v, want one call for %+v", asked, want)
 	}
@@ -139,7 +139,7 @@ func TestDispatchAsksForTheDeploymentDefaultWhenATaskNamesNoFramework(t *testing
 	// real framework is deliberately the factory's job (cmd/grain's own
 	// defaultAgentFramework), not this package's: only the caller knows
 	// what this deployment's default currently is.
-	if len(asked) != 1 || !reflect.DeepEqual(asked[0], orchestrator.AgentChoice{}) {
+	if len(asked) != 1 || !reflect.DeepEqual(asked[0], orchestrator.AgentChoice{TaskID: "t1"}) {
 		t.Fatalf("Deps.Framework was asked for %v, want one call for the empty (default) framework", asked)
 	}
 }
@@ -174,7 +174,7 @@ func TestDispatchCarriesTheTaskOwnTeam(t *testing.T) {
 		t.Fatalf("RunCycle: %v", err)
 	}
 
-	want := orchestrator.AgentChoice{Framework: model.AgentFrameworkClaude}
+	want := orchestrator.AgentChoice{Framework: model.AgentFrameworkClaude, TaskID: "t1"}
 	if len(asked) != 1 || !reflect.DeepEqual(asked[0], want) {
 		t.Fatalf("Deps.Framework was asked for %v, want one call for %+v", asked, want)
 	}

@@ -604,3 +604,33 @@ func TestSandboxAdvertiseHostAndEndpointPortsForOffClusterK8sGranule(t *testing.
 		t.Fatalf("ports.EndpointPorts() = %v, want 1 positive port", gotPorts)
 	}
 }
+
+// A stored Kubernetes image is live only on the backend that creates pods
+// from it; on any other backend it waits for the restart that adopts the
+// backend too, so Settings can go on reporting it as pending.
+func TestLiveModelConfigAdoptsK8sImagesOnlyOnTheirOwnBackend(t *testing.T) {
+	t.Parallel()
+	const startedPod, storedPod = "registry.test/k8s-sandbox:started", "registry.test/k8s-sandbox:stored"
+	const startedGuest, storedGuest = "registry.test/guest:started", "registry.test/guest:stored"
+	stored := model.Config{K8sSandboxImage: storedPod, K8sGranuleImage: storedGuest}
+
+	container := Config{ContainerSandboxes: true, ContainerImage: "example/guest", ContainerGitProxyHost: "172.17.0.1",
+		K8sSandboxImage: startedPod, K8sGranuleImage: startedGuest}
+	live := container.withLiveModelConfig(stored)
+	if live.K8sSandboxImage != startedPod || live.K8sGranuleImage != startedGuest {
+		t.Errorf("container backend: live k8s images = %q, %q, want the startup %q, %q until a restart",
+			live.K8sSandboxImage, live.K8sGranuleImage, startedPod, startedGuest)
+	}
+
+	k8s := Config{K8sSandboxes: true, K8sSandboxImage: startedPod, K8sGranuleImage: startedGuest}
+	if live := k8s.withLiveModelConfig(stored); live.K8sSandboxImage != storedPod || live.K8sGranuleImage != startedGuest {
+		t.Errorf("kubernetes backend: live k8s images = %q, %q, want %q, %q",
+			live.K8sSandboxImage, live.K8sGranuleImage, storedPod, startedGuest)
+	}
+
+	k8sGranule := Config{K8sGranuleSandboxes: true, K8sSandboxImage: startedPod, K8sGranuleImage: startedGuest}
+	if live := k8sGranule.withLiveModelConfig(stored); live.K8sSandboxImage != startedPod || live.K8sGranuleImage != storedGuest {
+		t.Errorf("kubernetes-granule backend: live k8s images = %q, %q, want %q, %q",
+			live.K8sSandboxImage, live.K8sGranuleImage, startedPod, storedGuest)
+	}
+}

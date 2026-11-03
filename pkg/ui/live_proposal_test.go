@@ -181,9 +181,9 @@ func TestProposalIsFiledWithDefaultCapabilitiesNotItsParents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(piece.Capabilities, []string{"gcp-key"}) {
-		t.Errorf("capabilities = %v, want [gcp-key] -- the defaults, not the parent's grant set",
-			piece.Capabilities)
+	if !reflect.DeepEqual(piece.Capabilities, []string{model.GCPKeySandboxAgentGrant}) {
+		t.Errorf("capabilities = %v, want [%s] -- the defaults, not the parent's grant set",
+			piece.Capabilities, model.GCPKeySandboxAgentGrant)
 	}
 	stored, err := store.GetTask(ctx, piece.ID)
 	if err != nil {
@@ -204,8 +204,8 @@ func TestProposalIsFiledWithDefaultCapabilitiesNotItsParents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(custom.Capabilities, "gcp-key") || !slices.Contains(custom.Capabilities, model.GrainHostExecGrant) {
-		t.Errorf("custom capabilities = %v, want [gcp-key %s] (self-repair as it is now spelt)", custom.Capabilities, model.GrainHostExecGrant)
+	if !slices.Contains(custom.Capabilities, model.GCPKeySandboxAgentGrant) || !slices.Contains(custom.Capabilities, model.GrainHostExecGrant) {
+		t.Errorf("custom capabilities = %v, want [%s %s]", custom.Capabilities, model.GCPKeySandboxAgentGrant, model.GrainHostExecGrant)
 	}
 }
 
@@ -779,7 +779,7 @@ func TestProposalGetsAutoGrantedGrainCIWhenTargetHasWorkflows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(proposal.Capabilities, "grain-ci") {
+	if !slices.Contains(proposal.Capabilities, model.GrainCIGrant) {
 		t.Errorf("proposal capabilities = %v, want grain-ci auto-granted", proposal.Capabilities)
 	}
 }

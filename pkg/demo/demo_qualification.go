@@ -36,11 +36,14 @@ const demoQualificationRelease = "1.0"
 // (docs/test-runs/2026-10-12-rbac-enforcement-sweep.md). Opt-in, because
 // the run files a task every other demo spec would have to count around.
 //
-// The orchestrator cuts a candidate on GitHub and its qualification
-// reconciler files the run (reconcileQualifications); a demo has neither,
-// so the candidate is marked cut here and the run is created the way that
-// reconciler creates one, from a plan that requires approval.
-func seedQualificationDemo(ctx context.Context, store *model.Store, repo model.RepoRef) error {
+// The orchestrator provisions the release's latest branch, cuts a
+// candidate on GitHub and files the run (reconcileQualifications); a demo
+// has neither, so the release and candidate are marked provisioned and cut
+// here and the run is created the way that reconciler creates one, from a
+// plan that requires approval. With -github-sim (githubSimRepo != ""),
+// both branches are pushed to its bare repo too so promoting the candidate
+// moves 1.0 to 1.0.rc.1 rather than stalling on a missing branch.
+func seedQualificationDemo(ctx context.Context, store *model.Store, repo model.RepoRef, githubSimRepo string) error {
 	now := time.Now().UTC()
 	tmpl := model.Template{
 		ID: "template-qualify", Name: "Qualify", Title: "Qualify the candidate",
@@ -66,6 +69,16 @@ func seedQualificationDemo(ctx context.Context, store *model.Store, repo model.R
 	}
 	if candidate == nil {
 		return fmt.Errorf("release %s has no candidate", demoQualificationRelease)
+	}
+	if githubSimRepo != "" {
+		for _, branch := range []string{release.LatestBranch(), candidate.Branch} {
+			if err := pushDemoGitHubSimBranch(githubSimRepo, branch); err != nil {
+				return fmt.Errorf("pushing %s to simulated GitHub: %w", branch, err)
+			}
+		}
+	}
+	if err := store.MarkReleaseProvisioned(ctx, release.ID); err != nil {
+		return fmt.Errorf("marking release %s provisioned: %w", demoQualificationRelease, err)
 	}
 	if err := store.MarkCandidateCut(ctx, candidate.ID); err != nil {
 		return fmt.Errorf("marking the candidate cut: %w", err)

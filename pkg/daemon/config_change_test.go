@@ -19,6 +19,7 @@ import (
 	"errors"
 	"os/exec"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -95,8 +96,8 @@ func TestProposedConfigChangeIsDiffedValidatedAndMergedAtItsHead(t *testing.T) {
 	if !pending.Validation.OK {
 		t.Fatalf("validation = %+v, want ok", pending.Validation)
 	}
-	if _, err := manager.ProposeConfigChange(ctx, ui.ConfigChangeProposal{Summary: "Be kind", Branch: branch, HeadSHA: "0123456789012345678901234567890123456789"}); err == nil {
-		t.Fatal("a proposal naming a head the branch is not at was recorded")
+	if _, err := manager.ProposeConfigChange(ctx, ui.ConfigChangeProposal{Summary: "Be kind", Branch: branch, HeadSHA: "0123456789012345678901234567890123456789"}); !errors.Is(err, ui.ErrConfigChangeRefused) {
+		t.Fatalf("a proposal naming a head the branch is not at = %v, want ErrConfigChangeRefused", err)
 	}
 
 	moved := *pending
@@ -115,6 +116,24 @@ func TestProposedConfigChangeIsDiffedValidatedAndMergedAtItsHead(t *testing.T) {
 	}
 	if exists, err := localRefExists(manager.repo.Dir(), branch); err != nil || exists {
 		t.Fatalf("proposal branch survived its merge: %v %v", exists, err)
+	}
+
+	// The agent's own mistakes are refusals it is told the reason for
+	// (ui answers ErrConfigChangeRefused 400 with its text), not faults:
+	// a branch never pushed, and one that changes nothing -- what an
+	// agent re-proposing an already-approved branch name pushes.
+	if _, err := manager.ProposeConfigChange(ctx, ui.ConfigChangeProposal{Summary: "Be kind", Branch: branch}); !errors.Is(err, ui.ErrConfigChangeRefused) {
+		t.Fatalf("proposing a branch that is not there = %v, want ErrConfigChangeRefused", err)
+	}
+	tip, err := localResolve(manager.repo.Dir(), manager.repo.Branch())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := localGit(manager.repo.Dir(), "update-ref", "refs/heads/"+branch, tip); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.ProposeConfigChange(ctx, ui.ConfigChangeProposal{Summary: "Be kind", Branch: branch, HeadSHA: tip}); !errors.Is(err, ui.ErrConfigChangeRefused) || !strings.Contains(err.Error(), "changes nothing") {
+		t.Fatalf("proposing a branch that changes nothing = %v, want ErrConfigChangeRefused", err)
 	}
 }
 

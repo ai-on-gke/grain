@@ -76,6 +76,17 @@ const (
 	// LegacySelfRepair is the retired in-process capability name for HostExecGrant.
 	LegacySelfRepair = "self-repair"
 
+	// CIMethod puts the branches a task pushes through the repository's
+	// own .grain/workflows and holds the merge queue on the verdict
+	// (formerly grain-ci). grain grants it from a repository's CI Mode;
+	// nobody attaches it by hand (grainci.Refusal).
+	CIMethod = model.GrainCIMethod
+	CIRef    = model.GrainCIRef
+	CIGrant  = model.GrainCIGrant
+
+	// LegacyGrainCI is the retired in-process capability name for CIGrant.
+	LegacyGrainCI = model.GrainCICapability
+
 	// RepoID is the canonical capability_id of the in-process repo server.
 	RepoID = model.RepoCapabilityServerID
 
@@ -174,7 +185,22 @@ func buildServer() *protocol.Server {
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building #%s: %v", HostExecMethod, err))
 	}
-	cs, err := protocol.NewCapabilityServer("grain", journal, health, sqlMethod, hostExec)
+	ciMethod, err := protocol.NewMethod(protocol.MethodSpec{
+		Name: CIMethod,
+		Description: "Run this repository's own .grain/workflows in grain's sandboxes for the branches " +
+			"this task pushes, and hold the merge queue until they pass. grain grants it from the " +
+			"repository's CI Mode (\"Use Grain CI\"); it is not attached by hand.",
+		// Nothing is placed in the sandbox: grain CI and the merge
+		// queue read the grant off the task (grainci.Granted).
+		Mint: func(_ context.Context, _ string, _ time.Time, _ map[string]any) (*protocol.MintResponse, error) {
+			return &protocol.MintResponse{Status: protocol.StatusOK}, nil
+		},
+		Now: callerClock,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("grainserver: building #%s: %v", CIMethod, err))
+	}
+	cs, err := protocol.NewCapabilityServer("grain", journal, health, sqlMethod, hostExec, ciMethod)
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building capability server: %v", err))
 	}
@@ -413,6 +439,10 @@ func IsHostExecGrant(grant string) bool { return model.IsGrainHostExecGrant(gran
 
 // HasHostExec reports whether any grant in grants opens grain#host-exec.
 func HasHostExec(grants []string) bool { return model.HasGrainHostExec(grants) }
+
+// IsCIGrant reports whether grant names grain#ci (recorded or bare) or
+// the retired grain-ci alias.
+func IsCIGrant(grant string) bool { return model.IsGrainCIGrant(grant) }
 
 // IsGitPushAnyRefGrant reports whether grant is GitPushAnyRefGrant or the
 // retired bare git-push-any-ref alias.

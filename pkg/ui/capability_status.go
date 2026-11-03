@@ -279,19 +279,20 @@ const defaultSecretKey = secrets.AgentCredentialKey
 // "Gemini proxy") are the vendor's own -- see modelProxyDisplayNames
 // below, which folds them in.
 var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
-	"gcp-key":             "GCP key",
-	"gemini-key":          "Gemini key",
-	"github-sandbox":      "GitHub sandbox",
-	"self-debug":          "Self debug",
-	"bootstrap-playbooks": "Bootstrap playbooks",
-	"grain-ci":            "grain CI",
-	"registry-push":       "Registry push",
-	"package-publish":     "Package publish",
-	"image-signing":       "Image signing",
-	"console":             "Interactive console",
-	"priority-dispatch":   "Priority dispatch",
-	"durable":             "Durable",
-	"read-issues":         "Read issues",
+	"gcp-key":               "GCP key",
+	"gemini-key":            "Gemini key",
+	"github-sandbox":        "GitHub sandbox",
+	"self-debug":            "Self debug",
+	"bootstrap-playbooks":   "Bootstrap playbooks",
+	model.GrainCIGrant:      "grain CI",
+	model.GrainCICapability: "grain CI",
+	"registry-push":         "Registry push",
+	"package-publish":       "Package publish",
+	"image-signing":         "Image signing",
+	"console":               "Interactive console",
+	"priority-dispatch":     "Priority dispatch",
+	"durable":               "Durable",
+	"read-issues":           "Read issues",
 })
 
 // withModelProxyDisplayNames adds one row per vendor's proxy capability
@@ -357,7 +358,6 @@ func capabilityDisplayName(id string) string {
 // dispatch, so their specs can be read back out.
 func capabilityProviderCatalog() []model.CapabilityProvider {
 	providers := []model.CapabilityProvider{
-		gcpkey.NewProvider(gcpkey.Config{}),
 		geminikey.New("", model.CredentialRef{Name: gcpkey.DefaultMinterCredential}),
 		githubsandbox.NewProvider(githubsandbox.Config{}),
 	}
@@ -437,7 +437,7 @@ func ciOnlyCapability(name string) bool {
 // build ships, registers a provider for, and publishes releases with --
 // true of the picker and useless to the person reading it.
 func capabilityRefusal(id string) string {
-	if id == grainci.CapabilityName {
+	if grainci.IsGrant(id) {
 		return grainci.Refusal()
 	}
 	if ciOnlyCapability(id) {
@@ -505,15 +505,6 @@ func (c *Client) checkable(id string) bool {
 // mints under it.
 func missingConfigFor(name string, cfg model.Config) []string {
 	switch name {
-	case "gcp-key":
-		var missing []string
-		if cfg.GCPProject == "" {
-			missing = append(missing, "GCP project")
-		}
-		if cfg.GCPServiceAccountEmail == "" {
-			missing = append(missing, "GCP service account email")
-		}
-		return missing
 	case "gemini-key":
 		if cfg.GCPProject == "" {
 			return []string{"GCP project"}
@@ -605,9 +596,9 @@ func capabilitySecretsFor(requires []string, list []secrets.SecretInfo) []Capabi
 	return out
 }
 
-// capabilitiesWithReadiness is Config.Capabilities -- the per-task
-// picker's own listing -- with each row told whether this deployment can
-// actually honour it, from the same capabilityStatuses the Settings
+// capabilitiesWithReadiness is pickerCapabilities -- the per-task
+// picker's own listing, its api scope sets as they are now -- with each
+// row told whether this deployment can actually honour it, from the same capabilityStatuses the Settings
 // pane's Capabilities tab is built from.
 //
 // The two listings were entirely independent before this, which is the
@@ -633,12 +624,13 @@ func (c *Client) capabilitiesWithReadiness(cfg *model.Config, repoConfigs []mode
 	if cfg != nil {
 		deployment = *cfg
 	}
-	byID := make(map[string]CapabilityStatus, len(c.Config.Capabilities))
+	rows := c.pickerCapabilities()
+	byID := make(map[string]CapabilityStatus, len(rows))
 	for _, s := range c.capabilityStatuses(deployment, repoConfigs) {
 		byID[s.ID] = s
 	}
-	out := make([]Capability, 0, len(c.Config.Capabilities))
-	for _, row := range c.Config.Capabilities {
+	out := make([]Capability, 0, len(rows))
+	for _, row := range rows {
 		if status, ok := byID[row.ID]; ok {
 			ready := status.Ready
 			row.Ready = &ready

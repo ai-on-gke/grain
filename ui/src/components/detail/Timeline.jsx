@@ -278,7 +278,10 @@ function timelineEvents(t, zone, now = Date.now()) {
               (model.TaskEvent) -- set only on a step somebody asked for. */}
           {(tr.by || tr.reason || tr.detail) && (
             <div className="timeline-meta timeline-transition-by">
-              {tr.by && <>by {tr.by}</>}
+              {/* byLabel says how the actor was established -- "operator
+                  (access code)" rather than the deployment's own address;
+                  rows from before sources were recorded have only by. */}
+              {tr.by && <>by {tr.byLabel || tr.by}</>}
               {tr.reason && (
                 <>
                   {tr.by ? " · " : ""}
@@ -378,6 +381,25 @@ function timelineEvents(t, zone, now = Date.now()) {
               same overlay the entry opens (CapabilityAudit). A line of its
               own: on the meta line it pushed a phone's "finished" time
               onto two lines. */}
+          {/* Which grain hostd its host work went to, the machine that
+              hostd ran on and its owner (ui.Attempt.Hostd), on a line of
+              its own for the same reason. */}
+          {a.hostd?.hostd && (
+            <div
+              className="timeline-meta timeline-attempt-hostd"
+              title={[
+                `Host work on grain hostd ${a.hostd.hostd}`,
+                a.hostd.instance && `on ${a.hostd.instance}`,
+                a.hostd.owner && `owned by ${a.hostd.owner}`,
+              ]
+                .filter(Boolean)
+                .join(", ")}
+            >
+              hostd {a.hostd.hostd}
+              {a.hostd.instance && <> on {a.hostd.instance}</>}
+              {a.hostd.owner && <> · {a.hostd.owner}</>}
+            </div>
+          )}
           {a.capabilityAuditCount > 0 && (
             <div className="timeline-meta">
               {a.capabilityAuditCount} capability audit record
@@ -486,9 +508,13 @@ function timelineEvents(t, zone, now = Date.now()) {
     // onBehalfOf is set when grain relayed somebody else's words -- a
     // question from a dispatched run reads as grain speaking for an
     // agent, not as grain's own.
+    // authorLabel is how the author reads to a person ("operator (access
+    // code)", "task 20"); comments from before sources were recorded have
+    // only author.
+    const author = c.authorLabel || c.author;
     const who = c.onBehalfOf
-      ? `${c.author} on behalf of ${c.onBehalfOf}`
-      : c.author;
+      ? `${author} on behalf of ${c.onBehalfOf}`
+      : author;
     const at = timelineTime(c.createdAt);
     return {
       key: `comment-${i}`,
