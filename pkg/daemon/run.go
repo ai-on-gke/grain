@@ -1210,9 +1210,9 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			LiveCI.Store(ciService)
 			defer ciService.Detach()
 			log.Printf("grain daemon: grain CI is on for repos whose CI mode is \"Use Grain CI\" (Settings -> Repos); "+
-				"attaching the %q capability alone does not turn it on. How many jobs run at once is "+
+				"attaching the %q grant alone does not turn it on. How many jobs run at once is "+
 				"bounded by %s",
-				grainci.CapabilityName, BudgetSentence(cfg.Limits(), KubernetesSandboxes(cfg)))
+				grainci.Grant, BudgetSentence(cfg.Limits(), KubernetesSandboxes(cfg)))
 		}
 	}
 	// The tokens those runs held came back with the registry's file

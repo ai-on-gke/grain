@@ -652,7 +652,7 @@ func TestSyncReviewsGrantsGrainCIToGrainCIRepo(t *testing.T) {
 	filed := reviewTaskOf(t, ctx, store, task.ID)
 	found := false
 	for _, g := range filed.Grants {
-		if g.Capability == "grain-ci" {
+		if g.Capability == model.GrainCIGrant {
 			found = true
 			break
 		}

@@ -598,7 +598,7 @@ func TestSystemSchedulesSeedsTheInfraReviewNightly(t *testing.T) {
 	}
 	// It reads the record, the measurements and grain's own source
 	// through one grant, and the deployment's CI runs through the other.
-	for _, want := range []string{"self-debug", "grain-ci"} {
+	for _, want := range []string{"self-debug", model.GrainCIGrant} {
 		if !granted[want] {
 			t.Errorf("the infrastructure review template does not hold %q; its grants are %+v",
 				want, tmpl.Grants)
