@@ -324,7 +324,7 @@ func TestCheckCapabilityGrantsJudgesTheCatalogueForASubject(t *testing.T) {
 	setCatalogue(t, context.Background(), client.Store, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
 		"gcp-key": {Restrictions: &model.CapabilityRestrictions{Repos: []string{"acme/widgets"}}},
 	}})
-	grants := []any{map[string]any{"grant": "gcp-key"}, map[string]any{"grant": "gemini-key"}}
+	grants := []any{map[string]any{"grant": "gcp-key"}, map[string]any{"grant": "read-issues"}}
 	for _, tc := range []struct {
 		name    string
 		subject any
