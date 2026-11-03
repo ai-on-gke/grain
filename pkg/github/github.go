@@ -2872,6 +2872,27 @@ func (c *RESTClient) ListPullRequestCommits(owner, repo string, number int) ([]C
 	return commits, nil
 }
 
+// AppSlugSource is a TokenSource that can say which GitHub App the token
+// it hands out for owner/repo belongs to: the slug check runs posted with
+// it carry (CheckRun.App), or "" when that token is not an App's.
+type AppSlugSource interface {
+	AppSlugFor(owner, repo string) (string, error)
+}
+
+// CheckRunApp is the slug of the GitHub App this client's check runs on
+// owner/repo are posted as, or "" when it cannot tell (its TokenSource is
+// no AppSlugSource, or the token is not an App's). A check run's name is
+// not an identity -- anything that can write check runs on a repository
+// can post one by any name -- so a caller that trusts its own check run
+// matches it on this.
+func (c *RESTClient) CheckRunApp(owner, repo string) (string, error) {
+	src, ok := c.Tokens.(AppSlugSource)
+	if !ok {
+		return "", nil
+	}
+	return src.AppSlugFor(owner, repo)
+}
+
 // ListCheckRuns returns the check runs against ref -- a branch name works
 // fine here, GitHub resolves it to that branch's current tip itself, so a
 // caller never needs a commit sha in hand. Paginates the same Link-header
