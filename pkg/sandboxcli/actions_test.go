@@ -148,7 +148,7 @@ func TestSandboxCIWaitReportsEachVerdict(t *testing.T) {
 	if _, errOut, code := runActionCLI(t, srv, nil, "pr", "review-comment", "x", "--path", "a.go"); code != 1 || !strings.Contains(errOut, "--line") {
 		t.Errorf("review-comment without --line: %d %s", code, errOut)
 	}
-	if _, errOut, code := runActionCLI(t, srv, nil, "pr", "resolve"); code != 1 || !strings.Contains(errOut, "--thread-id") {
+	if _, errOut, code := runActionCLI(t, srv, nil, "pr", "resolve"); code != 2 || !strings.Contains(errOut, "--thread-id") {
 		t.Errorf("resolve naming nothing: %d %s", code, errOut)
 	}
 }
@@ -222,7 +222,7 @@ func TestSandboxGitRevertRevertsATaskMergeLocally(t *testing.T) {
 	srv := httptest.NewServer(proxy)
 	defer srv.Close()
 
-	if _, errOut, code := runActionCLI(t, srv, nil, "git", "revert", "--task", "42", "-C", dir); code != 1 || !strings.Contains(errOut, "--reason") {
+	if _, errOut, code := runActionCLI(t, srv, nil, "git", "revert", "--task", "42", "-C", dir); code != 2 || !strings.Contains(errOut, "--reason") {
 		t.Errorf("revert without --reason: %d %s", code, errOut)
 	}
 	out, errOut, code := runActionCLI(t, srv, nil, "git", "revert", "--task", "42", "--reason", "broke main", "-C", dir)

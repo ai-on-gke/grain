@@ -399,7 +399,7 @@ func (c *sandboxCLI) run(args []string) error {
 		return err
 	}
 	if parseErr != nil {
-		return usageError{fmt.Sprintf("grain %s: %v\n", cmd, parseErr)}
+		return usageError{fmt.Sprintf("grain %s: %v; run 'grain %s --help' for usage\n", cmd, parseErr, cmd)}
 	}
 	for _, name := range sandboxCountFlags {
 		if v, ok := p.flags[name]; ok {
@@ -442,6 +442,11 @@ func (c *sandboxCLI) run(args []string) error {
 		uri, err := p.arg(1, "uri")
 		if err != nil {
 			return err
+		}
+		if n, err := strconv.Atoi(p.get("max")); p.has("max") && err == nil && n == 0 {
+			// The namespace refuses it too, but only once the proxy has
+			// been asked, and with exit status 1.
+			return usageError{fmt.Sprintf("grain grep: --max %q is not a match limit: it takes a positive integer\n", p.get("max"))}
 		}
 		q := p.query("glob", "max")
 		q.Set("grep", pattern)
@@ -603,7 +608,7 @@ func (c *sandboxCLI) run(args []string) error {
 	case "db query":
 		sql := strings.Join(p.positional, " ")
 		if strings.TrimSpace(sql) == "" {
-			return fmt.Errorf("db query: a SQL statement is required")
+			return p.missing("<sql>")
 		}
 		return c.get("/cli/db/query", url.Values{"sql": {sql}}, c.out)
 	}

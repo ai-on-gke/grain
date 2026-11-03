@@ -56,11 +56,11 @@ func (c *sandboxCLI) handoverWrite(p sandboxArgs) error {
 func (c *sandboxCLI) notify(p sandboxArgs) error {
 	subject := strings.TrimSpace(p.get("subject"))
 	if subject == "" {
-		return fmt.Errorf("--subject is required: a short key for what this notification is about")
+		return p.missing("--subject <key>: a short key for what this notification is about")
 	}
 	title := strings.TrimSpace(p.get("title"))
 	if title == "" {
-		return fmt.Errorf("--title is required: one line the operator reads first")
+		return p.missing("--title <title>: one line the operator reads first")
 	}
 	body := p.get("body")
 	if body == "" && (p.get("file") != "" || len(p.positional) > 0) {
@@ -180,7 +180,7 @@ func (c *sandboxCLI) taskPropose(p sandboxArgs) error {
 	}
 	title := strings.TrimSpace(p.get("title"))
 	if title == "" {
-		return fmt.Errorf("--title is required: run 'grain help propose' for usage")
+		return p.missing("--title <title>")
 	}
 	body := strings.TrimSpace(p.get("body"))
 	if body == "" && (p.get("file") != "" || len(p.positional) > 0) {
