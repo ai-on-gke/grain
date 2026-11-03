@@ -120,6 +120,19 @@ var geminiSeedCases = []struct {
 			}},
 		wantAdmin: "minter", setAdmin: gcpsets.DefaultAdmin, setCredential: "$secret:deploy-minter", wantAdmins: 2,
 	},
+	{
+		// The set names no admin and resolved to the sole one; with a
+		// second admin beside it, it has to name "ops" or it names none.
+		name: "a sole named admin bound elsewhere",
+		entry: &protocol.ServerConfig{Command: "grain", Args: []string{"capability", "gcp"}, Builtin: "gcp",
+			Env: map[string]string{"GRAIN_GCP_MINTER_OPS": "$secret:deploy-minter"},
+			Config: map[string]any{
+				"admins": []any{map[string]any{"name": "ops", "credential_source": "configured",
+					"credential_env": "GRAIN_GCP_MINTER_OPS"}},
+				"permission_sets": []any{geminiSeedSet("")},
+			}},
+		wantAdmin: "minter", setAdmin: "ops", setCredential: "$secret:deploy-minter", wantAdmins: 2,
+	},
 }
 
 // Migration 102 seeds gemini_key: {project} into the gcp server entry

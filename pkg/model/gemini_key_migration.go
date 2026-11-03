@@ -165,6 +165,20 @@ func seedGCPGeminiKey(rawMCP, project string) (string, bool, error) {
 			break
 		}
 		admins := append([]any(nil), rawAdmins...)
+		if len(rawAdmins) == 1 && !used["default"] {
+			// gcpsets gives a set naming no admin the sole one, and once
+			// there are two, "default" -- which this entry has none of --
+			// so the sets here name the one they resolved to.
+			sole, _ := rawAdmins[0].(map[string]any)
+			name, _ := sole["name"].(string)
+			for _, item := range sets {
+				if set, ok := item.(map[string]any); ok {
+					if a, _ := set["admin"].(string); a == "" {
+						set["admin"] = name
+					}
+				}
+			}
+		}
 		if !hasAdmins {
 			// The top-level admin as gcpsets synthesizes it, so the sets
 			// already here keep it once there are two admins.
