@@ -149,8 +149,8 @@ func TestTaskViewLabelsEachActorByHowItWasEstablished(t *testing.T) {
 		labels[c.Body] = c.AuthorLabel
 	}
 	for body, want := range map[string]string{
-		"from the code":  "operator (access code)",
-		"from ext1":      "external agent ext1",
+		"from the code": "operator (access code)",
+		"from ext1":     "external agent ext1",
 		// A row from before sources were recorded names somebody
 		// nothing verified (operator-attribution spec §1.2.2's legacy row).
 		"before sources": "alice@example.com (unverified)",
