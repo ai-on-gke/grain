@@ -245,3 +245,151 @@ func TestARefusalStraightAfterAMergeInTheLaneWaitsForTheNextCycle(t *testing.T) 
 		t.Fatal("the next cycle did not merge the change refused before")
 	}
 }
+
+// A 5xx or transport failure on a lane's second merge is not a refusal that
+// left the base as it was: GitHub may have applied the merge before failing,
+// so the cycle must still report the error and close the lane behind it rather
+// than letting later members merge into an unknown base.
+func TestAMergeErrorAfterAnEarlierMergeStillClosesTheLane(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, rest := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	_, firstBranch := queuedTaskWithPullRequest(t, ctx, store, sim, rest, "t1", repo)
+	second, secondBranch := queuedTaskWithPullRequest(t, ctx, store, sim, rest, "t2", repo)
+	third, thirdBranch := queuedTaskWithPullRequest(t, ctx, store, sim, rest, "t3", repo)
+	setMergeable(sim, true)
+	for _, b := range []string{firstBranch, secondBranch, thirdBranch} {
+		sim.CheckRuns[b] = greenCheck
+	}
+	client := &mergeMovesBase{RESTClient: rest, sim: sim, fail: map[string]bool{secondBranch: true}}
+
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err == nil {
+		t.Fatal("SyncPullRequests swallowed a 502 on the lane's second merge")
+	}
+	if !mergedBranch(sim, firstBranch) {
+		t.Fatal("the first clean member did not merge")
+	}
+	if mergedBranch(sim, secondBranch) {
+		t.Fatal("the failed second merge landed")
+	}
+	if mergedBranch(sim, thirdBranch) {
+		t.Fatal("the third member merged into a lane whose second merge ended in a 502")
+	}
+	for _, task := range []model.Task{second, third} {
+		if st, err := store.State(ctx, task.ID); err != nil || st != model.StateCompleted {
+			t.Fatalf("%s is %q (%v), want still completed", task.ID, st, err)
+		}
+	}
+
+	client.fail = nil
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(time.Minute)); err != nil {
+		t.Fatalf("second SyncPullRequests: %v", err)
+	}
+	for _, b := range []string{secondBranch, thirdBranch} {
+		if !mergedBranch(sim, b) {
+			t.Errorf("%s did not merge once the lane reopened", b)
+		}
+	}
+}
+
+// Classic branch protection answers a missing approving review with the same
+// bare 405 ("Pull Request is not mergeable") as a moved base. Even straight
+// after an earlier merge in the lane, a refusal that the branch's protection
+// rules place as an approval wait enters waiting_github_approval at once.
+func TestAGitHubApprovalRefusalAfterAnEarlierMergeEntersApprovalWait(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, rest := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	_, firstBranch := queuedTaskWithPullRequest(t, ctx, store, sim, rest, "t1", repo)
+	second, secondBranch := queuedTaskWithPullRequest(t, ctx, store, sim, rest, "t2", repo)
+	_, thirdBranch := queuedTaskWithPullRequest(t, ctx, store, sim, rest, "t3", repo)
+	setMergeable(sim, true)
+	for _, b := range []string{firstBranch, secondBranch, thirdBranch} {
+		sim.CheckRuns[b] = greenCheck
+	}
+	firstPR, thirdPR := prNumber(t, sim, firstBranch), prNumber(t, sim, thirdBranch)
+	sim.Approvals = map[int][]string{firstPR: {"alice"}, thirdPR: {"alice"}}
+	sim.BranchRules = map[string][]map[string]any{"main": {{
+		"type": "pull_request", "ruleset_id": 7,
+		"parameters": map[string]any{"required_approving_review_count": 1},
+	}}}
+	sim.RulesetNames = map[int]string{7: "protect main"}
+	client := &mergeMovesBase{RESTClient: rest, sim: sim, refuse: map[string]bool{secondBranch: true}}
+
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err != nil {
+		t.Fatalf("SyncPullRequests: %v", err)
+	}
+	if !mergedBranch(sim, firstBranch) || !mergedBranch(sim, thirdBranch) {
+		t.Fatal("the approved members did not merge")
+	}
+	obs := mergeQueueStatus(t, ctx, store, second.ID)
+	if obs.MergeQueueState != "waiting_github_approval" {
+		t.Fatalf("t2 state = %q (%q), want waiting_github_approval", obs.MergeQueueState, obs.MergeQueueNote)
+	}
+}
+
+// A non-member merge acted on first in the cycle (for example, a pull request
+// previously waiting on a GitHub approval that has now arrived) still moves
+// the lane's base before the queue members run, so a queue member refused
+// straight after it is treated as the base moving rather than charged a
+// refusal.
+func TestANonMemberMergeInTheLaneMarksTheBaseMovedForMembersBehindIt(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, rest := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	first, firstBranch := queuedTaskWithPullRequest(t, ctx, store, sim, rest, "t1", repo)
+	second, secondBranch := queuedTaskWithPullRequest(t, ctx, store, sim, rest, "t2", repo)
+	setMergeable(sim, true)
+	for _, b := range []string{firstBranch, secondBranch} {
+		sim.CheckRuns[b] = greenCheck
+	}
+	firstPR, secondPR := prNumber(t, sim, firstBranch), prNumber(t, sim, secondBranch)
+	sim.Approvals = map[int][]string{secondPR: {"alice"}}
+	sim.BranchRules = map[string][]map[string]any{"main": {{
+		"type": "pull_request", "ruleset_id": 7,
+		"parameters": map[string]any{"required_approving_review_count": 1},
+	}}}
+	sim.RulesetNames = map[int]string{7: "protect main"}
+	client := &mergeMovesBase{RESTClient: rest, sim: sim, refuse: map[string]bool{firstBranch: true}}
+
+	// Cycle 1: t1 enters waiting_github_approval (leaving queue membership);
+	// hold t2 to Pending so it stays in the queue for cycle 2.
+	sim.CheckRuns[secondBranch] = []github.CheckRun{{Name: "tests", Status: "in_progress"}}
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err != nil {
+		t.Fatalf("first SyncPullRequests: %v", err)
+	}
+	if obs := mergeQueueStatus(t, ctx, store, first.ID); obs.MergeQueueState != "waiting_github_approval" {
+		t.Fatalf("t1 state = %q, want waiting_github_approval", obs.MergeQueueState)
+	}
+
+	// Cycle 2: t1 gets its approval (acted on first as a non-member) and
+	// merges, moving main; t2 (a queue member) is transiently refused right
+	// after t1's merge and waits cleanly with no refusal recorded.
+	sim.Approvals[firstPR] = []string{"alice"}
+	sim.CheckRuns[secondBranch] = greenCheck
+	client.refuse = map[string]bool{secondBranch: true}
+	later := baseTime.Add(3 * time.Minute)
+	if err := orchestrator.SyncPullRequests(ctx, store, client, later); err != nil {
+		t.Fatalf("second SyncPullRequests: %v", err)
+	}
+	if !mergedBranch(sim, firstBranch) {
+		t.Fatal("the newly approved non-member did not merge")
+	}
+	if mergedBranch(sim, secondBranch) {
+		t.Fatal("the refused member merged")
+	}
+	if obs := mergeQueueStatus(t, ctx, store, second.ID); obs.MergeQueueState != "waiting_queue" {
+		t.Fatalf("t2 state = %q (%q), want waiting_queue", obs.MergeQueueState, obs.MergeQueueNote)
+	}
+
+	client.refuse = nil
+	if err := orchestrator.SyncPullRequests(ctx, store, client, later.Add(10*time.Second)); err != nil {
+		t.Fatalf("third SyncPullRequests: %v", err)
+	}
+	if !mergedBranch(sim, secondBranch) {
+		t.Fatal("t2 did not merge on the next cycle: a refusal was held against it despite the non-member merge moving main")
+	}
+}
