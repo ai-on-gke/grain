@@ -362,6 +362,9 @@ Commands:
   failures [-window 7d] [-suspect]     what runs said when they failed for a reason grain could not
                                        name -- the instrument over its own provider-refusal markers
                                        (see failures.go)
+  health                               the counters a layer built on grain keeps in the daemon, by
+                                       section, since it started (-json: all of GET /api/sandboxes;
+                                       see health.go)
   pause [-lift|-set|-resume]           why nothing is dispatching, and stop or resume this deployment (see pause.go)
   pause [-now] <id>                    pause one task in any open state: release what it holds, keep its place
                                        (a running task is given 2m to push and write its handover; -now skips it)
@@ -556,6 +559,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdMetrics(ctx, c, out, cmdArgs)
 	case "failures":
 		return cmdFailures(ctx, c, out, cmdArgs)
+	case "health":
+		return cmdHealth(ctx, c, out, cmdArgs)
 	case "pause":
 		return cmdPause(ctx, c, out, cmdArgs)
 	case "resume":

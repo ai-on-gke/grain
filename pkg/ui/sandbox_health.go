@@ -509,6 +509,11 @@ type SandboxHealthResponse struct {
 	// Daemon is the health of the process answering this request
 	// (Config.Daemon). Absent where nothing can speak for it.
 	Daemon *DaemonHealth `json:"daemon,omitempty"`
+	// Counters is every section a layer built on grain registered with
+	// RegisterHealthCounters (health_counters.go): its own in-process
+	// counts since this daemon started, which grain stores nowhere.
+	// Absent where nothing is registered, which in core is always.
+	Counters []HealthCounters `json:"counters,omitempty"`
 	// HostError carries Config.HostStats' own error (e.g. this process is
 	// not running on Linux, see pkg/sysstat's doc comment) without taking
 	// the rest of the pane down with it -- a caller with a configured
@@ -1008,7 +1013,7 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 	// and says so whether or not a pool is wired to report on.
 	if s.tasks.Config.Sandboxes == nil && s.tasks.Config.HostStats == nil && s.tasks.Config.Daemon == nil && s.tasks.Config.StandingSandboxes == nil && s.tasks.Config.PersistentSandboxes == nil && s.tasks.Config.Overcommit == nil {
 		writeJSON(w, http.StatusOK, SandboxHealthResponse{Enabled: false, StateRepoSync: syncFailure, HostCredentials: hostCredentials,
-			SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context())})
+			SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()), Counters: healthCounterSections()})
 		return
 	}
 	resp := SandboxHealthResponse{
@@ -1024,6 +1029,7 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		CIHistory:            s.tasks.ciHistoryStorage(r.Context()),
 		Lifetime:             s.tasks.sandboxLifetime(r.Context()),
 		StandingSandboxes:    s.tasks.standingSandboxes(),
+		Counters:             healthCounterSections(),
 	}
 	if ps := s.tasks.Config.PersistentSandboxes; ps != nil {
 		if list, err := ps.List(r.Context()); err == nil {
