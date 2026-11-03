@@ -226,11 +226,16 @@ func run() error {
 		// loopback included, shows it, as on every grain daemon.
 		LocalAPIToken: os.Getenv("GRAIN_E2E_ACCESS_CODE"),
 	}, store)
+	// api grants resolve as on every grain daemon
+	// (ui.AgentAPIDynamicProvider): every console session holds
+	// model.ConsoleSessionCIReadGrant by default.
+	registry := model.NewCapabilityRegistry(bootstrap.New(), durable.New())
+	registry.RegisterDynamic(ui.AgentAPIDynamicProvider)
 	deps := orchestrator.Deps{
 		Store: store, Sandboxes: orchestrator.NewHostSandboxes(sandboxRoot),
 		Framework: orchestrator.StaticFramework(provider),
 		Config: orchestrator.Config{
-			Capabilities:   model.NewCapabilityRegistry(bootstrap.New(), durable.New()),
+			Capabilities:   registry,
 			TaskCancellers: cancellers,
 		},
 		MaxWorkers: 2,
