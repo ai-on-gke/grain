@@ -927,6 +927,7 @@ function NotificationSwitch() {
 
 export default function InboxPage({
   tasks,
+  tasksLoaded = true,
   config,
   onOpenTask,
   onAct,
@@ -992,7 +993,17 @@ export default function InboxPage({
       {/* Deliberately the same sentence it always was, and about tasks
           only: a line promising that every base branch is tested is the
           exact reassurance this page was extended to stop giving. */}
-      {groups.length === 0 &&
+      {/* A task list that has never been read is not an empty one: say
+          so rather than promise nothing is waiting (2026-11-03
+          walkthrough, with GET /api/tasks failing on a cold load). */}
+      {!tasksLoaded && (
+        <ListEmpty>
+          The task list could not be read, so this page cannot show what is
+          waiting on you yet. It tries again on its own.
+        </ListEmpty>
+      )}
+      {tasksLoaded &&
+        groups.length === 0 &&
         localScripts.length === 0 &&
         notifications.length === 0 &&
         !syncFailure && (
