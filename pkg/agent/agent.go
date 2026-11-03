@@ -537,7 +537,7 @@ func CarryCapabilityServers(h Host, servers []CapabilityMCPServer) (carried []Ca
 		}
 		return carried, release, nil
 	}
-	return nil, nil, fmt.Errorf("this run's capability grants expose MCP servers, which grain proxies on its own host, and its agent CLI runs where it cannot reach them (%T)", h)
+	return nil, nil, hostSetup(fmt.Errorf("this run's capability grants expose MCP servers, which grain proxies on its own host, and its agent CLI runs where it cannot reach them (%T)", h))
 }
 
 // InteractiveArgs is the "-interactive" flag a Framework passes its

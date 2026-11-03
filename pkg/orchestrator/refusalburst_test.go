@@ -18,12 +18,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
@@ -76,6 +78,71 @@ func TestAnUnrecognisedRefusalBurstPausesTheFrameworkAndChargesNoTask(t *testing
 			t.Errorf("burst%d detail = %q, want the provider's words and the pause", i, runs[0].Detail)
 		}
 	}
+}
+
+// Three runs pinned to a hostd that failed in a second each, in the same
+// words, because grain could not carry their MCP endpoint to it: grain's
+// own wiring, not a provider's refusal (docs/test-runs/2026-11-03-hostd-
+// routing.md, F4). Nothing is paused -- in memory or in usage_limit_pause
+// -- and each run is setup-failed.
+func TestHostdSetupFailuresAreNotARefusalBurst(t *testing.T) {
+	t.Parallel()
+	for name, cause := range map[string]error{
+		"not connected": hostd.ErrRemoteNotConnected,
+		"old hostd":     hostd.ErrCarryUnsupported,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			store, ctx := openStore(t)
+			host := agent.HostdHost{Remote: failingCarrier{cause}}
+			fw := agentFunc(func(context.Context, agent.RunConfig) (*agent.Result, error) {
+				_, _, err := agent.CarryMCPEndpoint(host, "http://127.0.0.1:1/mcp", "tok")
+				return &agent.Result{}, fmt.Errorf("antigravity: %w", err)
+			})
+			pause := &orchestrator.Pause{}
+			now := baseTime
+			if _, err := pause.Restore(ctx, store, now); err != nil {
+				t.Fatal(err)
+			}
+			cfg := orchestrator.Config{Pause: pause, Now: func() time.Time { return now }}
+			for i := 1; i <= 3; i++ {
+				taskID := fmt.Sprintf("carry%d", i)
+				dispatchTask(t, ctx, store, taskID)
+				d := dispatch.Dispatch{TaskID: taskID, RunID: taskID + "-1", Attempt: 1}
+				startRun(t, ctx, store, d, now)
+				task, err := store.GetTask(ctx, taskID)
+				if err != nil || task == nil {
+					t.Fatalf("reading task: %v", err)
+				}
+				if _, runErr := orchestrator.RunDispatch(ctx, store, fw, cfg, *task, d, nil, t.TempDir(), "", nil, now); runErr == nil {
+					t.Fatal("RunDispatch err = nil, want the failure reported")
+				}
+				now = now.Add(time.Second)
+			}
+			if paused := pause.Pauses(now); len(paused) != 0 {
+				t.Errorf("paused %v, want nothing: the provider was never involved", paused)
+			}
+			if rows, err := store.ListUsageLimitPauses(ctx); err != nil || len(rows) != 0 {
+				t.Errorf("usage_limit_pause rows = %+v, %v; want none", rows, err)
+			}
+			for i := 1; i <= 3; i++ {
+				runs, err := store.Runs(ctx, fmt.Sprintf("carry%d", i))
+				if err != nil || len(runs) != 1 {
+					t.Fatalf("runs of carry%d = %+v, %v", i, runs, err)
+				}
+				if runs[0].Outcome != model.SetupFailedOutcome || !strings.Contains(runs[0].Detail, cause.Error()) {
+					t.Errorf("carry%d = %q %q, want setup-failed with the hostd's error", i, runs[0].Outcome, runs[0].Detail)
+				}
+			}
+		})
+	}
+}
+
+// failingCarrier is a hostd link that cannot carry anything.
+type failingCarrier struct{ err error }
+
+func (c failingCarrier) CarryHTTP(context.Context, http.Handler) (string, func(), error) {
+	return "", nil, c.err
 }
 
 // Runs that did some work before failing are an agent's failures, not a
