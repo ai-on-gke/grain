@@ -18,6 +18,7 @@ import { heldForRunNow } from "../alerts.js";
 import CampaignIcon from "@mui/icons-material/Campaign";
 import api from "../api.js";
 import GrantChip from "./GrantChip.jsx";
+import KeepRunningChip from "./KeepRunningChip.jsx";
 import {
   STATE_LABELS,
   statesOf,
@@ -68,6 +69,7 @@ import {
 import ItemGlyph from "./ItemGlyph.jsx";
 import NotifyRunningDialog from "./NotifyRunningDialog.jsx";
 import StateDot from "./StateDot.jsx";
+import ChipStrip from "./ChipStrip.jsx";
 
 const FILTER_TITLES = {
   all: "All tasks",
@@ -747,13 +749,28 @@ export function TaskRow({
           <time dateTime={mergedAt}>{formatDateTime(mergedAt, zone)}</time>
         </span>
       )}
-      <span className="chips">
+      <ChipStrip>
         {/* What this deployment's own fields say about the task, first
             in the row: on a list sorted by one of them it is the answer
             the order was made of, and it is what somebody scanning a
             backlog for "the high-priority ones" is reading past
             everything else to find. */}
         <CustomFieldChips fields={shownFields} values={t.customFields} />
+        {t.priority != null && t.priority !== 5 && (
+          <Chip
+            size="small"
+            variant="outlined"
+            className="chip-priority"
+            data-testid="task-priority-badge"
+            title={`Task priority ${t.priority} (default 5; higher numbers run first)`}
+            label={`P${t.priority}`}
+          />
+        )}
+        {/* A task that never ends on its own (model.Task.KeepRunning):
+            what a person approving a held proposal from the Inbox most
+            needs to see before pressing approve, since approving it
+            starts a run that is restarted every time it exits. */}
+        {t.keepRunning && <KeepRunningChip />}
         {/* The two chips that say where a task came from carry the
             figure of the thing it came from (ItemGlyph.jsx) -- the same
             hourglass and lobes the nav rail shows for Schedules and
@@ -776,6 +793,18 @@ export function TaskRow({
             icon={<ItemGlyph kind="suites" />}
             title="filed automatically by a suite run"
             label="suite"
+          />
+        )}
+        {t.imported && (
+          <Chip
+            size="small"
+            className="chip-imported"
+            title={
+              t.origin
+                ? `imported from GitHub issue ${t.origin}`
+                : "imported from a GitHub issue"
+            }
+            label="imported"
           />
         )}
         {t.stacked && !nested && (
@@ -861,7 +890,7 @@ export function TaskRow({
         {t.capabilities.map((id) => (
           <GrantChip key={id} grant={id} config={config} />
         ))}
-      </span>
+      </ChipStrip>
       {stall && (
         <Chip
           size="small"

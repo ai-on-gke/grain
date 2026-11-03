@@ -134,7 +134,7 @@ describe("App", () => {
     );
 
     // Back on the repo page, on the Branches tab the compare form is on:
-    // the tab is in the path (docs/design/settings-panel.md §2.3).
+    // the tab is in the path (design/design/settings-panel.design.md §2.3).
     await user.click(screen.getByRole("button", { name: /acme\/other$/ }));
     expect(
       await screen.findByRole("heading", { name: "acme/other" }),
@@ -211,7 +211,7 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: /^Repos/ }));
     await user.click(await screen.findByText("acme/other"));
     await user.click(
-      await screen.findByRole("button", { name: "grain/task-1" }),
+      await screen.findByRole("button", { name: /^grain\/task-1, / }),
     );
 
     expect(await screen.findByText("go test")).toBeInTheDocument();

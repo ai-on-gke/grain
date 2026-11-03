@@ -137,7 +137,7 @@ test.describe("Pinned System and Settings sub-targets", () => {
       ["/system/health", "/system", ["Health"]],
       ["/system/sandboxes", "/system/sandboxes", ["Sandboxes"]],
       ["/system/logs", "/system/logs", ["System"]],
-      ["/settings", "/settings/general", ["General"]],
+      ["/settings", "/settings/models", ["Settings"]],
       ["/settings/general", "/settings/general", ["General"]],
       [
         "/settings/credentials",
@@ -449,6 +449,63 @@ test.describe("The session page's live work tree", () => {
       await page.request.post(`/api/tasks/${helper}/reopen`).catch(() => {});
     }
   });
+
+  // The tree's root is the session's own task, which opens as the
+  // session already on screen: it is drawn as the row being read, not
+  // as a link that goes nowhere (grain/task-2546).
+  for (const [label, size] of [
+    ["desktop", DESKTOP],
+    ["phone", PHONE],
+  ]) {
+    test(`the session's own task is the current row, not a dead link, at ${label} width`, async ({
+      page,
+    }) => {
+      const chat = await sessionTaskID(page, "director");
+      await page.setViewportSize(size);
+      await page.goto("/session/director");
+      const tree = page.getByRole("region", { name: "Work tree" });
+      await expect(tree).toContainText(`Work from task ${chat}: 0 of 4 done`);
+      await tree.locator(".provenance-toggle").click();
+      const rootRow = tree.locator(
+        `li[data-task-id="${chat}"] > .task-tree-row`,
+      );
+      await expect(rootRow).toBeVisible();
+      await expect(rootRow).toHaveAttribute("aria-current", "true");
+      await expect(rootRow.locator(".task-tree-id")).toHaveText(chat);
+      await expect(
+        rootRow.getByRole("link", { name: chat, exact: true }),
+      ).toHaveCount(0);
+      await expect(tree.locator(`a[href="/tasks/${chat}"]`)).toHaveCount(0);
+      // The text id still sits on the row's line, ahead of its title,
+      // inside the tree as the links under it do.
+      const idBox = await rootRow.locator(".task-tree-id").boundingBox();
+      const titleBox = await rootRow.locator(".task-tree-title").boundingBox();
+      const treeBox = await tree.boundingBox();
+      expect(idBox.x + idBox.width).toBeLessThanOrEqual(titleBox.x);
+      expect(idBox.y).toBeLessThan(titleBox.y + titleBox.height);
+      expect(titleBox.y).toBeLessThan(idBox.y + idBox.height);
+      expect(idBox.x).toBeGreaterThanOrEqual(treeBox.x);
+      expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(
+        treeBox.x + treeBox.width + 1,
+      );
+
+      // Clicking the row keeps the session open with nothing over it.
+      await rootRow.locator(".task-tree-title").click();
+      await expect(page).toHaveURL(/\/session\/director$/);
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+
+      // Its children are still links that open over the session.
+      const child = tree
+        .locator(`li[data-task-id="${chat}"] > ul > li`)
+        .first()
+        .locator(":scope > .task-tree-row a.task-tree-id");
+      const childId = (await child.textContent()).trim();
+      await child.click();
+      await expect(page).toHaveURL(new RegExp(`/tasks/${childId}$`));
+      await page.keyboard.press("Escape");
+      await expect(page).toHaveURL(/\/session\/director$/);
+    });
+  }
 });
 
 test.describe("Every scenario's declarations together", () => {

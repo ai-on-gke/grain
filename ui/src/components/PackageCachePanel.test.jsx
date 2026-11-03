@@ -120,7 +120,7 @@ describe("PackageCachePanel", () => {
     render(<PackageCachePanel cache={cache} showError={() => {}} />);
 
     await user.click(
-      screen.getByRole("button", { name: "Flush the whole cache" }),
+      screen.getByRole("button", { name: "Flush the whole proxy cache" }),
     );
     await waitFor(() =>
       expect(api).toHaveBeenCalledWith("/api/package-cache/flush", {
@@ -142,7 +142,7 @@ describe("PackageCachePanel", () => {
     render(<PackageCachePanel cache={cache} showError={showError} />);
 
     await user.click(
-      screen.getByRole("button", { name: "Flush the whole cache" }),
+      screen.getByRole("button", { name: "Flush the whole proxy cache" }),
     );
     await waitFor(() => expect(showError).toHaveBeenCalled());
   });

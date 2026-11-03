@@ -672,13 +672,20 @@ export function probeNote(sandbox) {
 // quiet cases stay quiet.
 function SandboxStatus({ sandbox }) {
   const probe = probeNote(sandbox);
+  const isIdleSession =
+    sandbox.terminationReason === "idle session" ||
+    sandbox.kind === "idle session";
   return (
     <>
       <Chip
         size="small"
-        color={sandbox.error ? "error" : "success"}
-        label={sandbox.error || "ready"}
-        title={probe?.title}
+        color={sandbox.error ? "error" : isIdleSession ? "info" : "success"}
+        label={sandbox.error || (isIdleSession ? "idle session" : "ready")}
+        title={
+          isIdleSession && !sandbox.error
+            ? "Warm session sandbox held idle awaiting the next message"
+            : probe?.title
+        }
       />
       {probe?.text && (
         <Typography
@@ -1456,6 +1463,32 @@ function HostCredentialsAlert({ warning }) {
   );
 }
 
+// StaleSandboxImageAlerts are the sandbox image settings that pin grain's
+// own stock sandbox image at another build than this daemon's
+// (pkg/ui's staleSandboxImagePins): each leaves every sandbox behind on
+// every upgrade, and Settings is not where anybody looks when a sandbox
+// later lacks something. A warning, not an error: runs still start.
+export function StaleSandboxImageAlerts({ warnings }) {
+  if (!Array.isArray(warnings) || warnings.length === 0) return null;
+  return warnings.map((w) => (
+    <Alert
+      key={w}
+      severity="warning"
+      data-testid="stale-sandbox-image"
+      sx={{ mb: "1rem", overflowWrap: "anywhere" }}
+    >
+      {w} Change it in{" "}
+      <Link
+        href={buildPath({ view: "settings", settingsSection: "sandboxes" })}
+        underline="hover"
+      >
+        Settings → Sandboxes
+      </Link>
+      .
+    </Alert>
+  ));
+}
+
 // DaemonHealthLine is the deployment's own state, above the readings it
 // takes of the machine under it: how long this process has been up, how
 // many times its service has started lately, and which of the flags it
@@ -1767,6 +1800,9 @@ export default function SandboxHealthPage({
         </Alert>
       )}
       {data !== null && <HostCredentialsAlert warning={data.hostCredentials} />}
+      {data !== null && (
+        <StaleSandboxImageAlerts warnings={data.sandboxImageWarnings} />
+      )}
       {data !== null && !data.enabled && (
         <Alert severity="info" sx={{ mb: 2 }}>
           Not available: this deployment has no sandbox pool or host stats

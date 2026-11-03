@@ -19,7 +19,9 @@
 //
 // It is the same grant registry-push is -- an operator turns it on per
 // repository, and a job may only receive it for a trusted post-merge
-// release or an operator's own workflow_dispatch -- and differs in where
+// release or an operator's own workflow_dispatch (and, unlike
+// registry-push, the cron grain itself fires from the default branch;
+// see SupportsTrustedSchedule) -- and differs in where
 // the material comes from. registry-push reads one JSON secret somebody
 // pasted: a second long-lived credential, rotated by hand, held against
 // nothing, and belonging to whichever account happened to create it.
@@ -35,13 +37,17 @@
 // registry protocol to ghcr.io directly -- there is no brokered route
 // for it the way there is for git (pkg/gitproxy/packages.go says why) --
 // so the job gets the token, and the event gate above is what keeps that
-// to releases an operator has already trusted with the repository.
+// to releases an operator has already trusted with the repository. The
+// job can also ask for a fresh token through the same gate, so a release
+// that runs longer than the token lasts can still push (refresh.go).
 package packagepublish
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -92,6 +98,14 @@ type Config struct {
 	// what a deployment against github.com wants; a GHES deployment
 	// names its own.
 	Registry string
+	// Refresh and RefreshURL are the route a job re-mints its login
+	// through (refresh.go): the token registry and the address its
+	// sandbox reaches it at, CredentialRoute and TokenRoute being paths
+	// under it. A nil Refresh, or a RefreshURL answering "", places the
+	// static login alone, which is what a job got before there was a
+	// route and lasts as long as the ladder's token does.
+	Refresh    *Refresher
+	RefreshURL func() string
 }
 
 type Provider struct {
@@ -124,6 +138,16 @@ func (*Provider) SupportsCIEvent(event string) bool {
 	return event == "release" || event == "workflow_dispatch"
 }
 
+// SupportsTrustedSchedule admits the cron grain itself fired from a
+// workflow on the default branch, as repo-write and release-gate-read
+// do: that cron and the job declaring this capability were both merged
+// there, which is the assurance a dispatch carries, and it is what lets
+// the daily release train publish its rc and pending images without an
+// operator dispatching it. A caller's own `-event schedule` run is still
+// refused (ci.Request.TrustedSchedule), and so is any repository whose
+// operator has not put package-publish in its ci_capabilities.
+func (*Provider) SupportsTrustedSchedule() bool { return true }
+
 func (p *Provider) Resolve(ctx context.Context, cc model.CapabilityContext) (model.Resolution, error) {
 	if _, err := p.credential(cc); err != nil {
 		return model.RefusedBecause(err.Error()), nil
@@ -136,11 +160,42 @@ func (p *Provider) Materialize(ctx context.Context, cc model.CapabilityContext) 
 	if err != nil {
 		return model.Materialization{}, err
 	}
-	return model.Materialization{Placements: []model.Placement{
+	m := model.Materialization{Placements: []model.Placement{
 		{Side: model.SideSandbox, Path: RegistryPath, Content: c.Registry},
 		{Side: model.SideSandbox, Path: UsernamePath, Content: c.Username},
 		{Side: model.SideSandbox, Path: TokenPath, Content: c.Token},
-	}}, nil
+	}}
+	listener := ""
+	if p.cfg.Refresh != nil && p.cfg.RefreshURL != nil {
+		listener = strings.TrimRight(p.cfg.RefreshURL(), "/")
+	}
+	if listener == "" {
+		return m, nil
+	}
+	now := cc.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	expires := now.Add(maxLease)
+	if !cc.Deadline.IsZero() && cc.Deadline.Before(expires) {
+		expires = cc.Deadline
+	}
+	// credential has already refused a job with no repository.
+	repo := *cc.Task.Target
+	id, token, err := p.cfg.Refresh.mint(refreshGrant{
+		runID: cc.Run.ID, repo: repo, owner: repo.StoredOwner(), registry: p.cfg.Registry,
+		source: p.cfg.Credentials, expires: expires,
+	})
+	if err != nil {
+		return model.Materialization{}, err
+	}
+	refresh, err := refreshPlacements(listener, token, c.Registry)
+	if err != nil {
+		return model.Materialization{}, err
+	}
+	m.Placements = append(m.Placements, refresh...)
+	m.Lease = &model.Lease{Capability: CapabilityName, Resource: id, IssuedAt: now, ExpiresAt: &expires}
+	return m, nil
 }
 
 // credential is the one lookup Resolve and Materialize share: which
@@ -175,8 +230,16 @@ func (p *Provider) credential(cc model.CapabilityContext) (Credential, error) {
 	if err != nil {
 		return Credential{}, err
 	}
-	if c.Registry == "" || c.Username == "" || c.Token == "" {
-		return Credential{}, fmt.Errorf("the credential for %s is incomplete: a registry, a username and a token are all needed to log in", repo)
+	if err := complete(c, *repo); err != nil {
+		return Credential{}, err
 	}
 	return c, nil
+}
+
+// complete refuses a login the registry could not be logged in to.
+func complete(c Credential, repo model.RepoRef) error {
+	if c.Registry == "" || c.Username == "" || c.Token == "" {
+		return fmt.Errorf("the credential for %s is incomplete: a registry, a username and a token are all needed to log in", repo)
+	}
+	return nil
 }

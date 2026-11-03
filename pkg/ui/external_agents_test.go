@@ -27,7 +27,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -851,20 +850,21 @@ func TestExternalAgentConcurrencyCapRefusesASecondRequest(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		defer pr.Close()
 		srv.ServeHTTP(heldRec, held)
 	}()
 
-	// The held request takes its slot before it reads its body; until it
-	// has, a second request may still be let through.
-	var refused *httptest.ResponseRecorder
-	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
-		if rec, _ := doMCP(t, srv, issued.Token, "ping", map[string]any{}); rec.Code == http.StatusTooManyRequests {
-			refused = rec
-			break
-		}
+	// Writing to the unbuffered pipe blocks until handleMCP calls
+	// io.ReadAll(r.Body), which is after serveHTTP's
+	// authenticateExternalAgent has acquired the concurrency slot. Keeping
+	// pw open holds the request in io.ReadAll with the slot taken.
+	if _, err := pw.Write([]byte(" ")); err != nil {
+		t.Fatalf("held request exited before reading its body (%d: %s): %v", heldRec.Code, heldRec.Body.String(), err)
 	}
-	if refused == nil {
-		t.Fatal("a second request was never refused while the first held the only slot")
+
+	refused, _ := doMCP(t, srv, issued.Token, "ping", map[string]any{})
+	if refused.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request while slot held: status %d (%s), want 429", refused.Code, refused.Body.String())
 	}
 	if !strings.Contains(refused.Body.String(), "exceeded max concurrent requests (1)") {
 		t.Errorf("refusal = %s, want the concurrency cap named", refused.Body.String())
@@ -925,4 +925,48 @@ func TestExternalAgentCredentialNotFoundNamesTheCredential(t *testing.T) {
 			t.Errorf("%s %s: %d %s, want 404 naming the credential", c.method, c.path, rec.Code, rec.Body.String())
 		}
 	}
+}
+
+// TestExternalAgentViewKeepsPerScopeRepos checks that a scope granted on
+// one repository (tasks:write@acme/widgets) is listed with that
+// repository in resolvedScopes -- on create, rotate and list -- rather
+// than as a bare scope that reads as a grant on every repository.
+func TestExternalAgentViewKeepsPerScopeRepos(t *testing.T) {
+	_, client := testServer(t)
+	ctx := context.Background()
+	enableExternalAgentAPI(t, client.Store)
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+
+	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:   "widgets-writer",
+		Scopes: []string{"tasks:write@acme/widgets", "ci:read"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(where string, got []string) {
+		t.Helper()
+		if !slices.Contains(got, "tasks:write@acme/widgets") || slices.Contains(got, "tasks:write") {
+			t.Errorf("%s: resolvedScopes %v, want tasks:write@acme/widgets and no bare tasks:write", where, got)
+		}
+		if !slices.Contains(got, "ci:read") {
+			t.Errorf("%s: resolvedScopes %v, want the unlimited ci:read listed bare", where, got)
+		}
+	}
+	check("create", issued.ResolvedScopes)
+
+	rotated, err := client.RotateExternalAgentToken(humanCtx, issued.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("rotate", rotated.ResolvedScopes)
+
+	views, err := client.ListExternalAgentTokens(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(views) != 1 {
+		t.Fatalf("listed %d credentials, want 1", len(views))
+	}
+	check("list", views[0].ResolvedScopes)
 }

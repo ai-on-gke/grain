@@ -103,7 +103,17 @@ func (p *printer) detail(d ui.TaskDetail) {
 	if len(d.Transitions) > 0 {
 		fmt.Println("\nhistory:")
 		for _, tr := range d.Transitions {
-			fmt.Printf("  -> %-*s %s\n", stateColumn, tr.State, tr.At.Format(time.RFC3339))
+			line := fmt.Sprintf("  -> %-*s %s", stateColumn, tr.State, tr.At.Format(time.RFC3339))
+			if tr.By != "" {
+				line += " by " + tr.By
+			}
+			if tr.Reason != "" {
+				line += fmt.Sprintf(" (%s)", tr.Reason)
+			}
+			if tr.Detail != "" {
+				line += "; " + tr.Detail
+			}
+			fmt.Println(line)
 		}
 	}
 	// Each attempt, with the model it actually ran on: a task left to
@@ -214,6 +224,11 @@ func taskBlock(t ui.Task) string {
 	if t.DeferredUntil != nil {
 		fmt.Fprintf(&b, "deferred until: %s\n", t.DeferredUntil.Format(time.RFC3339))
 	}
+	priority := t.Priority
+	if priority <= 0 {
+		priority = 5
+	}
+	fmt.Fprintf(&b, "priority:   %d\n", priority)
 	fmt.Fprintf(&b, "auto-merge: %t\n", t.AutoMerge)
 	if len(t.Capabilities) > 0 {
 		fmt.Fprintf(&b, "capabilities: %s\n", strings.Join(t.Capabilities, ", "))

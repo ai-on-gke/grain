@@ -86,7 +86,7 @@ import (
 // own `repo-read:`/`repo-write:` is met by being declared, the
 // per-repository list is not consulted for them, and cmd/grain's
 // ciSandbox puts the job's git requests through the proxy as its team.
-// The untrusted-event gate on repo-write (pkg/capability/repowrite) is
+// The untrusted-event gate on repo-write (model.RepoAccessAdmitsCIEvent) is
 // unchanged: that protects against untrusted code, which is a different
 // question from whose approval a repository needs.
 //
@@ -150,7 +150,7 @@ import (
 // A capability reference (model.IsCapabilityRef) is kept and dropped the
 // same way, for the same reason: the job's declaration is what asks for
 // it and the deployment's capability policy is what decides, when the
-// job's grants are minted (docs/capabilities-spec.md §4.2.2), so neither
+// job's grants are minted (design/spec/capabilities/capabilities.spec.md §4.2.2), so neither
 // the repository's CI capabilities list nor its absence there says
 // anything about it.
 //
@@ -265,8 +265,10 @@ func UnmetRequirements(job Job, req Request) []string {
 		for _, id := range job.Capabilities {
 			// A reference is the capability policy's to refuse, which
 			// denies it to an untrusted run unless a rule opts it in
-			// (SandboxRequest.Untrusted).
-			if IsCapabilityRef(id) {
+			// (SandboxRequest.Untrusted). Repository access (repo#read,
+			// repo#write {repo}) mints no pass and is widened directly on
+			// the git proxy, so an untrusted commit never holds it.
+			if IsCapabilityRef(id) && (Capabilities.IsRepoAccess == nil || !Capabilities.IsRepoAccess(id)) {
 				continue
 			}
 			out = append(out, fmt.Sprintf("this job requires the capability %q, and %s", id, req.UntrustedCommit()))
@@ -278,7 +280,9 @@ func UnmetRequirements(job Job, req Request) []string {
 	}
 	for _, id := range job.Capabilities {
 		if req.WithholdEventGated {
-			if IsCapabilityRef(id) || strings.HasPrefix(id, "repo-read:") {
+			isRepoRead := (Capabilities.IsRepoRead != nil && Capabilities.IsRepoRead(id)) || strings.HasPrefix(id, "repo-read:")
+			isNonRepoRef := IsCapabilityRef(id) && (Capabilities.IsRepoAccess == nil || !Capabilities.IsRepoAccess(id))
+			if isRepoRead || isNonRepoRef {
 				continue
 			}
 			if !slices.Contains(req.Capabilities, id) {

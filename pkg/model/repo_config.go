@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 )
 
 // RepoConfig is one repo's own configuration -- the per-repo layer of
@@ -747,6 +748,76 @@ type RepoConfig struct {
 	// only. It was the default team's team_repo_config.git_credential
 	// until schema 23 folded that table in.
 	GitCredential string
+
+	// IssueImport is the periodic GitHub issue importer's settings for
+	// this repository: whether grain files a task for each open issue it
+	// has not imported yet, from where, and whether those tasks wait for
+	// a person (orchestrator.reconcileIssueImports, schema 65).
+	IssueImport IssueImport
+}
+
+// IssueImport is RepoConfig.IssueImport. Its zero value imports nothing.
+//
+// The tasks it files target the repository whose row this is; Repo only
+// changes which repository's issues are read, so an upstream project's
+// issues (kubernetes/autoscaler) can be worked on in a fork.
+//
+// Approved is off by default, and that default is the safety of the
+// whole feature: anybody who can open an issue on the source repository
+// writes the words an imported task's agent is given. With Approved off
+// every imported task lands unapproved -- shown as "imported" -- and
+// nothing is dispatched until a person has read it and approved it. With
+// it on, the operator has decided that the source repository's issue
+// authors are trusted to queue work here, which is a grant of authority
+// and so never something a repository declares for itself
+// (pkg/declschema).
+type IssueImport struct {
+	// Enabled switches the importer on for this repository.
+	Enabled bool
+	// Repo is the owner/name whose issues are read, empty for this
+	// repository itself.
+	Repo string
+	// Label, when set, imports only open issues carrying it.
+	Label string
+	// Approved files imported tasks approved, so they queue at once.
+	Approved bool
+	// IntervalSeconds is how often the source repository is polled; zero
+	// is DefaultIssueImportInterval.
+	IntervalSeconds int
+}
+
+// DefaultIssueImportInterval is how often an enabled importer polls its
+// source repository when IssueImport.IntervalSeconds says nothing.
+const DefaultIssueImportInterval = 10 * time.Minute
+
+// MinIssueImportInterval is the shortest poll an operator may configure:
+// each poll is a GitHub read of every open issue on the source.
+const MinIssueImportInterval = time.Minute
+
+// Empty reports whether i says nothing at all.
+func (i IssueImport) Empty() bool {
+	return i == IssueImport{}
+}
+
+// Interval is how often the importer polls, defaulted and floored.
+func (i IssueImport) Interval() time.Duration {
+	if i.IntervalSeconds <= 0 {
+		return DefaultIssueImportInterval
+	}
+	d := time.Duration(i.IntervalSeconds) * time.Second
+	if d < MinIssueImportInterval {
+		return MinIssueImportInterval
+	}
+	return d
+}
+
+// Source is the repository whose issues are imported into repo: Repo when
+// it is set and parses, repo itself otherwise.
+func (i IssueImport) Source(repo RepoRef) (RepoRef, error) {
+	if strings.TrimSpace(i.Repo) == "" {
+		return repo, nil
+	}
+	return ParseRepo(i.Repo)
 }
 
 // CIMode names the CI verification mode for a repository.
@@ -808,7 +879,7 @@ func (c RepoConfig) Empty() bool {
 		c.DeclaredPromptExtension == "" && c.DeclaredSetupCommand == "" &&
 		c.RepairTemplateID == "" && len(c.PortBranches) == 0 && len(c.DeclaredPortBranches) == 0 &&
 		len(c.PortTypes) == 0 && len(c.DeclaredPortTypes) == 0 &&
-		c.GitCredential == ""
+		c.GitCredential == "" && c.IssueImport.Empty()
 }
 
 // RepoPromptExtension is this repository's whole layer of the prompt
@@ -1018,4 +1089,16 @@ func (c RepoConfig) PortTypesWarnings() []string {
 	check(DeclaredPortTypesWarningPrefix, true, c.DeclaredPortTypes)
 	slices.Sort(out)
 	return out
+}
+
+// IssueImportResult is what one pass of the GitHub issue importer did for
+// one repository: the open issues it read on Source, the tasks it filed
+// for the ones nothing stood for yet, and how many it skipped because a
+// task already did.
+type IssueImportResult struct {
+	Repo     string   `json:"repo"`
+	Source   string   `json:"source"`
+	Open     int      `json:"open"`
+	Imported []string `json:"imported"`
+	Skipped  int      `json:"skipped"`
 }

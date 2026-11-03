@@ -166,6 +166,21 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 			}
 		}
 	}
+	// Even for capabilities task 1 holds, or empty lists / false flags that
+	// strip grants, PATCH /api/tasks/2 touching grants requires
+	// capabilities:admin.
+	for _, body := range []string{
+		`{"capabilities":[]}`,
+		`{"capabilities":["api:tasks:read"]}`,
+		`{"grants":[{"capability":"api:tasks:read"}]}`,
+		`{"priority":false}`,
+		`{"keepRunning":false}`,
+		`{"keep_running":false}`,
+	} {
+		if code, resp := asAgent(t, srv, "1", http.MethodPatch, "/api/tasks/2", body, "testing"); code != http.StatusForbidden {
+			t.Errorf("PATCH /api/tasks/2 without capabilities:admin with %s answered %d: %s", body, code, resp)
+		}
+	}
 
 	// Holding capabilities:admin itself -- a dangerous scope a person
 	// granted, with a reason -- is the power to attach grants, not to
@@ -188,6 +203,29 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 			t.Errorf("POST /api/tasks/2/capabilities with %s answered an agent %d: %s", body, code, resp)
 		}
 	}
+	seedAPITask(t, client, "4", "acme/widgets", "api:capabilities:admin", "api:tasks:write", "api:tasks:read", "gcp-key")
+	for _, body := range []string{
+		`{"capabilities":["self-debug"]}`,
+		`{"grants":[{"capability":"self-debug"}]}`,
+		`{"priority":true}`,
+		`{"priority":false}`,
+		`{"keepRunning":true}`,
+		`{"keepRunning":false}`,
+		`{"keep_running":true}`,
+	} {
+		if code, resp := asAgent(t, srv, "4", http.MethodPatch, "/api/tasks/2", body, "testing"); code != http.StatusForbidden {
+			t.Errorf("PATCH /api/tasks/2 with %s answered an agent %d: %s", body, code, resp)
+		}
+	}
+	for _, body := range []string{
+		`{"grants":[{"capability":"self-debug","via":"label"}]}`,
+		`{"grants":[{"Capability":"self-debug"}]}`,
+		`{"capabilities":[{"capability":"api:secrets:write","via":"label"}]}`,
+	} {
+		if code, resp := asAgent(t, srv, "4", http.MethodPatch, "/api/tasks/2", body, "testing"); code != http.StatusBadRequest && code != http.StatusForbidden {
+			t.Errorf("PATCH /api/tasks/2 with %s answered an agent %d: %s", body, code, resp)
+		}
+	}
 	for _, body := range []string{
 		`{"id":"api:tasks:read","attach":true}`,
 		`{"grant":"api:tasks:read@acme/widgets","attach":true}`,
@@ -205,6 +243,49 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 		if !slices.Contains([]string{"api:tasks:read", "api:tasks:read@acme/widgets", "gcp-key"}, g.Capability) {
 			t.Errorf("task 2 was granted %s by an agent", g.Capability)
 		}
+	}
+}
+
+// TestAgentAPICapabilitiesAdminMayDetachUnheldCapability verifies that an
+// agent holding api:capabilities:admin can detach (attach: false) a capability
+// from a task even when the acting task does not hold that capability, while
+// still refusing attach: true or replace: <unheld>.
+func TestAgentAPICapabilitiesAdminMayDetachUnheldCapability(t *testing.T) {
+	srv, client := testServer(t)
+	seedAPITask(t, client, "1", "acme/widgets", "api:capabilities:admin")
+	capRef := `https://github.com/acme/caps/gcp#key={"project":"p"}`
+	seedAPITask(t, client, "2", "acme/widgets", model.GrainCIGrant, "self-debug", capRef)
+
+	for _, body := range []string{
+		`{"id":"grain-ci","attach":true}`,
+		`{"capability":"https://grain.dev/capabilities/grain#ci","attach":true}`,
+		`{"grant":"self-debug","attach":true}`,
+		`{"capability":"https://github.com/acme/caps/gcp#key","with":{"project":"p"},"attach":true}`,
+		`{"id":"grain-ci","attach":false,"replace":"self-debug"}`,
+		`{"grant":"grain-ci","attach":false,"replace":"self-debug"}`,
+		`{"capability":"https://grain.dev/capabilities/grain#ci","attach":false,"replace":"self-debug"}`,
+	} {
+		if code, resp := asAgent(t, srv, "1", http.MethodPost, "/api/tasks/2/capabilities", body, "testing"); code != http.StatusForbidden {
+			t.Errorf("POST /api/tasks/2/capabilities with %s answered an agent %d, want 403: %s", body, code, resp)
+		}
+	}
+
+	for _, body := range []string{
+		`{"grant":"https://grain.dev/capabilities/grain#ci={}","attach":false}`,
+		`{"grant":"self-debug","attach":false}`,
+		`{"capability":"https://github.com/acme/caps/gcp#key","with":{"project":"p"},"attach":false}`,
+	} {
+		if code, resp := asAgent(t, srv, "1", http.MethodPost, "/api/tasks/2/capabilities", body, "testing"); code != http.StatusOK {
+			t.Errorf("POST /api/tasks/2/capabilities detach with %s answered %d, want 200: %s", body, code, resp)
+		}
+	}
+
+	task, err := client.Store.GetTask(context.Background(), "2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(task.Grants) != 0 {
+		t.Errorf("task 2 grants after detach = %v, want empty", task.Grants)
 	}
 }
 
@@ -234,6 +315,8 @@ func TestAgentAPICannotFileAroundTheProposalGate(t *testing.T) {
 		{http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets","author":"admin@example.com"}`},
 		{http.MethodPost, "/api/tasks", `{"title":"x","templateId":"tpl-key"}`},
 		{http.MethodPatch, "/api/tasks/2", `{"autoMerge":true}`},
+		{http.MethodPatch, "/api/tasks/2", `{"autoApproveProposals":true}`},
+		{http.MethodPatch, "/api/tasks/2", `{"auto_approve_proposals":true}`},
 		{http.MethodPost, "/api/tasks/2/submit", `{}`},
 		// Mailing a CL and publishing its replies are a person's.
 		{http.MethodPost, "/api/tasks/2/change-mail", `{"reviewers":["alice"]}`},
@@ -336,6 +419,54 @@ func TestAgentAPIRails(t *testing.T) {
 	}
 }
 
+// TestAgentAPIChildNotesItsDirector: the standing-session rail lets a
+// director's child leave it a note (message_task) through the agent API,
+// as the CLI and MCP hops already do, and nothing else: a task that is
+// not the director's parent or child is still refused, and so is any
+// other call the child makes on the director.
+func TestAgentAPIChildNotesItsDirector(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	directorID, err := model.FileConsoleSessionTask(ctx, client.Store, model.DefaultConsoleSessions()[0],
+		model.FileConsoleSessionOptions{Now: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedAPITask(t, client, "101", "acme/widgets", "api:tasks:write")
+	child, err := client.Store.GetTask(ctx, "101")
+	if err != nil || child == nil {
+		t.Fatalf("GetTask(101) = %v, %v", child, err)
+	}
+	child.Links = append(child.Links, model.Link{Kind: model.LinkProposedBy, Target: directorID})
+	if err := client.Store.PutTask(ctx, *child); err != nil {
+		t.Fatal(err)
+	}
+	seedAPITask(t, client, "102", "acme/widgets", "api:tasks:write")
+
+	notes := "/api/tasks/" + directorID + "/notes"
+	if code, body := asAgent(t, srv, "101", http.MethodPost, notes, `{"body":"finished the check"}`, "testing"); code != http.StatusOK {
+		t.Fatalf("the director's child noting it answered %d: %s", code, body)
+	}
+	comments, err := client.Store.Comments(ctx, directorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(comments, func(c model.Comment) bool {
+		return c.Body == "finished the check" && c.Author.Actor == model.Principal{Kind: model.PrincipalAgent, ID: "101"}
+	}) {
+		t.Errorf("director comments = %+v, want the child's note", comments)
+	}
+
+	if code, body := asAgent(t, srv, "102", http.MethodPost, notes, `{"body":"do it my way"}`, "testing"); code != http.StatusForbidden ||
+		!strings.Contains(body, "does not own") {
+		t.Errorf("an unrelated task noting the director answered %d: %s", code, body)
+	}
+	if code, body := asAgent(t, srv, "101", http.MethodPost, "/api/tasks/"+directorID+"/comments", `{"body":"hi"}`, "testing"); code != http.StatusForbidden ||
+		!strings.Contains(body, "does not own") {
+		t.Errorf("the director's child commenting on it answered %d: %s", code, body)
+	}
+}
+
 func TestAgentAPIAttributesTheCall(t *testing.T) {
 	srv, client := testServer(t)
 	seedAPITask(t, client, "1", "acme/widgets", "api:tasks:write")
@@ -349,7 +480,7 @@ func TestAgentAPIAttributesTheCall(t *testing.T) {
 	}
 	var sawComment, sawRecord bool
 	for _, c := range comments {
-		if c.Body == "from the director" && c.Author.Actor == (model.Principal{Kind: model.PrincipalAgent, ID: "1"}) {
+		if c.Body == "from the director" && c.Author.Actor == (model.Principal{Kind: model.PrincipalAgent, ID: "1", Source: model.SourceSandbox}) {
 			sawComment = true
 		}
 		if strings.Contains(c.Body, "Task 1 called") && strings.Contains(c.Body, "triage") &&
@@ -464,7 +595,7 @@ func TestAgentAPIPassesRepoPersonGateWhenConfigIsStored(t *testing.T) {
 
 // TestAgentAPIWriteRefusesAStaleExpectation is a task-admin write made
 // through the generated tool with an expect argument
-// (docs/design/durable-tasks.md#DT-13): the tool reads the task first and
+// (design/design/durable-tasks.design.md#DT-13): the tool reads the task first and
 // refuses, changing nothing, when the record disagrees.
 func TestAgentAPIWriteRefusesAStaleExpectation(t *testing.T) {
 	srv, client := testServer(t)
@@ -978,13 +1109,45 @@ func TestSandboxCLIChannelAllowsNonDangerousScopesAndRefusesDangerousAndEscalati
 	}
 }
 
+// TestSandboxCLIChannelRefusesModelOnlyControlRoutes pins
+// sandboxChannelGuard: speaking to an operator and parking a run are the
+// model's control tools, never the sandbox CLI's, even for a run whose
+// grants (api:tasks:admin among them) reach the route on any other task.
+func TestSandboxCLIChannelRefusesModelOnlyControlRoutes(t *testing.T) {
+	srv, client := testServer(t)
+	seedAPITask(t, client, "1", "acme/widgets", "api:tasks:read", "api:tasks:write", "api:tasks:admin")
+	seedAPITask(t, client, "2", "acme/widgets")
+	seedAPITask(t, client, "3", "acme/widgets")
+
+	for _, tc := range []struct {
+		path, body string
+	}{
+		{"/api/tasks/2/messages", `{"body":"hello from the sandbox"}`},
+		{"/api/tasks/2/park-until", `{"until":"2030-01-01T00:00:00Z"}`},
+		{"/api/tasks/2/resume-later", `{"when":{"at":"1h"}}`},
+		{"/api/tasks/2/wait-on", `{"ids":["3"],"park":true}`},
+	} {
+		code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPost, tc.path, tc.body, "testing sandbox guard")
+		if code != http.StatusForbidden || !strings.Contains(resp, "model-only control action") {
+			t.Errorf("POST %s %s over sandbox-cli: got %d %s, want 403 refusing a model-only control action", tc.path, tc.body, code, resp)
+		}
+	}
+	// A blocking wait is the CLI's own (grain task wait): only park is refused.
+	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPost, "/api/tasks/2/wait-on",
+		`{"ids":["3"]}`, ""); code != http.StatusOK {
+		t.Errorf("POST /api/tasks/2/wait-on without park over sandbox-cli: got %d %s, want 200", code, resp)
+	}
+}
+
 // TestAgentAPIReleasesWriteDoesNotWriteReleaseNotes pins that the
 // release-manager scope reads the deployment's weekly release notes but
-// cannot write them: writing stays with the release-notes capability
-// (and memory:write), on either channel.
+// cannot write them, and that memory:write cannot write them either:
+// writing stays with release-notes:write (and the api:release-notes preset),
+// on either channel.
 func TestAgentAPIReleasesWriteDoesNotWriteReleaseNotes(t *testing.T) {
 	srv, client := testServer(t)
 	seedAPITask(t, client, "1", "acme/widgets", "api:releases:read", "api:releases:write")
+	seedAPITask(t, client, "2", "acme/widgets", "api:memory")
 	body := `{"period":"2026-W43","title":"t","text":"x"}`
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/release-notes", body, ""); code != http.StatusForbidden {
 		t.Errorf("api:releases:write wrote release notes: %d %s, want 403", code, resp)
@@ -992,12 +1155,18 @@ func TestAgentAPIReleasesWriteDoesNotWriteReleaseNotes(t *testing.T) {
 	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPut, "/api/release-notes", body, ""); code != http.StatusForbidden {
 		t.Errorf("api:releases:write wrote release notes over sandbox-cli: %d %s, want 403", code, resp)
 	}
+	if code, resp := asAgent(t, srv, "2", http.MethodPut, "/api/release-notes", body, ""); code != http.StatusForbidden {
+		t.Errorf("api:memory wrote release notes: %d %s, want 403", code, resp)
+	}
+	if code, resp := asSandboxAgent(t, srv, "2", "run-1", http.MethodPut, "/api/release-notes", body, ""); code != http.StatusForbidden {
+		t.Errorf("api:memory wrote release notes over sandbox-cli: %d %s, want 403", code, resp)
+	}
 	if code, resp := asAgent(t, srv, "1", http.MethodGet, "/api/release-notes", "", ""); code == http.StatusForbidden {
 		t.Errorf("api:releases:read was refused reading release notes: %d %s", code, resp)
 	}
-	for _, r := range ui.SandboxAPIRoutes([]string{"api:releases:write"}, "") {
+	for _, r := range ui.SandboxAPIRoutes([]string{"api:releases:write", "api:memory"}, "") {
 		if r.Pattern == "PUT /api/release-notes" {
-			t.Errorf("SandboxAPIRoutes([api:releases:write]) lists PUT /api/release-notes")
+			t.Errorf("SandboxAPIRoutes([api:releases:write api:memory]) lists PUT /api/release-notes")
 		}
 	}
 }
@@ -1024,5 +1193,116 @@ func TestAgentReleaseNoteWriteIsAttributedToTheAgent(t *testing.T) {
 	}
 	if note.UpdatedByKind != string(model.PrincipalAgent) || note.UpdatedBy != "1" {
 		t.Errorf("release note written by task 1 is attributed to %s %q, want agent \"1\"", note.UpdatedByKind, note.UpdatedBy)
+	}
+}
+
+// A CI run is its repository's: a task holding ci:read for some
+// repositories reads a run in one of them by id, and a run elsewhere is
+// refused; a listing that names no repository is narrowed to the one
+// the grant reaches rather than refused.
+func TestAgentAPIRepoScopedCIReadReachesRunsByID(t *testing.T) {
+	runner := &fakeCIRunner{runs: []ci.Run{
+		{ID: "run-w", Repo: "acme/widgets", Ref: "grain/task-2"},
+		{ID: "run-g", Repo: "acme/gadgets", Ref: "grain/task-3"},
+	}}
+	client, _, _ := testClient(t)
+	client.Config.CI = runner
+	srv := ui.NewServerWithClient(client)
+	seedAPITask(t, client, "1", "acme/widgets", "api:ci:read@acme/widgets")
+
+	if code, body := asAgent(t, srv, "1", http.MethodGet, "/api/ci/runs/run-w", "", ""); code != http.StatusOK {
+		t.Errorf("ci:read@acme/widgets was refused a run in acme/widgets: %d %s", code, body)
+	}
+	if code, body := asAgent(t, srv, "1", http.MethodGet, "/api/ci/runs/run-g", "", ""); code != http.StatusForbidden ||
+		!strings.Contains(body, "acme/gadgets") {
+		t.Errorf("ci:read@acme/widgets read a run in acme/gadgets: %d %s", code, body)
+	}
+	code, body := asAgent(t, srv, "1", http.MethodGet, "/api/ci/runs", "", "")
+	if code != http.StatusOK || !strings.Contains(body, "run-w") || strings.Contains(body, "run-g") {
+		t.Errorf("GET /api/ci/runs without ?repo= was not narrowed to acme/widgets: %d %s", code, body)
+	}
+}
+
+// grain-ci reads CI over the agent API for the repositories its task's
+// runs may read -- its own and its reads -- as it does over /fs/ci/, and
+// for no other.
+func TestAgentAPIGrainCIReadsCIOfTheTasksRepositories(t *testing.T) {
+	runner := &fakeCIRunner{runs: []ci.Run{
+		{ID: "run-w", Repo: "acme/widgets", Ref: "grain/task-2"},
+		{ID: "run-l", Repo: "acme/library", Ref: "main"},
+		{ID: "run-g", Repo: "acme/gadgets", Ref: "grain/task-3"},
+	}}
+	client, _, _ := testClient(t)
+	client.Config.CI = runner
+	srv := ui.NewServerWithClient(client)
+	target := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := client.Store.PutTask(context.Background(), model.Task{
+		ID: "1", Intent: model.IntentImplement, Title: "task 1", Target: &target,
+		Reads:  []model.RepoRef{{Owner: "acme", Name: "library"}},
+		Grants: []model.Grant{{Capability: "grain-ci", Via: model.GrantByLabel}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, id := range []string{"run-w", "run-l"} {
+		if code, body := asSandboxAgent(t, srv, "1", "", http.MethodGet, "/api/ci/runs/"+id, "", ""); code != http.StatusOK {
+			t.Errorf("grain-ci was refused %s: %d %s", id, code, body)
+		}
+	}
+	if code, body := asSandboxAgent(t, srv, "1", "", http.MethodGet, "/api/ci/runs/run-g", "", ""); code != http.StatusForbidden {
+		t.Errorf("grain-ci read a run in a repository its task does not read: %d %s", code, body)
+	}
+	code, body := asSandboxAgent(t, srv, "1", "", http.MethodGet, "/api/ci/runs", "", "")
+	if code != http.StatusOK || !strings.Contains(body, "run-w") || strings.Contains(body, "run-g") {
+		t.Errorf("grain-ci's GET /api/ci/runs was not narrowed to its own repository: %d %s", code, body)
+	}
+	if code, body := asSandboxAgent(t, srv, "1", "", http.MethodGet, "/api/ci/runs?repo=acme/library", "", ""); code != http.StatusOK ||
+		!strings.Contains(body, "run-l") {
+		t.Errorf("grain-ci was refused its reads repository's runs: %d %s", code, body)
+	}
+	if code, _ := asSandboxAgent(t, srv, "1", "", http.MethodGet, "/api/ci/runs?repo=acme/gadgets", "", ""); code != http.StatusForbidden {
+		t.Errorf("grain-ci listed a repository its task does not read: %d", code)
+	}
+	if code, _ := asSandboxAgent(t, srv, "1", "", http.MethodDelete, "/api/ci/runs/run-w", "", "stop"); code != http.StatusForbidden {
+		t.Errorf("grain-ci cancelled a run: %d", code)
+	}
+}
+
+// settings/new-task-form.yml's hidden defaults are a person's form, not a
+// way around the proposal gate: an agent's POST /api/tasks is judged on
+// the body it sent, so the defaults are not put in after that gate.
+func TestAgentAPIFilingTakesNoHiddenFormDefaults(t *testing.T) {
+	srv, client := testServer(t)
+	seedAPITask(t, client, "1", "acme/widgets", "api:tasks:write")
+	var form model.NewTaskForm
+	if err := json.Unmarshal([]byte(`{"default": {"fields": {
+		"autoMerge": {"visibility": "hidden", "default": true},
+		"approved": {"visibility": "hidden", "default": true},
+		"writes": {"visibility": "hidden", "default": ["acme/gadgets"]},
+		"reads": {"visibility": "hidden", "default": ["acme/secret"]}
+	}}}`), &form); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Store.UpdateConfig(context.Background(), func(c *model.Config) error {
+		c.NewTaskForm = &form
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, body := asAgent(t, srv, "1", http.MethodPost, "/api/tasks", `{"title":"x","repo":"acme/widgets"}`, "testing")
+	if code != http.StatusCreated {
+		t.Fatalf("agent filing answered %d: %s", code, body)
+	}
+	var created struct{ ID string }
+	if err := json.Unmarshal([]byte(body), &created); err != nil || created.ID == "" {
+		t.Fatalf("created = %s (%v)", body, err)
+	}
+	task, err := client.Store.GetTask(context.Background(), created.ID)
+	if err != nil || task == nil {
+		t.Fatalf("GetTask(%s) = %v, %v", created.ID, task, err)
+	}
+	if task.AutoMerge || task.Approval != nil || len(task.Writes) != 0 || len(task.Reads) != 0 {
+		t.Errorf("agent-filed task took the form's hidden defaults: autoMerge=%v approval=%v writes=%v reads=%v",
+			task.AutoMerge, task.Approval, task.Writes, task.Reads)
 	}
 }

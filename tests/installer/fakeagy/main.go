@@ -29,7 +29,8 @@
 // can tell where it ran. mode=hang makes it wait, after its tool calls,
 // until something kills it: the cancel and deadline cases. mode=steady
 // ticks=N prints N numbered ticks, one every half second, before its
-// result: the daemon-upgrade case.
+// result: the daemon-upgrade case. mode=limit fails the run with agy's
+// spent-quota text: the per-hostd pause case.
 //
 // With "capability-server <report>" as its arguments it is instead a
 // stdio capability server with one method, host-probe, for a `run: host`
@@ -38,9 +39,12 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -76,7 +80,10 @@ type report struct {
 	HostOnlySeen bool     `json:"hostOnlySeen"`
 	InContainer  bool     `json:"inContainer"`
 	PID          int      `json:"pid"`
+	PPID         int      `json:"ppid"`
+	Hostname     string   `json:"hostname"`
 	MCPCommand   string   `json:"mcpCommand"`
+	MCPURL       string   `json:"mcpUrl,omitempty"`
 	MCPArgs      []string `json:"mcpArgs"`
 	MCPStderr    string   `json:"mcpStderr"`
 	ToolResults  []string `json:"toolResults"`
@@ -101,7 +108,8 @@ func runAgy() {
 
 	cwd, _ := os.Getwd()
 	r := report{Args: os.Args[1:], UID: os.Getuid(), Cwd: cwd, Home: os.Getenv("HOME"),
-		HTTPSProxy: os.Getenv("HTTPS_PROXY"), PID: os.Getpid()}
+		HTTPSProxy: os.Getenv("HTTPS_PROXY"), PID: os.Getpid(), PPID: os.Getppid()}
+	r.Hostname, _ = os.Hostname()
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
 		r.EnvNames = append(r.EnvNames, name)
@@ -116,10 +124,14 @@ func runAgy() {
 	emit(map[string]any{"event": "init", "conversation_id": "fake-conversation",
 		"init": map[string]any{"cwd": cwd, "tools": []string{}}})
 
-	command, args := mcpServer(r.Home)
-	r.MCPCommand, r.MCPArgs = command, args
+	command, args, serverURL := mcpServer(r.Home)
+	r.MCPCommand, r.MCPArgs, r.MCPURL = command, args, serverURL
 	step := 0
-	if command == "" {
+	if serverURL != "" {
+		// A hostd on another machine: grain's endpoint carried to this
+		// machine's loopback (pkg/hostd/carry.go).
+		step = callHTTPTools(serverURL, &r)
+	} else if command == "" {
 		r.ToolErrors = append(r.ToolErrors, "no "+mcp.ToolNamespace+" server in "+filepath.Join(r.Home, ".gemini", "config", "mcp_config.json"))
 	} else {
 		step = callTools(command, args, &r)
@@ -143,6 +155,11 @@ func runAgy() {
 		for {
 			time.Sleep(time.Hour)
 		}
+	}
+	if fields["mode"] == "limit" {
+		// agy's own wording for a spent quota on the login it runs as: a
+		// usage limit on an ambient credential, for the per-hostd pause.
+		fail("Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h0m0s.")
 	}
 	if fields["mode"] == "steady" {
 		// Prints one numbered tick at a time, for as long as a daemon
@@ -234,23 +251,84 @@ func callTools(command string, args []string, r *report) int {
 }
 
 // mcpServer is the grain-sandbox server from the mcp_config.json grain
-// wrote into HOME, the file real agy reads.
-func mcpServer(home string) (string, []string) {
+// wrote into HOME, the file real agy reads: the command it forks, or the
+// serverUrl it calls when grain carried its endpoint here.
+func mcpServer(home string) (string, []string, string) {
 	b, err := os.ReadFile(filepath.Join(home, ".gemini", "config", "mcp_config.json"))
 	if err != nil {
-		return "", nil
+		return "", nil, ""
 	}
 	var cfg struct {
 		MCPServers map[string]struct {
-			Command string   `json:"command"`
-			Args    []string `json:"args"`
+			Command   string   `json:"command"`
+			Args      []string `json:"args"`
+			ServerURL string   `json:"serverUrl"`
 		} `json:"mcpServers"`
 	}
 	if json.Unmarshal(b, &cfg) != nil {
-		return "", nil
+		return "", nil, ""
 	}
 	s := cfg.MCPServers[mcp.ToolNamespace]
-	return s.Command, s.Args
+	return s.Command, s.Args, s.ServerURL
+}
+
+// callHTTPTools makes one tool call over MCP's streamable HTTP at
+// serverURL, as agy does with a serverUrl entry.
+func callHTTPTools(serverURL string, r *report) int {
+	session := ""
+	call := func(id int, method string, params any) (json.RawMessage, error) {
+		body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+		req, _ := http.NewRequest(http.MethodPost, serverURL, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		if session != "" {
+			req.Header.Set("Mcp-Session-Id", session)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		if s := resp.Header.Get("Mcp-Session-Id"); s != "" {
+			session = s
+		}
+		out, _ := io.ReadAll(resp.Body)
+		// An event stream carries the answer on its data: line.
+		for _, line := range strings.Split(string(out), "\n") {
+			if rest, ok := strings.CutPrefix(line, "data:"); ok {
+				out = []byte(strings.TrimSpace(rest))
+			}
+		}
+		var res struct {
+			Result json.RawMessage `json:"result"`
+			Error  any             `json:"error"`
+		}
+		if err := json.Unmarshal(out, &res); err != nil || res.Error != nil {
+			return nil, fmt.Errorf("%s: %d %s", method, resp.StatusCode, out)
+		}
+		return res.Result, nil
+	}
+	if _, err := call(1, "initialize", map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{},
+		"clientInfo": map[string]any{"name": "fakeagy", "version": "0"}}); err != nil {
+		r.ToolErrors = append(r.ToolErrors, "initialize: "+err.Error())
+		return 0
+	}
+	args := map[string]any{"file_path": "HOSTD_AGY.md", "content": "written by a remote-hostd agy through the carried MCP endpoint\n"}
+	emit(map[string]any{"event": "step_update", "step_update": map[string]any{
+		"step_index": 1, "state": "ACTIVE", "step_type": "tool", "tool_name": "write_file",
+		"tool_info": map[string]any{"name": "write_file", "parameters": args}}})
+	res, err := call(2, "tools/call", map[string]any{"name": "write_file", "arguments": args})
+	state, out := "DONE", string(res)
+	if err != nil {
+		state, out = "ERROR", err.Error()
+		r.ToolErrors = append(r.ToolErrors, "write_file: "+out)
+	} else {
+		r.ToolResults = append(r.ToolResults, "write_file: "+out)
+	}
+	emit(map[string]any{"event": "step_update", "step_update": map[string]any{
+		"step_index": 1, "state": state, "step_type": "tool", "tool_name": "write_file",
+		"tool_info": map[string]any{"name": "write_file", "parameters": args, "output": out}}})
+	return 1
 }
 
 func emit(event map[string]any) {
@@ -280,7 +358,7 @@ func parseFields(prompt string) map[string]string {
 	return out
 }
 
-// serveCapability is a stdio capability server (docs/capabilities-spec.md)
+// serveCapability is a stdio capability server (design/spec/capabilities/capabilities.spec.md)
 // with one method, host-probe. It records where it was started in
 // reportPath before it serves, so the test can see a `run: host` server
 // came up on the host, as the installing user, before any run mints

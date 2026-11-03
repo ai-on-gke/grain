@@ -158,6 +158,10 @@ export default async function api(path, opts) {
     // A capability grant's refusal keyed by the argument it is about
     // (pkg/ui's ValidationError fields), which a grant form marks.
     if (body && body.fields) err.fields = body.fields;
+    // A config change the pre-review suite refused (POST
+    // /api/state-repo/pull-requests' 422): its report, which
+    // components/ConfigRefusal.jsx lists.
+    if (body && body.validation) err.validation = body.validation;
     // A configuration write refused because the configuration lives in
     // an external config repository, with the file and the patch to
     // commit there instead (components/ConfigRefusal.jsx).

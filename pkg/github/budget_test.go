@@ -225,11 +225,16 @@ func TestKindOfNamesTheReadsTheIncidentNamed(t *testing.T) {
 		{"GET", "/repos/acme/widgets/pulls/12/comments?per_page=100", "review comments"},
 		{"GET", "/repos/acme/widgets/commits/deadbeef/check-runs?per_page=100", "checks"},
 		{"GET", "/repos/acme/widgets/actions/runs?head_sha=abc", "checks"},
+		{"GET", "/repos/acme/widgets/actions/runs/42/jobs?per_page=100", "checks"},
+		{"GET", "/repos/acme/widgets/actions/jobs/77/logs", "job logs"},
+		{"GET", "/repos/acme/widgets/actions/runs/42/artifacts?per_page=100", "artifacts"},
 		{"GET", "/repos/acme/widgets/compare/abc1234...def5678", "compare"},
 		{"GET", "/repos/acme/widgets/issues/12/comments", "comments"},
 		{"GET", "/repos/acme/widgets", "repo read"},
 		{"PUT", "/repos/acme/widgets/pulls/12/merge", "write"},
-		{"POST", "/graphql", "write"},
+		{"POST", "/graphql", "graphql"},
+		{"POST", "/api/graphql", "graphql"},
+		{"POST", "/repos/acme/widgets/issues/12/comments", "write"},
 	} {
 		if got := kindOf(c.method, endpointOf(c.path)); got != c.want {
 			t.Errorf("kindOf(%s %s) = %q, want %q", c.method, c.path, got, c.want)

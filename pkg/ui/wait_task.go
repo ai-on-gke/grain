@@ -104,6 +104,11 @@ func (c *Client) WaitOn(ctx context.Context, id string, ids []string, park bool)
 	}); err != nil {
 		return nil, err
 	}
+	ids = make([]string, len(targets))
+	for i, t := range targets {
+		ids[i] = t.ID
+	}
+	c.noteTaskAction(ctx, self.ID, model.TaskEventParked, "waiting on "+strings.Join(ids, ", "))
 	return targets, nil
 }
 
@@ -186,6 +191,7 @@ func (c *Client) ParkUntil(ctx context.Context, id string, until time.Time) (tim
 	}); err != nil {
 		return time.Time{}, err
 	}
+	c.noteTaskAction(ctx, self.ID, model.TaskEventParked, "until "+until.Format(time.RFC3339))
 	return until, nil
 }
 
@@ -246,7 +252,7 @@ type resumeLaterRequest struct {
 }
 
 // ResumeLater is the daemon's half of resume_later
-// (docs/design/durable-tasks.md#DT-9), and of wait_for_task's two parks,
+// (design/design/durable-tasks.design.md#DT-9), and of wait_for_task's two parks,
 // which are forms of it: the run working on id stops and asks for its
 // task to be queued again when when is met. What holds the task until
 // then is what already held a park:

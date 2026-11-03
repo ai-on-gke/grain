@@ -26,17 +26,13 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
 	"github.com/ai-on-gke/grain/pkg/capability/geminikey"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
-	"github.com/ai-on-gke/grain/pkg/capability/gitpushanyref"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
 	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
-	"github.com/ai-on-gke/grain/pkg/capability/quarantine"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
-	"github.com/ai-on-gke/grain/pkg/capability/releasenotes"
-	"github.com/ai-on-gke/grain/pkg/capability/teambroadcast"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -283,32 +279,20 @@ const defaultSecretKey = secrets.AgentCredentialKey
 // "Gemini proxy") are the vendor's own -- see modelProxyDisplayNames
 // below, which folds them in.
 var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
-	"gcp-key":             "GCP key",
-	"gemini-key":          "Gemini key",
-	"github-sandbox":      "GitHub sandbox",
-	"self-debug":          "Self debug",
-	"deployment-health":   "Deployment health",
-	"grain-log":           "Grain log",
-	"self-repair":         "Self repair",
-	"self-upgrade":        "Self upgrade",
-	"bootstrap-playbooks": "Bootstrap playbooks",
-	"grain-ci":            "grain CI",
-	"registry-push":       "Registry push",
-	"package-publish":     "Package publish",
-	"image-signing":       "Image signing",
-	"memory":              "Memory",
-	"release-notes":       "Release notes",
-	"team-broadcast":      "Team broadcast",
-	"pipeline-control":    "Pipeline control",
-	"dispatch-control":    "Dispatch control",
-	"git-push-any-ref":    "Push any ref",
-	"console":             "Interactive console",
-	"test-quarantine":     "Test quarantine",
-	"priority-dispatch":   "Priority dispatch",
-	"durable":             "Durable",
-	"read-issues":         "Read issues",
-	"db-read":             "Grain DB read",
-	"db-write":            "Grain DB read/write",
+	"gcp-key":               "GCP key",
+	"gemini-key":            "Gemini key",
+	"github-sandbox":        "GitHub sandbox",
+	"self-debug":            "Self debug",
+	"bootstrap-playbooks":   "Bootstrap playbooks",
+	model.GrainCIGrant:      "grain CI",
+	model.GrainCICapability: "grain CI",
+	"registry-push":         "Registry push",
+	"package-publish":       "Package publish",
+	"image-signing":         "Image signing",
+	"console":               "Interactive console",
+	"priority-dispatch":     "Priority dispatch",
+	"durable":               "Durable",
+	"read-issues":           "Read issues",
 })
 
 // withModelProxyDisplayNames adds one row per vendor's proxy capability
@@ -352,13 +336,19 @@ func capabilityCatalog() []model.CapabilitySpec {
 //
 // capabilityDisplayName is capabilityDisplayNames[id], or for a
 // capability contributed from outside core the Name it was registered
-// with (capability.RegisterProvider).
+// with (capability.RegisterProvider, or capability.Register for a
+// contributed method's reference or grant).
 func capabilityDisplayName(id string) string {
 	if name, ok := capabilityDisplayNames[id]; ok {
 		return name
 	}
 	if r, ok := capability.Lookup(id); ok {
 		return r.Name
+	}
+	for _, m := range capability.Methods() {
+		if id == m.Ref() || id == m.Grant() {
+			return m.Name
+		}
 	}
 	return ""
 }
@@ -374,15 +364,11 @@ func capabilityProviderCatalog() []model.CapabilityProvider {
 	}
 	providers = append(providers, admincaps.Providers()...)
 	providers = append(providers,
-		gitpushanyref.New(),
 		bootstrap.New(),
-		releasenotes.New(),
-		teambroadcast.New(),
 		registrypush.NewWithConfig(registrypush.Config{}),
 		packagepublish.New(packagepublish.Config{}),
 		imagesigning.New(imagesigning.Config{}),
 		consolecap.New(),
-		quarantine.New(),
 		readissues.New(),
 		prioritydispatch.New(),
 		durable.New(),
@@ -420,6 +406,9 @@ func ciOnlyCapability(name string) bool {
 	if name == model.ReleaseGateReadCapability {
 		return true
 	}
+	if model.CapabilityGrantRef(name) == model.RepoReadRef {
+		return true
+	}
 	if _, ok := model.RepoReadTarget(name); ok {
 		return true
 	}
@@ -449,7 +438,7 @@ func ciOnlyCapability(name string) bool {
 // build ships, registers a provider for, and publishes releases with --
 // true of the picker and useless to the person reading it.
 func capabilityRefusal(id string) string {
-	if id == grainci.CapabilityName {
+	if grainci.IsGrant(id) {
 		return grainci.Refusal()
 	}
 	if ciOnlyCapability(id) {
@@ -617,9 +606,9 @@ func capabilitySecretsFor(requires []string, list []secrets.SecretInfo) []Capabi
 	return out
 }
 
-// capabilitiesWithReadiness is Config.Capabilities -- the per-task
-// picker's own listing -- with each row told whether this deployment can
-// actually honour it, from the same capabilityStatuses the Settings
+// capabilitiesWithReadiness is pickerCapabilities -- the per-task
+// picker's own listing, its api scope sets as they are now -- with each
+// row told whether this deployment can actually honour it, from the same capabilityStatuses the Settings
 // pane's Capabilities tab is built from.
 //
 // The two listings were entirely independent before this, which is the
@@ -645,12 +634,13 @@ func (c *Client) capabilitiesWithReadiness(cfg *model.Config, repoConfigs []mode
 	if cfg != nil {
 		deployment = *cfg
 	}
-	byID := make(map[string]CapabilityStatus, len(c.Config.Capabilities))
+	rows := c.pickerCapabilities()
+	byID := make(map[string]CapabilityStatus, len(rows))
 	for _, s := range c.capabilityStatuses(deployment, repoConfigs) {
 		byID[s.ID] = s
 	}
-	out := make([]Capability, 0, len(c.Config.Capabilities))
-	for _, row := range c.Config.Capabilities {
+	out := make([]Capability, 0, len(rows))
+	for _, row := range rows {
 		if status, ok := byID[row.ID]; ok {
 			ready := status.Ready
 			row.Ready = &ready

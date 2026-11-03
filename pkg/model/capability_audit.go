@@ -17,7 +17,7 @@ package model
 // What a run's capability grants did for it.
 //
 // A capability server may answer release_<method> with audit records
-// about the grant it is releasing (docs/capabilities-spec.md §4.4.4):
+// about the grant it is releasing (design/spec/capabilities/capabilities.spec.md §4.4.4):
 // host-script's one record per call -- script, argv, exit code, duration,
 // the refusal reason of a refused call -- is the first. Grain releases a
 // run's grants once the run has ended, so these are written after the
@@ -46,6 +46,10 @@ type CapabilityAuditRecord struct {
 	At        time.Time
 	Record    string
 	Note      string
+	// Hostd is the grain hostd the grant's server ran through (run:
+	// host capability servers start through the deployment's default
+	// hostd), "" for none.
+	Hostd string
 }
 
 // AppendRunCapabilityAudit adds records to runID's audit after any it
@@ -65,8 +69,8 @@ func (s *Store) AppendRunCapabilityAudit(ctx context.Context, runID string, reco
 			seq++
 			if _, err := tx.ExecContext(ctx,
 				"INSERT INTO `task_run_capability_audit` "+
-					"(`run_id`,`seq`,`capability`,`attempt_id`,`at`,`record`,`note`) VALUES (?,?,?,?,?,?,?)",
-				runID, seq, r.Grant, r.AttemptID, r.At.UTC(), r.Record, r.Note); err != nil {
+					"(`run_id`,`seq`,`capability`,`attempt_id`,`at`,`record`,`note`,`hostd`) VALUES (?,?,?,?,?,?,?,?)",
+				runID, seq, r.Grant, r.AttemptID, r.At.UTC(), r.Record, r.Note, r.Hostd); err != nil {
 				return err
 			}
 		}
@@ -88,12 +92,12 @@ func (s *Store) RunCapabilityAudit(ctx context.Context, taskID string, attempt i
 	}
 	var out []CapabilityAuditRecord
 	err = each(ctx, s.db,
-		"SELECT `run_id`,`seq`,`capability`,`attempt_id`,`at`,`record`,`note` "+
+		"SELECT `run_id`,`seq`,`capability`,`attempt_id`,`at`,`record`,`note`,`hostd` "+
 			"FROM `task_run_capability_audit` WHERE `run_id` = ? ORDER BY `seq`",
 		[]any{runID},
 		func(rows *sql.Rows) error {
 			var r CapabilityAuditRecord
-			if err := rows.Scan(&r.RunID, &r.Seq, &r.Grant, &r.AttemptID, &r.At, &r.Record, &r.Note); err != nil {
+			if err := rows.Scan(&r.RunID, &r.Seq, &r.Grant, &r.AttemptID, &r.At, &r.Record, &r.Note, &r.Hostd); err != nil {
 				return err
 			}
 			r.At = r.At.UTC()

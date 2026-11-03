@@ -44,6 +44,7 @@ type releaseCutFixture struct {
 
 func newReleaseCutFixture(t *testing.T) *releaseCutFixture {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	f := &releaseCutFixture{t: t, state: filepath.Join(root, "state"), client: filepath.Join(root, "client")}
 	runLocalGit(t, "", "init", "-q", "-b", "main", f.state)
@@ -93,7 +94,7 @@ func newReleaseCutFixture(t *testing.T) *releaseCutFixture {
 		})
 		runLocalGit(t, f.state, append(gitAs, "commit", "-q", "-m", fmt.Sprintf("fix: candidate %d", i))...)
 	}
-	runLocalGit(t, f.state, "tag", "-a", "-m", "v1.9.0-rc.1", "v1.9.0-rc.1", "candidate~2")
+	runLocalGit(t, f.state, append(gitAs, "tag", "-a", "-m", "v1.9.0-rc.1", "v1.9.0-rc.1", "candidate~2")...)
 	runLocalGit(t, f.state, "checkout", "-q", "--detach", "main")
 
 	tokens, err := LoadSandboxTokens(writeTokensFile(t, t.TempDir(), map[string]string{"sandbox-0": "tok0"}))

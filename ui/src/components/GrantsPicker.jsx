@@ -34,6 +34,7 @@ import CheckIcon from "@mui/icons-material/Check";
 import CloseIcon from "@mui/icons-material/Close";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import CapabilityArgsForm from "./CapabilityArgsForm.jsx";
+import InfoPopover from "./InfoPopover.jsx";
 import { capabilityMethods, checkGrants } from "./capabilityMethods.js";
 import {
   DANGEROUS_API_HINT,
@@ -54,10 +55,11 @@ import {
   unsupportedReason,
   validateValue,
 } from "../capabilityArgs.js";
+import { pickerAllows, pickerDisplay, sortByDisplay } from "../newTaskForm.js";
 
 // GrantsPicker is the one "Grants" control of the new task overlay, the
 // task pane, the template editor and the schedule editor
-// (docs/design/unified-grants.md, slice 1): every grant a task holds --
+// (design/design/unified-grants.design.md, slice 1): every grant a task holds --
 // grain API scopes and presets (api:<name>[@owner/repo], docs/agent-api.md)
 // and capability server methods with their with: arguments
 // (docs/capabilities.md) -- is one section in one list, and one "Add
@@ -91,7 +93,7 @@ import {
 //
 // runKind is the kind of run the grants are for ("task", "process" or
 // "ci"): each method carries the capability policy's verdict per kind
-// (docs/capabilities-spec.md §4.2.2), shown on it. policyRepo, where the
+// (design/spec/capabilities/capabilities.spec.md §4.2.2), shown on it. policyRepo, where the
 // form knows the repository too, has the listing judge that one run: a
 // method the policy denies it is listed disabled with the policy's own
 // reason rather than offered as a grant filing would refuse, and a held
@@ -117,11 +119,20 @@ const RUN_KIND_LABELS = {
   ci: "CI jobs",
 };
 
+// Where a CI job's repository access is explained: it is declared in the
+// job's workflow file, which is the one place that grants it.
+const REPO_ACCESS_DOC =
+  "https://github.com/ai-on-gke/grain/blob/main/docs/ci-capabilities.md#repository-access-declared-in-the-repository-enforced-by-the-teams-credential";
+const REPO_ACCESS_DOC_LABEL = "Repository access docs";
+
 function policyVerdictText(verdict, runKind) {
   if (!verdict) return "";
   const forKind = RUN_KIND_LABELS[runKind]
     ? ` for ${RUN_KIND_LABELS[runKind]}`
     : "";
+  if (verdict === "ci_only") {
+    return `CI only: not a grant${forKind}; a CI job declares it in its workflow's capabilities:`;
+  }
   if (verdict === "denied") {
     return `denied by the capability policy${forKind}`;
   }
@@ -143,6 +154,14 @@ export default function GrantsPicker({
   idPrefix = "grant",
   runKind = "task",
   policyRepo = "",
+  // formCapabilities is settings/new-task-form.yml's capability picker
+  // configuration as resolved for the New Task form (newTaskForm.js):
+  // offered and hidden narrow the "Add grant…" listing -- a grant
+  // already held is still shown, and removable -- and display relabels,
+  // describes and orders its rows. null everywhere else.
+  formCapabilities = null,
+  label = "Grants",
+  helpText = "",
 }) {
   const all = grants || [];
   const apiHeld = useMemo(() => all.filter(isApiGrant), [all]);
@@ -184,6 +203,18 @@ export default function GrantsPicker({
   const typedRepo = (policyRepo || "").trim();
   const subjectRepo =
     runKind && /^[^/\s]+\/[^/\s]+$/.test(typedRepo) ? typedRepo : "";
+  // With the repo known the listing has judged a task's or process's
+  // one run, so a method it does not refuse is admitted: the kind's
+  // "may be refused" (true of some other repo) would only mislead. A CI
+  // job's trigger event is still unknown, so it keeps the kind's verdict.
+  const kindVerdictShown =
+    Boolean(runKind) && (!subjectRepo || runKind === "ci");
+  // A CI-only method (repo#read) is refused this run by grain's own rule,
+  // not by the capability policy, so it is worded as that and points at
+  // how a CI job gets it -- declared in the job's own workflow file. The
+  // repository's CI capabilities list does not grant it, and neither does
+  // the policy, which has no rule to change.
+  const ciOnly = (m) => Boolean(runKind) && m?.policy?.[runKind] === "ci_only";
   const load = useCallback(
     (fresh) => {
       const subject = subjectRepo ? { kind: runKind, repo: subjectRepo } : null;
@@ -353,6 +384,25 @@ export default function GrantsPicker({
   };
 
   const policyState = (ref) => {
+    if (ciOnly(byRef[ref])) {
+      const policyNote = policyVerdictText("ci_only", runKind);
+      return {
+        severity: "warning",
+        badge: "CI only",
+        suffix: " (CI only)",
+        textNote: `This grant is ${policyNote}. Remove this grant: a CI job that needs it declares it in its own .grain/workflows file (${REPO_ACCESS_DOC_LABEL}).`,
+        note: (
+          <>
+            This grant is {policyNote}. Remove this grant: a CI job that needs
+            it declares it in its own .grain/workflows file (
+            <Link href={REPO_ACCESS_DOC} target="_blank" rel="noreferrer">
+              {REPO_ACCESS_DOC_LABEL}
+            </Link>
+            ).
+          </>
+        ),
+      };
+    }
     const refused = byRef[ref]?.policyRefusal;
     if (refused)
       return {
@@ -370,7 +420,9 @@ export default function GrantsPicker({
           </>
         ),
       };
-    const verdict = runKind ? byRef[ref]?.policy?.[runKind] : undefined;
+    const verdict = kindVerdictShown
+      ? byRef[ref]?.policy?.[runKind]
+      : undefined;
     if (!verdict) return null;
     const policyNote = policyVerdictText(verdict, runKind);
     return {
@@ -450,7 +502,7 @@ export default function GrantsPicker({
             label={label}
             ariaLabel={`${label}${state?.suffix || ""}`}
             tip={`${state ? `${state.textNote || state.note}\n\n` : ""}${d.lines.join("\n")}`}
-            caption={method?.description || ""}
+            info={method?.description || ""}
             badge={
               state
                 ? {
@@ -501,7 +553,24 @@ export default function GrantsPicker({
   const apiMatches = (row) =>
     matches(row.id, row.summary, row.description, ...(row.scopes || []));
   const menuGroups = [];
-  const shownPresets = presets.filter(apiMatches);
+  const formOffers = (id) => pickerAllows(formCapabilities, id);
+  const displayed = (row) => {
+    const d = pickerDisplay(formCapabilities, row.id);
+    return d
+      ? {
+          ...row,
+          displayLabel: d.label || "",
+          summary: d.description || row.summary,
+        }
+      : row;
+  };
+  const arrange = (rows) =>
+    sortByDisplay(
+      formCapabilities,
+      rows.filter((r) => formOffers(r.id)).map(displayed),
+      (r) => r.id,
+    );
+  const shownPresets = arrange(presets).filter(apiMatches);
   if (shownPresets.length > 0)
     menuGroups.push({
       key: "api-presets",
@@ -510,7 +579,7 @@ export default function GrantsPicker({
       rows: shownPresets,
     });
   for (const { area, rows } of areas) {
-    const shown = rows.filter(apiMatches);
+    const shown = arrange(rows).filter(apiMatches);
     if (shown.length > 0)
       menuGroups.push({
         key: `api-${area}`,
@@ -520,8 +589,12 @@ export default function GrantsPicker({
         rows: shown,
       });
   }
-  const shownMethods = (methods || []).filter((m) =>
-    matches(m.ref, m.method, m.description),
+  const shownMethods = sortByDisplay(
+    formCapabilities,
+    (methods || []).filter(
+      (m) => formOffers(m.ref) && matches(m.ref, m.method, m.description),
+    ),
+    (m) => m.ref,
   );
   if (shownMethods.length > 0)
     menuGroups.push({
@@ -532,7 +605,7 @@ export default function GrantsPicker({
     });
 
   const apiItem = (row) => {
-    const name = apiShortName(row.id);
+    const name = row.displayLabel || apiShortName(row.id);
     const held = apiHeld.includes(apiGrantId(row.id, apiRepo));
     return (
       <MenuItem
@@ -606,13 +679,20 @@ export default function GrantsPicker({
   // is known: policyRepo) is listed disabled, with the policy's own
   // reason; one it may deny some run of the kind carries the verdict.
   const methodItem = (m) => {
-    const refused = m.policyRefusal || "";
-    const verdict = refused
-      ? "denied"
-      : runKind
-        ? m.policy?.[runKind]
-        : undefined;
-    const policyNote = refused || policyVerdictText(verdict, runKind);
+    const isCIOnly = ciOnly(m);
+    const refused = isCIOnly
+      ? m.policyRefusal || policyVerdictText("ci_only", runKind)
+      : m.policyRefusal || "";
+    const verdict = isCIOnly
+      ? "ci_only"
+      : refused
+        ? "denied"
+        : kindVerdictShown
+          ? m.policy?.[runKind]
+          : undefined;
+    const policyNote = isCIOnly
+      ? policyVerdictText("ci_only", runKind)
+      : refused || policyVerdictText(verdict, runKind);
     const refSummary = `${splitRef(m.ref).capability.replace(/^https:\/\//, "")}${m.requiresArgs ? " · needs arguments" : ""}`;
     return (
       <MenuItem
@@ -620,8 +700,11 @@ export default function GrantsPicker({
         className="method-grant-row"
         data-method={m.ref}
         data-policy-verdict={verdict || undefined}
-        data-policy-denied={refused ? "true" : undefined}
-        title={policyNote ? `${m.ref} — ${policyNote}` : m.ref}
+        data-policy-denied={refused && !isCIOnly ? "true" : undefined}
+        data-ci-only={isCIOnly ? "true" : undefined}
+        title={
+          refused || policyNote ? `${m.ref} — ${refused || policyNote}` : m.ref
+        }
         disabled={Boolean(refused)}
         onClick={refused ? undefined : () => addMethod(m)}
         sx={{
@@ -639,7 +722,10 @@ export default function GrantsPicker({
         </ListItemIcon>
         <ListItemText
           sx={{ minWidth: 0 }}
-          primary={methodMenuLabel(m.ref, m.method)}
+          primary={
+            pickerDisplay(formCapabilities, m.ref)?.label ||
+            methodMenuLabel(m.ref, m.method)
+          }
           primaryTypographyProps={
             refused ? { color: "text.disabled" } : undefined
           }
@@ -661,11 +747,20 @@ export default function GrantsPicker({
                 >
                   {policyNote} (
                   <Link
-                    href="/settings/capabilities#capability-policy"
+                    href={
+                      isCIOnly
+                        ? REPO_ACCESS_DOC
+                        : "/settings/capabilities#capability-policy"
+                    }
+                    {...(isCIOnly
+                      ? { target: "_blank", rel: "noreferrer" }
+                      : {})}
                     onClick={(e) => e.stopPropagation()}
                     onKeyDown={(e) => e.stopPropagation()}
                   >
-                    Settings → Capabilities
+                    {isCIOnly
+                      ? REPO_ACCESS_DOC_LABEL
+                      : "Settings → Capabilities"}
                   </Link>
                   )
                 </Typography>
@@ -694,7 +789,7 @@ export default function GrantsPicker({
       sx={{ mt: 1.5 }}
     >
       <Typography id={`${regionId}-label`} variant="subtitle2" component="div">
-        Grants
+        {label}
       </Typography>
       <Typography
         variant="caption"
@@ -702,8 +797,12 @@ export default function GrantsPicker({
         component="p"
         sx={{ mb: 0.75 }}
       >
-        What the agent may use: grain&apos;s own API (docs/agent-api.md) and
-        capability server methods (docs/capabilities.md).
+        {helpText || (
+          <>
+            What the agent may use: grain&apos;s own API (docs/agent-api.md) and
+            capability server methods (docs/capabilities.md).
+          </>
+        )}
       </Typography>
       <Box
         className="grants-held"
@@ -866,6 +965,7 @@ function GrantLine({
   ariaLabel,
   tip,
   caption,
+  info,
   badge,
   onRemove,
 }) {
@@ -914,6 +1014,7 @@ function GrantLine({
           {label}
         </Typography>
       </Tooltip>
+      <InfoPopover title={info} label={label} />
       {caption && (
         <Typography
           variant="caption"
@@ -1079,14 +1180,17 @@ function ArgsSection({
         }}
       >
         <Box sx={{ flex: "1 1 0", minWidth: 0, pt: 0.5 }}>
-          <Typography
-            variant="body2"
-            component="div"
-            className="grant-label"
-            sx={{ fontWeight: 500 }}
-          >
-            {label}
-          </Typography>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+            <Typography
+              variant="body2"
+              component="div"
+              className="grant-label"
+              sx={{ fontWeight: 500 }}
+            >
+              {label}
+            </Typography>
+            <InfoPopover title={method.description} label={label} />
+          </Box>
           <Typography
             variant="caption"
             color="text.secondary"
@@ -1095,15 +1199,6 @@ function ArgsSection({
           >
             {method.ref}
           </Typography>
-          {method.description && (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              component="div"
-            >
-              {method.description}
-            </Typography>
-          )}
         </Box>
         {(status || !grant) && (
           <Typography

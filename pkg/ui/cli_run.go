@@ -21,13 +21,14 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // CLIRunSettings is GET and PUT /api/settings/cli-run's answer: where each
 // agent CLI is set to run (Settings -> Models, model.Config.CLIRun), and
 // where it will run on its next dispatch and why, as the daemon resolves
-// it (daemon.CLIRunResolution, docs/design/cli-run-location.md).
+// it (daemon.CLIRunResolution, design/design/cli-run-location.design.md).
 type CLIRunSettings struct {
 	Settings map[string]model.CLIRunSetting `json:"settings"`
 	// Resolved is nil where no daemon is colocated with this UI to say
@@ -51,6 +52,9 @@ func (c *Client) cliRunSettings(ctx context.Context) (CLIRunSettings, error) {
 			out.Settings[k] = v
 		}
 	}
+	// The pane shows a dialing-in hostd that is not connected at once,
+	// rather than after the wait a run would give it (hostd.ForDisplay).
+	ctx = hostd.ForDisplay(ctx)
 	if c.Config.CLIRuns != nil {
 		out.Resolved = c.Config.CLIRuns(ctx, out.Settings)
 	}
@@ -100,7 +104,7 @@ func (c *Client) auditCLIRunChanges(ctx context.Context, before, after map[strin
 	if c.Store == nil {
 		return
 	}
-	user := c.actor(ctx).ID
+	user := c.requestActor(ctx).Actor.ID
 	for _, name := range model.CLIRunFrameworks {
 		was, now := trimCLIRun(before[name]), trimCLIRun(after[name])
 		if was == now {

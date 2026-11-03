@@ -94,10 +94,25 @@ test("adds, tests, configures, edits, grants, denies by policy and removes a cap
     `/settings/capabilities/${encodeURIComponent(NEW)}`,
   );
 
+  // Method descriptions sit in an (i) popover rather than inline prose.
+  const methodsSection = card.getByTestId("capability-server-methods");
+  await expect(methodsSection).not.toContainText(
+    "Mint a short-lived cloud service-account key",
+  );
+  await methodsSection.getByRole("button", { name: "About cloud-key" }).hover();
+  await expect(page.getByRole("tooltip")).toContainText(
+    "Mint a short-lived cloud service-account key for one account and place it in the sandbox.",
+  );
+
   // Server settings: a value the server's schema refuses is shown on
-  // its field.
+  // its field, and field descriptions sit in (i) popovers.
   await card.getByRole("button", { name: "Edit server settings" }).click();
   const config = card.getByTestId("capability-server-config");
+  await expect(config).not.toContainText("The project keys are minted in.");
+  await config.getByRole("button", { name: "About project" }).hover();
+  await expect(page.getByRole("tooltip")).toContainText(
+    "The project keys are minted in.",
+  );
   await expect(config.getByTestId("secret-state-apiToken")).toHaveText(
     "not set",
   );
@@ -325,10 +340,16 @@ test("lists the built-in capability servers first, full width, badged and disabl
     await page.getByTestId("capability-servers-back").click();
   }
 
-  // The operator's own servers follow the built-ins.
+  // The operator's own servers follow the built-ins (configured, then
+  // in-process: capability-in-process-servers.spec.js).
   const allRows = await rows.all();
   const builtinFlags = await Promise.all(
-    allRows.map(async (r) => Boolean(await r.getAttribute("data-builtin-row"))),
+    allRows.map(async (r) =>
+      Boolean(
+        (await r.getAttribute("data-builtin-row")) ||
+        (await r.getAttribute("data-in-process-row")),
+      ),
+    ),
   );
   const firstCustomIdx = builtinFlags.indexOf(false);
   expect(firstCustomIdx).toBeGreaterThan(0);

@@ -850,7 +850,7 @@ type Config struct {
 	AutoUpgradeTime string
 	// JudgementModel is the model the symbolic model JudgementModelName
 	// ("judgement") resolves to: the model a durable judgement agent --
-	// the pipeline steward -- runs on (docs/design/durable-tasks.md#DT-11,
+	// the pipeline steward -- runs on (design/design/durable-tasks.design.md#DT-11,
 	// ResolveJudgementModel). Empty, the default, resolves it to the
 	// strongest model this deployment's connections offer, by
 	// JudgementModelRanking.
@@ -900,7 +900,7 @@ type Config struct {
 	K8sPriorityClassCI          string
 	// MCPServers are the capability servers this deployment attaches,
 	// keyed by capability_id, in the shape of an Antigravity mcpServers
-	// object (protocol.ServerConfig, docs/capabilities-spec.md §3.1).
+	// object (protocol.ServerConfig, design/spec/capabilities/capabilities.spec.md §3.1).
 	// Stored as JSON in one column and exported to grain/config with
 	// the rest of this row, so it is plain text: a sensitive env or
 	// headers value is a $secret:<name> reference into pkg/secrets, and
@@ -917,10 +917,15 @@ type Config struct {
 	// admission before anything is minted. Stored as JSON in one column
 	// and exported to grain/config with the rest of this row.
 	CapabilityPolicy CapabilityPolicy
+	// NewTaskForm is the New Task form's configuration
+	// (settings/new-task-form.yml, new_task_form.go); nil when the
+	// deployment has none, and the form is drawn as it always was.
+	// Stored as JSON in one column.
+	NewTaskForm *NewTaskForm
 	// CLIRun is where each agent CLI runs, keyed by framework name
 	// (claude, codex, antigravity, custom): on the host, in a per-run
 	// container of an image, or whichever of those the host allows
-	// (cli_run.go, docs/design/cli-run-location.md). A framework with no
+	// (cli_run.go, design/design/cli-run-location.design.md). A framework with no
 	// entry runs where the daemon's flags, and then its built-in default,
 	// say.
 	CLIRun map[string]CLIRunSetting
@@ -935,6 +940,18 @@ type Config struct {
 	// agents"). Off by default so a deployment must opt in before any
 	// external credential is accepted.
 	ExternalAgentAPI bool
+	// SessionSandboxIdleTTL is how long an interactive chat/session task's
+	// sandbox (and in-process agent session) stays warm awaiting a reply
+	// after a turn ends before being released. Zero means "nobody has
+	// chosen" and reads as DefaultSessionSandboxIdleTTL (30 minutes) via
+	// SessionSandboxIdleTTLOr; a negative duration turns warm retention off
+	// so the sandbox is released as soon as the turn ends.
+	SessionSandboxIdleTTL time.Duration
+	// SettingsLocked opts into locking non-bootstrap settings in the UI
+	// and REST API when an internal config repository (grain/config) is
+	// configured, requiring changes to go through config pull requests.
+	// False by default so settings remain editable from the UI and API.
+	SettingsLocked bool `json:"settings_locked"`
 }
 
 // Default Kubernetes sandbox configuration values.
@@ -1083,6 +1100,7 @@ func DefaultConfig() Config {
 		K8sPriorityClassInteractive: DefaultK8sPriorityClassInteractive,
 		K8sPriorityClassAgent:       DefaultK8sPriorityClassAgent,
 		K8sPriorityClassCI:          DefaultK8sPriorityClassCI,
+		SessionSandboxIdleTTL:       DefaultSessionSandboxIdleTTL,
 	}
 }
 
@@ -1113,12 +1131,40 @@ func NewDeploymentConfig() Config {
 // what they are about rather than only which task they are.
 const DefaultTaskBranchTemplate = "grain/{deployment}/task-{id}-{slug}"
 
+// UnsluggedTaskBranchTemplate is the DefaultTaskBranchTemplate
+// NewDeploymentConfig seeded before grain/task-56 added {slug} to it.
+// Schema migration 78 upgrades a stored grain_config row still holding
+// this template to DefaultTaskBranchTemplate so existing deployments
+// include a slug of the task's title on new task branches in addition
+// to the deployment and task-id uniquifiers.
+const UnsluggedTaskBranchTemplate = "grain/{deployment}/task-{id}"
+
 // DefaultPollInterval is Config.PollInterval for a deployment that has
 // never chosen one -- named here rather than repeated at each of the
 // places that have to agree on it: DefaultConfig above, cmd/grain
 // daemon's own -poll-interval flag default, scripts/setup.sh, and
 // terraform.
 const DefaultPollInterval = 10 * time.Second
+
+// DefaultSessionSandboxIdleTTL is Config.SessionSandboxIdleTTL for a
+// deployment that has never chosen one: 30 minutes of idle retention for
+// a session task's sandbox and in-process agent turn wait.
+const DefaultSessionSandboxIdleTTL = 30 * time.Minute
+
+// SessionSandboxIdleTTLOr returns Config.SessionSandboxIdleTTL as the
+// orchestrator reads it: the stored duration where one has been chosen,
+// DefaultSessionSandboxIdleTTL where nothing has (zero), and zero (no
+// warm retention) where an operator has turned it off with a negative
+// duration. A nil Config reads as the default.
+func (c *Config) SessionSandboxIdleTTLOr() time.Duration {
+	if c == nil || c.SessionSandboxIdleTTL == 0 {
+		return DefaultSessionSandboxIdleTTL
+	}
+	if c.SessionSandboxIdleTTL < 0 {
+		return 0
+	}
+	return c.SessionSandboxIdleTTL
+}
 
 // DefaultMaxWorkers is Config.MaxWorkers for a deployment that has never
 // chosen one -- named here rather than repeated at each of the places
@@ -1145,8 +1191,11 @@ const DefaultAgentBackendConcurrency = 4
 // grain_config.default_filters.
 const DefaultTaskFilters = "f=state:none:deferred|closed&f=kind:none:interactive"
 
-// DefaultMaxMergesPerRepo preserves the merge queue's original behavior.
-const DefaultMaxMergesPerRepo = 1
+// DefaultMaxMergesPerRepo is how many queue members may land in one lane
+// per cycle where nobody chose. It was 1, the merge queue's original
+// behavior, until schema 95; each merge is still judged on its own read of
+// the pull request, taken after the merge before it moved the base.
+const DefaultMaxMergesPerRepo = 5
 
 // DefaultBaseCIRedStreak is Config.BaseCIRedStreak where nothing has
 // been chosen: two consecutive red tips on the same job, which is the

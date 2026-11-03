@@ -183,4 +183,37 @@ describe("TasksSection", () => {
       defaultCapabilities: ["gcp-key", held],
     });
   });
+
+  // design/design/config-repo-settings.design.md §7.4, settings-mutability D-11:
+  // under the config repo the defaults are listed as read-only chips
+  // rather than edited with a GrantsPicker, and the section's own
+  // ConfigManagedNotice links the config-repo files without repeating
+  // settings/capabilities.yml inside the card.
+  it("lists default method and api grants as read-only chips without duplicating the section notice link", async () => {
+    resetCapabilityMethodsForTest();
+    serveMethods();
+    const held = cloudGrant({ account: "staging", ttl: 60 });
+    const s = section({
+      defaultCapabilities: ["gcp-key", "api:tasks:read", held],
+      capabilities: [{ id: "gcp-key", name: "GCP key" }],
+    });
+    render(
+      <TasksSection
+        s={{ ...s, readOnly: true }}
+        config={{
+          capabilityMethods: 1,
+          capabilities: [{ id: "api:tasks:read", name: "Read tasks" }],
+        }}
+      />,
+    );
+    expect(screen.queryByTestId("default-grants")).toBeInTheDocument();
+    const grants = screen.getByTestId("default-grants-list");
+    expect(grants.querySelectorAll("[data-grant-chip]")).toHaveLength(2);
+    expect(grants.querySelector("input")).toBeNull();
+    expect(
+      within(grants).queryByRole("button", { name: /^Remove/ }),
+    ).toBeNull();
+    expect(within(grants).queryByTestId("config-repo-link")).toBeNull();
+    expect(s.saveChoice).not.toHaveBeenCalled();
+  });
 });

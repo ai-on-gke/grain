@@ -26,8 +26,8 @@
 name: gcp-smoke
 
 on:
-  schedule:
-    - cron: "41 4 * * *"
+  # Retired from automatic schedule triggering: ai-on-gke/grain runs
+  # gcp-smoke on GitHub Actions (.github/workflows/gcp-smoke.yml).
   workflow_dispatch:
 
 env:

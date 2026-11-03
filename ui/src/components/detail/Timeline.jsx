@@ -138,12 +138,23 @@ const RANK = {
   failed: 6,
   awaiting_submit: 6,
   closed: 7,
+  // A reopen recorded at the same instant as its close undid it, so it
+  // comes after.
+  reopened: 7.5,
 };
 
 // transitionRank is where a state transition falls among same-instant
 // events. A requeue model.Transitions could only infer stands at the
 // finish of the attempt before it, so it goes after that attempt rather
 // than ahead of it.
+// The timeline's titles for a change to a task's auto-merge, each a
+// transition of its own (model.MergeTaskEvents).
+const AUTO_MERGE_STEPS = {
+  auto_merge_on: "Auto-merge turned on",
+  auto_merge_off: "Auto-merge turned off",
+  auto_merge_kept_off: "Auto-merge kept off",
+};
+
 function transitionRank(tr) {
   if (tr.state === "queued" && tr.inferred) return RANK.requeue;
   return RANK[tr.state] ?? RANK.comment;
@@ -224,7 +235,12 @@ function timelineEvents(t, zone, now = Date.now()) {
     attempts.length > 0
       ? transitions.filter((tr) => tr.state !== "running")
       : transitions;
-  const lastTransitionIndex = shownTransitions.length - 1;
+  // Only a lifecycle step can be the task's current state: an auto-merge
+  // change (model.TaskEventAutoMergeOn/Off/KeptOff) is a note about one
+  // setting, not a state the task moved into.
+  const lastTransitionIndex = shownTransitions.findLastIndex(
+    (tr) => !AUTO_MERGE_STEPS[tr.state],
+  );
 
   const transitionEvents = shownTransitions.map((tr, i) => {
     const at = timelineTime(tr.at);
@@ -233,7 +249,14 @@ function timelineEvents(t, zone, now = Date.now()) {
       at,
       sortAt: at,
       rank: transitionRank(tr),
-      badge: tr.state,
+      // A reopen is not a state of its own (model.TransitionReopened):
+      // the task is back to waiting on whatever its record implies, so it
+      // takes the waiting dot.
+      badge: AUTO_MERGE_STEPS[tr.state]
+        ? "comment"
+        : tr.state === "reopened"
+          ? "queued"
+          : tr.state,
       inferred: Boolean(tr.inferred),
       lifecycle: true,
       // Only the most recent transition can still be "now" -- a running
@@ -243,9 +266,37 @@ function timelineEvents(t, zone, now = Date.now()) {
       current: i === lastTransitionIndex,
       closedTransition: tr.state === "closed",
       render: () => (
-        <div className="timeline-title">
-          {STATE_LABELS[tr.state] || tr.state}
-        </div>
+        <>
+          <div className="timeline-title">
+            {tr.state === "reopened"
+              ? "Reopened"
+              : AUTO_MERGE_STEPS[tr.state] ||
+                STATE_LABELS[tr.state] ||
+                tr.state}
+          </div>
+          {/* Who closed or reopened it, why, and what the close cancelled
+              (model.TaskEvent) -- set only on a step somebody asked for. */}
+          {(tr.by || tr.reason || tr.detail) && (
+            <div className="timeline-meta timeline-transition-by">
+              {/* byLabel says how the actor was established -- "operator
+                  (access code)" rather than the deployment's own address;
+                  rows from before sources were recorded have only by. */}
+              {tr.by && <>by {tr.byLabel || tr.by}</>}
+              {tr.reason && (
+                <>
+                  {tr.by ? " · " : ""}
+                  {tr.reason}
+                </>
+              )}
+              {tr.detail && (
+                <>
+                  {tr.by || tr.reason ? " · " : ""}
+                  {tr.detail}
+                </>
+              )}
+            </div>
+          )}
+        </>
       ),
     };
   });
@@ -330,6 +381,25 @@ function timelineEvents(t, zone, now = Date.now()) {
               same overlay the entry opens (CapabilityAudit). A line of its
               own: on the meta line it pushed a phone's "finished" time
               onto two lines. */}
+          {/* Which grain hostd its host work went to, the machine that
+              hostd ran on and its owner (ui.Attempt.Hostd), on a line of
+              its own for the same reason. */}
+          {a.hostd?.hostd && (
+            <div
+              className="timeline-meta timeline-attempt-hostd"
+              title={[
+                `Host work on grain hostd ${a.hostd.hostd}`,
+                a.hostd.instance && `on ${a.hostd.instance}`,
+                a.hostd.owner && `owned by ${a.hostd.owner}`,
+              ]
+                .filter(Boolean)
+                .join(", ")}
+            >
+              hostd {a.hostd.hostd}
+              {a.hostd.instance && <> on {a.hostd.instance}</>}
+              {a.hostd.owner && <> · {a.hostd.owner}</>}
+            </div>
+          )}
           {a.capabilityAuditCount > 0 && (
             <div className="timeline-meta">
               {a.capabilityAuditCount} capability audit record
@@ -438,9 +508,13 @@ function timelineEvents(t, zone, now = Date.now()) {
     // onBehalfOf is set when grain relayed somebody else's words -- a
     // question from a dispatched run reads as grain speaking for an
     // agent, not as grain's own.
+    // authorLabel is how the author reads to a person ("operator (access
+    // code)", "task 20"); comments from before sources were recorded have
+    // only author.
+    const author = c.authorLabel || c.author;
     const who = c.onBehalfOf
-      ? `${c.author} on behalf of ${c.onBehalfOf}`
-      : c.author;
+      ? `${author} on behalf of ${c.onBehalfOf}`
+      : author;
     const at = timelineTime(c.createdAt);
     return {
       key: `comment-${i}`,

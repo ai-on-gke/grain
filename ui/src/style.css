@@ -24,13 +24,20 @@
   --border-strong: #d5d1c7;
 
   --text: #24221d;
-  --text-secondary: #6e6a60;
-  --text-tertiary: #9a9588;
+  /* Tertiary carries real text -- form hints, counts, task numbers, the
+     board's "Nothing here." -- so it has to hold WCAG AA's 4.5:1 on every
+     ground it sits on, the darkest being --surface-hover (4.8:1 there,
+     5.6:1 on white). Secondary moved down with it to keep the step
+     between the two: text ~1.9x secondary ~1.5x tertiary. */
+  --text-secondary: #524e46;
+  --text-tertiary: #6c685e;
   --text-placeholder: #b5b0a3;
 
   /* Bronze, not the wheat gold the dark theme uses: the gold washes out
-     on white, and this has to carry white button text at 5:1. */
-  --accent: #8a6a2e;
+     on white, and this has to carry white button text at 5:1. It is
+     also link text, on white and on an Alert's tint (#eff3f5 for info),
+     so it is dark enough to hold 4.5:1 on the palest of those too. */
+  --accent: #856629;
   --accent-hover: #6d5324;
   --on-accent: #ffffff;
   --accent-subtle: #f6eeda;
@@ -121,8 +128,12 @@
   --border-strong: #3a3d44;
 
   --text: #e9e7e1;
-  --text-secondary: #9b988f;
-  --text-tertiary: #6f6c65;
+  /* The same rule as the light palette's: tertiary holds 4.5:1 on every
+     ground, the lightest here being --surface-active (5.0:1 there, 5.8:1
+     on --surface), and secondary rose with it to keep the step between
+     the two: text ~1.7x secondary ~1.5x tertiary. */
+  --text-secondary: #b8b5ad;
+  --text-tertiary: #959189;
   --text-placeholder: #57544e;
 
   /* The grain colour, on the two grounds the mark was drawn against. */
@@ -573,8 +584,15 @@ samp,
   flex: 1;
 }
 
+/* The chat fills what the body has left, but never less than a working
+   window: on a short screen -- a 320x568 phone, or a phone turned on its
+   side -- New chat's name field and Create button left it 2px tall, the
+   composer clipped inside it and impossible to tap. The window's floor
+   makes the chat's own basis (flex: 1 0 auto) tall enough, and the body
+   scrolls to it instead. The window's basis is 0px, not 0%, so a long
+   conversation still scrolls the message list rather than growing it. */
 .console-session-body .task-chat {
-  flex: 1;
+  flex: 1 0 auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -585,7 +603,8 @@ samp,
 
 .console-session-body .task-chat-window {
   height: auto;
-  flex: 1;
+  flex: 1 1 0px;
+  min-height: 14rem;
 }
 
 .console-session-capabilities {
@@ -794,6 +813,16 @@ samp,
 @media (prefers-reduced-motion: reduce) {
   .sidebar {
     transition: none;
+  }
+}
+/* MUI's keyboard-focus ripple pulses for as long as a button holds
+   focus -- a 2.5s keyframe loop the theme's reduced-motion transitions
+   (theme.js) cannot reach, since it is an animation, not a transition.
+   Held still, the ring still marks the focused control (2026-11-01
+   responsive walkthrough). */
+@media (prefers-reduced-motion: reduce) {
+  .MuiTouchRipple-childPulsate {
+    animation: none !important;
   }
 }
 .sidebar-collapsed .MuiListItemButton-root {
@@ -1092,13 +1121,30 @@ main,
 /* The end of one folder's boards, while a board is being dragged
    (BoardList.jsx). Without it the last position in a folder has no drop
    target of its own: the row below it is the next folder's heading, and
-   dropping on that files the board *into* that folder. Only on screen
-   during a drag, like the task list's own trailing zone, and shorter
-   than it -- it sits inside a list of sections rather than after all of
-   them, so every folder grows by its height the moment a drag starts. */
-.board-drop-end {
+   dropping on that files the board *into* that folder. Overlaid on the
+   seam below the section rather than taking height of its own in the
+   flow, so starting a drag does not shift the folders and rows under it
+   down while the reader is aiming at them, and stopping at the next
+   heading's top edge so the heading keeps its own drop. */
+.template-list > .board-drop-end {
   list-style: none;
-  min-height: 1.25rem;
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin-top: -0.5rem;
+  height: 0.5rem;
+  min-height: 0;
+  z-index: 1;
+}
+.template-list > .board-drop-end.task-drop-target {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.template-list > .board-drop-end:last-child {
+  margin-top: 0;
+  height: 2rem;
+}
+.template-list > .board-drop-end:last-child.task-drop-target {
+  box-shadow: inset 0 2px 0 var(--accent);
 }
 .reorder-slot-button {
   display: flex;
@@ -1408,6 +1454,15 @@ main,
   align-content: flex-start;
   max-height: var(--chips-line);
   overflow: hidden;
+}
+/* ...and once they have wrapped, ChipStrip.jsx takes them out of the
+   layout altogether. A wrapping flex container does not narrow to the
+   chips left on its first line, so the width a wrapped chip vacated
+   stayed in the strip as a blank gap before the row's phase chip, while
+   the title and status beside it ellipsised for want of it. Hidden, the
+   strip is as wide as what it shows and the rest goes back to them. */
+.chips > .chip-overflow {
+  display: none;
 }
 /* RepoPage's header is that heading's width: its counts wrap onto as
    many lines as they need and none is hidden. `.chips` alone is
@@ -2232,7 +2287,7 @@ html[data-phone="true"] .gantt-body {
 }
 /* ...and on a finger, the same link with a target under it. "Open" set
    at 0.8rem with no padding is a 31x19px box -- measured in a real
-   browser at 390px and 360px, docs/hand-runs/2026-09-07-panel-dashboard.md
+   browser at 390px and 360px, the 2026-09-07 panel-dashboard hand run
    section 6 -- and it is the only way out of a panel into the view it
    summarises, so it is the gesture a phone reader makes most and the
    smallest thing on the page. 44px is what the coarse-pointer block
@@ -2391,10 +2446,44 @@ html[data-phone="true"] .gantt-body {
    -- there are up to five of these on a page and only one of that. */
 .inbox-group-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   flex-wrap: wrap;
   gap: 0.5rem;
   padding: 1.2rem 1.75rem 0.5rem;
+}
+.inbox-group-collapsed .inbox-group-header {
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.inbox-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.15rem 0.35rem;
+  margin-left: -0.35rem;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.inbox-group-toggle:hover {
+  background: var(--surface-hover);
+}
+.inbox-group-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.inbox-group-chevron {
+  flex: none;
+  color: var(--text-secondary);
+  transform: rotate(-90deg);
+  transition: transform 0.15s ease;
+}
+.inbox-group-toggle[aria-expanded="true"] .inbox-group-chevron {
+  transform: none;
 }
 .inbox-group-header h3 {
   margin: 0;
@@ -2443,6 +2532,26 @@ html[data-phone="true"] .gantt-body {
   gap: 0.4rem;
   flex: none;
   padding-right: 1.75rem;
+}
+/* A pending release's soak beside its Approve (InboxPage's ReleaseSoak),
+   with the SHORT SOAK warning when it was under the minimum. */
+.inbox-release-soak {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+.inbox-release-short-soak {
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  background: var(--danger-subtle);
+  color: var(--danger);
+  font-weight: 600;
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
 }
 /* The one row on this page that is not a task (InboxPage's
    base_branch_gate group): a base branch nothing is judging. It stands
@@ -2580,7 +2689,7 @@ html[data-phone="true"] .gantt-body {
   color: inherit;
 }
 
-/* The Processes table (docs/design/settings-panel.md §5.1): one grid
+/* The Processes table (design/design/settings-panel.design.md §5.1): one grid
    row per schedule, template, suite or trigger, with the columns every
    kind shares -- kind, name, repo, last run, next run, enabled -- and
    what only one kind has as chips under the name. The heading row is
@@ -2690,6 +2799,7 @@ html[data-phone="true"] .gantt-body {
    with everything else about that template, the same "list vs. behind
    a click" split .task-row itself draws against DetailOverlay. */
 .template-list {
+  position: relative;
   list-style: none;
   margin: var(--list-rows-gap) 0 0;
   padding: 0;
@@ -2910,6 +3020,7 @@ html[data-phone="true"] .gantt-body {
    by hand -- so they share the treatment. */
 .chip-scheduled,
 .chip-suite,
+.chip-imported,
 .chip-stacked {
   background: var(--accent-subtle);
   color: var(--accent);
@@ -3977,6 +4088,12 @@ fieldset legend {
   color: var(--text-tertiary);
   font-size: 0.8rem;
 }
+/* Who closed or reopened a task and why (model.TaskEvent): the reason is
+   whatever they typed, often a URL or a branch name, and an unbroken one
+   ran out of a phone's timeline item instead of wrapping inside it. */
+.timeline-transition-by {
+  overflow-wrap: anywhere;
+}
 /* The model an attempt ran on, on its meta line: a model id is one
    word to the reader, so a narrow line wraps before it, not inside it
    or inside the timestamp ahead of it. */
@@ -4252,6 +4369,12 @@ fieldset legend {
 :root[data-phone="true"] .inbox-line {
   flex-wrap: wrap;
 }
+/* A pending release's soak takes a line of its own above the answers,
+   so Approve, Reject and Acknowledge stay on one row under the thumb. */
+:root[data-phone="true"] .inbox-release-soak {
+  flex: 1 1 100%;
+  justify-content: flex-end;
+}
 :root[data-phone="true"] .inbox-actions {
   flex: 1 1 100%;
   /* A CL's chip and its presubmit and review badges beside the answers
@@ -4501,6 +4624,14 @@ fieldset legend {
 }
 .task-chat-window .cs-message-list .cs-typing-indicator__text {
   color: var(--text-tertiary);
+}
+/* The kit's three bouncing dots loop for as long as a reply is awaited;
+   held still, the "is typing" text beside them says the same thing
+   (2026-11-02 responsive walkthrough). */
+@media (prefers-reduced-motion: reduce) {
+  .task-chat-window .cs-typing-indicator__dot {
+    animation: none;
+  }
 }
 /* The message list's own scroll bar (perfect-scrollbar, which the kit
    bundles and styles from the same palette -- its thumb was the "blue
@@ -4779,7 +4910,7 @@ fieldset legend {
 }
 
 /* A setting the Settings filter jumped to, outlined for two seconds
-   (docs/design/settings-panel.md §3.3). */
+   (design/design/settings-panel.design.md §3.3). */
 .setting-highlight {
   outline: 2px solid var(--mui-palette-primary-main, #1976d2);
   outline-offset: 4px;
@@ -4851,6 +4982,26 @@ fieldset legend {
 }
 /* A thumb's worth of target on a phone, as every other pressable there
    (e2e/phone.spec.js). */
-:root[data-phone="true"] .question-disclosure-toggle {
+:root[data-phone="true"] .question-disclosure-toggle,
+:root[data-phone="true"] .inbox-group-toggle {
   min-height: 44px;
+}
+
+/* An optimistic message not yet on the server (TaskChat.jsx): faded
+   while it is in flight, so it never reads as sent, and outlined in the
+   error colour once it has failed, with its Retry and Discard under it. */
+.task-chat-window .task-chat-sending .cs-message__content {
+  opacity: 0.65;
+}
+.task-chat-window .task-chat-failed .cs-message__content {
+  outline: 1px solid var(--danger);
+}
+.task-chat-window .task-chat-pending .cs-message__sent-time {
+  font-style: italic;
+}
+.task-chat-retry {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
 }

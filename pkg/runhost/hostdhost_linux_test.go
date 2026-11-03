@@ -21,11 +21,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -243,5 +245,146 @@ func TestHostdVersionProbeInARunIsAPlainStart(t *testing.T) {
 	}
 	if _, ok := seen.get("run-3"); !ok {
 		t.Fatal("the run itself was not started detached")
+	}
+}
+
+// flakyLink is a connection to hostd that a test can cut, as a hostd
+// that dials in loses its session: every open connection closes at once,
+// and while it is down a dial finds no hostd connected.
+type flakyLink struct {
+	socket string
+	down   atomic.Bool
+	mu     sync.Mutex
+	conns  []net.Conn
+}
+
+func (f *flakyLink) dial(ctx context.Context) (net.Conn, error) {
+	if f.down.Load() {
+		return nil, hostd.ErrRemoteNotConnected
+	}
+	var d net.Dialer
+	c, err := d.DialContext(ctx, "unix", f.socket)
+	if err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	f.conns = append(f.conns, c)
+	f.mu.Unlock()
+	return c, nil
+}
+
+// cut drops every open connection and leaves the link down.
+func (f *flakyLink) cut() {
+	f.down.Store(true)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.conns {
+		_ = c.Close()
+	}
+	f.conns = nil
+}
+
+func flaky(t *testing.T, client hostd.Client) (*flakyLink, hostd.Client) {
+	t.Helper()
+	link := &flakyLink{socket: client.Socket}
+	client.Dial = link.dial
+	return link, client
+}
+
+// A run's CLI on a hostd that drops is re-attached when hostd is back
+// within the reattach timeout, from where its stream stood: the run
+// finishes with its whole transcript, nothing lost and nothing repeated.
+func TestHostdRunIsReattachedWhenHostdReconnectsWithinTheTimeout(t *testing.T) {
+	link, client := flaky(t, serveHostd(t))
+	var seen cursors
+	back := make(chan struct{})
+	d := &Hostd{Client: client, OnCursor: seen.on, CursorEvery: time.Millisecond, ReattachTimeout: time.Minute,
+		Reconnected: func(ctx context.Context) error {
+			select {
+			case <-back:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}}
+	script, want := steadyLines(30)
+	ctx := WithRun(context.Background(), Run{Task: "42", Run: "run-r", Deadline: time.Now().Add(time.Hour)})
+	var tee lockedBuf
+	type result struct {
+		out string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		out, err := d.Host(agent.LocalHost{}, "sh").Run(ctx, agent.Command{Args: []string{"-c", script}}, &tee)
+		done <- result{out, err}
+	}()
+	for !strings.Contains(tee.String(), "line5\n") {
+		time.Sleep(10 * time.Millisecond)
+	}
+	link.cut()
+	time.Sleep(300 * time.Millisecond)
+	select {
+	case r := <-done:
+		t.Fatalf("Run returned while hostd was away: %q, %v", r.out, r.err)
+	default:
+	}
+	link.down.Store(false)
+	close(back)
+	r := <-done
+	if r.err != nil {
+		t.Fatalf("Run after hostd came back = %v", r.err)
+	}
+	if tee.String() != want || r.out != want {
+		t.Fatalf("transcript across the drop =\n%q\nreturned\n%q\nwant\n%q", tee.String(), r.out, want)
+	}
+	if n, _ := seen.get("run-r"); n != int64(len(want)) {
+		t.Fatalf("final cursor %d, want %d", n, len(want))
+	}
+}
+
+// A hostd that is not back within the reattach timeout fails the run as
+// agent.ErrHostdLost, and the CLI it left running is cancelled once hostd
+// answers again.
+func TestHostdRunFailsAsLostPastTheReattachTimeout(t *testing.T) {
+	plain := serveHostd(t)
+	link, client := flaky(t, plain)
+	d := &Hostd{Client: client, ReattachTimeout: 300 * time.Millisecond}
+	ctx := WithRun(context.Background(), Run{Task: "42", Run: "run-l", Deadline: time.Now().Add(time.Hour)})
+	var tee lockedBuf
+	done := make(chan error, 1)
+	go func() {
+		_, err := d.Host(agent.LocalHost{}, "sh").Run(ctx, agent.Command{Args: []string{"-c", "echo up; sleep 60"}}, &tee)
+		done <- err
+	}()
+	for !strings.Contains(tee.String(), "up\n") {
+		time.Sleep(10 * time.Millisecond)
+	}
+	link.cut()
+	start := time.Now()
+	err := <-done
+	if !errors.Is(err, agent.ErrHostdLost) {
+		t.Fatalf("Run with hostd gone past the timeout = %v, want ErrHostdLost", err)
+	}
+	if waited := time.Since(start); waited < 300*time.Millisecond || waited > 10*time.Second {
+		t.Fatalf("gave up after %s, want about the 300ms timeout", waited)
+	}
+	link.down.Store(false)
+	for i := 0; ; i++ {
+		procs, err := plain.Processes(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		running := false
+		for _, p := range procs {
+			running = running || (p.Run == "run-l" && !p.Exited)
+		}
+		if !running {
+			break
+		}
+		if i > 200 {
+			t.Fatalf("the lost run's CLI is still running in hostd: %+v", procs)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

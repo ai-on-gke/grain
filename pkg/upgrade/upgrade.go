@@ -306,7 +306,7 @@ type Config struct {
 	// not ask for a pause, and refusing to upgrade because a gate would
 	// not close is the worse failure.
 	Hold func(branch string) (release func(), err error)
-	// Flush, when set, is step 3 of docs/non-disruptive-upgrade.md's
+	// Flush, when set, is step 3 of design/design/non-disruptive-upgrade.design.md's
 	// upgrade protocol: called once the new build is staged and just
 	// before RestartCmd, it stops this daemon tailing the runs it drives
 	// in run hosts, persists each one's spool cursor and stops writing
@@ -503,7 +503,8 @@ func validateBranch(branch string) error {
 //
 // What enforces that is not this list. grain's own sandboxes cannot push
 // any of these refs (pkg/gitproxy: a run pushes only its own branch,
-// unless it holds the admin-only git-push-any-ref the cut holds). But on
+// unless it holds the team-granted repo#write any-ref grant,
+// model.GitPushAnyRefGrant, formerly git-push-any-ref). But on
 // GitHub anybody with write access to the repository can push a branch
 // or a tag unless a ruleset stops them -- that is as true of main as of
 // the rest, and it is GitHub's rulesets, not grain, that keep it out.
@@ -866,8 +867,8 @@ func (u *Upgrader) run(branch string, status Status) {
 	}
 
 	restarting := u.restarts()
-	p.succeed(detail, restarting)
 	if len(u.cfg.RestartCmd) == 0 {
+		p.succeed(detail, restarting)
 		if !restarting {
 			// Nothing is coming up to release the hold on the far side
 			// of a restart, because there is no restart: this process
@@ -904,8 +905,17 @@ func (u *Upgrader) run(branch string, status Status) {
 	// otherwise have its restart killed the instant it started and be
 	// reported as "staged but the restart failed" when nothing was ever
 	// actually tried.
+	//
+	// The flush and the restart step's start come before succeed, not
+	// after it: PhaseOK is what the upgrade check reads as "a new build
+	// is up" (orchestrator.reconcileUpgradeCheck, Status.RestartPending),
+	// and written any earlier it let this outgoing process file that
+	// check itself while the flush was still waiting on in-flight work --
+	// with this build's hash, and no restart gap or adoption to report
+	// (task 1937).
 	resume := u.flush(p)
 	p.start(stepRestart)
+	p.succeed(detail, true)
 	if u.cfg.BeforeRestart != nil {
 		u.cfg.BeforeRestart(branch)
 	}
@@ -1659,6 +1669,37 @@ func (s Status) RestartRequestedAt() (time.Time, bool) {
 		return *s.FinishedAt, true
 	}
 	return time.Time{}, false
+}
+
+// RestartPending reports whether the successful upgrade s records is
+// still waiting, as seen from a process that started at started, for the
+// restart that brings its build up: true for the outgoing process, which
+// is still running the old build, and false for the one that restart
+// started. An upgrade that does not restart anything is never pending.
+//
+// A restart step still pending in a successful upgrade (a status written
+// by a build that recorded success before flushing) is pending until a
+// process started after the upgrade finished; a started of zero, which
+// cannot tell, treats it as pending and everything else as not.
+func (s Status) RestartPending(started time.Time) bool {
+	if s.Phase != PhaseOK || s.Unchanged {
+		return false
+	}
+	at, ok := s.RestartRequestedAt()
+	if !ok {
+		for _, step := range s.Steps {
+			if step.Name == stepRestart && step.State == StepPending && s.FinishedAt != nil {
+				at, ok = *s.FinishedAt, true
+				if started.IsZero() {
+					return true
+				}
+			}
+		}
+	}
+	if !ok || started.IsZero() {
+		return false
+	}
+	return !started.After(at)
 }
 
 func readStatus(path string) (Status, error) {

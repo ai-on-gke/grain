@@ -24,7 +24,7 @@ Usage of grain daemon:
   -checkpost-url string
     	base url of this deployment's checkpost service, which CI reports verdicts to; empty asks GitHub for check runs as before
   -ci
-    	run grain's own CI: the .grain/workflows a repository declares, in this deployment's own sandboxes, for the repos whose CI mode is "Use Grain CI" (Settings -> Repos), which also grants their tasks the grain-ci capability. -ci=false turns the engine off entirely, so no repository's workflows run however its CI mode is set, and the CI API reports that this deployment has none. A job's sandbox is built the way a run's is and given no credential beyond a read-only checkout of the one repository under test (pkg/ci, "What a workflow file is trusted with"). (default true)
+    	run grain's own CI: the .grain/workflows a repository declares, in this deployment's own sandboxes, for the repos whose CI mode is "Use Grain CI" (Settings -> Repos), which also grants their tasks the https://grain.dev/capabilities/grain#ci={} grant. -ci=false turns the engine off entirely, so no repository's workflows run however its CI mode is set, and the CI API reports that this deployment has none. A job's sandbox is built the way a run's is and given no credential beyond a read-only checkout of the one repository under test (pkg/ci, "What a workflow file is trusted with"). (default true)
   -ci-artifact-max-age duration
     	how long a run's CI artifacts are kept before the sweep drops them; 0 uses grain's own default, 336h0m0s, which is about how long a red run stays worth investigating. See -ci-artifact-max-bytes for what this group holds. (default 336h0m0s)
   -ci-artifact-max-bytes bytes
@@ -86,19 +86,9 @@ Usage of grain daemon:
   -default-target-repo string
     	owner/name a task created through the UI/API with no repo of its own targets
   -disable-native-sandboxes
-    	disable native sandboxes on this host -- in this mode only remote execution sandboxes can exist
+    	select sandbox backend "none": run the control plane only -- no sandbox is created, so no task runs (for tests and walkthroughs)
   -docker-root-dir docker info
     	path to the local docker engine's own data root, for the UI's host disk figures only (grain/task-148): the sandbox image and every granule VM's disk overlay are written there rather than under -sandbox-dir, so on a deployment that gives sandboxes a volume of their own it is a disk worth a figure. Empty asks docker info for it once at startup, which is right whenever the daemon can reach the docker socket and sees that path where dockerd does; name it here when it cannot, or when this process sees the same directory at a path of its own. A path this process cannot stat is logged once and left out, not reported as a broken figure -- a containerised daemon is usually shown docker's socket and not the tree behind it
-  -executor-addr string
-    	address to listen on for remote model executors (host:port, e.g. :4243); empty disables remote execution
-  -executor-cert-file string
-    	PEM certificate file for TLS on -executor-addr (required with -executor-key-file)
-  -executor-key-file string
-    	PEM private key file for TLS on -executor-addr (required with -executor-cert-file)
-  -executor-token-file string
-    	file holding the shared token remote executors authenticate with (required with -executor-addr)
-  -executor-wait duration
-    	how long a dispatch waits for a remote executor to connect before giving up (default 30s)
   -flag-names grain daemon
     	print every flag this build's grain daemon accepts, one per line -- the name, then "bool" or "value" for whether it takes an argument -- and exit. Not configuration: it is what an upgrade asks a newly pulled image before cutting over to it, so that a systemd unit passing a flag the new build dropped is reported then rather than discovered at the next start (pkg/upgrade/image.go)
   -gcp-agent-account-count int
@@ -147,16 +137,24 @@ Usage of grain daemon:
     	working directory run_command/read_file/edit_file/write_file operate in on each granule VM (required with -granule-sandboxes)
   -grit-client-token token
     	client token (<id>.<secret>) sent in Grit-Client when -grit-url is set
+  -grit-experimental
+    	allow -grit-url, knowing it runs no repository's workflows, takes grit's attestation key from grit itself, and has no reverse-tunnel mode: for developing the grit split, not for a deployment's CI
   -grit-url url
-    	remote grit server base url (e.g. http://127.0.0.1:4244); when unset, CI runs in-process
+    	EXPERIMENTAL, refused without -grit-experimental: remote grit server base url (e.g. http://127.0.0.1:4244); when unset, CI runs in-process. It runs none of a repository's workflows yet (design/design/grit-split.design.md, GS-3 to GS-5 deferred)
   -host-sandbox-env value
     	NAME or NAME=VALUE, repeatable, only with -host-sandboxes: an environment variable every host-sandbox run of this machine's own tasks (not anybody else's) gets on top of the default allowlist -- NAME alone passes this daemon's own value, NAME=VALUE sets that one. For ambient workstation credentials a run should use as you: SSH_AUTH_SOCK, HTTPS_PROXY/HTTP_PROXY/NO_PROXY, CLOUDSDK_CONFIG=$HOME/.config/gcloud. Every run then acts with that identity. HOME cannot be set (it stays pinned to the run's directory, which keeps its git credentials its own). Values reach runs through a 0600 file and are redacted from what run_command returns, but a NAME=VALUE entry sits on this daemon's own command line, so one with credentials in a URL (user:pass@) is refused: export it and pass NAME alone
   -host-sandboxes
-    	dispatch each run into its own plain directory under -sandbox-dir on this host, with NO isolation: runs execute as this daemon's user, with this host's tools and network. For a single-user workstation; refused on a daemon others can reach (a non-loopback -ui-addr, -executor-addr, IAP, -run-host-image) unless -allow-unisolated-host-sandboxes is also passed
+    	dispatch each run into its own plain directory under -sandbox-dir on this host, with NO isolation: runs execute as this daemon's user, with this host's tools and network. For a single-user workstation; refused on a daemon others can reach (a non-loopback -ui-addr, IAP, -run-host-image) unless -allow-unisolated-host-sandboxes is also passed
+  -hostd-reattach-timeout duration
+    	how long a run's agent CLI, running detached on a grain hostd whose connection drops, waits for that same hostd to reconnect before the run fails as an infrastructure failure (no strike against the task); re-attached in time, it carries on from where its output stood. Runs queued for a hostd that is not connected wait for it whatever this is. 0 fails at once (default 15m0s)
   -hostd-socket string
     	grain hostd's unix socket, for a daemon in a container whose host CLIs run through hostd; empty uses /run/grain-hostd/hostd.sock when its directory is mounted into the container. Refused on Kubernetes, which has no host
   -hostd-token-file string
-    	file holding the shared token a grain hostd on another machine dials in to /api/hostd/connect with (grain hostd -server <this daemon's URL> -token-file ...): its host CLIs and run: host capability servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset; neither means no hostd may dial in
+    	deprecated, for one release: file holding a shared token a grain hostd on another machine dials in to /api/hostd/connect with (grain hostd -server <this daemon's URL> -token-file ...), as the one hostd -hostd-token-name names: its host CLIs and run: host capability servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each hostd in the hostd registry (/api/hostds) instead, which gives it a token of its own
+  -hostd-token-name string
+    	the hostd name a hostd dialing in with -hostd-token-file's shared token is known by (default "remote")
+  -hostd-token-owner string
+    	the owner of -hostd-token-name's hostd: the email or service account a hostd dialing in with the shared token through IAP (or another identity verifier's proxy) must be verified as. A remote hostd with no owner is refused; one over loopback is not
   -iap-backend-service string
     	GCP Compute backend service name for dynamic IAP IAM reconciliation; empty disables IAP reconciliation (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
   -iap-resource string
@@ -168,7 +166,7 @@ Usage of grain daemon:
   -k8s-git-proxy-host string
     	address (no port) this daemon's git proxy and model proxies are reachable at from inside a sandbox pod, in place of the loopback address the proxy binds to by default -- required with -k8s-sandboxes, the same way -granule-git-proxy-host is required with -granule-sandboxes and for the same reason: a pod's 127.0.0.1 is its own. In-cluster this is grain's own pod IP, which every other pod can route to directly, so it defaults to $GRAIN_POD_IP when that is set -- deploy/kubernetes/deployment.yaml fills it from the downward API (status.podIP); see -k8s-sandbox-service (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
   -k8s-granule-access string
-    	k8s-granule only: how grain runs steps in a sandbox's guest -- "kubectl" (granule exec over kubectl exec) or "dialout" (the wrapper's channel to -sandbox-access-addr's acceptor; refused unless grain runs in-cluster). docs/design/grain-on-gke.md#GKE-3 (default "kubectl")
+    	k8s-granule only: how grain runs steps in a sandbox's guest -- "kubectl" (granule exec over kubectl exec) or "dialout" (the wrapper's channel to -sandbox-access-addr's acceptor; refused unless grain runs in-cluster). design/design/grain-on-gke.design.md#GKE-3 (default "kubectl")
   -k8s-granule-image string
     	the packed guest image every pod this backend creates runs: a self-contained image with its own guest disk and kernel already baked in -- the shape Granulefile's own build produces, not the thin exec target -k8s-sandbox-image names and, just as importantly, not "granule:vendored" either (grain init's own -granule-runtime-image default, what scripts/granule/build-granule-image.sh produces, which has no guest disk and cannot boot at all -- confirmed against a real cluster, where a pod running it exits immediately). Required with -k8s-granule-sandboxes; no context-free default to pick, since nothing publishes a packed guest image under a stable tag yet -- docs/k8s-granule-design.md §4 (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default "ghcr.io/bwsalmon/grain/guest:latest")
   -k8s-granule-reattach-timeout duration
@@ -241,16 +239,6 @@ Usage of grain daemon:
     	maximum number of ordinary tasks dispatched at once -- the worker half of the concurrency dispatch.Cycle fills (model.Limits) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default 10)
   -model-backend string
     	agy, claude or codex: the same as -agent-framework (agy is antigravity)
-  -model-exec-addr string
-    	legacy alias for -executor-addr
-  -model-exec-cert-file string
-    	legacy alias for -executor-cert-file
-  -model-exec-key-file string
-    	legacy alias for -executor-key-file
-  -model-exec-token-file string
-    	legacy alias for -executor-token-file
-  -model-exec-wait duration
-    	legacy alias for -executor-wait
   -model-proxy-max-concurrent int
     	how many requests one run may have open through each model proxy at once, a streamed reply counting until it finishes. The next waits up to -model-proxy-slot-wait for one, then is refused with a 429 in the vendor's own error shape, so one run's token cannot monopolize this deployment's shared credential. 0 or less means the default (default 16)
   -model-proxy-slot-wait duration
@@ -288,17 +276,17 @@ Usage of grain daemon:
   -reboot-cmd sudo systemctl reboot
     	one argument of the command the UI's reboot-host button runs -- repeat for every argument. Defaults to sudo systemctl reboot.
   -relay-audience string
-    	removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set
+    	removed: the rendezvous relay is gone. The daemon refuses to start with this set
   -relay-auth-token-file string
-    	removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set
+    	removed: the rendezvous relay is gone. The daemon refuses to start with this set
   -relay-iap-jwt-audience string
-    	removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set
+    	removed: the rendezvous relay is gone. The daemon refuses to start with this set
   -relay-session-lifetime string
-    	removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set
+    	removed: the rendezvous relay is gone. The daemon refuses to start with this set
   -relay-token string
-    	removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set
+    	removed: the rendezvous relay is gone. The daemon refuses to start with this set
   -relay-url string
-    	removed: the rendezvous relay is gone (docs/relay-removed.md). The daemon refuses to start with this set
+    	removed: the rendezvous relay is gone. The daemon refuses to start with this set
   -repair-reserve-sandboxes int
     	how many standard agent sandboxes' worth of that budget is kept for base-branch repairs -- tasks marked fixes_base_branch and the CI confirming their branch green -- so a red base branch's repair starts on a saturated deployment instead of queueing behind the work it blocks. 0 reserves nothing; a repair the reserve cannot hold may still pre-empt work blocked on the same base (model.Budget.RepairReserve) (default 1)
   -repo value
@@ -312,9 +300,9 @@ Usage of grain daemon:
   -run-host-dir string
     	where run hosts' spools and staging live, seen at the same path by the daemon and every run host (default <data-dir>/runhosts; under -k8s-run-host-rwx, on that volume)
   -run-host-image string
-    	drive each claude run in a run host of this image: a container that is a sibling of the daemon, not a child of it, writing to a spool the daemon tails (pkg/runhost, docs/non-disruptive-upgrade.md). Normally the deployment image itself ("self" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes: a run host cannot reach a container sandbox
+    	drive each claude run in a run host of this image: a container that is a sibling of the daemon, not a child of it, writing to a spool the daemon tails (pkg/runhost, design/design/non-disruptive-upgrade.design.md). Normally the deployment image itself ("self" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes: a run host cannot reach a container sandbox
   -sandbox-access-addr string
-    	k8s-granule only: address to run the sandbox-access acceptor on (":4244"), which every sandbox pod's wrapper then dials out to over mTLS with its own certificate and token (pkg/sandboxaccess, docs/design/grain-on-gke.md "Sandbox access"); empty leaves it off and builds pods as before
+    	k8s-granule only: address to run the sandbox-access acceptor on (":4244"), which every sandbox pod's wrapper then dials out to over mTLS with its own certificate and token (pkg/sandboxaccess, design/design/grain-on-gke.design.md "Sandbox access"); empty leaves it off and builds pods as before
   -sandbox-access-ca-secret string
     	Secret Manager secret (projects/<p>/secrets/<s>) holding the sandbox-access CA, read through Workload Identity and generated into it on first start; empty keeps the CA in <data-dir>/sandbox-access-ca.pem
   -sandbox-access-dial string
@@ -338,7 +326,7 @@ Usage of grain daemon:
   -sandbox-image grain sandbox-image
     	the sandbox container image every granule VM is created from, overriding the reference stamped into this build at build time (grain sandbox-image). Left empty (the default), each start resolves that stamp, so an upgrade -- which pulls the new grain image and the sandbox image that grain names -- moves both halves together. Set it only to run something else on purpose: a mirror, a private copy, or a guest held at an older commit. This is where such a pin belongs; a -granule-create-arg -kontur-image naming another tag of the stamp's own repository is read as the install-time value an older scripts/setup.sh wrote unconditionally, and the stamp is used instead (chooseSandboxImage). Only used with -granule-sandboxes.
   -sandbox-image-mirror string
-    	OCI repository (without tag, e.g. us-docker.pkg.dev/<cluster-project>/grain/guest) into which off-cluster deployments mirror the build-stamped sandbox guest image on upgrade and startup so a Kubernetes cluster in another GCP organization can pull the commit-matched guest image from its own registry.
+    	OCI repository (without tag, e.g. us-docker.pkg.dev/<cluster-project>/grain/guest) into which off-cluster deployments mirror the build-stamped sandbox guest image on upgrade and startup, so a cluster in another GCP organization can pull the commit-matched guest from its own registry. This host keeps only the current and previous mirrored tags; the registry is not pruned -- give it a cleanup policy (docs/sandbox-image-mirror.md).
   -sandbox-memory-mb granule vm create
     	deployment-wide default guest memory, in MiB, for a granule-managed sandbox VM, passed as granule vm create's own -memory-mb (only used with -granule-sandboxes); 0 uses grain's own default, 8192. Overridable per task from the UI/API (model.Task.SandboxMemoryMB) (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
   -sandbox-memory-overcommit float
@@ -359,6 +347,8 @@ Usage of grain daemon:
     	address to serve the UI/API on, in-process, over this same store -- empty disables it (default "0.0.0.0:4242")
   -ui-allowed-hosts string
     	comma-separated host names the UI/API answers to besides IP literals, localhost and this machine's own hostname ("grain.example.com", "*.example.com"); a request with any other Host header is refused with 421, which is what stops a DNS-rebinding page reaching a loopback-bound API (grain#2380). Checked on every request when this is set or -ui-addr names a specific address; on an every-interface -ui-addr with this unset, on loopback requests only. "*" turns the check off
+  -ui-allowed-principals string
+    	comma-separated principals admitted when authenticated by IAP or another registered IdentityVerifier (user:<email>, serviceAccount:<email>, group:<email>, domain:<domain>); defaults to $GRAIN_ALLOWED_PRINCIPALS, and when unset to the deployment owner plus the service accounts grain provisions
   -ui-iap-audience string
     	the audience a signed X-Goog-IAP-JWT-Assertion must carry for the UI/API to accept the identity in it, or several separated by commas -- IAP's /projects/NUMBER/global/backendServices/ID or /projects/NUMBER/apps/PROJECT, or what a BeyondCorp tunnel's assertion names (the proxy's own docs); defaults to $GRAIN_IAP_AUDIENCE. With none, no assertion is accepted
   -ui-iap-issuer string
@@ -367,6 +357,8 @@ Usage of grain daemon:
     	where the signing keys for those assertions are published (IAP's PEM map or a JWK set); defaults to $GRAIN_IAP_KEYS_URL, then https://www.gstatic.com/iap/verify/public_key
   -ui-open
     	open the UI in the system's default browser once it's listening
+  -ui-require-iap
+    	accept the access code (bearer or grain_access cookie) only from loopback with no forwarding or proxy headers, and serve no "Enter access code" page, so network callers sign in through IAP alone (docs/access-code.md); needs -ui-iap-audience or $GRAIN_IAP_AUDIENCE. Defaults to $GRAIN_REQUIRE_IAP
   -upgrade-allowed-branches string
     	comma-separated branches the UI's Upgrade button, a scheduled upgrade or an agent may upgrade this deployment to, each a path.Match pattern ('*' never crosses a '/'; e.g. main,release/*), or ** for any branch at all; any other branch is refused. The default is grain's own release names -- main, candidate, latest and vX.Y.Z release tags -- which only grain's merge queue and release cut move; a task or feature branch needs listing here (default "main,candidate,rc,latest,v[0-9]*.[0-9]*.[0-9]*")
   -upgrade-drain-window duration

@@ -38,7 +38,7 @@ type HostdLister interface {
 var _ HostdLister = hostd.Client{}
 
 // RecoverHostd is RecoverRunHosts for host CLIs a previous daemon left
-// running detached in grain hostd (docs/design/cli-run-location.md,
+// running detached in grain hostd (design/design/cli-run-location.design.md,
 // "Upgrades and host runs"), and runs beside it, before
 // RecoverOrphanedRuns: it says hello, lists hostd's processes, and
 // decides the live rows driven through hostd -- a row with a hostd cursor
@@ -56,6 +56,16 @@ var _ HostdLister = hostd.Client{}
 // RecoverOrphanedRuns, and the error says why.
 func RecoverHostd(ctx context.Context, store *model.Store, client github.Client, hd HostdLister, build string,
 	now time.Time, adopted func(runhost.Adoption, int64) bool) (runhost.Plan, error) {
+	return RecoverHostdRuns(ctx, store, client, hd, build, now, nil, adopted)
+}
+
+// RecoverHostdRuns is RecoverHostd for one of several grain hostds: only
+// the live rows owns says ran on hd are decided against hd's processes,
+// so a row whose CLI runs on another hostd is neither finished as gone
+// here nor claims a process here. A process hd lists for a row it does
+// not own is released as unclaimed. A nil owns owns every row.
+func RecoverHostdRuns(ctx context.Context, store *model.Store, client github.Client, hd HostdLister, build string,
+	now time.Time, owns func(runID string) bool, adopted func(runhost.Adoption, int64) bool) (runhost.Plan, error) {
 	cursors, err := store.HostdCursors(ctx)
 	if err != nil {
 		return runhost.Plan{}, fmt.Errorf("orchestrator: reading hostd cursors: %w", err)
@@ -88,8 +98,11 @@ func RecoverHostd(ctx context.Context, store *model.Store, client github.Client,
 		if !hasCursor && !named[r.ID] {
 			continue
 		}
+		if owns != nil && !owns(r.ID) {
+			continue
+		}
 		byID[r.ID] = r
-		claims = append(claims, runhost.Claim{Run: r.ID, Task: r.TaskID, LastSeen: c.UpdatedAt})
+		claims = append(claims, runhost.Claim{Run: r.ID, Task: r.TaskID, Sandbox: r.Sandbox, LastSeen: c.UpdatedAt})
 	}
 	plan := runhost.DecideHostd(claims, procs, hostd.ThisHello(build), peer, now)
 

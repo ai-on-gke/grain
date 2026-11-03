@@ -17,7 +17,6 @@ package orchestrator
 import (
 	"context"
 	"errors"
-	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -64,7 +63,7 @@ func TestMergedPullRequestRecordsTheBaseBranchsNewTip(t *testing.T) {
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	task := model.Task{
 		ID: "42", Target: &repo,
-		Grants: []model.Grant{{Capability: grainci.CapabilityName}},
+		Grants: []model.Grant{{Capability: grainci.Grant}},
 	}
 	ref := model.PullRequestRef{Repo: repo, Number: 7}
 	err := recordPostMergeCI(ctx, store, postMergeHeadClient{
@@ -212,7 +211,7 @@ func TestMergedPullRequestWithReleasesOffAndNoJobsStillRecordsTheTip(t *testing.
 	runner := &postMergeCI{}
 	task := model.Task{
 		ID: "42", Target: &repo,
-		Grants: []model.Grant{{Capability: grainci.CapabilityName}},
+		Grants: []model.Grant{{Capability: grainci.Grant}},
 	}
 	err := recordPostMergeCI(ctx, store, postMergeHeadClient{
 		head: &github.BranchHead{SHA: "0123456789abcdef"},
@@ -1021,7 +1020,7 @@ func TestSyncEntryForgetsTheEmptyChecksSightingOnceChecksRegister(t *testing.T) 
 func syncOneEntry(ctx context.Context, store *model.Store, client github.Client,
 	e queueEntry, heads map[string]string, now time.Time) error {
 
-	return syncEntry(ctx, store, client, e, StateRepoGate{}, &mergeWalk{heads: maps.Clone(heads)},
+	return syncEntry(ctx, store, client, e, StateRepoGate{}, &mergeWalk{},
 		newRepoFinder(client), now)
 }
 
@@ -1697,7 +1696,7 @@ func TestBranchExistsSettledDoesNotProbeTheRepoOnAPositive(t *testing.T) {
 // test below is one line of it.
 
 func grantedTask() model.Task {
-	return model.Task{ID: "t1", Grants: []model.Grant{{Capability: grainci.CapabilityName}}}
+	return model.Task{ID: "t1", Grants: []model.Grant{{Capability: grainci.Grant}}}
 }
 
 func ciObservation(commit, conclusion string) *model.Observation {
@@ -2086,5 +2085,47 @@ func TestTargetBranchExistsReadsAPlainGitHostOverGit(t *testing.T) {
 	}
 	if len(transport.Calls) != 1 {
 		t.Errorf("API calls = %d, want 1", len(transport.Calls))
+	}
+}
+
+func TestQueueOrderPrefersHigherPriorityAndPreservesBandOrder(t *testing.T) {
+	t.Parallel()
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	approve := &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "operator"}}
+	makeEntry := func(id string, priority int, orderKey float64, fixesBase bool) queueEntry {
+		tk := model.Task{
+			ID:        id,
+			Priority:  priority,
+			Target:    &repo,
+			Approval:  approve,
+			AutoMerge: true,
+			OrderKey:  orderKey,
+		}
+		if fixesBase {
+			model.SetFixesBaseBranch(&tk, true)
+		}
+		return queueEntry{
+			task:   tk,
+			detail: github.PullRequestDetail{State: "open"},
+		}
+	}
+
+	entries := []queueEntry{
+		makeEntry("prio-2", 2, 10, false),
+		makeEntry("prio-5-back", 5, 40, false),
+		makeEntry("prio-5-front", 0, 20, false), // Priority 0 defaults to 5
+		makeEntry("prio-5-fixes-base", 5, 50, true),
+		makeEntry("prio-8", 8, 100, false),
+	}
+
+	got := queueOrder(entries)
+	want := []string{"prio-8", "prio-5-fixes-base", "prio-5-front", "prio-5-back", "prio-2"}
+	if len(got) != len(want) {
+		t.Fatalf("len(queueOrder) = %d, want %d", len(got), len(want))
+	}
+	for i, w := range want {
+		if got[i].task.ID != w {
+			t.Errorf("queueOrder[%d] = %q, want %q", i, got[i].task.ID, w)
+		}
 	}
 }

@@ -16,10 +16,13 @@ package cli
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net/url"
 	"os"
 	"os/signal"
@@ -31,7 +34,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/hostd"
-	"github.com/ai-on-gke/grain/pkg/modelexec"
+
 	"github.com/ai-on-gke/grain/pkg/version"
 )
 
@@ -63,8 +66,10 @@ func hostdCmd(args []string) {
 	command := fs.String("command", hostd.DefaultGrainCommand, "with -ensure-builtins: the grain binary on the host the added entries run")
 	server := fs.String("server", "", "the URL of a grain daemon this host cannot share a socket with (https://grain.example.com, http://127.0.0.1:4242): "+
 		"hostd keeps a connection open to its "+hostd.RemotePath+" and serves the daemon over it, as well as listening on -socket (set -socket= for no local listener)")
-	tokenFile := fs.String("token-file", "", "with -server: the file holding the shared hostd token the daemon takes (its -hostd-token-file); "+
-		"$GRAIN_HOSTD_TOKEN or $GRAIN_TOKEN when unset")
+	tokenFile := fs.String("token-file", "", "with -server: the file holding this hostd's token -- the one the hostd registry (/api/hostds) answered with when it was registered, "+
+		"which names it to the daemon (or the daemon's deprecated shared -hostd-token-file); $GRAIN_HOSTD_TOKEN or $GRAIN_TOKEN when unset")
+	name := fs.String("name", "", "with -server: the registry name this hostd expects to be (/api/hostds). Optional: the daemon names it from its token, "+
+		"and refuses the connection when this says otherwise")
 	iapAudience := fs.String("iap-audience", "", "with -server: the OAuth client ID of the GCP Identity-Aware Proxy in front of the daemon, to send its OIDC token")
 	useTLS := fs.Bool("tls", false, "with -server: dial over TLS even for an http:// URL (an https:// one always is)")
 	caFile := fs.String("ca-file", "", "with -server: PEM file of the certificate authority to verify the daemon's certificate against. Implies -tls")
@@ -134,7 +139,7 @@ func hostdCmd(args []string) {
 	}
 	var remote *hostd.Dialer
 	if *server != "" {
-		d, err := hostdDialer(*server, *tokenFile, *iapAudience, *useTLS, *caFile, *serverName)
+		d, err := hostdDialer(*server, *tokenFile, *name, *iapAudience, *useTLS, *caFile, *serverName)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "grain hostd: "+err.Error())
 			os.Exit(2)
@@ -143,6 +148,9 @@ func hostdCmd(args []string) {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
+	if remote != nil && remote.IDToken != nil {
+		go logHostdIdentity(ctx, remote)
+	}
 	srv := &hostd.Server{
 		Socket:          *socket,
 		Allowlist:       *allowlist,
@@ -150,6 +158,8 @@ func hostdCmd(args []string) {
 		DisconnectGrace: *grace,
 		Build:           version.Get().Release,
 		CurrentLink:     hostd.CurrentLinkFor(os.Args[0]),
+		Builtins:        intree.HostdBuiltins(),
+		BuiltinCommand:  hostdSelf(),
 	}
 	if remote != nil {
 		srv.Remote = remote.Dial
@@ -167,10 +177,43 @@ func hostdCmd(args []string) {
 	}
 }
 
-// hostdDialer is -server's way out to the daemon: the shared token from
-// -token-file or the environment, IAP's OIDC token when -iap-audience
-// names one, and TLS as grain executor's flags set it.
-func hostdDialer(server, tokenFile, iapAudience string, useTLS bool, caFile, serverName string) (*hostd.Dialer, error) {
+// hostdSelf is the binary this hostd runs, every link resolved: the
+// installer's versions/<version>/grain rather than the current link that
+// moves on the next upgrade. It is what the build's own entries the
+// allowlist lacks run (hostd.Server.Builtins), so they are always this
+// build's servers. "" when it cannot be found.
+func hostdSelf() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		return ""
+	}
+	return resolved
+}
+
+// logHostdIdentity logs the identity d's ID token names: the one a
+// controller behind IAP verifies this hostd as, which must be its hostd
+// row's owner there.
+func logHostdIdentity(ctx context.Context, d *hostd.Dialer) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	tok, err := d.IDToken(ctx)
+	if err != nil {
+		return // the dial says why
+	}
+	if email := hostd.IDTokenEmail(tok); email != "" {
+		log.Printf("grain hostd: dialing in to %s as %s through IAP: the controller admits this hostd only if its registry owner is %s (grain hostds set-owner <name> %s)",
+			d.Server, email, email, email)
+	}
+}
+
+// hostdDialer is -server's way out to the daemon: the hostd's token from
+// -token-file or the environment, the registry name -name expects, IAP's OIDC token when -iap-audience
+// names one, and TLS from -tls, -ca-file and -server-name (hostdClientTLS).
+func hostdDialer(server, tokenFile, name, iapAudience string, useTLS bool, caFile, serverName string) (*hostd.Dialer, error) {
 	var token string
 	if tokenFile != "" {
 		t, err := daemon.ReadTokenFile(tokenFile)
@@ -185,19 +228,19 @@ func hostdDialer(server, tokenFile, iapAudience string, useTLS bool, caFile, ser
 		}
 	}
 	if token == "" {
-		return nil, errors.New("-server needs the shared hostd token the daemon takes: -token-file, or $GRAIN_HOSTD_TOKEN")
+		return nil, errors.New("-server needs this hostd's token (/api/hostds): -token-file, or $GRAIN_HOSTD_TOKEN")
 	}
 	host, _ := os.Hostname()
-	d := &hostd.Dialer{Server: server, Token: token, Host: host, Build: version.Get().Release}
+	d := &hostd.Dialer{Server: server, Token: token, Name: name, Host: host, Build: version.Get().Release}
 	if useTLS || caFile != "" || serverName != "" {
-		cfg, err := executorClientTLS(caFile, serverName)
+		cfg, err := hostdClientTLS(caFile, serverName)
 		if err != nil {
 			return nil, err
 		}
 		d.TLS = cfg
 	}
 	if iapAudience != "" {
-		d.IDToken = modelexec.NewIAPTokenProvider(iapAudience).Token
+		d.IDToken = hostd.NewIAPTokenProvider(iapAudience).Token
 	}
 	if _, err := url.Parse(server); err != nil || !strings.Contains(server, "://") {
 		return nil, fmt.Errorf("-server %q is not a URL like https://grain.example.com", server)
@@ -300,4 +343,24 @@ func formatHostdStatus(socket string, hello hostd.Hello, offers []hostd.Offer) s
 		each = append(each, fmt.Sprintf("%s %s (%s)", o.Kind, o.Name, o.Path))
 	}
 	return line + ", offering " + strings.Join(each, ", ")
+}
+
+// hostdClientTLS is the TLS hostd -server dials the daemon with: the
+// system roots, or only -ca-file's when it names one, and serverName in
+// place of the URL's host when it is set.
+func hostdClientTLS(caFile, serverName string) (*tls.Config, error) {
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: serverName}
+	if caFile == "" {
+		return cfg, nil
+	}
+	pem, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("reading -ca-file: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("-ca-file %s holds no PEM certificate", caFile)
+	}
+	cfg.RootCAs = pool
+	return cfg, nil
 }

@@ -20,7 +20,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/memory"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -80,18 +79,6 @@ type memoryRequest struct {
 	Text       string `json:"text"`
 	Author     string `json:"author,omitempty"`
 	AuthorKind string `json:"authorKind,omitempty"`
-}
-
-// memoryAuthor is the principal a request names, and the zero Principal
-// for one that names nobody -- which Client.PutMemory and
-// Client.PutMemoryDocument read as "record this deployment's own actor".
-//
-// The validating is requestPrincipal's (principal.go), shared with the
-// other route an agent attributes a write through -- POST /api/upgrade's
-// own requester -- so that "a kind and an id together, and a kind grain
-// knows" is one rule rather than two spellings of it.
-func memoryAuthor(id, kind string) (model.Principal, error) {
-	return requestPrincipal("a memory's author", id, kind)
 }
 
 // errMemoryLong is how a memory too large to carry on every dispatch is
@@ -193,7 +180,7 @@ func (c *Client) PutMemory(ctx context.Context, repo, text string, by model.Prin
 // spelling of it is the one that eventually disagrees.
 func (c *Client) memoryAuthorOrActor(ctx context.Context, by model.Principal) model.Principal {
 	if by.Kind == "" && by.ID == "" {
-		return c.actor(ctx)
+		return c.requestActor(ctx).Actor
 	}
 	return by
 }
@@ -462,17 +449,9 @@ func memoryDocumentFrom(d model.MemoryDocument) MemoryDocument {
 // agent only from a task holding the memory capability, because it goes
 // into the prompt of every run this deployment dispatches.
 func (s *Server) memoryWriter(r *http.Request, id, kind, repo string) (model.Principal, error) {
-	p, hasPrincipal := PrincipalFromContext(r.Context())
-	if hasPrincipal && p.Kind == model.PrincipalHuman {
-		return p, nil
-	}
-
-	by, err := memoryAuthor(id, kind)
+	by, err := bodyAuthor(r.Context(), "a memory's author", id, kind)
 	if err != nil {
 		return model.Principal{}, err
-	}
-	if hasPrincipal {
-		by = p
 	}
 	if by.Kind == model.PrincipalAgent {
 		if err := s.tasks.requireMemoryGrant(r.Context(), by.ID, repo); err != nil {
@@ -483,9 +462,8 @@ func (s *Server) memoryWriter(r *http.Request, id, kind, repo string) (model.Pri
 }
 
 // requireMemoryGrant refuses a write attributed to task id's run unless
-// that task holds the memory capability. Every memory grant reaches
-// every scope: there is no team memory agent writing only its own
-// team's layer any more.
+// that task holds the memory:write scope (via api:memory, api:memory:write,
+// or the bare memory alias) for repo.
 func (c *Client) requireMemoryGrant(ctx context.Context, id, repo string) error {
 	if call, ok := agentCallFromContext(ctx); ok && call.external != nil {
 		if call.grants.Has("memory:write") {
@@ -500,15 +478,10 @@ func (c *Client) requireMemoryGrant(ctx context.Context, id, repo string) error 
 	if task == nil {
 		return forbiddenErrorf("task %s does not exist, so its run may not write memory", id)
 	}
-	for _, g := range task.Grants {
-		if g.Capability == memory.CapabilityName {
-			return nil
-		}
-	}
 	if APIGrantsOf(grantNames(task.Grants)).Allows("memory:write", strings.TrimSpace(repo)) {
 		return nil
 	}
-	return forbiddenErrorf("task %s does not hold the %q capability, so its run may not write memory", id, memory.CapabilityName)
+	return forbiddenErrorf("task %s does not hold the memory:write scope (api:memory), so its run may not write memory", id)
 }
 
 // handleListMemories answers GET /api/memory. An old client's ?team= is

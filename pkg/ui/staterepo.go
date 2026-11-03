@@ -123,7 +123,11 @@ type StateRepoStatus struct {
 	// stale one. Reported whether or not the cycle succeeded -- Error
 	// above says which -- because "last tried at" is the honest fact and
 	// a timestamp that stopped moving is itself the symptom.
-	SyncedAt time.Time `json:"syncedAt,omitempty"`
+	//
+	// omitzero, not omitempty: omitempty never drops a struct, so a zero
+	// time went out as 0001-01-01T00:00:00Z and the browser printed
+	// "exported 1/1/1, 12:00:00 AM" before the first cycle had run.
+	SyncedAt time.Time `json:"syncedAt,omitzero"`
 	// LastSnapshot is the path of the latest pre-import settings snapshot,
 	// if any has been taken on this host.
 	LastSnapshot string `json:"lastSnapshot,omitempty"`
@@ -651,7 +655,13 @@ func (s *Server) handleSyncStateRepo(w http.ResponseWriter, r *http.Request) {
 	}
 	status, err := s.tasks.Config.StateRepo.Sync(r.Context())
 	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
+		// Pull now's caller holds settings:write and acts on why the sync
+		// failed, and GET /api/state-repo already shows the same cycle's
+		// error to a settings:read caller as status.error. Withheld here,
+		// the button said only "an upstream service returned an error"
+		// while the panel under it stayed on the last good sync until the
+		// next background tick.
+		writeError(w, http.StatusBadGateway, apierror.Expose(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, normalizeStateRepoStatus(status))

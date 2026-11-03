@@ -14,7 +14,7 @@
 
 package daemon
 
-// What "host" can mean for this deployment (docs/design/cli-run-location.md,
+// What "host" can mean for this deployment (design/design/cli-run-location.design.md,
 // "Deployments with no host executor").
 //
 // A daemon on the bare machine starts a host CLI as its own child. A
@@ -39,6 +39,8 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/runhost"
@@ -85,6 +87,10 @@ type HostExecutor struct {
 	// so for the UI.
 	Remote      *hostd.Remote `json:"-"`
 	RemoteHostd bool          `json:"remote,omitempty"`
+	// Hostd is the registry name of the hostd this executor reaches over
+	// Remote (model.Hostd); "" is Remote's default (the deprecated shared
+	// token's hostd).
+	Hostd string `json:"hostd,omitempty"`
 }
 
 // remoteHostExecutor is HostExecutorHostd through the hostd dialing in
@@ -99,6 +105,9 @@ func (e HostExecutor) hostdClient() hostd.Client {
 	c := hostd.Client{Socket: e.Socket, Build: daemonBuild()}
 	if e.Remote != nil {
 		c.Dial = e.Remote.Dial
+		if e.Hostd != "" {
+			c.Dial = e.Remote.Dialer(e.Hostd)
+		}
 	}
 	return c
 }
@@ -312,6 +321,55 @@ func hostdMissing(offers []hostd.Offer) []ui.HostdMissingEntry {
 	return ui.MissingHostdBuiltins(have)
 }
 
+// OnlyNeeded narrows Hostd.Missing to the entries servers -- the
+// deployment's capability servers, grain_config.mcp_servers -- would
+// run: grain's own entries that are not a capability server's
+// (host-git), and each built-in's that an enabled run: host entry names,
+// once a built-in that needs configuring has been. A built-in nobody has
+// set up, or has set to run in the container, is not broken for want of
+// its host entry: it waits in Settings as needing configuring, and
+// System -> Health says nothing about it.
+func (st *HostExecutorStatus) OnlyNeeded(servers map[string]protocol.ServerConfig) {
+	if st.Hostd == nil || len(st.Hostd.Missing) == 0 {
+		return
+	}
+	ensured, _ := intree.EnsureBuiltins(servers)
+	kept := st.Hostd.Missing[:0]
+	for _, m := range st.Hostd.Missing {
+		if hostdEntryNeeded(m.Name, ensured) {
+			kept = append(kept, m)
+		}
+	}
+	st.Hostd.Missing = kept
+	if len(kept) == 0 {
+		st.Hostd.Missing = nil
+	}
+}
+
+// hostdEntryNeeded says whether servers would run hostd's entry name.
+func hostdEntryNeeded(name string, servers map[string]protocol.ServerConfig) bool {
+	var builtin intree.Builtin
+	isServer := false
+	for _, b := range intree.Builtins() {
+		if intree.HostEntry(b.Name) == name {
+			builtin, isServer = b, true
+		}
+	}
+	if !isServer {
+		return true
+	}
+	for _, cfg := range servers {
+		if cfg.Disabled || !cfg.OnHost() || cfg.Command != name {
+			continue
+		}
+		if cfg.Builtin == builtin.Name && builtin.NeedsConfig && len(cfg.Config) == 0 {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // HostdProcess is one row of hostd's listing, for Settings.
 type HostdProcess struct {
 	ID       string    `json:"id"`
@@ -389,7 +447,9 @@ func (c Config) HostExecutorStatus(ctx context.Context) HostExecutorStatus {
 	if exec.Kind != HostExecutorHostd {
 		return out
 	}
-	hctx, cancel := context.WithTimeout(ctx, hostdStatusTimeout)
+	// A dialing-in hostd that is not connected is said at once, not
+	// after hostdStatusTimeout of waiting for it (hostd.ForDisplay).
+	hctx, cancel := context.WithTimeout(hostd.ForDisplay(ctx), hostdStatusTimeout)
 	defer cancel()
 	offers, err := exec.hostdClient().Offers(hctx)
 	out.Hostd = &HostdStatus{Reachable: err == nil}
@@ -409,6 +469,22 @@ func (c Config) HostExecutorStatus(ctx context.Context) HostExecutorStatus {
 	out.Hostd.Suggest = c.hostdSuggestions(offers)
 	out.Hostd.Missing = hostdMissing(offers)
 	return out
+}
+
+// hostExecutorStatus is c.HostExecutorStatus as Settings and System ->
+// Health show it: missing only the entries store's capability servers
+// would run (HostExecutorStatus.OnlyNeeded).
+func hostExecutorStatus(ctx context.Context, c Config, store *model.Store) HostExecutorStatus {
+	st := c.HostExecutorStatus(ctx)
+	if st.Hostd == nil || len(st.Hostd.Missing) == 0 || store == nil {
+		return st
+	}
+	stored, err := store.GetConfig(ctx)
+	if err != nil || stored == nil {
+		return st
+	}
+	st.OnlyNeeded(stored.MCPServers)
+	return st
 }
 
 // hostdSuggestions are the cli entries an edition puts on the host by
@@ -450,14 +526,47 @@ func (c Config) cliHostdHost(r CLIRunResolution) (agent.Host, error) {
 	if entry == "" {
 		entry = cliBinaryName(r.Framework)
 	}
+	var h agent.HostdHost
 	if c.hostdRuns != nil {
 		// A run's CLI starts detached, and outlives a daemon upgrade
 		// (hostdruns.go).
-		h := c.hostdRuns.Host(agent.LocalHost{}, entry)
-		h.Path = r.HostPath
-		return h, nil
+		h = c.hostdRuns.Host(agent.LocalHost{}, entry)
+	} else {
+		h = agent.HostdHost{Client: c.hostExecutor().hostdClient(), Entry: entry}
 	}
-	return agent.HostdHost{Client: c.hostExecutor().hostdClient(), Entry: entry, Path: r.HostPath}, nil
+	h.Path = r.HostPath
+	if exec := c.hostExecutor(); exec.Remote != nil {
+		if err := remoteHostdHost(&h, exec.Remote.Carrier(exec.Hostd)); err != nil {
+			return nil, fmt.Errorf("%s is set to run on the host, through the grain hostd that dials in: %w", cliBinaryName(r.Framework), err)
+		}
+	}
+	return h, nil
+}
+
+// remoteHostdHostTimeout bounds the hello remoteHostdHost asks.
+const remoteHostdHostTimeout = 10 * time.Second
+
+// remoteHostdHost makes h a host on the machine of the grain hostd that
+// dialed in over remote: one that shares neither this daemon's
+// filesystem nor its loopback, so h stages there and carries grain's
+// endpoints there (agent/hostd_remote.go). Its hello says where. remote
+// is bound to the hostd h's Client reaches, so the carried endpoints
+// listen on the machine the CLI runs on, not the default hostd's.
+func remoteHostdHost(h *agent.HostdHost, remote *hostd.HostdCarrier) error {
+	ctx, cancel := context.WithTimeout(context.Background(), remoteHostdHostTimeout)
+	defer cancel()
+	hello, err := h.Client.Hello(ctx)
+	if err != nil {
+		return err
+	}
+	if !hello.SupportsCarry() || !hello.Remote {
+		return fmt.Errorf("it speaks hostd protocol %d (build %s), which cannot stage a run's files on its machine or carry grain's endpoints there; update grain hostd to this daemon's build", hello.Protocol, hello.Build)
+	}
+	h.Remote = remote
+	h.Grain = hello.Grain
+	h.StageRoot = hello.StageRoot
+	h.CodexAuth = hello.CodexAuth
+	return nil
 }
 
 // hostdOffersTimeout bounds asking hostd what it offers before a run, so
@@ -469,6 +578,7 @@ type hostdOffersCacheKey struct{}
 type hostdCacheTarget struct {
 	socket string
 	remote *hostd.Remote
+	name   string
 }
 
 type hostdSocketEntry struct {
@@ -506,7 +616,7 @@ func hostdOffersCLI(ctx context.Context, exec HostExecutor, entry string) (path,
 // hostdOffers is hostdOffersCLI for an entry of any kind.
 func hostdOffers(ctx context.Context, exec HostExecutor, kind hostd.Kind, entry string) (path, why string) {
 	if cache, ok := ctx.Value(hostdOffersCacheKey{}).(*hostdOffersCache); ok && cache != nil {
-		target := hostdCacheTarget{socket: exec.Socket, remote: exec.Remote}
+		target := hostdCacheTarget{socket: exec.Socket, remote: exec.Remote, name: exec.Hostd}
 		cache.mu.Lock()
 		se, ok := cache.sockets[target]
 		if !ok {
@@ -577,6 +687,15 @@ func (c Config) capabilityHostd() *hostd.Client {
 	}
 	client := exec.hostdClient()
 	return &client
+}
+
+// capabilityHostdName is the registry name of the hostd capabilityHostd
+// reaches, "" where there is none.
+func capabilityHostdName(c Config) string {
+	if c.capabilityHostd() == nil {
+		return ""
+	}
+	return c.DefaultHostd()
 }
 
 // storedHostWarned is the CLIs whose stored "host" this process has

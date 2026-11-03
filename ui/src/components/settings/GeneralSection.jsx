@@ -18,13 +18,21 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import SettingsCard from "./SettingsCard.jsx";
+import SettingsCard, { ReadOnlyFieldset } from "./SettingsCard.jsx";
 import { UpgradeCheckSettings } from "../UpgradePanel.jsx";
 
-// GeneralSection is Settings → General (docs/design/settings-panel.md
+// GeneralSection is Settings → General (design/design/settings-panel.design.md
 // §3.2). `s` is the page's useSettingsSection().
 export default function GeneralSection({ s, config }) {
   const { settings, saveChoice, onTextBlur, onEnterKey } = s;
+  const external = Boolean(
+    settings ? settings.externalConfigRepo : config?.externalConfigRepo,
+  );
+  const noConfigRepo = !config?.configRepo && !external;
+  const settingsLocked =
+    typeof settings?.settingsLocked === "boolean"
+      ? settings.settingsLocked
+      : Boolean(config?.settingsLocked || config?.configRepoOnly);
   return (
     <>
       <SettingsCard title="Deployment" anchor="deployment">
@@ -67,6 +75,37 @@ export default function GeneralSection({ s, config }) {
           }
           sx={{ display: "flex", mt: 1 }}
         />
+      </SettingsCard>
+      <SettingsCard
+        title="Settings lock"
+        anchor="settings-lock"
+        allowInExternalMode={!external}
+      >
+        <ReadOnlyFieldset disabled={noConfigRepo}>
+          <FormControlLabel
+            control={
+              <Checkbox
+                name="settingsLocked"
+                data-setting-id="settingsLocked"
+                checked={settingsLocked}
+                onChange={(evt) =>
+                  saveChoice({ settingsLocked: evt.target.checked })
+                }
+              />
+            }
+            label={
+              <>
+                Lock settings in UI (require config repo PRs)
+                <span className="hint">
+                  {noConfigRepo
+                    ? "Unavailable without a config repository: settings are always edited directly here."
+                    : "off (default): settings are editable in the UI and API and synced to the config repository automatically. on: settings managed in the config repository are read-only here and must be changed via config pull requests."}
+                </span>
+              </>
+            }
+            sx={{ display: "flex", mt: 1 }}
+          />
+        </ReadOnlyFieldset>
       </SettingsCard>
       <SettingsCard title="Updates" anchor="updates">
         <UpgradeCheckSettings

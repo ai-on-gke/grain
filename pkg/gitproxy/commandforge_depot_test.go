@@ -236,6 +236,7 @@ func newDepotFixture(t *testing.T, repos ...string) *depotFixture {
 	// The real git (the sandbox's, and the backend's), and this forgecli.
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("GRAIN_IN_CONTAINER", "0")
+	t.Setenv("HOME", t.TempDir())
 	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
 	writeRaw(t, filepath.Dir(globalConfig), "gitconfig", "")
 	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)

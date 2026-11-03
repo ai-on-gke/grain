@@ -26,7 +26,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
-// A direct config pull request (docs/design/config-repo-settings.md,
+// A direct config pull request (design/design/config-repo-settings.design.md,
 // section 4.1): the edit a refused configuration write handed back
 // (configWriteRehearsal), submitted as it is to open a pull request in
 // grain/config. It is validated before it is opened
@@ -73,7 +73,14 @@ type ConfigPullRequestOpener interface {
 type ConfigPullRequestInvalid struct {
 	Err        error
 	Validation staterepo.CandidateReport
+	// Stale is a change that no longer applies to the base branch:
+	// grain/config moved since the refusal that produced it, so the
+	// person has to make the change again for a patch that does.
+	Stale bool
 }
+
+// ConfigChangeStale is the code a 422 carries for a stale change.
+const ConfigChangeStale = "config_change_stale"
 
 func (e *ConfigPullRequestInvalid) Error() string {
 	return "the config change does not pass validation: " + e.Err.Error()
@@ -121,7 +128,7 @@ func validateConfigChanges(changes []staterepo.FileChange) error {
 // config pull request the way it opens any other, from a task on the
 // repository.
 func (c *Client) OpenConfigPullRequest(ctx context.Context, req ConfigPullRequestRequest) (ConfigPullRequest, error) {
-	if c.actor(ctx).Kind != model.PrincipalHuman {
+	if c.requestActor(ctx).Actor.Kind != model.PrincipalHuman {
 		return ConfigPullRequest{}, forbiddenErrorf("only a person may open a config pull request here; an agent opens one from a task on %s", internalConfigRepo)
 	}
 	if err := validateConfigChanges(req.Changes); err != nil {
@@ -142,17 +149,21 @@ func (s *Server) handleOpenConfigPullRequest(w http.ResponseWriter, r *http.Requ
 	if !readJSON(w, r, &req) {
 		return
 	}
-	req.User = actingUser(r, "")
+	req.User = requestPerson(r.Context())
 	pr, err := s.tasks.OpenConfigPullRequest(r.Context(), req)
 	var invalid *ConfigPullRequestInvalid
 	switch {
 	case errors.Is(err, errConfigPullRequestsUnavailable):
 		writeError(w, http.StatusNotImplemented, apierror.Public(err.Error()))
 	case errors.As(err, &invalid):
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+		body := map[string]any{
 			"error":      invalid.Error(),
 			"validation": invalid.Validation,
-		})
+		}
+		if invalid.Stale {
+			body["code"] = ConfigChangeStale
+		}
+		writeJSON(w, http.StatusUnprocessableEntity, body)
 	case err != nil:
 		writeClientError(w, err)
 	default:

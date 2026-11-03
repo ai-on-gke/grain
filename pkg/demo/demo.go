@@ -37,9 +37,11 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/change"
+	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/ghwebhook"
 	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -60,11 +62,26 @@ type Options struct {
 	// with it, as on a real deployment (docs/access-code.md). Empty keeps
 	// it beside the throwaway store and logs it.
 	AccessCodeFile string
-	Addr           string
-	Actor          string
-	Repo           model.RepoRef // -default-target-repo
-	Open           bool
-	Observability  bool
+	// IAPAudience, IAPIssuer, IAPKeysURL, RequireIAP and
+	// AllowedPrincipals are the daemon's -ui-iap-audience,
+	// -ui-iap-issuer, -ui-iap-keys-url, -ui-require-iap and
+	// -ui-allowed-principals, so the demo can be put behind a signing
+	// proxy (a real IAP or a test issuer) and sign callers in as a
+	// deployment does (design/design/authentication.design.md).
+	IAPAudience       string
+	IAPIssuer         string
+	IAPKeysURL        string
+	RequireIAP        bool
+	AllowedPrincipals []string
+	// CloudIdentityEndpoint, when set, is the base URL group: entries in
+	// AllowedPrincipals are resolved against instead of Google's Cloud
+	// Identity API, with the same Application Default Credentials.
+	CloudIdentityEndpoint string
+	Addr                  string
+	Actor                 string
+	Repo                  model.RepoRef // -default-target-repo
+	Open                  bool
+	Observability         bool
 	// Staging runs two fake persistent sandboxes for the rail's Staging
 	// group (demo_persistent_sandboxes.go).
 	Staging          bool
@@ -72,7 +89,7 @@ type Options struct {
 	AgentPaused      bool
 	MergeQueueStates bool
 	// StalledTasks hands the UI the orchestrator's stall deadlines and
-	// seeds two tasks past them (demo_stalled.go).
+	// seeds three tasks past them (demo_stalled.go).
 	StalledTasks bool
 	FakeCI       bool
 	GitHubSim    bool
@@ -94,6 +111,10 @@ type Options struct {
 	// public repository -- what a team whose git credential is "None
 	// (public)" reaches. An anonymous push is refused either way.
 	GitHubSimPublic bool
+	// ForkPullRequest is -fork-pull-request: -github-sim's repo also has
+	// an open and a closed pull request from a contributor's fork
+	// (demo_fork_pull_request.go).
+	ForkPullRequest bool
 	MergeRules      bool
 	SensitiveHold   bool
 	MechanicalPort  bool
@@ -142,8 +163,9 @@ type Options struct {
 	// reconcile loop's suite step, and its release step too with
 	// -github-sim. Zero runs no loop at all.
 	Reconcile time.Duration
-	// HostExecutor is -host-executor: which deployment Settings -> Models'
-	// run locations are resolved as (demoCLIRunConfig).
+	// HostExecutor is -host-executor: which deployment Settings' run
+	// locations (agent CLIs and capability servers) are resolved as
+	// (demoCLIRunConfig).
 	HostExecutor string
 	// HostModeInstall is -host-mode-install: GET /api/config reports the
 	// install notice an unmigrated host-mode install gets
@@ -156,8 +178,8 @@ type Options struct {
 	GithubWebhookAddr string
 }
 
-// demoCLIRunConfig is the daemon config Settings -> Models' run locations
-// are resolved under, by -host-executor:
+// demoCLIRunConfig is the daemon config Settings' run locations (agent CLIs
+// and capability servers) are resolved under, by -host-executor:
 //   - "" (the default): a development daemon on the bare machine, which
 //     offers only host, with claude set to the container a release
 //     before v2.3.0 could have stored -- shown as running on the host,
@@ -174,7 +196,7 @@ type Options struct {
 //     in to it (grain hostd -server), with a real one dialing in over
 //     loopback (startDemoRemoteHostd), offering what "hostd"'s does;
 //   - "hostd-remote-down": the same daemon with no hostd dialed in.
-func demoCLIRunConfig(executor string) (daemon.Config, error) {
+func demoCLIRunConfig(ctx context.Context, executor string) (daemon.Config, error) {
 	inContainer := whererun.Detection{Host: false, Signal: whererun.InContainerEnv + "=1, which grain's deployment image sets"}
 	noSocketDir := func(string) bool { return false }
 	var c daemon.Config
@@ -190,7 +212,7 @@ func demoCLIRunConfig(executor string) (daemon.Config, error) {
 	case "hostd-down":
 		c = daemon.Config{AgyRun: model.CLIRunHost, HostdSocket: filepath.Join(os.TempDir(), "grain-demo-hostd-not-running.sock")}
 	case "hostd":
-		socket, err := startDemoHostd()
+		socket, err := startDemoHostd(ctx)
 		if err != nil {
 			return daemon.Config{}, err
 		}
@@ -198,7 +220,7 @@ func demoCLIRunConfig(executor string) (daemon.Config, error) {
 	case "hostd-remote", "hostd-remote-down":
 		remote := &hostd.Remote{Token: "grain-demo-hostd-token"}
 		if executor == "hostd-remote" {
-			if err := startDemoRemoteHostd(remote); err != nil {
+			if err := startDemoRemoteHostd(ctx, remote); err != nil {
 				return daemon.Config{}, err
 			}
 		}
@@ -209,6 +231,17 @@ func demoCLIRunConfig(executor string) (daemon.Config, error) {
 	exec := daemon.DetectHostExecutor(c, inContainer, noSocketDir)
 	c.HostExec = &exec
 	return c, nil
+}
+
+// demoCapabilityHostd is the client run: host capability servers reach the
+// demo's grain hostd through, or nil where -host-executor has none
+// (matching daemon.Config's capabilityHostd).
+func demoCapabilityHostd(c daemon.Config) *hostd.Client {
+	if c.HostExec == nil || c.HostExec.Kind != daemon.HostExecutorHostd {
+		return nil
+	}
+	client := c.HostExec.HostdClient()
+	return &client
 }
 
 // demoGitHubToken is the demo's one fake GitHub token, the "default"
@@ -228,8 +261,18 @@ func Run(opts Options) error {
 		// The sub-case of each task's state (ui.Config.Reasons): a pure
 		// function of the rows, so the demo shows it as a deployment does.
 		Reasons: daemon.ReasonClassifier{},
+
+		IAPAudience:       opts.IAPAudience,
+		IAPIssuer:         opts.IAPIssuer,
+		IAPKeysURL:        opts.IAPKeysURL,
+		RequireIAP:        opts.RequireIAP,
+		AllowedPrincipals: opts.AllowedPrincipals,
 	}
-	runCfg, err := demoCLIRunConfig(opts.HostExecutor)
+	if opts.CloudIdentityEndpoint != "" {
+		cfg.GroupChecker = ui.NewCloudIdentityGroupChecker(ui.WithCloudIdentityEndpoint(opts.CloudIdentityEndpoint))
+	}
+	ctx := context.Background()
+	runCfg, err := demoCLIRunConfig(ctx, opts.HostExecutor)
 	if err != nil {
 		return err
 	}
@@ -312,7 +355,6 @@ func Run(opts Options) error {
 	}
 
 	store := model.New(db)
-	ctx := context.Background()
 	if err := store.Init(ctx); err != nil {
 		return fmt.Errorf("grain demo: applying the schema: %v", err)
 	}
@@ -365,7 +407,7 @@ func Run(opts Options) error {
 		}
 		v, err := cfg.Secrets.Resolve(ctx, name)
 		return v, err == nil
-	}, store)
+	}, store, demoCapabilityHostd(runCfg))
 	if err != nil {
 		return fmt.Errorf("grain demo: %v", err)
 	}
@@ -398,9 +440,15 @@ func Run(opts Options) error {
 	}
 	var githubSimRepo string
 	if opts.GitHubSim {
-		if cfg, githubSimRepo, err = configureGitHubSimDemo(dir, cfg, repo); err != nil {
+		var seed func(*githubsim.Sim, string) error
+		if opts.ForkPullRequest {
+			seed = func(sim *githubsim.Sim, bare string) error { return seedDemoForkPullRequests(sim, bare, repo) }
+		}
+		if cfg, githubSimRepo, err = configureGitHubSimDemoWith(dir, cfg, repo, seed); err != nil {
 			return fmt.Errorf("grain demo: -github-sim: %v", err)
 		}
+	} else if opts.ForkPullRequest {
+		return fmt.Errorf("grain demo: -fork-pull-request seeds -github-sim's repo, so it needs -github-sim too")
 	}
 	var scheduledWorkflows *orchestrator.Deps
 	if opts.ScheduledWorkflows {
@@ -433,10 +481,9 @@ func Run(opts Options) error {
 		baseBranch = configureBaseBranchDemo(store, repo, cfg.CI.(*demoFakeCI), client)
 	}
 	// Stand-ins for what sits outside grain (demo_scenarios.go): a
-	// credential's issuer and remote executors, on every demo; a fresh
-	// install's missing setup and a provider's usage limit, on request.
+	// credential's issuer, on every demo; a fresh install's missing
+	// setup and a provider's usage limit, on request.
 	cfg.CapabilityChecks = demoCapabilityChecks{}
-	cfg.Executors = demoExecutors{started: time.Now().UTC()}
 	// -staging: two staging environments for the rail's Staging group
 	// (demo_persistent_sandboxes.go). Off by default, where System ->
 	// Sandboxes says it has no sandbox backend to report on.
@@ -503,7 +550,7 @@ func Run(opts Options) error {
 		}
 	}
 	if opts.Qualification {
-		if err := seedQualificationDemo(ctx, store, repo); err != nil {
+		if err := seedQualificationDemo(ctx, store, repo, githubSimRepo); err != nil {
 			return fmt.Errorf("grain demo: -qualification: %v", err)
 		}
 	}
@@ -529,15 +576,17 @@ func Run(opts Options) error {
 		cfg.StateRepo = newExternalConfigRepo(opts.ExternalConfigRepo, opts.ExternalConfigBranch)
 	}
 	ghCalls.enableLive()
-	webhookConsumer, err := startDemoGitHubWebhooks(context.Background(), dir, opts, creds, store, ghCalls)
+	var simClient github.Client
+	if opts.GitHubSim {
+		simClient, _ = cfg.GitHubBranches.(github.Client)
+	}
+	webhookConsumer, err := startDemoGitHubWebhooks(context.Background(), dir, opts, creds, store, simClient, ghCalls)
 	if err != nil {
 		return fmt.Errorf("grain demo: %v", err)
 	}
-	if webhookConsumer != nil {
-		if ghClient, ok := cfg.GitHubBranches.(github.Client); ok && ghClient != nil {
-			if st, ok := demoSimClients.Load(ghClient); ok {
-				st.(*demoSimState).events = webhookConsumer
-			}
+	if webhookConsumer != nil && simClient != nil {
+		if st, ok := demoSimClients.Load(simClient); ok {
+			st.(*demoSimState).events = webhookConsumer
 		}
 	}
 	client := ui.NewClient(cfg, store)
@@ -601,6 +650,11 @@ func Run(opts Options) error {
 	}
 	if baseBranch != nil {
 		srv = baseBranchDemoHandler(srv, baseBranch)
+	}
+	if opts.GitHubSim {
+		if simClient, ok := cfg.GitHubBranches.(github.Client); ok {
+			srv = githubSimDemoHandler(srv, simClient)
+		}
 	}
 	ln, err := net.Listen("tcp", opts.Addr)
 	if err != nil {
@@ -932,13 +986,37 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		return fmt.Errorf("seeding a merge batch: %w", err)
 	}
 	batchStartedAt := ago(5 * time.Minute)
-	batchRef := model.MergeBatchRef(deploymentID, "main")
+	batchRef := model.MergeRecheckRef(deploymentID, completed.ID, "main")
+	const batchCommit = "abcdef0123456789abcdef0123456789abcdef01"
+	var batchRunID string
+	if ciStore, ok := cfg.CI.(ci.RunStore); ok {
+		batchRunID = "demo-recheck-1"
+		ciStore.Put(ci.Run{
+			ID:          batchRunID,
+			Repo:        cfg.DefaultTarget.String(),
+			Ref:         batchRef,
+			Commit:      batchCommit,
+			Event:       ci.EventPullRequest,
+			RequestedBy: "merge-recheck:" + cfg.DefaultTarget.String() + ":main",
+			StartedAt:   &batchStartedAt,
+			Jobs: []ci.JobRun{
+				{
+					JobID:        ".grain/workflows/ci.yml:test",
+					Name:         "test",
+					WorkflowPath: ".grain/workflows/ci.yml",
+					StartedAt:    &batchStartedAt,
+				},
+			},
+		})
+	}
 	if err := store.PutMergeBatch(ctx, model.MergeBatch{
 		Repo:       *cfg.DefaultTarget,
 		Branch:     "main",
+		TaskID:     completed.ID,
 		Ref:        batchRef,
 		BaseCommit: "1234567890abcdef1234567890abcdef12345678",
-		Commit:     "abcdef0123456789abcdef0123456789abcdef01",
+		Commit:     batchCommit,
+		RunID:      batchRunID,
 		StartedAt:  batchStartedAt,
 		Queued:     1,
 		Members: []model.MergeBatchMember{
@@ -1079,6 +1157,12 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	if err := store.FinishRun(ctx, firstRun, firstDone, "succeeded", "the run made 14 tool call(s)"); err != nil {
 		return fmt.Errorf("seeding a task under repair: %w", err)
 	}
+	// The hostd its host work went to (model.TaskRunHostd).
+	if err := store.RecordTaskRunHostd(ctx, model.TaskRunHostd{
+		RunID: firstRun, TaskID: repairing.ID, Hostd: "ws-a", Instance: "build-box", Owner: "dana@example.com", At: ago(48 * time.Minute),
+	}); err != nil {
+		return fmt.Errorf("seeding a task under repair: %w", err)
+	}
 	if err := store.AppendRunCapabilityAudit(ctx, firstRun, demoCapabilityAudit(repairing.ID, ago)); err != nil {
 		return fmt.Errorf("seeding a task under repair: %w", err)
 	}
@@ -1214,6 +1298,32 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		model.Link{Kind: model.LinkProposedBy, Target: repairing.ID},
 	)
 	if err := store.PutTask(ctx, *st); err != nil {
+		return err
+	}
+
+	// An open GitHub issue the issue importer filed and nobody has
+	// approved yet (model.ReasonImported): the "Imported" status and
+	// chip the task list shows for one.
+	imported, err := create(ago(25*time.Minute), ui.CreateTaskRequest{
+		Title: "[#42] Search results drop the last page",
+		Description: "Imported from GitHub issue acme/widgets#42: https://github.com/acme/widgets/issues/42\n\n" +
+			"Author: @reporter\nLabels: bug\n\n## Description\n\nThe last page of search results is never shown.",
+	})
+	if err != nil {
+		return fmt.Errorf("seeding imported task: %w", err)
+	}
+	if err := store.UpdateTask(ctx, imported.ID, func(t *model.Task) error {
+		t.Origin = model.Origin{
+			Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "issue-import"}},
+			Reason:      model.ReasonImported,
+		}
+		if t.Target != nil {
+			t.Issue = 42
+			t.WorkOrigin = model.GitHubOrigin(*t.Target, 42)
+		}
+		t.Approval, t.ApprovedAt = nil, nil
+		return nil
+	}); err != nil {
 		return err
 	}
 
@@ -1416,6 +1526,9 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	}
 
 	if err := seedGitHubCIDemo(ctx, store, ago); err != nil {
+		return err
+	}
+	if err := seedDemoHostds(ctx, store); err != nil {
 		return err
 	}
 	if err := seedDemoMemory(ctx, store, cfg, ago); err != nil {
@@ -1623,10 +1736,26 @@ func (demoChangelists) Observe(_ context.Context, _ model.Task, target string) (
 func (demoChangelists) Threads(context.Context, model.Task, string) ([]change.Thread, error) {
 	return nil, nil
 }
+
+// Submit and Sync remember what the forge would report afterwards, since
+// the demo has no poll to read it back: a submitted CL observes as
+// submitted (what a cl-submitted goal naming its number reads), and a
+// synced one as a new snapshot, up to date with head, whose presubmit has
+// not run yet.
 func (demoChangelists) Submit(_ context.Context, _ model.Task, target string, by change.Person) (change.Result, error) {
+	obs, _ := change.LastObserved(target)
+	obs.Target, obs.Status = target, change.StatusSubmitted
+	change.Remember(obs)
 	return change.Result{Target: target, Message: fmt.Sprintf("%s submitted %s (demo: nothing left this process).", by.Name, target)}, nil
 }
-func (demoChangelists) Sync(_ context.Context, _ model.Task, _ string) (change.SyncResult, error) {
+func (demoChangelists) Sync(_ context.Context, task model.Task, _ string) (change.SyncResult, error) {
+	if live := change.LiveChanges(task); len(live) > 0 {
+		obs, _ := change.LastObserved(live[0])
+		obs.Target, obs.Health, obs.Presubmit, obs.Checks = live[0], change.HealthOK, change.PresubmitNotRun, nil
+		obs.Snapshot++
+		obs.SnapshotAt = time.Now().UTC()
+		change.Remember(obs)
+	}
 	return change.SyncResult{Message: "synced to head (demo)"}, nil
 }
 
@@ -1716,7 +1845,7 @@ func (demoChangelists) Mail(_ context.Context, _ model.Task, target string, revi
 // seedDemoNotifications raises three operator notifications (DT-5), so
 // the alerts bell and the Inbox's Notifications section have rows to
 // show: a warning a reconciler would raise, a trunk release waiting for a
-// person's Approve or Reject (docs/design/release-from-trunk.md §4), and
+// person's Approve or Reject (design/design/release-from-trunk.design.md §4), and
 // an agent's own note to the operator about a task, already acknowledged.
 func seedDemoNotifications(ctx context.Context, store *model.Store, taskID string, ago func(time.Duration) time.Time) error {
 	if _, err := store.RaiseNotification(ctx, model.Notification{
@@ -1736,7 +1865,8 @@ func seedDemoNotifications(ctx context.Context, store *model.Store, taskID strin
 		Severity: model.NotificationWarning,
 		Title:    "v2.4.0 is ready to promote (v2.4.0-rc.2 passed its soak)",
 		Body: "v2.4.0-rc.2 passed its 24h staging soak and is staged as v2.4.0-pending: images built and " +
-			"published as :v2.4.0-pending, nothing left to build or test.",
+			"published as :v2.4.0-pending, nothing left to build or test.\n\n" +
+			"Soak: soaked 25h10m of 24h: PASS",
 		Repo:     model.GrainSourceRepo().String(),
 		RaisedBy: "system:release-gate",
 		RaisedAt: ago(90 * time.Minute),
@@ -1887,6 +2017,28 @@ func syncDemoDeclarations(ctx context.Context, store *model.Store, repo model.Re
 // Written straight to the store rather than through ui.Client.PutMemory,
 // which is the one place in this seed that matters: the client stamps
 // UpdatedAt with the current time, and every age here is the point.
+// seedDemoHostds fills Settings -> Hostds: local, a workstation with an
+// owner and labels, a runner registered with no owner (which may dial in
+// over loopback but not through IAP), and one revoked.
+func seedDemoHostds(ctx context.Context, store *model.Store) error {
+	if err := store.EnsureLocalHostd(ctx); err != nil {
+		return err
+	}
+	for _, h := range []model.Hostd{
+		{Name: "cloudtop-alice", Owner: "alice@example.com", Labels: map[string]string{"gpu": "yes", "os": "linux"}, CreatedBy: "operator"},
+		{Name: "build-runner", CreatedBy: "operator"},
+		{Name: "old-laptop", Owner: "bob@example.com", CreatedBy: "operator"},
+	} {
+		if _, _, err := store.CreateHostd(ctx, h); err != nil {
+			return fmt.Errorf("seeding hostd %s: %w", h.Name, err)
+		}
+	}
+	if _, err := store.RevokeHostd(ctx, "old-laptop"); err != nil {
+		return fmt.Errorf("seeding a revoked hostd: %w", err)
+	}
+	return nil
+}
+
 func seedDemoMemory(ctx context.Context, store *model.Store, cfg ui.Config, ago func(time.Duration) time.Time) error {
 	day := 24 * time.Hour
 	agent := model.Principal{Kind: model.PrincipalAgent, ID: "demo-memory-run"}
@@ -2182,23 +2334,31 @@ func IsLoopbackHostPort(hostPort string) bool {
 // Neither binary need exist: nothing in the demo asks hostd to start one,
 // and Settings only lists what it offers. hostd refuses to run as root
 // and runs on Linux only; either way the demo shows hostd not answering.
-func startDemoHostd() (string, error) {
+func startDemoHostd(ctx context.Context) (string, error) {
 	srv, err := demoHostdServer("hostd")
 	if err != nil {
 		return "", err
 	}
 	srv.Socket = filepath.Join(filepath.Dir(srv.Allowlist), "hostd.sock")
+	failed := make(chan struct{})
 	go func() {
-		if err := srv.Serve(context.Background()); err != nil {
+		if err := srv.Serve(ctx); err != nil {
 			log.Printf("grain demo: the demo's grain hostd is not running, so Settings shows it not answering: %v", err)
+			close(failed)
 		}
+		<-ctx.Done()
+		_ = os.RemoveAll(filepath.Dir(srv.Allowlist))
 	}()
 	// Up before the first page asks, so Settings never catches it starting.
 	for i := 0; i < 200; i++ {
 		if _, err := os.Stat(srv.Socket); err == nil {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-failed:
+			return srv.Socket, nil
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 	return srv.Socket, nil
 }
@@ -2232,25 +2392,41 @@ func demoHostdServer(executor string) (*hostd.Server, error) {
 // in to a daemon in a cluster. It is connected before it returns, so
 // Settings never catches it connecting, or it is left to Settings to say
 // it is not.
-func startDemoRemoteHostd(remote *hostd.Remote) error {
+func startDemoRemoteHostd(ctx context.Context, remote *hostd.Remote) error {
 	srv, err := demoHostdServer("hostd-remote")
 	if err != nil {
 		return err
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
+		_ = os.RemoveAll(filepath.Dir(srv.Allowlist))
 		return fmt.Errorf("grain demo: -host-executor=hostd-remote: %v", err)
 	}
+	go func() {
+		<-ctx.Done()
+		_ = ln.Close()
+	}()
 	go func() { _ = http.Serve(ln, remote) }()
 	srv.Remote = hostd.Dialer{Server: "http://" + ln.Addr().String(), Token: remote.Token, Host: "cloudtop", Build: srv.Build}.Dial
+	failed := make(chan struct{})
 	go func() {
-		if err := srv.Serve(context.Background()); err != nil {
+		if err := srv.Serve(ctx); err != nil {
 			log.Printf("grain demo: the demo's grain hostd is not running, so Settings shows none connected: %v", err)
+			close(failed)
+		}
+		<-ctx.Done()
+		_ = os.RemoveAll(filepath.Dir(srv.Allowlist))
+	}()
+	wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	go func() {
+		select {
+		case <-failed:
+			cancel()
+		case <-wctx.Done():
 		}
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_ = remote.WaitConnected(ctx)
+	_ = remote.WaitConnected(wctx)
 	return nil
 }
 
@@ -2498,7 +2674,7 @@ func (d *demoGitHubCalls) Stats() github.Stats {
 	}
 }
 
-func startDemoGitHubWebhooks(ctx context.Context, dir string, opts Options, creds *gitproxy.CredentialSet, store *model.Store, ghCalls *demoGitHubCalls) (*daemon.GitHubWebhookConsumer, error) {
+func startDemoGitHubWebhooks(ctx context.Context, dir string, opts Options, creds *gitproxy.CredentialSet, store *model.Store, client github.Client, ghCalls *demoGitHubCalls) (*daemon.GitHubWebhookConsumer, error) {
 	if opts.GithubWebhookURL == "" && opts.GithubWebhookAddr == "" {
 		return nil, nil
 	}
@@ -2511,7 +2687,9 @@ func startDemoGitHubWebhooks(ctx context.Context, dir string, opts Options, cred
 		return nil, err
 	}
 	wake := func() {
-		processDemoGitHubWebhooks(ctx, store, consumer, ghCalls, time.Now().UTC())
+		if err := processDemoGitHubWebhooks(ctx, store, consumer, client, ghCalls, time.Now().UTC()); err != nil {
+			log.Printf("grain demo: github webhook reconcile: %v", err)
+		}
 	}
 	if err := consumer.Start(ctx, wake, func(string) {}); err != nil {
 		return nil, err
@@ -2519,9 +2697,9 @@ func startDemoGitHubWebhooks(ctx context.Context, dir string, opts Options, cred
 	return consumer, nil
 }
 
-func processDemoGitHubWebhooks(ctx context.Context, store *model.Store, events orchestrator.GitHubEventSource, ghCalls *demoGitHubCalls, now time.Time) {
+func processDemoGitHubWebhooks(ctx context.Context, store *model.Store, events orchestrator.GitHubEventSource, client github.Client, ghCalls *demoGitHubCalls, now time.Time) error {
 	if store == nil || events == nil {
-		return
+		return nil
 	}
 	if ghCalls != nil {
 		ghCalls.webhookMu.Lock()
@@ -2542,9 +2720,8 @@ func processDemoGitHubWebhooks(ctx context.Context, store *model.Store, events o
 	}
 	deps := orchestrator.Deps{
 		Store:        store,
+		Client:       client,
 		GitHubEvents: events,
 	}
-	if err := runDemoReconcilers(ctx, deps, now, "github-events", "takeovers"); err != nil {
-		log.Printf("grain demo: github webhook reconcile: %v", err)
-	}
+	return runDemoReconcilers(ctx, deps, now, "github-events", "takeovers")
 }

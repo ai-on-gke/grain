@@ -55,6 +55,7 @@ func TestSandboxAcquiringCallSitesAreAllAccountedFor(t *testing.T) {
 		"pkg/orchestrator/cycle.go",                // agent run & recreate_sandbox (admitted in dispatch.Cycle / held by active run)
 		"pkg/orchestrator/persistent_sandboxes.go", // persistent sandbox (reserved & admitted in PoolPersistent)
 		"pkg/daemon/ci.go",                         // CI job sandbox (admitted in Engine.Jobs.Acquire in PoolCI)
+		"pkg/orchestrator/sandbox_probe.go",        // `grain sandbox probe` (admitted in ProbeSandbox in PoolAgent)
 	}
 
 	// 4. SandboxMeter.Serve(ctx, serving, kind, spec) (4 arguments) may only be

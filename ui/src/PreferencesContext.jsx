@@ -17,7 +17,7 @@ import { browserTimeZone } from "./time.js";
 
 // This browser's own preferences that have no context of their own --
 // today the preferred time zone. It was UserContext.jsx's, beside the
-// browser-chosen username that docs/design/settings-panel.md §6 removed:
+// browser-chosen username that design/design/settings-panel.design.md §6 removed:
 // grain has no users, so nothing here is kept per user.
 // storageMigration.js moved the old grain.userTimeZone key here.
 export const TIMEZONE_STORAGE_KEY = "grain.timeZone";

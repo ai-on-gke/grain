@@ -30,12 +30,16 @@ import api from "../../api.js";
 import { buildPath } from "../../paths.js";
 import { repoApiRoot } from "../../repoApi.js";
 import { knownRepos } from "../../state.js";
-import { CI_MODE_LABELS, repoCIMode } from "../RepoPage.jsx";
+import {
+  CI_MODE_LABELS,
+  confirmBaseRepairBypass,
+  repoCIMode,
+} from "../RepoPage.jsx";
 import { repoHostOf } from "../RepoList.jsx";
 import SettingsCard from "./SettingsCard.jsx";
 
 // RepositoriesSection is Settings → Repositories: an index only
-// (docs/design/settings-panel.md §2.3). Each repository's settings stay
+// (design/design/settings-panel.design.md §2.3). Each repository's settings stay
 // on its own page, beside the status they govern; this answers "where
 // do I configure a repo" with one row per configured repository: its
 // base branch, whether its declarations are read, its CI mode and the
@@ -104,6 +108,7 @@ export default function RepositoriesSection({
   );
 
   const toggleBaseRepairBypass = async (repo, on) => {
+    if (on && !confirmBaseRepairBypass(repo)) return;
     const root = repoApiRoot(repo);
     try {
       const defaults = await api(`${root}/base-repair-bypasses-human-gates`, {

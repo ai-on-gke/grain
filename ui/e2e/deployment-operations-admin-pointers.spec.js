@@ -23,7 +23,7 @@ test.use({ demoArgs: ["-observability"] });
 // (docs/test-runs/2026-10-05-deployment-operations.md): the Sandboxes
 // page sent CI history to "Settings → General", a pane and tab that do
 // not hold it. Every pointer now names the Settings section that does
-// (docs/design/settings-panel.md split Engine & Concurrency into Engine
+// (design/design/settings-panel.design.md split Engine & Concurrency into Engine
 // and CI), and following it finds the card it promised.
 test("sends CI history to the Settings section that holds it", async ({
   page,

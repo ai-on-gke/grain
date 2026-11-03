@@ -9,6 +9,13 @@ Each file has:
 - **Highlights**: a short account of the features and fixes worth a
   reader's attention, written by the agent of the release's release-notes
   task.
+- **Breaking changes**, only when there are any: every change whose title
+  or commits carry a Conventional Commits `!` marker (`feat!:`,
+  `fix(api)!:`) or a `BREAKING CHANGE:` trailer, with the trailer's text.
+  `scripts/release-notes.sh check-breaking` refuses a release that has
+  them unless it is the major release `RELEASE_MAJOR` in
+  `scripts/release.conf` asks for, or a person sets
+  `RELEASE_ALLOW_BREAKING=<version>` for it.
 - **Features**, **Fixes** and **Other changes**: every pull request merged
   into the release, by title and number, sorted by its Conventional Commits
   type (`feat`, `fix`, everything else).
@@ -55,10 +62,6 @@ that time may still have a "Fixes owed to main" section.
 `v1.2.0` to `v1.5.0` were generated after the fact from the same script and
 have no highlights. There is no `v1.1.0` tag, so `v1.2.0` is measured from
 `v1.1.0-rc.1`.
-
-This folder is about grain's own releases. `docs/release-notes.md` covers
-something else: the weekly account a deployment writes of its own activity
-across all the repositories it works in.
 
 There is no `v1.14.0`. Its candidate, `v1.14.0-rc.1`, held only the
 single-tenant reset's first stage and was never promoted

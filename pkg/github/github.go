@@ -99,6 +99,14 @@ type RealTransport struct {
 	// github.com (APIHost) and a test server serving the API at its root.
 	PathPrefix string
 
+	// GraphQLPath is where this transport's host serves GraphQL, as a
+	// path on Host taken whole rather than put under PathPrefix: the
+	// request a RESTClient makes to "/graphql" goes there. Empty works it
+	// out from PathPrefix (graphqlPath), which is right for github.com
+	// and for a GitHub Enterprise Server; a layer whose forge serves it
+	// somewhere else sets it.
+	GraphQLPath string
+
 	// Conditional has GETs revalidate against the ETag of the answer
 	// this transport last got for the same request, so an unchanged
 	// resource comes back 304 and costs nothing against the rate limit.
@@ -207,6 +215,27 @@ func (t *RealTransport) Request(method, path string, headers map[string]string, 
 	}
 }
 
+// graphqlRequestPath is the path a RESTClient hands its Transport for a
+// GraphQL request: the endpoint by name rather than by where any one host
+// serves it, which is the transport's business (graphqlPath). A Transport
+// that is not a RealTransport maps it to its own host's endpoint itself.
+const graphqlRequestPath = "/graphql"
+
+// graphqlPath is the path on Host GraphQL is posted to: GraphQLPath when
+// set, and otherwise beside the REST API rather than under it --
+// /graphql for api.github.com (no prefix), /api/graphql for a GitHub
+// Enterprise Server whose REST API is under /api/v3. A REST prefix that
+// is not a /v3 one has GraphQL put under it, as every other path is.
+func (t *RealTransport) graphqlPath() string {
+	if t.GraphQLPath != "" {
+		return t.GraphQLPath
+	}
+	if base, ok := strings.CutSuffix(t.PathPrefix, "/v3"); ok {
+		return base + graphqlRequestPath
+	}
+	return t.PathPrefix + graphqlRequestPath
+}
+
 // sendOnce is one attempt at a call: the gate, the conditional request,
 // the round trip and the bookkeeping that follows it. Everything in here
 // is per-attempt on purpose -- a retry re-asks the gate, so a throttle
@@ -235,7 +264,10 @@ func (t *RealTransport) sendOnce(method, path string, headers map[string]string,
 		bodyReader = bytes.NewReader(body)
 	}
 	fullPath := t.PathPrefix + path
-	if t.PathPrefix != "" && (path == t.PathPrefix || strings.HasPrefix(path, t.PathPrefix+"/")) {
+	switch {
+	case path == graphqlRequestPath:
+		fullPath = t.graphqlPath()
+	case t.PathPrefix != "" && (path == t.PathPrefix || strings.HasPrefix(path, t.PathPrefix+"/")):
 		fullPath = path
 	}
 	req, err := http.NewRequest(method, scheme+"://"+t.Host+fullPath, bodyReader)
@@ -306,9 +338,13 @@ func (t *RealTransport) sendOnce(method, path string, headers map[string]string,
 	respHeaders := headerMap(resp.Header)
 	out := ApiResponse{Status: resp.StatusCode, Headers: respHeaders, Body: data,
 		URL: method + " " + req.URL.String()}
-	t.counts.record(endpointOf(path), false, out.Status >= 400)
+	// A caller that sent its own validator (CompletedWorkflowRuns keeps
+	// one per repository) and got a 304 back was revalidated all the
+	// same: GitHub does not charge it, so neither does Health's budget.
+	callerRevalidated := out.Status == http.StatusNotModified && headerValue(headers, "If-None-Match") != ""
+	t.counts.record(endpointOf(path), callerRevalidated, out.Status >= 400)
 	t.counts.noteLimit(respHeaders, now)
-	t.ledgerOf().record(caller, method, path, false, out.Status >= 400)
+	t.ledgerOf().record(caller, method, path, callerRevalidated, out.Status >= 400)
 	t.ledgerOf().noteLimit(headerValue(headers, "Authorization"), respHeaders, now)
 
 	if until, reason, throttled := throttledUntil(now, out); throttled {
@@ -407,6 +443,10 @@ type Error struct {
 	// URL is ApiResponse.URL: the method and URL that were refused, or
 	// empty when the transport does not say.
 	URL string
+	// Note is grain's own sentence about the refusal, when it knows more
+	// than GitHub said (graphql: which endpoint refused, and whether REST
+	// on the same connection still answers). Both renderings end with it.
+	Note string
 }
 
 func (e *Error) Error() string {
@@ -414,10 +454,16 @@ func (e *Error) Error() string {
 	if len(body) > 200 {
 		body = body[:200]
 	}
+	var out string
 	if e.URL != "" {
-		return fmt.Sprintf("GitHub API error %d from %s: %q", e.Status, e.URL, body)
+		out = fmt.Sprintf("GitHub API error %d from %s: %q", e.Status, e.URL, body)
+	} else {
+		out = fmt.Sprintf("GitHub API error %d: %q", e.Status, body)
 	}
-	return fmt.Sprintf("GitHub API error %d: %q", e.Status, body)
+	if e.Note != "" {
+		out += " (" + e.Note + ")"
+	}
+	return out
 }
 
 // Message is the same refusal written for somebody to read: the status
@@ -464,6 +510,9 @@ func Message(err error) string {
 		return err.Error()
 	}
 	if said := errorMessage(e.Body); said != "" {
+		if e.Note != "" {
+			return fmt.Sprintf("GitHub answered %d: %s (%s)", e.Status, said, e.Note)
+		}
 		return fmt.Sprintf("GitHub answered %d: %s", e.Status, said)
 	}
 	return e.Error()
@@ -1160,12 +1209,13 @@ type CheckRun struct {
 	// the same response: ID is the check run's id (an Actions job's id),
 	// App the slug of the App that posted it, Output its whole output --
 	// title, summary and text -- bounded.
-	ID          int64
-	HeadSHA     string
-	App         string
-	StartedAt   *time.Time
-	CompletedAt *time.Time
-	Output      string
+	ID           int64
+	CheckSuiteID int64
+	HeadSHA      string
+	App          string
+	StartedAt    *time.Time
+	CompletedAt  *time.Time
+	Output       string
 }
 
 // JobLog is one failed GitHub Actions job and the tail of what it
@@ -1548,6 +1598,8 @@ type Client interface {
 	ListPullRequestCommits(owner, repo string, number int) ([]Commit, error)
 	ListCheckRuns(owner, repo, ref string) ([]CheckRun, error)
 	ListWorkflowRuns(owner, repo, headSHA string) ([]CheckRun, error)
+	RerequestCheckSuite(owner, repo string, checkSuiteID int64) error
+	RerequestCheckRun(owner, repo string, checkRunID int64) error
 	FailedJobLogs(owner, repo, headSHA string) ([]JobLog, error)
 	ActionsState(owner, repo, headSHA string) (ActionsState, error)
 	RecentRunStarts(owner, repo string, limit int) (RunStarts, error)
@@ -2187,8 +2239,8 @@ func (c *RESTClient) UpdateBranch(owner, repo, branch, sha string, force bool) e
 
 // DeleteBranch removes branch entirely. It is for a ref grain owns and
 // nobody has a pull request against -- the merge queue's own throwaway
-// batch ref (model.MergeBatchRef), destroyed when the batch it stood for
-// is dropped part-way through merging (orchestrator.dropBatchRef).
+// re-check ref (model.MergeRecheckRef), destroyed when the re-check it
+// stood for ends (orchestrator.dropRecheckRef).
 //
 // A branch that is already gone is not an error: GitHub answers 422 for a
 // ref that does not exist, and "make sure this is not there" is what every
@@ -2850,6 +2902,9 @@ func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) 
 				App         struct {
 					Slug string `json:"slug"`
 				} `json:"app"`
+				CheckSuite struct {
+					ID int64 `json:"id"`
+				} `json:"check_suite"`
 				Output struct {
 					Title   *string `json:"title"`
 					Summary *string `json:"summary"`
@@ -2880,6 +2935,7 @@ func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) 
 				FailureReason: reason,
 				StepsExecuted: len(item.Steps),
 				ID:            item.ID,
+				CheckSuiteID:  item.CheckSuite.ID,
 				HeadSHA:       item.HeadSHA,
 				App:           item.App.Slug,
 				StartedAt:     item.StartedAt,
@@ -2890,6 +2946,46 @@ func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) 
 		path = nextPagePath(resp.Headers["Link"])
 	}
 	return runs, nil
+}
+
+// RerequestCheckSuite asks GitHub to re-run a check suite in place on its
+// commit (POST /repos/{owner}/{repo}/check-suites/{check_suite_id}/rerequest).
+// GitHub answers 201 when the suite's app accepts re-requests and 403/404/422
+// when the credential or the app does not allow it.
+func (c *RESTClient) RerequestCheckSuite(owner, repo string, checkSuiteID int64) error {
+	if checkSuiteID <= 0 {
+		return &Error{Status: 422, Body: []byte(`{"message":"invalid check_suite_id"}`)}
+	}
+	resp, err := c.request(
+		"POST", fmt.Sprintf("/repos/%s/%s/check-suites/%d/rerequest", url.PathEscape(owner), url.PathEscape(repo), checkSuiteID),
+		c.headers(owner, repo, false), nil,
+	)
+	if err != nil {
+		return err
+	}
+	if resp.Status != 201 {
+		return &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	return nil
+}
+
+// RerequestCheckRun asks GitHub to re-run a single check run in place on its
+// commit (POST /repos/{owner}/{repo}/check-runs/{check_run_id}/rerequest).
+func (c *RESTClient) RerequestCheckRun(owner, repo string, checkRunID int64) error {
+	if checkRunID <= 0 {
+		return &Error{Status: 422, Body: []byte(`{"message":"invalid check_run_id"}`)}
+	}
+	resp, err := c.request(
+		"POST", fmt.Sprintf("/repos/%s/%s/check-runs/%d/rerequest", url.PathEscape(owner), url.PathEscape(repo), checkRunID),
+		c.headers(owner, repo, false), nil,
+	)
+	if err != nil {
+		return err
+	}
+	if resp.Status != 201 {
+		return &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	return nil
 }
 
 // ListWorkflowRuns returns the GitHub Actions workflow runs against one
@@ -3678,6 +3774,173 @@ type JobLogTailer interface {
 	JobLogTail(owner, repo string, jobID int64) (string, error)
 }
 
+// WorkflowRun is one GitHub Actions workflow run returned by
+// GET /repos/{owner}/{repo}/actions/runs.
+type WorkflowRun struct {
+	ID         int64      `json:"id"`
+	Name       string     `json:"name"`
+	Path       string     `json:"path"`
+	HeadBranch string     `json:"head_branch"`
+	HeadSHA    string     `json:"head_sha"`
+	HeadRepo   string     `json:"head_repo,omitempty"`
+	Event      string     `json:"event"`
+	Status     string     `json:"status"`
+	Conclusion string     `json:"conclusion"`
+	HTMLURL    string     `json:"html_url"`
+	RunAttempt int        `json:"run_attempt"`
+	StartedAt  *time.Time `json:"run_started_at"`
+	UpdatedAt  *time.Time `json:"updated_at"`
+}
+
+// WorkflowRunJob is one job of a GitHub Actions workflow run returned by
+// GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs.
+type WorkflowRunJob struct {
+	ID          int64      `json:"id"`
+	RunID       int64      `json:"run_id"`
+	Name        string     `json:"name"`
+	Status      string     `json:"status"`
+	Conclusion  string     `json:"conclusion"`
+	StartedAt   *time.Time `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at"`
+	HTMLURL     string     `json:"html_url"`
+	FailingStep string     `json:"failing_step,omitempty"`
+}
+
+// WorkflowRunsReader is the optional Client capability for polling completed
+// GitHub Actions workflow runs and listing a run's jobs.
+type WorkflowRunsReader interface {
+	CompletedWorkflowRuns(owner, repo string, limit int) ([]WorkflowRun, error)
+	ListWorkflowRunJobs(owner, repo string, runID int64) ([]WorkflowRunJob, error)
+}
+
+var _ WorkflowRunsReader = (*RESTClient)(nil)
+
+// completedRunsETags caches the last ETag seen per (Transport, owner, repo) for
+// CompletedWorkflowRuns so unchanged polls cost 304 Not Modified. Keyed in a
+// package-level sync.Map because RESTClient.As makes a shallow copy of RESTClient.
+var completedRunsETags sync.Map
+
+// CompletedWorkflowRuns returns the most recent completed workflow runs in
+// owner/repo (up to limit), sending If-None-Match when an ETag was previously
+// observed and returning (nil, nil) on 304 Not Modified or 404.
+func (c *RESTClient) CompletedWorkflowRuns(owner, repo string, limit int) ([]WorkflowRun, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	endpoint := fmt.Sprintf("/repos/%s/%s/actions/runs?status=completed&per_page=%d", owner, repo, limit)
+	headers := c.headers(owner, repo, false)
+	cacheKey := fmt.Sprintf("%p/%s/%s/%d", c.Transport, strings.ToLower(owner), strings.ToLower(repo), limit)
+	if etag, ok := completedRunsETags.Load(cacheKey); ok {
+		if s, ok := etag.(string); ok && s != "" {
+			headers["If-None-Match"] = s
+		}
+	}
+	resp, err := c.request("GET", endpoint, headers, nil)
+	if err != nil {
+		return nil, err
+	}
+	switch resp.Status {
+	case http.StatusNotModified, http.StatusNotFound:
+		return nil, nil
+	case http.StatusOK:
+	default:
+		return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	if etag := strings.TrimSpace(resp.Headers["ETag"]); etag != "" {
+		completedRunsETags.Store(cacheKey, etag)
+	} else if etag := strings.TrimSpace(resp.Headers["Etag"]); etag != "" {
+		completedRunsETags.Store(cacheKey, etag)
+	}
+	var data struct {
+		WorkflowRuns []struct {
+			WorkflowRun
+			HeadRepository *struct {
+				FullName string `json:"full_name"`
+			} `json:"head_repository"`
+		} `json:"workflow_runs"`
+	}
+	if err := json.Unmarshal(resp.Body, &data); err != nil {
+		return nil, err
+	}
+	runs := make([]WorkflowRun, len(data.WorkflowRuns))
+	for i, item := range data.WorkflowRuns {
+		r := item.WorkflowRun
+		if r.RunAttempt <= 0 {
+			r.RunAttempt = 1
+		}
+		if item.HeadRepository != nil && r.HeadRepo == "" {
+			r.HeadRepo = strings.TrimSpace(item.HeadRepository.FullName)
+		}
+		runs[i] = r
+	}
+	return runs, nil
+}
+
+// ListWorkflowRunJobs returns the jobs of one GitHub Actions workflow run.
+func (c *RESTClient) ListWorkflowRunJobs(owner, repo string, runID int64) ([]WorkflowRunJob, error) {
+	if runID <= 0 {
+		return nil, nil
+	}
+	var out []WorkflowRunJob
+	path := fmt.Sprintf("/repos/%s/%s/actions/runs/%d/jobs?per_page=100", owner, repo, runID)
+	for path != "" {
+		resp, err := c.get(owner, repo, path)
+		if err != nil {
+			return nil, err
+		}
+		if resp.Status == http.StatusNotFound {
+			return nil, nil
+		}
+		if resp.Status != http.StatusOK {
+			return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+		}
+		var data struct {
+			Jobs []struct {
+				ID          int64      `json:"id"`
+				RunID       int64      `json:"run_id"`
+				Name        string     `json:"name"`
+				Status      string     `json:"status"`
+				Conclusion  string     `json:"conclusion"`
+				StartedAt   *time.Time `json:"started_at"`
+				CompletedAt *time.Time `json:"completed_at"`
+				HTMLURL     string     `json:"html_url"`
+				Steps       []struct {
+					Name       string `json:"name"`
+					Status     string `json:"status"`
+					Conclusion string `json:"conclusion"`
+				} `json:"steps"`
+			} `json:"jobs"`
+		}
+		if err := json.Unmarshal(resp.Body, &data); err != nil {
+			return nil, err
+		}
+		for _, job := range data.Jobs {
+			j := WorkflowRunJob{
+				ID:          job.ID,
+				RunID:       job.RunID,
+				Name:        job.Name,
+				Status:      job.Status,
+				Conclusion:  job.Conclusion,
+				StartedAt:   job.StartedAt,
+				CompletedAt: job.CompletedAt,
+				HTMLURL:     job.HTMLURL,
+			}
+			if j.RunID == 0 {
+				j.RunID = runID
+			}
+			for _, step := range job.Steps {
+				if step.Status == "completed" && failedConclusion(step.Conclusion) {
+					j.FailingStep = step.Name
+					break
+				}
+			}
+			out = append(out, j)
+		}
+		path = nextPagePath(resp.Headers["Link"])
+	}
+	return out, nil
+}
+
 // checkRunIDFrom is the numeric id at the end of a job's check_run_url
 // ("https://api.github.com/repos/o/r/check-runs/123"), or 0 if it is not
 // shaped like that. The whole URL cannot simply be fetched: Transport
@@ -3919,25 +4182,53 @@ func (c *RESTClient) ReplyToReviewComment(owner, repo string, pullNumber, commen
 	return data.ID, nil
 }
 
+// graphqlRefusal is the Note on a 401 or 404 from the GraphQL endpoint:
+// which endpoint refused, and whether the REST API on the same transport
+// and credential answers for the same repository. "Bad credentials" alone
+// sends whoever reads it after the token, when a token that REST takes
+// and GraphQL refuses says the GraphQL request went somewhere it should
+// not have, or that this host's GraphQL wants something REST does not.
+func (c *RESTClient) graphqlRefusal(owner, repo, refused string) string {
+	endpoint := "the GraphQL endpoint"
+	if refused != "" {
+		endpoint += " (" + refused + ")"
+	}
+	note := endpoint + " refused the request"
+	if owner == "" || repo == "" {
+		return note
+	}
+	probe, err := c.get(owner, repo, fmt.Sprintf("/repos/%s/%s", owner, repo))
+	if err == nil && probe.Status == http.StatusOK {
+		note += fmt.Sprintf(", though the REST API on the same connection answers for %s/%s", owner, repo)
+	}
+	return note
+}
+
 // graphql posts one GraphQL document and decodes its data into out.
 // GitHub answers a GraphQL request it could not carry out with a 200 and
 // an "errors" array rather than a status, so those are turned into an
 // error here instead of leaving every caller to look.
 //
-// The path is /graphql, which is where api.github.com serves it. A GitHub
-// Enterprise Server transport with a /api/v3 PathPrefix would need
-// /api/graphql instead; nothing here reaches one today.
+// Every GraphQL call here comes through this one function, and it hands
+// the transport "/graphql" (graphqlRequestPath): where that is on the
+// host -- /graphql on api.github.com, /api/graphql beside a GitHub
+// Enterprise Server's /api/v3 -- is the transport's to say
+// (RealTransport.graphqlPath).
 func (c *RESTClient) graphql(owner, repo, query string, variables map[string]any, out any) error {
 	payload, err := json.Marshal(map[string]any{"query": query, "variables": variables})
 	if err != nil {
 		return err
 	}
-	resp, err := c.request("POST", "/graphql", c.headers(owner, repo, true), payload)
+	resp, err := c.request("POST", graphqlRequestPath, c.headers(owner, repo, true), payload)
 	if err != nil {
 		return err
 	}
 	if resp.Status != http.StatusOK {
-		return &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+		e := &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+		if resp.Status == http.StatusUnauthorized || resp.Status == http.StatusNotFound {
+			e.Note = c.graphqlRefusal(owner, repo, resp.URL)
+		}
+		return e
 	}
 	var envelope struct {
 		Data   json.RawMessage `json:"data"`

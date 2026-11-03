@@ -235,12 +235,13 @@ func relayReviewFeedback(ctx context.Context, store *model.Store, client github.
 	if hasBaseRepairBypass(*reviewed) {
 		return len(findings), fileBaseRepairReviewFollowUp(ctx, store, client, task, *reviewed, ref, findings, reviewID, now)
 	}
+	relayed := discoverRelayedThreads(client, ref, task.ID, reviewID, false)
 	kind := "a draft review"
 	if submitted {
 		kind = "a review"
 	}
 	return len(findings), noteFindingsOnReviewedTask(ctx, store, task, *reviewed, ref.String(), kind, findings,
-		wantedAutoMerge, reviewID, now)
+		wantedAutoMerge, reviewID, now, relayed...)
 }
 
 // reviewedWantsAutoMerge reports whether the task review was filed
@@ -506,7 +507,8 @@ func noteFindingsOnReview(ctx context.Context, store *model.Store, task model.Ta
 // only mislead. The draft review is still posted, since a finding about
 // code that just landed is still worth having.
 func noteFindingsOnReviewedTask(ctx context.Context, store *model.Store, review, reviewed model.Task,
-	ref, kind string, findings []reviewFinding, wantedAutoMerge bool, draftID int, now time.Time) error {
+	ref, kind string, findings []reviewFinding, wantedAutoMerge bool, draftID int, now time.Time,
+	relayed ...model.RelayedReviewThread) error {
 
 	closed, err := taskClosed(ctx, store, reviewed.ID)
 	if err != nil {
@@ -547,6 +549,9 @@ func noteFindingsOnReviewedTask(ctx context.Context, store *model.Store, review,
 		t.Links = append(t.Links, model.Link{Kind: model.LinkReviewQuestions, Target: questions.Target()})
 		if draftID != 0 {
 			t.Links = append(t.Links, model.Link{Kind: model.LinkDraftReview, Target: strconv.Itoa(draftID)})
+		}
+		for _, rt := range relayed {
+			t.Links = append(t.Links, model.Link{Kind: model.LinkRelayedReviewThread, Target: rt.Target()})
 		}
 		return nil
 	}); err != nil {

@@ -36,12 +36,12 @@ test.describe("System Administration and Diagnostic Workflows", () => {
     await expect(refreshCacheBtn).toBeVisible();
     await refreshCacheBtn.click();
 
-    // "Flush the whole cache": the proxy cache's comes first, above the
-    // Actions cache's button of the same name.
+    // "Flush the whole cache" for the proxy cache, named apart from the
+    // Actions cache's button of the same text.
     await expect(page.getByText(/Total space consumed: [1-9]/)).toBeVisible();
-    const flushWholeBtn = page
-      .getByRole("button", { name: "Flush the whole cache" })
-      .first();
+    const flushWholeBtn = page.getByRole("button", {
+      name: "Flush the whole proxy cache",
+    });
     await expect(flushWholeBtn).toBeEnabled();
     await flushWholeBtn.click();
     await expect(page.getByText(/Total space consumed: 0 B/)).toBeVisible();

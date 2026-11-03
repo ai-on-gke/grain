@@ -28,6 +28,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -301,8 +302,30 @@ func accessLifetime(cfg IAPConfig) time.Duration {
 // request came from: on a single-tenant daemon the code is the
 // credential wherever it is presented from.
 func presentsAccessCode(r *http.Request, cfg IAPConfig) bool {
+	if !accessCodeAccepted(r, cfg) {
+		return false
+	}
 	got, ok := bearerToken(r)
 	return ok && matchesAccessCode(got, cfg.LocalAPIToken)
+}
+
+// accessCodeAccepted reports whether r may authenticate with the access
+// code at all. Without -ui-require-iap it always may. With it, the code
+// counts only for a request straight from loopback that no proxy
+// relayed (relayedByProxy: no X-Forwarded-*, Forwarded or verifier
+// header), which keeps `kubectl exec deploy/grain -- grain ...` as a
+// break-glass path that does not depend on IAP; or for one a registered
+// verifier decides that declares AccessCodeWins, whose proxy keeps the
+// code as its own break-glass path. -ui-require-iap governs IAP only.
+func accessCodeAccepted(r *http.Request, cfg IAPConfig) bool {
+	if !cfg.RequireIAP {
+		return true
+	}
+	if isLoopbackRequest(r) && !relayedByProxy(r) {
+		return true
+	}
+	cv := cachedOrVerifyCaller(r)
+	return cv.present && cv.err == nil && cv.accessCodeWins
 }
 
 func bearerToken(r *http.Request) (string, bool) {
@@ -317,6 +340,9 @@ func bearerToken(r *http.Request) (string, bool) {
 // accessSessionIssued is when r's access session cookie was issued, if
 // it carries one the current code signed and it has not expired.
 func accessSessionIssued(r *http.Request, cfg IAPConfig) (time.Time, bool) {
+	if !accessCodeAccepted(r, cfg) {
+		return time.Time{}, false
+	}
 	c, err := r.Cookie(AccessCookieName)
 	if err != nil || c == nil {
 		return time.Time{}, false
@@ -500,8 +526,8 @@ func accessLimitExempt(r *http.Request) bool {
 // couldBeAccessCode reports whether got could be code at all, and so
 // counts as a guess at it when it is wrong. A bearer token of another
 // length once case, dashes and whitespace are set aside, or with a
-// character no access code has (the dots of a JWT, an executor token's
-// "gxt_"), is somebody's other credential sent to the wrong place, not
+// character no access code has (the dots of a JWT, the underscore of a
+// "gma_" token), is somebody's other credential sent to the wrong place, not
 // a guess: it can never match, so it is refused without being counted.
 // An access code's length and alphabet are not secret: every generated
 // code has the same ones.
@@ -545,8 +571,8 @@ func clearAccessCookie(w http.ResponseWriter, r *http.Request) {
 }
 
 // The routes a single-tenant daemon serves to a caller without the code:
-// the login page's own, logging out, and remote execution's
-// (executorBootstrapRoute), which authenticates in its own protocol.
+// the login page's own, logging out, and a grain hostd dialing in
+// (hostdConnectRoute), which authenticates in its own protocol.
 const (
 	accessCodePath       = "/api/auth/access-code"
 	accessCodeScriptPath = "/api/auth/access-code/login.js"
@@ -557,26 +583,82 @@ func singleTenantOpenRoute(r *http.Request) bool {
 	case accessCodePath, accessCodeScriptPath, "/api/auth/logout":
 		return true
 	}
-	return executorBootstrapRoute(r)
+	return hostdConnectRoute(r)
 }
 
 const errAccessCodeNeeded = "this daemon is single-tenant and every caller shows its access code: " +
 	"sign in with it on the UI's \"Enter access code\" page, or send it as a bearer token " +
 	"(`grain access-code` prints it, to the account grain runs as and root)"
 
+const errIAPRequired = "this daemon requires IAP (-ui-require-iap): the access code is not accepted over the network, " +
+	"so sign in through the deployment's IAP URL; the code still works from the daemon's own host over loopback " +
+	"(kubectl exec deploy/grain -- grain ...)"
+
 const errAccessCodeLimited = "too many wrong access codes: wait a minute and try again"
 
 // singleTenantGate is a single-tenant daemon's access gate, ahead of
-// everything else serveHTTP does: a caller with the access code (or an
-// in-process one, singleTenantTrusted) goes on, with its access session
-// renewed when it is due; anybody else gets the "Enter access code" page
-// or, for the API, a 401 -- never the app. It reports whether serveHTTP
+// everything else serveHTTP does: a caller authenticated by an
+// IdentityVerifier (IAP or a wrapper's proxy) and admitted by the allowlist,
+// or a caller with the access code (or an in-process one, singleTenantTrusted),
+// goes on; anybody else gets a 401/403 or, for the browser UI without an
+// assertion, the "Enter access code" page. It reports whether serveHTTP
 // should go on.
 func (s *Server) singleTenantGate(w http.ResponseWriter, r *http.Request, cfg IAPConfig) bool {
+	cv := cachedOrVerifyCaller(r)
+	if cv.present {
+		if cv.err != nil {
+			writeAssertionRefused(w, r, cv.err)
+			return false
+		}
+		if cv.accessCodeWins {
+			if externalTokenFromContext(r.Context()) != nil {
+				return true
+			}
+			if tok, ok := bearerToken(r); ok && couldBeAccessCode(tok, cfg.LocalAPIToken) {
+				source := accessSource(r)
+				if !accessLimitExempt(r) && s.access.sourceLimited(source, time.Now()) {
+					writeError(w, http.StatusTooManyRequests, errors.New(errAccessCodeLimited))
+					return false
+				}
+				if !presentsAccessCode(r, cfg) {
+					if s.access.failed(source, time.Now()) {
+						writeError(w, http.StatusTooManyRequests, errors.New(errAccessCodeLimited))
+						return false
+					}
+					writeError(w, http.StatusUnauthorized, errors.New(errAccessCodeNeeded))
+					return false
+				}
+				return true
+			}
+			if issued, ok := accessSessionIssued(r, cfg); ok {
+				if time.Since(issued) > accessSessionRenewAfter {
+					setAccessCookie(w, r, cfg.LocalAPIToken, accessLifetime(cfg))
+				}
+				return true
+			}
+		}
+		if singleTenantOpenRoute(r) {
+			return true
+		}
+		if err := s.checkAllowedPrincipal(r.Context(), cv.id); err != nil {
+			if browserNavigation(r) {
+				s.writePrincipalRefusedPage(w, r, cv, err)
+				return false
+			}
+			writeError(w, http.StatusForbidden, err)
+			return false
+		}
+		if !checkVerifiedIdentityCSRF(w, r) {
+			return false
+		}
+		return true
+	}
+
 	if singleTenantOpenRoute(r) {
 		return true
 	}
-	if tok, ok := bearerToken(r); ok && couldBeAccessCode(tok, cfg.LocalAPIToken) {
+	codeAccepted := accessCodeAccepted(r, cfg)
+	if tok, ok := bearerToken(r); ok && codeAccepted && couldBeAccessCode(tok, cfg.LocalAPIToken) {
 		// A source over its own limit is refused before its code is
 		// looked at, so the refusal is the same whether the code was
 		// right; a wrong one is counted. Loopback is never refused a
@@ -601,11 +683,24 @@ func (s *Server) singleTenantGate(w http.ResponseWriter, r *http.Request, cfg IA
 		// Expired, or signed with a code since rotated.
 		clearAccessCookie(w, r)
 	}
+	if !codeAccepted {
+		// No code form to offer: behind IAP a browser that got here
+		// without an assertion bypassed the Gateway, and signs in by
+		// going through it.
+		if strings.HasPrefix(r.URL.Path, "/api/") || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+			writeError(w, http.StatusUnauthorized, errors.New(errIAPRequired))
+			return false
+		}
+		writeIAPRequiredPage(w)
+		return false
+	}
 	if strings.HasPrefix(r.URL.Path, "/api/") || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
 		writeError(w, http.StatusUnauthorized, errors.New(errAccessCodeNeeded))
 		return false
 	}
-	writeAccessCodePage(w, http.StatusUnauthorized, "")
+	// No return path from here: the page's script fills it in from the
+	// address bar, so a refusal repeats nothing the request said.
+	writeAccessCodePage(w, http.StatusUnauthorized, "", "")
 	return false
 }
 
@@ -622,7 +717,14 @@ type AccessCodeRequest struct {
 func (s *Server) handleAccessCodeStatus(w http.ResponseWriter, r *http.Request) {
 	cfg, _ := IAPConfigFromContext(r.Context())
 	_, ok := accessSessionIssued(r, cfg)
-	writeJSON(w, http.StatusOK, map[string]any{"authenticated": ok})
+	resp := map[string]any{"authenticated": ok}
+	if cfg.RequireIAP {
+		// What `grain access-code` reads to say the code it prints works
+		// over loopback only.
+		resp["requireIAP"] = true
+		resp["accessCodeAccepted"] = accessCodeAccepted(r, cfg)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleAccessCodeLogin is POST /api/auth/access-code: the access code,
@@ -631,13 +733,17 @@ func (s *Server) handleAccessCodeStatus(w http.ResponseWriter, r *http.Request) 
 // UI on success and shown the page again otherwise.
 func (s *Server) handleAccessCodeLogin(w http.ResponseWriter, r *http.Request) {
 	cfg, _ := IAPConfigFromContext(r.Context())
+	if !accessCodeAccepted(r, cfg) {
+		writeError(w, http.StatusForbidden, errors.New(errIAPRequired))
+		return
+	}
 	isJSON := strings.HasPrefix(strings.TrimSpace(r.Header.Get("Content-Type")), "application/json")
 	fail := func(status int, msg string) {
 		if isJSON {
 			writeError(w, status, errors.New(msg))
 			return
 		}
-		writeAccessCodePage(w, status, msg)
+		writeAccessCodePage(w, status, msg, r.PostForm.Get(accessReturnField))
 	}
 	source := accessSource(r)
 	if !accessLimitExempt(r) && s.access.sourceLimited(source, time.Now()) {
@@ -645,7 +751,7 @@ func (s *Server) handleAccessCodeLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var code string
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	r.Body = http.MaxBytesReader(w, r.Body, 4096+3*maxAccessReturnPath)
 	if isJSON {
 		var req AccessCodeRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
@@ -673,7 +779,48 @@ func (s *Server) handleAccessCodeLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"authenticated": true})
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	// Back to the page the browser was trying to open when it was shown
+	// the login page, which the form carries as a hidden field; anything
+	// but a path on this origin is "/".
+	http.Redirect(w, r, localReturnPath(r.PostForm.Get(accessReturnField)), http.StatusSeeOther)
+}
+
+const (
+	// accessReturnField is the login form's hidden field holding the
+	// path and query the page was served for.
+	accessReturnField = "next"
+	// maxAccessReturnPath is the longest return path kept; a longer one
+	// is "/".
+	maxAccessReturnPath = 2048
+)
+
+// localReturnPath is next if it is a path and query on this origin, the
+// only place a sign-in may send a browser back to, and "/" otherwise:
+// next is whatever the form post carried, so it is no more trusted than
+// a query parameter would be. A path must start with one "/", not "//"
+// or "/\" (which a browser reads as another host), and has no
+// backslash, control character, scheme, host or fragment anywhere.
+// /api/ paths are "/" too: a browser signing in wants a page.
+func localReturnPath(next string) string {
+	if next == "" || len(next) > maxAccessReturnPath || next[0] != '/' {
+		return "/"
+	}
+	if len(next) > 1 && (next[1] == '/' || next[1] == '\\') {
+		return "/"
+	}
+	for i := 0; i < len(next); i++ {
+		if c := next[i]; c < 0x20 || c == 0x7f || c == '\\' || c == '#' {
+			return "/"
+		}
+	}
+	u, err := url.Parse(next)
+	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil || u.Opaque != "" || !strings.HasPrefix(u.Path, "/") {
+		return "/"
+	}
+	if strings.HasPrefix(u.Path, "/api/") {
+		return "/"
+	}
+	return next
 }
 
 // accessCodeScript is the login page's one script, served from
@@ -683,7 +830,17 @@ func (s *Server) handleAccessCodeLogin(w http.ResponseWriter, r *http.Request) {
 // so a browser holding a live session can land on this page; asking
 // from here is a same-site request, which does carry it, and loading
 // the page again from here is a same-site navigation.
-const accessCodeScript = `fetch("/api/auth/access-code", {credentials: "same-origin"})
+//
+// It also fills in the form's return path from the address bar, which
+// is the deep link the browser was trying to open, unless the page
+// already carries one (a wrong code shown it again).
+const accessCodeScript = `(function () {
+  var next = document.querySelector('form input[name="` + accessReturnField + `"]');
+  if (next && !next.value && window.location.pathname.indexOf("/api/") !== 0) {
+    next.value = window.location.pathname + window.location.search;
+  }
+})();
+fetch("/api/auth/access-code", {credentials: "same-origin"})
   .then(function (r) { return r.ok ? r.json() : {}; })
   .then(function (s) { if (s && s.authenticated) { window.location.replace(window.location.href); } })
   .catch(function () {});
@@ -715,7 +872,8 @@ p { color: #444; font-size: .9rem; }
 <body>
 <form method="post" action="` + accessCodePath + `">
 <h1>Enter access code</h1>
-{{if .}}<p class="error" role="alert">{{.}}</p>{{end}}
+{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+<input type="hidden" name="` + accessReturnField + `" value="{{.Next}}">
 <label for="code">Access code</label>
 <input id="code" name="code" type="password" autocomplete="current-password" autofocus required>
 <button type="submit">Continue</button>
@@ -725,11 +883,43 @@ p { color: #444; font-size: .9rem; }
 </html>
 `))
 
-func writeAccessCodePage(w http.ResponseWriter, status int, msg string) {
+// writeAccessCodePage serves the login page with msg as its error, if
+// any, and next -- a return path a wrong code's form post carried -- as
+// where a sign-in sends it back to, once localReturnPath has vetted it
+// (the gate passes none; accessCodeScript fills it in).
+func writeAccessCodePage(w http.ResponseWriter, status int, msg, next string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	if err := accessCodePage.Execute(w, msg); err != nil {
+	page := struct{ Error, Next string }{msg, ""}
+	if next != "" {
+		page.Next = localReturnPath(next)
+	}
+	if err := accessCodePage.Execute(w, page); err != nil {
 		fmt.Fprintln(w, "enter access code")
 	}
+}
+
+var iapRequiredPage = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>grain: sign in through IAP</title>
+</head>
+<body>
+<h1>Sign in through IAP</h1>
+<p>This grain requires Identity-Aware Proxy and does not take an access code over the network.
+Open it at the deployment's IAP URL to sign in with your Google account.</p>
+</body>
+</html>
+`
+
+// writeIAPRequiredPage is what a browser without an assertion gets from a
+// -ui-require-iap daemon in place of the "Enter access code" page.
+func writeIAPRequiredPage(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusUnauthorized)
+	io.WriteString(w, iapRequiredPage)
 }

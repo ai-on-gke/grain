@@ -31,7 +31,7 @@ import (
 // orchestrator.reconcileWake undefers.
 //
 // The agent's own suspension (SuspendRequested, task_run.suspend_kind),
-// which resume_later generalises (docs/design/durable-tasks.md#DT-9): the
+// which resume_later generalises (design/design/durable-tasks.design.md#DT-9): the
 // run did what it meant to, and nothing about it is a failure for
 // MaxConsecutiveFailures to count, nor a success that ends a streak --
 // kept apart from "succeeded" so the
@@ -50,13 +50,15 @@ func ParkedDetail(ids []string) string {
 }
 
 // ParkedTargets is the ids a ParkedOutcome run's detail names, or nil for
-// any other detail.
+// any other detail. An optional ": <reason>" suffix (written when the park
+// came from resume_later rather than wait_for_task) is stripped first.
 func ParkedTargets(detail string) []string {
 	rest, ok := strings.CutPrefix(detail, parkedDetailPrefix)
 	if !ok {
 		return nil
 	}
-	return strings.Fields(rest)
+	ids, _, _ := strings.Cut(rest, ": ")
+	return strings.Fields(ids)
 }
 
 // parkedUntilPrefix starts the detail of a run that parked until a time.
@@ -70,13 +72,15 @@ func ParkedUntilDetail(until time.Time) string {
 }
 
 // ParkedUntil is the wake time a ParkedOutcome run's detail names, or
-// false for any other detail.
+// false for any other detail. An optional ": <reason>" suffix (written
+// when the timed park came from resume_later) is stripped before parsing.
 func ParkedUntil(detail string) (time.Time, bool) {
 	rest, ok := strings.CutPrefix(detail, parkedUntilPrefix)
 	if !ok {
 		return time.Time{}, false
 	}
-	until, err := time.Parse(time.RFC3339, strings.TrimSpace(rest))
+	rawTime, _, _ := strings.Cut(rest, ": ")
+	until, err := time.Parse(time.RFC3339, strings.TrimSpace(rawTime))
 	if err != nil {
 		return time.Time{}, false
 	}
@@ -86,7 +90,7 @@ func ParkedUntil(detail string) (time.Time, bool) {
 // ResumeOn is what a requested suspension (SuspendRequested) waits for
 // before its task is queued again: task_suspension.resume_on, as JSON.
 // The task is re-queued when any one condition is met; a ResumeOn with
-// none is the next cycle (docs/design/durable-tasks.md#DT-9).
+// none is the next cycle (design/design/durable-tasks.design.md#DT-9).
 //
 // wait_for_task's two parks are forms of it: park: true is Tasks (with
 // UntilMerged), resume_at is At. CI and Message are resume_later's own.

@@ -242,7 +242,7 @@ describe("CachesPage", () => {
     await screen.findByText("apt packages: 412 packages, 3.0 GiB");
 
     const buttons = screen.getAllByRole("button", {
-      name: /^Flush (?!the whole cache$)/,
+      name: /^Flush (?!the whole )/,
     });
     // Every row's button is named for its row, six ecosystems and one
     // repository, rather than seven buttons all called "Flush".
@@ -252,11 +252,16 @@ describe("CachesPage", () => {
     for (const btn of buttons) {
       expect(btn).toBeEnabled();
     }
-    const wholeCacheButtons = screen.getAllByRole("button", {
-      name: "Flush the whole cache",
-    });
+    // The two whole-cache buttons read alike on screen and are told
+    // apart by name: one empties the proxy cache, the other the
+    // Actions cache.
+    const wholeCacheButtons = [
+      screen.getByRole("button", { name: "Flush the whole proxy cache" }),
+      screen.getByRole("button", { name: "Flush the whole Actions cache" }),
+    ];
     for (const btn of wholeCacheButtons) {
       expect(btn).toBeEnabled();
+      expect(btn).toHaveTextContent("Flush the whole cache");
     }
   });
 });

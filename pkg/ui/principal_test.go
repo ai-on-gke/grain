@@ -126,9 +126,10 @@ func TestIAPAssertionVerification(t *testing.T) {
 	}
 
 	iapCfg := ui.IAPConfig{
-		Audience:  aud,
-		Validator: customValidator,
+		Audience: aud,
 	}
+	unreg := ui.RegisterIdentityVerifier(ui.NewIAPVerifier(ui.WithIAPAudience(aud), ui.WithIAPValidator(customValidator)))
+	t.Cleanup(unreg)
 
 	t.Run("valid IAP JWT assertion extracts user", func(t *testing.T) {
 		tok := signIAPToken(t, privKey, kid, aud, "user@example.com", "accounts.google.com:1001", ui.GoogleIAPIssuer, time.Now().Add(1*time.Hour))
@@ -202,7 +203,7 @@ func TestIAPAssertionVerification(t *testing.T) {
 
 func TestExtractPrincipal_IAPMode_ForgedPlaintextHeaders(t *testing.T) {
 	iapCfg := ui.IAPConfig{
-		Mode: true,
+		RequireIAP: true,
 	}
 
 	t.Run("plaintext headers ignored when IAP mode is active without JWT assertion", func(t *testing.T) {

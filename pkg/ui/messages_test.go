@@ -25,6 +25,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -414,5 +415,211 @@ func TestPostAgentMessageDerivesAMissingSummaryAndRefusesABadOne(t *testing.T) {
 	}
 	if _, err := client.PostAgentMessage(ctx, task.ID, "which?", strings.Repeat("x", model.MaxQuestionSummaryLen+1), nil); err == nil {
 		t.Errorf("an over-long summary was accepted")
+	}
+}
+
+// RecordDelivered clears PendingQuestionCommentID and PendingSecret only when
+// the delivered mark actually advances across at least one PrincipalHuman
+// reply: a duplicate/stale delivery report or an agent-to-agent message must
+// never lift the task's parked question or pending secret prompt.
+func TestRecordDeliveredOnlyClearsPendingQuestionOnNewHumanReply(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := testClient(t)
+	task := create(t, client, ctx)
+	running(t, store, ctx, task.ID)
+
+	seedHuman, err := store.AddComment(ctx, model.Comment{
+		TaskID: task.ID, Body: "initial instruction",
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.RecordDelivered(ctx, task.ID, seedHuman); err != nil {
+		t.Fatalf("RecordDelivered(seedHuman): %v", err)
+	}
+
+	asked, err := client.PostAgentMessage(ctx, task.ID, "Need confirmation and secret", "Confirm and set secret", nil)
+	if err != nil {
+		t.Fatalf("PostAgentMessage: %v", err)
+	}
+	if err := store.ObserveField(ctx, task.ID, client.Now(), func(o *model.Observation) {
+		o.PendingSecret = "stripe-api-key"
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Stale/duplicate RecordDelivered at or below DeliveredCommentID must NOT clear pending fields.
+	if err := client.RecordDelivered(ctx, task.ID, seedHuman); err != nil {
+		t.Fatalf("RecordDelivered(stale): %v", err)
+	}
+	obs, err := store.GetObservation(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obs.PendingQuestionCommentID == nil || *obs.PendingQuestionCommentID != asked.ID || obs.PendingSecret != "stripe-api-key" {
+		t.Fatalf("after stale RecordDelivered: PendingQuestionCommentID=%v PendingSecret=%q, want %d and stripe-api-key",
+			obs.PendingQuestionCommentID, obs.PendingSecret, asked.ID)
+	}
+
+	// 2. Advancing DeliveredCommentID over a non-human (agent) comment must NOT clear pending fields.
+	peerComment, err := store.AddComment(ctx, model.Comment{
+		TaskID: task.ID, Body: "peer agent note",
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: "peer-task"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.RecordDelivered(ctx, task.ID, peerComment); err != nil {
+		t.Fatalf("RecordDelivered(peerComment): %v", err)
+	}
+	obs, err = store.GetObservation(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obs.DeliveredCommentID == nil || *obs.DeliveredCommentID != peerComment {
+		t.Fatalf("DeliveredCommentID = %v, want %d", obs.DeliveredCommentID, peerComment)
+	}
+	if obs.PendingQuestionCommentID == nil || *obs.PendingQuestionCommentID != asked.ID || obs.PendingSecret != "stripe-api-key" {
+		t.Fatalf("after non-human RecordDelivered: PendingQuestionCommentID=%v PendingSecret=%q, want %d and stripe-api-key",
+			obs.PendingQuestionCommentID, obs.PendingSecret, asked.ID)
+	}
+
+	// 3. Advancing DeliveredCommentID across a PrincipalHuman reply DOES clear both pending fields.
+	humanReply, err := store.AddComment(ctx, model.Comment{
+		TaskID: task.ID, Body: "yes, proceed",
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.RecordDelivered(ctx, task.ID, humanReply); err != nil {
+		t.Fatalf("RecordDelivered(humanReply): %v", err)
+	}
+	obs, err = store.GetObservation(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obs.DeliveredCommentID == nil || *obs.DeliveredCommentID != humanReply {
+		t.Fatalf("DeliveredCommentID = %v, want %d", obs.DeliveredCommentID, humanReply)
+	}
+	if obs.PendingQuestionCommentID != nil || obs.PendingSecret != "" {
+		t.Fatalf("after human RecordDelivered: PendingQuestionCommentID=%v PendingSecret=%q, want nil and empty",
+			obs.PendingQuestionCommentID, obs.PendingSecret)
+	}
+}
+
+// A person's comment said before the run asked its question, and only
+// marked delivered afterwards, does not answer that question: the
+// delivered report must leave it parked.
+func TestRecordDeliveredKeepsAQuestionAskedAfterTheHumanComment(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := testClient(t)
+	task := create(t, client, ctx)
+	running(t, store, ctx, task.ID)
+
+	earlier, err := store.AddComment(ctx, model.Comment{
+		TaskID: task.ID, Body: "an earlier note",
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Parked directly, as a question relayed when a run ends is: a chat
+	// post would not park on a comment already waiting
+	// (TestPostAgentMessageDoesNotParkOnAQuestionAlreadyAnswered).
+	asked := ui.Message{}
+	asked.ID, err = store.AddComment(ctx, model.Comment{
+		TaskID: task.ID, Body: "Which region?",
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ObserveField(ctx, task.ID, time.Now(), func(o *model.Observation) {
+		o.PendingQuestionCommentID = &asked.ID
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if asked.ID <= earlier {
+		t.Fatalf("question %d is not after the earlier comment %d", asked.ID, earlier)
+	}
+	if err := client.RecordDelivered(ctx, task.ID, asked.ID); err != nil {
+		t.Fatalf("RecordDelivered(question): %v", err)
+	}
+	obs, err := store.GetObservation(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obs.PendingQuestionCommentID == nil || *obs.PendingQuestionCommentID != asked.ID {
+		t.Fatalf("PendingQuestionCommentID = %v, want %d: a comment from before the question un-parked it",
+			obs.PendingQuestionCommentID, asked.ID)
+	}
+}
+
+// A chat post made while a person's comment is already waiting, unshown
+// to the run, is answered by that comment the moment the chat call polls,
+// so it must not leave the task parked on a question nobody is left to
+// answer.
+func TestPostAgentMessageDoesNotParkOnAQuestionAlreadyAnswered(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := testClient(t)
+	task := create(t, client, ctx)
+	running(t, store, ctx, task.ID)
+
+	// With no delivered mark nothing says what a run has been shown, so
+	// an answered question followed by a new one parks as it always has.
+	answer, err := store.AddComment(ctx, model.Comment{
+		TaskID: task.ID, Body: "use main",
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unmarked, err := client.PostAgentMessage(ctx, task.ID, "And which reviewer?", "Pick a reviewer", nil)
+	if err != nil {
+		t.Fatalf("PostAgentMessage: %v", err)
+	}
+	obs, err := store.GetObservation(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obs == nil || obs.PendingQuestionCommentID == nil || *obs.PendingQuestionCommentID != unmarked.ID {
+		t.Fatalf("PendingQuestionCommentID = %v, want %d with no delivered mark", obs, unmarked.ID)
+	}
+	if err := client.RecordDelivered(ctx, task.ID, answer); err != nil {
+		t.Fatalf("RecordDelivered: %v", err)
+	}
+
+	waiting, err := store.AddComment(ctx, model.Comment{
+		TaskID: task.ID, Body: "ok, did that do it?",
+		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.PostAgentMessage(ctx, task.ID, "Done; anything else?", "Anything else?", nil); err != nil {
+		t.Fatalf("PostAgentMessage: %v", err)
+	}
+	if obs, err = store.GetObservation(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if obs != nil && obs.PendingQuestionCommentID != nil {
+		t.Fatalf("PendingQuestionCommentID = %d, want nil: a waiting comment already answers the chat post", *obs.PendingQuestionCommentID)
+	}
+
+	// Once that comment has been delivered, the next chat post parks as usual.
+	if err := client.RecordDelivered(ctx, task.ID, waiting); err != nil {
+		t.Fatalf("RecordDelivered: %v", err)
+	}
+	asked, err := client.PostAgentMessage(ctx, task.ID, "Which region?", "Pick a region", nil)
+	if err != nil {
+		t.Fatalf("PostAgentMessage: %v", err)
+	}
+	if obs, err = store.GetObservation(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if obs == nil || obs.PendingQuestionCommentID == nil || *obs.PendingQuestionCommentID != asked.ID {
+		t.Fatalf("PendingQuestionCommentID = %v, want %d once nothing is waiting", obs, asked.ID)
 	}
 }

@@ -100,7 +100,7 @@ var (
 	jsAttrID    = regexp.MustCompile(`(?m)^\s*id: "([^"]+)",`)
 	jsAttrType  = regexp.MustCompile(`(?m)^\s*type: TYPE_(\w+),`)
 	jsAttrNone  = regexp.MustCompile(`(?m)^\s*noneLabel: "`)
-	jsAttrOrder = regexp.MustCompile(`(?m)^\s*order: (.+),$`)
+	jsAttrOrder = regexp.MustCompile(`(?m)^\s*order: (\[[^\]]*\]|\w+),$`)
 	jsOperator  = regexp.MustCompile(`(?m)^\s*(\w+): \{ label: "([^"]+)", input: "([^"]+)" \},`)
 	jsByType    = regexp.MustCompile(`(?m)^\s*\[TYPE_(\w+)\]: \[([^\]]*)\],`)
 	jsString    = regexp.MustCompile(`"([^"]+)"`)

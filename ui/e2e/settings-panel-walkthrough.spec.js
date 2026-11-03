@@ -15,7 +15,7 @@
 import { test, expect } from "./fixtures.js";
 
 // Walkthrough: the Settings view behind the gear, and System behind the
-// icon beside it (docs/design/settings-panel.md, stage (a)), against the
+// icon beside it (design/design/settings-panel.design.md, stage (a)), against the
 // real `grain demo` server with none of grain's own APIs mocked. The
 // run is recorded in docs/test-runs/2026-10-20-settings-panel.md.
 
@@ -24,9 +24,9 @@ async function openFromGear(page) {
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
   await page.getByTestId("top-bar-settings").click();
   await expect(
-    page.getByRole("heading", { name: "General", level: 1 }),
+    page.getByRole("heading", { name: "Models", level: 1 }),
   ).toBeVisible();
-  await expect(page).toHaveURL(/\/settings\/general$/);
+  await expect(page).toHaveURL(/\/settings\/models$/);
 }
 
 async function section(page, id, title) {
@@ -77,6 +77,7 @@ test("edits one setting in each section, and every one survives a reload", async
     await openFromGear(page);
 
     // General
+    await section(page, "general", "General");
     await commitBox(page, "Environment name", "walkthrough");
     // Access: what this section has to show is how this browser is signed in.
     await section(page, "access", "Access");
@@ -117,13 +118,6 @@ test("edits one setting in each section, and every one survives a reload", async
     // Legacy capabilities
     await section(page, "credentials", "Legacy capabilities");
     await commitBox(page, "GCP project", "walkthrough-project");
-    // Executors: a join token is a setting.
-    await section(page, "executors", "Executors");
-    await page.getByRole("button", { name: "Issue Token" }).click();
-    await page.getByLabel("Token Name / Description").fill("walkthrough-token");
-    await page.getByRole("button", { name: "Generate Token" }).click();
-    await expect(page.getByText("walkthrough-token").first()).toBeVisible();
-    await page.keyboard.press("Escape");
     // Engine, CI, Sandboxes, Caches
     await section(page, "engine", "Engine");
     await commitBox(page, "Poll interval", "45s");
@@ -168,8 +162,6 @@ test("edits one setting in each section, and every one survives a reload", async
     await expect(page.getByLabel("GCP project", { exact: true })).toHaveValue(
       "walkthrough-project",
     );
-    await page.goto("/settings/executors");
-    await expect(page.getByText("walkthrough-token").first()).toBeVisible();
     await page.goto("/settings/engine");
     await expect(page.getByLabel("Poll interval", { exact: true })).toHaveValue(
       "45s",
@@ -209,7 +201,7 @@ test("every old path lands where §3.5 says, and Back skips it", async ({
     ["/admin/accounts", "/settings/access"],
     ["/admin/engine", "/settings/engine"],
     ["/admin/sandbox", "/settings/sandboxes"],
-    ["/admin/executors", "/settings/executors"],
+    ["/admin/executors", "/settings/hostds"],
     ["/admin/integrations", "/settings/credentials"],
     ["/admin/state", "/settings/config-repo"],
     ["/admin/upgrade", "/settings/upgrade"],
@@ -230,11 +222,11 @@ test("every old path lands where §3.5 says, and Back skips it", async ({
     ["/system/accounts", "/settings/access"],
     ["/system/engine", "/settings/engine"],
     ["/system/sandbox", "/settings/sandboxes"],
-    ["/system/executors", "/settings/executors"],
+    ["/system/executors", "/settings/hostds"],
     ["/system/integrations", "/settings/credentials"],
     ["/system/state", "/settings/config-repo"],
     ["/system/nonsense", "/system"],
-    ["/settings", "/settings/general"],
+    ["/settings", "/settings/models"],
     ["/memory", "/settings/memory"],
     ["/sandboxes", "/system/sandboxes"],
     ["/caches", "/system/caches"],
@@ -270,6 +262,7 @@ test("filtering 'overcommit' finds CPU overcommit and focuses it", async ({
 
 test("a toggle autosaves and survives a reload", async ({ page }) => {
   await openFromGear(page);
+  await section(page, "general", "General");
   const toggle = page.getByRole("checkbox", {
     name: /Show closed tasks by default/,
   });
@@ -471,7 +464,7 @@ test("pinned Settings shortcut highlights on desktop and Back returns to Tasks",
     hasText: "Settings",
   });
   await pinnedSettings.click();
-  await expect(page).toHaveURL(/\/settings\/general$/);
+  await expect(page).toHaveURL(/\/settings\/models$/);
   await expect(pinnedSettings).toHaveClass(/Mui-selected/);
 
   await page.goBack();

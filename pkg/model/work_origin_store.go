@@ -281,3 +281,53 @@ func (s *Store) GitHubWorkOrigins(ctx context.Context) ([]WorkOrigin, error) {
 	}
 	return out, rows.Err()
 }
+
+// TaskForIssue is the id of a task that already stands for issue number
+// of source in repo target, in any state -- open, held, running, done or
+// closed -- and "" when there is none. It is what keeps the GitHub issue
+// importer (orchestrator.reconcileIssueImports) from filing one issue
+// twice.
+//
+// A task stands for the issue when its WorkOrigin names it, which every
+// importer task does and every task a tree under one inherits, or -- when
+// source is target itself -- when it was filed against the issue by
+// number (Task.Issue), the way a GitHub mention files one. Task.Issue is
+// a number in the task's own target, so it says nothing about an issue on
+// another repository and is not consulted for one.
+func (s *Store) TaskForIssue(ctx context.Context, source RepoRef, number int, target RepoRef) (string, error) {
+	origin := GitHubOrigin(source, number)
+	query := "SELECT `id` FROM `task` WHERE LOWER(`origin_ref`) = LOWER(?)"
+	args := []any{string(origin)}
+	if source.Same(target) {
+		query += " OR (LOWER(`target_owner`) = LOWER(?) AND LOWER(`target_name`) = LOWER(?) AND `issue` = ?)"
+		args = append(args, target.StoredOwner(), target.Name, number)
+	}
+	var id string
+	err := s.db.QueryRowContext(ctx, query+" LIMIT 1", args...).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("looking for a task for %s: %w", origin, err)
+	}
+	return id, nil
+}
+
+// OriginOnlyUnapprovedImports reports whether every task in origin's tree
+// is a GitHub issue import nobody has approved yet (ReasonImported, no
+// approval) -- and there is at least one. Such an origin is owed no
+// progress comment: nothing has been agreed to work on it, and the
+// issue's own thread, often on a repository this deployment does not own,
+// is no place to announce a task that may never be approved.
+func (s *Store) OriginOnlyUnapprovedImports(ctx context.Context, origin WorkOrigin) (bool, error) {
+	var imports, others int
+	err := s.db.QueryRowContext(ctx,
+		"SELECT COALESCE(SUM(CASE WHEN `origin_reason` = ? AND `approved_at` IS NULL THEN 1 ELSE 0 END), 0), "+
+			"COALESCE(SUM(CASE WHEN `origin_reason` = ? AND `approved_at` IS NULL THEN 0 ELSE 1 END), 0) "+
+			"FROM `task` WHERE `origin_ref` = ?",
+		string(ReasonImported), string(ReasonImported), string(origin)).Scan(&imports, &others)
+	if err != nil {
+		return false, fmt.Errorf("reading the tasks under %s: %w", origin, err)
+	}
+	return imports > 0 && others == 0, nil
+}

@@ -52,7 +52,7 @@ func TestListTemplatesOffersGrainsOwnFileableTemplates(t *testing.T) {
 	if !gke.System || !gke.Interactive {
 		t.Errorf("system = %v, interactive = %v; want both", gke.System, gke.Interactive)
 	}
-	for _, want := range []string{"bootstrap-playbooks", "self-repair"} {
+	for _, want := range []string{"bootstrap-playbooks", model.GrainHostExecGrant} {
 		if !slices.Contains(gke.Capabilities, want) {
 			t.Errorf("capabilities %v lack %s", gke.Capabilities, want)
 		}
@@ -83,7 +83,7 @@ func TestFilingTheGKESandboxClusterTemplate(t *testing.T) {
 	if task.Repo != "" {
 		t.Errorf("repo = %q, want none", task.Repo)
 	}
-	for _, want := range []string{"bootstrap-playbooks", "self-repair"} {
+	for _, want := range []string{"bootstrap-playbooks", model.GrainHostExecGrant} {
 		if !slices.Contains(task.Capabilities, want) {
 			t.Errorf("capabilities %v lack %s", task.Capabilities, want)
 		}

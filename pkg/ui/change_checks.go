@@ -51,6 +51,12 @@ type ChangeChecksResponse struct {
 
 var errNoChangeChecks = errors.New("this task's change has no checks provider on this deployment")
 
+// noCLYetNote ends every "no CL yet" answer. A CL made mid-run (with
+// citc_cl_create) is linked only when the run ends, so an agent asking
+// before then would otherwise read "no CL yet" as that CL never counting.
+const noCLYetNote = "A CL this run created with citc_cl_create is not linked yet: " +
+	"it becomes this task's CL when the run ends, unless it holds no files or has been deleted by then."
+
 // ChangeChecks answers req for task id's primary change through the
 // registered change.Checks. A kind blocked on expired credentials answers
 // with the block rather than polling.
@@ -65,7 +71,7 @@ func (c *Client) ChangeChecks(ctx context.Context, id string, req ChangeChecksRe
 	checks, p, target, ok := change.ChecksFor(*task)
 	if target == "" && req.Op != ChangeChecksRefusal {
 		return ChangeChecksResponse{}, validationErrorf("this task has no CL yet, so it has no checks: " +
-			"call open_pull_request with a summary and body to create and upload it, then call this again")
+			"call open_pull_request with a summary and body to create and upload it, then call this again. " + noCLYetNote)
 	}
 	if !ok {
 		return ChangeChecksResponse{}, errNoChangeChecks

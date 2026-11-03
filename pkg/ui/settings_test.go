@@ -193,44 +193,6 @@ func TestUpdateSettingsRoundTripsEnvironmentName(t *testing.T) {
 	}
 }
 
-// The merge queue's gather window round-trips through a column of whole
-// milliseconds, so the values that cannot survive that are refused while
-// whoever typed them is still looking. The dangerous one is a negative
-// window too small to store: it is an operator turning the wait off, and
-// a stored zero means "never chosen", which would turn it back on at
-// grain's own five minutes (grain/task-360).
-func TestUpdateSettingsRejectsAGatherWindowTooSmallToStore(t *testing.T) {
-	t.Parallel()
-	c, _, ctx := testClient(t)
-	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
-		t.Fatal(err)
-	}
-	for _, bad := range []string{"-100us", "500us", "1ns"} {
-		window := bad
-		if _, err := c.UpdateSettings(ctx,
-			ui.UpdateSettingsRequest{MergeGatherWindow: &window}); err == nil {
-			t.Errorf("UpdateSettings accepted mergeGatherWindow %q, want a validation error "+
-				"rather than a silent 0", bad)
-		}
-	}
-	// The two values either side of it are fine, and mean opposite
-	// things: blank is grain's own window, and a negative one is off.
-	for _, good := range []string{"", "-1s", "90s"} {
-		window := good
-		if _, err := c.UpdateSettings(ctx,
-			ui.UpdateSettingsRequest{MergeGatherWindow: &window}); err != nil {
-			t.Fatalf("UpdateSettings refused mergeGatherWindow %q: %v", good, err)
-		}
-	}
-	read, err := c.GetSettings(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if read.MergeGatherWindow != "1m30s" {
-		t.Fatalf("mergeGatherWindow = %q after storing 90s", read.MergeGatherWindow)
-	}
-}
-
 // TestUpdateSettingsRejectsUnrenderableEnvironmentName pins the two
 // bounds on what is otherwise free text: it is rendered as a badge in
 // the sidebar and appended to the tab title, so a pasted paragraph or an
@@ -1503,17 +1465,52 @@ func TestUpdateSettingsRoundTripsKubernetesSettingsAndValidatesNodeSelector(t *t
 		{"k8sPriorityClassInteractive", func(v *string) ui.UpdateSettingsRequest {
 			return ui.UpdateSettingsRequest{K8sPriorityClassInteractive: v}
 		}},
+		{"k8sServiceAccount", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sServiceAccount: v} }},
+		{"k8sSandboxService", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sSandboxService: v} }},
+		{"k8sDeployment", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sDeployment: v} }},
+		{"k8sContainer", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sContainer: v} }},
 	} {
 		bad := "Bad_Name"
 		if _, err := c.UpdateSettings(ctx, tc.req(&bad)); err == nil || !strings.HasPrefix(err.Error(), tc.key+" ") {
 			t.Errorf("UpdateSettings(%s=%q) = %v, want a refusal naming %s", tc.key, bad, err, tc.key)
 		}
 		good := " walk-low.v1 "
-		if tc.key == "k8sNamespace" {
+		if tc.key == "k8sNamespace" || tc.key == "k8sSandboxService" || tc.key == "k8sContainer" {
 			good = " walk-ns "
 		}
 		if _, err := c.UpdateSettings(ctx, tc.req(&good)); err != nil {
 			t.Errorf("UpdateSettings(%s=%q): %v", tc.key, good, err)
+		}
+	}
+	// The git proxy host is an address: the 2026-10-30 walkthrough saved
+	// "not a host!".
+	for host, ok := range map[string]bool{"not a host!": false, "http://10.0.0.1": false, "10.96.0.10": true, "grain.grain.svc.cluster.local": true, "fd00::1": true} {
+		h := host
+		_, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{K8sGitProxyHost: &h})
+		if ok != (err == nil) {
+			t.Errorf("UpdateSettings(k8sGitProxyHost=%q) = %v, want accepted %v", host, err, ok)
+		}
+	}
+	// The pod images are image references and the workspace an absolute
+	// path: the 2026-11-01 walkthrough saved "not a ref!!" and
+	// "relative/dir".
+	for _, tc := range []struct {
+		key       string
+		req       func(*string) ui.UpdateSettingsRequest
+		bad, good string
+	}{
+		{"k8sSandboxImage", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sSandboxImage: v} }, "not a ref!!", "registry.walk.test/team/k8s-sandbox:v1"},
+		{"k8sGranuleImage", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sGranuleImage: v} }, "not a ref!!", "registry.walk.test/team/guest@sha256:" + strings.Repeat("a", 64)},
+		{"k8sWorkspace", func(v *string) ui.UpdateSettingsRequest { return ui.UpdateSettingsRequest{K8sWorkspace: v} }, "relative/dir", "/home/walk"},
+	} {
+		bad, good, blank := tc.bad, tc.good, ""
+		if _, err := c.UpdateSettings(ctx, tc.req(&bad)); err == nil || !strings.HasPrefix(err.Error(), tc.key+" ") {
+			t.Errorf("UpdateSettings(%s=%q) = %v, want a refusal naming %s", tc.key, bad, err, tc.key)
+		}
+		for _, v := range []*string{&good, &blank} {
+			if _, err := c.UpdateSettings(ctx, tc.req(v)); err != nil {
+				t.Errorf("UpdateSettings(%s=%q): %v", tc.key, *v, err)
+			}
 		}
 	}
 	none := ""
@@ -1834,5 +1831,80 @@ func TestCheckImageManifestHTTPServer(t *testing.T) {
 	err := ui.CheckImageManifest(ctx, host+"/bwsalmon/grain/k8s-sandbox:missing")
 	if !errors.Is(err, ui.ErrImageNotFound) {
 		t.Fatalf("CheckImageManifest(missing) = %v, want ErrImageNotFound", err)
+	}
+}
+
+// The 2026-11-01 walkthrough saved "not an email" as the GCP service
+// account email, which only failed when gcp-key next minted a key.
+func TestUpdateSettingsRefusesAGCPServiceAccountEmailThatIsNotOne(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		email string
+		ok    bool
+	}{
+		{"not an email", false},
+		{"no-at-sign", false},
+		{"@project.iam.gserviceaccount.com", false},
+		{"minter@", false},
+		{"a@b@c", false},
+		{" grain-minter@walk-1.iam.gserviceaccount.com ", true},
+		{"", true},
+	} {
+		e := tc.email
+		_, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{GCPServiceAccountEmail: &e})
+		if tc.ok != (err == nil) {
+			t.Errorf("UpdateSettings(gcpServiceAccountEmail=%q) = %v, want accepted %v", tc.email, err, tc.ok)
+		}
+		if err != nil && !strings.HasPrefix(err.Error(), "gcpServiceAccountEmail ") {
+			t.Errorf("refusal %q does not name gcpServiceAccountEmail", err)
+		}
+		if tc.ok && err == nil && tc.email != "" {
+			saved, err := c.GetSettings(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if saved.GCPServiceAccountEmail != strings.TrimSpace(tc.email) {
+				t.Errorf("GCPServiceAccountEmail = %q, want %q trimmed", saved.GCPServiceAccountEmail, tc.email)
+			}
+		}
+	}
+}
+
+// TestUpdateSettingsRefusesAGCPProjectThatIsNotAProjectID: the 2026-11-01
+// walkthrough saved "Bad Project!" from Legacy capabilities, which every
+// gcp-key and gemini-key attempt would then have failed on.
+func TestUpdateSettingsRefusesAGCPProjectThatIsNotAProjectID(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
+		t.Fatal(err)
+	}
+	for project, ok := range map[string]bool{
+		"Bad Project!":           false,
+		"UPPER-case-1":           false,
+		"short":                  false,
+		"1starts-with-digit":     false,
+		"ends-with-hyphen-":      false,
+		"my-project-123":         true,
+		" walkthrough-project ":  true,
+		"example.com:my-project": true,
+		"":                       true,
+	} {
+		p := project
+		got, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{GCPProject: &p})
+		if ok != (err == nil) {
+			t.Errorf("UpdateSettings(gcpProject=%q) = %v, want accepted %v", project, err, ok)
+			continue
+		}
+		if !ok && !strings.HasPrefix(err.Error(), "gcpProject ") {
+			t.Errorf("UpdateSettings(gcpProject=%q) = %v, want a refusal naming gcpProject", project, err)
+		}
+		if ok && got.GCPProject != strings.TrimSpace(project) {
+			t.Errorf("UpdateSettings(gcpProject=%q) stored %q", project, got.GCPProject)
+		}
 	}
 }

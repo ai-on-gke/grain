@@ -255,6 +255,8 @@ func TestAdmissionKeepsAnExhaustedGrantQueuedUntilRetryAfter(t *testing.T) {
 	}
 }
 
+// The policy's refusal is grain's own: said as grain's, with no
+// capability server's name on it and nothing framed as untrusted text.
 func TestAdmissionRefusesWhatTheCapabilityPolicyDoesNotAdmit(t *testing.T) {
 	caller := &mintCaller{}
 	deps, store, ctx, _ := passHarness(t, caller)
@@ -269,8 +271,15 @@ func TestAdmissionRefusesWhatTheCapabilityPolicyDoesNotAdmit(t *testing.T) {
 	if got := caller.called(); len(got) != 0 {
 		t.Errorf("calls = %q, want nothing minted", got)
 	}
-	if comments, _ := store.Comments(ctx, "7"); len(comments) != 1 || !strings.Contains(comments[0].Body, "capability policy") {
-		t.Errorf("comments = %+v, want the policy refusal", comments)
+	comments, _ := store.Comments(ctx, "7")
+	if len(comments) != 1 || !strings.Contains(comments[0].Body, "grain refused the capability `"+passTestCap+"#gcp-key`") || !strings.Contains(comments[0].Body, "capability policy does not admit") {
+		t.Fatalf("comments = %+v, want the policy refusal as grain's", comments)
+	}
+	if c := comments[0]; strings.Contains(c.Body, "untrusted text") || strings.Contains(c.Body, "not grain's own words") {
+		t.Errorf("comment body = %q, want grain's own refusal not quoted as untrusted", c.Body)
+	}
+	if c := comments[0]; c.Author.OnBehalfOf != nil || c.Author.Actor.ID != "grain" {
+		t.Errorf("comment author = %+v, want grain alone", c.Author)
 	}
 }
 
@@ -304,8 +313,8 @@ func TestAdmissionRefusesGrantsOnHostDirectorySandboxes(t *testing.T) {
 	if got := caller.called(); len(got) != 0 {
 		t.Errorf("calls = %q, want nothing minted", got)
 	}
-	if comments, _ := store.Comments(ctx, "7"); len(comments) != 1 || !strings.Contains(comments[0].Body, "grain's own host") {
-		t.Errorf("comments = %+v, want the host-sandbox refusal", comments)
+	if comments, _ := store.Comments(ctx, "7"); len(comments) != 1 || !strings.Contains(comments[0].Body, "grain's own host") || strings.Contains(comments[0].Body, "untrusted text") {
+		t.Errorf("comments = %+v, want the host-sandbox refusal as grain's own", comments)
 	}
 }
 
@@ -452,5 +461,62 @@ func TestAdmissionPassesTaskReviewersToWorkspaceGrant(t *testing.T) {
 	got, _ := caller.args[0]["reviewers"].([]string)
 	if len(got) != 2 || got[0] != "alice" || got[1] != "bob" {
 		t.Errorf("workspace mint reviewers = %#v, want [alice bob]", caller.args[0]["reviewers"])
+	}
+}
+
+// hostdServers routes task 7's capability servers to the hostd ws-a, as
+// the daemon routes a pinned task's run: host servers
+// (TaskCapabilityServers), and every other task's to the default.
+type hostdServers struct {
+	oneServer
+	pinned oneServer
+}
+
+func (h hostdServers) ForTask(_ context.Context, taskID string) (CapabilityServers, string, error) {
+	if taskID == "7" {
+		return h.pinned, "ws-a", nil
+	}
+	return h.oneServer, "local", nil
+}
+
+// A task whose run is routed to another hostd mints, and releases,
+// through that hostd's servers -- not the default's -- and its run's
+// capability audit records name that hostd rather than Deps'.
+func TestAPinnedTasksPassIsMintedOnItsHostdAndItsAuditSaysSo(t *testing.T) {
+	onDefault, onPinned := &mintCaller{}, &mintCaller{releaseReply: `{"status":"ok","audit":[` +
+		`{"time":"2026-10-22T12:05:00Z","attempt_id":"grain-7-1-0","script":"deploy","argv":[],"exit_code":0}]}`}
+	deps, store, ctx, now := passHarness(t, onDefault)
+	pinnedSrv, err := protocol.NewServer(ctx, passTestCap, onPinned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps.CapabilityServers = hostdServers{oneServer: deps.CapabilityServers.(oneServer), pinned: oneServer{pinnedSrv}}
+	deps.CapabilityHostd = "local"
+	if adm, err := capabilityAdmitter(deps, admitAll)(ctx, dispatch.Candidate{TaskID: "7", RunID: "7-1", Attempt: 1}); err != nil || !adm.Admitted {
+		t.Fatalf("admit = %+v, %v", adm, err)
+	}
+	if got := onPinned.called(); len(got) != 1 || got[0] != "mint_gcp-key grain-7-1-0" {
+		t.Fatalf("ws-a's server was called %q, want the mint", got)
+	}
+	if got := onDefault.called(); len(got) != 0 {
+		t.Fatalf("the default hostd's server was called %q, want nothing", got)
+	}
+	// The run's endpoints and ports are the servers that minted its pass.
+	if srv, err := deps.capabilityPasses().heldDeps("7-1", deps).CapabilityServers.Lookup(passTestCap); err != nil || srv != pinnedSrv {
+		t.Fatalf("the run's servers look up %v, %v; want ws-a's", srv, err)
+	}
+	if err := store.StartRun(ctx, model.Run{ID: "7-1", TaskID: "7", Attempt: 1, StartedAt: *now}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	releaseRunCapabilities(ctx, deps, "7", "7-1")
+	if got := onPinned.called(); len(got) != 2 || got[1] != "release_gcp-key grain-7-1-0" {
+		t.Fatalf("ws-a's server was called %q, want the release too", got)
+	}
+	recs, ok, err := store.RunCapabilityAudit(ctx, "7", 1)
+	if err != nil || !ok || len(recs) != 1 {
+		t.Fatalf("audit = %+v, %v, %v; want the record", recs, ok, err)
+	}
+	if recs[0].Hostd != "ws-a" {
+		t.Errorf("the audit record says hostd %q, want ws-a", recs[0].Hostd)
 	}
 }

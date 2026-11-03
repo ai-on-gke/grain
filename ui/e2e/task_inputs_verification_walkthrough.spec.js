@@ -452,11 +452,11 @@ test.describe("Task Intake, Detail Edit, and Filter Inputs Verification Walkthro
     // A task names no team, so there is no Team attribute to filter by.
     await expect(page.getByRole("menuitem", { name: "Team" })).toHaveCount(0);
     await expect(
-      page.getByRole("menuitem", { name: "Priority" }),
+      page.getByRole("menuitem", { name: "Priority", exact: true }),
     ).toBeVisible();
 
     // Pick "Priority" attribute
-    await page.getByRole("menuitem", { name: "Priority" }).click();
+    await page.getByRole("menuitem", { name: "Priority", exact: true }).click();
 
     // Select comparison value "high"
     const valuePicker = page.getByLabel(/^Value for filter \d+$/).last();

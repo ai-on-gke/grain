@@ -310,6 +310,7 @@ export default function CachesPage({ showError, standalone = false }) {
               <Button
                 size="small"
                 sx={{ mt: 0.5 }}
+                aria-label="Flush the whole Actions cache"
                 disabled={
                   flushingActions !== "" || !(actionsCache.entries || 0)
                 }

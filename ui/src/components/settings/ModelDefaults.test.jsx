@@ -160,6 +160,59 @@ describe("ModelDefaults", () => {
     expect(screen.getByText("claude-gone")).toBeInTheDocument();
   });
 
+  // A default only paused connections serve runs nothing until the pause
+  // ends, which the panel said nothing about while the connection was
+  // still enabled (grain/task-2089's walkthrough, `grain demo
+  // -agent-paused`).
+  it("warns of a default model only paused connections serve", () => {
+    const connections = [
+      {
+        id: "ag",
+        name: "gemini 2.5 pro",
+        framework: "antigravity",
+        models: ["gemini-2.5-pro"],
+      },
+    ];
+    const pause = {
+      paused: true,
+      pauses: [{ connection: "ag", framework: "antigravity", reason: "quota" }],
+    };
+    const { rerender } = render(
+      <ModelDefaults
+        deployment={{ defaultModel: "gemini-2.5-pro" }}
+        connections={connections}
+        pause={pause}
+        onSave={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText(
+        /Every enabled connection that serves model gemini-2.5-pro is paused/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/No enabled connection serves model/),
+    ).not.toBeInTheDocument();
+
+    rerender(
+      <ModelDefaults
+        deployment={{ defaultModel: "gemini-2.5-pro" }}
+        connections={[
+          ...connections,
+          {
+            id: "ag2",
+            name: "spare key",
+            framework: "antigravity",
+            models: ["gemini-2.5-pro"],
+          },
+        ]}
+        pause={pause}
+        onSave={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/is paused\./)).not.toBeInTheDocument();
+  });
+
   it("points at the connections above when none advertises a model", () => {
     render(<ModelDefaults deployment={{}} connections={[]} onSave={vi.fn()} />);
     expect(

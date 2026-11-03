@@ -81,3 +81,31 @@ func TestDialWaitsOutMultiSecondRestart(t *testing.T) {
 	conn.Close()
 	(<-ready).Close()
 }
+
+// A page asking after a dialing-in hostd that is not connected is told so
+// at once, with the error a run would get after waiting it out.
+func TestDialForDisplayAnswersAtOnceWithNoHostdConnected(t *testing.T) {
+	c := Client{Dial: (&Remote{Token: "x"}).Dial}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err := c.dial(ForDisplay(ctx))
+	if took := time.Since(start); took > 500*time.Millisecond {
+		t.Errorf("dial for display took %s, want it at once", took)
+	}
+	if err == nil || !strings.Contains(err.Error(), ErrRemoteNotConnected.Error()) || !strings.Contains(err.Error(), "grain hostd -server") {
+		t.Fatalf("err = %v", err)
+	}
+
+	// A run still waits for one to dial in, within its deadline.
+	rctx, rcancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer rcancel()
+	start = time.Now()
+	_, runErr := c.dial(rctx)
+	if took := time.Since(start); took < 250*time.Millisecond {
+		t.Errorf("dial for a run gave up after %s, want it to wait out its deadline", took)
+	}
+	if runErr == nil || runErr.Error() != err.Error() {
+		t.Errorf("run's error = %v, want the display's %v", runErr, err)
+	}
+}

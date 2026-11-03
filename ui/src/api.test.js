@@ -184,6 +184,22 @@ describe("api", () => {
     );
   });
 
+  it("carries a refused config change's code and validation report", async () => {
+    const body = {
+      error: "the config change does not pass validation",
+      code: "config_change_stale",
+      validation: { liveness: ["max_parallel is 0, which lets no run start"] },
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(422, body)));
+
+    const err = await api("/api/state-repo/pull-requests", {
+      method: "POST",
+    }).catch((e) => e);
+    expect(err.status).toBe(422);
+    expect(err.code).toBe("config_change_stale");
+    expect(err.validation).toEqual(body.validation);
+  });
+
   it("falls back to the status line when a non-2xx response carries no JSON error", async () => {
     vi.stubGlobal(
       "fetch",

@@ -87,16 +87,16 @@ package agent
 //   - claude 2.1.197 retries a persistent 529 ten times over 2m51s, so a
 //     run refused twice sits for around six minutes inside Framework.Run
 //     with nothing on its transcript
-//     (docs/hand-runs/2026-09-08-claude-resume.md §5).
+//     (the 2026-09-08 claude-resume hand run §5).
 //   - codex 0.153.0 retries a persistent 503 thirty times over 25
 //     seconds -- five requests per stream attempt, six stream attempts
 //     -- so a run refused twice spends about 2m45s, of which this
 //     policy's own 30 and 60 second waits are the larger half
-//     (docs/hand-runs/2026-09-08-codex-retry.md).
+//     (the 2026-09-08 codex-retry hand run).
 //   - agy 1.2.2 was still retrying a persistent 503 after ten requests
 //     and five minutes. Version 1.1.27 had made one request in 0.15s; the
 //     change is why agent/antigravity now cancels one model turn after
-//     100 seconds (docs/hand-runs/2026-09-08-agy-retry.md).
+//     100 seconds (the 2026-09-08 agy-retry hand run).
 //
 // Claude and codex leave their internal ladders alone; their own files
 // carry the decisions on CLAUDE_CODE_MAX_RETRIES and
@@ -124,7 +124,7 @@ package agent
 // already spent as well as the sandbox. None of the three rests on a
 // guess: each has a live probe that measures the flag or subcommand
 // against the real binary (agent/codex's is
-// docs/hand-runs/2026-09-07-codex-resume.md, written down as a test that
+// the 2026-09-07 codex-resume hand run, written down as a test that
 // needs the binary and no credential), and each keeps the cheap variant
 // as its fallback for a build that will not take it: see those packages'
 // resume.go and retry.go.
@@ -335,6 +335,16 @@ const SuspendedPreamble = "Before the task below: you have worked on this task b
 	"and it is what is true now. Read it rather than assuming it is the brief you already have: " +
 	"where it differs from what you remember, it wins. Then carry on with what is left rather " +
 	"than repeating work you have already pushed.\n\n"
+
+// SuspendedReusedSandboxPreamble is SuspendedPreamble's counterpart for a
+// session dispatch that reuses the warm sandbox left by the previous turn.
+const SuspendedReusedSandboxPreamble = "Before the task below: you have worked on this task before. The " +
+	"conversation above is your own -- grain suspended it when your previous run ended and has " +
+	"now resumed you in it rather than starting you from nothing.\n\n" +
+	"The sandbox is the same one. Your filesystem, installed packages, clones and uncommitted " +
+	"changes from your previous turn are still in place -- do not redo setup, re-clone or " +
+	"reinstall packages that are already there.\n\n" +
+	"The updates since your last turn are below. Read them and carry on from where you left off.\n\n"
 
 // SuspendedResumeRefusedNote is what a run says in its transcript when
 // the session a previous run left suspended turned out not to be

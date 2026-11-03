@@ -27,6 +27,7 @@ package deploy
 // posture from grain.yaml's own.
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -250,5 +251,48 @@ func TestTheKubernetesGranuleRolePinsDeploymentWritesToTheDeploymentAnUpgradeRep
 	}
 	if !pinned {
 		t.Errorf("no Role rule grants patch/update on deployment %q", deployment)
+	}
+}
+
+// TestTheKubernetesGranuleRoleNeverReadsSecrets: the daemon creates
+// and deletes the per-sandbox Secrets it hands a guest (pkg/k8s's
+// secret.go) and never reads or lists one, so its Role grants exactly
+// create and delete on secrets -- a get, list or watch there would let
+// a compromised daemon pod read every Secret in its namespace. The GKE
+// overlay's test held the base manifest to this before that overlay
+// was removed.
+func TestTheKubernetesGranuleRoleNeverReadsSecrets(t *testing.T) {
+	objects, nodes := manifestDocsForFile(t, "grain-granule.yaml")
+	var sawRole, sawSecretsRule bool
+	for i, obj := range objects {
+		if obj.Kind != "Role" {
+			continue
+		}
+		sawRole = true
+		var role struct {
+			Rules []struct {
+				Resources []string `yaml:"resources"`
+				Verbs     []string `yaml:"verbs"`
+			} `yaml:"rules"`
+		}
+		if err := nodes[i].Decode(&role); err != nil {
+			t.Fatalf("decoding Role/%s: %v", obj.Metadata.Name, err)
+		}
+		for _, rule := range role.Rules {
+			if !slices.Contains(rule.Resources, "secrets") && !slices.Contains(rule.Resources, "*") {
+				continue
+			}
+			sawSecretsRule = true
+			if want := []string{"create", "delete"}; !slices.Equal(rule.Verbs, want) {
+				t.Errorf("Role/%s grants %v on %v; want exactly %v (the daemon never reads or lists Secrets)",
+					obj.Metadata.Name, rule.Verbs, rule.Resources, want)
+			}
+		}
+	}
+	if !sawRole {
+		t.Fatal("grain-granule.yaml ships no Role")
+	}
+	if !sawSecretsRule {
+		t.Error("grain-granule.yaml's Role has no rule on secrets; the daemon needs create and delete there")
 	}
 }

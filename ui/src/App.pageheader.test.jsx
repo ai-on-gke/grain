@@ -42,12 +42,18 @@ const PAGES = [
   ["/ci", "ci", "ci"],
   ["/repos", "repositories", "repos"],
   ["/repos/acme/widgets", "repositories/acme/widgets", "repos"],
+  // A tab other than Overview is a crumb of its own (2026-11-01).
+  [
+    "/repos/acme/widgets/settings/merge-queue",
+    "repositories/acme/widgets/merge queue",
+    "repos",
+  ],
   [
     "/repos/acme/widgets/releases",
     "repositories/acme/widgets/releases",
     "repos",
   ],
-  ["/settings", "settings/general", "settings"],
+  ["/settings", "settings/models", "settings"],
   ["/system", "system/health", "system"],
   ["/system/logs", "system/logs", "system"],
 ];

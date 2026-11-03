@@ -137,6 +137,93 @@ func TestCatalogueValidateGrants(t *testing.T) {
 	}
 }
 
+// TestCatalogueRetiredInProcessBindsItsPreset is the upgraded store from
+// docs/test-runs/2026-11-01-capability-api-presets.md: a catalogue saved
+// before memory, release-notes and test-quarantine were retired keeps
+// their restrictions under in_process, and the migrations rewrite every
+// grant to the api: preset. The restriction must keep binding the preset
+// rather than being dropped because nothing is called "memory" any more.
+func TestCatalogueRetiredInProcessBindsItsPreset(t *testing.T) {
+	cat := &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
+		"memory": {Enabled: boolp(false)},
+		"release-notes": {Restrictions: &model.CapabilityRestrictions{
+			Repos: model.Patterns{"acme/*"}, RequiresPerson: true,
+		}},
+		"test-quarantine":   {Restrictions: &model.CapabilityRestrictions{Kinds: model.Patterns{"task"}}},
+		"deployment-health": {Restrictions: &model.CapabilityRestrictions{Kinds: model.Patterns{"director"}}},
+		"self-repair":       {Restrictions: &model.CapabilityRestrictions{Kinds: model.Patterns{"director"}}},
+	}}
+	cases := []struct {
+		name    string
+		gc      model.GrantContext
+		refused string
+		person  bool
+	}{
+		{name: "disabled memory refuses api:memory", gc: model.GrantContext{Kind: "task", Grants: []string{"api:memory"}},
+			refused: "in_process.memory"},
+		{name: "disabled memory refuses a repo-limited api:memory", gc: model.GrantContext{Kind: "task", Grants: []string{"api:memory@acme/widgets"}},
+			refused: "disabled"},
+		{name: "release-notes repo restriction binds the preset", gc: model.GrantContext{Repo: repo("other/x"), Kind: "task", Grants: []string{"api:release-notes"}},
+			refused: "not granted on other/x"},
+		{name: "release-notes requires a person on an admitted repo", gc: model.GrantContext{Repo: repo("acme/widgets"), Kind: "task", Grants: []string{"api:release-notes"}},
+			person: true},
+		{name: "test-quarantine kind restriction binds the preset", gc: model.GrantContext{Kind: "ci", Grants: []string{"api:test-quarantine"}},
+			refused: "not granted to"},
+		{name: "test-quarantine admitted for its kind", gc: model.GrantContext{Kind: "task", Grants: []string{"api:test-quarantine"}}},
+		{name: "a split retirement binds its api half", gc: model.GrantContext{Kind: "task", Grants: []string{"api:deployment:read"}},
+			refused: "in_process.deployment-health"},
+		{name: "self-repair kind restriction binds grain#host-exec", gc: model.GrantContext{Kind: "task", Grants: []string{model.GrainHostExecGrant}},
+			refused: "in_process.self-repair"},
+		{name: "self-repair kind restriction binds a bare grain#host-exec", gc: model.GrantContext{Kind: "task", Grants: []string{model.GrainHostExecRef}},
+			refused: "in_process.self-repair"},
+		{name: "self-repair kind restriction binds grain#host-exec spelled otherwise", gc: model.GrantContext{Kind: "task", Grants: []string{model.GrainHostExecRef + "={ }"}},
+			refused: "in_process.self-repair"},
+		{name: "grain#host-exec admitted for its kind", gc: model.GrantContext{Kind: "director", Grants: []string{model.GrainHostExecGrant}}},
+		{name: "an unrelated preset is not judged", gc: model.GrantContext{Kind: "task", Grants: []string{"api:team-broadcast"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := cat.ValidateGrants(tc.gc)
+			if tc.refused != "" {
+				var refusal *model.GrantRefusal
+				if !errors.As(err, &refusal) || !strings.Contains(err.Error(), tc.refused) {
+					t.Fatalf("ValidateGrants = %v, want a refusal saying %q", err, tc.refused)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ValidateGrants refused: %v", err)
+			}
+			if got := len(v.RequiresPerson) > 0; got != tc.person {
+				t.Fatalf("RequiresPerson = %v, want person %v", v.RequiresPerson, tc.person)
+			}
+		})
+	}
+}
+
+// TestCatalogueRetiredSplitBindsEveryHalf is finding 5 of
+// docs/test-runs/2026-11-02-grain-capability-server-upgrade.md: a
+// restriction kept under in_process.deployment-health binds both grants
+// the name became, including an api:deployment:read a task held on its
+// own. That refuses more than the build before the split did, and is
+// intended: a stored grant does not say whether it came from
+// deployment-health, so binding grain#health alone would let the api
+// half of an upgraded grant past the restriction.
+func TestCatalogueRetiredSplitBindsEveryHalf(t *testing.T) {
+	cat := &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
+		"deployment-health": {Restrictions: &model.CapabilityRestrictions{Repos: model.Patterns{"acme/other"}}},
+	}}
+	for _, g := range []string{"api:deployment:read", model.GrainHealthGrant} {
+		refused := cat.Refusals(model.GrantContext{Repo: repo("acme/widgets"), Kind: "task", Grants: []string{g}})
+		if len(refused) != 1 || !strings.Contains(refused[0].Reason, "in_process.deployment-health") {
+			t.Errorf("%s on acme/widgets: Refusals = %+v, want one naming in_process.deployment-health", g, refused)
+		}
+		if refused := cat.Refusals(model.GrantContext{Repo: repo("acme/other"), Kind: "task", Grants: []string{g}}); len(refused) != 0 {
+			t.Errorf("%s on acme/other: Refusals = %+v, want none", g, refused)
+		}
+	}
+}
+
 func TestNilCatalogueAdmitsEverything(t *testing.T) {
 	var cat *model.CapabilityCatalogue
 	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{"anything"}}); err != nil {
@@ -224,5 +311,278 @@ func TestCatalogueKindOf(t *testing.T) {
 	forged := model.Task{Interactive: true, Tags: []string{model.ConsoleSessionTag(model.DirectorSessionID)}}
 	if got := model.CatalogueKindOf(forged); got != model.CatalogueKindTask {
 		t.Fatalf("an interactive task tagged as the director is %q, want task", got)
+	}
+}
+
+func TestFoldRetiredInProcessMergesConservatively(t *testing.T) {
+	cat := &model.CapabilityCatalogue{
+		InProcess: map[string]model.CatalogueInProcess{
+			"memory": {Enabled: boolp(false)},
+			"release-notes": {Restrictions: &model.CapabilityRestrictions{
+				Repos:          model.Patterns{"acme/*"},
+				Kinds:          model.Patterns{"task", "session"},
+				RequiresPerson: true,
+			}},
+			"test-quarantine": {Restrictions: &model.CapabilityRestrictions{
+				Repos:     model.Patterns{"acme/widgets", "other/*"},
+				Kinds:     model.Patterns{"task", "review"},
+				Templates: model.Patterns{"quarantine-*"},
+			}},
+			"pipeline-control": {Restrictions: &model.CapabilityRestrictions{
+				CIOnly: true,
+			}},
+			"self-debug": {Restrictions: &model.CapabilityRestrictions{
+				Repos: model.Patterns{"ai-on-gke/grain"},
+			}},
+			"deployment-health": {Restrictions: &model.CapabilityRestrictions{
+				Kinds: model.Patterns{"director"},
+			}},
+		},
+		APIScopes: model.CatalogueAPIScopes{
+			Presets: map[string]model.CataloguePreset{
+				"test-quarantine": {
+					Enabled: boolp(true),
+					Restrictions: &model.CapabilityRestrictions{
+						Repos:     model.Patterns{"acme/*"},
+						Kinds:     model.Patterns{"task", "director"},
+						Templates: model.Patterns{"quarantine-fix"},
+					},
+				},
+				"pipeline-control": {
+					Restrictions: &model.CapabilityRestrictions{
+						Kinds: model.Patterns{"task"},
+					},
+				},
+			},
+		},
+	}
+
+	if !cat.FoldRetiredInProcess() {
+		t.Fatal("FoldRetiredInProcess = false, want true")
+	}
+	if cat.FoldRetiredInProcess() {
+		t.Fatal("second FoldRetiredInProcess = true, want idempotent false")
+	}
+	if err := cat.Validate(); err != nil {
+		t.Fatalf("Validate after fold: %v", err)
+	}
+
+	for _, retired := range []string{"memory", "release-notes", "test-quarantine", "pipeline-control"} {
+		if _, ok := cat.InProcess[retired]; ok {
+			t.Errorf("retired %q still in InProcess: %+v", retired, cat.InProcess)
+		}
+	}
+	if _, ok := cat.InProcess["self-debug"]; !ok {
+		t.Error("active self-debug was dropped from InProcess")
+	}
+	if _, ok := cat.InProcess["deployment-health"]; !ok {
+		t.Error("split deployment-health was dropped from InProcess")
+	}
+
+	mem := cat.APIScopes.Presets["memory"]
+	if mem.Enabled == nil || *mem.Enabled {
+		t.Fatalf("Presets[memory] = %+v, want disabled", mem)
+	}
+	for _, g := range []string{"api:memory", "api:grain/memory", "memory"} {
+		if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{g}}); err == nil || !strings.Contains(err.Error(), "disabled") {
+			t.Errorf("ValidateGrants(%s) = %v, want disabled refusal", g, err)
+		}
+	}
+
+	tq := cat.APIScopes.Presets["test-quarantine"]
+	if tq.Restrictions == nil {
+		t.Fatal("Presets[test-quarantine] has nil restrictions")
+	}
+	if got := []string(tq.Restrictions.Repos); len(got) != 1 || got[0] != "acme/widgets" {
+		t.Errorf("merged test-quarantine repos = %v, want [acme/widgets]", got)
+	}
+	if got := []string(tq.Restrictions.Kinds); len(got) != 1 || got[0] != "task" {
+		t.Errorf("merged test-quarantine kinds = %v, want [task]", got)
+	}
+	if got := []string(tq.Restrictions.Templates); len(got) != 1 || got[0] != "quarantine-fix" {
+		t.Errorf("merged test-quarantine templates = %v, want [quarantine-fix]", got)
+	}
+
+	// pipeline-control had CIOnly: true in inProcess and Kinds: [task] in
+	// presets -> disjoint kinds, so nobody may hold it and Validate passes.
+	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "ci", Grants: []string{"api:pipeline-control"}}); err == nil {
+		t.Error("merged pipeline-control admitted ci, want refused because preset allowed only task")
+	}
+	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{"api:pipeline-control"}}); err == nil {
+		t.Error("merged pipeline-control admitted task, want refused because in_process was ci_only")
+	}
+}
+
+func TestRetiredGrainServerCapabilitiesAndPresetAliases(t *testing.T) {
+	cat := &model.CapabilityCatalogue{
+		InProcess: map[string]model.CatalogueInProcess{
+			"grain-log":         {Restrictions: &model.CapabilityRestrictions{Repos: model.Patterns{"ai-on-gke/grain"}}},
+			"deployment-health": {Restrictions: &model.CapabilityRestrictions{Kinds: model.Patterns{"director"}}},
+			"db-read":           {Restrictions: &model.CapabilityRestrictions{RequiresPerson: true}},
+			"db-write":          {Enabled: boolp(false)},
+		},
+		APIScopes: model.CatalogueAPIScopes{
+			Presets: map[string]model.CataloguePreset{
+				model.ReleaseGateReadCapability: {Enabled: boolp(false)},
+				"self-debug": {Restrictions: &model.CapabilityRestrictions{
+					Repos:          model.Patterns{"ai-on-gke/grain"},
+					RequiresPerson: true,
+				}},
+			},
+		},
+	}
+
+	if _, err := cat.ValidateGrants(model.GrantContext{Repo: repo("other/repo"), Kind: "task", Grants: []string{model.GrainJournalGrant}}); err == nil || !strings.Contains(err.Error(), "in_process.grain-log") {
+		t.Errorf("GrainJournalGrant on other/repo = %v, want in_process.grain-log refusal", err)
+	}
+	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{model.GrainHealthGrant}}); err == nil || !strings.Contains(err.Error(), "in_process.deployment-health") {
+		t.Errorf("GrainHealthGrant for task = %v, want in_process.deployment-health refusal", err)
+	}
+	v, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{model.GrainSQLReadGrant}})
+	if err != nil || len(v.RequiresPerson) != 1 {
+		t.Errorf("GrainSQLReadGrant = (%+v, %v), want admitted with RequiresPerson from in_process.db-read", v, err)
+	}
+	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{model.GrainSQLWriteGrant}}); err == nil || !strings.Contains(err.Error(), "in_process.db-write") {
+		t.Errorf("GrainSQLWriteGrant = %v, want disabled refusal from in_process.db-write", err)
+	}
+	if _, err := cat.ValidateGrants(model.GrantContext{Kind: "ci", Grants: []string{model.ReleaseGateReadCapability}}); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Errorf("bare release-gate-read = %v, want disabled refusal from api_scopes.presets.release-gate-read", err)
+	}
+	if _, err := cat.ValidateGrants(model.GrantContext{Repo: repo("other/repo"), Kind: "task", Grants: []string{"self-debug"}}); err == nil || !strings.Contains(err.Error(), "other/repo") {
+		t.Errorf("bare self-debug on other/repo = %v, want repo refusal from api_scopes.presets.self-debug", err)
+	}
+	sdVerdict, err := cat.ValidateGrants(model.GrantContext{Repo: repo("ai-on-gke/grain"), Kind: "task", Grants: []string{"self-debug"}})
+	if err != nil || len(sdVerdict.RequiresPerson) != 1 || sdVerdict.RequiresPerson[0] != "self-debug" {
+		t.Errorf("bare self-debug on ai-on-gke/grain = (%+v, %v), want RequiresPerson [self-debug] from api_scopes.presets.self-debug", sdVerdict, err)
+	}
+	disabledSD := &model.CapabilityCatalogue{
+		APIScopes: model.CatalogueAPIScopes{
+			Presets: map[string]model.CataloguePreset{
+				"self-debug": {Enabled: boolp(false)},
+			},
+		},
+	}
+	if _, err := disabledSD.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{"self-debug"}}); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Errorf("bare self-debug with disabled api_scopes.presets.self-debug = %v, want disabled refusal", err)
+	}
+
+	merged := model.MergeCapabilityRestrictions(
+		&model.CapabilityRestrictions{Templates: model.Patterns{"ops*"}},
+		&model.CapabilityRestrictions{Templates: model.Patterns{"ops/nightly*"}},
+	)
+	if len(merged.Templates) != 0 {
+		t.Errorf("MergeCapabilityRestrictions(ops*, ops/nightly*).Templates = %v, want [] because path.Match '*' does not cross '/'", merged.Templates)
+	}
+
+	for _, tc := range []struct {
+		name string
+		a, b *model.CapabilityRestrictions
+	}{
+		{
+			name: "template bracket class vs literal bracket suffix",
+			a:    &model.CapabilityRestrictions{Templates: model.Patterns{"a*]"}},
+			b:    &model.CapabilityRestrictions{Templates: model.Patterns{"a[bc]"}},
+		},
+		{
+			name: "repo bracket class vs literal bracket suffix",
+			a:    &model.CapabilityRestrictions{Repos: model.Patterns{"acme/a*]"}},
+			b:    &model.CapabilityRestrictions{Repos: model.Patterns{"acme/a[bc]"}},
+		},
+		{
+			name: "template escaped star vs escaped literal",
+			a:    &model.CapabilityRestrictions{Templates: model.Patterns{`a\*`}},
+			b:    &model.CapabilityRestrictions{Templates: model.Patterns{`a\b`}},
+		},
+		{
+			name: "template escaped backslash glob vs escaped hyphen",
+			a:    &model.CapabilityRestrictions{Templates: model.Patterns{`tpl\\*`}},
+			b:    &model.CapabilityRestrictions{Templates: model.Patterns{`tpl\-1`}},
+		},
+	} {
+		got := model.MergeCapabilityRestrictions(tc.a, tc.b)
+		if len(got.Repos) != 0 || len(got.Templates) != 0 {
+			t.Errorf("%s: MergeCapabilityRestrictions = %+v, want empty intersection", tc.name, got)
+		}
+	}
+}
+
+func TestCatalogueRepoAccessBindingsAcrossBothSpellings(t *testing.T) {
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	deploy := model.RepoRef{Owner: "acme", Name: "deploy"}
+
+	// Pre-retirement in_process rules (both family "repo-write" and target-specific
+	// "repo-write:acme/deploy") continue to bind canonical repo#write {repo} grants.
+	legacyFamily := &model.CapabilityCatalogue{
+		InProcess: map[string]model.CatalogueInProcess{
+			"repo-write": {Enabled: boolp(false)},
+			"repo-read:acme/deploy": {Restrictions: &model.CapabilityRestrictions{
+				Repos: model.Patterns{"acme/widgets"},
+			}},
+		},
+	}
+	if _, err := legacyFamily.ValidateGrants(model.GrantContext{
+		Kind: model.CatalogueKindCI, Repo: &widgets,
+		Grants: []string{model.RepoWriteGrant(deploy)},
+	}); err == nil {
+		t.Fatal("in_process.repo-write enabled:false let repo#write {repo} through")
+	}
+	otherRepo := model.RepoRef{Owner: "other", Name: "app"}
+	if _, err := legacyFamily.ValidateGrants(model.GrantContext{
+		Kind: model.CatalogueKindCI, Repo: &otherRepo,
+		Grants: []string{model.RepoReadGrant(deploy)},
+	}); err == nil {
+		t.Fatal("in_process.repo-read:acme/deploy restriction let other/app through")
+	}
+	if _, err := legacyFamily.ValidateGrants(model.GrantContext{
+		Kind: model.CatalogueKindCI, Repo: &widgets,
+		Grants: []string{model.RepoReadGrant(deploy)},
+	}); err != nil {
+		t.Fatalf("allowed repo#read {repo} refused: %v", err)
+	}
+
+	// Post-retirement servers rules on https://grain.dev/capabilities/repo also
+	// bind bare repo-read:/repo-write: grants in .grain/workflows.
+	serverCat := &model.CapabilityCatalogue{
+		Servers: []model.CatalogueServer{{
+			ID: "https://grain.dev/capabilities/repo",
+			Methods: []model.CatalogueMethod{{
+				Name: "write",
+				Args: map[string]model.CatalogueArg{"repo": {Allowed: []string{"acme/widgets"}}},
+			}},
+		}},
+	}
+	if _, err := serverCat.ValidateGrants(model.GrantContext{
+		Kind: model.CatalogueKindCI, Repo: &widgets,
+		Grants: []string{"repo-write:acme/deploy"},
+	}); err == nil {
+		t.Fatal("servers repo#write args.repo.allowed let bare repo-write:acme/deploy through")
+	}
+	if _, err := serverCat.ValidateGrants(model.GrantContext{
+		Kind: model.CatalogueKindCI, Repo: &widgets,
+		Grants: []string{"repo-write:acme/widgets"},
+	}); err != nil {
+		t.Fatalf("allowed bare repo-write:acme/widgets refused: %v", err)
+	}
+	if _, err := serverCat.ValidateGrants(model.GrantContext{
+		Kind: model.CatalogueKindCI, Repo: &widgets,
+		Grants: []string{"repo-read:acme/widgets"},
+	}); err == nil {
+		t.Fatal("servers unlisted method read let bare repo-read:acme/widgets through")
+	}
+}
+
+// TestRawScopeRulesBindDespiteAPresetEntry: an api_scopes.presets entry
+// named like a raw scope does not lift the raw_scopes rule matching it.
+func TestRawScopeRulesBindDespiteAPresetEntry(t *testing.T) {
+	cat := &model.CapabilityCatalogue{APIScopes: model.CatalogueAPIScopes{
+		Presets: map[string]model.CataloguePreset{"tasks:write": {}},
+		RawScopes: map[string]model.CapabilityRestrictions{
+			"tasks:*": {CIOnly: true},
+		},
+	}}
+	_, err := cat.ValidateGrants(model.GrantContext{Kind: "task", Grants: []string{"api:tasks:write"}})
+	var refusal *model.GrantRefusal
+	if !errors.As(err, &refusal) || !strings.Contains(refusal.Reason, "CI-only") {
+		t.Fatalf("api:tasks:write with an empty presets entry = %v, want the raw scope's CI-only refusal", err)
 	}
 }

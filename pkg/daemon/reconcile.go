@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -145,25 +146,33 @@ func reconcile(ctx context.Context, deps orchestrator.Deps, live *LiveConfig) {
 // this deployment's own measurements -- so the bound never shows up as
 // latency a person notices, and does bound the loop for a store where a
 // tick has grown expensive.
-const minWakeInterval = time.Second
+const minWakeInterval = 50 * time.Millisecond
 
 // reconcileWith is reconcile with the wake channel as an argument, so a
 // test can drive it. See reconcile and cycleWakes.
 func ReconcileWith(ctx context.Context, deps orchestrator.Deps, live *LiveConfig, wakes <-chan struct{}, iapSyncs <-chan struct{}) {
+	var depsMu sync.Mutex
+	snapshotDeps := func() orchestrator.Deps {
+		depsMu.Lock()
+		defer depsMu.Unlock()
+		return deps
+	}
 	var lastTick time.Time
 	tick := func() {
 		lastTick = time.Now()
-		if err := orchestrator.RunCycle(ctx, deps, time.Now().UTC()); err != nil {
+		if err := orchestrator.RunCycle(ctx, snapshotDeps(), time.Now().UTC()); err != nil {
 			log.Printf("grain daemon: reconcile cycle: %v", err)
 		}
 	}
 	reap := func() {
-		reapCapabilities(ctx, deps.Store, deps.Config.Capabilities, deps.Config.Credentials, time.Now().UTC())
+		d := snapshotDeps()
+		reapCapabilities(ctx, d.Store, d.Config.Capabilities, d.Config.Credentials, time.Now().UTC())
 	}
 	syncIAP := func() {
 		// ReconcileIAP itself returns at once when no IAP target is
 		// configured, after clearing the status of any that was.
-		if err := ReconcileIAP(ctx, deps.Store, live.Current()); err != nil {
+		d := snapshotDeps()
+		if err := ReconcileIAP(ctx, d.Store, live.Current()); err != nil {
 			log.Printf("grain daemon: IAP IAM reconciliation: %v", err)
 		}
 	}
@@ -182,6 +191,68 @@ func ReconcileWith(ctx context.Context, deps orchestrator.Deps, live *LiveConfig
 	defer ticker.Stop()
 	reapTicker := time.NewTicker(reapInterval)
 	defer reapTicker.Stop()
+
+	loopWakes := wakes
+	var wakeWG sync.WaitGroup
+	defer wakeWG.Wait()
+	if deps.Runs != nil && wakes != nil {
+		forwarded := make(chan struct{}, 1)
+		loopWakes = forwarded
+		wakeWG.Add(1)
+		go func() {
+			defer wakeWG.Done()
+			var lastFastWake time.Time
+			fastTimer := time.NewTimer(time.Hour)
+			if !fastTimer.Stop() {
+				<-fastTimer.C
+			}
+			defer fastTimer.Stop()
+			fastPending := false
+			inFlightRetry := false
+			runFast := func(allowInFlightRetry bool) {
+				lastFastWake = time.Now()
+				d := snapshotDeps()
+				hadInFlight := d.Runs != nil && d.Runs.Len() > 0
+				if err := orchestrator.RunDispatchCycle(ctx, d, time.Now().UTC()); err != nil {
+					log.Printf("grain daemon: woken dispatch cycle: %v", err)
+				}
+				if allowInFlightRetry && hadInFlight && !fastPending {
+					fastPending = true
+					inFlightRetry = true
+					fastTimer.Reset(minWakeInterval)
+				}
+				select {
+				case forwarded <- struct{}{}:
+				default:
+				}
+			}
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-wakes:
+					if fastPending {
+						inFlightRetry = false
+						continue
+					}
+					wait := max(0, minWakeInterval-time.Since(lastFastWake))
+					if wait == 0 {
+						runFast(true)
+					} else {
+						fastPending = true
+						inFlightRetry = false
+						fastTimer.Reset(wait)
+					}
+				case <-fastTimer.C:
+					allowRetry := !inFlightRetry
+					fastPending = false
+					inFlightRetry = false
+					runFast(allowRetry)
+				}
+			}
+		}()
+	}
+
 	// woken fires when a wake that had to be spaced out comes due;
 	// wakePending says one is already scheduled, which is what makes a
 	// burst of wakes cost a single cycle. Stopped rather than running, so
@@ -196,7 +267,10 @@ func ReconcileWith(ctx context.Context, deps orchestrator.Deps, live *LiveConfig
 		// Before the cycle, so a settings change made since the last
 		// tick is in effect for the dispatches this one decides on
 		// rather than for the one after it.
-		if live.Refresh(ctx, &deps) {
+		depsMu.Lock()
+		changed := live.Refresh(ctx, &deps)
+		depsMu.Unlock()
+		if changed {
 			ticker.Reset(live.Current().PollInterval)
 		}
 		tick()
@@ -207,7 +281,7 @@ func ReconcileWith(ctx context.Context, deps orchestrator.Deps, live *LiveConfig
 			return
 		case <-ticker.C:
 			cycle()
-		case <-wakes:
+		case <-loopWakes:
 			if wakePending {
 				// A cycle is already coming for an earlier wake, and it
 				// will read the store as it stands when it runs -- which
@@ -215,7 +289,14 @@ func ReconcileWith(ctx context.Context, deps orchestrator.Deps, live *LiveConfig
 				continue
 			}
 			wakePending = true
-			woken.Reset(max(0, minWakeInterval-time.Since(lastTick)))
+			wait := max(0, minWakeInterval-time.Since(lastTick))
+			if deps.Runs != nil {
+				// RunDispatchCycle has already dispatched ready work;
+				// give newly spawned runs a brief head start on the
+				// store before running the full background cycle.
+				wait = max(wait, 500*time.Millisecond)
+			}
+			woken.Reset(wait)
 		case <-woken.C:
 			wakePending = false
 			// The periodic tick is pushed out a whole interval by a woken

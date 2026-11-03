@@ -62,12 +62,24 @@ type TaskDBExecResponse struct {
 	LastInsertID int64 `json:"lastInsertID,omitempty"`
 }
 
-func taskHasGrant(task *model.Task, capability string) bool {
+func taskHasDBRead(task *model.Task) bool {
 	if task == nil {
 		return false
 	}
 	for _, g := range task.Grants {
-		if g.Capability == capability {
+		if model.IsGrainSQLGrant(g.Capability) {
+			return true
+		}
+	}
+	return false
+}
+
+func taskHasDBWrite(task *model.Task) bool {
+	if task == nil {
+		return false
+	}
+	for _, g := range task.Grants {
+		if model.IsGrainSQLWriteGrant(g.Capability) {
 			return true
 		}
 	}
@@ -114,8 +126,8 @@ func (s *Server) handleTaskDBQuery(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeTaskDB(w, r, task) {
 		return
 	}
-	if !taskHasGrant(task, dbaccess.CapabilityDBRead) && !taskHasGrant(task, dbaccess.CapabilityDBWrite) {
-		writeError(w, http.StatusForbidden, fmt.Errorf("task %q does not hold capability db-read or db-write", taskID))
+	if !taskHasDBRead(task) {
+		writeError(w, http.StatusForbidden, fmt.Errorf("task %q does not hold capability %s (db-read or db-write)", taskID, model.GrainSQLRef))
 		return
 	}
 	if s.tasks.Config.SourceDB == nil {
@@ -133,8 +145,8 @@ func (s *Server) handleTaskDBQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If the task does NOT hold db-write, enforce read-only validation
-	if !taskHasGrant(task, dbaccess.CapabilityDBWrite) {
+	// If the task does NOT hold write access, enforce read-only validation
+	if !taskHasDBWrite(task) {
 		if err := dbaccess.ValidateReadOnlyQuery(req.Query); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("read-only validation failed: %w", err))
 			return
@@ -154,10 +166,10 @@ func (s *Server) handleTaskDBQuery(w http.ResponseWriter, r *http.Request) {
 		return readErr
 	}
 
-	// A db-write grant may write through this endpoint as well; a
-	// db-read one is held to reading by the database itself, since the
+	// A write grant may write through this endpoint as well; a
+	// read-only one is held to reading by the database itself, since the
 	// validator above is only text inspection.
-	if taskHasGrant(task, dbaccess.CapabilityDBWrite) {
+	if taskHasDBWrite(task) {
 		err = queryWithWrite(r.Context(), s.tasks.Config.SourceDB, req.Query, req.Params, read)
 	} else {
 		err = dbaccess.QueryReadOnly(r.Context(), s.tasks.Config.SourceDB, req.Query, req.Params, read)
@@ -242,8 +254,8 @@ func (s *Server) handleTaskDBExec(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeTaskDB(w, r, task) {
 		return
 	}
-	if !taskHasGrant(task, dbaccess.CapabilityDBWrite) {
-		writeError(w, http.StatusForbidden, fmt.Errorf("task %q does not hold capability db-write", taskID))
+	if !taskHasDBWrite(task) {
+		writeError(w, http.StatusForbidden, fmt.Errorf("task %q does not hold capability %s (db-write)", taskID, model.GrainSQLWriteGrant))
 		return
 	}
 	if s.tasks.Config.SourceDB == nil {

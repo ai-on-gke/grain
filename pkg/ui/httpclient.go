@@ -40,7 +40,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/modelexec"
 )
 
 // HTTPClient is Client's method surface (bwsalmon/agents#363) spoken over
@@ -287,7 +286,7 @@ func runGcloud(ctx context.Context, args ...string) (string, error) {
 // RetryPolicy is how long HTTPClient keeps trying a daemon that is not
 // answering, and how often, before it gives up and says so.
 //
-// It exists for the restart gap (docs/non-disruptive-upgrade.md, Stage
+// It exists for the restart gap (design/design/non-disruptive-upgrade.design.md, Stage
 // 1): while an upgrade restarts the daemon, its API refuses connections
 // -- or the reverse proxy in front of it answers 502/503 -- for as long
 // as the new build takes to come up, and every `grain mcpserver` call an
@@ -738,11 +737,16 @@ func (c *HTTPClient) AddCommentWithAuthor(ctx context.Context, id, body string, 
 // than saying so.
 func (c *HTTPClient) Close(ctx context.Context, id string, opts CloseOptions) error {
 	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/close",
-		closeRequest{ClosePullRequest: opts.ClosePullRequest}, nil)
+		closeRequest{ClosePullRequest: opts.ClosePullRequest, Reason: opts.Reason}, nil)
 }
 
 func (c *HTTPClient) Reopen(ctx context.Context, id string) error {
-	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/reopen", nil, nil)
+	return c.ReopenBecause(ctx, id, "")
+}
+
+// ReopenBecause is Client.ReopenBecause over the wire.
+func (c *HTTPClient) ReopenBecause(ctx context.Context, id, reason string) error {
+	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/reopen", reopenRequest{Reason: reason}, nil)
 }
 
 func (c *HTTPClient) Retry(ctx context.Context, id string) error {
@@ -773,8 +777,8 @@ func (c *HTTPClient) RunNow(ctx context.Context, id string) error {
 }
 
 // RunNowAs is RunNow asked for by the agent by names, which the approval
-// and the note on the task are attributed to (dispatch-control's
-// run_task_now). The zero Principal is RunNow.
+// and the note on the task are attributed to. The zero Principal is
+// RunNow.
 func (c *HTTPClient) RunNowAs(ctx context.Context, id string, by model.Principal) error {
 	return c.do(ctx, http.MethodPost, "/api/tasks/"+url.PathEscape(id)+"/run-now",
 		runNowRequest{RequestedBy: by.ID, RequestedByKind: string(by.Kind)}, nil)
@@ -853,6 +857,16 @@ func (c *HTTPClient) StageAttachment(ctx context.Context, id, path string, uploa
 	return staged, nil
 }
 
+// ProposeConfigChange is Client.ProposeConfigChange over the wire: the
+// mcpserver's propose_config_change, for its own task.
+func (c *HTTPClient) ProposeConfigChange(ctx context.Context, id string, proposal ConfigChangeProposal) (*model.PendingConfigChange, error) {
+	var pending model.PendingConfigChange
+	if err := c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/config-change", proposal, &pending); err != nil {
+		return nil, err
+	}
+	return &pending, nil
+}
+
 // CreditWait is Client.CreditWait over the wire: credit id's live run for
 // the time it has now spent blocked on CI, and read back where its
 // deadline stands as a result.
@@ -896,8 +910,17 @@ func (c *HTTPClient) PostTaskMessage(ctx context.Context, id, body, summary stri
 // themselves rather than a "yes/no": the answer to a question is the
 // words in it.
 func (c *HTTPClient) TaskMessages(ctx context.Context, id string, after int64) ([]Message, error) {
+	return c.TaskMessagesWait(ctx, id, after, 0)
+}
+
+// TaskMessagesWait is TaskMessages with an optional server-side long-poll wait
+// so a chat turn wakes immediately when a human posts a reply.
+func (c *HTTPClient) TaskMessagesWait(ctx context.Context, id string, after int64, wait time.Duration) ([]Message, error) {
 	var messages []Message
 	path := "/api/tasks/" + id + "/messages?after=" + strconv.FormatInt(after, 10)
+	if ms := wait.Milliseconds(); ms > 0 {
+		path += "&wait_ms=" + strconv.FormatInt(ms, 10)
+	}
 	if err := c.do(ctx, http.MethodGet, path, nil, &messages); err != nil {
 		return nil, err
 	}
@@ -1613,7 +1636,7 @@ func (c *HTTPClient) PausePipeline(ctx context.Context, reason string) (
 }
 
 // PausePipelineAs is PausePipeline taken by the agent by names, which the
-// pause row records as who paused (dispatch-control's pause_pipeline).
+// pause row records as who paused.
 // The zero Principal is PausePipeline.
 func (c *HTTPClient) PausePipelineAs(ctx context.Context, reason string, by model.Principal) (
 	status PipelinePauseStatus, paused bool, err error) {
@@ -1638,20 +1661,24 @@ func (c *HTTPClient) ResumePipeline(ctx context.Context) (
 }
 
 // DecideRelease is Client.DecideRelease over the wire -- `grain release
-// approve|reject vX.Y.0`: a person approving or rejecting a pending trunk
-// release.
-func (c *HTTPClient) DecideRelease(ctx context.Context, repo, version string, approve bool) (ReleaseDecision, error) {
-	owner, name, ok := strings.Cut(repo, "/")
-	if !ok {
-		return ReleaseDecision{}, fmt.Errorf("repo %q is not owner/name", repo)
+// approve|reject [-short-soak-ok] vX.Y.Z`: a person approving or
+// rejecting a pending trunk release.
+func (c *HTTPClient) DecideRelease(ctx context.Context, repo, version string, approve, shortSoakOK bool) (ReleaseDecision, error) {
+	ref, err := model.ParseRepo(repo)
+	if err != nil {
+		return ReleaseDecision{}, err
 	}
 	verb := "reject"
 	if approve {
 		verb = "approve"
 	}
+	var body any
+	if shortSoakOK {
+		body = ReleaseApproval{ShortSoakOK: true}
+	}
 	var resp ReleaseDecision
-	err := c.do(ctx, http.MethodPost, "/api/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(name)+
-		"/pending-releases/"+url.PathEscape(version)+"/"+verb, nil, &resp)
+	err = c.do(ctx, http.MethodPost, "/api/repos/"+url.PathEscape(ref.StoredOwner())+"/"+url.PathEscape(ref.Name)+
+		"/pending-releases/"+url.PathEscape(version)+"/"+verb, body, &resp)
 	return resp, err
 }
 
@@ -1796,6 +1823,12 @@ func ciRunsPath(f ci.RunFilter, limit int, view string) string {
 	if job := strings.TrimSpace(f.Job); job != "" {
 		query.Set("job", job)
 	}
+	if workflow := strings.TrimSpace(f.Workflow); workflow != "" {
+		query.Set("workflow", workflow)
+	}
+	if provider := strings.TrimSpace(f.Provider); provider != "" {
+		query.Set("provider", provider)
+	}
 	for _, state := range f.States {
 		query.Add("conclusion", state)
 	}
@@ -1841,6 +1874,20 @@ func (c *HTTPClient) CIRun(ctx context.Context, id string) (ci.Run, error) {
 		return ci.Run{}, err
 	}
 	return run, nil
+}
+
+// CIRunLog is one GitHub Actions job's log -- GET /api/ci/runs/{id}/log,
+// job by name or id ("" for the first that failed).
+func (c *HTTPClient) CIRunLog(ctx context.Context, id, job string) (CIRunLogResponse, error) {
+	path := "/api/ci/runs/" + url.PathEscape(id) + "/log"
+	if job = strings.TrimSpace(job); job != "" {
+		path += "?job=" + url.QueryEscape(job)
+	}
+	var resp CIRunLogResponse
+	if err := c.do(ctx, http.MethodGet, path, nil, &resp); err != nil {
+		return CIRunLogResponse{}, err
+	}
+	return resp, nil
 }
 
 // CIRunArtifacts is what one run left behind -- GET
@@ -2021,15 +2068,6 @@ func (c *HTTPClient) SetGCPKey(ctx context.Context, req SetGCPKeyRequest) (model
 // DeleteGCPKey is DELETE /api/gcp-keys/{name}.
 func (c *HTTPClient) DeleteGCPKey(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodDelete, "/api/gcp-keys/"+url.PathEscape(name), nil, nil)
-}
-
-// ListExecutors returns the connected remote executors snapshot from GET /api/executors.
-func (c *HTTPClient) ListExecutors(ctx context.Context) ([]modelexec.Status, error) {
-	var out []modelexec.Status
-	if err := c.do(ctx, http.MethodGet, "/api/executors", nil, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 // RequestLocalScriptApproval is the run's mcpserver asking for a person

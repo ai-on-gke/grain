@@ -15,9 +15,11 @@
 package orchestrator_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"testing"
@@ -315,4 +317,41 @@ func (s *gatingAcquireSandboxes) Acquire(ctx context.Context, name string, shape
 		}
 	}
 	return s.Sandboxes.Acquire(ctx, name, shape)
+}
+
+// A task the model-availability check holds is logged with that gate and
+// its reason, not a bare "admission refused" -- session 2174 waited 16
+// minutes behind usage-limit pauses with nothing in the log saying so.
+// Not parallel: it redirects the standard logger.
+func TestAModelWaitIsLoggedWithItsGateAndReason(t *testing.T) {
+	store, ctx := openStore(t)
+	_, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	task := filedTask(t, ctx, store, "t1", repo)
+
+	var buf bytes.Buffer
+	prev, flags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	t.Cleanup(func() {
+		log.SetOutput(prev)
+		log.SetFlags(flags)
+	})
+
+	reason := "all connections serving claude-x are busy (2 cooling off after a usage limit)"
+	deps := orchestrator.Deps{
+		Store: store, Client: client,
+		Sandboxes:  &recordingSandboxes{HostSandboxes: orchestrator.NewHostSandboxes(t.TempDir())},
+		Framework:  completesWithAComment(),
+		MaxWorkers: 1,
+		ModelAvailability: func(context.Context, orchestrator.AgentChoice) string {
+			return reason
+		},
+	}
+	if err := orchestrator.RunCycle(ctx, deps, baseTime); err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	want := fmt.Sprintf("dispatch: candidate %s skipped: admission refused by model availability -- %s", task.ID, reason)
+	if !strings.Contains(buf.String(), want) {
+		t.Fatalf("log lacks %q:\n%s", want, buf.String())
+	}
 }

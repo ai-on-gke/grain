@@ -151,6 +151,22 @@ func (c Client) oneShot(ctx context.Context, req Request, want byte, out any) er
 // request in that window should wait it out rather than fail.
 var dialRetry = 30 * time.Second
 
+type forDisplayKey struct{}
+
+// ForDisplay marks ctx as asking hostd for an answer a page shows --
+// Settings, System -> Health, a capability server's test -- rather than
+// for a run. With it, dial does not wait out a dialing-in hostd that is
+// not connected (ErrRemoteNotConnected): the page says so at once, with
+// the same error, where a run resolved during a reconnect waits for it.
+func ForDisplay(ctx context.Context) context.Context {
+	return context.WithValue(ctx, forDisplayKey{}, true)
+}
+
+func forDisplay(ctx context.Context) bool {
+	v, _ := ctx.Value(forDisplayKey{}).(bool)
+	return v
+}
+
 func (c Client) dial(ctx context.Context) (net.Conn, error) {
 	var d net.Dialer
 	give := time.Now().Add(dialRetry)
@@ -168,7 +184,7 @@ func (c Client) dial(ctx context.Context) (net.Conn, error) {
 		}
 		down := errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, ErrRemoteNotConnected)
 		now := time.Now()
-		if !down || !now.Before(give) || ctx.Err() != nil {
+		if !down || !now.Before(give) || ctx.Err() != nil || (forDisplay(ctx) && errors.Is(err, ErrRemoteNotConnected)) {
 			return nil, c.unreachable(err, down)
 		}
 		sleep := wait

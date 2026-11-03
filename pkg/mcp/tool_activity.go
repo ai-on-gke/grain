@@ -138,15 +138,16 @@ var toolActivityNotes = map[string]string{
 	"wait_for_task":     "waiting on another task",
 
 	// The escape hatches: written now, relayed when the run ends.
-	"ask_question":       "writing a question for a human",
-	"request_secret":     "asking for a credential",
-	"comment_on_issue":   "writing its closing note",
-	"nothing_needed":     "closing the task as needing no work",
-	"write_handover":     "writing a handover for the next run",
-	"notify_operator":    "notifying the operator",
-	"message_task":       "leaving a note for another task",
-	"propose_task":       "filing a follow-up task",
-	"add_review_comment": "writing review comments",
+	"ask_question":          "writing a question for a human",
+	"request_secret":        "asking for a credential",
+	"propose_config_change": "proposing a config change",
+	"comment_on_issue":      "writing its closing note",
+	"nothing_needed":        "closing the task as needing no work",
+	"write_handover":        "writing a handover for the next run",
+	"notify_operator":       "notifying the operator",
+	"message_task":          "leaving a note for another task",
+	"propose_task":          "filing a follow-up task",
+	"add_review_comment":    "writing review comments",
 
 	// grain's memory.
 	"update_memory":         "writing down what it learned",
@@ -162,7 +163,6 @@ var toolActivityNotes = map[string]string{
 	"read_grain_task":            "reading a grain task",
 	"read_grain_task_prompt":     "reading a grain task's prompt",
 	"read_grain_task_transcript": "reading a grain task's transcript",
-	"broadcast_team_message":     "broadcasting a message to the team",
 	"read_grain_metrics":         "reading grain's own measurements",
 	"read_pipeline_changes":      "reading grain's pipeline changes",
 	"query_merge_queue":          "checking the merge queue",
@@ -180,11 +180,6 @@ var toolActivityNotes = map[string]string{
 	// The db-read and db-write grants (pkg/capability/dbaccess).
 	"query_grain_db":   "querying grain database",
 	"execute_grain_db": "executing statement in grain database",
-
-	// The self-upgrade grant: this deployment's own upgrade.
-	"deployment_upgrade_status": "reading this deployment's upgrade status",
-	"upgrade_deployment":        "upgrading this deployment",
-	"cancel_deployment_upgrade": "calling off this deployment's upgrade",
 }
 
 // capabilityActivityNotes is toolActivityNotes for the tools of the
@@ -238,7 +233,7 @@ func capabilityToolNote(server, tool string) (CapabilityToolNote, bool) {
 // declaredWaitTools are the tools that block on something outside the
 // run -- CI, another task, a person -- for as long as that takes. A
 // durable run inside one is not idle however quiet it is
-// (orchestrator's idle watchdog, docs/design/durable-tasks.md#DT-1).
+// (orchestrator's idle watchdog, design/design/durable-tasks.design.md#DT-1).
 var declaredWaitTools = []string{"wait_for_checks", "run_ci_job", "wait_for_task", "chat", "run_host_command"}
 
 // IsDeclaredWait reports whether note, a run's activity phrase as

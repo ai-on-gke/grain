@@ -39,7 +39,7 @@ package mcp
 // mechanism.
 //
 // Both parks are forms of resume_later (resume_later_tool.go,
-// docs/design/durable-tasks.md#DT-9): one TaskWaiter.ResumeLater call,
+// design/design/durable-tasks.design.md#DT-9): one TaskWaiter.ResumeLater call,
 // and a run recorded as a requested suspension when it ends.
 //
 // The sandbox does not survive a park, which is why parking with work not

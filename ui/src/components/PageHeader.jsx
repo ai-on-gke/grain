@@ -22,10 +22,19 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { Box, IconButton, Tooltip, Typography } from "@mui/material";
+import {
+  Box,
+  ButtonBase,
+  IconButton,
+  Menu,
+  MenuItem,
+  Tooltip,
+  Typography,
+} from "@mui/material";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import ItemGlyph from "./ItemGlyph.jsx";
 import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
+import { verifiedUserEmail } from "./settings/AccessSection.jsx";
 
 // crumbSx is the one type style of the page title: every crumb and the
 // slash between them share a family, size, line height, letter-spacing
@@ -98,7 +107,7 @@ export function PageHeaderActions({ children }) {
 // are drawn after everything else the page put there and pushed to the
 // right-hand end of the slot, just before the global buttons, whatever
 // order the page's header and toolbar portalled them in
-// (docs/design/settings-panel.md §4.1). Out of the rail it is a plain
+// (design/design/settings-panel.design.md §4.1). Out of the rail it is a plain
 // inline row of them.
 export function PageHeaderPageActions({ children }) {
   return (
@@ -129,7 +138,7 @@ export function PageHeaderProvider({ slot, children }) {
 }
 
 // GlobalButtons is the far-right cluster every page's rail ends in
-// (docs/design/settings-panel.md §4.1): the alerts bell, System with the
+// (design/design/settings-panel.design.md §4.1): the alerts bell, System with the
 // unbacked-config-repo dot, and the Settings gear -- the only way into
 // Settings. Each reads as selected while its view is showing. The test
 // ids are the ones the old top bar's buttons had, so a test that clicks
@@ -140,7 +149,11 @@ export function GlobalButtons({
   config = null,
   onOpenSystem,
   onOpenSettings,
+  onOpenAccess,
+  onLogout,
 }) {
+  const [userAnchor, setUserAnchor] = useState(null);
+  const email = verifiedUserEmail(config);
   const selectedSx = (on) => ({
     color: on ? "primary.main" : "text.secondary",
     bgcolor: on ? "action.selected" : "transparent",
@@ -182,6 +195,79 @@ export function GlobalButtons({
             <ItemGlyph kind="settings" size={18} />
           </IconButton>
         </Tooltip>
+      )}
+      {email && (
+        <>
+          <Tooltip title={`Signed in as ${email}`}>
+            <ButtonBase
+              data-testid="top-bar-user"
+              aria-label={`Signed in as ${email}`}
+              aria-haspopup={onLogout || onOpenAccess ? "menu" : undefined}
+              aria-expanded={Boolean(userAnchor) || undefined}
+              onClick={(e) => {
+                if (onLogout || onOpenAccess) {
+                  setUserAnchor(e.currentTarget);
+                } else {
+                  onOpenSettings?.();
+                }
+              }}
+              sx={{
+                px: 1,
+                height: 28,
+                borderRadius: 1,
+                maxWidth: 200,
+                fontSize: "0.75rem",
+                fontWeight: 500,
+                color: "text.secondary",
+                border: 1,
+                borderColor: "divider",
+                "&:hover": {
+                  bgcolor: "action.hover",
+                  color: "text.primary",
+                },
+              }}
+            >
+              <Typography
+                component="span"
+                variant="caption"
+                noWrap
+                sx={{ fontSize: "0.75rem", fontWeight: 500, lineHeight: 1 }}
+              >
+                {email}
+              </Typography>
+            </ButtonBase>
+          </Tooltip>
+          <Menu
+            anchorEl={userAnchor}
+            open={Boolean(userAnchor)}
+            onClose={() => setUserAnchor(null)}
+            anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+            transformOrigin={{ vertical: "top", horizontal: "right" }}
+          >
+            {(onOpenAccess || onOpenSettings) && (
+              <MenuItem
+                dense
+                onClick={() => {
+                  setUserAnchor(null);
+                  (onOpenAccess || onOpenSettings)();
+                }}
+              >
+                Access settings
+              </MenuItem>
+            )}
+            {onLogout && (
+              <MenuItem
+                dense
+                onClick={() => {
+                  setUserAnchor(null);
+                  onLogout();
+                }}
+              >
+                Log out
+              </MenuItem>
+            )}
+          </Menu>
+        </>
       )}
     </Box>
   );
@@ -245,7 +331,43 @@ export default function PageHeader({
       setOverflowing((was) => (was === clipped ? was : clipped));
     };
     measure();
-    if (typeof ResizeObserver === "undefined") return undefined;
+    // The slot clips with overflow, which a browser still scrolls to
+    // show what is focused in it: Tab onto an action wrapped behind
+    // "more" scrolled the rail to that row and left it there, the
+    // search box and count gone from it until a reload. A keyboard stop
+    // on a wrapped row opens the menu instead, with focus left where it
+    // landed, and the slot is back on its first line when it closes. A
+    // pointer cannot reach a clipped row, so only a Tab counts.
+    let tabbed = false;
+    const onKeyDown = (event) => {
+      tabbed = event.key === "Tab";
+    };
+    const onPointerDown = () => {
+      tabbed = false;
+    };
+    const onFocusIn = (event) => {
+      if (node.classList.contains("page-header-slot-expanded")) return;
+      if (!tabbed) return;
+      const top =
+        event.target.getBoundingClientRect().top -
+        node.getBoundingClientRect().top +
+        node.scrollTop;
+      if (top >= node.clientHeight) {
+        node.scrollTop = 0;
+        setExpanded(true);
+      }
+    };
+    node.addEventListener("focusin", onFocusIn);
+    document.addEventListener("keydown", onKeyDown, true);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    const stopFocus = () => {
+      node.removeEventListener("focusin", onFocusIn);
+      document.removeEventListener("keydown", onKeyDown, true);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+    };
+    if (typeof ResizeObserver === "undefined") {
+      return stopFocus;
+    }
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     const watchChildren = new MutationObserver(() => {
@@ -255,6 +377,7 @@ export default function PageHeader({
     watchChildren.observe(node, { childList: true, subtree: true });
     for (const child of node.children) observer.observe(child);
     return () => {
+      stopFocus();
       observer.disconnect();
       watchChildren.disconnect();
     };
@@ -273,6 +396,7 @@ export default function PageHeader({
   const moreRef = useRef(null);
   useEffect(() => {
     const header = headerRef.current;
+    if (!expanded && slotRef.current) slotRef.current.scrollTop = 0;
     if (!expanded || !header) return undefined;
     const onPointerDown = (event) => {
       const target = event.target;
@@ -288,11 +412,22 @@ export default function PageHeader({
       setExpanded(false);
       moreRef.current?.focus();
     };
+    // Tab on past the rail closes it too, rather than leaving the menu
+    // over the page the keyboard has moved on to.
+    const onFocusOut = (event) => {
+      const next = event.relatedTarget;
+      if (!(next instanceof Element) || header.contains(next)) return;
+      if (next.closest(".MuiPopover-root, .MuiModal-root, .MuiPopper-root"))
+        return;
+      setExpanded(false);
+    };
     document.addEventListener("pointerdown", onPointerDown);
     header.addEventListener("keydown", onKeyDown);
+    header.addEventListener("focusout", onFocusOut);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown);
       header.removeEventListener("keydown", onKeyDown);
+      header.removeEventListener("focusout", onFocusOut);
     };
   }, [expanded]);
 

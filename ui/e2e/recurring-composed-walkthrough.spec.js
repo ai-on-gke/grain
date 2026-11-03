@@ -30,7 +30,7 @@ test.describe("Recurring and Composed Work Automation UI Walkthrough", () => {
     await page.getByRole("button", { name: /^Processes/ }).click();
     await expect(page).toHaveURL(/\/processes$/);
     // Templates are one kind on the Processes page: narrowed to them, the
-    // page is what /templates was (docs/design/settings-panel.md §5.4).
+    // page is what /templates was (design/design/settings-panel.design.md §5.4).
     await page
       .getByTestId("process-kind-filter")
       .getByRole("button", { name: /^Templates / })
@@ -1708,7 +1708,7 @@ test.describe("Recurring and Composed Work Automation UI Walkthrough", () => {
         .locator("..");
       await expect(caps).toContainText("self-debug");
       await expect(caps).toContainText("from the schedule");
-      await expect(caps).toContainText("grain-ci");
+      await expect(caps).toContainText("grain › ci");
       await expect(caps).toContainText("from the repo");
 
       const schedVal = await caps
@@ -1718,7 +1718,7 @@ test.describe("Recurring and Composed Work Automation UI Walkthrough", () => {
         .getByText("from the schedule", { exact: true })
         .boundingBox();
       const repoVal = await caps
-        .getByText("grain-ci", { exact: true })
+        .getByText("grain › ci", { exact: true })
         .boundingBox();
       const repoChip = await caps
         .getByText("from the repo", { exact: true })

@@ -26,7 +26,7 @@ import (
 )
 
 // grain's own escalations, raised as operator notifications
-// (docs/design/durable-tasks.md, DT-5's "Existing escalations, mapped").
+// (design/design/durable-tasks.design.md, DT-5's "Existing escalations, mapped").
 //
 // Each is raised where the escalation already happens and cleared by the
 // same code when its condition goes away, so a notification is never the
@@ -55,11 +55,10 @@ const (
 	repairFailingFor  = 12 * time.Hour
 )
 
-// raisePipelineNotification raises n as of now, and delivers a new or
-// risen one the way the API's raise does: into the director's chat, and
-// to the durable tasks subscribed to its family. A failed delivery is
-// logged -- the notification is raised either way, and
-// reconcileNotifications tries the director again.
+// raisePipelineNotification raises n as of now, and delivers a new one
+// the way the API's raise does: to the durable tasks subscribed to its
+// family. A failed delivery is logged -- the notification is raised
+// either way.
 func raisePipelineNotification(ctx context.Context, store *model.Store, n model.Notification,
 	now time.Time) (model.NotificationRaise, error) {
 
@@ -70,9 +69,6 @@ func raisePipelineNotification(ctx context.Context, store *model.Store, n model.
 	}
 	if raised.New || raised.Rose {
 		log.Printf("orchestrator: raised notification %s (%s): %s", n.Subject, raised.Notification.Severity, n.Title)
-		if _, err := store.DeliverNotificationToDirector(ctx, raised.Notification, now); err != nil {
-			log.Printf("orchestrator: delivering notification %d to the director: %v", raised.Notification.ID, err)
-		}
 	}
 	if raised.New {
 		if _, err := store.WakeNotificationSubscribers(ctx, raised.Notification, now); err != nil {
@@ -122,7 +118,7 @@ func clearPipelineNotification(ctx context.Context, store *model.Store, subject,
 // does not pass through there.
 func raiseBaseRed(ctx context.Context, deps Deps, row model.BaseBranchCI, reason string, now time.Time) error {
 	key := model.BranchKey(row.Repo, row.Branch)
-	body := fmt.Sprintf("grain CI on `%s` %s is confirmed red: %s.", row.Branch, row.Repo, reason)
+	body := fmt.Sprintf("grain CI on %s `%s` is confirmed red: %s.", row.Repo, row.Branch, reason)
 	n := model.Notification{
 		Subject:  model.NotificationSubject(model.FamilyBaseRed, key),
 		Severity: model.NotificationWarning,
@@ -252,10 +248,9 @@ func reconcilePublishingNotifications(ctx context.Context, deps Deps, now time.T
 }
 
 // reconcileMergeStalledClears clears each open pipeline.merge-stalled
-// whose task the merge queue is driving again: its block lifted by Retry
-// merge, a new push, or the pull request landing. grain no longer raises
-// it (the automatic stall escalation is gone); this clears ones an older
-// grain raised.
+// whose task the merge queue is driving normally again: its block or external
+// check stall cleared by Retry merge, the check reporting, a fresh push, or
+// the pull request landing or closing.
 func reconcileMergeStalledClears(ctx context.Context, store *model.Store) error {
 	open, err := store.ListNotifications(ctx, model.NotificationFilter{
 		Open: true, Family: model.FamilyMergeStalled, Limit: 1000,
@@ -274,7 +269,9 @@ func reconcileMergeStalledClears(ctx context.Context, store *model.Store) error 
 			errs = append(errs, err)
 			continue
 		}
-		if obs != nil && obs.MergeQueueBlockedAt != nil {
+		if obs != nil && (obs.MergeQueueBlockedAt != nil ||
+			(obs.PrMergedAt == nil && obs.PrClosedAt == nil &&
+				obs.MergeQueueState == mergeStateWaitingCI && obs.MergeQueueStallRetryAt != nil)) {
 			continue
 		}
 		if _, err := store.ClearNotification(ctx, n.Subject, mergeQueueNotifier); err != nil {

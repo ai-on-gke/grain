@@ -24,7 +24,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// Model failover (docs/design/durable-tasks.md#DT-2): a run suspended
+// Model failover (design/design/durable-tasks.design.md#DT-2): a run suspended
 // because its model refused it -- no capacity, a usage limit, a
 // model-side failure -- records that model on its suspension
 // (task_suspension.model_hint), and the task's next run is offered the
@@ -41,6 +41,28 @@ func (d Deps) dispatchChoiceFor(ctx context.Context, task model.Task) AgentChoic
 	choice := d.choiceFor(task)
 	if d.Store == nil {
 		return choice
+	}
+	if choice.Framework == "" && choice.BackendID == "" && choice.Model == "" {
+		if obs, err := d.Store.GetObservation(ctx, task.ID); err == nil && obs != nil && obs.SuspendedSession != nil && obs.SuspendedSession.Token != "" {
+			choice.PreferFramework = obs.SuspendedSession.Framework
+		}
+		if task.Interactive || choice.PreferFramework != "" {
+			if runs, err := d.Store.Runs(ctx, task.ID); err == nil {
+				for i := len(runs) - 1; i >= 0; i-- {
+					r := runs[i]
+					if r.AgentFramework == "" && r.Model == "" {
+						continue
+					}
+					if choice.PreferFramework == "" && r.AgentFramework != "" {
+						choice.PreferFramework = r.AgentFramework
+					}
+					if choice.PreferModel == "" && r.Model != "" && (choice.PreferFramework == "" || r.AgentFramework == choice.PreferFramework) {
+						choice.PreferModel = r.Model
+					}
+					break
+				}
+			}
+		}
 	}
 	avoid, err := d.Store.FailedOverModels(ctx, task.ID)
 	if err != nil {

@@ -37,6 +37,7 @@ type fakeStateRepo struct {
 	status      ui.StateRepoStatus
 	importedKey string
 	synced      bool
+	syncErr     error
 	keyError    error
 	// remotes is every SetRemote, in order.
 	remotes   []ui.StateRepoRemoteRequest
@@ -107,6 +108,9 @@ func (f *fakeStateRepo) DismissResetNotices(context.Context) (ui.StateRepoStatus
 
 func (f *fakeStateRepo) Sync(context.Context) (ui.StateRepoStatus, error) {
 	f.synced = true
+	if f.syncErr != nil {
+		return ui.StateRepoStatus{}, f.syncErr
+	}
 	return f.status, nil
 }
 
@@ -157,6 +161,29 @@ func TestStateRepoStatusReportsWhereStateLives(t *testing.T) {
 	// a secret ever comes back through here.
 	if got.SecretsPublicKey == "" || got.SecretsKeyFile == "" {
 		t.Fatalf("the pane cannot tell an operator which key to back up: %+v", got)
+	}
+}
+
+// Before the export loop's first cycle the manager reports a zero
+// SyncedAt. That has to leave syncedAt out of the answer rather than send
+// 0001-01-01, which the file browser printed as "exported 1/1/1, 12:00:00
+// AM" (docs/test-runs/2026-11-03-user-system-settings.md).
+func TestStateRepoStatusOmitsASyncThatHasNotHappened(t *testing.T) {
+	t.Parallel()
+	fake := &fakeStateRepo{status: ui.StateRepoStatus{Branch: "main", Head: "abc123"}}
+	rec := do(t, stateRepoServer(t, fake), http.MethodGet, "/api/state-repo", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "syncedAt") {
+		t.Fatalf("a cycle that has not run was reported: %s", rec.Body)
+	}
+
+	at := time.Date(2026, 11, 3, 3, 0, 0, 0, time.UTC)
+	fake.status.SyncedAt = at
+	rec = do(t, stateRepoServer(t, fake), http.MethodGet, "/api/state-repo", "")
+	if got := decode[ui.StateRepoStatus](t, rec); !got.SyncedAt.Equal(at) {
+		t.Fatalf("syncedAt = %v, want %v: %s", got.SyncedAt, at, rec.Body)
 	}
 }
 
@@ -356,17 +383,26 @@ func TestExternalConfigRepoRefusesSettingsMutationsAndExposesMode(t *testing.T) 
 		t.Fatalf("POST /api/state-repo/remote status %d: %s", rec.Code, rec.Body)
 	}
 
-	// Once back in internal mode, POST /api/settings writes a bootstrap
-	// field directly, and refuses any other with the edit to make in
-	// grain/config instead.
+	// Once back in internal mode (settingsLocked == false by default),
+	// POST /api/settings writes both bootstrap and non-bootstrap fields
+	// directly; when settingsLocked is enabled, it refuses non-bootstrap
+	// fields with the edit to make in grain/config instead.
 	rec = do(t, srv, http.MethodPost, "/api/settings", `{"maxWorkers":3}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("POST /api/settings (bootstrap) in internal mode status %d: %s", rec.Code, rec.Body)
 	}
+	rec = do(t, srv, http.MethodPost, "/api/settings", `{"environmentName":"staging"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/settings (non-bootstrap, unlocked) in internal mode status %d: %s", rec.Code, rec.Body)
+	}
+	rec = do(t, srv, http.MethodPost, "/api/settings", `{"settingsLocked":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/settings (lock) in internal mode status %d: %s", rec.Code, rec.Body)
+	}
 	rec = do(t, srv, http.MethodPost, "/api/settings", `{"environmentName":"prod"}`)
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"repo":"grain/config"`) ||
 		!strings.Contains(rec.Body.String(), `+    \"environment_name\": \"prod\"`) {
-		t.Fatalf("POST /api/settings (non-bootstrap) in internal mode status %d: %s", rec.Code, rec.Body)
+		t.Fatalf("POST /api/settings (non-bootstrap, locked) in internal mode status %d: %s", rec.Code, rec.Body)
 	}
 }
 
@@ -540,6 +576,23 @@ func TestSyncNowGoesThroughTheManager(t *testing.T) {
 	}
 	if !fake.synced {
 		t.Fatal("the sync did not reach the manager")
+	}
+}
+
+// A Pull now that failed says why: the same reason GET /api/state-repo
+// shows as status.error once the cycle has recorded it. It used to answer
+// "an upstream service returned an error (ref ...)", leaving the person
+// who pressed the button to wait for the next background tick to learn
+// the remote had gone (2026-10-30 settings walkthrough).
+func TestAFailedSyncNowSaysWhy(t *testing.T) {
+	t.Parallel()
+	fake := &fakeStateRepo{syncErr: errors.New("the state repository's remote could not be reached: fetching main: exit status 128")}
+	rec := do(t, stateRepoServer(t, fake), http.MethodPost, "/api/state-repo/sync", "")
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "remote could not be reached: fetching main") {
+		t.Fatalf("the failure does not say why the sync failed: %s", rec.Body)
 	}
 }
 

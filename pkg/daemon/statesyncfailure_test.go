@@ -18,6 +18,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
 // A sync that keeps failing is reported, outside the journal, once it has
@@ -56,5 +58,27 @@ func TestStateSyncFailureIsReportedUntilASyncSucceeds(t *testing.T) {
 	m.noteOutcome(nil)
 	if got := m.syncFailure(); got != nil {
 		t.Fatalf("a sync that succeeded is still reported failing: %+v", got)
+	}
+}
+
+// A failing sync of an external config repository says so: grain only
+// reads from one, so the alert has to speak of configuration not
+// arriving rather than of settings not being exported -- which is what
+// it said on 2026-10-30, with the UI's settings read-only all along.
+func TestStateSyncFailureSaysWhenTheRepositoryIsExternal(t *testing.T) {
+	internal := &StateManager{dataDir: t.TempDir()}
+	internal.noteOutcome(errors.New("export failed"))
+	if f := internal.failure.Load(); f == nil || f.External {
+		t.Fatalf("an internal grain/config's failure = %+v, want one not marked external", f)
+	}
+
+	dataDir := t.TempDir()
+	if err := staterepo.SaveSettings(dataDir, staterepo.Settings{Remote: "https://github.com/acme/grain-config.git", Branch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	external := &StateManager{dataDir: dataDir}
+	external.noteOutcome(errors.New("the state repository's remote could not be reached"))
+	if f := external.failure.Load(); f == nil || !f.External {
+		t.Fatalf("an external config repository's failure = %+v, want it marked external", f)
 	}
 }

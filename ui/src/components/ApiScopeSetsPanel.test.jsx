@@ -193,4 +193,60 @@ describe("ApiScopeSetsPanel", () => {
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(/could not count/)).toBeTruthy();
   });
+
+  it("shows disabled and restricted catalogue entries including retired in_process keys", async () => {
+    api.mockResolvedValue({
+      sets: [
+        {
+          name: "grain/memory",
+          description: "Read and write memory",
+          scopes: ["memory:read", "memory:write"],
+          resolved: ["memory:read", "memory:write"],
+          builtin: true,
+          person: false,
+          source: "builtin",
+          catalogue: {
+            preset: "memory",
+            disabled: true,
+            legacyInProcess: ["memory"],
+          },
+        },
+        {
+          name: "grain/release-notes",
+          description: "Publish release notes",
+          scopes: ["release-notes:write"],
+          resolved: ["release-notes:write"],
+          builtin: true,
+          person: true,
+          source: "builtin",
+          catalogue: {
+            preset: "release-notes",
+            restrictions: {
+              repos: ["acme/*"],
+              requiresPerson: true,
+            },
+          },
+        },
+      ],
+      path: "tables/api_scope_set.json",
+    });
+    render(<ApiScopeSetsPanel showError={() => {}} />);
+    const memory = await screen.findByTestId("api-scope-set-grain/memory");
+    expect(within(memory).getByText("disabled")).toBeTruthy();
+    expect(within(memory).getByText("in_process.memory")).toBeTruthy();
+    expect(
+      within(memory).getByTestId("api-scope-set-catalogue-grain/memory"),
+    ).toHaveTextContent(
+      "settings/capabilities.yml · retired in_process.memory (move to api_scopes.presets.memory): disabled",
+    );
+
+    const rn = screen.getByTestId("api-scope-set-grain/release-notes");
+    expect(within(rn).getByText("requires a person")).toBeTruthy();
+    expect(within(rn).getByText("restricted")).toBeTruthy();
+    expect(
+      within(rn).getByTestId("api-scope-set-catalogue-grain/release-notes"),
+    ).toHaveTextContent(
+      "settings/capabilities.yml · api_scopes.presets.release-notes: repos acme/* · requires a person",
+    );
+  });
 });

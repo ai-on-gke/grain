@@ -192,7 +192,7 @@ var taskStates = []model.State{
 // the order taskOrigin tests them in: a merge fix is always generated
 // from another task, so calling it "proposed" would say the less
 // specific of two true things.
-var taskOrigins = []string{"hand", "proposed", "schedule", "suite", "fix", "review"}
+var taskOrigins = []string{"hand", "external", "proposed", "schedule", "suite", "fix", "review"}
 
 func taskOrigin(t ui.Task) string {
 	switch {
@@ -208,6 +208,10 @@ func taskOrigin(t ui.Task) string {
 		return "suite"
 	case t.GeneratedFrom != "":
 		return "proposed"
+	// An external agent's credential files as the deployment's person
+	// (Creator) but is the author (model.ExternalAgentPrincipalPrefix).
+	case strings.HasPrefix(t.Author, model.ExternalAgentPrincipalPrefix):
+		return "external"
 	}
 	return "hand"
 }
@@ -462,6 +466,17 @@ var builtinAttributes = attributeSet{
 		typ:    typeText,
 		values: one(func(t ui.Task) string { return t.ID }),
 		key:    func(t ui.Task) sortKey { return idKey(t.ID) },
+	},
+	{
+		id:  "priority",
+		typ: typeNumber,
+		values: func(t ui.Task) []string {
+			p := t.Priority
+			if p <= 0 {
+				p = model.DefaultTaskPriority
+			}
+			return []string{strconv.Itoa(p)}
+		},
 	},
 }
 

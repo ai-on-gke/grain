@@ -340,9 +340,29 @@ describe("a grain hostd that dials in", () => {
     render(<CLIRunLocations showError={vi.fn()} />);
     const status = await screen.findByTestId("cli-run-hostd-status");
     expect(status).toHaveTextContent(
-      "This daemon takes a grain hostd that dials in to it, but none is connected. On the host, run",
+      "This daemon takes a grain hostd that dials in to it, but none is connected. A CLI set to host fails its runs until one does.",
     );
-    expect(status).toHaveTextContent("grain hostd -server");
+    expect(status).toHaveTextContent(
+      "this daemon logs a hostd it refuses for its token.",
+    );
+    // An installed grain-hostd.service takes the flags in a drop-in, not
+    // a second hostd beside it sharing its state directory.
+    expect(status).toHaveTextContent(
+      "rather than starting a second hostd beside it (the two would share one state directory). Run sudo systemctl edit grain-hostd.service",
+    );
+    // The browser's origin may be a proxy hostd cannot reach, so the URL
+    // stays a placeholder.
+    expect(screen.getByTestId("cli-run-hostd-dropin").textContent).toBe(
+      "[Service]\nExecStart=\nExecStart=<the unit's ExecStart> -server <this daemon's URL> -token-file <the hostd token>",
+    );
+    expect(status).toHaveTextContent(
+      "Then run sudo systemctl restart grain-hostd.service.",
+    );
+    // A hand-run hostd works without the installer's /run/grain-hostd
+    // and /etc/grain/hostd.yaml.
+    expect(screen.getByTestId("cli-run-hostd-command").textContent).toBe(
+      "grain hostd -server <this daemon's URL> -token-file <the hostd token> -socket= -allowlist <file>",
+    );
   });
 });
 

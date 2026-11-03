@@ -2381,7 +2381,7 @@ as *superseded* (`Store.Supersede`) hands its open dependents over to
 its replacement first, so they go on waiting rather than being released
 alongside the task that took over the work. The replacement's own wait
 on the old task, and a dependent the replacement already waits on, stay
-where they are (implementation-notes, "A task is superseded when its
+where they are ("A task is superseded when its
 replacement is filed"). `FIXES` is `OpenPullRequest.fix_issue` read from the other
 direction. `PROPOSED_BY` is the English sentence `_file_proposed_tasks`
 writes today, made queryable — it never blocks anything, it just answers
@@ -3063,10 +3063,14 @@ runs, `UNKNOWN`, or one this cycle could not read — closes the queue
 behind it as before, because it answers on its own within a cycle or two
 and merging past it would put a later change in front of an earlier one
 for no better reason than being quicker to test. Only an entry whose next
-move is a whole agent run, or a person, is worth reordering around. And it
-is still at most one merge per repo per cycle: everything behind the entry
-that merges had its checks read against a base that merge has just moved,
-so it is judged again next cycle against what is actually there. This is
+move is a whole agent run, or a person, is worth reordering around. And a
+lane takes at most `max_merges_per_repo` merges a cycle — 5 by default,
+1 before schema 95 (a deployment that stored 1 keeps it). Several merges in
+one cycle are each judged on their own: an entry in a lane that has
+already had a merge this cycle has its pull request read again just before
+its own merge, so GitHub's answer about it is about the base that merge
+moved. While GitHub is still recomputing that answer it reads `UNKNOWN`,
+and that entry waits for the next cycle. This is
 also why "who merges" is walked down the queue as `SyncPullRequests` acts
 (`orchestrator.actOrder`) rather than computed up front the way
 `queueHeads` is — it turns on health nobody has read yet.

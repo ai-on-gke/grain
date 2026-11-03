@@ -1,0 +1,466 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { signInContext } from "./accesscode.js";
+import { expect, test } from "./fixtures.js";
+import { startDaemon } from "./realdaemon.js";
+
+// design/design/config-repo-settings.design.md §2.1, §2.3, §7.4: when the API
+// sends a settings write to the config repo (GET /api/config's
+// configRepoOnly), Settings keeps Models and Sandboxes editable and draws
+// the departing sections -- and a repository's page -- read-only under a
+// notice linking each file into the Config Repo Browser. `grain demo` has
+// no config repo, so the flag is set on its /api/config answer here, and
+// on GET /api/settings, which carries the same configRepoOnly for the
+// row it answers with (the Settings page draws on that once loaded).
+const DESKTOP = { width: 1440, height: 900 };
+const PHONE = { width: 390, height: 844 };
+
+async function configRepoOnly(page) {
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response = await route.fetch();
+    const body = await response.json();
+    await route.fulfill({ response, json: { ...body, configRepoOnly: true } });
+  });
+  await page.route("**/api/config", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    await route.fulfill({
+      response,
+      json: { ...body, configRepoOnly: true },
+    });
+  });
+}
+
+// inside says box b lies within box a, horizontally.
+function inside(a, b) {
+  return b.x >= a.x - 0.5 && b.x + b.width <= a.x + a.width + 0.5;
+}
+
+for (const [name, viewport] of [
+  ["desktop", DESKTOP],
+  ["phone", PHONE],
+]) {
+  test(`a config-repo-only section is read-only with its links inside the notice on a ${name} screen`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await configRepoOnly(page);
+    await page.goto("/settings/agents");
+
+    const notice = page.getByTestId("config-managed-notice");
+    await expect(notice).toBeVisible();
+    // Console sessions are grain_config.console_sessions, so the one
+    // file is tables/grain_config.json.
+    const links = notice.getByTestId("config-repo-link");
+    await expect(links).toHaveCount(1);
+    await expect(links.first()).toHaveAttribute(
+      "href",
+      "/config?path=tables%2Fgrain_config.json",
+    );
+    await expect(
+      page.getByLabel("Standing instructions for every run"),
+    ).toBeDisabled();
+
+    // The notice sits in the section's column, above its first card, and
+    // each link wraps inside it rather than running off a phone.
+    const noticeBox = await notice.boundingBox();
+    const content = await page.getByTestId("settings-section").boundingBox();
+    expect(inside(content, noticeBox)).toBe(true);
+    for (const link of await links.all()) {
+      expect(inside(noticeBox, await link.boundingBox())).toBe(true);
+    }
+    const firstCard = await page.locator("[data-settings-card]").first();
+    expect((await firstCard.boundingBox()).y).toBeGreaterThan(
+      noticeBox.y + noticeBox.height - 1,
+    );
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+
+    // Models stays editable, with no notice.
+    await page.goto("/settings/models");
+    await expect(
+      page.getByRole("heading", { name: "Models", level: 1 }),
+    ).toBeVisible();
+    await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
+  });
+
+  // A bootstrap field stays writable under the lock and can be left
+  // pending a restart, so Health links it to its own field (#k8sNamespace)
+  // inside Sandboxes → Kubernetes, a card taller than either screen. Both
+  // Health's field link and the card's own anchor (#kubernetes, used by
+  // the Settings filter and card deep links, aligned to its top rather
+  // than centred past its heading) land with the card's heading on screen
+  // and the named field focused and in the viewport.
+  test(`Health's field link and a tall card's anchor both land on its heading and named field on a ${name} screen`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await configRepoOnly(page);
+    await page.route("**/api/settings", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const body = await response.json();
+      await route.fulfill({
+        response,
+        json: {
+          ...body,
+          configRepoOnly: true,
+          pendingRestart: ["k8sNamespace"],
+        },
+      });
+    });
+    await page.goto("/system/health");
+
+    const link = page
+      .getByTestId("health-pending-restart")
+      .getByRole("link", { name: "Kubernetes namespace" });
+    await expect(link).toHaveAttribute(
+      "href",
+      "/settings/sandboxes#k8sNamespace",
+    );
+    await link.click();
+    await expect(page).toHaveURL(/\/settings\/sandboxes#k8sNamespace$/);
+    await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
+
+    const card = page.locator("#kubernetes");
+    const field = card.getByLabel("Kubernetes namespace");
+    const assertHeadingAndField = async () => {
+      await expect(field).toBeFocused();
+      await expect(field).toBeEnabled();
+      expect((await card.boundingBox()).height).toBeGreaterThan(
+        viewport.height,
+      );
+      await expect(field).toBeInViewport();
+      await expect
+        .poll(async () => (await card.boundingBox()).y)
+        .toBeGreaterThanOrEqual(0);
+      // Nothing fixed covers the card's top edge.
+      const top = await card.boundingBox();
+      expect(
+        await page.evaluate(
+          ([x, y]) =>
+            document
+              .getElementById("kubernetes")
+              .contains(document.elementFromPoint(x, y)),
+          [top.x + top.width / 2, top.y + 4],
+        ),
+      ).toBe(true);
+    };
+    await assertHeadingAndField();
+
+    // Opening the tall card's own anchor aligns the card to its top rather
+    // than centring it past its heading and first field.
+    await page.goto("/settings/sandboxes#kubernetes");
+    await assertHeadingAndField();
+  });
+
+  // settings-mutability.spec.md D-11: before a deployment adopts the
+  // capability catalogue, grain/config exports no settings/capabilities.yml.
+  // Neither Tasks nor Capabilities links the missing file, and each link on
+  // the page appears once.
+  test(`Tasks and Capabilities omit an unexported settings/capabilities.yml and link each file once on a ${name} screen`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await configRepoOnly(page);
+    await page.route("**/api/state-repo/files", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          head: "ff335f52c0c1d3",
+          entries: [
+            { path: "README.md", size: 412 },
+            { path: "settings", dir: true, size: 0 },
+            { path: "settings/schedules.yml", size: 120 },
+            { path: "settings/suites.yml", size: 96 },
+            { path: "settings/templates.yml", size: 140 },
+            { path: "tables", dir: true, size: 0 },
+            { path: "tables/api_scope_set.json", size: 64 },
+            { path: "tables/custom_field.json", size: 64 },
+            { path: "tables/grain_config.json", size: 2048 },
+          ],
+        }),
+      });
+    });
+
+    const assertNoticeLinks = async (expectedHrefs) => {
+      const notice = page.getByTestId("config-managed-notice");
+      await expect(notice).toBeVisible();
+      const noticeLinks = notice.getByTestId("config-repo-link");
+      await expect(noticeLinks).toHaveCount(expectedHrefs.length);
+      for (let i = 0; i < expectedHrefs.length; i += 1) {
+        await expect(noticeLinks.nth(i)).toHaveAttribute(
+          "href",
+          expectedHrefs[i],
+        );
+      }
+      // Every config-repo link on the section belongs to the notice and
+      // appears once (no duplicate link inside a card).
+      await expect(page.getByTestId("config-repo-link")).toHaveCount(
+        expectedHrefs.length,
+      );
+
+      const noticeBox = await notice.boundingBox();
+      const content = await page.getByTestId("settings-section").boundingBox();
+      expect(inside(content, noticeBox)).toBe(true);
+      for (const link of await noticeLinks.all()) {
+        expect(inside(noticeBox, await link.boundingBox())).toBe(true);
+      }
+      const firstCard = await page.locator("[data-settings-card]").first();
+      expect((await firstCard.boundingBox()).y).toBeGreaterThan(
+        noticeBox.y + noticeBox.height - 1,
+      );
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+      ).toBe(true);
+    };
+
+    await page.goto("/settings/tasks");
+    await assertNoticeLinks([
+      "/config?path=tables%2Fgrain_config.json",
+      "/config?path=tables%2Fcustom_field.json",
+    ]);
+
+    await page.goto("/settings/capabilities");
+    await assertNoticeLinks([
+      "/config?path=tables%2Fgrain_config.json",
+      "/config?path=tables%2Fapi_scope_set.json",
+    ]);
+  });
+}
+
+test("Tasks links settings/capabilities.yml once when the catalogue is exported", async ({
+  page,
+}) => {
+  await page.setViewportSize(DESKTOP);
+  await configRepoOnly(page);
+  await page.route("**/api/state-repo/files", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        head: "ff335f52c0c1d3",
+        entries: [
+          { path: "settings/capabilities.yml", size: 256 },
+          { path: "tables/custom_field.json", size: 64 },
+          { path: "tables/grain_config.json", size: 2048 },
+        ],
+      }),
+    });
+  });
+
+  await page.goto("/settings/tasks");
+  const links = page.getByTestId("config-repo-link");
+  await expect(links).toHaveCount(3);
+  await expect(links.nth(0)).toHaveAttribute(
+    "href",
+    "/config?path=tables%2Fgrain_config.json",
+  );
+  await expect(links.nth(1)).toHaveAttribute(
+    "href",
+    "/config?path=tables%2Fcustom_field.json",
+  );
+  await expect(links.nth(2)).toHaveAttribute(
+    "href",
+    "/config?path=settings%2Fcapabilities.yml",
+  );
+});
+
+// Git connections are grain_config.git_connections / git_credential and a
+// repository's choice repo_config.git_credential (schema 22), so the Git
+// notice links those two tables' files, not tables that no longer exist.
+test("the Git section links the files that hold its connections", async ({
+  page,
+}) => {
+  await page.setViewportSize(DESKTOP);
+  await configRepoOnly(page);
+  await page.goto("/settings/git");
+
+  const links = page
+    .getByTestId("config-managed-notice")
+    .getByTestId("config-repo-link");
+  await expect(links).toHaveCount(2);
+  await expect(links.nth(0)).toHaveAttribute(
+    "href",
+    "/config?path=tables%2Fgrain_config.json",
+  );
+  await expect(links.nth(1)).toHaveAttribute(
+    "href",
+    "/config?path=tables%2Frepo_config.json",
+  );
+});
+
+test("a repository's settings are read-only, its default grants chips, its branches still addable", async ({
+  page,
+}) => {
+  await page.setViewportSize(DESKTOP);
+  await configRepoOnly(page);
+  await page.goto("/repos/acme/widgets/settings/agents");
+
+  const notice = page.getByTestId("config-managed-notice");
+  await expect(notice).toBeVisible();
+  await expect(notice.getByTestId("config-repo-link")).toHaveCount(2);
+  const grants = page.getByTestId("repo-default-grants");
+  await expect(grants).toBeVisible();
+  await expect(grants.getByTestId("config-repo-link")).toHaveAttribute(
+    "href",
+    "/config?path=settings%2Fcapabilities.yml",
+  );
+  await expect(grants.locator("input")).toHaveCount(0);
+
+  await page.getByRole("tab", { name: "Branches" }).click();
+  await expect(page.getByRole("button", { name: "Add branch" })).toBeEnabled();
+});
+
+test("a View in config repo link opens Settings → Config repo with the file named", async ({
+  page,
+}) => {
+  await configRepoOnly(page);
+  await page.goto("/settings/capabilities");
+  await page
+    .getByTestId("config-managed-notice")
+    .getByTestId("config-repo-link")
+    .first()
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Config repo", level: 1 }),
+  ).toBeVisible();
+  await expect(page).toHaveURL(
+    /\/settings\/config-repo\/tables\/grain_config\.json$/,
+  );
+});
+
+for (const [name, viewport] of [
+  ["desktop", DESKTOP],
+  ["phone", PHONE],
+]) {
+  test(`General disables Lock settings in UI without a config repo on a ${name} screen`, async ({
+    page,
+  }) => {
+    try {
+      await page.setViewportSize(viewport);
+      await page.goto("/settings/general");
+
+      const envBox = page.getByLabel("Environment name");
+      const lockToggle = page.getByRole("checkbox", {
+        name: /Lock settings in UI \(require config repo PRs\)/i,
+      });
+      await expect(envBox).toBeEnabled();
+      await expect(lockToggle).toBeDisabled();
+      await expect(
+        page.getByText(/Unavailable without a config repository/i),
+      ).toBeVisible();
+      await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
+
+      const sectionBox = await page
+        .getByTestId("settings-section")
+        .boundingBox();
+      const lockCard = page.locator("#settings-lock");
+      const lockCardBox = await lockCard.boundingBox();
+      const hintBox = await lockCard.locator(".hint").boundingBox();
+      expect(inside(sectionBox, lockCardBox)).toBe(true);
+      expect(inside(lockCardBox, hintBox)).toBe(true);
+      expect(hintBox.y + hintBox.height).toBeLessThanOrEqual(
+        lockCardBox.y + lockCardBox.height + 0.5,
+      );
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+      ).toBe(true);
+
+      // Even if settingsLocked is set via the API on a standalone demo,
+      // non-bootstrap settings stay writable and General stays editable.
+      const putLock = await page.request.put("/api/settings", {
+        data: { settingsLocked: true },
+      });
+      expect(putLock.ok()).toBeTruthy();
+      expect((await putLock.json()).configRepoOnly).toBe(false);
+      await page.reload();
+      await expect(envBox).toBeEnabled();
+      await expect(lockToggle).toBeDisabled();
+      await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
+    } finally {
+      await page.request
+        .put("/api/settings", { data: { settingsLocked: false } })
+        .catch(() => {});
+    }
+  });
+}
+
+test("toggling Lock settings in UI in General locks and unlocks settings", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const root = await fs.mkdtemp(
+    path.join(os.tmpdir(), "grain-settings-lock-e2e-"),
+  );
+  const dataDir = path.join(root, "data");
+  const sandboxDir = path.join(root, "sandboxes");
+  await fs.mkdir(dataDir);
+  await fs.mkdir(sandboxDir);
+  await fs.writeFile(path.join(root, "gemini-key"), "test-only-key\n", {
+    mode: 0o600,
+  });
+
+  let daemon;
+  try {
+    daemon = await startDaemon(root, dataDir, sandboxDir, [], {
+      directConfigWrites: false,
+    });
+    await signInContext(page.context(), daemon.url);
+    await page.setViewportSize(DESKTOP);
+    await page.goto(`${daemon.url}/settings/general`);
+
+    const envBox = page.getByLabel("Environment name");
+    const lockToggle = page.getByRole("checkbox", {
+      name: /Lock settings in UI \(require config repo PRs\)/i,
+    });
+    await expect(envBox).toBeEnabled();
+    await expect(lockToggle).toBeEnabled();
+    await expect(lockToggle).not.toBeChecked();
+    await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
+
+    const sectionBox = await page.getByTestId("settings-section").boundingBox();
+    const lockCardBox = await page.locator("#settings-lock").boundingBox();
+    expect(inside(sectionBox, lockCardBox)).toBe(true);
+
+    // Enable settings lock
+    await lockToggle.click();
+    await expect(lockToggle).toBeChecked();
+    await expect(envBox).toBeDisabled();
+    await expect(page.getByTestId("config-managed-notice")).toBeVisible();
+    await expect(lockToggle).toBeEnabled();
+
+    // Disable settings lock again
+    await lockToggle.click();
+    await expect(lockToggle).not.toBeChecked();
+    await expect(envBox).toBeEnabled();
+    await expect(page.getByTestId("config-managed-notice")).toHaveCount(0);
+  } finally {
+    await daemon?.stop();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

@@ -36,7 +36,7 @@ func TestADeploymentThatHasNeverChosenGetsTheDirector(t *testing.T) {
 		t.Errorf("NetworkAccess = %q, want open: the shipped host sandbox cannot enforce none",
 			director.NetworkAccess)
 	}
-	if slices.Contains(director.Capabilities, "self-repair") {
+	if slices.ContainsFunc(director.Capabilities, model.IsGrainHostExecGrant) {
 		t.Error("the director ships holding self-repair, which can break the deployment it is talking about")
 	}
 }

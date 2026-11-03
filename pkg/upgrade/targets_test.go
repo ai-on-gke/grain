@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -351,6 +352,62 @@ func TestTargetsDiscardedRC(t *testing.T) {
 			}
 			if gotDirect := u.DiscardedRC(context.Background()); !reflect.DeepEqual(gotDirect, tc.want) {
 				t.Errorf("DiscardedRC() = %+v, want %+v", gotDirect, tc.want)
+			}
+		})
+	}
+}
+
+func TestTargetsRetractedRelease(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		running string
+		tags    []string
+		want    *RetractedRelease
+	}{
+		{
+			name:    "retracted-latest-rolled-back",
+			running: "v3.5.0",
+			tags:    []string{"latest", "v3.3.0", "v3.4.0", "v3.5.0", "v3.5.0-retracted", "v3.6.0-rc.1"},
+			want:    &RetractedRelease{Running: "v3.5.0", Latest: "v3.4.0"},
+		},
+		{
+			name:    "retracted-with-a-fix-forward-published",
+			running: "v3.5.0",
+			tags:    []string{"latest", "v3.4.0", "v3.4.1", "v3.4.1-retracted", "v3.5.0", "v3.5.0-retracted", "v3.6.0"},
+			want:    &RetractedRelease{Running: "v3.5.0", Latest: "v3.4.0", Newer: "v3.6.0"},
+		},
+		{
+			name:    "release-stands",
+			running: "v3.4.0",
+			tags:    []string{"latest", "v3.4.0", "v3.5.0", "v3.5.0-retracted"},
+			want:    nil,
+		},
+		{
+			name:    "running-a-candidate",
+			running: "v3.5.0-rc.1",
+			tags:    []string{"v3.5.0", "v3.5.0-retracted", "v3.5.0-rc.1"},
+			want:    nil,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u := New(Config{
+				Image:          &ImageConfig{Repository: "ghcr.io/example/grain/grain"},
+				RunningRelease: func() string { return tc.running },
+				ListTags: func(context.Context, string) ([]string, error) {
+					return tc.tags, nil
+				},
+			})
+			targets := u.Targets(context.Background())
+			if got := targets.RetractedRelease; !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("Targets().RetractedRelease = %+v, want %+v", got, tc.want)
+			}
+			if got := u.CachedRetractedRelease(context.Background()); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("CachedRetractedRelease() = %+v, want %+v", got, tc.want)
+			}
+			for _, target := range targets.Targets {
+				if target.Kind == TargetVersion && slices.Contains(tc.tags, target.Name+"-retracted") {
+					t.Errorf("Targets() offers the retracted release %s", target.Name)
+				}
 			}
 		})
 	}

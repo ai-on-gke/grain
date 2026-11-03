@@ -1,0 +1,47 @@
+// Walkthrough-only: githubsim REST + git http-backend on one address.
+package main
+
+import (
+	"io"
+	"log"
+	"net/http"
+	"net/http/cgi"
+	"os"
+	"sync"
+
+	"github.com/ai-on-gke/grain/pkg/github/githubsim"
+)
+
+func main() {
+	addr, root, owner, repo := os.Args[1], os.Args[2], os.Args[3], os.Args[4]
+	sim := githubsim.New(owner, repo, root+"/"+owner+"/"+repo+".git", "main")
+	var mu sync.Mutex
+	api := func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		h := map[string]string{}
+		for k := range r.Header {
+			h[k] = r.Header.Get(k)
+		}
+		mu.Lock()
+		resp, err := sim.Request(r.Method, r.URL.RequestURI(), h, body)
+		mu.Unlock()
+		log.Printf("api %s %s -> %d", r.Method, r.URL.RequestURI(), resp.Status)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		for k, v := range resp.Headers {
+			w.Header().Set(k, v)
+		}
+		w.WriteHeader(resp.Status)
+		w.Write(resp.Body)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/", api)
+	mux.HandleFunc("/graphql", api)
+	mux.HandleFunc("/user", api)
+	git := &cgi.Handler{Path: "/usr/bin/git", Args: []string{"http-backend"},
+		Env: []string{"GIT_PROJECT_ROOT=" + root, "GIT_HTTP_EXPORT_ALL=1"}}
+	mux.Handle("/", git)
+	log.Fatal(http.ListenAndServe(addr, mux))
+}

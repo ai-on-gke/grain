@@ -234,6 +234,30 @@ describe("NarrowingBar", () => {
     );
   });
 
+  // A link's sort key naming no attribute here orders nothing and has no
+  // row in the editor, so the button says the view's own order rather
+  // than nothing at all, and the editor offers "Sort by…" with the note.
+  it("labels the sort by the keys it knows, not by a link's unknown one", async () => {
+    const user = userEvent.setup();
+    render(
+      <Narrowed
+        narrowing={{ ...NO_NARROWING, sort: [{ attr: "bogus", dir: "asc" }] }}
+      />,
+    );
+
+    expect(screen.getByTitle(SORT_BUTTON)).toHaveTextContent("Backlog order");
+    await user.click(screen.getByTitle(SORT_BUTTON));
+    expect(screen.queryByLabelText("Attribute for sort 1")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Sort by…" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "The backlog's own order, which is the one a drag changes.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("adds a condition, and takes it away again", async () => {
     const user = userEvent.setup();
     render(<Narrowed narrowing={NO_NARROWING} />);

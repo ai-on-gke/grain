@@ -53,6 +53,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -123,8 +124,12 @@ var (
 	// job's log. actionsRunsRe is also what ListWorkflowRuns reads when a
 	// credential cannot reach the Checks API.
 	actionsRunsRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs$`)
-	runJobsRe     = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs/(\d+)/jobs$`)
-	jobLogsRe     = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/jobs/(\d+)/logs$`)
+	// workflowRunsRe is GET .../actions/workflows/{workflow_id}/runs, the
+	// per-workflow listing (github.RESTClient.ListActionsRunsPage with a
+	// Workflow): seeded WorkflowRuns whose Path is that file.
+	workflowRunsRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/workflows/([^/]+)/runs$`)
+	runJobsRe      = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs/(\d+)/jobs$`)
+	jobLogsRe      = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/jobs/(\d+)/logs$`)
 	// And the fourth read hung off that walk, for a run whose jobs served
 	// no log: the check run behind one of them, which is where GitHub
 	// writes why a job it never started did not start. Its annotations
@@ -151,6 +156,8 @@ var (
 	pullCommentReactionsRe   = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/pulls/comments/(\d+)/reactions$`)
 	createCheckRunsRe        = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/check-runs$`)
 	updateCheckRunRe         = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/check-runs/(\d+)$`)
+	rerequestCheckRunRe      = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/check-runs/(\d+)/rerequest$`)
+	rerequestCheckSuiteRe    = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/check-suites/(\d+)/rerequest$`)
 	contentsRe               = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/contents/(.+)$`)
 )
 
@@ -310,6 +317,28 @@ type WorkflowJob struct {
 	// wrote nothing there, which is what every job that really ran looks
 	// like.
 	FailureReason string
+	// FailingStep is the name of the step that failed in this job; defaults
+	// to "Run the job" when empty.
+	FailingStep string
+}
+
+// WorkflowRun is one seeded GitHub Actions workflow run for Sim.WorkflowRuns.
+type WorkflowRun struct {
+	ID         int64
+	Name       string
+	Path       string
+	HeadBranch string
+	HeadSHA    string
+	HeadRepo   string
+	Event      string
+	Status     string
+	Conclusion string
+	RunAttempt int
+	HTMLURL    string
+	// CreatedAt, when set, is served as created_at and run_started_at and
+	// is what ?created=>=... filters on; a run without one always matches.
+	CreatedAt time.Time
+	Jobs      []WorkflowJob
 }
 
 // Sim is a github.Transport backed by an in-memory set of issues and pull
@@ -362,6 +391,14 @@ type Sim struct {
 	// by resolve to one commit here the same way they do on GitHub (see
 	// checkRunsFor).
 	CheckRuns map[string][]github.CheckRun
+	// RerequestedCheckSuites and RerequestedCheckRuns record every
+	// POST .../check-suites/{id}/rerequest and .../check-runs/{id}/rerequest
+	// call the sim accepted. DisableCheckRerequest makes both endpoints
+	// refuse with 422, matching a third-party check provider or forge that
+	// does not support re-requesting checks in place.
+	RerequestedCheckSuites []int64
+	RerequestedCheckRuns   []int64
+	DisableCheckRerequest  bool
 	// WorkflowJobs is the CI behind those check runs: the GitHub Actions
 	// jobs, and their logs, that github.RESTClient.FailedJobLogs reaches
 	// through a commit's workflow runs. Keyed like CheckRuns, except that
@@ -374,6 +411,9 @@ type Sim struct {
 	// would decide for the test what CI looked like, and the point of
 	// these is a test saying what one particular job printed.
 	WorkflowJobs map[string][]WorkflowJob
+	// WorkflowRuns is explicit workflow runs seeded for GET .../actions/runs
+	// and GET .../actions/runs/{id}/jobs.
+	WorkflowRuns []WorkflowRun
 	// StartupFailures marks the commits (keyed exactly like WorkflowJobs)
 	// whose workflow run GitHub concluded before any job of it started:
 	// the run is there, it is `startup_failure`, and its jobs endpoint
@@ -444,6 +484,12 @@ type Sim struct {
 	// merges once it does -- which is what lets a test show the queue
 	// waiting for an approval and merging when it arrives.
 	RequireApprovals int
+	// RequireConversationResolution, when true, is GitHub's "Require
+	// conversation resolution before merging" branch protection / ruleset
+	// rule: PUT .../merge answers 405 "Repository rule violations found\n\nAll
+	// comments must be resolved." while any review thread on the pull
+	// request is unresolved.
+	RequireConversationResolution bool
 	// RefuseLabels, when non-zero, is the status GitHub answers POST
 	// .../issues/N/labels with instead of applying them -- a 403 for a
 	// token without the permission, a 422 for a label the repository will
@@ -1386,10 +1432,26 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			s.mustOwn(m[1], m[2])
 			key := qs.Get("head_sha")
 			// No commit to scope to is the repository-wide read
-			// (github.RESTClient.RecentRunStarts): everything this
-			// repository has run lately, rather than one commit's runs.
+			// (github.RESTClient.RecentRunStarts / CompletedWorkflowRuns):
+			// everything this repository has run lately, rather than one commit's runs.
 			if key == "" {
-				return jsonResponse(200, s.repoRunsJSON(m[1], m[2])), nil
+				payload, link := pageRuns(p, qs, s.repoRunsJSON(m[1], m[2]), "")
+				rawBytes, _ := json.Marshal(payload)
+				var h uint64 = 14695981039346656037
+				for _, b := range rawBytes {
+					h ^= uint64(b)
+					h *= 1099511628211
+				}
+				etag := fmt.Sprintf(`W/"%x-%016x"`, len(rawBytes), h)
+				if headers["If-None-Match"] != "" && headers["If-None-Match"] == etag {
+					return github.ApiResponse{Status: 304, Headers: map[string]string{"ETag": etag}}, nil
+				}
+				resp := jsonResponse(200, payload)
+				resp.Headers = map[string]string{"ETag": etag}
+				if link != "" {
+					resp.Headers["Link"] = link
+				}
+				return resp, nil
 			}
 			if s.startupFailureFor(key) {
 				return jsonResponse(200, startupFailureRunJSON(m[1], m[2], s.runIDFor(key))), nil
@@ -1397,9 +1459,25 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			jobs := s.workflowJobsFor(key)
 			return jsonResponse(200, workflowRunsJSON(m[1], m[2], s.runIDFor(key), jobs)), nil
 		}
+		if m := workflowRunsRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			workflow, _ := url.PathUnescape(m[3])
+			if !s.hasWorkflowFile(workflow) {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			payload, link := pageRuns(p, qs, s.repoRunsJSON(m[1], m[2]), workflow)
+			resp := jsonResponse(200, payload)
+			if link != "" {
+				resp.Headers = map[string]string{"Link": link}
+			}
+			return resp, nil
+		}
 		if m := runJobsRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
 			runID := mustAtoi(m[3])
+			if wr, ok := s.workflowRunByID(int64(runID)); ok {
+				return jsonResponse(200, jobsJSON(m[1], m[2], runID, wr.Jobs)), nil
+			}
 			key, ok := s.runKeyFor(runID)
 			if !ok {
 				return github.ApiResponse{Status: 404, Body: []byte("{}")}, nil
@@ -1416,6 +1494,12 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			s.mustOwn(m[1], m[2])
 			id := mustAtoi(m[3])
 			runID, index := id/1000, id%1000
+			if wr, ok := s.workflowRunByID(int64(runID)); ok {
+				if index >= len(wr.Jobs) || wr.Jobs[index].Log == "" {
+					return github.ApiResponse{Status: 410, Body: []byte("{}")}, nil
+				}
+				return github.ApiResponse{Status: 200, Body: []byte(wr.Jobs[index].Log)}, nil
+			}
 			key, ok := s.runKeyFor(runID)
 			if !ok {
 				return github.ApiResponse{Status: 404, Body: []byte("{}")}, nil
@@ -1462,21 +1546,52 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 		}
 		if m := issuesRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
+			// GitHub's own filters: state (open unless asked otherwise --
+			// a closed issue is not in the default listing) and labels.
+			// The listing also carries the repository's pull requests,
+			// each marked by a pull_request key, as GitHub's does: a
+			// reader that wants only issues has to skip them itself.
 			label := qs.Get("labels")
-			numbers := make([]int, 0, len(s.Issues))
-			for n := range s.Issues {
-				numbers = append(numbers, n)
+			state := qs.Get("state")
+			if state == "" {
+				state = "open"
 			}
-			sort.Ints(numbers)
-			items := make([]map[string]any, 0, len(numbers))
-			for _, n := range numbers {
-				issue := s.Issues[n]
+			wanted := func(itemState string, labels map[string]struct{}) bool {
+				if itemState == "" {
+					itemState = "open"
+				}
+				if state != "all" && itemState != state {
+					return false
+				}
 				if label != "" {
-					if _, ok := issue.Labels[label]; !ok {
-						continue
+					if _, ok := labels[label]; !ok {
+						return false
 					}
 				}
-				items = append(items, issueJSON(n, s.Owner, s.Repo, issue))
+				return true
+			}
+			type listed struct {
+				number int
+				item   map[string]any
+			}
+			var all []listed
+			for n, issue := range s.Issues {
+				if wanted(issue.State, issue.Labels) {
+					all = append(all, listed{n, issueJSON(n, s.Owner, s.Repo, issue)})
+				}
+			}
+			for _, pr := range s.PullRequests {
+				if !wanted(pr.State, pr.Labels) {
+					continue
+				}
+				item := issueJSON(pr.Number, s.Owner, s.Repo, &Issue{Title: pr.Title, Body: pr.Body, Labels: pr.Labels, State: pr.State})
+				item["pull_request"] = map[string]string{"html_url": pr.HTMLURL}
+				all = append(all, listed{pr.Number, item})
+			}
+			sort.Slice(all, func(i, j int) bool { return all[i].number < all[j].number })
+			items := make([]map[string]any, 0, len(all))
+			for _, l := range all {
+				items = append(items, l.item)
 			}
 			return jsonResponse(200, items), nil
 		}
@@ -1736,7 +1851,7 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			}
 			s.nextReviewID++
 			s.Reviews = append(s.Reviews, Review{Number: number, Event: payload.Event, Body: payload.Body, Comments: comments})
-			if payload.Event != "" && len(comments) > 0 {
+			if (payload.Event != "" || s.conversationResolutionRequiredForPR(number)) && len(comments) > 0 {
 				if s.ReviewComments == nil {
 					s.ReviewComments = map[int][]github.ReviewComment{}
 				}
@@ -1744,10 +1859,12 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 					s.nextCommentID++
 					line := c.Line
 					s.ReviewComments[number] = append(s.ReviewComments[number], github.ReviewComment{
-						ID:   s.nextCommentID,
-						Path: c.Path,
-						Line: &line,
-						Body: c.Body,
+						ID:       s.nextCommentID,
+						User:     "grain-agent",
+						ReviewID: s.nextReviewID,
+						Path:     c.Path,
+						Line:     &line,
+						Body:     c.Body,
 					})
 				}
 			}
@@ -1813,6 +1930,24 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			}
 			s.CheckRuns[payload.HeadSHA] = append(s.CheckRuns[payload.HeadSHA], cr)
 			return jsonResponse(201, map[string]any{"id": id}), nil
+		}
+		if m := rerequestCheckSuiteRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			if s.DisableCheckRerequest {
+				return github.ApiResponse{Status: 422, Body: []byte(`{"message":"Check suite cannot be rerequested"}`)}, nil
+			}
+			id := int64(mustAtoi(m[3]))
+			s.RerequestedCheckSuites = append(s.RerequestedCheckSuites, id)
+			return jsonResponse(201, map[string]any{}), nil
+		}
+		if m := rerequestCheckRunRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			if s.DisableCheckRerequest {
+				return github.ApiResponse{Status: 422, Body: []byte(`{"message":"Check run cannot be rerequested"}`)}, nil
+			}
+			id := int64(mustAtoi(m[3]))
+			s.RerequestedCheckRuns = append(s.RerequestedCheckRuns, id)
+			return jsonResponse(201, map[string]any{}), nil
 		}
 		if m := mergesRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
@@ -1888,6 +2023,25 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 	}
 
 	if method == "PATCH" {
+		// Closing or reopening an issue (PATCH .../issues/N with a
+		// state), the one edit to an issue anything here makes.
+		if m := issueRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			issue, ok := s.Issues[mustAtoi(m[3])]
+			if !ok {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			var payload struct {
+				State string `json:"state"`
+			}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				return github.ApiResponse{}, err
+			}
+			if payload.State != "" {
+				issue.State = payload.State
+			}
+			return jsonResponse(200, issueJSON(mustAtoi(m[3]), s.Owner, s.Repo, issue)), nil
+		}
 		if m := updateCheckRunRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
 			var payload struct {
@@ -2093,6 +2247,10 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 						return jsonResponse(405, map[string]string{"message": fmt.Sprintf(
 							"Repository rule violations found\n\nReview required: at least %d approving review is required by reviewers with write access.",
 							s.RequireApprovals)}), nil
+					}
+					if s.conversationResolutionRequired(s.PullRequests[i].Base) && s.hasUnresolvedReviewThreads(number) {
+						return jsonResponse(405, map[string]string{"message": "Repository rule violations found\n\n" +
+							"All comments must be resolved."}), nil
 					}
 					// GitHub's own message: commit_title (its default
 					// when empty), a blank line, then commit_message.
@@ -2452,6 +2610,43 @@ func (s *Sim) reviewThreadExists(id string) bool {
 	return false
 }
 
+func (s *Sim) conversationResolutionRequiredForPR(number int) bool {
+	if s.RequireConversationResolution {
+		return true
+	}
+	pr, ok := s.pullRequest(number)
+	if !ok {
+		return false
+	}
+	return s.conversationResolutionRequired(pr.Base)
+}
+
+func (s *Sim) conversationResolutionRequired(base string) bool {
+	if s.RequireConversationResolution {
+		return true
+	}
+	for _, rule := range s.BranchRules[base] {
+		if rule["type"] != "pull_request" {
+			continue
+		}
+		if params, ok := rule["parameters"].(map[string]any); ok {
+			if req, _ := params["required_review_thread_resolution"].(bool); req {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *Sim) hasUnresolvedReviewThreads(number int) bool {
+	for _, c := range s.ReviewComments[number] {
+		if c.InReplyTo == 0 && !s.ResolvedThreads[fmt.Sprintf("thread-%d", c.ID)] {
+			return true
+		}
+	}
+	return false
+}
+
 // reviewThreadsJSON is pull request number's review comments grouped
 // into GraphQL reviewThreads nodes, one per comment that opened a thread.
 func (s *Sim) reviewThreadsJSON(number int) []map[string]any {
@@ -2563,6 +2758,13 @@ func jobID(runID, index int) int { return runID*1000 + index }
 // more thing to invert and GitHub's real ids are opaque to a test either
 // way.
 func (s *Sim) jobByID(id int) (WorkflowJob, bool) {
+	if wr, ok := s.workflowRunByID(int64(id / 1000)); ok {
+		index := id % 1000
+		if index >= len(wr.Jobs) {
+			return WorkflowJob{}, false
+		}
+		return wr.Jobs[index], true
+	}
 	key, ok := s.runKeyFor(id / 1000)
 	if !ok {
 		return WorkflowJob{}, false
@@ -2616,8 +2818,158 @@ func workflowRunsJSON(owner, repo string, runID int, jobs []WorkflowJob) map[str
 // otherwise the run its jobs imply. Run ids come from runIDFor, the same
 // as every other answer here, so the jobs endpoint can be asked about
 // anything named in this list.
+// AddWorkflowRun appends r to WorkflowRuns under Sim's mutex, filling in
+// the defaults repoRunsJSON serves (an unused run ID, status "completed",
+// conclusion from r.Jobs, attempt 1, HeadSHA from HeadBranch and HeadRepo
+// from Owner/Repo) and returning the stored WorkflowRun. Posting a later
+// attempt of an existing run ID replaces the earlier entry so the runs
+// listing and jobs endpoint serve the latest attempt.
+func (s *Sim) AddWorkflowRun(r WorkflowRun) WorkflowRun {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r.ID <= 0 {
+		id := int64(runIDBase + 500 + len(s.WorkflowRuns))
+		for {
+			if _, taken := s.workflowRunByID(id); !taken {
+				break
+			}
+			id++
+		}
+		r.ID = id
+	}
+	if r.Status == "" {
+		r.Status = "completed"
+	}
+	if r.Conclusion == "" && r.Status == "completed" {
+		r.Conclusion = "success"
+		for _, job := range r.Jobs {
+			switch jobConclusion(job) {
+			case "failure", "timed_out", "startup_failure":
+				r.Conclusion = "failure"
+			}
+		}
+	}
+	if r.RunAttempt <= 0 {
+		r.RunAttempt = 1
+	}
+	if r.Name == "" {
+		if r.Path != "" {
+			base := filepath.Base(r.Path)
+			r.Name = strings.TrimSuffix(strings.TrimSuffix(base, ".yml"), ".yaml")
+		}
+		if r.Name == "" {
+			r.Name = "tests"
+		}
+	}
+	if r.HeadBranch == "" {
+		r.HeadBranch = s.defaultBranch()
+	}
+	if r.HeadSHA == "" && r.HeadBranch != "" {
+		r.HeadSHA = s.branchSHA(r.HeadBranch)
+	}
+	if r.HeadRepo == "" {
+		r.HeadRepo = s.Owner + "/" + s.Repo
+	}
+	if r.Event == "" {
+		r.Event = "push"
+	}
+	if r.HTMLURL == "" {
+		r.HTMLURL = fmt.Sprintf("https://github.example/%s/%s/actions/runs/%d", s.Owner, s.Repo, r.ID)
+	}
+	if len(r.Jobs) > 0 {
+		jobs := make([]WorkflowJob, len(r.Jobs))
+		copy(jobs, r.Jobs)
+		r.Jobs = jobs
+	}
+	kept := s.WorkflowRuns[:0]
+	for i, existing := range s.WorkflowRuns {
+		existingID := existing.ID
+		if existingID <= 0 {
+			existingID = int64(runIDBase + 500 + i)
+		}
+		if existingID != r.ID {
+			kept = append(kept, existing)
+		}
+	}
+	s.WorkflowRuns = append(kept, r)
+	return r
+}
+
+func (s *Sim) workflowRunByID(id int64) (WorkflowRun, bool) {
+	for i := len(s.WorkflowRuns) - 1; i >= 0; i-- {
+		r := s.WorkflowRuns[i]
+		runID := r.ID
+		if runID <= 0 {
+			runID = int64(runIDBase + 500 + i)
+		}
+		if runID == id {
+			r.ID = runID
+			return r, true
+		}
+	}
+	return WorkflowRun{}, false
+}
+
 func (s *Sim) repoRunsJSON(owner, repo string) map[string]any {
 	runs := []map[string]any{}
+	for i, wr := range s.WorkflowRuns {
+		runID := wr.ID
+		if runID <= 0 {
+			runID = int64(runIDBase + 500 + i)
+		}
+		status := wr.Status
+		if status == "" {
+			status = "completed"
+		}
+		conclusion := wr.Conclusion
+		if conclusion == "" {
+			conclusion = "success"
+			for _, job := range wr.Jobs {
+				switch jobConclusion(job) {
+				case "failure", "timed_out", "startup_failure":
+					conclusion = "failure"
+				}
+			}
+		}
+		attempt := wr.RunAttempt
+		if attempt <= 0 {
+			attempt = 1
+		}
+		name := wr.Name
+		if name == "" {
+			name = "tests"
+		}
+		headSHA := wr.HeadSHA
+		if headSHA == "" && wr.HeadBranch != "" {
+			headSHA = s.branchSHA(wr.HeadBranch)
+		}
+		headRepo := wr.HeadRepo
+		if headRepo == "" {
+			headRepo = owner + "/" + repo
+		}
+		htmlURL := wr.HTMLURL
+		if htmlURL == "" {
+			htmlURL = fmt.Sprintf("https://github.example/%s/%s/actions/runs/%d", owner, repo, runID)
+		}
+		runs = append(runs, map[string]any{
+			"id":              runID,
+			"name":            name,
+			"path":            wr.Path,
+			"head_branch":     wr.HeadBranch,
+			"head_sha":        headSHA,
+			"head_repository": map[string]string{"full_name": headRepo},
+			"event":           wr.Event,
+			"status":          status,
+			"conclusion":      conclusion,
+			"run_attempt":     attempt,
+			"html_url":        htmlURL,
+		})
+		if !wr.CreatedAt.IsZero() {
+			at := wr.CreatedAt.UTC().Format(time.RFC3339)
+			runs[len(runs)-1]["created_at"] = at
+			runs[len(runs)-1]["run_started_at"] = at
+		}
+	}
 	for _, key := range s.runCommits() {
 		id := s.runIDFor(key)
 		if s.startupFailureFor(key) {
@@ -2700,8 +3052,12 @@ func jobsJSON(owner, repo string, runID int, jobs []WorkflowJob) map[string]any 
 	items := make([]map[string]any, len(jobs))
 	for i, job := range jobs {
 		id := jobID(runID, i)
+		stepName := job.FailingStep
+		if stepName == "" {
+			stepName = "Run the job"
+		}
 		steps := []map[string]any{
-			{"name": "Run the job", "status": "completed", "conclusion": jobConclusion(job)},
+			{"name": stepName, "status": "completed", "conclusion": jobConclusion(job)},
 		}
 		if job.NeverStarted {
 			steps = []map[string]any{}
@@ -2743,6 +3099,9 @@ func checkRunsJSON(runs []github.CheckRun) map[string]any {
 		item := map[string]any{"name": r.Name, "status": r.Status, "conclusion": r.Conclusion, "html_url": r.HTMLURL}
 		if r.ID != 0 {
 			item["id"] = r.ID
+		}
+		if r.CheckSuiteID != 0 {
+			item["check_suite"] = map[string]any{"id": r.CheckSuiteID}
 		}
 		if r.HeadSHA != "" {
 			item["head_sha"] = r.HeadSHA
@@ -2798,4 +3157,78 @@ func mustAtoi(s string) int {
 		n = n*10 + int(c-'0')
 	}
 	return n
+}
+
+// hasWorkflowFile reports whether a seeded run comes from workflow, a file
+// name (or numeric id) the way GitHub's workflow_id takes one: the
+// per-workflow endpoint is a 404 for a workflow the repository lacks.
+func (s *Sim) hasWorkflowFile(workflow string) bool {
+	for _, wr := range s.WorkflowRuns {
+		if workflowFileMatches(wr.Path, wr.ID, workflow) {
+			return true
+		}
+	}
+	return false
+}
+
+func workflowFileMatches(runPath string, id int64, workflow string) bool {
+	return workflow != "" && (path.Base(runPath) == workflow || strconv.FormatInt(id, 10) == workflow)
+}
+
+// pageRuns narrows a runs listing the way GitHub's own query does --
+// ?branch=, ?created=>=..., the workflow a per-workflow listing is for --
+// and cuts it to ?per_page= (default 30, at most 100) at ?page=, with
+// total_count the whole match and a Link header naming the next page
+// when there is one. Runs are served in the order they were seeded, so a
+// test wanting GitHub's newest-first seeds newest first.
+func pageRuns(reqPath string, qs url.Values, payload map[string]any, workflow string) (map[string]any, string) {
+	all, _ := payload["workflow_runs"].([]map[string]any)
+	branch := qs.Get("branch")
+	var since time.Time
+	if c, ok := strings.CutPrefix(qs.Get("created"), ">="); ok {
+		since, _ = time.Parse(time.RFC3339, c)
+	}
+	matched := []map[string]any{}
+	for _, r := range all {
+		if workflow != "" {
+			p, _ := r["path"].(string)
+			id, _ := r["id"].(int64)
+			if !workflowFileMatches(p, id, workflow) {
+				continue
+			}
+		}
+		if branch != "" && r["head_branch"] != branch {
+			continue
+		}
+		if at, ok := r["created_at"].(string); ok && !since.IsZero() {
+			if t, err := time.Parse(time.RFC3339, at); err == nil && t.Before(since) {
+				continue
+			}
+		}
+		matched = append(matched, r)
+	}
+	perPage, page := 30, 1
+	if n, err := strconv.Atoi(qs.Get("per_page")); err == nil && n > 0 {
+		perPage = min(n, 100)
+	}
+	if n, err := strconv.Atoi(qs.Get("page")); err == nil && n > 0 {
+		page = n
+	}
+	// A listing that fits one page is served whole, as it always was: the
+	// callers that never asked for a page size read every seeded run.
+	if qs.Get("per_page") == "" && qs.Get("page") == "" {
+		perPage = max(perPage, len(matched))
+	}
+	start, end := min((page-1)*perPage, len(matched)), min(page*perPage, len(matched))
+	link := ""
+	if end < len(matched) {
+		next := url.Values{}
+		for k, v := range qs {
+			next[k] = v
+		}
+		next.Set("page", strconv.Itoa(page+1))
+		next.Set("per_page", strconv.Itoa(perPage))
+		link = fmt.Sprintf(`<https://api.github.example%s?%s>; rel="next"`, reqPath, next.Encode())
+	}
+	return map[string]any{"total_count": len(matched), "workflow_runs": matched[start:end]}, link
 }

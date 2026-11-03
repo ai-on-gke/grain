@@ -16,9 +16,12 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -65,6 +68,9 @@ type Settings struct {
 	// PollInterval is a Go duration string ("30s"), the same syntax
 	// -poll-interval itself parses.
 	PollInterval string `json:"pollInterval"`
+	// PollIntervalDefault is grain's own interval, shown beside the box
+	// as the placeholder a cleared box goes back to.
+	PollIntervalDefault string `json:"pollIntervalDefault"`
 	// There is deliberately no maxWorkers, maxMergers or maxCIJobs here.
 	// They were this deployment's three concurrency settings until
 	// grain/task-28: how many ordinary runs could be live, how much
@@ -79,42 +85,6 @@ type Settings struct {
 	// what they would commit, and nothing schedules on them.
 	MaxWorkers       int `json:"maxWorkers"`
 	MaxMergesPerRepo int `json:"maxMergesPerRepo"`
-	// MergeBatchSize is how many queued changes the merge queue tests
-	// together on a throwaway ref before merging the lot
-	// (model.Config.MergeBatchSize). 1 turns batching off and leaves the
-	// one-at-a-time queue.
-	MergeBatchSize int `json:"mergeBatchSize"`
-	// MergeBatchSizeChosen is the batch size this deployment has stored,
-	// or 0 when it has chosen none and MergeBatchSize is grain's default.
-	// The Admin pane's box shows this one, so a box somebody cleared reads
-	// blank after a reload rather than the default as though it had been
-	// typed in (docs/test-runs/2026-10-12-suite-release-batch-fixes.md).
-	MergeBatchSizeChosen int `json:"mergeBatchSizeChosen"`
-	// MergeGatherWindow is how long the queue holds a lone ready change
-	// at the front of a branch's queue, waiting to see whether a second
-	// becomes ready and the two can be tested together
-	// (model.Config.MergeGatherWindow), as a Go duration string ("5m") --
-	// the same syntax PollInterval and the CI gate's two windows use.
-	//
-	// Empty means this deployment has chosen nothing, which is grain's
-	// own window shown beside it as a placeholder
-	// (MergeGatherWindowDefault). A negative duration is how the wait is
-	// turned off altogether, the spelling CIReserveAfter uses for the
-	// same kind of trade.
-	MergeGatherWindow        string `json:"mergeGatherWindow"`
-	MergeGatherWindowDefault string `json:"mergeGatherWindowDefault"`
-	// MergeBatching is what the batches that size has produced have
-	// actually cost and saved (grain/task-300), or nil on a deployment
-	// that has never formed one. It sits beside the setting because the
-	// setting is a bet, and this is the record of how the bet has gone.
-	MergeBatching *MergeBatching `json:"mergeBatching,omitempty"`
-	// MergeGathering is what the holds that window has taken have
-	// actually done (grain/task-440), or nil on a deployment whose queue
-	// has never held anything. It sits beside MergeGatherWindow for
-	// MergeBatching's reason, and for a sharper one: a hold leaves no
-	// other trace at all, so without it the window above is the one
-	// setting in this pane with no evidence behind it.
-	MergeGathering *MergeGathering `json:"mergeGathering,omitempty"`
 	// MaxAutoSubmitDepth and MaxAutoSubmitFanOut are the bounds on work
 	// grain queues with nobody having approved it -- model.Config's own
 	// fields of the same name, and model.AutoSubmitLimits for what the
@@ -229,6 +199,14 @@ type Settings struct {
 	// adjustments and OOM kills are SandboxCommitment.Budget.Overcommit.
 	SandboxOvercommit model.OvercommitSettings `json:"sandboxOvercommit"`
 	ExternalAgentAPI  bool                     `json:"externalAgentApi"`
+	// SessionSandboxIdleTTL is model.Config.SessionSandboxIdleTTL: how long
+	// an interactive chat/session task's sandbox (and in-process agent run)
+	// stays warm awaiting a reply after a turn ends before being released,
+	// as a Go duration string ("30m"). Empty means grain's own default
+	// (SessionSandboxIdleTTLDefault); a negative duration ("-1s") turns warm
+	// retention off.
+	SessionSandboxIdleTTL        string `json:"sessionSandboxIdleTtl"`
+	SessionSandboxIdleTTLDefault string `json:"sessionSandboxIdleTtlDefault"`
 	// SandboxMemoryReserveMBDefault is what a negative reserve comes to
 	// on the host this process can speak for (model.DefaultReserveMemoryMB),
 	// so the pane's blank field can say what blank means. Zero, and so
@@ -741,6 +719,16 @@ type Settings struct {
 	// is managed in read-only Infrastructure-as-Code mode (state-repo.json).
 	ExternalConfigRepo   string `json:"externalConfigRepo,omitempty"`
 	ExternalConfigBranch string `json:"externalConfigBranch,omitempty"`
+	// SettingsLocked is model.Config.SettingsLocked: whether non-bootstrap
+	// settings are locked in the UI and REST API in favour of config
+	// repository pull requests. False by default.
+	SettingsLocked bool `json:"settingsLocked"`
+	// ConfigRepoOnly is GET /api/config's configRepoOnly for this row:
+	// whether the API refuses its non-bootstrap writes in favour of a
+	// config pull request. Unlike SettingsLocked it is false without a
+	// config repository and under the directConfigWrites opt-out, so it is
+	// what the UI draws read-only on (settings-mutability D-10, D-12).
+	ConfigRepoOnly bool `json:"configRepoOnly"`
 }
 
 type UnrunnableSetting struct {
@@ -1014,38 +1002,31 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 	cfg, unrunnable := c.runnableSettings(cfg)
 	geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSet()
 	sandboxImgDefault, granuleImgDefault, buildVersion := c.resolveK8sImageDefaults(ctx, &cfg, repoConfigs)
-	effectiveGranuleForWarn := firstNonEmptyString(cfg.K8sGranuleImage, granuleImgDefault)
-	if mirror := strings.TrimSpace(cfg.SandboxImageMirror); mirror != "" {
-		if mirrored := upgrade.MirrorSandboxRef(effectiveGranuleForWarn, mirror); mirrored != "" {
-			effectiveGranuleForWarn = mirrored
-		}
-	}
 	sandboxWarn, granuleWarn := c.resolveK8sImageWarnings(
 		ctx,
 		firstNonEmptyString(cfg.K8sSandboxImage, sandboxImgDefault),
-		effectiveGranuleForWarn,
+		c.k8sGranuleImageForWarn(cfg, granuleImgDefault),
 	)
+	sandboxWarn = joinWarnings(sandboximage.StaleStockPin(cfg.K8sSandboxImage, sandboxImgDefault, nil), sandboxWarn)
+	granuleWarn = joinWarnings(sandboximage.StaleStockPin(cfg.K8sGranuleImage, granuleImgDefault, nil), granuleWarn)
 	out := Settings{
-		Configured:               true,
-		PollInterval:             cfg.PollInterval.String(),
-		MaxWorkers:               cfg.MaxWorkers,
-		MaxMergesPerRepo:         cfg.MaxMergesPerRepo,
-		MergeBatchSize:           cfg.MergeBatchSizeOr(),
-		MergeBatchSizeChosen:     max(cfg.MergeBatchSize, 0),
-		MergeGatherWindow:        durationSetting(cfg.MergeGatherWindow),
-		MergeGatherWindowDefault: model.DefaultMergeGatherWindow.String(),
-		MaxAutoSubmitDepth:       cfg.AutoSubmitLimits().Depth,
-		MaxAutoSubmitFanOut:      cfg.AutoSubmitLimits().FanOut,
-		GeminiEfforts:            antigravity.Efforts(),
-		CodexEfforts:             codex.Efforts(),
-		MaxAgentTurns:            cfg.MaxAgentTurns,
-		GitHubHost:               cfg.GitHubHost,
-		GitHubInsecureHTTP:       cfg.GitHubInsecureHTTP,
-		GCPProject:               cfg.GCPProject,
-		GCPServiceAccountEmail:   cfg.GCPServiceAccountEmail,
-		GCPServiceAccountCount:   cfg.GCPServiceAccountCount,
-		IAPBackendService:        cfg.IAPBackendService,
-		IAPResource:              cfg.IAPResource,
+		Configured:             true,
+		PollInterval:           cfg.PollInterval.String(),
+		PollIntervalDefault:    model.DefaultPollInterval.String(),
+		MaxWorkers:             cfg.MaxWorkers,
+		MaxMergesPerRepo:       cfg.MaxMergesPerRepo,
+		MaxAutoSubmitDepth:     cfg.AutoSubmitLimits().Depth,
+		MaxAutoSubmitFanOut:    cfg.AutoSubmitLimits().FanOut,
+		GeminiEfforts:          antigravity.Efforts(),
+		CodexEfforts:           codex.Efforts(),
+		MaxAgentTurns:          cfg.MaxAgentTurns,
+		GitHubHost:             cfg.GitHubHost,
+		GitHubInsecureHTTP:     cfg.GitHubInsecureHTTP,
+		GCPProject:             cfg.GCPProject,
+		GCPServiceAccountEmail: cfg.GCPServiceAccountEmail,
+		GCPServiceAccountCount: cfg.GCPServiceAccountCount,
+		IAPBackendService:      cfg.IAPBackendService,
+		IAPResource:            cfg.IAPResource,
 
 		NewestFirst:            cfg.NewestFirst,
 		SandboxBackend:         string(cfg.SandboxBackend),
@@ -1131,6 +1112,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		SandboxMemoryReserveMBDefault:      c.sandboxMemoryReserveDefault(),
 		SandboxOvercommit:                  cfg.SandboxOvercommit.Resolved(),
 		ExternalAgentAPI:                   cfg.ExternalAgentAPI,
+		SessionSandboxIdleTTL:              durationSetting(cfg.SessionSandboxIdleTTL),
+		SessionSandboxIdleTTLDefault:       model.DefaultSessionSandboxIdleTTL.String(),
 		SandboxDiskFloorShare:              cfg.SandboxDiskFloorShare,
 		SandboxDiskFloorMinMB:              cfg.SandboxDiskFloorMinMB,
 		SandboxDiskFloorShareDefault:       model.DefaultDiskFloorShare,
@@ -1142,6 +1125,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		SandboxShapeIgnored:                c.Config.SandboxShapeIgnored,
 		SandboxCommitment:                  c.sandboxCommitment(cfg),
 		ShowClosedByDefault:                cfg.ShowClosedByDefault,
+		SettingsLocked:                     cfg.SettingsLocked,
+		ConfigRepoOnly:                     c.rowConfigRepoOnly(ctx, cfg),
 		EnvironmentName:                    cfg.EnvironmentName,
 		PromptExtension:                    cfg.PromptExtension,
 		RepairTemplateID:                   cfg.RepairTemplateID,
@@ -1346,6 +1331,8 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			SandboxDiskOvercommitDefault:   model.DefaultDiskOvercommit,
 			SandboxOvercommit:              def.SandboxOvercommit.Resolved(),
 			ExternalAgentAPI:               def.ExternalAgentAPI,
+			SessionSandboxIdleTTL:          durationSetting(def.SessionSandboxIdleTTL),
+			SessionSandboxIdleTTLDefault:   model.DefaultSessionSandboxIdleTTL.String(),
 			SandboxDiskFloorShare:          def.SandboxDiskFloorShare,
 			SandboxDiskFloorMinMB:          def.SandboxDiskFloorMinMB,
 			SandboxDiskFloorShareDefault:   model.DefaultDiskFloorShare,
@@ -1413,8 +1400,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			CIArtifactRunMBDefault:             ciStorageDefaults.artifactRunMB,
 			CIArtifactFileMBDefault:            ciStorageDefaults.artifactFileMB,
 			CIArtifactDaysDefault:              ciStorageDefaults.artifactDays,
-			MergeGatherWindow:                  durationSetting(def.MergeGatherWindow),
-			MergeGatherWindowDefault:           model.DefaultMergeGatherWindow.String(),
+			PollIntervalDefault:                model.DefaultPollInterval.String(),
 			CIJobsPerRun:                       def.CIJobsPerRun,
 			CIAgeBoost:                         durationSetting(def.CIAgeBoost),
 			CIReserveAfter:                     durationSetting(def.CIReserveAfter),
@@ -1428,6 +1414,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			TimeZone:                           model.TimeZoneOrDefault(def.TimeZone),
 			NetworkAccess:                      string(model.NormalizeNetworkAccess(def.NetworkAccess)),
 			NetworkAccesses:                    networkAccessNames(),
+			SettingsLocked:                     def.SettingsLocked,
 			RestartRequired:                    restartRequiredKeys(),
 		}
 		c.resolveSandboxImageFields(ctx, def, sandboxImgDefault, granuleImgDefault).apply(&out)
@@ -1435,11 +1422,10 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 		out.Sources = sources
 		out.SettingSources = sources
 		out.ExternalConfigRepo, out.ExternalConfigBranch = c.externalConfigRepo(ctx)
+		out.ConfigRepoOnly = c.rowConfigRepoOnly(ctx, def)
 		return out, nil
 	}
 	settings := c.settingsFrom(ctx, *cfg, repoConfigs)
-	settings.MergeBatching = c.mergeBatching(ctx, *cfg)
-	settings.MergeGathering = c.mergeGathering(ctx)
 	settings.DeploymentIDDefault = c.deploymentIDDefault(ctx)
 	settings.TaskBranchTemplateDefault = model.DefaultTaskBranchTemplate
 	settings.ExternalConfigRepo, settings.ExternalConfigBranch = c.externalConfigRepo(ctx)
@@ -1450,8 +1436,6 @@ type UpdateSettingsRequest struct {
 	PollInterval            *string  `json:"pollInterval"`
 	MaxWorkers              *int     `json:"maxWorkers"`
 	MaxMergesPerRepo        *int     `json:"maxMergesPerRepo"`
-	MergeBatchSize          *int     `json:"mergeBatchSize"`
-	MergeGatherWindow       *string  `json:"mergeGatherWindow"`
 	MaxAutoSubmitDepth      *int     `json:"maxAutoSubmitDepth"`
 	MaxAutoSubmitFanOut     *int     `json:"maxAutoSubmitFanOut"`
 	MaxAgentTurns           *int     `json:"maxAgentTurns"`
@@ -1474,6 +1458,7 @@ type UpdateSettingsRequest struct {
 	// (model.OvercommitSettings); zero bounds are grain's defaults.
 	SandboxOvercommit      *model.OvercommitSettings `json:"sandboxOvercommit"`
 	ExternalAgentAPI       *bool                     `json:"externalAgentApi"`
+	SessionSandboxIdleTTL  *string                   `json:"sessionSandboxIdleTtl"`
 	SandboxMemoryReserveMB *int                      `json:"sandboxMemoryReserveMb"`
 	SandboxDiskFloorShare  *float64                  `json:"sandboxDiskFloorShare"`
 	SandboxDiskFloorMinMB  *int                      `json:"sandboxDiskFloorMinMb"`
@@ -1537,6 +1522,29 @@ type UpdateSettingsRequest struct {
 	TaskBranchTemplate  *string               `json:"taskBranchTemplate"`
 	DeploymentID        *string               `json:"deploymentId"`
 	DefaultCapabilities *[]string             `json:"defaultCapabilities"`
+	SettingsLocked      *bool                 `json:"settingsLocked"`
+}
+
+func (r *UpdateSettingsRequest) UnmarshalJSON(data []byte) error {
+	type plain UpdateSettingsRequest
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*r = UpdateSettingsRequest(p)
+	var snake struct {
+		SettingsLocked      *bool     `json:"settings_locked"`
+		DefaultCapabilities *[]string `json:"default_capabilities"`
+	}
+	if err := json.Unmarshal(data, &snake); err == nil {
+		if r.SettingsLocked == nil && snake.SettingsLocked != nil {
+			r.SettingsLocked = snake.SettingsLocked
+		}
+		if r.DefaultCapabilities == nil && snake.DefaultCapabilities != nil {
+			r.DefaultCapabilities = snake.DefaultCapabilities
+		}
+	}
+	return nil
 }
 
 func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) (Settings, error) {
@@ -1559,6 +1567,15 @@ func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) 
 	if err := c.Store.PutConfig(ctx, cfg); err != nil {
 		return Settings{}, err
 	}
+	// Who saved what, named here because nothing downstream can: the
+	// daemon applies the change from the stored row on its own tick
+	// (pkg/daemon's live config), long after the request has gone. A
+	// rehearsal wrote nothing, so it is not reported as a save.
+	if r, ok := model.WriteRehearsalFrom(ctx); !ok || !r.Rehearsing() {
+		if changed := changedConfigFields(current, cfg); len(changed) > 0 {
+			log.Printf("grain ui: settings saved by %s: changed %s", writerName(ctx), strings.Join(changed, ", "))
+		}
+	}
 	c.triggerIAPSync()
 	if req.AgentBackends != nil {
 		var before []model.AgentBackend
@@ -1574,8 +1591,6 @@ func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) 
 		return Settings{}, err
 	}
 	settings := c.settingsFrom(ctx, cfg, repoConfigs)
-	settings.MergeBatching = c.mergeBatching(ctx, cfg)
-	settings.MergeGathering = c.mergeGathering(ctx)
 	settings.DeploymentIDDefault = c.deploymentIDDefault(ctx)
 	settings.TaskBranchTemplateDefault = model.DefaultTaskBranchTemplate
 	settings.ExternalConfigRepo, settings.ExternalConfigBranch = c.externalConfigRepo(ctx)
@@ -1600,7 +1615,15 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	}
 
 	if req.PollInterval != nil {
-		d, err := time.ParseDuration(*req.PollInterval)
+		// A cleared box is grain's default, shown beside it as the
+		// placeholder, rather than the parse error `time: invalid
+		// duration ""` it used to be. It is stored as that interval,
+		// since a stored zero means no interval at all.
+		raw := strings.TrimSpace(*req.PollInterval)
+		if raw == "" {
+			raw = model.DefaultPollInterval.String()
+		}
+		d, err := time.ParseDuration(raw)
 		if err != nil {
 			return model.Config{}, validationErrorf("pollInterval: %v", err)
 		}
@@ -1620,57 +1643,6 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			return model.Config{}, validationErrorf("maxMergesPerRepo must be at least 1")
 		}
 		cfg.MaxMergesPerRepo = *req.MaxMergesPerRepo
-	}
-	if req.MergeBatchSize != nil {
-		// 1 is off rather than a floor to reject: a deployment whose
-		// changes break each other constantly should be able to say so.
-		// The ceiling is model.MaxMergeBatchSize, because a batch holds
-		// every member out of the queue until it reports.
-		//
-		// 0 is not a size but "give it back to grain's default", which
-		// is what a stored zero already means (model.Config's
-		// MergeBatchSizeOr) and what the Admin pane sends for a cleared
-		// box. Refusing it left no way back to the default from the UI:
-		// clearing the box was a 400 and the old value stayed.
-		if *req.MergeBatchSize < 0 {
-			return model.Config{}, validationErrorf("mergeBatchSize must be at least 1 (1 turns batching off), or 0 for grain's default")
-		}
-		if *req.MergeBatchSize > model.MaxMergeBatchSize {
-			return model.Config{}, validationErrorf("mergeBatchSize cannot be more than %d",
-				model.MaxMergeBatchSize)
-		}
-		cfg.MergeBatchSize = *req.MergeBatchSize
-	}
-	if req.MergeGatherWindow != nil {
-		d, err := parseDurationSetting("mergeGatherWindow", *req.MergeGatherWindow)
-		if err != nil {
-			return model.Config{}, err
-		}
-		// Negative is allowed, and is how an operator declines the trade
-		// entirely: the wait buys at most one suite and costs latency on
-		// a change that is ready now, which a deployment with CI capacity
-		// to spare should be able to refuse. The ceiling is
-		// model.MaxMergeGatherWindow, because past it the latency is
-		// worth more than any suite the batch could save.
-		if d > model.MaxMergeGatherWindow {
-			return model.Config{}, validationErrorf("mergeGatherWindow cannot be more than %s",
-				model.MaxMergeGatherWindow)
-		}
-		// And refused rather than rounded if it cannot survive being
-		// stored. The column is milliseconds (grain_config's
-		// merge_gather_window_ms, like the poll interval and the CI
-		// gate's windows), so anything under one lands as a zero -- which
-		// means "this deployment has never chosen" and reads back as
-		// grain's own five minutes. A "-100µs" meant as "turn the wait
-		// off" would therefore turn it on, which is the one direction an
-		// operator must not be surprised in.
-		if d != 0 && d > -time.Millisecond && d < time.Millisecond {
-			return model.Config{}, validationErrorf("mergeGatherWindow is stored in whole "+
-				"milliseconds, so %s would be kept as 0 -- which means grain's own default rather "+
-				"than what you asked for. Use a negative duration (-1s) to turn the wait off, or "+
-				"blank for the default", d)
-		}
-		cfg.MergeGatherWindow = d
 	}
 	// Both bounds take 1 as their floor rather than 0. Zero is the value
 	// the store reads as "nobody chose" (model.AutoSubmitLimits.
@@ -1708,10 +1680,25 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		cfg.GitHubInsecureHTTP = *req.GitHubInsecureHTTP
 	}
 	if req.GCPProject != nil {
-		cfg.GCPProject = *req.GCPProject
+		// A project ID, which gcp-key and gemini-key put into every
+		// resource name they mint under: the 2026-11-01 walkthrough saved
+		// "Bad Project!", which only failed later, on a task's attempt.
+		project := strings.TrimSpace(*req.GCPProject)
+		if project != "" && !gcpProjectID.MatchString(project) {
+			return model.Config{}, validationErrorf("gcpProject %q is not a GCP project ID: 6 to 30 lowercase letters, digits and '-', starting with a letter and not ending with '-', such as my-project-123", project)
+		}
+		cfg.GCPProject = project
 	}
 	if req.GCPServiceAccountEmail != nil {
-		cfg.GCPServiceAccountEmail = *req.GCPServiceAccountEmail
+		// A service account is an email address; the 2026-11-01
+		// walkthrough saved "not an email", which only failed when a key
+		// was minted.
+		email := strings.TrimSpace(*req.GCPServiceAccountEmail)
+		if local, domain, ok := strings.Cut(email, "@"); email != "" &&
+			(!ok || local == "" || domain == "" || strings.ContainsAny(email, " \t") || strings.Contains(domain, "@")) {
+			return model.Config{}, validationErrorf("gcpServiceAccountEmail %q is not a service account email, such as grain-minter@my-project-123.iam.gserviceaccount.com", email)
+		}
+		cfg.GCPServiceAccountEmail = email
 	}
 	if req.GCPServiceAccountCount != nil {
 		count := *req.GCPServiceAccountCount
@@ -1735,24 +1722,26 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.DefaultCapabilities != nil {
 		seen := map[string]bool{}
 		ids := make([]string, 0, len(*req.DefaultCapabilities))
-		for _, id := range *req.DefaultCapabilities {
-			id, err := c.normalizeCapabilityID(id)
+		for _, rawID := range *req.DefaultCapabilities {
+			normalizedIDs, err := c.normalizeCapabilityIDs(rawID)
 			if err != nil {
 				return model.Config{}, err
 			}
-			if _, ok := c.capabilityByID(id); !ok {
-				// Refused rather than dropped, and named with
-				// capabilityRefusal's own words: this set seeds every
-				// task filed on the deployment (CreateTask), so a
-				// CI-only id landing here would fail every one of them
-				// at model.ResolveGrants at once.
-				return model.Config{}, validationErrorf("defaultCapabilities: %s", capabilityRefusal(id))
+			for _, id := range normalizedIDs {
+				if _, ok := c.capabilityByID(id); !ok {
+					// Refused rather than dropped, and named with
+					// capabilityRefusal's own words: this set seeds every
+					// task filed on the deployment (CreateTask), so a
+					// CI-only id landing here would fail every one of them
+					// at model.ResolveGrants at once.
+					return model.Config{}, validationErrorf("defaultCapabilities: %s", capabilityRefusal(id))
+				}
+				if seen[id] {
+					continue
+				}
+				seen[id] = true
+				ids = append(ids, id)
 			}
-			if seen[id] {
-				continue
-			}
-			seen[id] = true
-			ids = append(ids, id)
 		}
 		cfg.DefaultCapabilities = ids
 	}
@@ -1824,6 +1813,19 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	}
 	if req.ExternalAgentAPI != nil {
 		cfg.ExternalAgentAPI = *req.ExternalAgentAPI
+	}
+	if req.SessionSandboxIdleTTL != nil {
+		d, err := parseDurationSetting("sessionSandboxIdleTtl", *req.SessionSandboxIdleTTL)
+		if err != nil {
+			return model.Config{}, err
+		}
+		if d != 0 && d > -time.Millisecond && d < time.Millisecond {
+			return model.Config{}, validationErrorf("sessionSandboxIdleTtl is stored in whole "+
+				"milliseconds, so %s would be kept as 0 -- which means grain's own default rather "+
+				"than what you asked for. Use a negative duration (-1s) to turn warm retention off, "+
+				"or blank for the default", d)
+		}
+		cfg.SessionSandboxIdleTTL = d
 	}
 	// A negative reserve is grain's own (an eighth of the machine), so
 	// what there is to refuse here is the other end: a reserve at or
@@ -1898,23 +1900,55 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.K8sKubectl != nil {
 		cfg.K8sKubectl = strings.TrimSpace(*req.K8sKubectl)
 	}
+	// The pod images are checked as the custom sandbox image is, and the
+	// workspace is a directory inside the pod, so an absolute path: the
+	// 2026-11-01 walkthrough saved "not a ref!!" and "relative/dir", which
+	// only failed later, on every pod grain created.
 	if req.K8sSandboxImage != nil {
-		cfg.K8sSandboxImage = strings.TrimSpace(*req.K8sSandboxImage)
+		image := strings.TrimSpace(*req.K8sSandboxImage)
+		if image != "" {
+			if err := sandboximage.ValidateReference(image); err != nil {
+				return model.Config{}, validationErrorf("k8sSandboxImage must be one OCI image reference, such as registry.example/team/k8s-sandbox:v1: %v", err)
+			}
+		}
+		cfg.K8sSandboxImage = image
 	}
 	if req.K8sGranuleImage != nil {
-		cfg.K8sGranuleImage = strings.TrimSpace(*req.K8sGranuleImage)
+		image := strings.TrimSpace(*req.K8sGranuleImage)
+		if image != "" {
+			if err := sandboximage.ValidateReference(image); err != nil {
+				return model.Config{}, validationErrorf("k8sGranuleImage must be one OCI image reference, such as registry.example/team/guest:v1: %v", err)
+			}
+		}
+		cfg.K8sGranuleImage = image
 	}
 	if req.K8sWorkspace != nil {
-		cfg.K8sWorkspace = strings.TrimSpace(*req.K8sWorkspace)
+		ws := strings.TrimSpace(*req.K8sWorkspace)
+		if ws != "" && !path.IsAbs(ws) {
+			return model.Config{}, validationErrorf("k8sWorkspace %q is not an absolute path, such as /home/agent", ws)
+		}
+		cfg.K8sWorkspace = ws
 	}
 	if req.K8sGitProxyHost != nil {
-		cfg.K8sGitProxyHost = strings.TrimSpace(*req.K8sGitProxyHost)
+		host := strings.TrimSpace(*req.K8sGitProxyHost)
+		if host != "" && !k8sAddress.MatchString(host) {
+			return model.Config{}, validationErrorf("k8sGitProxyHost %q is not a host name or IP address", host)
+		}
+		cfg.K8sGitProxyHost = host
 	}
 	if req.K8sSandboxService != nil {
-		cfg.K8sSandboxService = strings.TrimSpace(*req.K8sSandboxService)
+		name, err := k8sObjectName("k8sSandboxService", *req.K8sSandboxService, k8sLabelName, "Service")
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sSandboxService = name
 	}
 	if req.K8sServiceAccount != nil {
-		cfg.K8sServiceAccount = strings.TrimSpace(*req.K8sServiceAccount)
+		name, err := k8sObjectName("k8sServiceAccount", *req.K8sServiceAccount, k8sSubdomainName, "ServiceAccount")
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sServiceAccount = name
 	}
 	if req.K8sNodeSelector != nil {
 		selectors := make([]string, 0, len(*req.K8sNodeSelector))
@@ -1940,10 +1974,18 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		cfg.K8sNetworkPolicy = *req.K8sNetworkPolicy
 	}
 	if req.K8sDeployment != nil {
-		cfg.K8sDeployment = strings.TrimSpace(*req.K8sDeployment)
+		name, err := k8sObjectName("k8sDeployment", *req.K8sDeployment, k8sSubdomainName, "Deployment")
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sDeployment = name
 	}
 	if req.K8sContainer != nil {
-		cfg.K8sContainer = strings.TrimSpace(*req.K8sContainer)
+		name, err := k8sObjectName("k8sContainer", *req.K8sContainer, k8sLabelName, "container")
+		if err != nil {
+			return model.Config{}, err
+		}
+		cfg.K8sContainer = name
 	}
 	if req.K8sPriorityClassInteractive != nil {
 		name, err := k8sPriorityClassName("k8sPriorityClassInteractive", *req.K8sPriorityClassInteractive)
@@ -2089,6 +2131,9 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.ShowClosedByDefault != nil {
 		cfg.ShowClosedByDefault = *req.ShowClosedByDefault
 	}
+	if req.SettingsLocked != nil {
+		cfg.SettingsLocked = *req.SettingsLocked
+	}
 	if req.EnvironmentName != nil {
 		name := strings.TrimSpace(*req.EnvironmentName)
 		if utf8.RuneCountInString(name) > maxEnvironmentNameLen {
@@ -2134,6 +2179,9 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			if _, err := model.FormatTaskBranchName(template, strings.Repeat("a", 32), "a", "123", title); err != nil {
 				return model.Config{}, validationErrorf("taskBranchTemplate %v", err)
 			}
+		}
+		if _, err := model.FormatTaskBranchName(template, strings.Repeat("a", 32), strings.Repeat("a", model.MaxDeploymentIDLen), "9223372036854775807", ""); err != nil {
+			return model.Config{}, validationErrorf("taskBranchTemplate %v", err)
 		}
 		cfg.TaskBranchTemplate = template
 	}
@@ -2345,8 +2393,6 @@ func (c *Client) PlanSettings(ctx context.Context, req UpdateSettingsRequest) (S
 		return Settings{}, err
 	}
 	settings := c.settingsFrom(ctx, cfg, repoConfigs)
-	settings.MergeBatching = c.mergeBatching(ctx, cfg)
-	settings.MergeGathering = c.mergeGathering(ctx)
 	settings.DeploymentIDDefault = c.deploymentIDDefault(ctx)
 	settings.TaskBranchTemplateDefault = model.DefaultTaskBranchTemplate
 	settings.ExternalConfigRepo, settings.ExternalConfigBranch = c.externalConfigRepo(ctx)
@@ -2429,6 +2475,30 @@ var (
 	k8sLabelName     = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 	k8sSubdomainName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
 )
+
+// gcpProjectID is a GCP project ID, with the "example.com:" prefix a
+// domain-scoped project carries allowed in front of it.
+var gcpProjectID = regexp.MustCompile(`^([a-z0-9][a-z0-9.-]*[a-z0-9]:)?[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
+
+// k8sAddress is what the git proxy host a sandbox pod is handed may be:
+// a host name or an IP address, with no scheme, path or space in it.
+var k8sAddress = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.:-]*[A-Za-z0-9])?$`)
+
+// k8sObjectName trims a setting naming a Kubernetes object of kind and
+// refuses a name re says the API server never accepts (the 2026-10-30
+// walkthrough saved the ServiceAccount "Bad SA"). Empty is valid: the
+// setting's default or none applies.
+func k8sObjectName(key, raw string, re *regexp.Regexp, kind string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name != "" && (len(name) > 253 || !re.MatchString(name)) {
+		chars := "lowercase letters, digits and '-'"
+		if re == k8sSubdomainName {
+			chars = "lowercase letters, digits, '-' and '.'"
+		}
+		return "", validationErrorf("%s %q is not a Kubernetes %s name: %s, starting and ending with a letter or digit", key, name, kind, chars)
+	}
+	return name, nil
+}
 
 // k8sPriorityClassName trims a priority class setting and refuses a
 // name Kubernetes could never accept. Empty is valid: it sets none.

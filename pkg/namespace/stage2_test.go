@@ -72,8 +72,9 @@ type stubDeployProvider struct {
 	grainLog        string
 	// gotMetrics and gotLog, when set, record the query each read was
 	// asked with.
-	gotMetrics *MetricsQuery
-	gotLog     *GrainLogQuery
+	gotMetrics  *MetricsQuery
+	gotLog      *GrainLogQuery
+	gotPipeline *pipelineRead
 }
 
 func (s stubDeployProvider) ReadMergeQueue(ctx context.Context) (string, error) {
@@ -90,8 +91,17 @@ func (s stubDeployProvider) ReadMetrics(ctx context.Context, section string, q M
 	return s.metrics["all"], nil
 }
 
-func (s stubDeployProvider) ReadPipelineChanges(ctx context.Context) (string, error) {
+func (s stubDeployProvider) ReadPipelineChanges(ctx context.Context, cursor string, limit int) (string, error) {
+	if s.gotPipeline != nil {
+		*s.gotPipeline = pipelineRead{cursor, limit}
+	}
 	return s.pipelineChanges, nil
+}
+
+// pipelineRead is what a deploy://pipeline-changes read asked its provider for.
+type pipelineRead struct {
+	cursor string
+	limit  int
 }
 
 func (s stubDeployProvider) ReadHealth(ctx context.Context) (string, error) {
@@ -247,10 +257,10 @@ func TestStage2NamespaceRootsAndScoping(t *testing.T) {
 	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/metrics", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"self-debug"`) {
 		t.Fatalf("deploy://metrics without grant: status=%d body=%q", rec.Code, rec.Body.String())
 	}
-	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/health", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"deployment-health"`) {
+	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/health", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"https://grain.dev/capabilities/grain#health"`) {
 		t.Fatalf("deploy://health without grant: status=%d body=%q", rec.Code, rec.Body.String())
 	}
-	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/grain.log", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"grain-log"`) {
+	if rec := serveRequest(srv, baseline, http.MethodGet, "/fs/deploy/grain.log", nil); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"https://grain.dev/capabilities/grain#journal"`) {
 		t.Fatalf("deploy://grain.log without grant: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 
@@ -311,7 +321,7 @@ func TestDeployReadsForwardTheirQuery(t *testing.T) {
 		t.Fatalf("deploy://grain.log: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 	if want := (GrainLogQuery{Since: "2026-10-29T00:00:00Z", Until: "2026-10-29T06:00:00Z",
-		MinPriority: "err", Contains: "dispatch failed", MaxLines: 900}); gotLog != want {
+		MinPriority: "err", Contains: "dispatch failed", MaxLines: 900, TaskID: "1"}); gotLog != want {
 		t.Errorf("grain.log query = %+v, want %+v", gotLog, want)
 	}
 	if rec := serveRequest(srv, scope, http.MethodGet, "/fs/deploy/grain.log?lines=50", nil); rec.Code != http.StatusOK || gotLog.MaxLines != 50 {
@@ -330,5 +340,193 @@ func TestDeployReadsForwardTheirQuery(t *testing.T) {
 		Repos: []string{"acme/a", "acme/b", "acme/c"}, Authors: []string{"task"}}
 	if !reflect.DeepEqual(gotMetrics, want) {
 		t.Errorf("metrics query = %+v, want %+v", gotMetrics, want)
+	}
+}
+
+// deploy://pipeline-changes passes ?cursor= (or ?since=) and ?page= on, so
+// a read can page past the feed's first page.
+func TestPipelineChangesReadForwardsItsCursor(t *testing.T) {
+	t.Parallel()
+	var got pipelineRead
+	srv := &Server{Deploy: stubDeployProvider{pipelineChanges: "a change\n", gotPipeline: &got}}
+	scope := Scope{TaskID: 1, TaskIDStr: "1", MayReadPipeline: true}
+	for _, tc := range []struct {
+		query string
+		want  pipelineRead
+	}{
+		{"", pipelineRead{}},
+		{"?cursor=2026-10-29T11:50:43Z~1&page=20", pipelineRead{"2026-10-29T11:50:43Z~1", 20}},
+		{"?since=2026-10-29T11:50:43Z", pipelineRead{"2026-10-29T11:50:43Z", 0}},
+	} {
+		got = pipelineRead{}
+		rec := serveRequest(srv, scope, http.MethodGet, "/fs/deploy/pipeline-changes"+tc.query, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%q: status=%d body=%q", tc.query, rec.Code, rec.Body.String())
+		}
+		if got != tc.want {
+			t.Errorf("%q: provider asked for %+v, want %+v", tc.query, got, tc.want)
+		}
+	}
+	for _, q := range []string{"?page=0", "?page=lots"} {
+		if rec := serveRequest(srv, scope, http.MethodGet, "/fs/deploy/pipeline-changes"+q, nil); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status=%d, want 400; body=%q", q, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+type stubConfigProvider struct {
+	repos   []string
+	configs map[string]string
+}
+
+func (s stubConfigProvider) ListConfigRepos(ctx context.Context) ([]string, error) {
+	return s.repos, nil
+}
+
+func (s stubConfigProvider) ReadRepoConfig(ctx context.Context, repo string) (string, error) {
+	for k, v := range s.configs {
+		if strings.EqualFold(k, repo) {
+			return v, nil
+		}
+	}
+	return "", ErrNotFound
+}
+
+func TestThreeSegmentHostQualifiedRepoConfigAndMemory(t *testing.T) {
+	t.Parallel()
+
+	const forgeRepo = "git.forge.example/experimental/grain"
+	scope := Scope{
+		TaskID:    1920,
+		TaskIDStr: "1920",
+		TaskRepo:  forgeRepo,
+	}
+
+	// 1. Direct unit checks on PermitsConfig and PermitsMemory for 3-segment TaskRepo.
+	for _, allowed := range []string{
+		"",
+		"repos",
+		"repos/git.forge.example",
+		"repos/git.forge.example/experimental",
+		"repos/git.forge.example/experimental/grain",
+		"repos/git.forge.example/experimental/grain.json",
+		"repos/git.forge.example/experimental/grain.yml",
+		"repos/git.forge.example/experimental/grain.yaml",
+		"repos/git.forge.example/experimental/grain/sub",
+	} {
+		if !scope.PermitsConfig(allowed) {
+			t.Errorf("PermitsConfig(%q) = false, want true", allowed)
+		}
+	}
+	for _, denied := range []string{
+		"grain.yml",
+		"repos/git.forge.example/experimental/other",
+		"repos/git.forge.example/experimental/other.yml",
+		"repos/git.forge.example/other",
+		"repos/git.forge.example/other/grain",
+		"repos/ai-on-gke/grain",
+	} {
+		if scope.PermitsConfig(denied) {
+			t.Errorf("PermitsConfig(%q) = true, want false", denied)
+		}
+	}
+
+	for _, allowed := range []string{
+		"",
+		"global",
+		"global.md",
+		"global/MEMORY.md",
+		"repos",
+		"repos/git.forge.example",
+		"repos/git.forge.example/experimental",
+		"repos/git.forge.example/experimental/grain",
+		"repos/git.forge.example/experimental/grain.md",
+		"repos/git.forge.example/experimental/grain/MEMORY.md",
+		"repos/git.forge.example/experimental/grain/docs/ci.md",
+	} {
+		if !scope.PermitsMemory(allowed) {
+			t.Errorf("PermitsMemory(%q) = false, want true", allowed)
+		}
+	}
+	for _, denied := range []string{
+		"repos/git.forge.example/experimental/other",
+		"repos/git.forge.example/experimental/other.md",
+		"repos/git.forge.example/other",
+		"repos/git.forge.example/other/grain",
+		"repos/ai-on-gke/grain",
+	} {
+		if scope.PermitsMemory(denied) {
+			t.Errorf("PermitsMemory(%q) = true, want false", denied)
+		}
+	}
+
+	// 2. Virtual ConfigProvider and MemoryProvider with both 2-segment and 3-segment repos.
+	srv := &Server{
+		Config: stubConfigProvider{
+			repos: []string{
+				"ai-on-gke/grain",
+				forgeRepo,
+				"git.forge.example/experimental/other",
+			},
+			configs: map[string]string{
+				"ai-on-gke/grain":                      `{"repo":"ai-on-gke/grain"}` + "\n",
+				forgeRepo:                              `{"repo":"git.forge.example/experimental/grain"}` + "\n",
+				"git.forge.example/experimental/other": `{"repo":"other"}` + "\n",
+			},
+		},
+		Memory: stubMemoryProvider{
+			repos: []string{
+				"ai-on-gke/grain",
+				forgeRepo,
+				"git.forge.example/experimental/other",
+			},
+			layers: map[string]*MemoryLayerView{
+				forgeRepo: {
+					Scope: forgeRepo,
+					Text:  "forge grain standing memory\n",
+					Docs:  []MemoryDocView{{Slug: "runbook", Text: "forge runbook doc\n"}},
+				},
+				"git.forge.example/experimental/other": {
+					Scope: "git.forge.example/experimental/other",
+					Text:  "other memory\n",
+				},
+			},
+		},
+	}
+
+	for _, tc := range []struct {
+		url  string
+		want string
+	}{
+		{"/fs/config/repos?list", "git.forge.example/\n"},
+		{"/fs/config/repos/git.forge.example?list", "experimental/\n"},
+		{"/fs/config/repos/git.forge.example/experimental?list", "grain\n"},
+		{"/fs/config/repos/git.forge.example/experimental/grain", `{"repo":"git.forge.example/experimental/grain"}` + "\n"},
+		{"/fs/config/repos/git.forge.example/experimental/grain.json", `{"repo":"git.forge.example/experimental/grain"}` + "\n"},
+		{"/fs/config/repos/git.forge.example/experimental/grain.yml", `{"repo":"git.forge.example/experimental/grain"}` + "\n"},
+		{"/fs/config/repos/git.forge.example/experimental/grain.yaml", `{"repo":"git.forge.example/experimental/grain"}` + "\n"},
+		{"/fs/memory/repos?list", "git.forge.example/\n"},
+		{"/fs/memory/repos/git.forge.example?list", "experimental/\n"},
+		{"/fs/memory/repos/git.forge.example/experimental?list", "grain/\n"},
+		{"/fs/memory/repos/git.forge.example/experimental/grain?list", "MEMORY.md\nrunbook.md\n"},
+		{"/fs/memory/repos/git.forge.example/experimental/grain.md", "forge grain standing memory\n"},
+		{"/fs/memory/repos/git.forge.example/experimental/grain/MEMORY.md", "forge grain standing memory\n"},
+		{"/fs/memory/repos/git.forge.example/experimental/grain/runbook.md", "forge runbook doc\n"},
+		{"/fs/memory/repos/git.forge.example/experimental/grain/docs/runbook.md", "forge runbook doc\n"},
+	} {
+		rec := serveRequest(srv, scope, http.MethodGet, tc.url, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d: %s", tc.url, rec.Code, rec.Body.String())
+		}
+		if got := rec.Body.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.url, got, tc.want)
+		}
+	}
+
+	if rec := serveRequest(srv, scope, http.MethodGet, "/fs/config/repos/git.forge.example/experimental/other", nil); rec.Code != http.StatusForbidden {
+		t.Errorf("other 3-segment config status = %d, want 403", rec.Code)
+	}
+	if rec := serveRequest(srv, scope, http.MethodGet, "/fs/memory/repos/git.forge.example/experimental/other/MEMORY.md", nil); rec.Code != http.StatusForbidden {
+		t.Errorf("other 3-segment memory status = %d, want 403", rec.Code)
 	}
 }

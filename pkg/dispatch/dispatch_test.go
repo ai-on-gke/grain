@@ -1453,68 +1453,6 @@ func TestCyclePreservesNonQuotaGrantWaitAndClearsStaleQuotaWait(t *testing.T) {
 	}
 }
 
-func TestDirectorDispatchAdmitsAtMostOneSandboxOverBudgetAndHoldsSecond(t *testing.T) {
-	store, ctx := open(t)
-	d1 := directorTask("dir-1")
-	d2 := directorTask("dir-2")
-	d2.Tags = []string{model.ConsoleSessionTag("dir-2")}
-	putTasks(t, store, ctx, d1, d2)
-
-	ledger := &model.Ledger{}
-	shape := model.Commitment{CPUs: 4, MemoryMB: 8 * 1024}
-	// Budget is 4 vCPU / 8 GiB, and one worker run already fills it to cap.
-	budget := model.Budget{
-		Host:             model.Commitment{CPUs: 4, MemoryMB: 8 * 1024},
-		CPUOvercommit:    1,
-		MemoryOvercommit: 1,
-	}
-	releaseWorker := ledger.Charge(model.PoolAgent, "worker-1", shape)
-	defer releaseWorker()
-
-	limits := model.Limits{
-		Workers:    2,
-		Budget:     budget,
-		AgentShape: shape,
-		Ledger:     ledger,
-	}
-
-	// Cycle dispatches at most one director as the single budget exception,
-	// and holds the second director with a quota wait until committed is back
-	// under the cap.
-	got, err := dispatch.Cycle(ctx, store, limits, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].TaskID != "dir-1" {
-		t.Fatalf("dispatched %+v, want only dir-1 admitted over full budget", got)
-	}
-	if wait, err := store.GrantWaitOf(ctx, "dir-2"); err != nil || wait == nil || wait.Capability != model.QuotaWaitCapability {
-		t.Fatalf("GrantWaitOf(dir-2) = %+v (%v), want QuotaWaitCapability while over cap", wait, err)
-	}
-
-	// Even an explicit RunNow for dir-2 must wait while committed exceeds the cap.
-	requestRunNow(t, ctx, store, "dir-2", now.Add(time.Second))
-	gotNow, err := dispatch.Cycle(ctx, store, limits, now.Add(time.Second))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(gotNow) != 0 {
-		t.Fatalf("RunNow for dir-2 while over cap dispatched %+v, want none", gotNow)
-	}
-
-	// Once worker-1 releases its sandbox, live commitment drops back to the
-	// 4 vCPU / 8 GiB cap, so dir-2 is admitted.
-	releaseWorker()
-
-	got2, err := dispatch.Cycle(ctx, store, limits, now.Add(3*time.Second))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got2) != 1 || got2[0].TaskID != "dir-2" {
-		t.Fatalf("dispatched %+v after cap cleared, want dir-2", got2)
-	}
-}
-
 func TestDispatchChargesPerTaskSandboxShapeOverride(t *testing.T) {
 	store, ctx := open(t)
 
@@ -1542,5 +1480,90 @@ func TestDispatchChargesPerTaskSandboxShapeOverride(t *testing.T) {
 	}
 	if live := ledger.Live(); live != (model.Commitment{CPUs: 8, MemoryMB: 16 * 1024}) {
 		t.Fatalf("ledger.Live() = %s, want 8 vCPU / 16 GiB from t-big's override", live)
+	}
+}
+
+func TestDispatchPrefersHigherPriorityAndPreservesBandOrder(t *testing.T) {
+	store, ctx := open(t)
+	repo := model.RepoRef{Owner: "owner", Name: "payments-api"}
+
+	// File tasks in mixed order across priorities 2, 5 (default), and 8.
+	low := task("prio-2", true)
+	low.Priority = 2
+	low.Target = &repo
+	low.OrderKey = 10
+	t0 := now
+	low.CreatedAt = &t0
+
+	midFIFO1 := task("prio-5-fifo-1", true)
+	midFIFO1.Target = &repo // Priority 0 -> defaults to 5
+	midFIFO1.OrderKey = 20
+	t1 := now.Add(time.Minute)
+	midFIFO1.CreatedAt = &t1
+
+	midFIFO2 := task("prio-5-fifo-2", true)
+	midFIFO2.Priority = 5
+	midFIFO2.Target = &repo
+	midFIFO2.OrderKey = 20 // tie on OrderKey -> broken by CreatedAt FIFO
+	t2 := now.Add(2 * time.Minute)
+	midFIFO2.CreatedAt = &t2
+
+	midAtFront := task("prio-5-at-front", true)
+	midAtFront.Priority = 5
+	midAtFront.Target = &repo
+	midAtFront.OrderKey = 30
+	t3 := now.Add(3 * time.Minute)
+	midAtFront.CreatedAt = &t3
+
+	midFixesBase := task("prio-5-fixes-base", true)
+	midFixesBase.Priority = 5
+	midFixesBase.Target = &repo
+	midFixesBase.OrderKey = 40
+	t4 := now.Add(4 * time.Minute)
+	midFixesBase.CreatedAt = &t4
+	model.SetFixesBaseBranch(&midFixesBase, true)
+
+	high := task("prio-8", true)
+	high.Priority = 8
+	high.Target = &repo
+	high.OrderKey = 50
+	t5 := now.Add(5 * time.Minute)
+	high.CreatedAt = &t5
+
+	putTasks(t, store, ctx, low, midFIFO1, midFIFO2, midAtFront, midFixesBase, high)
+
+	// Move prio-5-at-front to the front of the backlog; it moves to the
+	// front of its priority=5 band (behind prio-5-fixes-base) without
+	// jumping ahead of prio-8.
+	if err := store.MoveToFrontOfBacklog(ctx, []string{"prio-5-at-front"}); err != nil {
+		t.Fatalf("MoveToFrontOfBacklog: %v", err)
+	}
+
+	limits := model.Limits{Workers: 1}
+	wantOrder := []string{
+		"prio-8",
+		"prio-5-fixes-base",
+		"prio-5-at-front",
+		"prio-5-fifo-1",
+		"prio-5-fifo-2",
+		"prio-2",
+	}
+
+	for i, wantID := range wantOrder {
+		stepTime := now.Add(time.Duration(i+1) * time.Hour)
+		got, err := dispatch.Cycle(ctx, store, limits, stepTime)
+		if err != nil {
+			t.Fatalf("step %d Cycle: %v", i, err)
+		}
+		if len(got) != 1 || got[0].TaskID != wantID {
+			t.Fatalf("step %d dispatched %+v, want [%s]", i, got, wantID)
+		}
+		if err := store.FinishRun(ctx, got[0].RunID, stepTime.Add(time.Minute), "succeeded", "done"); err != nil {
+			t.Fatalf("step %d FinishRun: %v", i, err)
+		}
+		doneAt := stepTime.Add(time.Minute)
+		if err := store.Observe(ctx, model.Observation{TaskID: wantID, CompletedAt: &doneAt, ClosedAt: &doneAt}); err != nil {
+			t.Fatalf("step %d Observe: %v", i, err)
+		}
 	}
 }

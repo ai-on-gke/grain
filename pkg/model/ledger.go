@@ -82,6 +82,13 @@ type Ledger struct {
 	// shared budget -- so the reconcile loop runs a dispatch cycle
 	// immediately rather than waiting out its poll interval.
 	Wake func()
+	// VMMHeadroom is what each VM sandbox's cgroup is allowed beyond its
+	// guest's RAM (DefaultVMMHeadroom on a granule backend, zero
+	// elsewhere). Charges are filed at the shape asked for and every live
+	// sum adds it per entry, so what admission is held against is the
+	// memory a VM can really take rather than its guest's alone. Set once,
+	// before the ledger is shared; Budget.VMMHeadroom is its other half.
+	VMMHeadroom VMMHeadroom
 
 	mu             sync.Mutex
 	held           map[ledgerKey]ledgerEntry
@@ -106,8 +113,11 @@ type ledgerKey struct {
 }
 
 type ledgerEntry struct {
-	Shape Commitment
-	Since time.Time
+	Shape     Commitment
+	Since     time.Time
+	Idle      bool
+	IdleSince time.Time
+	Evict     func()
 }
 
 func (l *Ledger) now() time.Time {
@@ -132,7 +142,20 @@ func (l *Ledger) Live() Commitment {
 func (l *Ledger) live() Commitment {
 	var out Commitment
 	for _, e := range l.held {
-		out = out.Plus(e.Shape)
+		out = out.Plus(l.VMMHeadroom.Charge(e.Shape))
+	}
+	return out
+}
+
+// nonIdleLive is live excluding idle session sandboxes that can be evicted
+// on demand under capacity pressure.
+func (l *Ledger) nonIdleLive() Commitment {
+	var out Commitment
+	for _, e := range l.held {
+		if e.Idle {
+			continue
+		}
+		out = out.Plus(l.VMMHeadroom.Charge(e.Shape))
 	}
 	return out
 }
@@ -147,7 +170,20 @@ func (l *Ledger) liveWithout(pool, id string) Commitment {
 		if k == skip {
 			continue
 		}
-		out = out.Plus(e.Shape)
+		out = out.Plus(l.VMMHeadroom.Charge(e.Shape))
+	}
+	return out
+}
+
+// nonIdleLiveWithout is liveWithout excluding idle entries.
+func (l *Ledger) nonIdleLiveWithout(pool, id string) Commitment {
+	var out Commitment
+	skip := ledgerKey{Pool: pool, ID: id}
+	for k, e := range l.held {
+		if k == skip || e.Idle {
+			continue
+		}
+		out = out.Plus(l.VMMHeadroom.Charge(e.Shape))
 	}
 	return out
 }
@@ -164,7 +200,7 @@ func (l *Ledger) LiveIn(pool string) Commitment {
 	var out Commitment
 	for k, e := range l.held {
 		if k.Pool == pool {
-			out = out.Plus(e.Shape)
+			out = out.Plus(l.VMMHeadroom.Charge(e.Shape))
 		}
 	}
 	return out
@@ -186,13 +222,32 @@ func (l *Ledger) Count(pool string) int {
 	return n
 }
 
+// IdleCount is how many sandboxes of one pool are currently held idle (e.g.
+// warm session sandboxes awaiting the next message).
+func (l *Ledger) IdleCount(pool string) int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for k, e := range l.held {
+		if k.Pool == pool && e.Idle {
+			n++
+		}
+	}
+	return n
+}
+
 // LedgerHolder is one entry as Holders reports it: which pool and which
 // id it is filed under, what it is holding, and when it was charged.
 type LedgerHolder struct {
-	Pool  string
-	ID    string
-	Shape Commitment
-	Since time.Time
+	Pool      string
+	ID        string
+	Shape     Commitment
+	Since     time.Time
+	Idle      bool
+	IdleSince time.Time
 }
 
 // Holders is every live entry this ledger has, broken out by its own
@@ -215,7 +270,14 @@ func (l *Ledger) Holders() []LedgerHolder {
 	defer l.mu.Unlock()
 	out := make([]LedgerHolder, 0, len(l.held))
 	for k, e := range l.held {
-		out = append(out, LedgerHolder{Pool: k.Pool, ID: k.ID, Shape: e.Shape, Since: e.Since})
+		out = append(out, LedgerHolder{
+			Pool:      k.Pool,
+			ID:        k.ID,
+			Shape:     e.Shape,
+			Since:     e.Since,
+			Idle:      e.Idle,
+			IdleSince: e.IdleSince,
+		})
 	}
 	return out
 }
@@ -234,7 +296,13 @@ func (l *Ledger) Verdict(budget Budget, want Commitment) BudgetVerdict {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return budget.Admits(l.live(), want)
+	v := budget.Admits(l.live(), want)
+	if !v.OK {
+		if nonIdle := budget.Admits(l.nonIdleLive(), want); nonIdle.OK {
+			return nonIdle
+		}
+	}
+	return v
 }
 
 // Admits is Verdict's boolean.
@@ -251,7 +319,53 @@ func (l *Ledger) VerdictException(budget Budget, want Commitment) BudgetVerdict 
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return budget.AdmitsException(l.live(), want)
+	v := budget.AdmitsException(l.live(), want)
+	if !v.OK {
+		if nonIdle := budget.AdmitsException(l.nonIdleLive(), want); nonIdle.OK {
+			return nonIdle
+		}
+	}
+	return v
+}
+
+// VerdictPriority is Verdict for a run with priority dispatch
+// (Budget.AdmitsPriority): refused only by the disk floor or the
+// cluster, never by the budget's ceilings or what CI holds.
+func (l *Ledger) VerdictPriority(budget Budget, want Commitment) BudgetVerdict {
+	if l == nil {
+		return budget.AdmitsPriority(Commitment{}, want)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return budget.AdmitsPriority(l.live(), want)
+}
+
+// AdmitPriority is Admit for a run with priority dispatch
+// (Budget.AdmitsPriority). Idle session sandboxes are still evicted
+// first when that makes room inside the budget, so a session's own warm
+// neighbours are what it displaces before it over-commits the host.
+func (l *Ledger) AdmitPriority(budget Budget, pool, id string, want Commitment) (BudgetVerdict, func()) {
+	if l == nil {
+		return budget.AdmitsPriority(Commitment{}, want), func() {}
+	}
+	l.mu.Lock()
+	_, evicts := l.evictIdleForLocked(pool, id, func(committed Commitment) BudgetVerdict {
+		return budget.Admits(committed, want)
+	})
+	verdict := budget.AdmitsPriority(l.liveWithout(pool, id), want)
+	if !verdict.OK {
+		l.mu.Unlock()
+		for _, evict := range evicts {
+			evict()
+		}
+		return verdict, nil
+	}
+	l.charge(pool, id, want)
+	l.mu.Unlock()
+	for _, evict := range evicts {
+		evict()
+	}
+	return verdict, l.releaser(pool, id)
 }
 
 // AdmitsException is VerdictException's boolean.
@@ -285,7 +399,61 @@ func (l *Ledger) VerdictAs(budget Budget, want Commitment, repair bool) BudgetVe
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return budget.AdmitsAs(l.live(), want, repair)
+	v := budget.AdmitsAs(l.live(), want, repair)
+	if !v.OK {
+		if nonIdle := budget.AdmitsAs(l.nonIdleLive(), want, repair); nonIdle.OK {
+			return nonIdle
+		}
+	}
+	return v
+}
+
+// evictIdleForLocked evicts idle entries in oldest-IdleSince-first order
+// when doing so allows fits to succeed. Must be called with l.mu held.
+func (l *Ledger) evictIdleForLocked(pool, id string, fits func(Commitment) BudgetVerdict) (BudgetVerdict, []func()) {
+	verdict := fits(l.liveWithout(pool, id))
+	if verdict.OK {
+		return verdict, nil
+	}
+	if !fits(l.nonIdleLiveWithout(pool, id)).OK {
+		return verdict, nil
+	}
+	type candidate struct {
+		key   ledgerKey
+		entry ledgerEntry
+	}
+	skip := ledgerKey{Pool: pool, ID: id}
+	var idles []candidate
+	for k, e := range l.held {
+		if k == skip || !e.Idle {
+			continue
+		}
+		idles = append(idles, candidate{key: k, entry: e})
+	}
+	sort.Slice(idles, func(i, j int) bool {
+		if !idles[i].entry.IdleSince.Equal(idles[j].entry.IdleSince) {
+			return idles[i].entry.IdleSince.Before(idles[j].entry.IdleSince)
+		}
+		if !idles[i].entry.Since.Equal(idles[j].entry.Since) {
+			return idles[i].entry.Since.Before(idles[j].entry.Since)
+		}
+		return idles[i].key.ID < idles[j].key.ID
+	})
+	var evicts []func()
+	for _, c := range idles {
+		delete(l.held, c.key)
+		if c.entry.Evict != nil {
+			evicts = append(evicts, c.entry.Evict)
+		}
+		verdict = fits(l.liveWithout(pool, id))
+		if verdict.OK {
+			break
+		}
+	}
+	if len(evicts) > 0 {
+		l.notifyChangeLocked()
+	}
+	return verdict, evicts
 }
 
 // AdmitAs is Admit for a base-branch repair when repair is set, which
@@ -295,13 +463,18 @@ func (l *Ledger) AdmitAs(budget Budget, pool, id string, want Commitment, repair
 		return budget.AdmitsAs(Commitment{}, want, repair), func() {}
 	}
 	l.mu.Lock()
-	verdict := budget.AdmitsAs(l.liveWithout(pool, id), want, repair)
+	verdict, evicts := l.evictIdleForLocked(pool, id, func(committed Commitment) BudgetVerdict {
+		return budget.AdmitsAs(committed, want, repair)
+	})
 	if !verdict.OK {
 		l.mu.Unlock()
 		return verdict, nil
 	}
 	l.charge(pool, id, want)
 	l.mu.Unlock()
+	for _, evict := range evicts {
+		evict()
+	}
 	return verdict, l.releaser(pool, id)
 }
 
@@ -319,14 +492,123 @@ func (l *Ledger) AdmitException(budget Budget, pool, id string, want Commitment)
 		return budget.AdmitsException(Commitment{}, want), func() {}
 	}
 	l.mu.Lock()
-	verdict := budget.AdmitsException(l.liveWithout(pool, id), want)
+	verdict, evicts := l.evictIdleForLocked(pool, id, func(committed Commitment) BudgetVerdict {
+		return budget.AdmitsException(committed, want)
+	})
 	if !verdict.OK {
 		l.mu.Unlock()
 		return verdict, nil
 	}
 	l.charge(pool, id, want)
 	l.mu.Unlock()
+	for _, evict := range evicts {
+		evict()
+	}
 	return verdict, l.releaser(pool, id)
+}
+
+// ParkIdle records or converts an entry in pool under id as an idle
+// commitment (such as a warm session sandbox between turns) that counts
+// toward Live/Count honestly and is evicted oldest-first when a new
+// admission needs its capacity.
+func (l *Ledger) ParkIdle(pool, id string, want Commitment, idleSince time.Time, evict func()) func() {
+	if l == nil {
+		return func() {}
+	}
+	l.mu.Lock()
+	if l.held == nil {
+		l.held = map[ledgerKey]ledgerEntry{}
+	}
+	now := l.now()
+	if idleSince.IsZero() {
+		idleSince = now
+	}
+	key := ledgerKey{Pool: pool, ID: id}
+	since := now
+	if existing, ok := l.held[key]; ok && !existing.Since.IsZero() {
+		since = existing.Since
+	}
+	l.held[key] = ledgerEntry{
+		Shape:     want,
+		Since:     since,
+		Idle:      true,
+		IdleSince: idleSince,
+		Evict:     evict,
+	}
+	l.notifyChangeLocked()
+	l.mu.Unlock()
+	return l.releaser(pool, id)
+}
+
+// UnparkIdle marks an entry in pool under id as active (no longer idle or
+// evictable) while keeping its commitment charged.
+func (l *Ledger) UnparkIdle(pool, id string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	key := ledgerKey{Pool: pool, ID: id}
+	if existing, ok := l.held[key]; ok && existing.Idle {
+		existing.Idle = false
+		existing.IdleSince = time.Time{}
+		existing.Evict = nil
+		l.held[key] = existing
+		l.notifyChangeLocked()
+	}
+	l.mu.Unlock()
+}
+
+// EvictOldestIdle evicts up to n idle entries across all pools in order of
+// oldest IdleSince first, returning how many were evicted.
+func (l *Ledger) EvictOldestIdle(n int) int {
+	if l == nil || n <= 0 {
+		return 0
+	}
+	l.mu.Lock()
+	type candidate struct {
+		key   ledgerKey
+		entry ledgerEntry
+	}
+	var idles []candidate
+	for k, e := range l.held {
+		if e.Idle {
+			idles = append(idles, candidate{key: k, entry: e})
+		}
+	}
+	if len(idles) == 0 {
+		l.mu.Unlock()
+		return 0
+	}
+	sort.Slice(idles, func(i, j int) bool {
+		if !idles[i].entry.IdleSince.Equal(idles[j].entry.IdleSince) {
+			return idles[i].entry.IdleSince.Before(idles[j].entry.IdleSince)
+		}
+		if !idles[i].entry.Since.Equal(idles[j].entry.Since) {
+			return idles[i].entry.Since.Before(idles[j].entry.Since)
+		}
+		return idles[i].key.ID < idles[j].key.ID
+	})
+	if n > len(idles) {
+		n = len(idles)
+	}
+	var evicts []func()
+	for i := 0; i < n; i++ {
+		delete(l.held, idles[i].key)
+		if idles[i].entry.Evict != nil {
+			evicts = append(evicts, idles[i].entry.Evict)
+		}
+	}
+	l.notifyChangeLocked()
+	wake := l.agentWaiting && l.Wake != nil
+	wakeFn := l.Wake
+	l.mu.Unlock()
+	for _, evict := range evicts {
+		evict()
+	}
+	if wake {
+		wakeFn()
+	}
+	return n
 }
 
 // Charge files a commitment without asking the budget about it -- what
@@ -501,7 +783,8 @@ func (l *Ledger) Sync(pool string, live map[string]Commitment) {
 		key := ledgerKey{Pool: pool, ID: id}
 		if existing, ok := l.held[key]; ok {
 			if existing.Shape != shape {
-				l.held[key] = ledgerEntry{Shape: shape, Since: existing.Since}
+				existing.Shape = shape
+				l.held[key] = existing
 				changed = true
 				if shape.CPUs < existing.Shape.CPUs || shape.MemoryMB < existing.Shape.MemoryMB {
 					freed = true
@@ -556,7 +839,8 @@ func (l *Ledger) Reserve(pool string, reserved map[string]Commitment) {
 		key := ledgerKey{Pool: pool, ID: id}
 		if existing, ok := l.held[key]; ok {
 			if existing.Shape != shape {
-				l.held[key] = ledgerEntry{Shape: shape, Since: existing.Since}
+				existing.Shape = shape
+				l.held[key] = existing
 				changed = true
 				if shape.CPUs < existing.Shape.CPUs || shape.MemoryMB < existing.Shape.MemoryMB {
 					freed = true
@@ -618,7 +902,7 @@ func (l *Ledger) Describe() string {
 			sums[k.Pool] = s
 		}
 		s.n++
-		s.shape = s.shape.Plus(e.Shape)
+		s.shape = s.shape.Plus(l.VMMHeadroom.Charge(e.Shape))
 	}
 	ordered := make([]*poolSum, 0, len(sums))
 	for _, s := range sums {

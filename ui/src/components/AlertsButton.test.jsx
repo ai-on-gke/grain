@@ -262,6 +262,19 @@ describe("AlertsButton (grain/task-4008)", () => {
     );
   });
 
+  it("opens System → Power, where Restart grain is, for a stopped reconcile loop", async () => {
+    const onOpenPower = vi.fn();
+    renderBell(config({ reconcilerDown: true }), { onOpenPower });
+    const panel = openPanel();
+    const [row] = within(panel).getAllByTestId("alert-row");
+    expect(row).toHaveTextContent("Restart the daemon to recover");
+    fireEvent.click(within(row).getByRole("button", { name: "Power" }));
+    expect(onOpenPower).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(screen.queryByTestId("alerts-panel")).not.toBeInTheDocument(),
+    );
+  });
+
   it("announces a new critical alert politely, but not the ones already up", () => {
     const { rerender } = render(<AlertsButton alerts={[]} />);
     const region = screen.getByTestId("alerts-announcer");

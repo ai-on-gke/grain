@@ -21,11 +21,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -132,7 +134,7 @@ func TestCapabilityMethodsListArgumentSchemas(t *testing.T) {
 	if code := postJSON(t, ts, "GET", "/api/capability-methods", nil, &methods); code != 200 {
 		t.Fatalf("status %d", code)
 	}
-	if len(methods) != 2 {
+	if len(methods) < 2 {
 		t.Fatalf("methods = %+v", methods)
 	}
 	key := methods[0]
@@ -142,8 +144,11 @@ func TestCapabilityMethodsListArgumentSchemas(t *testing.T) {
 	if props, _ := key.Args["properties"].(map[string]any); props["account"] == nil {
 		t.Errorf("key's schema lost its properties: %v", key.Args)
 	}
-	if v := methods[1]; v.RequiresArgs || v.Releasable || v.Args != nil || v.Policy != nil {
+	if v := methods[1]; v.Ref != grantTestCap+"#viewer" || v.RequiresArgs || v.Releasable || v.Args != nil || v.Policy != nil {
 		t.Errorf("viewer = %+v", v)
+	}
+	if !slices.ContainsFunc(methods, func(m ui.CapabilityMethod) bool { return m.Ref == model.GrainJournalRef && !m.RequiresArgs }) {
+		t.Errorf("methods missing in-process %s: %+v", model.GrainJournalRef, methods)
 	}
 
 	if err := client.SetCapabilityPolicy(context.Background(), model.CapabilityPolicy{
@@ -311,6 +316,51 @@ func TestCheckCapabilityGrants(t *testing.T) {
 	}
 }
 
+// With a subject, the check also says which grants the capability
+// catalogue refuses a task on that repo -- or on none -- so the new-task
+// form can mark a pre-ticked default before filing rather than after.
+func TestCheckCapabilityGrantsJudgesTheCatalogueForASubject(t *testing.T) {
+	ts, client := grantTestServer(t)
+	setCatalogue(t, context.Background(), client.Store, &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
+		"gcp-key": {Restrictions: &model.CapabilityRestrictions{Repos: []string{"acme/widgets"}}},
+	}})
+	grants := []any{map[string]any{"grant": "gcp-key"}, map[string]any{"grant": "gemini-key"}}
+	for _, tc := range []struct {
+		name    string
+		subject any
+		refused bool
+	}{
+		{"no subject", nil, false},
+		{"its repo", map[string]any{"repo": "acme/widgets"}, false},
+		{"another repo", map[string]any{"repo": "acme/gadgets"}, true},
+		{"no repository", map[string]any{"repo": ""}, true},
+	} {
+		body := map[string]any{"grants": grants}
+		if tc.subject != nil {
+			body["subject"] = tc.subject
+		}
+		var out []ui.GrantCheck
+		if code := postJSON(t, ts, "POST", "/api/capability-grants/check", body, &out); code != 200 || len(out) != 2 {
+			t.Fatalf("%s: %d %+v", tc.name, code, out)
+		}
+		if got := out[0].CatalogueRefusal != ""; got != tc.refused {
+			t.Errorf("%s: gcp-key refusal = %q, want refused %v", tc.name, out[0].CatalogueRefusal, tc.refused)
+		}
+		if tc.refused && !strings.Contains(out[0].CatalogueRefusal, "repos: acme/widgets") {
+			t.Errorf("%s: refusal %q does not name the restriction", tc.name, out[0].CatalogueRefusal)
+		}
+		if out[1].CatalogueRefusal != "" {
+			t.Errorf("%s: gemini-key, which nothing restricts, is refused: %q", tc.name, out[1].CatalogueRefusal)
+		}
+	}
+	var bad map[string]any
+	if code := postJSON(t, ts, "POST", "/api/capability-grants/check", map[string]any{
+		"grants": grants, "subject": map[string]any{"repo": "not a repo"},
+	}, &bad); code != 400 {
+		t.Errorf("a malformed subject repo: %d %v", code, bad)
+	}
+}
+
 func TestCreateTaskGrantRefusalNamesItsField(t *testing.T) {
 	ts, _ := grantTestServer(t)
 	var out map[string]any
@@ -356,6 +406,87 @@ func TestCreateTaskRefusesAGrantThePolicyDenies(t *testing.T) {
 		"capabilities": []string{grantTestCap + "#viewer"},
 	}, &out); code != 201 {
 		t.Fatalf("filing on a repo the rule does not cover: %d %v", code, out)
+	}
+}
+
+// A repository default the policy denies is dropped when a task is
+// filed -- nobody asked for it -- and both the answer to the filing and
+// the task's thread say which one and why, so the filer is not left to
+// find it missing. The note is grain's, not the filer's.
+func TestCreateTaskReportsADefaultThePolicyDrops(t *testing.T) {
+	ts, client := grantTestServer(t)
+	ctx := context.Background()
+	if _, err := client.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{grantTestCap + "#viewer"}); err != nil {
+		t.Fatal(err)
+	}
+	setDenyViewerFor(t, client)
+	var out map[string]any
+	if code := postJSON(t, ts, "POST", "/api/tasks", map[string]any{"title": "defaults", "repo": "acme/widgets"}, &out); code != 201 {
+		t.Fatalf("filing: %d %v", code, out)
+	}
+	dropped, _ := out["droppedDefaults"].([]any)
+	if len(dropped) != 1 {
+		t.Fatalf("droppedDefaults = %v, want the one denied default", out["droppedDefaults"])
+	}
+	entry, _ := dropped[0].(map[string]any)
+	if reason, _ := entry["reason"].(string); entry["grant"] != grantTestCap+"#viewer" || !strings.Contains(reason, "rule 1: deny") {
+		t.Fatalf("droppedDefaults[0] = %v, want the grant and the rule that denied it", entry)
+	}
+	id, _ := out["id"].(string)
+	task, err := client.Store.GetTask(ctx, id)
+	if err != nil || task == nil {
+		t.Fatalf("task %q: %v", id, err)
+	}
+	for _, g := range task.Grants {
+		if model.CapabilityGrantRef(g.Capability) == grantTestCap+"#viewer" {
+			t.Fatalf("the denied default was attached: %v", task.Grants)
+		}
+	}
+	comments, err := client.Store.Comments(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 1 || !strings.Contains(comments[0].Body, "Default grant "+grantTestCap+"#viewer was not attached") || !strings.Contains(comments[0].Body, "rule 1: deny") {
+		t.Fatalf("thread = %+v, want one note naming the dropped default and the rule", comments)
+	}
+	if by := comments[0].Author.Actor; by.Kind != model.PrincipalAutomation || by.ID != "grain" {
+		t.Fatalf("note authored by %+v, want grain automation", by)
+	}
+	// A filing the policy leaves alone carries no droppedDefaults at all.
+	out = nil
+	if code := postJSON(t, ts, "POST", "/api/tasks", map[string]any{"title": "elsewhere", "repo": "acme/gadgets"}, &out); code != 201 {
+		t.Fatalf("filing elsewhere: %d %v", code, out)
+	}
+	if _, ok := out["droppedDefaults"]; ok {
+		t.Fatalf("droppedDefaults on a filing that dropped nothing: %v", out["droppedDefaults"])
+	}
+}
+
+// `grain task propose` (SandboxCLIActions.ProposeTask) answers with the
+// defaults the policy dropped as well, so the run that filed the
+// proposal is told the follow-up lacks them (docs/test-runs/
+// 2026-11-02-security-fixes-live.md, F3).
+func TestSandboxProposeTaskReportsADefaultThePolicyDrops(t *testing.T) {
+	ts, client := grantTestServer(t)
+	ctx := context.Background()
+	var parent map[string]any
+	if code := postJSON(t, ts, "POST", "/api/tasks", map[string]any{"title": "parent", "repo": "acme/widgets"}, &parent); code != 201 {
+		t.Fatalf("filing the parent: %d %v", code, parent)
+	}
+	if _, err := client.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{grantTestCap + "#viewer"}); err != nil {
+		t.Fatal(err)
+	}
+	setDenyViewerFor(t, client)
+	parentID, _ := parent["id"].(string)
+	res, err := ui.SandboxCLIActions{Client: client}.ProposeTask(ctx, parentID, "run-1", gitproxy.CLIProposeRequest{
+		Title: "follow-up", Body: "b",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.DroppedDefaults) != 1 || res.DroppedDefaults[0].Grant != grantTestCap+"#viewer" ||
+		!strings.Contains(res.DroppedDefaults[0].Reason, "rule 1: deny") {
+		t.Fatalf("DroppedDefaults = %+v, want the denied default and the rule", res.DroppedDefaults)
 	}
 }
 

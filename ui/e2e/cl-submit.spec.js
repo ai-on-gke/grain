@@ -111,4 +111,13 @@ test("Sync answers through the provider", async ({ page }) => {
   await page.goto(`/tasks/${behind.id}`);
   await page.getByTestId("cl-sync").click();
   await expect(page.getByText("synced to head (demo)").first()).toBeVisible();
+  // The sync made a new snapshot up to date with head: the badge goes,
+  // and Submit now waits on that snapshot's presubmit instead.
+  await expect(page.getByTestId("cl-behind-badge")).toHaveCount(0);
+  await expect(page.getByTestId("cl-submit-reasons")).toContainText(
+    "snapshot 3 (not run)",
+  );
+  await expect(page.getByTestId("cl-submit-reasons")).not.toContainText(
+    "behind head",
+  );
 });

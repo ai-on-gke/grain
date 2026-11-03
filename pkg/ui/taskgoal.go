@@ -14,7 +14,7 @@
 
 package ui
 
-// A task's goal (model.TaskGoal, docs/design/durable-tasks.md#DT-4), as
+// A task's goal (model.TaskGoal, design/design/durable-tasks.design.md#DT-4), as
 // the task page's goal editor sets and clears it: PUT and DELETE
 // /api/tasks/{id}/goal.
 
@@ -22,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -50,10 +51,20 @@ func (c *Client) SetGoal(ctx context.Context, id string, goal model.GoalDecl) er
 	if state == model.StateClosed {
 		return validationErrorf("%s is closed: reopen it before giving it a goal", id)
 	}
-	actor := c.actor(ctx)
+	prev, err := c.Store.TaskGoal(ctx, id)
+	if err != nil {
+		return err
+	}
+	actor := c.requestActor(ctx).Actor
 	now := c.now()
 	if err := c.Store.SetTaskGoal(ctx, id, goal, model.PrincipalString(actor), now); err != nil {
 		return err
+	}
+	_, _ = c.Store.ClearNotification(ctx, model.NotificationSubject(model.FamilyNoProgress, id), model.PrincipalString(actor))
+	if prev != nil && task.DeferredAt != nil && (prev.LimitNotifiedAt != nil || (prev.MetAt != nil && prev.OnMet == model.GoalRestOnMet)) {
+		if err := c.Store.SetDeferred(ctx, id, nil, nil, now); err != nil {
+			return err
+		}
 	}
 	_, err = c.Store.AddComment(ctx, model.Comment{
 		TaskID: id, Author: model.Attribution{Actor: actor}, CreatedAt: now,
@@ -80,12 +91,40 @@ func (c *Client) ClearGoal(ctx context.Context, id string) error {
 	if err := c.Store.ClearTaskGoal(ctx, id); err != nil {
 		return err
 	}
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
+	now := c.now()
+	_, _ = c.Store.ClearNotification(ctx, model.NotificationSubject(model.FamilyNoProgress, id), model.PrincipalString(actor))
+	if task.DeferredAt != nil && deferredByGoal(ctx, c.Store, id, *goal) {
+		if err := c.Store.SetDeferred(ctx, id, nil, nil, now); err != nil {
+			return err
+		}
+	}
 	_, err = c.Store.AddComment(ctx, model.Comment{
-		TaskID: id, Author: model.Attribution{Actor: actor}, CreatedAt: c.now(),
+		TaskID: id, Author: model.Attribution{Actor: actor}, CreatedAt: now,
 		Body: fmt.Sprintf("Removed this task's goal (%s).", goalWords(goal.Decl())),
 	})
 	return err
+}
+
+// deferredByGoal reports whether task id's current deferral was set by its
+// goal (at its progress limit, resting after meeting an on_met: rest goal,
+// or resting between runs via restOnGoal).
+func deferredByGoal(ctx context.Context, store *model.Store, id string, goal model.TaskGoal) bool {
+	if goal.LimitNotifiedAt != nil || (goal.MetAt != nil && goal.OnMet == model.GoalRestOnMet) {
+		return true
+	}
+	sus, err := store.Suspensions(ctx, id)
+	if err != nil || len(sus) == 0 {
+		return false
+	}
+	last := sus[len(sus)-1]
+	if last.ResumedAt != nil || last.Kind != model.SuspendRequested {
+		return false
+	}
+	if on, err := model.ParseResumeOn(last.ResumeOn); err == nil && on.Goal {
+		return true
+	}
+	return strings.HasPrefix(last.Detail, "the agent ended its run; the task rests on its ")
 }
 
 // goalWords is a goal in a sentence, for the comments above.

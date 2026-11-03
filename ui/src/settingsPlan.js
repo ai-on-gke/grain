@@ -48,13 +48,12 @@
 // job is completeness.
 const SETTING_LABELS = {
   environmentName: "Environment name",
+  settingsLocked: "Lock settings in UI (require config repo PRs)",
   pollInterval: "Poll interval",
   maxWorkers: "Max worker agents",
   maxMergesPerRepo: "Max merges per repo branch",
   maxMergers: "Max merge agents",
   maxCIJobs: "Max CI jobs",
-  mergeBatchSize: "Merge batch size",
-  mergeGatherWindow: "Merge gather window",
   newestFirst: "Work through the backlog newest-first",
   showClosedByDefault: "Show closed tasks by default",
   approvedByDefault: "Queue new tasks immediately by default",
@@ -81,6 +80,7 @@ const SETTING_LABELS = {
   sandboxMemoryMb: "Sandbox memory (MiB)",
   sandboxDiskGb: "Sandbox disk (GiB)",
   networkAccess: "Sandbox network",
+  sessionSandboxIdleTtl: "Session sandbox idle TTL",
   sandboxOvercommit: "Overcommit mode",
   sandboxOvercommitCpuMin: "Auto CPU minimum",
   sandboxOvercommitCpuMax: "Auto CPU maximum",
@@ -144,6 +144,8 @@ export function settingLabel(field) {
   return SETTING_LABELS[field] || field;
 }
 
+export { settingLocation } from "./settingsIndex.js";
+
 // SETTING_MINS is the lower bound on each bounded numeric setting, matching
 // both the input's own `min` in components/settings and the check in
 // pkg/ui/settings.go. Keeping the table here lets useSettingsSection
@@ -155,7 +157,6 @@ const SETTING_MINS = {
   maxMergesPerRepo: 1,
   maxMergers: 0,
   maxCIJobs: 0,
-  mergeBatchSize: 1,
   maxAutoSubmitDepth: 1,
   maxAutoSubmitFanOut: 1,
   maxAgentTurns: 0,

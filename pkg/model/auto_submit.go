@@ -220,8 +220,9 @@ func EscalatedCapabilities(child, parent Task) []string {
 		held[g.Capability] = true
 	}
 	var out []string
+	listed := map[string]bool{}
 	for _, g := range child.Grants {
-		if IsCapabilityRef(g.Capability) {
+		if IsCapabilityRef(g.Capability) || listed[g.Capability] {
 			continue
 		}
 		// A dangerous api scope, or priority-dispatch, is a person's to
@@ -232,12 +233,23 @@ func EscalatedCapabilities(child, parent Task) []string {
 			continue
 		}
 		held[g.Capability] = true
+		listed[g.Capability] = true
 		out = append(out, g.Capability)
 	}
 	// A capability reference the parent's recorded grants do not cover
 	// is an escalation however it came to be on the child, a default
-	// included (docs/capabilities-spec.md §2.3.4).
-	return append(out, UncoveredCapabilityRefs(child.Grants, parent.Grants)...)
+	// included (design/spec/capabilities/capabilities.spec.md §2.3.4) --
+	// except grain#ci attached by default from the target repository's CI
+	// Mode, which mints no credential and cannot be held by a standing
+	// session or a task on a GitHub-mode repository (ui.Client.capabilityByID).
+	childRefs := make([]Grant, 0, len(child.Grants))
+	for _, g := range child.Grants {
+		if g.Via == GrantByDefault && IsGrainCIGrant(g.Capability) {
+			continue
+		}
+		childRefs = append(childRefs, g)
+	}
+	return append(out, UncoveredCapabilityRefs(childRefs, parent.Grants)...)
 }
 
 // CapabilityEscalationNote is the line appended to a proposal's body when
@@ -253,6 +265,69 @@ func CapabilityEscalationNote(proposer string, caps []string) string {
 		"a person rather than being queued automatically: approving it grants those "+
 		"capabilities as well as the work. Remove them from the task first if it should go "+
 		"ahead without them.", "`"+strings.Join(caps, "`, `")+"`", proposer)
+}
+
+// SeededEscalations splits caps -- EscalatedCapabilities(child, ...) --
+// into those child's proposer named in its own call (asked) and those
+// child carries only because this deployment or its repo seeds every new
+// task with them (seeded, GrantByDefault). Only a capability reference
+// can be in seeded: a named default is never an escalation at all.
+//
+// The two are told apart because they are different things to approve.
+// "This proposal asked for X" is false of a seeded default, and the
+// person deciding should hear that X is a default the proposer was never
+// given, not a request somebody typed.
+func SeededEscalations(child Task, caps []string) (asked, seeded []string) {
+	for _, c := range caps {
+		if isSeededGrant(child.Grants, c) {
+			seeded = append(seeded, c)
+		} else {
+			asked = append(asked, c)
+		}
+	}
+	return asked, seeded
+}
+
+// isSeededGrant reports whether capability -- as EscalatedCapabilities
+// names it, which for a reference is its recorded form -- is on grants
+// only as a GrantByDefault.
+func isSeededGrant(grants []Grant, capability string) bool {
+	want, wantRef := recordedCapabilityGrant(capability)
+	found := false
+	for _, g := range grants {
+		match := g.Capability == capability
+		if !match && wantRef {
+			if got, ok := recordedCapabilityGrant(g.Capability); ok {
+				match = RecordedCapabilityGrant(got) == RecordedCapabilityGrant(want)
+			}
+		}
+		if !match {
+			continue
+		}
+		if g.Via != GrantByDefault {
+			return false
+		}
+		found = true
+	}
+	return found
+}
+
+// ProposalEscalationNote is CapabilityEscalationNote for a proposal
+// whose escalated capabilities may include seeded defaults
+// (SeededEscalations): each half is explained as what it is. "" for
+// none.
+func ProposalEscalationNote(proposer string, child Task, caps []string) string {
+	asked, seeded := SeededEscalations(child, caps)
+	note := CapabilityEscalationNote(proposer, asked)
+	if len(seeded) > 0 {
+		note += fmt.Sprintf("\n\n---\n\ngrain: this proposal holds %s because this deployment "+
+			"gives every new task it as a default capability -- task %s, which proposed it, did "+
+			"not ask for it, but does not hold it itself. A capability reference its proposer does "+
+			"not hold keeps a proposal from being queued automatically, so it waits for a person: "+
+			"approving it grants that default as well as the work. Remove it from the task first if "+
+			"it should go ahead without it.", "`"+strings.Join(seeded, "`, `")+"`", proposer)
+	}
+	return note
 }
 
 // UngrantedWritesNote is the line appended to a proposal that declared

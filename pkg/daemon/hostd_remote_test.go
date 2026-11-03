@@ -170,3 +170,32 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// Settings -> Models and System -> Health say at once that no dialing-in
+// hostd is connected, rather than after the seconds a run would wait for
+// one (hostd.ForDisplay).
+func TestStatusWithNoHostdConnectedAnswersAtOnce(t *testing.T) {
+	remote := &hostd.Remote{Token: "hostd-token"}
+	cfg := withExecutor(Config{K8sSandboxes: true, HostdRemote: remote}, whererun.Detection{Signal: "KUBERNETES_SERVICE_HOST"}, noHostdLookup(t))
+	cfg.CLIRun = map[string]model.CLIRunSetting{"antigravity": {Location: model.CLIRunHost}}
+
+	start := time.Now()
+	st := cfg.HostExecutorStatus(context.Background())
+	if took := time.Since(start); took > 500*time.Millisecond {
+		t.Errorf("HostExecutorStatus took %s with no hostd connected, want it at once", took)
+	}
+	if st.Hostd == nil || st.Hostd.Reachable || !strings.Contains(st.Hostd.Error, hostd.ErrRemoteNotConnected.Error()) {
+		t.Fatalf("status = %+v, want it to say no hostd is connected", st.Hostd)
+	}
+
+	start = time.Now()
+	rs := cfg.ResolveCLIRuns(hostd.ForDisplay(context.Background()))
+	if took := time.Since(start); took > 500*time.Millisecond {
+		t.Errorf("ResolveCLIRuns for display took %s with no hostd connected, want it at once", took)
+	}
+	for _, r := range rs {
+		if r.Framework == model.AgentFrameworkAntigravity && !strings.Contains(r.Err, hostd.ErrRemoteNotConnected.Error()) {
+			t.Errorf("agy resolved %+v, want it to say no hostd is connected", r)
+		}
+	}
+}

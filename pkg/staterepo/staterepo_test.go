@@ -1107,3 +1107,95 @@ func TestOpenRestrictsAnExistingStateDirectory(t *testing.T) {
 		t.Fatalf("tables directory mode = %o, want no group or other access", perm)
 	}
 }
+
+func TestSettingsLockedRoundTripsAndUIEditsPersistAcrossReconcileCycles(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, db := openDB(t)
+	dir := filepath.Join(t.TempDir(), "state")
+	repo, err := staterepo.Open(ctx, staterepo.Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("opening: %v", err)
+	}
+	if err := staterepo.Load(ctx, repo, db, model.SchemaVersion); err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+
+	// Simulate UI edits to grain_config (default_capabilities, console_sessions),
+	// repo_config, schedules, and templates with SettingsLocked == false (default).
+	cfg := model.Config{
+		PollInterval:        time.Minute,
+		MaxWorkers:          2,
+		GitHubHost:          "github.com",
+		DefaultCapabilities: []string{"github-read"},
+		ConsoleSessions: []model.ConsoleSession{
+			{ID: "ops", Title: "Ops Session"},
+		},
+		SettingsLocked: false,
+	}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatalf("PutConfig: %v", err)
+	}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:            model.RepoRef{Owner: "acme", Name: "widgets"},
+		PromptExtension: "Always test",
+		MergeOnGreen:    true,
+	}); err != nil {
+		t.Fatalf("PutRepoConfig: %v", err)
+	}
+	if err := store.PutSchedule(ctx, model.Schedule{
+		ID:         "sched-1",
+		Title:      "Hourly sweep",
+		Target:     model.RepoRef{Owner: "acme", Name: "widgets"},
+		Recurrence: model.Recurrence{Kind: model.RecurrenceEveryNHours, EveryNHours: 1},
+		Overlap:    model.OverlapSkip,
+	}); err != nil {
+		t.Fatalf("PutSchedule: %v", err)
+	}
+	putTemplate(t, ctx, store, "tpl-1", "Triage template")
+
+	// Export immediately on write (Sync), then run reconcile cycles (Apply + Sync).
+	if _, err := staterepo.Sync(ctx, repo, db, model.SchemaVersion); err != nil {
+		t.Fatalf("Sync after UI write: %v", err)
+	}
+	for range 2 {
+		if _, err := staterepo.Apply(ctx, repo, db, model.SchemaVersion); err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		if _, err := staterepo.Sync(ctx, repo, db, model.SchemaVersion); err != nil {
+			t.Fatalf("Sync: %v", err)
+		}
+	}
+
+	gotCfg, err := store.GetConfig(ctx)
+	if err != nil || gotCfg == nil {
+		t.Fatalf("GetConfig: %v (%v)", gotCfg, err)
+	}
+	if gotCfg.SettingsLocked {
+		t.Fatal("expected SettingsLocked to default to false")
+	}
+	if len(gotCfg.DefaultCapabilities) != 1 || gotCfg.DefaultCapabilities[0] != "github-read" {
+		t.Fatalf("DefaultCapabilities = %v, want [github-read]", gotCfg.DefaultCapabilities)
+	}
+	if len(gotCfg.ConsoleSessions) != 1 || gotCfg.ConsoleSessions[0].Title != "Ops Session" {
+		t.Fatalf("ConsoleSessions = %+v, want Ops Session", gotCfg.ConsoleSessions)
+	}
+
+	// Lock settings and verify SettingsLocked == true round-trips into a fresh DB via Load.
+	gotCfg.SettingsLocked = true
+	if err := store.PutConfig(ctx, *gotCfg); err != nil {
+		t.Fatalf("PutConfig (lock): %v", err)
+	}
+	if _, err := staterepo.Sync(ctx, repo, db, model.SchemaVersion); err != nil {
+		t.Fatalf("Sync (lock): %v", err)
+	}
+
+	store2, db2 := openDB(t)
+	if err := staterepo.Load(ctx, repo, db2, model.SchemaVersion); err != nil {
+		t.Fatalf("Load into second DB: %v", err)
+	}
+	loadedCfg, err := store2.GetConfig(ctx)
+	if err != nil || loadedCfg == nil || !loadedCfg.SettingsLocked {
+		t.Fatalf("loadedCfg = %+v (err %v), want SettingsLocked == true", loadedCfg, err)
+	}
+}

@@ -40,7 +40,8 @@ func TestTeamBroadcastByAPersonKeepsTheirName(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(comments) != 1 || comments[0].Body != "freeze" ||
-		comments[0].Author != (model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}}) {
+		comments[0].Author.OnBehalfOf != nil ||
+		!comments[0].Author.Actor.Same(model.Principal{Kind: model.PrincipalHuman, ID: "alice"}) {
 		t.Errorf("comments = %+v, want alice's unprefixed broadcast", comments)
 	}
 }
@@ -129,4 +130,33 @@ func TestBroadcastTeamMessageRunningOnly(t *testing.T) {
 // "user" a request names is ignored (grain/task-2078).
 func actingAs(ctx context.Context, user string) context.Context {
 	return ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: user})
+}
+
+// team-broadcast is retired for the agent API's teams:broadcast scope: a
+// task filed naming the bare grant records api:team-broadcast, and its
+// run may broadcast; a run holding neither is refused.
+func TestTeamBroadcastIsTheTeamsBroadcastScope(t *testing.T) {
+	client, store, ctx := testClient(t)
+	sender, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "Announcer", Approved: true, NoRepo: true,
+		Capabilities: &[]string{"team-broadcast"}})
+	if err != nil {
+		t.Fatalf("CreateTask naming team-broadcast: %v", err)
+	}
+	stored, err := store.GetTask(ctx, sender.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Grants) != 1 || stored.Grants[0].Capability != "api:team-broadcast" {
+		t.Fatalf("grants = %+v, want team-broadcast recorded as api:team-broadcast", stored.Grants)
+	}
+	other, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "Bystander", Approved: true, NoRepo: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.BroadcastTeamMessage(ctx, ui.BroadcastTeamRequest{Message: "freeze", Task: sender.ID}); err != nil {
+		t.Errorf("a task holding api:team-broadcast was refused: %v", err)
+	}
+	if _, err := client.BroadcastTeamMessage(ctx, ui.BroadcastTeamRequest{Message: "freeze", Task: other.ID}); err == nil {
+		t.Error("a task holding no broadcast grant was let broadcast")
+	}
 }

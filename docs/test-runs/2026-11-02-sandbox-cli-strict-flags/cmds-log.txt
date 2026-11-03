@@ -1,0 +1,11 @@
+# grain log with grain-log (demo's daemon log is one line long)
+log
+log -n 1
+log --lines 1
+log --tail 10
+log --tail 10 -n 1
+log --max-lines 0
+log --since 10m
+log daemon --contains started
+log --help
+read deploy://grain.log --tail 12

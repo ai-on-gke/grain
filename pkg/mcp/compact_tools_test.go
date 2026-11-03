@@ -15,7 +15,7 @@
 package mcp
 
 // Tests for the compact pipeline tools a judgement agent works from
-// (docs/design/durable-tasks.md#DT-13): read_pipeline_changes, the
+// (design/design/durable-tasks.design.md#DT-13): read_pipeline_changes, the
 // summary and conversation views of read_grain_task, list_grain_tasks'
 // filters, list_ci_runs' summary default, query_merge_queue's compact
 // default and the per-run tool budget -- and the measurement that a
@@ -291,6 +291,50 @@ func TestQueryMergeQueueCompactAndChangedSince(t *testing.T) {
 	}
 }
 
+// TestToolBudgetNoticeWordedPerSurface: the hard line names the handover
+// and the pipeline cursor as the run can reach them -- tools on the full
+// surface, `grain` commands on the control one -- asks for the cursor
+// only of a steward wake, and tells a control-surface run what its
+// run_command results cost.
+func TestToolBudgetNoticeWordedPerSurface(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		w             ToolBudgetWording
+		want, wantNot []string
+	}{
+		{"full director", ToolBudgetWording{},
+			[]string{"(write_handover)", "what you settled and what is left --"},
+			[]string{"pipeline", "grain handover", "run_command"}},
+		{"full steward", ToolBudgetWording{PipelineCursor: true},
+			[]string{"(write_handover)", "the read_pipeline_changes cursor"},
+			[]string{"grain handover", "run_command"}},
+		{"control director", ToolBudgetWording{CLI: true},
+			[]string{"`grain handover write --file <f>`", "run_command result counts towards the budget", "about 20 KB", "to a file and grep it"},
+			[]string{"write_handover", "pipeline"}},
+		{"control steward", ToolBudgetWording{CLI: true, PipelineCursor: true},
+			[]string{"`grain handover write --file <f>`", "`grain read deploy://pipeline-changes`", "run_command result counts"},
+			[]string{"write_handover", "read_pipeline_changes"}},
+	} {
+		got := toolBudgetNotice(ToolBudgetHardCalls, 0, tc.w)
+		for _, w := range tc.want {
+			if !strings.Contains(got, w) {
+				t.Errorf("%s: notice lacks %q:\n%s", tc.name, w, got)
+			}
+		}
+		for _, w := range tc.wantNot {
+			if strings.Contains(got, w) {
+				t.Errorf("%s: notice says %q:\n%s", tc.name, w, got)
+			}
+		}
+	}
+	if soft := toolBudgetNotice(ToolBudgetSoftCalls, 0, ToolBudgetWording{CLI: true}); !strings.Contains(soft, "run_command result counts") {
+		t.Errorf("control surface's soft notice does not say what run_command costs:\n%s", soft)
+	}
+	if soft := toolBudgetNotice(ToolBudgetSoftCalls, 0, ToolBudgetWording{}); strings.Contains(soft, "run_command") {
+		t.Errorf("full surface's soft notice names run_command:\n%s", soft)
+	}
+}
+
 func TestToolBudgetNoticesPastEachLine(t *testing.T) {
 	for _, tc := range []struct {
 		calls, bytes int
@@ -302,7 +346,7 @@ func TestToolBudgetNoticesPastEachLine(t *testing.T) {
 		{ToolBudgetHardCalls, 0, "Write your handover now"},
 		{1, ToolBudgetHardBytes, "Write your handover now"},
 	} {
-		got := toolBudgetNotice(tc.calls, tc.bytes)
+		got := toolBudgetNotice(tc.calls, tc.bytes, ToolBudgetWording{})
 		if (tc.want == "") != (got == "") || !strings.Contains(got, tc.want) {
 			t.Errorf("notice(%d calls, %d bytes) = %q, want %q", tc.calls, tc.bytes, got, tc.want)
 		}
@@ -477,5 +521,65 @@ func TestAStewardWakeFitsItsToolBudget(t *testing.T) {
 	t.Logf("sweeping wake: %d calls, %s", len(fixture.tasks.summaries)+2, humanBytes(sweep))
 	if sweep <= ToolBudgetHardBytes {
 		t.Errorf("the sweep came to %s, which would fit the budget: the fixture is too light to measure anything", humanBytes(sweep))
+	}
+}
+
+// An interactive session holds its conversation in one run, so a person's
+// chat reply is a new wake: the count restarts with it, the reply itself
+// carries no budget notice, and a session that keeps being answered is
+// never told to write its handover and stop part-way through a
+// conversation (task 1981).
+func TestAChatReplyRestartsTheToolBudget(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(Tool{Name: "big", Handler: func(context.Context, map[string]any) Result {
+		return Result{Text: strings.Repeat("x", 4<<10)}
+	}})
+	registry.Register(NewChatTools(&fakeChatter{turn: ChatTurn{Reply: "and now the Terraform"}}, nil)...)
+	registry.AnnounceToolBudget()
+	client := NewInProcess(context.Background(), registry)
+	t.Cleanup(func() { client.Close() })
+	call := func(name string, args map[string]any) string {
+		res, err := client.CallTool(context.Background(), name, args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Text()
+	}
+	chatArgs := map[string]any{"message": "done; anything else?", "summary": "Anything else?"}
+
+	for turn := range 4 {
+		var last string
+		for range ToolBudgetHardCalls - 5 {
+			last = call("big", nil)
+			if strings.Contains(last, "Write your handover now") {
+				t.Fatalf("turn %d: hard-line notice after a reply restarted the count: %q", turn, last[len(last)-200:])
+			}
+		}
+		if !strings.Contains(last, "Tool budget: this wake has made") {
+			t.Fatalf("turn %d: no soft-line notice after %d calls in one wake", turn, ToolBudgetHardCalls-5)
+		}
+		reply := call("chat", chatArgs)
+		if !strings.Contains(reply, "and now the Terraform") {
+			t.Fatalf("turn %d: chat lost the reply: %q", turn, reply)
+		}
+		if strings.Contains(reply, "Tool budget") {
+			t.Fatalf("turn %d: the person's reply carries grain's budget notice: %q", turn, reply)
+		}
+		registry.budget.mu.Lock()
+		calls, bytes := registry.budget.calls, registry.budget.bytes
+		registry.budget.mu.Unlock()
+		if calls != 1 || bytes >= 4<<10 {
+			t.Fatalf("turn %d: after a reply the budget reads %d calls, %d bytes; want the reply alone", turn, calls, bytes)
+		}
+	}
+	// A turn that ends with nobody replying is no new wake: it is grain's
+	// text, not a person's, and the count carries on.
+	registry.Register(NewChatTools(&fakeChatter{}, nil)...)
+	call("chat", chatArgs)
+	registry.budget.mu.Lock()
+	calls := registry.budget.calls
+	registry.budget.mu.Unlock()
+	if calls != 2 {
+		t.Errorf("an unanswered chat restarted the budget: %d calls, want 2", calls)
 	}
 }

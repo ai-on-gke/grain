@@ -224,7 +224,7 @@ func hasPullRequest(task model.Task) bool {
 // other order would post a fresh copy of the note every cycle for as
 // long as the close kept failing.
 func closeFinishedReview(ctx context.Context, store *model.Store, task model.Task, now time.Time) error {
-	if err := observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+	if err := closeTask(ctx, store, task.ID, now, "review finished", func(o *model.Observation) {
 		o.ClosedAt = &now
 	}); err != nil {
 		return err
@@ -466,18 +466,18 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 		if usesGrainCI {
 			found := false
 			for _, g := range grants {
-				if g.Capability == grainci.CapabilityName {
+				if grainci.IsGrant(g.Capability) {
 					found = true
 					break
 				}
 			}
 			if !found {
-				grants = append(grants, model.Grant{Capability: grainci.CapabilityName, Via: model.GrantByDefault})
+				grants = append(grants, model.Grant{Capability: grainci.Grant, Via: model.GrantByDefault})
 			}
 		} else {
 			filtered := make([]model.Grant, 0, len(grants))
 			for _, g := range grants {
-				if g.Capability != grainci.CapabilityName {
+				if !grainci.IsGrant(g.Capability) {
 					filtered = append(filtered, g)
 				}
 			}

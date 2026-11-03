@@ -542,6 +542,61 @@ func ParseContainerExit(out string) (ContainerExit, error) {
 	return ContainerExit{Status: fields[0], ExitCode: code, OOMKilled: fields[2] == "true"}, nil
 }
 
+// cgroupRoot is where the host's cgroup v2 hierarchy is mounted; a var
+// for tests.
+var cgroupRoot = "/sys/fs/cgroup"
+
+// containerCgroupDirs are where docker puts a container's cgroup under
+// cgroup v2, relative to cgroupRoot: the systemd driver's scope, then the
+// cgroupfs driver's directory.
+var containerCgroupDirs = []string{"system.slice/docker-%s.scope", "docker/%s"}
+
+// DockerContainerOOMKills is the oom_kill count in the memory.events of
+// vmName's own VM container's cgroup: how many processes the kernel
+// killed because that cgroup reached its memory limit
+// (-memory-limit-mb). It is the host's own account of a VMM killed for
+// host memory, and readable while the container is still up -- a VMM
+// that was a child of the container's init dies without docker's
+// OOMKilled ever being set on an exit. A cgroup that is gone (the
+// container exited and was cleaned up) or not cgroup v2 is an error.
+func DockerContainerOOMKills(ctx context.Context, vmName string) (int, error) {
+	id, err := dockerInspect(ctx, "{{.Id}}", PodName(vmName))
+	if err != nil {
+		return 0, err
+	}
+	return ContainerOOMKills(id)
+}
+
+// ContainerOOMKills is DockerContainerOOMKills for a container id.
+func ContainerOOMKills(id string) (int, error) {
+	if id == "" || strings.ContainsAny(id, "/.") {
+		return 0, fmt.Errorf("granule: container id %q", id)
+	}
+	var lastErr error
+	for _, dir := range containerCgroupDirs {
+		data, err := os.ReadFile(filepath.Join(cgroupRoot, fmt.Sprintf(dir, id), "memory.events"))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return ParseOOMKills(string(data)), nil
+	}
+	return 0, fmt.Errorf("granule: reading container %s's memory.events: %w", id, lastErr)
+}
+
+// ParseOOMKills reads the oom_kill count out of a cgroup v2
+// memory.events file, zero when it has none.
+func ParseOOMKills(events string) int {
+	for _, line := range strings.Split(events, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == "oom_kill" {
+			n, _ := strconv.Atoi(fields[1])
+			return n
+		}
+	}
+	return 0
+}
+
 // guestOOMMarkers are what a Linux kernel prints when its OOM killer
 // runs: "<proc> invoked oom-killer: ...", the "oom-kill:constraint=..."
 // summary, and "Out of memory: Killed process N (name) ...". Matched in

@@ -136,6 +136,29 @@ export function stateLabels(states) {
   return [...new Set((states || []).map((s) => STATE_LABELS[s] || s))];
 }
 
+// ASKED_PART_LABELS name one of ASKED_STATES on its own, for a list
+// holding only one of the pair: a board whose own columns collect
+// awaiting_reply ("Talking") and nothing collects awaiting_submit must
+// not say "Asked" is in no column while a column of Asked cards sits
+// right above that note.
+const ASKED_PART_LABELS = {
+  awaiting_reply: "Asked for a reply",
+  awaiting_submit: "Asked to submit",
+};
+
+// partStateLabels is stateLabels for a list that may hold only part of
+// a display state: "Asked" for both asked states together, and the one
+// that is there by its own name when the other is not.
+export function partStateLabels(states) {
+  const list = states || [];
+  const asked = ASKED_STATES.filter((s) => list.includes(s));
+  return stateLabels(
+    list.map((s) =>
+      asked.length === 1 && s === asked[0] ? ASKED_PART_LABELS[s] : s,
+    ),
+  );
+}
+
 // displayCounts folds a per-state count (an object keyed by state, or a
 // list of {state, count}) into one entry per display state, in
 // DISPLAY_STATE_ORDER: a legend counting both asked states shows one
@@ -342,6 +365,11 @@ export function stateLabel(t) {
   if (isTaskMerged(t)) return "Merged";
   if (isTaskPaused(t)) return "Paused";
   if (isBlockedWaiting(t)) return "Blocked";
+  // A GitHub issue the importer filed, waiting for somebody to approve it
+  // (ui.Task.AwaitingImportApproval): its own status rather than
+  // "Proposed", so an operator can see at a glance which held tasks came
+  // in from GitHub. Approve takes it to the queue the same way.
+  if (t.awaitingImportApproval && t.state === "proposed") return "Imported";
   const label = STATE_LABELS[t.state] || t.state;
   if (!t.repairing && t.interactive && t.state === "running")
     return "Interactive";
@@ -1244,8 +1272,8 @@ export function inboxCount(tasks) {
 // pullRequestUrl turns "owner/name#123" (t.pullRequest, straight off
 // model.PullRequestRef.String()) into the surface that owns it: the
 // config repository's native comparison page for grain/config
-// (model.IsConfigRepo, the only one there is), or GitHub for an external
-// repo. It lived
+// (model.IsConfigRepo, the only one there is), or the git host an
+// external repo is on (repoUrl). It lived
 // in DetailOverlay.jsx until the inbox needed the same link on a row
 // (InboxPage.jsx) -- two views spelling out github.com/.../pull/... for
 // themselves is one of them getting it wrong the first time the ref's
@@ -1256,7 +1284,15 @@ export function pullRequestUrl(ref, branch = "", base = "") {
     const head = branch || `grain/task-${number}`;
     return internalPullRequestUrl("grain/config", head, base || "main");
   }
-  return `https://github.com/${repo}/pull/${number}`;
+  return `${repoUrl(repo)}/pull/${number}`;
+}
+
+// issueUrl turns "owner/name#123" or "host/owner/name#123" -- a task's
+// GitHub origin -- into that issue's page on the repo's git host. The
+// /issues/ path serves a pull request too.
+export function issueUrl(ref) {
+  const [repo, number] = ref.split("#");
+  return `${repoUrl(repo)}/issues/${number}`;
 }
 
 // internalPullRequestUrl is grain's own pull request for a task branch:
@@ -1384,7 +1420,7 @@ export const NO_CAPABILITIES_HINT =
 
 // LEGACY_CAPABILITIES_HINT sits under every in-process capability
 // checklist: those ids are being converted to capability server methods
-// or api scopes (docs/design/unified-grants.md), so new access belongs
+// or api scopes (design/design/unified-grants.design.md), so new access belongs
 // under Grants rather than here.
 export const LEGACY_CAPABILITIES_HINT =
   "Legacy in-process capabilities, each being converted to a server method or API scope. Add new access under Grants.";

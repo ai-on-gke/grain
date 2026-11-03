@@ -178,7 +178,9 @@ func NewNamespaceTools(cfg NamespaceToolsConfig) []Tool {
 		{
 			Name: "grain_ls",
 			Description: "List a directory or match a glob in the grain namespace (e.g. \"ci://owner/repo\", " +
-				"\"ci://owner/repo/<run>/go/tests\", \"src://pkg\"). Results are capped at the normal tool-result limit; " +
+				"\"ci://owner/repo/<run>/go/tests\", \"src://pkg\"). On a daemon whose own module builds on grain core, " +
+				"core's source is also under \"src://core\" and answers src:// paths that module lacks. " +
+				"Results are capped at the normal tool-result limit; " +
 				"for uncapped listings in the sandbox, curl http://127.0.0.1:9728/fs/<scheme>/<path>?list.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -188,8 +190,9 @@ func NewNamespaceTools(cfg NamespaceToolsConfig) []Tool {
 						"description": "Namespace URI or path to list (e.g. \"ci://bwsalmon/grain/<run>/go\" or \"src://pkg\").",
 					},
 					"glob": map[string]any{
-						"type":        "string",
-						"description": "Optional glob pattern to filter entries recursively (e.g. \"*Test*\").",
+						"type": "string",
+						"description": "Optional glob pattern. Without / or ** it matches the directory's own entries (e.g. \"*Test*\"); " +
+							"with them it walks the subtree (e.g. \"**/*_test.go\"). A trailing / matches directories only.",
 					},
 				},
 				"required": []string{"path"},

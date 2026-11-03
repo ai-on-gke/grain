@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -358,6 +359,458 @@ var Migrations = []Migration{
 		Description: "persist running CI steps' exec ids and cursors so a restart reattaches them",
 		Statements:  []string{ciStepAttachmentTable},
 	},
+	{
+		Version:     65,
+		Description: "add each repository's GitHub issue importer settings to repo_config",
+		Statements: []string{
+			"ALTER TABLE `repo_config` ADD COLUMN `issue_import_enabled` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `repo_config` ADD COLUMN `issue_import_repo` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `issue_import_label` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `repo_config` ADD COLUMN `issue_import_approved` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `repo_config` ADD COLUMN `issue_import_interval_seconds` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version:     66,
+		Description: "add session_sandbox_idle_ttl_ms to grain_config for keeping session sandboxes warm between turns",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `session_sandbox_idle_ttl_ms` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version:     67,
+		Description: "rewrite stored team-broadcast grants to api:team-broadcast (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"team-broadcast": "api:team-broadcast"}),
+	},
+	{
+		Version:     68,
+		Description: "rewrite stored dispatch-control grants to api:dispatch-control (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"dispatch-control": "api:dispatch-control"}),
+	},
+	{
+		Version:     69,
+		Description: "rewrite stored pipeline-control grants to api:pipeline-control (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"pipeline-control": "api:pipeline-control"}),
+	},
+	{
+		Version:     70,
+		Description: "add settings_locked to grain_config for opt-in UI/API settings lock",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `settings_locked` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version:     71,
+		Description: "rewrite stored memory grants to api:memory (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"memory": "api:memory"}),
+	},
+	{
+		Version:     72,
+		Description: "rewrite stored release-notes grants to api:release-notes (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"release-notes": "api:release-notes"}),
+	},
+	{
+		Version:     73,
+		Description: "add numeric priority to task (default 5) and template",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `priority` INTEGER NOT NULL DEFAULT 5",
+			"ALTER TABLE `template` ADD COLUMN `priority` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version:     74,
+		Description: "add keep_running flag to task, template and schedule",
+		Statements: []string{
+			"ALTER TABLE `task` ADD COLUMN `keep_running` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `template` ADD COLUMN `keep_running` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `schedule` ADD COLUMN `keep_running` INTEGER NOT NULL DEFAULT 0",
+		},
+	},
+	{
+		Version:     75,
+		Description: "rewrite stored self-upgrade grants to api:self-upgrade (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"self-upgrade": "api:self-upgrade"}),
+	},
+	{
+		Version:     76,
+		Description: "rewrite stored test-quarantine grants to api:test-quarantine (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"test-quarantine": "api:test-quarantine"}),
+	},
+	{
+		Version:     77,
+		Description: "add the New Task form's configuration to grain_config",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `new_task_form` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     78,
+		Description: "upgrade the pre-slug default task_branch_template (grain/{deployment}/task-{id}) to grain/{deployment}/task-{id}-{slug}",
+		Statements: []string{
+			"UPDATE `grain_config` SET `task_branch_template` = '" + DefaultTaskBranchTemplate + "' WHERE `task_branch_template` = '" + UnsluggedTaskBranchTemplate + "'",
+		},
+	},
+	{
+		Version:     79,
+		Description: "add pending_config_change to task_observation for propose_config_change",
+		Statements: []string{
+			"ALTER TABLE `task_observation` ADD COLUMN `pending_config_change` TEXT NULL",
+		},
+	},
+	{
+		Version:     80,
+		Description: "rewrite stored grain-log grants to https://grain.dev/capabilities/grain#journal={} (the in-process capability is retired)",
+		Up:          rewriteLegacyGrants(map[string]string{"grain-log": GrainJournalGrant}),
+	},
+	{
+		Version:     81,
+		Description: "rewrite stored deployment-health grants to api:deployment:read and https://grain.dev/capabilities/grain#health={} (the in-process capability is retired)",
+		Up:          rewriteLegacyGrantsMulti(map[string][]string{"deployment-health": {"api:deployment:read", GrainHealthGrant}}),
+	},
+	{
+		Version:     82,
+		Description: "rewrite stored db-read and db-write grants to https://grain.dev/capabilities/grain#sql (the in-process capabilities are retired)",
+		Up: rewriteLegacyGrants(map[string]string{
+			"db-read":  GrainSQLReadGrant,
+			"db-write": GrainSQLWriteGrant,
+		}),
+	},
+	{
+		Version:     83,
+		Description: "rewrite retired capability grants in repo_config.ci_capabilities",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", map[string][]string{
+				"team-broadcast":    {"api:team-broadcast"},
+				"dispatch-control":  {"api:dispatch-control"},
+				"pipeline-control":  {"api:pipeline-control"},
+				"memory":            {"api:memory"},
+				"release-notes":     {"api:release-notes"},
+				"self-upgrade":      {"api:self-upgrade"},
+				"test-quarantine":   {"api:test-quarantine"},
+				"grain-log":         {GrainJournalGrant},
+				"deployment-health": {"api:deployment:read", GrainHealthGrant},
+				"db-read":           {GrainSQLReadGrant},
+				"db-write":          {GrainSQLWriteGrant},
+			})
+		},
+	},
+	{
+		Version:     84,
+		Description: "rewrite stored self-repair grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/grain#host-exec={} (the in-process capability is retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames := map[string]string{"self-repair": GrainHostExecGrant}
+			if err := rewriteLegacyGrants(renames)(ctx, tx); err != nil {
+				return err
+			}
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities",
+				map[string][]string{"self-repair": {GrainHostExecGrant}})
+		},
+	},
+	{
+		Version:     85,
+		Description: "rewrite stored git-push-any-ref grants to https://grain.dev/capabilities/repo#write (the in-process capability is retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames := map[string][]string{GitPushAnyRefCapability: {GitPushAnyRefGrant}}
+			if err := rewriteLegacyGrantsMulti(renames)(ctx, tx); err != nil {
+				return err
+			}
+			// Unlike 67-82 (which 83 caught up on), this one rewrites
+			// repo_config.ci_capabilities at once.
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", renames)
+		},
+	},
+	{
+		Version:     86,
+		Description: "rewrite stored corp-research grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/corp#research={} (a wrapper distribution's in-process capability is retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames := map[string]string{"corp-research": CorpResearchGrant}
+			if err := rewriteLegacyGrants(renames)(ctx, tx); err != nil {
+				return err
+			}
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities",
+				map[string][]string{"corp-research": {CorpResearchGrant}})
+		},
+	},
+	{
+		Version:     87,
+		Description: "drop executor_token and executor_token_sequence (remote executors are retired)",
+		Statements: []string{
+			"DROP TABLE IF EXISTS `executor_token`",
+			"DROP TABLE IF EXISTS `executor_token_sequence`",
+		},
+	},
+	{
+		Version:     88,
+		Description: "rewrite stored repo-read:<repo> and repo-write:<repo> grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/repo#read / #write {repo} (the in-process providers are retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames, err := legacyRepoAccessRenames(ctx, tx)
+			if err != nil || len(renames) == 0 {
+				return err
+			}
+			if err := rewriteLegacyGrantsMulti(renames)(ctx, tx); err != nil {
+				return err
+			}
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", renames)
+		},
+	},
+	{
+		Version:     89,
+		Description: "rebuild merge_batch keyed by task as well as branch: one overlap re-check per change",
+		// Neither engine changes a primary key in place. The rows are
+		// copied out to a table with no constraints at all (CREATE TABLE
+		// ... AS, so that no constraint name is left behind to collide
+		// with the new table's on Postgres), and back into merge_batch
+		// created afresh from the statement a new store uses.
+		Statements: []string{
+			"CREATE TABLE `merge_batch_v88` AS SELECT * FROM `merge_batch`",
+			"DROP TABLE `merge_batch`",
+			mergeBatchTable,
+			"INSERT INTO `merge_batch` (`owner`,`name`,`branch`,`task_id`,`ref`,`base_commit`,`commit`," +
+				"`members`,`run_id`,`started_at`,`finished_at`,`conclusion`,`detail`,`splits`,`queued`," +
+				"`recheck_of`,`recheck_detail`,`recheck_at`) " +
+				"SELECT `owner`,`name`,`branch`,'',`ref`,`base_commit`,`commit`," +
+				"`members`,`run_id`,`started_at`,`finished_at`,`conclusion`,`detail`,`splits`,`queued`," +
+				"`recheck_of`,`recheck_detail`,`recheck_at` FROM `merge_batch_v88`",
+			"DROP TABLE `merge_batch_v88`",
+		},
+	},
+	{
+		Version:     90,
+		Description: "fold retired in-process catalogue entries into api_scopes.presets in grain_config.capability_policy",
+		Up: foldRetiredCatalogueInProcess(
+			map[string]string{
+				"team-broadcast":   "team-broadcast",
+				"dispatch-control": "dispatch-control",
+				"pipeline-control": "pipeline-control",
+				"memory":           "memory",
+				"release-notes":    "release-notes",
+				"self-upgrade":     "self-upgrade",
+				"test-quarantine":  "test-quarantine",
+			},
+			map[string][]string{
+				"team-broadcast":        {"api:team-broadcast"},
+				"dispatch-control":      {"api:dispatch-control"},
+				"pipeline-control":      {"api:pipeline-control"},
+				"memory":                {"api:memory"},
+				"release-notes":         {"api:release-notes"},
+				"self-upgrade":          {"api:self-upgrade"},
+				"test-quarantine":       {"api:test-quarantine"},
+				"grain-log":             {GrainJournalGrant},
+				"deployment-health":     {"api:deployment:read", GrainHealthGrant},
+				"db-read":               {GrainSQLReadGrant},
+				"db-write":              {GrainSQLWriteGrant},
+				"self-repair":           {GrainHostExecGrant},
+				GitPushAnyRefCapability: {GitPushAnyRefGrant},
+				"corp-research":         {CorpResearchGrant},
+			},
+		),
+	},
+	{
+		Version:     91,
+		Description: "add a *_source column beside every principal's *_kind/*_id pair, task_event's on-behalf-of, and config_audit (operator-attribution spec §1.3, §7.1)",
+		Statements: append([]string{
+			// task_pause and task_event postdate the 2.0 baseline and
+			// Init's CREATE TABLE IF NOT EXISTS made them in place, so a
+			// store this old may not have them yet: create them in the
+			// shape schema 90 knew first, so that the ALTERs below meet
+			// the same table whichever store they run on.
+			schema90TaskPauseTable,
+			schema90TaskEventTable,
+		}, principalSourceColumns()...),
+	},
+	{
+		Version:     92,
+		Description: "add the hostd registry (hostd, hostd_token), with the co-located hostd as local",
+		Statements: []string{
+			hostdTable,
+			hostdTokenTable,
+		},
+		Up: ensureLocalHostd,
+	},
+	{
+		Version:     93,
+		Description: "route host work per run: task_hostd, task_run_hostd, and the hostd of each task_run_capability_audit record",
+		Statements: []string{
+			taskHostdTable,
+			taskRunHostdTable,
+			// task_run_capability_audit postdates the 2.0 baseline and
+			// Init made it in place, so a store this old may not have it
+			// yet: create it in schema 92's shape first.
+			schema92CapabilityAuditTable,
+			"ALTER TABLE `task_run_capability_audit` ADD COLUMN `hostd` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     94,
+		Description: "add the hostd selector a template's tasks start pinned to",
+		Statements: []string{
+			"ALTER TABLE `template` ADD COLUMN `hostd` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     95,
+		Description: "raise grain_config.max_merges_per_repo's column default from 1 to 5 (stored values are kept)",
+		Up:          raiseMaxMergesPerRepoDefault,
+	},
+	{
+		Version:     96,
+		Description: "rewrite stored grain-ci grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/grain#ci={} (the in-process capability is retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames := map[string]string{GrainCICapability: GrainCIGrant}
+			if err := rewriteLegacyGrants(renames)(ctx, tx); err != nil {
+				return err
+			}
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities",
+				map[string][]string{GrainCICapability: {GrainCIGrant}})
+		},
+	},
+}
+
+// maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as
+// schemas before 95 wrote it, with the default captured for replacing.
+var maxMergesPerRepoDefault1 = regexp.MustCompile("(`max_merges_per_repo`\\s+INTEGER\\s+NOT\\s+NULL\\s+DEFAULT\\s+)1\\b")
+
+// grainConfigTableName is the table name at the head of grain_config's
+// stored CREATE statement, however it was quoted.
+var grainConfigTableName = regexp.MustCompile("^(\\s*CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?)[`\"]?grain_config[`\"]?")
+
+// raiseMaxMergesPerRepoDefault is migration 95. Only the column default
+// changes, never a row: a deployment whose row holds 1 keeps 1, because the
+// row is written whole on every save and so cannot say whether that 1 was
+// chosen.
+//
+// Postgres changes a default in place. SQLite cannot, so there the table is
+// rebuilt from its own stored CREATE statement with only the default
+// edited -- the columns, their order and every row as they were. The two
+// are told apart by that statement: sqlite_master is a compatibility view
+// on Postgres whose sql column is always empty.
+func raiseMaxMergesPerRepoDefault(ctx context.Context, tx *sql.Tx) error {
+	var ddl string
+	if err := tx.QueryRowContext(ctx,
+		"SELECT `sql` FROM `sqlite_master` WHERE `type` = 'table' AND `name` = 'grain_config'").Scan(&ddl); err != nil {
+		return fmt.Errorf("reading grain_config's definition: %w", err)
+	}
+	if ddl == "" {
+		_, err := tx.ExecContext(ctx, "ALTER TABLE `grain_config` ALTER COLUMN `max_merges_per_repo` SET DEFAULT 5")
+		return err
+	}
+	raised := maxMergesPerRepoDefault1.ReplaceAllString(ddl, "${1}5")
+	if raised == ddl {
+		return nil
+	}
+	if !grainConfigTableName.MatchString(raised) {
+		return fmt.Errorf("grain_config's stored definition does not start as a CREATE TABLE: %.60q", ddl)
+	}
+	raised = grainConfigTableName.ReplaceAllString(raised, "${1}`grain_config_95`")
+	for _, stmt := range []string{
+		"DROP TABLE IF EXISTS `grain_config_95`",
+		raised,
+		"INSERT INTO `grain_config_95` SELECT * FROM `grain_config`",
+		"DROP TABLE `grain_config`",
+		"ALTER TABLE `grain_config_95` RENAME TO `grain_config`",
+	} {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// principalSourceColumns are migration 91's ALTERs: `<p>_source` beside
+// every stored principal, `”` for every row already there.
+func principalSourceColumns() []string {
+	cols := []struct{ table, column string }{
+		{"task", "origin_actor_source"},
+		{"task", "origin_behalf_source"},
+		{"task", "approval_actor_source"},
+		{"task", "approval_behalf_source"},
+		{"task_comment", "author_source"},
+		{"task_comment", "author_behalf_source"},
+		{"task_pause", "paused_by_source"},
+		{"pipeline_pause", "actor_source"},
+		{"scheduled_upgrade", "actor_source"},
+		{"memory", "updated_by_source"},
+		{"memory_document", "updated_by_source"},
+		{"release_note", "updated_by_source"},
+		{"task_event", "actor_source"},
+		{"task_event", "behalf_kind"},
+		{"task_event", "behalf_id"},
+		{"task_event", "behalf_source"},
+	}
+	out := make([]string, 0, len(cols))
+	for _, c := range cols {
+		out = append(out, "ALTER TABLE `"+c.table+"` ADD COLUMN `"+c.column+"` TEXT NOT NULL DEFAULT ''")
+	}
+	return out
+}
+
+// schema92CapabilityAuditTable is task_run_capability_audit as schema
+// 92 created it, frozen for migration 93.
+const schema92CapabilityAuditTable = `CREATE TABLE IF NOT EXISTS ` + "`task_run_capability_audit`" + ` (
+  ` + "`run_id`" + `     TEXT     NOT NULL,
+  ` + "`seq`" + `        INTEGER  NOT NULL,
+  ` + "`capability`" + ` TEXT     NOT NULL,
+  ` + "`attempt_id`" + ` TEXT     NOT NULL,
+  ` + "`at`" + `         DATETIME NOT NULL,
+  ` + "`record`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`note`" + `       TEXT     NOT NULL DEFAULT '',
+  PRIMARY KEY (` + "`run_id`" + `, ` + "`seq`" + `)
+)`
+
+// schema90TaskPauseTable and schema90TaskEventTable are task_pause and
+// task_event as schema 90 created them, frozen for migration 91.
+const schema90TaskPauseTable = `CREATE TABLE IF NOT EXISTS ` + "`task_pause`" + ` (
+  ` + "`task_id`" + `           TEXT     NOT NULL,
+  ` + "`paused_at`" + `         DATETIME NOT NULL,
+  ` + "`paused_by_kind`" + `    TEXT     NOT NULL,
+  ` + "`paused_by_id`" + `      TEXT     NOT NULL,
+  ` + "`from_state`" + `        TEXT     NOT NULL,
+  ` + "`immediate`" + `         INTEGER  NOT NULL DEFAULT 0,
+  ` + "`grace_until`" + `       DATETIME NULL,
+  ` + "`run_id`" + `            TEXT     NULL,
+  PRIMARY KEY (` + "`task_id`" + `)
+)`
+
+const schema90TaskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
+  ` + "`id`" + `         INTEGER PRIMARY KEY AUTOINCREMENT,
+  ` + "`task_id`" + `    TEXT     NOT NULL,
+  ` + "`kind`" + `       TEXT     NOT NULL,
+  ` + "`at`" + `         DATETIME NOT NULL,
+  ` + "`actor_kind`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_id`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`reason`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`detail`" + `     TEXT     NOT NULL DEFAULT ''
+)`
+
+// CorpResearchGrant is what migration 86 rewrote stored corp-research grants
+// to: the method a wrapper distribution's build registers (capability.Register) in place
+// of its in-process corp-research provider, and makes corp-research an alias
+// of. Core serves no such method; it names the grant only because the
+// migration list is core's, and a store migrated by a build without the
+// method holds a grant nothing there resolves, as the bare corp-research it
+// replaced resolved to no provider there either.
+const CorpResearchGrant = "https://grain.dev/capabilities/corp#research={}"
+
+// ApplyDataMigrations runs the row rewrites (Up) of every migration past
+// from, inside tx, on tables already at SchemaVersion's shape. It is for
+// rows that arrive by another way than the store they were written in --
+// a state repository dump stamped from, imported into a store at this
+// build's schema -- which an in-place migration never sees: without it a
+// dump from before the capability retirements would keep the retired
+// names in grain_config's and repo_config's capability lists and in
+// the standing console sessions. Every Up is idempotent, so a row that is
+// already canonical is left as it is.
+func ApplyDataMigrations(ctx context.Context, tx *sql.Tx, from int) error {
+	for v := from + 1; v <= SchemaVersion; v++ {
+		m, ok := migrationFor(v)
+		if !ok || m.Up == nil {
+			continue
+		}
+		if err := m.Up(ctx, tx); err != nil {
+			return fmt.Errorf("applying schema %d's rewrite to rows from schema %d: %w", v, from, err)
+		}
+	}
+	return nil
 }
 
 // migrationFor returns the migration that produces version, or false.
@@ -422,7 +875,7 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 	for v := from + 1; v <= SchemaVersion; v++ {
 		m, _ := migrationFor(v)
 		for _, stmt := range m.Statements {
-			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			if err := execMigrationStatement(ctx, tx, stmt); err != nil {
 				return fmt.Errorf("migrating schema to %d (%s): %w", v, m.Description, err)
 			}
 		}
@@ -442,6 +895,32 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 		return fmt.Errorf("migrating schema %d to %d: restamping: %w", from, SchemaVersion, err)
 	}
 	return tx.Commit()
+}
+
+// execMigrationStatement runs one of a migration's Statements, passing over
+// an ADD COLUMN whose column the store already has. That statement runs
+// under a savepoint: Postgres aborts the whole transaction on any failed
+// statement (SQLSTATE 25P02 on everything after it), so without rolling
+// back to the savepoint the error it passes over would fail the next
+// statement instead, under that statement's name.
+func execMigrationStatement(ctx context.Context, tx *sql.Tx, stmt string) error {
+	if !strings.Contains(strings.ToUpper(stmt), " ADD COLUMN ") {
+		_, err := tx.ExecContext(ctx, stmt)
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "SAVEPOINT grain_add_column"); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, stmt); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") &&
+			!strings.Contains(strings.ToLower(err.Error()), "already exists") {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT grain_add_column")
+		return err
+	}
+	_, err := tx.ExecContext(ctx, "RELEASE SAVEPOINT grain_add_column")
+	return err
 }
 
 // storeViews names the views the store holds, whichever build made

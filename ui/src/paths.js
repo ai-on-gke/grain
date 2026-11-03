@@ -103,7 +103,7 @@ import {
 //
 // Memory, Sandboxes and Caches were views of their own (/memory,
 // /sandboxes, /caches); they are a Settings section and two System tabs
-// now (docs/design/settings-panel.md §3.5), and parseSegments redirects
+// now (design/design/settings-panel.design.md §3.5), and parseSegments redirects
 // their old paths there.
 const VIEWS = [
   "inbox",
@@ -214,6 +214,14 @@ export function parsePath(pathname, search = "") {
   if (parsed.showNewTask) {
     const newTaskFields = parseNewTaskFields(search);
     return newTaskFields ? { ...parsed, newTaskFields } : parsed;
+  }
+  if (
+    parsed.view === "settings" &&
+    parsed.settingsSection === "config-repo" &&
+    !parsed.settingsItem &&
+    params.get("path")
+  ) {
+    return { ...parsed, settingsItem: params.get("path") };
   }
   if (parsed.view === "system" && parsed.systemTab === "metrics") {
     const metricsNarrowing = parseNarrowing(search);
@@ -532,7 +540,7 @@ function parseSegments(pathname) {
   if (segments[0] === "t" && segments.length > 1) {
     return parseSegments(`/${segments.slice(2).join("/")}`);
   }
-  // Settings and System are views (docs/design/settings-panel.md §3.5).
+  // Settings and System are views (design/design/settings-panel.design.md §3.5).
   // Every path that used to open one of their old overlays, or one of
   // the pages that moved into them, parses to where that is now; App's
   // replaceState pass then writes the new path, so Back never lands on
@@ -541,14 +549,29 @@ function parseSegments(pathname) {
     const settingsSection = settingsSectionFor(segments[1]);
     // One item of a section -- a capability server, by its
     // capability_id -- is the segment after it
-    // (/settings/capabilities/<id>), so a server's page is a link.
+    // (/settings/capabilities/<id>), so a server's page is a link. The
+    // config repo browser's is the file it has open, slashes and all
+    // (/settings/config-repo/settings/capabilities.yml).
     const settingsItem =
-      settingsSection === "capabilities" && segments.length > 2
+      (settingsSection === "capabilities" ||
+        settingsSection === "config-repo") &&
+      segments.length > 2
         ? itemId(segments.slice(2).join("/"))
         : "";
     return settingsItem
       ? { view: "settings", settingsSection, settingsItem }
       : { view: "settings", settingsSection };
+  }
+  // The Config Repo Browser (design/design/config-repo-settings.design.md §2.3)
+  // is Settings → Config repo; /config is the address every "View in
+  // config repo" link names, the file in its ?path= (parsePath) or after
+  // it.
+  if (segments[0] === "config") {
+    const settingsItem =
+      segments.length > 1 ? itemId(segments.slice(1).join("/")) : "";
+    return settingsItem
+      ? { view: "settings", settingsSection: "config-repo", settingsItem }
+      : { view: "settings", settingsSection: "config-repo" };
   }
   if (segments[0] === "admin") return oldAdminDestination(segments[1]);
   if (segments[0] === "system") return systemDestination(segments[1]);
@@ -624,7 +647,7 @@ function parseSegments(pathname) {
             release: itemId(rest[1]),
           }
         : { view: "repos", repo, showReleases: true };
-    // One tab of the repo page (docs/design/settings-panel.md §2.3), so
+    // One tab of the repo page (design/design/settings-panel.design.md §2.3), so
     // Settings → Repositories can link to where a setting lives:
     // /repos/acme/widgets/settings/ci. A tab this build does not have
     // opens the page on Overview, as a bare /repos/<o>/<n> does.
@@ -649,7 +672,7 @@ function parseSegments(pathname) {
   if (segments[0] === "boards" && segments[1]) {
     return { view: "boards", boardId: itemId(segments[1]) };
   }
-  // Processes (docs/design/settings-panel.md §5.4): schedules,
+  // Processes (design/design/settings-panel.design.md §5.4): schedules,
   // templates and suites are one page, and each item opens under it at
   // /processes/<kind>/<id>, <kind> plural so the old top-level paths
   // below redirect by a prefix swap. A suite's runs are under the suites
@@ -959,7 +982,11 @@ export function buildPath({
   if (view === "settings")
     return settingsSection
       ? `/settings/${encodeURIComponent(settingsSection)}${
-          settingsItem ? `/${encodeURIComponent(settingsItem)}` : ""
+          !settingsItem
+            ? ""
+            : settingsSection === "config-repo"
+              ? `/${settingsItem.split("/").map(encodeURIComponent).join("/")}`
+              : `/${encodeURIComponent(settingsItem)}`
         }`
       : "/settings";
   if (view === "system") {

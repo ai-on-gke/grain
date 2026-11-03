@@ -69,7 +69,9 @@ const LABELS = {
   nothingNeeded: "Nothing needed",
   model: "Model",
   autoMerge: "Auto-merge",
+  keepRunning: "Keep running",
   approval: "Approval",
+  priority: "Task priority",
 };
 
 // EMPTY is what an empty value *means*, per field -- the whole reason
@@ -153,7 +155,12 @@ function fieldValue(field) {
     return (
       <Box
         component="span"
-        sx={{ display: "inline-flex", flexWrap: "wrap", gap: 0.5 }}
+        sx={{
+          display: "inline-flex",
+          flexWrap: "wrap",
+          gap: 0.5,
+          maxWidth: "100%",
+        }}
       >
         {field.values.map((v) => (
           <GrantChip key={v} grant={v} component="span" />
@@ -240,7 +247,7 @@ function ComposedTaskCard({ task, index, total }) {
                   <Typography
                     component="dd"
                     variant="body2"
-                    sx={{ m: 0, flex: 1, wordBreak: "break-word" }}
+                    sx={{ m: 0, flex: 1, minWidth: 0, wordBreak: "break-word" }}
                   >
                     {fieldValue({ ...field, source: groups[0].source })}
                   </Typography>
@@ -251,7 +258,11 @@ function ComposedTaskCard({ task, index, total }) {
                   />
                 </>
               ) : (
-                <Stack component="dd" spacing={0.5} sx={{ m: 0, flex: 1 }}>
+                <Stack
+                  component="dd"
+                  spacing={0.5}
+                  sx={{ m: 0, flex: 1, minWidth: 0 }}
+                >
                   {groups.map((group) => (
                     <Stack
                       key={`${group.source}-${group.values.join(",")}`}
@@ -261,7 +272,12 @@ function ComposedTaskCard({ task, index, total }) {
                     >
                       <Typography
                         variant="body2"
-                        sx={{ m: 0, flex: 1, wordBreak: "break-word" }}
+                        sx={{
+                          m: 0,
+                          flex: 1,
+                          minWidth: 0,
+                          wordBreak: "break-word",
+                        }}
                       >
                         {fieldValue({
                           ...field,

@@ -1,0 +1,8 @@
+name: Release process review
+template: release-process-review
+base: main
+timezone: UTC
+weekly:
+  day: monday
+  at: "07:00"
+overlap: skip

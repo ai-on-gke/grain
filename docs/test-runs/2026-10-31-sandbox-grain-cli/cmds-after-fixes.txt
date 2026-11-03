@@ -1,0 +1,7 @@
+command -v grain; sha256sum $(command -v grain)
+grain log --min-prority err --max-lines 2; echo "exit=$?"
+grain log --repo other/repo --max-lines 1; echo "exit=$?"
+grain metrics --repos acme/widgets; echo "exit=$?"
+grain metrics --window 24h --repo acme/widgets | head -3; echo "exit=$?"
+grain log --help | tail -2
+grain log --contains read_grain_log --max-lines 1

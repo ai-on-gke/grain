@@ -70,6 +70,9 @@ func reconcileTaskPauses(ctx context.Context, deps Deps, now time.Time) error {
 		return err
 	}
 	for _, p := range pauses {
+		if pauseGraceOver(p, now) {
+			releaseWarmSessionSandbox(ctx, deps, p.TaskID, true)
+		}
 		if deps.Config.TaskCancellers.Live(p.TaskID) && pauseGraceOver(p, now) {
 			if deps.Config.TaskCancellers.Cancel(p.TaskID, ErrOperatorPaused) {
 				log.Printf("orchestrator: task %s is paused; cancelled its live run", p.TaskID)

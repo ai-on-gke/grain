@@ -168,16 +168,17 @@ func TestPipelineChangesRoute(t *testing.T) {
 }
 
 // A repository-scoped tasks:read grant reads only its own repository's
-// feed: the gate admits it only to a call naming that repository, and the
-// feed answers for that repository alone -- not, as GET /api/tasks does,
-// for the whole deployment whatever repo= says.
+// feed: the gate admits it only to a call naming that repository --
+// narrowing one that names none to it -- and the feed answers for that
+// repository alone.
 func TestPipelineChangesRouteKeepsARepoScopedGrantToItsRepository(t *testing.T) {
 	client, _ := pipelineWorld(t)
 	srv := ui.NewServerWithClient(client)
 	seedAPITask(t, client, "900", "acme/gadgets", "api:tasks:read@acme/gadgets")
 
-	if code, body := asAgent(t, srv, "900", http.MethodGet, "/api/pipeline/changes", "", ""); code != http.StatusForbidden {
-		t.Errorf("a repository-scoped grant naming no repository: %d %s, want 403", code, body)
+	if code, body := asAgent(t, srv, "900", http.MethodGet, "/api/pipeline/changes", "", ""); code != http.StatusOK ||
+		strings.Contains(body, "acme/widgets") || strings.Contains(body, "run-") {
+		t.Errorf("a repository-scoped grant naming no repository was not narrowed to acme/gadgets: %d %s", code, body)
 	}
 	if code, body := asAgent(t, srv, "900", http.MethodGet, "/api/pipeline/changes?repo=acme/widgets", "", ""); code != http.StatusForbidden {
 		t.Errorf("a grant on acme/gadgets read acme/widgets: %d %s, want 403", code, body)

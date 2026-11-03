@@ -82,6 +82,25 @@ type FiledProposal struct {
 	// work, or what the proposer's permission does not cover -- and ""
 	// for a queued one or a filer that does not say.
 	ApprovalNote string
+	// Parked is why filing parked the proposal awaiting a reply -- its
+	// repo is off the deployment's target repo list, say -- and "" for one
+	// filing did not park. A parked proposal is not dispatched whatever
+	// Queued says: Queued is its approval, and the park is a second thing
+	// standing between it and a run that only an operator lifts.
+	Parked string
+	// DroppedDefaults is the deployment and repository default grants
+	// the capability policy kept off the proposal when it was filed, each
+	// with the policy's reason (ui.Task.DroppedDefaults). Reported
+	// because nobody asked for a default, so nothing else tells the run
+	// that the follow-up it just filed will start without one.
+	DroppedDefaults []DroppedDefault
+}
+
+// DroppedDefault is one default grant the capability policy kept off a
+// proposal, and why (ui.DroppedDefault).
+type DroppedDefault struct {
+	Grant  string
+	Reason string
 }
 
 // SupersedeKept is one dependent a supersede left where it was, and why
@@ -135,6 +154,11 @@ type ProposedTask struct {
 	// Branch is the base branch this proposal's work should target.
 	// Empty means the target repository's default branch.
 	Branch string
+
+	// Priority is the numeric task priority (default 5; higher numbers mean higher priority).
+	// 0 means unset (defaults to model.DefaultTaskPriority, or template
+	// priority); the tool refuses an explicit priority below 1.
+	Priority int
 
 	// NoRepo files this task with no repository at all -- a standalone
 	// task with no repository target,
@@ -216,6 +240,9 @@ type ProposedTask struct {
 	// NoPort files the proposal as one whose change is not ported to its
 	// repository's other paired branches (model.Task.NoPort).
 	NoPort bool
+	// KeepRunning files the proposal so that its task immediately restarts
+	// when its run exits rather than completing or parking (model.Task.KeepRunning).
+	KeepRunning bool
 	// FixesBaseBranch files the proposal marked as fixing its base branch
 	// while that branch is red (model.FixesBaseBranch): it is not made to
 	// wait on the branch's repair, because it is one.
@@ -241,6 +268,9 @@ type ProposedTask struct {
 	// Per call, and not inherited by what the held task files in turn.
 	HoldForApproval bool
 }
+
+// TaskProposal aliases ProposedTask for callers referring to a proposed task record.
+type TaskProposal = ProposedTask
 
 // ReviewComment is one add_review_comment call as this process recorded
 // it. Turning it into a real draft review on the pull request under
@@ -822,7 +852,8 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 		Name: "propose_task",
 		Description: "Propose a follow-up or out-of-scope task for the queue. " + filing +
 			", linked to this task: queued when your task's permission covers it, or held " +
-			"unapproved for human review (pass hold_for_approval: true to hold regardless). " +
+			"unapproved for human review (pass hold_for_approval: true to hold regardless; " +
+			"keep_running or a priority above your task's always holds). " +
 			"Set depends_on for tasks it must wait on, repo if the work belongs in another " +
 			"repository, or supersedes to replace an undispatched task. Run 'grain help propose' " +
 			"for full reference.",
@@ -898,12 +929,17 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 					"type": "string",
 					"enum": []any{"close", "ack"},
 				},
+				"keep_running":      map[string]any{"type": "boolean"},
 				"no_port":           map[string]any{"type": "boolean"},
 				"fixes_base_branch": map[string]any{"type": "boolean"},
 				"origin":            map[string]any{"type": "string"},
 				"no_repo":           map[string]any{"type": "boolean"},
 				"at_front":          map[string]any{"type": "boolean"},
-				"template_id":       map[string]any{"type": "string"},
+				"priority": map[string]any{
+					"type":        "integer",
+					"description": "1 or more (default 5; higher runs first). Not inherited from your task",
+				},
+				"template_id": map[string]any{"type": "string"},
 				"template_fields": map[string]any{
 					"type": "object",
 					"additionalProperties": map[string]any{
@@ -967,6 +1003,10 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 			}
 			supersedes, _ := argString(args, "supersedes")
 			reviewTemplateID, _ := argString(args, "review_template_id")
+			priority, hasPriority, whole := argWholeInt(args, "priority")
+			if hasPriority && (!whole || priority < 1) {
+				return Result{Text: "priority must be a positive integer (1 or more; leave it out for the default, 5)", IsError: true}
+			}
 			cpus, _ := argInt(args, "sandbox_cpus")
 			memoryMB, _ := argInt(args, "sandbox_memory_mb")
 			diskGB, _ := argInt(args, "sandbox_disk_gb")
@@ -1014,6 +1054,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 				Body:                body,
 				Repo:                repo,
 				Branch:              strings.TrimSpace(branch),
+				Priority:            priority,
 				NoRepo:              noRepo,
 				ChangeTarget:        changeTarget,
 				AtFront:             atFront,
@@ -1042,6 +1083,9 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 			if noPort, ok := argBool(args, "no_port"); ok {
 				task.NoPort = noPort
 			}
+			if keepRunning, ok := argBool(args, "keep_running"); ok {
+				task.KeepRunning = keepRunning
+			}
 			if fixes, ok := argBool(args, "fixes_base_branch"); ok {
 				task.FixesBaseBranch = fixes
 			}
@@ -1059,9 +1103,9 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 					return Result{Text: "Could not file proposal: " + err.Error(), IsError: true}
 				}
 				standing := proposalStanding(task, filed)
-				return Result{Text: fmt.Sprintf("Proposed task #%s is visible now: %s. %s%s%s",
+				return Result{Text: fmt.Sprintf("Proposed task #%s is visible now: %s. %s%s%s%s",
 					filed.ID, relativeProposalURL(filed), standing, notBeforeOutcome(task.NotBefore),
-					supersedeOutcome(task.Supersedes, filed))}
+					supersedeOutcome(task.Supersedes, filed), droppedDefaultsOutcome(filed.DroppedDefaults))}
 			}
 
 			sink.mu.Lock()
@@ -1099,19 +1143,45 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 // answer partly the run's own choice: a run that asked to hold a
 // proposal and is told only "unapproved" cannot tell whether its request
 // was the reason or its permission was, and so cannot say which in chat.
+//
+// A proposal filing parked (FiledProposal.Parked) is said to be parked
+// as well, and never "queued": an approved one parked on a repo off the
+// target repo list is not dispatched in its turn, and a run told it was
+// would pass that on as fact -- or, holding one, conclude its hold had
+// not worked.
 func proposalStanding(task ProposedTask, filed FiledProposal) string {
-	switch {
-	case filed.Queued:
+	if filed.Queued {
+		if filed.Parked != "" {
+			return "It is filed approved -- your own task's permission covers it -- but it is " +
+				"not queued: filing parked it awaiting a reply, and it is not dispatched until an " +
+				"operator lifts that. " + parkedReason(filed.Parked)
+		}
 		return "It is filed approved -- your own task's permission covers it -- so it is " +
 			"queued already and dispatched in its turn without anybody approving it."
+	}
+	var standing string
+	switch {
 	case filed.ApprovalNote != "":
-		return "It is filed unapproved because " + filed.ApprovalNote +
+		standing = "It is filed unapproved because " + filed.ApprovalNote +
 			". It waits until a human approves it."
 	case task.HoldForApproval:
-		return "It is filed unapproved because you asked to hold it (hold_for_approval). " +
+		standing = "It is filed unapproved because you asked to hold it (hold_for_approval). " +
 			"It waits until a human approves it."
+	default:
+		standing = "It is filed unapproved: your permission does not cover it. It waits until a human approves it."
 	}
-	return "It is filed unapproved: your permission does not cover it. It waits until a human approves it."
+	if filed.Parked != "" {
+		standing += " It is also parked awaiting a reply, and a reply alone does not approve it. " +
+			parkedReason(filed.Parked)
+	}
+	return standing
+}
+
+// parkedReason quotes the comment filing parked a proposal on, which
+// says what lifts the park in grain's own words (model.
+// OffAllowlistParkComment).
+func parkedReason(note string) string {
+	return "Parked because: " + strings.TrimSpace(note)
 }
 
 // ParseNotBefore reads propose_task's `not_before`: a bare date, taken
@@ -1188,6 +1258,22 @@ func supersedeOutcome(asked string, filed FiledProposal) string {
 	return fmt.Sprintf(" Task %s is still open: grain would not close it -- a task that has "+
 		"already been dispatched, has a pull request, lives in another repository or does not "+
 		"exist is left for a human. The note on the new task says which.", asked)
+}
+
+// droppedDefaultsOutcome is what a propose_task call -- live, or `grain
+// task propose` -- is told about the default grants the capability
+// policy kept off the task it just filed: one sentence per grant, with
+// the policy's reason, and "" when none was dropped. The task's thread
+// carries the same note, but the run that filed it does not read that
+// thread, and a default is the one grant it never asked for and so would
+// not think to check.
+func droppedDefaultsOutcome(dropped []DroppedDefault) string {
+	var out string
+	for _, d := range dropped {
+		out += fmt.Sprintf(" Default grant %s was not attached to it: %s.",
+			d.Grant, strings.TrimSuffix(strings.TrimSpace(d.Reason), "."))
+	}
+	return out
 }
 
 // hashList is ids written "#1, #2".

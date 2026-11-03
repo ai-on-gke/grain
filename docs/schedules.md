@@ -260,6 +260,40 @@ day-of-month field added for monthly).
 Still open, unchanged from before: no CLI, and no per-schedule approval
 gate.
 
+## Update: event-driven schedules triggered by a concluded GitHub Actions workflow run
+
+In addition to wall-clock cadences (`every`, `daily`, `weekly`, `monthly`), a
+schedule can fire when a GitHub Actions workflow run concludes
+(`RecurrenceGitHubWorkflowRun`, `pkg/workflows/recurrence.go`):
+
+```yaml
+trigger:
+  github_workflow_run:
+    workflow: nightly.yml
+    conclusions: [failure, success]
+    branches: [main]
+```
+
+- **`workflow`** (required): matches the workflow's filename (`nightly.yml`),
+  stem (`nightly`), path (`.github/workflows/nightly.yml`), or display name.
+- **`conclusions`** (optional): list of GitHub run conclusions that fire the
+  schedule (for example `[failure]` or `[failure, success]`). When omitted on
+  a workflow-review schedule, grain's `review:` policy (`on-failure` by default,
+  or `always`) decides whether a passing run files a review task or settles
+  with `ReviewNotNeeded: true`.
+- **`branches`** (optional): list of branches (or glob patterns) the run's head
+  branch must match; when omitted, the schedule's `base` branch is used if set.
+
+When declared in `.grain/schedules/<name>.yml` without an explicit `template:`
+or `suite:`, a `github_workflow_run` schedule defaults to the built-in
+`system:workflow-review:<stem>` ("Review last night's `<stem>` run") template
+and records each firing in `scheduled_workflow_run` (`model.ScheduledWorkflowRun`),
+including the GitHub run URL, conclusion, failing jobs and steps, and the
+failure tails from `github_ci_job` in both the filed task's prompt and its
+opening comment. Concluded runs arrive via `workflow_run` webhooks or the
+ETag-cached `GET /repos/{o}/{r}/actions/runs?status=completed` polling fallback
+and are deduplicated by `(repo, run_id, attempt)`.
+
 ## Update: templates (bwsalmon/agents#516)
 
 A schedule's own content -- title, description, target repo, base
@@ -323,7 +357,7 @@ with no per-template `GET` for the same reason schedules have none.
 **Frontend**: templates are a kind of row on the Processes page
 (`ProcessesList.jsx`, `/processes`), the one table of schedules,
 workflow schedules, templates, suites and triggers that replaced the
-separate Schedules and Templates panes (docs/design/settings-panel.md
+separate Schedules and Templates panes (design/design/settings-panel.design.md
 §5). "+ New" there, or a click on an existing template row, opens
 `TemplateOverlay.jsx` -- the same fields a schedule carries, minus any
 cadence, since a template has none of its own. `ScheduleOverlay.jsx`,

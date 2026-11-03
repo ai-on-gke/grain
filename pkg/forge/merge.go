@@ -132,7 +132,7 @@ func (r MergeRefusal) Exhausted(now time.Time) bool {
 	switch r.Kind {
 	case github.RefusalApproval:
 		return false
-	case github.RefusalRule, github.RefusalRequiredChecks:
+	case github.RefusalRule, github.RefusalRequiredChecks, github.RefusalUnresolvedThreads:
 		return true
 	}
 	return r.Count >= MaxBlindMergeRetries || r.Stalled(now)

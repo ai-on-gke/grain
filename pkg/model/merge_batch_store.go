@@ -23,17 +23,15 @@ import (
 	"time"
 )
 
-// GetMergeBatch reads the batch in flight for one base branch, or nil
-// (with no error) where there is none -- which is every branch on a
-// deployment that has just upgraded across this, and every branch between
-// batches. See MergeBatch.
-func (s *Store) GetMergeBatch(ctx context.Context, repo RepoRef, branch string) (*MergeBatch, error) {
+// GetMergeBatch reads the re-check in flight for one change on one base
+// branch, or nil (with no error) where there is none. See MergeBatch.
+func (s *Store) GetMergeBatch(ctx context.Context, repo RepoRef, branch, taskID string) (*MergeBatch, error) {
 	row := s.db.QueryRowContext(ctx,
 		"SELECT `ref`,`base_commit`,`commit`,`members`,`run_id`,`started_at`,`finished_at`,"+
 			"`conclusion`,`detail`,`splits`,`queued`,`recheck_of`,`recheck_detail`,`recheck_at` FROM `merge_batch` "+
-			"WHERE `owner` = ? AND `name` = ? AND `branch` = ?",
-		repo.Owner, repo.Name, branch)
-	b := MergeBatch{Repo: repo, Branch: branch}
+			"WHERE `owner` = ? AND `name` = ? AND `branch` = ? AND `task_id` = ?",
+		repo.Owner, repo.Name, branch, taskID)
+	b := MergeBatch{Repo: repo, Branch: branch, TaskID: taskID}
 	var startedAt time.Time
 	var finishedAt sql.NullTime
 	var members string
@@ -63,23 +61,22 @@ func (s *Store) GetMergeBatch(ctx context.Context, repo RepoRef, branch string) 
 	return &b, nil
 }
 
-// ListMergeBatches returns every batch grain has in flight, ordered so a
-// listing is stable. It is what the reconciler walks: one row per base
-// branch with a batch on it, which is a handful on the busiest
-// deployment.
+// ListMergeBatches returns every re-check grain has in flight, ordered so
+// a listing is stable. It is what the reconciler walks: one row per
+// change being re-checked, which is a handful on the busiest deployment.
 func (s *Store) ListMergeBatches(ctx context.Context) ([]MergeBatch, error) {
 	var out []MergeBatch
 	err := each(ctx, s.db,
-		"SELECT `owner`,`name`,`branch`,`ref`,`base_commit`,`commit`,`members`,`run_id`,"+
+		"SELECT `owner`,`name`,`branch`,`task_id`,`ref`,`base_commit`,`commit`,`members`,`run_id`,"+
 			"`started_at`,`finished_at`,`conclusion`,`detail`,`splits`,`queued`,"+
 			"`recheck_of`,`recheck_detail`,`recheck_at` "+
-			"FROM `merge_batch` ORDER BY `owner`,`name`,`branch`", nil,
+			"FROM `merge_batch` ORDER BY `owner`,`name`,`branch`,`task_id`", nil,
 		func(rows *sql.Rows) error {
 			var b MergeBatch
 			var startedAt time.Time
 			var finishedAt, recheckAt sql.NullTime
 			var members string
-			if err := rows.Scan(&b.Repo.Owner, &b.Repo.Name, &b.Branch, &b.Ref, &b.BaseCommit,
+			if err := rows.Scan(&b.Repo.Owner, &b.Repo.Name, &b.Branch, &b.TaskID, &b.Ref, &b.BaseCommit,
 				&b.Commit, &members, &b.RunID, &startedAt, &finishedAt, &b.Conclusion,
 				&b.Detail, &b.Splits, &b.Queued, &b.RecheckOf, &b.RecheckDetail, &recheckAt); err != nil {
 				return err
@@ -107,9 +104,10 @@ func (s *Store) ListMergeBatches(ctx context.Context) ([]MergeBatch, error) {
 	return out, nil
 }
 
-// PutMergeBatch replaces the row for one base branch wholesale, the shape
-// PutBaseBranchCI has: a batch is one indivisible statement about a tree,
-// and the next batch on that branch supersedes all of it.
+// PutMergeBatch replaces the row for one change on one base branch
+// wholesale, the shape PutBaseBranchCI has: a re-check is one indivisible
+// statement about a tree, and the next re-check of that change supersedes
+// all of it.
 func (s *Store) PutMergeBatch(ctx context.Context, b MergeBatch) error {
 	members, err := json.Marshal(b.Members)
 	if err != nil {
@@ -124,25 +122,26 @@ func (s *Store) PutMergeBatch(ctx context.Context, b MergeBatch) error {
 			recheckAt = b.RecheckAt.UTC()
 		}
 		_, err := tx.ExecContext(ctx,
-			"REPLACE INTO `merge_batch` (`owner`,`name`,`branch`,`ref`,`base_commit`,`commit`,"+
+			"REPLACE INTO `merge_batch` (`owner`,`name`,`branch`,`task_id`,`ref`,`base_commit`,`commit`,"+
 				"`members`,`run_id`,`started_at`,`finished_at`,`conclusion`,`detail`,`splits`,"+
-				"`queued`,`recheck_of`,`recheck_detail`,`recheck_at`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-			b.Repo.Owner, b.Repo.Name, b.Branch, b.Ref, b.BaseCommit, b.Commit,
+				"`queued`,`recheck_of`,`recheck_detail`,`recheck_at`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+			b.Repo.Owner, b.Repo.Name, b.Branch, b.TaskID, b.Ref, b.BaseCommit, b.Commit,
 			string(members), b.RunID, b.StartedAt.UTC(), finishedAt, b.Conclusion, b.Detail,
 			b.Splits, b.Queued, b.RecheckOf, b.RecheckDetail, recheckAt)
 		return err
 	})
 }
 
-// DeleteMergeBatch forgets one branch's batch. A batch is transient by
-// nature -- it ends the moment its members merge, fall out, or the whole
-// thing is abandoned -- and leaving the last one's row behind would hold
-// the next set of changes out of the queue for a tree nobody is testing.
-func (s *Store) DeleteMergeBatch(ctx context.Context, repo RepoRef, branch string) error {
-	return s.write(ctx, "clear merge batch for "+repo.String()+" "+branch, func(tx *sql.Tx) error {
+// DeleteMergeBatch forgets one change's re-check on one branch. A
+// re-check is transient by nature -- it ends the moment its change
+// merges, falls out, or the whole thing is abandoned -- and leaving the
+// row behind would hold the change out of the queue for a tree nobody is
+// testing.
+func (s *Store) DeleteMergeBatch(ctx context.Context, repo RepoRef, branch, taskID string) error {
+	return s.write(ctx, "clear merge batch for "+repo.String()+" "+branch+" "+taskID, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
-			"DELETE FROM `merge_batch` WHERE `owner` = ? AND `name` = ? AND `branch` = ?",
-			repo.Owner, repo.Name, branch)
+			"DELETE FROM `merge_batch` WHERE `owner` = ? AND `name` = ? AND `branch` = ? AND `task_id` = ?",
+			repo.Owner, repo.Name, branch, taskID)
 		return err
 	})
 }

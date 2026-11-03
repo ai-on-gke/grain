@@ -167,3 +167,59 @@ func TestRemoteHostMkdirAllFailureFallsBackToTempHome(t *testing.T) {
 		t.Errorf("attempt tried to resume %q with temp home", got)
 	}
 }
+
+type mockCarriedMCPHost struct {
+	mockRemoteHost
+	tempHome string
+}
+
+func (m *mockCarriedMCPHost) ServesMCPOverHTTP() bool { return true }
+
+func (m *mockCarriedMCPHost) MkdirTemp(ctx context.Context, pattern string) (string, error) {
+	if m.tempHome != "" {
+		return m.tempHome, nil
+	}
+	return m.LocalHost.MkdirTemp(ctx, pattern)
+}
+
+func TestRemoteHostRejectsTraversalTaskID(t *testing.T) {
+	r := &attemptRunner{replies: []attemptReply{
+		{stdout: stream(conversationInit("conv-tmp"), successResult("done"))},
+	}}
+	rh := &mockRemoteHost{}
+	customRoot := "/opt/remote/sessions"
+	f := newFramework(r, "/usr/local/bin/grain", WithHost(rh), withSessionsIn(t.TempDir()), WithRemoteSessionRoot(customRoot))
+
+	result, err := f.Run(context.Background(), agent.RunConfig{
+		Prompt: "do something", SandboxRoot: t.TempDir(), TaskID: "../escape",
+	})
+	if err != nil {
+		t.Fatalf("Run err: %v", err)
+	}
+	if result.ResumableSession != "" {
+		t.Errorf("ResumableSession = %q, want empty on malformed TaskID", result.ResumableSession)
+	}
+	for _, d := range rh.dirs {
+		if strings.Contains(d, customRoot) || strings.Contains(d, "escape") {
+			t.Errorf("MkdirAll touched %q for malformed TaskID", d)
+		}
+	}
+}
+
+func TestCarriedMCPHostOmitsDaemonSandboxRootFromArgsAndWorkDir(t *testing.T) {
+	r := &attemptRunner{}
+	stageHome := t.TempDir()
+	ch := &mockCarriedMCPHost{tempHome: stageHome}
+	f := newFramework(r, "/usr/local/bin/grain", WithHost(ch))
+	daemonSandbox := "/var/lib/grain/daemon-only-sandbox"
+
+	args := f.agyArgs(context.Background(), agent.RunConfig{SandboxRoot: daemonSandbox}, "")
+	for _, a := range args {
+		if a == "--add-dir" || a == daemonSandbox {
+			t.Fatalf("agyArgs on carried-MCP host passed daemon SandboxRoot: %v", args)
+		}
+	}
+	if got, want := f.workDir(agent.RunConfig{SandboxRoot: daemonSandbox}, stageHome), agyWorkspaceDir(stageHome); got != want {
+		t.Fatalf("workDir on carried-MCP host = %q, want %q", got, want)
+	}
+}

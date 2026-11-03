@@ -120,12 +120,15 @@ func (v Version) Stock() bool { return v.Digest == "" }
 
 // ParseVersion reads back what String wrote.
 func ParseVersion(s string) (Version, error) {
-	repo, pin, ok := strings.Cut(s, "@")
-	owner, name, named := strings.Cut(repo, "/")
-	if !ok || !named || owner == "" || name == "" || pin == "" {
+	text, pin, ok := strings.Cut(s, "@")
+	if !ok || pin == "" {
 		return Version{}, fmt.Errorf("version %q is not owner/name@<pin>", s)
 	}
-	v := Version{Repo: model.RepoRef{Owner: owner, Name: name}}
+	repo, err := model.ParseRepo(text)
+	if err != nil {
+		return Version{}, fmt.Errorf("version %q is not owner/name@<pin> (or host/owner/name@<pin>)", s)
+	}
+	v := Version{Repo: repo}
 	switch {
 	case strings.HasPrefix(pin, "sha256:"):
 		v.Digest = pin

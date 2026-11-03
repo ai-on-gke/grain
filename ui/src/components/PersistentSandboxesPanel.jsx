@@ -246,8 +246,7 @@ export default function PersistentSandboxesPanel({
             </Link>{" "}
             to set one up — e.g.{" "}
             <em>
-              &apos;set up a staging environment for bwsalmon/grain on
-              main&apos;
+              &apos;set up a staging environment for acme/web on main&apos;
             </em>
             .
           </Typography>

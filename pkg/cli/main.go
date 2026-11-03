@@ -137,7 +137,7 @@ func Main() {
 	gitrefs.Pin()
 	args := os.Args[1:]
 	// Inside an agent's sandbox, the read commands of
-	// docs/design/sandbox-first-agent-surface.md answer over the
+	// design/design/sandbox-first-agent-surface.design.md answer over the
 	// sandbox's own proxy (pkg/sandboxcli); anything else runs as it
 	// always has.
 	if code, handled := sandboxcli.Main(args, os.Stdout, os.Stderr); handled {
@@ -177,9 +177,6 @@ func Main() {
 			return
 		case "host-script":
 			os.Exit(hostscriptcli.Main(args[1:], os.Stdout, os.Stderr))
-		case "model-server", "executor", "modelexec":
-			executorCmd(args[1:])
-			return
 		case "access-code":
 			accessCodeCmd(args[1:])
 			return
@@ -248,7 +245,24 @@ func Main() {
 			return
 		}
 	}
+	if len(args) == 0 {
+		// Inside a sandbox, a bare grain gets the sandbox CLI's help.
+		if code, handled := sandboxcli.Unknown(args, os.Stderr); handled {
+			os.Exit(code)
+		}
+	}
 	if err := runCLI(args); err != nil {
+		var unknown unknownCommandError
+		if errors.As(err, &unknown) {
+			// Inside a sandbox, a command neither CLI has is answered with
+			// the sandbox CLI's help, not this CLI's daemon-facing usage;
+			// the task-CLI commands above (grain declarations check) still
+			// run there.
+			if code, handled := sandboxcli.Unknown(args, os.Stderr); handled {
+				os.Exit(code)
+			}
+			fmt.Fprint(os.Stderr, usage)
+		}
 		fmt.Fprintln(os.Stderr, "grain: "+err.Error())
 		os.Exit(1)
 	}
@@ -260,7 +274,6 @@ const usage = `usage: grain [global flags] <command> [args]
        grain mcpserver [flags] speak MCP over stdin/stdout against the sandbox tools (see mcpserver.go)
        grain runhost exec [flags] a run host's entrypoint: run one spooled agent CLI invocation (see pkg/runhost)
        grain hostd [flags]     on the bare machine, run the allowlisted host CLIs and capability servers a containerised daemon asks for (see pkg/hostd)
-       grain model-server [flags] run agent model CLIs (agy, claude, codex) on this host and connect outbound to grain (aliases: executor, modelexec; see executor.go)
        grain host-script <name> [args]  in a sandbox, run a granted host script on grain's side (see pkg/hostscriptcli)
        grain secrets [flags]   set/delete/list a colocated server's secrets on disk (see secrets.go)
        grain connections import FILE  record a seed file's git and model connections (see connections.go)
@@ -337,6 +350,10 @@ Commands:
   settings [flags]                     show, or change, the daemon's stored configuration (bwsalmon/agents#320)
   sandbox-budget                       whether one sandbox of this deployment's shape fits in its sandbox budget,
                                        and the settings that would fit when it does not (see sandbox_budget_cmd.go)
+  sandbox probe -id <id> [-access dialout|kubectl] -- <command> [args...]
+                                       build one throwaway sandbox, run the command in it over the
+                                       deployment's guest-access channel, print its output and delete it
+                                       (-k8s-granule-sandboxes only; see sandbox_probe_cmd.go)
   repo <subcommand> [args]             list repos, and read or change one repo's own settings --
                                        capabilities, standing instructions and setup command (see repo.go)
   metrics [-window 7d] [-repo R]       throughput and latency over a window -- or over an absolute
@@ -376,6 +393,8 @@ Commands:
   gcp-key list|get|set|delete          manage this deployment's GCP service-account keys
   capability-servers list|add|remove|enable|disable|bind-secret
                                        manage this deployment's capability servers (mcpServers)
+  hostds list|register|set-owner       the hostd registry: register a hostd with its owner, the identity
+                                       it dials in through IAP as
   broadcast [-all] <message...>        send a notice to all running task agents (or with -all, all active tasks)
   release approve|reject vX.Y.0        make a pending trunk release official, or drop it -- a person's act;
                                        an agent is refused
@@ -547,12 +566,16 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdSettings(ctx, c, out, cmdArgs)
 	case "sandbox-budget":
 		return cmdSandboxBudget(ctx, c, out, cmdArgs)
+	case "sandbox":
+		return cmdSandbox(ctx, c, out, cmdArgs)
 	case "repo":
 		return cmdRepo(ctx, c, out, cmdArgs)
 	case "gcp-key":
 		return cmdGCPKey(ctx, c, out, cmdArgs)
 	case "capability-servers":
 		return cmdCapabilityServers(ctx, c, out, cmdArgs)
+	case "hostds":
+		return cmdHostds(ctx, c, out, cmdArgs)
 	case "git-ambient":
 		return cmdGitAmbient(ctx, c, out, cmdArgs)
 	case "git-connections":
@@ -564,10 +587,15 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 	case "release":
 		return cmdRelease(ctx, c, out, cmdArgs)
 	default:
-		fs.Usage()
-		return fmt.Errorf("unknown command %q", cmd)
+		return unknownCommandError{cmd}
 	}
 }
+
+// unknownCommandError is a command dispatchCLI does not have; Main prints
+// the usage for it (the sandbox CLI's, inside a sandbox).
+type unknownCommandError struct{ cmd string }
+
+func (e unknownCommandError) Error() string { return fmt.Sprintf("unknown command %q", e.cmd) }
 
 // taskID reads the task id positional argument. It is not parsed as a
 // number: ids are decimal today because that is what Store.NewTaskID

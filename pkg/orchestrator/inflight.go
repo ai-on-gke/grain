@@ -65,6 +65,13 @@ type InFlight struct {
 // before the goroutine is what makes a Wait immediately after a cycle
 // see the runs that cycle just started, rather than racing the scheduler.
 func (f *InFlight) Go(runID, taskID string, fn func()) {
+	f.GoAfter(runID, taskID, fn, nil)
+}
+
+// GoAfter is Go with an optional afterDone callback invoked after runID has
+// been removed from the in-flight set (so Busy(taskID) is already false when
+// afterDone wakes the reconcile loop).
+func (f *InFlight) GoAfter(runID, taskID string, fn, afterDone func()) {
 	f.mu.Lock()
 	if f.live == nil {
 		f.live = make(map[string]string)
@@ -73,7 +80,12 @@ func (f *InFlight) Go(runID, taskID string, fn func()) {
 	f.mu.Unlock()
 
 	go func() {
-		defer f.done(runID)
+		defer func() {
+			f.done(runID)
+			if afterDone != nil {
+				afterDone()
+			}
+		}()
 		fn()
 	}()
 }

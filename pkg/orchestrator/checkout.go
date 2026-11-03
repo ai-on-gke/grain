@@ -169,11 +169,15 @@ type checkout struct {
 	// Setup and not an error: see runSetupCommand.
 	Setup *SetupResult
 	// DirectorState records the best-effort checkout made for a Director
-	// session. It never makes dispatch fail: the prompt explains why the
+	// session, or for any repo-less task holding grain/config in its
+	// Writes (wantsStateCheckout). It never makes dispatch fail: the prompt explains why the
 	// state is absent when it cannot be supplied.
 	DirectorState     directorStateStatus
 	DirectorStateRepo model.RepoRef
-	ProxyBase         string
+	// DirectorStateWritable is a ready checkout the session may push
+	// proposal branches from: the state repository is in its Writes.
+	DirectorStateWritable bool
+	ProxyBase             string
 	// GrainSource records what placeGrainSource did with the
 	// deployment's baked-in copy of grain's source for a self-debug run.
 	GrainSource grainSourceStatus
@@ -281,13 +285,18 @@ func prepareCheckout(ctx context.Context, tools []mcp.Tool, remoteBase string, t
 
 func prepareCheckoutFrom(ctx context.Context, tools []mcp.Tool, remoteBase, cloneURL string, task model.Task,
 	setup string, notes setupNotes, settingsRepos ...model.RepoRef) (checkout, error) {
+	return prepareCheckoutWithReuse(ctx, tools, remoteBase, cloneURL, task, setup, false, notes, settingsRepos...)
+}
+
+func prepareCheckoutWithReuse(ctx context.Context, tools []mcp.Tool, remoteBase, cloneURL string, task model.Task,
+	setup string, reused bool, notes setupNotes, settingsRepos ...model.RepoRef) (checkout, error) {
 
 	var settings model.RepoRef
 	if len(settingsRepos) != 0 {
 		settings = settingsRepos[0]
 	}
-	if id, ok := model.ConsoleSessionIDOf(task); ok && id == model.DirectorSessionID && task.Target == nil {
-		return prepareDirectorState(ctx, tools, remoteBase, task, settings), nil
+	if wantsStateCheckout(task) {
+		return prepareDirectorStateWithReuse(ctx, tools, remoteBase, task, settings, reused), nil
 	}
 
 	if (remoteBase == "" && cloneURL == "") || task.Target == nil {
@@ -299,6 +308,20 @@ func prepareCheckoutFrom(ctx context.Context, tools []mcp.Tool, remoteBase, clon
 		// (and a second entry in the narration setupNotes keeps) on it.
 		out := checkout{Root: sandboxWorkingDir(ctx, tools)}
 		return out, nil
+	}
+	if reused {
+		if run, ok := runCommandTool(tools); ok {
+			checkExisting := fmt.Sprintf("set -e\n%s\nif [ -d '%s/.git' ]; then\n  cd '%s'\n  echo 'grain-reused-checkout:yes'\n  %s\nfi",
+				sandboxRootEcho(), CheckoutDir, CheckoutDir, stateRepoCheck())
+			res := run(ctx, map[string]any{"command": checkExisting})
+			if !res.IsError && strings.Contains(res.Text, "grain-reused-checkout:yes") {
+				return checkout{
+					Dir:       CheckoutDir,
+					Root:      sandboxRootFrom(res.Text),
+					StateRepo: strings.Contains(res.Text, stateRepoMarker),
+				}, nil
+			}
+		}
 	}
 	branch := task.BranchName()
 	for _, v := range []string{task.Target.Owner, task.Target.Name, branch} {
@@ -386,17 +409,62 @@ fi
 	return out, nil
 }
 
+// wantsStateCheckout reports whether task's run is given the grain-state
+// checkout (DirectorStateDir) instead of a repository checkout: a task with
+// no repo of its own that is either the Director or holds grain/config in
+// its Writes. The second half is what propose_config_change, and the git
+// proxy's proposal-branch grant, key on (writesConfigRepo in pkg/daemon,
+// model.Store.GitConfigProposalPrefix) -- the tool's script starts in
+// grain-state, so a session offered it without this checkout could only
+// ever fail to push.
+func wantsStateCheckout(task model.Task) bool {
+	if task.Target != nil {
+		return false
+	}
+	if id, ok := model.ConsoleSessionIDOf(task); ok && id == model.DirectorSessionID {
+		return true
+	}
+	return writesConfigRepo(task)
+}
+
+// writesConfigRepo reports whether task holds grain/config
+// (model.ConfigRepo) in its Writes.
+func writesConfigRepo(task model.Task) bool {
+	for _, write := range task.Writes {
+		if model.IsConfigRepo(write.Repo) {
+			return true
+		}
+	}
+	return false
+}
+
 func prepareDirectorState(ctx context.Context, tools []mcp.Tool, remoteBase string, task model.Task, repo model.RepoRef) checkout {
+	return prepareDirectorStateWithReuse(ctx, tools, remoteBase, task, repo, false)
+}
+
+func prepareDirectorStateWithReuse(ctx context.Context, tools []mcp.Tool, remoteBase string, task model.Task, repo model.RepoRef, reused bool) checkout {
 	out := checkout{DirectorStateRepo: repo, ProxyBase: proxyBaseWithoutCredentials(remoteBase)}
 	if repo.Owner == "" {
 		out.DirectorState = directorStateAbsent
 		out.Root = sandboxWorkingDir(ctx, tools)
 		return out
 	}
-	granted := false
+	// A session that may write the state repository (grain_config's
+	// console_sessions gives the director grain/config in its writes) gets
+	// a checkout it can push from: never to main, which the git proxy
+	// refuses, but to the proposal branches propose_config_change pushes
+	// (model.ConfigProposalBranchPrefix). Read access alone keeps the push
+	// URL disabled, as every checkout did before.
+	granted, writable := false, false
 	for _, read := range task.Reads {
-		if read == repo {
+		if read.Same(repo) {
 			granted = true
+			break
+		}
+	}
+	for _, write := range task.Writes {
+		if write.Repo.Same(repo) {
+			granted, writable = true, true
 			break
 		}
 	}
@@ -411,10 +479,24 @@ func prepareDirectorState(ctx context.Context, tools []mcp.Tool, remoteBase stri
 		out.Root = sandboxWorkingDir(ctx, tools)
 		return out
 	}
+	after := fmt.Sprintf("git -C '%s' remote set-url --push origin grain-read-only", DirectorStateDir)
+	if writable {
+		after = fmt.Sprintf("git -C '%[1]s' config user.name 'grain director' && git -C '%[1]s' config user.email 'grain@localhost'", DirectorStateDir)
+	}
 	script := fmt.Sprintf(`%s
 rm -rf '%s'
-git clone --quiet '%s' '%s' && git -C '%s' remote set-url --push origin grain-read-only`,
-		sandboxRootEcho(), DirectorStateDir, CloneURL(out.ProxyBase, repo), DirectorStateDir, DirectorStateDir)
+git clone --quiet '%s' '%s' && %s`,
+		sandboxRootEcho(), DirectorStateDir, CloneURL(out.ProxyBase, repo), DirectorStateDir, after)
+	if reused {
+		script = fmt.Sprintf(`%s
+if [ -d '%s/.git' ]; then
+  git -C '%s' pull --ff-only --quiet 2>/dev/null || true
+else
+  rm -rf '%s'
+  git clone --quiet '%s' '%s' && %s
+fi`,
+			sandboxRootEcho(), DirectorStateDir, DirectorStateDir, DirectorStateDir, CloneURL(out.ProxyBase, repo), DirectorStateDir, after)
+	}
 	result := run(ctx, map[string]any{"command": script})
 	out.Root = sandboxRootFrom(result.Text)
 	if result.IsError {
@@ -423,6 +505,7 @@ git clone --quiet '%s' '%s' && git -C '%s' remote set-url --push origin grain-re
 		return out
 	}
 	out.DirectorState = directorStateReady
+	out.DirectorStateWritable = writable
 	return out
 }
 

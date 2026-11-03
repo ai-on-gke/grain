@@ -333,6 +333,12 @@ func TestSyncReviewsClosesAReviewThatFinishedWithNothingToLand(t *testing.T) {
 	if !strings.Contains(bodies[0], task.ID) {
 		t.Fatalf("the note on the closed review = %q, want it to name task %s", bodies[0], task.ID)
 	}
+	// And recorded as grain's close, once, for the reason the timeline
+	// shows under it.
+	if events, err := store.TaskEvents(ctx, review.ID); err != nil || len(events) != 1 ||
+		events[0].By != model.GrainPrincipal || events[0].Reason != "review finished" {
+		t.Fatalf("the review's events = %+v (%v), want grain's one close, review finished", events, err)
+	}
 
 	// The change under review is emphatically not closed by this: it has
 	// a pull request, it is on the queue, and its own ending is the merge.
@@ -646,7 +652,7 @@ func TestSyncReviewsGrantsGrainCIToGrainCIRepo(t *testing.T) {
 	filed := reviewTaskOf(t, ctx, store, task.ID)
 	found := false
 	for _, g := range filed.Grants {
-		if g.Capability == "grain-ci" {
+		if g.Capability == model.GrainCIGrant {
 			found = true
 			break
 		}

@@ -497,6 +497,30 @@ export function matchesFilters(t, conditions, q, config, searchIn = null) {
   );
 }
 
+// unknownValues is the values a condition names that its attribute's
+// closed vocabulary (`closed`: the states) does not have. Such a value
+// matches nothing, and without saying so its chip reads like a real one:
+// `state:any:waiting` -- a board query written from the label "Waiting"
+// rather than the state `queued` -- was worded "State is any of waiting",
+// exactly as `state:any:queued` is, over an empty list. A value is read
+// through `expand` first, so "asked" -- both asked states, as the menu
+// offers them -- is known.
+//
+// Only an attribute that says its `order` is the whole vocabulary is
+// checked. An enum custom field's options can move on under values
+// tasks still carry (its "is a legacy value" comparison), and an
+// attribute's `order` is otherwise only how it sorts.
+export function unknownValues(attr, cond) {
+  if (!attr?.closed || OPERATORS[cond?.op]?.input !== "choices") return [];
+  return (cond.values || []).filter(
+    (v) =>
+      v !== NONE &&
+      !(attr.expand ? attr.expand(v) : [v]).every((x) =>
+        attr.order.includes(x),
+      ),
+  );
+}
+
 // describeCondition is one condition as a sentence, for the chip a
 // closed editor leaves behind: "Repo is any of acme/widgets, acme/
 // gadgets". A condition with no value yet says what it is waiting for
@@ -506,14 +530,18 @@ export function describeCondition(attr, cond, config) {
   const label = `${attr.label} ${op ? op.label : cond.op}`;
   if (!op || op.input === "none") return label;
   if (cond.values.length === 0) return `${label}…`;
-  if (op.input === "choices")
+  if (op.input === "choices") {
+    const unknown = new Set(unknownValues(attr, cond));
     return `${label} ${cond.values
       .map((v) =>
         v === NONE
           ? attr.noneLabel || NONE_LABEL_FALLBACK
-          : valueLabel(attr, v, config),
+          : unknown.has(v)
+            ? `“${v}” (unknown)`
+            : valueLabel(attr, v, config),
       )
       .join(", ")}`;
+  }
   if (op.input === "days")
     return `${label} ${cond.values[0]} day${cond.values[0] === "1" ? "" : "s"}`;
   if (op.input === "hours")
@@ -533,7 +561,13 @@ const DIRECTIONS = {
   text: { asc: "A–Z", desc: "Z–A" },
 };
 
+// A date that is still to come -- a schedule's next run -- is read as
+// soon or late rather than old or new: "Next run, oldest first" named
+// the run furthest off as the old one.
+const FUTURE_DATE = { asc: "Soonest first", desc: "Latest first" };
+
 export function directionLabels(attr) {
+  if (attr.type === TYPE_DATE && attr.future) return FUTURE_DATE;
   if (DIRECTIONS[attr.type]) return DIRECTIONS[attr.type];
   return attr.order ? DIRECTIONS.ordered : DIRECTIONS.text;
 }
@@ -625,7 +659,7 @@ export function sortTasks(tasks, sort, attributes, config) {
 // three-second poll. Measured on a store of 929 tasks: 1.0-1.2s of
 // script per poll tick at six panels and 2.1-2.3s at ten, which is a
 // main thread saturated by a deployment where nothing is happening
-// (docs/hand-runs/2026-09-07-panel-dashboard.md, section 5). The tasks
+// (the 2026-09-07 panel-dashboard hand run, section 5). The tasks
 // were the same tasks and the question was usually the same question --
 // a panel with no query of its own inherits the dashboard's -- so the
 // cost was N copies of one answer, N times a minute, for as long as the

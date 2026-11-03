@@ -44,9 +44,7 @@ func (p *grainPlacer) RunInSandbox(context.Context, []string, string) (string, s
 func writeSandboxGrain(t *testing.T, content string) (path, sum string) {
 	t.Helper()
 	path = filepath.Join(t.TempDir(), "grain-sandbox")
-	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutableStub(t, path, content)
 	digest := sha256.Sum256([]byte(content))
 	return path, hex.EncodeToString(digest[:])
 }
@@ -101,9 +99,7 @@ func TestSandboxGrainBinaryBeside(t *testing.T) {
 	if got := SandboxGrainBinaryBeside(exe); got != "" {
 		t.Errorf("with no grain-sandbox beside it: %q, want \"\"", got)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "grain-sandbox"), []byte("x"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutableStub(t, filepath.Join(dir, "grain-sandbox"), "x")
 	if got := SandboxGrainBinaryBeside(exe); got != filepath.Join(dir, "grain-sandbox") {
 		t.Errorf("SandboxGrainBinaryBeside = %q", got)
 	}

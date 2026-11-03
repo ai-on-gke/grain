@@ -386,6 +386,7 @@ function ScheduleOverlay({
   const [title, setTitle] = useState(schedule?.title || "");
   const [description, setDescription] = useState(schedule?.description || "");
   const [autoMerge, setAutoMerge] = useState(!!schedule?.autoMerge);
+  const [keepRunning, setKeepRunning] = useState(!!schedule?.keepRunning);
   const [networkAccess, setNetworkAccess] = useState(
     schedule?.networkAccess || "",
   );
@@ -467,6 +468,7 @@ function ScheduleOverlay({
       req.title = title;
       req.description = description;
       req.autoMerge = autoMerge;
+      req.keepRunning = keepRunning;
       req.networkAccess = networkAccess;
       req.nothingNeededAction = nothingNeededAction;
       req.reads = reads;
@@ -602,7 +604,7 @@ function ScheduleOverlay({
     const what = schedule.suiteId
       ? `a run of the suite "${schedule.suiteName || schedule.suiteId}"`
       : schedule.templateId?.startsWith("system:workflow-review:")
-        ? `a CI run of the workflow it was declared in, to be reviewed when it finishes`
+        ? `a CI run of the workflow it was declared in`
         : schedule.templateId
           ? // Titled by the template, not by this schedule: a declared
             // schedule's own name ("Nightly Repo Maintenance Sweep")
@@ -611,11 +613,17 @@ function ScheduleOverlay({
             // the one that was never going to appear.
             `a task from the template "${schedule.templateName || schedule.templateId}"`
           : `the task "${schedule.title}"`;
+    // What happens after the start, said after "straight away" so that
+    // it is the start that is immediate: tacked onto `what`, the
+    // sentence read "to be reviewed when it finishes straight away".
+    const then = schedule.templateId?.startsWith("system:workflow-review:")
+      ? ", to be reviewed when it finishes"
+      : "";
     // One question rather than two: the run's own, with the edit it
     // would throw away named in it.
     if (
       !confirm(
-        `Run "${schedule.title}" now? It starts ${what} straight away; ` +
+        `Run "${schedule.title}" now? It starts ${what} straight away${then}; ` +
           `the schedule's own next run is unchanged.` +
           (isDirty()
             ? ` Your unsaved changes here are discarded, not run.`
@@ -799,9 +807,14 @@ function ScheduleOverlay({
               grain and change when grain is upgraded, so the title and
               description stored on this schedule are a copy of them rather than
               what actually runs -- editing that copy, here or in the config
-              repository, changes neither. You can change how often it runs,
-              what it does when a firing overlaps the last one, and whether it
-              runs at all.
+              repository, changes neither.{" "}
+              {/* A repository's own workflow schedule is one of these too,
+                and none of the three is changeable here: the declared
+                notice above says so and Pause and Save are off, so this
+                says where they are changed instead. */}
+              {declaredIn
+                ? `How often it runs, what it does when a firing overlaps the last one, and whether it runs at all are set in ${declaredIn.path}.`
+                : "You can change how often it runs, what it does when a firing overlaps the last one, and whether it runs at all."}
             </Typography>
           ) : firesSuite ? (
             <FormControl fullWidth margin="normal" size="small">
@@ -984,6 +997,18 @@ function ScheduleOverlay({
                 }
                 label="Auto-merge once checks pass"
                 sx={{ display: "flex", mt: 1 }}
+              />
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    name="keepRunning"
+                    defaultChecked={schedule?.keepRunning}
+                    onChange={(e) => setKeepRunning(e.target.checked)}
+                  />
+                }
+                label="Keep running"
+                title="Immediately restart every task this schedule files when its run exits, instead of completing or parking it."
+                sx={{ display: "flex" }}
               />
               <TextField
                 select

@@ -113,15 +113,17 @@ export default function RepoRuns({ repo, onOpenRun, showError }) {
           </Button>
         )}
       </Box>
-      {/* Said here rather than left to be inferred from an empty list,
-          and said next to the workflows form above precisely because
-          that form is right there: a deployment started with -ci=false
-          will store every workflow written above and run none of them,
-          which is worth knowing before writing another. */}
+      {/* Said here rather than left to be inferred from an empty list:
+          a deployment started with -ci=false will store every workflow
+          written on the repository's CI tab and run none of them, which
+          is worth knowing before writing another. This list sits on the
+          Overview, not under that form, so the note names the tab
+          rather than pointing "above" at workflows that are not there. */}
       {data !== null && !data.enabled && (
         <Alert severity="info">
           This deployment does not run grain CI: its daemon was started with
-          -ci=false, so the workflows above are stored but never run.
+          -ci=false, so the workflows on this repository's CI tab are stored but
+          never run.
         </Alert>
       )}
       {/* The repo is not a question here, so the form is a branch and a

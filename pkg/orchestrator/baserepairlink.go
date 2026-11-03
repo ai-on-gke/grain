@@ -104,7 +104,7 @@ func isBaseRepair(task model.Task, repo model.RepoRef, branch string, row *model
 // closeBaseRepairsOnGreen is what a green verdict on a base branch does
 // to the repairs of it: every repair -- grain's own and every one marked
 // fixes_base_branch -- is a base-green goal with on_met close
-// (docs/design/durable-tasks.md#DT-4), and this is that goal's check run
+// (design/design/durable-tasks.design.md#DT-4), and this is that goal's check run
 // against the verdict as it lands (checkBaseGreenGoals). A repair not
 // running is closed with outcome goal-met and a note naming the green
 // run and commit, which releases everything waiting on it; a running one
@@ -174,9 +174,10 @@ func forgetGreenNoted(ctx context.Context, store *model.Store, taskID string) er
 	})
 }
 
-// closeSupersededTasks closes each of ids that is not running, with note.
+// closeSupersededTasks closes each of ids that is not running, with note,
+// recording the close as by's for reason.
 func closeSupersededTasks(ctx context.Context, store *model.Store, ids []string, by model.Principal,
-	note string, now time.Time) error {
+	reason, note string, now time.Time) error {
 
 	var errs []error
 	for _, id := range ids {
@@ -188,7 +189,7 @@ func closeSupersededTasks(ctx context.Context, store *model.Store, ids []string,
 		if st == "" || st == model.StateClosed || st == model.StateRunning {
 			continue
 		}
-		if err := observeField(ctx, store, id, now, func(o *model.Observation) {
+		if err := closeTaskBy(ctx, store, id, now, by, reason, func(o *model.Observation) {
 			o.ClosedAt = &now
 		}); err != nil {
 			errs = append(errs, fmt.Errorf("orchestrator: closing %s: %w", id, err))

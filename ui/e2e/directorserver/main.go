@@ -538,11 +538,15 @@ func run() error {
 	})
 	httpServer := &http.Server{Handler: testHandler, ReadHeaderTimeout: 5 * time.Second}
 
+	// The Director's defaults carry api:deployment:read, which, like
+	// every api grant, is the daemon's dynamic provider's to resolve.
+	capabilities := model.NewCapabilityRegistry(append(admincaps.Providers(), bootstrap.New(), durable.New(), prioritydispatch.New())...)
+	capabilities.RegisterDynamic(ui.AgentAPIDynamicProvider)
 	deps := orchestrator.Deps{
 		Store: store, Sandboxes: sandboxes,
 		Framework: orchestrator.StaticFramework(provider),
 		Config: orchestrator.Config{
-			Capabilities:  model.NewCapabilityRegistry(append(admincaps.Providers(), bootstrap.New(), durable.New(), prioritydispatch.New())...),
+			Capabilities:  capabilities,
 			GitRemoteBase: gitServer.URL, GrainStateDir: stateDir,
 			GrainSecretsDir: secretsDir, StateRepo: func() model.RepoRef { return stateRepo },
 			TaskCancellers: cancellers,

@@ -21,7 +21,7 @@ import (
 
 // The two surfaces partition PublishedToolNames: every published tool is
 // on exactly one of them, and the ones the design names are where it
-// puts them (docs/design/sandbox-first-agent-surface.md §1, §6).
+// puts them (design/design/sandbox-first-agent-surface.design.md §1, §6).
 func TestPublishedSurfacesPartitionTheRoster(t *testing.T) {
 	control := PublishedControlToolNames()
 	cli := PublishedCLICommandNames()
@@ -33,7 +33,7 @@ func TestPublishedSurfacesPartitionTheRoster(t *testing.T) {
 	}
 	for _, name := range []string{"run_command", "edit_file", "ask_question", "comment_on_issue",
 		"nothing_needed", "propose_task", "wait_for_task", "resume_later", "recreate_sandbox", "chat",
-		"pause_pipeline", "upgrade_deployment", "execute_grain_db", "broadcast_team_message"} {
+		"execute_grain_db"} {
 		if ToolSurface(name) != SurfaceControl {
 			t.Errorf("ToolSurface(%q) = %q, want %q", name, ToolSurface(name), SurfaceControl)
 		}

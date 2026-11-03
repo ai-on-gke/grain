@@ -84,43 +84,12 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/mcp"
-	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/systemlog"
 )
 
-// CapabilityName is the grant name ui.OfferedCapabilities lists as
-// "grain log".
+// CapabilityName is the retired bare capability alias for
+// https://grain.dev/capabilities/grain#journal.
 const CapabilityName = "grain-log"
-
-// Provider is the grain-log capability. Every method but Spec is
-// model.BaseCapability's default: there is no credential to withhold, no
-// lease to mint, nothing to place and nothing to revoke -- what it
-// grants is one tool.
-type Provider struct {
-	model.BaseCapability
-}
-
-// ProviderConfig holds configuration for grainlog Provider.
-type ProviderConfig struct{}
-
-// New returns a grain-log Provider, ready to register.
-func New() *Provider { return &Provider{} }
-
-// NewWithConfig returns a grain-log Provider with config.
-func NewWithConfig(_ ProviderConfig) *Provider { return &Provider{} }
-
-func (p *Provider) Spec() model.CapabilitySpec {
-	return model.CapabilitySpec{
-		Name:      CapabilityName,
-		Label:     "Grain log",
-		Source:    model.GrantByLabel,
-		Provision: model.ProvisionGrant,
-		Description: "Let this task read a bounded slice of grain's own systemd journal on this " +
-			"host -- the daemon's log and the kernel's -- with known credentials redacted before " +
-			"it leaves. Separate from self-debug on purpose: the journal carries whatever anything " +
-			"here has ever logged, which is far more than grain's source code.",
-	}
-}
 
 // maxLinesCap is the most lines one call can ever return, whatever it
 // asked for. It bounds a tool result rather than a file: the answer goes

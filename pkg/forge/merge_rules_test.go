@@ -110,6 +110,50 @@ func TestMergeRulesModeReplacesTheRepositorysForThisPullRequest(t *testing.T) {
 	}
 }
 
+func TestCIModeGitHubGatingAndMergeRulesOverridesToGrainOrNone(t *testing.T) {
+	// 1. Repository with CIMode: "github" reads GitHub checks and gates on them without requiring Grain CI.
+	client, transport := gateClient(openPullRequest, redChecks)
+	seen, err := Observe(client, Ref{Owner: "o", Repo: "r", Number: 10}, Input{
+		CIMode: "github",
+	}, gateTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !askedAboutChecks(transport) || seen.Health != Failing || seen.GrainCI.Required {
+		t.Fatalf("CIMode=github on red checks: asked=%v health=%s grainRequired=%v; want true, FAILING, false",
+			askedAboutChecks(transport), seen.Health, seen.GrainCI.Required)
+	}
+
+	// 2. Repository with CIMode: "github" overridden to Mode: "grain" by merge rules skips GitHub checks and gates on Grain CI.
+	client, transport = gateClient(openPullRequest, redChecks)
+	seen, err = Observe(client, Ref{Owner: "o", Repo: "r", Number: 11}, Input{
+		CIMode:     "github",
+		PolicyFor:  func(string) *Policy { return &Policy{Mode: "grain"} },
+		GrainCIFor: func(string) GrainCI { return GrainCI{Passed: true} },
+	}, gateTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if askedAboutChecks(transport) || seen.Health != Clean || !seen.GrainCI.Required {
+		t.Fatalf("CIMode=github overridden to grain: asked=%v health=%s grainRequired=%v; want false, CLEAN, true",
+			askedAboutChecks(transport), seen.Health, seen.GrainCI.Required)
+	}
+
+	// 3. Repository with CIMode: "github" overridden to Mode: "none" (e.g. docs-only path rule) skips GitHub checks and is immediately Clean.
+	client, transport = gateClient(openPullRequest, redChecks)
+	seen, err = Observe(client, Ref{Owner: "o", Repo: "r", Number: 12}, Input{
+		CIMode:    "github",
+		PolicyFor: func(string) *Policy { return &Policy{Mode: "none"} },
+	}, gateTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if askedAboutChecks(transport) || seen.Health != Clean || seen.GrainCI.Required {
+		t.Fatalf("CIMode=github overridden to none: asked=%v health=%s grainRequired=%v; want false, CLEAN, false",
+			askedAboutChecks(transport), seen.Health, seen.GrainCI.Required)
+	}
+}
+
 func TestAPathsStallTimeoutShortensTheDeadline(t *testing.T) {
 	defer SetCheckStallDeadline(2 * time.Hour)()
 	ref := Ref{Owner: "o", Repo: "r", Number: 7}

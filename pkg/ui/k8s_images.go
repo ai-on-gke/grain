@@ -28,6 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/registryauth"
+	"github.com/ai-on-gke/grain/pkg/upgrade"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
 
@@ -461,6 +462,25 @@ func (c *Client) resolveK8sImageDefaults(ctx context.Context, cfg *model.Config,
 	granuleDefault = ResolveDefaultSandboxImage(track, info, tagExists)
 	buildVersion = DaemonBuildVersion(info)
 	return sandboxDefault, granuleDefault, buildVersion
+}
+
+// k8sGranuleImageForWarn is the Granule VM pod image the Settings pane
+// probes: the one the daemon really creates pods from
+// (Config.K8sGranuleImage), and only where no daemon says so, cfg's own
+// image or granuleDefault mirrored into cfg's SandboxImageMirror.
+func (c *Client) k8sGranuleImageForWarn(cfg model.Config, granuleDefault string) string {
+	if c != nil && c.Config.K8sGranuleImage != nil {
+		if img := c.Config.K8sGranuleImage(cfg); img != "" {
+			return img
+		}
+	}
+	img := firstNonEmptyString(cfg.K8sGranuleImage, granuleDefault)
+	if mirror := strings.TrimSpace(cfg.SandboxImageMirror); mirror != "" {
+		if mirrored := upgrade.MirrorSandboxRef(img, mirror); mirrored != "" {
+			img = mirrored
+		}
+	}
+	return img
 }
 
 func (c *Client) resolveK8sImageWarnings(ctx context.Context, effectiveSandbox, effectiveGranule string) (sandboxWarn, granuleWarn string) {

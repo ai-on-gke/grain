@@ -40,7 +40,7 @@ const PAGES = [
   ["a board", null, /^boards\/Board$/],
   ["a session", "/session/director", /^sessions\//],
   ["Processes", "/processes", /^processes$/],
-  ["Settings", "/settings", /^settings\/general$/],
+  ["Settings", "/settings", /^settings\/models$/],
   ["System", "/system", /^system\/health$/],
   ["Logs", "/system/logs", /^system\/logs$/],
 ];

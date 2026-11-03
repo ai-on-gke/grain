@@ -193,3 +193,100 @@ func TestTimedParkDefersTheTaskAndWakesItBackIntoTheQueue(t *testing.T) {
 		}
 	}
 }
+
+// A resume_later call on when.at or when.task keeps the agent's reason in
+// the recorded detail (so the opening suspension note quotes it to the
+// next run) while still parsing as a timed or task park for ResumedUntil
+// and ResumedFrom.
+func TestResumeLaterPreservesReasonOnTaskAndTimedParks(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	_, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	target := filedTask(t, ctx, store, "dep1", repo)
+	onTask := filedTask(t, ctx, store, "park-task", repo)
+	onTime := filedTask(t, ctx, store, "park-time", repo)
+	wake := baseTime.Add(time.Minute)
+
+	// 1. resume_later with when.task
+	if err := store.StartRun(ctx, model.Run{ID: "park-task-1", TaskID: onTask.ID, Sandbox: "s1", Attempt: 1, StartedAt: baseTime}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	linked := onTask
+	linked.Links = append(slices.Clone(linked.Links), model.Link{Kind: model.LinkDependsOn, Target: target.ID})
+	if err := store.PutTask(ctx, linked); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, "park-task-1", baseTime, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	taskWhen := model.ResumeOn{Tasks: []string{target.ID}, UntilMerged: true}
+	resTask := toolResult(agent.ToolCall{
+		Name:      "resume_later",
+		Arguments: map[string]any{"reason": "Wait for dep1 schema migration PR", "when": map[string]any{"task": target.ID, "until": "merged"}},
+		Text:      "Parked. This task is queued again once #" + target.ID + " has merged.\n\nresume_on: " + taskWhen.JSON(),
+	})
+	if err := orchestrator.ProcessResult(ctx, store, client, onTask, resTask, "park-task-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult (when.task): %v", err)
+	}
+	runsTask, err := store.Runs(ctx, onTask.ID)
+	if err != nil || len(runsTask) != 1 {
+		t.Fatalf("Runs(onTask) = %v, %v", runsTask, err)
+	}
+	if !strings.Contains(runsTask[0].Detail, "Wait for dep1 schema migration PR") {
+		t.Fatalf("when.task detail = %q, want agent reason preserved", runsTask[0].Detail)
+	}
+	closedAt := baseTime.Add(30 * time.Second)
+	if err := store.ObserveField(ctx, target.ID, closedAt, func(o *model.Observation) {
+		o.CompletedAt, o.PrMergedAt, o.ClosedAt = &closedAt, &closedAt, &closedAt
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resumedTargets := orchestrator.ResumedFrom(ctx, store, runsTask)
+	if len(resumedTargets) != 1 || resumedTargets[0].ID != target.ID {
+		t.Fatalf("ResumedFrom = %+v, want [%s]", resumedTargets, target.ID)
+	}
+	promptTask := orchestrator.BuildPrompt(onTask, "work", "", true, 0,
+		orchestrator.History{Attempt: 2, Attempts: runsTask, Resumed: resumedTargets}, nil)
+	for _, want := range []string{"Wait for dep1 schema migration PR", "resumes from a park", "Task " + target.ID} {
+		if !strings.Contains(promptTask, want) {
+			t.Fatalf("promptTask lacks %q:\n%s", want, promptTask)
+		}
+	}
+
+	// 2. resume_later with when.at
+	if err := store.StartRun(ctx, model.Run{ID: "park-time-1", TaskID: onTime.ID, Sandbox: "s1", Attempt: 1, StartedAt: baseTime}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	deferUntil(t, store, onTime.ID, baseTime, wake)
+	if err := store.FinishRun(ctx, "park-time-1", baseTime, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	timeWhen := model.ResumeOn{At: &wake}
+	resTime := toolResult(agent.ToolCall{
+		Name:      "resume_later",
+		Arguments: map[string]any{"reason": "Hold off 1m for rate window", "when": map[string]any{"at": "1m"}},
+		Text:      "Parked. This task is queued again once " + wake.Format(time.RFC3339) + " has passed.\n\nresume_on: " + timeWhen.JSON(),
+	})
+	if err := orchestrator.ProcessResult(ctx, store, client, onTime, resTime, "park-time-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult (when.at): %v", err)
+	}
+	runsTime, err := store.Runs(ctx, onTime.ID)
+	if err != nil || len(runsTime) != 1 {
+		t.Fatalf("Runs(onTime) = %v, %v", runsTime, err)
+	}
+	if !strings.Contains(runsTime[0].Detail, "Hold off 1m for rate window") {
+		t.Fatalf("when.at detail = %q, want agent reason preserved", runsTime[0].Detail)
+	}
+	resumedUntil := orchestrator.ResumedUntil(runsTime)
+	if !resumedUntil.Equal(wake) {
+		t.Fatalf("ResumedUntil = %v, want %v", resumedUntil, wake)
+	}
+	promptTime := orchestrator.BuildPrompt(onTime, "work", "", true, 0,
+		orchestrator.History{Attempt: 2, Attempts: runsTime, ResumedUntil: resumedUntil}, nil)
+	for _, want := range []string{"Hold off 1m for rate window", "resumes from a park", wake.Format(time.RFC3339)} {
+		if !strings.Contains(promptTime, want) {
+			t.Fatalf("promptTime lacks %q:\n%s", want, promptTime)
+		}
+	}
+}

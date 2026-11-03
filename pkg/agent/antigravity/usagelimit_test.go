@@ -108,6 +108,10 @@ func TestRetryDelayReadsTheAPIsOwnSpellings(t *testing.T) {
 		{"agy reset in, any case", `YOUR QUOTA WILL RESET IN 1H5M.`, time.Hour + 5*time.Minute},
 		{"both, reset longer", `"retryDelay":"56s" ... Your quota will reset after 56m20s.`, 56*time.Minute + 20*time.Second},
 		{"both, retryDelay longer", `Your quota will reset after 30s. "retryDelay":"90s"`, 90 * time.Second},
+		{"resets in", `Individual quota reached. Resets in 10h46m37s.`, 10*time.Hour + 46*time.Minute + 37*time.Second},
+		{"resets in, any case", `individual quota reached. RESETS IN 17H32M.`, 17*time.Hour + 32*time.Minute},
+		{"resets in and retryDelay, resets longer", `"retryDelay":"56s" Resets in 2h.`, 2 * time.Hour},
+		{"all three, longest wins", `Your quota will reset after 1h. Resets in 3h. "retryDelay":"90s"`, 3 * time.Hour},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, ok := retryDelay(tc.text)
@@ -133,6 +137,15 @@ const agyQuotaResetRefusal = "You have exhausted your capacity on this model. Yo
 	"AGY diagnostic log (redacted; complete records from the final 64 KiB):\n" +
 	"E1024 18:36:02.112 calling model: Error 429, Message: You have exhausted your capacity on this model. Your quota will reset after 2h28m27s., Status: RESOURCE_EXHAUSTED"
 
+// agyIndividualQuotaRefusal is agy's newer wording, as production saw it
+// on 2026-11-01 (task 1856, attempt #2; task 1908): before "Resets in"
+// was read, each model pause lasted 15 minutes against a 10-17h window.
+const agyIndividualQuotaRefusal = "cloudtop-antigravity: usage limit reached; Individual quota reached. " +
+	"Please upgrade your subscription to increase your limits. Resets in 10h46m37s. " +
+	"AGY diagnostic log (redacted; complete records from the final 64 KiB):\n" +
+	"E1101 02:40:21.874 calling model: Error 429, Message: Individual quota reached. " +
+	"Please upgrade your subscription to increase your limits. Resets in 10h46m37s., Status: RESOURCE_EXHAUSTED"
+
 func TestUsageLimitFailureReadsAgysQuotaReset(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -144,6 +157,9 @@ func TestUsageLimitFailureReadsAgysQuotaReset(t *testing.T) {
 		{"production minutes", strings.ReplaceAll(agyQuotaResetRefusal, "2h28m27s", "56m20s"), nil, 56*time.Minute + 20*time.Second},
 		{"sentence alone", "You have exhausted your capacity on this model. Your quota will reset after 45s.", nil, 45 * time.Second},
 		{"in the subprocess error", "", errors.New("exit status 1: " + agyQuotaResetRefusal), 2*time.Hour + 28*time.Minute + 27*time.Second},
+		{"individual quota, production", agyIndividualQuotaRefusal, nil, 10*time.Hour + 46*time.Minute + 37*time.Second},
+		{"individual quota, sentence alone", "Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 17h32m0s.", nil, 17*time.Hour + 32*time.Minute},
+		{"individual quota, in the subprocess error", "", errors.New("exit status 1: " + agyIndividualQuotaRefusal), 10*time.Hour + 46*time.Minute + 37*time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			limit := usageLimitFailure(tc.result, tc.runErr)

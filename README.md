@@ -45,9 +45,9 @@ runs the selected agent with a constrained tool set. Grain records the run,
 collects its result, and manages the resulting pull request. Sandboxes do not
 receive the deployment's long-lived GitHub or model-provider credentials.
 
-For a 25-minute end-to-end tour of how all the pieces fit together—task states,
-the sandbox boundary, the merge queue, where state lives on disk and in Git,
-and how to debug a stuck task—read **[docs/architecture.md](docs/architecture.md)**.
+For how all the pieces fit together—the control plane, the sandbox boundary,
+CI and the merge queue, and where state lives on disk and in Git—read
+**[the architecture design](design/design/architecture.design.md)**.
 
 Grain is single-tenant (see
 [docs/local-policy.md](docs/local-policy.md#single-tenant-mode)): a grain
@@ -221,7 +221,7 @@ exit codes, what each step does, and what to do when one is left manual.
 > the container, nothing runs as you on the machine, and "host" is not offered
 > as a run location, as on Kubernetes. The readiness report and Settings →
 > Models say which of the two an install is. See
-> [docs/design/cli-run-location.md](docs/design/cli-run-location.md), "Trust
+> [design/design/cli-run-location.design.md](design/design/cli-run-location.design.md), "Trust
 > levels", for what each shape trusts grain with.
 
 > **Host mode is gone.** `GRAIN_INSTALL_MODE=host` (the daemon as a plain
@@ -233,7 +233,7 @@ exit codes, what each step does, and what to do when one is left manual.
 > until that re-run, and says so: a `level=warning` line at start and a banner
 > in the UI naming the agent CLIs that cannot run until then
 > ([docs/releases/v2.4.0.md](docs/releases/v2.4.0.md),
-> [docs/design/cli-run-location.md](docs/design/cli-run-location.md#migrating-a-host-mode-install)). Going back to host
+> [design/design/cli-run-location.design.md](design/design/cli-run-location.design.md#migrating-a-host-mode-install)). Going back to host
 > mode means re-running an older release's own `scripts/setup.sh`, which
 > replaces `/usr/local/bin/grain` but leaves `grain-hostd.service` in place:
 > the unit then skips its start, since that binary has no `hostd`, and
@@ -362,48 +362,53 @@ tags, and history. It does not contain `data-dir/secrets`, Google credential
 files, Git remote configuration, or any historical `secrets.enc` object; the
 temporary bundle export removes that path from every commit.
 
-## Remote Model Executors
+## Remote hosts
 
-Remote executors allow Grain to dispatch agent model CLI invocations (`agy`, `claude`, `codex`) to dedicated remote machines (such as workstations, GPU instances, or cloudtops with corp/ambient logins), while tunneling MCP tools and sandboxes back to the Grain daemon.
-
-### Single-Command Bootstrap
-
-On the remote machine, run the bootstrap installer to automatically detect OS/arch, download the matching `grain` binary, discover installed agent CLIs, and connect to the Grain daemon:
+`grain hostd` is grain's only host agent. On the daemon's own machine it
+listens on `/run/grain-hostd/hostd.sock` and is the registry's `local`
+hostd. Any number of others dial in to the daemon alongside it, each
+registered in **Settings → Hostds** (or `POST /api/hostds`) with a name,
+an owner and labels, and given a token of its own there, shown once:
 
 ```bash
-# Direct single command via curl. Keep the token in a file (mode 600) rather
-# than passing --token, which would land in shell history and ps output.
-curl -fsSL https://<grain-host>:4242/api/executors/install.sh | bash -s -- \
-  --server <grain-host>:8422 \
-  --token-file ~/.grain/token \
-  --team default
-
-# Or using the repository runner script
-./scripts/run-remote-executor.sh \
-  --server <grain-host>:8422 \
-  --token-file ~/.grain/token \
-  --team infrastructure
-
-# Install and enable as a persistent background service (systemd or macOS launchd)
-./scripts/run-remote-executor.sh \
-  --server <grain-host>:8422 \
-  --token-file ~/.grain/token \
-  --service
+grain hostd -server https://<grain-host> -token-file /etc/grain/hostd.token -name <name>
 ```
 
-A downloaded `grain` binary is only installed once its SHA-256 matches: either
-the digest passed with `--sha256` (or `GRAIN_BINARY_SHA256`), or the one the
-download source publishes beside it at `<url>.sha256` -- which the daemon's own
-`/api/executors/bin/<binary>.sha256` and `/install/<os>/<arch>.sha256`
-endpoints serve. A mismatch aborts the install; a source with no checksum is
-skipped unless `--allow-unverified-binary` is given.
+The daemon names a connection from its token alone; `-name` is optional
+and, when given, must be that token's hostd. Rotating a hostd's token
+takes effect on its next connection; revoking the hostd disconnects it
+at once. The single
+shared token of `grain daemon -hostd-token-file` still works for this
+release, as one hostd named by `-hostd-token-name` (default `remote`),
+and is removed in the next. A hostd's allowlist (`/etc/grain/hostd.yaml`)
+may set `capacity:` and `labels:`, which it reports to the daemon.
+
+While a hostd is disconnected, tasks pinned to it wait in the queue
+(`waiting for hostd <name>`) and never move to another hostd; they
+resume when it reconnects. An agent CLI already running there keeps
+running, and is re-attached from where its output stood if the same
+hostd reconnects within `grain daemon -hostd-reattach-timeout` (default
+15m). Past that the run fails as an infrastructure failure, with no
+strike against the task.
+
+The remote model executors (`grain executor` / `grain model-server`,
+`scripts/run-remote-executor.sh`) were removed; see
+[docs/executors-removed.md](docs/executors-removed.md) for what a remote
+hostd does and does not do yet.
+The `none` sandbox backend (`-disable-native-sandboxes`) that such
+deployments used remains only for a control-plane-only daemon in tests
+and walkthroughs; see
+[docs/sandbox-backend-none.md](docs/sandbox-backend-none.md).
 
 ## Documentation
 
-- **[Architecture](docs/architecture.md)** is the end-to-end introduction for
-  new Grain users and operators: the three pieces, the life of a task from
-  filing through CI and the merge queue, where state lives, agents/models,
-  capabilities, schedules, releases, and a troubleshooting guide.
+- **[Architecture](design/design/architecture.design.md)** describes the
+  current design end to end: the control plane, sandboxes, `grain hostd`,
+  agents, capabilities, CI and the merge queue, where state lives, and the
+  security boundaries. Component designs live beside it in
+  [`design/design/`](design/design), playbook designs in
+  [`design/playbook/`](design/playbook), and specifications in
+  [`design/spec/`](design/spec).
 - [`grain init`](docs/grain-init.md) documents bringing up a deployment from
   a source checkout: prerequisites, what it installs versus only demands,
   exit codes and re-running it.
@@ -411,9 +416,6 @@ skipped unless `--allow-unverified-binary` is given.
   half: bringing up a GCE instance with nested virtualization to run it on
   -- sizing, verifying acceleration actually works, suspend/resume, and
   reaching its loopback-bound UI.
-- [Implementation notes](docs/implementation-notes.md) preserve the detailed
-  architecture, design decisions, operating notes, and project history that
-  previously lived in this README.
 - [Data model](docs/data-model.md) describes tasks, runs, capabilities, leases,
   and their lifecycle.
 - [Composition](docs/composition.md) explains how Grain's components fit
@@ -433,7 +435,7 @@ skipped unless `--allow-unverified-binary` is given.
 - [Key user journeys](docs/user-journeys.md) catalogues the main journeys
   through grain, from install to merge, with their step counts and friction
   today, as the basis for a nightly simplification review.
-- [Upgrading without stopping the work](docs/non-disruptive-upgrade.md) is a
+- [Upgrading without stopping the work](design/design/non-disruptive-upgrade.design.md) is a
   proposal for upgrading a deployment without discarding the agent runs and CI
   jobs it has in flight.
 - [Declarations](docs/declarations.md) covers the templates, suites and
@@ -444,15 +446,6 @@ skipped unless `--allow-unverified-binary` is given.
 - [Repo Controllers & Dynamic Environments](docs/repo-controllers-and-environments.md)
   specifies the Granule-based per-repository controller architecture for dynamic
   infrastructure provisioning and repository state machines.
-- [Shibu](docs/shibu.md) is a design for a namespace and allocator layer
-  that lets agents delegate permissions and build infrastructure, tested
-  against a full software-factory walk-through, with its findings, open
-  questions and how it relates to grain.
-- [The Shibu API specification](docs/shibu-spec/README.md) derives
-  Shibu's APIs from that design: the kernel's control API, the web
-  proxy and caller assertion, agents and the harness contract, and the
-  contracts for allocators, backend drivers, secret backends and every
-  standard-distribution component.
 
 ## Development
 
@@ -464,9 +457,9 @@ make test
 ```
 
 The frontend requires Node.js and npm; the backend requires the Go version
-declared in [`go.mod`](go.mod). See the [implementation
-notes](docs/implementation-notes.md) for package-level detail and design
-rationale.
+declared in [`go.mod`](go.mod). See the
+[architecture design](design/design/architecture.design.md) for package-level
+detail and design rationale.
 
 ## Contributing
 

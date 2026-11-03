@@ -26,7 +26,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/ciapi"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
-	"github.com/ai-on-gke/grain/pkg/capability/repowrite"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
@@ -49,12 +48,12 @@ func ciAPIRegistry(gate *ciapi.Endpoint) *model.CapabilityRegistry {
 			ciapi.Aliases[model.ReleaseGateReadCapability]),
 		packagepublish.New(packagepublish.Config{Credentials: stubPackageCredentials{}}),
 	)
-	reg.RegisterDynamic(repowrite.DynamicProvider, ui.AgentAPIDynamicProvider)
+	reg.RegisterDynamic(ui.AgentAPIDynamicProvider)
 	reg.RegisterCIDynamic(ciapi.DynamicProvider(gate, ciapi.Config{}))
 	return reg
 }
 
-// release-gate-read (docs/design/release-from-trunk.md §6, RFT-3) and
+// release-gate-read (design/design/release-from-trunk.design.md §6, RFT-3) and
 // any other api grant a job declares are granted to the cron grain
 // itself fires and to trusted events, and to nothing an untrusted tree
 // can ask for: a pull request's, an ordinary push's, or an agent's
@@ -135,8 +134,8 @@ func testTrustedOnly(t *testing.T, id string) {
 
 // Event-gated capabilities (repo-write:* and package-publish) are
 // withheld when a workflow_dispatch or release request is marked as not
-// a person's, while human dispatches, trusted releases, and (for
-// repo-write) trusted schedules still receive them.
+// a person's, while human dispatches, trusted releases, and trusted
+// schedules still receive them.
 func TestEventGatedCapabilitiesAreWithheldFromNonHumanDispatches(t *testing.T) {
 	gate := ciapi.NewEndpoint()
 	gate.SetURL("http://192.0.2.1:9000")
@@ -148,7 +147,8 @@ func TestEventGatedCapabilitiesAreWithheldFromNonHumanDispatches(t *testing.T) {
 		trustedSchedule bool
 	}{
 		{"repo-write:bwsalmon/grain", true},
-		{packagepublish.CapabilityName, false},
+		{model.RepoWriteGrant(model.RepoRef{Owner: "bwsalmon", Name: "grain"}), true},
+		{packagepublish.CapabilityName, true},
 	} {
 		t.Run(tc.id, func(t *testing.T) {
 			for _, c := range []struct {
@@ -167,29 +167,34 @@ func TestEventGatedCapabilitiesAreWithheldFromNonHumanDispatches(t *testing.T) {
 				{"push", ci.EventPush, false, false, false},
 				{"pull_request", ci.EventPullRequest, false, false, false},
 			} {
-				_, resolved, err := ResolveCICapabilities(context.Background(), reg, nil, repo, "c1234-0",
-					c.event, c.trusted, []string{tc.id}, c.withhold)
-				if err != nil {
-					t.Fatalf("%s: %v", c.name, err)
-				}
 				var granted bool
-				for _, r := range resolved {
-					if r.Grant.Capability == tc.id && !r.Resolution.Refused {
-						granted = true
+				if model.IsRepoAccessGrant(tc.id) {
+					// No provider: the grant's own gate decides the
+					// proxy scope grantRepoAccess widens.
+					granted = ciRepoAccessAdmitted(tc.id, c.event, c.trusted, c.withhold)
+				} else {
+					_, resolved, err := ResolveCICapabilities(context.Background(), reg, nil, repo, "c1234-0",
+						c.event, c.trusted, []string{tc.id}, c.withhold)
+					if err != nil {
+						t.Fatalf("%s: %v", c.name, err)
+					}
+					for _, r := range resolved {
+						if r.Grant.Capability == tc.id && !r.Resolution.Refused {
+							granted = true
+						}
 					}
 				}
 				if granted != c.want {
-					t.Errorf("%s: granted=%v (%+v), want %v", c.name, granted, resolved, c.want)
+					t.Errorf("%s: granted=%v, want %v", c.name, granted, c.want)
 				}
 			}
 		})
 	}
 
-	regFn := func() *model.CapabilityRegistry { return reg }
-	if ciHoldsRepoAccess(regFn, ci.EventManual, false, []string{"repo-write:bwsalmon/grain"}, true) {
+	if ciHoldsRepoAccess(ci.EventManual, false, []string{"repo-write:bwsalmon/grain"}, true) {
 		t.Error("ciHoldsRepoAccess admitted repo-write on a withheld manual run")
 	}
-	if !ciHoldsRepoAccess(regFn, ci.EventManual, false, []string{"repo-write:bwsalmon/grain"}, false) {
+	if !ciHoldsRepoAccess(ci.EventManual, false, []string{"repo-write:bwsalmon/grain"}, false) {
 		t.Error("ciHoldsRepoAccess refused repo-write on a human manual run")
 	}
 }
@@ -340,5 +345,60 @@ func TestTheCIAPIIsAnsweredByGrainsOwnAPI(t *testing.T) {
 	ui.NewServer(ui.Config{Actor: ui.DefaultActor("deployment")}, store).ServeHTTP(w, req)
 	if w.Code == http.StatusOK {
 		t.Errorf("grain's API answered a sandbox's own request without an access code")
+	}
+}
+
+// A CI job's capability context carries the job's own deadline (its run's
+// ceiling, ctx's deadline, and the teardown after it), so what a provider
+// mints for the job is bounded by the job rather than by the provider's
+// longest lease: the walk's package-publish refresh tokens were all good
+// for 6h whatever the run's ceiling, because nothing set it
+// (docs/test-runs/2026-11-03-capabilities-ci-repo.md, F3). A job with no
+// deadline still states none.
+func TestACIJobsCapabilityContextCarriesItsDeadline(t *testing.T) {
+	gate := ciapi.NewEndpoint()
+	reg := ciAPIRegistry(gate)
+	refresh := packagepublish.NewRefresher()
+	refresh.Log = func(string, ...any) {}
+	reg.Register(packagepublish.New(packagepublish.Config{
+		Credentials: stubPackageCredentials{}, Refresh: refresh,
+		RefreshURL: func() string { return "http://192.0.2.1:9000" },
+	}))
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	end := time.Now().Add(90 * time.Minute)
+	ctx, cancel := context.WithDeadline(context.Background(), end)
+	defer cancel()
+	cc, resolved, err := ResolveCICapabilities(ctx, reg, nil, repo, "c1234-0", ci.EventManual, false,
+		[]string{packagepublish.CapabilityName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := end.Add(ciReleaseTimeout).UTC(); !cc.Deadline.Equal(want) {
+		t.Errorf("Deadline = %v, want the job's %v", cc.Deadline, want)
+	}
+	materialized, err := model.MaterializeGrants(context.Background(), reg, cc, resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leased := false
+	for _, m := range materialized {
+		if l := m.Materialization.Lease; l != nil && l.Capability == packagepublish.CapabilityName {
+			leased = true
+			if l.ExpiresAt == nil || !l.ExpiresAt.Equal(cc.Deadline) {
+				t.Errorf("package-publish lease expires %v, want the job's deadline %v", l.ExpiresAt, cc.Deadline)
+			}
+		}
+	}
+	if !leased {
+		t.Errorf("no package-publish lease was minted: %+v", materialized)
+	}
+
+	cc, _, err = ResolveCICapabilities(context.Background(), reg, nil, repo, "c1234-1", ci.EventManual, false,
+		[]string{packagepublish.CapabilityName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cc.Deadline.IsZero() {
+		t.Errorf("Deadline = %v for a job with no deadline, want none", cc.Deadline)
 	}
 }

@@ -31,9 +31,11 @@ import {
   useMediaQuery,
 } from "@mui/material";
 import { DISCARD_PROMPT } from "./Overlay.jsx";
+import { keepInView } from "../keepInView.js";
 import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
 import GeneralSection from "./settings/GeneralSection.jsx";
 import AccessSection from "./settings/AccessSection.jsx";
+import HostdsSection from "./settings/HostdsSection.jsx";
 import ConfigRepoSection from "./settings/ConfigRepoSection.jsx";
 import ModelsSection from "./settings/ModelsSection.jsx";
 import AgentsSection from "./settings/AgentsSection.jsx";
@@ -43,7 +45,6 @@ import RepositoriesSection from "./settings/RepositoriesSection.jsx";
 import GitSection from "./settings/GitSection.jsx";
 import CapabilitiesSection from "./settings/CapabilitiesSection.jsx";
 import CredentialsSection from "./settings/CredentialsSection.jsx";
-import ExecutorsSection from "./settings/ExecutorsSection.jsx";
 import EngineSection from "./settings/EngineSection.jsx";
 import CISection from "./settings/CISection.jsx";
 import SandboxesSection from "./settings/SandboxesSection.jsx";
@@ -56,9 +57,13 @@ import {
   configRepoRefusal,
   settingsSectionPath,
 } from "./ConfigRefusal.jsx";
+import { ConfigManagedNotice } from "./ConfigRepoLink.jsx";
 import {
+  CONFIG_REPO_SECTION_PATHS,
+  DEFAULT_SETTINGS_SECTION,
   SETTINGS_GROUPS,
   SETTINGS_SECTIONS,
+  isConfigRepoSection,
   settingsSectionLabel,
 } from "../settingsSections.js";
 import { matchSettings } from "../settingsIndex.js";
@@ -70,10 +75,18 @@ import { useIsPhone } from "../phone.js";
 export { SETTINGS_SECTIONS, SETTINGS_GROUPS };
 
 // Sections that hold no saved settings of their own -- this browser's
-// preferences, and Upgrade, which is an action -- so they are never
-// read-only under an external config repo. Upgrade has no save state
-// either, so its header leaves the "All changes saved" line off.
-const NOT_CONFIG = new Set(["config-repo", "preferences", "upgrade"]);
+// preferences, Access's sign-in (design/design/config-repo-settings.design.md
+// §1 invariant 7: it stays outside the config repo so a bad config PR can
+// never lock the operator out), and Upgrade, which is an action -- so they
+// are never read-only under an external config repo. Upgrade has no save
+// state either, so its header leaves the "All changes saved" line off.
+const NOT_CONFIG = new Set([
+  "config-repo",
+  "preferences",
+  "upgrade",
+  "access",
+  "hostds",
+]);
 const NO_SAVE_STATE = new Set(["upgrade"]);
 
 // Sections that read GET /api/settings, and so wait for it.
@@ -90,7 +103,7 @@ const READS_SETTINGS = new Set([
   "caches",
 ]);
 
-// SettingsPage is the Settings view (docs/design/settings-panel.md §3):
+// SettingsPage is the Settings view (design/design/settings-panel.design.md §3):
 // every deployment setting, this browser's preferences and Memory, in
 // one view beside the sidebar, opened from the gear in the top bar. A
 // section nav with a filter on the left, the open section's cards on
@@ -98,7 +111,7 @@ const READS_SETTINGS = new Set([
 // list then a section on a phone.
 //
 // `section` is the open section's id ("" for the bare /settings: the
-// list on a phone, General elsewhere -- App fills that in), and
+// list on a phone, Models elsewhere -- App fills that in), and
 // onSection picks another. One useSettingsSection() holds the save and
 // dirty state for every section, so the nav can mark a dirty one and
 // leaving one asks first.
@@ -131,14 +144,38 @@ export default function SettingsPage({
   const [filter, setFilter] = useState("");
   const filterRef = useRef(null);
   const matches = useMemo(() => matchSettings(filter), [filter]);
-  const current = section || (isPhone ? "" : "general");
+  const current = section || (isPhone ? "" : DEFAULT_SETTINGS_SECTION);
   const externalConfigRepo =
     (settings ? settings.externalConfigRepo : config?.externalConfigRepo) || "";
   const externalConfigBranch =
     (settings ? settings.externalConfigBranch : config?.externalConfigBranch) ||
     "main";
-  const readOnly = Boolean(externalConfigRepo) && !NOT_CONFIG.has(current);
+  // A config-repo-only section is read-only whichever repository holds
+  // the configuration (design/design/config-repo-settings.design.md §2.1): what it
+  // draws is what the config repo says, and changing it is a pull
+  // request.
+  const external = Boolean(externalConfigRepo) && !NOT_CONFIG.has(current);
+  // GET /api/config's configRepoOnly: the API refuses these sections'
+  // writes in favour of a config pull request when settings are locked.
+  // By default (settingsLocked: false) they stay editable in the UI, and
+  // so they do under the directConfigWrites opt-out, which the server
+  // folds into configRepoOnly: the loaded settings carry the same answer
+  // for the row they last wrote, so toggling the lock redraws at once.
+  const lockedInUI =
+    settings && typeof settings.configRepoOnly === "boolean"
+      ? settings.configRepoOnly
+      : Boolean(config?.configRepoOnly);
+  const configRepoOnly = lockedInUI || Boolean(externalConfigRepo);
+  const configManaged = configRepoOnly && isConfigRepoSection(current);
+  const readOnly = external || configManaged;
   s.readOnly = readOnly;
+  // configLocked is for the sections that mix bootstrap settings with
+  // config-managed ones (Engine, Sandboxes, Legacy capabilities): the
+  // API refuses a change to the config-managed fields while this is on
+  // (settings-mutability.spec.md D-1, D-2), so those fields are drawn
+  // read-only one by one and the bootstrap ones beside them stay
+  // editable.
+  s.configLocked = configRepoOnly;
 
   useEffect(() => {
     if (READS_SETTINGS.has(current) && !settings) reloadSettings();
@@ -169,14 +206,26 @@ export default function SettingsPage({
   useEffect(() => {
     if (anchor) setFocusTarget(anchor);
   }, [anchor]);
+  // What still holds the last revealed card in view while the section
+  // around it draws (keepInView); revealing another, or leaving, lets go.
+  const settling = useRef(null);
+  useEffect(() => () => settling.current?.(), []);
   useEffect(() => {
     if (!focusTarget) return;
-    const timer = setTimeout(() => {
+    const reveal = () => {
       const el =
         document.querySelector(`[data-setting-id="${focusTarget}"]`) ||
         document.getElementById(focusTarget);
-      if (!el) return;
-      el.scrollIntoView?.({ block: "center" });
+      if (!el) return false;
+      // Centre a field or a short card; a card taller than the screen
+      // (Sandboxes → Kubernetes) is aligned to its top instead, since
+      // centring it scrolls past its heading and the first field, which is
+      // the one focused below without scrolling.
+      const tall = el.getBoundingClientRect?.().height > window.innerHeight;
+      const scrollOptions = { block: tall ? "start" : "center" };
+      el.scrollIntoView?.(scrollOptions);
+      settling.current?.();
+      settling.current = keepInView(el, scrollOptions);
       const input = el.matches?.("input,textarea,select,button")
         ? el
         : el.querySelector?.("input:not([type=hidden]),textarea,select,button");
@@ -184,8 +233,14 @@ export default function SettingsPage({
       el.classList.add("setting-highlight");
       setTimeout(() => el.classList.remove("setting-highlight"), 2000);
       setFocusTarget("");
-    }, 50);
-    return () => clearTimeout(timer);
+      return true;
+    };
+    if (reveal()) return;
+    const observer = new MutationObserver(() => {
+      if (reveal()) observer.disconnect();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
   }, [focusTarget, current, settings]);
 
   const go = (next) => {
@@ -220,7 +275,10 @@ export default function SettingsPage({
       onChange={(evt) => setFilter(evt.target.value)}
       onKeyDown={(evt) => {
         if (evt.key === "Escape") setFilter("");
-        if (evt.key === "Enter" && matches[0]) pick(matches[0]);
+        if (evt.key === "Enter" && matches[0]) {
+          evt.preventDefault();
+          pick(matches[0]);
+        }
       }}
       inputProps={{ "aria-label": "Filter settings" }}
       data-testid="settings-filter"
@@ -272,7 +330,14 @@ export default function SettingsPage({
                       onClick={() => pick(m)}
                       data-testid="settings-result"
                     >
-                      <ListItemText primary={`${m.label}, ${sec.label}`} />
+                      <ListItemText
+                        primary={`${m.label}, ${sec.label}`}
+                        secondary={
+                          m.configRepo && configRepoOnly
+                            ? "Read-only: in the config repo"
+                            : null
+                        }
+                      />
                     </ListItemButton>
                   </ListItem>
                 ))}
@@ -493,10 +558,15 @@ export default function SettingsPage({
       case "access":
         body = <AccessSection s={s} {...common} onLogout={onLogout} />;
         break;
+      case "hostds":
+        body = <HostdsSection {...common} />;
+        break;
       case "config-repo":
         body = (
           <ConfigRepoSection
             {...common}
+            item={item}
+            onItem={onItem}
             onStatusChange={() => {
               reloadSettings();
               onSaved?.();
@@ -508,7 +578,9 @@ export default function SettingsPage({
         body = <ModelsSection {...common} onSaved={onSaved} />;
         break;
       case "git":
-        body = <GitSection showError={showError} onSaved={onSaved} />;
+        body = (
+          <GitSection showError={showError} onSaved={onSaved} onSection={go} />
+        );
         break;
       case "tasks":
         body = (
@@ -552,11 +624,6 @@ export default function SettingsPage({
               ),
             ]}
           />
-        );
-        break;
-      case "executors":
-        body = (
-          <ExecutorsSection showError={showError} onOpenSystem={onOpenSystem} />
         );
         break;
       case "engine":
@@ -618,7 +685,10 @@ export default function SettingsPage({
             Not configured yet -- nothing has been saved for this deployment.
           </Alert>
         )}
-        {readOnly && (
+        {configManaged && !external && (
+          <ConfigManagedNotice paths={CONFIG_REPO_SECTION_PATHS[current]} />
+        )}
+        {external && (
           <Alert
             severity="info"
             sx={{ mb: 2 }}

@@ -260,3 +260,33 @@ func TestCreateTaskChecksAChangeTargetLive(t *testing.T) {
 		t.Errorf("a target needing no check: %v, %d calls", err, len(checker.calls))
 	}
 }
+
+// A change-target task with no live CL has nothing to Submit, and a
+// change-target task cannot be turned to auto-merge by editing it: either
+// would leave it holding auto-merge, which every dispatch refuses
+// (task 1860).
+func TestAChangeTargetTaskWithNoCLIsNeverTurnedToAutoMerge(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	task, err := c.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "fix it in the workspace", Approved: true,
+		ChangeTarget: &model.ChangeTarget{Kind: testTargetKind},
+	})
+	if err != nil {
+		t.Fatalf("filing a change-target task: %v", err)
+	}
+
+	err = c.Submit(ctx, task.ID)
+	var verr *ui.ValidationError
+	if !errors.As(err, &verr) || !strings.Contains(err.Error(), "no "+testTargetKind+" change to submit yet") {
+		t.Errorf("Submit = %v, want a validation error saying there is no change to submit yet", err)
+	}
+	on := true
+	if _, err := c.UpdateTask(ctx, task.ID, ui.UpdateTaskRequest{AutoMerge: &on}); !errors.As(err, &verr) ||
+		!strings.Contains(err.Error(), "auto_merge cannot be set") {
+		t.Errorf("UpdateTask(autoMerge) = %v, want a validation error refusing auto_merge", err)
+	}
+	if stored := mustGetTask(t, ctx, store, task.ID); stored.AutoMerge {
+		t.Error("the change-target task was left holding auto-merge")
+	}
+}

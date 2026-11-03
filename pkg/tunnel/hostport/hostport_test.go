@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -75,18 +76,39 @@ func dialTo(addr string) func(ctx context.Context) (net.Conn, error) {
 	}
 }
 
+// syncOnFreePort has f forward a port nothing else holds to dial, and
+// returns it. freePort's port is free only until it returns, so another
+// listener -- this package's echo servers, or any other test process --
+// can take it before Sync binds it; that is retried on a fresh port
+// rather than reported as the forwarder's failure.
+func syncOnFreePort(t *testing.T, f *Forwarder, dial func(ctx context.Context) (net.Conn, error)) int {
+	t.Helper()
+	var errs map[int]error
+	for range 10 {
+		port := freePort(t)
+		if errs = f.Sync(map[int]func(ctx context.Context) (net.Conn, error){port: dial}); len(errs) == 0 {
+			return port
+		}
+		if !errors.Is(errs[port], syscall.EADDRINUSE) {
+			break
+		}
+	}
+	t.Fatal(errs)
+	return 0
+}
+
 func TestForwarderForwardsAndRepoints(t *testing.T) {
 	f := New("127.0.0.1")
 	t.Cleanup(f.Close)
-	port := freePort(t)
-	if errs := f.Sync(map[int]func(ctx context.Context) (net.Conn, error){port: dialTo(echoServer(t, "one"))}); len(errs) != 0 {
-		t.Fatal(errs)
-	}
+	// Both dial targets listen before a port is picked for the forwarder,
+	// so neither can be handed the port it is about to bind.
+	one, two := echoServer(t, "one"), echoServer(t, "two")
+	port := syncOnFreePort(t, f, dialTo(one))
 	if got, err := roundTrip(t, port); err != nil || got != "one:hi\n" {
 		t.Fatalf("first = %q, %v", got, err)
 	}
 	// A restarted sandbox is a new dial target behind the same listener.
-	f.Sync(map[int]func(ctx context.Context) (net.Conn, error){port: dialTo(echoServer(t, "two"))})
+	f.Sync(map[int]func(ctx context.Context) (net.Conn, error){port: dialTo(two)})
 	if got, err := roundTrip(t, port); err != nil || got != "two:hi\n" {
 		t.Fatalf("after repointing = %q, %v", got, err)
 	}

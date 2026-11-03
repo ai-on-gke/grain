@@ -66,7 +66,7 @@ func (s RepoDeclarationSource) Head(ctx context.Context, repo model.RepoRef) (st
 	ctx, cancel := context.WithTimeout(ctx, declarationTimeout)
 	defer cancel()
 
-	dir, err := os.MkdirTemp(s.Clone.TempDir, "grain-declarations-head-")
+	dir, err := ciMkdirTemp(s.Clone.TempDir, "grain-declarations-head-")
 	if err != nil {
 		return "", err
 	}
@@ -96,7 +96,7 @@ func (s RepoDeclarationSource) Read(ctx context.Context, repo model.RepoRef) (mo
 	ctx, cancel := context.WithTimeout(ctx, declarationTimeout)
 	defer cancel()
 
-	dir, err := os.MkdirTemp(s.Clone.TempDir, "grain-declarations-")
+	dir, err := ciMkdirTemp(s.Clone.TempDir, "grain-declarations-")
 	if err != nil {
 		return model.RepoDeclarations{}, "", err
 	}

@@ -57,7 +57,7 @@ type SupersedeKeptEntry struct {
 // task nobody proposed.
 type Task struct {
 	// Goal is the task's goal and grain's progress towards it
-	// (model.TaskGoal, docs/design/durable-tasks.md#DT-4); filled on a
+	// (model.TaskGoal, design/design/durable-tasks.design.md#DT-4); filled on a
 	// single task's read, nil in a list and for a task with none.
 	Goal        *model.TaskGoal `json:"goal,omitempty"`
 	ID          string          `json:"id"`
@@ -72,10 +72,13 @@ type Task struct {
 	// which. The frontend needs the distinction to keep a task nobody
 	// filed by hand from steering a human's own defaults -- see
 	// state.js's lastBaseForRepo.
-	AuthorKind string      `json:"authorKind,omitempty"`
-	State      model.State `json:"state"`
-	Repo       string      `json:"repo,omitempty"`
-	Branch     string      `json:"branch,omitempty"`
+	AuthorKind string `json:"authorKind,omitempty"`
+	// AuthorLabel is how the filer reads to a person (shownLabel), empty
+	// for a task filed before sources were recorded.
+	AuthorLabel string      `json:"authorLabel,omitempty"`
+	State       model.State `json:"state"`
+	Repo        string      `json:"repo,omitempty"`
+	Branch      string      `json:"branch,omitempty"`
 	// Reads is every repo this task's run may read but never push to --
 	// model.Task.Reads, rendered as owner/name strings the same way Repo
 	// renders its single Target.
@@ -92,6 +95,7 @@ type Task struct {
 	// piece missing.
 	Writes               []WriteTarget `json:"writes,omitempty"`
 	Base                 string        `json:"base,omitempty"`
+	Priority             int           `json:"priority"`
 	AutoMerge            bool          `json:"autoMerge"`
 	AutoApproveProposals bool          `json:"autoApproveProposals"`
 	// Interactive mirrors model.Task's own field of the same name
@@ -152,6 +156,10 @@ type Task struct {
 	// what a run ending on nothing_needed does to this task, "close" or
 	// "ack", with "" meaning close.
 	NothingNeededAction string `json:"nothingNeededAction,omitempty"`
+	// KeepRunning is model.Task.KeepRunning: when true, the orchestrator
+	// immediately restarts the task when its run exits rather than completing
+	// or parking it.
+	KeepRunning bool `json:"keepRunning,omitempty"`
 	// NoPort is model.Task.NoPort: this task's change is not ported to
 	// its repository's other paired branches.
 	NoPort bool `json:"noPort,omitempty"`
@@ -244,10 +252,17 @@ type Task struct {
 	// declaration may say the field holds a set (custom_fields.go's own
 	// doc comment on which, and why the one-value case is still a bare
 	// string).
-	CustomFields  map[string]CustomFieldValue `json:"customFields,omitempty"`
-	Issue         int                         `json:"issue,omitempty"`
-	PullRequest   string                      `json:"pullRequest,omitempty"`
-	GeneratedFrom string                      `json:"generatedFrom,omitempty"`
+	CustomFields map[string]CustomFieldValue `json:"customFields,omitempty"`
+	Issue        int                         `json:"issue,omitempty"`
+	PullRequest  string                      `json:"pullRequest,omitempty"`
+	// ExternalPullRequests are the pull requests this task is about but
+	// does not own (model.LinkExternalPR, "owner/repo#number"): a fork's
+	// pull request the task was filed against by its head label
+	// (pkg/forkhead), or a contributor's pull request grain took over.
+	// PullRequest beside it is the one grain pushes to; these it only
+	// reads and comments on.
+	ExternalPullRequests []string `json:"externalPullRequests,omitempty"`
+	GeneratedFrom        string   `json:"generatedFrom,omitempty"`
 	// Origin is the pull request, issue or grain task this task's tree of
 	// work came from (model.WorkOrigin): "owner/repo#12" or "task:1766",
 	// empty for a task that has none.
@@ -285,6 +300,13 @@ type Task struct {
 	// (mcp.FiledProposal).
 	SupersedeMoved []string             `json:"supersedeMoved,omitempty"`
 	SupersedeKept  []SupersedeKeptEntry `json:"supersedeKept,omitempty"`
+	// DroppedDefaults is the deployment and repository default grants
+	// the capability policy kept off this task when it was filed, each
+	// with the policy's reason -- the same thing the note on its thread
+	// says, for a caller filing over the API that reads no thread.
+	// Filled in only on the answer to the CreateTask call that dropped
+	// them, like SupersedeMoved.
+	DroppedDefaults []DroppedDefault `json:"droppedDefaults,omitempty"`
 	// Reverts is the ID of the task this one was filed to revert, and
 	// RevertedBy the ID of the task that reverted this one --
 	// model.LinkReverts and model.LinkRevertedBy.
@@ -345,8 +367,18 @@ type Task struct {
 	// (model.ReasonSuite, bwsalmon/agents#642) -- Scheduled's own badge
 	// treatment, so a pass of tasks that appeared with nobody filing
 	// them by hand reads as expected rather than as a mystery.
-	SuiteRun  bool       `json:"suiteRun,omitempty"`
-	CreatedAt *time.Time `json:"createdAt,omitempty"`
+	SuiteRun bool `json:"suiteRun,omitempty"`
+	// Imported is true for a task the GitHub issue importer filed
+	// (model.ReasonImported): the row's "imported" chip, kept after the
+	// task is approved so an imported issue stays identifiable. Origin
+	// names the issue it came from.
+	Imported bool `json:"imported,omitempty"`
+	// AwaitingImportApproval is Imported while nobody has approved the
+	// task -- its explicit "imported" status, standing in for
+	// "proposed": the same Approve action takes it to the queue, and
+	// until then nothing dispatches it.
+	AwaitingImportApproval bool       `json:"awaitingImportApproval,omitempty"`
+	CreatedAt              *time.Time `json:"createdAt,omitempty"`
 	// StartedAt and EndedAt are model.TaskSpan on the wire: when this
 	// task's first attempt began, and when it stopped being work in
 	// progress (that type's own doc comment says which ending counts and
@@ -391,6 +423,13 @@ type Task struct {
 	// to the run that filed it. Set by CreateTask only; empty on every
 	// other read, like SupersedeMoved.
 	ApprovalNote string `json:"approvalNote,omitempty"`
+	// ParkNote is, on the response to a task just filed, the comment
+	// filing parked it awaiting a reply on -- a repo off the target repo
+	// list, or one nothing here can reach -- and "" for one filing did
+	// not park. propose_task relays it, since a parked proposal is not
+	// dispatched in its turn whatever its approval says. Set by
+	// CreateTask only, like ApprovalNote.
+	ParkNote string `json:"parkNote,omitempty"`
 	// DependsOn is every task this one has declared a depends-on link to,
 	// resolved or not -- the definition. Blocked and BlockedBy are the
 	// signal: whether any of it (or a child-of link) is still open right
@@ -559,10 +598,16 @@ func oomRetryActivity(at time.Time) *model.RunActivity {
 func grantWaitActivity(wait model.GrantWait) *model.RunActivity {
 	if wait.Capability == model.ModelWaitCapability || wait.Capability == model.TeamSetupWaitCapability ||
 		wait.Capability == model.BranchWaitCapability || wait.Capability == model.PolicyWaitCapability ||
-		wait.Capability == model.QuotaWaitCapability {
+		wait.Capability == model.QuotaWaitCapability || wait.Capability == model.ChangeTargetWaitCapability {
 		// The resource is already the whole sentence: "no enabled
 		// connection serves model X", "all connections serving X are busy",
-		// 'team "x" has no GitHub credential for o/r -- ...'.
+		// 'team "x" has no GitHub credential for o/r -- ...'. One that
+		// already says what it is waiting for (a session's "waiting for
+		// sandbox budget: ...", dispatch.capacityReasonFor) is not
+		// prefixed a second time.
+		if strings.HasPrefix(wait.Resource, "waiting for ") {
+			return &model.RunActivity{Note: wait.Resource, At: &wait.WaitingAt, BySetup: true}
+		}
 		return &model.RunActivity{Note: "waiting: " + wait.Resource, At: &wait.WaitingAt, BySetup: true}
 	}
 	return &model.RunActivity{
@@ -579,12 +624,16 @@ func grantWaitActivity(wait model.GrantWait) *model.RunActivity {
 // else's words, so a question from a dispatched run renders as grain
 // speaking for an agent rather than as grain's own.
 type Comment struct {
-	ID         int64     `json:"id"`
-	Author     string    `json:"author"`
-	AuthorKind string    `json:"authorKind"`
-	OnBehalfOf string    `json:"onBehalfOf,omitempty"`
-	Body       string    `json:"body"`
-	CreatedAt  time.Time `json:"createdAt"`
+	ID         int64  `json:"id"`
+	Author     string `json:"author"`
+	AuthorKind string `json:"authorKind"`
+	OnBehalfOf string `json:"onBehalfOf,omitempty"`
+	// AuthorLabel is how the author reads to a person (shownLabel), empty
+	// for grain's own notes and for a comment written before sources were
+	// recorded. OnBehalfOf stays separate, as the timeline shows it.
+	AuthorLabel string    `json:"authorLabel,omitempty"`
+	Body        string    `json:"body"`
+	CreatedAt   time.Time `json:"createdAt"`
 	// Handover marks this comment as the task's handover: a run's standing
 	// summary of the older part of the conversation, written for the next
 	// run on the task rather than for a person (model.Comment.Handover).
@@ -633,6 +682,9 @@ func attachmentFrom(a model.AttachmentMeta) Attachment {
 // attempts, last failure: reason").
 type TaskDetail struct {
 	Task
+	// Hostd is the task's hostd pin or label selector
+	// (model.SetTaskHostd), "" for the default hostd.
+	Hostd    string    `json:"hostd,omitempty"`
 	Comments []Comment `json:"comments"`
 	// LocalScriptApprovals is the local-script calls this task's run is
 	// waiting on a person for, and the ones answered recently
@@ -685,6 +737,10 @@ type TaskDetail struct {
 	// read a stored secret back, and PUT /api/tasks/{id}/secret is the
 	// one direction this travels (see task_secret.go).
 	PendingSecret *CapabilitySecret `json:"pendingSecret,omitempty"`
+	// PendingConfigChange is the grain/config change a parked session
+	// proposed (propose_config_change, task_config_change.go): what the
+	// task pane renders as an inline diff with Approve and Reject.
+	PendingConfigChange *model.PendingConfigChange `json:"pendingConfigChange,omitempty"`
 	// CI is what grain's own CI last said about the branch this task
 	// pushed (model.Observation.CI), nil for the overwhelming majority of
 	// tasks -- one that does not hold the grain-ci capability, or whose
@@ -714,8 +770,7 @@ type TaskDetail struct {
 	SuspendedSession *TaskSuspendedSession `json:"suspendedSession,omitempty"`
 	// DeploymentWide is every team-scoped capability this task holds in
 	// its deployment-wide form (admincaps.TeamScoped, grain/task-2555):
-	// self-debug reading every team's tasks and metrics, pipeline-control
-	// pausing the whole deployment. A capability held but not named here
+	// self-debug reading every team's tasks and metrics. A capability held but not named here
 	// reaches only the task's own team's work -- which is what `grain
 	// mcpserver` reads it as, so an older daemon that never sends it
 	// leaves a run team-scoped rather than wider than it should be.
@@ -818,14 +873,43 @@ type PullRequestEvent struct {
 // model.Transition. Inferred is model.Transition.Inferred: At is the
 // earliest the state can have begun, not a recorded moment, and the
 // timeline says so rather than showing it as precise.
+//
+// A close or reopen somebody asked for (model.TaskEvent) carries By --
+// who, as "<kind> <id>" (principalLabel) -- and the Reason they gave and
+// the Detail of what it cancelled. Its state is "closed", or "reopened"
+// (model.TransitionReopened) for the step that undid one.
 type Transition struct {
 	State    model.State `json:"state"`
 	At       time.Time   `json:"at"`
 	Inferred bool        `json:"inferred,omitempty"`
+	By       string      `json:"by,omitempty"`
+	// ByLabel is how By reads to a person (shownLabel): "operator
+	// (access code)" rather than the deployment's own address for a
+	// change made with the access code. Empty for a row written before
+	// sources were recorded, which reads as By always has.
+	ByLabel string `json:"byLabel,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Detail  string `json:"detail,omitempty"`
 }
 
 func transitionFrom(t model.Transition) Transition {
-	return Transition{State: t.State, At: t.At, Inferred: t.Inferred}
+	out := Transition{State: t.State, At: t.At, Inferred: t.Inferred, Reason: t.Reason, Detail: t.Detail}
+	if t.By != nil {
+		out.By = principalLabel(*t.By)
+		out.ByLabel = shownLabel(*t.By, nil)
+	}
+	return out
+}
+
+// shownLabel is PrincipalLabel for a principal whose source is recorded,
+// and "" for one written before sources existed (schema 91): such a row
+// cannot be told apart from a verified one, so it keeps reading as its
+// bare id rather than as "(unverified)" noise.
+func shownLabel(p model.Principal, behalf *model.Principal) string {
+	if p.Source == "" {
+		return ""
+	}
+	return PrincipalLabel(p, behalf)
 }
 
 // Attempt is one of a task's runs, projected from model.Run.
@@ -889,6 +973,32 @@ type Attempt struct {
 	// (model.CapabilityAuditRecord). The records are their own fetch
 	// (AttemptCapabilityAudit), for the transcript's reason.
 	CapabilityAuditCount int `json:"capabilityAuditCount,omitempty"`
+	// Hostd is the grain hostd this attempt's host work went to, the
+	// machine it ran on and its owner (model.TaskRunHostd); nil for an
+	// attempt that resolved none.
+	Hostd *model.TaskRunHostd `json:"hostd,omitempty"`
+	// QueuedAt, SandboxAcquiredAt, SandboxPreparedAt, AgentStartedAt and
+	// FirstTurnAt are the startup phase timestamps of this attempt
+	// (model.RunStartup, model.Run.AgentStartedAt), and Startup is the
+	// per-phase latency breakdown derived from them.
+	QueuedAt          *time.Time      `json:"queuedAt,omitempty"`
+	SandboxAcquiredAt *time.Time      `json:"sandboxAcquiredAt,omitempty"`
+	SandboxPreparedAt *time.Time      `json:"sandboxPreparedAt,omitempty"`
+	AgentStartedAt    *time.Time      `json:"agentStartedAt,omitempty"`
+	FirstTurnAt       *time.Time      `json:"firstTurnAt,omitempty"`
+	Startup           *AttemptStartup `json:"startup,omitempty"`
+}
+
+// AttemptStartup is the per-phase startup breakdown of one attempt
+// (model.RunStartup), in seconds: queued -> dispatched, sandbox acquire,
+// prepare sandbox, agent launch -> first turn, and total attempt started ->
+// agent's first turn. Nil when no startup phase durations are available.
+type AttemptStartup struct {
+	QueuedToDispatchedSeconds     *float64 `json:"queuedToDispatchedSeconds,omitempty"`
+	SandboxAcquireSeconds         *float64 `json:"sandboxAcquireSeconds,omitempty"`
+	PrepareSandboxSeconds         *float64 `json:"prepareSandboxSeconds,omitempty"`
+	AgentLaunchToFirstTurnSeconds *float64 `json:"agentLaunchToFirstTurnSeconds,omitempty"`
+	StartedToFirstTurnSeconds     *float64 `json:"startedToFirstTurnSeconds,omitempty"`
 }
 
 // taskFrom projects a model.Task to its JSON shape. closed reports, for
@@ -913,14 +1023,20 @@ type Attempt struct {
 func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueueBlockedAt *time.Time,
 	repairing bool, mergeQueue model.MergeQueueActivity, activity *model.RunActivity,
 	reviewTemplateName string, span model.TaskSpan, stall string) Task {
+	priority := t.Priority
+	if priority == 0 {
+		priority = model.DefaultTaskPriority
+	}
 	out := Task{
 		ID:                   t.ID,
 		Title:                t.Title,
 		Description:          t.Body,
 		Author:               t.Origin.Attribution.Actor.ID,
 		AuthorKind:           string(t.Origin.Attribution.Actor.Kind),
+		AuthorLabel:          shownLabel(t.Origin.Attribution.Actor, t.Origin.Attribution.OnBehalfOf),
 		State:                state,
 		Base:                 t.Base,
+		Priority:             priority,
 		Issue:                t.Issue,
 		AutoMerge:            t.AutoMerge,
 		AutoApproveProposals: t.AutoApproveProposals,
@@ -935,6 +1051,7 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		ModelSource:          string(t.ModelSource),
 		NetworkAccess:        string(t.NetworkAccess),
 		NothingNeededAction:  string(t.NothingNeededAction),
+		KeepRunning:          t.KeepRunning,
 		NoPort:               t.NoPort,
 		FixesBaseBranch:      model.FixesBaseBranch(t),
 		GrainBaseRepair:      model.GrainBaseRepair(t),
@@ -948,21 +1065,24 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		Review:               t.Origin.Reason == model.ReasonReview,
 		Scheduled:            t.Origin.Reason == model.ReasonSchedule,
 		SuiteRun:             t.Origin.Reason == model.ReasonSuite,
-		CreatedAt:            t.CreatedAt,
-		StartedAt:            span.StartedAt,
-		EndedAt:              span.EndedAt,
-		ClosedAt:             span.ClosedAt,
-		PrMergedAt:           span.PrMergedAt,
-		PrClosedAt:           span.PrClosedAt,
-		DeferredUntil:        t.DeferredUntil,
-		Approved:             t.ApprovedAt != nil,
-		MergeQueueBlockedAt:  mergeQueueBlockedAt,
-		Repairing:            repairing,
-		MergeQueueState:      mergeQueue.State,
-		MergeQueueNote:       mergeQueue.Note,
-		MergeQueueStateAt:    mergeQueue.At,
-		MergeQueueStalledAt:  mergeQueue.StalledAt,
-		Stall:                stall,
+		Imported:             t.Origin.Reason == model.ReasonImported,
+		AwaitingImportApproval: t.Origin.Reason == model.ReasonImported && t.ApprovedAt == nil &&
+			state == model.StateProposed,
+		CreatedAt:           t.CreatedAt,
+		StartedAt:           span.StartedAt,
+		EndedAt:             span.EndedAt,
+		ClosedAt:            span.ClosedAt,
+		PrMergedAt:          span.PrMergedAt,
+		PrClosedAt:          span.PrClosedAt,
+		DeferredUntil:       t.DeferredUntil,
+		Approved:            t.ApprovedAt != nil,
+		MergeQueueBlockedAt: mergeQueueBlockedAt,
+		Repairing:           repairing,
+		MergeQueueState:     mergeQueue.State,
+		MergeQueueNote:      mergeQueue.Note,
+		MergeQueueStateAt:   mergeQueue.At,
+		MergeQueueStalledAt: mergeQueue.StalledAt,
+		Stall:               stall,
 	}
 	if activity != nil {
 		out.Activity, out.ActivityAt = activity.Note, activity.At
@@ -993,6 +1113,9 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 	for _, l := range t.Links {
 		if l.Kind == model.LinkFixes && !model.LinkOffTarget(t, l) {
 			out.PullRequest = l.Target
+		}
+		if l.Kind == model.LinkExternalPR {
+			out.ExternalPullRequests = append(out.ExternalPullRequests, l.Target)
 		}
 		if l.Kind == model.LinkProposedBy {
 			out.GeneratedFrom = l.Target
@@ -1092,6 +1215,9 @@ func commentFrom(c model.Comment, attachments []Attachment) Comment {
 	if b := c.Author.OnBehalfOf; b != nil {
 		out.OnBehalfOf = b.ID
 	}
+	if c.Author.Actor.Kind != model.PrincipalAutomation {
+		out.AuthorLabel = shownLabel(c.Author.Actor, nil)
+	}
 	return out
 }
 
@@ -1110,6 +1236,12 @@ func attemptFrom(r model.Run, promptBytes, auditCounts map[int]int) Attempt {
 		Model:                r.Model,
 		AgentFramework:       r.AgentFramework,
 		CapabilityAuditCount: auditCounts[r.Attempt],
+		QueuedAt:             r.QueuedAt,
+		SandboxAcquiredAt:    r.SandboxAcquiredAt,
+		SandboxPreparedAt:    r.SandboxPreparedAt,
+		AgentStartedAt:       r.AgentStartedAt,
+		FirstTurnAt:          r.FirstTurnAt,
+		Startup:              attemptStartupFrom(r),
 	}
 	if size := model.MeasurePromptBytes(promptBytes[r.Attempt]); !size.Zero() {
 		out.PromptBytes, out.PromptTokens = size.Bytes, size.EstimatedTokens
@@ -1121,6 +1253,56 @@ func attemptFrom(r model.Run, promptBytes, auditCounts map[int]int) Attempt {
 		out.SetupNote, out.SetupNoteAt = r.Activity, r.ActivityAt
 	}
 	return out
+}
+
+func attemptStartupFrom(r model.Run) *AttemptStartup {
+	var s AttemptStartup
+	hasAny := false
+	if r.QueuedAt != nil && !r.StartedAt.Before(*r.QueuedAt) {
+		v := r.StartedAt.Sub(*r.QueuedAt).Seconds()
+		s.QueuedToDispatchedSeconds = &v
+		hasAny = true
+	}
+	if r.SandboxAcquiredAt != nil && !r.SandboxAcquiredAt.Before(r.StartedAt) {
+		v := r.SandboxAcquiredAt.Sub(r.StartedAt).Seconds()
+		s.SandboxAcquireSeconds = &v
+		hasAny = true
+	}
+	prepEnd := r.SandboxPreparedAt
+	if prepEnd == nil {
+		prepEnd = r.AgentStartedAt
+	}
+	if prepEnd != nil {
+		prepStart := r.StartedAt
+		if r.SandboxAcquiredAt != nil {
+			prepStart = *r.SandboxAcquiredAt
+		}
+		if !prepEnd.Before(prepStart) {
+			v := prepEnd.Sub(prepStart).Seconds()
+			s.PrepareSandboxSeconds = &v
+			hasAny = true
+		}
+	}
+	if r.FirstTurnAt != nil {
+		launchStart := r.AgentStartedAt
+		if launchStart == nil {
+			launchStart = r.SandboxPreparedAt
+		}
+		if launchStart != nil && !r.FirstTurnAt.Before(*launchStart) {
+			v := r.FirstTurnAt.Sub(*launchStart).Seconds()
+			s.AgentLaunchToFirstTurnSeconds = &v
+			hasAny = true
+		}
+		if !r.FirstTurnAt.Before(r.StartedAt) {
+			v := r.FirstTurnAt.Sub(r.StartedAt).Seconds()
+			s.StartedToFirstTurnSeconds = &v
+			hasAny = true
+		}
+	}
+	if !hasAny {
+		return nil
+	}
+	return &s
 }
 
 // --- handlers ------------------------------------------------------------
@@ -1314,7 +1496,7 @@ type configResponse struct {
 	// for a restart, or an upgrade that ends in one is running. The
 	// frontend remembers it, so that when the next poll cannot reach
 	// the API it says "grain is restarting" rather than that the
-	// deployment cannot be reached (docs/non-disruptive-upgrade.md,
+	// deployment cannot be reached (design/design/non-disruptive-upgrade.design.md,
 	// Stage 1).
 	Restarting bool `json:"restarting,omitempty"`
 	// SandboxCount is the number of live agent and CI sandboxes the
@@ -1323,13 +1505,6 @@ type configResponse struct {
 	// Config.Sandboxes counts its live set without the per-guest probes
 	// GET /api/sandboxes performs for the health pane.
 	SandboxCount int `json:"sandboxCount"`
-	// ExecutorAddr is where this deployment's remote executor listener
-	// accepts workers (Config.ExecutorAddr), with a wildcard host left
-	// off (":8422") since only the browser knows which name reaches this
-	// machine. Absent when remote execution is off, and from anybody who
-	// has not signed in. ExecutorTLS says the listener wants --tls.
-	ExecutorAddr string `json:"executorAddr,omitempty"`
-	ExecutorTLS  bool   `json:"executorTLS,omitempty"`
 	// PackageCacheEntries is how many packages this deployment's proxy
 	// cache is holding, across every ecosystem. It rides here for the
 	// reason SandboxCount above does: the sidebar shows it beside its
@@ -1586,6 +1761,19 @@ type configResponse struct {
 	Deployment           *Team  `json:"deployment,omitempty"`
 	ExternalConfigRepo   string `json:"externalConfigRepo,omitempty"`
 	ExternalConfigBranch string `json:"externalConfigBranch,omitempty"`
+	// ConfigRepoOnly is whether a non-bootstrap settings write from the
+	// API is refused with a config pull request (configRepoFor): an
+	// external config repository, or the internal grain/config with
+	// settings_locked enabled and without the directConfigWrites opt-out.
+	// The UI draws the config-repo-only settings read-only exactly then
+	// (design/design/config-repo-settings.design.md §2.1).
+	ConfigRepoOnly bool `json:"configRepoOnly,omitempty"`
+	SettingsLocked bool `json:"settingsLocked,omitempty"`
+	// NewTaskForm is settings/new-task-form.yml as stored
+	// (model.NewTaskForm), which the New Task form resolves for the
+	// repository, template and board it is filled in for; nil draws the
+	// form as built (design/design/config-repo-settings.design.md §6).
+	NewTaskForm *model.NewTaskForm `json:"newTaskForm,omitempty"`
 }
 
 // CustomFieldDeclaration is one declared field on the wire -- the JSON
@@ -1754,7 +1942,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
-	actor := s.tasks.actor(r.Context())
+	actor := s.tasks.requestActor(r.Context()).Actor
 	_, authenticated := PrincipalFromContext(r.Context())
 	// /api/config is served to callers nobody has vouched for, since it
 	// is what the sign-in page reads. Only a trusted source runs as the
@@ -1796,10 +1984,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if s.tasks.Config.Sandboxes != nil {
 		resp.SandboxCount = s.tasks.Config.Sandboxes.SandboxCount()
 	}
-	if actor.ID != "" {
-		resp.ExecutorAddr = executorDialAddr(s.tasks.Config.ExecutorAddr)
-		resp.ExecutorTLS = resp.ExecutorAddr != "" && s.tasks.Config.ExecutorTLS
-	}
 	if s.tasks.Config.PackageCache != nil {
 		entries := s.tasks.Config.PackageCache.PackageCacheEntryCount()
 		resp.PackageCacheEntries = &entries
@@ -1812,6 +1996,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		resp.ConfigRepo = s.tasks.Config.StateRepoRef().String()
 	}
 	resp.ExternalConfigRepo, resp.ExternalConfigBranch = s.tasks.externalConfigRepo(r.Context())
+	resp.ConfigRepoOnly = s.tasks.configRepoOnly(r.Context())
 	resp.AgentFramework = model.AgentFrameworkAntigravity
 	resp.NetworkAccess = string(model.NetworkOpen)
 	// Same reading of "no row yet" the AgentFramework line above takes:
@@ -1824,6 +2009,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if cfg != nil {
 		resp.ModelsConfigured = len(cfg.AgentBackends) > 0
 		resp.ShowClosedByDefault = cfg.ShowClosedByDefault
+		resp.SettingsLocked = cfg.SettingsLocked
+		resp.NewTaskForm = cfg.NewTaskForm
 		resp.DefaultFilters = cfg.DefaultFilters
 		resp.EnvironmentName = cfg.EnvironmentName
 		// The stored zone, which before this never reached the frontend:
@@ -1975,6 +2162,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 // tasks of the teams they belong to (bwsalmon/grain#2415). ?repo=owner/name
 // answers only that repository's tasks.
 func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
+	if q, ok := parseTaskListQuery(r.URL.Query()); ok {
+		s.handleFilteredTaskList(w, r, q)
+		return
+	}
 	body, etag, err := s.taskList.response(r.Context(), s.tasks, strings.TrimSpace(r.URL.Query().Get("repo")))
 	if err != nil {
 		writeClientError(w, err)
@@ -2121,10 +2312,7 @@ func (s *Server) handleGetTaskPrompt(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
-	user := requestUser(r)
-	if user == "" && s.tasks.Config.Actor.Kind == model.PrincipalHuman {
-		user = strings.TrimSpace(s.tasks.Config.Actor.ID)
-	}
+	user := s.tasks.requestPersonOrOperator(r.Context())
 	if user == "" {
 		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
 		return
@@ -2144,13 +2332,26 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	// A requester the body names (CreateTaskRequest.Author) is the
 	// operator's word about who asked, and only the operator's: a
 	// signed-in person may name nobody but themselves.
-	if author := strings.TrimSpace(req.Author); author != "" && requestUser(r) != "" && !strings.EqualFold(author, user) {
+	if author := strings.TrimSpace(req.Author); author != "" && requestPerson(r.Context()) != "" && !strings.EqualFold(author, user) {
 		writeError(w, http.StatusForbidden, fmt.Errorf("a signed-in user files tasks as themselves, not as %q", author))
 		return
 	}
 	// The browser's zone when the body names none (TimeZoneHeader).
 	if strings.TrimSpace(req.TimeZone) == "" {
 		req.TimeZone = requestTimeZone(r)
+	}
+	// The fields settings/new-task-form.yml hides file as it says -- for
+	// a person's filing, never an agent's. agentAPIGate judged an agent's
+	// escalations (autoMerge, approved, writes, reads, grants, repo) on
+	// the body it sent, so a default put in after it would be a grant
+	// that gate never saw.
+	if p, ok := PrincipalFromContext(r.Context()); ok && p.Kind == model.PrincipalAgent {
+		// filed as the body says
+	} else if cfg, err := s.tasks.Store.GetConfig(r.Context()); err == nil && cfg != nil {
+		if err := applyHiddenFormDefaults(&req, cfg.NewTaskForm); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
 	}
 	task, err := s.tasks.CreateTask(r.Context(), req)
 	if err != nil {
@@ -2365,7 +2566,7 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	if !readAttachmentJSON(w, r, &req, func(req *addCommentRequest) []AttachmentUpload { return req.Attachments }) {
 		return
 	}
-	req.Author = actingUser(r, req.Author)
+	req.Author = requestPerson(r.Context())
 	id := r.PathValue("id")
 	if req.Reviewers != nil {
 		if _, err := s.tasks.UpdateTask(r.Context(), id, UpdateTaskRequest{Reviewers: req.Reviewers}); err != nil {
@@ -2450,10 +2651,16 @@ func attachmentServingHeaders(stored string) (contentType, disposition string) {
 }
 
 // closeRequest is the body of POST /api/tasks/{id}/close: the choice
-// made at the moment of closing, and nothing else. See CloseOptions,
-// whose one field this is.
+// made at the moment of closing, and the reason given for it. See
+// CloseOptions, whose fields these are.
 type closeRequest struct {
-	ClosePullRequest bool `json:"close_pull_request"`
+	ClosePullRequest bool   `json:"close_pull_request"`
+	Reason           string `json:"reason,omitempty"`
+}
+
+// reopenRequest is the optional body of POST /api/tasks/{id}/reopen.
+type reopenRequest struct {
+	Reason string `json:"reason,omitempty"`
 }
 
 // handleClose closes a task, and closes its pull request too if -- and
@@ -2471,7 +2678,7 @@ func (s *Server) handleClose(w http.ResponseWriter, r *http.Request) {
 	if !readOptionalJSON(w, r, &req) {
 		return
 	}
-	if err := s.tasks.Close(r.Context(), id, CloseOptions{ClosePullRequest: req.ClosePullRequest}); err != nil {
+	if err := s.tasks.Close(r.Context(), id, CloseOptions{ClosePullRequest: req.ClosePullRequest, Reason: req.Reason}); err != nil {
 		writeClientError(w, err)
 		return
 	}
@@ -2491,7 +2698,11 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleReopen(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := s.tasks.Reopen(r.Context(), id); err != nil {
+	var req reopenRequest
+	if !readOptionalJSON(w, r, &req) {
+		return
+	}
+	if err := s.tasks.ReopenBecause(r.Context(), id, req.Reason); err != nil {
 		writeClientError(w, err)
 		return
 	}
@@ -2626,6 +2837,10 @@ func writeClientError(w http.ResponseWriter, err error) {
 		writeCINotUp(w)
 		return
 	}
+	if errors.Is(err, ci.ErrStartQueued) {
+		writeCIStartQueued(w, err)
+		return
+	}
 	var fe *ForbiddenError
 	if errors.As(err, &fe) {
 		writeError(w, http.StatusForbidden, err)
@@ -2744,11 +2959,28 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return readJSONLimit(w, r, v, maxJSONBody)
 }
 
+func ensureJSONEOF(dec *json.Decoder) error {
+	var extra any
+	err := dec.Decode(&extra)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return errors.New("unexpected trailing JSON data after request body")
+}
+
 // readJSONLimit is readJSON with the body bound set by the caller, for
 // the few routes whose bodies are legitimately larger than maxJSONBody.
 func readJSONLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
 	defer r.Body.Close()
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit)).Decode(v); err != nil {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
+	if err := dec.Decode(v); err != nil {
+		writeBodyError(w, err)
+		return false
+	}
+	if err := ensureJSONEOF(dec); err != nil {
 		writeBodyError(w, err)
 		return false
 	}
@@ -2766,7 +2998,12 @@ func readJSONLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) b
 func readAttachmentJSON[T any](w http.ResponseWriter, r *http.Request, v *T, uploads func(*T) []AttachmentUpload) bool {
 	defer r.Body.Close()
 	body := &countingReader{r: http.MaxBytesReader(w, r.Body, maxAttachmentJSONBody)}
-	if err := json.NewDecoder(body).Decode(v); err != nil {
+	dec := json.NewDecoder(body)
+	if err := dec.Decode(v); err != nil {
+		writeBodyError(w, err)
+		return false
+	}
+	if err := ensureJSONEOF(dec); err != nil {
 		writeBodyError(w, err)
 		return false
 	}
@@ -2813,11 +3050,16 @@ func writeBodyError(w http.ResponseWriter, err error) {
 // nothing to decode", and is the only error swallowed here.
 func readOptionalJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	defer r.Body.Close()
-	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(v)
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody))
+	err := dec.Decode(v)
 	if errors.Is(err, io.EOF) {
 		return true
 	}
 	if err != nil {
+		writeBodyError(w, err)
+		return false
+	}
+	if err := ensureJSONEOF(dec); err != nil {
 		writeBodyError(w, err)
 		return false
 	}

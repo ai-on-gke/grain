@@ -154,9 +154,10 @@ the daemon, only `kubectl exec`.
 ## Installing
 
 ```sh
-# Edit the three CHANGEME values in grain.yaml first -- the image, the
-# default target repo, and the cosign.pub the Upgrade button verifies
-# images against (docs/image-signing.md). Upgrading a
+# Edit the CHANGEME values in grain.yaml first -- the image, the
+# default target repo, the cosign.pub the Upgrade button verifies
+# images against (docs/image-signing.md), and, behind IAP,
+# GRAIN_ALLOWED_PRINCIPALS (see "Signing in behind IAP"). Upgrading a
 # deployment that predates the securityContext? Take the chown above
 # before this apply.
 kubectl apply -f deploy/kubernetes/grain.yaml
@@ -172,6 +173,59 @@ kubectl -n grain port-forward svc/grain 8080:80
 Then open `http://127.0.0.1:8080`, and give the deployment a GitHub
 credential on the Settings pane — the same first step a single-node
 deployment takes.
+
+## Signing in behind IAP
+
+Once `Service/grain` is behind a GKE Gateway with IAP, grain can take the
+person IAP signed in as the caller rather than asking for the access
+code ([docs/access-code.md](../../docs/access-code.md)):
+
+1. Set `-ui-iap-audience` (or `GRAIN_IAP_AUDIENCE`) to the IAP backend's
+   `/projects/NUMBER/global/backendServices/ID`, and
+   `GRAIN_ALLOWED_PRINCIPALS` (below) to who may get in. A verified
+   assertion now signs its person in. The access code still works too, so nobody is
+   locked out while you move over.
+2. When everybody signs in through IAP, add `-ui-require-iap` (or
+   `GRAIN_REQUIRE_IAP=true`). The network listener then takes no access
+   code at all, neither the bearer token nor the `grain_access` cookie,
+   and serves no "Enter access code" page. The daemon refuses to start
+   with this flag and no audience.
+
+`grain.yaml` sets the allowlist as `GRAIN_ALLOWED_PRINCIPALS` on the
+`grain` container (the same as `-ui-allowed-principals`), a
+comma-separated list of `user:`, `group:`, `domain:` and
+`serviceAccount:` entries. Put the installing user there as
+`user:<their IAP email>`. Without it the daemon's default is the
+deployment owner, which is the OS account it runs as rather than an
+email, so no IAP sign-in matches it.
+
+This is a different list from the IAP access list on the backend
+service. The IAP access list decides who reaches the pod at all. This
+one decides who grain signs in without the access code. Someone IAP lets
+through who is not on it is refused unless they present the access code.
+A non-empty list also replaces the daemon's default rather than adding
+to it, so list any service account that reaches the UI through IAP too.
+
+A `grain hostd` on another machine that dials in through the Gateway
+(`grain hostd -server https://<grain host> -token-file <file>
+-iap-audience <IAP client ID>`) is held to the same allowlist. It must
+also connect as its hostd row's owner: register it with `grain hostds
+register -owner <email> <name>`, where the owner is the service account
+or login it gets its ID token from, and put that identity in
+`GRAIN_ALLOWED_PRINCIPALS` too. A hostd through `kubectl port-forward`
+reaches the pod over loopback and still needs only its token
+([docs/access-code.md](../../docs/access-code.md#a-grain-hostd-dialing-in)).
+`scripts/migrate-local-to-gke.sh --server-url <Gateway URL>` takes the
+owner as `--hostd-owner` and the audience as `--iap-audience`.
+
+`grain.yaml` carries both IAP flags commented out; `-ui-require-iap` is off
+unless you add it. With it on, the code still works from inside the pod,
+over loopback, with no forwarding headers. That is the break-glass path
+when IAP or the allowlist is broken:
+
+```sh
+kubectl -n grain exec deploy/grain -- env GRAIN_SERVER=http://127.0.0.1:8080 GRAIN_DATA_DIR=/data grain list
+```
 
 ## What is different in the UI
 
@@ -198,7 +252,7 @@ and **Container** both mean here. `PUT /api/settings/cli-run` refuses
 `-codex-run=host`, `-agy-run=host` or `-hostd-socket`. A `host` stored by
 an earlier install runs in the container instead: the daemon logs it once
 and Settings shows a warning until it is changed
-([docs/design/cli-run-location.md](../../docs/design/cli-run-location.md)).
+([design/design/cli-run-location.design.md](../../design/design/cli-run-location.design.md)).
 
 The **Sandbox health** pane stays: those are pods this deployment really
 does own. Two of its figures mean something slightly different here —
@@ -458,7 +512,7 @@ namespace relaxed for `k8s-granule`'s sandboxes is a namespace
 
 Both `grain.yaml` (`k8s-container`) and `grain-granule.yaml`
 (`k8s-granule`) run the grain daemon *inside* the cluster as a
-Deployment. In the Stage 1 hybrid shape (`grain init -platform=gke-sandboxes`),
+Deployment. In the hybrid shape (`grain init -platform=gke-sandboxes`),
 the grain controller — the daemon, its SQLite or Postgres store, its
 git proxy, and its package cache — stays on its existing host outside
 the cluster, while sandbox VMs run as privileged `k8s-granule` pods on a

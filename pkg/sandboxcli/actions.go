@@ -15,7 +15,7 @@
 package sandboxcli
 
 // sandboxcli_actions.go is the acting half of the sandbox CLI
-// (docs/design/sandbox-first-agent-surface.md, Stage 2): grain ci wait,
+// (design/design/sandbox-first-agent-surface.design.md, Stage 2): grain ci wait,
 // run-job and retrigger, grain pr open, reply, resolve and
 // review-comment, which POST to the sandbox proxy's /cli/ routes
 // (pkg/gitproxy's cli_actions.go), and grain git revert, which asks the
@@ -123,6 +123,7 @@ type sandboxWaitAnswer struct {
 	Commit      string `json:"commit"`
 	Conclusion  string `json:"conclusion"`
 	Error       string `json:"error"`
+	Report      string `json:"report"`
 	Selective   bool   `json:"selective"`
 	Jobs        []struct {
 		Name       string `json:"name"`
@@ -132,6 +133,12 @@ type sandboxWaitAnswer struct {
 	CreditMS    int64 `json:"credit_used_ms"`
 	CreditCapMS int64 `json:"credit_cap_ms"`
 	CreditLive  bool  `json:"credit_live"`
+	// CancelReason, CancelledByHand, SupersededBy and SupersededByCommit
+	// say why a cancelled run was (gitproxy.CLIWaitResponse).
+	CancelReason       string `json:"cancel_reason"`
+	CancelledByHand    bool   `json:"cancelled_by_hand"`
+	SupersededBy       string `json:"superseded_by"`
+	SupersededByCommit string `json:"superseded_by_commit"`
 }
 
 // ciWait runs grain ci wait (single == "") or grain ci run-job <single>.
@@ -163,6 +170,13 @@ func (c *sandboxCLI) ciWait(p sandboxArgs, single string) error {
 }
 
 func (c *sandboxCLI) reportWait(ans sandboxWaitAnswer) error {
+	if ans.Report != "" {
+		fmt.Fprintln(c.out, strings.TrimRight(ans.Report, "\n"))
+		if ans.Status == "failed" {
+			return errSandboxReported
+		}
+		return nil
+	}
 	waited := (time.Duration(ans.WaitedMS) * time.Millisecond).Round(time.Second)
 	credit := ""
 	if ans.CreditLive {
@@ -204,6 +218,19 @@ func (c *sandboxCLI) reportWait(ans sandboxWaitAnswer) error {
 		commit, ans.RunID, ans.Conclusion, waited, credit)
 	if ans.Error != "" {
 		fmt.Fprintf(c.out, "  %s\n", ans.Error)
+	}
+	switch {
+	case ans.CancelReason != "" && ans.CancelledByHand:
+		fmt.Fprintf(c.out, "This run was cancelled by hand. The reason given: %s\n", ans.CancelReason)
+	case ans.CancelReason != "":
+		fmt.Fprintf(c.out, "Grain cancelled this run itself: %s\n", ans.CancelReason)
+	}
+	if ans.SupersededBy != "" {
+		next := ans.SupersededByCommit
+		if len(next) > 12 {
+			next = next[:12]
+		}
+		fmt.Fprintf(c.out, "That run is on %s, a newer commit on this branch, and its verdict is the branch's: run 'grain ci wait' again for it.\n", next)
 	}
 	if len(failed) > 0 {
 		fmt.Fprintf(c.out, "Failing: %s\n", strings.Join(failed, ", "))
@@ -257,7 +284,7 @@ func (c *sandboxCLI) textArg(p sandboxArgs, what string) (string, error) {
 	}
 	text := strings.Join(p.positional, " ")
 	if strings.TrimSpace(text) == "" {
-		return "", fmt.Errorf("missing <%s> (or --file): run with --help for usage", what)
+		return "", p.missing("<" + what + "> (or --file)")
 	}
 	return text, nil
 }
@@ -297,7 +324,7 @@ func (c *sandboxCLI) prResolve(p sandboxArgs) error {
 	}
 	thread := p.get("thread-id")
 	if thread == "" && id == 0 {
-		return fmt.Errorf("name the thread: --thread-id <id> or --comment-id <id>")
+		return p.missing("--thread-id <id> or --comment-id <id>: name the thread")
 	}
 	req := map[string]any{}
 	if thread != "" {
@@ -344,7 +371,7 @@ type sandboxRevertInfo struct {
 func (c *sandboxCLI) gitRevert(p sandboxArgs) error {
 	reason := strings.TrimSpace(p.get("reason"))
 	if reason == "" {
-		return fmt.Errorf("--reason is required: say why this is being reverted")
+		return p.missing("--reason <why>: say why this is being reverted")
 	}
 	task, commit := strings.TrimSpace(p.get("task")), strings.TrimSpace(p.get("commit"))
 	if (task == "") == (commit == "") {

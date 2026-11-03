@@ -104,6 +104,56 @@ describe("chatEntries", () => {
     ]);
   });
 
+  it("suppresses synthetic wake comments and console-session notification comments", () => {
+    const entries = chatEntries(
+      task({
+        comments: [
+          {
+            id: 1,
+            author: "schedule",
+            authorKind: "automation",
+            body: "_Woken early:_ a note from task 20. Read the queue again and act on what has changed since your handover.",
+            createdAt: "2026-09-08T10:01:00Z",
+          },
+          {
+            id: 2,
+            author: "schedule",
+            authorKind: "automation",
+            body: "_Scheduled wake._ Read the queue again and act on what has changed since your handover.\n",
+            createdAt: "2026-09-08T10:02:00Z",
+          },
+          {
+            id: 3,
+            author: "console-session",
+            authorKind: "automation",
+            body: "**Notification (warning):** acme/widgets main is red\n\n`pipeline.base-red:acme/widgets@main` -- acknowledge or investigate it from the [Inbox](/inbox).",
+            createdAt: "2026-09-08T10:03:00Z",
+          },
+          {
+            id: 4,
+            author: "brandon",
+            authorKind: "human",
+            body: "**Notification (warning):** quoting a notification in chat",
+            createdAt: "2026-09-08T10:04:00Z",
+          },
+          {
+            id: 5,
+            author: "grain",
+            authorKind: "automation",
+            onBehalfOf: "run-7",
+            body: "_Woken early:_ quoting wake text from an agent",
+            createdAt: "2026-09-08T10:05:00Z",
+          },
+        ],
+      }),
+    );
+    expect(entries.map((e) => e.body)).toEqual([
+      "walk me through pkg/dispatch",
+      "**Notification (warning):** quoting a notification in chat",
+      "_Woken early:_ quoting wake text from an agent",
+    ]);
+  });
+
   it("puts a human's comments on one side and everyone else's on the other", () => {
     const entries = chatEntries(
       task({

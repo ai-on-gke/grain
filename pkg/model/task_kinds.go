@@ -14,7 +14,7 @@
 
 package model
 
-// The five kind tags a task can carry on the board and in agent-API task
+// The six kind tags a task can carry on the board and in agent-API task
 // headers (pkg/ui/task_kinds.go).
 const (
 	TaskKindPort     = "port"
@@ -22,6 +22,11 @@ const (
 	TaskKindSession  = "session"
 	TaskKindProposal = "proposal"
 	TaskKindDurable  = "durable"
+	// TaskKindImported is a task the GitHub issue importer filed
+	// (ReasonImported). It stays on the task after it is approved and
+	// dispatched, so an imported issue is identifiable whatever state it
+	// has reached.
+	TaskKindImported = "imported"
 )
 
 // TaskKinds is the fixed vocabulary of task kind tags, in the order they are
@@ -32,6 +37,7 @@ var TaskKinds = []string{
 	TaskKindSession,
 	TaskKindProposal,
 	TaskKindDurable,
+	TaskKindImported,
 }
 
 // TaskKindTags returns the kind tags t carries at state, in TaskKinds order.
@@ -54,6 +60,9 @@ func TaskKindTags(t Task, state State) []string {
 	}
 	if t.IsDurable() {
 		kinds = append(kinds, TaskKindDurable)
+	}
+	if t.Origin.Reason == ReasonImported {
+		kinds = append(kinds, TaskKindImported)
 	}
 	return kinds
 }

@@ -32,7 +32,7 @@ import (
 )
 
 // What follows, down to queueEntry, is this file's side of the boundary
-// docs/three-pieces.md draws: the pure "what is true about this branch"
+// design/design/architecture.design.md draws: the pure "what is true about this branch"
 // half of what used to be here now lives in pkg/forge, which imports no
 // pkg/model and so cannot read a task, and this is the adapter onto it.
 //
@@ -209,7 +209,7 @@ func SetCheckStallDeadline(d time.Duration) func() { return forge.SetCheckStallD
 // for itself (forge.Input.IgnoreGitHubCI); this arm is what lets a task
 // that *has* a recorded verdict be judged on it rather than on silence.
 func grainCIVerdictOf(task model.Task, obs *model.Observation, headSHA string, gateIsGrainCI bool) grainCIVerdict {
-	if (!grainci.Granted(task.Grants) && !gateIsGrainCI) || headSHA == "" {
+	if (!grainci.GrantedExplicitly(task.Grants) && !gateIsGrainCI) || headSHA == "" {
 		return grainCIVerdict{}
 	}
 	if obs == nil || obs.CI == nil {
@@ -275,11 +275,11 @@ type queueEntry struct {
 	// that merges cleanly merges on the verdict it already holds, however
 	// far behind it is. See bringHeadUpToDate for the other direction.
 	requireUpToDate bool
-	// mergeOnGreen is this repository's answer to "may a green entry
-	// merge past one ahead of it whose CI is still running"
-	// (model.RepoConfig.MergeOnGreen), read once per repository per cycle
-	// beside requireUpToDate above. False -- the default -- is the strict
-	// lane: an entry still deciding closes it (passedOver).
+	// mergeOnGreen is this repository's model.RepoConfig.MergeOnGreen,
+	// read once per repository per cycle beside requireUpToDate above.
+	// Nothing in the walk reads it any more: with no order between
+	// members (mergeWalk, task 2346) a green entry always merges past one
+	// still deciding, whichever way it is set.
 	mergeOnGreen bool
 	// gateIsGrainCI is this repository's answer to "are GitHub's check
 	// runs a source of verdicts here at all"
@@ -300,6 +300,9 @@ type queueEntry struct {
 	gateIsGrainCI bool
 	// ciMode is this repository's configured CI mode (grain, github, none).
 	ciMode model.CIMode
+	// explicitDisablesGrainCI is true when the repository's stored RepoConfig
+	// explicitly sets CIMode to CIModeGitHub or CIModeNone.
+	explicitDisablesGrainCI bool
 	// running says an agent run for this task is in flight right now, so
 	// its branch is one somebody is still pushing to.
 	//
@@ -312,6 +315,13 @@ type queueEntry struct {
 	// being written to is what actually matters to it, and who asked for
 	// that is not.
 	running bool
+	// turnStopped says a person stopped this task's last turn
+	// (ui.Client.Stop) and it is parked on that stop, waiting for them
+	// to reply or press Retry -- not for a worker. A repair in that state
+	// is not going to finish on its own, so the queue says who it is
+	// waiting on and stops holding its place for it
+	// (escalateStoppedRepair).
+	turnStopped bool
 	// recheckingHead is the commit SHA of this task's pull request when
 	// grain CI is currently running an overlap re-check for it on the
 	// merge-queue ref (mergerecheck.go).
@@ -364,6 +374,18 @@ type queueEntry struct {
 	// missingChecks is the GitHub checks the policy requires that are
 	// not on the head commit at all.
 	missingChecks []string
+	// unknownFor and pendingFor are how long this pull request has read
+	// PrUnknown, or PrPending with nothing changing, on its current head
+	// (waitclocks.go), for its row; zero for any other read.
+	unknownFor time.Duration
+	pendingFor time.Duration
+	// externalPending, externalPendingFor, externalStalled and
+	// externalStallThreshold carry forge.Observe's third-party check stall
+	// measurements for reconcileExternalCheckStall and statusOf.
+	externalPending        []github.CheckRun
+	externalPendingFor     time.Duration
+	externalStalled        bool
+	externalStallThreshold time.Duration
 }
 
 // observe fills in e's GitHub half: the pull request as it stands, the
@@ -411,6 +433,9 @@ func (e *queueEntry) observe(client github.Client, now time.Time) error {
 		},
 		GrainCIFor: func(headSHA string) forge.GrainCI {
 			gate := e.gateIsGrainCI || (e.policy != nil && e.policy.Mode.Grain())
+			if e.explicitDisablesGrainCI && !gate {
+				return forge.GrainCI{}
+			}
 			return narrowedGrainCI(grainCIVerdictOf(e.task, e.obs, headSHA, gate), e.policy, e.obs, e.runner)
 		},
 	}, now)
@@ -425,6 +450,10 @@ func (e *queueEntry) observe(client github.Client, now time.Time) error {
 	e.health = model.PrHealth(seen.Health)
 	e.stalled, e.stallDeadline = seen.Stalled, seen.StallDeadline
 	e.missingChecks = seen.MissingChecks
+	e.externalPending = seen.ExternalPending
+	e.externalPendingFor = seen.ExternalPendingFor
+	e.externalStalled = seen.ExternalStalled
+	e.externalStallThreshold = seen.ExternalStallThreshold
 	return nil
 }
 
@@ -631,6 +660,19 @@ func queueOrder(entries []queueEntry) []queueEntry {
 		}
 	}
 	sort.SliceStable(members, func(i, j int) bool {
+		pi, pj := members[i].task.Priority, members[j].task.Priority
+		if pi == 0 {
+			pi = model.DefaultTaskPriority
+		}
+		if pj == 0 {
+			pj = model.DefaultTaskPriority
+		}
+		if pi != pj {
+			return pi > pj
+		}
+		if fi, fj := model.FixesBaseBranch(members[i].task), model.FixesBaseBranch(members[j].task); fi != fj {
+			return fi
+		}
 		if ni, nj := newToQueue(members[i]), newToQueue(members[j]); ni != nj {
 			return nj
 		}
@@ -685,70 +727,78 @@ func stampQueueEntry(ctx context.Context, store *model.Store, members []queueEnt
 }
 
 // mergeWalk is who merges this cycle, decided one lane at a time as
-// SyncPullRequests works down each queue (actOrder) rather than up front.
-// It has to be decided that way round: whether the
-// entry behind may merge depends on what is wrong with the one in front,
-// and that is only known once the one in front has been read.
+// SyncPullRequests works through each lane's members (actOrder).
 //
-// A lane is a repository and one base branch in it (mergelane.go), and
-// everything below is about one lane: a `main` change still deciding
-// holds the `main` changes behind it and nothing queued for `candidate`.
-// The lane is the pull request's base as this cycle read it (laneOf).
+// A lane is a repository and one base branch in it (mergelane.go). There is
+// no order between the pull requests in it: each member is judged on its
+// own, every cycle, against the merge predicate (mergepredicate.go), and
+// one the predicate admits merges whatever is true of the others. A member
+// that is pending, unknown, conflicted, failing, under review, awaiting a
+// Submit, being re-checked or repaired holds itself and nothing else.
 //
-// A lane's slot starts open. The first member acted on takes it if it can
-// merge; an entry that cannot merge either closes the slot -- everything
-// behind it waits, which is the ordinary queue -- or is *passed over*,
-// leaving the slot open for the next entry along (passedOver).
+// This used to be a queue. The first member of a lane was its head, an
+// entry still deciding closed the lane behind it, and only a conflicted,
+// failing or repaired entry was "passed over". On ai-on-gke/grain's main
+// queue on 2026-11-01 that meant four members GitHub had not finished
+// computing mergeability for, and one waiting on a `cla/google` that never
+// reported, held every green change behind them for an hour, and the rows
+// behind named a head that was holding nobody. The order bought nothing
+// the predicate does not already guarantee: a change merges only onto a
+// base it merges cleanly into, with a green verdict on its own head and
+// the overlap re-check where what landed since touches it (mergerecheck.go).
 //
-// Passing over is the whole of what stops one conflict holding up every
-// merge behind it. A conflicted or failing head is repaired on its own
-// branch by an agent (requeueForRepair): a sandbox, a clone, a
-// resolution, a push, and another round of CI. Every green pull request
-// queued behind it used to wait out all of that and only then merge, in
-// order. Now they merge while it is being resolved, and it merges when
-// its resolution lands.
+// What the walk still keeps per lane:
 //
-// What is *not* passed over matters as much. An entry still deciding --
-// PrPending while CI runs, PrUnknown, or one this cycle could not read --
-// closes the slot, so nothing behind it merges. Those resolve on their
-// own, usually within a cycle or two, and merging past one would put a
-// later change ahead of an earlier one on nothing better than being
-// quicker to answer, which is the ordering a queue exists to provide.
-// Only an entry whose next move is a whole agent run, or a person, is
-// worth reordering around.
-//
-// Each entry that merges consumes one of its lane's configured slots
-// (model.Config.MaxMergesPerRepo, which despite its name is per lane).
-// Once the limit is reached, everything behind it is judged again next
-// cycle against the base the earlier merges moved.
-//
-// # Heads
-//
-// The walk also says who is at the front of each lane: the first queue
-// member in queueOrder whose lane it is. Only a lane's head is ever
-// refreshed or escalated on a given cycle -- everything behind it waits,
-// which is the whole property that makes this a queue rather than "merge
-// every clean PR in whatever order GitHub happens to return them in": a
-// fix filed for the second task while the first is still being repaired
-// would very likely need refiling the moment the first merges and changes
-// what the second is based against.
-//
-// That reasoning stops at the branch, which is why heads are per lane.
-// And it is why they are claimed here, as each member is read, rather than
-// computed up front: a task that named no base is only placed in its lane
-// by reading its pull request (laneOf).
+//   - The cap. Each merge spends one of the lane's
+//     model.Config.MaxMergesPerRepo merges for the cycle (which despite its
+//     name is per lane), and once they are spent the rest merge next cycle.
+//   - The base as it now stands. A member whose lane has already had a
+//     merge this cycle has its pull request read again just before its own
+//     merge (syncEntry's merge arm), so "merges cleanly" is GitHub's answer
+//     about the base that merge moved, not the one read earlier.
+//   - A close after a merge whose effect is unknown. A merge that errored,
+//     or whose outcome could not be read back, leaves the base in a state
+//     nothing in this cycle has read, so nothing more merges into it until
+//     the next cycle reads it again (closeEntry). That close is about
+//     correctness, not order; it is the only one left.
 type mergeWalk struct {
 	used  map[string]int
 	limit int
-	// heads is each lane's head task (claimHead), keyed by laneKey -- and,
-	// under the bare repository name, the task that took every lane of
-	// its repository because nobody could say which lane it was in.
-	heads map[string]string
-	// closedRepos is every repository closed as a whole: an entry whose
-	// lane nothing could name failed, and a member nobody could read or
-	// place is one nobody in its repository may be reordered around.
+	// closedRepos is every repository closed as a whole: a merge whose
+	// effect is unknown on a pull request nothing could place in a lane.
 	closedRepos map[string]bool
+	// merges is every task that merged in each lane this cycle, keyed by
+	// laneKey, so the members the cap holds can say who spent it, and so
+	// the next merge into a lane knows to read its pull request again.
+	merges map[string][]string
+	// moved is every lane whose base a direct merge moved this cycle,
+	// including merges that did not spend the lane's cap
+	// (MergeRecheckEnforce, forced or non-member merges).
+	moved map[string]bool
+	// closed is why a lane was closed this cycle, where it was (closeEntry).
+	closed map[string]string
+	// leads is the first member read in each lane this cycle (noteRead).
+	// It decides nothing about who merges and no row names it. It is who
+	// does the lane's once-a-cycle work: the escalations and base
+	// refreshes whose findings are about the repository or its base
+	// rather than one change (advanceMergeQueueHead's isHead), so three
+	// members failing the same way are not three escalations, and the
+	// member the poll schedule reads first under a low budget (syncClass).
+	leads map[string]string
 }
+
+// noteRead makes taskID lane's lead if nothing read before it is.
+func (w *mergeWalk) noteRead(lane, taskID string) {
+	if w.leads == nil {
+		w.leads = map[string]string{}
+	}
+	if _, taken := w.leads[lane]; !taken {
+		w.leads[lane] = taskID
+	}
+}
+
+// leadOf is lane's lead, "" where no member of it has been read yet.
+func (w *mergeWalk) leadOf(lane string) string { return w.leads[lane] }
 
 func (w *mergeWalk) limitOrDefault() int {
 	if w.limit < 1 {
@@ -766,134 +816,73 @@ func (w *mergeWalk) mayMerge(lane string) bool {
 	return w.used[lane] < w.limitOrDefault()
 }
 
-// merged spends one of lane's merges.
-func (w *mergeWalk) merged(lane string) {
+// merged spends one of lane's merges on taskID.
+func (w *mergeWalk) merged(lane, taskID string) {
 	if w.used == nil {
 		w.used = map[string]int{}
 	}
+	if w.merges == nil {
+		w.merges = map[string][]string{}
+	}
 	w.used[lane]++
+	w.merges[lane] = append(w.merges[lane], taskID)
 }
 
-// close takes lane out of the walk for the rest of this cycle. It is used
-// when an entry is not safe to pass over, and when acting on a member fails:
-// a member nobody could read is a member nobody may reorder around.
-func (w *mergeWalk) close(lane string) {
+// noteBaseMoved records that a merge into lane landed this cycle and moved
+// its base, whether or not that merge spent one of the lane's un-rechecked
+// slots.
+func (w *mergeWalk) noteBaseMoved(lane string) {
+	if w.moved == nil {
+		w.moved = map[string]bool{}
+	}
+	w.moved[lane] = true
+}
+
+// mergedThisCycle reports whether lane has had a merge already this cycle,
+// which moved its base since anything read before it.
+func (w *mergeWalk) mergedThisCycle(lane string) bool {
+	return len(w.merges[lane]) > 0 || w.moved[lane]
+}
+
+// closeEntry closes e's lane for the rest of the cycle after a merge whose
+// effect on the base is unknown (see mergeWalk). Where the lane has no
+// branch to it -- a task that named no base, whose pull request nothing
+// has read -- which lane it belongs to is not known, and the whole
+// repository is closed instead.
+func (w *mergeWalk) closeEntry(e queueEntry, why string) {
+	if laneBase(e) == "" {
+		if w.closedRepos == nil {
+			w.closedRepos = map[string]bool{}
+		}
+		w.closedRepos[e.ref.Repo.String()] = true
+	}
+	lane := laneOf(e)
+	if w.closed == nil {
+		w.closed = map[string]string{}
+	}
+	if _, ok := w.closed[lane]; !ok {
+		w.closed[lane] = why
+	}
 	if w.used == nil {
 		w.used = map[string]int{}
 	}
 	w.used[lane] = w.limitOrDefault()
 }
 
-// claimHead makes taskID the head of lane, unless the lane already has
-// one. Called for each queue member as it is read, in queue order, so the
-// first member of each lane is its head.
-func (w *mergeWalk) claimHead(lane, taskID string) {
-	if w.heads == nil {
-		w.heads = map[string]string{}
-	}
-	if _, taken := w.heads[laneRepo(lane)]; taken {
-		return
-	}
-	if _, taken := w.heads[lane]; !taken {
-		w.heads[lane] = taskID
-	}
+// laneState is what a clean member the walk did not merge is told about
+// its lane (laneFullNote).
+type laneState struct {
+	merges []string
+	closed string
 }
 
-// releaseHead clears taskID from being the head of lane once its pull
-// request has merged, so the next unmerged member in lane claims the head.
-func (w *mergeWalk) releaseHead(lane, taskID string) {
-	if w.heads != nil && w.heads[lane] == taskID {
-		delete(w.heads, lane)
+// stateOf is lane as the walk has it now, for statusOf.
+func (w *mergeWalk) stateOf(lane string) laneState {
+	closed := w.closed[lane]
+	if closed == "" {
+		closed = w.closed[laneRepo(lane)]
 	}
-}
-
-// claimHeadOf is claimHead for a member this cycle could not read. Its
-// declared lane is claimed where it has one; where it has none, which lane
-// it heads is not known, so it heads every lane of its repository not yet
-// headed -- nobody behind it is promoted past a change nobody could read.
-func (w *mergeWalk) claimHeadOf(e queueEntry) {
-	if laneBase(e) != "" {
-		w.claimHead(laneOf(e), e.task.ID)
-		return
-	}
-	if w.heads == nil {
-		w.heads = map[string]string{}
-	}
-	repo := e.ref.Repo.String()
-	if _, taken := w.heads[repo]; !taken {
-		w.heads[repo] = e.task.ID
-	}
-}
-
-// headOf is the head of lane, "" where nothing has claimed it yet.
-func (w *mergeWalk) headOf(lane string) string { return headIn(w.heads, lane) }
-
-// headIn reads lane's head out of a mergeWalk's heads.
-func headIn(heads map[string]string, lane string) string {
-	if head, ok := heads[lane]; ok {
-		return head
-	}
-	return heads[laneRepo(lane)]
-}
-
-// closeEntry closes e's lane after acting on it failed. Where the lane has
-// no branch to it -- a task that named no base, whose pull request nothing
-// has read -- which lane it belongs to is not known, and the whole
-// repository is closed instead: that is the conservative direction, and
-// the per-repository behaviour this queue had before it had lanes.
-func (w *mergeWalk) closeEntry(e queueEntry) {
-	if laneBase(e) != "" {
-		w.close(laneOf(e))
-		return
-	}
-	if w.closedRepos == nil {
-		w.closedRepos = map[string]bool{}
-	}
-	w.closedRepos[e.ref.Repo.String()] = true
-}
-
-// passedOver reports whether e is a queue member the queue can see is not
-// merging as it stands, and which the entries behind it may therefore
-// merge ahead of -- see mergeWalk.
-//
-// The first two cases are one situation at two moments. A conflicted or
-// failing entry is one the queue is about to send back to an agent
-// (advanceMergeQueueHead, this same cycle, if it is the head); an entry
-// with a repair in flight is one it already has. Either way the next
-// thing that can change its verdict is a push from a whole agent run, so
-// there is nothing to be gained by making the changes behind it wait.
-//
-// The third is the exception mergeWalk's own doc comment reserves. An
-// entry still deciding closes the slot, on the reasoning that it resolves
-// on its own within a cycle or two and merging past it would reorder two
-// changes on nothing better than which was quicker to answer. A cancelled
-// verdict is the read that reasoning does not cover: it is PENDING
-// (forge.HealthFrom's "cancelled is neither"), it is *finished*, and no
-// cycle will ever change it -- only a re-run somebody asks for, or the
-// stall deadline two hours away. Everything behind it used to wait out
-// both. That is what grain/task-149 did to the whole of this
-// repository's queue for a day, which is how the silence was noticed at
-// all: not by the row that said nothing, but by every task behind it
-// standing still.
-//
-// The fourth is a repository's own choice to give up the ordering itself
-// (model.RepoConfig.MergeOnGreen, grain/task-545): there an entry whose CI
-// is still running is passed over too, so a green, clean change behind it
-// takes the slot and merges this cycle. The pending entry keeps its place
-// and its waiting_ci row, and merges on a later cycle once its own
-// verdict is green. Only PrPending: an entry this cycle could not read,
-// or one whose state is unknown, still closes the lane.
-func passedOver(e queueEntry) bool {
-	if e.obs.RepairInFlight() {
-		return true
-	}
-	if e.health == model.PrPending && e.mergeOnGreen {
-		return true
-	}
-	if e.health == model.PrPending && verdictWithdrawn(e) {
-		return true
-	}
-	return e.health == model.PrConflicted || e.health == model.PrFailing
+	return laneState{merges: w.merges[lane], closed: closed}
 }
 
 // verdictWithdrawn reports whether the only thing holding e PENDING is a
@@ -1031,7 +1020,10 @@ type StateRepoGate struct {
 	// CI receives the release event caused by every merged pull request. The
 	// run is against the destination branch's new head, so an `on: release`
 	// workflow is repository-agnostic and fires for both Grain-managed and
-	// externally merged pull requests when Grain next observes them.
+	// externally merged pull requests when Grain next observes them. A pull
+	// request merged after its task closed is recorded (closedprs.go) but
+	// starts nothing here: base-branch CI sees the branch's tip move either
+	// way.
 	CI ci.Runner
 	// Porter makes the ports a merge onto a paired branch calls for
 	// mechanically where it can (port.go); nil files every one as an
@@ -1119,6 +1111,13 @@ func SyncPullRequestsGuarding(ctx context.Context, store *model.Store, client gi
 	for _, r := range live {
 		running[r.TaskID] = true
 	}
+	// Who is parked on an operator's Stop rather than on anything an
+	// agent or grain is doing (model.Store.TurnsStopped), read once for
+	// the cycle the same way. See queueEntry.turnStopped.
+	stopped, err := store.TurnsStopped(ctx)
+	if err != nil {
+		return fmt.Errorf("orchestrator: reading stopped turns: %w", err)
+	}
 
 	entries := make([]queueEntry, 0, len(links))
 	var errs []error
@@ -1159,6 +1158,7 @@ func SyncPullRequestsGuarding(ctx context.Context, store *model.Store, client gi
 	onGreen := map[model.RepoRef]bool{}
 	grainCIGate := map[model.RepoRef]bool{}
 	ciModes := map[model.RepoRef]model.CIMode{}
+	explicitDisablesGrain := map[model.RepoRef]bool{}
 	unfixableChecks := map[model.RepoRef][]string{}
 	mergeRules := map[model.RepoRef]*model.MergeRules{}
 	for _, link := range links {
@@ -1197,6 +1197,13 @@ func SyncPullRequestsGuarding(ctx context.Context, store *model.Store, client gi
 			}
 			ciModes[ref.Repo] = mode
 			grainCIGate[ref.Repo] = (mode == model.CIModeGrain)
+			if !deploymentGateIsGrainCI {
+				disabled, _, err := repoExplicitlyDisablesGrainCI(ctx, store, ref.Repo)
+				if err != nil {
+					return err
+				}
+				explicitDisablesGrain[ref.Repo] = disabled
+			}
 		}
 		if _, read := unfixableChecks[ref.Repo]; !read {
 			declared, err := repoUnfixableChecks(ctx, store, ref.Repo)
@@ -1216,14 +1223,15 @@ func SyncPullRequestsGuarding(ctx context.Context, store *model.Store, client gi
 			rules:  mergeRules[ref.Repo],
 			runner: gate.CI,
 			task:   *task, obs: obs, ref: ref, requiredCheck: gate.requiredCheckFor(ref),
-			verdicts: verdicts, running: running[link.TaskID],
-			requireUpToDate:   upToDate[ref.Repo],
-			mergeOnGreen:      onGreen[ref.Repo],
-			gateIsGrainCI:     grainCIGate[ref.Repo],
-			ciMode:            ciModes[ref.Repo],
-			declaredUnfixable: unfixableChecks[ref.Repo],
-			recheckingHead:    rechecking[link.TaskID],
-			paused:            taskPaused(ctx, store, link.TaskID),
+			verdicts: verdicts, running: running[link.TaskID], turnStopped: stopped[link.TaskID],
+			requireUpToDate:         upToDate[ref.Repo],
+			mergeOnGreen:            onGreen[ref.Repo],
+			gateIsGrainCI:           grainCIGate[ref.Repo],
+			ciMode:                  ciModes[ref.Repo],
+			explicitDisablesGrainCI: explicitDisablesGrain[ref.Repo],
+			declaredUnfixable:       unfixableChecks[ref.Repo],
+			recheckingHead:          rechecking[link.TaskID],
+			paused:                  taskPaused(ctx, store, link.TaskID),
 		})
 	}
 
@@ -1276,9 +1284,13 @@ func SyncPullRequestsGuarding(ctx context.Context, store *model.Store, client gi
 		}
 		if err := syncEntry(ctx, store, client, e, gate, walk, find, now); err != nil {
 			errs = append(errs, err)
-			if isQueueMember(e) {
-				walk.closeEntry(e)
-			}
+		}
+	}
+	// The pull requests of tasks that closed before them, read only to
+	// record a merge or close nobody else will (closedprs.go).
+	if ctx.Err() == nil {
+		if err := syncClosedPullRequests(ctx, store, client, now); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	// What the queue said about the tasks it is no longer watching, taken
@@ -1305,7 +1317,17 @@ func SyncPullRequestsGuarding(ctx context.Context, store *model.Store, client gi
 // closing it behind itself, or leaving it open for the entry behind.
 func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	e queueEntry, gate StateRepoGate, walk *mergeWalk,
-	find *repoFinder, now time.Time) error {
+	find *repoFinder, now time.Time) (retErr error) {
+
+	// A merge asked for and then an error: whether the base moved is not
+	// known, so nothing more merges into it this cycle (mergeWalk). The
+	// one lane close left, and it is about correctness rather than order.
+	mergeAsked := false
+	defer func() {
+		if retErr != nil && mergeAsked && isQueueMember(e) {
+			walk.closeEntry(e, "a merge into it this cycle ended in an error, so what it did to the base is not known yet")
+		}
+	}()
 
 	task, ref := e.task, e.ref
 	e.policyFor = func(headSHA string) *model.EffectiveMergePolicy {
@@ -1313,7 +1335,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	}
 	if err := e.observe(client, now); err != nil {
 		if isQueueMember(e) {
-			walk.claimHeadOf(e)
+			walk.noteRead(laneOf(e), task.ID)
 		}
 		// Say on the row that this cycle could not read the pull request,
 		// rather than returning under whatever the row last said and
@@ -1326,18 +1348,19 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	// than by a read of its own (githubci.go).
 	recordPolledChecks(ctx, store, ref.Repo, e.detail.HeadRef, e.detail.HeadSHA, e.checks, now)
 	syncRead(store, e, now)
+	// How long this head has waited on GitHub's mergeability, or on
+	// checks that have not moved, for the row (waitclocks.go).
+	clockKey := syncPollKey(store, ref)
+	e.unknownFor = observeUnknown(clockKey, e, now)
+	e.pendingFor = observePending(clockKey, e, now)
 	if e.detail.State == "open" && !e.detail.Merged {
 		if updated, retargeted, err := retargetTaskBase(ctx, store, client, task, e.detail.BaseRef); err == nil && retargeted {
 			task = updated
 			e.task = updated
 		}
 	}
-	// Its place at the front of its lane, if it is first there, taken now
-	// that the read has said which lane that is, and before anything below
-	// can return: a member the queue is holding for some other reason is
-	// still the one in front (mergeWalk's heads).
 	if isQueueMember(e) {
-		walk.claimHead(laneOf(e), task.ID)
+		walk.noteRead(laneOf(e), task.ID)
 	}
 	// detail and health are the only two of e's observations that change
 	// after that read: merging settles the pull request, and the merge arm
@@ -1374,6 +1397,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			return err
 		}
 		task = pinned
+		e.task = pinned
 		cleared, err := clearedForHead(ctx, store, client, task, ref, detail.HeadSHA, now)
 		if err != nil {
 			return err
@@ -1433,17 +1457,18 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	// The lane this entry merges in, as this cycle read it: the slot it
 	// takes or closes is its own branch's and no other's (mergeWalk).
 	lane := laneOf(e)
-	isHead := walk.headOf(lane) == task.ID
-	// isMergeHead is the narrower question: is this the entry that takes
-	// its repo's one merge this cycle? Usually the head -- but a head that
-	// is conflicted, failing or being repaired is passed over instead, so
-	// that a green change behind it does not wait out somebody else's
-	// conflict. See mergeWalk.
+	// Every member is judged on its own (mergeWalk): it merges if the
+	// predicate admits it and its lane has a merge left this cycle,
+	// whatever is true of the others. isHead is only whether it does its
+	// lane's once-a-cycle work (mergeWalk.leads): the conclusions that are
+	// about the repository rather than this change. What is about this
+	// change alone -- its own checks stalled, grain CI given up on its own
+	// head, its own repair stopped -- is escalated for every member, so a
+	// later member's stall is not hidden behind an earlier one that keeps
+	// being read first.
 	member := isQueueMember(e)
+	isHead := member && walk.leadOf(lane) == task.ID
 	isMergeHead := member && walk.mayMerge(lane)
-	if member && !passedOver(e) && health != model.PrClean {
-		walk.close(lane)
-	}
 	blocked := blockedEntry(e)
 	rechecking := e.recheckingHead != "" && e.recheckingHead == detail.HeadSHA
 	// A repair the queue asked for is still being worked on this very
@@ -1527,7 +1552,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	// here and nothing here calls GitHub, so the row is written before
 	// the one call in this function that can block long enough for
 	// somebody to be looking at that row while it does.
-	status := statusOf(e, isMergeHead, blocked, review, walk.heads)
+	status := statusOf(e, isMergeHead, blocked, review, walk.stateOf(lane))
 	// A change undergoing an overlap re-check has its row written by
 	// setRecheckState when the re-check started.
 	if !rechecking || settled || health != model.PrClean || !task.AutoMerge || working {
@@ -1535,6 +1560,14 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		if err := setMergeQueueState(ctx, store, e.obs, task.ID, status, now); err != nil {
 			return err
 		}
+	}
+	mergedForExternalCheck, err := reconcileExternalCheckStall(
+		ctx, store, client, &e, task,
+		isMergeHead, blocked, repairing, working, stacked, rechecking,
+		review, walk.stateOf(lane), now,
+	)
+	if err != nil || mergedForExternalCheck {
+		return err
 	}
 	// The refusal record is about one clean pull request grain is trying
 	// to merge and cannot; a pull request that is not clean has something
@@ -1650,9 +1683,6 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		// Being re-checked on top of the base branch (mergerecheck.go):
 		// this change merges when that run reports green. The lane closes
 		// behind it so later changes do not jump ahead while it is tested.
-		if member {
-			walk.close(lane)
-		}
 
 	case forcing || (health == model.PrClean && task.AutoMerge && !working &&
 		(stacked || blocked || awaitingGitHubApproval(ref) || (isMergeHead && !repairing))):
@@ -1663,9 +1693,6 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		// (holdRefusedMerge) -- never once a cycle. A head held for a
 		// retry keeps its place; the slot closes behind it.
 		if !forcing && holdRefusedMerge(client, e, detail, blocked, now) {
-			if member {
-				walk.close(lane)
-			}
 			break
 		}
 		// "Clean" is GitHub's word for a pull request that merges without
@@ -1693,9 +1720,6 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 				// past it either: it is still this repository's head, it
 				// is still first in line, and what is happening to it is
 				// a write the queue itself made a moment ago.
-				if member {
-					walk.close(lane)
-				}
 				break
 			}
 		}
@@ -1732,9 +1756,6 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			// Nothing behind it merges past it either: what is holding
 			// this entry is a statement about the branch rather than about
 			// the change.
-			if member {
-				walk.close(lane)
-			}
 			break
 		}
 		// The overlap re-check (mergerecheck.go): asked of every change
@@ -1755,15 +1776,13 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			}
 			if recheck.held != "" {
 				// A batch just started has written its own row
-				// (setBatchState); anything else is said here.
-				if recheck.held != "started" {
+				// (setBatchState); a task already blocked keeps its
+				// merge_failed row; anything else is said here.
+				if recheck.held != "started" && recheck.held != "blocked" {
 					if err := setMergeQueueState(ctx, store, e.obs, task.ID,
 						queueStatus{state: mergeStateWaitingQueue, note: recheck.held}, now); err != nil {
 						return err
 					}
-				}
-				if member {
-					walk.close(lane)
 				}
 				break
 			}
@@ -1796,14 +1815,35 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		// not restarted. That flicker is the whole shape of the
 		// complaint: a row that says "Merging" forever and means
 		// "refused, again, since this morning".
+		// Another change has merged into this lane already this cycle, so
+		// whatever this read said about merging cleanly was about a base
+		// that has since moved. Asked again now, of the base as it stands
+		// (mergeWalk): a pull request GitHub has not recomputed reads
+		// UNKNOWN and waits for the next cycle, one that now conflicts
+		// reads conflicted, and only one still clean on the same head goes
+		// on to merge.
+		if member && !forcing && walk.mergedThisCycle(lane) {
+			fresh, err := client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+			if err != nil {
+				return fmt.Errorf("orchestrator: re-reading %s after this cycle's merge into %s: %w", ref, detail.BaseRef, err)
+			}
+			if fresh.HeadSHA != detail.HeadSHA {
+				return nil
+			}
+			detail = fresh
+			health = healthOf(detail, checks, e.requiredCheck, checksKnown, checksSettled, grain)
+			if health != model.PrClean {
+				e.detail, e.health = detail, health
+				st := statusOf(e, false, blocked, review, walk.stateOf(lane))
+				st.reason = mergeReasonOf(e, st.state, gate.CI)
+				return setMergeQueueState(ctx, store, e.obs, task.ID, st, now)
+			}
+		}
 		// An empty diff is never merged, whatever brought it here: see
 		// closeIfLanded.
 		if closed, err := closeIfLanded(ctx, store, client, task, ref, detail, now); err != nil {
 			return err
 		} else if closed {
-			if member {
-				walk.close(lane)
-			}
 			return closeOutLanded(ctx, store, task, e.obs, ref, detail, now)
 		}
 		// A head already handed to GitHub's merge queue is not merged
@@ -1818,18 +1858,45 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		}
 		var mergeErr error
 		if !onGitHubQueue {
+			mergeAsked = true
 			mergeErr = mergeTaskPullRequest(ctx, store, client, ref.Repo, ref.Number, detail.HeadSHA, task.ID, detail.Title)
+			if mergeErr != nil && (github.ClassifyMergeRefusal(mergeErr) == github.RefusalUnresolvedThreads || github.IsMergeRuleStatus(mergeErr)) {
+				if resolveOrClassifyUnresolvedThreadsOnMerge(ctx, store, client, task, ref) {
+					mergeErr = mergeTaskPullRequest(ctx, store, client, ref.Repo, ref.Number, detail.HeadSHA, task.ID, detail.Title)
+				}
+			}
 		}
 		// A base branch that only takes changes through GitHub's merge
 		// queue: the pull request is put in that queue instead, and lands
-		// when GitHub merges it -- this entry keeps its repository's slot
-		// until then (githubqueue.go).
+		// when GitHub merges it (githubqueue.go). Handing it over spends
+		// one of the lane's merges for the cycle, as merging it would.
 		if handled, err := landThroughGitHubQueue(ctx, store, client, e, ref, detail, mergeErr, now); handled && err == nil {
 			if member {
-				walk.close(lane)
+				walk.merged(lane, task.ID)
 			}
 			break
 		} else if err != nil {
+			// A refusal (405, 403 or 422 -- never a 5xx or transport failure,
+			// whose effect on the base is unknown and must close the lane)
+			// that neither GitHub's words nor the branch's protection rules
+			// and review threads can place, straight after an earlier merge
+			// in this lane moved the base, is most likely that move: GitHub
+			// had not yet re-judged this pull request against it, and the
+			// clean read (even the one just taken again above) was its answer
+			// about the base before. Nothing is charged to the change for
+			// that, and a refused merge left the base as it was, so the rest
+			// of the lane goes on; this one is read fresh next cycle.
+			if member && !forcing && walk.mergedThisCycle(lane) &&
+				unplacedRefusalAfterBaseMove(client, e, ref, detail, err) {
+				log.Printf("orchestrator: %s was refused a merge right after another merge into %s this cycle; "+
+					"judging it again next cycle against the base as it now stands: %v", ref, detail.BaseRef, err)
+				if err := setMergeQueueState(ctx, store, e.obs, task.ID,
+					queueStatus{state: mergeStateWaitingQueue,
+						note: "another change just merged into " + detail.BaseRef + "; judged again next cycle"}, now); err != nil {
+					return err
+				}
+				break
+			}
 			// A merge GitHub will not do is the one dead end the queue
 			// used to retry forever in silence, with the row left saying
 			// "Merging" -- refusedMerge is what gives it words and an end.
@@ -1874,13 +1941,25 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			// against the live branch tip before merging, so a landed merge
 			// does not spend the un-rechecked per-cycle limit.
 			if !detail.Merged || recheck.verdict == nil || !recheck.verdict.hasFiles || recheck.mode != model.MergeRecheckEnforce {
-				walk.merged(lane)
-			}
-			if detail.Merged && walk.mayMerge(lane) {
-				walk.releaseHead(lane, task.ID)
+				walk.merged(lane, task.ID)
 			}
 		}
+		if !stacked {
+			walk.noteBaseMoved(lane)
+		}
 		gate.merged(ref)
+
+	case member && !stacked && !blocked && repairing && e.turnStopped && !working:
+		// The repair the queue asked for was stopped by a person, and the
+		// task is parked on that stop: no worker will pick it up until
+		// somebody replies or presses Retry, so waiting out
+		// defaultRepairDeadline would only leave the change sitting in the
+		// queue for hours on a run nobody is going to start. Handed over now, the same
+		// way escalateUnfinishedRepair hands over a repair that is late,
+		// and the queue moves on to the next entry.
+		if err := escalateStoppedRepair(ctx, store, task, ref, health, now); err != nil {
+			return err
+		}
 
 	case !stacked && !blocked && (health == model.PrFailing || health == model.PrConflicted):
 		// Both standalone CI failure and base branch merge conflicts trigger
@@ -1890,7 +1969,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			return err
 		}
 
-	case isHead && !stacked && !blocked && !repairing && health == model.PrPending && grainCIGivenUp(grain):
+	case member && !stacked && !blocked && !repairing && health == model.PrPending && grainCIGivenUp(grain):
 		// grain has stopped starting runs for this commit, so nothing is
 		// going to end this wait: said now rather than after the stall
 		// deadline, which would leave the row reading "Waiting for CI"
@@ -1899,7 +1978,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			return err
 		}
 
-	case isHead && !stacked && !blocked && !repairing && stalled:
+	case member && !stacked && !blocked && !repairing && stalled:
 		// A grain CI stall is handed to a person (merge_failed, the
 		// Inbox's "Unblock a merge"). The daemon no longer retries it or
 		// extends its deadline on its own: system:pipeline-steward sees the
@@ -1921,6 +2000,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	// ClosedAt, so there is never a cycle needing both writes at once.
 	if health == model.PrMerged || health == model.PrClosed {
 		forgetEmptyChecks(ref)
+		forge.ForgetExternalChecks(forgeRef(ref))
 		forgetMergeRefusals(ref)
 		forgetGitHubQueued(ref)
 	}
@@ -1943,6 +2023,31 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		return err
 	}
 	return recordPullRequestEvents(ctx, store, task.ID, e.obs, detail, health, now)
+}
+
+// unplacedRefusalAfterBaseMove reports whether cause is a merge refusal (405,
+// 403 or 422 -- never a 5xx or transport failure, whose effect on the base is
+// unknown and must close the lane) that neither GitHub's message nor the
+// branch's protection rules and review threads can place as an approval,
+// required-check or rule violation.
+func unplacedRefusalAfterBaseMove(client github.Client, e queueEntry, ref model.PullRequestRef,
+	detail github.PullRequestDetail, cause error) bool {
+
+	if !github.IsMergeRuleStatus(cause) || github.ClassifyMergeRefusal(cause) != github.RefusalTransient {
+		return false
+	}
+	req, read := readMergeRequirements(client, ref, detail.BaseRef)
+	checks := e.checks
+	if read && len(req.RequiredChecks) > 0 {
+		checks = githubCheckRuns(client, ref, detail.HeadSHA, checks)
+	}
+	if refineRefusal(github.RefusalTransient, cause, req, read, checks) != github.RefusalTransient {
+		return false
+	}
+	if count, _ := unresolvedReviewThreads(client, e.task, ref); count > 0 {
+		return false
+	}
+	return true
 }
 
 // closeOutLanded is the closing write for a pull request closeIfLanded
@@ -2051,8 +2156,12 @@ func recordPostMergeCI(ctx context.Context, store *model.Store, client github.Cl
 	if err != nil {
 		return err
 	}
-	if policy.Refusal == baseCINotEnabled && grainci.Granted(task.Grants) {
-		// Not enabled for the repository, but this task holds the grant:
+	disabled, _, err := repoExplicitlyDisablesGrainCI(ctx, store, ref.Repo)
+	if err != nil {
+		return err
+	}
+	if policy.Refusal == baseCINotEnabled && !disabled && grainci.GrantedExplicitly(task.Grants) {
+		// Not enabled for the repository, but this task holds an explicit grant:
 		// the one branch somebody is trying grain CI on gets its
 		// post-merge run, exactly as it did when the task's grant was the
 		// only thing consulted.
@@ -2155,7 +2264,11 @@ func recordPullRequestEvents(ctx context.Context, store *model.Store, taskID str
 		return nil
 	}
 
-	err := observeField(ctx, store, taskID, now, func(o *model.Observation) {
+	reason := "pull request closed"
+	if health == model.PrMerged {
+		reason = "pull request merged"
+	}
+	err := closeTask(ctx, store, taskID, now, reason, func(o *model.Observation) {
 		if needsOpenedAt {
 			openedAt := detail.CreatedAt
 			o.PrOpenedAt = &openedAt
@@ -2628,10 +2741,11 @@ func bringHeadUpToDate(ctx context.Context, store *model.Store, client github.Cl
 	task model.Task, obs *model.Observation, ref model.PullRequestRef,
 	detail github.PullRequestDetail, now time.Time) (bool, error) {
 
-	if detail.HeadRef == "" || detail.BaseRef == "" {
-		// Nothing to name in the call. A pull request grain cannot see the
-		// branches of is one it merges as it stands rather than one it
-		// holds forever on a write it cannot make.
+	if !sameRepoHeadBranch(ref.Repo, detail) {
+		// Nothing to name in the call, or the head branch lives in a fork. A
+		// pull request grain cannot update in ref.Repo is one it merges as it
+		// stands rather than writing to a same-named branch in ref.Repo or
+		// holding forever on a write it cannot make.
 		return false, nil
 	}
 
@@ -2823,7 +2937,13 @@ func refreshStaleHead(ctx context.Context, store *model.Store, client github.Cli
 	if refreshSpent(obs) {
 		return refreshAlreadyTried, nil
 	}
-	if detail.HeadRef == "" || detail.BaseRef == "" {
+	if detail.HeadRef == "" || detail.BaseRef == "" || detail.HeadRef == detail.BaseRef {
+		return refreshUnreachable, nil
+	}
+	if !sameRepoHeadBranch(ref.Repo, detail) {
+		if err := recordRefreshAttempt(ctx, store, task.ID, now); err != nil {
+			return refreshUnreachable, err
+		}
 		return refreshUnreachable, nil
 	}
 
@@ -4133,6 +4253,38 @@ func escalateUnfinishedRepair(ctx context.Context, store *model.Store,
 		"the repair never finished -- this task was sent back to an agent more than %s ago "+
 			"and has not run to completion", humanDuration(defaultRepairDeadline))
 	return blockMergeQueue(ctx, store, task.ID, comment, reason, now)
+}
+
+// stoppedRepairNote is the row's sentence for a repair whose turn a
+// person stopped: who it is waiting on, and the two things that resume
+// it. Shared by the row (statusOf) and the escalation, so the queue says
+// the same thing before and after it gives up the position.
+const stoppedRepairNote = "stopped by an operator -- reply or press Retry to resume"
+
+// escalateStoppedRepair gives up the queue position of a task whose
+// repair turn a person stopped (queueEntry.turnStopped). Like
+// escalateUnfinishedRepair it leaves the task exactly as it is -- parked
+// on the stop, for whoever stopped it -- and gives up only the position:
+// once the turn is resumed and its push reads clean, the pull request
+// still merges the moment it does, as every blocked one does.
+func escalateStoppedRepair(ctx context.Context, store *model.Store,
+	task model.Task, ref model.PullRequestRef, health model.PrHealth, now time.Time) error {
+
+	var state string
+	switch health {
+	case model.PrFailing, model.PrConflicted:
+		state = ", and " + healthReasonSuffix(health)
+	case model.PrPending:
+		state = ", with its checks still to report"
+	}
+	comment := fmt.Sprintf(
+		"The automatic repair of %s was stopped by an operator%s -- so it waits on a "+
+			"person rather than a worker. Reply on this task or press Retry to resume the "+
+			"turn; %s merges as soon as it reads clean. The queue has moved on to the next "+
+			"task in %s.",
+		ref, state, ref, ref.Repo,
+	)
+	return blockMergeQueue(ctx, store, task.ID, comment, stoppedRepairNote, now)
 }
 
 // escalateStalledChecks gives up on task for the third reason: its checks

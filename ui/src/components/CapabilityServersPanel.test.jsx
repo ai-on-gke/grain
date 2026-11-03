@@ -582,6 +582,50 @@ describe("CapabilityServersPanel", () => {
     }
   });
 
+  // 2026-11-02 walkthrough: Disable answered with the state the daemon
+  // had not yet let go of, and the page showed it -- pending -- until a
+  // reload, because only an enabled server was read again.
+  it("reads a server just disabled again until it says disabled", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const status = (state) => ({ id: gcp, state, transport: "stdio" });
+      const attached = { ...failed, secrets: [], status: status("attached") };
+      const disabled = {
+        ...attached,
+        config: { ...attached.config, disabled: true },
+      };
+      serve({
+        ...base,
+        "GET /api/capability-servers": queue(
+          [attached],
+          [{ ...disabled, status: status("pending") }],
+          [{ ...disabled, status: status("disabled") }],
+        ),
+        "POST /api/capability-servers/disable": [
+          { ...disabled, status: status("pending") },
+        ],
+      });
+      render(<CapabilityServersPanel showError={() => {}} />);
+      const c = await card(gcp);
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      await user.click(within(c).getByRole("button", { name: "Disable" }));
+      expect(
+        await within(c).findByRole("button", { name: "Enable" }),
+      ).toBeInTheDocument();
+      for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(2000);
+      expect(
+        within(c).getByTestId("capability-server-state"),
+      ).toHaveTextContent("disabled");
+      const reads = () =>
+        api.mock.calls.filter(([p]) => p === "/api/capability-servers").length;
+      const settled = reads();
+      await vi.advanceTimersByTimeAsync(20000);
+      expect(reads()).toBe(settled);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("binds an env entry to a secret, sending the value only in the bind call", async () => {
     serve({
       ...base,
@@ -717,9 +761,11 @@ describe("CapabilityServersPanel", () => {
       within(again).getByRole("button", { name: "Save connection" }),
     );
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/Task #42/)).toHaveTextContent(
-      "rotate keys",
-    );
+    // The task that still grants it is a link to its page, where the
+    // grant is changed (2026-11-01 walkthrough: it was plain text).
+    const holder = within(dialog).getByRole("link", { name: "Task #42" });
+    expect(holder).toHaveAttribute("href", "/tasks/42");
+    expect(holder.closest("li")).toHaveTextContent("rotate keys");
     expect(
       api.mock.calls.filter(([p]) => p === "/api/capability-servers").length,
     ).toBe(puts);
@@ -1126,5 +1172,126 @@ describe("CapabilityServersPanel", () => {
     expect(
       await within(row).findByTestId("hostd-unreachable"),
     ).toHaveTextContent("grain hostd is not reachable");
+  });
+
+  it("shortens long server summaries and puts server, method, and field descriptions in (i) popovers", async () => {
+    const leaseId = "https://grain.dev/capabilities/workspace-lease";
+    const longSummary =
+      "Leased workspaces on the host machine, provisioned per attempt with narrow proxy access — gives sandboxes a read/write view of a single checkout without exposing the host's full credentials or other workspaces.";
+    const longMethodDesc =
+      "Lease a dedicated workspace on the host for this attempt and mount it through a narrow proxy that only serves that single workspace.";
+    const longFieldDesc =
+      "Prefix used when naming workspaces leased for task attempts; each workspace is named <prefix>-<attempt_id> so reaping can identify orphaned directories.";
+    const leaseServer = {
+      id: leaseId,
+      config: {
+        command: "grain-workspace-lease",
+        run: "host",
+        builtin: "workspace-lease",
+        config: { client_prefix: "grain" },
+      },
+      secrets: [],
+      builtin: {
+        name: "workspace-lease",
+        id: leaseId,
+        summary: longSummary,
+      },
+      status: {
+        id: leaseId,
+        state: "attached",
+        transport: "stdio",
+        builtin: "workspace-lease",
+        methods: ["workspace-lease"],
+        methodDetails: [
+          {
+            name: "workspace-lease",
+            description: longMethodDesc,
+            releasable: true,
+            args: {
+              type: "object",
+              properties: {
+                base_rev: {
+                  type: "string",
+                  description: "Optional base revision to sync.",
+                },
+              },
+            },
+          },
+        ],
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            client_prefix: {
+              type: "string",
+              description: longFieldDesc,
+            },
+          },
+        },
+      },
+    };
+    serve({
+      ...base,
+      "GET /api/capability-servers": [leaseServer],
+    });
+    const user = userEvent.setup();
+    render(<CapabilityServersPanel showError={vi.fn()} />);
+
+    // In the server list row, only the first clause is inline; the full summary is in (i).
+    await waitFor(() => expect(rowOf(leaseId)).not.toBeNull());
+    const r = within(rowOf(leaseId));
+    const rowSummary = r.getByTestId("capability-server-summary");
+    expect(rowSummary).toHaveTextContent(
+      "Leased workspaces on the host machine, provisioned per attempt with narrow proxy access",
+    );
+    expect(rowSummary).not.toHaveTextContent("without exposing the host's");
+    await user.hover(r.getByRole("button", { name: "About workspace-lease" }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(longSummary);
+    await user.unhover(
+      r.getByRole("button", { name: "About workspace-lease" }),
+    );
+
+    // Open the server detail card.
+    const c = await card(leaseId);
+    const detailSummary = within(c).getByTestId("capability-server-summary");
+    expect(detailSummary).not.toHaveTextContent("without exposing the host's");
+    await user.hover(
+      within(c).getByRole("button", { name: "About workspace-lease server" }),
+    );
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(longSummary);
+    await user.unhover(
+      within(c).getByRole("button", { name: "About workspace-lease server" }),
+    );
+
+    // Method descriptions are in (i) popovers, not inline.
+    const methodsSection = within(c).getByTestId("capability-server-methods");
+    expect(methodsSection).not.toHaveTextContent(longMethodDesc);
+    await user.hover(
+      within(methodsSection).getByRole("button", {
+        name: "About workspace-lease",
+      }),
+    );
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      longMethodDesc,
+    );
+    await user.unhover(
+      within(methodsSection).getByRole("button", {
+        name: "About workspace-lease",
+      }),
+    );
+
+    // Configure schema field descriptions are in (i) popovers, not inline.
+    await user.click(
+      within(c).getByRole("button", { name: "Edit server settings" }),
+    );
+    const form = within(c).getByTestId("capability-server-config");
+    expect(form).not.toHaveTextContent(longFieldDesc);
+    const fieldInfo = within(form).getByRole("button", {
+      name: "About client_prefix",
+    });
+    fieldInfo.focus();
+    await waitFor(() =>
+      expect(screen.getByRole("tooltip")).toHaveTextContent(longFieldDesc),
+    );
   });
 });

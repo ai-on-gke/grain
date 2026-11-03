@@ -21,7 +21,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
@@ -123,6 +122,13 @@ func reconcileUpgradeCheck(ctx context.Context, deps Deps, now time.Time) error 
 		return nil
 	}
 	if now.Sub(status.FinishedAt.UTC()) > upgradeCheckWindow {
+		return nil
+	}
+	// This process is the one the upgrade is about to restart away, not
+	// the one it brings up: the check is the next process's to file,
+	// with that build's hash, the restart's gap and what its adoption
+	// pass did -- none of which exists yet (task 1937).
+	if status.RestartPending(deps.Config.ProcessStartedAt) {
 		return nil
 	}
 	tag := upgradeCheckTag(status)
@@ -234,7 +240,7 @@ func fileUpgradeCheck(ctx context.Context, deps Deps, status upgrade.Status, tag
 		Binding: model.BindingDirective,
 		Grants: []model.Grant{
 			{Capability: selfdebug.CapabilityName, Via: model.GrantByGrain},
-			{Capability: grainlog.CapabilityName, Via: model.GrantByGrain},
+			{Capability: model.GrainJournalGrant, Via: model.GrantByGrain},
 		},
 		Tags:      []string{tag},
 		CreatedAt: &now,
@@ -366,7 +372,7 @@ func restartGapFor(cfg Config, status upgrade.Status) upgrade.RestartGap {
 // gap, when it has any services, is how long the restart left grain
 // unreachable (restartGapFor), reported so the check can say whether the
 // gap was ordinary for this mode -- the measurement Stage 1 of
-// docs/non-disruptive-upgrade.md asks every upgrade to take.
+// design/design/non-disruptive-upgrade.design.md asks every upgrade to take.
 //
 // adoption, when set, is what the restart did to the agent runs in run
 // hosts (adoptionFor): how many were adopted, how many lost, and why.
@@ -415,8 +421,8 @@ func upgradeCheckBody(status upgrade.Status, stateRepo model.RepoRef, gap upgrad
 		"is running on still say what it said before the upgrade?\n\n")
 	b.WriteString("You have the self-debug capability: inspect grain's own code in the read-only " +
 		"`grain-src/` checkout using standard sandbox tools, which is the code the " +
-		"upgrade installed, and list_grain_tasks, read_grain_task, read_grain_task_prompt and " +
-		"read_grain_task_transcript read this deployment's own tasks and runs through the " +
+		"upgrade installed, and `grain task list`, `grain task read`, `grain task prompt` and " +
+		"`grain task transcript` read this deployment's own tasks and runs through the " +
 		"daemon -- which is how you answer the queue questions above, and the only way to " +
 		"those rows from here. read_grain_metrics is the same record measured: ask it for a " +
 		"window that ends now and one that ended before the upgrade, and \"do the runs since " +

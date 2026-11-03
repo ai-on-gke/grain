@@ -78,7 +78,7 @@ var gkeSandboxClusterMachineTypes = []string{
 //     a person's live approval in the chat (selfrepair's
 //     run_host_command), and "switch Settings -> Sandboxes" is a click
 //     only that person can make.
-//   - bootstrap-playbooks, for the runbook itself, and self-repair,
+//   - bootstrap-playbooks, for the runbook itself, and grain#host-exec,
 //     which is what actually runs `grain init` on this host: without it
 //     the agent could read the steps and do none of them. Both
 //     GrantByLabel, as if the person filing had ticked them: they did,
@@ -112,7 +112,7 @@ func gkeSandboxClusterTemplate() *Template {
 			// package's own CapabilityName: those packages import this
 			// one.
 			{Capability: "bootstrap-playbooks", Via: GrantByLabel},
-			{Capability: "self-repair", Via: GrantByLabel},
+			{Capability: GrainHostExecGrant, Via: GrantByLabel},
 		},
 	}
 }

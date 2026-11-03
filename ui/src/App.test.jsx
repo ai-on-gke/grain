@@ -868,6 +868,13 @@ describe("App", () => {
     // times a test -- App.test.jsx's other queries are text queries for
     // the same reason.
     const railRow = (name) => screen.getByText(name).closest("li");
+    // BoardList marks a drag a tick after dragstart (Chromium cancels a
+    // drag whose row moves inside the handler), so a drop has to wait
+    // for that tick the way a real one always does.
+    const dragStart = async (row) => {
+      fireEvent.dragStart(row);
+      await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    };
     const patchOf = (id) =>
       api.mock.calls.find(
         ([path, opts]) =>
@@ -886,12 +893,12 @@ describe("App", () => {
 
       // Dropped above the board that already follows it: that is where
       // it is, so nothing is written.
-      fireEvent.dragStart(railRow("Waiting on me"));
+      await dragStart(railRow("Waiting on me"));
       fireEvent.dragOver(railRow("Weekly report"));
       fireEvent.drop(railRow("Weekly report"));
       expect(patchOf("board-1")).toBeUndefined();
 
-      fireEvent.dragStart(railRow("Weekly report"));
+      await dragStart(railRow("Weekly report"));
       fireEvent.dragOver(railRow("Waiting on me"));
       fireEvent.drop(railRow("Waiting on me"));
 
@@ -926,7 +933,7 @@ describe("App", () => {
       await screen.findByText("Waiting on me");
       const heading = screen.getByText("Reports").closest("li");
 
-      fireEvent.dragStart(railRow("Waiting on me"));
+      await dragStart(railRow("Waiting on me"));
       fireEvent.dragOver(heading);
       fireEvent.drop(heading);
 
@@ -1032,7 +1039,7 @@ describe("App", () => {
   // a re-render of everything holding it and a miss in every memo keyed
   // on its identity, which on a store of 929 tasks was six dashboard
   // panels re-sorting and re-filtering all of them for nothing
-  // (docs/hand-runs/2026-09-07-panel-dashboard.md, section 5). A poll
+  // (the 2026-09-07 panel-dashboard hand run, section 5). A poll
   // keeps what it already holds when the new answer says the same thing
   // (poll.js), and this is what pins it.
   //
@@ -1576,7 +1583,7 @@ describe("App", () => {
     },
   );
 
-  // grain has no users (docs/design/settings-panel.md §6): a first visit
+  // grain has no users (design/design/settings-panel.design.md §6): a first visit
   // is asked for no name, and the app is what it opens on.
   it("asks a first visit for no username", async () => {
     setupApi();
@@ -1612,6 +1619,47 @@ describe("App", () => {
 
     expect(await screen.findByText("Fix bug")).toBeInTheDocument();
     expect(screen.queryByText("auth-user@example.com")).toBeNull();
+  });
+
+  it("shows the signed-in IAP email in the header and redirects logout to /_gcp_iap/clear_login_cookie", async () => {
+    const assignSpy = vi.fn();
+    const origLocation = window.location;
+    delete window.location;
+    window.location = { ...origLocation, assign: assignSpy };
+    try {
+      setupApi();
+      const realImpl = api.getMockImplementation();
+      api.mockImplementation((path, opts) => {
+        if (path === "/api/config") {
+          return Promise.resolve({
+            ...config,
+            authenticated: true,
+            authMethod: "iap",
+            actor: "iap-user@example.com",
+            actorKind: "human",
+          });
+        }
+        if (path === "/api/auth/logout") {
+          return Promise.resolve({
+            loggedOut: true,
+            redirect: "/_gcp_iap/clear_login_cookie",
+          });
+        }
+        return realImpl(path, opts);
+      });
+
+      const user = userEvent.setup();
+      render(<App />);
+
+      const badge = await screen.findByTestId("top-bar-user");
+      expect(badge).toHaveTextContent("iap-user@example.com");
+
+      await user.click(badge);
+      await user.click(screen.getByRole("menuitem", { name: "Log out" }));
+      expect(assignSpy).toHaveBeenCalledWith("/_gcp_iap/clear_login_cookie");
+    } finally {
+      window.location = origLocation;
+    }
   });
 
   // A browser the server names nobody for (actor "") and refuses every

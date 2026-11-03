@@ -23,8 +23,9 @@ import CapabilitiesPanel from "../CapabilitiesPanel.jsx";
 import SecretsPanel from "../SecretsPanel.jsx";
 import SettingsCard, { settingHints } from "./SettingsCard.jsx";
 import { identifierField } from "../../identifierField.js";
+import { ConfigManagedNotice } from "../ConfigRepoLink.jsx";
 
-// CredentialsSection is Settings → Legacy capabilities (docs/design/settings-panel.md
+// CredentialsSection is Settings → Legacy capabilities (design/design/settings-panel.design.md
 // §3.2). `s` is the page's useSettingsSection().
 export default function CredentialsSection({ s, claimedSecrets }) {
   const {
@@ -57,9 +58,19 @@ export default function CredentialsSection({ s, claimedSecrets }) {
           <>
             <Box
               component="fieldset"
-              disabled={Boolean(readOnly)}
+              // Config-managed grain_config fields: refused by the API
+              // while settings are locked as well as in external mode
+              // (settings-mutability.spec.md D-2). The secrets below
+              // stay writable either way.
+              disabled={Boolean(readOnly) || Boolean(s.configLocked)}
               sx={{ border: 0, p: 0, m: 0, minInlineSize: 0 }}
             >
+              {!readOnly && s.configLocked && (
+                <ConfigManagedNotice
+                  what="The GitHub host and GCP settings"
+                  paths={["tables/grain_config.json"]}
+                />
+              )}
               <TextField
                 key={`githubHost-${settings.githubHost || ""}`}
                 name="githubHost"

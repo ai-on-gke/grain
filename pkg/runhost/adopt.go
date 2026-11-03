@@ -22,19 +22,29 @@ import (
 
 // The adoption pass: at daemon startup, the run-host listing is what
 // tells a live task_run row the previous daemon abandoned from one whose
-// work is still going (docs/non-disruptive-upgrade.md, "Run hosts never
+// work is still going (design/design/non-disruptive-upgrade.design.md, "Run hosts never
 // touch the store"). Decide is the whole decision, with no I/O, so every
 // combination of row, run host, protocol and spool state has one answer
 // held by a table test (adopt_test.go).
 
 // Claim is one live task_run row, as the adoption pass sees it.
 type Claim struct {
-	Run  string
-	Task string
+	Run     string
+	Task    string
+	Sandbox string
 	// LastSeen is when a daemon last advanced this run's spool cursor:
 	// the start of the gap the adoption credits as wait time. Zero when
 	// no cursor was ever written.
 	LastSeen time.Time
+}
+
+// SandboxName returns the sandbox ID this run is executing in: c.Sandbox
+// when set (e.g. a reused warm session sandbox), or c.Run otherwise.
+func (c Claim) SandboxName() string {
+	if c.Sandbox != "" {
+		return c.Sandbox
+	}
+	return c.Run
 }
 
 // Adoption is a live row matched to a run host that is resumed.

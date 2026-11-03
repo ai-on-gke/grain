@@ -1,0 +1,46 @@
+PASS [a-ui-engine] pollInterval → poll_interval_ms 27000 got 27000
+PASS [a-ui-engine] mergeBatchSize → merge_batch_size 6 got 6
+PASS [a-ui-engine] mergeGatherWindow → 120000ms got 120000
+PASS [a-ui-engine] maxWorkers → max_workers 9 got 9
+PASS [a-ui-caches] packageCacheEnabled → true got 1
+PASS [a-ui-caches] packageCacheSizeGb → 15 got 15
+PASS [a-ui-caches] actionsCacheSizeGb → 11 got 11
+PASS [a-ui-sandboxes] sandboxCpus → 4 got 4
+PASS [a-ui-sandboxes] sessionSandboxIdleTtl → 2400000ms got 2400000
+PASS [a-ui-credentials] githubHost → github_host 
+PASS [a-persist] UI edits survive POST /api/state-repo/sync 27s 15 ghe.example.com
+PASS [a-ui-preferences] appearance → localStorage changed 
+PASS [a-ui-preferences] no server write for preferences 
+PASS [a-ui-preferences] preferences absent from grain/config 
+PASS [b-repo-ui] Engine shows poll interval from grain/config (44s) 44s
+PASS [b-repo-ui] Caches shows actions cache size from grain/config (13) 13
+PASS [c-ui-locked] Engine Poll interval disabled 
+PASS [c-ui-locked] Engine Max merges per repo branch disabled 
+PASS [c-ui-locked] Engine Merge batch size disabled 
+PASS [c-ui-locked] Engine Merge gather window disabled 
+PASS [c-ui-locked] Engine Max worker agents editable 
+PASS [c-ui-locked] Max worker agents saves while locked got 6
+PASS [c-ui-locked] Caches proxy checkbox disabled 
+PASS [c-ui-locked] Caches shows config-managed notice 
+PASS [c-ui-locked] Sandboxes idle TTL disabled 
+PASS [c-ui-locked] Sandboxes vCPUs editable 
+PASS [c-ui-locked] Legacy capabilities GitHub host disabled 
+PASS [c-ui-locked] Models has no config-managed notice 
+PASS [c-ui-locked] Models has no disabled fieldset 
+PASS [c-ui-locked] Executors has no disabled fieldset 
+PASS [c-ui-locked] Preferences has no disabled fieldset 
+PASS [c-ui-locked] Upgrade has no disabled fieldset 
+PASS [c-ui-locked] Upgrade button present enabled=true
+PASS [c-ui-locked] lock toggle enabled while locked 
+PASS [c-ui-unlock] unlock from UI → configRepoOnly false 
+PASS [c-ui-unlock] Engine poll interval editable again 
+PASS [d-ui-external] models read-only with banner 
+PASS [d-ui-external] sandboxes read-only with banner 
+PASS [d-ui-external] executors read-only with banner 
+PASS [d-ui-external] caches read-only with banner 
+PASS [d-ui-external] engine read-only with banner 
+PASS [d-ui-external] preferences stays editable 
+PASS [d-ui-external] upgrade stays editable 
+PASS [d-ui-external] config-repo stays editable 
+PASS [d-ui-external] Legacy capabilities GitHub host disabled 
+FAILS: 0 of 45

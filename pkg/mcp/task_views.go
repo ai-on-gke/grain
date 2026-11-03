@@ -16,7 +16,7 @@ package mcp
 
 // task_views.go is read_grain_task's two compact views -- summary and
 // conversation -- and the kind vocabulary list_grain_tasks filters by
-// (docs/design/durable-tasks.md#DT-13). The full record is
+// (design/design/durable-tasks.design.md#DT-13). The full record is
 // renderTaskRecord's, in task_tools.go.
 
 import (
@@ -28,7 +28,7 @@ import (
 
 // taskKindVocabulary is ui.TaskKinds restated, since pkg/ui imports this
 // package: the tags list_grain_tasks' kind filter accepts.
-var taskKindVocabulary = []string{"port", "repair", "session", "proposal", "durable"}
+var taskKindVocabulary = []string{"port", "repair", "session", "proposal", "durable", "imported"}
 
 // summaryEventCount is how many of a task's latest events the summary
 // carries, and the byte bounds keep each of them, and the handover's head,
@@ -51,6 +51,11 @@ func renderTaskSummary(t TaskRecord, now time.Time) string {
 	if t.Stall != "" {
 		fmt.Fprintf(&b, "  Stalled: %s\n", clipWords(singleLine(t.Stall), maxSummaryEventBytes*2))
 	}
+	priority := t.Priority
+	if priority <= 0 {
+		priority = 5
+	}
+	fmt.Fprintf(&b, "Priority: %d\n", priority)
 	fmt.Fprintf(&b, "Kind: %s\n", kindWords(t.Kinds))
 	if t.Repo != "" {
 		fmt.Fprintf(&b, "Repo: %s (base %s)\n", t.Repo, blankAsNone(t.Base, "default branch"))
@@ -104,7 +109,8 @@ type taskEvent struct {
 }
 
 // lastTaskEvents is the n latest things the record says happened to the
-// task: attempts starting and ending, and comments.
+// task: attempts starting and ending, recorded closes and reopens, and
+// comments.
 func lastTaskEvents(t TaskRecord, n int) []taskEvent {
 	var events []taskEvent
 	for _, a := range t.Attempts {
@@ -117,6 +123,22 @@ func lastTaskEvents(t TaskRecord, n int) []taskEvent {
 		} else {
 			events = append(events, taskEvent{at: a.StartedAt, text: fmt.Sprintf("attempt #%d started, still running", a.Number)})
 		}
+	}
+	for _, tr := range t.Transitions {
+		if (tr.State != "closed" && tr.State != "reopened") || (tr.By == "" && tr.Reason == "" && tr.Detail == "") {
+			continue
+		}
+		text := tr.State
+		if tr.By != "" {
+			text += " by " + tr.By
+		}
+		if tr.Reason != "" {
+			text += " (" + singleLine(tr.Reason) + ")"
+		}
+		if tr.Detail != "" {
+			text += "; " + singleLine(tr.Detail)
+		}
+		events = append(events, taskEvent{at: tr.At, text: text})
 	}
 	for _, c := range t.Comments {
 		text := fmt.Sprintf("comment #%d by %s (%s): %s", c.ID, c.Author, c.AuthorKind, singleLine(c.Body))

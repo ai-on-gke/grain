@@ -175,6 +175,22 @@ func SucceededOutcome(outcome string) bool {
 	return outcome == "succeeded" || outcome == NothingNeededOutcome || outcome == ParkedOutcome
 }
 
+// StoppedByPerson reports whether a finished run was ended by a person's
+// decision about its task rather than by anything the task did: the task
+// was closed while the run was live (EndingTaskClosed), or somebody
+// stopped the turn (EndingTurnStopped). computeStreakForTask and
+// Store.FailureStreak pass over such a run the way they pass over a
+// suspension -- it neither counts toward the failure streak nor breaks
+// it -- so a task closed and reopened, or stopped and replied to, is not
+// held back by dispatch's retry backoff for a "failure" nobody saw.
+func StoppedByPerson(outcome, detail string) bool {
+	switch EndingOf(outcome, detail) {
+	case EndingTaskClosed, EndingTurnStopped:
+		return true
+	}
+	return false
+}
+
 // EndingOf reads a finished run's recorded outcome and detail back as the
 // ending they describe.
 //

@@ -84,6 +84,61 @@ func TestSyncPullRequestsClosesOutAMergedPullRequest(t *testing.T) {
 	if obs.PrOpenedAt == nil {
 		t.Fatal("expected PrOpenedAt to be set alongside PrMergedAt")
 	}
+	events, err := store.TaskEvents(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].By != model.GrainPrincipal || events[0].Reason != "pull request merged" {
+		t.Fatalf("events = %+v, want grain's one close for the merge", events)
+	}
+}
+
+// A pull request merging after somebody closed its task leaves their
+// close standing, the one close on the task's record: grain's own
+// "pull request merged" close is for a task still open
+// (docs/test-runs/2026-11-02-close-reopen-attribution.md).
+func TestSyncPullRequestsMergedAfterAPersonClosedTheTaskKeepsTheirClose(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	task := filedTask(t, ctx, store, "t1", repo)
+	pushBranch(t, sim.BareRepo, model.BranchName(task.ID))
+	pr, err := orchestrator.EnsurePullRequest(ctx, store, client, task, baseTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task.Links = append(task.Links, model.Link{
+		Kind: model.LinkFixes, Target: model.PullRequestRef{Repo: repo, Number: pr.Number}.String(),
+	})
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	bob := model.Principal{Kind: model.PrincipalHuman, ID: "bob"}
+	if err := store.ObserveClose(ctx, task.ID, baseTime, bob, "not needed", func(o *model.Observation) {
+		o.CompletedAt, o.ClosedAt = &baseTime, &baseTime
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.MergePullRequest("acme", "widgets", pr.Number, ""); err != nil {
+		t.Fatal(err)
+	}
+	later := baseTime.Add(time.Hour)
+	if err := orchestrator.SyncPullRequests(ctx, store, client, later); err != nil {
+		t.Fatalf("SyncPullRequests: %v", err)
+	}
+
+	obs, err := store.GetObservation(ctx, task.ID)
+	if err != nil || obs == nil || obs.ClosedAt == nil || !obs.ClosedAt.Equal(baseTime) {
+		t.Fatalf("observation = %+v (%v), want ClosedAt left at bob's close", obs, err)
+	}
+	events, err := store.TaskEvents(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].By != bob {
+		t.Fatalf("events = %+v, want bob's one close", events)
+	}
 }
 
 func TestSyncPullRequestsAutoClosesCorrelatedGitHubIssueOnMerge(t *testing.T) {
@@ -417,5 +472,90 @@ func TestSyncPullRequestsMergesCompletedRepairWithoutRedispatch(t *testing.T) {
 	}
 	if st != model.StateClosed {
 		t.Fatalf("state = %q, want closed after merge", st)
+	}
+}
+
+func TestRunCycleDispatchesHigherPriorityTasksFirstWhenCapacityConstrained(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	_, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+
+	low := filedTask(t, ctx, store, "prio-2", repo)
+	low.Priority = 2
+	low.OrderKey = 10
+	t0 := baseTime
+	low.CreatedAt = &t0
+	if err := store.PutTask(ctx, low); err != nil {
+		t.Fatal(err)
+	}
+
+	midFIFO := filedTask(t, ctx, store, "prio-5-fifo", repo)
+	midFIFO.Priority = 0 // unset -> defaults to 5
+	midFIFO.OrderKey = 20
+	t1 := baseTime.Add(time.Minute)
+	midFIFO.CreatedAt = &t1
+	if err := store.PutTask(ctx, midFIFO); err != nil {
+		t.Fatal(err)
+	}
+
+	midFront := filedTask(t, ctx, store, "prio-5-front", repo)
+	midFront.Priority = 5
+	midFront.OrderKey = 30
+	t2 := baseTime.Add(2 * time.Minute)
+	midFront.CreatedAt = &t2
+	if err := store.PutTask(ctx, midFront); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MoveToFrontOfBacklog(ctx, []string{"prio-5-front"}); err != nil {
+		t.Fatal(err)
+	}
+
+	midFixes := filedTask(t, ctx, store, "prio-5-fixes-base", repo)
+	midFixes.Priority = 5
+	midFixes.OrderKey = 40
+	t3 := baseTime.Add(3 * time.Minute)
+	midFixes.CreatedAt = &t3
+	model.SetFixesBaseBranch(&midFixes, true)
+	if err := store.PutTask(ctx, midFixes); err != nil {
+		t.Fatal(err)
+	}
+
+	high := filedTask(t, ctx, store, "prio-8", repo)
+	high.Priority = 8
+	high.OrderKey = 50
+	t4 := baseTime.Add(4 * time.Minute)
+	high.CreatedAt = &t4
+	if err := store.PutTask(ctx, high); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := orchestrator.Deps{
+		Store:     store,
+		Client:    client,
+		Sandboxes: orchestrator.NewHostSandboxes(t.TempDir()),
+		Framework: orchestrator.StaticFramework(stubFramework{result: toolResult(agent.ToolCall{
+			Name:      "nothing_needed",
+			Arguments: map[string]any{"reason": "done"},
+		})}),
+		MaxWorkers: 1,
+	}
+
+	wantOrder := []string{"prio-8", "prio-5-fixes-base", "prio-5-front", "prio-5-fifo", "prio-2"}
+	for i, wantID := range wantOrder {
+		stepTime := baseTime.Add(time.Duration(i+1) * time.Hour)
+		if err := orchestrator.RunCycle(ctx, deps, stepTime); err != nil {
+			t.Fatalf("cycle %d: %v", i, err)
+		}
+		runs, err := store.Runs(ctx, wantID)
+		if err != nil || len(runs) != 1 {
+			t.Fatalf("after cycle %d runs(%s) = %+v (%v), want 1 run", i, wantID, runs, err)
+		}
+		for _, laterID := range wantOrder[i+1:] {
+			laterRuns, err := store.Runs(ctx, laterID)
+			if err != nil || len(laterRuns) != 0 {
+				t.Fatalf("after cycle %d task %s already has runs %+v (%v), want it still waiting behind %s", i, laterID, laterRuns, err, wantID)
+			}
+		}
 	}
 }

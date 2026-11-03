@@ -21,6 +21,7 @@ import {
   planChanges,
   settingErrorMessage,
   settingLabel,
+  settingLocation,
   settingMin,
 } from "./settingsPlan.js";
 
@@ -55,6 +56,37 @@ describe("settingLabel", () => {
     expect(ids.size).toBeGreaterThan(40);
     const unlabelled = [...ids].filter((id) => settingLabel(id) === id);
     expect(unlabelled).toEqual([]);
+    const unlocated = [...ids].filter((id) => !settingLocation(id));
+    expect(unlocated).toEqual([]);
+  });
+
+  // A link to a setting lands on the field itself, not the top of its
+  // card: Legacy capabilities' GitHub host sits a screen below the card's
+  // top, so Health's "Saved, not applied until restart" link to it used
+  // to open the section with the field out of sight (2026-11-01
+  // deployment-operations walkthrough).
+  it("maps each setting key to its Settings section, card and field", () => {
+    expect(settingLocation("pollInterval")).toEqual({
+      section: "engine",
+      anchor: "polling",
+      target: "pollInterval",
+      href: "/settings/engine#pollInterval",
+    });
+    expect(settingLocation("ciJobsPerRun")).toEqual({
+      section: "ci",
+      anchor: "ci-queue",
+      target: "ciJobsPerRun",
+      href: "/settings/ci#ciJobsPerRun",
+    });
+    expect(settingLocation("githubHost")).toEqual({
+      section: "credentials",
+      anchor: "credentials",
+      target: "githubHost",
+      href: "/settings/credentials#githubHost",
+    });
+    // A card names no setting key.
+    expect(settingLocation("card:general:about")).toBeNull();
+    expect(settingLocation("somethingNewerThanThisBuild")).toBeNull();
   });
 
   // A UI running against a newer daemon: the setting still gets a line,

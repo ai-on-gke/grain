@@ -233,7 +233,7 @@ func (m *StateManager) refreshForbidden(ctx context.Context) {
 func (m *StateManager) sync(ctx context.Context) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.cycle(ctx, false)
+	return m.cycle(ctx, false, "")
 }
 
 // syncAll is what a human asking for a sync means, and what the loop
@@ -245,14 +245,16 @@ func (m *StateManager) sync(ctx context.Context) (bool, error) {
 func (m *StateManager) syncAll(ctx context.Context) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.cycle(ctx, true)
+	return m.cycle(ctx, true, "")
 }
 
 // cycle first applies any native grain/config merge to the database, then
 // exports the configuration and commits it to the same local repository.
 // all is whether this is an explicit sync (staterepo.SyncAll) or a tick
-// of the timer.
-func (m *StateManager) cycle(ctx context.Context, all bool) (bool, error) {
+// of the timer. note, when set, is the commit message the export carries
+// instead of the plain one (staterepo.SyncNoted): SyncAfterWrite's,
+// naming who made the write it follows.
+func (m *StateManager) cycle(ctx context.Context, all bool, note string) (bool, error) {
 	m.lastCycle = time.Now()
 	// Whatever this cycle imports, the deployment's API scope sets are
 	// installed from the database it leaves behind -- on its way out, so
@@ -291,6 +293,11 @@ func (m *StateManager) cycle(ctx context.Context, all bool) (bool, error) {
 	export := staterepo.Sync
 	if all {
 		export = staterepo.SyncAll
+	}
+	if note != "" {
+		export = func(ctx context.Context, r *staterepo.Repo, db *sql.DB, version int) (bool, error) {
+			return staterepo.SyncNoted(ctx, r, db, version, note)
+		}
 	}
 	changed, syncErr := export(ctx, m.repo, m.db, model.SchemaVersion)
 	m.lastErr = errors.Join(applyErr, syncErr)
@@ -346,7 +353,8 @@ func (m *StateManager) noteOutcome(err error) {
 		}
 		return
 	}
-	next := &ui.StateRepoSyncFailure{Since: time.Now(), LastSuccess: m.lastSuccess, Error: err.Error(), Repo: m.settingsRepoLocked().String()}
+	remote, _ := m.externalConfigRepo(false)
+	next := &ui.StateRepoSyncFailure{Since: time.Now(), LastSuccess: m.lastSuccess, Error: err.Error(), Repo: m.settingsRepoLocked().String(), External: remote != ""}
 	if prev := m.failure.Load(); prev != nil {
 		next.Since = prev.Since
 	}
@@ -1103,10 +1111,21 @@ func (m *StateManager) SetSecretsRepo(ctx context.Context, req ui.SecretsRepoReq
 func (m *StateManager) Sync(ctx context.Context) (ui.StateRepoStatus, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, err := m.cycle(ctx, true); err != nil {
+	if _, err := m.cycle(ctx, true, ""); err != nil {
 		return ui.StateRepoStatus{}, err
 	}
 	return m.status(ctx), nil
+}
+
+// SyncAfterWrite exports a UI/API settings write immediately to
+// grain/config so the repository reflects the database without waiting
+// for the next background sync tick. note is the commit message
+// pkg/ui wrote for it, naming who made the write; "" is the plain one.
+func (m *StateManager) SyncAfterWrite(ctx context.Context, note string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, err := m.cycle(ctx, false, note)
+	return err
 }
 
 func writeStateRepoToken(dataDir, token string) (string, error) {

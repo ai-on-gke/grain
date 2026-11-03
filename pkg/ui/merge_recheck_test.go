@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/forge"
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -45,8 +46,8 @@ func TestSetRepoSettingsAppliesCapabilitiesAndUnfixableChecks(t *testing.T) {
 	if !reflect.DeepEqual(got.DefaultCapabilities, []string{"gcp-key"}) {
 		t.Errorf("defaultCapabilities = %v, want [gcp-key]", got.DefaultCapabilities)
 	}
-	if !reflect.DeepEqual(got.CICapabilities, []string{"gemini-key", "package-publish", "repo-read:acme/tools"}) {
-		t.Errorf("ciCapabilities = %v, want [gemini-key package-publish repo-read:acme/tools]", got.CICapabilities)
+	if want := []string{"gemini-key", "package-publish", model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"})}; !reflect.DeepEqual(got.CICapabilities, want) {
+		t.Errorf("ciCapabilities = %v, want %v", got.CICapabilities, want)
 	}
 	if !reflect.DeepEqual(got.UnfixableChecks, []string{"cla/google", "license/check"}) {
 		t.Errorf("unfixableChecks = %v, want [cla/google license/check]", got.UnfixableChecks)

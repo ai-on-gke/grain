@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
-	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 type mockDBExecutor struct {
@@ -47,34 +46,6 @@ func (m *mockDBExecutor) ExecDB(ctx context.Context, query string, params []any)
 		return dbaccess.ExecResult{}, m.execErr
 	}
 	return m.execRes, nil
-}
-
-func TestReadProviderSpec(t *testing.T) {
-	p := dbaccess.NewReadProvider()
-	spec := p.Spec()
-	if spec.Name != dbaccess.CapabilityDBRead {
-		t.Errorf("name = %q, want %q", spec.Name, dbaccess.CapabilityDBRead)
-	}
-	if spec.Provision != model.ProvisionGrant {
-		t.Errorf("provision = %q, want %q", spec.Provision, model.ProvisionGrant)
-	}
-	if spec.Description == "" {
-		t.Error("expected non-empty description")
-	}
-}
-
-func TestWriteProviderSpec(t *testing.T) {
-	p := dbaccess.NewWriteProvider()
-	spec := p.Spec()
-	if spec.Name != dbaccess.CapabilityDBWrite {
-		t.Errorf("name = %q, want %q", spec.Name, dbaccess.CapabilityDBWrite)
-	}
-	if spec.Provision != model.ProvisionGrant {
-		t.Errorf("provision = %q, want %q", spec.Provision, model.ProvisionGrant)
-	}
-	if spec.Description == "" {
-		t.Error("expected non-empty description")
-	}
 }
 
 func TestReadOnlyToolsOnlyProvidesQueryTool(t *testing.T) {

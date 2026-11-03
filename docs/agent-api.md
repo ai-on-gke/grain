@@ -39,6 +39,18 @@ one). The daemon's gate then:
    task, a note in that task's conversation, signed by grain on behalf of
    the run.
 
+A repository off the default git host is `host/owner/name`. In a
+`/api/repos/{owner}/{name}/...` path its `{owner}` is `host/owner`
+escaped into one segment, as the UI writes it:
+`/api/repos/git.forge.example%2Fexperimental/grain/releases`. The
+unescaped `/api/repos/<host>/<owner>/<name>/...` is read as that same
+route when no other matches (a first segment holding a `.` or a `:` is
+a host, as `model.ParseRepo` reads one). The gate reads every
+repository a call names -- in its path, a `repo` in its body, or a
+`?repo=` -- the way the deployment spells it, so an SSH remote, a URL
+or another capitalisation matches the grant naming that repository.
+Text that is not a repository is refused with 400.
+
 The header can only narrow a request. A request without it is whatever
 the access gate already let in, so anyone able to send the header could
 also have left it off.
@@ -110,13 +122,15 @@ every `DELETE`.
 |---|---|---|
 | `tasks:read` | read tasks, conversations, transcripts, trees | |
 | `tasks:write` | file, edit, comment on, reorder, defer, pause, resume, retry, stop, close and reopen tasks | |
-| `tasks:admin` | approve proposed tasks, recreate sandboxes | yes |
+| `tasks:admin` | approve proposed tasks, recreate sandboxes, edit numeric task `priority` (`PATCH /api/tasks/{id}` with `{"priority": <int>}` only) | yes |
 | `tasks:from-template` | file a task from a repository's own declared template (`POST /api/tasks/from-template`); an agent's call also needs `tasks:write`, since it is served as `POST /api/tasks` | |
 | `merge:write` | open pull requests for tasks, retry their merges | |
 | `merge:force` | force-merge past the gate | yes |
 | `ci:read` | read CI runs (job logs included), artifacts, merge batches, base-branch gates | |
 | `ci:write` | start, re-run and cancel CI runs, base-branch and release runs | |
+| `tests:write` | quarantine flaky or failing tests (`POST /api/tests/quarantine` and `grain quarantine`) and file held follow-up repair tasks | |
 | `notifications:write` | raise and clear operator notifications (`POST /api/notifications`, `/{id}/clear`); acknowledging and Investigate are a person's | no |
+| `teams:broadcast` | post a comment to every active task (`POST /api/deployment/broadcast`), un-parking the ones awaiting a reply; signed as the broadcasting task, and model-only (never on the sandbox channel) | |
 | `dispatch:read` | read whether dispatch is paused | |
 | `dispatch:write` | pause and resume dispatch, run a task now | |
 | `schedules:read` | read schedules and what they compose | |
@@ -131,8 +145,10 @@ every `DELETE`.
 | `repos:write` | add and remove repositories, change their settings, create branches | |
 | `boards:read` | read boards | |
 | `boards:write` | create, edit and delete boards | |
-| `memory:read` | read memory documents and release notes | |
-| `memory:write` | write memory documents and release notes | |
+| `memory:read` | read memory documents | |
+| `memory:write` | write memory documents | |
+| `release-notes:read` | read release notes and weekly cluster stats | |
+| `release-notes:write` | write release notes | |
 | `sessions:read` | read standing sessions and live consoles | |
 | `sessions:write` | edit standing sessions (subject to the rails) | |
 | `caches:read` | read the CI, package and actions caches | |
@@ -148,7 +164,7 @@ every `DELETE`.
 | `deployment:read` | read host, sandbox, log, metric and upgrade status | |
 | `sandboxes:read` | read the persistent sandboxes' status (`GET /api/persistent-sandboxes`); `deployment:read` implies it | |
 | `deployment:upgrade` | upgrade grain and its database, or cancel a scheduled upgrade | yes |
-| `deployment:restart` | restart grain, act on persistent sandboxes | yes |
+| `deployment:restart` | restart grain, act on persistent sandboxes, run sandbox probes | yes |
 | `deployment:reboot` | reboot or shut down the host | yes |
 
 `internal` marks grain's own plumbing, which no agent can ever reach.
@@ -169,13 +185,37 @@ table only so the table stays total.
 | `self-debug` | `tasks:read`, `deployment:read` |
 | `self-upgrade` | `deployment:read`, `deployment:upgrade` |
 | `pipeline-control` | `dispatch:read`, `dispatch:write` |
+| `team-broadcast` | `teams:broadcast` |
+| `memory` | `memory:read`, `memory:write` |
+| `release-notes` | `release-notes:read`, `release-notes:write` |
+| `test-quarantine` | `tests:write` |
 | `release-gate-read` | `ci:read`, `tasks:read`, `sandboxes:read`, `tasks:from-template` limited to the `release-notes` template |
 
-The `self-debug`, `self-upgrade` and `pipeline-control` capabilities are
-now aliases. A task holding any of them is also served its preset's
-routes, and keeps the tools it always had under their old names
-(`list_grain_tasks`, `read_grain_metrics`, `start_upgrade`,
-`pause_pipeline`, ...).
+The `self-debug` capability is now an alias. A task holding it is also
+served its preset's routes, and keeps the tools it always had under
+their old names (`list_grain_tasks`, `read_grain_metrics`, ...).
+
+`team-broadcast`, `dispatch-control`, `pipeline-control`, `memory`,
+`release-notes`, `self-upgrade` and `test-quarantine` are aliases
+too, but their
+in-process capabilities are retired (design/design/unified-grants.design.md §4):
+they have no tools of their own any longer, and a run holding one is
+served its preset's `api_*` tools and `grain` CLI subcommands instead (`api_deployment_broadcast`
+for `broadcast_team_message`; the pipeline-pause, run-now and defer
+routes for `pause_pipeline`, `resume_pipeline`, `run_task_now` and
+`defer_task`; for pipeline-control, the pipeline-pause routes, which an
+agent calls as itself, so it lifts only a pause it took and never an
+upgrade's hold; for `memory` and `release-notes`, the `/api/memory*` and
+`/api/release-notes*` routes and `grain memory` / `grain release-notes`;
+for `self-upgrade`, `api_start_upgrade` and `api_cancel_scheduled_upgrade`
+plus `GET /api/upgrade` via `grain api`; for `test-quarantine`,
+`POST /api/tests/quarantine` (`api_quarantine_test`) and `grain quarantine`). Every place a grant is recorded writes it as
+`api:<preset>` (`model.CanonicalLegacyGrant`), importing a grain/config
+does the same, and schema migrations 67, 68, 69, 71, 72, 75 and 76 rewrote the grants
+already stored -- tasks, templates, schedules, the default capability
+lists and the standing sessions. The bare name keeps granting the preset
+wherever it is still written, such as a repository's own `.grain`
+declarations.
 
 The per-ability capabilities that were queued separately are presets over
 this mechanism rather than new tool plumbing:
@@ -370,8 +410,72 @@ repository access, a job is granted them by declaring them: they are
 not taken from the repository's CI capabilities list.
 
 `release-gate-read`, the release train's capability
-(`docs/design/release-from-trunk.md`, RFT-3), is the built-in preset
+(`design/design/release-from-trunk.design.md`, RFT-3), is the built-in preset
 `api:release-gate-read`. A job may declare it under either name.
+
+## GitHub Actions runs
+
+For a repository whose CI is GitHub Actions (`ci_mode: github`, or any
+repository whose GitHub CI is not ignored), the `ci:read` routes serve
+its Actions workflow runs beside grain CI's. The reads go through the
+daemon's own forge connection, so no credential reaches a sandbox: the
+GitHub App or token for github.com, and the host's own tool
+(`ForgeViaCommand`) for a GitHub Enterprise host, whose REST API is
+under `/api/v3`. The rules for which
+repositories a task may read are the same as for grain CI runs, and
+only repositories this deployment works in (its target repos, or every
+repository while that list is empty) are read at all: a grant for every
+repository, or a person, reading a `gha:` id of any other gets a 404,
+and the forge is not asked.
+
+| Route | Answers |
+|---|---|
+| `GET /api/ci/runs?repo=owner/name` | Grain CI runs and Actions workflow runs merged, newest first. Each row has `provider` (`grain` or `github-actions`). An Actions row's `actions` object holds `runId`, `runAttempt`, `workflow` (the file), `workflowName`, GitHub's `status` and `conclusion`, `url` and `failedJobs`. `ref`, `conclusion`, `since`, `until` and `limit` filter both kinds of row. `provider=grain` or `provider=github-actions` keeps one kind. |
+| `GET /api/ci/runs/{id}` | With an Actions id (`gha:<owner>:<name>:<run id>`, for example `gha:ai-on-gke:grain:123`): the run with its jobs and their steps, each with its conclusion. Logs are not included. |
+| `GET /api/ci/runs/{id}/log?job=<name or id>&tail=<lines>` | One Actions job's log. With no `job`, the first job that failed, or the only job. It is capped at 256 KiB (`ci.MaxStepOutput`, the same cap as a grain CI step's output), and the end is kept. The answer gives `job`, `jobId`, `url`, the full size in `bytes`, and `truncated`. |
+| `GET /api/ci/runs/{id}/artifacts` | The Actions run's artifacts, names and sizes only. Downloading one (`.../artifacts/{job}/{name}`) answers 501. An Actions artifact is a zip behind a redirect, sometimes gigabytes, and grain does not fetch it for you; get it from the run's page. |
+
+Notes:
+
+- **Who sees Actions rows by default.** A call from an agent gets the
+  Actions rows without asking. A person's call needs `provider` to get
+  them. The CI pane is a person's call: it polls every few seconds and
+  shows grain CI only.
+- **Where the rows come from.** A listing reads the forge's
+  `actions/runs`, one page of at most 100, and adds in the jobs grain
+  has recorded for each run (`github_ci_job`, filled by the merge
+  queue's polls and by webhooks).
+  - If there is no forge connection, the hour's API budget is low
+    (`github.BudgetLow`), or the forge read fails, the listing is built
+    from grain's record alone.
+  - When that happens, `actionsNote` says why.
+- **Rate-limit budget.** Every forge call is charged to the `ci-read`
+  caller in the budget ledger (`GET /api/system/github`). Job logs and
+  artifact lists have their own kinds, `job logs` and `artifacts`.
+- **Caching.**
+  - A listing is cached for 30 seconds.
+  - A finished run, its jobs, and a finished job's log are cached for
+    10 minutes.
+  - A run or job that is still going is cached for 15 seconds.
+- **Log redirects.** A log comes back as a redirect to a blob host.
+  - On github.com, net/http follows it and drops the credential.
+  - Through a host's own tool (`ForgeViaCommand`), the tool follows it itself. If it hands the redirect
+    back, the full URL is sent through the tool again.
+
+In a sandbox the same runs are read with the `grain` CLI and under
+`ci://`:
+
+```sh
+grain ci list --repo ai-on-gke/grain --ref main --provider github-actions
+grain ci show gha:ai-on-gke:grain:123
+grain ci log gha:ai-on-gke:grain:123 --job publish --lines 80
+grain read ci://ai-on-gke/grain/gha:ai-on-gke:grain:123/publish/job.log --tail 4000
+```
+
+`list_ci_runs` takes `provider` as well, and `get_ci_log` reads an
+Actions job's log when given a `gha:` run id. `grain ci wait` and
+`wait_for_checks` already wait on the GitHub checks that gate a
+`ci_mode: github` task's branch.
 
 ## Policy
 
@@ -413,6 +517,20 @@ not taken from the repository's CI capabilities list.
   that default, with a note on the proposal, instead. Whatever template
   a review comes from, it never carries a dangerous api grant the
   reviewed task did not hold itself.
+- **Task priority is 1 or more, everywhere.** `priority` on
+  `POST`/`PATCH /api/tasks`, `grain create -priority` and
+  `grain update -priority`, `grain task propose --priority`,
+  `propose_task`'s `priority` and the Edit form all refuse 0 and below
+  with the same message. No value means "the default": leave the field
+  out to file at 5 (or at the template's priority), and set 5 to put an
+  edited task back on it. A `propose_task` priority above both the
+  proposer's own and 5 is filed for a person to approve.
+- **Follow-ups do not inherit their parent's priority.** A proposal
+  that names no `priority` files at 5, or at its template's priority,
+  whatever the proposing task's priority is
+  (`pkg/orchestrator/finish.go`). A follow-up from a priority-9 task
+  that should run as urgently has to ask for 9 itself, which it may do
+  without a person's approval because 9 is not above its parent's.
 - **Edits to grants go through the existing policy.** Approval rules,
   `capability_policy.go` and the proposal trust gate apply to api grants
   exactly as they apply to any other capability.
@@ -432,7 +550,12 @@ not taken from the repository's CI capabilities list.
   ([question-summaries.md](question-summaries.md)).
 - **Standing sessions.** A run can't act on a standing session it doesn't
   own. It can never create, restart, cancel or delete a session, and
-  can't type into a live console.
+  can't type into a live console. The one exception is a note
+  (`POST /api/tasks/{id}/notes`, message_task) from the session's own
+  parent or child: a director's child may report back to it. A note never
+  parks the session or acts on its run. It reaches the session the same
+  way whether it is sent through the agent API, `grain task message` or
+  `grain mcpserver`'s `message_task`.
 - **Upgrade holds.** A run honours them. It can't lift a dispatch pause
   someone else took. It can't upgrade, restart or reboot while an upgrade
   check holds dispatch for another task.
@@ -447,6 +570,7 @@ example:
 | `api_reorder` | `POST /api/tasks/reorder` |
 | `api_start_ci_run` | `POST /api/ci/runs` |
 | `api_get_ci_run` | `GET /api/ci/runs/{id}` |
+| `api_get_ci_run_log` | `GET /api/ci/runs/{id}/log` |
 | `api_run_schedule` | `POST /api/schedules/{id}/run` |
 | `api_cut_candidate` | `POST /api/repos/{owner}/{name}/releases/{release}/candidates` |
 
@@ -467,7 +591,7 @@ any other read -- and refuses,
 changing nothing, when any field given disagrees with the record, naming
 both versions. `kind` is one of the kind tags `port`, `repair`, `session`,
 `proposal`, `durable` (`ui.TaskKindTags`), or `none`
-(docs/design/durable-tasks.md#DT-13).
+(design/design/durable-tasks.design.md#DT-13).
 
 Descriptions come from `routeDocs`, or, for a read with none, from the
 handler's name. `TestEveryScopedRouteIsDescribed` (in
@@ -539,7 +663,12 @@ Each external agent is issued its own scoped bearer token (`gma_<hex>`):
   `<area>:<level>@owner/name` in `scopes` (`tasks:write@acme/widgets`).
   Each level is its own scope: a credential holding only `tasks:write`
   can file and edit tasks but is offered no `tasks:read` tool to list or
-  read them.
+  read them, and mutating task routes answer with `{id, state}` (plus any
+  fields that `PATCH /api/tasks/{id}` itself just replaced; empty `PATCH`
+  bodies are refused) rather than echoing the full task record unless the
+  caller also holds `tasks:read` on that repository. A plain `POST
+  /api/tasks` still answers with the whole new task, since it holds only
+  what the caller sent; one naming a `templateId` or `supersedes` does not.
 - **Expiry and limits**: an optional `expiresAt` timestamp, a per-credential
   request rate limit (`rateLimit`, requests per minute, default `60`), and
   an in-flight concurrency cap (`maxConcurrent`, default `8`).
@@ -563,6 +692,13 @@ Credentials are managed through:
 | `POST /api/external-agents/tokens/{id}/revoke` | `capabilities:admin` | Revoke a credential immediately (`204 No Content`). |
 | `DELETE /api/external-agents/tokens/{id}` | `capabilities:admin` | Delete a credential record (`204 No Content`). |
 | `POST /api/external-agents/tokens/revoke-all` | `capabilities:admin` | Emergency kill switch: revoke every active external agent credential immediately. |
+
+A credential's view (listed, created or rotated) carries
+`resolvedScopes`: every scope it holds after expanding scope sets and
+implied scopes. A scope held on named repositories only is listed once
+per repository as `scope@owner/name` (a credential issued with
+`"scopes": ["tasks:write@acme/widgets"]` lists `tasks:write@acme/widgets`);
+a bare scope is held on every repository.
 
 ### Attribution
 

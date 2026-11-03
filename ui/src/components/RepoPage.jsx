@@ -51,6 +51,8 @@ import {
 import api from "../api.js";
 import GrantChip from "./GrantChip.jsx";
 import GrantsPicker from "./GrantsPicker.jsx";
+import ReadOnlyGrants from "./ReadOnlyGrants.jsx";
+import { ConfigManagedNotice } from "./ConfigRepoLink.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
 import { isApiGrant, withoutApiRows } from "../apiGrants.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
@@ -171,6 +173,13 @@ function latestPerName(branches) {
 // not enabled for, that switch is what enrols its watched branch.
 const CI_MODE_ID = "repo-ci-mode";
 
+// REPO_CONFIG_PATHS are the config repo files a repository's settings
+// on this page are kept in (design/design/config-repo-settings.design.md §2.1).
+const REPO_CONFIG_PATHS = [
+  "tables/repo_config.json",
+  "settings/capabilities.yml",
+];
+
 // REPO_TABS are the page's sections, in the order its tab strip shows
 // them (grain/task-3333). The page used to be one column of a dozen
 // settings forms with the live state -- batches in flight, recent runs --
@@ -178,7 +187,7 @@ const CI_MODE_ID = "repo-ci-mode";
 // healthy (Overview), how is it tested (CI), how does work land (Merge
 // queue), what does an agent here get (Agents), and what happens after
 // merge (Releases). The selected tab is in the page's path
-// (/repos/acme/widgets/settings/ci, docs/design/settings-panel.md §2.3,
+// (/repos/acme/widgets/settings/ci, design/design/settings-panel.design.md §2.3,
 // paths.js's REPO_TAB_IDS), so a tab is a link somebody can share and
 // Settings → Repositories can point at. It used to ride in the hash
 // (/repos/acme/widgets#ci), and a link from then still opens its tab.
@@ -245,6 +254,19 @@ export function repoCIMode(defaults) {
   return defaults.ciMode || (defaults.ignoreGitHubCI ? "grain" : "github");
 }
 
+// confirmBaseRepairBypass asks before repo's base-branch repair PRs may
+// merge past human gates, naming the repo and the risk, as Promote and
+// Delete do. Both places that offer the switch ask the same question;
+// turning it off never asks.
+export function confirmBaseRepairBypass(repo) {
+  return window.confirm(
+    `Let base-branch repair PRs in ${repo} merge without a human when their CI is green? ` +
+      `While ${repo}'s base branch is red, an agent's repair pull request can then land changes to ` +
+      `.grain/workflows/** or trust-boundary code with no human sign-off before the merge. ` +
+      `Review tasks are still filed afterwards.`,
+  );
+}
+
 // RepoOverview is the at-a-glance strip at the top of the Overview tab:
 // the handful of facts somebody opening the page wants before any form,
 // each a way into the tab that changes it.
@@ -273,6 +295,17 @@ function RepoOverview({ upToDate, branches, gates, onShowTab }) {
       label: "Merge when green",
       value: upToDate ? (upToDate.mergeOnGreen ? "On" : "Off") : "…",
       tab: "merge-queue",
+    },
+    {
+      label: "Issue import",
+      value: upToDate?.issueImport
+        ? upToDate.issueImport.enabled
+          ? upToDate.issueImport.approved
+            ? "On, approved"
+            : "On, held for approval"
+          : "Off"
+        : "…",
+      tab: "agents",
     },
     {
       label: "Base repair bypass",
@@ -422,6 +455,13 @@ export default function RepoPage({
   // is a real and different answer, and the expensive one to get wrong
   // in either direction.
   const [upToDate, setUpToDate] = useState(null);
+  // The GitHub issue importer's text settings as typed and not yet saved
+  // (source repository, label, poll interval), null until upToDate has
+  // loaded them; and what the last "Import issues now" did, or why it
+  // could not.
+  const [importDraft, setImportDraft] = useState(null);
+  const [importOutcome, setImportOutcome] = useState(null);
+  const [importing, setImporting] = useState(false);
   // And the checks in this repository that will never pass for a pull
   // request grain's agents author, whatever is pushed to the branch --
   // `cla/google` and its kind (grain/task-291): what GET /api/repos/
@@ -456,10 +496,24 @@ export default function RepoPage({
   // (repoAdministered). The server refuses them with a 403, so the page
   // says why once and draws its controls disabled rather than offer ones
   // that can only fail. null is "offer everything".
-  const writeRefusal = repoAdministered(config, repo)
-    ? null
-    : `you can read ${repo}'s settings but not change them: that needs a repository admin`;
-  const readOnly = writeRefusal !== null;
+  const adminReadOnly = !repoAdministered(config, repo);
+  const writeRefusal = adminReadOnly
+    ? `you can read ${repo}'s settings but not change them: that needs a repository admin`
+    : null;
+  // configRepoOnly is GET /api/config's word that a repo's settings are
+  // config-repo only (design/design/config-repo-settings.design.md §2.1): kept in
+  // tables/repo_config.json and settings/capabilities.yml, and refused by
+  // the API in favour of a config pull request. Then every configuration
+  // control here is drawn with its current value, read-only, under a
+  // notice linking to those files. The operational actions -- adding a
+  // branch, importing issues now, a manual release, a base branch's
+  // check -- are not settings, and stay a repo admin's (adminReadOnly).
+  // configRepoOnly alone, not settingsLocked: with directConfigWrites in
+  // state-repo.json the lock is on but the API still takes the write, and
+  // the server folds both into configRepoOnly
+  // (design/spec/settings/settings-mutability.spec.md D-10).
+  const configRepoOnly = Boolean(config?.configRepoOnly);
+  const readOnly = adminReadOnly || configRepoOnly;
   // The same sentence is each disabled control's own accessible
   // description, so a screen reader on one hears why it is dimmed
   // rather than having to find the page's one alert (2026-10-14
@@ -468,7 +522,17 @@ export default function RepoPage({
   // already describes the control -- a TextField's own helper text,
   // which setting the attribute would otherwise replace.
   const refusalId = useId();
+  const configNoticeId = useId();
+  // A configuration control is described by the config-repo notice when
+  // that is what makes it read-only, for everybody, and by the admin
+  // sentence otherwise; an operational one only ever by the admin
+  // sentence (adminRefusedBy).
   const refusedBy = (off, ...more) => {
+    const why = configRepoOnly ? configNoticeId : writeRefusal ? refusalId : "";
+    const ids = [off ? why : "", ...more].filter(Boolean);
+    return ids.length ? ids.join(" ") : undefined;
+  };
+  const adminRefusedBy = (off, ...more) => {
     const ids = [off && writeRefusal ? refusalId : "", ...more].filter(Boolean);
     return ids.length ? ids.join(" ") : undefined;
   };
@@ -902,7 +966,46 @@ export default function RepoPage({
     }
   };
 
+  // saveIssueImport writes some of the GitHub issue importer's settings
+  // (model.RepoConfig.IssueImport) through PUT .../settings, which
+  // leaves every field it is not sent alone. The orchestrator's next
+  // cycle reads the row; nothing is imported here.
+  const saveIssueImport = async (fields) => {
+    try {
+      setUpToDate(
+        await api(`${root}/settings`, {
+          method: "PUT",
+          body: JSON.stringify(fields),
+        }),
+      );
+      setImportDraft(null);
+      await onRefreshConfig();
+    } catch (err) {
+      showError(err);
+    }
+  };
+
+  // importIssuesNow runs one import pass immediately
+  // (POST .../import-issues), on top of the periodic one, and says what
+  // it did.
+  const importIssuesNow = async () => {
+    setImporting(true);
+    setImportOutcome(null);
+    try {
+      const out = await api(`${root}/import-issues`, { method: "POST" });
+      const n = (out.imported || []).length;
+      let text = `Read ${out.open} open issue${out.open === 1 ? "" : "s"} on ${out.source}: imported ${n}, ${out.skipped} already imported.`;
+      if (out.error) text += ` Some could not be imported: ${out.error}`;
+      setImportOutcome({ error: Boolean(out.error), text });
+    } catch (err) {
+      setImportOutcome({ error: true, text: String(err?.message || err) });
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const saveBaseRepairBypassesHumanGates = async (on) => {
+    if (on && !confirmBaseRepairBypass(repo)) return;
     try {
       setUpToDate(
         await api(`${root}/base-repair-bypasses-human-gates`, {
@@ -1358,6 +1461,14 @@ export default function RepoPage({
           </Alert>
         )}
 
+        {configRepoOnly && (
+          <ConfigManagedNotice
+            id={configNoticeId}
+            what={`${repo}'s settings`}
+            paths={REPO_CONFIG_PATHS}
+            sx={{ mb: 0 }}
+          />
+        )}
         {writeRefusal && (
           // The header lowercases its own text; this is a sentence.
           <Alert id={refusalId} severity="info" sx={{ textTransform: "none" }}>
@@ -1787,16 +1898,25 @@ export default function RepoPage({
                   <Typography variant="body2" sx={{ mb: 0.5 }}>
                     CI grants
                   </Typography>
-                  <GrantsPicker
-                    config={{ ...config, capabilities: [] }}
-                    grants={ciCapsSelection}
-                    onApiChange={() => {}}
-                    onSubmit={ciCapsMethods.onSubmit}
-                    onRemove={ciCapsMethods.onRemove}
-                    disabled={readOnly}
-                    idPrefix="repo-ci"
-                    runKind="ci"
-                  />
+                  {configRepoOnly ? (
+                    <ReadOnlyGrants
+                      config={{ ...config, capabilities: [] }}
+                      grants={ciCapsRefs}
+                      testId="repo-ci-grants"
+                    />
+                  ) : (
+                    <GrantsPicker
+                      config={{ ...config, capabilities: [] }}
+                      grants={ciCapsSelection}
+                      onApiChange={() => {}}
+                      onSubmit={ciCapsMethods.onSubmit}
+                      onRemove={ciCapsMethods.onRemove}
+                      disabled={readOnly}
+                      idPrefix="repo-ci"
+                      runKind="ci"
+                      policyRepo={repo}
+                    />
+                  )}
                 </Box>
               </Stack>
             )}
@@ -1850,12 +1970,12 @@ export default function RepoPage({
                     }}
                   />
                   <Typography variant="body2" color="text.secondary">
-                    Merge when green and clean. A pull request whose required
-                    checks have passed and that merges cleanly with its target
-                    branch merges straight away, instead of waiting behind pull
-                    requests ahead of it whose CI is still running. Those keep
-                    their place and merge once their own checks pass. With it
-                    off, {repo}&rsquo;s queue merges strictly in order.
+                    Merge when green and clean. The merge queue no longer keeps
+                    an order, so this no longer changes anything: on or off,
+                    every pull request into {repo} whose required checks have
+                    passed and that merges cleanly merges straight away, up to
+                    this deployment&rsquo;s merges per branch per cycle, and one
+                    still in CI holds only itself.
                   </Typography>
                 </Stack>
                 <Stack direction="row" alignItems="flex-start" spacing={1}>
@@ -2125,20 +2245,28 @@ export default function RepoPage({
                   <Typography variant="body2" sx={{ mb: 0.5 }}>
                     Default grants
                   </Typography>
-                  <GrantsPicker
-                    config={config}
-                    grants={capsSelection}
-                    onApiChange={(next) => {
-                      const all = [...capsLegacy, ...next, ...capsRefs];
-                      setCapsSelection(all);
-                      saveCapabilities(all);
-                    }}
-                    onSubmit={capsMethods.onSubmit}
-                    onRemove={capsMethods.onRemove}
-                    disabled={readOnly}
-                    idPrefix="repo-default"
-                    policyRepo={repo}
-                  />
+                  {configRepoOnly ? (
+                    <ReadOnlyGrants
+                      config={config}
+                      grants={[...capsApi, ...capsRefs]}
+                      testId="repo-default-grants"
+                    />
+                  ) : (
+                    <GrantsPicker
+                      config={config}
+                      grants={capsSelection}
+                      onApiChange={(next) => {
+                        const all = [...capsLegacy, ...next, ...capsRefs];
+                        setCapsSelection(all);
+                        saveCapabilities(all);
+                      }}
+                      onSubmit={capsMethods.onSubmit}
+                      onRemove={capsMethods.onRemove}
+                      disabled={readOnly}
+                      idPrefix="repo-default"
+                      policyRepo={repo}
+                    />
+                  )}
                 </Box>
                 <Typography variant="body2" color="text.secondary">
                   A task filed against {repo} starts with:{" "}
@@ -2312,6 +2440,185 @@ export default function RepoPage({
               </Stack>
             )}
           </Box>
+          <Box sx={{ mt: 3 }}>
+            <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+              GitHub issue import
+            </Typography>
+            {upToDate === null || !upToDate.issueImport ? (
+              <Typography variant="body2" color="text.secondary">
+                Loading issue import settings…
+              </Typography>
+            ) : (
+              (() => {
+                const imp = upToDate.issueImport;
+                const draft = importDraft || {
+                  repo: imp.repo || "",
+                  label: imp.label || "",
+                  interval: imp.intervalSeconds
+                    ? String(Math.round(imp.intervalSeconds / 60))
+                    : "",
+                };
+                const dirty =
+                  importDraft !== null &&
+                  (draft.repo !== (imp.repo || "") ||
+                    draft.label !== (imp.label || "") ||
+                    draft.interval !==
+                      (imp.intervalSeconds
+                        ? String(Math.round(imp.intervalSeconds / 60))
+                        : ""));
+                const edit = (field) => (e) =>
+                  setImportDraft({ ...draft, [field]: e.target.value });
+                // The fields as typed, in the shape PUT .../settings takes.
+                const draftFields = () => {
+                  const minutes = draft.interval.trim();
+                  return {
+                    issueImportRepo: draft.repo.trim(),
+                    issueImportLabel: draft.label.trim(),
+                    issueImportIntervalSeconds: minutes
+                      ? Math.round(Number(minutes) * 60)
+                      : 0,
+                  };
+                };
+                return (
+                  <Stack spacing={1.5} data-testid="repo-issue-import">
+                    <Stack direction="row" alignItems="flex-start" spacing={1}>
+                      <Checkbox
+                        size="small"
+                        sx={{ mt: -0.5 }}
+                        checked={Boolean(imp.enabled)}
+                        onChange={(e) =>
+                          // Switching on saves whatever source, label and
+                          // interval are typed but not yet saved with it:
+                          // the first pass runs on the next cycle, and
+                          // would otherwise read every open issue with
+                          // the label the person had just typed unsaved.
+                          saveIssueImport({
+                            issueImportEnabled: e.target.checked,
+                            ...(e.target.checked && dirty ? draftFields() : {}),
+                          })
+                        }
+                        disabled={readOnly}
+                        inputProps={{
+                          "aria-label": `Import open GitHub issues as tasks in ${repo}`,
+                          "aria-describedby": refusedBy(readOnly),
+                        }}
+                      />
+                      <Typography variant="body2" color="text.secondary">
+                        Import open GitHub issues as tasks. Every{" "}
+                        {Math.round(imp.effectiveIntervalSeconds / 60)} minutes
+                        grain reads the open issues of {imp.repo || repo}
+                        {imp.label ? ` labelled “${imp.label}”` : ""} and files
+                        a task targeting {repo} for each one it has not imported
+                        before. An issue is imported once, however its task
+                        ends.
+                      </Typography>
+                    </Stack>
+                    <Stack direction="row" alignItems="flex-start" spacing={1}>
+                      <Checkbox
+                        size="small"
+                        sx={{ mt: -0.5 }}
+                        checked={Boolean(imp.approved)}
+                        onChange={(e) =>
+                          saveIssueImport({
+                            issueImportApproved: e.target.checked,
+                          })
+                        }
+                        disabled={readOnly}
+                        inputProps={{
+                          "aria-label": `Queue imported issues in ${repo} without approval`,
+                          "aria-describedby": refusedBy(readOnly),
+                        }}
+                      />
+                      <Typography variant="body2" color="text.secondary">
+                        Queue imported tasks at once. With this off, each
+                        imported task waits as <strong>Imported</strong> until
+                        somebody approves it. Turn it on only if you trust
+                        everybody who can open an issue on {imp.repo || repo}:
+                        they write what the agent is told to do.
+                      </Typography>
+                    </Stack>
+                    <Stack
+                      component="form"
+                      direction={{ xs: "column", sm: "row" }}
+                      spacing={1}
+                      alignItems={{ sm: "flex-start" }}
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        saveIssueImport(draftFields());
+                      }}
+                    >
+                      <TextField
+                        size="small"
+                        label="Source repository"
+                        placeholder={repo}
+                        value={draft.repo}
+                        onChange={edit("repo")}
+                        disabled={readOnly}
+                        helperText="owner/name; empty for this repository"
+                        sx={{ flexGrow: 1 }}
+                      />
+                      <TextField
+                        size="small"
+                        label="Label"
+                        placeholder="any"
+                        value={draft.label}
+                        onChange={edit("label")}
+                        disabled={readOnly}
+                        helperText="only issues carrying it"
+                      />
+                      <TextField
+                        size="small"
+                        label="Every (minutes)"
+                        type="number"
+                        placeholder={String(
+                          Math.round(imp.effectiveIntervalSeconds / 60),
+                        )}
+                        value={draft.interval}
+                        onChange={edit("interval")}
+                        disabled={readOnly}
+                        inputProps={{ min: 1 }}
+                        helperText="empty for the default"
+                        sx={{ maxWidth: { sm: 150 } }}
+                      />
+                      <Button
+                        type="submit"
+                        variant="contained"
+                        size="small"
+                        disabled={readOnly || !dirty}
+                        aria-describedby={refusedBy(readOnly)}
+                        sx={{ mt: { sm: 0.5 }, whiteSpace: "nowrap" }}
+                      >
+                        Save
+                      </Button>
+                    </Stack>
+                    <Stack direction="row" alignItems="center" spacing={1.5}>
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        onClick={importIssuesNow}
+                        disabled={adminReadOnly || !imp.enabled || importing}
+                        aria-describedby={adminRefusedBy(adminReadOnly)}
+                        sx={{ whiteSpace: "nowrap" }}
+                      >
+                        {importing ? "Importing…" : "Import issues now"}
+                      </Button>
+                      {importOutcome ? (
+                        <Typography
+                          variant="body2"
+                          color={
+                            importOutcome.error ? "error" : "text.secondary"
+                          }
+                          role="status"
+                        >
+                          {importOutcome.text}
+                        </Typography>
+                      ) : null}
+                    </Stack>
+                  </Stack>
+                );
+              })()
+            )}
+          </Box>
         </RepoTabPanel>
 
         <RepoTabPanel id="branches" tab={tab}>
@@ -2343,8 +2650,8 @@ export default function RepoPage({
                 autoComplete="off"
                 inputProps={{
                   ...identifierField,
-                  "aria-describedby": refusedBy(
-                    readOnly,
+                  "aria-describedby": adminRefusedBy(
+                    adminReadOnly,
                     `${refusalId}-branch-helper-text`,
                   ),
                 }}
@@ -2352,14 +2659,14 @@ export default function RepoPage({
                 InputLabelProps={{ required: false }}
                 size="small"
                 fullWidth
-                disabled={readOnly}
+                disabled={adminReadOnly}
               />
               <Button
                 type="submit"
                 variant="outlined"
                 size="small"
-                disabled={readOnly}
-                aria-describedby={refusedBy(readOnly)}
+                disabled={adminReadOnly}
+                aria-describedby={adminRefusedBy(adminReadOnly)}
                 sx={{ whiteSpace: "nowrap", mt: 0.25 }}
               >
                 Add branch
@@ -2461,7 +2768,8 @@ export default function RepoPage({
           <RepoReleaseWorkflowSettings
             repo={repo}
             config={config}
-            readOnly={readOnly}
+            readOnly={adminReadOnly}
+            configReadOnly={configRepoOnly}
             describedBy={refusedBy(readOnly)}
             refreshKey={gateCheck + ownershipSaves}
             onOpenRun={onOpenCIRun}

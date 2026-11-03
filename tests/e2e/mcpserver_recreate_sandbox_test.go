@@ -374,7 +374,7 @@ func TestMCPServerRecreatesARealSandboxOverStdio(t *testing.T) {
 	if !ended.IsError {
 		t.Fatalf("recreate_sandbox succeeded for a task with no live run: %q", ended.Text())
 	}
-	if !strings.Contains(ended.Text(), "no live run on this daemon") {
+	if !strings.Contains(ended.Text(), "no sandbox to rebuild") {
 		t.Errorf("text = %q, want the registry's own message about there being no sandbox to rebuild", ended.Text())
 	}
 

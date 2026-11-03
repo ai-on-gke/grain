@@ -44,9 +44,6 @@ func (c *Client) PutTeamAgentBackend(ctx context.Context, id, backendID string, 
 	if backendID == "" || strings.ContainsAny(backendID, " /\\") {
 		return model.AgentBackend{}, validationErrorf("invalid connection id %q", backendID)
 	}
-	if strings.HasPrefix(backendID, "executor-") {
-		return model.AgentBackend{}, validationErrorf("connection ids starting with \"executor-\" are reserved for remote executors")
-	}
 	backend.ID = backendID
 	cfg, err := c.Store.GetConfig(ctx)
 	if err != nil {
@@ -157,7 +154,7 @@ func (c *Client) authorizeAgentBackendChange(_ context.Context, _, _ string) err
 
 // requireAgentBackendAdmin is authorizeAgentBackendChange for a handler.
 func (s *Server) requireAgentBackendAdmin(w http.ResponseWriter, r *http.Request) bool {
-	if err := s.tasks.authorizeAgentBackendChange(r.Context(), strings.TrimSpace(r.PathValue("id")), requestUser(r)); err != nil {
+	if err := s.tasks.authorizeAgentBackendChange(r.Context(), strings.TrimSpace(r.PathValue("id")), requestPerson(r.Context())); err != nil {
 		writeClientError(w, err)
 		return false
 	}

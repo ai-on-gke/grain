@@ -143,19 +143,41 @@ type CustomImageCheck struct {
 	// wants credentials both end up here.
 	Verified bool          `json:"verified"`
 	Contract ContractCheck `json:"contract"`
-	Warning  string        `json:"warning,omitempty"`
+	// Stale is StaleStockPin's verdict: why the image is grain's own stock
+	// sandbox image from another build than this daemon's, or "".
+	Stale   string `json:"stale,omitempty"`
+	Warning string `json:"warning,omitempty"`
 }
 
 // CheckCustomImage judges a custom image from its OCI labels (as a
-// LabelReader read them, or the error it failed with).
+// LabelReader read them, or the error it failed with), against stamped,
+// the stock image this daemon would otherwise create sandboxes from (""
+// when unknown).
 //
-// It is deliberately a contract check and not the commit check the stock
+// It is mostly a contract check and not the commit check the stock
 // image gets (the daemon's sandboxImageDriftWarning): a custom image is
 // expected to be from a different commit than the daemon -- it was built
 // FROM a base image once and is meant to stay put across upgrades. What
 // it must not be is built against a sandbox boundary this grain no longer
 // drives, which is what its contract label says.
-func CheckCustomImage(image, backend, baseImage string, labels map[string]string, readErr error) CustomImageCheck {
+//
+// The exception is a "custom" image that is really grain's own stock
+// image pinned at another build (StaleStockPin): that one was never meant
+// to stay put, and is warned about whatever its contract says.
+func CheckCustomImage(image, backend, baseImage, stamped string, labels map[string]string, readErr error) CustomImageCheck {
+	out := checkCustomImageContract(image, backend, baseImage, labels, readErr)
+	out.Stale = StaleStockPin(image, stamped, labels)
+	switch {
+	case out.Stale == "":
+	case out.Warning == "":
+		out.Warning = out.Stale
+	default:
+		out.Warning = out.Stale + " " + out.Warning
+	}
+	return out
+}
+
+func checkCustomImageContract(image, backend, baseImage string, labels map[string]string, readErr error) CustomImageCheck {
 	out := CustomImageCheck{Image: image, Backend: backend, BaseImage: baseImage}
 	if readErr != nil {
 		out.Contract = CheckImageLabels(nil, backend)
@@ -184,6 +206,136 @@ func CheckCustomImage(image, backend, baseImage string, labels map[string]string
 			"It is still supported; rebuild it FROM %s before a grain upgrade raises the minimum past it.", image, c.Summary, baseImage)
 	}
 	return out
+}
+
+// RevisionLabel is the OCI label grain's image builds stamp with the
+// commit they were built from.
+const RevisionLabel = "org.opencontainers.image.revision"
+
+// StaleStockPin says why image, configured in place of stamped (the stock
+// sandbox image this daemon's build names for the same backend), is
+// grain's own stock sandbox image from another build -- or "" when it is
+// not, or when that cannot be told.
+//
+// A deployment that copies the stock image into its own registry and
+// names it in sandbox_image, k8s_sandbox_image or k8s_granule_image
+// (us-docker.pkg.dev/<project>/grain/guest:sha-31d0973) has pinned the
+// build it copied: the setting wins over the stamp, so every later
+// upgrade moves the daemon and leaves its sandboxes behind, and the
+// contract label cannot catch it until the boundary itself changes. So
+// an image is judged a stock one by its repository's last two path
+// elements ("grain/guest", "grain/k8s-sandbox") matching stamped's,
+// whatever registry holds it, and stale when it pins a build -- a sha-<short> or vX.Y.Z tag, or
+// labels naming a revision -- that is not stamped's. A stamped image on a
+// moving tag (a dev build's "latest") names no build to compare with, and
+// an image built FROM a base image under a name of its own is a custom
+// image, which CheckCustomImage judges by its contract instead.
+func StaleStockPin(image, stamped string, labels map[string]string) string {
+	image, stamped = strings.TrimSpace(image), strings.TrimSpace(stamped)
+	if image == "" || stamped == "" || image == stamped {
+		return ""
+	}
+	if name := repositoryName(stamped); name == "" || repositoryName(image) != name {
+		return ""
+	}
+	want := imageTag(stamped)
+	if !isBuildTag(want) {
+		return ""
+	}
+	got := imageTag(image)
+	if isBuildTag(got) {
+		if got == want {
+			return ""
+		}
+		return staleStockPinWarning(image, got, stamped, want)
+	}
+	// A moving tag, or a bare digest: only the image's own revision
+	// label says which build it is.
+	rev := strings.TrimSpace(labels[RevisionLabel])
+	commit, ok := strings.CutPrefix(want, "sha-")
+	if rev == "" || !ok || !isHex(commit) {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(rev), strings.ToLower(commit)) {
+		return ""
+	}
+	return staleStockPinWarning(image, "revision "+shortRev(rev), stamped, want)
+}
+
+func staleStockPinWarning(image, build, stamped, want string) string {
+	return fmt.Sprintf("Sandbox image %s is grain's stock sandbox image from another build (%s), but this daemon "+
+		"is stamped for %s (%s). The setting pins that build: upgrades move the daemon and leave every sandbox on "+
+		"the older image, which can lack what this grain relies on inside a sandbox (such as the in-sandbox grain "+
+		"CLI). Clear the setting to follow the stamp, or name the %s tag.", image, build, stamped, want, want)
+}
+
+// repositoryName is the last two path elements of ref's repository --
+// "grain/guest" for us-docker.pkg.dev/p/grain/guest:sha-31d0973 -- which
+// scripts/release-images.sh publishes every stock image under
+// (<registry>/<owner>/<repository>/guest), whichever registry a copy is
+// in. "" for a repository of one element, which no stock image is.
+func repositoryName(ref string) string {
+	repo := ref
+	if at := strings.LastIndex(repo, "@"); at >= 0 {
+		repo = repo[:at]
+	}
+	if colon := strings.LastIndex(repo, ":"); colon > strings.LastIndex(repo, "/") {
+		repo = repo[:colon]
+	}
+	parts := strings.Split(repo, "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	return strings.Join(parts[len(parts)-2:], "/")
+}
+
+// imageTag is ref's tag, "" when it has none.
+func imageTag(ref string) string {
+	if at := strings.LastIndex(ref, "@"); at >= 0 {
+		ref = ref[:at]
+	}
+	if colon := strings.LastIndex(ref, ":"); colon > strings.LastIndex(ref, "/") {
+		return ref[colon+1:]
+	}
+	return ""
+}
+
+// isBuildTag is whether tag names one build: scripts/release-images.sh's
+// sha-<short> commit tags and v<major>.<minor>.<patch> release tags (with
+// any -rc.N suffix), as opposed to a moving tag such as latest or main.
+func isBuildTag(tag string) bool {
+	if commit, ok := strings.CutPrefix(tag, "sha-"); ok {
+		return len(commit) >= 7 && isHex(commit)
+	}
+	rest, ok := strings.CutPrefix(tag, "v")
+	if !ok {
+		return false
+	}
+	core, _, _ := strings.Cut(rest, "-")
+	parts := strings.Split(core, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, p := range parts {
+		if p == "" || strings.Trim(p, "0123456789") != "" {
+			return false
+		}
+	}
+	return true
+}
+
+func isHex(s string) bool {
+	if s == "" {
+		return false
+	}
+	return strings.Trim(strings.ToLower(s), "0123456789abcdef") == ""
+}
+
+func shortRev(rev string) string {
+	if len(rev) > 7 && isHex(rev) {
+		return rev[:7]
+	}
+	return rev
 }
 
 func granuleRangeNote(backend string) string {

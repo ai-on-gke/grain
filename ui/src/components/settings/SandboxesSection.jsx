@@ -30,7 +30,7 @@ import SettingsCard, {
 } from "./SettingsCard.jsx";
 
 const SANDBOX_BACKEND_LABELS = {
-  none: "Disabled (remote execution only)",
+  none: "None (control plane only)",
   host: "Host directories (no isolation)",
   container: "Local Docker containers",
   granule: "Granule virtual machines",
@@ -39,7 +39,7 @@ const SANDBOX_BACKEND_LABELS = {
 };
 
 const SANDBOX_BACKEND_ISOLATION = {
-  none: "No local or cluster sandboxes are created; tasks run only on remote executors.",
+  none: "This daemon runs grain's control plane only (settings, the inbox, the config repository) and creates no sandboxes, so no task runs here: each dispatch fails at sandbox acquisition and says so. Meant for tests and walkthroughs.",
   host: "Each run executes directly in a directory on the daemon machine with no container or VM isolation.",
   container:
     "Each run executes in an unprivileged local Docker container sharing the host kernel (no VM).",
@@ -51,7 +51,7 @@ const SANDBOX_BACKEND_ISOLATION = {
     "Each run boots a Granule microVM with its own guest kernel over /dev/kvm inside a privileged Kubernetes pod.",
 };
 
-// SandboxesSection is Settings → Sandboxes (docs/design/settings-panel.md
+// SandboxesSection is Settings → Sandboxes (design/design/settings-panel.design.md
 // §3.2). `s` is the page's useSettingsSection().
 export default function SandboxesSection({ s }) {
   const {
@@ -277,6 +277,23 @@ export default function SandboxesSection({ s }) {
             </option>
           ))}
         </TextField>
+        <TextField
+          key={`sessionSandboxIdleTtl-${settings.sessionSandboxIdleTtl || ""}`}
+          name="sessionSandboxIdleTtl"
+          // Config-managed, unlike the rest of this section: refused by
+          // the API while settings are locked (settings-mutability.spec.md D-1).
+          disabled={Boolean(s.configLocked)}
+          data-setting-id="sessionSandboxIdleTtl"
+          label="Session sandbox idle TTL"
+          helperText="how long an interactive chat or director session's sandbox (and in-process agent session) stays warm awaiting a reply after a turn ends before being released. A new message within this window continues in the same sandbox; the oldest idle session sandbox is evicted first under capacity pressure. Blank uses grain's default (30m); a negative duration (-1s) disables warm retention."
+          defaultValue={settings.sessionSandboxIdleTtl || ""}
+          placeholder={settings.sessionSandboxIdleTtlDefault || undefined}
+          onBlur={onTextBlur("sessionSandboxIdleTtl")}
+          onKeyDown={onEnterKey}
+          autoComplete="off"
+          fullWidth
+          margin="normal"
+        />
       </SettingsCard>
       <SettingsCard title="Sandbox budget" anchor="sandbox-budget">
         <TextField

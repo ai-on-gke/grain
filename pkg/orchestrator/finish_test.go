@@ -712,23 +712,26 @@ func TestProcessResultRelaysFullAssistantResponseWhenCommentEndsWithDots(t *test
 	}
 }
 
-// TestProcessResultPrefersFullAssistantResponseWhenMoreComplete tests that
-// even without an ellipsis, a significantly more detailed FinalText is preferred.
-func TestProcessResultPrefersFullAssistantResponseWhenMoreComplete(t *testing.T) {
+// TestProcessResultRelaysFiledCommentOnIssueOverLongerFinalText tests that
+// when comment_on_issue carries a complete (non-ellipsis) report, ProcessResult
+// relays that tool argument rather than overwriting it with a longer FinalText
+// emitted after the tool call returned.
+func TestProcessResultRelaysFiledCommentOnIssueOverLongerFinalText(t *testing.T) {
 	t.Parallel()
 	store, ctx := openStore(t)
 	_, client := newSim(t, "acme", "widgets", "main")
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	task := filedTask(t, ctx, store, "t1", repo)
 
-	fullReport := "Completed analysis.\n\nKey takeaways:\n1. Memory usage stabilized.\n2. Latency improved by 40%."
+	filed := "Nothing needed doing: the pipeline has not changed since 17:46Z."
+	chattyFinal := "I checked the pipeline changes and updated the handover. Tasks 1245 and 979 are still queued behind the main CI run."
 	result := &agent.Result{
-		FinalText: fullReport,
+		FinalText: chattyFinal,
 		ToolCalls: []agent.ToolCall{
 			{
 				Name: "comment_on_issue",
 				Arguments: map[string]any{
-					"comment": "Completed analysis.",
+					"comment": filed,
 				},
 			},
 		},
@@ -738,8 +741,40 @@ func TestProcessResultPrefersFullAssistantResponseWhenMoreComplete(t *testing.T)
 	}
 
 	got := commentBodies(t, ctx, store, task.ID)
-	if len(got) != 1 || got[0] != fullReport {
-		t.Fatalf("conversation = %q, want full report %q", got, fullReport)
+	if len(got) != 1 || got[0] != filed {
+		t.Fatalf("conversation = %q, want filed comment_on_issue %q", got, filed)
+	}
+}
+
+// TestProcessResultDoesNotReplaceTruncatedCommentWithShorterFinalText tests
+// that a comment ending in an ellipsis is not replaced by a shorter FinalText
+// sign-off like "Done.".
+func TestProcessResultDoesNotReplaceTruncatedCommentWithShorterFinalText(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	_, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	task := filedTask(t, ctx, store, "t1", repo)
+
+	truncatedButDetailed := "Investigation summary: Found that the database connection pool was exhausted…"
+	result := &agent.Result{
+		FinalText: "Done.",
+		ToolCalls: []agent.ToolCall{
+			{
+				Name: "comment_on_issue",
+				Arguments: map[string]any{
+					"comment": truncatedButDetailed,
+				},
+			},
+		},
+	}
+	if err := orchestrator.ProcessResult(ctx, store, client, task, result, "t1-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult: %v", err)
+	}
+
+	got := commentBodies(t, ctx, store, task.ID)
+	if len(got) != 1 || got[0] != truncatedButDetailed {
+		t.Fatalf("conversation = %q, want %q", got, truncatedButDetailed)
 	}
 }
 
@@ -1962,6 +1997,9 @@ func TestProcessResultDoesNotExplainAutoMergeAProposalOptedOutOf(t *testing.T) {
 	}
 	if proposal.AutoMerge {
 		t.Error("AutoMerge = true, want false -- the run asked for false")
+	}
+	if !model.AutoMergeDeclined(proposal) {
+		t.Error("the run's explicit auto_merge: false was not made sticky (model.DeclineAutoMerge)")
 	}
 	if proposal.Body != "unrelated, review it" {
 		t.Errorf("proposal body = %q, want the run's own words alone", proposal.Body)

@@ -1129,6 +1129,29 @@ func TestSettingsRejectionsAre400(t *testing.T) {
 	}
 }
 
+// A cleared Poll interval box (Settings → Engine) is grain's default,
+// the one its placeholder shows, not the 400 `time: invalid duration ""`
+// it was (2026-11-02 walkthrough).
+func TestSettingsBlankPollIntervalIsTheDefault(t *testing.T) {
+	t.Parallel()
+	srv, _ := testServer(t)
+	if rec := do(t, srv, http.MethodPut, "/api/settings", `{"pollInterval":"25s","githubHost":"github.com"}`); rec.Code != http.StatusOK {
+		t.Fatalf("set 25s: status = %d: %s", rec.Code, rec.Body)
+	}
+	rec := do(t, srv, http.MethodPut, "/api/settings", `{"pollInterval":"  "}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear: status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	got := decode[ui.Settings](t, do(t, srv, http.MethodGet, "/api/settings", ""))
+	want := model.DefaultPollInterval.String()
+	if got.PollInterval != want || got.PollIntervalDefault != want {
+		t.Fatalf("pollInterval = %q (default %q), want both %q", got.PollInterval, got.PollIntervalDefault, want)
+	}
+	if rec := do(t, srv, http.MethodPut, "/api/settings", `{"pollInterval":"0s"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("0s: status = %d, want 400: %s", rec.Code, rec.Body)
+	}
+}
+
 // The build stamp rides on /api/config (version.go) so the sidebar can
 // print which grain is answering. Which of the two branches below runs
 // is a property of how this test binary was built, not of the server:
@@ -1496,7 +1519,7 @@ func TestReconcilerDownReportsConfiguredFunc(t *testing.T) {
 
 // A daemon on its way down for a restart says so on the call the UI
 // polls, so the banner for the gap that follows can say "restarting"
-// (docs/non-disruptive-upgrade.md, Stage 1).
+// (design/design/non-disruptive-upgrade.design.md, Stage 1).
 func TestConfigReportsRestarting(t *testing.T) {
 	t.Parallel()
 	srv, _ := testServer(t)
@@ -1604,6 +1627,30 @@ func TestRestartWatchAnswersAtOnceWhenItHasNothingToWaitFor(t *testing.T) {
 	rec = do(t, srv, http.MethodGet, "/api/restart-watch", "")
 	if got := decode[map[string]any](t, rec); got["restarting"] != true {
 		t.Fatalf("restarting = %v while restarting, want true", got["restarting"])
+	}
+}
+
+// ?quick=1 is the frontend asking whether grain is answering again after
+// an ask of its own failed: it is answered at once even where the watch
+// would otherwise be held (grain/task-2258).
+func TestRestartWatchQuickDoesNotHold(t *testing.T) {
+	t.Parallel()
+	client, _, _ := testClient(t)
+	client.Config.Restarting = func() bool { return false }
+	client.Config.ShutdownStarted = make(chan struct{})
+	srv := ui.NewServerWithClient(client)
+	done := make(chan map[string]any, 1)
+	go func() {
+		rec := do(t, srv, http.MethodGet, "/api/restart-watch?quick=1", "")
+		done <- decode[map[string]any](t, rec)
+	}()
+	select {
+	case got := <-done:
+		if got["restarting"] != false {
+			t.Fatalf("restarting = %v, want false", got["restarting"])
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("?quick=1 was held, want an answer at once")
 	}
 }
 

@@ -179,9 +179,13 @@ export default function PackageCachePanel({ cache, showError, onFlushed }) {
           </Box>
         ))}
       </Stack>
+      {/* Named for the cache it empties: System → Caches has an Actions
+          cache "Flush the whole cache" below this one, and two buttons
+          of one name are one button twice to a screen reader. */}
       <Button
         size="small"
         sx={{ mt: 0.5 }}
+        aria-label="Flush the whole proxy cache"
         disabled={flushing !== "" || total === 0}
         onClick={() => flush("")}
       >

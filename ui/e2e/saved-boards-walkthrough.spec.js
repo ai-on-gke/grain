@@ -502,6 +502,25 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     await page.getByRole("option", { name: "By state" }).click();
     await expect(page.locator(".gantt-lane-title").first()).toBeVisible();
 
+    // Both asked states share one "Asked" lane, drawn straight after
+    // Running as the rail and the kanban order it -- not below Closed,
+    // where ranking its "asked" key against the raw states put it.
+    const laneTitles = (
+      await page.locator(".gantt-lane-title").allInnerTexts()
+    ).map((t) => t.trim().toLowerCase());
+    const asked = laneTitles.indexOf("asked");
+    expect(asked, laneTitles.join(", ")).toBe(
+      laneTitles.indexOf("running") + 1,
+    );
+    expect(laneTitles.at(-1), laneTitles.join(", ")).toBe("closed");
+    const askedBox = await page
+      .locator(".gantt-lane-header", { hasText: /^asked/i })
+      .boundingBox();
+    const closedBox = await page
+      .locator(".gantt-lane-header", { hasText: /^closed/i })
+      .boundingBox();
+    expect(askedBox.y).toBeLessThan(closedBox.y);
+
     // Open task detail overlay from Gantt bar click
     await runningRow.click();
     await expect(page.locator(".detail-header")).toContainText(
@@ -1176,6 +1195,43 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     await expect(page).toHaveURL(/\/tasks\/8$/);
   });
 
+  test("5d. A board whose query names a state that does not exist says so on its chip", async ({
+    page,
+  }) => {
+    // grain/task-2401: `waiting` is the label of the state `queued`, and
+    // a board query written from the label drew the chip "state is any
+    // of running, waiting" -- word for word what `queued` draws -- over
+    // a tree missing every waiting task.
+    const stamp = Date.now();
+    const board = await seedOne(page, "/api/boards", {
+      name: `WT Unknown State ${stamp}`,
+      kind: "tree",
+      query: "f=state:any:running|waiting",
+    });
+    seededBoards.push(board.id);
+
+    await page.goto(`/boards/${board.id}`);
+    const chip = page.locator(".narrowing-chips .MuiChip-root").first();
+    await expect(chip).toHaveText(
+      "State is any of Running, “waiting” (unknown)",
+      {
+        ignoreCase: true,
+      },
+    );
+    await expect(chip).toHaveClass(/MuiChip-colorWarning/);
+    await expect(chip).toHaveAttribute(
+      "title",
+      /“waiting” is not a value State has/,
+    );
+
+    // The state the label belongs to is a known value, and not flagged.
+    await page.goto(`/boards/${board.id}?f=state:any:running|queued`);
+    await expect(chip).toHaveText("State is any of Running, Waiting", {
+      ignoreCase: true,
+    });
+    await expect(chip).not.toHaveClass(/MuiChip-colorWarning/);
+  });
+
   test("4b. Back from a reloaded task returns to the board it was opened from", async ({
     page,
   }) => {
@@ -1354,6 +1410,29 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     await expect(desc).toContainText("- kind: list");
     await expect(desc).not.toContainText("see the panels section below");
     await expect(desc).not.toContainText("see the report section below");
+  });
+
+  test("2c. A board's own columns that collect one asked state name the other in the no-column note", async ({
+    page,
+  }) => {
+    // 2026-11-01 walkthrough: a "Talking" column of awaiting_reply cards
+    // sat above "N tasks in no column (Asked, …)", because the demo's
+    // awaiting_submit tasks were the ones left off and both states read
+    // "Asked".
+    const board = await seedOne(page, "/api/boards", {
+      name: `WT Talking ${Date.now()}`,
+      kind: "kanban",
+      columns: [{ name: "Talking", states: ["awaiting_reply"] }],
+    });
+    seededBoards.push(board.id);
+
+    await page.goto(`/boards/${board.id}`);
+    await expect(
+      page.locator(".board-column", { hasText: "Talking" }),
+    ).toBeVisible();
+    const note = page.locator(".board-hidden-note");
+    await expect(note).toContainText("Asked to submit");
+    await expect(note).not.toContainText(/[(,] Asked[,)]|\(Asked[,)]/);
   });
 
   test("8. Deletion safety and throwaway cleanup", async ({ page }) => {

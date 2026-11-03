@@ -30,6 +30,7 @@ import {
   Typography,
 } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
+import InfoPopover from "./InfoPopover.jsx";
 import {
   deref,
   fieldKind,
@@ -284,7 +285,7 @@ function SecretField({
     error ||
     (state === "set"
       ? "Stored in the secrets store. Type a new value to replace it."
-      : schema?.description || "Stored only in the secrets store.");
+      : "Stored only in the secrets store.");
   return (
     <Box
       sx={{ display: "flex", gap: 1, alignItems: "flex-start" }}
@@ -302,6 +303,11 @@ function SecretField({
         helperText={help}
         placeholder={state === "set" ? "••••••••" : ""}
         onChange={(e) => onChange(e.target.value)}
+      />
+      <InfoPopover
+        title={schema?.description}
+        label={schema?.title || name}
+        sx={{ mt: 1 }}
       />
       <Chip
         size="small"
@@ -349,6 +355,10 @@ function ManagedSecretField({
         }}
       >
         <Typography variant="body2">{schema?.title || name}</Typography>
+        <InfoPopover
+          title={schema?.description}
+          label={schema?.title || name}
+        />
         <Chip
           size="small"
           variant="outlined"
@@ -375,6 +385,7 @@ function ManagedSecretField({
           schema={{
             ...schema,
             title: `Override ${schema?.title || name}`,
+            description: undefined,
           }}
           state={state}
           value={value}
@@ -400,9 +411,10 @@ function Field({
 }) {
   const kind = fieldKind(schema);
   const error = errors[path];
-  const help = error || schema?.description || "";
+  const help = error || "";
   const id = `${idPrefix}-${path.replace(/[^A-Za-z0-9_-]/g, "-")}`;
   const lbl = label(name, schema, required);
+  const infoTitle = schema?.title || name;
   switch (kind) {
     case "choice": {
       const options = "enum" in schema ? schema.enum : [schema.const];
@@ -412,95 +424,115 @@ function Field({
         (o) => JSON.stringify(o) === JSON.stringify(effective),
       );
       return (
-        <FormControl
-          size="small"
-          fullWidth
-          error={Boolean(error)}
-          required={required}
-        >
-          <InputLabel id={`${id}-label`}>
-            {label(name, schema, false)}
-          </InputLabel>
-          <Select
-            labelId={`${id}-label`}
-            id={id}
-            label={label(name, schema, false)}
-            value={index < 0 ? "" : String(index)}
-            onChange={(e) =>
-              onChange(
-                e.target.value === ""
-                  ? undefined
-                  : options[Number(e.target.value)],
-              )
-            }
-            inputProps={{ "data-arg": path }}
+        <Box sx={{ display: "flex", alignItems: "flex-start", gap: 0.5 }}>
+          <FormControl
+            size="small"
+            fullWidth
+            error={Boolean(error)}
+            required={required}
           >
-            {!required && (
-              <MenuItem value="">
-                <em>Not set</em>
-              </MenuItem>
-            )}
-            {options.map((o, i) => (
-              <MenuItem key={i} value={String(i)}>
-                {typeof o === "string" ? o : JSON.stringify(o)}
-              </MenuItem>
-            ))}
-          </Select>
-          {help && <FormHelperText>{help}</FormHelperText>}
-        </FormControl>
+            <InputLabel id={`${id}-label`}>
+              {label(name, schema, false)}
+            </InputLabel>
+            <Select
+              labelId={`${id}-label`}
+              id={id}
+              label={label(name, schema, false)}
+              value={index < 0 ? "" : String(index)}
+              onChange={(e) =>
+                onChange(
+                  e.target.value === ""
+                    ? undefined
+                    : options[Number(e.target.value)],
+                )
+              }
+              inputProps={{ "data-arg": path }}
+            >
+              {!required && (
+                <MenuItem value="">
+                  <em>Not set</em>
+                </MenuItem>
+              )}
+              {options.map((o, i) => (
+                <MenuItem key={i} value={String(i)}>
+                  {typeof o === "string" ? o : JSON.stringify(o)}
+                </MenuItem>
+              ))}
+            </Select>
+            {help && <FormHelperText>{help}</FormHelperText>}
+          </FormControl>
+          <InfoPopover
+            title={schema?.description}
+            label={infoTitle}
+            sx={{ mt: 1 }}
+          />
+        </Box>
       );
     }
     case "boolean":
       return (
         <FormControl error={Boolean(error)}>
-          <FormControlLabel
-            control={
-              <Switch
-                id={id}
-                checked={value === true}
-                onChange={(e) => onChange(e.target.checked)}
-                inputProps={{ "data-arg": path, role: "switch" }}
-              />
-            }
-            label={lbl}
-          />
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+            <FormControlLabel
+              sx={{ mr: 0 }}
+              control={
+                <Switch
+                  id={id}
+                  checked={value === true}
+                  onChange={(e) => onChange(e.target.checked)}
+                  inputProps={{ "data-arg": path, role: "switch" }}
+                />
+              }
+              label={lbl}
+            />
+            <InfoPopover title={schema?.description} label={infoTitle} />
+          </Box>
           {help && <FormHelperText sx={{ mt: -0.5 }}>{help}</FormHelperText>}
         </FormControl>
       );
     case "string":
       return (
-        <TextField
-          id={id}
-          size="small"
-          fullWidth
-          multiline={isMultiline(schema)}
-          minRows={
-            schema.format === "code" ? 6 : isMultiline(schema) ? 3 : undefined
-          }
-          maxRows={isMultiline(schema) ? 24 : undefined}
-          sx={
-            schema.format === "code"
-              ? { "& textarea": { fontFamily: "monospace", fontSize: 13 } }
-              : undefined
-          }
-          label={lbl}
-          value={value ?? ""}
-          error={Boolean(error)}
-          helperText={
-            help || (schema.pattern ? `Pattern: ${schema.pattern}` : " ")
-          }
-          placeholder={schema.pattern ? schema.pattern : undefined}
-          inputProps={{ "data-arg": path, maxLength: undefined }}
-          onChange={(e) =>
-            onChange(e.target.value === "" ? undefined : e.target.value)
-          }
-        />
+        <Box sx={{ display: "flex", alignItems: "flex-start", gap: 0.5 }}>
+          <TextField
+            id={id}
+            size="small"
+            fullWidth
+            multiline={isMultiline(schema)}
+            minRows={
+              schema.format === "code" ? 6 : isMultiline(schema) ? 3 : undefined
+            }
+            maxRows={isMultiline(schema) ? 24 : undefined}
+            sx={
+              schema.format === "code"
+                ? { "& textarea": { fontFamily: "monospace", fontSize: 13 } }
+                : undefined
+            }
+            label={lbl}
+            value={value ?? ""}
+            error={Boolean(error)}
+            helperText={
+              help ||
+              (schema.pattern ? `Pattern: ${schema.pattern}` : undefined)
+            }
+            placeholder={schema.pattern ? schema.pattern : undefined}
+            inputProps={{ "data-arg": path, maxLength: undefined }}
+            onChange={(e) =>
+              onChange(e.target.value === "" ? undefined : e.target.value)
+            }
+          />
+          <InfoPopover
+            title={schema?.description}
+            label={infoTitle}
+            sx={{ mt: 1 }}
+          />
+        </Box>
       );
     case "number":
       return (
         <NumberField
           id={id}
           lbl={lbl}
+          infoTitle={infoTitle}
           schema={schema}
           value={value}
           onChange={onChange}
@@ -522,6 +554,7 @@ function Field({
           path={path}
           idPrefix={idPrefix}
           lbl={lbl}
+          infoTitle={infoTitle}
           help={help}
         />
       );
@@ -538,6 +571,7 @@ function Field({
             path={path}
             id={id}
             lbl={lbl}
+            infoTitle={infoTitle}
             help={help}
           />
         );
@@ -554,19 +588,12 @@ function Field({
             pb: 1.5,
           }}
         >
-          <Typography variant="body2" sx={{ mb: 1, fontWeight: 500 }}>
-            {lbl}
-          </Typography>
-          {schema.description && (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              component="p"
-              sx={{ mb: 1 }}
-            >
-              {schema.description}
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 1 }}>
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+              {lbl}
             </Typography>
-          )}
+            <InfoPopover title={schema.description} label={infoTitle} />
+          </Box>
           <ObjectFields
             root={root}
             schema={schema}
@@ -593,6 +620,7 @@ function Field({
           path={path}
           idPrefix={idPrefix}
           lbl={lbl}
+          infoTitle={infoTitle}
           help={help}
         />
       );
@@ -603,7 +631,17 @@ function Field({
 
 // NumberField keeps its own text so "1." or "-" can be typed on the way
 // to a number.
-function NumberField({ id, lbl, schema, value, onChange, error, help, path }) {
+function NumberField({
+  id,
+  lbl,
+  infoTitle,
+  schema,
+  value,
+  onChange,
+  error,
+  help,
+  path,
+}) {
   const [text, setText] = useState(value === undefined ? "" : String(value));
   useEffect(() => {
     if (value === undefined ? text !== "" : Number(text) !== value)
@@ -619,28 +657,37 @@ function NumberField({ id, lbl, schema, value, onChange, error, help, path }) {
     .filter(Boolean)
     .join(", ");
   return (
-    <TextField
-      id={id}
-      size="small"
-      fullWidth
-      type="number"
-      label={lbl}
-      value={text}
-      error={Boolean(error)}
-      helperText={[help, !error && bounds].filter(Boolean).join(" · ") || " "}
-      inputProps={{
-        "data-arg": path,
-        step: schema.type === "integer" ? 1 : "any",
-        min: schema.minimum,
-        max: schema.maximum,
-      }}
-      onChange={(e) => {
-        setText(e.target.value);
-        if (e.target.value === "") onChange(undefined);
-        else if (!Number.isNaN(Number(e.target.value)))
-          onChange(Number(e.target.value));
-      }}
-    />
+    <Box sx={{ display: "flex", alignItems: "flex-start", gap: 0.5 }}>
+      <TextField
+        id={id}
+        size="small"
+        fullWidth
+        type="number"
+        label={lbl}
+        value={text}
+        error={Boolean(error)}
+        helperText={
+          [help, !error && bounds].filter(Boolean).join(" · ") || undefined
+        }
+        inputProps={{
+          "data-arg": path,
+          step: schema.type === "integer" ? 1 : "any",
+          min: schema.minimum,
+          max: schema.maximum,
+        }}
+        onChange={(e) => {
+          setText(e.target.value);
+          if (e.target.value === "") onChange(undefined);
+          else if (!Number.isNaN(Number(e.target.value)))
+            onChange(Number(e.target.value));
+        }}
+      />
+      <InfoPopover
+        title={schema?.description}
+        label={infoTitle}
+        sx={{ mt: 1 }}
+      />
+    </Box>
   );
 }
 
@@ -654,6 +701,7 @@ function ArrayField({
   path,
   idPrefix,
   lbl,
+  infoTitle,
   help,
 }) {
   const items = Array.isArray(value) ? value : [];
@@ -667,6 +715,8 @@ function ArrayField({
     .filter(Boolean)
     .join(", ");
   const update = (next) => onChange(next);
+  const helper =
+    errors[path] || [help, constraints].filter(Boolean).join(" · ");
   return (
     <Box
       role="group"
@@ -681,9 +731,12 @@ function ArrayField({
         pb: 1,
       }}
     >
-      <Typography variant="body2" sx={{ mb: 1, fontWeight: 500 }}>
-        {lbl}
-      </Typography>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 1 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+          {lbl}
+        </Typography>
+        <InfoPopover title={schema?.description} label={infoTitle} />
+      </Box>
       {items.map((item, i) => (
         <Box
           key={i}
@@ -736,9 +789,9 @@ function ArrayField({
       >
         Add {name}
       </Button>
-      <FormHelperText error={Boolean(errors[path])}>
-        {errors[path] || [help, constraints].filter(Boolean).join(" · ")}
-      </FormHelperText>
+      {helper && (
+        <FormHelperText error={Boolean(errors[path])}>{helper}</FormHelperText>
+      )}
     </Box>
   );
 }
@@ -757,6 +810,7 @@ function StringMapField({
   path,
   id,
   lbl,
+  infoTitle,
   help,
 }) {
   const toRows = (v) => Object.entries(v || {}).map(([k, x]) => [k, x]);
@@ -773,6 +827,7 @@ function StringMapField({
     const obj = Object.fromEntries(next.filter(([k]) => k !== ""));
     onChange(Object.keys(obj).length === 0 && !required ? undefined : obj);
   };
+  const helper = errors[path] || help;
   return (
     <Box
       role="group"
@@ -787,9 +842,15 @@ function StringMapField({
         pb: 1,
       }}
     >
-      <Typography variant="body2" sx={{ mb: 1, fontWeight: 500 }}>
-        {lbl}
-      </Typography>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mb: 1 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+          {lbl}
+        </Typography>
+        <InfoPopover
+          title={schema?.description || valueSchema?.description}
+          label={infoTitle}
+        />
+      </Box>
       {rows.map(([k, v], i) => {
         const rowError = k ? errors[path ? `${path}.${k}` : k] : "";
         const dup = k !== "" && rows.findIndex(([n]) => n === k) !== i;
@@ -849,9 +910,9 @@ function StringMapField({
       <Button size="small" onClick={() => update([...rows, ["", ""]])}>
         Add entry
       </Button>
-      <FormHelperText error={Boolean(errors[path])}>
-        {errors[path] || help}
-      </FormHelperText>
+      {helper && (
+        <FormHelperText error={Boolean(errors[path])}>{helper}</FormHelperText>
+      )}
     </Box>
   );
 }
@@ -867,6 +928,7 @@ function VariantField({
   path,
   idPrefix,
   lbl,
+  infoTitle,
   help,
 }) {
   const options = (schema.oneOf || schema.anyOf).map((s) => deref(root, s));
@@ -879,27 +941,38 @@ function VariantField({
   const sub = options[picked];
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
-      <FormControl size="small" fullWidth>
-        <InputLabel id={`${idPrefix}-${path}-variant-label`}>{lbl}</InputLabel>
-        <Select
-          labelId={`${idPrefix}-${path}-variant-label`}
-          label={lbl}
-          value={String(picked)}
-          inputProps={{ "data-arg-variant": path }}
-          onChange={(e) => {
-            const i = Number(e.target.value);
-            setPicked(i);
-            onChange(initialValue(root, options[i]));
-          }}
-        >
-          {options.map((o, i) => (
-            <MenuItem key={i} value={String(i)}>
-              {o?.title || o?.description || `${o?.type || "option"} ${i + 1}`}
-            </MenuItem>
-          ))}
-        </Select>
-        {help && <FormHelperText>{help}</FormHelperText>}
-      </FormControl>
+      <Box sx={{ display: "flex", alignItems: "flex-start", gap: 0.5 }}>
+        <FormControl size="small" fullWidth>
+          <InputLabel id={`${idPrefix}-${path}-variant-label`}>
+            {lbl}
+          </InputLabel>
+          <Select
+            labelId={`${idPrefix}-${path}-variant-label`}
+            label={lbl}
+            value={String(picked)}
+            inputProps={{ "data-arg-variant": path }}
+            onChange={(e) => {
+              const i = Number(e.target.value);
+              setPicked(i);
+              onChange(initialValue(root, options[i]));
+            }}
+          >
+            {options.map((o, i) => (
+              <MenuItem key={i} value={String(i)}>
+                {o?.title ||
+                  o?.description ||
+                  `${o?.type || "option"} ${i + 1}`}
+              </MenuItem>
+            ))}
+          </Select>
+          {help && <FormHelperText>{help}</FormHelperText>}
+        </FormControl>
+        <InfoPopover
+          title={schema?.description}
+          label={infoTitle}
+          sx={{ mt: 1 }}
+        />
+      </Box>
       <Field
         name={sub?.title || name}
         root={root}

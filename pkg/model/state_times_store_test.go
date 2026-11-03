@@ -49,7 +49,7 @@ func TestStateTimesInSQLAgreeWithStateTimesInGo(t *testing.T) {
 		}
 		return tk
 	}
-	ids := []string{"never", "again", "running", "done", "retried", "undeferred"}
+	ids := []string{"never", "again", "running", "done", "retried", "undeferred", "waking"}
 	for _, id := range ids {
 		if err := store.PutTask(ctx, mk(id, id == "done")); err != nil {
 			t.Fatalf("filing %s: %v", id, err)
@@ -99,6 +99,12 @@ func TestStateTimesInSQLAgreeWithStateTimesInGo(t *testing.T) {
 	if err := store.SetDeferred(ctx, "undeferred", nil, nil, pickedUp); err != nil {
 		t.Fatalf("picking it back up: %v", err)
 	}
+	// And put aside with a wake time, which is when its wait on the
+	// orchestrator begins.
+	wakeAt := at.Add(30 * 24 * time.Hour)
+	if err := store.SetDeferred(ctx, "waking", &deferredAt, &wakeAt, deferredAt); err != nil {
+		t.Fatalf("deferring with a wake time: %v", err)
+	}
 
 	inSQL, err := store.StateTimes(ctx)
 	if err != nil {
@@ -143,6 +149,11 @@ func TestStateTimesInSQLAgreeWithStateTimesInGo(t *testing.T) {
 		if id == "undeferred" {
 			if since := inGo.Since(state); since == nil || !since.Equal(pickedUp) {
 				t.Errorf("the undeferred task is queued since %v, want the undeferral %v", since, pickedUp)
+			}
+		}
+		if id == "waking" {
+			if since := inGo.Since(state); state != model.StateDeferred || since == nil || !since.Equal(wakeAt) {
+				t.Errorf("the deferral with a wake time is %s since %v, want deferred since %v", state, since, wakeAt)
 			}
 		}
 	}

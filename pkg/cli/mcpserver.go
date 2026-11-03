@@ -76,8 +76,14 @@
 // -- a whole turn of a conversation inside one tool call, rather than one
 // dispatch per thing said. The waiting is done here, by polling the same
 // daemon (daemonChat), which is what pkg/capability/selfrepair's Confirm
-// has always needed and never had: a route to the conversation from a
+// had always needed and never had: a route to the conversation from a
 // process holding no store handle.
+//
+// -interactive with -grant naming grain#host-exec (or the retired
+// self-repair) adds run_host_command over that route: every command it
+// is asked to run is posted into the task's chat first, and runs only
+// once a person there replies approve (daemonHostExecConfirm). A run
+// that is not -interactive is not given it, since nobody would answer.
 //
 // -propose-repo names a repository this deployment works in, once per
 // repository, and adds no tool at all: it narrows one that is always
@@ -136,10 +142,10 @@
 // are markdown embedded in this very binary, so this process is already
 // holding everything the tools read.
 //
-// Both are read-only, which is why both can be served from here at all.
-// pkg/capability/selfrepair cannot follow: its one tool blocks on a
-// human's reply in the task's own chat, which needs the store handle
-// this process deliberately does not have.
+// Both are read-only, which is why both can be served from here with no
+// further hop. pkg/capability/selfrepair's run_host_command is served
+// too, but only beside chat (see -interactive above), because its one
+// tool blocks on a human's reply in the task's own chat.
 //
 // -run-deadline is the moment grain will cancel the run this process
 // serves. It adds no tool: it makes every tool result carry how much
@@ -156,11 +162,9 @@
 package cli
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
@@ -203,13 +207,6 @@ func grantedTools(grants daemon.GrantNames, srcDir, secretsDir, taskID string) [
 }
 
 func mcpserver(args []string) {
-	if sock := os.Getenv("GRAIN_EXECUTOR_SOCK"); sock != "" {
-		if err := tunnelMCPServer(sock, args); err != nil {
-			fmt.Fprintf(os.Stderr, "grain mcpserver tunnel: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	}
 	if err := serveMCPServer(os.Stdin, os.Stdout, args); err != nil {
 		if !errors.Is(err, io.EOF) {
 			fmt.Fprintf(os.Stderr, "grain mcpserver: %v\n", err)
@@ -218,37 +215,6 @@ func mcpserver(args []string) {
 	}
 }
 
-func tunnelMCPServer(sock string, args []string) error {
-	return tunnelMCPServerIO(sock, args, os.Stdin, os.Stdout)
-}
-
-// tunnelMCPServerIO bridges in and out to the executor's MCP tunnel. It
-// returns once grain's side of the tunnel is finished, not when in is: a
-// client that writes its last request and closes its end -- `echo req |
-// grain mcpserver` -- is still owed the answer, which arrives after in has
-// hit EOF. Returning on whichever copy finished first dropped that answer
-// while grain still acted on the request.
-func tunnelMCPServerIO(sock string, args []string, in io.Reader, out io.Writer) error {
-	conn, err := net.Dial("unix", sock)
-	if err != nil {
-		return fmt.Errorf("dialing executor MCP tunnel at %s: %w", sock, err)
-	}
-	defer conn.Close()
-
-	if err := json.NewEncoder(conn).Encode(args); err != nil {
-		return fmt.Errorf("sending args to executor tunnel: %w", err)
-	}
-
-	go func() {
-		_, _ = io.Copy(conn, in)
-		if cw, ok := conn.(interface{ CloseWrite() error }); ok {
-			_ = cw.CloseWrite()
-		}
-	}()
-	_, err = io.Copy(out, conn)
-	return err
-}
-
 func serveMCPServer(in io.Reader, out io.Writer, args []string) error {
-	return daemon.ServeMCPServerPinned(in, out, args, nil)
+	return daemon.ServeMCPServer(in, out, args)
 }

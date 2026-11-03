@@ -14,6 +14,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Alert, Button, CircularProgress, TextField } from "@mui/material";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import api from "../api.js";
 import LinkedNote from "../linkedNote.jsx";
 import { linkTaskRefs, taskRefFromHref } from "../taskRefs.js";
@@ -36,7 +37,12 @@ import ClChip from "./ClChip.jsx";
 import PresubmitBadge from "./PresubmitBadge.jsx";
 import ReviewBadge from "./ClReview.jsx";
 import { BehindBadge } from "./ClSubmit.jsx";
-import { STATE_SYNC_TITLE, muiSeverity, stateSyncSentence } from "../alerts.js";
+import {
+  muiSeverity,
+  stateSyncImpact,
+  stateSyncSentence,
+  stateSyncTitle,
+} from "../alerts.js";
 import {
   ackNotification,
   investigateNotification,
@@ -89,20 +95,118 @@ function usePendingLocalScripts() {
   return [pending, () => setTick((n) => n + 1)];
 }
 
+// INBOX_COLLAPSED_STORAGE_KEY remembers which inbox sections this browser
+// has folded or unfolded, keyed by stable section id rather than display
+// title. Only choices that differ from a section's default are kept.
+export const INBOX_COLLAPSED_STORAGE_KEY = "grain.inbox.collapsed";
+
+function readCollapsedMap() {
+  try {
+    const raw = localStorage.getItem(INBOX_COLLAPSED_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+export function useCollapsed(sectionId, defaultCollapsed = false) {
+  const [collapsed, setCollapsed] = useState(() => {
+    const stored = readCollapsedMap()[sectionId];
+    return typeof stored === "boolean" ? stored : Boolean(defaultCollapsed);
+  });
+  const toggle = () => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        const map = readCollapsedMap();
+        if (next === Boolean(defaultCollapsed)) {
+          delete map[sectionId];
+        } else {
+          map[sectionId] = next;
+        }
+        if (Object.keys(map).length === 0) {
+          localStorage.removeItem(INBOX_COLLAPSED_STORAGE_KEY);
+        } else {
+          localStorage.setItem(
+            INBOX_COLLAPSED_STORAGE_KEY,
+            JSON.stringify(map),
+          );
+        }
+      } catch {
+        // Storage unavailable: the choice still applies until the page reloads.
+      }
+      return next;
+    });
+  };
+  return [collapsed, toggle];
+}
+
+// CollapsibleInboxGroup wraps every section on the Inbox page so each
+// heading is a button with a chevron, the section title and its count,
+// and folding a section hides its rows while keeping its heading and
+// count on screen.
+export function CollapsibleInboxGroup({
+  sectionId,
+  title,
+  count,
+  hint,
+  actions,
+  defaultCollapsed = false,
+  testId,
+  children,
+}) {
+  const [collapsed, toggle] = useCollapsed(sectionId, defaultCollapsed);
+  const bodyId = `inbox-group-${sectionId}`;
+  return (
+    <section
+      className={`inbox-group${collapsed ? " inbox-group-collapsed" : ""}`}
+      data-testid={testId}
+      data-section-id={sectionId}
+    >
+      <div className="inbox-group-header">
+        <button
+          type="button"
+          className="inbox-group-toggle"
+          aria-expanded={!collapsed}
+          aria-controls={bodyId}
+          onClick={toggle}
+        >
+          <ExpandMoreIcon
+            fontSize="small"
+            className="inbox-group-chevron"
+            aria-hidden="true"
+          />
+          <h3>{title}</h3>
+          <span className="count">{count}</span>
+        </button>
+        {!collapsed && actions && (
+          <div className="inbox-group-actions">{actions}</div>
+        )}
+        {!collapsed && hint && <p className="inbox-group-hint">{hint}</p>}
+      </div>
+      <div id={bodyId} className="inbox-group-body" hidden={collapsed}>
+        {!collapsed && children}
+      </div>
+    </section>
+  );
+}
+
 // LocalScriptsGroup is the inbox's group of waiting local-script calls,
 // each with Approve and Deny on the row and its task one click away.
 function LocalScriptsGroup({ pending, onAct, onOpenTask, reload }) {
   if (pending.length === 0) return null;
   return (
-    <section className="inbox-group" key="local-scripts">
-      <div className="inbox-group-header">
-        <h3>Local scripts waiting for approval</h3>
-        <span className="count">{pending.length}</span>
-        <p className="inbox-group-hint">
-          A run asks to run a script on the node host. It waits until somebody
-          approves or denies the call, or until the script&apos;s timeout.
-        </p>
-      </div>
+    <CollapsibleInboxGroup
+      key="local-scripts"
+      sectionId="local-scripts"
+      title="Local scripts waiting for approval"
+      count={pending.length}
+      hint="A run asks to run a script on the node host. It waits until somebody approves or denies the call, or until the script's timeout."
+    >
       <ul className="task-list">
         {pending.map((a) => (
           <li className="inbox-item" key={a.id}>
@@ -121,7 +225,7 @@ function LocalScriptsGroup({ pending, onAct, onOpenTask, reload }) {
           </li>
         ))}
       </ul>
-    </section>
+    </CollapsibleInboxGroup>
   );
 }
 
@@ -448,8 +552,9 @@ const GROUPS = [
   // on the queue longer than the whole of that queue's own deadlines.
   //
   // t.stall is the whole of the test, and it is only ever set for the
-  // three states grain itself drives (model.StateTimes.Since), so the
-  // only tasks this can take from a group above are completed ones --
+  // three states grain itself drives and for a deferral whose wake time
+  // has passed (model.StateTimes.Since, orchestrator's deferredWake), so
+  // the only tasks this can take from a group above are completed ones --
   // which merge_blocked and merge_stalled both claim first, and rightly:
   // where this says only "'completed' has stood too long", they say
   // which state of the merge cycle it is standing in and offer the pull
@@ -558,22 +663,23 @@ const GROUPS = [
 // StateSyncGroup is the inbox row for a deployment admin when this
 // deployment's settings have stopped reaching its state repository
 // (config.stateRepoSyncFailure): the alerts panel says it to everyone
-// (alerts.js, in the same words: STATE_SYNC_TITLE, stateSyncSentence), and this
+// (alerts.js, in the same words: stateSyncTitle, stateSyncSentence), and this
 // puts it on the list of things waiting on the people who can fix it.
 function StateSyncGroup({ failure, onOpenConfigRepo }) {
   const zone = useTimeZone();
   if (!failure) return null;
   return (
-    <section className="inbox-group" key="state-sync">
-      <div className="inbox-group-header">
-        <h3>{STATE_SYNC_TITLE}</h3>
-        <span className="count">1</span>
-        <p className="inbox-group-hint">
-          Until this is fixed, settings changed here are not backed up, and a
-          restart into a newer commit of the state repository has only the last
-          export to merge against.
-        </p>
-      </div>
+    <CollapsibleInboxGroup
+      key="state-sync"
+      sectionId="state-sync"
+      title={stateSyncTitle(failure)}
+      count={1}
+      hint={
+        failure.external
+          ? stateSyncImpact(failure)
+          : "Until this is fixed, settings changed here are not backed up, and a restart into a newer commit of the state repository has only the last export to merge against."
+      }
+    >
       <ul className="task-list">
         <li className="inbox-item">
           <div className="inbox-line">
@@ -595,12 +701,31 @@ function StateSyncGroup({ failure, onOpenConfigRepo }) {
           <p className="inbox-note">{stateSyncSentence(failure, zone)}</p>
         </li>
       </ul>
-    </section>
+    </CollapsibleInboxGroup>
   );
 }
 
+// ReleaseSoak is what a pending release's Approve needs said beside it:
+// how long it soaked, and when that was under the minimum, the release
+// train's SHORT SOAK warning -- approving it then accepts the short soak
+// (short_soak_ok), which the approve job otherwise refuses.
+function ReleaseSoak({ release }) {
+  if (!release.soak && !release.shortSoak) return null;
+  return (
+    <span
+      className="inbox-release-soak"
+      data-testid="inbox-release-soak"
+      title={release.shortSoak || undefined}
+    >
+      {release.shortSoak && (
+        <span className="inbox-release-short-soak">SHORT SOAK</span>
+      )}
+      {release.soak || "no recorded soak"}
+    </span>
+  );
+}
 // NotificationsGroup is the open operator notifications
-// (notifications.js, docs/design/durable-tasks.md DT-5), above the task
+// (notifications.js, design/design/durable-tasks.design.md DT-5), above the task
 // rows: one row each, with what a person can do about it. An
 // acknowledged one stays here, marked, until whatever raised it clears
 // it; acknowledging only takes it out of the alerts bell's count.
@@ -633,19 +758,15 @@ function NotificationsGroup({
     }
   };
   return (
-    <section
-      className="inbox-group"
+    <CollapsibleInboxGroup
       key="notifications"
-      data-testid="inbox-notifications"
+      sectionId="notifications"
+      title="Notifications"
+      count={notifications.length}
+      defaultCollapsed
+      testId="inbox-notifications"
+      hint="Raised by grain and its agents for a person to know about. Each clears itself once its condition goes away."
     >
-      <div className="inbox-group-header">
-        <h3>Notifications</h3>
-        <span className="count">{notifications.length}</span>
-        <p className="inbox-group-hint">
-          Raised by grain and its agents for a person to know about. Each clears
-          itself once its condition goes away.
-        </p>
-      </div>
       <ul className="task-list">
         {notifications.map((n) => (
           <li
@@ -667,13 +788,19 @@ function NotificationsGroup({
               <div className="inbox-actions">
                 {pendingReleaseOf(n) && (
                   <>
+                    <ReleaseSoak release={pendingReleaseOf(n)} />
                     <Button
                       size="small"
                       variant="contained"
+                      color={
+                        pendingReleaseOf(n).shortSoak ? "warning" : "primary"
+                      }
                       disabled={busy !== null}
                       onClick={() => act(n, "approve")}
                     >
-                      Approve
+                      {pendingReleaseOf(n).shortSoak
+                        ? "Approve short soak"
+                        : "Approve"}
                     </Button>
                     <Button
                       size="small"
@@ -725,7 +852,7 @@ function NotificationsGroup({
           </li>
         ))}
       </ul>
-    </section>
+    </CollapsibleInboxGroup>
   );
 }
 
@@ -800,6 +927,7 @@ function NotificationSwitch() {
 
 export default function InboxPage({
   tasks,
+  tasksLoaded = true,
   config,
   onOpenTask,
   onAct,
@@ -865,7 +993,17 @@ export default function InboxPage({
       {/* Deliberately the same sentence it always was, and about tasks
           only: a line promising that every base branch is tested is the
           exact reassurance this page was extended to stop giving. */}
-      {groups.length === 0 &&
+      {/* A task list that has never been read is not an empty one: say
+          so rather than promise nothing is waiting (2026-11-03
+          walkthrough, with GET /api/tasks failing on a cold load). */}
+      {!tasksLoaded && (
+        <ListEmpty>
+          The task list could not be read, so this page cannot show what is
+          waiting on you yet. It tries again on its own.
+        </ListEmpty>
+      )}
+      {tasksLoaded &&
+        groups.length === 0 &&
         localScripts.length === 0 &&
         notifications.length === 0 &&
         !syncFailure && (
@@ -890,139 +1028,145 @@ export default function InboxPage({
         onOpenTask={onOpenTask}
         reload={reloadLocalScripts}
       />
-      {groups.map(({ group, tasks: rows }) => (
-        <section className="inbox-group" key={group.id}>
-          <div className="inbox-group-header">
-            <h3>{group.title}</h3>
-            <span className="count">{rows.length}</span>
-            <div className="inbox-group-actions">
-              {/* Whole-group answers, when there is more than one task
-                  to give them to (bulkActions above). */}
-              {bulkActions(group, rows).map((action) => (
-                <Button
-                  key={action.bulk.label}
-                  size="small"
-                  variant="outlined"
-                  onClick={() => runAll(rows, action)}
-                >
-                  {action.bulk.label} ({rows.length})
-                </Button>
-              ))}
-            </div>
-            <p className="inbox-group-hint">{group.hint}</p>
-          </div>
-          <ul className="task-list">
-            {rows.map((t) => {
-              // What this group has to say about this particular task,
-              // where it has something: the merge queue's own note on a
-              // stalled wait (GROUPS' merge_stalled).
-              const note = group.note?.(t) || null;
-              return (
-                <li className="inbox-item" key={t.id}>
-                  <div className="inbox-line">
-                    <TaskRow
-                      t={t}
-                      config={config}
-                      onOpenTask={onOpenTask}
-                      hideQuestion={!!group.reply}
-                    />
-                    <div className="inbox-actions">
-                      {t.changelists?.length > 0 && (
-                        <ClChip cl={t.changelists[0]} primary />
-                      )}
-                      {t.changelists?.length > 0 && t.presubmit && (
-                        <PresubmitBadge presubmit={t.presubmit} />
-                      )}
-                      {t.changelists?.length > 0 && t.clReview && (
-                        <ReviewBadge review={t.clReview} />
-                      )}
-                      {t.changelists?.length > 0 && t.clSubmit && (
-                        <BehindBadge submit={t.clSubmit} />
-                      )}
-                      {group.reply && (
-                        <Button
-                          size="small"
-                          variant={replyTo === t.id ? "outlined" : "contained"}
-                          onClick={() =>
-                            setReplyTo(replyTo === t.id ? null : t.id)
-                          }
-                        >
-                          {replyTo === t.id ? "Cancel" : "Reply"}
-                        </Button>
-                      )}
-                      {[
-                        ...(group.controls?.(t) || []),
-                        ...(group.actions || []),
-                      ]
-                        .filter(
-                          (action) => !action.when || action.when(t, config),
-                        )
-                        .map((action) =>
-                          action.href ? (
-                            <Button
-                              key={action.label}
-                              size="small"
-                              variant={action.variant || "outlined"}
-                              color={action.color}
-                              title={action.title}
-                              href={action.href(t) || undefined}
-                              disabled={!action.href(t)}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
-                              {action.label}
-                            </Button>
-                          ) : (
-                            <Button
-                              key={action.label}
-                              size="small"
-                              variant={action.variant || "outlined"}
-                              color={action.color}
-                              title={action.title}
-                              // `open` is the third kind of answer a row can
-                              // carry, beside a link out and a request: the
-                              // task's own pane, for a wait whose next step
-                              // is reading rather than doing.
-                              onClick={() =>
-                                action.open
-                                  ? onOpenTask(t.id)
-                                  : action.forceMerge
-                                    ? promptForceMerge(t, (fn) =>
-                                        onAct(fn, t.id),
-                                      )
-                                    : run(t, action)
-                              }
-                            >
-                              {action.label}
-                            </Button>
-                          ),
+      {groups.map(({ group, tasks: rows }) => {
+        const bulk = bulkActions(group, rows);
+        return (
+          <CollapsibleInboxGroup
+            key={group.id}
+            sectionId={group.id}
+            title={group.title}
+            count={rows.length}
+            hint={group.hint}
+            actions={
+              bulk.length > 0
+                ? bulk.map((action) => (
+                    <Button
+                      key={action.bulk.label}
+                      size="small"
+                      variant="outlined"
+                      onClick={() => runAll(rows, action)}
+                    >
+                      {action.bulk.label} ({rows.length})
+                    </Button>
+                  ))
+                : null
+            }
+          >
+            <ul className="task-list">
+              {rows.map((t) => {
+                // What this group has to say about this particular task,
+                // where it has something: the merge queue's own note on a
+                // stalled wait (GROUPS' merge_stalled).
+                const note = group.note?.(t) || null;
+                return (
+                  <li className="inbox-item" key={t.id}>
+                    <div className="inbox-line">
+                      <TaskRow
+                        t={t}
+                        config={config}
+                        onOpenTask={onOpenTask}
+                        hideQuestion={!!group.reply}
+                      />
+                      <div className="inbox-actions">
+                        {t.changelists?.length > 0 && (
+                          <ClChip cl={t.changelists[0]} primary />
                         )}
+                        {t.changelists?.length > 0 && t.presubmit && (
+                          <PresubmitBadge presubmit={t.presubmit} />
+                        )}
+                        {t.changelists?.length > 0 && t.clReview && (
+                          <ReviewBadge review={t.clReview} />
+                        )}
+                        {t.changelists?.length > 0 && t.clSubmit && (
+                          <BehindBadge submit={t.clSubmit} />
+                        )}
+                        {group.reply && (
+                          <Button
+                            size="small"
+                            variant={
+                              replyTo === t.id ? "outlined" : "contained"
+                            }
+                            onClick={() =>
+                              setReplyTo(replyTo === t.id ? null : t.id)
+                            }
+                          >
+                            {replyTo === t.id ? "Cancel" : "Reply"}
+                          </Button>
+                        )}
+                        {[
+                          ...(group.controls?.(t) || []),
+                          ...(group.actions || []),
+                        ]
+                          .filter(
+                            (action) => !action.when || action.when(t, config),
+                          )
+                          .map((action) =>
+                            action.href ? (
+                              <Button
+                                key={action.label}
+                                size="small"
+                                variant={action.variant || "outlined"}
+                                color={action.color}
+                                title={action.title}
+                                href={action.href(t) || undefined}
+                                disabled={!action.href(t)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                {action.label}
+                              </Button>
+                            ) : (
+                              <Button
+                                key={action.label}
+                                size="small"
+                                variant={action.variant || "outlined"}
+                                color={action.color}
+                                title={action.title}
+                                // `open` is the third kind of answer a row can
+                                // carry, beside a link out and a request: the
+                                // task's own pane, for a wait whose next step
+                                // is reading rather than doing.
+                                onClick={() =>
+                                  action.open
+                                    ? onOpenTask(t.id)
+                                    : action.forceMerge
+                                      ? promptForceMerge(t, (fn) =>
+                                          onAct(fn, t.id),
+                                        )
+                                      : run(t, action)
+                                }
+                              >
+                                {action.label}
+                              </Button>
+                            ),
+                          )}
+                      </div>
                     </div>
-                  </div>
-                  {/* The note is grain's own sentence, and the page it
-                      names -- the GitHub review an approval wait needs --
-                      is a link here as it is in the task's pane. */}
-                  {note && (
-                    <p className="inbox-note">
-                      <LinkedNote text={note} />
-                    </p>
-                  )}
-                  {group.reply && (
-                    <Responder
-                      t={t}
-                      open={replyTo === t.id}
-                      onAct={onAct}
-                      onOpenTask={onOpenTask}
-                      onSent={() => setReplyTo(null)}
-                      showError={showError}
-                    />
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      ))}
+                    {/* The note is grain's own sentence, and the page it
+                        names -- the GitHub review an approval wait needs --
+                        is a link here as it is in the task's pane. */}
+                    {note && (
+                      <p className="inbox-note">
+                        <LinkedNote text={note} />
+                      </p>
+                    )}
+                    {group.reply && (
+                      <Responder
+                        t={t}
+                        open={replyTo === t.id}
+                        onAct={onAct}
+                        onOpenTask={onOpenTask}
+                        onSent={() => setReplyTo(null)}
+                        showError={showError}
+                      />
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </CollapsibleInboxGroup>
+        );
+      })}
     </main>
   );
 }

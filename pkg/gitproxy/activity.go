@@ -97,8 +97,12 @@ func namespaceRouteTargets(path string) []string {
 		}
 	case "ci":
 		parts := strings.Split(rel, "/")
-		if len(parts) >= 3 && parts[2] != "" {
-			return []string{parts[2]}
+		runIdx := 2
+		if len(parts) > 0 && strings.ContainsAny(parts[0], ".:") {
+			runIdx = 3
+		}
+		if len(parts) > runIdx && parts[runIdx] != "" {
+			return []string{parts[runIdx]}
 		}
 	}
 	return nil

@@ -35,22 +35,15 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/geminikey"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
-	"github.com/ai-on-gke/grain/pkg/capability/gitpushanyref"
-	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
-	"github.com/ai-on-gke/grain/pkg/capability/quarantine"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
-	"github.com/ai-on-gke/grain/pkg/capability/releasenotes"
-	"github.com/ai-on-gke/grain/pkg/capability/reporead"
-	"github.com/ai-on-gke/grain/pkg/capability/repowrite"
-	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
-	"github.com/ai-on-gke/grain/pkg/capability/teambroadcast"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -60,7 +53,7 @@ import (
 
 func newCapabilityRegistryWithStore(store *model.Store, local localscripts.Config, providers ...model.CapabilityProvider) *model.CapabilityRegistry {
 	reg := model.NewCapabilityRegistry(providers...)
-	reg.RegisterDynamic(reporead.DynamicProvider, repowrite.DynamicProvider, gcpkey.DynamicProvider(store),
+	reg.RegisterDynamic(gcpkey.DynamicProvider(store),
 		localscripts.DynamicProvider(local), ui.AgentAPIDynamicProvider)
 	// A CI job's api grants are a token for CIAPI rather than routes an
 	// agent may call (pkg/capability/ciapi).
@@ -109,19 +102,10 @@ func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*mod
 		Host: cfg.GithubHost, InsecureHTTP: cfg.GithubInsecureHTTP,
 	}))
 	providers = append(providers, admincaps.Providers()...)
-	// git-push-any-ref is a team capability like the ones beside it, not
-	// an admin one (grain/task-2536): what it lifts is the proxy's
-	// one-branch rule, and the team's own git credential is still what
-	// every push goes out with.
 	providers = append(providers,
-		gitpushanyref.New(),
 		bootstrap.New(),
-		grainci.New(),
 		registrypush.NewWithConfig(registrypush.Config{}),
-		releasenotes.New(),
-		teambroadcast.New(),
 		consolecap.New(),
-		quarantine.New(),
 		readissues.New(),
 		prioritydispatch.New(),
 		durable.New(),
@@ -138,8 +122,15 @@ func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*mod
 	// deployment publishes somewhere else and has no setting to say so
 	// yet; it gets a login that fails at the registry, which is the
 	// honest outcome until there is a configuration field for it.
+	//
+	// Its refresh route is mounted on the CI API listener (CIAPI), so a
+	// job whose release outlasts the ladder's hour-long token re-mints
+	// it there rather than failing at its last push; with no listener
+	// the job gets the static login alone, as it always did.
 	providers = append(providers, packagepublish.New(packagepublish.Config{
 		Credentials: githubCredentials,
+		Refresh:     PackagePublishRefresh,
+		RefreshURL:  CIAPI.URL,
 	}))
 	// image-signing registers unconditionally too, and for the same
 	// reason: what it needs is two secrets, which its own Resolve looks
@@ -151,7 +142,7 @@ func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*mod
 	// for the api:release-gate-read preset (pkg/capability/ciapi), and
 	// what it needs is this process's CI API listener (CIAPI), which its
 	// own Resolve refuses without, and a job of grain's own repository,
-	// which it refuses every other one for (docs/design/release-from-trunk.md §6).
+	// which it refuses every other one for (design/design/release-from-trunk.design.md §6).
 	providers = append(providers, ciapi.NewAlias(CIAPI, ciapi.Config{}, model.ReleaseGateReadCapability,
 		ciapi.Aliases[model.ReleaseGateReadCapability]))
 	// claude-proxy, openai-proxy and gemini-proxy register
@@ -258,6 +249,12 @@ func GitHubCredentialLadder(dataDir string) (*gitproxy.CredentialSet, error) {
 // the two in step.
 const defaultSourceDir = "/usr/local/share/grain/src"
 
+// defaultCoreSourceDir is where an image whose own module builds on
+// core, rather than being core, carries core's source at the version it
+// was built against, for src://core/... (namespace.CoreSource). Core's
+// own image has none: its src/ already is core.
+const defaultCoreSourceDir = "/usr/local/share/grain/core-src"
+
 // sourceDir is the tree the self-debug capability reads.
 //
 // The image's own copy wins over anything a flag names, which is the
@@ -278,12 +275,17 @@ func sourceDir(flagged string) string {
 	return flagged
 }
 
-// grantTools wires selfdebug/selfrepair's own tool-building functions
+// grantTools wires grainlog/bootstrap's own tool-building functions
 // into orchestrator.Config.GrantTools -- see that field's own doc
 // comment for why this indirection exists instead of a method on
 // model.CapabilityProvider. srcDir is whatever sourceDir resolved: the
 // image's baked-in copy of grain's own source, or the checkout
 // -upgrade-src-dir names on a deployment that has no such image.
+//
+// grain#host-exec's run_host_command is not here: it is served by the
+// run's forked mcpserver, which confirms each command over the daemon
+// (daemonHostExecConfirm), and an entry here would only build a second
+// copy no framework reads.
 func grantTools(srcDir, secretsDir string) map[string]func(store *model.Store, taskID string) []mcp.Tool {
 	return map[string]func(store *model.Store, taskID string) []mcp.Tool{
 		// Built per run rather than once here, so that a secret set
@@ -295,8 +297,11 @@ func grantTools(srcDir, secretsDir string) map[string]func(store *model.Store, t
 				Redactor: grainLogRedactor(secretsDir),
 			})
 		},
-		selfrepair.CapabilityName: func(store *model.Store, taskID string) []mcp.Tool {
-			return selfrepair.HostCommandTools(store, taskID, 0, 0)
+		grainserver.JournalGrant: func(_ *model.Store, taskID string) []mcp.Tool {
+			return grainlog.Tools(grainlog.Config{
+				TaskID:   taskID,
+				Redactor: grainLogRedactor(secretsDir),
+			})
 		},
 		bootstrap.CapabilityName: func(*model.Store, string) []mcp.Tool {
 			return bootstrap.PlaybookTools()
@@ -582,3 +587,10 @@ func storeGitConnections(ctx context.Context, store *model.Store) gitproxy.Conne
 // capability registry is rebuilt from live configuration, and every
 // build has to mint into the one registry being served.
 var CIAPI = ciapi.NewEndpoint()
+
+// PackagePublishRefresh is the route a CI job holding package-publish
+// re-mints its registry login through, mounted on CIAPI's listener: a
+// package-level value for the reason CIAPI is one.
+var PackagePublishRefresh = packagepublish.NewRefresher()
+
+func init() { CIAPI.Mount(packagepublish.RefreshRoute, PackagePublishRefresh) }

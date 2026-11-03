@@ -15,6 +15,7 @@
 package model
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -25,7 +26,7 @@ import (
 // steward is woken by the pipeline.* notifications it subscribes to
 // (PipelineStewardSubscriptions), so the schedule is only a safety wake
 // for something no notification covers
-// (docs/design/durable-tasks.md#DT-6).
+// (design/design/durable-tasks.design.md#DT-6).
 const PipelineStewardEveryNMinutes = 6 * 60
 
 // PipelineStewardSubscriptions are the notification families that wake
@@ -75,7 +76,7 @@ const PipelineStewardMaxActions = 5
 var PipelineStewardAPIPresets = []string{"task-admin", "dispatch-control", "ci-read"}
 
 // pipelineStewardTemplate is the pipeline steward itself: a durable
-// judgement agent, woken by notifications (docs/design/durable-tasks.md#DT-6).
+// judgement agent, woken by notifications (design/design/durable-tasks.design.md#DT-6).
 //
 //   - No Target. It changes nothing in any repository itself, and files
 //     no repairs: the base-branch reconciler owns those. A hold is a
@@ -139,11 +140,11 @@ func PipelineStewardGoal() *GoalDecl {
 }
 
 // PipelineStewardReportLines is the most lines a wake's report may run
-// to (docs/design/durable-tasks.md#DT-12).
+// to (design/design/durable-tasks.design.md#DT-12).
 const PipelineStewardReportLines = 15
 
 // pipelineStewardBody is what the run is told. It is written around the
-// four rules of docs/design/durable-tasks.md#DT-12, against the ways a
+// four rules of design/design/durable-tasks.design.md#DT-12, against the ways a
 // standing job with write access went wrong on 768's first wake: it read
 // everything and overflowed its context, described tasks from memory, and
 // acted on what it believed rather than on the record.
@@ -166,10 +167,13 @@ func pipelineStewardBody() string {
 
 	b.WriteString("## Each wake\n\n")
 	b.WriteString("Read and act through the `grain` CLI in your sandbox (`grain help`); only " +
-		"`propose_task`, `resume_later`, `comment_on_issue` and your dispatch-control tools " +
+		"`propose_task`, `resume_later`, `comment_on_issue` and the `api_*` tools your " +
+		"dispatch-control preset serves (pausing, resuming, Run now) " +
 		"are tool calls.\n\n")
 	b.WriteString("1. **Work from deltas.** Read your handover's cursor, then run " +
-		"`grain api GET '/api/pipeline/changes?after=<cursor>'` (no cursor: leave `after` off). " +
+		"`grain read deploy://pipeline-changes --cursor <cursor>` (no cursor: leave `--cursor` off). " +
+		"Its last line is the command that reads the next page: run it while the page says more " +
+		"changes follow, and hand over the cursor the last page ended with. " +
 		"Read nothing else unless a change, or the note that woke you, names it. Do not sweep " +
 		"`grain task list` or `grain ci list`; `grain merge-queue`, `grain ci log`, " +
 		"`grain health` and `grain log` are for what a change names.\n" +
@@ -219,14 +223,16 @@ func pipelineStewardBody() string {
 }
 
 // UsesToolBudget reports whether t's runs are durable judgement wakes,
-// which run under the per-wake tool budget (docs/design/durable-tasks.md#DT-13,
+// which run under the per-wake tool budget (design/design/durable-tasks.design.md#DT-13,
 // mcp's tool_budget.go): the pipeline steward's standing task, and any
 // task holding the durable grant.
 func UsesToolBudget(t Task) bool {
-	for _, tag := range t.Tags {
-		if tag == ScheduleFiringTag(PipelineStewardTemplateID) {
-			return true
-		}
-	}
-	return t.IsDurable()
+	return IsPipelineStewardFiring(t) || t.IsDurable()
+}
+
+// IsPipelineStewardFiring reports whether t is one of the pipeline
+// steward's own firings, whose wakes start from the pipeline-changes
+// cursor the last one handed over.
+func IsPipelineStewardFiring(t Task) bool {
+	return slices.Contains(t.Tags, ScheduleFiringTag(PipelineStewardTemplateID))
 }

@@ -161,8 +161,6 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		PollInterval:            ptr("1m"),
 		MaxWorkers:              ptr(4),
 		MaxMergesPerRepo:        ptr(2),
-		MergeBatchSize:          ptr(4),
-		MergeGatherWindow:       ptr("3m"),
 		MaxAutoSubmitDepth:      ptr(3),
 		MaxAutoSubmitFanOut:     ptr(4),
 		MaxAgentTurns:           ptr(42),
@@ -183,6 +181,7 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		SandboxDiskOvercommit:   ptr(4.0),
 		SandboxOvercommit:       &model.OvercommitSettings{Mode: model.OvercommitAuto, CPUMax: 4},
 		ExternalAgentAPI:        ptr(true),
+		SessionSandboxIdleTTL:   ptr("45m"),
 		SandboxMemoryReserveMB:  ptr(4096),
 		SandboxDiskFloorShare:   ptr(0.2),
 		SandboxDiskFloorMinMB:   ptr(8192),
@@ -240,6 +239,7 @@ func everySettingChanged() ui.UpdateSettingsRequest {
 		TaskBranchTemplate:          ptr("alice/grain/task-{id}"),
 		DeploymentID:                ptr("prod"),
 		DefaultCapabilities:         ptr([]string{ui.OfferedCapabilities()[0].ID}),
+		SettingsLocked:              ptr(true),
 	}
 }
 

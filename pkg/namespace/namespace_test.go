@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -28,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/bootstrap/playbooks"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/redact"
 )
@@ -644,7 +646,7 @@ func TestGrepMatchLimitListJSONAndGlob(t *testing.T) {
 	if !strings.Contains(body, "100:match line 100") || strings.Contains(body, "101:match line 101") {
 		t.Errorf("default grep did not stop at 100 matches:\n%s", body)
 	}
-	if !strings.Contains(body, "[truncated at match limit (100 matches); pass ?max=200 to raise the limit]") {
+	if !strings.Contains(body, "[truncated at match limit (100 matches); pass --max 200 (grain grep) to raise the limit]") {
 		t.Errorf("missing truncation notice in:\n%s", body)
 	}
 
@@ -756,5 +758,343 @@ func TestNewRedactorAppliesToReadRedactedGrepAndGrainLog(t *testing.T) {
 	logOut := srv.RedactGrainLogText("daemon started with token=" + secretVal + "\n")
 	if strings.Contains(logOut, secretVal) || !strings.Contains(logOut, "[redacted: secret custom]") {
 		t.Errorf("RedactGrainLogText did not apply NewRedactor: %q", logOut)
+	}
+}
+
+func TestThreeSegmentHostQualifiedRepoCI(t *testing.T) {
+	t.Parallel()
+
+	const repo = "git.forge.example/experimental/grain"
+	store := ci.NewRunStore(10)
+	now := time.Now().UTC()
+	artDir := t.TempDir()
+	artPath := filepath.Join(artDir, "run-forge-1", "go", "cover.out")
+	if err := os.MkdirAll(filepath.Dir(artPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(artPath, []byte("mode: set\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store.Put(ci.Run{
+		ID:         "run-forge-1",
+		Repo:       repo,
+		Ref:        "main",
+		Commit:     "abc123456789",
+		Conclusion: ci.ConclusionFailure,
+		StartedAt:  &now,
+		FinishedAt: &now,
+		Jobs: []ci.JobRun{
+			{
+				JobID:      "go",
+				Name:       "go",
+				Conclusion: ci.ConclusionFailure,
+				Steps: []ci.StepRun{
+					{
+						Name:       "Test",
+						Conclusion: ci.ConclusionFailure,
+						Output:     "--- FAIL: TestForgeNamespace (0.02s)\n",
+					},
+				},
+				Artifacts: []ci.Artifact{
+					{Name: "cover.out", Job: "go", Stored: true, Bytes: 10},
+				},
+				Attempts: []ci.JobAttempt{
+					{
+						Attempt:    1,
+						Conclusion: ci.ConclusionFailure,
+						Steps: []ci.StepRun{
+							{
+								Name:       "Test",
+								Conclusion: ci.ConclusionFailure,
+								Output:     "--- FAIL: TestForgeNamespace (0.02s)\n",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	srv := newTestServer(t, store, "", nil)
+	srv.ArtifactDir = artDir
+	scope := Scope{TaskRepo: repo, MayReadCI: true}
+
+	for _, tc := range []struct {
+		url  string
+		want string
+	}{
+		{"/fs/ci/?list", "git.forge.example/experimental/grain/\n"},
+		{"/fs/ci/git.forge.example?list", "experimental/grain/\n"},
+		{"/fs/ci/git.forge.example/experimental?list", "grain/\n"},
+		{"/fs/ci/git.forge.example/experimental/grain?list", "run-forge-1/\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1?list", "go/\nartifacts/\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1/go?list", "attempts/\nTest.log\ngotest.log\ntests/\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1/go/attempts?list", "1/\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1/go/Test.log", "--- FAIL: TestForgeNamespace (0.02s)\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1/go/attempts/1/Test.log", "--- FAIL: TestForgeNamespace (0.02s)\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1/artifacts/go/cover.out", "mode: set\n"},
+		{"/fs/ci/git.forge.example/experimental/grain/run-forge-1/go/Test.log?grep=FAIL", "--- FAIL: TestForgeNamespace (0.02s)\n"},
+	} {
+		rec := serveRequest(srv, scope, http.MethodGet, tc.url, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d: %s", tc.url, rec.Code, rec.Body.String())
+		}
+		if got := rec.Body.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.url, got, tc.want)
+		}
+	}
+
+	// Out-of-scope 3-segment repo reports the full 3-segment name in the refusal.
+	forbiddenRec := serveRequest(srv, scope, http.MethodGet, "/fs/ci/git.forge.example/experimental/other/run-forge-1", nil)
+	if forbiddenRec.Code != http.StatusForbidden {
+		t.Fatalf("out-of-scope 3-segment repo status = %d, want 403", forbiddenRec.Code)
+	}
+	if got := forbiddenRec.Body.String(); !strings.Contains(got, "ci://git.forge.example/experimental/other is outside this sandbox's CI read scope") {
+		t.Errorf("out-of-scope refusal = %q, want full 3-segment repo name", got)
+	}
+}
+
+// task://<id> reads another task's record where that task works in a
+// repository the scope reaches -- its own, one it reads, or one an
+// api:tasks:read@repo grant names -- and refuses every other task, and
+// one that does not exist, alike.
+func TestTaskReadsTasksInTheScopesRepositories(t *testing.T) {
+	srv := &Server{Tasks: stubTaskProvider{tasks: map[string]*TaskView{
+		"100": {ID: "100", Repo: "acme/widgets", Record: "Task 100\n"},
+		"101": {ID: "101", Repo: "acme/widgets", Record: "Task 101: sibling\n"},
+		"102": {ID: "102", Repo: "acme/library", Record: "Task 102: library\n"},
+		"103": {ID: "103", Repo: "acme/gadgets", Record: "Task 103: gadgets\n"},
+		"104": {ID: "104", Record: "Task 104: no repository\n"},
+	}}}
+	scope := Scope{
+		TaskID: 100, TaskIDStr: "100", TaskRepo: "acme/widgets",
+		TaskReadRepos: map[string]bool{"acme/widgets": true, "acme/library": true},
+	}
+	for _, id := range []string{"101", "102"} {
+		if rec := serveRequest(srv, scope, http.MethodGet, "/fs/task/"+id+"/record.md", nil); rec.Code != http.StatusOK ||
+			!strings.Contains(rec.Body.String(), "Task "+id) {
+			t.Errorf("task://%s in a repository the scope reaches: %d %q", id, rec.Code, rec.Body.String())
+		}
+	}
+	for _, id := range []string{"103", "104", "999"} {
+		if rec := serveRequest(srv, scope, http.MethodGet, "/fs/task/"+id+"/record.md", nil); rec.Code != http.StatusForbidden ||
+			!strings.Contains(rec.Body.String(), `"self-debug"`) {
+			t.Errorf("task://%s outside the scope's repositories: %d %q", id, rec.Code, rec.Body.String())
+		}
+	}
+	// A scope with only its own repository and no grant reads its own
+	// task, and none of its siblings.
+	bare := Scope{TaskID: 100, TaskIDStr: "100", TaskRepo: "acme/widgets"}
+	if rec := serveRequest(srv, bare, http.MethodGet, "/fs/task/100/record.md", nil); rec.Code != http.StatusOK {
+		t.Errorf("task://100, the scope's own task: %d %q", rec.Code, rec.Body.String())
+	}
+	for _, id := range []string{"101", "102"} {
+		if rec := serveRequest(srv, bare, http.MethodGet, "/fs/task/"+id+"/record.md", nil); rec.Code != http.StatusForbidden {
+			t.Errorf("task://%s with no tasks:read grant: %d", id, rec.Code)
+		}
+	}
+}
+
+// TestTaskReadsSiblingsOnlyWithATasksReadGrant pins that working in a
+// repository does not open its other tasks: a run with no grant is
+// refused every file of a sibling's task://, and told which grant to ask
+// for, until an api:tasks:read grant names the repository (or the scope
+// may read every task).
+func TestTaskReadsSiblingsOnlyWithATasksReadGrant(t *testing.T) {
+	srv := &Server{Tasks: stubTaskProvider{tasks: map[string]*TaskView{
+		"101": {
+			ID: "101", Repo: "acme/widgets", Record: "Task 101 record\n",
+			Prompt: "Task 101 prompt\n", Conversation: "Task 101 conversation\n",
+			Transcript: "Task 101 transcript\n",
+			Attempts:   []TaskAttemptView{{Number: 1, Prompt: "Task 101 attempt prompt\n", Transcript: "Task 101 attempt transcript\n"}},
+		},
+	}}}
+	files := []string{"record.md", "prompt.md", "conversation.md", "transcript.md", "attempts/1/transcript.md", "attempts/1/prompt.md", ""}
+
+	bare := Scope{TaskID: 100, TaskIDStr: "100", TaskRepo: "acme/widgets"}
+	for _, f := range files {
+		rec := serveRequest(srv, bare, http.MethodGet, "/fs/task/101/"+f, nil)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("task://101/%s with no grant: %d %q", f, rec.Code, rec.Body.String())
+			continue
+		}
+		body := rec.Body.String()
+		if strings.Contains(body, "Task 101") {
+			t.Errorf("task://101/%s refusal leaks the sibling: %q", f, body)
+		}
+		if !strings.Contains(body, `"self-debug"`) || !strings.Contains(body, "api:tasks:read@") {
+			t.Errorf("task://101/%s refusal does not name the grants: %q", f, body)
+		}
+	}
+
+	granted := bare
+	granted.TaskReadRepos = map[string]bool{"acme/widgets": true}
+	all := bare
+	all.MayReadAllTasks = true
+	for name, scope := range map[string]Scope{"api:tasks:read@acme/widgets": granted, "MayReadAllTasks": all} {
+		for _, f := range files {
+			if f == "" {
+				continue
+			}
+			rec := serveRequest(srv, scope, http.MethodGet, "/fs/task/101/"+f, nil)
+			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Task 101") {
+				t.Errorf("%s: task://101/%s: %d %q", name, f, rec.Code, rec.Body.String())
+			}
+		}
+	}
+}
+
+// TestPlaybooksServedFromTheEmbeddedCopy checks src://playbooks lists
+// and reads the playbooks embedded in the binary, whatever SrcDir is --
+// no deployment's source tree has a playbooks/ of its own -- and still
+// only for a scope the bootstrap-playbooks grant (or self-debug) opens.
+func TestPlaybooksServedFromTheEmbeddedCopy(t *testing.T) {
+	t.Parallel()
+
+	want, err := fs.ReadFile(playbooks.FS, "gke-sandbox-cluster.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unrelated := t.TempDir()
+	if err := os.WriteFile(filepath.Join(unrelated, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, srcDir := range map[string]string{"no SrcDir": "", "unrelated SrcDir": unrelated} {
+		t.Run(name, func(t *testing.T) {
+			srv := &Server{SrcDir: srcDir, Redactor: redact.New(nil)}
+			scope := Scope{MayReadPlaybooks: true}
+
+			rec := serveRequest(srv, scope, http.MethodGet, "/fs/src/playbooks?list", nil)
+			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "gke-sandbox-cluster.md\n") {
+				t.Fatalf("list: %d %q", rec.Code, rec.Body.String())
+			}
+			for _, p := range []string{"/fs/src/playbooks/gke-sandbox-cluster.md", "/fs/src/playbooks/gke-sandbox-cluster"} {
+				rec := serveRequest(srv, scope, http.MethodGet, p, nil)
+				if rec.Code != http.StatusOK || rec.Body.String() != string(want) {
+					t.Errorf("read %s: %d, %d bytes, want %d", p, rec.Code, rec.Body.Len(), len(want))
+				}
+			}
+			if rec := serveRequest(srv, scope, http.MethodGet, "/fs/src/playbooks/nope", nil); rec.Code != http.StatusNotFound {
+				t.Errorf("missing playbook: %d, want 404", rec.Code)
+			}
+			if rec := serveRequest(srv, scope, http.MethodGet, "/fs/src/main.go", nil); rec.Code != http.StatusForbidden {
+				t.Errorf("bootstrap-playbooks reading outside playbooks/: %d, want 403", rec.Code)
+			}
+			rec = serveRequest(srv, Scope{}, http.MethodGet, "/fs/src/playbooks?list", nil)
+			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "bootstrap-playbooks") {
+				t.Errorf("no grant: %d %q, want 403 naming bootstrap-playbooks", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestGrepOnCIRunSkipsAttemptsUnlessAsked(t *testing.T) {
+	t.Parallel()
+
+	store := ci.NewRunStore(10)
+	now := time.Now().UTC()
+	store.Put(ci.Run{
+		ID:         "run-dup",
+		Repo:       "bwsalmon/grain",
+		Ref:        "main",
+		Conclusion: ci.ConclusionFailure,
+		StartedAt:  &now,
+		FinishedAt: &now,
+		Jobs: []ci.JobRun{
+			{
+				JobID:      "go",
+				Name:       "go",
+				Conclusion: ci.ConclusionFailure,
+				Steps: []ci.StepRun{
+					{
+						Name:       "Test",
+						Conclusion: ci.ConclusionFailure,
+						Output:     "step summary: latest attempt failed\n",
+					},
+				},
+				Attempts: []ci.JobAttempt{
+					{
+						Attempt:    1,
+						Conclusion: ci.ConclusionFailure,
+						Steps: []ci.StepRun{
+							{
+								Name:       "Test",
+								Conclusion: ci.ConclusionFailure,
+								Output:     "step summary: attempt 1 failed\n",
+							},
+						},
+					},
+					{
+						Attempt:    2,
+						Conclusion: ci.ConclusionFailure,
+						Steps: []ci.StepRun{
+							{
+								Name:       "Test",
+								Conclusion: ci.ConclusionFailure,
+								Output:     "step summary: latest attempt failed\n",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	srcDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(srcDir, "pkg", "sub", "deeper"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "pkg", "sub", "deeper", "note.txt"), []byte("nested match\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "pkg", "sub", "deeper", "skip.go"), []byte("nested match\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := newTestServer(t, store, srcDir, nil)
+	scope := Scope{TaskRepo: "bwsalmon/grain", MayReadCI: true, MayReadSrc: true}
+
+	// 1. Grepping ci://<repo>/<run> returns the latest attempt match once under go/Test.log, not duplicated under go/attempts/2/Test.log.
+	rec := serveRequest(srv, scope, http.MethodGet, "/fs/ci/bwsalmon/grain/run-dup?grep=latest+attempt+failed&n=1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("run grep status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if got, want := rec.Body.String(), "go/Test.log:1:step summary: latest attempt failed\n"; got != want {
+		t.Errorf("run grep = %q, want %q", got, want)
+	}
+
+	// 2. Grepping ci://<repo> likewise skips nested attempts/ directories.
+	rec = serveRequest(srv, scope, http.MethodGet, "/fs/ci/bwsalmon/grain?grep=latest+attempt+failed&n=1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("repo grep status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if got, want := rec.Body.String(), "run-dup/go/Test.log:1:step summary: latest attempt failed\n"; got != want {
+		t.Errorf("repo grep = %q, want %q", got, want)
+	}
+
+	// 3. Passing --glob mentioning attempts or grepping the attempts/ directory directly still searches attempts/.
+	rec = serveRequest(srv, scope, http.MethodGet, "/fs/ci/bwsalmon/grain/run-dup?grep=attempt+1+failed&glob=*/attempts/*/*.log&n=1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("attempts glob grep status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if got, want := rec.Body.String(), "go/attempts/1/Test.log:1:step summary: attempt 1 failed\n"; got != want {
+		t.Errorf("attempts glob grep = %q, want %q", got, want)
+	}
+	rec = serveRequest(srv, scope, http.MethodGet, "/fs/ci/bwsalmon/grain/run-dup/go/attempts?grep=attempt+1+failed&n=1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("attempts dir grep status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if got, want := rec.Body.String(), "1/Test.log:1:step summary: attempt 1 failed\n"; got != want {
+		t.Errorf("attempts dir grep = %q, want %q", got, want)
+	}
+
+	// 4. A bare filename --glob in Grep (no "/") still searches nested subdirectories.
+	rec = serveRequest(srv, scope, http.MethodGet, "/fs/src/pkg?grep=nested+match&glob=*.txt&n=1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bare glob grep status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if got, want := rec.Body.String(), "sub/deeper/note.txt:1:nested match\n"; got != want {
+		t.Errorf("bare glob grep = %q, want %q", got, want)
 	}
 }

@@ -10,7 +10,7 @@
   - Go `go1.26.6`, Node.js `v20.19.0`, npm `10.8.2`
   - Playwright `1.62.1`, headless Chromium (`chromium-1234`), 1400×900 unless stated;
     390×844 for the phone checks
-  - Server: `./google/cmd/grain demo -addr 127.0.0.1:<port> -open=false -github-sim
+  - Server: a wrapper distribution's `cmd/grain` demo -addr 127.0.0.1:<port> -open=false -github-sim
     -fake-ci -merge-rules -secrets-store -access-code-file <file>`, serving the
     production Vite bundle (`cd ui && npm ci && npm run build`, embedded from
     `pkg/ui/static`) over a throwaway embedded SQLite store under `$TMPDIR`. Two

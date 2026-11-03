@@ -17,7 +17,6 @@ package orchestrator
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -43,7 +42,7 @@ func (neverConnects) WaitClient(ctx context.Context, _ string) (*granulesandbox.
 // wrapper container's own log in the error, where granule-shim's stderr
 // (and so its dial-out lines) ends up, read by one bounded kubectl logs;
 // its credentials are revoked and its pod deleted
-// (docs/design/grain-on-gke.md#GKE-3).
+// (design/design/grain-on-gke.design.md#GKE-3).
 func TestK8sGranuleDialoutAcquireFailsWithTheWrapperLogWhenTheChannelNeverConnects(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -59,12 +58,7 @@ case "$*" in
 esac
 printf 'Running|True|docker-pullable://example/granule@sha256:abc|\n'
 `
-	if err := os.WriteFile(bin+".src", []byte(script), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := exec.Command("install", "-m", "0755", bin+".src", bin).CombinedOutput(); err != nil {
-		t.Fatalf("installing fake kubectl: %v: %s", err, out)
-	}
+	writeExecutableStub(t, bin, script)
 	minter := &fakeMinter{}
 	k := NewK8sGranuleSandboxes(K8sGranuleConfig{
 		Namespace:         "grain",

@@ -70,7 +70,7 @@ import SessionsPage from "./components/SessionsPage.jsx";
 import PanelBoard from "./components/PanelBoard.jsx";
 import ReportBoard from "./components/ReportBoard.jsx";
 import RepoList from "./components/RepoList.jsx";
-import RepoPage from "./components/RepoPage.jsx";
+import RepoPage, { REPO_TABS } from "./components/RepoPage.jsx";
 import PullRequestPage from "./components/PullRequestPage.jsx";
 import ProcessesList from "./components/ProcessesList.jsx";
 import { declaringRepos, triggersOf } from "./processes.js";
@@ -79,6 +79,9 @@ import CIPage from "./components/CIPage.jsx";
 import CIRunOverlay from "./components/CIRunOverlay.jsx";
 import BatchActionsBar from "./components/BatchActionsBar.jsx";
 import ErrorBanner from "./components/ErrorBanner.jsx";
+import DroppedDefaultsNotice, {
+  droppedDefaults,
+} from "./components/DroppedDefaultsNotice.jsx";
 import ConfigRefusalDialog from "./components/ConfigRefusal.jsx";
 import DetailOverlay from "./components/DetailOverlay.jsx";
 import TaskLoadingOverlay from "./components/TaskLoadingOverlay.jsx";
@@ -89,6 +92,7 @@ import CustomizeSidebarOverlay from "./components/CustomizeSidebarOverlay.jsx";
 import SettingsPage from "./components/SettingsPage.jsx";
 import SystemPage from "./components/SystemPage.jsx";
 import {
+  DEFAULT_SETTINGS_SECTION,
   oldAdminDestination,
   settingsSectionFor,
   systemDestination,
@@ -254,6 +258,17 @@ function repoTabAt(parsed, hash) {
   return isRepoTab(fromHash) ? fromHash : null;
 }
 
+// repoTabCrumb is the " / <tab>" a repo page's crumbs end in when one of
+// its tabs other than Overview is showing -- "repositories /
+// acme/widgets / merge queue" -- so the rail says where in the repo the
+// reader is, as it does for a settings section or a system tab. Without
+// it every tab read the same as Overview.
+function repoTabCrumb(tab) {
+  const found =
+    tab && tab !== "overview" && REPO_TABS.find((t) => t.id === tab);
+  return found ? ` / ${found.label.toLowerCase()}` : "";
+}
+
 // WhenRailReady holds the page back until the header rail's slot has
 // mounted -- the same commit, since the rail's ref sets it before the
 // browser paints -- so a page's header row is drawn into the rail from
@@ -328,6 +343,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // that says, in prose and in counts, that this deployment has nothing.
   const [loaded, setLoaded] = useState(false);
   const [tasks, setTasks] = useState([]);
+  // Whether /api/tasks has answered with a list at least once. Until it
+  // has, the empty `tasks` above is not "no tasks" but "not read yet",
+  // and a page that would say nothing is waiting must not say it.
+  const [tasksListed, setTasksListed] = useState(false);
   const [schedules, setSchedules] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [suites, setSuites] = useState([]);
@@ -401,7 +420,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // in has nothing to work with: it gets AccessDenied, which sends it to
   // the access-code sign-in, rather than an empty app. grain has no
   // users, so there is no name to choose here
-  // (docs/design/settings-panel.md §6.1). A caller the server trusts
+  // (design/design/settings-panel.design.md §6.1). A caller the server trusts
   // without a session (loopback) is named, and is let in; nor is a page
   // whose /api/config never got grain's answer at all held here.
   const isSignedOut =
@@ -531,7 +550,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
     () => parsePath(window.location.pathname).repo || null,
   );
   // repoTab is which of that page's tabs is showing, null for Overview:
-  // /repos/<o>/<n>/settings/<tab> (docs/design/settings-panel.md §2.3).
+  // /repos/<o>/<n>/settings/<tab> (design/design/settings-panel.design.md §2.3).
   // The tab used to ride in the hash (/repos/acme/widgets#ci), and a link
   // kept from then still opens its tab -- the first address written
   // below moves it into the path.
@@ -621,7 +640,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // restartingRef is the last GET /api/config's `restarting`: the daemon
   // said it was draining for a restart, or running an upgrade that ends
   // in one. A disconnection that starts while it is set is that restart
-  // (docs/non-disruptive-upgrade.md, Stage 1), and the banner says
+  // (design/design/non-disruptive-upgrade.design.md, Stage 1), and the banner says
   // "grain is restarting" rather than that the deployment cannot be
   // reached.
   const restartingRef = useRef(false);
@@ -728,6 +747,16 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // "no override", so the overlay falls back to whichever repo page is
   // open, the same as the sidebar's own "+ New task" button does.
   const [newTaskRepo, setNewTaskRepo] = useState(null);
+  // newTaskBoard is the board whose page "New task" was opened on, which
+  // picks settings/new-task-form.yml's boards layer (newTaskForm.js) and
+  // rides on the filing as boardId for the server's hidden defaults.
+  // Null for the form opened anywhere else.
+  const [newTaskBoard, setNewTaskBoard] = useState(null);
+  // newTaskTemplate is the template whose "New task from this template"
+  // opened the form: it picks settings/new-task-form.yml's templates
+  // layer and is filed as templateId (the form's Template picker can
+  // still change it). Null for the form opened anywhere else.
+  const [newTaskTemplate, setNewTaskTemplate] = useState(null);
   // newTaskPrefill is a task somebody is being offered rather than one
   // they are writing from scratch: the "New board"/"Edit board" buttons
   // open the form with the title and the description already in it
@@ -747,7 +776,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // settingsItem is one item of the open section, in the path after it:
   // the capability server /settings/capabilities/<id> opens.
   const [settingsItem, setSettingsItem] = useState(
-    () => parsePath(window.location.pathname).settingsItem || "",
+    () =>
+      parsePath(window.location.pathname, window.location.search)
+        .settingsItem || "",
   );
   const [systemTab, setSystemTab] = useState(
     () => parsePath(window.location.pathname).systemTab || "",
@@ -785,7 +816,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // metricsNarrowing).
   // processQuery is the Processes list's narrowing -- search, sort and
   // conditions, the kind chips among them (processFilters.js)
-  // (docs/design/settings-panel.md §5.4), in the URL so a filtered view
+  // (design/design/settings-panel.design.md §5.4), in the URL so a filtered view
   // is a link. Null until somebody narrows it.
   const [processQuery, setProcessQuery] = useState(
     () =>
@@ -844,9 +875,15 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // 10 (half a minute at POLL_INTERVAL_MS), so a halted host is asked
   // less and less often rather than every three seconds for as long as
   // it stays down. pollTick counts ticks against it; both reset to 1/0
-  // the moment a tick gets through.
+  // the moment a tick gets through. The backoff spaces out the main
+  // poll's own asking, not how soon the page notices grain is back: the
+  // restart watch below keeps asking every POLL_INTERVAL_MS through the
+  // outage, and the first answer it gets resets both and calls pollNow,
+  // so the banner clears within a tick of grain answering rather than
+  // up to half a minute later.
   const pollBackoff = useRef(1);
   const pollTick = useRef(0);
+  const pollNow = useRef(null);
   const hiddenTick = useRef(0);
 
   // isUnreachable/unreachableReason first: a toast for a mutation that
@@ -938,6 +975,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
     // endpoint's own bytes, this covers a change those views do not care
     // about.
     setTasks((prev) => keepIfSame(prev, next));
+    setTasksListed(true);
     // Drop any selected id the store no longer reports, so a stale
     // selection never quietly outlives the task it named.
     const ids = new Set(next.map((t) => t.id));
@@ -1089,8 +1127,27 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // rail is waiting on can arrive without anybody doing anything here: a
   // session configured a moment ago has no task until the next cycle's
   // reconciler files one, and the chat cannot open until it does.
+  //
+  // Reads are sequenced: the background poll's read can still be out
+  // when a restart answers with the session's replacement task, and
+  // written after it, its older list would point the pane back at the
+  // closed task and draw that conversation again. So a list is only
+  // written if no read started later (or answer applied by
+  // applySessions) has been written already; a stale one is dropped
+  // and refreshSessions answers null.
+  const sessionsSeq = useRef(0);
+  const sessionsWritten = useRef(0);
+  const applySessions = useCallback((next) => {
+    sessionsSeq.current += 1;
+    sessionsWritten.current = sessionsSeq.current;
+    setSessions((prev) => keepIfSame(prev, next));
+  }, []);
   const refreshSessions = useCallback(async () => {
+    sessionsSeq.current += 1;
+    const seq = sessionsSeq.current;
     const res = await api("/api/console-sessions");
+    if (seq < sessionsWritten.current) return null;
+    sessionsWritten.current = seq;
     const next = (res && res.sessions) || [];
     setSessions((prev) => keepIfSame(prev, next));
     setSessionsLoaded(true);
@@ -1143,8 +1200,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const [sessionTask, setSessionTask] = useState(null);
   const sessionTaskRef = useRef(null);
   sessionTaskRef.current = sessionTask;
+  const sessionTaskSeq = useRef(0);
   const loadSessionTask = useCallback(
     async (taskId = openSessionTaskId) => {
+      const seq = ++sessionTaskSeq.current;
       if (!taskId) {
         setSessionTask(null);
         return;
@@ -1152,11 +1211,17 @@ function AppContent({ onReload = () => window.location.reload() }) {
       let detail = await api(`/api/tasks/${taskId}`, {
         poll: true,
       });
+      if (seq !== sessionTaskSeq.current) {
+        return;
+      }
       if (detail === UNCHANGED) {
         if (String(sessionTaskRef.current?.id) === String(taskId)) {
           return;
         }
         detail = await api(`/api/tasks/${taskId}`);
+        if (seq !== sessionTaskSeq.current) {
+          return;
+        }
       }
       if (String(openSessionTaskIdRef.current) !== String(taskId)) {
         return;
@@ -1182,13 +1247,20 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // sent in a chat should leave them in the chat.
   const sessionAct = useCallback(
     async (mutate) => {
+      sessionTaskSeq.current += 1;
       try {
         await mutate();
+      } catch (err) {
+        showError(err);
+        return false;
+      }
+      try {
         await loadSessionTask();
         await refreshList();
       } catch (err) {
         showError(err);
       }
+      return true;
     },
     [loadSessionTask, refreshList, showError],
   );
@@ -1198,18 +1270,34 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // capability toggle) completes so the chat's Stop button, state badge,
   // and separator reflect the mutation immediately rather than waiting
   // for the next poll tick.
-  const refreshSessionSaved = useCallback(async () => {
-    const [nextSessions] = await Promise.all([
-      refreshSessions(),
-      refreshList(),
-    ]);
-    const currentSession = openSessionIdRef.current
-      ? nextSessions.find((s) => s.id === openSessionIdRef.current) || null
-      : nextSessions[0] || null;
-    const nextTaskId = currentSession?.taskId || null;
-    openSessionTaskIdRef.current = nextTaskId;
-    await loadSessionTask(nextTaskId);
-  }, [refreshSessions, loadSessionTask, refreshList]);
+  //
+  // A control whose answer already lists the sessions (Start a fresh
+  // chat answers with the replacement task in it) passes that list,
+  // which is written at once: until it is, the pane is still pointed at
+  // the task the restart closed.
+  const refreshSessionSaved = useCallback(
+    async (answered) => {
+      const pointAt = (listed) => {
+        const currentSession = openSessionIdRef.current
+          ? listed.find((s) => s.id === openSessionIdRef.current) || null
+          : listed[0] || null;
+        openSessionTaskIdRef.current = currentSession?.taskId || null;
+      };
+      if (Array.isArray(answered)) {
+        applySessions(answered);
+        pointAt(answered);
+      }
+      const [nextSessions] = await Promise.all([
+        refreshSessions(),
+        refreshList(),
+      ]);
+      // null: a later read or answer has already been written, and the
+      // pane already points where that one said.
+      if (nextSessions) pointAt(nextSessions);
+      await loadSessionTask(openSessionTaskIdRef.current);
+    },
+    [applySessions, refreshSessions, loadSessionTask, refreshList],
+  );
 
   // refreshConfig re-fetches /api/config -- needed after adding a target
   // repo (RepoList's own "Add") or removing one (RepoPage's own
@@ -1275,10 +1363,18 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // (ui.CreateTaskRequest.AtFront, config.newestFirst), and the form
   // seeds its picker from that -- so without re-reading the config here,
   // the choice would only show up on the next full page load.
-  const refreshAfterCreate = useCallback(async () => {
-    await refreshList();
-    await refreshConfig();
-  }, [refreshList, refreshConfig]);
+  //
+  // It is also handed the filed task, and a filing that left a default
+  // grant off (ui.Task.DroppedDefaults) says so in a toast.
+  const [filedWithoutDefaults, setFiledWithoutDefaults] = useState(null);
+  const refreshAfterCreate = useCallback(
+    async (created) => {
+      if (droppedDefaults(created).length > 0) setFiledWithoutDefaults(created);
+      await refreshList();
+      await refreshConfig();
+    },
+    [refreshList, refreshConfig],
+  );
 
   const toggleSelect = useCallback((id) => {
     setSelected((prev) => {
@@ -1427,16 +1523,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // showing. Its second argument is a release the address named that the
   // repo does not have: the pane shows the newest instead, and the
   // address is corrected the way one naming a missing task is -- replaced
-  // rather than pushed, and saying what it could not find.
+  // rather than pushed. The pane says what it could not find itself, in
+  // place and until it is dismissed, so no toast repeats it here.
   const selectRelease = useCallback((release, missing) => {
     setOpenRelease((prev) => {
-      if (missing) {
-        const notes = droppedRef.current?.missing || [];
-        const message = missingMessage("release", missing);
-        droppedRef.current = {
-          missing: notes.includes(message) ? notes : [...notes, message],
-        };
-      } else if (release === null && prev !== null) {
+      if (missing || (release === null && prev !== null)) {
         droppedRef.current = droppedRef.current || { missing: [] };
       }
       return release;
@@ -1501,6 +1592,23 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // from the page it was opened on.
   const openNewTaskForRepo = useCallback((repo) => {
     setNewTaskRepo(repo);
+    setNewTaskBoard(null);
+    setNewTaskTemplate(null);
+    setNewTaskFields(null);
+    setShowNewTask(true);
+  }, []);
+
+  // openNewTaskFromTemplate is a template page's "New task from this
+  // template": the form filed from it, against the repo it is bound to
+  // where it is bound to one. The template's page is closed under it,
+  // as a task is under "File a task with these fields", so the form is
+  // the thing on screen.
+  const openNewTaskFromTemplate = useCallback((template) => {
+    setOpenTemplateId(null);
+    setNewTaskRepo(template.repo || null);
+    setNewTaskBoard(null);
+    setNewTaskTemplate(template.id);
+    setNewTaskPrefill(null);
     setNewTaskFields(null);
     setShowNewTask(true);
   }, []);
@@ -1565,6 +1673,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
     setNewTaskPrefill(prefill);
     setNewTaskFields(null);
     setNewTaskRepo(targetRepo || BOARDS_REPO);
+    setNewTaskBoard(null);
+    setNewTaskTemplate(null);
     setShowNewTask(true);
   }, []);
 
@@ -1781,7 +1891,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // following a link something else drew, and ask nothing new.
   //
   // A pin of a System tab or a Settings section names it in `at`
-  // (docs/design/settings-panel.md §5.6): { systemTab } or
+  // (design/design/settings-panel.design.md §5.6): { systemTab } or
   // { settingsSection }, "" for the view's own default.
   const navigateFromRail = useCallback(
     (v, at = {}) => {
@@ -1791,8 +1901,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
           !isPhone && at.systemTab === "health" ? "" : at.systemTab || "",
         );
       if (v === "settings") {
-        setSettingsSection(at.settingsSection || (isPhone ? "" : "general"));
+        setSettingsSection(
+          at.settingsSection || (isPhone ? "" : DEFAULT_SETTINGS_SECTION),
+        );
         setSettingsItem("");
+        setSettingsAnchor("");
       }
       // The rail's Processes entry is the whole list, whatever it was
       // last narrowed to; the pages it replaced, if anything still asks
@@ -1951,7 +2064,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       }
       const listed = res?.sessions || [];
       if (listed.length) {
-        setSessions((prev) => keepIfSame(prev, listed));
+        applySessions(listed);
       }
       // The answer names what it created; the diff against what the
       // rail knew is for a daemon older than that field.
@@ -1967,6 +2080,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       await Promise.all([refreshSessions(), refreshList()]);
     },
     [
+      applySessions,
       refreshSessions,
       refreshList,
       openStandingSession,
@@ -2364,12 +2478,14 @@ function AppContent({ onReload = () => window.location.reload() }) {
       }
     }
     const interval = setInterval(poll, POLL_INTERVAL_MS);
+    pollNow.current = poll;
     const onVisible = () => {
       if (document.visibilityState === "visible") poll();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       clearInterval(interval);
+      if (pollNow.current === poll) pollNow.current = null;
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [
@@ -2401,20 +2517,36 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // the poll, not this, is what reports the daemon unreachable. A hidden
   // tab stops asking, as it stops polling (HIDDEN_POLL_EVERY), and asks
   // again the moment it is shown.
+  //
+  // It is also how the page hears that grain is back. After a failed
+  // ask, the next one is ?quick=1, which the daemon answers at once
+  // rather than holding, and an answer that finds the main poll backed
+  // off resets its backoff and polls now: otherwise the banner waited
+  // for the poll's next backed-off tick, up to half a minute after
+  // grain was answering again (grain/task-2258).
   const watchingRestart = Boolean(config) && !pollDenied;
   useEffect(() => {
     if (!watchingRestart) return undefined;
     let stopped = false;
     let asking = false;
     let timer = null;
+    let failed = false;
     async function watch() {
       timer = null;
       if (stopped || asking || document.visibilityState === "hidden") return;
       asking = true;
       const started = Date.now();
       try {
-        const answer = await api("/api/restart-watch");
+        const answer = await api(
+          failed ? "/api/restart-watch?quick=1" : "/api/restart-watch",
+        );
+        failed = false;
         if (stopped) return;
+        if (pollBackoff.current > 1) {
+          pollBackoff.current = 1;
+          pollTick.current = 0;
+          pollNow.current?.();
+        }
         if (answer?.restarting) {
           restartingRef.current = true;
           // A request that failed while this answer was on its way
@@ -2427,6 +2559,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
         }
       } catch {
         // Unreachable, refused or anything else: the poll says so.
+        failed = true;
       }
       asking = false;
       if (stopped) return;
@@ -2689,20 +2822,28 @@ function AppContent({ onReload = () => window.location.reload() }) {
       // Back to it would only be corrected all over again.
       // An address Processes replaced (/schedules/sched-1, /suites) is
       // rewritten in place too: it is the same page under its new name
-      // (docs/design/settings-panel.md §5.4), and a step back to it would
+      // (design/design/settings-panel.design.md §5.4), and a step back to it would
       // only redirect forward again.
       const oldProcessPath =
         /^\/(schedules|templates|suites|processes\/triggers)(\/|$)/.test(
           window.location.pathname,
         ) ||
-        (view === "settings" &&
-          settingsSection === "general" &&
+        // A bare /settings becoming /settings/models is the same page
+        // renamed everywhere but a phone, where the bare path is the
+        // section list: picking Models from it is a step Back has to
+        // return from, as it does for every other section (2026-11-01
+        // responsive walkthrough).
+        (!isPhone &&
+          view === "settings" &&
+          settingsSection === DEFAULT_SETTINGS_SECTION &&
           window.location.pathname === "/settings") ||
         (view === "session" &&
           !openTaskId &&
           /^\/(tasks|director)(\/|$)/.test(window.location.pathname));
       if (mountedRef.current && !samePage && !dropped && !oldProcessPath) {
-        window.history.pushState(entry, "", path);
+        const anchorHash =
+          view === "settings" && settingsAnchor ? `#${settingsAnchor}` : "";
+        window.history.pushState(entry, "", path + anchorHash);
       } else {
         // A correction of the address on screen -- the first write on
         // load -- keeps its #fragment, which is a
@@ -2737,6 +2878,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
     openCIRunId,
     openSessionId,
     settingsSection,
+    settingsAnchor,
     settingsItem,
     systemTab,
     metricsNarrowing,
@@ -2752,6 +2894,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
     config,
     urlTask,
     showError,
+    isPhone,
   ]);
 
   // Mirrors the browser's own back/forward buttons onto the same state
@@ -2821,6 +2964,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
       // as well as in and out of the views, since both are in the path.
       setSettingsSection(parsed.settingsSection || "");
       setSettingsItem(parsed.settingsItem || "");
+      setSettingsAnchor(
+        parsed.view === "settings" && window.location.hash
+          ? decodeURIComponent(window.location.hash.slice(1))
+          : "",
+      );
       setSystemTab(parsed.systemTab || "");
       // Back out of a scoped report is how that scope is undone, exactly
       // as it is for a narrowed list above.
@@ -3041,6 +3189,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       narrowing={narrowing}
       onNarrow={narrow}
       onOpenTask={openTask}
+      onOpen={openPanelView}
       showError={showError}
       onMoveSection={moveSection}
       pickedWindow={boardWindow}
@@ -3054,6 +3203,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // itself into another.
   const openNewTask = () => {
     setNewTaskRepo(null);
+    setNewTaskBoard(view === "boards" ? openBoardId : null);
+    setNewTaskTemplate(null);
     setNewTaskPrefill(null);
     setNewTaskFields(null);
     setShowNewTask(true);
@@ -3088,6 +3239,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
     (fields) => {
       closeDetail();
       setNewTaskRepo(null);
+      setNewTaskBoard(null);
+      setNewTaskTemplate(null);
       setNewTaskPrefill(null);
       setNewTaskFields(
         fields && Object.keys(fields).length > 0 ? fields : null,
@@ -3119,7 +3272,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
     [setViewAndCloseOpen, isPhone],
   );
   const openSettings = useCallback(
-    (section = "general", anchor = "") => {
+    (section = DEFAULT_SETTINGS_SECTION, anchor = "") => {
       if (!section) {
         if (leavingLosesEdits() && !window.confirm(DISCARD_PROMPT)) return;
         setSettingsSection("");
@@ -3146,11 +3299,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
   );
   const openDeploymentSettings = openSettings;
 
-  // A bare /settings is the section list on a phone and General
-  // everywhere else, so the address says General there (§3.2).
+  // A bare /settings is the section list on a phone and Models
+  // everywhere else, so the address says Models there (§3.2).
   useEffect(() => {
     if (view === "settings" && !settingsSection && !isPhone)
-      setSettingsSection("general");
+      setSettingsSection(DEFAULT_SETTINGS_SECTION);
   }, [view, settingsSection, isPhone]);
   // And a /system/health is the bare /system everywhere but a phone,
   // where the bare path is the list of tabs (settingsSections.js's
@@ -3161,15 +3314,26 @@ function AppContent({ onReload = () => window.location.reload() }) {
   }, [view, systemTab, isPhone]);
 
   const handleLogout = useCallback(async () => {
+    let redirect = "";
     try {
-      await api("/api/auth/logout", { method: "POST" });
+      const res = await api("/api/auth/logout", { method: "POST" });
+      if (typeof res?.redirect === "string") {
+        redirect = res.redirect;
+      }
     } catch {
       // Ignored
+    }
+    if (!redirect && config?.authMethod === "iap") {
+      redirect = "/_gcp_iap/clear_login_cookie";
+    }
+    if (redirect) {
+      window.location.assign(redirect);
+      return;
     }
     // The page itself is what the daemon gates: loaded again without the
     // session it is the access-code sign-in.
     onReload();
-  }, [onReload]);
+  }, [config?.authMethod, onReload]);
 
   // The persistent sandboxes, for the rail's Staging group. Quiet on
   // failure: a deployment that supervises none answers an empty list,
@@ -3239,6 +3403,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
       stateFilter={stateFilter}
       onSetFilter={selectStateFilter}
       onOpenSystem={() => openSystem("")}
+      onOpenAccess={() => openSettings("access")}
+      onLogout={handleLogout}
       onOpenUpgrade={() => openSettings("upgrade")}
       onOpenNewTask={openNewTask}
     />
@@ -3256,10 +3422,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
             ? " / releases"
             : repoComparison !== null
               ? " / pull request"
-              : ""
+              : repoTabCrumb(repoTab)
         }`
       : view === "settings"
-        ? `settings / ${settingsSectionLabel(settingsSection || "general").toLowerCase()}`
+        ? `settings / ${settingsSectionLabel(settingsSection || DEFAULT_SETTINGS_SECTION).toLowerCase()}`
         : view === "system"
           ? `system / ${systemTabLabel(systemTab || "health").toLowerCase()}`
           : view === "boards" && openBoardRow
@@ -3303,6 +3469,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       onChanged={() => Promise.all([refreshConfig(), reloadNotifications()])}
       showError={showError}
       onOpenConfigRepo={() => openSettings("config-repo")}
+      onOpenPower={() => openSystem("power")}
       onOpenConnection={() => openDeploymentSettings("models")}
       onOpenSetup={({ tab, view: target }) =>
         target ? setViewAndCloseOpen(target) : openDeploymentSettings(tab)
@@ -3316,14 +3483,16 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // The far end of every page's header rail: the bell, System and the
   // gear. A phone has no rail: PhoneNav's bar holds the bell and the
   // gear and System is the row at the foot of the drawer
-  // (docs/design/settings-panel.md §4.1).
+  // (design/design/settings-panel.design.md §4.1).
   const globalButtons = (
     <GlobalButtons
       alerts={alertsButton}
       view={view}
       config={config}
       onOpenSystem={() => openSystem("")}
-      onOpenSettings={() => openSettings("general")}
+      onOpenSettings={() => openSettings()}
+      onOpenAccess={() => openSettings("access")}
+      onLogout={handleLogout}
     />
   );
 
@@ -3441,6 +3610,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                               setReleasesOpen(false);
                               setOpenRelease(null);
                             }}
+                            onOpenTab={(tab) => openRepoPage(openRepo, tab)}
                             onOpenTask={openTask}
                             showError={showError}
                           />
@@ -3505,6 +3675,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                             onOpenSchedule={setOpenScheduleId}
                             openTemplateId={openTemplateId}
                             onOpenTemplate={setOpenTemplateId}
+                            onNewTaskFromTemplate={openNewTaskFromTemplate}
                             openSuiteId={openSuiteId}
                             onOpenSuite={setOpenSuiteId}
                             openSuiteRunId={openSuiteRunId}
@@ -3537,6 +3708,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                    flat list. */
                           <InboxPage
                             tasks={tasks}
+                            tasksLoaded={tasksListed}
                             config={config}
                             onOpenTask={openTask}
                             onOpenConfigRepo={() => openSettings("config-repo")}
@@ -3726,6 +3898,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                               metricsWindow={metricsWindow}
                               onPickMetricsWindow={setMetricsWindow}
                               onOpenTask={openTaskFromMetrics}
+                              onOpenView={openPanelView}
                               onAct={act}
                               onOpenSession={openStandingSession}
                             />
@@ -3754,6 +3927,12 @@ function AppContent({ onReload = () => window.location.reload() }) {
           )}
         </div>
         {error !== null && <ErrorBanner message={error} />}
+        {filedWithoutDefaults !== null && (
+          <DroppedDefaultsNotice
+            created={filedWithoutDefaults}
+            onClose={() => setFiledWithoutDefaults(null)}
+          />
+        )}
         <ConfigRefusalDialog
           refusal={configRefusal}
           onClose={() => setConfigRefusal(null)}
@@ -3835,8 +4014,12 @@ function AppContent({ onReload = () => window.location.reload() }) {
               defaultRepo={newTaskRepo !== null ? newTaskRepo : openRepo}
               prefill={newTaskPrefill}
               fields={newTaskFields}
+              boardId={newTaskBoard || ""}
+              templateId={newTaskTemplate || ""}
               onClose={() => {
                 setShowNewTask(false);
+                setNewTaskBoard(null);
+                setNewTaskTemplate(null);
                 setNewTaskFields(null);
                 setNewTaskPrefill(null);
               }}

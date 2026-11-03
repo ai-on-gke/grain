@@ -585,7 +585,7 @@ func templateSchema() Schema {
 			// filing team already has.
 			{Model: "Model", Keys: carried("model"), Columns: []string{"agent_model"}},
 			// The goal every task it files is declared with
-			// (model.Template.Goal, docs/design/durable-tasks.md#DT-4): JSON
+			// (model.Template.Goal, design/design/durable-tasks.design.md#DT-4): JSON
 			// model.GoalDecl. Settings only: a goal decides when grain
 			// closes the work, which is the deployment's to say.
 			{Model: "Goal", Keys: []Key{settingsOnly("goal", Inline)}, Columns: []string{"goal"}},
@@ -594,6 +594,13 @@ func templateSchema() Schema {
 			// decides who the agent talks to while it works, not what the
 			// work may touch.
 			{Model: "Interactive", Keys: carried("interactive"), Columns: []string{"interactive"}},
+			{Model: "KeepRunning", Keys: carried("keep-running"), Columns: []string{"keep_running"}},
+			// The hostd every task it files starts pinned to
+			// (model.Template.Hostd). Settings only: which machine runs
+			// the work's host side, under whose credentials, is the
+			// deployment's to say -- a repository naming one would be
+			// routing its own work onto somebody's hostd.
+			{Model: "Hostd", Keys: []Key{settingsOnly("hostd", Authority)}, Columns: []string{"hostd"}},
 			{Model: "CustomFields", Keys: carried("custom-fields"), Table: "template_custom_field"},
 
 			// The refusals. Each of these would be perfectly natural to
@@ -619,6 +626,11 @@ func templateSchema() Schema {
 				Model:   "Reviewers",
 				Keys:    []Key{settingsOnly("reviewers", Reach)},
 				Columns: []string{"reviewers"},
+			},
+			{
+				Model:   "Priority",
+				Keys:    carried("priority"),
+				Columns: []string{"priority"},
 			},
 			{Model: "Reads", Keys: []Key{settingsOnly("reads", Reach)}, Table: "template_read"},
 			{Model: "Writes", Keys: []Key{settingsOnly("writes", Reach)}, Table: "template_write"},
@@ -757,6 +769,7 @@ func scheduleSchema() Schema {
 					{Name: "daily", In: Everywhere},
 					{Name: "weekly", In: Everywhere},
 					{Name: "monthly", In: Everywhere},
+					{Name: "trigger", In: Everywhere},
 				},
 				Columns: []string{
 					"recurrence_kind", "every_n_hours", "every_n_minutes", "time_of_day_minutes", "weekday", "day_of_month",
@@ -792,6 +805,11 @@ func scheduleSchema() Schema {
 				Model:   "NothingNeededAction",
 				Keys:    []Key{settingsOnly("nothing-needed", Inline)},
 				Columns: []string{"nothing_needed_action"},
+			},
+			{
+				Model:   "KeepRunning",
+				Keys:    []Key{settingsOnly("keep-running", Inline)},
+				Columns: []string{"keep_running"},
 			},
 			{
 				Model: "CustomFields",
@@ -1089,6 +1107,18 @@ func RepoSettingsSchema() Schema {
 				Model:   "MergeRecheck",
 				Keys:    []Key{settingsOnly("merge-recheck", Verdict)},
 				Columns: []string{"merge_recheck"},
+			},
+
+			// issue-import turns GitHub issues into tasks here, and with
+			// issue_import_approved it queues them unread: whoever can
+			// open an issue on the source then decides what an agent is
+			// dispatched to do. Authority, because a repository cannot
+			// grant its own issue authors that.
+			{
+				Model: "IssueImport",
+				Keys:  []Key{settingsOnly("issue-import", Authority)},
+				Columns: []string{"issue_import_enabled", "issue_import_repo", "issue_import_label",
+					"issue_import_approved", "issue_import_interval_seconds"},
 			},
 
 			// ci-mode configures the unified CI mode (grain, github, none).

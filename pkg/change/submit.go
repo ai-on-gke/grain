@@ -190,6 +190,26 @@ type Store interface {
 	AddComment(ctx context.Context, c model.Comment) (int64, error)
 }
 
+// closer is a Store that records who closed a task beside the stamp
+// (model.Store.ObserveClose). It is not part of Store so that a Store
+// standing in for model.Store need not carry it; one that does not is
+// only stamped.
+type closer interface {
+	ObserveClose(ctx context.Context, taskID string, now time.Time, by model.Principal, reason string,
+		set func(*model.Observation)) error
+}
+
+// observeClose stamps a close through st, recorded as by's for reason
+// where st can record it.
+func observeClose(ctx context.Context, st Store, taskID string, now time.Time, by model.Principal, reason string,
+	set func(*model.Observation)) error {
+
+	if c, ok := st.(closer); ok {
+		return c.ObserveClose(ctx, taskID, now, by, reason, set)
+	}
+	return st.ObserveField(ctx, taskID, now, set)
+}
+
 // SubmitPrincipal is who writes the notes a Submit's outcome leaves.
 var SubmitPrincipal = model.Principal{Kind: model.PrincipalAutomation, ID: "cl-submit"}
 
@@ -259,7 +279,11 @@ func RecordSubmitted(ctx context.Context, st Store, task model.Task, from, to, m
 		return fmt.Errorf("recording %s submitted: %w", from, err)
 	}
 	if last {
-		if err := st.ObserveField(ctx, task.ID, now, func(o *model.Observation) {
+		reason := "change submitted"
+		if outside {
+			reason = "change submitted outside grain"
+		}
+		if err := observeClose(ctx, st, task.ID, now, SubmitPrincipal, reason, func(o *model.Observation) {
 			if o.ClosedAt == nil {
 				o.ClosedAt = &now
 			}
@@ -307,10 +331,24 @@ func plural(n int, what string) string {
 	return fmt.Sprintf("%d %ss", n, what)
 }
 
-// RecordAbandoned marks task's CL target abandoned. A task left with no
-// live CL goes back to awaiting_reply (model.AwaitsAck reads a task with
-// no change link as waiting on a person), with a comment saying why.
+// RecordAbandoned marks task's CL target abandoned: abandoned or deleted
+// outside a Submit, by a person or by a run (citc_cl_delete). A task left
+// with no live CL goes back to awaiting_reply (model.AwaitsAck reads a
+// task with no change link as waiting on a person), with a comment saying
+// why.
 func RecordAbandoned(ctx context.Context, st Store, task model.Task, target string, now time.Time) error {
+	return recordDead(ctx, st, task, target, fmt.Sprintf("%s was abandoned or deleted.", target), now)
+}
+
+// RecordEmpty marks task's CL target abandoned because it holds no files
+// (Observation.Empty), which no Submit can land: an empty CL is no change
+// to wait on, so it counts as RecordAbandoned's does.
+func RecordEmpty(ctx context.Context, st Store, task model.Task, target string, now time.Time) error {
+	return recordDead(ctx, st, task, target,
+		fmt.Sprintf("%s holds no files, so there is nothing to submit; grain no longer counts it as this task's CL.", target), now)
+}
+
+func recordDead(ctx context.Context, st Store, task model.Task, target, why string, now time.Time) error {
 	if Settled(task, target) {
 		return nil
 	}
@@ -332,7 +370,7 @@ func RecordAbandoned(ctx context.Context, st Store, task model.Task, target stri
 	}); err != nil {
 		return fmt.Errorf("recording %s abandoned: %w", target, err)
 	}
-	body := fmt.Sprintf("%s was abandoned outside grain.", target)
+	body := why
 	if live == 0 {
 		body += " This task has no live CL left, so it is waiting on a person: reopen it with a comment to have a run upload a new CL, or close it."
 	}

@@ -56,8 +56,9 @@ var errSandboxCLIUnwired = errors.New("this daemon's UI/API server is not runnin
 type sandboxCLIGate struct{}
 
 var (
-	_ gitproxy.CLIActions     = sandboxCLIGate{}
-	_ gitproxy.CLITaskActions = sandboxCLIGate{}
+	_ gitproxy.CLIActions            = sandboxCLIGate{}
+	_ gitproxy.CLITaskActions        = sandboxCLIGate{}
+	_ gitproxy.CLIGitHubCheckActions = sandboxCLIGate{}
 )
 
 func (sandboxCLIGate) actions() (ui.SandboxCLIActions, error) {
@@ -164,6 +165,24 @@ func (g sandboxCLIGate) ListAPIRoutes(ctx context.Context, callerTaskID string, 
 	return a.ListAPIRoutes(ctx, callerTaskID, grants, scopeFilter)
 }
 
+func (g sandboxCLIGate) UsesGitHubChecks(ctx context.Context, taskID string) (bool, error) {
+	a, err := g.actions()
+	if err != nil {
+		return false, err
+	}
+	return a.UsesGitHubChecks(ctx, taskID)
+}
+
+func (g sandboxCLIGate) WaitForGitHubChecks(ctx context.Context, taskID string,
+	timeout, poll time.Duration, onPoll func(waited time.Duration)) (mcp.GitHubCheckWaitResult, error) {
+
+	a, err := g.actions()
+	if err != nil {
+		return mcp.GitHubCheckWaitResult{}, err
+	}
+	return a.WaitForGitHubChecks(ctx, taskID, timeout, poll, onPoll)
+}
+
 // NewWaitCreditor returns a gitproxy.CLIWaitCreditor backed by credits.
 func NewWaitCreditor(credits *orchestrator.RunWaitCredits) gitproxy.CLIWaitCreditor {
 	return waitCreditAdapter{credits: credits}
@@ -251,6 +270,67 @@ func (PullRequestGate) ResolveForTask(ctx context.Context, taskID, threadID stri
 	return opener.ResolveForTask(ctx, taskID, threadID, commentID)
 }
 
+// GitHubPullRequestReader is ui.PullRequestCheckReader.
+func (o *PullRequestOpener) GitHubPullRequestReader() mcp.PullRequestReader {
+	if o == nil {
+		return nil
+	}
+	return o.Client
+}
+
+// GitHubPullRequestReader is the same gate for ui.PullRequestCheckReader.
+func (PullRequestGate) GitHubPullRequestReader() mcp.PullRequestReader {
+	opener := LivePullRequests.Load()
+	if opener == nil {
+		return nil
+	}
+	return opener.GitHubPullRequestReader()
+}
+
 var errNoGitHubClientYet = errors.New(
 	"this daemon has no GitHub client yet: " +
 		"its reconcile loop has not started (or has failed -- check the daemon log)")
+
+// sandboxExternalCI is the namespace's ci.ExternalRuns -- GitHub Actions
+// runs, served under ci:// and by grain ci list/show/log -- over whatever
+// liveSandboxCLI holds: the UI/API server's client reads them through the
+// daemon's own forge connection (pkg/ui/ci_actions.go). Before that
+// client is up there are none to serve.
+type sandboxExternalCI struct{}
+
+var (
+	_ ci.ExternalRuns        = sandboxExternalCI{}
+	_ ci.ExternalRunsCounter = sandboxExternalCI{}
+)
+
+func (sandboxExternalCI) FindExternalRuns(ctx context.Context, f ci.RunFilter, limit int) ([]ci.Run, string) {
+	client := liveSandboxCLI.Load()
+	if client == nil {
+		return nil, ""
+	}
+	return client.ExternalCIRuns().FindExternalRuns(ctx, f, limit)
+}
+
+func (sandboxExternalCI) FindExternalRunsCounted(ctx context.Context, f ci.RunFilter, limit int) ([]ci.Run, int, string) {
+	client := liveSandboxCLI.Load()
+	if client == nil {
+		return nil, 0, ""
+	}
+	return ci.FindExternalRunsCounted(ctx, client.ExternalCIRuns(), f, limit)
+}
+
+func (sandboxExternalCI) ExternalRun(ctx context.Context, id string) (ci.Run, bool, error) {
+	client := liveSandboxCLI.Load()
+	if client == nil {
+		return ci.Run{}, false, nil
+	}
+	return client.ExternalCIRuns().ExternalRun(ctx, id)
+}
+
+func (sandboxExternalCI) ExternalJobLog(ctx context.Context, id, job string) (string, error) {
+	client := liveSandboxCLI.Load()
+	if client == nil {
+		return "", errSandboxCLIUnwired
+	}
+	return client.ExternalCIRuns().ExternalJobLog(ctx, id, job)
+}

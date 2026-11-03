@@ -30,12 +30,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
 )
 
@@ -46,12 +49,15 @@ func isCLIPath(path string) bool {
 // cliRouteTools names each /cli/ read after the MCP tool it replaces.
 var cliRouteTools = map[string]string{
 	"ci/runs":         "list_ci_runs",
+	"ci/run":          "list_ci_runs",
+	"ci/show":         "get_ci_log",
 	"ci/test-history": "query_test_history",
 	"pr/status":       "pull_request_status",
 	"pr/base-status":  "base_branch_status",
 	"issues":          "list_issues",
 	"issue":           "read_issue",
 	"db/query":        "query_grain_db",
+	"tasks":           "list_grain_tasks",
 	// The acting routes (cli_actions.go).
 	"ci/wait":           "wait_for_checks",
 	"ci/run-job":        "run_ci_job",
@@ -67,7 +73,7 @@ var cliRouteTools = map[string]string{
 	"tasks/notes":       "message_task",
 	"tasks/wait":        "wait_for_task",
 	"proposals":         "propose_task",
-	"quarantine":        "quarantine_test",
+	"quarantine":        "api_quarantine_test",
 }
 
 // CLIRouteActivity names a /cli/<route> request after the MCP tool it
@@ -150,17 +156,28 @@ func (p *GitProxy) serveCLIRoute(w http.ResponseWriter, r *http.Request, scope n
 			"task": scope.TaskIDStr, "repo": scope.TaskRepo, "branch": scope.TaskBranch, "base": scope.TaskBase,
 		})
 	case route == "ci/runs":
-		p.serveCIRuns(w, q, scope)
+		p.serveCIRuns(w, r, scope)
+	case route == "ci/run":
+		p.serveCIRunRepo(w, q, scope)
+	case route == "ci/show":
+		p.serveCIShow(w, r, scope)
 	case route == "ci/test-history":
 		p.serveTestHistory(w, q, scope)
 	case route == "pr/status":
-		p.serveBranchStatus(w, scope, scope.TaskBranch, "this task's branch")
+		p.servePRStatus(w, r, scope)
+	case route == "tasks":
+		p.serveTasks(w, r, scope)
 	case route == "pr/base-status":
+		if scope.TaskRepo == "" {
+			// Without a repository "main" is every repository's main.
+			cliError(w, errNoTaskRepo)
+			return
+		}
 		base := scope.TaskBase
 		if base == "" {
 			base = "main"
 		}
-		p.serveBranchStatus(w, scope, base, "the base branch")
+		p.serveBranchStatus(w, scope, "", base, "the base branch")
 	case route == "issues" || strings.HasPrefix(route, "issues/"):
 		if !scope.MayReadIssues {
 			cliError(w, namespace.RefuseCapability("grain issue", "read-issues"))
@@ -169,7 +186,7 @@ func (p *GitProxy) serveCLIRoute(w http.ResponseWriter, r *http.Request, scope n
 		p.serveIssues(w, r, scope, strings.TrimPrefix(strings.TrimPrefix(route, "issues"), "/"))
 	case route == "db/query":
 		if !scope.MayReadDB {
-			cliError(w, namespace.RefuseCapability("grain db query", "db-read"))
+			cliError(w, namespace.RefuseCapability("grain db query", "https://grain.dev/capabilities/grain#sql"))
 			return
 		}
 		p.serveDBQuery(w, r, scope)
@@ -292,7 +309,7 @@ func (p *GitProxy) ciReadRepo(scope namespace.Scope, repo string) (string, ci.Ru
 		repo = scope.TaskRepo
 	}
 	if !scope.PermitsCI("") {
-		return "", nil, namespace.RefuseCapability("grain ci", "grain-ci")
+		return "", nil, namespace.RefuseCapability("grain ci", model.GrainCIRef)
 	}
 	if repo == "" && !scope.MayReadAllCI {
 		// An empty filter matches every repository's runs (ci.RunFilter),
@@ -319,17 +336,80 @@ func cliLimit(q url.Values, key string, def, max int) int {
 	return n
 }
 
-func (p *GitProxy) serveCIRuns(w http.ResponseWriter, q url.Values, scope namespace.Scope) {
-	repo, store, err := p.ciReadRepo(scope, q.Get("repo"))
+// errNoTaskRepo answers a command about this task's own branch on a task
+// with no repository (no_repo): its scope may still name a branch, but no
+// repository has it, so nothing is reported about it.
+var errNoTaskRepo = fmt.Errorf("%w: this task has no repository or branch; pass --repo <owner/repo> [--ref <b>] or use `grain ci list --repo ...`", namespace.ErrBadRequest)
+
+// TaskRefLookup is what a NamespaceScopeLookup also implements to name
+// another task's repository and branch, for /cli/ci/runs?task= and
+// /cli/pr/status?task=. Implemented by *model.Store.
+type TaskRefLookup interface {
+	TaskCIRef(ctx context.Context, taskID string) (repo, branch string, found bool, err error)
+}
+
+// taskCIRef resolves task to the repository and branch its CI runs are
+// recorded under, refusing a task whose repository is outside the run's
+// CI read scope in the same words as one that does not exist.
+func (p *GitProxy) taskCIRef(ctx context.Context, scope namespace.Scope, task string) (repo, branch string, err error) {
+	task = strings.TrimSpace(strings.TrimPrefix(task, "#"))
+	if !scope.PermitsCI("") {
+		return "", "", namespace.RefuseCapability("grain ci", model.GrainCIRef)
+	}
+	if own := scope.TaskIDStr; own != "" && strings.EqualFold(own, task) {
+		if scope.TaskRepo == "" {
+			return "", "", errNoTaskRepo
+		}
+		return scope.TaskRepo, scope.TaskBranch, nil
+	}
+	lookup, ok := p.NamespaceScopes.(TaskRefLookup)
+	if !ok {
+		return "", "", fmt.Errorf("%w: this proxy cannot look up another task's branch: name it with --ref", namespace.ErrNotFound)
+	}
+	repo, branch, found, err := lookup.TaskCIRef(ctx, task)
+	if err != nil {
+		return "", "", err
+	}
+	if !found || repo == "" || !scope.PermitsCI(repo) {
+		return "", "", fmt.Errorf("%w: task %s is not a task in a repository this sandbox may read CI for", namespace.ErrNotFound, task)
+	}
+	return repo, branch, nil
+}
+
+func (p *GitProxy) serveCIRuns(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
+	q := r.URL.Query()
+	repoArg, ref, exact := q.Get("repo"), q.Get("ref"), ""
+	if task := strings.TrimSpace(q.Get("task")); task != "" {
+		taskRepo, branch, err := p.taskCIRef(r.Context(), scope, task)
+		if err != nil {
+			cliError(w, err)
+			return
+		}
+		if repoArg != "" && !strings.EqualFold(repoArg, taskRepo) {
+			cliError(w, fmt.Errorf("%w: task %s works in %s, not %s", namespace.ErrBadRequest, task, taskRepo, repoArg))
+			return
+		}
+		repoArg, ref, exact = taskRepo, branch, branch
+	}
+	repo, store, err := p.ciReadRepo(scope, repoArg)
 	if err != nil {
 		cliError(w, err)
 		return
 	}
-	ref := q.Get("ref")
 	if ref == "@branch" {
+		if scope.TaskRepo == "" {
+			cliError(w, errNoTaskRepo)
+			return
+		}
 		ref = scope.TaskBranch
 	}
-	f := ci.RunFilter{Repo: repo, Ref: ref, Job: q.Get("job"), Descending: true}
+	f := ci.RunFilter{
+		Repo:       repo,
+		Ref:        ref,
+		Job:        q.Get("job"),
+		Workflow:   strings.TrimSpace(q.Get("workflow")),
+		Descending: true,
+	}
 	for _, c := range strings.Split(q.Get("conclusion"), ",") {
 		if c = strings.TrimSpace(c); c != "" {
 			f.States = append(f.States, c)
@@ -343,18 +423,198 @@ func (p *GitProxy) serveCIRuns(w http.ResponseWriter, q url.Values, scope namesp
 		}
 		f.Since = at
 	}
-	page := store.Find(f, cliLimit(q, "limit", 20, 200))
+	limit := cliLimit(q, "limit", 20, 200)
+	switch f.Provider = strings.ToLower(strings.TrimSpace(q.Get("provider"))); f.Provider {
+	case "", ci.ProviderGrain, ci.ProviderGitHubActions:
+	default:
+		cliError(w, fmt.Errorf("%w: %q is not a CI provider: use %s or %s", namespace.ErrBadRequest, q.Get("provider"),
+			ci.ProviderGrain, ci.ProviderGitHubActions))
+		return
+	}
+	if exact != "" {
+		// Ref matches as a substring, so task-19's branch would find
+		// task-190's runs too: read a wider page and keep the branch's own.
+		page := p.findCIRuns(r.Context(), store, f, 200)
+		var runs []ci.Run
+		for _, run := range page.Runs {
+			if strings.EqualFold(run.Ref, exact) && len(runs) < limit {
+				runs = append(runs, run)
+			}
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		fmt.Fprintf(w, "%d run(s) of task %s on %s in %s, newest first:\n", len(runs), strings.TrimPrefix(strings.TrimSpace(q.Get("task")), "#"), exact, repo)
+		for _, run := range runs {
+			fmt.Fprintln(w, formatCIRunLine(run))
+		}
+		return
+	}
+	page := p.findCIRuns(r.Context(), store, f, limit)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if repo == "" {
+		// No repository filter: the runs are every readable repository's,
+		// so each row says whose it is.
+		fmt.Fprintf(w, "%d of %d matching run(s) across all readable repos, newest first:\n", len(page.Runs), page.Matched)
+		for _, run := range page.Runs {
+			fmt.Fprintln(w, run.Repo+" "+formatCIRunLine(run))
+		}
+		return
+	}
 	fmt.Fprintf(w, "%d of %d matching run(s) in %s, newest first:\n", len(page.Runs), page.Matched, repo)
 	for _, run := range page.Runs {
 		fmt.Fprintln(w, formatCIRunLine(run))
 	}
+	if page.note != "" {
+		fmt.Fprintf(w, "(GitHub Actions: %s)\n", page.note)
+	}
+}
+
+// ciRunsPage is a page of runs from grain CI and the namespace's
+// ExternalCI together, and why the external half is short, if it is.
+type ciRunsPage struct {
+	ci.RunPage
+	note string
+}
+
+// findCIRuns is store's runs matching f merged with the namespace's
+// ExternalCI (GitHub Actions) runs of f.Repo, newest first, at most limit.
+func (p *GitProxy) findCIRuns(ctx context.Context, store ci.RunStore, f ci.RunFilter, limit int) ciRunsPage {
+	var page ci.RunPage
+	if f.Provider == "" || f.Provider == ci.ProviderGrain {
+		grain := f
+		grain.Provider = ""
+		page = store.Find(grain, limit)
+	}
+	if p.Namespace == nil || p.Namespace.ExternalCI == nil || f.Repo == "" || f.Provider == ci.ProviderGrain {
+		return ciRunsPage{RunPage: page}
+	}
+	external, extMatched, note := ci.FindExternalRunsCounted(ctx, p.Namespace.ExternalCI, f, limit)
+	if len(external) == 0 {
+		page.Matched += extMatched
+		page.Stored += extMatched
+		return ciRunsPage{RunPage: page, note: note}
+	}
+	runs := append(append([]ci.Run(nil), page.Runs...), external...)
+	sort.SliceStable(runs, func(i, j int) bool {
+		a, b := runs[i].StartedAt, runs[j].StartedAt
+		switch {
+		case a == nil:
+			return b != nil
+		case b == nil:
+			return false
+		}
+		return a.After(*b)
+	})
+	if len(runs) > limit {
+		runs = runs[:limit]
+	}
+	page.Runs = runs
+	page.Matched += extMatched
+	page.Stored += extMatched
+	return ciRunsPage{RunPage: page, note: note}
+}
+
+// serveCIRunRepo answers /cli/ci/run?id=<run> with the run's repository
+// and branch as JSON, so `grain ci log <run-id>` reads a run of any
+// repository the sandbox may read CI for without being told which.
+func (p *GitProxy) serveCIRunRepo(w http.ResponseWriter, q url.Values, scope namespace.Scope) {
+	id := strings.TrimSpace(q.Get("id"))
+	if id == "" {
+		http.Error(w, "id is required", http.StatusBadRequest)
+		return
+	}
+	if !scope.PermitsCI("") {
+		cliError(w, namespace.RefuseCapability("grain ci", model.GrainCIRef))
+		return
+	}
+	if p.Namespace == nil || p.Namespace.CIStore == nil {
+		cliError(w, fmt.Errorf("%w: CI store is unavailable", namespace.ErrNotFound))
+		return
+	}
+	run, ok := p.Namespace.CIStore.Get(id)
+	if !ok && p.Namespace.ExternalCI != nil && externalRunPermitted(scope, id) {
+		run, ok, _ = p.Namespace.ExternalCI.ExternalRun(context.Background(), id)
+	}
+	if !ok || run.Repo == "" || !scope.PermitsCI(run.Repo) {
+		// A run outside the scope is answered as one nobody remembers.
+		cliError(w, fmt.Errorf("%w: no CI run %s in a repository this sandbox may read", namespace.ErrNotFound, id))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(map[string]string{"id": run.ID, "repo": run.Repo, "ref": run.Ref})
+}
+
+// serveCIShow answers /cli/ci/show?id=<run> with the run's line, then
+// each job and its steps with their conclusions -- grain CI's or GitHub
+// Actions' alike -- for `grain ci show`.
+func (p *GitProxy) serveCIShow(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		cliError(w, fmt.Errorf("%w: a run id is required", namespace.ErrBadRequest))
+		return
+	}
+	if !scope.PermitsCI("") {
+		cliError(w, namespace.RefuseCapability("grain ci", model.GrainCIRef))
+		return
+	}
+	if p.Namespace == nil || p.Namespace.CIStore == nil {
+		cliError(w, fmt.Errorf("%w: CI store is unavailable", namespace.ErrNotFound))
+		return
+	}
+	run, ok := p.Namespace.CIStore.Get(id)
+	if !ok && p.Namespace.ExternalCI != nil && externalRunPermitted(scope, id) {
+		var err error
+		if run, ok, err = p.Namespace.ExternalCI.ExternalRun(r.Context(), id); err != nil {
+			ok = false
+		}
+	}
+	if !ok || run.Repo == "" || !scope.PermitsCI(run.Repo) {
+		cliError(w, fmt.Errorf("%w: no CI run %s in a repository this sandbox may read", namespace.ErrNotFound, id))
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	fmt.Fprintf(w, "%s (%s)\n", formatCIRunLine(run), run.Repo)
+	if a := run.Actions; a != nil {
+		if a.WorkflowName != "" || a.Workflow != "" {
+			fmt.Fprintf(w, "workflow: %s %s, attempt %d, event %s\n", a.WorkflowName, a.Workflow, a.RunAttempt, run.Event)
+		}
+		if a.URL != "" {
+			fmt.Fprintf(w, "url: %s\n", a.URL)
+		}
+	}
+	for _, job := range run.Jobs {
+		state := ci.JobStateOf(job)
+		if job.JobID != "" && job.JobID != job.Name {
+			fmt.Fprintf(w, "job %s: %s (id %s)\n", job.Name, state, job.JobID)
+		} else {
+			fmt.Fprintf(w, "job %s: %s\n", job.Name, state)
+		}
+		for i, step := range job.Steps {
+			verdict := string(step.Conclusion)
+			if verdict == "" {
+				verdict = "not finished"
+			}
+			fmt.Fprintf(w, "  %d. %s: %s\n", i+1, step.Name, verdict)
+		}
+	}
+}
+
+// externalRunPermitted reports whether scope may read the repository a
+// GitHub Actions run id names. It is asked before the run is read: the
+// daemon reads it from the forge with its own credential, so an id for
+// a repository outside the scope is refused without that read, not after
+// it.
+func externalRunPermitted(scope namespace.Scope, id string) bool {
+	repo, _, ok := ci.ParseActionsRunID(id)
+	return ok && scope.PermitsCI(repo)
 }
 
 func formatCIRunLine(run ci.Run) string {
 	verdict := string(run.Conclusion)
 	if verdict == "" {
 		verdict = "running"
+		if run.Actions != nil {
+			verdict = ci.RunStateOf(run)
+		}
 	}
 	started := ""
 	if run.StartedAt != nil {
@@ -366,7 +626,19 @@ func formatCIRunLine(run ci.Run) string {
 			failing = append(failing, job.Name)
 		}
 	}
-	line := strings.TrimSpace(strings.Join([]string{run.ID, run.Ref, shortSHA(run.Commit), verdict, started}, " "))
+	// Which CI ran it: grain, or the provider and the workflow's file.
+	provider := ci.ProviderOf(run)
+	if a := run.Actions; a != nil {
+		if len(failing) == 0 {
+			failing = a.FailedJobs
+		}
+		if wf := path.Base(a.Workflow); a.Workflow != "" {
+			provider += "/" + wf
+		} else if a.WorkflowName != "" {
+			provider += "/" + strings.ReplaceAll(a.WorkflowName, " ", "_")
+		}
+	}
+	line := strings.TrimSpace(strings.Join([]string{run.ID, provider, run.Ref, shortSHA(run.Commit), verdict, started}, " "))
 	if len(failing) > 0 {
 		line += " failing: " + strings.Join(failing, ", ")
 	}
@@ -398,12 +670,45 @@ func (p *GitProxy) serveTestHistory(w http.ResponseWriter, q url.Values, scope n
 	fmt.Fprint(w, report.Render())
 }
 
-// serveBranchStatus reports the latest grain CI run on branch and each of
-// its jobs' verdicts.
-func (p *GitProxy) serveBranchStatus(w http.ResponseWriter, scope namespace.Scope, branch, what string) {
-	repo, store, err := p.ciReadRepo(scope, "")
+// servePRStatus answers /cli/pr/status: this task's own branch, another
+// task's (?task=<id>), or any branch (?ref=<branch>, in ?repo= or this
+// task's repository).
+func (p *GitProxy) servePRStatus(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
+	q := r.URL.Query()
+	task, ref, repo := strings.TrimSpace(q.Get("task")), strings.TrimSpace(q.Get("ref")), strings.TrimSpace(q.Get("repo"))
+	switch {
+	case task != "" && ref != "":
+		cliError(w, fmt.Errorf("%w: give --task or --ref, not both", namespace.ErrBadRequest))
+	case task != "":
+		taskRepo, branch, err := p.taskCIRef(r.Context(), scope, task)
+		if err != nil {
+			cliError(w, err)
+			return
+		}
+		p.serveBranchStatus(w, scope, taskRepo, branch, "task "+strings.TrimPrefix(task, "#")+"'s branch")
+	case ref != "":
+		p.serveBranchStatus(w, scope, repo, ref, "branch")
+	default:
+		if scope.TaskRepo == "" {
+			cliError(w, errNoTaskRepo)
+			return
+		}
+		p.serveBranchStatus(w, scope, repo, scope.TaskBranch, "this task's branch")
+	}
+}
+
+// serveBranchStatus reports the latest grain CI run on branch in repo
+// ("" is the task's own) and each of its jobs' verdicts.
+func (p *GitProxy) serveBranchStatus(w http.ResponseWriter, scope namespace.Scope, repo, branch, what string) {
+	repo, store, err := p.ciReadRepo(scope, repo)
 	if err != nil {
 		cliError(w, err)
+		return
+	}
+	if repo == "" {
+		// --ref with no --repo on a task without one: a branch name
+		// alone would match that name in every repository.
+		cliError(w, errNoTaskRepo)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")

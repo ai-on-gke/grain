@@ -26,7 +26,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/k8s"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/modelexec"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
@@ -151,8 +150,10 @@ type LiveConfig struct {
 	// (startCapabilityServers); Refresh hands it each mcp_servers it
 	// reads. Nil where nothing attaches them (tests, `grain demo`).
 	capabilityServers *servers.Registry
-
-	executorServer *modelexec.Server
+	// hostdCapabilityServers starts run: host servers on the hostd a
+	// pinned task's run is routed to; Refresh hands it each mcp_servers
+	// too. Nil beside a nil capabilityServers.
+	hostdCapabilityServers *hostdCapabilityServers
 
 	Mu      sync.Mutex
 	Applied Config
@@ -197,6 +198,17 @@ func (l *LiveConfig) WithCapabilityServers(r *servers.Registry) *LiveConfig {
 	return l
 }
 
+// withHostdCapabilityServers hands Refresh the hostds' registries of run:
+// host servers (hostdCapabilityServers) beside the deployment's.
+func (l *LiveConfig) withHostdCapabilityServers(h *hostdCapabilityServers) *LiveConfig {
+	if h != nil {
+		// Each run routed by the configuration as it stands.
+		h.live = l.Current
+	}
+	l.hostdCapabilityServers = h
+	return l
+}
+
 // CapabilityServers is the registry of attached capability servers, nil
 // when this process attaches none.
 func (l *LiveConfig) CapabilityServers() *servers.Registry {
@@ -214,24 +226,6 @@ func (l *LiveConfig) withPackageCache(c *PackageCache) *LiveConfig {
 func (l *LiveConfig) withActionsCache(c *ActionsCache) *LiveConfig {
 	l.actionsCache = c
 	return l
-}
-
-func (l *LiveConfig) SetExecutorServer(srv *modelexec.Server) {
-	if l == nil {
-		return
-	}
-	l.Mu.Lock()
-	defer l.Mu.Unlock()
-	l.executorServer = srv
-}
-
-func (l *LiveConfig) GetExecutorServer() *modelexec.Server {
-	if l == nil {
-		return nil
-	}
-	l.Mu.Lock()
-	defer l.Mu.Unlock()
-	return l.executorServer
 }
 
 // actionsCacheUsable is the stored switch as the grant reads it: may
@@ -457,7 +451,9 @@ func (l *LiveConfig) Refresh(ctx context.Context, deps *orchestrator.Deps) (poll
 	// unchanged one and attaches, refreshes and detaches off this
 	// goroutine (pkg/capability/servers).
 	if l.capabilityServers != nil {
-		l.capabilityServers.Update(registerBuiltinCapabilityServers(ctx, l.store, now.DataDir, stored.MCPServers))
+		configured := registerBuiltinCapabilityServers(ctx, l.store, now.DataDir, stored.MCPServers)
+		l.capabilityServers.Update(configured)
+		l.hostdCapabilityServers.update(configured)
 	}
 
 	wasCPUOvercommit, wasMemOvercommit := was.overcommitRatios()

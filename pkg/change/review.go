@@ -131,7 +131,11 @@ type ReviewGate interface {
 }
 
 // GateSubmit is the provider's ReviewGate answer for task's primary
-// change: ok, with no reason, when no provider gates it.
+// change. A provider that files reviews (ReviewFiler) without gating them
+// itself is gated on the review the task names, which is the one grain
+// files for it (orchestrator.SyncCLReviews): Submit waits until that
+// review has cleared the snapshot last observed. Otherwise ok, with no
+// reason: nothing gates it.
 func GateSubmit(ctx context.Context, task model.Task) (bool, string, error) {
 	p, target := ReviewOf(task)
 	if p == nil || target == "" {
@@ -139,9 +143,45 @@ func GateSubmit(ctx context.Context, task model.Task) (bool, string, error) {
 	}
 	g, ok := p.(ReviewGate)
 	if !ok {
+		if _, files := p.(ReviewFiler); files {
+			ok, reason := taskReviewCleared(task, target)
+			return ok, reason, nil
+		}
 		return true, "", nil
 	}
 	return g.GateSubmittable(ctx, task, target)
+}
+
+// taskReviewCleared is the gate on target where grain files the task's
+// own review template (Task.ReviewTemplateID) and the provider does not
+// gate: cleared on the snapshot last observed, or why not. A CL not yet
+// observed at a snapshot is never reviewed, and is not held here (Submit
+// is refused for want of an observation on its own).
+func taskReviewCleared(task model.Task, target string) (bool, string) {
+	if task.ReviewTemplateID == "" {
+		return true, ""
+	}
+	obs, observed := LastObserved(target)
+	if !observed || obs.Snapshot <= 0 {
+		return true, ""
+	}
+	key := model.CLReviewTarget(target, obs.Snapshot, task.ReviewTemplateID)
+	filed := false
+	for _, l := range task.Links {
+		if l.Target != key {
+			continue
+		}
+		switch l.Kind {
+		case model.LinkCLReviewCleared:
+			return true, ""
+		case model.LinkCLReviewFiled:
+			filed = true
+		}
+	}
+	if filed {
+		return false, fmt.Sprintf("grain's review of snapshot %d has not passed yet", obs.Snapshot)
+	}
+	return false, fmt.Sprintf("grain has not reviewed snapshot %d yet", obs.Snapshot)
 }
 
 // ReviewOf is the provider answering for task's CL review loop and its

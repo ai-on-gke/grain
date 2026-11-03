@@ -147,7 +147,7 @@ type Engine struct {
 	// Attachments, when set, is where each running step's exec id and
 	// output cursor are kept, so a grain that restarts mid-step can
 	// reattach the step rather than interrupt its run
-	// (docs/design/grain-on-gke.md#GKE-4). nil keeps nothing: a restart
+	// (design/design/grain-on-gke.design.md#GKE-4). nil keeps nothing: a restart
 	// can then only rerun the step through its in-sandbox step runner.
 	Attachments StepAttachments
 	// AttachmentCheckpoint is how often a running step's cursor is
@@ -249,7 +249,7 @@ type AdoptedJob struct {
 	// Attachment, when set, is the stored exec of the step that was
 	// running when grain stopped: that step is reattached by its exec id
 	// from its cursor rather than started again
-	// (docs/design/grain-on-gke.md#GKE-4).
+	// (design/design/grain-on-gke.design.md#GKE-4).
 	Attachment *StepAttachment
 	// Lost, when set, is why the job's sandbox did not come back across
 	// the restart. Sandbox is then nil, and the step that was running ends
@@ -952,8 +952,13 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		}
 	}
 
+	jobName := pj.Job.ID
+	if jobName == "" {
+		jobName = pj.ID
+	}
+	jobLabel := gateJobLabel(plan.Request.Repo, runID, jobName)
 	if perRun != nil {
-		release, err := perRun.Acquire(queueCtx, GateRequest{Wait: waiting})
+		release, err := perRun.Acquire(queueCtx, GateRequest{Job: jobLabel, Wait: waiting})
 		if err != nil {
 			if e.stopping(ctx) {
 				return NewJobRun(pj)
@@ -972,6 +977,7 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		// the count (grain/task-173).
 		var jobID string
 		release, err := e.Jobs.Acquire(queueCtx, GateRequest{
+			Job:  jobLabel,
 			Want: workflows.SandboxCommitment(pj.Job.Sandbox), Priority: rank, Wait: waiting,
 			Adopted: adopted != nil,
 			Assigned: func(id string) {
@@ -1122,7 +1128,7 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 
 	// A first attempt whose sandbox the kernel OOM-killed is retried
 	// whatever the job declares: under memory overcommit that is the
-	// deployment's doing, not the tree's (docs/design/auto-overcommit.md).
+	// deployment's doing, not the tree's (design/design/auto-overcommit.design.md).
 	var oomHow string
 	var oomKilled bool
 	if !channelLost {
@@ -1360,7 +1366,7 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 }
 
 // ChannelLostFaultPrefix is the JobRun.Error prefix recorded when a step ends
-// with sandboxaccess.ErrChannelLost (docs/design/grain-on-gke.md#GKE-3).
+// with sandboxaccess.ErrChannelLost (design/design/grain-on-gke.design.md#GKE-3).
 const ChannelLostFaultPrefix = sandboxaccess.ChannelLostFault
 
 // OOMRetryReasonPrefix starts a job's RetryReason (and Error, Warning)
@@ -1909,15 +1915,17 @@ func stepTimeout(ctx context.Context, step workflows.Step) time.Duration {
 // the bottom, then the workflow's, the job's and the step's, each
 // layering over the last -- GitHub's own precedence -- except for the
 // caller-identity variables (GRAIN_CI_REQUESTED_BY_KIND,
-// GRAIN_CI_REQUESTED_BY and GRAIN_CI_RELEASE_VERSION), which a
-// person-only release workflow reads to verify that a person started it
-// and which a workflow file's own env: may neither set nor replace.
+// GRAIN_CI_REQUESTED_BY, GRAIN_CI_RELEASE_VERSION and
+// GRAIN_CI_RELEASE_SHORT_SOAK_OK), which a person-only release workflow
+// reads to verify that a person started it, and what they decided, and
+// which a workflow file's own env: may neither set nor replace.
 func StepEnv(plan workflows.Plan, pj workflows.PlannedJob, step workflows.Step) map[string]string {
 	env := workflows.RunEnv(plan.Request, pj.Workflow, pj.Job.ID)
 	for _, layer := range []map[string]string{pj.WorkflowEnv, pj.Job.Env, step.Env} {
 		for k, v := range layer {
 			switch k {
-			case workflows.RequestedByKindEnv, workflows.RequestedByEnv, workflows.ReleaseVersionEnv:
+			case workflows.RequestedByKindEnv, workflows.RequestedByEnv, workflows.ReleaseVersionEnv,
+				workflows.ReleaseShortSoakOKEnv:
 				continue
 			}
 			env[k] = v

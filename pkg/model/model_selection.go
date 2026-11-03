@@ -68,6 +68,14 @@ const PolicyWaitCapability = "local-policy"
 // rather than handing its sandbox what the catalogue now forbids.
 const CatalogueWaitCapability = "capability-catalogue"
 
+// ChangeTargetWaitCapability is the GrantWait capability a task whose
+// change target (ValidateTaskChangeTarget) refuses it as it stands is held
+// under (orchestrator.changeTargetHold) -- auto-merge turned on for a CL,
+// say, or the workspace grant it needs missing. Its Resource is the whole
+// sentence. Nothing a run does can change that, so the task waits for a
+// person to edit it rather than being dispatched into a setup failure.
+const ChangeTargetWaitCapability = "change-target"
+
 // QuotaWaitCapability is the GrantWait capability a task held back by
 // host sandbox resource budget, worker/merger capacity limits, or a
 // provider usage-limit pause is recorded under. Like ModelWaitCapability,

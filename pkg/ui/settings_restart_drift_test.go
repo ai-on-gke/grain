@@ -53,8 +53,6 @@ var settingsAppliedLive = map[string]string{
 	"pollInterval":           "the reconcile loop's own ticker (liveConfig.refresh)",
 	"maxWorkers":             "the reconcile loop's own per-tick refresh (liveConfig.refresh)",
 	"maxMergesPerRepo":       "orchestrator.RunCycle's own per-cycle re-read",
-	"mergeBatchSize":         "orchestrator.reconcileMergeBatches reads the config row every cycle",
-	"mergeGatherWindow":      "orchestrator.reconcileMergeBatches reads the config row every cycle (mergeBatchSettings)",
 	"maxAutoSubmitDepth":     "read from the store as each proposal is filed (autoSubmitLimits)",
 	"maxAutoSubmitFanOut":    "read from the store as each proposal is filed (autoSubmitLimits)",
 	"maxAgentTurns":          "orchestrator.RunCycle's own per-cycle re-read",
@@ -74,6 +72,7 @@ var settingsAppliedLive = map[string]string{
 	"sandboxMemoryOvercommit": "the budget the next sandbox is admitted against (liveConfig.refresh, via config.budget)",
 	"sandboxDiskOvercommit":   "the budget the next sandbox is admitted against, and on Kubernetes the next pod's ephemeral-storage request (liveConfig.refresh, via config.budget and SetOvercommit)",
 	"sandboxOvercommit":       "the auto overcommit controller's mode and bounds (runOvercommit reconfigures it each step, and config.budget reads its ratios)",
+	"sessionSandboxIdleTtl":   "how long a session's sandbox and in-process agent wait stay warm between turns (RunCycle refreshes deps.Config.SessionSandboxIdleTTL from grain_config each cycle)",
 	"sandboxMemoryReserveMb":  "the budget the next sandbox is admitted against (liveConfig.refresh, via config.budget)",
 	"sandboxDiskFloorShare": "how much of each volume the next admission is held over (cmd/grain's diskWatch, which asks " +
 		"liveConfig.diskFloor per reading rather than holding the one it was built with)",
@@ -125,6 +124,7 @@ var settingsAppliedLive = map[string]string{
 	"taskBranchTemplate": "model.Store.PutTask reads the current grain_config row when it freezes a new task's branch name",
 	"deploymentId":       "model.Store.PutTask reads the current grain_config row when it freezes a new task's branch name",
 	"externalAgentApi":   "pkg/ui, which reads grain_config per request (authenticateExternalAgent)",
+	"settingsLocked":     "pkg/ui, which reads grain_config per request (settingsLocked)",
 }
 
 func TestEverySettingIsEitherAppliedLiveOrRestartOnly(t *testing.T) {

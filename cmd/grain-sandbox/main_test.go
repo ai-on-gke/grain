@@ -18,8 +18,11 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/sandboximage"
 )
 
 // The sandbox image's grain answers the sandbox CLI, not only host-script:
@@ -51,6 +54,14 @@ func TestSandboxGrainAnswersTheSandboxCLI(t *testing.T) {
 	if code := run([]string{"log", "--help"}, &out, &errOut); code != 0 || !strings.Contains(out.String(), "--min-priority") {
 		t.Errorf("grain log --help = %d, %q", code, out.String())
 	}
+
+	// A command it does not have gets the sandbox CLI's help, not this
+	// binary's out-of-sandbox usage.
+	errOut.Reset()
+	if code := run([]string{"frobnicate"}, &out, &errOut); code != 2 ||
+		!strings.Contains(errOut.String(), `unknown command "frobnicate"`) || !strings.Contains(errOut.String(), "sandbox CLI for this grain deployment") {
+		t.Errorf("grain frobnicate = %d, %q", code, errOut.String())
+	}
 }
 
 // Outside a sandbox there is no proxy to answer over, and the error says
@@ -68,5 +79,20 @@ func TestSandboxGrainOutsideASandbox(t *testing.T) {
 	errOut.Reset()
 	if code := run([]string{"daemon"}, &out, &errOut); code != 2 || !strings.Contains(errOut.String(), "not a command") {
 		t.Errorf("grain daemon = %d, %q", code, errOut.String())
+	}
+}
+
+// pkg/sandboximage.VerifyScript decides whether an image's grain carries
+// the sandbox CLI by reading this usage, outside any sandbox.
+func TestUsageNamesTheSandboxCLI(t *testing.T) {
+	t.Setenv("GRAIN_SANDBOX_CLI", "0")
+	var out, errOut bytes.Buffer
+	if code := run([]string{"help"}, &out, &errOut); code != 0 {
+		t.Fatalf("grain help = %d, %q", code, errOut.String())
+	}
+	for _, sub := range append(append([]string(nil), sandboximage.SandboxCLICommands...), "host-script") {
+		if !regexp.MustCompile(`(?m)grain ` + sub + `( |$)`).MatchString(out.String()) {
+			t.Errorf("grain help does not name %q:\n%s", "grain "+sub, out.String())
+		}
 	}
 }

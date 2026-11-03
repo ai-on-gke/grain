@@ -110,6 +110,57 @@ export function fileableFieldValues(config, prefill) {
   return values;
 }
 
+// unfiledLinkValues is what fileableFieldValues dropped from a /new
+// link's values, as sentences for the form to show: each value its field
+// does not offer, and each name no declared field answers to. The drop
+// itself is deliberate -- the task is filed rather than refused -- but
+// done without a word it filed a different task from the one the link's
+// sender meant, with nothing on the form to say so (2026-10-29 intake
+// walkthrough, O3). An empty list for no link, or one whose every value
+// was kept.
+export function unfiledLinkValues(config, prefill) {
+  if (!prefill) return [];
+  const fields = declaredFields(config);
+  const byName = new Map(fields.map((f) => [f.name, f]));
+  const out = [];
+  for (const [name, given] of Object.entries(prefill)) {
+    const f = byName.get(name);
+    const values = valueList(given);
+    if (!f) {
+      if (values.length > 0)
+        out.push(`“${name}” is not a field on this deployment`);
+      continue;
+    }
+    // A set keeps only its first value when its field holds one, as
+    // fileableFieldValues does; the rest are dropped all the same.
+    const kept = f.multiple
+      ? values.filter((v) => isOffered(f, v))
+      : values.filter((v) => isOffered(f, v)).slice(0, 1);
+    for (const v of values) {
+      if (!kept.includes(v))
+        out.push(`${fieldLabel(f)}: “${v}” is not one of its values`);
+    }
+  }
+  return out;
+}
+
+// hiddenLinkValues is what a /new link carried for fields the form
+// hides (settings/new-task-form.yml's customFields at visibility:
+// hidden), as unfiledLinkValues' sentences: a hidden field files its
+// default, so these values are left out the same way an unoffered one
+// is -- and said, rather than filed where nobody filing could see them.
+export function hiddenLinkValues(config, prefill) {
+  if (!prefill) return [];
+  const kept = fileableFieldValues(config, prefill);
+  const out = [];
+  for (const f of declaredFields(config)) {
+    if (prefill[f.name] === undefined) continue;
+    for (const v of valueList(kept[f.name]))
+      out.push(`${fieldLabel(f)}: “${v}” is in a field this form hides`);
+  }
+  return out;
+}
+
 // LEGACY_NOTICE and LEGACY_SET_NOTICE are what a form says about one:
 // what happened, and what the person in front of it can do about it.
 // Neither is an error -- nothing is wrong with the task, and saving the

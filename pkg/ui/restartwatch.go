@@ -49,6 +49,11 @@ const restartWatchRecheck = time.Second
 // deployment with neither wired (grain demo's throwaway UI) has nothing
 // to wait on and answers false straight away; the frontend paces its
 // own re-asking.
+//
+// ?quick=1 answers straight away too, with whatever Restarting says
+// now. The frontend asks that way after an ask of its own failed: it
+// wants to know grain is answering again as soon as it is, to clear
+// its disconnected banner, not 25 s later (grain/task-2258).
 func (s *Server) handleRestartWatch(w http.ResponseWriter, r *http.Request) {
 	cfg := s.tasks.Config
 	restarting := func() bool { return cfg.Restarting != nil && cfg.Restarting() }
@@ -59,7 +64,7 @@ func (s *Server) handleRestartWatch(w http.ResponseWriter, r *http.Request) {
 		answer(true)
 		return
 	}
-	if cfg.ShutdownStarted == nil && cfg.Restarting == nil {
+	if r.URL.Query().Get("quick") == "1" || (cfg.ShutdownStarted == nil && cfg.Restarting == nil) {
 		answer(false)
 		return
 	}

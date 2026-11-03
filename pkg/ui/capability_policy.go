@@ -16,6 +16,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"net/http"
 	"sort"
@@ -26,7 +27,7 @@ import (
 )
 
 // The deployment's capability policy (grain_config.capability_policy,
-// model.CapabilityPolicy, docs/capabilities-spec.md §4.2.2) and who holds
+// model.CapabilityPolicy, design/spec/capabilities/capabilities.spec.md §4.2.2) and who holds
 // each capability server's references today. Settings edits the policy
 // here, previews which existing grants a change would newly refuse before
 // it is saved, and warns with a server's holders before it is removed or
@@ -42,7 +43,9 @@ type CapabilityPolicyBody struct {
 // an open task, a template, a schedule, or a job of a workflow this
 // deployment declares for a repo.
 type CapabilityGrantHolder struct {
-	// Kind is "task", "template", "schedule" or "workflow".
+	// Kind is "task", "template", "schedule", "workflow", or "default"
+	// (the deployment's default grants, ID "deployment", or a
+	// repository's, ID owner/name).
 	Kind string `json:"kind"`
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -256,6 +259,31 @@ func (c *Client) grantHolders(ctx context.Context, keep func(string) bool) ([]Ca
 		repo := s.Target
 		addGrants("schedule", s.ID, s.Title, &repo, s.Grants, taskSubject(&repo))
 	}
+	// The deployment's and each repository's default grants are seeded
+	// onto every task filed there (model.Config.DefaultCapabilities), so
+	// they are holders too: the next task holds what they name.
+	asGrants := func(ids []string) []model.Grant {
+		var grants []model.Grant
+		for _, g := range ids {
+			grants = append(grants, model.Grant{Capability: g})
+		}
+		return grants
+	}
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if cfg != nil {
+		addGrants("default", "deployment", "Deployment defaults", nil, asGrants(cfg.DefaultCapabilities), taskSubject(nil))
+	}
+	repoConfigs, err := c.Store.ListRepoConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, rc := range repoConfigs {
+		repo := rc.Repo
+		addGrants("default", repo.String(), "Repository defaults", &repo, asGrants(rc.DefaultCapabilities), taskSubject(&repo))
+	}
 	workflows, err := c.Store.ListRepoWorkflows(ctx)
 	if err != nil {
 		return nil, err
@@ -405,25 +433,43 @@ func (c *Client) capabilityPolicyFor(ctx context.Context) (model.CapabilityPolic
 // grant admission would only refuse later is refused with the task
 // (400) instead. A default the policy denies -- a repository's default
 // the policy keeps from this run kind, say -- is dropped, since nobody
-// asked for it. Admission asks the policy again when it mints, so a
-// policy saved after a task was filed still has the last word.
-func (c *Client) policyFilingGrants(ctx context.Context, grants []model.Grant, target *model.RepoRef) ([]model.Grant, error) {
+// asked for it, and dropped names it with the policy's reason, for the
+// task's thread: a filer who expected the default is told it is not
+// there rather than left to find it missing, and so is whoever filed
+// it over the API (Task.DroppedDefaults). Admission asks the policy
+// again when it mints, so a policy saved after a task was filed still
+// has the last word.
+func (c *Client) policyFilingGrants(ctx context.Context, grants []model.Grant, target *model.RepoRef) (kept []model.Grant, dropped []DroppedDefault, err error) {
 	policy, configured, err := c.capabilityPolicyFor(ctx)
 	if err != nil || len(policy.Rules) == 0 {
-		return grants, err
+		return grants, nil, err
 	}
 	subject := model.CapabilitySubject{Repo: target, Kind: model.CapabilityRunTask}
-	kept := make([]model.Grant, 0, len(grants))
+	kept = make([]model.Grant, 0, len(grants))
 	for _, g := range grants {
 		if err := policy.Permits(g.Capability, subject, configured); err != nil {
 			if g.Via == model.GrantByDefault {
+				dropped = append(dropped, DroppedDefault{Grant: model.CapabilityGrantRef(g.Capability), Reason: err.Error()})
 				continue
 			}
-			return nil, validationErrorf("%v", err)
+			return nil, nil, validationErrorf("%v", err)
 		}
 		kept = append(kept, g)
 	}
-	return kept, nil
+	return kept, dropped, nil
+}
+
+// DroppedDefault is a deployment or repository default grant CreateTask
+// left off the task it filed, and why: the capability policy's own
+// words for the refusal.
+type DroppedDefault struct {
+	Grant  string `json:"grant"`
+	Reason string `json:"reason"`
+}
+
+// Note is the sentence the task's thread carries for d.
+func (d DroppedDefault) Note() string {
+	return fmt.Sprintf("Default grant %s was not attached to this task: %s.", d.Grant, d.Reason)
 }
 
 // policyEditRefusalFor is the capability policy's answer to grant being
@@ -453,7 +499,7 @@ func (c *Client) policyEditRefusalFor(ctx context.Context, id, grant string) err
 // rather than offer a grant filing would turn away.
 func (c *Client) markPolicyRefusals(ctx context.Context, methods []CapabilityMethod, subject model.CapabilitySubject) ([]CapabilityMethod, error) {
 	policy, configured, err := c.capabilityPolicyFor(ctx)
-	if err != nil || len(policy.Rules) == 0 {
+	if err != nil {
 		return methods, err
 	}
 	for i := range methods {

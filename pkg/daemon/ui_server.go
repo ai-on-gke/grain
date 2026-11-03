@@ -34,6 +34,40 @@ import (
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
+// CheckUIAllowedPrincipals validates -ui-allowed-principals (or
+// $GRAIN_ALLOWED_PRINCIPALS when the flag is unset), including refusing any
+// serviceAccount: entry that names a gcp-key agent pool account.
+func CheckUIAllowedPrincipals(cfg Config) error {
+	return checkUIAllowedPrincipalsWithPool(cfg, ui.GCPKeyPoolEmails(cfg.GcpServiceAccountEmail, cfg.GcpServiceAccountCount, cfg.GcpProject))
+}
+
+func checkUIAllowedPrincipalsWithPool(cfg Config, gcpPoolEmails []string) error {
+	if len(cfg.UiAllowedPrincipals) > 0 {
+		_, err := ui.ValidateAllowedPrincipals(cfg.UiAllowedPrincipals, gcpPoolEmails)
+		return err
+	}
+	if env := strings.TrimSpace(os.Getenv("GRAIN_ALLOWED_PRINCIPALS")); env != "" {
+		_, err := ui.ValidateAllowedPrincipals(ui.SplitAllowedPrincipals(env), gcpPoolEmails)
+		return err
+	}
+	return nil
+}
+
+// CheckUIRequireIAP refuses -ui-require-iap without an IAP audience
+// (-ui-iap-audience or $GRAIN_IAP_AUDIENCE): with no assertion able to
+// verify and no access code accepted over the network, nobody could
+// reach the UI except from the daemon's own host.
+func CheckUIRequireIAP(cfg Config) error {
+	if !cfg.UiRequireIAP {
+		return nil
+	}
+	if strings.TrimSpace(cfg.UiIAPAudience) != "" || strings.TrimSpace(os.Getenv("GRAIN_IAP_AUDIENCE")) != "" {
+		return nil
+	}
+	return errors.New("-ui-require-iap needs an IAP audience: set -ui-iap-audience (or $GRAIN_IAP_AUDIENCE) to the IAP backend's " +
+		"/projects/NUMBER/global/backendServices/ID, or drop -ui-require-iap to keep accepting the access code over the network")
+}
+
 // startUIServer serves pkg/ui.Server -- the JSON API plus the static
 // frontend -- on addr, over the same store RunCycle dispatches against,
 // returning a shutdown func the same shape startGitProxy's own is.
@@ -103,23 +137,54 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	if reader, ok := stateRepo.(ui.SettingsHistoryReader); ok {
 		settingsHistory = reader
 	}
+	gcpPoolSAs := ui.GCPKeyPoolEmails(cfg.GcpServiceAccountEmail, cfg.GcpServiceAccountCount, cfg.GcpProject)
+	combinedPoolSAs := append([]string(nil), gcpPoolSAs...)
+	if store != nil {
+		if mc, err := store.GetConfig(context.Background()); err == nil && mc != nil {
+			combinedPoolSAs = append(combinedPoolSAs, ui.GCPKeyPoolEmails(mc.GCPServiceAccountEmail, mc.GCPServiceAccountCount, mc.GCPProject)...)
+		}
+	}
+	if err := checkUIAllowedPrincipalsWithPool(cfg, combinedPoolSAs); err != nil {
+		return nil, err
+	}
+	var provisionedSAs []string
+	if proj := strings.TrimSpace(cfg.GcpProject); proj != "" {
+		daemonSA := "grain-daemon@" + strings.ToLower(proj) + ".iam.gserviceaccount.com"
+		inPool := false
+		for _, sa := range combinedPoolSAs {
+			if strings.EqualFold(sa, daemonSA) {
+				inPool = true
+				break
+			}
+		}
+		if !inPool {
+			provisionedSAs = append(provisionedSAs, daemonSA)
+		}
+	}
 	uiCfg := ui.Config{
-		Actor:                 ui.DefaultActor(ActorID(cfg.Actor)),
-		LocalAPIToken:         localAPIToken,
-		LocalAPITokenFile:     localAPITokenFile,
-		AccessSessionLifetime: cfg.UiAccessSessionLifetime,
-		IAPAudience:           cfg.UiIAPAudience,
-		IAPIssuer:             cfg.UiIAPIssuer,
-		IAPKeysURL:            cfg.UiIAPKeysURL,
-		DBDriver:              cfg.DbDriver,
-		DBDSN:                 cfg.DbDSN,
-		DataDir:               cfg.DataDir,
-		SourceDB:              db,
+		Actor:                      ui.DefaultActor(ActorID(cfg.Actor)),
+		LocalAPIToken:              localAPIToken,
+		LocalAPITokenFile:          localAPITokenFile,
+		AccessSessionLifetime:      cfg.UiAccessSessionLifetime,
+		IAPAudience:                cfg.UiIAPAudience,
+		IAPIssuer:                  cfg.UiIAPIssuer,
+		IAPKeysURL:                 cfg.UiIAPKeysURL,
+		RequireIAP:                 cfg.UiRequireIAP,
+		AllowedPrincipals:          cfg.UiAllowedPrincipals,
+		ProvisionedServiceAccounts: provisionedSAs,
+		GCPKeyServiceAccounts:      gcpPoolSAs,
+		DBDriver:                   cfg.DbDriver,
+		DBDSN:                      cfg.DbDSN,
+		DataDir:                    cfg.DataDir,
+		SourceDB:                   db,
 		// The fixed set grain ships providers for, plus one row per named
 		// GitHub token this deployment has beyond its default one
 		// (grain/task-117) -- the same names capabilityProviders builds
 		// the matching providers from, so every id the picker offers is
-		// one a dispatch can actually resolve.
+		// one a dispatch can actually resolve. The api rows appended last
+		// are only a marker that this picker offers the agent API: the
+		// Client reads them again per request (pickerCapabilities), so a
+		// scope set declared after startup is offered too.
 		Capabilities: append(append(ui.OfferedCapabilities(), ui.GitHubTokenCapabilities(live.GitHubTokens())...),
 			ui.APICapabilities()...),
 		Consoles: consoleSessions,
@@ -136,12 +201,6 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// or clearing it can never touch an operator-managed file.
 		CodexAuthFile:         ManagedCodexAuthFile(cfg.DataDir),
 		CodexAuthFallbackFile: cfg.CodexAuthFile,
-		ExecutorServer:        cfg.executorServer,
-		// Where that listener bound, and whether it wants TLS, so the
-		// Teams pane's bootstrap command names the port this daemon
-		// really serves rather than guessing 8422 (grain/task-2396).
-		ExecutorAddr: cfg.executorListenAddr,
-		ExecutorTLS:  cfg.executorListenAddr != "" && cfg.ExecutorCertFile != "",
 		// The "test this credential" action on that same tab
 		// (ui.Config.CapabilityChecks): the pane that says **Ready**
 		// because a secret is set, given a way to ask the far end
@@ -222,11 +281,16 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// What each of those credentials reaches on GitHub, so a task is
 		// refused at filing against a repository its team cannot reach
 		// and the New task pickers can offer what it can (grain/task-1850).
-		GitReach:                  &gitproxy.Reach{Credentials: uiCredentials, API: githubTransport, Host: cfg.GithubHost},
-		GitHubBranches:            githubClient,
-		GitHubPullRequestFiles:    githubClient,
-		GitHubPullRequests:        githubClient,
-		GitHubForkPullRequests:    githubClient,
+		GitReach:               &gitproxy.Reach{Credentials: uiCredentials, API: githubTransport, Host: cfg.GithubHost},
+		GitHubBranches:         githubClient,
+		GitHubPullRequestFiles: githubClient,
+		GitHubPullRequests:     githubClient,
+		GitHubForkPullRequests: githubClient,
+		// The manual "Import issues now" (POST .../import-issues): the
+		// orchestrator's own pass, read through the UI's GitHub client.
+		IssueImporter: func(ctx context.Context, repo model.RepoRef) (model.IssueImportResult, error) {
+			return orchestrator.ImportIssues(ctx, store, githubClient, repo, time.Now().UTC())
+		},
 		GitHubCredentialAvailable: githubTokens.HasCredential,
 		// The System pane's Logs tab: which streams this deployment can
 		// show is a property of the shape it runs as, so logSources
@@ -390,7 +454,7 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 			return resolving.ResolveCLIRuns(ctx)
 		},
 		CLIRunCheck:  cfg.CheckCLIRunSettings,
-		HostExecutor: func(ctx context.Context) any { return cfg.HostExecutorStatus(ctx) },
+		HostExecutor: func(ctx context.Context) any { return hostExecutorStatus(ctx, cfg, store) },
 		// PullRequests is how a dispatched run opens its own pull request
 		// before it exits (ui.Config.PullRequests' own doc comment): its
 		// mcpserver asks this API, which asks the daemon's GitHub client.
@@ -422,6 +486,17 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// when it was dispatched. No gate, unlike PullRequests above --
 		// see sandboxRecreations' own doc comment.
 		SandboxRecreate: sandboxRecreateAdapter{sandboxRecreations},
+		// SandboxProbe builds one throwaway sandbox from the same backend
+		// runs use, admitted and metered as they are, for `grain sandbox
+		// probe`. Gated by its route's scope, not here.
+		SandboxProbe: sandboxProbeAdapter{
+			sandboxes: sandboxes,
+			meter:     orchestrator.MeterFor(store),
+			cache: orchestrator.PackageCacheSource{
+				Base: pkgCache.sandboxURL(live), CA: pkgCache.sandboxCA(live), DNS: pkgCache.SandboxDNS(live),
+			},
+			config: live.Current,
+		},
 		// StandingSandboxes is what the reconcile loop's own supervisor
 		// is running, for GET /api/sandboxes. No gate, for the reason
 		// SandboxRecreate needs none (standingSandboxes' doc comment).
@@ -485,6 +560,12 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 			}
 			return checkClusterSandboxImageConnectivity(ctx, live.Current(), imageRef)
 		},
+		// The Granule VM image the Settings pane probes is the one this
+		// daemon resolves -- its stamp, mirrored -- not the UI's
+		// version-derived default (k8sGranuleImageForSettings).
+		K8sGranuleImage: func(mc model.Config) string {
+			return k8sGranuleImageForSettings(live.Current(), mc)
+		},
 		// The Settings pane's sandbox image check reads labels the way
 		// the daemon's own startup check does: local docker first, then
 		// the registry (FetchImageLabels), Google-authenticated for an
@@ -498,7 +579,9 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	uiCfg.RepoComparer = repoComparisonGate{local: localRepoComparer}
 	// Assigned only when there is one, as Upgrader below: a nil
 	// *hostd.Remote in the interface would not read as nil.
-	if cfg.HostdRemote != nil {
+	if cfg.HostdHub != nil {
+		uiCfg.HostdRemote = cfg.HostdHub
+	} else if cfg.HostdRemote != nil {
 		uiCfg.HostdRemote = cfg.HostdRemote
 	}
 	branchGate := repoBranchGate{remote: githubTokens}
@@ -530,9 +613,6 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	if upgrader != nil {
 		uiCfg.Upgrader = upgrader
 		uiCfg.LastRestart = lastRestart(store, upgrader, cfg.runHostUpgrade.adoption())
-	}
-	if cfg.executorServer != nil {
-		uiCfg.Executors = cfg.executorServer
 	}
 	// And one line in the journal saying which of the two pipelines this
 	// deployment's upgrades actually run, or that they are off. Here

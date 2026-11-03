@@ -812,6 +812,28 @@ describe("TaskList", () => {
       expect(onReorder).toHaveBeenCalledWith([3], 1, 2);
     });
 
+    // The list names the rows it shows either side of the drop, even
+    // when one of them has another priority: Store.Reorder places the
+    // moved task against its own priority's tasks only, so a P9 row
+    // above means "the head of the P5 tasks" (grain/task-2339).
+    it("drops a task at a priority boundary between the rows it shows there", () => {
+      const onReorder = vi.fn();
+      renderList({
+        tasks: [
+          { ...threeTasks[1], priority: 9 },
+          threeTasks[0],
+          threeTasks[2],
+        ],
+        onReorder,
+      });
+
+      fireEvent.dragStart(rowFor("Third"));
+      fireEvent.dragOver(rowFor("First"));
+      fireEvent.drop(rowFor("First"));
+
+      expect(onReorder).toHaveBeenCalledWith([3], 2, 1);
+    });
+
     it("drops a task at the very end of the list", () => {
       const onReorder = vi.fn();
       renderList({ tasks: threeTasks, onReorder });
@@ -2411,6 +2433,72 @@ describe("TaskList", () => {
       "1 running task agent will receive this notice:",
     );
     expect(screen.getByText("#2 Ship the other thing")).toBeInTheDocument();
+  });
+
+  it("shows a priority badge on tasks with non-default priority", () => {
+    renderList({
+      tasks: [
+        {
+          id: 10,
+          title: "High priority task",
+          state: "queued",
+          priority: 8,
+          capabilities: [],
+          blocked: false,
+        },
+        {
+          id: 11,
+          title: "Default priority task",
+          state: "queued",
+          priority: 5,
+          capabilities: [],
+          blocked: false,
+        },
+      ],
+    });
+    const highRow = rowFor("High priority task");
+    const defaultRow = rowFor("Default priority task");
+    expect(
+      highRow.querySelector('[data-testid="task-priority-badge"]'),
+    ).toHaveTextContent("P8");
+    expect(
+      defaultRow.querySelector('[data-testid="task-priority-badge"]'),
+    ).toBeNull();
+  });
+
+  it("marks a keep_running task's row, and only that one", () => {
+    renderList({
+      tasks: [
+        {
+          id: 12,
+          title: "Standing worker",
+          state: "proposed",
+          keepRunning: true,
+          capabilities: [],
+          blocked: false,
+        },
+        {
+          id: 13,
+          title: "One-off task",
+          state: "proposed",
+          capabilities: [],
+          blocked: false,
+        },
+      ],
+    });
+    const badge = rowFor("Standing worker").querySelector(
+      '[data-testid="task-keep-running-badge"]',
+    );
+    expect(badge).toHaveTextContent("keeps running");
+    expect(badge).toHaveAttribute(
+      "title",
+      expect.stringMatching(/never completes on its own/),
+    );
+    expect(
+      rowFor("One-off task").querySelector(
+        '[data-testid="task-keep-running-badge"]',
+      ),
+    ).toBeNull();
   });
 });
 

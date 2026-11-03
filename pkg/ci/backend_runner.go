@@ -22,11 +22,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -194,11 +198,18 @@ type BackendRunner struct {
 	secretResolver    func(ctx context.Context, req Request) (gritapi.SecretPayload, error)
 	onVerdictVerified func(run Run)
 
-	mu      sync.Mutex
-	outbox  []OutboxEntry
+	mu     sync.Mutex
+	outbox []OutboxEntry
+	// flushMu serialises FlushOutbox, so two flushes never deliver the
+	// same entry twice and the one writing the outbox back knows that
+	// anything past what it read was appended while it was delivering.
+	flushMu sync.Mutex
 	tracked map[string]trackedRunMeta // runID -> metadata
 	byReqID map[string]string         // requestID -> runID
 	syncMu  sync.Mutex
+	// reconciledAtStart is set once the in-flight runs carried over from
+	// a previous daemon have each been asked about directly (SyncOnce).
+	reconciledAtStart bool
 }
 
 var _ Runner = (*BackendRunner)(nil)
@@ -402,30 +413,108 @@ func (r *BackendRunner) Start(ctx context.Context, req Request) (Run, error) {
 			return existingRun, nil
 		}
 	}
-	entry := OutboxEntry{
-		Kind:        OutboxStart,
-		RequestID:   startReq.RequestID,
-		StartReq:    &startReq,
-		TreeArchive: archive,
-		RequestedBy: req.RequestedBy,
-		Recheck:     req.Recheck,
-		CreatedAt:   time.Now().UTC(),
+	// The same start asked for again while the first is still waiting
+	// in the outbox -- a caller retrying the 503 an unreachable grit
+	// answered with -- joins that one rather than queueing a second run
+	// that would be delivered beside it. A recheck's attempt is fresh
+	// on every call, so it is left out of what counts as the same.
+	if queued, ok := r.queuedStartLocked(startReq); ok {
+		startReq.RequestID = queued
+	} else {
+		r.outbox = append(r.outbox, OutboxEntry{
+			Kind:        OutboxStart,
+			RequestID:   startReq.RequestID,
+			StartReq:    &startReq,
+			TreeArchive: archive,
+			RequestedBy: req.RequestedBy,
+			Recheck:     req.Recheck,
+			CreatedAt:   time.Now().UTC(),
+		})
+		r.saveOutboxLocked()
 	}
-	r.outbox = append(r.outbox, entry)
-	r.saveOutboxLocked()
 	r.mu.Unlock()
 
 	if err := r.FlushOutbox(ctx); err != nil {
-		return Run{}, err
+		r.mu.Lock()
+		_, stillQueued := r.queuedStartLocked(startReq)
+		r.mu.Unlock()
+		if stillQueued {
+			return Run{}, &StartQueuedError{RequestID: startReq.RequestID, Err: err}
+		}
+		// Delivered by this flush after all, and only something queued
+		// behind it failed.
+		if _, recorded := r.recordedRunID(startReq.RequestID); !recorded {
+			return Run{}, err
+		}
 	}
 
-	r.mu.Lock()
-	runID := r.byReqID[startReq.RequestID]
-	r.mu.Unlock()
+	runID, _ := r.recordedRunID(startReq.RequestID)
 	if run, ok := r.store.Get(runID); ok {
 		return run, nil
 	}
 	return Run{}, fmt.Errorf("ci: run for request %s was not recorded", startReq.RequestID)
+}
+
+// queuedStartLocked is the request id of a start in the outbox that asks
+// for what req does, ignoring the attempt a recheck draws afresh each
+// time. r.mu must be held.
+func (r *BackendRunner) queuedStartLocked(req gritapi.StartRun) (string, bool) {
+	for _, e := range r.outbox {
+		if e.Kind != OutboxStart || e.StartReq == nil {
+			continue
+		}
+		q := e.StartReq
+		if q.Repo == req.Repo && q.Ref == req.Ref && q.Commit == req.Commit && q.Tree == req.Tree &&
+			q.Event == req.Event && q.TrustedRelease == req.TrustedRelease && slices.Equal(q.Jobs, req.Jobs) &&
+			(q.RequestID == req.RequestID || (q.Attempt > 1) == (req.Attempt > 1)) {
+			return e.RequestID, true
+		}
+	}
+	return "", false
+}
+
+func (r *BackendRunner) recordedRunID(requestID string) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id, ok := r.byReqID[requestID]
+	return id, ok
+}
+
+// ErrStartQueued is a start that could not be handed to the grit server
+// yet -- it is unreachable, or answering 5xx -- and is waiting in the
+// durable outbox, from which it is delivered once grit answers again.
+// The run will happen; starting it again is what must not.
+var ErrStartQueued = errors.New("ci: the grit server could not be reached; the run is queued and will be submitted when it is back")
+
+// StartQueuedError is ErrStartQueued for one request: the id the queued
+// start is delivered under, and what the attempt to deliver it met.
+type StartQueuedError struct {
+	RequestID string
+	Err       error
+}
+
+func (e *StartQueuedError) Error() string {
+	return fmt.Sprintf("%v (request %s; the last attempt failed: %v) -- asking for the same run again joins it rather than starting a second", ErrStartQueued, e.RequestID, e.Err)
+}
+
+func (e *StartQueuedError) Is(target error) bool { return target == ErrStartQueued }
+
+func (e *StartQueuedError) Unwrap() error { return e.Err }
+
+// rejectedStart reports whether err is the grit server refusing a start
+// outright -- a request it will refuse however often it is sent -- rather
+// than failing to answer. Authentication and rate limits are left out:
+// those clear up without the request changing.
+func rejectedStart(err error) bool {
+	var apiErr *gritapi.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch apiErr.StatusCode {
+	case http.StatusBadRequest, http.StatusNotFound, http.StatusConflict, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
+		return true
+	}
+	return false
 }
 
 func (r *BackendRunner) resolveTree(ctx context.Context, req Request) (treeid.ID, []byte, error) {
@@ -468,6 +557,8 @@ func (r *BackendRunner) resolveTree(ctx context.Context, req Request) (treeid.ID
 // Entries that succeed are removed from the persisted outbox; if an entry fails,
 // it remains in the outbox for the next flush attempt.
 func (r *BackendRunner) FlushOutbox(ctx context.Context) error {
+	r.flushMu.Lock()
+	defer r.flushMu.Unlock()
 	r.mu.Lock()
 	pending := make([]OutboxEntry, len(r.outbox))
 	copy(pending, r.outbox)
@@ -480,6 +571,8 @@ func (r *BackendRunner) FlushOutbox(ctx context.Context) error {
 	var firstErr error
 	var remaining []OutboxEntry
 	for i, entry := range pending {
+		// The first failure stops delivery; it and everything behind it
+		// stay queued, in order.
 		if firstErr != nil {
 			remaining = append(remaining, pending[i:]...)
 			break
@@ -492,8 +585,11 @@ func (r *BackendRunner) FlushOutbox(ctx context.Context) error {
 			rs, err := r.submitStartEntry(ctx, *entry.StartReq, entry.TreeArchive)
 			if err != nil {
 				firstErr = err
-				remaining = append(remaining, pending[i:]...)
-				break
+				if !rejectedStart(err) {
+					remaining = append(remaining, entry)
+				}
+				// else sending it again would only be refused again.
+				continue
 			}
 			r.recordSubmittedRun(rs, *entry.StartReq, entry.RequestedBy, entry.Recheck)
 
@@ -508,8 +604,8 @@ func (r *BackendRunner) FlushOutbox(ctx context.Context) error {
 					continue
 				}
 				firstErr = err
-				remaining = append(remaining, pending[i:]...)
-				break
+				remaining = append(remaining, entry)
+				continue
 			}
 			r.applyCancelStatus(rs, entry.CancelReason, entry.CancelBy)
 
@@ -520,8 +616,8 @@ func (r *BackendRunner) FlushOutbox(ctx context.Context) error {
 			rs, err := r.backend.RetriggerRun(ctx, entry.RunID, *entry.RetriggerReq)
 			if err != nil {
 				firstErr = err
-				remaining = append(remaining, pending[i:]...)
-				break
+				remaining = append(remaining, entry)
+				continue
 			}
 			r.mu.Lock()
 			meta := r.tracked[entry.RunID]
@@ -534,7 +630,8 @@ func (r *BackendRunner) FlushOutbox(ctx context.Context) error {
 	}
 
 	r.mu.Lock()
-	r.outbox = remaining
+	// Starts queued while this flush was delivering are kept for the next.
+	r.outbox = append(remaining, r.outbox[len(pending):]...)
 	r.saveOutboxLocked()
 	r.mu.Unlock()
 	return firstErr
@@ -647,6 +744,17 @@ func (r *BackendRunner) SyncOnce(ctx context.Context, wait time.Duration, limit 
 		return err
 	}
 
+	if !r.reconciledAtStart {
+		// A run this runner tracked can have been lost while no daemon
+		// was watching -- grit's state reset and the cursor already moved
+		// to the new epoch -- and no event will ever name it again. Ask
+		// about each in-flight run once at start.
+		if err := r.reconcileInFlight(ctx, ""); err != nil {
+			return err
+		}
+		r.reconciledAtStart = true
+	}
+
 	savedEpoch, afterSeq, err := r.cursor.LoadCursor()
 	if err != nil {
 		return err
@@ -729,10 +837,29 @@ func (r *BackendRunner) resyncInFlight(ctx context.Context, newEpoch string) err
 		newEpoch = headBatch.Epoch
 	}
 
+	if err := r.reconcileInFlight(ctx, newEpoch); err != nil {
+		return err
+	}
+
+	latest, err := r.backend.Events(ctx, highWater, 0, 1000)
+	if err == nil && latest.NextSeq > 1 {
+		highWater = latest.NextSeq - 1
+	}
+	return r.cursor.SaveCursor(newEpoch, highWater)
+}
+
+// reconcileInFlight asks grit about every run this runner has not yet
+// concluded, recording what it says and concluding the ones it no longer
+// knows (concludeLostRun).
+func (r *BackendRunner) reconcileInFlight(ctx context.Context, epoch string) error {
 	for _, runID := range r.inFlightRunIDs() {
 		rs, rErr := r.backend.GetRun(ctx, runID)
 		if rErr != nil {
 			if apiErr, ok := rErr.(*gritapi.APIError); ok && apiErr.StatusCode == 404 {
+				r.mu.Lock()
+				meta := r.tracked[runID]
+				r.mu.Unlock()
+				r.concludeLostRun(meta, epoch)
 				continue
 			}
 			return rErr
@@ -741,12 +868,7 @@ func (r *BackendRunner) resyncInFlight(ctx context.Context, newEpoch string) err
 			return err
 		}
 	}
-
-	latest, err := r.backend.Events(ctx, highWater, 0, 1000)
-	if err == nil && latest.NextSeq > 1 {
-		highWater = latest.NextSeq - 1
-	}
-	return r.cursor.SaveCursor(newEpoch, highWater)
+	return nil
 }
 
 func (r *BackendRunner) handleEvent(ctx context.Context, ev gritapi.Event) error {
@@ -890,9 +1012,27 @@ func (r *BackendRunner) verifyAndConcludeRun(ctx context.Context, rs gritapi.Run
 	// must pass DSSE signature and subject (tree SHA256 + gitTree + commit)
 	// verification before being recorded in RunStore / ci.Gate.
 	if conclusion != ConclusionCancelled {
-		if err := r.verifyRunAttestation(ctx, rs.ID, meta); err != nil {
+		if err := r.verifyRunAttestation(ctx, rs, meta); err != nil {
+			var transient *transientGritError
+			if errors.As(err, &transient) {
+				// grit restarting, or a proxy in front of it, is not a
+				// verdict: leave the run in flight and let the next
+				// sync fetch the attestation again.
+				return err
+			}
 			conclusion = ConclusionErrored
 			runErr = fmt.Sprintf("attestation verification failed: %v", err)
+			// No job's conclusion is vouched for either: keep a
+			// "success" from the unsigned status out of the job rows,
+			// where `grain ci list` would count it as green.
+			for i := range jobs {
+				if jobs[i].Conclusion == ConclusionSuccess {
+					jobs[i].Conclusion = ConclusionErrored
+					for k := range jobs[i].Steps {
+						jobs[i].Steps[k].Conclusion = ConclusionErrored
+					}
+				}
+			}
 		}
 	}
 
@@ -928,13 +1068,24 @@ func (r *BackendRunner) verifyAndConcludeRun(ctx context.Context, rs gritapi.Run
 	return nil
 }
 
-func (r *BackendRunner) verifyRunAttestation(ctx context.Context, runID string, meta trackedRunMeta) error {
+func (r *BackendRunner) verifyRunAttestation(ctx context.Context, rs gritapi.RunStatus, meta trackedRunMeta) error {
+	runID := rs.ID
 	env, err := r.backend.GetAttestation(ctx, runID)
 	if err != nil {
-		return fmt.Errorf("fetching attestation for run %s: %w", runID, err)
+		err = fmt.Errorf("fetching attestation for run %s: %w", runID, err)
+		if isTransientGritError(err) {
+			return &transientGritError{err}
+		}
+		return err
+	}
+	if env == nil {
+		return fmt.Errorf("grit returned no attestation for run %s", runID)
 	}
 	keys, err := r.resolveKeySet(ctx)
 	if err != nil {
+		if isTransientGritError(err) {
+			return &transientGritError{err}
+		}
 		return err
 	}
 	stmt, err := attest.Verify(env, keys)
@@ -948,7 +1099,106 @@ func (r *BackendRunner) verifyRunAttestation(ctx context.Context, runID string, 
 	if err := stmt.CheckSubject(expectedTree, meta.Commit); err != nil {
 		return err
 	}
+	return checkAttestedVerdict(stmt, rs)
+}
+
+// checkAttestedVerdict binds the verdict about to be recorded to the one
+// grit signed. The run status and its jobs' conclusions come from
+// unsigned `GET /v1/runs/{id}` responses; only the attestation is signed,
+// so a status that names another run, or a job set or conclusion the
+// statement does not, is refused rather than recorded -- otherwise a
+// verified attestation of a failing run would carry a "success" status
+// through (docs/test-runs/2026-10-29-grit-backend-ci-shutdown.md, F2).
+func checkAttestedVerdict(stmt *attest.Statement, rs gritapi.RunStatus) error {
+	if got := stmt.Predicate.Request.Run; got != "" && got != rs.ID {
+		return fmt.Errorf("attestation is for run %s, not %s", got, rs.ID)
+	}
+	attested := make(map[string]string, len(stmt.Predicate.Jobs))
+	for _, j := range stmt.Predicate.Jobs {
+		attested[j.ID] = strings.ToLower(strings.TrimSpace(j.Result.Conclusion))
+	}
+	if len(attested) != len(rs.Jobs) {
+		return fmt.Errorf("attestation covers %d jobs, run status reports %d", len(attested), len(rs.Jobs))
+	}
+	for _, j := range rs.Jobs {
+		want, ok := attested[j.ID]
+		if !ok {
+			return fmt.Errorf("job %s is not in the attestation", j.ID)
+		}
+		if got := strings.ToLower(strings.TrimSpace(j.Conclusion)); got != want {
+			return fmt.Errorf("job %s: run status reports %q, attestation signs %q", j.ID, got, want)
+		}
+	}
 	return nil
+}
+
+// transientGritError marks a failure to reach grit while verifying a run:
+// the verdict is retried on the next sync rather than recorded.
+type transientGritError struct{ err error }
+
+func (e *transientGritError) Error() string { return e.err.Error() }
+func (e *transientGritError) Unwrap() error { return e.err }
+
+// isTransientGritError reports whether err is grit being unreachable or
+// failing on its side (a transport error, 429 or 5xx) rather than an answer
+// about the run. Such an error must not be recorded as the run's verdict:
+// a 503 while grit restarted used to conclude the run errored for good
+// (docs/test-runs/2026-10-29-grit-backend-ci-shutdown.md, F3).
+func isTransientGritError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var apiErr *gritapi.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode == http.StatusTooManyRequests || apiErr.StatusCode >= 500
+	}
+	var netErr net.Error
+	var opErr *net.OpError
+	return errors.As(err, &netErr) || errors.As(err, &opErr) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+// concludeLostRun records a run grit no longer knows -- its state was
+// reset, so it answers 404 for the id -- as errored. Skipping it left the
+// run "running" in grain for ever, and every `grain ci wait` and gate on
+// it waiting with it (docs/test-runs/2026-10-29-grit-backend-ci-shutdown.md, F4).
+func (r *BackendRunner) concludeLostRun(meta trackedRunMeta, newEpoch string) {
+	now := time.Now().UTC()
+	run, ok := r.store.Get(meta.RunID)
+	if !ok {
+		run = Run{
+			ID:          meta.RunID,
+			Key:         runKeyForMeta(meta),
+			Repo:        meta.Repo,
+			Ref:         meta.Ref,
+			Commit:      meta.Commit,
+			Event:       meta.Event,
+			RequestedBy: meta.RequestedBy,
+			Recheck:     meta.Recheck,
+			StartedAt:   &now,
+			Build:       BuildOf(version.Get()),
+		}
+	}
+	for i := range run.Jobs {
+		if !run.Jobs[i].Conclusion.Done() {
+			run.Jobs[i].Conclusion = ConclusionErrored
+		}
+	}
+	run.FinishedAt = &now
+	run.Conclusion = ConclusionErrored
+	run.Error = fmt.Sprintf("grit no longer has run %s (its state was reset): run it again", meta.RunID)
+	if newEpoch != "" {
+		run.Error = fmt.Sprintf("grit no longer has run %s (its state was reset; event stream epoch is now %s): run it again", meta.RunID, newEpoch)
+	}
+	r.store.Put(run)
+
+	r.mu.Lock()
+	meta.Concluded = true
+	r.tracked[meta.RunID] = meta
+	r.saveTrackedLocked()
+	r.mu.Unlock()
 }
 
 func mapConclusion(c string) Conclusion {

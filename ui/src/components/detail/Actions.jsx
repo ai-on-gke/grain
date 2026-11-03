@@ -520,6 +520,31 @@ export default function Actions({ t, config, act, onOpenTask }) {
         sx={{ display: "flex", m: 0 }}
         slotProps={{ typography: { fontSize: "0.8rem" } }}
       />
+      {t.state !== "closed" && (
+        <FormControlLabel
+          control={
+            <Checkbox
+              size="small"
+              name="keepRunning"
+              checked={!!t.keepRunning}
+              onChange={() =>
+                act(
+                  () =>
+                    api(`/api/tasks/${t.id}`, {
+                      method: "PATCH",
+                      body: JSON.stringify({ keepRunning: !t.keepRunning }),
+                    }),
+                  t.id,
+                )
+              }
+            />
+          }
+          label="Keep running"
+          title="Immediately restart this task when its run exits rather than closing or resting it."
+          sx={{ display: "flex", m: 0 }}
+          slotProps={{ typography: { fontSize: "0.8rem" } }}
+        />
+      )}
       {/* "This fixes a red <base>" (ui.UpdateTaskRequest.FixesBaseBranch,
           grain/task-3451): while a base branch is red, grain makes the
           work aimed at it wait on the branch's repair task, shown above
@@ -643,7 +668,11 @@ export default function Actions({ t, config, act, onOpenTask }) {
             Force merge
           </Button>
         )}
-      {t.state === "failed" && (
+      {/* Retry also resumes a turn an operator stopped (ui.Client.Retry),
+          which is what the stopped task's status line and its merge-queue
+          row ("reply or press Retry to resume") offer. */}
+      {(t.state === "failed" ||
+        (t.state === "awaiting_reply" && t.turnStopped)) && (
         <Button
           variant="contained"
           onClick={() =>

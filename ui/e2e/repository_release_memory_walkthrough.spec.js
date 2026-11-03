@@ -544,7 +544,10 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
     // Invalid release name containing spaces
     await releaseNameInput.fill("invalid release name with spaces");
     await page.getByRole("button", { name: "Create release" }).click();
-    await expect(page.locator(".MuiAlert-filledError")).toBeVisible();
+    // The refusal sits on the box itself rather than in a toast
+    // (docs/test-runs/2026-11-03-repository-release-memory-ui.md).
+    await expect(page.getByText(/invalid release name/)).toBeVisible();
+    await expect(releaseNameInput).toHaveAttribute("aria-invalid", "true");
 
     // Valid release creation
     const releaseName = `rel-${Date.now()}`;
@@ -728,7 +731,9 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
     // A link naming a release the repo does not have opens the newest,
     // says so, and stops naming it.
     await page.goto("/repos/acme/widgets/releases/no-such-release");
-    await expect(page.getByText('no release "no-such-release"')).toBeVisible();
+    await expect(
+      page.getByText("acme/widgets has no release named “no-such-release”"),
+    ).toBeVisible();
     await expect(page).toHaveURL(/\/repos\/acme\/widgets\/releases$/);
     await expect(picker).toContainText(newer);
   });

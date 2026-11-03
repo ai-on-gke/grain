@@ -27,6 +27,11 @@ import (
 type Result struct {
 	Text    string
 	IsError bool
+	// HumanTurn marks a result that is a person's own reply (chat): the
+	// start of a new turn of the conversation, which restarts the tool
+	// budget and is handed back without a budget notice appended to the
+	// person's words (tool_budget.go).
+	HumanTurn bool
 }
 
 // Tool is one entry in tools/list plus the function that answers tools/call
@@ -130,7 +135,7 @@ func (r *Registry) Register(tools ...Tool) {
 // Retain drops every registered tool keep says no to, leaving the rest in
 // the order they were registered. It is how `grain mcpserver` narrows a
 // roster built from every constructor down to the model-only control set
-// (docs/design/sandbox-first-agent-surface.md §6): the tools it drops are
+// (design/design/sandbox-first-agent-surface.design.md §6): the tools it drops are
 // still reachable as `grain` CLI commands inside the sandbox.
 func (r *Registry) Retain(keep func(name string) bool) {
 	order := r.order[:0]
@@ -226,6 +231,9 @@ func (r *Registry) handleCall(ctx context.Context, id json.RawMessage, params js
 	if args == nil {
 		args = map[string]any{}
 	}
+	// Acknowledge any addenda handed to the previous tool call now that the
+	// agent is making another tool call rather than exiting the run.
+	r.ackPendingAddenda(ctx)
 	// Before the handler, because the point of the line is to say what
 	// the run is doing *while* it does it: a tool that blocks for a
 	// quarter of an hour is exactly the one a person watching the row
@@ -251,7 +259,16 @@ func (r *Registry) handleCall(ctx context.Context, id json.RawMessage, params js
 	// start a long repair it has no time to push.
 	// The budget counts what the tool answered, after the bound above and
 	// before grain's own notices, so a run is charged for what it read.
-	budgetNotice := r.budget.spend(len(text))
+	// A person's reply is a new wake for budgeting: an interactive session
+	// stays in one run across many turns, and what it spent answering the
+	// last message is no reason to tell it to stop before answering this
+	// one. The reply itself carries no notice -- it is their words.
+	var budgetNotice string
+	if result.HumanTurn {
+		r.budget.reset(len(text))
+	} else {
+		budgetNotice = r.budget.spend(len(text))
+	}
 	text = withDeadlineNotice(text, r.deadlineNotice())
 	text = withDeadlineNotice(text, budgetNotice)
 	// And after it, a person's own words, if anybody has said anything
@@ -259,8 +276,12 @@ func (r *Registry) handleCall(ctx context.Context, id json.RawMessage, params js
 	// result a run is most likely to have to act on, and because the
 	// poll behind it is only worth making once the handler has returned:
 	// a wait_for_checks that blocked for a quarter of an hour picks up
-	// everything said during it (addenda.go).
-	text = withDeadlineNotice(text, r.addendaNotice(ctx))
+	// everything said during it (addenda.go). Skip turn-ending tools and
+	// unanswered chat turns so comments arriving as the run stops are left
+	// for the next turn/dispatch.
+	if !isTurnEndingTool(t.Name, result) {
+		text = withDeadlineNotice(text, r.addendaNotice(ctx))
+	}
 	return mustMarshalLine(rpcResponse{
 		JSONRPC: "2.0", ID: id,
 		Result: map[string]any{
@@ -268,4 +289,15 @@ func (r *Registry) handleCall(ctx context.Context, id json.RawMessage, params js
 			"isError": result.IsError,
 		},
 	})
+}
+
+func isTurnEndingTool(name string, result Result) bool {
+	switch name {
+	case "comment_on_issue", "ask_question", "nothing_needed", "request_secret", "resume_later":
+		return true
+	case "chat":
+		return !result.HumanTurn
+	default:
+		return false
+	}
 }

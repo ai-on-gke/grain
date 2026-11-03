@@ -33,13 +33,13 @@ it does anything.
 
 ``````console
 $ agy --version
-1.4.9
+1.4.12
 ``````
 
 ``````console
 path   /opt/antigravity/antigravity
-size   229708176 bytes
-sha256 1c9102d0a36194d57f6b4a66249217ece0bf563e108bcdd1046b81c5b6d6004c
+size   234144144 bytes
+sha256 1edfb30477447825f0aaa05fd9a91d82f9adf26686f41cd4f5c70b90abe383e8
 ``````
 
 ## Commands and flags
@@ -71,6 +71,7 @@ Usage of agy:
   --prompt-interactive            Run an initial prompt interactively and continue the session
   --remote-control                Create a remote connection for the CLI session on start up
   --sandbox                       Run in a sandbox with terminal restrictions enabled
+  --settings                      Settings for this session only, never saved: a JSON object of settings.json keys, inline or as a file path
 
 Available subcommands:
   agent           List available agents
@@ -511,8 +512,8 @@ error: /exit is not available in print mode (the process exits as soon as the ru
 
 ``````console
 $ agy --disable-slash-commands -p /help
-error: agent executor error: generating and executing: Error 400, Message: API key not valid. Please pass a valid API key., Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:googleapis.com metadata:map[service:generativelanguage.googleapis.com] reason:API_KEY_INVALID] map[@type:type.googleapis.com/google.rpc.LocalizedMessage locale:en-US message:API key not valid. Please pass a valid API key.]]
-AGY_ERROR: {"short_error":"agent executor error: generating and executing: Error 400, Message: API key not valid. Please pass a valid API key., Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:googleapis.com metadata:map[service:generativelanguage.googleapis.com] reason:API_KEY_INVALID] map[@type:type.googleapis.com/google.rpc.LocalizedMessage locale:en-US message:API key not valid. Please pass a valid API key.]]","status":"INVALID_ARGUMENT","error_code":400,"code_kind":"http","retryable":false,"error_id":"$UUID-1"}
+error: agent executor error: generating and executing: Error 400, Message: API key not valid. Please pass a valid API key., Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:googleapis.com metadata:map[service:generativelanguage.googleapis.com] reason:API_KEY_INVALID] map[@type:type.googleapis.com/google.rpc.LocalizedMessage locale:en-US message:API key not valid. Please pass a valid API key.] map[@type:type.googleapis.com/google.rpc.DebugInfo detail:Invalid API key: $GEMINI_API_KEY]]
+AGY_ERROR: {"short_error":"agent executor error: generating and executing: Error 400, Message: API key not valid. Please pass a valid API key., Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:googleapis.com metadata:map[service:generativelanguage.googleapis.com] reason:API_KEY_INVALID] map[@type:type.googleapis.com/google.rpc.LocalizedMessage locale:en-US message:API key not valid. Please pass a valid API key.] map[@type:type.googleapis.com/google.rpc.DebugInfo detail:Invalid API key: $GEMINI_API_KEY]]","status":"INVALID_ARGUMENT","error_code":400,"code_kind":"http","retryable":false,"error_id":"$UUID-1"}
 [exit 3]
 ``````
 
@@ -522,10 +523,21 @@ A command print mode refuses *by name* is a command that exists and belongs to t
 
 ## What agy documents about itself
 
-The changelog ships *in* the binary, which makes it the closest thing to release notes there is: a key or a flag appearing here is the announcement of it.
+The changelog is the closest thing to release notes there is: a key or a flag appearing here is the announcement of it. It used to ship *in* the binary, but since 1.4.9 `agy changelog` fetches the vendor's current notes when it has a network and falls back to its own copy when it has none -- so a 1.4.9 binary online lists releases newer than itself. Those entries are cut here, so that the section describes the binary the image pins and does not change every time agy publishes a release.
 
 ``````console
 $ agy changelog
+1.4.12:
+· Added `"optional": true` for API key providers in a plugin's `auth.json`, for services that work without a key but raise rate limits with one: when you haven't set the key, the plugin's commands now see the variable as unset and make unauthenticated requests at the free rate limit, instead of failing with `401` errors or asking you to sign in.
+· Fixed Markdown tables in long streaming replies leaving misaligned borders and repeated text in your terminal scrollback: a table's rows now stay in the live view until the table is complete, so they reach scrollback with their final column widths.
+
+1.4.11:
+· Added a billing model choice after you sign in with Google Cloud, so you can pick either a Gemini subscription or Pay As You Go.
+· Added `terminationBehavior` to `PreInvocation` hooks: returning `"terminate"` stops the turn before the model is called, for example to block a prompt that contains sensitive data, and hooks can now inject an `errorMessage` whose `userMessage` is shown to you without being sent to the model, which also makes a `-p` run exit with a non-zero code.
+· Added a `finished_reason` field to the result of `--output-format json` and `stream-json` runs that says why a turn ended early, `print_timeout` when `--print-timeout` expired and the response is partial, `interrupted` when the run was canceled such as with `Ctrl+C`, or `error` for any other failure, so scripts can tell a cut-off answer from a complete one; the field is omitted when the turn finishes normally.
+· Improved the `/plugin` Discover tab for long shelves: each shelf now shows its first 6 plugins followed by a `⋯ N more — enter to show` row, `Ctrl+E` expands or collapses the shelf under the cursor, and `[` and `]` jump to the previous or next shelf.
+· Fixed `agy plugin import claude` printing `No claude extensions found.` for plugins installed from a Claude Code marketplace: it now reads Claude Code's list of installed plugins, skipping plugins disabled in Claude Code's settings and plugins installed for a single project only, and imported plugins now keep their remote MCP servers (`"type": "http"` with `url` and `headers`) and servers from `.mcp.json` files without an `mcpServers` wrapper, expand `${CLAUDE_PLUGIN_ROOT}` to the installed plugin's directory, and list servers that can't be converted, such as ones using the legacy SSE transport, with a warning instead of reporting them as installed.
+
 1.4.10:
 · Improved streaming of agent replies: lines that scroll off the top of the screen are now scrolled into your terminal's scrollback instead of repainting the whole screen, and text wrapping writes whole runs of text at a time, so streaming writes about 70% fewer bytes to the terminal and stays much smoother over slow SSH connections.
 · Improved memory use shortly after startup: the CLI now returns about 100 MB of memory left over from startup to the operating system 15 seconds after the interactive UI opens; print and headless modes are unaffected.
@@ -817,20 +829,6 @@ $ agy changelog
 
 1.2.13:
 · Improved rate-limit handling when the model API returns a retry delay: the CLI now waits the delay the server asks for instead of a fixed 5 seconds, and stops right away instead of retrying when the delay is longer than 30 seconds or the quota is a daily or billing cap
-· Improved rendering efficiency, cutting CPU use and memory churn while the conversation view redraws, such as during fast scrolling or while the agent is working
-· Improved the artifact viewer's `m` hint to name the content and the mode it switches to, such as `diagram ASCII`, `diagram source`, or `math image`, instead of `toggle ASCII` or `toggle raw`
-· Fixed the workspace trust dialog, the `/help` panel, and the sign-in and MCP authentication screens clipping text on narrow terminals of around 40 columns; long lines and navigation hints now wrap, and the `/help` tab bar compacts to fit
-
-1.2.12:
-· Improved scrolling in the full-screen view: bursts of mouse-wheel or trackpad events are now coalesced before redrawing, which cuts CPU use and reduces scroll lag in long conversations and the artifact viewer
-· Improved `GEMINI_API_KEY` sessions to stop immediately when the Gemini API reports an exhausted daily quota, a project or billing-account spend cap, or depleted prepaid credits, instead of spending several minutes on retries that cannot succeed; short-lived per-minute rate limits are still retried
-· Fixed resuming a long conversation in `medium` or `low` verbosity taking many seconds and lagging while history replayed: earlier tool groups now appear already finished instead of each re-animating, and keys pressed during the replay no longer refresh a half-loaded transcript
-· Fixed the terminal or tab title changing to a string like `Ga=q,f=32,...` every time the CLI starts inside GNU `screen`, `tmux` (including iTerm2 `tmux -CC` tabs), or Zellij; the CLI no longer sends its image-support probe through a multiplexer, and `CLI_GRAPHICS=kitty` still forces image mode
-· Fixed Vim mode ignoring non-ASCII characters such as `é` or `中` after `r`, `f`, `F`, `t` and `T`, `fv` and `fV` in Visual mode leaving Visual mode instead of extending the selection, and `D`, `C`, or Visual `~`/`u`/`U` recording an empty undo step and clearing redo history when they changed nothing
-
-1.2.11:
-· Improved reasoning effort level for models with different support, selectable with `--effort` or from the effort gauge in `/effort` and `/model`.
-· Changed plugins placed directly in `~/.gemini/config/plugins` so that a plugin whose MCP server needs configuration variables now starts disabled until you enable it, matching plugins installed through `/plugin`.
 ... [truncated at 65536 bytes by scripts/agy-surface.sh]
 ``````
 
@@ -888,6 +886,7 @@ d .gemini/config
 d .gemini/config/projects
 f .gemini/antigravity-cli/bin/webm_encoder
 f .gemini/antigravity-cli/builtin/.checksum
+f .gemini/antigravity-cli/builtin/.manifest
 f .gemini/antigravity-cli/builtin/keep.txt
 f .gemini/antigravity-cli/builtin/skills/agy-customizations/SKILL.md
 f .gemini/antigravity-cli/builtin/skills/agy-customizations/docs/hooks.md
@@ -1320,7 +1319,8 @@ the beginning of a new conversation session.
 
 ### 4. `PreInvocation` Contract
 
-Use to inject context or instructions before the model runs.
+Use to gate user prompts or inject context or instructions before the model
+runs.
 
 *   **Input (stdin)**:
 
@@ -1340,7 +1340,8 @@ Use to inject context or instructions before the model runs.
         {
           "ephemeralMessage": "Remember to check for lint errors before proposing changes."
         }
-      ]
+      ],
+      "terminationBehavior": ""
     }
     ```
 
@@ -1356,6 +1357,16 @@ Use to inject context or instructions before the model runs.
         *   `{"userMessage": "..."}` (plain string)
         *   `{"ephemeralMessage": "..."}` (plain string; transient message
             dropped after the current turn)
+        *   `{"errorMessage": {"userMessage": "..."}}` (shows an error message
+            to the user without sending it to the model. Marks the turn as
+            errored with a non-zero exit code in non-interactive `-p` mode, and
+            does not stop execution on its own unless paired with
+            `"terminationBehavior": "terminate"`).
+    *   **`terminationBehavior`** (string, optional):
+        *   `"terminate"`: Stops execution immediately before calling the model
+            (pair with an injected `errorMessage` to show a block message to the
+            user).
+        *   `""` (or omitted): Proceeds to the model call (default).
 
 --------------------------------------------------------------------------------
 
@@ -1377,7 +1388,8 @@ Use to inspect model outputs and potentially force continuation.
         step types as `PreInvocation`).
     *   **`terminationBehavior`** (string, optional):
         *   `"force_continue"`: Forces the execution loop to continue.
-        *   `"terminate"`: Forces the loop to stop.
+        *   `"terminate"`: Forces the loop to stop (pair with an injected
+            `errorMessage` to show a block message to the user).
         *   `""` (or omitted): Default behavior.
 
 --------------------------------------------------------------------------------
@@ -1407,8 +1419,8 @@ Use to prevent the agent from stopping if goals are not met.
         *   `"ERROR"`: Execution terminated due to an error.
         *   `"USER_CANCELED"`: Canceled by the user.
         *   `"TERMINAL_STEP_TYPE"`: Stopped on a terminal step type.
-        *   `"TERMINAL_CUSTOM_HOOK"`: Terminated by a custom `PostInvocation`
-            hook.
+        *   `"TERMINAL_CUSTOM_HOOK"`: Terminated by a custom `PreInvocation` or
+            `PostInvocation` hook.
         *   `"INJECTED_RESPONSE"`: Terminated after an injected response.
 
 *   **Output (stdout)**:
@@ -1424,13 +1436,7 @@ Use to prevent the agent from stopping if goals are not met.
         and re-enter the loop. Any other value allows the agent to stop.
     *   **`reason`** (string, optional): Injected as a system message if
         continuing.
-
---------------------------------------------------------------------------------
-
-## Current Limitations
-
-*   Only `type: "command"` is supported (no HTTP or prompt hooks yet).
-*   Hooks run synchronously and block the agent loop (no async execution).
+... [truncated at 400 lines by scripts/agy-surface.sh]
 ``````
 
 #### `.gemini/antigravity-cli/builtin/skills/agy-customizations/docs/json_configs.md`
@@ -3068,7 +3074,7 @@ source /tmp/lsrpc.sh && lsrpc GetAllPlugins '{"workspaceUris":["file:///path/to/
   disabled: (.disabled // false),
   isGlobal,
   skills: [.skills[]?.name],
-  agents: [.agents[]?.name],
+  agents: [.agents[]?.agent.name],
   rules: [.rules[]?.absolutePath],
   hooks: ((.hooksJson // "") | length > 0),
   mcp: [.mcpServers[]?.name]
@@ -3649,9 +3655,9 @@ $ agy --input-format stream-json --output-format stream-json --dangerously-skip-
 {"event":"init","conversation_id":"$UUID","init":{"cwd":"$PWD","tools":["ask_custom_permission","ask_permission","ask_question","browser_click_element","browser_drag_pixel_to_pixel","browser_get_dom","browser_get_network_request","browser_input","browser_list_network_requests","browser_mouse_down","browser_mouse_up","browser_move_mouse","browser_press_key","browser_refresh_page","browser_resize_window","browser_scroll","browser_scroll_dom","browser_select_option","browser_subagent","call_mcp_tool","capture_browser_console_logs","capture_browser_screenshot","click_browser_pixel","command_status","define_subagent","delete_knowledge","execute_browser_javascript","find_by_name","finish","generate_image","grep_search","invoke_subagent","list_browser_pages","list_dir","list_permissions","list_plugin_accounts","list_resources","manage_inbox","manage_subagents","manage_task","multi_replace_file_content","notebook_edit","notebook_execution","open_browser_url","read_browser_page","read_resource","read_url_content","replace_file_content","run_command","run_workflow","schedule","search_marketplace","search_web","sed_file","send_command_input","send_message","view_file","wait","wait_5_seconds","write_to_file"],"permission_mode":"always-proceed"}}
 {"event":"step_update","step_update":{"conversation_id":"$UUID","step_index":0,"state":"DONE","step_type":"user_input"}}
 {"event":"step_update","step_update":{"conversation_id":"$UUID","step_index":1,"state":"DONE","step_type":"error_message"}}
-error: agent executor error: generating and executing: Error 400, Message: API key not valid. Please pass a valid API key., Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:googleapis.com metadata:map[service:generativelanguage.googleapis.com] reason:API_KEY_INVALID] map[@type:type.googleapis.com/google.rpc.LocalizedMessage locale:en-US message:API key not valid. Please pass a valid API key.]]
-AGY_ERROR: {"short_error":"agent executor error: generating and executing: Error 400, Message: API key not valid. Please pass a valid API key., Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:googleapis.com metadata:map[service:generativelanguage.googleapis.com] reason:API_KEY_INVALID] map[@type:type.googleapis.com/google.rpc.LocalizedMessage locale:en-US message:API key not valid. Please pass a valid API key.]]","status":"INVALID_ARGUMENT","error_code":400,"code_kind":"http","retryable":false,"error_id":"$UUID-1"}
-{"event":"result","result":{"conversation_id":"$UUID","status":"ERROR","response":"","error":"agent executor error: generating and executing: Error 400, Message: API key not valid. Please pass a valid API key., Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:googleapis.com metadata:map[service:generativelanguage.googleapis.com] reason:API_KEY_INVALID] map[@type:type.googleapis.com/google.rpc.LocalizedMessage locale:en-US message:API key not valid. Please pass a valid API key.]]","duration_seconds":$SECONDS,"num_turns":1,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0}}}
+error: agent executor error: generating and executing: Error 400, Message: API key not valid. Please pass a valid API key., Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:googleapis.com metadata:map[service:generativelanguage.googleapis.com] reason:API_KEY_INVALID] map[@type:type.googleapis.com/google.rpc.LocalizedMessage locale:en-US message:API key not valid. Please pass a valid API key.] map[@type:type.googleapis.com/google.rpc.DebugInfo detail:Invalid API key: $GEMINI_API_KEY]]
+AGY_ERROR: {"short_error":"agent executor error: generating and executing: Error 400, Message: API key not valid. Please pass a valid API key., Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:googleapis.com metadata:map[service:generativelanguage.googleapis.com] reason:API_KEY_INVALID] map[@type:type.googleapis.com/google.rpc.LocalizedMessage locale:en-US message:API key not valid. Please pass a valid API key.] map[@type:type.googleapis.com/google.rpc.DebugInfo detail:Invalid API key: $GEMINI_API_KEY]]","status":"INVALID_ARGUMENT","error_code":400,"code_kind":"http","retryable":false,"error_id":"$UUID-1"}
+{"event":"result","result":{"conversation_id":"$UUID","status":"ERROR","response":"","error":"agent executor error: generating and executing: Error 400, Message: API key not valid. Please pass a valid API key., Status: INVALID_ARGUMENT, Details: [map[@type:type.googleapis.com/google.rpc.ErrorInfo domain:googleapis.com metadata:map[service:generativelanguage.googleapis.com] reason:API_KEY_INVALID] map[@type:type.googleapis.com/google.rpc.LocalizedMessage locale:en-US message:API key not valid. Please pass a valid API key.] map[@type:type.googleapis.com/google.rpc.DebugInfo detail:Invalid API key: $GEMINI_API_KEY]]","duration_seconds":$SECONDS,"num_turns":1,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0},"finished_reason":"error"}}
 [exit 3]
 ``````
 
@@ -3853,6 +3859,8 @@ json:"cli_tools,omitempty"
 json:"current_tool_step_idx"
 json:"custom_tools,omitempty"
 json:"delta_tool_calls,omitempty"
+json:"disableBuiltInTools"
+json:"disable_built_in_tools"
 json:"disable_parallel_tool_calls,omitempty"
 json:"disable_simple_research_tools,omitempty"
 json:"disable_tool_call_execution_outside_workspace,omitempty"
@@ -3926,14 +3934,17 @@ json:"supports_tool_calls,omitempty"
 json:"tool"
 json:"tool,omitempty"
 json:"toolAction"
+json:"toolCall"
 json:"toolCall,omitempty"
 json:"toolCallCancellation,omitempty"
 json:"toolCallId"
+json:"toolCallId,omitempty"
 json:"toolChoice,omitempty"
 json:"toolConfig,omitempty"
 json:"toolConfirmation"
 json:"toolFormatterType,omitempty"
 json:"toolName,omitempty"
+json:"toolPermission"
 json:"toolPermission,omitempty"
 json:"toolResponse,omitempty"
 json:"toolSummary"
@@ -4032,6 +4043,7 @@ json:"agent_permissions,omitempty"
 json:"agy_allowed_models,omitempty"
 json:"allow,omitempty"
 json:"allowFileDiscovery,omitempty"
+json:"allowNonWorkspaceAccess"
 json:"allowNonWorkspaceAccess,omitempty"
 json:"allowTopFrameEditing,omitempty"
 json:"allowTriggeredUpdates,omitempty"
@@ -4174,6 +4186,7 @@ json:"system_denylist,omitempty"
 json:"system_denylist_regex,omitempty"
 json:"teamDrivePermissionDetails,omitempty"
 json:"teamDrivePermissionType,omitempty"
+json:"toolPermission"
 json:"toolPermission,omitempty"
 json:"use_allowlist,omitempty"
 json:"user_allowlist,omitempty"
@@ -4236,6 +4249,7 @@ json:"mcp,omitempty"
 json:"mcpAllowlist,omitempty"
 json:"mcpArgumentsJson,omitempty"
 json:"mcpAuth"
+json:"mcpCapabilities,omitempty"
 json:"mcpCascadeId,omitempty"
 json:"mcpControls,omitempty"
 json:"mcpEnabled,omitempty"
@@ -4247,6 +4261,7 @@ json:"mcpServers,omitempty,omitzero"
 json:"mcpTool,omitempty"
 json:"mcpToolName,omitempty"
 json:"mcp_allowlist,omitempty"
+json:"mcp_capabilities,omitempty"
 json:"mcp_config_json,omitempty"
 json:"mcp_controls,omitempty"
 json:"mcp_enabled,omitempty"
@@ -4266,7 +4281,9 @@ json:"Subagents"
 json:"agent"
 json:"agent,omitempty"
 json:"agent,omitzero"
+json:"agentCapabilities"
 json:"agentControls,omitempty"
+json:"agentInfo"
 json:"agentMode,omitempty"
 json:"agentPermissions"
 json:"agentPluginsSpec"
@@ -4363,6 +4380,7 @@ json:"run_subagent,omitempty"
 json:"selected_agent_script,omitempty"
 json:"self_subagent_remove_prompt_sections,omitempty"
 json:"service_agent_attributes,omitempty"
+json:"shadowed_skills,omitempty"
 json:"should_download_firebase_skill,omitempty"
 json:"skill_id"
 json:"skill_id,omitempty"
@@ -4412,6 +4430,7 @@ json:"BypassSandbox,omitempty"
 json:"allow_sandbox_app_deployments,omitempty"
 json:"cns_sandbox_mounts,omitempty"
 json:"disable_sandbox_bypass,omitempty"
+json:"enableTerminalSandbox"
 json:"enableTerminalSandbox,omitempty"
 json:"enable_terminal_sandbox,omitempty"
 json:"inheritFilesFromSandbox,omitempty"
@@ -4581,7 +4600,6 @@ mapstructure:"variables,omitempty"
 
 ``````console
 $ strings -n 4 agy | grep -aoE 'jsonschema_description:"[^"]{1,120}"' | sort -u
-jsonschema_description:"'kill' terminates the subagents named in ConversationIds; 'kill_all' terminates all."
 jsonschema_description:"'list' reports the running tasks; the other actions operate on the task named in TaskId."
 jsonschema_description:"A description of the changes that you are making to the file."
 jsonschema_description:"A detailed system prompt for this subagent."
@@ -4598,6 +4616,7 @@ jsonschema_description:"Browser action to execute in the built-in webview browse
 jsonschema_description:"Browser action to execute in this batch step."
 jsonschema_description:"Byte offset into the line range. Use to continue reading when content is truncated by the byte limit."
 jsonschema_description:"Classification of the edit. Examples include \"
+jsonschema_description:"Concise 1-2 sentence evidence-velocity analysis (<35 words) written FIRST before deciding should_nudge."
 jsonschema_description:"Content of the message."
 jsonschema_description:"Conversation ID of the agent to message, or '@children' to broadcast to all active direct subagents."
 jsonschema_description:"Conversation ID of the agent to message."
@@ -4607,6 +4626,7 @@ jsonschema_description:"Decision for the tool call: 'allow' to proceed, 'deny' t
 jsonschema_description:"Decision on whether to stop execution: 'stop' to allow termination, 'continue' or 'block' to continue execution."
 jsonschema_description:"Defaults to 1:1."
 jsonschema_description:"Detailed multi-line summary of the artifact's contents and purpose."
+jsonschema_description:"Empty string when should_nudge is false; concise (<45 words) pacing note when should_nudge is true."
 jsonschema_description:"End line to read (inclusive). Omit to read until the end of the file, within the per-read limits."
 jsonschema_description:"Grant access to MCP tools."
 jsonschema_description:"Grant tools to create and edit files, and run commands."
@@ -4631,6 +4651,7 @@ jsonschema_description:"Normalized horizontal viewport coordinate in [0, 1000] w
 jsonschema_description:"Normalized vertical viewport coordinate in [0, 1000] when clicking/hovering/scrolling by coordinates."
 jsonschema_description:"Normalized vertical viewport coordinate in [0, 1000] when targeting by coordinates."
 jsonschema_description:"Number of characters to view. Make this as small as possible to avoid excessive memory usage."
+jsonschema_description:"Number of future agent turns to sleep before checking again (integer >= 3)."
 jsonschema_description:"One sentence naming the specific effect that decided the verdict."
 jsonschema_description:"Option value or visible label to select for 'select_option'."
 jsonschema_description:"Optional HTTP status code in [100, 599] when relevant."
@@ -4715,6 +4736,7 @@ jsonschema_description:"The task ID to manage. Required when Action is 'kill', '
 jsonschema_description:"The text prompt to generate an image for or the edit instructions."
 jsonschema_description:"The type of cell: 'code', 'markdown', or 'raw'. Required for 'add' action."
 jsonschema_description:"True if the user can get back to their prior state after this command runs. False if any effect of it cannot be undone."
+jsonschema_description:"True to inject nudge_message before the next agent turn; false to stay silent."
 jsonschema_description:"Type name of the subagent to invoke."
 jsonschema_description:"URL to read content from"
 jsonschema_description:"Unique identifier for the resource."
@@ -4839,6 +4861,9 @@ allowedWebsites
 deniedActions
 deniedCommandPatterns
 deniedCommands
+deniedGcloudAccountDomains
+deniedProjects
+deniedRefreshTokenHashes
 deniedToolPrefixes
 deniedTools
 disabledHeuristics
@@ -4879,6 +4904,7 @@ permissionManager
 permissionOverrides
 permissionOverridesX
 permissionPreset
+permissionPresets
 permissionRefreshInterval
 sandboxAllowNetwork
 sandboxAvailable

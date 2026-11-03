@@ -31,6 +31,7 @@ import {
   ListSearchField,
   ListToolbar,
 } from "./ListPrimitives.jsx";
+import ChipStrip from "./ChipStrip.jsx";
 
 // SessionsPage lists the standing interactive console sessions: the
 // director, and any dedicated interactive agents created for this deployment.
@@ -213,9 +214,9 @@ export default function SessionsPage({
                   {session.title || session.id}
                 </span>
               </button>
-              <span className="chips" id={`session-status-${session.id}`}>
+              <ChipStrip id={`session-status-${session.id}`}>
                 <SessionStatus task={taskById.get(session.taskId)} />
-              </span>
+              </ChipStrip>
               <span className="template-title hint">
                 {session.id === "director"
                   ? "Director standing session"

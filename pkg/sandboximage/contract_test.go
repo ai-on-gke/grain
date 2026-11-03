@@ -124,7 +124,7 @@ func TestCheckImageLabels(t *testing.T) {
 
 func TestVerifyScriptAndRequiredComponents(t *testing.T) {
 	k8sItems := strings.Join(RequiredComponents(BackendK8s), "\n")
-	for _, want := range []string{ContractFile, "debian", "/home/agent", "git", "curl", "ca-certificates", "python3"} {
+	for _, want := range []string{ContractFile, "debian", "/home/agent", "git", "curl", "ca-certificates", "python3", SandboxCLIPath, "host-script"} {
 		if !strings.Contains(k8sItems, want) {
 			t.Errorf("RequiredComponents(k8s) missing %q:\n%s", want, k8sItems)
 		}
@@ -150,6 +150,8 @@ func TestVerifyScriptAndRequiredComponents(t *testing.T) {
 			"for cmd in git curl python3",
 			"/etc/ssl/certs/ca-certificates.crt",
 			"import os, socket, sys, threading",
+			SandboxCLIPath,
+			"GRAIN_SANDBOX_CLI=0",
 		} {
 			if !strings.Contains(script, want) {
 				t.Errorf("VerifyScript(%s) missing %q:\n%s", backend, want, script)
@@ -183,5 +185,36 @@ func TestContractIsDeclaredEverywhere(t *testing.T) {
 		if !strings.Contains(text, wantFile) {
 			t.Errorf("%s does not write %s (expected when Contract = %d)", rel, wantFile, Contract)
 		}
+	}
+}
+
+// The contract's grain check passes a grain whose usage offers the
+// sandbox CLI and fails the host-script-only grain older images carry, or
+// none at all -- run against stand-ins for /usr/local/bin/grain.
+func TestVerifyScriptChecksTheSandboxCLI(t *testing.T) {
+	dir := t.TempDir()
+	fake := func(name, usage string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\ncat <<'USAGE'\n"+usage+"USAGE\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	current := fake("current", "usage: grain host-script <name>\n       grain ls <uri>\n       grain read <uri>\n"+
+		"       grain grep <re> <uri>\n       grain ci wait\n       grain pr status\n       grain task wait\n       grain api\n")
+	old := fake("old", "usage: grain host-script <name> [arguments...]   run a granted host script\n")
+	run := func(bin string) (string, error) {
+		script := "fail() { echo \"$*\" >&2; exit 1; }\n" + strings.ReplaceAll(sandboxCLIVerify(), SandboxCLIPath, bin)
+		out, err := exec.Command("sh", "-c", script).CombinedOutput()
+		return string(out), err
+	}
+	if out, err := run(current); err != nil {
+		t.Errorf("check of a grain with the sandbox CLI failed: %v\n%s", err, out)
+	}
+	if out, err := run(old); err == nil || !strings.Contains(out, "grain ls") {
+		t.Errorf("check of a host-script-only grain = %v, %q; want it to fail naming grain ls", err, out)
+	}
+	if out, err := run(filepath.Join(dir, "missing")); err == nil || !strings.Contains(out, "missing executable") {
+		t.Errorf("check with no grain = %v, %q; want it to fail as missing", err, out)
 	}
 }

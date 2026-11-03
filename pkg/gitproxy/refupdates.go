@@ -70,8 +70,8 @@ type BranchLookup interface {
 }
 
 // AnyRefLookup is the optional half of BranchLookup that answers whether
-// a sandbox's live run holds model.GitPushAnyRefCapability, the team
-// grant that lifts the one-branch rule. model.Store implements it; a
+// a sandbox's live run holds model.GitPushAnyRefGrant (or the retired
+// bare git-push-any-ref it replaced), the team grant that lifts the one-branch rule. model.Store implements it; a
 // lookup that does not is read as nobody holding it.
 type AnyRefLookup interface {
 	GitPushAnyRef(ctx context.Context, sandbox string) (bool, error)
@@ -99,6 +99,19 @@ var _ FastForwardOnlyLookup = (*model.Store)(nil)
 type DeclaredPushLookup interface {
 	GitDeclaredPush(ctx context.Context, sandbox string) (*model.DeclaredPush, error)
 }
+
+// ConfigProposalLookup is the optional half of BranchLookup that answers
+// which grain/config branches a sandbox's live run may push beyond its
+// own: the proposal branches propose_config_change pushes, under
+// model.ConfigProposalBranchPrefix, for a run whose task holds
+// grain/config in its Writes (model.Store.GitConfigProposalPrefix). ""
+// is a run with none. A lookup that does not implement it is read as no
+// run having any.
+type ConfigProposalLookup interface {
+	GitConfigProposalPrefix(ctx context.Context, sandbox string) (string, error)
+}
+
+var _ ConfigProposalLookup = (*model.Store)(nil)
 
 // RefGrant is one update of a ref other than the run's own branch that
 // AuthorizeRefUpdates let through, and on whose say-so -- what the audit
@@ -250,7 +263,9 @@ func (a *ModelAuthorizer) branches() BranchLookup {
 //     matching entry says `delete: true`, and a tag moved or a branch
 //     moved anywhere the pack does not show is a fast-forward only where
 //     it says `force: true`;
-//   - git-push-any-ref (AnyRefLookup), a team grant for ad-hoc work.
+//   - model.GitPushAnyRefGrant, the https://grain.dev/capabilities/repo#write
+//     grant formerly named git-push-any-ref (AnyRefLookup), a team grant
+//     for ad-hoc work.
 //
 // No team policy and no admin grant sits behind either: the team's own
 // git credential, which every push is forwarded with, is the only other
@@ -281,6 +296,10 @@ func (a *ModelAuthorizer) AuthorizeRefUpdates(ctx context.Context, sandbox, owne
 		return "", nil
 	}
 	check := pushCheckFrom(ctx)
+	var proposals string
+	if others, proposals, err = a.configProposalUpdates(ctx, sandbox, owner, repo, others, check); err != nil || len(others) == 0 {
+		return "", err
+	}
 	if anyRef, ok := lookup.(AnyRefLookup); ok {
 		held, err := anyRef.GitPushAnyRef(ctx, sandbox)
 		if err != nil {
@@ -288,7 +307,7 @@ func (a *ModelAuthorizer) AuthorizeRefUpdates(ctx context.Context, sandbox, owne
 		}
 		if held {
 			for _, u := range others {
-				check.grant(RefGrant{Ref: u.Ref, Kind: updateKind(u), Via: model.GitPushAnyRefCapability})
+				check.grant(RefGrant{Ref: u.Ref, Kind: updateKind(u), Via: model.RepoWriteRef})
 			}
 			return "", nil
 		}
@@ -309,6 +328,10 @@ func (a *ModelAuthorizer) AuthorizeRefUpdates(ctx context.Context, sandbox, owne
 		reason := fmt.Sprintf("refusing to update %s in %s/%s: a sandbox may push only its own task's branch, %s "+
 			"(push with `git push origin %s`)", strings.Join(refs, ", "), owner, repo, own, branch)
 		switch {
+		case proposals != "":
+			reason += fmt.Sprintf(", and its own config proposal branches, refs/heads/%s<name>. "+
+				"A change reaches %s's main only through propose_config_change and a person's approval",
+				proposals, model.ConfigRepo())
 		case declared != nil:
 			reason += fmt.Sprintf(". This task's template, %s, declares a push set for %s only",
 				declared.Declaration.Path, declared.Declaration.Repo)
@@ -344,6 +367,42 @@ func (a *ModelAuthorizer) AuthorizeRefUpdates(ctx context.Context, sandbox, owne
 	}
 	check.grant(grants...)
 	return "", nil
+}
+
+// configProposalUpdates is others less the updates to the run's own
+// grain/config proposal branches (ConfigProposalLookup), which are
+// granted -- created, moved, force-moved or deleted, as its own branch
+// may be -- and the branch prefix those are under ("" for a run with
+// none, which the refusal of the rest names). Only refs strictly under
+// the prefix qualify, and only in grain/config: main, and every other
+// task's branches, stay refused.
+func (a *ModelAuthorizer) configProposalUpdates(ctx context.Context, sandbox, owner, repo string,
+	others []RefUpdate, check *pushCheck) ([]RefUpdate, string, error) {
+	lookup, ok := a.branches().(ConfigProposalLookup)
+	if !ok {
+		return others, "", nil
+	}
+	cOwner, cRepo := canonicalizeRepo(owner, repo)
+	if !canonicalMatches(model.ConfigRepo(), cOwner, cRepo) {
+		return others, "", nil
+	}
+	prefix, err := lookup.GitConfigProposalPrefix(ctx, sandbox)
+	if err != nil {
+		return nil, "", fmt.Errorf("gitproxy: resolving config proposal branches for %s: %w", sandbox, err)
+	}
+	if prefix == "" {
+		return others, "", nil
+	}
+	refPrefix := "refs/heads/" + prefix
+	var rest []RefUpdate
+	for _, u := range others {
+		if strings.HasPrefix(u.Ref, refPrefix) && len(u.Ref) > len(refPrefix) {
+			check.grant(RefGrant{Ref: u.Ref, Kind: updateKind(u), Via: "config proposal"})
+			continue
+		}
+		rest = append(rest, u)
+	}
+	return rest, prefix, nil
 }
 
 // refuseBorrowedBranchRewrite is the one bound on a run's own branch: a

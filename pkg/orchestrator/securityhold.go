@@ -134,6 +134,11 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 	if current == nil || (!current.AutoMerge && !hasSecurityHold(*current) && !hasBrokenRulesHold(*current)) {
 		return nil
 	}
+	if !holdIsAbout(*current, ref) {
+		log.Printf("orchestrator: not classifying %s for task %s: its security hold is about %s",
+			ref, task.ID, model.TaskPullRequest(*current))
+		return nil
+	}
 
 	if headSHA == "" {
 		detail, err := client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
@@ -407,6 +412,11 @@ func SyncSecurityHolds(ctx context.Context, store *model.Store, client github.Cl
 		var ref *model.PullRequestRef
 		if r, err := model.ParsePullRequestRef(link.PullRequest); err == nil {
 			ref = &r
+		}
+		// The hold is about one of the task's pull requests: settling it
+		// against each of several had each re-read and rewrite the other's.
+		if ref != nil && !holdIsAbout(*task, *ref) {
+			continue
 		}
 		if hasBaseRepairBypass(*task) && ref != nil {
 			if _, err := revokeExpiredBaseRepairBypass(ctx, store, client, *task, *ref, "", now); err != nil {
@@ -700,7 +710,7 @@ func closeSecurityReviewOnSettle(ctx context.Context, store *model.Store, client
 		}
 		return nil
 	}
-	if err := observeField(ctx, store, reviewID, now, func(o *model.Observation) {
+	if err := closeTask(ctx, store, reviewID, now, fmt.Sprintf("the change it reviews, %s, is %s", ref, health), func(o *model.Observation) {
 		o.ClosedAt = &now
 	}); err != nil {
 		return fmt.Errorf("orchestrator: closing security review %s: %w", reviewID, err)
@@ -821,6 +831,14 @@ func isSettingsRepo(store *model.Store, repo model.RepoRef) bool {
 func clearedForHead(ctx context.Context, store *model.Store, client github.Client,
 	task model.Task, ref model.PullRequestRef, headSHA string, now time.Time) (bool, error) {
 
+	// A clearance read off a task with several pull requests is about one
+	// of them (holdIsAbout). Any other is not merged on its strength, and
+	// is not classified here either: that would overwrite the hold of the
+	// one it is about, and the next cycle's read of that one would
+	// overwrite it back.
+	if !holdIsAbout(task, ref) {
+		return false, nil
+	}
 	if hasBaseRepairBypass(task) {
 		if revoked, err := revokeExpiredBaseRepairBypass(ctx, store, client, task, ref, headSHA, now); err != nil || revoked {
 			return !revoked, err
@@ -850,6 +868,22 @@ func clearedForHead(ctx context.Context, store *model.Store, client github.Clien
 	}
 	return current != nil && current.AutoMerge &&
 		linkTarget(*current, model.LinkTrustBoundaryCleared) == clearedTarget(headSHA, rules), nil
+}
+
+// holdIsAbout reports whether ref is the pull request task's security-hold
+// state is about. That state -- LinkSecurityHold, LinkSecurityReviewTask,
+// LinkTrustBoundaryCleared and the rest -- is one set of links per task,
+// so a task carrying two open LinkFixes pull requests (task 1853: one in
+// a repository it was moved off, one in its new one) had every cycle
+// classify each in turn, the one read last overwriting the clearance of
+// the other and filing a fresh security review for it. It is keyed to the
+// task's own pull request (model.TaskPullRequest) instead: the one in its
+// target, the newest there. A task with no such link yet -- a caller
+// classifying before linking -- has nothing to compare against, and its
+// ref is taken as the one.
+func holdIsAbout(task model.Task, ref model.PullRequestRef) bool {
+	own := model.TaskPullRequest(task)
+	return own == nil || model.SamePullRequest(*own, ref)
 }
 
 // unjudged reports whether task is one the trust boundary does not judge
@@ -887,8 +921,15 @@ func hasSecurityHold(task model.Task) bool {
 // human's Submit may end (model.LinkHumanOnlyHold). Every path that hands
 // auto-merge back on grain's own judgement checks it, except the
 // base-repair bypass, which exists to lift human gates.
+//
+// A task whose auto-merge somebody turned off explicitly
+// (model.AutoMergeDeclined) is one too: the hold releasing is not the
+// person changing their mind, so its auto-merge stays off and the change
+// waits for their Submit. The store refuses the write regardless
+// (model.guardAutoMerge); saying so here is what keeps each release from
+// announcing a merge that is not going to happen.
 func heldForHuman(task model.Task) bool {
-	return linkTarget(task, model.LinkHumanOnlyHold) != ""
+	return linkTarget(task, model.LinkHumanOnlyHold) != "" || model.AutoMergeDeclined(task)
 }
 
 // linkTarget is the target of task's last link of kind, or "".

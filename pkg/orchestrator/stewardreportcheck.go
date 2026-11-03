@@ -29,7 +29,7 @@ import (
 )
 
 // StewardRegressionWindow is the rolling window over which the steward's
-// report-check failure rate is evaluated (docs/design/durable-tasks.md#DT-14).
+// report-check failure rate is evaluated (design/design/durable-tasks.design.md#DT-14).
 const StewardRegressionWindow = 7 * 24 * time.Hour
 
 // StewardRegressionThreshold is the 7-day failure-rate threshold (5% of claims)
@@ -112,7 +112,7 @@ func ReadIDsFromAPICalls(calls []model.RunAPICall) map[string]bool {
 
 // stewardReportCheck checks a steward wake's report for uncited claims,
 // cited-but-unread IDs, and attribute mismatches against the fixed vocabulary
-// of kind tags and task states (docs/design/durable-tasks.md#DT-14).
+// of kind tags and task states (design/design/durable-tasks.design.md#DT-14).
 func stewardReportCheck(runID, report string, calls []model.RunAPICall, tasks map[string]StewardCheckTask, promptIDs ...string) StewardReportCheckResult {
 	res := StewardReportCheckResult{
 		Check: model.RunReportCheck{RunID: runID},
@@ -549,25 +549,42 @@ func loadStewardCheckTasks(ctx context.Context, store *model.Store) (map[string]
 	return out, nil
 }
 
-// checkAndRecordStewardReport runs stewardReportCheck when a pipeline steward
-// run finishes with a report, stores the result in task_run_report_check,
-// raises agent.steward:report-mismatch when the report has any mismatch, and
-// evaluates the 7-day rolling regression rate.
+// checkAndRecordStewardReport resolves the posted closing report from result and
+// runs checkAndRecordStewardReportText.
 func checkAndRecordStewardReport(ctx context.Context, store *model.Store, task model.Task, runID string,
+	result *agent.Result, now time.Time) {
+
+	if result == nil {
+		return
+	}
+	report, ok := effectiveCommentOnIssue(result)
+	if !ok {
+		if _, hasNothingNeeded := nothingNeededReason(result); !hasNothingNeeded {
+			report = strings.TrimSpace(result.FinalText)
+		}
+	}
+	checkAndRecordStewardReportText(ctx, store, task, runID, report, result, now)
+}
+
+// checkAndRecordStewardReportText runs stewardReportCheck against the exact
+// report text relayed onto a pipeline steward wake, stores the result in
+// task_run_report_check, raises agent.steward:report-mismatch when the report
+// has any mismatch, and evaluates the 7-day rolling regression rate.
+func checkAndRecordStewardReportText(ctx context.Context, store *model.Store, task model.Task, runID, report string,
 	result *agent.Result, now time.Time) {
 
 	if result == nil || runID == "" {
 		return
 	}
+	report = strings.TrimSpace(report)
+	if report == "" {
+		return
+	}
 	if task.TemplateID == model.StewardAuditTemplateID || slices.Contains(task.Tags, model.ScheduleFiringTag(model.StewardAuditTemplateID)) {
-		recordStewardAuditReport(ctx, store, result, now)
+		recordStewardAuditReport(ctx, store, report, now)
 		return
 	}
 	if task.TemplateID != model.PipelineStewardTemplateID && !slices.Contains(task.Tags, model.ScheduleFiringTag(model.PipelineStewardTemplateID)) {
-		return
-	}
-	report, ok := effectiveCommentOnIssue(result)
-	if !ok || strings.TrimSpace(report) == "" {
 		return
 	}
 
@@ -651,9 +668,8 @@ func ParseStewardAuditReport(report string) []model.RunReportCheck {
 	return out
 }
 
-func recordStewardAuditReport(ctx context.Context, store *model.Store, result *agent.Result, now time.Time) {
-	report, ok := effectiveCommentOnIssue(result)
-	if !ok || strings.TrimSpace(report) == "" {
+func recordStewardAuditReport(ctx context.Context, store *model.Store, report string, now time.Time) {
+	if strings.TrimSpace(report) == "" {
 		return
 	}
 	checks := ParseStewardAuditReport(report)

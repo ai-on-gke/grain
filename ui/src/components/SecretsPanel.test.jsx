@@ -69,6 +69,82 @@ describe("SecretsPanel", () => {
     expect(screen.queryByText("gcp-key-minter")).not.toBeInTheDocument();
   });
 
+  // grain/task-2263: a capability server's own secret is not "other":
+  // it is listed with the server that uses it, with no Delete, which
+  // would break that server.
+  it("lists a capability server's secret with a link to its server", async () => {
+    const id = "https://grain.dev/capabilities/config-map";
+    api.mockResolvedValueOnce({
+      enabled: true,
+      secrets: [
+        {
+          name: "capability-server-1f6d92c4",
+          keys: ["secret_values"],
+          capabilityServers: [id],
+        },
+      ],
+    });
+    render(<SecretsPanel showError={() => {}} />);
+
+    const list = await screen.findByRole("list", {
+      name: "Secrets used by capability servers",
+    });
+    expect(list).toHaveTextContent("capability-server-1f6d92c4");
+    expect(screen.getByRole("link", { name: id })).toHaveAttribute(
+      "href",
+      `/settings/capabilities/${encodeURIComponent(id)}`,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Delete secret" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/^delete /)).not.toBeInTheDocument();
+    expect(screen.getByText("No other secrets set.")).toBeInTheDocument();
+    expect(screen.queryByText("orphaned")).not.toBeInTheDocument();
+  });
+
+  it("labels an orphaned capability server secret and keeps it deletable", async () => {
+    api
+      .mockResolvedValueOnce({
+        enabled: true,
+        secrets: [
+          {
+            name: "capability-server-deadbeef",
+            keys: ["secret_values"],
+            orphaned: true,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ enabled: true, secrets: [] });
+    const user = userEvent.setup();
+    render(<SecretsPanel showError={() => {}} />);
+
+    expect(await screen.findByText("orphaned")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("list", {
+        name: "Secrets used by capability servers",
+      }),
+    ).not.toBeInTheDocument();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+    await user.click(screen.getByRole("button", { name: "Delete secret" }));
+    confirm.mockRestore();
+    expect(api).toHaveBeenCalledWith(
+      "/api/secrets/capability-server-deadbeef",
+      {
+        method: "DELETE",
+      },
+    );
+  });
+
+  it("says capability servers' own secrets live on Settings → Capabilities", async () => {
+    api.mockResolvedValueOnce({ enabled: true, secrets: [] });
+    render(<SecretsPanel showError={() => {}} />);
+
+    expect(
+      await screen.findByRole("link", { name: "Settings → Capabilities" }),
+    ).toHaveAttribute("href", "/settings/capabilities");
+  });
+
   it("leaves repository release secrets on their repository page", async () => {
     api.mockResolvedValueOnce({
       enabled: true,

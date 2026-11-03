@@ -1,0 +1,20 @@
+# --lines / -n / --tail on read, task prompt/transcript, log
+read task://5/record.md
+read task://5/record.md --tail 20
+read task://5/record.md --lines 2
+read task://5/record.md -n 1
+read task://5/record.md --lines 0
+read task://5/record.md -n=3
+read task://5/record.md --tail 40 --lines 1
+read task://5/record.md --offset 0 --limit 12
+task prompt 5 --lines 2
+task prompt 5 --tail 30
+task transcript 5 --lines 2
+task transcript 5 --tail 30
+task transcript 5 --attempt 1 -n 1
+log
+log --tail 10
+log --lines 1
+log -n 1
+log --max-lines 1
+log --tail 0

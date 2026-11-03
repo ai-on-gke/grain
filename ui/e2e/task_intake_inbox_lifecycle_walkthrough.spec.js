@@ -172,7 +172,7 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     await autoMergeCheckbox.check();
 
     // Custom fields
-    await page.getByLabel("Priority").click();
+    await page.getByLabel("Priority", { exact: true }).click();
     await page.getByRole("option", { name: "high" }).click();
 
     await page.getByLabel("Area").click();
@@ -311,7 +311,7 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     await page
       .getByRole("button", { name: /^(Filter by…|Add filter)$/ })
       .click();
-    await page.getByRole("menuitem", { name: "Priority" }).click();
+    await page.getByRole("menuitem", { name: "Priority", exact: true }).click();
     await expect(page.getByRole("menu")).not.toBeVisible();
     await page
       .getByLabel(/^Value for filter \d+$/)
@@ -367,7 +367,7 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
 
     // 4b. Edit Custom Fields
     await page.getByRole("button", { name: "Edit fields" }).click();
-    await page.getByLabel("Priority").click();
+    await page.getByLabel("Priority", { exact: true }).click();
     await page.getByRole("option", { name: "medium" }).click();
     await page.getByLabel("Requested by").fill("CoreEngineering");
     await page.getByRole("button", { name: "Save fields" }).click();
@@ -727,7 +727,9 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     await page.goto("/t/default/new?field.priority=high");
     const form = page.getByRole("dialog", { name: "New task" });
     await expect(form).toBeVisible();
-    await expect(form.getByLabel("Priority")).toHaveText("high");
+    await expect(form.getByLabel("Priority", { exact: true })).toHaveText(
+      "high",
+    );
     await expect(page).toHaveURL(/\/new\?field\.priority=high$/);
     expect(new URL(page.url()).pathname).toBe("/new");
   });

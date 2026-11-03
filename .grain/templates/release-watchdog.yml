@@ -14,7 +14,7 @@ body: |
 
   ## 2. Check release-candidate progress on `main`
 
-  Releases are cut from `main` (`docs/design/release-from-trunk.md`): there is no
+  Releases are cut from `main` (`design/design/release-from-trunk.design.md`): there is no
   daily agent cut, no `candidate -> main` back-merge and no port tasks between the
   two branches any more, and `candidate` is never the base of a pull request.
   `.grain/workflows/release.yml` runs on every merge to `main`, so a green, current
@@ -32,12 +32,36 @@ body: |
   ## 2b. Check `main`'s nightly and live suites
 
   A release candidate is only picked from a `main` commit whose suites are green.
-  For each of `nightly`, `gcp-smoke`, `live-agent`, `live-frameworks` and
-  `live-secrets-repo`, find the newest concluded grain CI run on `main`
-  (`list_ci_runs` with `ref: main`, `since: 36h` and a job only that workflow has:
-  `go-long`, `smoke`, `live-agy`, `live-claude`, `live-secrets-repo`), and report
-  each verdict. A workflow with no run on `main` for more than 30 hours means its
-  schedule is not firing; that is a fault to report.
+  This repository's CI is GitHub Actions (`ci_mode: github`), so `nightly` and
+  `gcp-smoke` are GitHub Actions workflows, not grain CI runs: their list rows
+  carry no YAML job ids, and a `job:` filter such as `go-long` never matches them.
+  Query them by workflow file instead:
+
+  - `list_ci_runs` with `repo: ai-on-gke/grain`, `ref: main`,
+    `provider: github-actions`, `workflow: nightly.yml` and `since: 26h`
+    (`grain ci list --repo ai-on-gke/grain --ref main --provider github-actions --workflow nightly.yml --since 26h`),
+    and the same with `workflow: gcp-smoke.yml`. Report the newest run's
+    conclusion and URL for each.
+  - **If `nightly.yml` has no run on `main` in the last 26 hours**, its schedule has
+    stopped firing (or the workflow was disabled). Raise it, whatever else you find:
+
+        grain notify --subject pipeline.nightly-missing:ai-on-gke/grain --severity warning \
+          --title "nightly.yml has not run on main in 26h" \
+          --body "<the newest nightly.yml run you could find, its date, and what you checked>"
+
+    The `pipeline.*` subject also wakes the pipeline steward. Do the same for
+    `gcp-smoke.yml` with subject `pipeline.gcp-smoke-missing:ai-on-gke/grain`.
+  - A red, `timed_out` or `startup_failure` `nightly.yml` run is triaged by the
+    `nightly-ci-review` schedule (`.grain/schedules/nightly-ci-review.yml`), which
+    files a review task for every such run; check that one exists for the newest
+    red run rather than filing another.
+
+  For `live-agent`, `live-frameworks` and `live-secrets-repo`, which still run in
+  grain CI, find the newest concluded grain CI run on `main` (`list_ci_runs` with
+  `ref: main`, `provider: grain`, `since: 36h` and a job only that workflow has:
+  `live-agy`, `live-claude`, `live-secrets-repo`), and report each verdict. A
+  workflow with no run on `main` for more than 30 hours means its schedule is not
+  firing; that is a fault to report.
 
   - Do not repair a red suite here unless it is a release pipeline fault: its own
     review task owns it. Propose a task (`branch: "main"`) only for a `regression`

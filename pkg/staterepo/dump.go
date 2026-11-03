@@ -216,10 +216,14 @@ func Export(ctx context.Context, db *sql.DB, dir string) error {
 }
 
 // LocalTables is the tables that stay in the local database and are never
-// exported to a dump (docs/design/durable-tasks.md#DT-14): high-volume
+// exported to a dump (design/design/durable-tasks.design.md#DT-14): high-volume
 // per-call logs pruned locally after their retention window.
 var LocalTables = map[string]bool{
 	"task_run_api_call": true,
+	// The digests of each remote hostd's tokens (model.Hostd): the
+	// registry itself is exported, its credentials are not, and a store
+	// restored from the repository mints them again (Rotate).
+	"hostd_token": true,
 }
 
 // exportAll is Export's body, against whatever is already reading: the
@@ -639,7 +643,7 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 		}
 	}
 	for _, t := range tables {
-		if err := importTable(ctx, tx, dir, t, withhold); err != nil {
+		if err := importTable(ctx, tx, dir, t, withhold, found); err != nil {
 			return err
 		}
 	}
@@ -651,10 +655,18 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 	if err := plan.restore(ctx, tx); err != nil {
 		return err
 	}
+	// A dump from before a migration that rewrites rows (the retired
+	// capability grants, 67 onwards) gets those rewrites here, keyed by the
+	// migration's own number: the rows were never in a store that ran them.
+	if found > 0 && found < model.SchemaVersion {
+		if err := model.ApplyDataMigrations(ctx, tx, found); err != nil {
+			return fmt.Errorf("staterepo: %w", err)
+		}
+	}
 	return tx.Commit()
 }
 
-func importTable(ctx context.Context, tx *sql.Tx, dir, table string, withhold bool) error {
+func importTable(ctx context.Context, tx *sql.Tx, dir, table string, withhold bool, found int) error {
 	// Whichever shape the repository writes this table in: a nested
 	// settings document for the three kinds and their companions
 	// (decl.go), the table's own JSON file for everything else -- and
@@ -681,6 +693,11 @@ func importTable(ctx context.Context, tx *sql.Tx, dir, table string, withhold bo
 	}
 
 	for i, row := range rows {
+		if table == "grain_config" && found > 0 && found < 78 {
+			if tpl, _ := row["task_branch_template"].(string); tpl == model.UnsluggedTaskBranchTemplate {
+				row["task_branch_template"] = model.DefaultTaskBranchTemplate
+			}
+		}
 		if ext, ok := externalTexts[table]; ok {
 			if ref, isRef := row[ext.column].(map[string]any); isRef {
 				rel, hasFile := ref["file"].(string)

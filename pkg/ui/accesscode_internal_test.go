@@ -246,7 +246,7 @@ func TestCouldBeAccessCode(t *testing.T) {
 		"",
 		"ABCD",
 		code + "A",
-		"gxt_0123456789abcdef0123456789abcdef", // an executor token
+		"gma_0123456789abcdef0123456789abcdef", // an external agent token
 		"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln", // a JWT
 		"ABCD.EFGH.IJKL.MNOP.QRST.UVWX.YZ23.4567"[:32],
 	} {
@@ -256,35 +256,59 @@ func TestCouldBeAccessCode(t *testing.T) {
 	}
 }
 
-func TestExecutorBootstrapRoute(t *testing.T) {
+func TestHostdConnectRoute(t *testing.T) {
 	for target, want := range map[string]bool{
-		"/_grain/executor":                      true,
-		"/api/executors/connect":                true,
-		"/api/executors/stream":                 true,
-		"/api/hostd/connect":                    true,
-		"/install-executor.sh":                  true,
-		"/api/executors/install.sh":             true,
-		"/api/model-servers/install.sh":         true,
-		"/api/executors/bin/grain-linux-amd64":  true,
-		"/install/linux/amd64":                  true,
-		"/install/linux/amd64.sha256":           true,
-		"/api/executors":                        false,
-		"/api/executors/tokens":                 false,
-		"/api/executors/bin/":                   false,
-		"/api/executors/bin/../../api/settings": false,
-		"/install/linux":                        false,
-		"/install/../api":                       false,
-		"/install/linux/amd64/x":                false,
-		"/api/tasks":                            false,
+		"/api/hostd/connect":     true,
+		"/api/hostd/connect/x":   false,
+		"/api/executors/connect": false,
+		"/_grain/executor":       false,
+		"/install-executor.sh":   false,
+		"/install/linux/amd64":   false,
+		"/api/tasks":             false,
 	} {
 		r := httptest.NewRequest(http.MethodGet, "http://grain.example/", nil)
 		r.URL.Path = target
-		if got := executorBootstrapRoute(r); got != want {
-			t.Errorf("GET %s: executorBootstrapRoute = %v, want %v", target, got, want)
+		if got := hostdConnectRoute(r); got != want {
+			t.Errorf("GET %s: hostdConnectRoute = %v, want %v", target, got, want)
 		}
 		r.Method = http.MethodPost
-		if executorBootstrapRoute(r) {
-			t.Errorf("POST %s counted as remote execution's", target)
+		if hostdConnectRoute(r) {
+			t.Errorf("POST %s counted as a hostd dialing in", target)
 		}
+	}
+}
+
+// task 2727: a sign-in sends the browser back to the page it was
+// trying to open, and only ever to a path on this origin.
+func TestLocalReturnPath(t *testing.T) {
+	for _, tc := range []struct{ next, want string }{
+		{"/settings/access", "/settings/access"},
+		{"/tasks/42?tab=runs&q=a%20b", "/tasks/42?tab=runs&q=a%20b"},
+		{"/", "/"},
+		{"", "/"},
+		{"//evil.example", "/"},
+		{"//evil.example/settings", "/"},
+		{"https://evil.example", "/"},
+		{"https://evil.example/settings", "/"},
+		{"javascript:alert(1)", "/"},
+		{"/\\evil", "/"},
+		{"/\\\\evil.example", "/"},
+		{"/a\\b", "/"},
+		{"settings/access", "/"},
+		{"/tasks/42#runs", "/"},
+		{"/tasks/42\r\nSet-Cookie: x=y", "/"},
+		{"/tasks/\t42", "/"},
+		{"/tasks/\x7f", "/"},
+		{"/api/tasks", "/"},
+		{"/" + strings.Repeat("a", maxAccessReturnPath), "/"},
+	} {
+		if got := localReturnPath(tc.next); got != tc.want {
+			t.Errorf("localReturnPath(%q) = %q, want %q", tc.next, got, tc.want)
+		}
+	}
+	// The longest path kept is kept whole.
+	long := "/" + strings.Repeat("a", maxAccessReturnPath-1)
+	if got := localReturnPath(long); got != long {
+		t.Errorf("localReturnPath of a %d-byte path = %d bytes, want it unchanged", len(long), len(got))
 	}
 }

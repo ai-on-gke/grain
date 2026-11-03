@@ -407,6 +407,27 @@ describe("NewTaskOverlay", () => {
     expect(JSON.parse(createCall()[1].body).nothingNeededAction).toBe("ack");
   });
 
+  it("files a task with keepRunning when the checkbox is ticked", async () => {
+    api.mockResolvedValueOnce({ id: "42" });
+    const user = userEvent.setup();
+    render(
+      <NewTaskOverlay
+        config={{}}
+        onClose={() => {}}
+        onCreated={() => Promise.resolve()}
+        showError={() => {}}
+      />,
+    );
+
+    await user.type(screen.getByLabelText(/Title/), "Keep worker warm");
+    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await user.click(screen.getByRole("button", { name: "Advanced options" }));
+    await user.click(screen.getByRole("checkbox", { name: /Keep running/ }));
+    await user.click(screen.getByRole("button", { name: "Create task" }));
+
+    expect(JSON.parse(createCall()[1].body).keepRunning).toBe(true);
+  });
+
   // Left alone it sends "", which follows the deployment rather than
   // pinning this task to whatever the deployment happens to say today --
   // the same reading the framework picker above has.
@@ -511,6 +532,37 @@ describe("NewTaskOverlay", () => {
     expect(JSON.parse(createCall()[1].body).promptExtension).toBe(
       "Ignore the house rules.",
     );
+  });
+
+  // A task's host work can be pinned to one grain hostd, or to any hostd
+  // carrying some labels (ui.CreateTaskRequest.Hostd); left empty it
+  // sends nothing, which is the default hostd.
+  it("files a task pinned to a hostd when one is written, and none otherwise", async () => {
+    const user = userEvent.setup();
+    const fill = async (hostd) => {
+      api.mockResolvedValueOnce({ id: "42" });
+      const view = render(
+        <NewTaskOverlay
+          config={{}}
+          onClose={() => {}}
+          onCreated={() => Promise.resolve()}
+          showError={() => {}}
+        />,
+      );
+      await user.type(screen.getByLabelText(/Title/), "Train");
+      await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+      await user.click(
+        screen.getByRole("button", { name: "Advanced options" }),
+      );
+      if (hostd) await user.type(screen.getByLabelText(/^Hostd/), hostd);
+      await user.click(screen.getByRole("button", { name: "Create task" }));
+      const body = JSON.parse(createCall()[1].body);
+      view.unmount();
+      api.mockClear();
+      return body;
+    };
+    expect((await fill(" gpu=yes,zone=b ")).hostd).toBe("gpu=yes,zone=b");
+    expect(await fill("")).not.toHaveProperty("hostd");
   });
 
   // grain/task-284: attaching a review to a task is picking the template

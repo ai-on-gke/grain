@@ -13,9 +13,10 @@
 // limitations under the License.
 
 import { fuzzyScore } from "./fuzzy.js";
+import { isConfigRepoSection } from "./settingsSections.js";
 
 // settingsIndex is what the Settings filter searches
-// (docs/design/settings-panel.md §3.3): one entry per field and per
+// (design/design/settings-panel.design.md §3.3): one entry per field and per
 // card. A field entry's id is the field's data-setting-id, which is its
 // /api/settings key (or, for Models' default model, its /api/deployment
 // one); a card entry ("card": true) names a card whose
@@ -37,6 +38,13 @@ export const SETTINGS_INDEX = [
     anchor: "deployment",
     label: "Show closed tasks by default",
     keywords: [],
+  },
+  {
+    id: "settingsLocked",
+    section: "general",
+    anchor: "settings-lock",
+    label: "Lock settings in UI (require config repo PRs)",
+    keywords: ["lock", "read-only", "config repo"],
   },
   {
     id: "upgradeCheckMode",
@@ -113,20 +121,6 @@ export const SETTINGS_INDEX = [
     section: "engine",
     anchor: "merge-queue",
     label: "Max merges per repo branch",
-    keywords: [],
-  },
-  {
-    id: "mergeBatchSize",
-    section: "engine",
-    anchor: "merge-queue",
-    label: "Merge batch size",
-    keywords: [],
-  },
-  {
-    id: "mergeGatherWindow",
-    section: "engine",
-    anchor: "merge-queue",
-    label: "Merge gather window",
     keywords: [],
   },
   {
@@ -261,6 +255,13 @@ export const SETTINGS_INDEX = [
     anchor: "backend-and-size",
     label: "Sandbox network",
     keywords: ["internet", "egress"],
+  },
+  {
+    id: "sessionSandboxIdleTtl",
+    section: "sandboxes",
+    anchor: "backend-and-size",
+    label: "Session sandbox idle TTL",
+    keywords: ["chat", "director", "session", "warm", "idle", "ttl"],
   },
   {
     id: "sandboxOvercommit",
@@ -560,6 +561,22 @@ export const SETTINGS_INDEX = [
     card: true,
   },
   {
+    id: "card:hostds:hostds",
+    section: "hostds",
+    anchor: "hostds",
+    label: "Hostds",
+    keywords: ["hostd", "token", "rotate", "revoke", "owner", "labels"],
+    card: true,
+  },
+  {
+    id: "card:hostds:add-hostd",
+    section: "hostds",
+    anchor: "add-hostd",
+    label: "Add a hostd",
+    keywords: ["hostd", "register", "token"],
+    card: true,
+  },
+  {
     id: "card:config-repo:config-repo",
     section: "config-repo",
     anchor: "config-repo",
@@ -725,14 +742,6 @@ export const SETTINGS_INDEX = [
     card: true,
   },
   {
-    id: "card:executors:executors",
-    section: "executors",
-    anchor: "executors",
-    label: "Executor join tokens",
-    keywords: ["remote executor", "join token"],
-    card: true,
-  },
-  {
     id: "card:preferences:appearance",
     section: "preferences",
     anchor: "appearance",
@@ -766,6 +775,27 @@ export const SETTINGS_INDEX = [
   },
 ];
 
+const SETTING_BY_ID = new Map(
+  SETTINGS_INDEX.filter((e) => !e.card).map((e) => [e.id, e]),
+);
+
+// settingLocation is the Settings section and card anchor that hold a
+// setting key (the keys in GET /api/settings's pendingRestart and
+// unrunnable), or null for a key no section draws. target is what a link
+// to the setting scrolls to: the field itself (its data-setting-id), as
+// the filter's own pick does, since a card's top can be a screen or more
+// above a field near its foot (Legacy capabilities' GitHub host).
+export function settingLocation(id) {
+  const entry = SETTING_BY_ID.get(id);
+  if (!entry) return null;
+  return {
+    section: entry.section,
+    anchor: entry.anchor,
+    target: entry.id,
+    href: `/settings/${entry.section}#${entry.id}`,
+  };
+}
+
 // matchSettings is the filter's answer for a query: the entries whose
 // label, then keywords, fuzzy-match it, best first. Values are never
 // searched (§3.3's decision).
@@ -791,5 +821,13 @@ export function matchSettings(query) {
   const kept = scored.some((x) => x.exact)
     ? scored.filter((x) => x.exact)
     : scored;
-  return kept.sort((a, b) => b.score - a.score).map((x) => x.entry);
+  // A field of a config-repo-only section is still found -- its value is
+  // shown -- but says it is read-only here (configRepo).
+  return kept
+    .sort((a, b) => b.score - a.score)
+    .map((x) =>
+      isConfigRepoSection(x.entry.section)
+        ? { ...x.entry, configRepo: true }
+        : x.entry,
+    );
 }

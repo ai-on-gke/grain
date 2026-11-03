@@ -323,7 +323,7 @@ func OpenStateRepo(ctx context.Context, dataDir string) (*staterepo.Repo, error)
 	return repo, nil
 }
 
-func loadStateRepo(ctx context.Context, dataDir string, repo *staterepo.Repo, db *sql.DB, migrated bool) error {
+func loadStateRepo(ctx context.Context, dataDir string, repo *staterepo.Repo, db *sql.DB, migrated storeMigration) error {
 	if settings, err := staterepo.LoadSettings(dataDir); err == nil && strings.TrimSpace(settings.Remote) != "" {
 		return staterepo.LoadExternal(ctx, repo, db, model.SchemaVersion)
 	}
@@ -331,7 +331,7 @@ func loadStateRepo(ctx context.Context, dataDir string, repo *staterepo.Repo, db
 	if recoverDivergedStateRepo(ctx, repo, err) {
 		err = staterepo.Load(ctx, repo, db, model.SchemaVersion)
 	}
-	if migrated {
+	if migrated.authorisesDump(repo) {
 		if migrateStateRepo(ctx, repo, db, err) {
 			err = staterepo.Load(ctx, repo, db, model.SchemaVersion)
 		}

@@ -22,7 +22,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// The kind tags a task can carry (docs/design/durable-tasks.md#DT-13):
+// The kind tags a task can carry (design/design/durable-tasks.design.md#DT-13):
 // the small fixed vocabulary a judgement agent describes a task by, and
 // the one a mutating call's expect is checked against. Each is read off a
 // field the record already has, so an agent saying "port" about a task
@@ -33,10 +33,11 @@ const (
 	TaskKindSession  = "session"
 	TaskKindProposal = "proposal"
 	TaskKindDurable  = "durable"
+	TaskKindImported = model.TaskKindImported
 )
 
 // TaskKinds lists the vocabulary in its documented order.
-var TaskKinds = []string{TaskKindPort, TaskKindRepair, TaskKindSession, TaskKindProposal, TaskKindDurable}
+var TaskKinds = []string{TaskKindPort, TaskKindRepair, TaskKindSession, TaskKindProposal, TaskKindDurable, TaskKindImported}
 
 // DurableCapability is the grant that makes a task durable (DT-1). It is
 // named here before its provider lands so the tag reads it from day one.
@@ -59,6 +60,9 @@ func TaskKindTags(t Task) []string {
 	}
 	if slices.Contains(t.Capabilities, DurableCapability) {
 		out = append(out, TaskKindDurable)
+	}
+	if t.Imported {
+		out = append(out, TaskKindImported)
 	}
 	return out
 }

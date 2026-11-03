@@ -106,6 +106,16 @@ func (r *forgeRouter) Request(method, path string, headers map[string]string, bo
 	if !ok {
 		return r.def.Request(method, path, headers, body)
 	}
+	if path == "/graphql" {
+		// Fail closed: a GraphQL document whose variables name a repository
+		// on one host, sent by a client that said it is about a repository
+		// on another, goes to neither -- the token on it is the second
+		// host's, and it must never reach the first.
+		if hHost, hOwner, hRepo, hOK := r.headerRepo(headers); hOK && !model.SameGitHost(hHost, host, r.defHost) {
+			return github.ApiResponse{}, fmt.Errorf("refusing a GraphQL request bound for %s: it is for %s/%s, which is on %s",
+				r.hostOrDef(host), hOwner, hRepo, r.hostOrDef(hHost))
+		}
+	}
 	onDefault := host == "" || model.SameGitHost(host, r.defHost, model.DefaultGitHost)
 	if onDefault && !r.defViaCommand(owner, repo) {
 		return r.def.Request(method, rest, headers, newBody)
@@ -116,7 +126,7 @@ func (r *forgeRouter) Request(method, path string, headers map[string]string, bo
 		// so it is asked through the tool as any other such host is.
 		host = r.defHost
 	}
-	transport, err := r.transport(host, owner, repo, path == "/graphql")
+	transport, err := r.transport(host, owner, repo)
 	if err != nil {
 		return github.ApiResponse{}, fmt.Errorf("reaching the forge API for %s/%s/%s: %w", host, owner, repo, err)
 	}
@@ -131,17 +141,33 @@ func (r *forgeRouter) Request(method, path string, headers map[string]string, bo
 // repository (/user, /search/...), which goes to def unchanged.
 func (r *forgeRouter) route(path string, headers map[string]string, body []byte) (host, owner, repo, newPath string, newBody []byte, ok bool) {
 	if path == "/graphql" {
+		// A mutation on a node (resolveReviewThread, enqueuePullRequest)
+		// names no repository in its variables, only the node's ID: the
+		// RepoHeader the client set says which repository's host it is for.
+		// Before that fallback such a mutation went to -github-host with
+		// the other host's token -- a 401 from api.github.com for a
+		// thread on an Enterprise host.
+		hHost, hOwner, hRepo, hOK := r.headerRepo(headers)
 		var doc map[string]json.RawMessage
 		if json.Unmarshal(body, &doc) != nil {
+			if hOK {
+				return hHost, hOwner, hRepo, path, body, true
+			}
 			return "", "", "", "", nil, false
 		}
 		var vars map[string]any
 		if json.Unmarshal(doc["variables"], &vars) != nil {
+			if hOK {
+				return hHost, hOwner, hRepo, path, body, true
+			}
 			return "", "", "", "", nil, false
 		}
 		o, _ := vars["owner"].(string)
 		n, _ := vars["repo"].(string)
 		if o == "" || n == "" {
+			if hOK {
+				return hHost, hOwner, hRepo, path, body, true
+			}
 			return "", "", "", "", nil, false
 		}
 		host, owner = r.split(o, n)
@@ -163,12 +189,8 @@ func (r *forgeRouter) route(path string, headers map[string]string, body []byte)
 	}
 	tail, found := strings.CutPrefix(path, "/repos/")
 	if !found {
-		if v := headers[github.RepoHeader]; v != "" {
-			if i := strings.LastIndexByte(v, '/'); i > 0 && i+1 < len(v) {
-				o, n := v[:i], v[i+1:]
-				host, owner = r.split(o, n)
-				return host, owner, n, path, body, true
-			}
+		if host, owner, repo, ok := r.headerRepo(headers); ok {
+			return host, owner, repo, path, body, true
 		}
 		return "", "", "", "", nil, false
 	}
@@ -188,6 +210,30 @@ func (r *forgeRouter) route(path string, headers map[string]string, body []byte)
 		return "", "", "", "", nil, false
 	}
 	return r.lookup(segs[0], segs[1]), segs[0], segs[1], path, body, true
+}
+
+// hostOrDef is host, or defHost for the "" route gives a repository on it.
+func (r *forgeRouter) hostOrDef(host string) string {
+	if host == "" {
+		if r.defHost == "" {
+			return model.DefaultGitHost
+		}
+		return r.defHost
+	}
+	return host
+}
+
+// headerRepo is the repository a request's RepoHeader names ("owner/repo"
+// or "host/owner/repo"), with its host as split finds it.
+func (r *forgeRouter) headerRepo(headers map[string]string) (host, owner, repo string, ok bool) {
+	v := headers[github.RepoHeader]
+	i := strings.LastIndexByte(v, '/')
+	if i <= 0 || i+1 >= len(v) {
+		return "", "", "", false
+	}
+	o, n := v[:i], v[i+1:]
+	host, owner = r.split(o, n)
+	return host, owner, n, true
 }
 
 // split is owner as a host and a bare owner: "host/owner" taken apart,
@@ -217,11 +263,11 @@ func looksLikeHost(seg string) bool {
 // transport is the cached transport for owner/repo on host. The
 // credential owner/repo is pushed with decides which login a command-backed host is
 // asked through, so the cache is keyed by what transportFor was given.
-func (r *forgeRouter) transport(host, owner, repo string, graphql bool) (github.Transport, error) {
+// A GraphQL request goes through the same transport as REST: a
+// github.RealTransport sends "/graphql" to its own host's GraphQL
+// endpoint (/api/graphql beside a GitHub Enterprise Server's /api/v3).
+func (r *forgeRouter) transport(host, owner, repo string) (github.Transport, error) {
 	key := strings.ToLower(host + "/" + owner + "/" + repo)
-	if graphql {
-		key += "#graphql"
-	}
 	r.mu.Lock()
 	if t, ok := r.cache[key]; ok {
 		r.mu.Unlock()
@@ -232,9 +278,6 @@ func (r *forgeRouter) transport(host, owner, repo string, graphql bool) (github.
 	if err != nil {
 		return nil, err
 	}
-	if graphql {
-		t = graphqlTransport(t)
-	}
 	r.mu.Lock()
 	if r.cache == nil {
 		r.cache = map[string]github.Transport{}
@@ -242,19 +285,6 @@ func (r *forgeRouter) transport(host, owner, repo string, graphql bool) (github.
 	r.cache[key] = t
 	r.mu.Unlock()
 	return t, nil
-}
-
-// graphqlTransport is t aimed at its host's GraphQL endpoint: a GitHub
-// Enterprise Server serves REST under /api/v3 and GraphQL at
-// /api/graphql, so the /graphql path a RESTClient posts to goes under
-// /api rather than /api/v3.
-func graphqlTransport(t github.Transport) github.Transport {
-	rt, ok := t.(*github.RealTransport)
-	if !ok || !strings.HasSuffix(rt.PathPrefix, "/v3") {
-		return t
-	}
-	return &github.RealTransport{Host: rt.Host, UseTLS: rt.UseTLS, Client: rt.Client,
-		PathPrefix: strings.TrimSuffix(rt.PathPrefix, "/v3")}
 }
 
 // forgeTransport is forgeRouter.transportFor: the transport for

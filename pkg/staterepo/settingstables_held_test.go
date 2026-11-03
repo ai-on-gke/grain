@@ -27,18 +27,31 @@ import (
 // runs. Every other settings table is live on the next tick once merged
 // (staterepo.Apply), so it must sit under the hardcoded ceiling.
 var benignSettingsTables = map[string]bool{
-	"custom_field":                  true,
-	"qualification_config":          true,
-	"qualification_item":            true,
-	"qualification_item_depends_on": true,
-	"suite":                         true,
-	"suite_item":                    true,
-	"suite_sequence":                true,
-	"board":                         true,
-	"board_column":                  true,
-	"board_panel":                   true,
-	"board_section":                 true,
-	"board_sequence":                true,
+	"custom_field":   true,
+	"board":          true,
+	"board_column":   true,
+	"board_panel":    true,
+	"board_section":  true,
+	"board_sequence": true,
+}
+
+// TestApprovalSettingsTablesAreHeld pins the settings tables whose rows
+// carry approval or auto-merge switches (model.Suite's RequireApproval,
+// AutoMerge and AutoApproveProposals; model.QualificationPlan's
+// RequireApproval and AutoPromote) under the ceiling, so none of them
+// can be moved back onto benignSettingsTables unnoticed.
+func TestApprovalSettingsTablesAreHeld(t *testing.T) {
+	for _, name := range []string{
+		"suite", "suite_item", "suite_sequence",
+		"qualification_config", "qualification_item", "qualification_item_depends_on",
+	} {
+		if benignSettingsTables[name] {
+			t.Errorf("benignSettingsTables lists %q, whose rows set approval or auto-merge", name)
+		}
+		if p := "tables/" + name + ".json"; !trustboundary.IsNeverAutoMergePath(p) {
+			t.Errorf("%s is not in trustboundary.NeverAutoMergePaths", p)
+		}
+	}
 }
 
 // TestSettingsTablesAreHeldUnlessBenign keeps NeverAutoMergePaths in step

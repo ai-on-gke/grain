@@ -205,6 +205,152 @@ test("reorders a board within its folder, and files one into it", async ({
   expect(of(loose.id).orderKey).toBeGreaterThan(of(first.id).orderKey);
 });
 
+// The same move with a mouse, from a folder below the first section.
+// Marking a drag draws a drop zone closing every section, and drawn
+// inside dragstart it pushed every board under the first section down
+// and out from under the pointer -- which Chromium answers by cancelling
+// the drag on the spot (dragstart, then dragend, and no drop). jsdom has
+// no such check, so this is the test that can see it.
+test("files a board into another folder by dragging it", async ({ page }) => {
+  const stamp = Date.now();
+  const from = `E2E drag from ${stamp}`;
+  const to = `E2E drag to ${stamp}`;
+  const moved = await seedBoard(page, {
+    name: `E2E dragged ${stamp}`,
+    folder: from,
+    kind: "list",
+    query: "",
+  });
+  const stays = await seedBoard(page, {
+    name: `E2E stays ${stamp}`,
+    folder: from,
+    kind: "list",
+    query: "",
+  });
+  await seedBoard(page, {
+    name: `E2E resident ${stamp}`,
+    folder: to,
+    kind: "list",
+    query: "",
+  });
+
+  await page.goto("/boards");
+  const handle = page.getByRole("button", {
+    name: `Move E2E dragged ${stamp}`,
+  });
+  await expect(handle).toBeVisible();
+  const heading = page.locator(".board-folder-heading", { hasText: to });
+
+  // Check at phone width first that starting a drag does not shift the
+  // folder heading below, then return to desktop width and complete the
+  // drag by aiming at the heading's pre-drag box.
+  const defaultViewport = page.viewportSize() || { width: 1280, height: 720 };
+  try {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator(":root")).toHaveAttribute("data-phone", "true");
+    const phoneBefore = await heading.boundingBox();
+    const phoneFrom = await handle.boundingBox();
+    await page.mouse.move(
+      phoneFrom.x + phoneFrom.width / 2,
+      phoneFrom.y + phoneFrom.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      phoneFrom.x + phoneFrom.width / 2,
+      phoneFrom.y + phoneFrom.height / 2 + 8,
+      { steps: 3 },
+    );
+    await expect(page.locator(".board-drop-end").first()).toBeAttached();
+    await expect(page.locator(".task-row-dragging")).toHaveCount(1);
+    expect(await heading.boundingBox()).toEqual(phoneBefore);
+    await page.mouse.up();
+    await expect(page.locator(".board-drop-end")).toHaveCount(0);
+  } finally {
+    await page.setViewportSize(defaultViewport);
+    await expect(page.locator(":root")).not.toHaveAttribute(
+      "data-phone",
+      "true",
+    );
+  }
+
+  const patched = page.waitForResponse(
+    (r) =>
+      r.url().endsWith(`/api/boards/${moved.id}`) &&
+      r.request().method() === "PATCH",
+  );
+  const to_ = await heading.boundingBox();
+  const from_ = await handle.boundingBox();
+  await page.mouse.move(from_.x + from_.width / 2, from_.y + from_.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(
+    from_.x + from_.width / 2,
+    from_.y + from_.height / 2 + 8,
+    { steps: 3 },
+  );
+  // The drag took: had Chromium cancelled it, the zones would never be
+  // drawn and the row would never dim. The trailing zones overlay the
+  // section ends rather than taking layout height, so the heading is
+  // still where the reader aimed before the drag began.
+  await expect(page.locator(".board-drop-end").first()).toBeAttached();
+  await expect(page.locator(".task-row-dragging")).toHaveCount(1);
+  expect(await heading.boundingBox()).toEqual(to_);
+  const zone = await page.locator(".board-drop-end").nth(1).boundingBox();
+  expect(zone.y + zone.height).toBeLessThanOrEqual(to_.y);
+  await page.mouse.move(to_.x + 40, to_.y + to_.height / 2, { steps: 8 });
+  await page.mouse.up();
+  expect((await patched).ok()).toBe(true);
+
+  await expect
+    .poll(
+      async () => {
+        const res = await page.request.get("/api/boards");
+        return (await res.json()).find((b) => b.id === moved.id)?.folder;
+      },
+      { timeout: 20_000 },
+    )
+    .toBe(to);
+
+  // And the overlaid end-of-section zone right above `to`'s heading
+  // files the board at the end of `from`, after `stays`.
+  await expect(handle).toBeVisible();
+  const patchedEnd = page.waitForResponse(
+    (r) =>
+      r.url().endsWith(`/api/boards/${moved.id}`) &&
+      r.request().method() === "PATCH",
+  );
+  const backFrom = await handle.boundingBox();
+  await page.mouse.move(
+    backFrom.x + backFrom.width / 2,
+    backFrom.y + backFrom.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    backFrom.x + backFrom.width / 2,
+    backFrom.y + backFrom.height / 2 + 8,
+    { steps: 3 },
+  );
+  await expect(page.locator(".board-drop-end").nth(1)).toBeAttached();
+  const endZone = await page.locator(".board-drop-end").nth(1).boundingBox();
+  await page.mouse.move(endZone.x + 40, endZone.y + endZone.height / 2, {
+    steps: 8,
+  });
+  await page.mouse.up();
+  expect((await patchedEnd).ok()).toBe(true);
+
+  await expect
+    .poll(
+      async () => {
+        const res = await page.request.get("/api/boards");
+        const all = await res.json();
+        const m = all.find((b) => b.id === moved.id);
+        const s = all.find((b) => b.id === stays.id);
+        return m && s && m.folder === from && m.orderKey > s.orderKey;
+      },
+      { timeout: 20_000 },
+    )
+    .toBe(true);
+});
+
 // The whole of how a board is made: the button opens the new-task form
 // with the task already written (boards.js), rather than a form that
 // writes a board.

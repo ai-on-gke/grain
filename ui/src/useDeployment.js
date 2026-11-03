@@ -22,7 +22,7 @@ import api from "./api.js";
 export const deploymentPath = "/api/deployment";
 
 // useDeployment reads the deployment's record for Settings → Models and
-// Git (docs/design/settings-panel.md §7 stage a). A read that fails says
+// Git (design/design/settings-panel.design.md §7 stage a). A read that fails says
 // so (error) instead of letting a section draw panes that would offer
 // saves with nothing behind them.
 //
@@ -36,6 +36,7 @@ export const deploymentPath = "/api/deployment";
 export function useDeployment({ onSaved, showError } = {}) {
   const [deployment, setDeployment] = useState(null);
   const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   const reloadDeployment = useCallback(async () => {
     try {
@@ -44,6 +45,8 @@ export function useDeployment({ onSaved, showError } = {}) {
       setError(null);
     } catch (err) {
       setError(err);
+    } finally {
+      setLoading(false);
     }
   }, []);
   useEffect(() => {
@@ -74,5 +77,5 @@ export function useDeployment({ onSaved, showError } = {}) {
     }
   };
 
-  return { deployment, error, reloadDeployment, saveDeployment };
+  return { deployment, error, loading, reloadDeployment, saveDeployment };
 }

@@ -37,7 +37,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/ciapi"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
-	"github.com/ai-on-gke/grain/pkg/capability/repowrite"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -125,14 +124,25 @@ func TestReleaseWorkflowPublishesThroughAnUncachedScript(t *testing.T) {
 		if workflow.Path != ".grain/workflows/release.yml" {
 			continue
 		}
-		if !workflow.On.Matches(ci.EventRelease, "main") || workflow.On.Matches(ci.EventPush, "main") {
-			t.Fatalf("release triggers = %+v", workflow.On)
+		if !workflow.On.Matches(ci.EventManual, "main") ||
+			workflow.On.Matches(ci.EventRelease, "main") ||
+			workflow.On.Matches(ci.EventPush, "main") ||
+			workflow.On.Matches(ci.EventPullRequest, "main") ||
+			workflow.On.Matches(ci.EventSchedule, "main") {
+			t.Fatalf("release triggers = %+v, want workflow_dispatch only", workflow.On)
 		}
 		if len(workflow.Jobs) != 1 || workflow.Jobs[0].Cache {
 			t.Fatalf("release jobs = %+v, want one uncached job", workflow.Jobs)
 		}
-		if !strings.Contains(workflow.Jobs[0].Steps[0].Run, "scripts/release-images.sh") {
-			t.Fatalf("release step does not invoke scripts/release-images.sh: %+v", workflow.Jobs[0].Steps)
+		// The patch-tag guard goes first, so a vX.Y.Z tagged on main's
+		// head is refused before two hours of build
+		// (docs/release-candidate-management.md, section 9).
+		steps := workflow.Jobs[0].Steps
+		if len(steps) < 2 || !strings.Contains(steps[0].Run, "scripts/patch-tag-guard.sh") {
+			t.Fatalf("release's first step does not invoke scripts/patch-tag-guard.sh: %+v", steps)
+		}
+		if !strings.Contains(steps[1].Run, "scripts/release-images.sh") {
+			t.Fatalf("release step does not invoke scripts/release-images.sh: %+v", steps)
 		}
 		return
 	}
@@ -695,7 +705,7 @@ func TestTheGuestCacheJobIsWhatAPostMergeDispatchPlans(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan, err := ci.PlanRun(ci.Request{
-		Repo: "bwsalmon/grain", Ref: "main",
+		Repo: model.GrainSourceRepo().String(), Ref: "main",
 		Commit: "0123456789abcdef0123456789abcdef01234567",
 		Event:  ci.EventManual,
 		Jobs:   []string{".grain/workflows/image.yml:guest-cache"},
@@ -760,19 +770,38 @@ func TestTheBaseBranchGateForThisRepositoryRunsItsTests(t *testing.T) {
 	}
 	commit := "0123456789abcdef0123456789abcdef01234567"
 
-	// Exactly what orchestrator.startBaseBranchCI asks for once `main` has
-	// moved: an untrusted push of the whole push plan, narrowed by nothing
-	// (baseBranchCIPolicy.request with no RepoConfig.BaseBranchCIJobs).
+	// With ai-on-gke/grain in ci_mode: "github", automatic push, pull_request,
+	// and release triggers in .grain/workflows/ are retired so Grain CI does not
+	// automatically run them alongside GitHub Actions (.github/workflows/tests.yml).
+	for _, event := range []ci.Event{ci.EventPush, ci.EventPullRequest, ci.EventRelease} {
+		autoPlan, err := ci.PlanRun(ci.Request{
+			Repo: model.GrainSourceRepo().String(), Ref: "main", Commit: commit,
+			Event:          event,
+			TrustedRelease: event == ci.EventRelease,
+		}, workflows)
+		if err != nil {
+			t.Fatalf("planning %s on main: %v", event, err)
+		}
+		if len(autoPlan.Jobs) != 0 {
+			t.Errorf("an automatic %s run on main planned %s; expected no .grain/workflows jobs to trigger automatically",
+				event, strings.Join(plannedJobNames(autoPlan), ", "))
+		}
+	}
+
+	// Dispatched manually, .grain/workflows/tests.yml still plans the full
+	// test suite and none of the publisher jobs.
 	gate, err := ci.PlanRun(ci.Request{
-		Repo: "bwsalmon/grain", Ref: "main", Commit: commit,
-		Event: ci.EventPush,
+		Repo:     model.GrainSourceRepo().String(),
+		Ref:      "main",
+		Commit:   commit,
+		Event:    ci.EventManual,
+		Workflow: ".grain/workflows/tests.yml",
 	}, workflows)
 	if err != nil {
-		t.Fatalf("a base-branch run of this repository plans nothing: %v", err)
+		t.Fatalf("a manual dispatch of .grain/workflows/tests.yml plans nothing: %v", err)
 	}
 	if len(gate.Jobs) == 0 {
-		t.Fatalf("a base-branch run of this repository is made of no job at all, so it judges "+
-			"nothing and every merge lands unchecked: %s", gate.Unmatched)
+		t.Fatalf("a manual dispatch of .grain/workflows/tests.yml is made of no job at all: %s", gate.Unmatched)
 	}
 	// Each of this repository's own test suites has to be in there. Asking
 	// only "does any job run a test" would not have caught the incident:
@@ -790,7 +819,7 @@ func TestTheBaseBranchGateForThisRepositoryRunsItsTests(t *testing.T) {
 		if slices.ContainsFunc(gate.Jobs, func(job ci.PlannedJob) bool { return suite.found(job.Job) }) {
 			continue
 		}
-		t.Errorf("the base-branch gate is %s, and not one of those jobs runs %s: a gate that "+
+		t.Errorf("the tests.yml plan is %s, and not one of those jobs runs %s: a gate that "+
 			"holds merges and files repair tasks while saying nothing about whether main's "+
 			"own tests pass is grain/task-355's failure exactly",
 			strings.Join(plannedJobNames(gate), ", "), suite.what)
@@ -802,32 +831,18 @@ func TestTheBaseBranchGateForThisRepositoryRunsItsTests(t *testing.T) {
 		}
 	}
 	if len(published) > 0 {
-		t.Errorf("the base-branch gate contains %s, which is this repository's publisher: a "+
+		t.Errorf("the tests.yml plan contains %s, which is this repository's publisher: a "+
 			"publish that fails would hold every merge, and the fix for the publish could not "+
 			"be merged either (docs/merge-queue-behind.md, \"The release is not the gate\")",
 			strings.Join(published, ", "))
 	}
 
-	// The other direction: what a merge publishes with, which is a second
-	// run at the same tip and no part of the verdict
-	// (orchestrator.reconcileBaseBranchRelease).
-	release, err := ci.PlanRun(ci.Request{
-		Repo: "bwsalmon/grain", Ref: "main", Commit: commit,
-		Event: ci.EventRelease, TrustedRelease: true,
-	}, workflows)
-	if err != nil {
-		t.Fatalf("a release run of this repository plans nothing: %v", err)
-	}
-	for _, job := range release.Jobs {
-		if job.WorkflowPath == releaseWorkflowPath || job.WorkflowPath == promoteWorkflowPath {
-			continue
-		}
-		t.Errorf("%s:%s answers `release`, so it runs inside the trusted release run holding "+
-			"this repository's package credential -- every job of a release run is handed "+
-			"them, whether it publishes or not. Judging is a `push` now, so a test job has no "+
-			"reason to answer `release` (grain/task-461, docs/ci-capabilities.md)",
-			job.WorkflowPath, job.Job.ID)
-	}
+	// And .github/workflows/tests.yml carries the automatic push and
+	// pull_request triggers for GitHub Actions CI.
+	ghTestsTriggers := upTo(t, stripComments(read(t, ".github", "workflows", "tests.yml")), "jobs:")
+	contains(t, ghTestsTriggers, "push:")
+	contains(t, ghTestsTriggers, "pull_request:")
+	absent(t, ghTestsTriggers, "release:")
 }
 
 // This repository's publisher, named once for the two claims above.
@@ -941,9 +956,6 @@ func TestTheGoJobDeclaresEveryFileItsOwnTestsRead(t *testing.T) {
 		"deploy/terraform/gcp/variables.tf",
 		"deploy/terraform/gcp/instance.tf",
 		"deploy/terraform/gcp/files/deploy.sh",
-		"deploy/gke/terraform/variables.tf",
-		"deploy/kubernetes/gke/gateway.yaml",
-		"scripts/deploy-gke.sh",
 		"scripts/setup.sh",
 		"Makefile",
 		// The agent surface captures, which pkg/agent's own tests assert
@@ -1871,7 +1883,7 @@ func TestEverythingTheGateDoesNotRunTheNightlyDoes(t *testing.T) {
 	}
 }
 
-// releaseTrainPath is the daily release train (docs/design/release-from-trunk.md,
+// releaseTrainPath is the daily release train (design/design/release-from-trunk.design.md,
 // RFT-6): it cuts, soaks and stages releases from main, and a person's
 // approval through promote-release.yml is what makes one official.
 const releaseTrainPath = ".grain/workflows/release-train.yml"
@@ -1899,19 +1911,18 @@ func releaseTrainWorkflow(t *testing.T) ci.Workflow {
 // Signing is optional, as in release.yml.
 func TestTheReleaseTrainRunsDailyWithTheCapabilitiesItUses(t *testing.T) {
 	w := releaseTrainWorkflow(t)
-	var crons []string
-	for _, s := range w.On.Schedule {
-		crons = append(crons, s.Cron)
+	if len(w.On.Schedule) != 0 {
+		t.Errorf("%s still declares `on: schedule` (%v); automatic scheduling moved to .github/workflows/release-train.yml", releaseTrainPath, w.On.Schedule)
 	}
-	if !slices.Equal(crons, []string{"15 4 * * *"}) {
-		t.Errorf("%s is scheduled at %v, want the one daily cron \"15 4 * * *\"", releaseTrainPath, crons)
-	}
+	ghTrain := upTo(t, stripComments(read(t, ".github", "workflows", "release-train.yml")), "jobs:")
+	contains(t, ghTrain, "schedule:")
+	contains(t, ghTrain, `cron: "15 4 * * *"`)
 	if !w.On.Matches(ci.EventManual, "main") {
 		t.Errorf("%s does not answer workflow_dispatch on main (%s)", releaseTrainPath, w.On.Describe())
 	}
-	for _, event := range []ci.Event{ci.EventPush, ci.EventPullRequest, ci.EventRelease} {
+	for _, event := range []ci.Event{ci.EventPush, ci.EventPullRequest, ci.EventRelease, ci.EventSchedule} {
 		if w.On.Matches(event, "main") {
-			t.Errorf("%s answers %s on main: the train runs once a day, not on every merge", releaseTrainPath, event)
+			t.Errorf("%s answers %s on main: automatic triggers are retired on .grain/workflows/release-train.yml", releaseTrainPath, event)
 		}
 	}
 	if len(w.Jobs) != 1 {
@@ -1967,19 +1978,19 @@ func TestTheReleaseTrainsCapabilitiesAreGrantedOnGrainsOwnRepository(t *testing.
 	reg := model.NewCapabilityRegistry(
 		ciapi.NewAlias(gate, ciapi.Config{}, model.ReleaseGateReadCapability, ciapi.Aliases[model.ReleaseGateReadCapability]),
 		packagepublish.New(packagepublish.Config{Credentials: releaseTrainPackageCredential{}}),
-		repowrite.New(repo),
 	)
 	creds := releaseTrainCredential(`{"registry":"ghcr.io","username":"bot","token":"secret"}`)
 
-	// An operator's dispatch holds every one of them; grain's own cron
-	// holds all but package-publish, which stays release and dispatch only.
+	// An operator's dispatch and grain's own cron both hold every one of
+	// them: package-publish opted in to trusted schedules so the daily
+	// train can publish its rc and pending images (task 1913).
 	for _, tc := range []struct {
 		event   ci.Event
 		trusted bool
 		want    []string
 	}{
 		{ci.EventManual, false, job.Capabilities},
-		{ci.EventSchedule, true, []string{model.RepoWriteCapability(repo), model.ReleaseGateReadCapability}},
+		{ci.EventSchedule, true, job.Capabilities},
 	} {
 		cc, resolved, err := daemon.ResolveCICapabilities(context.Background(), reg, creds, repo, "ci-job", tc.event, tc.trusted, job.Capabilities)
 		if err != nil {
@@ -1995,6 +2006,14 @@ func TestTheReleaseTrainsCapabilitiesAreGrantedOnGrainsOwnRepository(t *testing.
 			granted = append(granted, g.Capability)
 		}
 		for _, id := range tc.want {
+			// Repository access is no provider's grant: it carries its
+			// own event gate, which the proxy scope is widened through.
+			if model.IsRepoAccessGrant(id) {
+				if !model.RepoAccessAdmitsCIEvent(id, string(tc.event), tc.trusted) {
+					t.Errorf("%s: %s's train is refused %s", tc.event, repo, id)
+				}
+				continue
+			}
 			if !slices.Contains(granted, id) {
 				t.Errorf("%s: %s's train holds %v, want %s among them", tc.event, repo, granted, id)
 			}

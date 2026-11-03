@@ -30,8 +30,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
-	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -224,6 +222,11 @@ type RunConfig struct {
 	// tool budget (mcp's tool_budget.go): its forked mcpserver is passed
 	// -tool-budget (GrantArgs) and every result past the budget says so.
 	ToolBudget bool
+	// ToolBudgetPipelineCursor is a pipeline steward wake under that
+	// budget, whose hard-line notice asks for the pipeline-changes cursor
+	// in its handover (-tool-budget-pipeline-cursor); a director's chat
+	// session reads no feed and is not asked for one.
+	ToolBudgetPipelineCursor bool
 	// ProposeRepos are the repositories this deployment works in, which a
 	// propose_task call may ask its proposal to be filed against
 	// (model.Store.WorkRepos, resolved by orchestrator.RunDispatch), most
@@ -442,6 +445,13 @@ type RunConfig struct {
 	// for any ResumeSession, by starting the task from Prompt.
 	ContinuePrompt string
 
+	// SandboxReused reports that this dispatch is reusing the warm sandbox
+	// left by the task's previous turn rather than starting in a fresh
+	// sandbox. When ResumeSession is also set, ResumeMessage uses
+	// SuspendedReusedSandboxPreamble instead of SuspendedPreamble so the
+	// agent knows the sandbox is the same one.
+	SandboxReused bool
+
 	// OnResumableSession, when set, is called with the conversation this
 	// run is in as soon as its CLI names it -- the same token
 	// Result.ResumableSession will carry, under the same rule that it is
@@ -459,7 +469,7 @@ type RunConfig struct {
 	OnResumableSession func(session string)
 
 	// CapabilityMCPServers are the MCP servers this run's capability
-	// grants expose (docs/capabilities-spec.md §5.2.4), each a loopback
+	// grants expose (design/spec/capabilities/capabilities.spec.md §5.2.4), each a loopback
 	// proxy on grain's own host, in grant order. A Framework passes them
 	// through CarryCapabilityServers for the host its CLI runs on, then
 	// registers every one beside grain-sandbox, under its Name, and
@@ -484,14 +494,14 @@ type CapabilityMCPServer struct {
 
 // CapabilityServerCarrier is a Host whose CLI cannot reach grain's
 // loopback, but which can host a listener of its own and carry what
-// arrives there back to grain (§5.2.4, last paragraph): a remote
-// executor, over its authenticated stream.
+// arrives there back to grain (§5.2.4, last paragraph), over a stream of
+// its own.
 //
 // CarryCapabilityServers returns servers with each URL replaced by one
 // the CLI reaches on its own machine, whose requests grain serves with
 // that server's Handler, and release, which stops carrying them. The
 // rules of §5.2.2 are the Handler's, applied on grain's side, so nothing
-// the executor does to a request can widen them.
+// the far end does to a request can widen them.
 type CapabilityServerCarrier interface {
 	CarryCapabilityServers(servers []CapabilityMCPServer) (carried []CapabilityMCPServer, release func(), err error)
 }
@@ -561,15 +571,25 @@ func (c RunConfig) EffectiveSuspendedPrompt() string {
 	return c.Prompt
 }
 
+// EffectiveSuspendedPreamble returns SuspendedReusedSandboxPreamble when the
+// run is reusing the previous turn's warm sandbox, and SuspendedPreamble when
+// the run is starting in a fresh sandbox.
+func (c RunConfig) EffectiveSuspendedPreamble() string {
+	if c.SandboxReused {
+		return SuspendedReusedSandboxPreamble
+	}
+	return SuspendedPreamble
+}
+
 // ResumeMessage is the user turn a Framework sends on joining
 // ResumeSession: ContinuePrompt alone when the stop rule is resuming a
-// session that has only just ended, and otherwise SuspendedPreamble in
-// front of EffectiveSuspendedPrompt.
+// session that has only just ended, and otherwise
+// EffectiveSuspendedPreamble in front of EffectiveSuspendedPrompt.
 func (c RunConfig) ResumeMessage() string {
 	if c.ContinuePrompt != "" {
 		return c.ContinuePrompt
 	}
-	return SuspendedPreamble + c.EffectiveSuspendedPrompt()
+	return c.EffectiveSuspendedPreamble() + c.EffectiveSuspendedPrompt()
 }
 
 // AddendaArgs is the "-addenda-after <id>" pair a Framework passes its
@@ -674,10 +694,10 @@ func GrantArgs(cfg RunConfig) []string {
 		if grant == selfdebug.CapabilityName && cfg.GrainSourceDir != "" {
 			args = append(args, "-grain-src-dir", cfg.GrainSourceDir)
 		}
-		if (grant == grainlog.CapabilityName || grant == deploymenthealth.CapabilityName) && cfg.GrainSecretsDir != "" {
+		if (model.IsGrainJournalGrant(grant) || model.IsGrainHealthGrant(grant)) && cfg.GrainSecretsDir != "" {
 			args = append(args, "-grain-secrets-dir", cfg.GrainSecretsDir)
 		}
-		if grant == deploymenthealth.CapabilityName && cfg.GrainStateDir != "" {
+		if model.IsGrainHealthGrant(grant) && cfg.GrainStateDir != "" {
 			args = append(args, "-grain-state-dir", cfg.GrainStateDir)
 		}
 	}
@@ -697,6 +717,9 @@ func GrantArgs(cfg RunConfig) []string {
 	// for the process serving its tools, so it travels with them.
 	if cfg.ToolBudget {
 		args = append(args, "-tool-budget")
+		if cfg.ToolBudgetPipelineCursor {
+			args = append(args, "-tool-budget-pipeline-cursor")
+		}
 	}
 	return args
 }
@@ -781,6 +804,14 @@ type ToolCall struct {
 	Arguments map[string]any
 	Text      string
 	IsError   bool
+	// Relayed is set by the orchestrator, never by a framework, once it
+	// has already acted on this call while the run was still going (an
+	// interactive session's in-process turns: orchestrator's
+	// continueSessionTurns), so the end-of-run pass does not act on it
+	// twice. A field rather than a key in Arguments because Arguments is
+	// the agent's own, and an agent must not be able to hide a call from
+	// the orchestrator by naming such a key itself.
+	Relayed bool `json:"-"`
 }
 
 // Result is what a run produced: the agent's final text answer plus every
@@ -855,7 +886,7 @@ type Framework interface {
 var ErrDetached = errors.New("agent: the daemon stopped; the run continues in its run host for the next daemon to adopt")
 
 // ResultParser is the optional half of Framework an adopting daemon needs
-// (docs/non-disruptive-upgrade.md, Stage 2): it turns the whole stdout of
+// (design/design/non-disruptive-upgrade.design.md, Stage 2): it turns the whole stdout of
 // a run another process started -- read back from a run host's spool --
 // and the way it ended into the Result and error Run would have returned
 // for it, so the run's outcome is read by the same rules whichever daemon

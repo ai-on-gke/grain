@@ -396,6 +396,30 @@ describe("ConsoleSessionPage", () => {
     expect(JSON.parse(options.body)).toEqual({ tasksApproved: true });
   });
 
+  it("toggles keepRunning on a console session from the capabilities pane", async () => {
+    render(
+      <ConsoleSessionPage
+        session={session()}
+        task={task()}
+        capabilities={capabilities}
+        act={vi.fn()}
+        onSaved={vi.fn()}
+        showError={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /Director capabilities/ }),
+    );
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /Keep running/ }),
+    );
+
+    await waitFor(() => expect(api).toHaveBeenCalled());
+    const [, options] = api.mock.calls.at(-1);
+    expect(JSON.parse(options.body)).toEqual({ keepRunning: true });
+  });
+
   it("offers a member of the session's team every control", () => {
     render(
       <ConsoleSessionPage

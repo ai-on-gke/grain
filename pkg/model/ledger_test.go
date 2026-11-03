@@ -340,50 +340,6 @@ func TestNilLedgerAdmitsAgainstAnEmptyHost(t *testing.T) {
 	}
 }
 
-// Policy: a director/console session or deadlock-breaking exception may exceed
-// the budget cap by at most one sandbox while existing commitments are within
-// the cap. Once committed exceeds the cap, both ordinary work and any second
-// exception sandbox wait until committed drops back under the cap.
-func TestDirectorExceptionAdmitsAtMostOneSandboxOverCap(t *testing.T) {
-	ledger := &Ledger{}
-	limits := Limits{Budget: ledgerBudget(), AgentShape: ledgerShape(), Ledger: ledger}
-	for i := 0; i < 4; i++ {
-		if v, _ := limits.ChargeSandbox(fmt.Sprintf("run-%d", i)); !v.OK {
-			t.Fatalf("run %d of 4 should fit: %q", i, v.Reason)
-		}
-	}
-	if !limits.Budget.WithinCap(ledger.Live()) {
-		t.Fatalf("4 runs at 4 vCPU / 8 GiB should be exactly at cap (16 vCPU / 32 GiB), got %s", ledger.Live())
-	}
-
-	// First director is admitted as the single allowed exception over cap.
-	v1, releaseDir1 := limits.AdmitDirectorSandbox("director-1")
-	if !v1.OK || !v1.Exception {
-		t.Fatalf("first director should be admitted as an exception: %+v", v1)
-	}
-	if limits.Budget.WithinCap(ledger.Live()) {
-		t.Fatalf("after exception admission, live (%s) should exceed cap", ledger.Live())
-	}
-
-	// While over cap, a second director and ordinary work are both refused.
-	if limits.DirectorSandboxAdmits() {
-		t.Fatal("second director must wait while committed already exceeds the budget cap")
-	}
-	v2, _ := limits.AdmitDirectorSandbox("director-2")
-	if v2.OK {
-		t.Fatal("AdmitDirectorSandbox for second director must be refused while over cap")
-	}
-	if limits.SandboxAdmits() {
-		t.Fatal("ordinary sandbox must wait while over cap")
-	}
-
-	// Once one ordinary run and the first director finish, committed is back under cap.
-	releaseDir1()
-	if !limits.DirectorSandboxAdmits() {
-		t.Fatal("once back within cap, a director can be admitted again")
-	}
-}
-
 // Persistent sandboxes reserve their share up front via Reserve, and re-admitting
 // an existing (pool, id) replaces its shape rather than double-counting it.
 func TestLedgerReserveAndReplacement(t *testing.T) {

@@ -113,7 +113,7 @@ func TestAStrayTeamStateReposDirectoryDoesNotBreakStartup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStateRepo with a stray team-state-repos: %v", err)
 	}
-	if err := loadStateRepo(t.Context(), data, repo, store.DB(), false); err != nil {
+	if err := loadStateRepo(t.Context(), data, repo, store.DB(), storeMigration{}); err != nil {
 		t.Fatalf("loading grain/config with a stray team-state-repos: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(stray, "default", ".git")); err != nil {

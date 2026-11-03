@@ -114,6 +114,19 @@ describe("RepoList", () => {
     expect(screen.getByText("1 task")).toBeInTheDocument();
   });
 
+  // ChipStrip hides a row's last chips first when they do not fit, so a
+  // Blocked chip behind the state counts was the first one a busy repo
+  // lost (grain/task-2235): it leads the strip instead.
+  it("puts the Blocked chip ahead of the state counts", () => {
+    renderList();
+    const row = screen.getByText("acme/widgets").closest(".repo-list-row");
+    const chips = [...row.querySelectorAll(".chips > *")].map(
+      (c) => c.textContent,
+    );
+    expect(chips[0]).toBe("Blocked 1");
+    expect(chips).toContain("Waiting 2");
+  });
+
   it("omits tasks with no target repo", () => {
     renderList();
     expect(screen.getAllByRole("listitem")).toHaveLength(2);

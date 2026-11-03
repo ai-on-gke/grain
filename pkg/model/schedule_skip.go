@@ -458,7 +458,7 @@ func (s *Store) AllScheduleSkips(ctx context.Context) (map[string][]ScheduleSkip
 func (s *Store) PausedDueSchedules(ctx context.Context, now time.Time) ([]Schedule, error) {
 	var out []Schedule
 	err := each(ctx, s.db,
-		"SELECT "+scheduleColumns+" FROM `schedule` WHERE `enabled` = 0 AND `next_run_at` <= ? ORDER BY `id`",
+		"SELECT "+scheduleColumns+" FROM `schedule` WHERE `enabled` = 0 AND `next_run_at` <= ? AND `recurrence_kind` NOT LIKE 'github_workflow_run%' ORDER BY `id`",
 		now.UTC(), func(rows *sql.Rows) error {
 			t, err := scanSchedule(rows.Scan)
 			if err != nil {

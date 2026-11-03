@@ -95,7 +95,7 @@ test.describe("Interactive Task Intake, Board Views and Multi-Team Filter Workfl
     await expect(page.getByText("Fields", { exact: true })).toBeVisible();
 
     // Set Priority enum to 'high'
-    await page.getByLabel("Priority").click();
+    await page.getByLabel("Priority", { exact: true }).click();
     await page.getByRole("option", { name: "high" }).click();
 
     // Set Area multi-select enum: select 'frontend' and 'backend'

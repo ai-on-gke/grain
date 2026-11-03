@@ -140,8 +140,19 @@ async function runNow(page, title) {
   const before = new Set((await ciRuns(page)).map((r) => r.id));
   await page.goto("/processes?kind=workflow");
   await page.getByRole("link", { name: title, exact: true }).click();
-  page.once("dialog", (dialog) => dialog.accept());
+  let question = "";
+  page.once("dialog", (dialog) => {
+    question = dialog.message();
+    return dialog.accept();
+  });
   await page.getByRole("button", { name: "Run now" }).click();
+  // It is the start that is immediate, not the review.
+  await expect
+    .poll(() => question)
+    .toContain(
+      "It starts a CI run of the workflow it was declared in straight away, " +
+        "to be reviewed when it finishes;",
+    );
   let run;
   await expect
     .poll(async () => {
@@ -201,6 +212,18 @@ test("1. the repository's workflow schedules are read, the candidate one with it
   await expect(
     scheduleRow(page, candidateTitle).getByText("Reviews every run"),
   ).toHaveCount(0);
+
+  // Its pane says it cannot be changed here and has Pause and Save off,
+  // so the built-in-job note under it names the file the cadence lives
+  // in rather than offering to change it.
+  await page.getByRole("link", { name: candidateTitle, exact: true }).click();
+  const pane = page.getByRole("dialog");
+  await expect(pane).toContainText("cannot be edited or deleted here");
+  await expect(pane).toContainText(
+    "whether it runs at all are set in .grain/schedules/x-candidate.yml.",
+  );
+  await expect(pane).not.toContainText("You can change how often it runs");
+  await expect(pane.getByRole("button", { name: "Pause" })).toBeDisabled();
 });
 
 test("2. a passing firing files no review and its row says so", async ({

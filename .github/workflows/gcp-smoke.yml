@@ -1,0 +1,150 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# GitHub Actions port of .grain/workflows/gcp-smoke.yml on GitHub-hosted
+# runners (ubuntu-latest).
+#
+# Authenticates to Google Cloud via Workload Identity Federation using the
+# repository variables GCP_WIF_PROVIDER and GCP_SA_EMAIL. If either variable
+# is unset, the workflow emits a clear notice and skips the smoke steps.
+
+name: gcp-smoke
+
+on:
+  schedule:
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  ZONE: us-central1-a
+
+jobs:
+  smoke:
+    name: GCE and GKE lifecycle
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: ${{ github.workflow }}-smoke-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    steps:
+      - name: Check GCP Workload Identity Federation variables
+        id: check-creds
+        env:
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          GCP_SA_EMAIL: ${{ vars.GCP_SA_EMAIL }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GCP_WIF_PROVIDER" ] || [ -z "$GCP_SA_EMAIL" ]; then
+            echo "::notice title=gcp-smoke skipped::Repository variables GCP_WIF_PROVIDER and/or GCP_SA_EMAIL are not set; skipping GCE and GKE lifecycle smoke tests."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.check-creds.outputs.configured == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Authenticate to Google Cloud
+        if: steps.check-creds.outputs.configured == 'true'
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SA_EMAIL }}
+
+      - name: Configure gcloud project
+        if: steps.check-creds.outputs.configured == 'true'
+        env:
+          GCP_SA_EMAIL: ${{ vars.GCP_SA_EMAIL }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          project="$GCP_PROJECT_ID"
+          if [ -z "$project" ]; then
+            project="$(printf '%s' "$GCP_SA_EMAIL" | sed -n 's/.*@\([^.]*\)\.iam\.gserviceaccount\.com$/\1/p')"
+          fi
+          if [ -n "$project" ]; then
+            gcloud config set project "$project"
+          fi
+          echo "active account: $(gcloud config get-value account), project: $(gcloud config get-value project)"
+
+      - name: Install GKE prerequisites
+        if: steps.check-creds.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
+          if ! command -v gke-gcloud-auth-plugin >/dev/null 2>&1 || ! command -v kubectl >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y kubectl google-cloud-cli-gke-gcloud-auth-plugin \
+              || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y kubectl google-cloud-sdk-gke-gcloud-auth-plugin
+          fi
+          kubectl version --client
+          gke-gcloud-auth-plugin --version
+
+      - name: GCE VM lifecycle
+        if: steps.check-creds.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          args=(--iap)
+          if [ "${SERVICE_ACCOUNT_SHAPE:-self}" = "default" ]; then
+            args+=(--service-account=default)
+          fi
+          ./scripts/gce-vm-smoke.sh "${args[@]}"
+
+      - name: GKE cluster lifecycle
+        if: steps.check-creds.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          args=()
+          if [ "${SERVICE_ACCOUNT_SHAPE:-self}" = "default" ]; then
+            args+=(--node-service-account=default)
+          fi
+          ./scripts/gke-cluster-smoke.sh "${args[@]}"
+
+      - name: Delete anything left behind
+        if: always() && steps.check-creds.outputs.configured == 'true'
+        run: |
+          set -uo pipefail
+          cutoff=7200
+          now="$(date -u +%s)"
+          ours_or_stale() {
+            local created
+            created="$(date -u -d "$1" +%s)" || return 1
+            [ $(( now - created )) -ge "$cutoff" ]
+          }
+          gcloud compute instances list \
+            --filter='labels.purpose=gce-vm-smoke' \
+            --format='value(name,zone.basename(),creationTimestamp)' |
+          while read -r name zone created; do
+            if ours_or_stale "$created"; then
+              echo "sweeping VM $name ($created)"
+              gcloud compute instances delete "$name" --zone="$zone" --quiet || true
+            fi
+          done
+
+          gcloud container clusters list \
+            --filter='resourceLabels.purpose=gke-cluster-smoke' \
+            --format='value(name,location,createTime)' |
+          while read -r name zone created; do
+            if ours_or_stale "$created"; then
+              echo "sweeping cluster $name ($created)"
+              gcloud container clusters delete "$name" --zone="$zone" --quiet || true
+            fi
+          done

@@ -23,7 +23,7 @@ import (
 
 // The capability catalogue (settings/capabilities.yml,
 // model.CapabilityCatalogue) at filing and at edit
-// (docs/design/config-repo-settings.md §3.4). Dispatch asks it again
+// (design/design/config-repo-settings.design.md §3.4). Dispatch asks it again
 // (orchestrator.catalogueHold), so a config change merged after a task
 // was filed still has the last word.
 
@@ -78,6 +78,34 @@ func (c *Client) catalogueFilingGrants(ctx context.Context, grants []model.Grant
 	return kept, needsPerson, nil
 }
 
+// markCatalogueRefusals sets CatalogueRefusal on each checked grant the
+// catalogue refuses a task filed against target (nil: no repository)
+// with no template -- what the new-task form files.
+func (c *Client) markCatalogueRefusals(ctx context.Context, checks []GrantCheck, target *model.RepoRef) ([]GrantCheck, error) {
+	cat, err := c.capabilityCatalogue(ctx)
+	if err != nil {
+		return checks, err
+	}
+	for i, check := range checks {
+		grant := check.Recorded
+		if grant == "" {
+			grant = check.Grant
+		}
+		if ciOnlyCapability(grant) {
+			checks[i].CatalogueRefusal = model.CIOnlyRefusal(grant)
+			continue
+		}
+		if cat == nil {
+			continue
+		}
+		gc := c.catalogueGrantContext(ctx, target, "", []model.Grant{{Capability: grant}})
+		if _, err := cat.ValidateGrants(gc); err != nil {
+			checks[i].CatalogueRefusal = err.Error()
+		}
+	}
+	return checks, nil
+}
+
 // catalogueEditRefusal judges one grant being attached to an existing
 // task: 400 for one the catalogue refuses the task, 403 for an agent
 // attaching one the catalogue says is a person's decision.
@@ -97,7 +125,7 @@ func (c *Client) catalogueEditRefusal(ctx context.Context, task model.Task, gran
 	if err != nil {
 		return validationErrorf("%v", err)
 	}
-	if len(verdict.RequiresPerson) > 0 && c.actor(ctx).Kind == model.PrincipalAgent {
+	if len(verdict.RequiresPerson) > 0 && c.requestActor(ctx).Actor.Kind == model.PrincipalAgent {
 		return forbiddenErrorf("capability %s requires human approval (settings/capabilities.yml marks it requires_person)", grant)
 	}
 	return nil
@@ -112,7 +140,7 @@ func (c *Client) catalogueEditRefusal(ctx context.Context, task model.Task, gran
 // A grant the catalogue refuses outright is not this check's business:
 // dispatch holds that task whoever approves it (orchestrator.catalogueHold).
 func (c *Client) catalogueApprovalRefusal(ctx context.Context, task model.Task) error {
-	if c.actor(ctx).Kind != model.PrincipalAgent {
+	if c.requestActor(ctx).Actor.Kind != model.PrincipalAgent {
 		return nil
 	}
 	cat, err := c.capabilityCatalogue(ctx)

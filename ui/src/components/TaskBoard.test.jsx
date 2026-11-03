@@ -159,6 +159,26 @@ describe("TaskBoard", () => {
       ).toBeNull();
     });
 
+    // A task that never ends on its own says so on its card, as on a
+    // row (KeepRunningChip.jsx), and one that does carries nothing.
+    it("marks a keep_running task's card", () => {
+      renderBoard({
+        tasks: tasks.map((task) =>
+          task.id === 1 ? { ...task, keepRunning: true } : task,
+        ),
+      });
+      expect(
+        cardFor("Fix the thing").querySelector(
+          '[data-testid="task-keep-running-badge"]',
+        ),
+      ).toHaveTextContent("keeps running");
+      expect(
+        cardFor("Ship the other thing").querySelector(
+          '[data-testid="task-keep-running-badge"]',
+        ),
+      ).toBeNull();
+    });
+
     // Sessions live in the Sessions pane (SessionsPage.jsx), so an
     // interactive task is never a card, live or not.
     it("leaves an interactive task off the board", () => {
@@ -198,6 +218,33 @@ describe("TaskBoard", () => {
       expect(screen.queryByText("Not this month")).not.toBeInTheDocument();
       expect(
         screen.getByText(/2 tasks in no column \(Deferred, Closed\)/),
+      ).toBeInTheDocument();
+    });
+
+    // A saved board's own columns can collect one asked state and not
+    // the other. The note then names the one it is hiding by its own
+    // name, not "Asked", which the Talking column's cards also read.
+    it("names the asked state it hides when a column collects the other one", () => {
+      renderBoard({
+        tasks: [
+          ...tasks,
+          {
+            id: 9,
+            title: "Submit me",
+            state: "awaiting_submit",
+            capabilities: [],
+            blocked: false,
+          },
+        ],
+        fixedColumns: [
+          { id: "talking", title: "Talking", states: ["awaiting_reply"] },
+        ],
+      });
+      expect(cardsIn("Talking")).toEqual(["Answer me"]);
+      expect(
+        screen.getByText(
+          /in no column \(Waiting, Running, Asked to submit, Closed\)/,
+        ),
       ).toBeInTheDocument();
     });
 

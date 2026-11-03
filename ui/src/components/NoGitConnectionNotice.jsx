@@ -59,8 +59,8 @@ export default function NoGitConnectionNotice({
       >
         Settings → Git
       </Link>
-      : a GitHub token or GitHub App for github.com, or an ambient login for
-      another git host.
+      : a GitHub token or GitHub App for github.com, or a token, SSH key or
+      ambient login for another git host.
     </Alert>
   );
 }

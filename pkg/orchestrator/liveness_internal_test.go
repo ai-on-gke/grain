@@ -443,12 +443,12 @@ func TestTaskStallNoteFlagsTheStatesGrainDrivesAndNoOthers(t *testing.T) {
 		}
 	}
 
-	// And the six a person owns say nothing, however long they stand. A
-	// proposal nobody has approved in a month is a proposal.
+	// And the ones a person owns say nothing, however long they stand. A
+	// proposal nobody has approved in a month is a proposal. (A deferral
+	// is the exception with a clock on it, and has a test of its own.)
 	month := entered.Add(30 * 24 * time.Hour)
 	for _, state := range []model.State{model.StateProposed, model.StateAwaitingReply,
-		model.StateAwaitingSubmit, model.StateFailed,
-		model.StateDeferred, model.StateClosed} {
+		model.StateAwaitingSubmit, model.StateFailed, model.StateClosed} {
 		if got := TaskStallNote(state, entered, month); got != "" {
 			t.Errorf("%s, which is waiting on a person by design, was flagged: %q", state, got)
 		}
@@ -459,6 +459,66 @@ func TestTaskStallNoteFlagsTheStatesGrainDrivesAndNoOthers(t *testing.T) {
 	// the same way the merge lane's does.
 	if got := TaskStallNote(model.State("thinking"), entered, month); got != "" {
 		t.Errorf("an unclassified task state was flagged: %q", got)
+	}
+}
+
+// TestADeferralWhoseWakeTimeHasPassedStalls is the driven half of
+// 'deferred' (deferredWake): a wake time reconcileWake has not acted on
+// within a cycle of it reads as stuck, measured from the wake time and
+// not from when the task was put aside, and its row offers Undefer. A
+// deferral with no wake time has no since (model.StateTimes.Since), so
+// nothing ever measures it.
+func TestADeferralWhoseWakeTimeHasPassedStalls(t *testing.T) {
+	deferredAt := baseInstant
+	until := deferredAt.Add(30 * 24 * time.Hour)
+	task := model.Task{ID: "9", DeferredAt: &deferredAt, DeferredUntil: &until}
+	times := model.StateTimesFrom(task, nil, nil)
+	since := times.Since(model.StateDeferred)
+	if since == nil || !since.Equal(until) {
+		t.Fatalf("a deferral with a wake time is measured from %v, want the wake time %v", since, until)
+	}
+	patience := deferredWake.patience()
+	if patience <= 0 {
+		t.Fatal("deferredWake has no patience: a wake that never happens would never be reported")
+	}
+
+	// A month on the shelf before the wake time is not a stall, and nor is
+	// the cycle after it: reconcileWake gets one cycle's grace.
+	for _, at := range []time.Time{deferredAt.Add(29 * 24 * time.Hour), until, until.Add(patience - time.Second)} {
+		if got := TaskStallNote(model.StateDeferred, *since, at); got != "" {
+			t.Errorf("flagged at %v, inside the wake time's patience: %q", at, got)
+		}
+	}
+	note := TaskStallNote(model.StateDeferred, *since, until.Add(patience))
+	if note == "" {
+		t.Fatalf("said nothing %s after the wake time", patience)
+	}
+	for _, want := range []string{"reconcileWake", `"Undefer"`} {
+		if !strings.Contains(note, want) {
+			t.Errorf("the stalled row does not name %s:\n%s", want, note)
+		}
+	}
+	if later := TaskStallNote(model.StateDeferred, *since, until.Add(patience+24*time.Hour)); later != note {
+		t.Errorf("the stalled row changed a day later:\n%s\n%s", note, later)
+	}
+
+	// The sub-case agrees: driven by the same component, escalated to a
+	// person, with the control the row is meant to offer.
+	reason := TaskReason(task, model.StateDeferred, nil, nil, nil)
+	if reason.Reason != taskReasonDeferredWake || reason.Driver != deferredWake.driver || reason.Control != "Undefer" {
+		t.Errorf("TaskReason = %+v, want %s driven by %s with Undefer", reason, taskReasonDeferredWake, deferredWake.driver)
+	}
+	if r := taskReasons[taskReasonDeferredWake]; r.escalation != stallToPerson {
+		t.Errorf("%s escalates to %q, want %q", taskReasonDeferredWake, r.escalation, stallToPerson)
+	}
+	if !packageFunctions(t)[deferredWake.driver] {
+		t.Errorf("deferredWake's driver %q is not a function in this package", deferredWake.driver)
+	}
+
+	// No wake time: a person's decision, and nothing to measure.
+	task.DeferredUntil = nil
+	if got := model.StateTimesFrom(task, nil, nil).Since(model.StateDeferred); got != nil {
+		t.Errorf("a deferral with no wake time is measured from %v, want nothing", got)
 	}
 }
 

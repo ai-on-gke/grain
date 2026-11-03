@@ -17,12 +17,10 @@ package ui
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"slices"
 	"sort"
 	"strings"
 
-	"github.com/ai-on-gke/grain/pkg/capability/teambroadcast"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -50,7 +48,6 @@ type Team struct {
 	ConfigRepo       string   `json:"configRepo,omitempty"`
 	ConfigCloneURL   string   `json:"configCloneUrl,omitempty"`
 	CloneCommand     string   `json:"cloneCommand,omitempty"`
-	MergeBatchSize   int      `json:"mergeBatchSize"`
 	RepairTemplateID string   `json:"repairTemplateID,omitempty"`
 	AgentFramework   string   `json:"agentFramework,omitempty"`
 	AgentBackendID   string   `json:"agentBackendId,omitempty"`
@@ -113,7 +110,6 @@ func teamFrom(cfg model.Config, defaultHost string) Team {
 		ConfigRepo:       configRepo,
 		ConfigCloneURL:   configCloneURL,
 		CloneCommand:     cloneCommand,
-		MergeBatchSize:   cfg.MergeBatchSize,
 		RepairTemplateID: cfg.RepairTemplateID,
 		AgentFramework:   cfg.AgentFramework,
 		AgentBackendID:   cfg.AgentBackendID,
@@ -449,52 +445,10 @@ func (c *Client) applyDeploymentSettings(cfg *model.Config, req UpdateTeamReques
 	return nil
 }
 
-// teamActingUser is who ctx acts as for a team or system-admin check:
-// its verified human principal (a session, a verified IAP assertion),
-// and nobody otherwise. claimed -- the "user" a request body or an
-// in-process caller names -- is never believed: a request with no
-// principal got past ServeHTTP only as a trusted source, and a trusted
-// source acts as the deployment's own actor (Client.Config.Actor, which
-// every caller of this falls back to on ""), never as a person it names
-// (grain#2379, grain/task-2078). Anything able to reach the daemon over
-// loopback -- every user onboarded through an SSH port-forward -- could
-// otherwise be any team admin or system admin by typing their name.
-func teamActingUser(ctx context.Context, claimed string) string {
-	_ = claimed
-	if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalHuman && strings.TrimSpace(p.ID) != "" {
-		return strings.TrimSpace(p.ID)
-	}
-	return ""
-}
-
 func (c *Client) triggerIAPSync() {
 	if c.Config.TriggerIAPSync != nil {
 		c.Config.TriggerIAPSync()
 	}
-}
-
-func requestUser(r *http.Request) string {
-	if p, ok := PrincipalFromContext(r.Context()); ok && p.Kind == model.PrincipalHuman && strings.TrimSpace(p.ID) != "" {
-		return strings.TrimSpace(p.ID)
-	}
-	if p, ok := ExtractPrincipal(r); ok && p.Kind == model.PrincipalHuman && strings.TrimSpace(p.ID) != "" {
-		return strings.TrimSpace(p.ID)
-	}
-	return ""
-}
-
-// actingUser is who r acts as for a team or attribution check: its
-// verified human principal, and "" otherwise. The user its body claims
-// is ignored, whoever sent it: a signed-in person, or a run with its own
-// agent principal, may not claim to be somebody else by naming them, and
-// neither may a request with no principal at all. That one got past
-// ServeHTTP's access gate only as a caller this daemon already trusts
-// (the access code, an in-process hop), and it
-// acts as the deployment's own actor, which "" falls back to -- not as
-// whichever team admin or system admin it names (grain/task-2078).
-func actingUser(r *http.Request, claimed string) string {
-	_ = claimed
-	return requestUser(r)
 }
 
 // BroadcastTeamRequest carries the payload for POST /api/deployment/broadcast.
@@ -598,13 +552,18 @@ func (c *Client) BroadcastTeamMessage(ctx context.Context, req BroadcastTeamRequ
 // -- so it is an instruction to all of the deployment's work, and two
 // kinds of caller may give one:
 //
-//   - with taskID, a run of that task, which must hold the team-broadcast
-//     grant (pkg/capability/teambroadcast);
+//   - with taskID, a run of that task, which must hold the agent API's
+//     teams:broadcast scope -- api:team-broadcast, or the bare
+//     team-broadcast it replaced, which is an alias for it;
 //   - without one, whoever ServeHTTP let in: every such caller is the
 //     deployment's own actor.
 //
 // Before grain/task-1568 neither was asked: every run was offered
 // broadcast_team_message and the daemon delivered whatever it was given.
+// teamBroadcastScope is the scope POST /api/deployment/broadcast is
+// served under (route_scopes.go).
+const teamBroadcastScope model.APIScope = "teams:broadcast"
+
 func (c *Client) authorizeBroadcast(ctx context.Context, taskID string) error {
 	taskID = strings.TrimSpace(taskID)
 	if taskID == "" {
@@ -620,13 +579,15 @@ func (c *Client) authorizeBroadcast(ctx context.Context, taskID string) error {
 	if task == nil {
 		return forbiddenErrorf("task %s does not exist, so it may not broadcast", taskID)
 	}
-	for _, g := range task.Grants {
-		if g.Capability == teambroadcast.CapabilityName {
-			return nil
-		}
+	names := make([]string, len(task.Grants))
+	for i, g := range task.Grants {
+		names[i] = g.Capability
 	}
-	return forbiddenErrorf("task %s does not hold the %q capability, so its run may not broadcast",
-		taskID, teambroadcast.CapabilityName)
+	if APIGrantsOf(names).Has(teamBroadcastScope) {
+		return nil
+	}
+	return forbiddenErrorf("task %s does not hold the agent API's %s scope (api:team-broadcast), so its run may not broadcast",
+		taskID, teamBroadcastScope)
 }
 
 // DeploymentRepoConfigResponse is the response body of
@@ -688,11 +649,8 @@ func (c *Client) teamRepoTarget(ctx context.Context, teamID string, repo model.R
 	// trusted in-process caller -- the daemon's own actor when that is a
 	// person. An agent in the context never falls back to the daemon's
 	// actor: it is no owner, so it gets no exception.
-	actingUser := teamActingUser(ctx, "")
-	if _, named := PrincipalFromContext(ctx); !named && actingUser == "" && c.Config.Actor.Kind == model.PrincipalHuman {
-		actingUser = strings.TrimSpace(c.Config.Actor.ID)
-	}
-	if actingUser != "" {
+	person := c.requestPersonOrTrustedOperator(ctx)
+	if person != "" {
 		return team, nil
 	}
 	return nil, validationErrorf("repository %q is not in this deployment's target repos", repo.String())
@@ -766,14 +724,27 @@ func (c *Client) SetDeploymentRepoConfigWithUser(ctx context.Context, repo strin
 		seen := make(map[string]bool, len(*req.DefaultCapabilities))
 		for _, capID := range *req.DefaultCapabilities {
 			t := strings.TrimSpace(capID)
-			if t != "" && !seen[t] {
-				seen[t] = true
-				if !slices.Contains(cfg.DefaultCapabilities, t) {
-					if _, ok := c.capabilityByID(t); !ok {
-						return DeploymentRepoConfigResponse{}, validationErrorf("defaultCapabilities: %s", capabilityRefusal(t))
+			if t != "" {
+				if slices.Contains(cfg.DefaultCapabilities, t) {
+					if !seen[t] {
+						seen[t] = true
+						clean = append(clean, t)
+					}
+					continue
+				}
+				normalizedIDs, err := c.normalizeCapabilityIDs(t)
+				if err != nil {
+					return DeploymentRepoConfigResponse{}, err
+				}
+				for _, nid := range normalizedIDs {
+					if _, ok := c.capabilityByID(nid); !ok {
+						return DeploymentRepoConfigResponse{}, validationErrorf("defaultCapabilities: %s", capabilityRefusal(nid))
+					}
+					if !seen[nid] {
+						seen[nid] = true
+						clean = append(clean, nid)
 					}
 				}
-				clean = append(clean, t)
 			}
 		}
 		cfg.DefaultCapabilities = clean

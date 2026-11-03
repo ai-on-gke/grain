@@ -455,11 +455,12 @@ func releaseTakeover(ctx context.Context, deps Deps, task model.Task, sender, ke
 		updateTakeoverCheck(deps.Client, task, id, sha, "completed", "neutral", "Released",
 			"grain handed this pull request back; its reviews no longer gate it.")
 	}
-	return deps.Store.ObserveField(ctx, task.ID, now, func(o *model.Observation) {
-		if o.ClosedAt == nil {
-			o.ClosedAt = &now
-		}
-	})
+	return deps.Store.ObserveClose(ctx, task.ID, now, model.GrainPrincipal, "takeover released by @"+sender,
+		func(o *model.Observation) {
+			if o.ClosedAt == nil {
+				o.ClosedAt = &now
+			}
+		})
 }
 
 // reconcileTakeovers keeps every live shepherd's review gate: it files the

@@ -64,7 +64,7 @@ test("returns to Metrics on Back from the oldest queued task", async ({
   await expect(page).toHaveURL(/\/system\/metrics$/);
 
   await page
-    .getByRole("button", { name: /^task \d+$/ })
+    .getByRole("link", { name: /^task \d+$/ })
     .first()
     .click();
   await expect(page).toHaveURL(/\/tasks\/\d+$/);

@@ -20,12 +20,17 @@ import (
 	"log"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
+
+// processStartedAt is when this process started, near enough: package
+// initialisation runs before main.
+var processStartedAt = time.Now().UTC()
 
 // upgradeStatus is orchestrator.Config.UpgradeStatus for this
 // deployment: the last (or current) upgrade as pkg/upgrade recorded it,
@@ -223,7 +228,7 @@ func newUpgrader(cfg Config, db *sql.DB, store *model.Store) *upgrade.Upgrader {
 			Schema:           upgradeSchemaConfig(cfg, db),
 			Hold:             orchestrator.UpgradeHold(store),
 			// Every run in a run host lets go, its cursor written,
-			// before the restart (docs/non-disruptive-upgrade.md, piece
+			// before the restart (design/design/non-disruptive-upgrade.design.md, piece
 			// 6); the next build adopts it.
 			Flush:      cfg.runHostUpgrade.flushHook(),
 			RestartCmd: cfg.UpgradeRestartCmd,

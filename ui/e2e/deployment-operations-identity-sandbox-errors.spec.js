@@ -39,7 +39,12 @@ test("sends the commit identity to the team's Git identity tab", async ({
 
   // The pane types in no identity: it says each run commits as its
   // credential's own account, and names grain's own as the fallback.
-  await page.goto("/settings/git");
+  // The pointer is a link there, not prose naming it (2026-11-01).
+  await page
+    .getByTestId("commit-identity-pointer")
+    .getByRole("link", { name: "Settings → Git" })
+    .click();
+  await expect(page).toHaveURL(/\/settings\/git$/);
   await expect(page.getByTestId("commit-author-derived")).toContainText(
     "grain agent <grain-agent@localhost>",
   );

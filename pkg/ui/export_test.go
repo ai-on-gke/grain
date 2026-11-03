@@ -17,6 +17,8 @@ package ui
 import (
 	"context"
 	"net"
+	"testing"
+	"time"
 )
 
 // What the external tests in this directory need to see of the inside.
@@ -35,10 +37,6 @@ func TaskListBuilds(s *Server) int { return int(s.taskList.builds.Load()) }
 
 // TaskDetailBuilds is the equivalent count for GET /api/tasks/{id}.
 func TaskDetailBuilds(s *Server) int { return int(s.taskDetails.builds.Load()) }
-
-// GrainInstallDirs are the fixed directories the binary endpoints search
-// for an installed grain before falling back to the running executable.
-var GrainInstallDirs = grainInstallDirs
 
 // httptest.NewRequest gives every request it builds a RemoteAddr in
 // TEST-NET-1 (192.0.2.1:1234). The tests in this directory build
@@ -65,6 +63,10 @@ func RefuseConfigWriteForTest(c *Client, ctx context.Context, tables ...string) 
 	return c.checkSettingsWritableUnrehearsed(ctx, tables...)
 }
 
-// FindGrainBinary is findGrainBinary, for tests that check what the
-// executor binary endpoints serve.
-var FindGrainBinary = findGrainBinary
+// SetCloudIdentityTimeoutForTest shortens the default group checker's
+// per-call timeout for the rest of t.
+func SetCloudIdentityTimeoutForTest(t *testing.T, d time.Duration) {
+	prev := cloudIdentityTimeout
+	cloudIdentityTimeout = d
+	t.Cleanup(func() { cloudIdentityTimeout = prev })
+}

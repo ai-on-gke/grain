@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path"
@@ -48,6 +49,8 @@ var (
 	_ github.CheckRunWriter     = (*StateRepoPullRequestClient)(nil)
 	_ github.CallerLabeler      = (*StateRepoPullRequestClient)(nil)
 	_ github.JobLogTailer       = (*StateRepoPullRequestClient)(nil)
+	_ github.WorkflowRunsReader = (*StateRepoPullRequestClient)(nil)
+	_ github.ActionsReader      = (*StateRepoPullRequestClient)(nil)
 )
 
 // WithCaller is this client with its forge requests charged to caller
@@ -805,6 +808,26 @@ func (c *StateRepoPullRequestClient) ListWorkflowRuns(owner, name, headSHA strin
 	return nil, nil
 }
 
+func (c *StateRepoPullRequestClient) RerequestCheckSuite(owner, name string, checkSuiteID int64) error {
+	if c.isDisabledConfigRepo(owner, name) {
+		return errExternalConfigRepoNoNativePR
+	}
+	if !c.isLocal(owner, name) {
+		return c.Client.RerequestCheckSuite(owner, name, checkSuiteID)
+	}
+	return &github.Error{Status: 422, Body: []byte(`{"message":"local state repo has no check suites"}`)}
+}
+
+func (c *StateRepoPullRequestClient) RerequestCheckRun(owner, name string, checkRunID int64) error {
+	if c.isDisabledConfigRepo(owner, name) {
+		return errExternalConfigRepoNoNativePR
+	}
+	if !c.isLocal(owner, name) {
+		return c.Client.RerequestCheckRun(owner, name, checkRunID)
+	}
+	return &github.Error{Status: 422, Body: []byte(`{"message":"local state repo has no check runs"}`)}
+}
+
 func (c *StateRepoPullRequestClient) ListPullRequestFiles(owner, name string, number int) ([]string, error) {
 	if c.isDisabledConfigRepo(owner, name) {
 		return nil, errExternalConfigRepoNoNativePR
@@ -1004,6 +1027,54 @@ func (c *StateRepoPullRequestClient) ListReviewComments(owner, name string, numb
 	return nil, nil
 }
 
+func (c *StateRepoPullRequestClient) ReplyToReviewComment(owner, name string, number, commentID int, body string) (int, error) {
+	if c.isDisabledConfigRepo(owner, name) {
+		return 0, errExternalConfigRepoNoNativePR
+	}
+	if c.isLocal(owner, name) {
+		return 0, nil
+	}
+	replier, ok := c.Client.(interface {
+		ReplyToReviewComment(owner, repo string, number, commentID int, body string) (int, error)
+	})
+	if !ok {
+		return 0, fmt.Errorf("%s/%s has no GitHub review comment replier", owner, name)
+	}
+	return replier.ReplyToReviewComment(owner, name, number, commentID, body)
+}
+
+func (c *StateRepoPullRequestClient) ListReviewThreads(owner, name string, number int) ([]github.ReviewThread, error) {
+	if c.isDisabledConfigRepo(owner, name) {
+		return nil, errExternalConfigRepoNoNativePR
+	}
+	if c.isLocal(owner, name) {
+		return nil, nil
+	}
+	lister, ok := c.Client.(interface {
+		ListReviewThreads(owner, repo string, number int) ([]github.ReviewThread, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("%s/%s has no GitHub review thread lister", owner, name)
+	}
+	return lister.ListReviewThreads(owner, name, number)
+}
+
+func (c *StateRepoPullRequestClient) ResolveReviewThread(owner, name, threadID string) error {
+	if c.isDisabledConfigRepo(owner, name) {
+		return errExternalConfigRepoNoNativePR
+	}
+	if c.isLocal(owner, name) {
+		return nil
+	}
+	resolver, ok := c.Client.(interface {
+		ResolveReviewThread(owner, repo, threadID string) error
+	})
+	if !ok {
+		return fmt.Errorf("%s/%s has no GitHub review thread resolver", owner, name)
+	}
+	return resolver.ResolveReviewThread(owner, name, threadID)
+}
+
 func (c *StateRepoPullRequestClient) ListComments(owner, name string, number int) ([]github.Comment, error) {
 	if c.isDisabledConfigRepo(owner, name) {
 		return nil, errExternalConfigRepoNoNativePR
@@ -1035,6 +1106,28 @@ func (c *StateRepoPullRequestClient) JobLogTail(owner, name string, jobID int64)
 		return "", nil
 	}
 	return tailer.JobLogTail(owner, name, jobID)
+}
+
+func (c *StateRepoPullRequestClient) CompletedWorkflowRuns(owner, name string, limit int) ([]github.WorkflowRun, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	reader, ok := c.Client.(github.WorkflowRunsReader)
+	if !ok {
+		return nil, nil
+	}
+	return reader.CompletedWorkflowRuns(owner, name, limit)
+}
+
+func (c *StateRepoPullRequestClient) ListWorkflowRunJobs(owner, name string, runID int64) ([]github.WorkflowRunJob, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	reader, ok := c.Client.(github.WorkflowRunsReader)
+	if !ok {
+		return nil, nil
+	}
+	return reader.ListWorkflowRunJobs(owner, name, runID)
 }
 
 func (c *StateRepoPullRequestClient) ActionsState(owner, name, headSHA string) (github.ActionsState, error) {
@@ -1330,4 +1423,55 @@ func (c *StateRepoPullRequestClient) UpdateCheckRun(owner, name string, checkRun
 		return fmt.Errorf("%s/%s has no GitHub check run writer", owner, name)
 	}
 	return writer.UpdateCheckRun(owner, name, checkRunID, run)
+}
+
+// actionsReader is the wrapped client's GitHub Actions reads, or nil for
+// the native config repository (which has no Actions) and a client
+// without them.
+func (c *StateRepoPullRequestClient) actionsReader(owner, name string) github.ActionsReader {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil
+	}
+	reader, _ := c.Client.(github.ActionsReader)
+	return reader
+}
+
+// ListActionsRuns is github.ActionsReader, passed through.
+func (c *StateRepoPullRequestClient) ListActionsRuns(owner, name string, q github.ActionsRunsQuery) ([]github.WorkflowRun, error) {
+	if reader := c.actionsReader(owner, name); reader != nil {
+		return reader.ListActionsRuns(owner, name, q)
+	}
+	return nil, nil
+}
+
+// GetActionsRun is github.ActionsReader, passed through.
+func (c *StateRepoPullRequestClient) GetActionsRun(owner, name string, runID int64) (*github.WorkflowRun, error) {
+	if reader := c.actionsReader(owner, name); reader != nil {
+		return reader.GetActionsRun(owner, name, runID)
+	}
+	return nil, nil
+}
+
+// ListActionsJobs is github.ActionsReader, passed through.
+func (c *StateRepoPullRequestClient) ListActionsJobs(owner, name string, runID int64) ([]github.ActionsRunJob, error) {
+	if reader := c.actionsReader(owner, name); reader != nil {
+		return reader.ListActionsJobs(owner, name, runID)
+	}
+	return nil, nil
+}
+
+// ActionsJobLog is github.ActionsReader, passed through.
+func (c *StateRepoPullRequestClient) ActionsJobLog(owner, name string, jobID int64) (string, error) {
+	if reader := c.actionsReader(owner, name); reader != nil {
+		return reader.ActionsJobLog(owner, name, jobID)
+	}
+	return "", &github.Error{Status: http.StatusNotFound}
+}
+
+// ListActionsArtifacts is github.ActionsReader, passed through.
+func (c *StateRepoPullRequestClient) ListActionsArtifacts(owner, name string, runID int64) ([]github.ActionsArtifact, error) {
+	if reader := c.actionsReader(owner, name); reader != nil {
+		return reader.ListActionsArtifacts(owner, name, runID)
+	}
+	return nil, nil
 }

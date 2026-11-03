@@ -160,13 +160,13 @@ func TestDemoReconcileAdvancesPollScheduleAndWebhookResetsBackoff(t *testing.T) 
 
 	const webhookSecret = "demo-webhook-test-secret"
 	t.Setenv("GITHUB_WEBHOOK_SECRET", webhookSecret)
+	releases, _ := cfg.GitHubBranches.(github.Client)
 	consumer, err := startDemoGitHubWebhooks(ctx, dir, Options{
 		GithubWebhookAddr: "127.0.0.1:0",
-	}, nil, store, ghCalls)
+	}, nil, store, releases, ghCalls)
 	if err != nil {
 		t.Fatalf("startDemoGitHubWebhooks: %v", err)
 	}
-	releases, _ := cfg.GitHubBranches.(github.Client)
 	if v, ok := demoSimClients.Load(releases); ok {
 		v.(*demoSimState).events = consumer
 	}

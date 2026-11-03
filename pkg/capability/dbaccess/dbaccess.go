@@ -22,7 +22,6 @@ import (
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/mcp"
-	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 const (
@@ -53,63 +52,11 @@ type DBExecutor interface {
 	ExecDB(ctx context.Context, query string, params []any) (ExecResult, error)
 }
 
-// Config holds configuration for database access providers and tools.
+// Config holds configuration for database access tools.
 type Config struct {
 	TaskID     string
 	Executor   DBExecutor
 	AllowWrite bool
-}
-
-// ReadProvider implements model.CapabilityProvider for db-read.
-type ReadProvider struct {
-	model.BaseCapability
-}
-
-// WriteProvider implements model.CapabilityProvider for db-write.
-type WriteProvider struct {
-	model.BaseCapability
-}
-
-// NewReadProvider returns a new db-read capability provider.
-func NewReadProvider() *ReadProvider {
-	return &ReadProvider{}
-}
-
-// NewReadProviderWithConfig returns a new db-read capability provider with configuration.
-func NewReadProviderWithConfig(_ Config) *ReadProvider {
-	return &ReadProvider{}
-}
-
-// Spec returns the capability specification for db-read.
-func (p *ReadProvider) Spec() model.CapabilitySpec {
-	return model.CapabilitySpec{
-		Name:        CapabilityDBRead,
-		Label:       "Grain DB read",
-		Description: "Let this task execute read-only SQL queries directly against Grain's database",
-		Source:      model.GrantByLabel,
-		Provision:   model.ProvisionGrant,
-	}
-}
-
-// NewWriteProvider returns a new db-write capability provider.
-func NewWriteProvider() *WriteProvider {
-	return &WriteProvider{}
-}
-
-// NewWriteProviderWithConfig returns a new db-write capability provider with configuration.
-func NewWriteProviderWithConfig(_ Config) *WriteProvider {
-	return &WriteProvider{}
-}
-
-// Spec returns the capability specification for db-write.
-func (p *WriteProvider) Spec() model.CapabilitySpec {
-	return model.CapabilitySpec{
-		Name:        CapabilityDBWrite,
-		Label:       "Grain DB read/write",
-		Description: "Let this task execute SQL queries and statements (read and write) directly against Grain's database",
-		Source:      model.GrantByLabel,
-		Provision:   model.ProvisionGrant,
-	}
 }
 
 // Tools returns the MCP database tools enabled by the given config.

@@ -295,7 +295,7 @@ GRAIN_GROUP=""
 # from an operator's environment or an old runbook, is refused rather
 # than quietly ignored (resolve_install_mode).
 GRAIN_INSTALL_MODE="${GRAIN_INSTALL_MODE:-}"
-# --- grain hostd (docs/design/cli-run-location.md) ----------------------
+# --- grain hostd (design/design/cli-run-location.design.md) ----------------------
 #
 # A container-mode daemon starts the few programs that must run on the
 # bare machine -- agy under the installing user's corp identity, a stdio
@@ -508,7 +508,7 @@ GRAIN_CODEX_PATH="${GRAIN_CODEX_PATH:-}"
 # Override the daemon's default Codex model -- the exact counterpart of
 # GRAIN_GEMINI_MODEL/GRAIN_CLAUDE_MODEL above.
 GRAIN_CODEX_MODEL="${GRAIN_CODEX_MODEL:-}"
-# Where each agent CLI runs (docs/design/cli-run-location.md): "container"
+# Where each agent CLI runs (design/design/cli-run-location.design.md): "container"
 # (a subprocess in the daemon's own container, from its image) or "host"
 # (on this machine as $GRAIN_USER, through grain hostd, for a CLI its
 # allowlist names). Passed as -claude-run, -codex-run and -agy-run; empty
@@ -561,7 +561,29 @@ GRAIN_GCP_SERVICE_ACCOUNT_KEY_FILE="${GRAIN_GCP_SERVICE_ACCOUNT_KEY_FILE:-}"
 # projects/<NUMBER>/iap_web/compute/services/<BACKEND_SERVICE_ID>.
 # "none" turns that off.
 GRAIN_IAP_RESOURCE="${GRAIN_IAP_RESOURCE:-}"
+# The IAP backend audience (-ui-iap-audience) the UI checks signed
+# X-Goog-IAP-JWT-Assertion headers against, e.g.
+# /projects/<NUMBER>/global/backendServices/<ID> (or several separated
+# by commas). Unset on a re-run keeps whatever the installed
+# grain-daemon.service already passes (resolve_iap_audience); empty or
+# "none" clears an installed one so no assertion is verified.
+GRAIN_IAP_AUDIENCE_GIVEN=0
+if [ "${GRAIN_IAP_AUDIENCE+set}" = set ]; then
+  GRAIN_IAP_AUDIENCE_GIVEN=1
+fi
 GRAIN_IAP_AUDIENCE="${GRAIN_IAP_AUDIENCE:-}"
+# Who the daemon admits as themselves once IAP (or another identity
+# verifier) has authenticated them (-ui-allowed-principals): a
+# comma-separated user:/group:/domain:/serviceAccount: list. Unset on a
+# re-run keeps whatever the installed grain-daemon.service already passes
+# (resolve_allowed_principals); empty or "none" clears an installed one
+# and leaves the daemon's own default -- the owner account plus the
+# service accounts grain provisions -- which matches no IAP email.
+GRAIN_ALLOWED_PRINCIPALS_GIVEN=0
+if [ "${GRAIN_ALLOWED_PRINCIPALS+set}" = set ]; then
+  GRAIN_ALLOWED_PRINCIPALS_GIVEN=1
+fi
+GRAIN_ALLOWED_PRINCIPALS="${GRAIN_ALLOWED_PRINCIPALS:-}"
 
 # --- the config repository (pkg/staterepo) ------------------------------
 #
@@ -1095,6 +1117,14 @@ Recognized variables:
                                       (projects/N/iap_web/compute/services/S)
                                       whose IAP access grain reconciles; "none"
                                       turns that off. Seeded once
+  GRAIN_ALLOWED_PRINCIPALS           comma-separated principals admitted as
+                                      themselves once IAP has authenticated
+                                      them (-ui-allowed-principals), e.g.
+                                      user:you@example.com,domain:example.com.
+                                      Unset keeps the installed unit's flag;
+                                      empty or "none" clears it to the daemon's
+                                      own default (the owner account and
+                                      grain's service accounts)
   GRAIN_GCP_SERVICE_ACCOUNT_KEY_FILE a minter key to seed under the gcp-key-minter
                                       secret. Written on *every* run, unlike the
                                       seeded-once values above: the deploy that
@@ -1104,7 +1134,10 @@ Recognized variables:
 
   GRAIN_IAP_AUDIENCE        the IAP backend audience the UI checks
                              X-Goog-IAP-JWT-Assertion against, identifying people
-                             IAP let through by it (-ui-iap-audience)
+                             IAP let through by it (-ui-iap-audience), e.g.
+                             /projects/<NUMBER>/global/backendServices/<ID>.
+                             Unset keeps the installed unit's flag; empty or
+                             "none" clears it
 
   GRAIN_SECRETS_REPO_URL    git URL of the repository this deployment's encrypted
                              secrets file is backed up to (pkg/secretsrepo),
@@ -2484,6 +2517,195 @@ if ! resolve_policy /etc/systemd/system/grain-daemon.service; then
   exit 2
 fi
 
+# --- the allowed principals (GRAIN_ALLOWED_PRINCIPALS) -------------------------
+
+# normalize_allowed_principals prints VALUE the way the daemon reads it
+# (pkg/ui/allowlist.go's SplitAllowedPrincipals and ParseAllowedPrincipals:
+# comma-separated user:/group:/serviceAccount:/domain: entries, blanks
+# around each entry dropped, empty ones skipped), or says on stderr why
+# the daemon could not use it and fails. Dropping spaces and refusing
+# whitespace, quotes, backslashes, '$' and '%' inside an entry also keeps
+# the unquoted ExecStart in grain-daemon.service from splitting the list
+# into separate daemon arguments or interpolating systemd specifiers.
+normalize_allowed_principals() {
+  local value="$1" origin="$2" raw entry prefix val parts=() out=""
+  raw="${value//$'\n'/,}"
+  IFS=, read -r -a parts <<<"$raw"
+  for entry in "${parts[@]}"; do
+    entry="${entry#"${entry%%[![:space:]]*}"}"
+    entry="${entry%"${entry##*[![:space:]]}"}"
+    if [ -z "$entry" ]; then
+      continue
+    fi
+    if [[ "$entry" != *:* ]]; then
+      echo "setup.sh: allowed principal \"$entry\" ($origin) must start with user:, serviceAccount:, group:, or domain:" >&2
+      return 1
+    fi
+    prefix="${entry%%:*}"
+    val="${entry#*:}"
+    prefix="${prefix#"${prefix%%[![:space:]]*}"}"
+    prefix="${prefix%"${prefix##*[![:space:]]}"}"
+    val="${val#"${val%%[![:space:]]*}"}"
+    val="${val%"${val##*[![:space:]]}"}"
+    if [ -z "$val" ]; then
+      echo "setup.sh: allowed principal \"$entry\" ($origin) has an empty ${prefix}: value" >&2
+      return 1
+    fi
+    if [[ "$prefix" =~ [[:space:]\"\'\\\$%] ]] || [[ "$val" =~ [[:space:]\"\'\\\$%] ]]; then
+      echo "setup.sh: allowed principal \"$entry\" ($origin) must not contain spaces, quotes, backslashes, '\$' or '%'" >&2
+      return 1
+    fi
+    case "$prefix" in
+      user|serviceAccount|group)
+        if [[ ! "$val" =~ ^[^@]+@[^@]+$ ]]; then
+          echo "setup.sh: allowed principal \"$entry\" ($origin): $prefix entry must be an email address" >&2
+          return 1
+        fi
+        ;;
+      domain)
+        if [[ "$val" == *@* ]] || [[ "$val" == */* ]]; then
+          echo "setup.sh: allowed principal \"$entry\" ($origin): domain entry must be a bare domain such as example.com" >&2
+          return 1
+        fi
+        ;;
+      *)
+        echo "setup.sh: allowed principal \"$entry\" ($origin) has unknown prefix \"$prefix:\" (want user:, serviceAccount:, group:, or domain:)" >&2
+        return 1
+        ;;
+    esac
+    out="${out:+$out,}${prefix}:${val}"
+  done
+  if [ -z "$out" ]; then
+    echo "setup.sh: allowed principals \"$value\" ($origin) names no principal at all" >&2
+    return 1
+  fi
+  printf '%s\n' "$out"
+}
+
+# resolve_allowed_principals settles GRAIN_ALLOWED_PRINCIPALS for the unit
+# about to be written over UNIT: an explicit empty value or "none" clears
+# it; another explicit value is normalized and checked; when unset in the
+# caller's environment (a bare `sudo ./setup.sh` update), the installed
+# unit's -ui-allowed-principals is checked and kept so an update neither
+# locks out the IAP allowlist nor reverts to the daemon's default.
+resolve_allowed_principals() {
+  local unit="$1" installed
+  installed="$(installed_unit_flag "$unit" ui-allowed-principals)"
+  if [ "${GRAIN_ALLOWED_PRINCIPALS_GIVEN:-0}" = "1" ]; then
+    if [ -z "$GRAIN_ALLOWED_PRINCIPALS" ] || [ "$GRAIN_ALLOWED_PRINCIPALS" = "none" ]; then
+      GRAIN_ALLOWED_PRINCIPALS=""
+      if [ -n "$installed" ]; then
+        log "Allowed principals: removing $installed (kept in $unit)"
+      fi
+      return 0
+    fi
+    GRAIN_ALLOWED_PRINCIPALS="$(normalize_allowed_principals "$GRAIN_ALLOWED_PRINCIPALS" \
+      "from GRAIN_ALLOWED_PRINCIPALS")" || return 1
+    if [ -n "$installed" ] && [ "$installed" != "$GRAIN_ALLOWED_PRINCIPALS" ]; then
+      log "Allowed principals: changing from $installed (the installed $unit) to $GRAIN_ALLOWED_PRINCIPALS"
+    else
+      log "Allowed principals: $GRAIN_ALLOWED_PRINCIPALS (as given)"
+    fi
+    return 0
+  fi
+  if [ -z "$installed" ]; then
+    GRAIN_ALLOWED_PRINCIPALS=""
+    return 0
+  fi
+  if ! GRAIN_ALLOWED_PRINCIPALS="$(normalize_allowed_principals "$installed" "kept from $unit")"; then
+    echo "          pass GRAIN_ALLOWED_PRINCIPALS=... (or GRAIN_ALLOWED_PRINCIPALS=none) to replace it" >&2
+    return 1
+  fi
+  log "Allowed principals: keeping $GRAIN_ALLOWED_PRINCIPALS from the installed $unit"
+  log "  (pass GRAIN_ALLOWED_PRINCIPALS=... to change it, or GRAIN_ALLOWED_PRINCIPALS=none to clear it)"
+}
+
+# --- end of the allowed principals ---------------------------------------------
+
+if ! resolve_allowed_principals /etc/systemd/system/grain-daemon.service; then
+  exit 2
+fi
+
+# --- the IAP audience (GRAIN_IAP_AUDIENCE) -------------------------------------
+
+# normalize_iap_audience prints VALUE the way the daemon reads it
+# (pkg/ui/principal.go's splitAudiences: comma-separated audiences, blanks
+# around each entry dropped, empty ones skipped), or says on stderr why
+# it cannot be used and fails. Dropping spaces and refusing whitespace,
+# quotes, backslashes, '$' and '%' inside an entry keeps the unquoted
+# ExecStart in grain-daemon.service from splitting the value into separate
+# daemon arguments or interpolating systemd specifiers.
+normalize_iap_audience() {
+  local value="$1" origin="$2" raw entry parts=() out=""
+  raw="${value//$'\n'/,}"
+  IFS=, read -r -a parts <<<"$raw"
+  for entry in "${parts[@]}"; do
+    entry="${entry#"${entry%%[![:space:]]*}"}"
+    entry="${entry%"${entry##*[![:space:]]}"}"
+    if [ -z "$entry" ]; then
+      continue
+    fi
+    if [[ "$entry" =~ [[:space:]\"\'\\\$%] ]]; then
+      echo "setup.sh: IAP audience \"$entry\" ($origin) must not contain spaces, quotes, backslashes, '\$' or '%'" >&2
+      return 1
+    fi
+    if [[ "$entry" == -* ]]; then
+      echo "setup.sh: IAP audience \"$entry\" ($origin) must not start with '-'" >&2
+      return 1
+    fi
+    out="${out:+$out,}${entry}"
+  done
+  if [ -z "$out" ]; then
+    echo "setup.sh: IAP audience \"$value\" ($origin) names no audience at all" >&2
+    return 1
+  fi
+  printf '%s\n' "$out"
+}
+
+# resolve_iap_audience settles GRAIN_IAP_AUDIENCE for the unit about to be
+# written over UNIT: an explicit empty value or "none" clears it; another
+# explicit value is normalized and checked; when unset in the caller's
+# environment (a bare `sudo ./setup.sh` update), the installed unit's
+# -ui-iap-audience is checked and kept so an update does not silently stop
+# verifying IAP assertions.
+resolve_iap_audience() {
+  local unit="$1" installed
+  installed="$(installed_unit_flag "$unit" ui-iap-audience)"
+  if [ "${GRAIN_IAP_AUDIENCE_GIVEN:-0}" = "1" ]; then
+    if [ -z "$GRAIN_IAP_AUDIENCE" ] || [ "$GRAIN_IAP_AUDIENCE" = "none" ]; then
+      GRAIN_IAP_AUDIENCE=""
+      if [ -n "$installed" ]; then
+        log "IAP audience: removing $installed (kept in $unit)"
+      fi
+      return 0
+    fi
+    GRAIN_IAP_AUDIENCE="$(normalize_iap_audience "$GRAIN_IAP_AUDIENCE" \
+      "from GRAIN_IAP_AUDIENCE")" || return 1
+    if [ -n "$installed" ] && [ "$installed" != "$GRAIN_IAP_AUDIENCE" ]; then
+      log "IAP audience: changing from $installed (the installed $unit) to $GRAIN_IAP_AUDIENCE"
+    else
+      log "IAP audience: $GRAIN_IAP_AUDIENCE (as given)"
+    fi
+    return 0
+  fi
+  if [ -z "$installed" ]; then
+    GRAIN_IAP_AUDIENCE=""
+    return 0
+  fi
+  if ! GRAIN_IAP_AUDIENCE="$(normalize_iap_audience "$installed" "kept from $unit")"; then
+    echo "          pass GRAIN_IAP_AUDIENCE=... (or GRAIN_IAP_AUDIENCE=none) to replace it" >&2
+    return 1
+  fi
+  log "IAP audience: keeping $GRAIN_IAP_AUDIENCE from the installed $unit"
+  log "  (pass GRAIN_IAP_AUDIENCE=... to change it, or GRAIN_IAP_AUDIENCE=none to clear it)"
+}
+
+# --- end of the IAP audience ---------------------------------------------------
+
+if ! resolve_iap_audience /etc/systemd/system/grain-daemon.service; then
+  exit 2
+fi
+
 # check_host_sandboxes refuses GRAIN_HOST_SANDBOXES=1 on a deployment
 # others can reach, exactly where the daemon it is about to install would
 # refuse to start (pkg/daemon's CheckHostSandboxes) -- so the refusal comes
@@ -2873,7 +3095,7 @@ resolve_hostd() {
   # claude detached by default: the image's claude, with the deployment's
   # login, as a container run -- but through hostd's claude-detached
   # entry, so a daemon upgrade does not interrupt it
-  # (docs/non-disruptive-upgrade.md). Not over an operator's own claude
+  # (design/design/non-disruptive-upgrade.design.md). Not over an operator's own claude
   # (GRAIN_CLAUDE_PATH), which only a container run mounts in.
   if [ -z "${GRAIN_CLAUDE_RUN:-}" ] && [ -z "${GRAIN_CLAUDE_PATH:-}" ]; then
     GRAIN_CLAUDE_RUN=detached
@@ -3635,7 +3857,7 @@ WRAPPER
     # Behind grain hostd /usr/local/bin/grain is the image's own binary,
     # not a wrapper: hostd's unit runs it, and a host-run agy forks its
     # mcpserver and hooks by the daemon's own path, which is this one
-    # (docs/design/cli-run-location.md, "agy's MCP server and hooks").
+    # (design/design/cli-run-location.design.md, "agy's MCP server and hooks").
     # The operator's `grain` is then that binary too, as in host mode.
     install_hostd_binary
   else
@@ -6271,6 +6493,7 @@ write_systemd_units() {
   [ -n "$GRAIN_GCP_PROJECT" ] && daemon_args+=(-gcp-project "$GRAIN_GCP_PROJECT")
   [ -n "$GRAIN_GCP_SERVICE_ACCOUNT_EMAIL" ] && daemon_args+=(-gcp-agent-service-account "$GRAIN_GCP_SERVICE_ACCOUNT_EMAIL")
   [ -n "$GRAIN_IAP_RESOURCE" ] && daemon_args+=(-iap-resource "$GRAIN_IAP_RESOURCE")
+  [ -n "$GRAIN_ALLOWED_PRINCIPALS" ] && daemon_args+=(-ui-allowed-principals "$GRAIN_ALLOWED_PRINCIPALS")
   [ -n "$GRAIN_TARGET_REPO" ] && daemon_args+=(-default-target-repo "$GRAIN_TARGET_REPO")
   if [ -n "$GRAIN_SANDBOX_CPUS" ]; then
     daemon_args+=(-sandbox-cpus "$GRAIN_SANDBOX_CPUS")
@@ -7002,7 +7225,7 @@ hostd_allowlist_content() {
   cat <<YAML
 # grain hostd's allowlist: every program the containerised grain daemon
 # may start on this host, and what each request for it may carry
-# (docs/design/cli-run-location.md, "Host CLIs through grain hostd").
+# (design/design/cli-run-location.design.md, "Host CLIs through grain hostd").
 #
 # Written once by scripts/setup.sh; a re-run keeps your edits. hostd
 # re-reads it on every request, and loads it only while it is owned by
@@ -7011,7 +7234,7 @@ YAML
   local proxies
   proxies="$(IFS=,; echo "${HOSTD_PROXY_VARS[*]}")"
   proxies="${proxies//,/, }"
-  # The container-equivalent entries (docs/non-disruptive-upgrade.md,
+  # The container-equivalent entries (design/design/non-disruptive-upgrade.design.md,
   # "Which substrate carries which CLI"): the image's own claude and
   # codex, which the extractor puts beside hostd's grain, run with the
   # container's HOME -- so ~/.claude, codex's home and the per-task

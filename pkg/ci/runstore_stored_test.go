@@ -966,3 +966,39 @@ func TestFindLeavesOutWhatTheReaderMayNotSee(t *testing.T) {
 		}
 	}
 }
+
+// A Put that lands while an Update is between its read and its write is
+// not undone by that write. Service.Cancel notes its reason with Update;
+// a second Cancel of a run that was already stopping read the run still
+// in flight, the run's own goroutine concluded it with Put, and the note
+// then wrote the in-flight copy back over the conclusion -- leaving a run
+// nothing would ever conclude (ci_mode grain -> github cancels a task's
+// run twice: docs/test-runs/2026-11-01-github-actions-ci-workflow-run.md).
+func TestAPutDuringAnUpdateIsNotOverwrittenByIt(t *testing.T) {
+	runs := storedTestStore(t, t.TempDir(), StoredRunStoreOptions{})
+	started := time.Now().UTC().Truncate(time.Millisecond)
+	live := storedTestRun("c4nc31", started)
+	runs.Put(live)
+
+	concluded := cloneRun(live)
+	concluded.Conclusion, concluded.FinishedAt = ConclusionCancelled, timePtr(started.Add(time.Second))
+	concluded.Jobs[0].Conclusion = ConclusionCancelled
+	put := make(chan struct{})
+	runs.Update(live.ID, func(r *Run) {
+		go func() {
+			runs.Put(concluded)
+			close(put)
+		}()
+		// Long enough for an unserialized Put to have finished.
+		select {
+		case <-put:
+		case <-time.After(300 * time.Millisecond):
+		}
+		r.CancelReason = "repository switched to GitHub CI"
+	})
+	<-put
+	got, ok := runs.Get(live.ID)
+	if !ok || got.Conclusion != ConclusionCancelled || got.FinishedAt == nil {
+		t.Fatalf("after a Put raced an Update the run is %s (finished %v), want the Put's conclusion", got.Conclusion, got.FinishedAt)
+	}
+}

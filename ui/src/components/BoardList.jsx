@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import {
   MoveHandle,
   MoveSlot,
@@ -94,7 +94,21 @@ export default function BoardList({
   // return to (MoveHandle's `landed`).
   const [landedId, setLandedId] = useState(null);
 
+  // A drag is marked a tick after dragstart rather than inside it.
+  // Marking it renders the trailing drop zones (below), and the one
+  // closing the section above shifts every row under it down -- and
+  // Chromium, once dragstart returns, checks the row is still under the
+  // point the drag began at and cancels the drag outright when it is
+  // not. Inside the handler, every board below the first section was
+  // undraggable by mouse: dragstart, then dragend at once, and no drop.
+  const starting = useRef(null);
+  useEffect(() => () => clearTimeout(starting.current), []);
+  const start = (id) => {
+    clearTimeout(starting.current);
+    starting.current = setTimeout(() => setDragId(id), 0);
+  };
   const stop = () => {
+    clearTimeout(starting.current);
     setDragId(null);
     setOverId(null);
   };
@@ -202,7 +216,7 @@ export default function BoardList({
                   <li
                     className={overClass(`board:${id}`)}
                     draggable={enabled}
-                    onDragStart={enabled ? () => setDragId(id) : undefined}
+                    onDragStart={enabled ? () => start(id) : undefined}
                     onDragEnd={enabled ? stop : undefined}
                     onDragOver={enabled ? dragOver(`board:${id}`) : undefined}
                     onDrop={

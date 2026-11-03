@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -30,8 +31,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
-	"github.com/ai-on-gke/grain/pkg/capability/reporead"
-	"github.com/ai-on-gke/grain/pkg/capability/repowrite"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -329,7 +328,6 @@ func TestPackagePublishAndRepoWriteStripWritePermissionsOnUntrustedEvents(t *tes
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	reg := model.NewCapabilityRegistry(
 		packagepublish.New(packagepublish.Config{}),
-		repowrite.New(repo),
 	)
 	creds := ciCredentialJSON(`{"registry":"ghcr.io","username":"bot","token":"secret"}`)
 
@@ -341,8 +339,8 @@ func TestPackagePublishAndRepoWriteStripWritePermissionsOnUntrustedEvents(t *tes
 		if err != nil {
 			t.Fatalf("event %s returned unexpected error: %v", event, err)
 		}
-		if len(cc.Task.Grants) != 0 {
-			t.Fatalf("event %s expected 0 grants, got: %+v", event, cc.Task.Grants)
+		if len(claimedCIGrants(t, cc)) != 0 {
+			t.Fatalf("event %s expected 0 grants, got: %+v", event, claimedCIGrants(t, cc))
 		}
 		if len(resolved) != 0 {
 			t.Fatalf("event %s expected 0 resolved capabilities, got: %+v", event, resolved)
@@ -355,13 +353,19 @@ func TestPackagePublishAndRepoWriteStripWritePermissionsOnUntrustedEvents(t *tes
 		if err != nil {
 			t.Fatalf("event %s returned unexpected error: %v", event, err)
 		}
-		if len(cc.Task.Grants) != 2 {
-			t.Fatalf("event %s expected 2 grants, got: %+v", event, cc.Task.Grants)
+		// repo-write has no provider: its own gate admits it, and the
+		// proxy's write scope is what it widens.
+		claimed := claimedCIGrants(t, cc)
+		if len(claimed) != 1 || claimed[0].Capability != "package-publish" {
+			t.Fatalf("event %s expected only package-publish among the provider grants, got: %+v", event, claimed)
 		}
-		for _, g := range cc.Task.Grants {
-			if g.Capability != "package-publish" && g.Capability != "repo-write:acme/widgets" {
-				t.Errorf("unexpected grant for %s: %s", event, g.Capability)
-			}
+		if !model.RepoAccessAdmitsCIEvent("repo-write:acme/widgets", string(event), false) {
+			t.Errorf("event %s refused repo-write", event)
+		}
+	}
+	for _, event := range []ci.Event{ci.EventPullRequest, ci.EventPush} {
+		if model.RepoAccessAdmitsCIEvent("repo-write:acme/widgets", string(event), false) {
+			t.Errorf("event %s admitted repo-write", event)
 		}
 	}
 }
@@ -560,7 +564,6 @@ func TestCICrossRepoReadCapabilityGrantsReadScope(t *testing.T) {
 	adapter.Sandboxes = ciCapabilityBackend{&ciPlacingSandbox{fakeSandbox: fake, root: t.TempDir()}}
 	adapter.Capabilities = func() *model.CapabilityRegistry {
 		reg := model.NewCapabilityRegistry()
-		reg.RegisterDynamic(reporead.DynamicProvider)
 		return reg
 	}
 
@@ -625,7 +628,6 @@ func TestCICrossRepoWriteCapabilityGatingAndScopes(t *testing.T) {
 			adapter.Sandboxes = ciCapabilityBackend{&ciPlacingSandbox{fakeSandbox: fake, root: t.TempDir()}}
 			adapter.Capabilities = func() *model.CapabilityRegistry {
 				reg := model.NewCapabilityRegistry()
-				reg.RegisterDynamic(repowrite.DynamicProvider)
 				return reg
 			}
 
@@ -664,33 +666,45 @@ func TestCICrossRepoWriteCapabilityGatingAndScopes(t *testing.T) {
 	}
 }
 
-func TestTrustedScheduleHoldsRepoWriteButNotPackagePublish(t *testing.T) {
+func TestTrustedScheduleHoldsOnlyTheProvidersThatOptedIn(t *testing.T) {
 	t.Parallel()
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	reg := model.NewCapabilityRegistry(
-		packagepublish.New(packagepublish.Config{}),
-		repowrite.New(repo),
+		packagepublish.New(packagepublish.Config{Credentials: trustedSchedulePackageCredential{}}),
+		registrypush.New(),
 	)
 	creds := ciCredentialJSON(`{"registry":"ghcr.io","username":"bot","token":"secret"}`)
-	requestedCaps := []string{"package-publish", "repo-write:acme/widgets"}
+	requestedCaps := []string{"package-publish", registrypush.CapabilityName, "repo-write:acme/widgets"}
 
 	// A caller's own `-event schedule` run is untrusted: nothing write-scoped.
 	cc, _, err := daemon.ResolveCICapabilities(context.Background(), reg, creds, repo, "ci-job", ci.EventSchedule, false, requestedCaps)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cc.Task.Grants) != 0 {
-		t.Fatalf("untrusted schedule grants = %+v, want none", cc.Task.Grants)
+	if len(claimedCIGrants(t, cc)) != 0 {
+		t.Fatalf("untrusted schedule grants = %+v, want none", claimedCIGrants(t, cc))
 	}
 
-	// The run grain's cron fired holds repo-write, and only the providers
-	// that opted in: package-publish stays release/dispatch only.
+	// The run grain's cron fired holds only the providers that opted in:
+	// repo-write and package-publish, so the release train can tag and
+	// publish (task 1913); registry-push stays release/dispatch only.
 	cc, _, err = daemon.ResolveCICapabilities(context.Background(), reg, creds, repo, "ci-job", ci.EventSchedule, true, requestedCaps)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cc.Task.Grants) != 1 || cc.Task.Grants[0].Capability != "repo-write:acme/widgets" {
-		t.Fatalf("trusted schedule grants = %+v, want only repo-write:acme/widgets", cc.Task.Grants)
+	var granted []string
+	for _, g := range claimedCIGrants(t, cc) {
+		granted = append(granted, g.Capability)
+	}
+	slices.Sort(granted)
+	if want := []string{"package-publish"}; !slices.Equal(granted, want) {
+		t.Fatalf("trusted schedule grants = %v, want %v", granted, want)
+	}
+	// repo-write carries its own gate, which takes the trusted schedule
+	// and no caller's own.
+	if !model.RepoAccessAdmitsCIEvent("repo-write:acme/widgets", string(ci.EventSchedule), true) ||
+		model.RepoAccessAdmitsCIEvent("repo-write:acme/widgets", string(ci.EventSchedule), false) {
+		t.Error("repo-write's gate does not take exactly grain's own trusted schedule")
 	}
 
 	// The flag means nothing on any other event.
@@ -698,9 +712,15 @@ func TestTrustedScheduleHoldsRepoWriteButNotPackagePublish(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cc.Task.Grants) != 0 {
-		t.Fatalf("push with trustedSchedule grants = %+v, want none", cc.Task.Grants)
+	if len(claimedCIGrants(t, cc)) != 0 {
+		t.Fatalf("push with trustedSchedule grants = %+v, want none", claimedCIGrants(t, cc))
 	}
+}
+
+type trustedSchedulePackageCredential struct{}
+
+func (trustedSchedulePackageCredential) PackageCredential(registry, _, _ string) (packagepublish.Credential, error) {
+	return packagepublish.Credential{Registry: registry, Username: "bot", Token: "secret", Name: "test"}, nil
 }
 
 // A scheduled workflow declaring repo-write for its own repository holds
@@ -741,8 +761,6 @@ func TestDeclaredRepoAccessRunsAsTheTeamOnlyWhenTheEventMayCarryIt(t *testing.T)
 			}
 			adapter.Capabilities = func() *model.CapabilityRegistry {
 				reg := model.NewCapabilityRegistry()
-				reg.RegisterDynamic(repowrite.DynamicProvider)
-				reg.RegisterDynamic(reporead.DynamicProvider)
 				return reg
 			}
 
@@ -793,7 +811,6 @@ func TestDeclaredRepoWriteFailsClearlyWhenTheTeamHasNoCredential(t *testing.T) {
 	}
 	adapter.Capabilities = func() *model.CapabilityRegistry {
 		reg := model.NewCapabilityRegistry()
-		reg.RegisterDynamic(repowrite.DynamicProvider)
 		return reg
 	}
 
@@ -820,4 +837,24 @@ func TestDeclaredRepoWriteFailsClearlyWhenTheTeamHasNoCredential(t *testing.T) {
 	if writes := adapter.WriteScopes.Repos(fake.name); len(writes) != 0 {
 		t.Errorf("a refused job holds write scopes %v", writes)
 	}
+}
+
+// claimedCIGrants is the grants a CI job's context holds beyond the
+// grain#ci every job carries (daemon.ResolveCICapabilities adds it
+// whatever the job names), failing t if that one is missing.
+func claimedCIGrants(t *testing.T, cc model.CapabilityContext) []model.Grant {
+	t.Helper()
+	var out []model.Grant
+	held := false
+	for _, g := range cc.Task.Grants {
+		if model.IsGrainCIGrant(g.Capability) {
+			held = true
+			continue
+		}
+		out = append(out, g)
+	}
+	if !held {
+		t.Fatalf("CI job grants = %+v, want the job's own %s among them", cc.Task.Grants, model.GrainCIGrant)
+	}
+	return out
 }

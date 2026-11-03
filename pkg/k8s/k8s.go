@@ -1177,6 +1177,18 @@ func (c Client) ClusterProject(ctx context.Context) string {
 
 const podWaitingImagesFormat = `{{range .items}}{{range .status.containerStatuses}}{{if .state.waiting}}{{.image}}|{{.state.waiting.reason}}: {{.state.waiting.message}}{{"\n"}}{{end}}{{end}}{{end}}`
 
+// imageRepository is ref without its tag or digest.
+func imageRepository(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if at := strings.Index(ref, "@"); at >= 0 {
+		ref = ref[:at]
+	}
+	if colon := strings.LastIndex(ref, ":"); colon > strings.LastIndex(ref, "/") {
+		ref = ref[:colon]
+	}
+	return ref
+}
+
 // CheckImagePullConnectivity checks whether the target cluster has reported or
 // is likely to encounter cross-project / cross-organization image pull failures
 // for imageRef, and returns an error with a setup suggestion for
@@ -1197,10 +1209,14 @@ func (c Client) CheckImagePullConnectivity(ctx context.Context, imageRef string)
 			if !ok || reason == "" {
 				continue
 			}
-			if img == imageRef || strings.HasPrefix(reason, "ErrImagePull:") || strings.HasPrefix(reason, "ImagePullBackOff:") {
-				if hint := ImagePullMirrorHint(reason, imageRef, clusterProject); hint != "" {
-					return errors.New(hint)
-				}
+			// Every managed pod is listed, whatever image it runs: only a
+			// failure pulling imageRef's own repository is imageRef's to
+			// report, or one image's 403 would be blamed on another.
+			if img != imageRef && imageRepository(img) != imageRepository(imageRef) {
+				continue
+			}
+			if hint := ImagePullMirrorHint(reason, imageRef, clusterProject); hint != "" {
+				return errors.New(hint)
 			}
 		}
 	}

@@ -232,8 +232,12 @@ func fileBaseRepairReviewFollowUp(ctx context.Context, store *model.Store, clien
 		return fmt.Errorf("orchestrator: filing follow-up task %s for %s's review findings: %w", followUp.ID, reviewed.ID, err)
 	}
 	if draftID != 0 {
+		relayed := discoverRelayedThreads(client, ref, review.ID, draftID, true)
 		if err := store.UpdateTask(ctx, reviewed.ID, func(t *model.Task) error {
 			t.Links = append(t.Links, model.Link{Kind: model.LinkDraftReview, Target: fmt.Sprintf("%d", draftID)})
+			for _, rt := range relayed {
+				t.Links = append(t.Links, model.Link{Kind: model.LinkRelayedReviewThread, Target: rt.Target()})
+			}
 			return nil
 		}); err != nil {
 			return fmt.Errorf("orchestrator: recording draft review on %s: %w", reviewed.ID, err)

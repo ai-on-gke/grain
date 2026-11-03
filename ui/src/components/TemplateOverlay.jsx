@@ -50,6 +50,7 @@ import {
 } from "./TemplateFields.jsx";
 import BranchField from "./BranchField.jsx";
 import RepoField from "./RepoField.jsx";
+import { taskPriority, wholeNumber } from "../wholeNumber.js";
 import WriteReposField from "./WriteReposField.jsx";
 import {
   configuredCapabilities,
@@ -87,6 +88,10 @@ function TemplateOverlay({
   config,
   onClose,
   onSaved,
+  // onNewTask opens the New Task form filed from this template
+  // (NewTaskOverlay's templateId), where settings/new-task-form.yml's
+  // templates: layer for it applies. Absent, the button is not drawn.
+  onNewTask,
   showError,
   onReload,
 }) {
@@ -170,6 +175,9 @@ function TemplateOverlay({
   const [stale, setStale] = useState(null);
   // Held from when the pane opened, ScheduleOverlay's openedRevision.
   const [openedRevision] = useState(template?.revision);
+  // Whether the last Save was refused for a priority that is not a whole
+  // number from 1 up; cleared as soon as the box is edited again.
+  const [priorityInvalid, setPriorityInvalid] = useState(false);
 
   const submit = async (evt) => {
     evt.preventDefault();
@@ -185,6 +193,9 @@ function TemplateOverlay({
       // Every task this template files is a live chat
       // (model.Template.Interactive).
       interactive: form.elements.interactive.checked,
+      // Every task this template files restarts when its run exits
+      // (model.Template.KeepRunning), as the new-task form's own box.
+      keepRunning: form.elements.keepRunning.checked,
       // How much of the internet the sandbox of every task this
       // template files may reach (grain/task-269). "" is a template
       // that fixes nothing, so each firing takes the deployment's own
@@ -195,6 +206,9 @@ function TemplateOverlay({
       // What a run ending on nothing_needed does to every task this
       // template files (model.Template.NothingNeededAction).
       nothingNeededAction: data.get("nothingNeededAction") || "close",
+      // The hostd every task this template files starts pinned to
+      // (model.Template.Hostd); "" is the default hostd.
+      hostd: String(data.get("hostd") || "").trim(),
       // Only when it changed: absent leaves the saved model alone
       // (ui.UpdateTemplateRequest.Model), and "" on a new template is
       // the same as saying nothing.
@@ -215,6 +229,22 @@ function TemplateOverlay({
       // (ui.UpdateTemplateRequest.Fields).
       fields: templateFieldsPayload(fields),
     };
+    // The priority every task this template files starts at
+    // (ui.CreateTemplateRequest.Priority). Blank leaves it on the
+    // default; on an edit that is said as 0, which clears a saved one
+    // (ui.UpdateTemplateRequest.Priority).
+    //
+    // A whole number from 1 up, as on the task pane's own form
+    // (EditTaskForm's priorityValid). Not parseInt, which read "1e2" as
+    // 1 and "2.5" as 2 without a word: taskPriority reads "1e2" as the
+    // 100 the box takes it for, and refuses "2.5".
+    const priorityText = String(data.get("priority") || "").trim();
+    if (priorityText !== "" && Number.isNaN(taskPriority(priorityText))) {
+      setPriorityInvalid(true);
+      return;
+    }
+    if (priorityText !== "") payload.priority = wholeNumber(priorityText);
+    else if (!isNew) payload.priority = 0;
     try {
       const saved = isNew
         ? await api("/api/templates", {
@@ -377,6 +407,33 @@ function TemplateOverlay({
             margin="normal"
             size="small"
           />
+          <TextField
+            name="priority"
+            label="Task priority"
+            type="number"
+            defaultValue={template?.priority ?? ""}
+            placeholder="5"
+            onChange={() => setPriorityInvalid(false)}
+            // This box sits in a <form>, so the browser's own min/step
+            // check stops 0, -1 and 1.5 before submit runs: say it in the
+            // words the rest of the refusals use, not the browser's
+            // bubble (2026-11-02 walkthrough).
+            onInvalid={(e) => {
+              e.preventDefault();
+              setPriorityInvalid(true);
+            }}
+            error={priorityInvalid}
+            helperText={
+              priorityInvalid
+                ? "a whole number, 1 or more; default 5, higher numbers run first"
+                : "optional -- every task this template files starts at this priority; default 5, higher numbers run first"
+            }
+            inputProps={{ min: 1, step: 1 }}
+            autoComplete="off"
+            fullWidth
+            margin="normal"
+            size="small"
+          />
           <FormControlLabel
             control={
               <Checkbox name="autoMerge" defaultChecked={template?.autoMerge} />
@@ -392,6 +449,17 @@ function TemplateOverlay({
               />
             }
             label="Interactive (agent can chat with you)"
+            sx={{ display: "flex" }}
+          />
+          <FormControlLabel
+            control={
+              <Checkbox
+                name="keepRunning"
+                defaultChecked={template?.keepRunning}
+              />
+            }
+            label="Keep running"
+            title="Immediately restart every task this template files when its run exits, instead of completing or parking it."
             sx={{ display: "flex" }}
           />
           <TextField
@@ -432,6 +500,16 @@ function TemplateOverlay({
             value={chosenModel}
             onChange={setChosenModel}
             helperText="the model every task this template files asks for. A task filed from it can still choose its own."
+          />
+          <TextField
+            name="hostd"
+            label="Hostd"
+            defaultValue={template?.hostd || ""}
+            helperText="where the host work of every task this template files runs: a hostd's name, or label=value[,label=value]. Empty for the default hostd. A task filed from it can still choose its own."
+            autoComplete="off"
+            fullWidth
+            margin="normal"
+            size="small"
           />
           <FormControl fullWidth margin="normal" size="small">
             <InputLabel id="template-capabilities-label">
@@ -511,6 +589,11 @@ function TemplateOverlay({
             </Button>
           )}
           <Stack direction="row" spacing={1}>
+            {!isNew && onNewTask && (
+              <Button onClick={() => onNewTask(template)}>
+                New task from this template
+              </Button>
+            )}
             <Button onClick={onClose}>{locked ? "Close" : "Cancel"}</Button>
             <Button type="submit" variant="contained" disabled={locked}>
               {isNew ? "Add template" : "Save"}

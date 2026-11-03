@@ -135,6 +135,10 @@ type upgradeStatusResponse struct {
 	DefaultImageRef  string               `json:"defaultImageRef,omitempty"`
 	ImageRepos       []string             `json:"imageRepos,omitempty"`
 	DiscardedRC      *upgrade.DiscardedRC `json:"discardedRc,omitempty"`
+	// RetractedRelease is set when the release this deployment runs has
+	// been retracted since it upgraded onto it: the pane tells the
+	// operator to move.
+	RetractedRelease *upgrade.RetractedRelease `json:"retractedRelease,omitempty"`
 }
 
 // upgradeScheduledResponse is the pending schedule and how close it is
@@ -276,11 +280,18 @@ func upgradeStatusResponseFrom(up Upgrader, status upgrade.Status, inFlightRuns 
 	if dr, ok := up.(discardedRCReporter); ok {
 		resp.DiscardedRC = dr.CachedDiscardedRC(context.Background())
 	}
+	if rr, ok := up.(retractedReleaseReporter); ok {
+		resp.RetractedRelease = rr.CachedRetractedRelease(context.Background())
+	}
 	return resp
 }
 
 type discardedRCReporter interface {
 	CachedDiscardedRC(ctx context.Context) *upgrade.DiscardedRC
+}
+
+type retractedReleaseReporter interface {
+	CachedRetractedRelease(ctx context.Context) *upgrade.RetractedRelease
 }
 
 // imageUpgrader is the optional half of Upgrader that lets an operator
@@ -683,7 +694,7 @@ func (s *Server) handleStartUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	case req.AfterTasksFinish:
 		if err := s.scheduleUpgrade(r, req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
+			writeClientError(w, err)
 			return
 		}
 	case req.Image != "":
@@ -728,20 +739,17 @@ func (s *Server) handleStartUpgrade(w http.ResponseWriter, r *http.Request) {
 func (s *Server) scheduleUpgrade(r *http.Request, req startUpgradeRequest) error {
 	branch, err := s.tasks.Config.Upgrader.ValidateBranch(req.Branch)
 	if err != nil {
-		return err
+		return validationErrorf("%v", err)
 	}
-	by, err := requestPrincipal(
-		"a scheduled upgrade's requester", req.RequestedBy, req.RequestedByKind)
+	ctx, err := withAgentRequester(
+		r.Context(), "a scheduled upgrade's requester", req.RequestedBy, req.RequestedByKind)
 	if err != nil {
 		return err
 	}
-	if by == (model.Principal{}) {
-		by = s.tasks.actor(r.Context())
-	}
-	return s.tasks.Store.SetScheduledUpgrade(r.Context(), model.ScheduledUpgrade{
+	return s.tasks.Store.SetScheduledUpgrade(ctx, model.ScheduledUpgrade{
 		Branch:      branch,
 		RequestedAt: time.Now().UTC(),
-		By:          by,
+		By:          s.tasks.requestActor(ctx).Actor,
 	})
 }
 

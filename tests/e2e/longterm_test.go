@@ -35,7 +35,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
-	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -652,7 +651,7 @@ func runLongTermTestHarness(t *testing.T, cfg longTermConfig, isSustained bool) 
 
 	// 5. Setup Capabilities Registry
 	capability := newLoadCapability(0.0, 2*time.Second)
-	registry := loadHarnessRegistry(capability, deploymenthealth.New())
+	registry := loadHarnessRegistry(capability)
 
 	// 6. Setup Orchestrator & Scripted Agent Framework
 	client := github.NewClient(multiSim, nil)

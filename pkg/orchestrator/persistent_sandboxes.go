@@ -679,8 +679,9 @@ func (s *PersistentSandboxSupervisor) build(ctx context.Context, pd persistentDe
 	e.set(func(e *persistentEntry) { e.packageCache = summary })
 	e.event("package-cache", "%s", summary)
 	if s.GrantRead != nil {
-		owner, repo, _ := strings.Cut(e.def.Repo, "/")
-		s.GrantRead(name, model.RepoRef{Owner: owner, Name: repo})
+		if repo, err := model.ParseRepo(e.def.Repo); err == nil {
+			s.GrantRead(name, repo)
+		}
 	}
 	if pd.mint != nil && s.RepoURL == nil {
 		token, err := pd.mint(name)
@@ -700,17 +701,33 @@ func (s *PersistentSandboxSupervisor) build(ctx context.Context, pd persistentDe
 	return sb, counted, nil
 }
 
+// persistentCloneURL is where a persistent sandbox clones repo from:
+// through the git proxy at remoteBase when there is one, else straight
+// from the repository's own host. A host-qualified repo keeps its host in
+// either (CloneURL puts it in the proxy path, which routes on it).
+func persistentCloneURL(remoteBase, repo string) (string, error) {
+	r, err := model.ParseRepo(repo)
+	if err != nil {
+		return "", err
+	}
+	if remoteBase != "" {
+		return CloneURL(remoteBase, r), nil
+	}
+	return "https://" + r.GitHost() + "/" + r.Owner + "/" + r.Name + ".git", nil
+}
+
 // checkout clones the repository on a fresh sandbox (or fetches it again
 // on a restart, for AutoUpdate) and checks Ref out detached.
 func (s *PersistentSandboxSupervisor) checkout(ctx context.Context, shell SandboxShell, e *persistentEntry, pd persistentDeps, fresh bool) error {
 	url := ""
-	switch {
-	case s.RepoURL != nil:
+	if s.RepoURL != nil {
 		url = s.RepoURL(e.def.Repo)
-	case pd.remoteBase != "":
-		url = strings.TrimSuffix(pd.remoteBase, "/") + "/" + e.def.Repo + ".git"
-	default:
-		url = "https://github.com/" + e.def.Repo + ".git"
+	} else {
+		u, err := persistentCloneURL(pd.remoteBase, e.def.Repo)
+		if err != nil {
+			return fmt.Errorf("persistent sandbox %q: %w", e.def.Name, err)
+		}
+		url = u
 	}
 	ref := e.def.Ref
 	if ref == "" {

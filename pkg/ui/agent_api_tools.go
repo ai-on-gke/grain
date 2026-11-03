@@ -72,7 +72,7 @@ var routeDocs = map[string]string{
 	"POST /api/settings/plan":                                              "Preview a settings change without saving it: what the given fields would change, and what it would take to apply.",
 	"PUT /api/settings/cli-run":                                            "Set the per-framework settings for agent CLI runs, keyed by framework.",
 	"POST /api/capabilities/{id}/check":                                    "Check that a capability's credential works, by making one request to the service it is for; stores nothing.",
-	"GET /api/tasks":                                                       "List tasks, with their state, position in the queue and pull request.",
+	"GET /api/tasks":                                                       "List tasks, with their state, position in the queue and pull request; narrow with state, q, limit and fields=summary rather than reading every task's full record.",
 	"GET /api/pipeline/changes":                                            "Read what changed in the pipeline since a cursor: task transitions, merge-queue states, stalls, base-branch verdicts and merge-batch results, oldest first, with the cursor to read on from.",
 	"POST /api/tasks":                                                      "File a new task: its title, description, repo and base branch, grants, dependencies and attachments.",
 	"POST /api/tasks/from-template":                                        "File a task from a repository's own declared template (.grain/templates/<template>.yml), by its stem, with its fields filled; an agent's call is also held to POST /api/tasks's rules.",
@@ -95,6 +95,7 @@ var routeDocs = map[string]string{
 	"POST /api/tasks/{id}/stop":                                            "Stop a task's running attempt.",
 	"POST /api/tasks/{id}/pause":                                           "Pause a task in any open state, releasing everything it holds and keeping its place; immediate true skips a running task's grace period.",
 	"POST /api/tasks/{id}/resume":                                          "Resume a paused task, back to exactly the state and dispatch standing it had.",
+	"PUT /api/tasks/{id}/hostd":                                            "Pin a task's host work to one grain hostd by name, or to any hostd carrying label=value[,label=value]; \"\" is the default hostd.",
 	"PUT /api/tasks/{id}/goal":                                             "Set a task's goal -- {kind, spec, on_met, on_limit}, as propose_task's goal -- replacing any it had; grain closes or rests the task when it is met.",
 	"DELETE /api/tasks/{id}/goal":                                          "Remove a task's goal, making it an ordinary task again.",
 	"POST /api/tasks/{id}/reopen":                                          "Reopen a closed task.",
@@ -104,6 +105,7 @@ var routeDocs = map[string]string{
 	"POST /api/tasks/{id}/run-now":                                         "Dispatch a queued task now, ahead of the queue.",
 	"POST /api/tasks/{id}/pull-request":                                    "Open the pull request for a task's pushed branch now, rather than when its run ends.",
 	"POST /api/tasks/{id}/sandbox/recreate":                                "Destroy a task's sandbox and build a fresh one in its place; uncommitted work in it is lost.",
+	"POST /api/sandbox-probe":                                              "Build a throwaway sandbox named probe-<id>, run argv in it over the deployment's guest-access channel (access: dialout or kubectl), return its output and exit code, and delete it.",
 	"POST /api/tasks/{id}/messages":                                        "Say something to the human watching your own task and park it on their reply (the chat tool's write half); only your own task's id is accepted. Give summary too: one line of at most 100 characters naming the decision you need, which is all the inbox and task list show of it. To message another task's agent, use POST /api/tasks/{id}/agent-messages.",
 	"POST /api/tasks/{id}/agent-messages":                                  "Send a message to another task's agent, signed as your task: its live run gets it on its next tool result, or its next run reads it; the task is never parked or re-queued by it.",
 	"POST /api/tasks/{id}/notes":                                           "Leave a note for your parent's or a child's agent (message_task): it never parks that task, reaches its live run, and wakes it if it is a resting durable task. Any other task needs api:task-admin.",
@@ -122,8 +124,8 @@ var routeDocs = map[string]string{
 	"PUT /api/repos/{owner}/{name}/release-secrets/{secret}":               "Set the value of one of a repository's release secrets.",
 	"DELETE /api/repos/{owner}/{name}/release-secrets/{secret}":            "Delete one of a repository's release secrets.",
 	"POST /api/repos/{owner}/{name}/release-runs":                          "Start a release run of a repository, at a branch, ref or commit, optionally only some jobs.",
-	"POST /api/repos/{owner}/{name}/pending-releases/{version}/approve":    "Approve a pending trunk release (vX.Y.0), making it official. Only a person may; an agent is refused.",
-	"POST /api/repos/{owner}/{name}/pending-releases/{version}/reject":     "Reject a pending trunk release (vX.Y.0), dropping its release candidate. Only a person may; an agent is refused.",
+	"POST /api/repos/{owner}/{name}/pending-releases/{version}/approve":    "Approve a pending trunk release (vX.Y.Z), making it official; short_soak_ok accepts a soak under the minimum, which is otherwise refused. Only a person may; an agent is refused.",
+	"POST /api/repos/{owner}/{name}/pending-releases/{version}/reject":     "Reject a pending trunk release (vX.Y.Z), dropping its release candidate. Only a person may; an agent is refused.",
 	"POST /api/repos/{owner}/{name}/base-branch-runs":                      "Start a grain CI run of one of a repository's base branches.",
 	"PUT /api/repos/{owner}/{name}/work-ownership":                         "Set who owns a repository's work: its default, or one work item's override.",
 	"PUT /api/repos/{owner}/{name}/capabilities":                           "Set the capabilities every task on a repository is granted by default.",
@@ -140,6 +142,7 @@ var routeDocs = map[string]string{
 	"PUT /api/repos/{owner}/{name}/unfixable-checks":                       "Set the checks on a repository that an agent cannot fix, so a failure of one does not hold a merge on the agent.",
 	"PUT /api/repos/{owner}/{name}/workflows":                              "Set a repository's grain CI workflows.",
 	"POST /api/repos/{owner}/{name}/lifecycle/refresh":                     "Re-read a repository's release lifecycle from the repository now.",
+	"POST /api/repos/{owner}/{name}/import-issues":                         "Import a repository's open GitHub issues as tasks now, as its issue importer would on its next poll: one task per issue not already imported, unapproved unless the repository's settings say approved.",
 	"GET /api/repos/{owner}/{name}/releases":                               "List a repository's releases.",
 	"POST /api/repos/{owner}/{name}/releases":                              "Create a release of a repository, by name.",
 	"DELETE /api/repos/{owner}/{name}/releases/{release}":                  "Delete a release.",
@@ -176,10 +179,10 @@ var routeDocs = map[string]string{
 	"PUT /api/deployment/repos/{owner}/{name}/config":                      "Set a repository's deployment-level configuration: only the fields given are changed.",
 	"PUT /api/deployment/repos/{owner}/{name}/git-connection":              "Set which git connection a repository is reached through.",
 	"POST /api/deployment/broadcast":                                       "Post a comment to every active task (running_only: only those with a run in flight).",
-	"POST /api/executors/tokens":                                           "Create a token a remote executor registers with; the token is shown once, in the answer.",
-	"POST /api/executors/tokens/{id}/revoke":                               "Revoke an executor token.",
-	"DELETE /api/executors/tokens/{id}":                                    "Revoke an executor token.",
-	"DELETE /api/executors/tokens/{id}/revoke":                             "Revoke an executor token.",
+	"POST /api/hostds":                                                     "Register a remote grain hostd; its token is shown once, in the answer.",
+	"PATCH /api/hostds/{name}":                                             "Set a hostd's owner or labels.",
+	"POST /api/hostds/{name}/rotate":                                       "Retire a hostd's token and mint a new one, shown once in the answer.",
+	"POST /api/hostds/{name}/revoke":                                       "Revoke a hostd and every token it has.",
 	"PUT /api/agent-keys/{framework}":                                      "Set an agent framework's credential.",
 	"DELETE /api/agent-keys/{framework}":                                   "Clear an agent framework's credential.",
 	"PUT /api/agent-backends/{id}/credential":                              "Set a model connection's credential.",
@@ -225,7 +228,7 @@ var routeDocs = map[string]string{
 	"POST /api/host/reboot":                                                "Reboot the machine grain runs on.",
 	"POST /api/host/shutdown":                                              "Power off the machine grain runs on; it does not come back on its own.",
 	"POST /api/host/restart":                                               "Restart the grain service, without touching the machine it runs on.",
-	"POST /api/upgrade":                                                    "Start upgrading grain, to a branch or image; afterTasksFinish waits for running tasks first.",
+	"POST /api/upgrade":                                                    "Start or schedule upgrading grain to a branch or image; set afterTasksFinish: true to drain running tasks and CI jobs first (your own run counts, so finish rather than polling), as false restarts grain immediately and discards in-flight work.",
 	"DELETE /api/upgrade/scheduled":                                        "Cancel an upgrade waiting for running tasks to finish.",
 	"POST /api/database/test":                                              "Check grain can connect to a database DSN.",
 	"POST /api/database/upgrade":                                           "Move grain's store to a Postgres DSN; the first call answers with a confirmation token, which a second identical call must carry.",
@@ -242,10 +245,12 @@ var routeDocs = map[string]string{
 	"POST /api/console-sessions/{id}/restart":                              "Restart a standing chat session; carryHandover carries its handover into the new one.",
 	"POST /api/console-sessions/{id}/cancel":                               "Stop a standing chat session's in-flight or queued turn.",
 	"POST /api/ci/runs":                                                    "Start a grain CI run: for a task (taskId), or a repo and ref; recheck with recheckFailed re-runs only the failed jobs, fresh.",
-	"GET /api/ci/runs":                                                     "List grain CI runs, newest first; narrow with query repo, ref, conclusion, job, since, until, limit; view=compact for one short entry per run naming its failing jobs.",
-	"GET /api/ci/runs/{id}":                                                "Read one grain CI run in full, every job's steps and their log output included.",
+	"GET /api/ci/runs":                                                     "List CI runs, newest first: grain CI's, and for a repo whose CI is GitHub Actions its workflow runs too (provider github-actions, ids gha:<owner>:<name>:<run id>); narrow with query repo, ref, conclusion, job, since, until, limit, provider; view=compact for one short entry per run naming its failing jobs.",
+	"GET /api/ci/runs/{id}":                                                "Read one CI run in full: a grain CI run's jobs, steps and their log output, or a GitHub Actions run's (gha:...) jobs and steps with their conclusions.",
+	"GET /api/ci/runs/{id}/log":                                            "Read one GitHub Actions job's log (gha:... runs): query job (name or id; default the first that failed) and tail (lines); capped at 256 KiB, keeping the end.",
 	"DELETE /api/ci/runs/{id}":                                             "Cancel a grain CI run.",
 	"DELETE /api/ci/cache":                                                 "Empty grain CI's job cache, so every job of the next runs does its work again.",
+	"POST /api/tests/quarantine":                                           "Quarantine a flaky or failing test (returning the rendered .grain/quarantine.yml entry to commit in the workspace) and optionally file a held follow-up repair task.",
 	"POST /api/package-cache/flush":                                        "Empty the package cache: query kind (apt, pypi, docker, npm or go) for one ecosystem, or all of them without.",
 	"POST /api/actions-cache/flush":                                        "Empty the actions cache: query repo (owner/name) for one repository's entries, or every repository's without.",
 	"POST /api/pipeline-pause":                                             "Pause the pipeline: nothing new is dispatched until it is resumed.",
@@ -263,24 +268,29 @@ var routeDocs = map[string]string{
 // handler hands to readJSON. Every route that reads a body has one, and
 // a route with none takes no body.
 var routeBodies = map[string]any{
-	"PUT /api/settings":                                              UpdateSettingsRequest{},
-	"POST /api/settings":                                             UpdateSettingsRequest{},
-	"POST /api/settings/plan":                                        UpdateSettingsRequest{},
-	"PUT /api/settings/cli-run":                                      updateCLIRunSettingsRequest{},
-	"POST /api/tasks":                                                CreateTaskRequest{},
-	"POST /api/tasks/from-template":                                  FromTemplateRequest{},
+	"PUT /api/settings":             UpdateSettingsRequest{},
+	"POST /api/settings":            UpdateSettingsRequest{},
+	"POST /api/settings/plan":       UpdateSettingsRequest{},
+	"PUT /api/settings/cli-run":     updateCLIRunSettingsRequest{},
+	"POST /api/tasks":               CreateTaskRequest{},
+	"POST /api/tasks/from-template": FromTemplateRequest{},
+	"POST /api/repos/{owner}/{name}/pending-releases/{version}/approve": ReleaseApproval{},
+	"POST /api/repos/{owner}/{name}/pending-releases/{version}/reject":  ReleaseApproval{},
 	"POST /api/tasks/reorder":                                        ReorderRequest{},
 	"PATCH /api/tasks/{id}":                                          UpdateTaskRequest{},
 	"POST /api/tasks/{id}/capabilities":                              setCapabilityRequest{},
 	"POST /api/tasks/{id}/depends-on":                                setDependencyRequest{},
 	"POST /api/tasks/{id}/defer":                                     deferRequest{},
+	"POST /api/sandbox-probe":                                        SandboxProbeRequest{},
 	"POST /api/tasks/{id}/pause":                                     pauseRequest{},
 	"PUT /api/tasks/{id}/goal":                                       setGoalRequest{},
+	"PUT /api/tasks/{id}/hostd":                                      setHostdRequest{},
 	"POST /api/tasks/{id}/run-now":                                   runNowRequest{},
 	"POST /api/tasks/{id}/comments":                                  addCommentRequest{},
 	"POST /api/tasks/{id}/change-mail":                               MailChangeRequest{},
 	"PUT /api/tasks/{id}/secret":                                     setPendingSecretRequest{},
 	"POST /api/tasks/{id}/close":                                     closeRequest{},
+	"POST /api/tasks/{id}/reopen":                                    reopenRequest{},
 	"POST /api/tasks/{id}/force-merge":                               forceMergeRequest{},
 	"POST /api/tasks/{id}/messages":                                  messageRequest{},
 	"POST /api/tasks/{id}/agent-messages":                            agentMessageRequest{},
@@ -333,7 +343,8 @@ var routeBodies = map[string]any{
 	"PUT /api/deployment/repos/{owner}/{name}/config":                SetDeploymentRepoConfigRequest{},
 	"PUT /api/deployment/repos/{owner}/{name}/git-connection":        SetTeamRepoGitConnectionRequest{},
 	"POST /api/deployment/broadcast":                                 BroadcastTeamRequest{},
-	"POST /api/executors/tokens":                                     CreateExecutorTokenRequest{},
+	"POST /api/hostds":                                               CreateHostdRequest{},
+	"PATCH /api/hostds/{name}":                                       UpdateHostdRequest{},
 	"PUT /api/agent-keys/{framework}":                                setAgentKeyRequest{},
 	"PUT /api/agent-backends/{id}/credential":                        setAgentKeyRequest{},
 	"PUT /api/agent-backends/{id}/codex-auth":                        setAgentKeyRequest{},
@@ -374,6 +385,7 @@ var routeBodies = map[string]any{
 	"POST /api/console-sessions/{id}/restart":                        RestartConsoleSessionRequest{},
 	"POST /api/ci/runs":                                              CIRunRequest{},
 	"DELETE /api/ci/runs/{id}":                                       CICancelRequest{},
+	"POST /api/tests/quarantine":                                     QuarantineTestRequest{},
 	"POST /api/pipeline-pause":                                       pausePipelineRequest{},
 	"POST /api/external-agents/tokens":                               CreateExternalAgentTokenRequest{},
 }
@@ -381,18 +393,32 @@ var routeBodies = map[string]any{
 // routeQueries is the query parameters a route's handler reads, each
 // with what it means: its tool describes them as properties of query.
 // A route with none takes no query of its own, though the query object
-// still carries any parameter a caller adds (a repo= the agent API's
-// gate reads, a template composition's field.<name>).
+// still carries any parameter a caller adds (such as a template
+// composition's field.<name>).
 var routeQueries = map[string]map[string]string{
+	"GET /api/restart-watch": {
+		"quick": "1 to answer at once with whether grain is restarting, rather than holding the request until it is or 25 s pass.",
+	},
 	"GET /api/pipeline/changes": {
 		"after": "The cursor a previous read returned as next (<RFC 3339 time>~<seq>); omitted, the last 24 hours.",
 		"limit": "At most this many entries (default 100, at most 500).",
 		"repo":  "Only this repository's tasks, base branches and merge batches (owner/name); a repository-scoped tasks:read grant must name its own.",
 	},
-	"GET /api/tasks":                            {"repo": "Only this repository's (owner/name) tasks; a repository-scoped tasks:read grant must name its own."},
-	"GET /api/tasks/states":                     {"limit": "At most this many states (default 1000).", "cursor": "The nextCursor of the previous page.", "since": "An older spelling of cursor."},
-	"GET /api/states":                           {"limit": "At most this many states (default 1000).", "cursor": "The nextCursor of the previous page.", "since": "An older spelling of cursor."},
-	"GET /api/tasks/{id}/messages":              {"after": "Only messages after this comment id.", "agents": "true to include other tasks' runs' messages to this task's agent (POST /api/tasks/{id}/agent-messages)."},
+	"GET /api/tasks": {
+		"repo":   "Only this repository's (owner/name) tasks; a repository-scoped tasks:read grant must name its own.",
+		"state":  "Only tasks in these states, repeated or comma-separated (proposed, queued, running, awaiting_reply, failed, awaiting_submit, completed, closed).",
+		"q":      "Only tasks whose title contains this text, case-insensitively.",
+		"search": "The same as q.",
+		"limit":  "At most this many tasks: the newest by filing time, listed oldest first.",
+		"fields": "summary for id, title, state, repo, createdAt, blockedBy and stall only -- no description; use it when the full records are not needed.",
+	},
+	"GET /api/tasks/states": {"limit": "At most this many states (default 1000).", "cursor": "The nextCursor of the previous page.", "since": "An older spelling of cursor."},
+	"GET /api/states":       {"limit": "At most this many states (default 1000).", "cursor": "The nextCursor of the previous page.", "since": "An older spelling of cursor."},
+	"GET /api/tasks/{id}/messages": {
+		"after":   "Only messages after this comment id.",
+		"agents":  "true to include other tasks' runs' messages to this task's agent (POST /api/tasks/{id}/agent-messages).",
+		"wait_ms": "Block up to this many milliseconds (at most 5000) for a new message to arrive when none is already waiting after the cursor.",
+	},
 	"GET /api/capability-servers/gchat-usage":   {"id": "The gchat capability server's capability_id."},
 	"GET /api/capability-methods":               {"kind": "The run kind the grants are for (task, process or ci): each method then carries policyRefusal, why the capability policy denies it that run.", "repo": "With kind, the repository (owner/name) the run is on."},
 	"GET /api/notifications":                    {"open": "1 for only notifications not yet cleared.", "after": "Only notifications after this id.", "family": "Only this family (the subject before its first ':')."},
@@ -429,14 +455,20 @@ var routeQueries = map[string]map[string]string{
 		"ref":        "Only runs of a branch matching this, by any part of its name.",
 		"conclusion": "Only runs ending so: failure, errored, cancelled, skipped, success, running or pending; comma-separated for several.",
 		"job":        "Only runs with this job, by name or id.",
+		"workflow":   "Only runs of this workflow, by file name (e.g. nightly.yml), stem (nightly), path, or display name.",
 		"since":      "How far back: a span (24h, 7d) or a date.",
 		"until":      "Only runs started before this: a span back from now (24h, 7d) or a date; with since, a window.",
 		"view":       "compact for each run's identity, conclusion and a line per job that did not succeed -- no steps, faults named once by digest; full (the default) for the whole listing.",
 		"sort":       "Order by started, finished or duration.",
 		"order":      "asc or desc (the default).",
 		"limit":      "At most this many runs.",
+		"provider":   "Only runs of this CI provider: grain or github-actions. Naming one also lists a GitHub Actions repo's workflow runs for a person's call, which otherwise sees grain's alone.",
 	},
-	"GET /api/merge-batches":        {"repo": "Only this repository's (owner/name) batches."},
+	"GET /api/ci/runs/{id}/log": {
+		"job":  "The job, by name or id; the first that failed when omitted.",
+		"tail": "Only this many lines from the end.",
+	},
+	"GET /api/merge-batches":        {"repo": "Only this repository's (owner/name) overlap re-checks."},
 	"POST /api/package-cache/flush": {"kind": "Empty only this ecosystem's cache: apt, pypi, docker, npm or go."},
 	"POST /api/actions-cache/flush": {"repo": "Empty only this repository's (owner/name) entries."},
 }
@@ -622,7 +654,7 @@ func (r APIRoute) inputSchema() map[string]any {
 // takesExpect reports whether the route changes one task by its id -- the
 // task-admin writes a judgement agent acts through -- and so takes an
 // expect argument checked against that task before the call is made
-// (docs/design/durable-tasks.md#DT-13).
+// (design/design/durable-tasks.design.md#DT-13).
 func (r APIRoute) takesExpect() bool {
 	return r.Method != http.MethodGet && strings.HasPrefix(r.Path, "/api/tasks/{id}") && slices.Contains(r.Params, "id")
 }
@@ -703,7 +735,7 @@ func AgentAPITools(client *HTTPClient, taskID string, grants []string) []mcp.Too
 	}
 	var tools []mcp.Tool
 	for _, route := range AgentAPIRoutes() {
-		if !set.Has(route.Scope) {
+		if !set.Has(route.Scope) && !tasksAdminAllowsTaskPatch(set, route.Pattern) {
 			continue
 		}
 		tools = append(tools, route.tool(client, taskID))

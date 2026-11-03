@@ -281,8 +281,6 @@ var settingsDiffRows = []settingsDiffRow{
 	{"pollInterval", "poll interval", func(s ui.Settings) any { return s.PollInterval }},
 	{"maxWorkers", "max workers", func(s ui.Settings) any { return s.MaxWorkers }},
 	{"maxMergesPerRepo", "max merges per repo", func(s ui.Settings) any { return s.MaxMergesPerRepo }},
-	{"mergeBatchSize", "merge batch size", func(s ui.Settings) any { return s.MergeBatchSize }},
-	{"mergeGatherWindow", "merge gather window", func(s ui.Settings) any { return s.MergeGatherWindow }},
 	{"maxAutoSubmitDepth", "max auto-submit depth", func(s ui.Settings) any { return s.MaxAutoSubmitDepth }},
 	{"maxAutoSubmitFanOut", "max auto-submit fan-out", func(s ui.Settings) any { return s.MaxAutoSubmitFanOut }},
 	{"defaultModel", "default model", func(s ui.Settings) any { return s.DefaultModel }},
@@ -309,6 +307,7 @@ var settingsDiffRows = []settingsDiffRow{
 		return string(b)
 	}},
 	{"externalAgentApi", "external agent api", func(s ui.Settings) any { return s.ExternalAgentAPI }},
+	{"sessionSandboxIdleTtl", "session sandbox idle ttl", func(s ui.Settings) any { return s.SessionSandboxIdleTTL }},
 	{"sandboxDiskFloorShare", "sandbox disk floor share", func(s ui.Settings) any { return s.SandboxDiskFloorShare }},
 	{"sandboxDiskFloorMinMb", "sandbox disk floor min mb", func(s ui.Settings) any { return s.SandboxDiskFloorMinMB }},
 	{"networkAccess", "sandbox network", func(s ui.Settings) any { return s.NetworkAccess }},
@@ -373,6 +372,7 @@ var settingsDiffRows = []settingsDiffRow{
 	{"autoUpgradeChannel", "automatic upgrade channel", func(s ui.Settings) any { return s.AutoUpgradeChannel }},
 	{"autoUpgradeTime", "automatic upgrade time", func(s ui.Settings) any { return s.AutoUpgradeTime }},
 	{"timeZone", "time zone", func(s ui.Settings) any { return s.TimeZone }},
+	{"settingsLocked", "settings locked", func(s ui.Settings) any { return s.SettingsLocked }},
 }
 
 // settingsDiffExceptions names any ui.UpdateSettingsRequest field that

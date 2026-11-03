@@ -175,6 +175,78 @@ func TestGGHForgeCallsGoThroughGGHAPI(t *testing.T) {
 	}
 }
 
+// GraphQL on an Enterprise Server is beside /api/v3, at /api/graphql,
+// which is where RealTransport sends it; through the tool it is the
+// tool's own "graphql" endpoint, the one gh posts wherever its host
+// serves GraphQL -- never /api/v3/graphql, which the host refuses.
+func TestGGHGraphQLGoesToTheToolsGraphQLEndpoint(t *testing.T) {
+	state := fakeGGHAPI(t)
+	c := gghDepotSet(t, "")
+	writeRaw(t, state, "api-response", gghResponse("200 OK",
+		map[string]string{"Content-Type": "application/json"},
+		`{"data":{"resolveReviewThread":{"thread":{"isResolved":true}}}}`))
+
+	transport, err := c.ForgeTransport("depot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := github.NewClient(transport, nil)
+	if err := client.ResolveReviewThread("experimental", "grain", "PRRT_1"); err != nil {
+		t.Fatal(err)
+	}
+	runs := apiRuns(t, state)
+	if len(runs) != 1 {
+		t.Fatalf("api runs = %q", runs)
+	}
+	if args := strings.Join(runs[0], " "); !strings.HasSuffix(args, " --input - graphql") {
+		t.Fatalf("args %q do not end in the tool's graphql endpoint", args)
+	}
+}
+
+// A request bound for some other forge -- GraphQL built for
+// api.github.com, say -- is refused before the tool runs: handed the
+// whole URL, the tool would send its own host's login there. The error
+// names both hosts.
+func TestCommandForgeRefusesAnotherHostsURL(t *testing.T) {
+	state := fakeGGHAPI(t)
+	c := gghDepotSet(t, "")
+	writeRaw(t, state, "api-response", gghResponse("200 OK", nil, `{}`))
+	transport, err := c.ForgeTransport("depot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := transport.(*github.RealTransport).Client.Transport
+	for _, u := range []string{"https://api.github.com/graphql", "https://other.example.com/api/v3/repos/o/r"} {
+		req, err := http.NewRequest("POST", u, strings.NewReader(`{"query":"q"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = rt.RoundTrip(req)
+		if err == nil {
+			t.Fatalf("%s was sent through forgecli for %s", u, depotHost)
+		}
+		for _, want := range []string{req.URL.Hostname(), depotHost} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not name %s", err, want)
+			}
+		}
+	}
+	if runs := apiRuns(t, state); len(runs) != 0 {
+		t.Fatalf("forgecli ran: %q", runs)
+	}
+
+	// Its own host's GraphQL still goes, as the tool's own endpoint.
+	req, _ := http.NewRequest("POST", "https://"+depotHost+"/api/graphql", strings.NewReader(`{"query":"q"}`))
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if runs := apiRuns(t, state); len(runs) != 1 || runs[0][len(runs[0])-1] != "graphql" {
+		t.Fatalf("api runs = %q", runs)
+	}
+}
+
 func TestGGHPassesNon2xxThroughAndHonoursAProxy(t *testing.T) {
 	state := fakeGGHAPI(t)
 	c := gghDepotSet(t, "http://127.0.0.1:3128")
@@ -344,6 +416,63 @@ func TestGGHHostNeedsNoProxy(t *testing.T) {
 	}
 	if h := c.HostOf("depot"); h.Proxy != "" || h.CheckTransport() != nil {
 		t.Fatalf("a forgecli host without a proxy is refused: %+v %v", h, h.CheckTransport())
+	}
+}
+
+func TestGGHGHECheckRunsMergeBranchAndRerequestRoundTrip(t *testing.T) {
+	state := fakeGGHAPI(t)
+	c := gghDepotSet(t, "")
+	transport, err := c.ForgeTransport("depot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := github.NewClient(transport, nil)
+
+	// 1. ListCheckRuns decodes app.slug and check_suite.id over GHE's forgecli transport.
+	writeRaw(t, state, "api-response-1", gghResponse("200 OK",
+		map[string]string{"Content-Type": "application/json"},
+		`{"total_count":1,"check_runs":[{"id":91,"head_sha":"abc1234","name":"cla/google","status":"queued","app":{"slug":"google-cla"},"check_suite":{"id":777}}]}`))
+	// 2. MergeBranch sends POST repos/o/r/merges with JSON body via --input -.
+	writeRaw(t, state, "api-response-2", gghResponse("204 No Content", nil, ""))
+	// 3. RerequestCheckSuite sends POST repos/o/r/check-suites/777/rerequest with no body.
+	writeRaw(t, state, "api-response-3", gghResponse("201 Created",
+		map[string]string{"Content-Type": "application/json"}, `{}`))
+	// 4. RerequestCheckRun sends POST repos/o/r/check-runs/91/rerequest with no body.
+	writeRaw(t, state, "api-response-4", gghResponse("201 Created",
+		map[string]string{"Content-Type": "application/json"}, `{}`))
+
+	runs, err := client.ListCheckRuns("o", "r", "abc1234")
+	if err != nil {
+		t.Fatalf("ListCheckRuns: %v", err)
+	}
+	if len(runs) != 1 || runs[0].App != "google-cla" || runs[0].CheckSuiteID != 777 || runs[0].ID != 91 {
+		t.Fatalf("ListCheckRuns = %+v, want google-cla suite 777 id 91", runs)
+	}
+	res, err := client.MergeBranch("o", "r", "feat", "main", "Merge main into feat")
+	if err != nil || res.Merged {
+		t.Fatalf("MergeBranch = (%+v, %v), want up-to-date 204", res, err)
+	}
+	if err := client.RerequestCheckSuite("o", "r", 777); err != nil {
+		t.Fatalf("RerequestCheckSuite: %v", err)
+	}
+	if err := client.RerequestCheckRun("o", "r", 91); err != nil {
+		t.Fatalf("RerequestCheckRun: %v", err)
+	}
+
+	argv := apiRuns(t, state)
+	if len(argv) != 4 {
+		t.Fatalf("forgecli api calls = %d, want 4: %q", len(argv), argv)
+	}
+	if got := strings.Join(argv[1], " "); !strings.Contains(got, "--method POST") || !strings.Contains(got, "--input - repos/o/r/merges") {
+		t.Fatalf("MergeBranch argv = %q", got)
+	}
+	if got := strings.Join(argv[2], " "); !strings.Contains(got, "--method POST") ||
+		strings.Contains(got, "--input") || !strings.HasSuffix(got, " repos/o/r/check-suites/777/rerequest") {
+		t.Fatalf("RerequestCheckSuite argv = %q", got)
+	}
+	if got := strings.Join(argv[3], " "); !strings.Contains(got, "--method POST") ||
+		strings.Contains(got, "--input") || !strings.HasSuffix(got, " repos/o/r/check-runs/91/rerequest") {
+		t.Fatalf("RerequestCheckRun argv = %q", got)
 	}
 }
 

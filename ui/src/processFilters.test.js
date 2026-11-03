@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildProcessRows } from "./processes.js";
 import {
   DEFAULT_PROCESS_NARROWING,
+  DEFAULT_PROCESS_SORT,
   PROCESS_ATTRIBUTES,
   kindNarrowing,
   kindsOf,
@@ -27,7 +28,7 @@ import {
   sourceOf,
   withKinds,
 } from "./processFilters.js";
-import { operatorsFor, optionsFor } from "./taskFilters.js";
+import { directionLabels, operatorsFor, optionsFor } from "./taskFilters.js";
 
 // The same four schedules pkg/schedulefilter's filter_test.go asks its
 // questions of, at the same moment, so the two readings can be checked
@@ -111,6 +112,21 @@ const ids = (narrowing) =>
 const only = (...filters) => ids({ sort: [], filters });
 
 describe("processFilters", () => {
+  // A next run is still to come, so "oldest first" would name the run
+  // furthest off as the old one; a last run has happened, and keeps
+  // the date wording.
+  it("words the next run's sort as soonest and latest, and the last run's as oldest and newest", () => {
+    const attr = (id) => PROCESS_ATTRIBUTES.find((a) => a.id === id);
+    expect(directionLabels(attr("next"))).toEqual({
+      asc: "Soonest first",
+      desc: "Latest first",
+    });
+    expect(directionLabels(attr("last"))).toEqual({
+      asc: "Oldest first",
+      desc: "Newest first",
+    });
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -330,6 +346,15 @@ describe("processFilters", () => {
     });
     expect(processNarrowingQuery(parsed)).toBe(query);
     expect(processNarrowingFromSearch(new URLSearchParams(""))).toBe(null);
+    // A key the page has no attribute for is dropped, as an unknown kind
+    // is; with nothing left the order is the default one.
+    expect(
+      processNarrowingFromSearch(new URLSearchParams("?sort=bogus:up")).sort,
+    ).toEqual(DEFAULT_PROCESS_SORT);
+    expect(
+      processNarrowingFromSearch(new URLSearchParams("?sort=bogus,name:desc"))
+        .sort,
+    ).toEqual([{ attr: "name", dir: "desc" }]);
     expect(processNarrowingQuery(DEFAULT_PROCESS_NARROWING)).toBe("");
     expect(processNarrowingQuery(kindNarrowing(["schedule"]))).toBe(
       "?kind=schedule",

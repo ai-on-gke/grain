@@ -19,11 +19,14 @@ package demo
 // ordinary demo can never show, because a task's stall note
 // (ui.Task.Stall) is only written when the UI is handed the
 // orchestrator's deadlines (ui.Config.Stall), and `grain demo` is not.
-// With -stalled-tasks it is, as cmd/grain's daemon is, and two tasks are
-// seeded past their patience: a queued task nothing has dispatched for
-// days, whose row offers Run now, and a run no process has finished in
-// two days, whose row offers Cancel. Opt-in, so the ordinary demo's
-// Inbox, which other specs count, is unchanged.
+// With -stalled-tasks it is, as cmd/grain's daemon is, and three tasks
+// are seeded past their patience: a queued task nothing has dispatched
+// for days, whose row offers Run now, a run no process has finished in
+// two days, whose row offers Cancel, and a deferral whose wake time came
+// four days ago and was never acted on, whose row offers Undefer -- the
+// demo runs no reconcileWake unless -reconcile is given, so it stays put.
+// Opt-in, so the ordinary demo's Inbox, which other specs count, is
+// unchanged.
 
 import (
 	"context"
@@ -38,6 +41,7 @@ import (
 const (
 	demoStalledQueuedTitle  = "Backfill the audit log retention job"
 	demoStalledRunningTitle = "Regenerate the protobuf bindings"
+	demoStalledDeferTitle   = "Rotate the staging signing keys"
 )
 
 // stalledTasksConfig hands cfg the orchestrator's own task-lane
@@ -82,6 +86,18 @@ func seedStalledTasksDemo(ctx context.Context, store *model.Store, cfg ui.Config
 		StartedAt: now.Add(-48 * time.Hour),
 	}, model.Limits{}); err != nil {
 		return fmt.Errorf("seeding %q: %w", demoStalledRunningTitle, err)
+	}
+	// Deferred five days ago until four days ago: past the one cycle
+	// reconcileWake is given after a wake time (orchestrator's
+	// deferredWake). Deferred through the client with its clock still in
+	// the past, since Defer refuses a wake time that is not in the future.
+	deferred, err := create(now.Add(-120*time.Hour), demoStalledDeferTitle)
+	if err != nil {
+		return err
+	}
+	until := now.Add(-96 * time.Hour)
+	if err := client.Defer(ctx, deferred.ID, ui.DeferOptions{Until: &until}); err != nil {
+		return fmt.Errorf("seeding %q: %w", demoStalledDeferTitle, err)
 	}
 	return nil
 }

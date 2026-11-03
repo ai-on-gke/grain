@@ -193,7 +193,14 @@ export default function LogsPage({ showError }) {
               header rail (PageHeader.jsx, grain/task-4915). */}
           <PageHeaderActions>
             <div className="logs-toolbar">
-              <FormControl size="small" sx={{ minWidth: 220 }}>
+              {/* A width the slot can take back, not a minimum: in a
+                  narrow rail (an 820px tablet) a 220px floor ran the
+                  select past the slot's clipped edge, its arrow cut
+                  off, rather than leaving it whole beside "more". */}
+              <FormControl
+                size="small"
+                sx={{ width: 220, maxWidth: "100%", flex: "0 1 auto" }}
+              >
                 <InputLabel id="logs-source-label">Source</InputLabel>
                 <Select
                   labelId="logs-source-label"

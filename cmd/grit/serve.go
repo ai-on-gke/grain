@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/attest"
@@ -86,23 +87,13 @@ func serve(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	srv := grit.NewServer(grit.ServerConfig{Local: loc})
 
 	if *grainURL != "" {
-		go func() {
-			for {
-				if ctx.Err() != nil {
-					return
-				}
-				_ = grit.DialSession(ctx, grit.SessionDialConfig{
-					GrainURL:    *grainURL,
-					ClientToken: *clientToken,
-					Server:      srv,
-				})
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(100 * time.Millisecond):
-				}
-			}
-		}()
+		go dialGrainLoop(ctx, *grainURL, func(ctx context.Context) error {
+			return grit.DialSession(ctx, grit.SessionDialConfig{
+				GrainURL:    *grainURL,
+				ClientToken: *clientToken,
+				Server:      srv,
+			})
+		}, stderr, 100*time.Millisecond, 30*time.Second)
 	}
 
 	ln, err := net.Listen("tcp", *listen)
@@ -135,5 +126,52 @@ func serve(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		return 0
+	}
+}
+
+// dialGrainLoop keeps a reverse-tunnel /v1/session to grain open for as long
+// as ctx lives. It used to redial every 100ms in silence, so a grain that
+// refused the session (a wrong token, or one that does not serve /v1/session
+// at all) left grit dialing ten times a second with nothing in its log to
+// say why no CI arrived (docs/test-runs/2026-10-29-grit-backend-ci-shutdown.md,
+// F5). A failure is now logged when it first happens and whenever it
+// changes, and the redial backs off from minWait to maxWait; a session that
+// was up resets it.
+func dialGrainLoop(ctx context.Context, grainURL string, dial func(context.Context) error, stderr io.Writer, minWait, maxWait time.Duration) {
+	wait := minWait
+	lastErr := ""
+	for ctx.Err() == nil {
+		err := dial(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if err == nil {
+			if lastErr != "" {
+				fmt.Fprintf(stderr, "grit serve: reverse session to %s closed; redialing\n", grainURL)
+			}
+			lastErr = ""
+			wait = minWait
+		} else {
+			if msg := err.Error(); msg != lastErr {
+				// One line, however much HTML a refusing proxy sent back.
+				short := strings.Join(strings.Fields(msg), " ")
+				if len(short) > 200 {
+					short = short[:200] + "..."
+				}
+				fmt.Fprintf(stderr, "grit serve: reverse session to %s: %s (retrying, backing off to %s)\n", grainURL, short, maxWait)
+				lastErr = msg
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+		if err != nil {
+			wait *= 2
+			if wait > maxWait {
+				wait = maxWait
+			}
+		}
 	}
 }
