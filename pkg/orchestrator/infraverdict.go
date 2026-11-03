@@ -165,7 +165,7 @@ func infraVerdict(run ci.Run) (string, bool) {
 // one. Grain wrote those words, so they can be read broadly.
 var infraJobErrors = []string{
 	"capabilit", "credential", "quota", "rate limit", "rate-limit", "429", "too many requests",
-	"resource_exhausted", "not granted", sandboxaccess.ChannelLostFault,
+	"resource_exhausted", "not granted", sandboxaccess.ChannelLostFault, sandboxaccess.SandboxLostFault,
 }
 
 // channelLostJobs names (ciJobName) the jobs of run that ended on a lost
@@ -190,6 +190,38 @@ var infraStepOutput = []string{
 	"quota exceeded", "received unexpected http status: 5",
 }
 
+// infraCheckoutOutput are git's own words for a forge that answered a
+// clone or fetch with a 5xx (the release runs of 2026-11-01/02 died on
+// them). A test could print "502" for any reason, so these are git's
+// whole phrases, and they are read only out of a step that checks the
+// tree out (checkoutStep) -- never out of a step that tests it.
+var infraCheckoutOutput = []string{
+	"the requested url returned error: 502",
+	"the requested url returned error: 503",
+	"the requested url returned error: 504",
+	"rpc failed; http 502", "rpc failed; http 503", "rpc failed; http 504",
+}
+
+// infraRunnerLost are what GitHub Actions writes when the runner a job
+// was on went away mid-step -- the hosted VM lost, or shut down under it.
+// The runner's own sentences, which no test prints, so they are read out
+// of any failed job.
+var infraRunnerLost = []string{
+	"lost communication with the server",
+	"the runner has received a shutdown signal",
+}
+
+// checkoutStep reports whether the step at index i of a job, named name,
+// is the one that checks the tree out: the first step, or one named for
+// `actions/checkout`, a checkout, or a git fetch or clone.
+func checkoutStep(i int, name string) bool {
+	if i == 0 {
+		return true
+	}
+	n := strings.ToLower(name)
+	return strings.Contains(n, "checkout") || strings.Contains(n, "git fetch") || strings.Contains(n, "git clone")
+}
+
 // infraStepTail is how much of a failing step's output is searched: the
 // end, which is where a tool that gave up says why.
 const infraStepTail = 4096
@@ -200,22 +232,75 @@ func infraSignature(job ci.JobRun) string {
 	if sig := firstContained(job.Error, infraJobErrors); sig != "" {
 		return sig
 	}
-	for _, step := range job.Steps {
+	for i, step := range job.Steps {
 		if step.Conclusion != ci.ConclusionFailure {
 			continue
 		}
 		if sig := firstContained(step.Error, infraJobErrors); sig != "" {
 			return sig
 		}
-		out := step.Output
-		if len(out) > infraStepTail {
-			out = out[len(out)-infraStepTail:]
-		}
-		if sig := firstContained(out, infraStepOutput); sig != "" {
+		if sig := infraOutputSignature(checkoutStep(i, step.Name), step.Output); sig != "" {
 			return sig
 		}
 	}
 	return ""
+}
+
+// infraOutputSignature is the infrastructure signature in the tail of
+// what a failed step printed, or "": the registry and rate-limit ones
+// from any step, git's 5xx ones only from a checkout step.
+func infraOutputSignature(checkout bool, out string) string {
+	if len(out) > infraStepTail {
+		out = out[len(out)-infraStepTail:]
+	}
+	if sig := firstContained(out, infraStepOutput); sig != "" {
+		return sig
+	}
+	if sig := firstContained(out, infraRunnerLost); sig != "" {
+		return sig
+	}
+	if checkout {
+		return firstContained(out, infraCheckoutOutput)
+	}
+	return ""
+}
+
+// gitHubInfraVerdict is infraVerdict for a GitHub Actions run that
+// concluded failure: whether every failed job of its latest attempt
+// failed on an infrastructure signature, read off the step GitHub says
+// failed (FailingStep) and the tail of the job's log or check output. A
+// job with no failing step named is read as having failed in its first
+// step -- GitHub's "Set up job", where a runner that never came up or a
+// checkout of the action itself fails. One failed job without a
+// signature makes it the tree's.
+func gitHubInfraVerdict(jobs []model.GitHubCIJob, attempt int) (string, bool) {
+	latest := 0
+	for _, j := range jobs {
+		latest = max(latest, j.RunAttempt)
+	}
+	if attempt > 0 && attempt <= latest {
+		latest = attempt
+	}
+	var why []string
+	for _, j := range jobs {
+		if !j.Failed() || (j.RunAttempt != 0 && j.RunAttempt != latest) {
+			continue
+		}
+		step := strings.ToLower(strings.TrimSpace(j.FailingStep))
+		checkout := step == "" || step == "set up job" || checkoutStep(-1, step)
+		sig := infraOutputSignature(checkout, j.FailureTail)
+		if sig == "" {
+			sig = infraOutputSignature(checkout, j.Output)
+		}
+		if sig == "" {
+			return "", false
+		}
+		why = append(why, j.JobName+" ("+sig+")")
+	}
+	if len(why) == 0 {
+		return "", false
+	}
+	return "every failing job failed on the deployment rather than the tree: " + strings.Join(why, ", "), true
 }
 
 func firstContained(text string, needles []string) string {
