@@ -35,6 +35,7 @@ package ui
 // order, so a cursor read back on the next wake lands on the same entry.
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
@@ -301,7 +302,10 @@ func taskChanges(t Task, runs []model.RunSpan, events []model.TaskEvent) []Pipel
 	closeRecorded := false
 	for _, e := range events {
 		at := e.At
-		detail := "by " + principalLabel(e.By)
+		// shownLabel says how the actor was established ("operator
+		// (access code)", "task 20"); an event from before sources were
+		// recorded reads as it always has.
+		detail := "by " + cmp.Or(shownLabel(e.By, nil), principalLabel(e.By))
 		if e.Reason != "" {
 			detail += ": " + e.Reason
 		}

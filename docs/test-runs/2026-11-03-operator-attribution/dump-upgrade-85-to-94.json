@@ -1,0 +1,59 @@
+{
+  "task": [
+    {
+      "id": "20",
+      "origin_actor_kind": "human",
+      "origin_actor_id": "owner@example.com",
+      "origin_actor_source": "",
+      "approval_actor_kind": "human",
+      "approval_actor_id": "owner@example.com",
+      "approval_actor_source": "",
+      "auto_merge": 0
+    }
+  ],
+  "task_event": [
+    {
+      "id": 1,
+      "task_id": "20",
+      "kind": "closed",
+      "actor_kind": "human",
+      "actor_id": "owner@example.com",
+      "actor_source": "",
+      "reason": "done at 85"
+    }
+  ],
+  "task_comment": [
+    {
+      "id": 8,
+      "task_id": "20",
+      "author_kind": "human",
+      "author_id": "owner@example.com",
+      "author_source": "",
+      "body": "a comment at 85"
+    },
+    {
+      "id": 9,
+      "task_id": "20",
+      "author_kind": "automation",
+      "author_id": "grain",
+      "author_source": "",
+      "body": "Paused by owner@example.com."
+    }
+  ],
+  "memory": [
+    {
+      "owner": "acme",
+      "name": "widgets",
+      "updated_by_kind": "human",
+      "updated_by_id": "owner@example.com",
+      "updated_by_source": ""
+    },
+    {
+      "owner": "",
+      "name": "",
+      "updated_by_kind": "human",
+      "updated_by_id": "owner@example.com",
+      "updated_by_source": ""
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "Schema": 94,
+  "Author": "owner@example.com",
+  "AuthorKind": "human",
+  "AuthorLabel": "",
+  "Comments": [
+    {
+      "Author": "owner@example.com",
+      "AuthorKind": "human",
+      "AuthorLabel": "",
+      "Body": "a comment at 85"
+    },
+    {
+      "Author": "grain",
+      "AuthorKind": "automation",
+      "AuthorLabel": "",
+      "Body": "Paused by owner@example.com."
+    }
+  ],
+  "Transitions": [
+    {
+      "State": "proposed",
+      "By": "",
+      "ByLabel": "",
+      "Reason": "",
+      "Detail": ""
+    },
+    {
+      "State": "queued",
+      "By": "",
+      "ByLabel": "",
+      "Reason": "",
+      "Detail": ""
+    },
+    {
+      "State": "closed",
+      "By": "human owner@example.com",
+      "ByLabel": "",
+      "Reason": "done at 85",
+      "Detail": ""
+    }
+  ]
+}

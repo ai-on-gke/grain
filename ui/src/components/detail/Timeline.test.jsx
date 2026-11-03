@@ -395,6 +395,60 @@ describe("DetailOverlay timeline", () => {
   // KeptOff) is a step of its own, saying who made it and which writer it
   // was -- and, being a note about one setting, never the task's current
   // state.
+  // docs/test-runs/2026-11-03-operator-attribution.md F3: a change made
+  // with the access code is stored under the deployment's own address, so
+  // the timeline showed it as that person. It shows the label the API
+  // sends (byLabel, authorLabel) instead, and the bare id only for rows
+  // from before sources were recorded.
+  it("names an access-code holder as the operator, not the deployment's address", () => {
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          transitions: [
+            { state: "queued", at: "2026-08-28T09:00:00Z" },
+            {
+              state: "closed",
+              at: "2026-08-28T10:00:00Z",
+              by: "human owner@example.com",
+              byLabel: "operator (access code)",
+              reason: "done",
+            },
+          ],
+          comments: [
+            {
+              author: "owner@example.com",
+              authorKind: "human",
+              authorLabel: "operator (access code)",
+              body: "a comment from code",
+              createdAt: "2026-08-28T09:30:00Z",
+            },
+            {
+              author: "alice",
+              authorKind: "human",
+              body: "an old comment",
+              createdAt: "2026-08-28T09:40:00Z",
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText("by operator (access code) · done"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("operator (access code) · human"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("alice · human")).toBeInTheDocument();
+    expect(screen.queryByText(/owner@example\.com/)).toBeNull();
+  });
+
   it("shows who turned auto-merge on or off, and a write that was kept off", () => {
     render(
       <DetailOverlay
