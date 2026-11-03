@@ -407,6 +407,13 @@ var notSettings = []string{
 	// (LocalTables).
 	"hostd",
 	"hostd_token",
+	// Verified-identity sign-in access (model.AllowedPrincipal) and its
+	// one-time flag migration record: managed live in Settings -> Access
+	// and `grain access`, and intentionally kept out of `grain/config` so
+	// a bad or compromised config-repo pull request can neither lock
+	// operators out nor grant sign-in access (design/design/settings.design.md §1).
+	"allowed_principal",
+	"allowed_principal_migration",
 	// Security audit log. Dynamic runtime records, not state repo
 	// declarative settings.
 	"secret_resolution_audit",

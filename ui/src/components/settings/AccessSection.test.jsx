@@ -12,25 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import AccessSection, { actorName } from "./AccessSection.jsx";
+import AccessSection, {
+  actorName,
+  validatePrincipalEntry,
+} from "./AccessSection.jsx";
 import api from "../../api.js";
 
 vi.mock("../../api.js", () => ({ default: vi.fn() }));
 
-// Settings → Access says how this browser is signed in and offers the
-// way out of it (design/design/settings-panel.design.md §3.2). grain has no users
-// (§6.1): there is no Username box, and the only name shown is the actor
-// the server reports for an IAP sign-in.
 const section = (props = {}) => (
   <AccessSection showError={() => {}} {...props} />
 );
 
 describe("AccessSection", () => {
   beforeEach(() => {
-    api.mockResolvedValue({});
+    api.mockResolvedValue({ entries: [] });
   });
   afterEach(() => {
     api.mockReset();
@@ -92,6 +91,125 @@ describe("AccessSection", () => {
       expect(screen.queryByText("alice")).toBeNull();
       unmount();
     }
+  });
+
+  it("validates, adds, and removes allowed users and groups for both access-code and IAP sessions", async () => {
+    const user = userEvent.setup();
+    let currentEntries = [
+      {
+        entry: "user:iap@example.com",
+        addedBy: "the access code",
+        addedAt: "2026-11-03T05:00:00Z",
+      },
+      {
+        entry: "group:team@example.com",
+        addedBy: "iap@example.com",
+        addedAt: "2026-11-03T05:10:00Z",
+      },
+    ];
+    api.mockImplementation(async (path, opts) => {
+      if (path === "/api/access/principals" && !opts?.method) {
+        return {
+          entries: [...currentEntries],
+          droppedFlagEntries: ["domain:legacy.example.com"],
+        };
+      }
+      if (path === "/api/access/principals" && opts?.method === "POST") {
+        expect(typeof opts.body).toBe("string");
+        const parsed = JSON.parse(opts.body);
+        currentEntries = [
+          ...currentEntries,
+          {
+            entry: parsed.entry,
+            addedBy: "iap@example.com",
+            addedAt: "2026-11-03T06:00:00Z",
+          },
+        ];
+        return { created: true };
+      }
+      if (
+        path.startsWith("/api/access/principals/") &&
+        opts?.method === "DELETE"
+      ) {
+        const target = decodeURIComponent(
+          path.slice("/api/access/principals/".length),
+        );
+        currentEntries = currentEntries.filter((e) => e.entry !== target);
+        return { entry: target, removed: true };
+      }
+      return {};
+    });
+
+    render(
+      section({
+        config: {
+          authenticated: true,
+          actor: "user:iap@example.com",
+          authMethod: "iap",
+        },
+      }),
+    );
+
+    await screen.findByText("user:iap@example.com");
+    expect(
+      screen.getByTestId("dropped-flag-entries-warning"),
+    ).toHaveTextContent("domain:legacy.example.com");
+
+    // Reject invalid entries client-side.
+    const input = screen.getByLabelText("User or group");
+    await user.type(input, "domain:example.com");
+    await user.click(
+      screen.getByRole("button", { name: "Add allowed principal" }),
+    );
+    expect(
+      screen.getByText(/domain: entries are not supported/),
+    ).toBeInTheDocument();
+
+    // Add valid user entry.
+    await user.clear(input);
+    await user.type(input, "user:Bob@Example.com");
+    await user.click(
+      screen.getByRole("button", { name: "Add allowed principal" }),
+    );
+    await screen.findByText("user:bob@example.com");
+
+    // Removing oneself prompts a warning before removing, and succeeds when confirmed.
+    await user.click(
+      screen.getByRole("button", { name: "Remove user:iap@example.com" }),
+    );
+    expect(screen.getByTestId("access-remove-warning")).toHaveTextContent(
+      /removing your own account/,
+    );
+    await user.click(screen.getByRole("button", { name: "Remove anyway" }));
+    await waitFor(() =>
+      expect(screen.queryByText("user:iap@example.com")).toBeNull(),
+    );
+    expect(screen.getByTestId("access-removed-notice")).toHaveTextContent(
+      /access code still works on a direct connection/,
+    );
+  });
+});
+
+describe("validatePrincipalEntry", () => {
+  it("accepts user: and group: emails and rejects other prefixes or malformed emails", () => {
+    expect(validatePrincipalEntry(" user:Alice@Example.com ")).toEqual({
+      canonical: "user:alice@example.com",
+      error: "",
+    });
+    expect(validatePrincipalEntry("group:Ops@Example.com")).toEqual({
+      canonical: "group:ops@example.com",
+      error: "",
+    });
+    expect(validatePrincipalEntry("alice@example.com").error).toMatch(
+      /must start with user: or group:/,
+    );
+    expect(
+      validatePrincipalEntry("serviceAccount:sa@proj.iam.gserviceaccount.com")
+        .error,
+    ).toMatch(/not supported/);
+    expect(validatePrincipalEntry("user:not-an-email").error).toMatch(
+      /valid email/,
+    );
   });
 });
 
