@@ -192,7 +192,7 @@ func (d DaemonTasks) Task(ctx context.Context, id string) (mcp.TaskRecord, error
 	if err != nil {
 		return mcp.TaskRecord{}, err
 	}
-	record := mcp.TaskRecord{TaskSummary: taskSummary(detail.Task), Description: detail.Description, Author: detail.Author, AuthorKind: detail.AuthorKind, Base: detail.Base, Capabilities: detail.Capabilities, PullRequest: detail.PullRequest, PullRequestMergedAt: detail.PrMergedAt, PullRequestClosedAt: detail.PrClosedAt, FailedAttempts: detail.FailedAttempts, LastFailureAt: detail.LastFailureAt, LastFailureReason: detail.LastFailureReason, Activity: mcp.TaskActivity{Note: detail.Activity, At: detail.ActivityAt, BySetup: detail.ActivityBySetup}}
+	record := mcp.TaskRecord{TaskSummary: taskSummary(detail.Task), Description: detail.Description, Author: detail.Author, AuthorKind: detail.AuthorKind, AuthorLabel: detail.AuthorLabel, Base: detail.Base, Capabilities: detail.Capabilities, PullRequest: detail.PullRequest, PullRequestMergedAt: detail.PrMergedAt, PullRequestClosedAt: detail.PrClosedAt, FailedAttempts: detail.FailedAttempts, LastFailureAt: detail.LastFailureAt, LastFailureReason: detail.LastFailureReason, Activity: mcp.TaskActivity{Note: detail.Activity, At: detail.ActivityAt, BySetup: detail.ActivityBySetup}}
 	for _, a := range detail.Attempts {
 		record.Attempts = append(record.Attempts, mcp.TaskAttempt{Number: a.Number, StartedAt: a.StartedAt, FinishedAt: a.FinishedAt, Outcome: a.Outcome, Detail: a.Detail, PromptBytes: a.PromptBytes, PromptTokens: a.PromptTokens, Model: a.Model, AgentFramework: a.AgentFramework})
 	}
@@ -200,7 +200,7 @@ func (d DaemonTasks) Task(ctx context.Context, id string) (mcp.TaskRecord, error
 		record.Transitions = append(record.Transitions, mcp.TaskTransition{State: string(tr.State), At: tr.At, Inferred: tr.Inferred, By: tr.By, Reason: tr.Reason, Detail: tr.Detail})
 	}
 	for _, c := range detail.Comments {
-		record.Comments = append(record.Comments, mcp.TaskComment{ID: c.ID, Author: c.Author, AuthorKind: c.AuthorKind, Body: c.Body, CreatedAt: c.CreatedAt, Handover: c.Handover})
+		record.Comments = append(record.Comments, mcp.TaskComment{ID: c.ID, Author: c.Author, AuthorKind: c.AuthorKind, AuthorLabel: c.Who(), Body: c.Body, CreatedAt: c.CreatedAt, Handover: c.Handover})
 	}
 	return record, nil
 }
@@ -1446,13 +1446,13 @@ func warnUnknownGrants(grants GrantNames) {
 	served := append(slices.Clone(servedGrants), capability.RunGrants()...)
 	for _, name := range grants {
 		if _, isAPI, err := ui.ParseAPIGrant(name); isAPI && err == nil {
-			continue // served as generated tools (ui.AgentAPITools)
+			continue // served by grain-controller on POST /api/mcp
 		}
 		if grainserver.IsInProcessGrant(name) {
 			continue
 		}
 		if model.APIAliasPreset(name) != "" {
-			continue // bare alias for an api preset (ui.AgentAPITools)
+			continue // bare alias for an api preset (served by grain-controller on POST /api/mcp)
 		}
 		if !slices.Contains(served, name) {
 			fmt.Fprintf(os.Stderr,
@@ -1496,16 +1496,6 @@ func GrantedDaemonTools(grants GrantNames, srcDir, secretsDir, stateDir, taskID 
 			AllowWrite: grainserver.HasSQLWrite(grants),
 			Executor:   executor,
 		})...)
-	}
-	// The agent API: one tool per route of grain's own API whose scope
-	// the task's api grants reach (docs/agent-api.md). Each call goes to
-	// the daemon naming this task, which holds it to those same grants
-	// (ui.ActingTaskHeader) -- so a tool listed here is an offer, and
-	// the daemon is what decides. Registered last, so a hand-written
-	// tool of the same name could never be shadowed by one, though the
-	// api_ prefix keeps them apart anyway.
-	if client != nil && taskID != "" {
-		tools = append(tools, ui.AgentAPITools(client, taskID, grants)...)
 	}
 	return tools
 }

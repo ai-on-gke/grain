@@ -1,7 +1,13 @@
 # Path trigger protecting repository declarations.
-# Any pull request modifying .grain/** gates on human approval.
+# Any pull request modifying .grain/** gates on human approval, except the
+# release jobs release-machinery.yml leaves to grain's security review
+# (design/playbook/releases.playbook.md §0.3).
 on: pull_request
 paths: [".grain/**"]
+ignore:
+  - .grain/workflows/release.yml
+  - .grain/workflows/promote.yml
+  - .grain/workflows/release-train.yml
 gate: true
 human: required
 sensitive: true

@@ -29,19 +29,25 @@ import (
 	"sync"
 	"unicode"
 
-	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-// This file turns the route table into MCP tools (docs/agent-api.md): one
-// tool per route whose scope is in the vocabulary, named after the
-// route's handler, described from routeDocs, and taking the route's path
-// parameters, its query and its body as arguments. A task granted a
-// scope is served the tools of every route under it. The tools call the
-// route over HTTP exactly as the UI does -- same handler, same
-// validation, same side effects -- with ActingTaskHeader set, so
-// agentAPIGate holds the call to the task's grants and records it.
+// This file turns the route table into APIRoutes (docs/agent-api.md): one
+// per route whose scope is in the vocabulary, named after the route's
+// handler, described from routeDocs, and taking the route's path
+// parameters, its query and its body as arguments. Their names,
+// descriptions and input schemas are what grain_explore_scope advertises
+// on POST /api/mcp (mcp_endpoint.go), where grain_invoke dispatches them
+// in-process through s.mux, and what ExternalAgentAPITools serves as one
+// tool per route on POST /mcp. Either way the route runs exactly as the
+// UI's does -- same handler, same validation, same side effects -- and
+// agentAPIGate holds the call to the caller's grants and records it.
+//
+// AgentAPITools, the per-route tools grain-sandbox used to serve a task
+// over HTTP with ActingTaskHeader set, is kept as the legacy surface
+// mcp_token_benchmark_test.go measures POST /api/mcp against; nothing
+// in grain registers it any more.
 
 // APIRoute is one route of the agent API, as a tool.
 type APIRoute struct {
@@ -435,6 +441,7 @@ var routeQueries = map[string]map[string]string{
 	"GET /api/suites/{id}/composition":          {"repo": "The repository (owner/name) the composition is for.", "base": "The base branch the composition is for."},
 	"POST /api/suites/composition":              {"repo": "The repository (owner/name) the composition is for.", "base": "The base branch the composition is for."},
 	"GET /api/deployment/audit-logs":            {"limit": "At most this many entries."},
+	"GET /api/deployment/config-audit":          {"limit": "At most this many entries."},
 	"GET /api/agent-models":                     {"framework": "Only this framework's models.", "backend": "Only this model connection's models."},
 	"GET /api/state-repo/file":                  {"path": "The file's path in the state repository.", "limit": "At most this many bytes of it."},
 	"GET /api/host/top":                         {"lines": "At most this many processes."},
@@ -512,16 +519,6 @@ func AgentAPIRoutes() []APIRoute {
 	return slices.Clone(apiRoutes)
 }
 
-// AgentAPIToolNames is every generated tool's name, for the frameworks'
-// allowed-tool lists (agent.PublishedToolNames).
-func AgentAPIToolNames() []string {
-	var names []string
-	for _, r := range AgentAPIRoutes() {
-		names = append(names, r.Tool)
-	}
-	return names
-}
-
 func toolNameFor(handler, method, path string) string {
 	name := strings.TrimPrefix(handler, "handle")
 	if name == "" {
@@ -530,9 +527,10 @@ func toolNameFor(handler, method, path string) string {
 	return APIToolPrefix + snake(name)
 }
 
-// maxAPIToolName bounds a generated tool's bare name: a CLI qualifies it
-// as mcp__grain-sandbox__<name> (mcp.QualifiedToolName), and a model
-// API takes at most 64 characters for the whole of that.
+// maxAPIToolName bounds a generated tool's bare name: POST /mcp serves
+// it as a tool a CLI qualifies as mcp__<server>__<name>
+// (mcp.QualifiedToolName), and a model API takes at most 64 characters
+// for the whole of that.
 const maxAPIToolName = 64 - len("mcp__"+mcp.ToolNamespace+"__")
 
 // uniqueToolName settles two routes served by one handler (GET, PUT and
@@ -764,20 +762,131 @@ func (r APIRoute) tool(client *HTTPClient, taskID string) mcp.Tool {
 }
 
 // call makes the route's request on taskID's behalf.
+// routeCall is one call of an APIRoute as a tool's arguments spelled it:
+// the path with its parameters filled in and the query appended, the
+// JSON body (nil for none), and the path parameters by name.
+type routeCall struct {
+	path   string
+	body   []byte
+	params map[string]string
+}
+
+// callArgKeys are the argument names every route's tool takes beside its
+// path parameters; anything else given to a route with a body is the
+// body's own fields, spelled flat.
+var callArgKeys = []string{"reason", "query", "expect", "body"}
+
+// buildCall turns a tool call's arguments into a request of r: each path
+// parameter by name (a number where the schema said string is taken as
+// its text), `query` as the query string, and on a method with a body
+// either `body` as given or, for a route that declares one, every other
+// field. The reason and expect are the caller's: a model-only tool reads
+// them from more places than a generated one, and checks expect through
+// its own channel.
+func (r APIRoute) buildCall(args map[string]any) (routeCall, error) {
+	call := routeCall{path: r.Path, params: make(map[string]string, len(r.Params))}
+	for _, p := range r.Params {
+		v, ok := stringArg(args, p)
+		if !ok {
+			return routeCall{}, fmt.Errorf("%s is required", p)
+		}
+		call.params[p] = v
+		escaped := url.PathEscape(v)
+		call.path = strings.Replace(call.path, "{"+p+"...}", escaped, 1)
+		call.path = strings.Replace(call.path, "{"+p+"}", escaped, 1)
+	}
+	if q, ok := args["query"].(map[string]any); ok && len(q) > 0 {
+		values := url.Values{}
+		for k, v := range q {
+			if v == nil {
+				continue
+			}
+			values.Set(k, fmt.Sprint(v))
+		}
+		if encoded := values.Encode(); encoded != "" {
+			call.path += "?" + encoded
+		}
+	}
+	if r.Method == http.MethodGet {
+		return call, nil
+	}
+	var body any
+	if given, ok := args["body"]; ok && given != nil {
+		body = given
+	} else if r.body != nil {
+		flat := map[string]any{}
+		for k, v := range args {
+			if slices.Contains(callArgKeys, k) || slices.Contains(r.Params, k) {
+				continue
+			}
+			flat[k] = v
+		}
+		if len(flat) > 0 {
+			body = flat
+		}
+	}
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return routeCall{}, fmt.Errorf("encoding body: %w", err)
+		}
+		call.body = encoded
+	}
+	return call, nil
+}
+
+// stringArg is args[key] as a trimmed, non-empty string: a string
+// argument, or a number or other scalar a model sent where the schema
+// said string (a task id as 42 rather than "42").
+func stringArg(args map[string]any, key string) (string, bool) {
+	raw, ok := args[key]
+	if !ok || raw == nil {
+		return "", false
+	}
+	var v string
+	switch x := raw.(type) {
+	case string:
+		v = x
+	case map[string]any, []any:
+		return "", false
+	default:
+		v = fmt.Sprint(x)
+	}
+	v = strings.TrimSpace(v)
+	return v, v != ""
+}
+
+// routeError is the error a route answered a call with: its own message
+// when the body is grain's {"error": ...} (and not a structured refusal
+// such as config_managed_externally, whose whole body the caller needs),
+// and otherwise the body, or the status text of an empty one.
+func routeError(code int, body []byte) error {
+	var errBody struct {
+		Error string `json:"error"`
+		Code  string `json:"code"`
+	}
+	if json.Unmarshal(body, &errBody) == nil && errBody.Error != "" && errBody.Code == "" {
+		return fmt.Errorf("HTTP %d: %s", code, errBody.Error)
+	}
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" {
+		trimmed = http.StatusText(code)
+	}
+	return fmt.Errorf("HTTP %d: %s", code, trimmed)
+}
+
+// emptyRouteAnswer is what a call that answered 2xx with no body returns.
+func emptyRouteAnswer(method, path string, code int) string {
+	return fmt.Sprintf("%s %s: %d %s", method, path, code, http.StatusText(code))
+}
+
 func (r APIRoute) call(ctx context.Context, client *HTTPClient, taskID string, args map[string]any) (string, error) {
 	if client == nil {
 		return "", fmt.Errorf("this run has no grain daemon to call")
 	}
-	path := r.Path
-	for _, p := range r.Params {
-		v, _ := args[p].(string)
-		v = strings.TrimSpace(v)
-		if v == "" {
-			return "", fmt.Errorf("%s is required", p)
-		}
-		escaped := url.PathEscape(v)
-		path = strings.Replace(path, "{"+p+"...}", escaped, 1)
-		path = strings.Replace(path, "{"+p+"}", escaped, 1)
+	rc, err := r.buildCall(args)
+	if err != nil {
+		return "", err
 	}
 	reason, _ := args["reason"].(string)
 	reason = strings.TrimSpace(reason)
@@ -785,8 +894,8 @@ func (r APIRoute) call(ctx context.Context, client *HTTPClient, taskID string, a
 		return "", fmt.Errorf("reason is required: %s is destructive", r.Pattern)
 	}
 	if expect, ok := expectation(args); ok && r.takesExpect() {
-		id, _ := args["id"].(string)
-		detail, err := getTaskAs(ctx, client, taskID, strings.TrimSpace(id))
+		id := rc.params["id"]
+		detail, err := getTaskAs(ctx, client, taskID, id)
 		if err != nil {
 			return "", fmt.Errorf("reading task %s to check expect: %w", id, err)
 		}
@@ -794,20 +903,7 @@ func (r APIRoute) call(ctx context.Context, client *HTTPClient, taskID string, a
 			return "", err
 		}
 	}
-	if q, ok := args["query"].(map[string]any); ok && len(q) > 0 {
-		values := url.Values{}
-		for k, v := range q {
-			values.Set(k, fmt.Sprint(v))
-		}
-		path += "?" + values.Encode()
-	}
-	var encoded []byte
-	if body, ok := args["body"]; ok && body != nil && r.Method != http.MethodGet {
-		var err error
-		if encoded, err = json.Marshal(body); err != nil {
-			return "", fmt.Errorf("encoding body: %w", err)
-		}
-	}
+	path, encoded := rc.path, rc.body
 	resp, err := client.send(ctx, r.Method, func() (*http.Request, error) {
 		var reader io.Reader
 		if encoded != nil {
@@ -838,7 +934,7 @@ func (r APIRoute) call(ctx context.Context, client *HTTPClient, taskID string, a
 		return "", fmt.Errorf("reading the response: %w", err)
 	}
 	if len(bytes.TrimSpace(data)) == 0 {
-		return fmt.Sprintf("%s %s: %s", r.Method, path, resp.Status), nil
+		return emptyRouteAnswer(r.Method, path, resp.StatusCode), nil
 	}
 	return string(data), nil
 }
@@ -899,16 +995,9 @@ func (r APIRoute) externalCall(ctx context.Context, s *Server, tok *model.Extern
 	if tok == nil {
 		return "", fmt.Errorf("missing external agent credential")
 	}
-	path := r.Path
-	for _, p := range r.Params {
-		v, _ := args[p].(string)
-		v = strings.TrimSpace(v)
-		if v == "" {
-			return "", fmt.Errorf("%s is required", p)
-		}
-		escaped := url.PathEscape(v)
-		path = strings.Replace(path, "{"+p+"...}", escaped, 1)
-		path = strings.Replace(path, "{"+p+"}", escaped, 1)
+	rc, err := r.buildCall(args)
+	if err != nil {
+		return "", err
 	}
 	reason, _ := args["reason"].(string)
 	reason = strings.TrimSpace(reason)
@@ -916,8 +1005,8 @@ func (r APIRoute) externalCall(ctx context.Context, s *Server, tok *model.Extern
 		return "", fmt.Errorf("reason is required: %s is destructive", r.Pattern)
 	}
 	if expect, ok := expectation(args); ok && r.takesExpect() {
-		id, _ := args["id"].(string)
-		detail, err := getTaskAsExternal(ctx, s, tok, strings.TrimSpace(id))
+		id := rc.params["id"]
+		detail, err := getTaskAsExternal(ctx, s, tok, id)
 		if err != nil {
 			return "", fmt.Errorf("reading task %s to check expect: %w", id, err)
 		}
@@ -925,36 +1014,7 @@ func (r APIRoute) externalCall(ctx context.Context, s *Server, tok *model.Extern
 			return "", err
 		}
 	}
-	if q, ok := args["query"].(map[string]any); ok && len(q) > 0 {
-		values := url.Values{}
-		for k, v := range q {
-			values.Set(k, fmt.Sprint(v))
-		}
-		path += "?" + values.Encode()
-	}
-	var encoded []byte
-	if r.Method != http.MethodGet {
-		if body, ok := args["body"]; ok && body != nil {
-			var err error
-			if encoded, err = json.Marshal(body); err != nil {
-				return "", fmt.Errorf("encoding body: %w", err)
-			}
-		} else if r.body != nil {
-			fallback := map[string]any{}
-			for k, v := range args {
-				if k == "reason" || k == "query" || k == "expect" || k == "body" || slices.Contains(r.Params, k) {
-					continue
-				}
-				fallback[k] = v
-			}
-			if len(fallback) > 0 {
-				var err error
-				if encoded, err = json.Marshal(fallback); err != nil {
-					return "", fmt.Errorf("encoding body: %w", err)
-				}
-			}
-		}
-	}
+	path, encoded := rc.path, rc.body
 	var reader io.Reader
 	if encoded != nil {
 		reader = bytes.NewReader(encoded)
@@ -970,18 +1030,11 @@ func (r APIRoute) externalCall(ctx context.Context, s *Server, tok *model.Extern
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
 	if rec.Code < 200 || rec.Code > 299 {
-		var errBody struct {
-			Error string `json:"error"`
-			Code  string `json:"code"`
-		}
-		if json.Unmarshal(rec.Body.Bytes(), &errBody) == nil && errBody.Error != "" && errBody.Code == "" {
-			return "", fmt.Errorf("HTTP %d: %s", rec.Code, errBody.Error)
-		}
-		return "", fmt.Errorf("HTTP %d: %s", rec.Code, strings.TrimSpace(rec.Body.String()))
+		return "", routeError(rec.Code, rec.Body.Bytes())
 	}
 	data := rec.Body.Bytes()
 	if len(bytes.TrimSpace(data)) == 0 {
-		return fmt.Sprintf("%s %s: %d %s", r.Method, path, rec.Code, http.StatusText(rec.Code)), nil
+		return emptyRouteAnswer(r.Method, path, rec.Code), nil
 	}
 	return string(data), nil
 }
@@ -1005,23 +1058,4 @@ func getTaskAsExternal(ctx context.Context, s *Server, tok *model.ExternalAgentT
 		return TaskDetail{}, fmt.Errorf("reading task %s: %w", id, err)
 	}
 	return detail, nil
-}
-
-func init() {
-	agent.RegisterPublishedToolNames(AgentAPIToolNames)
-	agent.RegisterPublishedControlToolNames(ModelOnlyAgentAPIRouteToolNames)
-}
-
-// ModelOnlyAgentAPIRouteToolNames is every generated tool that stays on
-// the model's control roster whatever the grants: the routes the sandbox
-// channel refuses outright, and those it refuses for some bodies
-// (ModelOnlyAgentAPIToolNames is the same for one run's grants).
-func ModelOnlyAgentAPIRouteToolNames() []string {
-	var names []string
-	for _, r := range AgentAPIRoutes() {
-		if IsSandboxDeniedScope(r.Scope) || sandboxChannelGuard(r.Pattern, nil) != nil || sandboxGuardReadsBody[r.Pattern] {
-			names = append(names, r.Tool)
-		}
-	}
-	return names
 }

@@ -73,6 +73,10 @@ type Server struct {
 	externalLimiter   *externalAgentLimiter
 	defaultGroupsOnce sync.Once
 	defaultGroups     *CloudIdentityGroupChecker
+	// controllerMCPHandler serves POST /api/mcp (mcp_endpoint.go), built
+	// once on first use.
+	controllerMCPOnce    sync.Once
+	controllerMCPHandler http.Handler
 }
 
 // NewServer builds a Server over a store.
@@ -228,6 +232,7 @@ func (s *Server) routes() {
 	s.route("GET /api/auth/logout", s.handleAuthLogout)
 	s.route("GET /api/auth/user", s.handleAuthUser)
 	s.route("GET /api/auth/status", s.handleAuthUser)
+	s.route("GET /api/whoami", s.handleWhoami)
 	s.route("GET /api/settings", s.handleGetSettings)
 	s.route("PUT /api/settings", s.handleUpdateSettings)
 	s.route("POST /api/settings", s.handleUpdateSettings)
@@ -649,6 +654,10 @@ func (s *Server) routes() {
 	s.route("GET /api/access/principals", s.handleListAccessPrincipals)
 	s.route("POST /api/access/principals", s.handleAllowPrincipal)
 	s.route("DELETE /api/access/principals/{entry}", s.handleDenyPrincipal)
+
+	// Controller MCP server (mcp_endpoint.go) shared by external BYO
+	// harnesses and built-in sessions/tasks holding api:* grants.
+	s.route("POST /api/mcp", s.handleControllerMCP)
 
 	static, err := fs.Sub(staticFS, "static")
 	if err != nil {

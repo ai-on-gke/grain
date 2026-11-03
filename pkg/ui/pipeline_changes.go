@@ -35,7 +35,6 @@ package ui
 // order, so a cursor read back on the next wake lands on the same entry.
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"net/http"
@@ -58,6 +57,14 @@ type PipelineChange struct {
 	From   string    `json:"from,omitempty"`
 	To     string    `json:"to"`
 	Detail string    `json:"detail,omitempty"`
+	// Actor* is who asked for a change somebody asked for -- a close or
+	// a reopen (model.TaskEvent) -- ActorLabel as PrincipalLabel reads it
+	// (operator-attribution spec §4.2); all empty on a change grain
+	// derived from the record.
+	Actor       string `json:"actor,omitempty"`
+	ActorKind   string `json:"actorKind,omitempty"`
+	ActorSource string `json:"actorSource,omitempty"`
+	ActorLabel  string `json:"actorLabel,omitempty"`
 }
 
 // The kinds an entry can be.
@@ -302,10 +309,8 @@ func taskChanges(t Task, runs []model.RunSpan, events []model.TaskEvent) []Pipel
 	closeRecorded := false
 	for _, e := range events {
 		at := e.At
-		// shownLabel says how the actor was established ("operator
-		// (access code)", "task 20"); an event from before sources were
-		// recorded reads as it always has.
-		detail := "by " + cmp.Or(shownLabel(e.By, nil), principalLabel(e.By))
+		label := PrincipalLabel(e.By, e.OnBehalfOf)
+		detail := "by " + label
 		if e.Reason != "" {
 			detail += ": " + e.Reason
 		}
@@ -313,6 +318,10 @@ func taskChanges(t Task, runs []model.RunSpan, events []model.TaskEvent) []Pipel
 			detail += "; " + e.Detail
 		}
 		add(&at, PipelineChangeTask, string(e.Kind), detail)
+		if n := len(out); n > 0 && out[n-1].At.Equal(at) && out[n-1].To == string(e.Kind) {
+			out[n-1].Actor, out[n-1].ActorKind, out[n-1].ActorSource = e.By.ID, string(e.By.Kind), string(e.By.Source)
+			out[n-1].ActorLabel = label
+		}
 		if e.Kind == model.TaskEventClosed && t.ClosedAt != nil {
 			if d := e.At.Sub(*t.ClosedAt); d < time.Second && d > -time.Second {
 				closeRecorded = true
