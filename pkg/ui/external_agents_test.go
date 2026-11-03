@@ -242,8 +242,8 @@ func TestExternalAgentMCPDoneWhen(t *testing.T) {
 	// 5. Verify attribution in the daemon journal and in t2's conversation.
 	logs := logBuf.String()
 	for _, wantLog := range []string{
-		"grain api: {agent, external:ops-laptop} POST /api/tasks/reorder scope=tasks:write repo=\"bwsalmon/grain\" reason=\"prioritize hotfix PR\" -> 200",
-		"grain api: {agent, external:ops-laptop} POST /api/ci/runs scope=ci:write repo=\"bwsalmon/grain\" reason=\"re-run CI on hotfix PR\" -> 202",
+		"grain api: {agent, external:ops-laptop on behalf of operator@example.com} POST /api/tasks/reorder scope=tasks:write repo=\"bwsalmon/grain\" reason=\"prioritize hotfix PR\" -> 200",
+		"grain api: {agent, external:ops-laptop on behalf of operator@example.com} POST /api/ci/runs scope=ci:write repo=\"bwsalmon/grain\" reason=\"re-run CI on hotfix PR\" -> 202",
 	} {
 		if !strings.Contains(logs, wantLog) {
 			t.Errorf("journal missing %q\ngot logs:\n%s", wantLog, logs)

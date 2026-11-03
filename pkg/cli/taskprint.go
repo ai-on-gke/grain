@@ -50,6 +50,11 @@ func (p *printer) detail(d ui.TaskDetail) {
 		return
 	}
 	fmt.Print(taskBlock(d.Task))
+	// The tool an external agent filed this from (X-Grain-Client), a
+	// label only.
+	if d.Provenance != "" {
+		fmt.Printf("provenance:      %s\n", d.Provenance)
+	}
 	if d.FailedAttempts > 0 {
 		fmt.Printf("failed attempts: %d in a row", d.FailedAttempts)
 		if d.LastFailureAt != nil {
@@ -131,6 +136,9 @@ func (p *printer) detail(d ui.TaskDetail) {
 			// Grain relaying somebody else's words -- the distinction
 			// model.Attribution exists to carry.
 			who = fmt.Sprintf("%s on behalf of %s", cm.Author, cm.OnBehalfOf)
+		}
+		if cm.FiledVia != "" {
+			who += " (from " + cm.FiledVia + ")"
 		}
 		fmt.Printf("\n--- comment #%d by %s ---\n%s\n", cm.ID, who, cm.Body)
 	}

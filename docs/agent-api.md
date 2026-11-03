@@ -192,6 +192,8 @@ table only so the table stays total.
 | `release-notes` | `release-notes:read`, `release-notes:write` |
 | `test-quarantine` | `tests:write` |
 | `release-gate-read` | `ci:read`, `tasks:read`, `sandboxes:read`, `tasks:from-template` limited to the `release-notes` template |
+| `external-dev` | `tasks:read`, `tasks:write`, `ci:read`, `ci:write`, `merge:write`, `repos:read`, `templates:read`, `deployment:read` |
+| `external-read` | `tasks:read`, `ci:read`, `repos:read`, `templates:read`, `deployment:read` |
 
 The `self-debug` capability is now an alias. A task holding it is also
 served its preset's routes, and keeps the tools it always had under
@@ -674,6 +676,14 @@ Each external agent is issued its own scoped bearer token (`gma_<hex>`):
 - **Expiry and limits**: an optional `expiresAt` timestamp, a per-credential
   request rate limit (`rateLimit`, requests per minute, default `60`), and
   an in-flight concurrency cap (`maxConcurrent`, default `8`).
+- **Owner**: the person the credential acts on behalf of (`owner`). It
+  defaults to the person issuing it; an operator may name somebody else.
+  A self-service credential (`"selfService": true`, what
+  `grain login --issue-token` mints) belongs to its caller only, and an
+  agent issuing one can pass on only the owner it acts for itself.
+  `grain/external-dev` (the default for a workstation agent) and
+  `grain/external-read` (a read-only observer) are the built-in scope
+  sets for these credentials; neither holds a dangerous scope.
 
 Only the SHA-256 hash of the token is stored (`external_agent_token`
 table). The raw `gma_...` secret is returned once when the credential is
@@ -716,6 +726,27 @@ through `agentAPIGate`:
   with `taskId`) records an audit comment on the affected task's
   conversation signed by `grain` on behalf of
   `{agent, external:<name>}`.
+- **Owner**: a call made with an owned credential runs on behalf of its
+  owner. The journal line reads `{agent, external:<name> on behalf of
+  <owner>}`, the audit comment says `on behalf of <owner>`, comments the
+  agent posts record the owner, and a task it files records the owner as
+  its requester (`creator`) and in its origin. A body naming an `author`
+  is refused, and `X-Forwarded-User` is not believed.
+- **Client label**: a request may carry `X-Grain-Client` (the CLI sends
+  `$GRAIN_CLIENT`, plus ` session=$GRAIN_CLIENT_SESSION`). The daemon
+  strips control characters, caps it at 256 bytes and stores it as the
+  `filedVia` of the task or comment the request posts, shown as
+  `provenance` (`filed from jetski/1.4 by jane@example.com`). It is a
+  label only: no scope, repository, approval or owner-trust decision
+  reads it.
+- **Owner-trust approval**: work an external agent files lands
+  `proposed`. The deployment setting `ownerTrust` (`PUT /api/settings`,
+  `settings:write`), a list of `{"owner": "<person>", "repo":
+  "<owner/name>|*"}`, queues an unapproved filing whose credential owner
+  and repository match a rule. The approval is recorded as grain's
+  `owner-trust` principal on behalf of the owner. A catalogue or
+  requires-person hold, `keepRunning`, or a priority above the default
+  still waits for a person.
 
 ### Routes without calling-task context
 
