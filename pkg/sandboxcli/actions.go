@@ -324,7 +324,7 @@ func (c *sandboxCLI) prResolve(p sandboxArgs) error {
 	}
 	thread := p.get("thread-id")
 	if thread == "" && id == 0 {
-		return fmt.Errorf("name the thread: --thread-id <id> or --comment-id <id>")
+		return p.missing("--thread-id <id> or --comment-id <id>: name the thread")
 	}
 	req := map[string]any{}
 	if thread != "" {
@@ -371,7 +371,7 @@ type sandboxRevertInfo struct {
 func (c *sandboxCLI) gitRevert(p sandboxArgs) error {
 	reason := strings.TrimSpace(p.get("reason"))
 	if reason == "" {
-		return fmt.Errorf("--reason is required: say why this is being reverted")
+		return p.missing("--reason <why>: say why this is being reverted")
 	}
 	task, commit := strings.TrimSpace(p.get("task")), strings.TrimSpace(p.get("commit"))
 	if (task == "") == (commit == "") {
