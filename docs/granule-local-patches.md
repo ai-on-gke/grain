@@ -68,6 +68,15 @@ This sync carries PRs #228–#241 on top of `a4b4e4b`, including:
   gke-labs/granule#240) and the `CHV_DISK_DIRECT` benchmark
   (gke-labs/granule#241). Neither runs in this repository: GitHub only
   reads workflows from the root `.github/`.
+- `pkg/config`: `GRANULE_WORKLOAD_ENV`, a comma-separated list of names
+  whose values in the VM container's environment are added to the guest
+  workload's (`CHV_CONTAINER_OVERRIDE`'s `env`). Only
+  `deploy/github-runner-images` sets it, to hand Actions Runner
+  Controller's `ACTIONS_RUNNER_INPUT_JITCONFIG` to the runner in the
+  guest; no image grain builds or runs sets it, so nothing in a grain
+  sandbox pod's environment reaches its guest by this route. That
+  image's `build.sh` downloads the latest `actions/runner` release
+  without a checksum; grain does not build it.
 
 `Dockerfile` changes only by its `debian:bookworm-slim` digest
 (gke-labs/granule#233); `go.sum`, `vendor/` and `pkg/guestimage`'s contract
