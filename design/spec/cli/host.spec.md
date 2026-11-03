@@ -672,13 +672,17 @@ Calls `POST /api/repos/{owner}/{name}/…` (`DecideRelease`). `-repo` defaults t
 Errors:
 - an unknown verb: `unknown release command "<v>": approve or reject`;
 - the wrong number of arguments: `grain release <verb> takes the pending release, vX.Y.Z`;
-- `-short-soak-ok` on reject: `-short-soak-ok is for grain release approve`.
+- `-short-soak-ok` on reject: `-short-soak-ok is for grain release approve`;
+- `-allow-breaking` on reject: `-allow-breaking is for grain release approve`.
+
+`-allow-breaking` (approve only) accepts a release that carries breaking changes without being the major release `RELEASE_MAJOR` asks for.
 
 With no arguments it prints the usage and returns `flag: help requested`. **Scope:** person; an agent is refused.
 
 <!-- BEGIN GENERATED FLAGS: grain release -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
+| `-allow-breaking` | bool |  |  | approve only: accept a release that carries breaking changes without being the major release RELEASE_MAJOR asks for |
 | `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose pending release this is |
 | `-short-soak-ok` | bool |  |  | approve only: accept a release whose staging soak was under the minimum (its notification says SHORT SOAK) |
 <!-- END GENERATED FLAGS -->
@@ -686,6 +690,7 @@ With no arguments it prints the usage and returns `flag: help requested`. **Scop
 <!-- BEGIN GENERATED FLAGS: grain release approve -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
+| `-allow-breaking` | bool |  |  | approve only: accept a release that carries breaking changes without being the major release RELEASE_MAJOR asks for |
 | `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose pending release this is |
 | `-short-soak-ok` | bool |  |  | approve only: accept a release whose staging soak was under the minimum (its notification says SHORT SOAK) |
 <!-- END GENERATED FLAGS -->
@@ -693,6 +698,7 @@ With no arguments it prints the usage and returns `flag: help requested`. **Scop
 <!-- BEGIN GENERATED FLAGS: grain release reject -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
+| `-allow-breaking` | bool |  |  | approve only: accept a release that carries breaking changes without being the major release RELEASE_MAJOR asks for |
 | `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose pending release this is |
 | `-short-soak-ok` | bool |  |  | approve only: accept a release whose staging soak was under the minimum (its notification says SHORT SOAK) |
 <!-- END GENERATED FLAGS -->
@@ -843,6 +849,22 @@ Reads a checkout's `.grain/templates`, `.grain/suites` and `.grain/schedules` an
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/declcmd_test.go`: `TestDeclarationsCheckPrintsWhatATreeDeclares`, `TestDeclarationsCheckReportsEveryProblemAtOnce`, `TestDeclarationsCheckJSONCarriesTheVerdict`, `TestDeclarationsCheckDefaultsToTheWorkingDirectory`.
+
+### 4.14 `grain access list|allow|deny` {#CLI-63}
+
+Manages the allowed users and groups (Settings -> Access): who may sign in when authenticated by Cloud IAP or another registered IdentityVerifier.
+
+- `list` (`ls`, and the default) calls `GET /api/access/principals` and prints each entry with who added it and when. It also warns about every `-ui-allowed-principals` flag entry that was dropped on import, since only `user:` and `group:` entries are supported. `-json` prints the response.
+- `allow <user:<email>|group:<email>>` (`add`) calls `POST /api/access/principals` and prints `allowed <entry>`. Adding an existing entry is a no-op.
+- `deny <user:<email>|group:<email>>` calls `DELETE /api/access/principals/{entry}` and prints `removed <entry>`.
+
+An unknown subcommand fails with `unknown access subcommand "<v>"` and the usage, which is hand-written. **Scope:** `access:read` for `list`, `access:write` for the others.
+
+<!-- BEGIN GENERATED FLAGS: grain access -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/access_test.go`: `TestGrainAccessCLI`.
 
 ---
 
@@ -1005,7 +1027,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-run-host-credential-dir` | string |  |  | the shared credential directory every run host mounts read-write, as a directory and at the same path (only used with -run-host-image) |
 | `-run-host-daemon-url` | string |  |  | the API address a run host's mcpserver is given, when not this process's own: a run pod needs one that outlives the daemon pod, e.g. http://grain.grain.svc |
 | `-run-host-dir` | string |  |  | where run hosts' spools and staging live, seen at the same path by the daemon and every run host (default <data-dir>/runhosts; under -k8s-run-host-rwx, on that volume) |
-| `-run-host-image` | string |  |  | drive each claude run in a run host of this image: a container that is a sibling of the daemon, not a child of it, writing to a spool the daemon tails (pkg/runhost, design/design/non-disruptive-upgrade.design.md). Normally the deployment image itself ("self" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes: a run host cannot reach a container sandbox |
+| `-run-host-image` | string |  |  | drive each claude run in a run host of this image: a container that is a sibling of the daemon, not a child of it, writing to a spool the daemon tails (pkg/runhost, design/design/non-disruptive-upgrade.design.md). Normally the deployment image itself ("self" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes or -host-sandboxes: a run host cannot reach either sandbox |
 | `-sandbox-access-addr` | string |  |  | k8s-granule only: address to run the sandbox-access acceptor on (":4244"), which every sandbox pod's wrapper then dials out to over mTLS with its own certificate and token (pkg/sandboxaccess, design/design/grain-on-gke.design.md "Sandbox access"); empty leaves it off and builds pods as before |
 | `-sandbox-access-ca-secret` | string |  |  | Secret Manager secret (projects/<p>/secrets/<s>) holding the sandbox-access CA, read through Workload Identity and generated into it on first start; empty keeps the CA in <data-dir>/sandbox-access-ca.pem |
 | `-sandbox-access-dial` | string |  |  | the address sandbox wrappers dial the acceptor at; empty is grain-access.<-k8s-namespace>.svc:4244, the Service deploy/kubernetes/grain-granule.yaml creates |
@@ -1029,7 +1051,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-ui-access-session-lifetime` | duration | `2160h0m0s` |  | on this single-tenant daemon, how long a browser stays signed in after entering the access code without using the UI; each use renews it. Rotating the code (grain access-code rotate) ends every session at once |
 | `-ui-addr` | string | `"0.0.0.0:4242"` |  | address to serve the UI/API on, in-process, over this same store -- empty disables it |
 | `-ui-allowed-hosts` | string |  |  | comma-separated host names the UI/API answers to besides IP literals, localhost and this machine's own hostname ("grain.example.com", "*.example.com"); a request with any other Host header is refused with 421, which is what stops a DNS-rebinding page reaching a loopback-bound API (grain#2380). Checked on every request when this is set or -ui-addr names a specific address; on an every-interface -ui-addr with this unset, on loopback requests only. "*" turns the check off |
-| `-ui-allowed-principals` | string |  | $GRAIN_ALLOWED_PRINCIPALS | comma-separated principals admitted when authenticated by IAP or another registered IdentityVerifier (user:<email>, serviceAccount:<email>, group:<email>, domain:<domain>); defaults to $GRAIN_ALLOWED_PRINCIPALS, and when unset to the deployment owner plus the service accounts grain provisions |
+| `-ui-allowed-principals` | string |  |  | deprecated: imported once on first start when the database allowlist is empty (user:<email> and group:<email> only; serviceAccount: and domain: entries are logged and dropped), then ignored. Manage allowed users and groups in Settings -> Access or with 'grain access' |
 | `-ui-iap-audience` | string |  | $GRAIN_IAP_AUDIENCE | the audience a signed X-Goog-IAP-JWT-Assertion must carry for the UI/API to accept the identity in it, or several separated by commas -- IAP's /projects/NUMBER/global/backendServices/ID or /projects/NUMBER/apps/PROJECT, or what a BeyondCorp tunnel's assertion names (the proxy's own docs); defaults to $GRAIN_IAP_AUDIENCE. With none, no assertion is accepted |
 | `-ui-iap-issuer` | string |  | $GRAIN_IAP_ISSUER | the issuer a signed assertion must carry; defaults to $GRAIN_IAP_ISSUER, then https://cloud.google.com/iap |
 | `-ui-iap-keys-url` | string |  | $GRAIN_IAP_KEYS_URL | where the signing keys for those assertions are published (IAP's PEM map or a JWK set); defaults to $GRAIN_IAP_KEYS_URL, then https://www.gstatic.com/iap/verify/public_key |
@@ -1089,7 +1111,7 @@ Serves the task UI on localhost over a throwaway store of fake tasks. Every call
 | `-sensitive-hold` | bool |  |  | seed a change held by a sensitive path trigger, and a failed trigger declaration read |
 | `-staging` | bool |  |  | run two fake persistent sandboxes, one on a /staging/ sub-path and one on a host port, for the rail's Staging group |
 | `-stalled-tasks` | bool |  |  | hand the UI the orchestrator's stall deadlines and seed a queued task, a run and a deferral past them, for the Inbox's stuck-task group |
-| `-ui-allowed-principals` | string |  | $GRAIN_ALLOWED_PRINCIPALS | comma-separated principals admitted when authenticated by IAP or another registered IdentityVerifier (user:<email>, serviceAccount:<email>, group:<email>, domain:<domain>); defaults to $GRAIN_ALLOWED_PRINCIPALS, and when unset to the deployment owner plus the service accounts grain provisions |
+| `-ui-allowed-principals` | string |  |  | deprecated: imported once on first start when the database allowlist is empty (user:<email> and group:<email> only; serviceAccount: and domain: entries are logged and dropped), then ignored. Manage allowed users and groups in Settings -> Access or with 'grain access' |
 | `-ui-cloud-identity-endpoint` | string |  |  | resolve -ui-allowed-principals' group: entries against this Cloud Identity API base URL (a test stand-in) rather than https://cloudidentity.googleapis.com |
 | `-ui-iap-audience` | string |  |  | as on grain daemon: the audience a signed X-Goog-IAP-JWT-Assertion must carry for the demo to sign its caller in from it |
 | `-ui-iap-issuer` | string |  |  | as on grain daemon: the issuer a signed assertion must carry (default https://cloud.google.com/iap) |
