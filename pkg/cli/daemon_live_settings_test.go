@@ -126,18 +126,17 @@ func TestLiveConfigRebuildsCapabilityProvidersWhenGCPChanges(t *testing.T) {
 		Capabilities: model.NewCapabilityRegistry(daemon.CapabilityProviders(cfg, nil, daemon.NewModelProxies(), nil, nil)...),
 	}}
 
-	if _, ok := deps.Config.Capabilities.Lookup("gcp-key"); ok {
-		t.Fatal("gcp-key is registered with no GCP project configured")
+	if _, ok := deps.Config.Capabilities.Lookup("gemini-key"); ok {
+		t.Fatal("gemini-key is registered with no GCP project configured")
 	}
 
 	changed := cfg.ToModelConfig()
 	changed.GCPProject = "acme-proj"
-	changed.GCPServiceAccountEmail = "agent@acme-proj.iam.gserviceaccount.com"
 	putConfig(t, store, changed)
 	live.Refresh(ctx, &deps)
 
-	if _, ok := deps.Config.Capabilities.Lookup("gcp-key"); !ok {
-		t.Fatal("gcp-key is still unregistered after a GCP project was configured -- the registry was not rebuilt")
+	if _, ok := deps.Config.Capabilities.Lookup("gemini-key"); !ok {
+		t.Fatal("gemini-key is still unregistered after a GCP project was configured -- the registry was not rebuilt")
 	}
 }
 

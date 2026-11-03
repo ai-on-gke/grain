@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { useContext } from "react";
+import { Alert } from "@mui/material";
 import CapabilityServersPanel from "../CapabilityServersPanel.jsx";
 import CapabilityPolicyEditor from "../CapabilityPolicyEditor.jsx";
 import ApiScopeSetsPanel from "../ApiScopeSetsPanel.jsx";
@@ -35,6 +36,18 @@ export default function CapabilitiesSection({
   );
   return (
     <>
+      <Alert
+        severity="info"
+        data-testid="gcp-key-deprecation-notice"
+        sx={{ mb: 2 }}
+      >
+        Deprecated: bare <code>gcp-key</code> and{" "}
+        <code>gcp-key:&lt;name&gt;</code> in-process grants were retired onto{" "}
+        <code>https://grain.dev/capabilities/gcp#gcp-key</code> permission sets.
+        They remain readable as aliases for one release; update{" "}
+        <code>.grain</code> declarations and external configs to{" "}
+        <code>gcp#gcp-key</code>.
+      </Alert>
       {/* The servers panel draws its own read-only form (readOnly), and
           keeps its list clickable so one server's page can still be
           opened; the card's disabled fieldset would stop that too. */}
