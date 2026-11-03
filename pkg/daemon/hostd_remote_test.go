@@ -66,7 +66,26 @@ func startDialingHostd(t *testing.T, url, token, allowlist string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { srv.Serve(ctx); close(done) }()
-	t.Cleanup(func() { cancel(); <-done })
+	t.Cleanup(func() {
+		cancel()
+		<-done
+		// Detached process reaper goroutines write exit.json under StateDir
+		// after Serve returns; wait for them before t.TempDir's RemoveAll.
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			exited := true
+			for _, p := range srv.Processes() {
+				if !p.Exited {
+					exited = false
+					break
+				}
+			}
+			if exited {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
 }
 
 // A daemon on Kubernetes has no host of its own, but one taking a hostd
