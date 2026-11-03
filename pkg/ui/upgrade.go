@@ -135,6 +135,10 @@ type upgradeStatusResponse struct {
 	DefaultImageRef  string               `json:"defaultImageRef,omitempty"`
 	ImageRepos       []string             `json:"imageRepos,omitempty"`
 	DiscardedRC      *upgrade.DiscardedRC `json:"discardedRc,omitempty"`
+	// RetractedRelease is set when the release this deployment runs has
+	// been retracted since it upgraded onto it: the pane tells the
+	// operator to move.
+	RetractedRelease *upgrade.RetractedRelease `json:"retractedRelease,omitempty"`
 }
 
 // upgradeScheduledResponse is the pending schedule and how close it is
@@ -276,11 +280,18 @@ func upgradeStatusResponseFrom(up Upgrader, status upgrade.Status, inFlightRuns 
 	if dr, ok := up.(discardedRCReporter); ok {
 		resp.DiscardedRC = dr.CachedDiscardedRC(context.Background())
 	}
+	if rr, ok := up.(retractedReleaseReporter); ok {
+		resp.RetractedRelease = rr.CachedRetractedRelease(context.Background())
+	}
 	return resp
 }
 
 type discardedRCReporter interface {
 	CachedDiscardedRC(ctx context.Context) *upgrade.DiscardedRC
+}
+
+type retractedReleaseReporter interface {
+	CachedRetractedRelease(ctx context.Context) *upgrade.RetractedRelease
 }
 
 // imageUpgrader is the optional half of Upgrader that lets an operator
