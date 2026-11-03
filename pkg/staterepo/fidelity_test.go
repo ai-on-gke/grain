@@ -1236,6 +1236,10 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 			[]any{"a1b2", "base-green", `{"repo":"owner/docs","branch":"main"}`, "close", "automation:task-goals", time.Now().UTC(), awkward, time.Now().UTC(), 6, 43200, "hold"}},
 		{"INSERT INTO `tuning_recommendation` (`target_parameter`, `proposed_value`, `cooldown_expiry`, `adopted`, `task_id`, `created_at`) VALUES (?, ?, ?, ?, ?, ?)",
 			[]any{"merge_batch_size", "4", "2026-10-12T00:00:00Z", 0, "a1b2", "2026-10-10T12:00:00Z"}},
+		{"INSERT INTO `allowed_principal` (`entry`, `added_by`, `added_at`) VALUES (?, ?, ?)",
+			[]any{"user:alice@example.com", "the access code", time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)}},
+		{"INSERT INTO `allowed_principal_migration` (`id`, `imported_at`, `source`, `dropped`) VALUES (?, ?, ?, ?)",
+			[]any{1, time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC), "-ui-allowed-principals", `["domain:example.com"]`}},
 	} {
 		if _, err := db.ExecContext(ctx, stmt.sql, stmt.args...); err != nil {
 			t.Fatalf("writing %s: %v", stmt.sql, err)

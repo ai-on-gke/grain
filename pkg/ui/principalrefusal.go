@@ -60,16 +60,15 @@ func registeredPrincipalAdvice() PrincipalAdvice {
 	return principalAdvice
 }
 
-// defaultPrincipalAdvice names the daemon's own flag and environment
-// variable.
-func defaultPrincipalAdvice(entry, rerunPrincipals string) string {
-	if rerunPrincipals == "" {
-		return "To let them in, the owner adds them to the daemon's -ui-allowed-principals " +
-			"(or GRAIN_ALLOWED_PRINCIPALS in its environment) and restarts it."
+const notAllowedPrincipalSuffix = " is not on the allowed users and groups list (Settings -> Access)"
+
+// defaultPrincipalAdvice names Settings -> Access and `grain access allow`.
+func defaultPrincipalAdvice(entry, _ string) string {
+	if entry == "" || strings.HasPrefix(entry, "serviceAccount:") {
+		return "To let them in, an allowed user or access-code holder can add their user or group under Settings -> Access, or run grain access allow."
 	}
-	return "To let them in, the owner adds " + entry + " to the daemon's -ui-allowed-principals " +
-		"(or GRAIN_ALLOWED_PRINCIPALS in its environment) and restarts it. The list replaces the default, " +
-		"so it keeps the entries already allowed: grain init -daemon-arg -ui-allowed-principals='" + rerunPrincipals + "'"
+	return "To let them in, an allowed user or access-code holder can add " + entry +
+		" under Settings -> Access, or run: grain access allow " + entry
 }
 
 // plainPrincipalList is whether s is made of nothing but the characters an
@@ -102,6 +101,9 @@ func (s *Server) principalRefusalAdvice(r *http.Request, id VerifiedIdentity) st
 		var names []string
 		if entries, err := s.effectiveAllowedPrincipals(r.Context()); err == nil {
 			for _, e := range entries {
+				if e.Prefix == "serviceAccount" {
+					continue
+				}
 				if n := e.Prefix + ":" + e.Value; n != entry {
 					names = append(names, n)
 				}
@@ -185,7 +187,7 @@ func (s *Server) writePrincipalRefusedPage(w http.ResponseWriter, r *http.Reques
 	}
 	// A refusal other than plain absence from the list -- a group lookup
 	// that failed, an allowlist that does not parse -- is worth saying.
-	if msg := err.Error(); !strings.HasSuffix(msg, " is not allowed by -ui-allowed-principals") {
+	if msg := err.Error(); !strings.HasSuffix(msg, notAllowedPrincipalSuffix) {
 		page.Reason = msg
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
