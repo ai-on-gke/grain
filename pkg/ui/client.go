@@ -430,6 +430,13 @@ func (c *Client) normalizeCapabilityIDs(id string) ([]string, error) {
 }
 
 func (c *Client) capabilityByID(id string) (Capability, bool) {
+	// grain#ci is a capability reference, which the branch below would
+	// take as grantable, but nobody grants it by hand in either
+	// spelling: a repository's CI Mode does (grainci.Refusal). Answering
+	// no here is what sends every picker to capabilityRefusal.
+	if grainci.IsGrant(id) {
+		return Capability{}, false
+	}
 	if model.IsCapabilityRef(id) {
 		if model.CheckCapabilityGrantSyntax(id) != nil {
 			return Capability{}, false
@@ -3363,7 +3370,7 @@ func (c *Client) park(ctx context.Context, taskID, reason string, now time.Time)
 func (c *Client) grantsFor(ids []string, via model.GrantSource) ([]model.Grant, error) {
 	grants := make([]model.Grant, 0, len(ids))
 	for _, id := range ids {
-		// grain-ci is the target repository's CI Mode to grant, never
+		// grain#ci (or the retired grain-ci) is the target repository's CI Mode to grant, never
 		// a caller's (pkg/capability/grainci's package doc), and
 		// creationGrants adds or strips it from that mode after this.
 		// A caller naming it is refused with the words that say so. A
@@ -3371,7 +3378,7 @@ func (c *Client) grantsFor(ids []string, via model.GrantSource) ([]model.Grant, 
 		// refused it there -- is not: dropping it changes nothing the
 		// mode does not already decide, and refusing it would fail
 		// every task filed against that repository.
-		if id == grainci.CapabilityName {
+		if grainci.IsGrant(id) {
 			if via == model.GrantByDefault {
 				continue
 			}
@@ -3463,13 +3470,13 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 				if id == "" {
 					continue
 				}
-				// An agent's proposal may name grain-ci because its own
+				// An agent's proposal may name grain#ci because its own
 				// task holds it. That is passed over rather than refused:
 				// the target repository's CI Mode decides it below, as it
 				// does for every task, and a propose_task call failing
 				// on a grant grain itself handed the agent would be the
 				// wrong lesson.
-				if id == grainci.CapabilityName {
+				if grainci.IsGrant(id) {
 					continue
 				}
 				normalizedIDs, err := c.normalizeCapabilityIDs(id)
@@ -3532,21 +3539,21 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 		if usesGrainCI {
 			found := false
 			for _, grant := range grants {
-				if grant.Capability == grainci.CapabilityName {
+				if grainci.IsGrant(grant.Capability) {
 					found = true
 					break
 				}
 			}
 			if !found {
 				grants = append(grants, model.Grant{
-					Capability: grainci.CapabilityName,
+					Capability: grainci.Grant,
 					Via:        model.GrantByDefault,
 				})
 			}
 		} else {
 			filtered := make([]model.Grant, 0, len(grants))
 			for _, grant := range grants {
-				if grant.Capability != grainci.CapabilityName {
+				if !grainci.IsGrant(grant.Capability) {
 					filtered = append(filtered, grant)
 				}
 			}
@@ -3561,7 +3568,7 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 	allowed := grants[:0:0]
 	var droppedRefusals []string
 	for _, g := range grants {
-		if g.Capability != grainci.CapabilityName {
+		if !grainci.IsGrant(g.Capability) {
 			if keyName, ok := model.GCPKeyName(g.Capability); ok && keyName != "" && c.Store != nil {
 				k, err := c.Store.GetGCPKey(ctx, keyName)
 				if err != nil {
@@ -6715,7 +6722,14 @@ func agentEscalatedCapabilities(task, requester model.Task) []string {
 		held[g.Capability] = true
 		out = append(out, g.Capability)
 	}
-	return append(out, model.UncoveredCapabilityRefs(task.Grants, requester.Grants)...)
+	childRefs := make([]model.Grant, 0, len(task.Grants))
+	for _, g := range task.Grants {
+		if g.Via == model.GrantByDefault && model.IsGrainCIGrant(g.Capability) {
+			continue
+		}
+		childRefs = append(childRefs, g)
+	}
+	return append(out, model.UncoveredCapabilityRefs(childRefs, requester.Grants)...)
 }
 
 // runNowComment is what a run-now leaves on the task's own thread. It

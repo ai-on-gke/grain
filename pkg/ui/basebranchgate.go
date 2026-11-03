@@ -558,11 +558,11 @@ func baseBranchGateDetail(g BaseBranchGate) string {
 	b = append(b, baseBranchGateSince(g))
 	switch g.Reason {
 	case baseGateNotEnabled:
-		// The CI Mode, and not the capability: grain-ci cannot be attached
+		// The CI Mode, and not the grant: grain#ci cannot be attached
 		// by hand (grainci.Refusal), which is the advice ciNotEnabledMessage
 		// stopped giving for the same reason.
 		b = append(b, "Setting this repository's CI Mode to \"Use Grain CI\" on its"+
-			" page is what enrols the branch; the "+grainci.CapabilityName+" capability"+
+			" page is what enrols the branch; the "+model.GrainCIRef+" grant"+
 			" cannot be attached by hand.")
 	case baseGateRunUnfinished:
 		if g.RunID != "" {
