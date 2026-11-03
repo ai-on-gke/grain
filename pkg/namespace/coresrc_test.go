@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/redact"
 )
 
 func writeTree(t *testing.T, root string, files map[string]string) {
@@ -297,5 +299,55 @@ func TestWalkCapIsHigherForSrcOnly(t *testing.T) {
 		if walkCap(scheme) != maxWalkFiles {
 			t.Errorf("walkCap(%s) = %d, want %d", scheme, walkCap(scheme), maxWalkFiles)
 		}
+	}
+}
+
+// A grep redacts only the lines it prints, through one redactor per
+// request, yet still never finds a secret by its value nor prints one in
+// a context line: redacting every line of every file first made a grep
+// of core's src://pkg take 15s (docs/test-runs/2026-11-03-sandbox-cli-edges.md).
+func TestGrepRedactsOnlyWhatItPrintsAndStillHidesSecrets(t *testing.T) {
+	const secret = "custom-secret-value-424242"
+	const ghToken = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+	root := t.TempDir()
+	files := map[string]string{
+		"pkg/a/a.go": "package a\n// token " + secret + " here\nfunc Before() {}\n" + ghToken + "\nfunc Wanted() {}\nvar after = \"" + secret + "\"\n",
+	}
+	for i := 0; i < 40; i++ {
+		files[fmt.Sprintf("pkg/b/f%02d.go", i)] = "package b\n"
+	}
+	writeTree(t, root, files)
+	builds := 0
+	s := &Server{SrcDir: root, NewRedactor: func() *redact.Redactor {
+		builds++
+		return redact.New([]redact.KnownValue{{Label: "secret custom", Value: secret}})
+	}}
+	scope := Scope{MayReadSrc: true}
+	grep := func(pattern string, ctxLines int) GrepResult {
+		t.Helper()
+		res, err := s.Grep(context.Background(), scope, "src", "pkg", GrepOptions{Pattern: pattern, ContextLines: ctxLines})
+		if err != nil {
+			t.Fatalf("grep %q: %v", pattern, err)
+		}
+		return res
+	}
+	for _, probe := range []string{secret, "custom-secret", ghToken, "ghp_[A-Z]+"} {
+		if res := grep(probe, 0); res.Matches != 0 || strings.Contains(res.Output, secret) || strings.Contains(res.Output, ghToken) {
+			t.Errorf("grep %q found a secret by its value: %d %q", probe, res.Matches, res.Output)
+		}
+	}
+	builds = 0
+	res := grep(`^func Wanted\(`, 2)
+	if res.Matches != 1 || !strings.Contains(res.Output, "a/a.go:5:func Wanted() {}") {
+		t.Errorf("grep for Wanted = %d %q", res.Matches, res.Output)
+	}
+	if strings.Contains(res.Output, secret) || strings.Contains(res.Output, ghToken) || !strings.Contains(res.Output, "[redacted: secret custom]") {
+		t.Errorf("a context line printed a secret: %q", res.Output)
+	}
+	if builds != 1 {
+		t.Errorf("one grep over %d files built %d redactors, want 1", len(files), builds)
+	}
+	if res := grep("token", 0); res.Matches != 1 || !strings.Contains(res.Output, "// token [redacted: secret custom] here") {
+		t.Errorf("a line that matches beside a secret = %d %q", res.Matches, res.Output)
 	}
 }
