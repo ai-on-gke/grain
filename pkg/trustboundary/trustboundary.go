@@ -255,7 +255,9 @@ var Categories = []Category{
 		Review: []string{
 			"the change cannot move a `vX.Y.Z` or `latest` git tag or image except as a result of a person's " +
 				"approval in promote-release.yml",
-			"it does not widen any workflow's `permissions:`, the secrets it reads, or who may dispatch it",
+			"it does not widen any workflow's `permissions:` (a GitHub workflow's) or `capabilities:` and " +
+				"`optional-capabilities:` (a grain workflow's), the secrets it reads, or who or what may " +
+				"dispatch it (`on:`)",
 			"it does not weaken a check that refuses anybody but a person (`GRAIN_CI_REQUESTED_BY_KIND`)",
 			"in scripts/release.conf, it does not raise `RELEASE_MAJOR`, which only a person may do",
 		},
