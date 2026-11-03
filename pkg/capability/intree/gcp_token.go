@@ -204,7 +204,7 @@ func (t *gcpTokens) accessToken(w http.ResponseWriter, r *http.Request, attemptI
 	if m == nil {
 		return
 	}
-	tok, exp, err := m.AccessToken(r.Context(), a.set, a.deadline)
+	tok, exp, err := m.AccessToken(r.Context(), a.set, a.account, a.deadline)
 	if err != nil {
 		t.failed(w, attemptID, a, "an access token", err)
 		return
@@ -226,7 +226,7 @@ func (t *gcpTokens) idToken(w http.ResponseWriter, r *http.Request, attemptID st
 	if m == nil {
 		return
 	}
-	tok, err := m.IDToken(r.Context(), a.set, aud, a.deadline)
+	tok, err := m.IDToken(r.Context(), a.set, a.account, aud, a.deadline)
 	if err != nil {
 		t.failed(w, attemptID, a, "an ID token", err)
 		return

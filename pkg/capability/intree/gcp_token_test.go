@@ -223,6 +223,12 @@ func TestGCPExistingAccountSetsArePersonGranted(t *testing.T) {
 	if protocol.Covers([]protocol.Grant{org}, org) {
 		t.Error("an agent holding the existing-account set could pass it on")
 	}
+	// The deprecated account argument chooses the set too, over
+	// permission_set, so it cannot name the reserved set instead.
+	viaAccount := protocol.Grant{Ref: ref, Args: validated(t, ps, "gcp-key", map[string]any{"account": "org"})}
+	if protocol.GrantKindOf(viaAccount) != protocol.GrantByPerson || protocol.Covers([]protocol.Grant{viaAccount}, viaAccount) {
+		t.Error("account: org passes the existing-account set on")
+	}
 	if protocol.GrantKindOf(reader) != protocol.GrantCovered || !protocol.Covers([]protocol.Grant{reader}, reader) {
 		t.Error("the pool set is no longer covered by its own grant")
 	}

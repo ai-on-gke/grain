@@ -282,12 +282,21 @@ func newGCPMethod(m *gcpsets.Manager, now func() time.Time, report string, token
 		names = append(names, n)
 	}
 	setArg := map[string]any{"type": "string", "title": "Permission set", "enum": names, "default": names[0]}
+	accountArg := map[string]any{"type": "string", "pattern": gcpAccountName.String(), "description": "Deprecated: the old name for permission_set; \"default\" is the first set."}
 	if reserved := m.Config.PersonGrantedSets(); len(reserved) > 0 {
 		vals := make([]any, 0, len(reserved))
 		for _, n := range reserved {
 			vals = append(vals, n)
 		}
 		setArg[protocol.PersonGrantedArgKey] = vals
+		// account chooses the set too, and wins over permission_set, so
+		// it reserves the same sets -- and "default" when that is the
+		// first set and the first set is reserved.
+		acctVals := append([]any(nil), vals...)
+		if m.Config.Set("default") == nil && m.Config.Sets[0].PersonGranted {
+			acctVals = append(acctVals, "default")
+		}
+		accountArg[protocol.PersonGrantedArgKey] = acctVals
 	}
 	desc := "Mint a per-attempt key for a service account of one of this deployment's GCP permission sets, deleted at release or past the attempt's deadline -- or, for a set over an existing service account with credential: token, short-lived access tokens for it by impersonation, and no key at all."
 	if report != "" {
@@ -303,7 +312,7 @@ func newGCPMethod(m *gcpsets.Manager, now func() time.Time, report string, token
 				"permission_set": setArg,
 				"primary": map[string]any{"type": "boolean", "default": true,
 					"description": "Place the key at ~/.gcp-service-account.json and activate it; false places it at ~/.gcp-keys/<set>.json only, for a task's second set."},
-				"account":  map[string]any{"type": "string", "pattern": gcpAccountName.String(), "description": "Deprecated: the old name for permission_set; \"default\" is the first set."},
+				"account":  accountArg,
 				"activate": map[string]any{"type": "boolean", "description": "Deprecated: a primary key is always activated."},
 			},
 		},

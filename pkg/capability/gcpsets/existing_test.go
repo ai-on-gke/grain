@@ -184,24 +184,30 @@ func TestExistingAccountTokenModeMintsNoKey(t *testing.T) {
 	}
 
 	deadline := now.Add(2 * time.Hour)
-	tok, exp, err := m.AccessToken(ctx, "org", deadline)
+	tok, exp, err := m.AccessToken(ctx, "org", orgSA, deadline)
 	if err != nil || !strings.HasSuffix(tok, orgSA) {
 		t.Fatalf("AccessToken = %q, %v", tok, err)
 	}
-	if want := now.Add(gcpsets.MaxTokenLifetime + time.Second); !exp.Equal(want) {
+	if want := now.Add(gcpsets.MaxTokenLifetime); !exp.Equal(want) {
 		t.Fatalf("first token expires %s, want an hour (%s)", exp, want)
 	}
 	// Near the deadline a refresh lives only until it.
 	now = deadline.Add(-10 * time.Minute)
-	if _, exp, err = m.AccessToken(ctx, "org", deadline); err != nil || exp.After(deadline.Add(time.Second)) {
+	if _, exp, err = m.AccessToken(ctx, "org", orgSA, deadline); err != nil || exp.After(deadline.Add(time.Second)) {
 		t.Fatalf("a refresh near the deadline expires %s (%v), past %s", exp, err, deadline)
 	}
 	now = deadline.Add(time.Second)
 	var refusal *gcpsets.Refusal
-	if _, _, err := m.AccessToken(ctx, "org", deadline); !errors.As(err, &refusal) {
+	if _, _, err := m.AccessToken(ctx, "org", orgSA, deadline); !errors.As(err, &refusal) {
 		t.Fatalf("a refresh past the deadline: %v, want a refusal", err)
 	}
-	if id, err := m.IDToken(ctx, "org", "https://svc.example.com", deadline.Add(time.Hour)); err != nil || id != "id-https://svc.example.com-"+orgSA {
+	if _, _, err := m.AccessToken(ctx, "org", "someone-else@grain-test-proj.iam.gserviceaccount.com", deadline.Add(time.Hour)); !errors.As(err, &refusal) {
+		t.Fatalf("a token for an account the grant was not given for: %v, want a refusal", err)
+	}
+	if _, err := m.IDToken(ctx, "org", "someone-else@grain-test-proj.iam.gserviceaccount.com", "https://svc.example.com", deadline.Add(time.Hour)); !errors.As(err, &refusal) {
+		t.Fatalf("an ID token for an account the grant was not given for: %v, want a refusal", err)
+	}
+	if id, err := m.IDToken(ctx, "org", orgSA, "https://svc.example.com", deadline.Add(time.Hour)); err != nil || id != "id-https://svc.example.com-"+orgSA {
 		t.Fatalf("IDToken = %q, %v", id, err)
 	}
 	if err := m.Release(ctx, "a1"); err != nil || len(m.Leases()) != 0 {

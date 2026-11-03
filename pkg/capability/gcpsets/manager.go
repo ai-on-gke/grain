@@ -745,13 +745,18 @@ func (m *Manager) remaining(set *PermissionSet, deadline time.Time) (time.Durati
 	if left > set.MaxLease {
 		left = set.MaxLease
 	}
+	left = left.Round(time.Second) + time.Second
 	if left > MaxTokenLifetime {
+		// generateAccessToken refuses a lifetime past its limit.
 		left = MaxTokenLifetime
 	}
-	return left.Round(time.Second) + time.Second, nil
+	return left, nil
 }
 
-func (m *Manager) tokenSet(setName string) (*PermissionSet, error) {
+// tokenSet is token-mode set setName, refused unless it still acts as
+// account, the account its grant was given for: a set reconfigured to
+// another account does not hand a running grant that account's tokens.
+func (m *Manager) tokenSet(setName, account string) (*PermissionSet, error) {
 	set := m.Config.Set(setName)
 	if set == nil {
 		return nil, &Refusal{"no permission set is called " + setName}
@@ -759,14 +764,18 @@ func (m *Manager) tokenSet(setName string) (*PermissionSet, error) {
 	if !set.TokenMode() {
 		return nil, &Refusal{"permission set " + setName + " does not mint access tokens"}
 	}
+	if set.ServiceAccount != account {
+		return nil, &Refusal{"permission set " + setName + " no longer acts as " + account + ", the account this grant was given for"}
+	}
 	return set, nil
 }
 
 // AccessToken is a fresh access token for token-mode set setName's
-// account, for a grant whose deadline is deadline: it lives until then,
-// at most MaxTokenLifetime, so a refresh is always another call here.
-func (m *Manager) AccessToken(ctx context.Context, setName string, deadline time.Time) (string, time.Time, error) {
-	set, err := m.tokenSet(setName)
+// account, for a grant of account whose deadline is deadline: it lives
+// until then, at most MaxTokenLifetime, so a refresh is always another
+// call here.
+func (m *Manager) AccessToken(ctx context.Context, setName, account string, deadline time.Time) (string, time.Time, error) {
+	set, err := m.tokenSet(setName, account)
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -786,9 +795,9 @@ func (m *Manager) AccessToken(ctx context.Context, setName string, deadline time
 }
 
 // IDToken is an ID token for token-mode set setName's account with
-// audience, for a grant whose deadline has not passed.
-func (m *Manager) IDToken(ctx context.Context, setName, audience string, deadline time.Time) (string, error) {
-	set, err := m.tokenSet(setName)
+// audience, for a grant of account whose deadline has not passed.
+func (m *Manager) IDToken(ctx context.Context, setName, account, audience string, deadline time.Time) (string, error) {
+	set, err := m.tokenSet(setName, account)
 	if err != nil {
 		return "", err
 	}

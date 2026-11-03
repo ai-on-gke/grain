@@ -344,6 +344,9 @@ func (c *Cloud) GenerateAccessToken(_ context.Context, email string, _ []string,
 	if !c.accountAllows(email, "iam.serviceAccounts.getAccessToken") {
 		return "", time.Time{}, fmt.Errorf("googleapi: Error 403: Permission 'iam.serviceAccounts.getAccessToken' denied on resource %s, PERMISSION_DENIED", email)
 	}
+	if lifetime > gcpsets.MaxTokenLifetime {
+		return "", time.Time{}, fmt.Errorf("googleapi: Error 400: The lifetime %s is past the maximum of %s, INVALID_ARGUMENT", lifetime, gcpsets.MaxTokenLifetime)
+	}
 	c.n++
 	c.Calls["GenerateAccessToken"]++
 	c.Lifetimes = append(c.Lifetimes, lifetime)
