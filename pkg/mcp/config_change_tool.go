@@ -135,9 +135,9 @@ func NewProposeConfigChangeTools(proposer ConfigChangeProposer, taskID string, t
 				// edit the next reconcile undoes, say); the agent that
 				// wrote the change is told the same, so it can revise
 				// rather than describe it as all green.
-				verdict = "It passed config validation with warnings the person also sees: " +
+				verdict = "It passed config validation with warnings, shown to the person beside the diff: " +
 					strings.Join(pending.Validation.Warnings, "; ") + ". If a warning means the change " +
-					"will not do what you intended, fix it and call propose_config_change again now."
+					"will not do what you intended, say so when you are woken, and revise it then."
 			}
 			return Result{Text: fmt.Sprintf("Proposed %s (%s, %d file(s)). %s The person sees the diff with "+
 				"Approve and Reject in this chat. This ends your turn: stop here and take no further "+
