@@ -1523,16 +1523,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // showing. Its second argument is a release the address named that the
   // repo does not have: the pane shows the newest instead, and the
   // address is corrected the way one naming a missing task is -- replaced
-  // rather than pushed, and saying what it could not find.
+  // rather than pushed. The pane says what it could not find itself, in
+  // place and until it is dismissed, so no toast repeats it here.
   const selectRelease = useCallback((release, missing) => {
     setOpenRelease((prev) => {
-      if (missing) {
-        const notes = droppedRef.current?.missing || [];
-        const message = missingMessage("release", missing);
-        droppedRef.current = {
-          missing: notes.includes(message) ? notes : [...notes, message],
-        };
-      } else if (release === null && prev !== null) {
+      if (missing || (release === null && prev !== null)) {
         droppedRef.current = droppedRef.current || { missing: [] };
       }
       return release;

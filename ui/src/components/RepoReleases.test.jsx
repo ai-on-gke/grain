@@ -338,6 +338,32 @@ describe("RepoReleases", () => {
     expect(screen.getByRole("combobox", { name: "Release" })).toHaveTextContent(
       "newer",
     );
+    // In place, naming both the release asked for and the one shown,
+    // rather than as a toast that is gone before it is read.
+    expect(
+      screen.getByText(/acme\/widgets has no release named “gone”/),
+    ).toHaveTextContent(
+      "acme/widgets has no release named “gone” -- showing newer instead.",
+    );
+  });
+
+  it("drops the unknown-release notice once another release is picked", async () => {
+    setupApi({ releases: [newerRelease, activeRelease] });
+    const user = userEvent.setup();
+    render(
+      <RepoReleases
+        repo="acme/widgets"
+        release="gone"
+        onSelectRelease={() => {}}
+        onBack={() => {}}
+        showError={() => {}}
+      />,
+    );
+
+    await screen.findByText(/has no release named “gone”/);
+    await user.click(screen.getByRole("combobox", { name: "Release" }));
+    await user.click(screen.getByRole("option", { name: /^myfeat/ }));
+    expect(screen.queryByText(/has no release named/)).toBeNull();
   });
 
   it("says why Cut new RC is off while the current candidate is active", async () => {
