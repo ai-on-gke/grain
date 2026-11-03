@@ -689,3 +689,24 @@ func TestReadGrainTaskTranscriptIsCapped(t *testing.T) {
 		t.Errorf("text = %q, want the elision notice saying where the rest is", res.Text)
 	}
 }
+
+// A pull request that settled is said on its own line, merged or closed,
+// because a task closed before its pull request merged has no other
+// place in the record that says the change landed (task 2350).
+func TestTaskRecordSaysWhenItsPullRequestSettled(t *testing.T) {
+	now := at("2026-11-02T19:15:00Z")
+	merged := at("2026-11-02T12:00:00Z")
+	record := TaskRecord{TaskSummary: TaskSummary{ID: "2350", State: "closed"},
+		PullRequest: "https://forge.example/acme/widgets/pull/47", PullRequestMergedAt: &merged}
+	if got, want := renderTaskRecord(record, now), "Pull request: https://forge.example/acme/widgets/pull/47 -- merged 2026-11-02T12:00:00Z (7h ago)\n"; !strings.Contains(got, want) {
+		t.Fatalf("record:\n%s\nwant a line %q", got, want)
+	}
+	record.PullRequestMergedAt, record.PullRequestClosedAt = nil, &merged
+	if got := renderTaskRecord(record, now); !strings.Contains(got, "/pull/47 -- closed without merging 2026-11-02T12:00:00Z") {
+		t.Fatalf("record:\n%s\nwant the close said", got)
+	}
+	record.PullRequestClosedAt = nil
+	if got := renderTaskRecord(record, now); !strings.Contains(got, "Pull request: https://forge.example/acme/widgets/pull/47\n") {
+		t.Fatalf("record:\n%s\nwant an open pull request's line unchanged", got)
+	}
+}

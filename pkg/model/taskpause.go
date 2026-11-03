@@ -131,9 +131,9 @@ func (s *Store) Pause(ctx context.Context, p TaskPause) (bool, error) {
 		}
 		if _, err := tx.ExecContext(ctx,
 			"INSERT INTO `task_pause` (`task_id`,`paused_at`,`paused_by_kind`,`paused_by_id`,`from_state`,"+
-				"`immediate`,`grace_until`,`run_id`) VALUES (?,?,?,?,?,?,?,?)",
+				"`immediate`,`grace_until`,`run_id`,`paused_by_source`) VALUES (?,?,?,?,?,?,?,?,?)",
 			p.TaskID, p.PausedAt.UTC(), string(p.PausedBy.Kind), p.PausedBy.ID, string(p.FromState),
-			p.Immediate, timeOf(p.GraceUntil), nullable(p.RunID)); err != nil {
+			p.Immediate, timeOf(p.GraceUntil), nullable(p.RunID), string(p.PausedBy.Source)); err != nil {
 			return err
 		}
 		paused = true
@@ -207,20 +207,20 @@ func (s *Store) PausedSet(ctx context.Context) (map[string]TaskPause, error) {
 }
 
 const pauseColumns = "`task_id`,`paused_at`,`paused_by_kind`,`paused_by_id`,`from_state`,`immediate`," +
-	"`grace_until`,`run_id`"
+	"`grace_until`,`run_id`,`paused_by_source`"
 
 type rowScanner interface{ Scan(dest ...any) error }
 
 func scanPause(row rowScanner) (TaskPause, error) {
 	var p TaskPause
-	var kind, from string
+	var kind, from, source string
 	var grace sql.NullTime
 	var runID sql.NullString
 	if err := row.Scan(&p.TaskID, &p.PausedAt, &kind, &p.PausedBy.ID, &from, &p.Immediate,
-		&grace, &runID); err != nil {
+		&grace, &runID, &source); err != nil {
 		return TaskPause{}, err
 	}
-	p.PausedBy.Kind = PrincipalKind(kind)
+	p.PausedBy.Kind, p.PausedBy.Source = PrincipalKind(kind), AuthSource(source)
 	p.FromState = State(from)
 	p.GraceUntil = timePtr(grace)
 	p.RunID = runID.String

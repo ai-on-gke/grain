@@ -401,11 +401,69 @@ import "strconv"
 // own -hostd-token-file) is grain's only host agent. A pure drop: the
 // importer passes over a table this build lacks, so a dump carrying
 // either imports without it.
-const SchemaVersion = 87
+//
+// 88 rewrites stored `repo-read:<repo>` and `repo-write:<repo>` grants,
+// `repo_config`.`ci_capabilities` included, to
+// `https://grain.dev/capabilities/repo#read={"repo":"<repo>"}` and
+// `#write={"repo":"<repo>"}`: the in-process reporead and repowrite
+// providers are retired for the repo server's methods, whose grant carries
+// the CI-only rule and write's event gate itself.
+//
+// 89 rebuilds `merge_batch` with `task_id` in its primary key, so one
+// branch can hold an overlap re-check for each of several changes at once
+// (grain/task-2390). The rows are carried across with an empty task_id,
+// which the queue still reads, re-validates and cleans up as before.
+//
+// 90 changes no table: it folds retired 1-to-1 preset capability entries in
+// `grain_config`.`capability_policy`'s catalogue from `inProcess[<retired>]`
+// into `apiScopes.presets[<preset>]`, merging restrictions conservatively when
+// both exist, and rewrites retired task defaults in `catalogue.defaults`.
+//
+// 91 adds a `<p>_source` column beside every `<p>_kind`/`<p>_id` principal
+// pair (task, task_comment, task_pause, pipeline_pause, scheduled_upgrade,
+// memory, memory_document, release_note and task_event, which also gains
+// behalf_kind/behalf_id/behalf_source), and the config_audit table
+// (operator-attribution spec §1.3, §4.4, §7.1). No row is rewritten: a row
+// written before reads back with an empty Principal.Source.
+//
+// 92 adds the hostd registry: `hostd`, one row per grain hostd this
+// daemon takes host work through (the co-located one as `local`), and
+// `hostd_token`, the SHA-256 digests of each remote hostd's tokens.
+// `hostd` goes to the state repository; `hostd_token` never does
+// (staterepo.LocalTables).
+//
+// 93 routes host work per run: `task_hostd` (a task's hostd pin or label
+// selector), `task_run_hostd` (the hostd, instance and owner each run
+// went to) and a `hostd` column on `task_run_capability_audit`, ” for
+// every record written before.
+//
+// 94 adds `hostd` to `template` (model.Template.Hostd): the hostd pin or
+// label selector every task filed from it starts with.
+const SchemaVersion = 94
+
+// configAuditTable is the `config_audit` table: one row per change to the
+// deployment's configuration somebody made (model.ConfigAuditEntry,
+// operator-attribution spec §4.4). surface is what was changed
+// (`settings`, `repo:<owner/name>`, `schedule:<id>`, ...) and summary
+// what changed, with no secret values.
+const configAuditTable = `CREATE TABLE IF NOT EXISTS ` + "`config_audit`" + ` (
+  ` + "`id`" + `            INTEGER PRIMARY KEY AUTOINCREMENT,
+  ` + "`at`" + `            DATETIME NOT NULL,
+  ` + "`actor_kind`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_id`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_source`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`behalf_kind`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`behalf_id`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`behalf_source`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`surface`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`summary`" + `       TEXT     NOT NULL DEFAULT ''
+)`
 
 // taskEventTable is the `task_event` table: one row per close or reopen of
 // a task by somebody (model.TaskEvent). actor_kind/actor_id are the
-// model.Principal that asked; reason is what they said, "" for nothing;
+// model.Principal that asked, actor_source how it was established
+// (operator-attribution spec §1.3), and behalf_* whose request it relayed,
+// all ” for none; reason is what they said, "" for nothing;
 // detail is what grain did because of it -- the live run and CI runs a
 // close cancelled. Observation.ClosedAt only ever holds the current
 // closure, so this is the only record of a close somebody later undid.
@@ -419,6 +477,10 @@ const taskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
   ` + "`at`" + `         DATETIME NOT NULL,
   ` + "`actor_kind`" + ` TEXT     NOT NULL DEFAULT '',
   ` + "`actor_id`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_source`" + ` TEXT   NOT NULL DEFAULT '',
+  ` + "`behalf_kind`" + `  TEXT   NOT NULL DEFAULT '',
+  ` + "`behalf_id`" + `    TEXT   NOT NULL DEFAULT '',
+  ` + "`behalf_source`" + ` TEXT  NOT NULL DEFAULT '',
   ` + "`reason`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`detail`" + `     TEXT     NOT NULL DEFAULT ''
 )`
@@ -443,6 +505,47 @@ const sandboxAccessTable = `CREATE TABLE IF NOT EXISTS ` + "`sandbox_access`" + 
   ` + "`token_hash`" + ` TEXT     NOT NULL,
   ` + "`not_after`" + `  DATETIME NOT NULL,
   PRIMARY KEY (` + "`sandbox`" + `)
+)`
+
+// hostdTable and hostdTokenTable are the hostd registry (model.Hostd),
+// named once for Tables and for the migration that adds them.
+const hostdTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd`" + ` (
+  ` + "`name`" + `       TEXT     NOT NULL,
+  ` + "`owner`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`labels`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`created_by`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + ` DATETIME NOT NULL,
+  ` + "`revoked_at`" + ` DATETIME NULL,
+  PRIMARY KEY (` + "`name`" + `)
+)`
+
+// taskHostdTable and taskRunHostdTable are a task's hostd selector and
+// the hostd each run resolved (model.SetTaskHostd, model.TaskRunHostd),
+// named once for Tables and for migration 93.
+const taskHostdTable = `CREATE TABLE IF NOT EXISTS ` + "`task_hostd`" + ` (
+  ` + "`task_id`" + `    TEXT     NOT NULL,
+  ` + "`selector`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`updated_at`" + ` DATETIME NOT NULL,
+  PRIMARY KEY (` + "`task_id`" + `)
+)`
+
+const taskRunHostdTable = `CREATE TABLE IF NOT EXISTS ` + "`task_run_hostd`" + ` (
+  ` + "`run_id`" + `   TEXT     NOT NULL,
+  ` + "`task_id`" + `  TEXT     NOT NULL,
+  ` + "`hostd`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`instance`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`owner`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`at`" + `       DATETIME NOT NULL,
+  PRIMARY KEY (` + "`run_id`" + `)
+)`
+
+const hostdTokenTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd_token`" + ` (
+  ` + "`token_hash`" + ` TEXT     NOT NULL,
+  ` + "`hostd`" + `      TEXT     NOT NULL,
+  ` + "`prefix`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + ` DATETIME NOT NULL,
+  ` + "`revoked_at`" + ` DATETIME NULL,
+  PRIMARY KEY (` + "`token_hash`" + `)
 )`
 
 // externalAgentTokenTable and externalAgentTokenSequenceTable are named
@@ -571,12 +674,16 @@ var Tables = []string{
   ` + "`origin_actor_id`" + `       TEXT    NOT NULL,
   ` + "`origin_behalf_kind`" + `    TEXT    NULL,
   ` + "`origin_behalf_id`" + `      TEXT    NULL,
+  ` + "`origin_actor_source`" + `   TEXT    NOT NULL DEFAULT '',
+  ` + "`origin_behalf_source`" + `  TEXT    NOT NULL DEFAULT '',
   ` + "`origin_reason`" + `         TEXT    NOT NULL,
 
   ` + "`approval_actor_kind`" + `   TEXT    NULL,
   ` + "`approval_actor_id`" + `     TEXT    NULL,
   ` + "`approval_behalf_kind`" + `  TEXT    NULL,
   ` + "`approval_behalf_id`" + `    TEXT    NULL,
+  ` + "`approval_actor_source`" + ` TEXT    NOT NULL DEFAULT '',
+  ` + "`approval_behalf_source`" + ` TEXT   NOT NULL DEFAULT '',
   ` + "`approved_at`" + `           DATETIME NULL,
   ` + "`deferred_at`" + `           DATETIME NULL,
   ` + "`deferred_until`" + `        DATETIME NULL,
@@ -719,6 +826,7 @@ var Tables = []string{
   ` + "`paused_at`" + `         DATETIME NOT NULL,
   ` + "`paused_by_kind`" + `    TEXT     NOT NULL,
   ` + "`paused_by_id`" + `      TEXT     NOT NULL,
+  ` + "`paused_by_source`" + `  TEXT     NOT NULL DEFAULT '',
   ` + "`from_state`" + `        TEXT     NOT NULL,
   ` + "`immediate`" + `         INTEGER  NOT NULL DEFAULT 0,
   ` + "`grace_until`" + `       DATETIME NULL,
@@ -1400,8 +1508,15 @@ var Tables = []string{
   ` + "`at`" + `         DATETIME NOT NULL,
   ` + "`record`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`note`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`hostd`" + `      TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`run_id`" + `, ` + "`seq`" + `)
 )`,
+
+	// task_hostd and task_run_hostd: which grain hostd a task's host
+	// work is pinned or selected to, and which one each run went to
+	// (model.TaskRunHostd), beside the frozen task_run DDL.
+	taskHostdTable,
+	taskRunHostdTable,
 
 	// task_run_startup records the per-phase startup timestamps of a run
 	// (queued_at -> started_at -> sandbox_acquired_at -> sandbox_prepared_at -> first_turn_at)
@@ -1461,6 +1576,8 @@ var Tables = []string{
   ` + "`author_id`" + `          TEXT    NOT NULL,
   ` + "`author_behalf_kind`" + ` TEXT     NULL,
   ` + "`author_behalf_id`" + `   TEXT     NULL,
+  ` + "`author_source`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`author_behalf_source`" + ` TEXT   NOT NULL DEFAULT '',
   ` + "`body`" + `               TEXT     NOT NULL,
   ` + "`created_at`" + `         DATETIME NOT NULL,
   ` + "`handover`" + `           INTEGER  NOT NULL DEFAULT 0,
@@ -1713,6 +1830,7 @@ var Tables = []string{
   ` + "`reviewers`" + `          TEXT NOT NULL DEFAULT '',
   ` + "`priority`" + `           INTEGER NOT NULL DEFAULT 0,
   ` + "`keep_running`" + `       INTEGER NOT NULL DEFAULT 0,
+  ` + "`hostd`" + `              TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2226,6 +2344,7 @@ var Tables = []string{
   ` + "`reason`" + `        TEXT     NOT NULL,
   ` + "`actor_kind`" + `    TEXT     NOT NULL,
   ` + "`actor_id`" + `      TEXT     NOT NULL,
+  ` + "`actor_source`" + `  TEXT     NOT NULL DEFAULT '',
   ` + "`until_task_id`" + ` TEXT     NOT NULL,
   PRIMARY KEY (` + "`id`" + `)
 )`,
@@ -2370,34 +2489,14 @@ var Tables = []string{
 	// base with several queued changes merged into it, and grain CI's
 	// verdict about that one tree.
 	//
-	// One row per (repo, branch), because a branch has at most one batch
-	// in flight and its members are held out of the ordinary merge path
-	// while it runs. `members` is JSON rather than a delimited list
-	// because a member is three fields including a commit; the rest is
+	// One row per (repo, branch, task): one change's overlap re-check
+	// (grain/task-2390), mergeBatchTable below. `members` is JSON rather
+	// than a delimited list because a member is three fields including a commit; the rest is
 	// the shape base_branch_ci above has, and it is off SettingsTables
 	// for the same reason -- the daemon writes it for itself, and a
 	// settings import landing mid-batch would either resurrect a batch
 	// whose ref has moved or drop one whose members are being held.
-	`CREATE TABLE IF NOT EXISTS ` + "`merge_batch`" + ` (
-  ` + "`owner`" + `       TEXT     NOT NULL,
-  ` + "`name`" + `        TEXT     NOT NULL,
-  ` + "`branch`" + `      TEXT     NOT NULL,
-  ` + "`ref`" + `         TEXT     NOT NULL,
-  ` + "`base_commit`" + ` TEXT     NOT NULL,
-  ` + "`commit`" + `      TEXT     NOT NULL,
-  ` + "`members`" + `     TEXT     NOT NULL DEFAULT '',
-  ` + "`run_id`" + `      TEXT     NOT NULL DEFAULT '',
-  ` + "`started_at`" + `  DATETIME NOT NULL,
-  ` + "`finished_at`" + ` DATETIME NULL,
-  ` + "`conclusion`" + `  TEXT     NOT NULL DEFAULT '',
-  ` + "`detail`" + `      TEXT     NOT NULL DEFAULT '',
-  ` + "`splits`" + `      INTEGER  NOT NULL DEFAULT 0,
-  ` + "`queued`" + `      INTEGER  NOT NULL DEFAULT 0,
-  ` + "`recheck_of`" + `     TEXT     NOT NULL DEFAULT '',
-  ` + "`recheck_detail`" + ` TEXT     NOT NULL DEFAULT '',
-  ` + "`recheck_at`" + `     DATETIME NULL,
-  PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `, ` + "`branch`" + `)
-)`,
+	mergeBatchTable,
 
 	// One firing of a schedule translated out of a workflow's own
 	// `on: schedule` cron (model.ScheduledWorkflowRun, grain/task-351):
@@ -2633,6 +2732,7 @@ var Tables = []string{
   ` + "`requested_at`" + ` DATETIME NOT NULL,
   ` + "`actor_kind`" + `   TEXT     NOT NULL,
   ` + "`actor_id`" + `     TEXT     NOT NULL,
+  ` + "`actor_source`" + ` TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -3139,6 +3239,7 @@ var Tables = []string{
   ` + "`updated_at`" + `      DATETIME NULL,
   ` + "`updated_by_kind`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`updated_by_id`" + `   TEXT NOT NULL DEFAULT '',
+  ` + "`updated_by_source`" + ` TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 
@@ -3180,6 +3281,7 @@ var Tables = []string{
   ` + "`updated_at`" + `      DATETIME NULL,
   ` + "`updated_by_kind`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`updated_by_id`" + `   TEXT NOT NULL DEFAULT '',
+  ` + "`updated_by_source`" + ` TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `, ` + "`document`" + `)
 )`,
 
@@ -3208,6 +3310,7 @@ var Tables = []string{
   ` + "`updated_at`" + `      DATETIME NULL,
   ` + "`updated_by_kind`" + ` TEXT NOT NULL DEFAULT '',
   ` + "`updated_by_id`" + `   TEXT NOT NULL DEFAULT '',
+  ` + "`updated_by_source`" + ` TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`period`" + `)
 )`,
 
@@ -3763,6 +3866,9 @@ var Tables = []string{
 	externalAgentTokenTable,
 	externalAgentTokenSequenceTable,
 
+	hostdTable,
+	hostdTokenTable,
+
 	`CREATE TABLE IF NOT EXISTS ` + "`secret_resolution_audit`" + ` (
   ` + "`id`" + `          INTEGER PRIMARY KEY AUTOINCREMENT,
   ` + "`timestamp`" + `   DATETIME NOT NULL,
@@ -3844,6 +3950,7 @@ var Tables = []string{
 	// Every close and reopen of a task somebody asked for, with who, when
 	// and why (model.TaskEvent).
 	taskEventTable,
+	configAuditTable,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_event_task`" + ` ON ` + "`task_event`" + ` (` + "`task_id`" + `)`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_event_at`" + ` ON ` + "`task_event`" + ` (` + "`at`" + `)`,
 }
@@ -4024,4 +4131,30 @@ const apiScopeSetTable = `CREATE TABLE IF NOT EXISTS ` + "`api_scope_set`" + ` (
   ` + "`version`" + `         INTEGER NOT NULL DEFAULT 0,
   ` + "`deprecated`" + `      INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`name`" + `)
+)`
+
+// mergeBatchTable is merge_batch's definition, named so that migration 89
+// (Migrations) can create the table it rebuilds from the very statement
+// a fresh store is created with. task_id joined the primary key there:
+// one row per change rather than per branch (grain/task-2390).
+const mergeBatchTable = `CREATE TABLE IF NOT EXISTS ` + "`merge_batch`" + ` (
+  ` + "`owner`" + `       TEXT     NOT NULL,
+  ` + "`name`" + `        TEXT     NOT NULL,
+  ` + "`branch`" + `      TEXT     NOT NULL,
+  ` + "`task_id`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`ref`" + `         TEXT     NOT NULL,
+  ` + "`base_commit`" + ` TEXT     NOT NULL,
+  ` + "`commit`" + `      TEXT     NOT NULL,
+  ` + "`members`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`run_id`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`started_at`" + `  DATETIME NOT NULL,
+  ` + "`finished_at`" + ` DATETIME NULL,
+  ` + "`conclusion`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`detail`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`splits`" + `      INTEGER  NOT NULL DEFAULT 0,
+  ` + "`queued`" + `      INTEGER  NOT NULL DEFAULT 0,
+  ` + "`recheck_of`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`recheck_detail`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`recheck_at`" + `     DATETIME NULL,
+  PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `, ` + "`branch`" + `, ` + "`task_id`" + `)
 )`

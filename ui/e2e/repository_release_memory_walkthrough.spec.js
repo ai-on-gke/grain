@@ -544,7 +544,10 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
     // Invalid release name containing spaces
     await releaseNameInput.fill("invalid release name with spaces");
     await page.getByRole("button", { name: "Create release" }).click();
-    await expect(page.locator(".MuiAlert-filledError")).toBeVisible();
+    // The refusal sits on the box itself rather than in a toast
+    // (docs/test-runs/2026-11-03-repository-release-memory-ui.md).
+    await expect(page.getByText(/invalid release name/)).toBeVisible();
+    await expect(releaseNameInput).toHaveAttribute("aria-invalid", "true");
 
     // Valid release creation
     const releaseName = `rel-${Date.now()}`;

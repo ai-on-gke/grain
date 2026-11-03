@@ -1,0 +1,8 @@
+# src:// on a layer whose core source did not ship (no replace, version not in the module cache)
+ls src://
+ls src://pkg
+ls src://pkg/own
+ls src://core
+read src://core/pkg/namespace/coresrc.go
+grep CoreSource src://pkg
+grep x src://pkg/nosuch

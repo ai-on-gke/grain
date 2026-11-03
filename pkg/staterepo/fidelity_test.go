@@ -331,10 +331,17 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	}
 	if _, err := store.RecordTaskEvent(ctx, model.TaskEvent{
 		TaskID: "a1b2", Kind: model.TaskEventClosed, At: sub, Reason: awkward,
-		By:     model.Principal{Kind: model.PrincipalHuman, ID: "bwsalmon"},
-		Detail: "cancelled run a1b2-1 (attempt 1)",
+		By:         model.Principal{Kind: model.PrincipalHuman, ID: "bwsalmon", Source: model.SourceIAP},
+		OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: "alice", Source: "example-proxy"},
+		Detail:     "cancelled run a1b2-1 (attempt 1)",
 	}); err != nil {
 		t.Fatalf("recording a close: %v", err)
+	}
+	if _, err := store.RecordConfigAudit(ctx, model.ConfigAuditEntry{
+		At: sub, By: model.Principal{Kind: model.PrincipalHuman, ID: "operator", Source: model.SourceAccessCode},
+		Surface: "settings", Summary: awkward,
+	}); err != nil {
+		t.Fatalf("recording a config change: %v", err)
 	}
 	// One attachment on the task itself (a NULL comment_id) and one on
 	// the comment (an integer one).
@@ -479,6 +486,16 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 		RunID: "a1b2-1", TaskID: "a1b2", At: sub, Calls: 3,
 	}); err != nil {
 		t.Fatalf("recording exec-tunnel failures: %v", err)
+	}
+	// Which hostd the run went to (task_run_hostd), and the task's own
+	// hostd pin (task_hostd).
+	if err := store.RecordTaskRunHostd(ctx, model.TaskRunHostd{
+		RunID: "a1b2-1", TaskID: "a1b2", Hostd: "laptop", Instance: "laptop.example.com", Owner: "owner@example.com", At: sub,
+	}); err != nil {
+		t.Fatalf("recording a run's hostd: %v", err)
+	}
+	if err := store.SetTaskHostd(ctx, "a1b2", "gpu=a100,zone=b"); err != nil {
+		t.Fatalf("pinning a task's hostd: %v", err)
 	}
 	// What a run's capability grants did for it
 	// (task_run_capability_audit): a capability server's own JSON
@@ -1045,8 +1062,8 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	// column filled, for the reason above -- and with several members, so
 	// the JSON column carries more than one element on the round trip.
 	if err := store.PutMergeBatch(ctx, model.MergeBatch{
-		Repo: model.RepoRef{Owner: "owner", Name: "payments-api"}, Branch: "main",
-		Ref:        model.MergeBatchRef("eu", "main"),
+		Repo: model.RepoRef{Owner: "owner", Name: "payments-api"}, Branch: "main", TaskID: "a1b2",
+		Ref:        model.MergeRecheckRef("eu", "a1b2", "main"),
 		BaseCommit: "0123456789abcdef0123456789abcdef01234567",
 		Commit:     "89abcdef0123456789abcdef0123456789abcdef",
 		Members: []model.MergeBatchMember{
@@ -1193,6 +1210,10 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 		args []any
 	}{
 		{"INSERT INTO `task_tag` (`task_id`, `tag`) VALUES (?, ?)", []any{"a1b2", awkward}},
+		// The hostd registry (model.Hostd); its tokens stay local
+		// (LocalTables).
+		{"INSERT INTO `hostd` (`name`, `owner`, `labels`, `created_by`, `created_at`, `revoked_at`) VALUES (?, ?, ?, ?, ?, NULL)",
+			[]any{"ws-1", "alice@example.com", "gpu=yes,os=linux", "admin", time.Date(2026, 11, 2, 9, 0, 0, 123000000, time.UTC)}},
 		{"INSERT INTO `work_origin_comment` (`origin`, `comment_id`, `body`) VALUES (?, ?, ?)",
 			[]any{"owner/docs#7", 12345, awkward}},
 		{"INSERT INTO `task_link` (`task_id`, `kind`, `target`, `blocks`) VALUES (?, ?, ?, ?)",

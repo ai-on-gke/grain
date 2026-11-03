@@ -24,18 +24,22 @@ body: |
   - Health (System's default tab): the alerts the bell lists, each with
     its link; the config-repo backing state; the settings saved but not
     applied until a restart and the ones stored but not runnable, each
-    linking to its Settings section; and the host-mode install notice
-    when the install still needs migrating.
+    linking to and focusing its specific `#<field-id>` in Settings; the
+    GitHub API budget and idle-poll backoff panel; the `grain hostd`
+    readiness note when host CLI entries are unreachable or missing; and
+    the host-mode install notice when the install still needs migrating.
   - Sandboxes: host commitment and pressure, the sandbox budget and the
     auto overcommit controller's live status, pool status, sandbox
-    lifetime and storage, CI sandboxes folded behind their summary row
-    in the live table, persistent sandboxes (their running commit and
-    last refresh, and the empty state), connected remote executors,
-    health/error/empty states, resource trends, and long-table
-    scrolling.
-  - Caches: the proxy and Actions caches, their sizes and hit history,
-    and each named Flush control (against throwaway entries only), with
-    its confirmation.
+    lifetime and storage, agent and standing sandboxes listed above CI
+    sandboxes folded behind their `"CI sandboxes (N)"` summary row in the
+    live table (persisting its open/closed state across reloads),
+    persistent sandboxes (their running commit and last refresh, and the
+    empty state), health/error/empty states, resource trends, and
+    long-table scrolling.
+  - Caches: the proxy and Actions caches, their entry and byte usage
+    against ceiling, per-repository Actions rows, Refresh, and each named
+    Flush control (against throwaway entries only), with its
+    confirmation.
   - CI (`/ci`, from the rail): the active-sandboxes table collapsed to a
     summary and expanded, run filtering; open runs/jobs/steps/log output
     from rows and from task links; exercise direct-link and reload,

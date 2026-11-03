@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, beforeEach } from "vitest";
 import { PinnedNavProvider, usePinnedNav } from "./PinnedNavContext.jsx";
@@ -33,6 +33,7 @@ function TestConsumer() {
         {pinnedItems.map((item, idx) => (
           <li key={`${item.kind}-${item.id}-${idx}`}>
             {item.kind}:{item.id}
+            {item.color ? ` ${item.color}` : ""}
           </li>
         ))}
       </ul>
@@ -102,5 +103,101 @@ describe("PinnedNavContext", () => {
     items = screen.getByTestId("pinned-list").querySelectorAll("li");
     expect(items).toHaveLength(1);
     expect(items[0]).toHaveTextContent("view:inbox");
+  });
+
+  // Another tab writing grain.pinned: the window's storage event, which
+  // only other tabs' writes fire, so the test writes storage itself and
+  // dispatches the event as the browser would.
+  function otherTabWrites(key, newValue) {
+    if (newValue === null) {
+      if (key !== null) localStorage.removeItem(key);
+      else localStorage.clear();
+    } else {
+      localStorage.setItem(key, newValue);
+    }
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key, newValue }));
+    });
+  }
+
+  function renderedPins() {
+    return [...screen.getByTestId("pinned-list").querySelectorAll("li")].map(
+      (li) => li.textContent,
+    );
+  }
+
+  it("follows another tab saving its pins", () => {
+    render(
+      <PinnedNavProvider>
+        <TestConsumer />
+      </PinnedNavProvider>,
+    );
+    expect(renderedPins()).toEqual(["view:inbox"]);
+
+    otherTabWrites(
+      "grain.pinned",
+      JSON.stringify([
+        { kind: "view", id: "ci", color: "#ef4444" },
+        { kind: "view", id: "inbox" },
+      ]),
+    );
+    expect(renderedPins()).toEqual(["view:ci #ef4444", "view:inbox"]);
+  });
+
+  it("validates and migrates another tab's list as a load does", () => {
+    render(
+      <PinnedNavProvider>
+        <TestConsumer />
+      </PinnedNavProvider>,
+    );
+
+    otherTabWrites(
+      "grain.pinned",
+      JSON.stringify([
+        { kind: "bogus", id: "x" },
+        { kind: "view", id: "schedules" },
+        { kind: "view", id: "templates" },
+        "junk",
+      ]),
+    );
+    expect(renderedPins()).toEqual(["view:processes"]);
+  });
+
+  it("goes back to the defaults when another tab resets or clears storage", () => {
+    localStorage.setItem(
+      "grain.pinned",
+      JSON.stringify([{ kind: "view", id: "ci" }]),
+    );
+    render(
+      <PinnedNavProvider>
+        <TestConsumer />
+      </PinnedNavProvider>,
+    );
+    expect(renderedPins()).toEqual(["view:ci"]);
+
+    otherTabWrites("grain.pinned", null);
+    expect(renderedPins()).toEqual(["view:inbox"]);
+
+    otherTabWrites(
+      "grain.pinned",
+      JSON.stringify([{ kind: "view", id: "repos" }]),
+    );
+    expect(renderedPins()).toEqual(["view:repos"]);
+    otherTabWrites(null, null);
+    expect(renderedPins()).toEqual(["view:inbox"]);
+  });
+
+  it("ignores another tab writing some other key", () => {
+    render(
+      <PinnedNavProvider>
+        <TestConsumer />
+      </PinnedNavProvider>,
+    );
+    localStorage.setItem(
+      "grain.pinned",
+      JSON.stringify([{ kind: "view", id: "ci" }]),
+    );
+    otherTabWrites("grain.themeMode", "dark");
+    expect(renderedPins()).toEqual(["view:inbox"]);
   });
 });

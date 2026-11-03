@@ -289,7 +289,7 @@ RUN mkdir -p /out/shims/bin /out/shims/usr/bin /out/shims/usr/local/bin \
 #
 # GITHUB_PROXY is declared in fetch-chv and fetch-kernel-source only, so a
 # change to it re-runs the downloads and nothing else.
-FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 AS fetch-chv
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS fetch-chv
 ARG CLOUD_HYPERVISOR_VERSION
 ARG TARGETARCH
 ARG GITHUB_PROXY=
@@ -375,7 +375,7 @@ RUN set -eux; \
 # (pkg/hypervisor's BuildArgs), so such an image keeps the kernel it was
 # snapshotted under -- without IPv6, if that was this stage's old
 # download -- until it is rebuilt.
-FROM --platform=$BUILDPLATFORM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 AS fetch-kernel-source
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS fetch-kernel-source
 ARG GRANULE_KERNEL_VERSION
 ARG GRANULE_KERNEL_SHA256
 ARG GITHUB_PROXY=
@@ -398,7 +398,7 @@ RUN set -eux; \
     fi; \
     echo "${GRANULE_KERNEL_SHA256}  linux.tar.gz" | sha256sum -c -
 
-FROM --platform=$BUILDPLATFORM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 AS build-kernel
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS build-kernel
 ARG TARGETARCH
 ARG BUILDARCH
 RUN set -eux; \
@@ -476,7 +476,7 @@ RUN set -eux; \
 # A guest that wants sshd for an operator's own interactive access
 # installs it the way it installs anything else, in a setup script run by
 # `granule guest build`.
-FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 AS guest-rootfs-debian
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS guest-rootfs-debian
 ARG GUEST_SUITE
 RUN apt-get update && apt-get install -y --no-install-recommends \
       debootstrap ca-certificates wget \
@@ -897,7 +897,7 @@ COPY deploy/guest-image/pack-guest /pack-guest
 # file has to be in the tree pack-guest measures and packs -- once the
 # script has run there is a disk and no longer a directory to write
 # into.
-FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 AS guest-image
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS guest-image
 RUN apt-get update && apt-get install -y --no-install-recommends e2fsprogs \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=guest-customized / /rootfs

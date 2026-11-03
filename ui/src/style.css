@@ -24,13 +24,20 @@
   --border-strong: #d5d1c7;
 
   --text: #24221d;
-  --text-secondary: #6e6a60;
-  --text-tertiary: #9a9588;
+  /* Tertiary carries real text -- form hints, counts, task numbers, the
+     board's "Nothing here." -- so it has to hold WCAG AA's 4.5:1 on every
+     ground it sits on, the darkest being --surface-hover (4.8:1 there,
+     5.6:1 on white). Secondary moved down with it to keep the step
+     between the two: text ~1.9x secondary ~1.5x tertiary. */
+  --text-secondary: #524e46;
+  --text-tertiary: #6c685e;
   --text-placeholder: #b5b0a3;
 
   /* Bronze, not the wheat gold the dark theme uses: the gold washes out
-     on white, and this has to carry white button text at 5:1. */
-  --accent: #8a6a2e;
+     on white, and this has to carry white button text at 5:1. It is
+     also link text, on white and on an Alert's tint (#eff3f5 for info),
+     so it is dark enough to hold 4.5:1 on the palest of those too. */
+  --accent: #856629;
   --accent-hover: #6d5324;
   --on-accent: #ffffff;
   --accent-subtle: #f6eeda;
@@ -121,8 +128,12 @@
   --border-strong: #3a3d44;
 
   --text: #e9e7e1;
-  --text-secondary: #9b988f;
-  --text-tertiary: #6f6c65;
+  /* The same rule as the light palette's: tertiary holds 4.5:1 on every
+     ground, the lightest here being --surface-active (5.0:1 there, 5.8:1
+     on --surface), and secondary rose with it to keep the step between
+     the two: text ~1.7x secondary ~1.5x tertiary. */
+  --text-secondary: #b8b5ad;
+  --text-tertiary: #959189;
   --text-placeholder: #57544e;
 
   /* The grain colour, on the two grounds the mark was drawn against. */
@@ -573,8 +584,15 @@ samp,
   flex: 1;
 }
 
+/* The chat fills what the body has left, but never less than a working
+   window: on a short screen -- a 320x568 phone, or a phone turned on its
+   side -- New chat's name field and Create button left it 2px tall, the
+   composer clipped inside it and impossible to tap. The window's floor
+   makes the chat's own basis (flex: 1 0 auto) tall enough, and the body
+   scrolls to it instead. The window's basis is 0px, not 0%, so a long
+   conversation still scrolls the message list rather than growing it. */
 .console-session-body .task-chat {
-  flex: 1;
+  flex: 1 0 auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -585,7 +603,8 @@ samp,
 
 .console-session-body .task-chat-window {
   height: auto;
-  flex: 1;
+  flex: 1 1 0px;
+  min-height: 14rem;
 }
 
 .console-session-capabilities {
@@ -2514,6 +2533,26 @@ html[data-phone="true"] .gantt-body {
   flex: none;
   padding-right: 1.75rem;
 }
+/* A pending release's soak beside its Approve (InboxPage's ReleaseSoak),
+   with the SHORT SOAK warning when it was under the minimum. */
+.inbox-release-soak {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+.inbox-release-short-soak {
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  background: var(--danger-subtle);
+  color: var(--danger);
+  font-weight: 600;
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+}
 /* The one row on this page that is not a task (InboxPage's
    base_branch_gate group): a base branch nothing is judging. It stands
    in .task-row's place inside .inbox-line, so it takes the same width
@@ -4049,6 +4088,12 @@ fieldset legend {
   color: var(--text-tertiary);
   font-size: 0.8rem;
 }
+/* Who closed or reopened a task and why (model.TaskEvent): the reason is
+   whatever they typed, often a URL or a branch name, and an unbroken one
+   ran out of a phone's timeline item instead of wrapping inside it. */
+.timeline-transition-by {
+  overflow-wrap: anywhere;
+}
 /* The model an attempt ran on, on its meta line: a model id is one
    word to the reader, so a narrow line wraps before it, not inside it
    or inside the timestamp ahead of it. */
@@ -4324,6 +4369,12 @@ fieldset legend {
 :root[data-phone="true"] .inbox-line {
   flex-wrap: wrap;
 }
+/* A pending release's soak takes a line of its own above the answers,
+   so Approve, Reject and Acknowledge stay on one row under the thumb. */
+:root[data-phone="true"] .inbox-release-soak {
+  flex: 1 1 100%;
+  justify-content: flex-end;
+}
 :root[data-phone="true"] .inbox-actions {
   flex: 1 1 100%;
   /* A CL's chip and its presubmit and review badges beside the answers
@@ -4573,6 +4624,14 @@ fieldset legend {
 }
 .task-chat-window .cs-message-list .cs-typing-indicator__text {
   color: var(--text-tertiary);
+}
+/* The kit's three bouncing dots loop for as long as a reply is awaited;
+   held still, the "is typing" text beside them says the same thing
+   (2026-11-02 responsive walkthrough). */
+@media (prefers-reduced-motion: reduce) {
+  .task-chat-window .cs-typing-indicator__dot {
+    animation: none;
+  }
 }
 /* The message list's own scroll bar (perfect-scrollbar, which the kit
    bundles and styles from the same palette -- its thumb was the "blue

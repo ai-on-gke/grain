@@ -138,6 +138,11 @@ describe("DetailOverlay work tree", () => {
       "true",
     );
     expect(root.querySelectorAll('[aria-current="true"]')).toHaveLength(1);
+    // It is the page already open, so its id is text, not a link to
+    // itself (grain/task-2546).
+    const current = within(pagination.querySelector(".task-tree-row"));
+    expect(current.queryByRole("link", { name: "14" })).toBeNull();
+    expect(current.getByText("14")).toHaveClass("task-tree-id");
 
     await user.click(
       within(root.querySelector('li[data-task-id="15"]')).getByRole("link", {

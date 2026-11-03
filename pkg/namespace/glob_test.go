@@ -240,12 +240,38 @@ func TestGrepSaysWhenTheWalkCapCutItShort(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.String())
 	}
-	if got := rec.Header().Get("X-Grain-Truncated"); got != "true" {
-		t.Errorf("X-Grain-Truncated = %q, want true", got)
+	for h, want := range map[string]string{"X-Grain-Truncated": "true", "X-Grain-Walk-Truncated": "true", "X-Grain-Matches": "0"} {
+		if got := rec.Header().Get(h); got != want {
+			t.Errorf("%s = %q, want %q", h, got, want)
+		}
 	}
-	want := fmt.Sprintf("[truncated: walked %d entries; narrow the path]\n", maxWalkFiles)
-	if got := rec.Body.String(); got != want {
-		t.Errorf("body = %q, want %q", got, want)
+	// The line names where the walk stopped and that a miss proves nothing.
+	body := rec.Body.String()
+	wantPrefix := fmt.Sprintf("[truncated: walked %d entries and stopped at ", maxWalkFiles)
+	wantSuffix := "; it and everything after it were not searched, so finding no match here does not mean there is none: narrow the path or pass --glob]\n"
+	if !strings.HasPrefix(body, wantPrefix) || !strings.HasSuffix(body, wantSuffix) || strings.Count(body, "\n") != 1 {
+		t.Errorf("body = %q, want %q<path>%q", body, wantPrefix, wantSuffix)
+	}
+}
+
+// A grep that reaches its match limit says so, not that the walk was cut
+// short, and is not flagged as having left anything unsearched.
+func TestGrepAtTheMatchLimitIsNotAWalkTruncation(t *testing.T) {
+	t.Parallel()
+
+	srv := manyTasksServer(maxWalkFiles + 100)
+	rec := serveRequest(srv, Scope{MayReadAllTasks: true}, http.MethodGet, "/fs/task/?grep=Task&max=5", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Grain-Walk-Truncated"); got != "" {
+		t.Errorf("X-Grain-Walk-Truncated = %q, want empty", got)
+	}
+	if got := rec.Header().Get("X-Grain-Matches"); got != "5" {
+		t.Errorf("X-Grain-Matches = %q, want 5", got)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "[truncated at match limit (5 matches)") || strings.Contains(body, "walked") {
+		t.Errorf("body = %q", body)
 	}
 }
 

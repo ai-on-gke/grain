@@ -37,7 +37,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/ciapi"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
-	"github.com/ai-on-gke/grain/pkg/capability/repowrite"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -135,8 +134,15 @@ func TestReleaseWorkflowPublishesThroughAnUncachedScript(t *testing.T) {
 		if len(workflow.Jobs) != 1 || workflow.Jobs[0].Cache {
 			t.Fatalf("release jobs = %+v, want one uncached job", workflow.Jobs)
 		}
-		if !strings.Contains(workflow.Jobs[0].Steps[0].Run, "scripts/release-images.sh") {
-			t.Fatalf("release step does not invoke scripts/release-images.sh: %+v", workflow.Jobs[0].Steps)
+		// The patch-tag guard goes first, so a vX.Y.Z tagged on main's
+		// head is refused before two hours of build
+		// (docs/release-candidate-management.md, section 9).
+		steps := workflow.Jobs[0].Steps
+		if len(steps) < 2 || !strings.Contains(steps[0].Run, "scripts/patch-tag-guard.sh") {
+			t.Fatalf("release's first step does not invoke scripts/patch-tag-guard.sh: %+v", steps)
+		}
+		if !strings.Contains(steps[1].Run, "scripts/release-images.sh") {
+			t.Fatalf("release step does not invoke scripts/release-images.sh: %+v", steps)
 		}
 		return
 	}
@@ -1972,7 +1978,6 @@ func TestTheReleaseTrainsCapabilitiesAreGrantedOnGrainsOwnRepository(t *testing.
 	reg := model.NewCapabilityRegistry(
 		ciapi.NewAlias(gate, ciapi.Config{}, model.ReleaseGateReadCapability, ciapi.Aliases[model.ReleaseGateReadCapability]),
 		packagepublish.New(packagepublish.Config{Credentials: releaseTrainPackageCredential{}}),
-		repowrite.New(repo),
 	)
 	creds := releaseTrainCredential(`{"registry":"ghcr.io","username":"bot","token":"secret"}`)
 
@@ -2001,6 +2006,14 @@ func TestTheReleaseTrainsCapabilitiesAreGrantedOnGrainsOwnRepository(t *testing.
 			granted = append(granted, g.Capability)
 		}
 		for _, id := range tc.want {
+			// Repository access is no provider's grant: it carries its
+			// own event gate, which the proxy scope is widened through.
+			if model.IsRepoAccessGrant(id) {
+				if !model.RepoAccessAdmitsCIEvent(id, string(tc.event), tc.trusted) {
+					t.Errorf("%s: %s's train is refused %s", tc.event, repo, id)
+				}
+				continue
+			}
 			if !slices.Contains(granted, id) {
 				t.Errorf("%s: %s's train holds %v, want %s among them", tc.event, repo, granted, id)
 			}

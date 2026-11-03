@@ -84,6 +84,61 @@ func TestSyncPullRequestsClosesOutAMergedPullRequest(t *testing.T) {
 	if obs.PrOpenedAt == nil {
 		t.Fatal("expected PrOpenedAt to be set alongside PrMergedAt")
 	}
+	events, err := store.TaskEvents(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].By != model.GrainPrincipal || events[0].Reason != "pull request merged" {
+		t.Fatalf("events = %+v, want grain's one close for the merge", events)
+	}
+}
+
+// A pull request merging after somebody closed its task leaves their
+// close standing, the one close on the task's record: grain's own
+// "pull request merged" close is for a task still open
+// (docs/test-runs/2026-11-02-close-reopen-attribution.md).
+func TestSyncPullRequestsMergedAfterAPersonClosedTheTaskKeepsTheirClose(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	task := filedTask(t, ctx, store, "t1", repo)
+	pushBranch(t, sim.BareRepo, model.BranchName(task.ID))
+	pr, err := orchestrator.EnsurePullRequest(ctx, store, client, task, baseTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task.Links = append(task.Links, model.Link{
+		Kind: model.LinkFixes, Target: model.PullRequestRef{Repo: repo, Number: pr.Number}.String(),
+	})
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	bob := model.Principal{Kind: model.PrincipalHuman, ID: "bob"}
+	if err := store.ObserveClose(ctx, task.ID, baseTime, bob, "not needed", func(o *model.Observation) {
+		o.CompletedAt, o.ClosedAt = &baseTime, &baseTime
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.MergePullRequest("acme", "widgets", pr.Number, ""); err != nil {
+		t.Fatal(err)
+	}
+	later := baseTime.Add(time.Hour)
+	if err := orchestrator.SyncPullRequests(ctx, store, client, later); err != nil {
+		t.Fatalf("SyncPullRequests: %v", err)
+	}
+
+	obs, err := store.GetObservation(ctx, task.ID)
+	if err != nil || obs == nil || obs.ClosedAt == nil || !obs.ClosedAt.Equal(baseTime) {
+		t.Fatalf("observation = %+v (%v), want ClosedAt left at bob's close", obs, err)
+	}
+	events, err := store.TaskEvents(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].By != bob {
+		t.Fatalf("events = %+v, want bob's one close", events)
+	}
 }
 
 func TestSyncPullRequestsAutoClosesCorrelatedGitHubIssueOnMerge(t *testing.T) {

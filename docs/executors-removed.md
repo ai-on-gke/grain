@@ -5,8 +5,10 @@ outright, with no migration into hostd (task 2324). No deployment had
 executors or executor tokens worth keeping. `grain hostd` is now grain's
 only host agent: it listens on `/run/grain-hostd/hostd.sock` on the
 daemon's own machine, and a hostd on another machine dials in to
-`/api/hostd/connect` with the token the daemon was started with
-(`grain daemon -hostd-token-file`, `grain hostd -server <url> -token-file`).
+`/api/hostd/connect` with a token of its own from the hostd registry
+(Settings → Hostds; `grain hostd -server <url> -token-file`), or, for one
+more release, with the shared token the daemon was started with
+(`grain daemon -hostd-token-file`).
 
 The removal took out:
 
@@ -37,6 +39,11 @@ The removal took out:
 - `grain mcpserver`'s `GRAIN_EXECUTOR_SOCK` tunnel client, and the
   GitHub-credential pins that guarded MCP servers arriving over the
   tunnel.
+- The reason for the `none` sandbox backend (`-disable-native-sandboxes`)
+  as a deployment's backend. It stays as a control-plane-only daemon for
+  tests and walkthroughs. Its dispatch failure, flag help and Settings
+  label now say that nothing runs, rather than "remote execution only";
+  see [sandbox-backend-none.md](sandbox-backend-none.md).
 - The `grain model-server` unit `scripts/migrate-local-to-gke.sh`
   installed beside hostd. `--rollback` still removes a unit an earlier
   run left.

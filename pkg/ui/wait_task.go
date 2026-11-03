@@ -104,6 +104,11 @@ func (c *Client) WaitOn(ctx context.Context, id string, ids []string, park bool)
 	}); err != nil {
 		return nil, err
 	}
+	ids = make([]string, len(targets))
+	for i, t := range targets {
+		ids[i] = t.ID
+	}
+	c.noteTaskAction(ctx, self.ID, model.TaskEventParked, "waiting on "+strings.Join(ids, ", "))
 	return targets, nil
 }
 
@@ -186,6 +191,7 @@ func (c *Client) ParkUntil(ctx context.Context, id string, until time.Time) (tim
 	}); err != nil {
 		return time.Time{}, err
 	}
+	c.noteTaskAction(ctx, self.ID, model.TaskEventParked, "until "+until.Format(time.RFC3339))
 	return until, nil
 }
 

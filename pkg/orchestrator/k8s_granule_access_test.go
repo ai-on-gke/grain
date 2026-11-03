@@ -22,7 +22,6 @@ import (
 	"errors"
 	"net"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strings"
@@ -96,13 +95,7 @@ case "$*" in
 esac
 printf 'Running|True|docker-pullable://example/granule@sha256:abc|\n'
 `
-	src := bin + ".src"
-	if err := os.WriteFile(src, []byte(script), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := exec.Command("install", "-m", "0755", src, bin).CombinedOutput(); err != nil {
-		t.Fatalf("installing fake kubectl: %v: %s", err, out)
-	}
+	writeExecutableStub(t, bin, script)
 	return bin
 }
 
@@ -515,14 +508,26 @@ func TestK8sGranuleRestartReadmitsFromStoredHashAndRefusesReleased(t *testing.T)
 	}
 	w2Cancel()
 
-	refusedDone := startInProcessGranuleWrapper(t, ctx, acc2.Addr().String(), sandboxID, rawToken, mountDir)
+	// granule's DialOut keeps retrying a refused handshake until its
+	// context ends (gke-labs/granule#230), then reports the refusal. Wait
+	// for a second refusal: by then the wrapper has read the first.
+	refusals := acc2.Refusals()
+	refusedCtx, refusedCancel := context.WithCancel(ctx)
+	defer refusedCancel()
+	refusedDone := startInProcessGranuleWrapper(t, refusedCtx, acc2.Addr().String(), sandboxID, rawToken, mountDir)
+	for deadline := time.Now().Add(10 * time.Second); acc2.Refusals() < refusals+2; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("wrapper was not refused after Release")
+		}
+	}
+	refusedCancel()
 	select {
 	case err := <-refusedDone:
 		if !errors.Is(err, granulesandbox.ErrAuthFailed) {
 			t.Fatalf("DialOut after Release = %v, want ErrAuthFailed", err)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("released sandbox's wrapper was not refused")
+		t.Fatal("released sandbox's wrapper did not stop once cancelled")
 	}
 }
 
@@ -605,14 +610,26 @@ func TestK8sGranuleSweepOrphansClearsStoredHashAndRefusesWrapper(t *testing.T) {
 		t.Fatal("reaped orphan sandbox is still reported Live")
 	}
 
-	refusedDone := startInProcessGranuleWrapper(t, ctx, acc.Addr().String(), sandboxID, rawToken, mountDir)
+	// granule's DialOut keeps retrying a refused handshake until its
+	// context ends (gke-labs/granule#230), then reports the refusal. Wait
+	// for a second refusal: by then the wrapper has read the first.
+	refusals := acc.Refusals()
+	refusedCtx, refusedCancel := context.WithCancel(ctx)
+	defer refusedCancel()
+	refusedDone := startInProcessGranuleWrapper(t, refusedCtx, acc.Addr().String(), sandboxID, rawToken, mountDir)
+	for deadline := time.Now().Add(10 * time.Second); acc.Refusals() < refusals+2; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("wrapper was not refused after ReapOrphans")
+		}
+	}
+	refusedCancel()
 	select {
 	case err := <-refusedDone:
 		if !errors.Is(err, granulesandbox.ErrAuthFailed) {
 			t.Fatalf("DialOut after ReapOrphans = %v, want ErrAuthFailed", err)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("reaped sandbox's wrapper was not refused")
+		t.Fatal("reaped sandbox's wrapper did not stop once cancelled")
 	}
 }
 

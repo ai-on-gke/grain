@@ -43,6 +43,9 @@
 //             values are a fixed vocabulary rather than whatever the
 //             tasks happen to hold. The rest are offered alphabetically
 //             by what the menu shows.
+//   closed    whether `order` is every value there can be, so a value
+//             outside it matches nothing and its chip says so
+//             (taskFilters.js's unknownValues).
 //   noneLabel what "has no value for this" is called, for the attributes
 //             where having none is a real answer worth filtering on.
 //   glyphOf   the item glyph a value's menu row carries, for the
@@ -222,6 +225,9 @@ export const ATTRIBUTES = [
     // order is model.State's own (the sort rank, and what pkg/cli's
     // vocabulary test reads); menuOrder is what the menu offers.
     order: STATE_ORDER,
+    // ...and is every state there is, so a condition naming anything
+    // else matches nothing and its chip says so (unknownValues).
+    closed: true,
     menuOrder: [...DISPLAY_STATE_ORDER, ...ASKED_STATES],
     labelOf: (v) =>
       v === "awaiting_reply"

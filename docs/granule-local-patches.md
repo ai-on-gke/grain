@@ -27,74 +27,125 @@ the resync that carries it lands.
 
 ## Synced at
 
-`gke-labs/granule` `main` at `a4b4e4b` (`a4b4e4b801b5a3efb0b070d8004ac7f075af7d22`,
-"Merge pull request #227 from gke-labs/grain/049f1e09/task-1478", 2026-10-28).
+`gke-labs/granule` `main` at `a0aeae5` (`a0aeae57fdefd16e002e1d037a94eabac1bc793b`,
+"Merge pull request #240 from gke-labs/grain/049f1e09/task-2628-ci-port-granule-s-grain-ci",
+2026-11-02).
 
-The tree was replaced wholesale from a `git archive` of `a4b4e4b`, with the
+The tree was replaced wholesale from a `git archive` of `a0aeae5`, with the
 local patches listed under "Patches in flight" below re-applied on top.
+The previous sync was `a4b4e4b` (`b0b39e23`).
 
-This sync carries PRs #213–#227 on top of `4411ce4`, including:
-- `pkg/sandbox` (`cmd/granule-shim/access.go`, `pkg/netshim/splice.go`,
-  `docs/sandbox-access-api.md`, `deploy/k8s/`): the sandbox access API
-  (gke-labs/granule#226 / task 1456, `e50c6c6`) providing multiplexed
-  reverse dial-out (`Server.DialOut` / `Acceptor`) and direct listen-mode
-  (`Server.Serve` / `sandbox.Dial`) transport over TLS/mTLS + bearer token,
-  with `Exec`/`StartExec`, `Reattach` (16 MiB per-exec ring buffer and 10 min
-  completed-session retention across wrapper reconnects), `Signal`/`Kill`,
-  batched `PutFiles`/`PutFile`, `GetFile`, `OpenForwardStream`, `Health`,
-  keep-alive heartbeats, TC `u32` `ControllerIPs` drop rules on `tap` ingress,
-  and an in-process fake wrapper hook (`ServerConfig.DialGuest`).
-- `pkg/relay` (`cmd/granule-relay`, `pkg/sandbox/relay.go`): Kubernetes API
-  subresource / dial-out relay (`sandbox.DialRelay`, gke-labs/granule#227 /
-  task 1478, `a4b4e4b`).
-- `pkg/guestforward` (`cmd/granule-shim`, `pkg/agent/forward.go`,
-  `pkg/cli/forward.go`): upstream multiplexed TCP/Unix port forwarding
-  (gke-labs/granule#225, `0068252`).
-- `pkg/extent` (`cmd/granule-extentd`, `pkg/storage`, `pkg/blockdev`):
-  content-addressed extent storage and FUSE block device backend.
+This sync carries PRs #228–#241 on top of `a4b4e4b`, including:
+- `pkg/vmspec`, `pkg/hypervisor`, `pkg/config`, `pkg/cgroupmem`: a VM
+  that fills its RAM with page cache is no longer OOM-killed from the host
+  (gke-labs/granule#238 / task 2577, `c35ae79`).
+  `vmspec.VMSpec.ContainerMemoryLimitMB()` defaults the container limit to
+  guest + `ContainerMemoryHeadroomMB` = max(512 MiB, guest/16); a
+  virtio-balloon with free page reporting (`CHV_BALLOON`, on by default)
+  lets the guest hand freed pages back; and writable disks are opened
+  `direct=on` (`CHV_DISK_DIRECT`, `auto` by default) so the VMM's disk I/O
+  stops filling host page cache charged to the VM's cgroup. Grain still
+  passes its own, larger `-memory-limit-mb` (`orchestrator.GranuleMemoryLimitMB`);
+  `TestGranuleMemoryLimitIsNeverBelowGranulesOwn` checks it stays at or
+  above granule's.
+- `pkg/dockervm`, `pkg/cli/vm.go`: per-VM cgroup memory limits and positive
+  `oom_score_adj` for Docker-backed VM containers (gke-labs/granule#234,
+  `31d88cf`), which this file listed as in flight.
+- `pkg/sandbox`: `handlePutFiles` quoting and per-exec replay bounds
+  (gke-labs/granule#235, `40f699f`), listed as in flight; and
+  `Server.DialOut` keeps retrying with capped backoff after an
+  `ErrAuthFailed` refusal rather than giving up, wrapping the last refusal
+  in the error it returns when its context ends (gke-labs/granule#230,
+  `762bdb8`). Grain's `pkg/sandboxaccess` and `pkg/orchestrator` tests of
+  a refused wrapper now wait for the acceptor to count the refusal and
+  then cancel the wrapper.
+- `cmd/granule-shim`: the resize FIFO is held open across writers
+  (gke-labs/granule#228) and its tests restore the log writer they found
+  (gke-labs/granule#236).
+- The Go module rename to `github.com/gke-labs/granule`
+  (gke-labs/granule#237, `42b30d9`) -- undone here, see "Patches in flight".
+- GitHub Actions CI for granule itself (`.github/`, `docs/github-actions-ci.md`,
+  gke-labs/granule#240) and the `CHV_DISK_DIRECT` benchmark
+  (gke-labs/granule#241). Neither runs in this repository: GitHub only
+  reads workflows from the root `.github/`.
+- `pkg/config`: `GRANULE_WORKLOAD_ENV`, a comma-separated list of names
+  whose values in the VM container's environment are added to the guest
+  workload's (`CHV_CONTAINER_OVERRIDE`'s `env`). Only
+  `deploy/github-runner-images` sets it, to hand Actions Runner
+  Controller's `ACTIONS_RUNNER_INPUT_JITCONFIG` to the runner in the
+  guest; no image grain builds or runs sets it, so nothing in a grain
+  sandbox pod's environment reaches its guest by this route. That
+  image's `build.sh` downloads the latest `actions/runner` release
+  without a checksum; grain does not build it.
 
-`Dockerfile`, `go.mod`, `go.sum`, `vendor/` and `pkg/guestimage`'s contract
-are untouched, so `scripts/granule/build-granule-image.sh` and
-`scripts/granule/guest-inputs.sh` need no change.
+`Dockerfile` changes only by its `debian:bookworm-slim` digest
+(gke-labs/granule#233); `go.sum`, `vendor/` and `pkg/guestimage`'s contract
+are unchanged (its two files change only by import path), so
+`scripts/granule/build-granule-image.sh` and `scripts/granule/guest-inputs.sh`
+need no change.
 
 ## Patches in flight
 
-- **Legacy `pkg/forward` compatibility for `pkg/granule/forward.go` (`granule forward -kube` / `granule-shim forward`).**
-  `pkg/forward`, `pkg/execwire`, `pkg/agent/forward.go`, `pkg/guestexec/forward.go`,
-  `cmd/granule-shim/main.go`, `pkg/cli/forward.go`, and `pkg/cli/vm.go`
-  retain `pkg/forward` alongside upstream's `pkg/guestforward` (`gke-labs/granule#13`,
-  grain task 480 / task 721) until `pkg/granule/forward.go` and live
-  `kubernetes-granule` sandbox pods migrate to `pkg/guestforward` / `pkg/sandbox`.
-- **Per-VM cgroup memory limits and positive `oom_score_adj` for Docker-backed VM containers.**
-  `pkg/vmspec/spec.go`, `pkg/cli/vm.go` and `pkg/dockervm/docker.go` add
-  `-memory-limit-mb` (defaulting to guest memory ceiling plus
-  `VMMMemoryOverheadMB = 512` MiB for cloud-hypervisor overhead) and
-  `-oom-score-adj` (defaulting to `DefaultOOMScoreAdj = 500`), and pass
-  `--oom-score-adj`, `--memory <limit>m` and `--memory-swap <limit>m` on
-  `docker run` when starting `granule-vm-<name>` (grain task 500). This
-  bounds each VM container's `memory.max` and `memory.swap.max` (to 0)
-  and ensures the kernel OOM killer picks a sandbox VM before the host
-  daemon or `hostd` (`-900`).
+- **Module path kept at `github.com/bwsalmon/granule`.** Upstream renamed
+  its module to `github.com/gke-labs/granule` (gke-labs/granule#237).
+  Grain imports and `go install`s the vendored tree as
+  `github.com/bwsalmon/granule` from about sixty files, scripts and
+  Dockerfiles, and `go.mod` replaces that path with `./third_party/granule`.
+  So this copy's `go.mod` `module` line and every `.go` import are
+  rewritten back with
+  `sed -i 's#github.com/gke-labs/granule#github.com/bwsalmon/granule#g'`
+  over `go.mod` and `*.go` (image references such as
+  `ghcr.io/gke-labs/granule...` and URLs are left alone). A resync repeats
+  the `sed`. This patch goes away with the switch to the
+  `github.com/gke-labs/granule` module (grain task 2594).
+- **Legacy `pkg/forward` compatibility -- no longer needed by grain.**
+  `pkg/forward`, `pkg/execwire`'s `ForwardSpecs`, `pkg/agent/forward.go`'s
+  `serveLegacyForward`, `pkg/guestexec/forward.go`, `cmd/granule-shim`'s
+  `forward` mode, and the `-kube` path in `pkg/cli/forward.go` /
+  `pkg/cli/vm.go` keep granule's old `pkg/forward` protocol next to
+  upstream's `pkg/guestforward` (`gke-labs/granule#13`, grain task 480 /
+  task 721). Grain itself no longer uses any of it: `pkg/granule/forward.go`
+  now runs a `pkg/guestforward.Forwarder` over `kubectl exec -i <pod> -c
+  sandbox -- granule forward-stdio`, and its `Command.ForwardArgs` renders
+  upstream's `granule forward pod/<pod> -L CALLER=GUEST -R GUEST=CALLER`
+  (grain task 2601). The guest only names which listener took a
+  connection, never where to dial, so the controller still reaches nothing
+  beyond the configured targets (`TestForwardKubectlRefusesOpenOutsideRemotePorts`).
+  Pod-side, `forward-stdio` and the agent's `guestforward.ServeAgent` have
+  been in the vendored tree since the `a4b4e4b` resync (`b0b39e23`, #1456),
+  and a `kubernetes-granule` pod's shim and guest agent are built from that
+  same tree, so every pod started since then speaks the new protocol. The
+  legacy files stay in `third_party/granule` only until the switch to the
+  `github.com/gke-labs/granule` module (grain task 2594) drops them; that
+  change should also repoint `tests/deploy`'s and `pkg/trustboundary`'s
+  references to `third_party/granule/pkg/forward`.
 - **Sanitized GCP project placeholder in IPv6 e2e docs and scripts.**
-  `.grain/workflows/e2e-ipv6-gke.yml`, `docs/ipv6-dual-stack-design.md`,
-  and `test/e2e-ipv6.sh` replace a contributor-specific GCP project name
-  with `grain-sandbox-dev` so `tests/hygiene` (`TestCoreSaysNoGoogleTokens`)
+  `.grain/workflows/e2e-ipv6-gke.yml`, `.github/workflows/e2e-ipv6-gke.yml`,
+  `docs/ipv6-dual-stack-design.md`, `docs/github-actions-ci.md` and
+  `test/e2e-ipv6.sh` replace a contributor-specific GCP project name with
+  `grain-sandbox-dev` so `tests/hygiene` (`TestCoreSaysNoGoogleTokens`)
   stays clean (`91c0dfffd`).
-- **`pkg/sandbox.Server`: shell-quote `handlePutFiles` `trap`/directory-error commands and enforce per-exec replay buffer & retention bounds.**
-  `pkg/sandbox/server.go` and `pkg/sandbox/sandbox_test.go` fix single-quote
-  escaping in `handlePutFiles`'s `trap ... EXIT` cleanup command and directory
-  check error message (which otherwise left `tmpQuoted` paths and `sf.dstPath`
-  unquoted inside single quotes, breaking paths with spaces/quotes or allowing
-  shell injection), reject `FileUpload.Owner` values starting with `-`, and
-  enforce the documented 16 MiB per-exec replay ring buffer
-  (`MaxExecBufferBytes`) and 10-minute completed-session eviction
-  (`CompletedExecRetention`) on `Server.execs`.
 
 ## Landed upstream
 
-These six were listed here as in flight, and all are on granule's own
-`main` now. The sync above carries them, so grain no longer patches
-anything to get them.
+These were listed here as in flight, and all are on granule's own
+`main` now. The syncs carry them, so grain no longer patches anything
+to get them.
+
+- **Per-VM cgroup memory limits and positive `oom_score_adj` for
+  Docker-backed VM containers** (gke-labs/granule#234, grain task 500).
+  `-memory-limit-mb` and `-oom-score-adj` (default `DefaultOOMScoreAdj =
+  500`) on `granule vm create`, applied as `--oom-score-adj`, `--memory`
+  and `--memory-swap` on `docker run`, so the kernel OOM killer picks a
+  sandbox VM before the host daemon or `hostd` (`-900`). The default limit
+  is now guest + max(512 MiB, guest/16) (gke-labs/granule#238); grain
+  never relies on it and always passes guest + `max(1 GiB, 25%)`
+  (`orchestrator.GranuleMemoryLimitMB`, grain task 2593).
+- **`pkg/sandbox.Server` `handlePutFiles` quoting and per-exec replay
+  bounds** (gke-labs/granule#235): single-quote escaping in the `trap ...
+  EXIT` cleanup and directory error, `FileUpload.Owner` values starting
+  with `-` refused, and the 16 MiB `MaxExecBufferBytes` / 10-minute
+  `CompletedExecRetention` limits enforced.
 
 - **Sandbox guests cannot ARP-spoof the shared docker bridge.**
   `pkg/netshim/splice.go` and `setup.go` guard netshim's tap -> ext

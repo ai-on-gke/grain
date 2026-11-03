@@ -343,6 +343,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // that says, in prose and in counts, that this deployment has nothing.
   const [loaded, setLoaded] = useState(false);
   const [tasks, setTasks] = useState([]);
+  // Whether /api/tasks has answered with a list at least once. Until it
+  // has, the empty `tasks` above is not "no tasks" but "not read yet",
+  // and a page that would say nothing is waiting must not say it.
+  const [tasksListed, setTasksListed] = useState(false);
   const [schedules, setSchedules] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [suites, setSuites] = useState([]);
@@ -971,6 +975,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
     // endpoint's own bytes, this covers a change those views do not care
     // about.
     setTasks((prev) => keepIfSame(prev, next));
+    setTasksListed(true);
     // Drop any selected id the store no longer reports, so a stale
     // selection never quietly outlives the task it named.
     const ids = new Set(next.map((t) => t.id));
@@ -3403,6 +3408,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
       stateFilter={stateFilter}
       onSetFilter={selectStateFilter}
       onOpenSystem={() => openSystem("")}
+      onOpenAccess={() => openSettings("access")}
+      onLogout={handleLogout}
       onOpenUpgrade={() => openSettings("upgrade")}
       onOpenNewTask={openNewTask}
     />
@@ -3706,6 +3713,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                    flat list. */
                           <InboxPage
                             tasks={tasks}
+                            tasksLoaded={tasksListed}
                             config={config}
                             onOpenTask={openTask}
                             onOpenConfigRepo={() => openSettings("config-repo")}

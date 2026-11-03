@@ -150,6 +150,20 @@ export function RunStatusChip({ run }) {
   );
 }
 
+// RunBaseChip is the branch a run's tasks target, drawn on the run's row
+// and at the top of its pane. A run with no base -- one a repository's
+// declared suite schedule started without a `base:` -- targets the
+// repo's default branch, and says so rather than drawing an empty chip.
+export function RunBaseChip({ run }) {
+  return (
+    <Chip
+      size="small"
+      variant="outlined"
+      label={run.base || "default branch"}
+    />
+  );
+}
+
 // ScheduledChip is the mark saying a clock started this run, drawn on the
 // run's row (SuitesList.jsx) and at the top of its pane, the same way in
 // both places. It is a link to the schedule that started the run: "a
@@ -244,7 +258,7 @@ export default function SuiteRunPane({
         <span className="chips">
           <RunStatusChip run={run} />
           <Chip size="small" label={run.repo} />
-          <Chip size="small" variant="outlined" label={run.base} />
+          <RunBaseChip run={run} />
           {run.scheduleId && (
             <ScheduledChip
               scheduleId={run.scheduleId}

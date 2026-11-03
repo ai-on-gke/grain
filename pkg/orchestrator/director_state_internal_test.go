@@ -155,3 +155,60 @@ func TestDirectorStateRepositoryIsWritableWhenInWrites(t *testing.T) {
 		t.Fatalf("prompt does not explain the proposal workflow: %q", prompt)
 	}
 }
+
+// A chat session that is not the Director, granted grain/config in its
+// Writes, is offered propose_config_change (and the git proxy's
+// proposal-branch grant) on that alone, so it needs the same writable
+// grain-state checkout the tool's script starts in.
+func TestNonDirectorSessionWritingConfigGetsAWritableStateCheckout(t *testing.T) {
+	t.Parallel()
+	remoteBase := t.TempDir()
+	repo := model.ConfigRepo()
+	seedStateRemote(t, remoteBase, repo)
+	root := t.TempDir()
+	task := model.Task{
+		ID:     "session-task",
+		Tags:   []string{model.ConsoleSessionTag("ops-chat")},
+		Writes: []model.WriteTarget{{Repo: repo}},
+	}
+
+	prepared, err := prepareCheckout(context.Background(), mcp.NewSandboxTools(root), remoteBase,
+		task, "", setupNotes{}, repo)
+	if err != nil {
+		t.Fatalf("prepareCheckout: %v", err)
+	}
+	if prepared.DirectorState != directorStateReady || !prepared.DirectorStateWritable {
+		t.Fatalf("state = %q writable = %v, want a ready writable checkout", prepared.DirectorState, prepared.DirectorStateWritable)
+	}
+	dir := filepath.Join(root, DirectorStateDir)
+	if got := git(t, dir, "remote", "get-url", "--push", "origin"); got == "grain-read-only" {
+		t.Fatalf("push URL = %q, want the proxy's", got)
+	}
+	prompt := directorStateSection(prepared, task)
+	if !strings.Contains(prompt, "propose_config_change") || !strings.Contains(prompt, dir) {
+		t.Fatalf("prompt does not explain the proposal workflow: %q", prompt)
+	}
+}
+
+func TestOnlyDirectorOrRepolessConfigWritersGetTheStateCheckout(t *testing.T) {
+	t.Parallel()
+	session := model.ConsoleSessionTag("ops-chat")
+	target := model.RepoRef{Owner: "acme", Name: "widgets"}
+	writes := []model.WriteTarget{{Repo: model.ConfigRepo()}}
+	for _, tc := range []struct {
+		name string
+		task model.Task
+		want bool
+	}{
+		{"director", directorTask(), true},
+		{"session writing grain/config", model.Task{Tags: []string{session}, Writes: writes}, true},
+		{"repo-less task writing grain/config", model.Task{Writes: writes}, true},
+		{"session reading grain/config", model.Task{Tags: []string{session}, Reads: []model.RepoRef{model.ConfigRepo()}}, false},
+		{"session writing another repo", model.Task{Tags: []string{session}, Writes: []model.WriteTarget{{Repo: target}}}, false},
+		{"repo task writing grain/config", model.Task{Target: &target, Writes: writes}, false},
+	} {
+		if got := wantsStateCheckout(tc.task); got != tc.want {
+			t.Errorf("%s: wantsStateCheckout = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

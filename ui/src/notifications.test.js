@@ -56,12 +56,46 @@ describe("notificationAlerts", () => {
     const [row] = notificationAlerts([{ ...open, investigationTaskId: "40" }]);
     expect(row.actions[1].label).toBe("Open investigation");
   });
+
+  // The base-branch reconciler's red-base notification names its repair
+  // in taskId; the bell offered no way to it, only a markdown link drawn
+  // as text (2026-11-03 deployment-operations walkthrough).
+  it("opens the task a notification names, before anything else", () => {
+    const [row] = notificationAlerts([
+      { ...open, subject: "pipeline.base-red:acme/widgets@main", taskId: "5" },
+    ]);
+    expect(row.actions[0]).toEqual({
+      kind: "open-task",
+      label: "Open #5",
+      taskId: "5",
+    });
+    expect(row.actions.map((a) => a.kind)).toEqual([
+      "open-task",
+      "ack-notification",
+      "investigate-notification",
+    ]);
+  });
 });
 
 describe("notificationSentence", () => {
   it("is the body's first line and how often it was raised", () => {
     expect(notificationSentence(open)).toBe(
       "Retried three times. Raised 2 times.",
+    );
+  });
+
+  it("draws a markdown body's links and inline code as their text", () => {
+    expect(
+      notificationSentence({
+        ...open,
+        raiseCount: 1,
+        body:
+          'grain CI on acme/widgets `main` is confirmed red: at 55d6e7c ("failure: test"). ' +
+          "[Task #5](/tasks/5) is repairing it; everything waiting on the branch waits on that.",
+      }),
+    ).toBe(
+      'grain CI on acme/widgets main is confirmed red: at 55d6e7c ("failure: test"). ' +
+        "Task #5 is repairing it; everything waiting on the branch waits on that.",
     );
   });
 
@@ -99,6 +133,8 @@ describe("pending releases", () => {
     expect(row.actions[0].release).toEqual({
       repo: "ai-on-gke/grain",
       version: "v2.4.0",
+      soak: null,
+      shortSoak: null,
     });
   });
 
@@ -107,6 +143,8 @@ describe("pending releases", () => {
     expect(pendingReleaseOf(unnamed)).toEqual({
       repo: "ai-on-gke/grain",
       version: "v2.4.0",
+      soak: null,
+      shortSoak: null,
     });
   });
 
@@ -127,6 +165,58 @@ describe("pending releases", () => {
     expect(await decideRelease(pendingReleaseOf(pending), true)).toBe(true);
     expect(api).toHaveBeenCalledWith(
       "/api/repos/ai-on-gke/grain/pending-releases/v2.4.0/approve",
+      { method: "POST" },
+    );
+  });
+
+  it("read the soak and the SHORT SOAK warning off the train's body", () => {
+    const short = {
+      ...pending,
+      body:
+        "v2.4.0-rc.2 passed its 24h staging soak and is staged as v2.4.0-pending.\n\n" +
+        "SHORT SOAK: under the 22h minimum; approving it needs short_soak_ok: true.\n\n" +
+        "Soak: soaked 1h00m of 24h (FORCE=true): supervisor: ok; http: ok\n" +
+        "Release notes: task 12",
+    };
+    expect(pendingReleaseOf(short)).toMatchObject({
+      soak: "soaked 1h00m of 24h (FORCE=true)",
+      shortSoak:
+        "SHORT SOAK: under the 22h minimum; approving it needs short_soak_ok: true.",
+    });
+    const full = {
+      ...pending,
+      body: "rc passed.\n\nSoak: soaked 25h10m of 24h: PASS\nRelease notes: x",
+    };
+    expect(pendingReleaseOf(full)).toMatchObject({
+      soak: "soaked 25h10m of 24h",
+      shortSoak: null,
+    });
+    expect(notificationAlerts([short])[0].actions[0].label).toBe(
+      "Approve short soak",
+    );
+    expect(notificationAlerts([full])[0].actions[0].label).toBe("Approve");
+  });
+
+  it("approve a short soak only with short_soak_ok, after saying so", async () => {
+    const release = {
+      repo: "ai-on-gke/grain",
+      version: "v2.4.0",
+      soak: "soaked 1h00m of 24h",
+      shortSoak: "SHORT SOAK: under the 22h minimum.",
+    };
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+    expect(await decideRelease(release, true)).toBe(true);
+    expect(confirm.mock.calls.at(-1)[0]).toContain("SHORT SOAK");
+    expect(confirm.mock.calls.at(-1)[0]).toContain("soaked 1h00m of 24h");
+    expect(api).toHaveBeenLastCalledWith(
+      "/api/repos/ai-on-gke/grain/pending-releases/v2.4.0/approve",
+      { method: "POST", body: JSON.stringify({ short_soak_ok: true }) },
+    );
+
+    vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+    expect(await decideRelease(release, false)).toBe(true);
+    expect(api).toHaveBeenLastCalledWith(
+      "/api/repos/ai-on-gke/grain/pending-releases/v2.4.0/reject",
       { method: "POST" },
     );
   });

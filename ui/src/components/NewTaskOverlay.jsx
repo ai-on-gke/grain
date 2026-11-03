@@ -42,7 +42,7 @@ import {
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import api from "../api.js";
-import { wholeNumber } from "../wholeNumber.js";
+import { PRIORITY_REFUSAL, taskPriority, wholeNumber } from "../wholeNumber.js";
 import { useHeldIds } from "../useHeldIds.js";
 import fileToAttachment from "../attachments.js";
 import {
@@ -186,6 +186,12 @@ export default function NewTaskOverlay({
   );
   const pickedTemplate =
     (templates || []).find((t) => t.id === fromTemplate) || null;
+  // templatePriority is what Task priority starts on with template id
+  // picked: the template's own priority, which is what it files at, or
+  // the default 5. The box shows it rather than a 5 the filing would not
+  // keep (2026-11-02 walkthrough: a template at 8 drew 5 and filed 8).
+  const templatePriority = (id) =>
+    String((templates || []).find((t) => t.id === id)?.priority || 5);
   // The picker is drawn where a template can matter to this form: it
   // was opened from one, or settings/new-task-form.yml gives some
   // template a layer of its own. Everywhere else it would be one more
@@ -575,6 +581,12 @@ export default function NewTaskOverlay({
   const [promptExtension, setPromptExtension] = useState(
     () => draft?.promptExtension ?? String(openingDefault("promptExtension")),
   );
+  // hostd pins the task's host work to one grain hostd by name, or to
+  // any hostd carrying label=value[,label=value] (ui.CreateTaskRequest.
+  // Hostd); "" is the default hostd.
+  const [hostd, setHostd] = useState(
+    () => draft?.hostd ?? String(openingDefault("hostd")),
+  );
   const openingShape = sandboxShapeDefault(openingForm.fields.sandboxShape);
   const [sandboxCpus, setSandboxCpus] = useState(
     () => draft?.sandboxCpus ?? openingShape.cpus,
@@ -649,8 +661,21 @@ export default function NewTaskOverlay({
     () => draft?.atFront ?? !!openingDefault("atFront"),
   );
   const [priority, setPriority] = useState(() =>
-    draft?.priority !== undefined ? String(draft.priority) : "5",
+    draft?.priority !== undefined
+      ? String(draft.priority)
+      : templatePriority(templateId),
   );
+  // Follows the Template picker until somebody types in the box, as the
+  // configured defaults do (formEdited).
+  useEffect(() => {
+    if (!formEdited.current.has("priority"))
+      setPriority(templatePriority(fromTemplate));
+  }, [fromTemplate, pickedTemplate?.priority]);
+  // A value the box holds that it cannot file as typed: refused where it
+  // is typed, in the words Edit and Bulk edit use, rather than left to
+  // the browser's own min/step message or to the server's JSON decoder.
+  const priorityInvalid =
+    String(priority).trim() !== "" && Number.isNaN(taskPriority(priority));
   // customFields is this deployment's own fields (grain/task-53), held
   // as state rather than read off the form at submit for the reason
   // capabilities above is: an enum is a <Select> and a boolean a
@@ -713,6 +738,7 @@ export default function NewTaskOverlay({
       String(openingDefault("promptExtension")).trim()
     )
       return true;
+    if (hostd.trim() !== String(openingDefault("hostd")).trim()) return true;
     const shapeDiffers = (v, d) => String(v || 0) !== String(d || 0);
     if (shapeDiffers(sandboxCpus, openingShape.cpus)) return true;
     if (shapeDiffers(sandboxMemoryMb, openingShape.memoryMb)) return true;
@@ -726,7 +752,7 @@ export default function NewTaskOverlay({
     if (newBranchName.trim() !== "") return true;
     if (reviewers.trim() !== "") return true;
     if (atFront !== !!openingDefault("atFront")) return true;
-    if (String(priority).trim() !== "5") return true;
+    if (String(priority).trim() !== templatePriority(fromTemplate)) return true;
     const defaultFields = fileableFieldValues(config, fields);
     for (const [k, v] of Object.entries(customFields)) {
       if (JSON.stringify(v) !== JSON.stringify(defaultFields[k])) return true;
@@ -778,6 +804,7 @@ export default function NewTaskOverlay({
         reviewTemplateId,
         reviewers,
         promptExtension,
+        hostd,
         sandboxCpus,
         sandboxMemoryMb,
         sandboxDiskGb,
@@ -813,6 +840,7 @@ export default function NewTaskOverlay({
     reviewTemplateId,
     reviewers,
     promptExtension,
+    hostd,
     sandboxCpus,
     sandboxMemoryMb,
     sandboxDiskGb,
@@ -855,6 +883,7 @@ export default function NewTaskOverlay({
       nothingNeededAction: (v) => setNothingNeededAction(String(v ?? "")),
       reviewTemplateId: (v) => setReviewTemplateId(String(v ?? "")),
       promptExtension: (v) => setPromptExtension(String(v ?? "")),
+      hostd: (v) => setHostd(String(v ?? "")),
       approved: (v) => setApproved(!!v),
       atFront: (v) => setAtFront(!!v),
     };
@@ -899,6 +928,7 @@ export default function NewTaskOverlay({
       "nothingNeededAction",
       "reviewTemplateId",
       "promptExtension",
+      "hostd",
     ])
       if (hidden(id)) out[id] = String(d(id) ?? "");
     if (hidden("reads")) out.reads = asList(d("reads"));
@@ -944,6 +974,7 @@ export default function NewTaskOverlay({
     setReviewTemplateId(String(openingDefault("reviewTemplateId")));
     setReviewers("");
     setPromptExtension(String(openingDefault("promptExtension")));
+    setHostd(String(openingDefault("hostd")));
     setSandboxCpus(openingShape.cpus);
     setSandboxMemoryMb(openingShape.memoryMb);
     setSandboxDiskGb(openingShape.diskGb);
@@ -953,7 +984,7 @@ export default function NewTaskOverlay({
     setKeepRunning(false);
     setFixesBaseBranch(!!openingDefault("fixesBaseBranch"));
     setAtFront(!!openingDefault("atFront"));
-    setPriority("5");
+    setPriority(templatePriority(templateId));
     setRepoSeed(null);
     setResetKey((k) => k + 1);
   };
@@ -1077,6 +1108,9 @@ export default function NewTaskOverlay({
       // it empty the run gets whatever the deployment and the repo say
       // (model.Task.PromptExtension).
       promptExtension: promptExtension || "",
+      // Sent only when set: "" is the default hostd
+      // (ui.CreateTaskRequest.Hostd).
+      ...(hostd.trim() ? { hostd: hostd.trim() } : {}),
       // "" is no review at all, which is what most tasks want and what
       // the picker below starts on (model.Task.ReviewTemplateID).
       reviewTemplateId: (templates || []).length === 0 ? "" : reviewTemplateId,
@@ -1119,8 +1153,12 @@ export default function NewTaskOverlay({
       approved,
       atFront,
       ...(() => {
-        const parsedPriority = wholeNumber(priority);
-        return !Number.isNaN(parsedPriority) && parsedPriority !== 5
+        // Stated whenever a template is picked, 5 included: the server
+        // fills a missing priority from the template, so leaving out
+        // the 5 somebody chose filed the template's instead.
+        const parsedPriority = taskPriority(priority);
+        return !Number.isNaN(parsedPriority) &&
+          (fromTemplate || parsedPriority !== 5)
           ? { priority: parsedPriority }
           : {};
       })(),
@@ -1172,6 +1210,7 @@ export default function NewTaskOverlay({
       setReviewTemplateId(String(openingDefault("reviewTemplateId")));
       setReviewers("");
       setPromptExtension(String(openingDefault("promptExtension")));
+      setHostd(String(openingDefault("hostd")));
       setSandboxCpus(openingShape.cpus);
       setSandboxMemoryMb(openingShape.memoryMb);
       setSandboxDiskGb(openingShape.diskGb);
@@ -1181,7 +1220,7 @@ export default function NewTaskOverlay({
       setKeepRunning(false);
       setFixesBaseBranch(!!openingDefault("fixesBaseBranch"));
       setAtFront(!!openingDefault("atFront"));
-      setPriority("5");
+      setPriority(templatePriority(templateId));
       onClose();
       // The filed task, for what its answer says beyond "filed" -- the
       // default grants the capability policy kept off it
@@ -2016,6 +2055,26 @@ export default function NewTaskOverlay({
       )}
     </>
   );
+  const hostdNode = (
+    <TextField
+      name="hostd"
+      label={F.hostd.label || "Hostd"}
+      helperText={
+        F.hostd.helpText ||
+        "Where this task's host work runs: a hostd's name, or label=value[,label=value] for any hostd carrying them. It waits for that hostd rather than running anywhere else. Leave empty for the default hostd."
+      }
+      autoComplete="off"
+      fullWidth
+      margin="normal"
+      size="small"
+      value={hostd}
+      // Left empty, a task filed from a template takes the template's
+      // hostd (ui.Client.fromTemplate), so the box says which.
+      placeholder={pickedTemplate?.hostd || undefined}
+      InputLabelProps={pickedTemplate?.hostd ? { shrink: true } : undefined}
+      onChange={(e) => edit("hostd", setHostd)(e.target.value)}
+    />
+  );
   const sandboxShapeNode = (
     <>
       {/* grain/task-26: on a deployment whose sandboxes have no
@@ -2207,7 +2266,11 @@ export default function NewTaskOverlay({
       helperText={
         pickedTemplate
           ? pickedTemplate.repo
-            ? `fills what this form leaves blank; always files against ${pickedTemplate.repo}`
+            ? // A bound template's repo and branch win over the form's
+              // (ui.Client.fromTemplate), so say which branch too: the
+              // Base branch box can hold another one, prefilled from the
+              // repo's last task (2026-11-03 walkthrough).
+              `fills what this form leaves blank; always files against ${pickedTemplate.repo}${pickedTemplate.base ? ` on ${pickedTemplate.base}` : ""}, whatever Repos and Base branch say`
             : "fills what this form leaves blank: title, description, reads, writes, capabilities, model"
           : "file from a template to have it fill what this form leaves blank"
       }
@@ -2230,7 +2293,14 @@ export default function NewTaskOverlay({
       <TextField
         name="priority"
         label="Task priority"
-        helperText="default 5; higher numbers run first"
+        helperText={
+          priorityInvalid
+            ? PRIORITY_REFUSAL
+            : pickedTemplate?.priority
+              ? `default ${pickedTemplate.priority}, from the template; higher numbers run first`
+              : "default 5; higher numbers run first"
+        }
+        error={priorityInvalid}
         type="number"
         inputProps={{ min: 1, step: 1 }}
         autoComplete="off"
@@ -2238,7 +2308,7 @@ export default function NewTaskOverlay({
         margin="normal"
         size="small"
         value={priority}
-        onChange={(e) => setPriority(e.target.value)}
+        onChange={(e) => edit("priority", setPriority)(e.target.value)}
       />
     </>
   );
@@ -2268,6 +2338,7 @@ export default function NewTaskOverlay({
     nothingNeededAction: nothingNeededActionNode,
     reviewTemplateId: reviewTemplateIdNode,
     promptExtension: promptExtensionNode,
+    hostd: hostdNode,
     sandboxShape: sandboxShapeNode,
     approved: approvedNode,
     atFront: atFrontNode,
@@ -2364,6 +2435,7 @@ export default function NewTaskOverlay({
             onClick={markSubmitAttempt}
             disabled={
               submitting ||
+              priorityInvalid ||
               (!title.trim() && !pickedTemplate) ||
               (!noRepo && !repo.trim() && !pickedTemplate?.repo) ||
               (!noRepo && newBranch && !newBranchName.trim())

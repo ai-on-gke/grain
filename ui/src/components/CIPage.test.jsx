@@ -29,6 +29,8 @@ import CIPage, {
   requesterLabel,
   retryRequest,
   RunDetail,
+  RunList,
+  runOpenLabel,
   SHARED_FAULTS_STORAGE_KEY,
   newSharedFaults,
   sharedFaultKey,
@@ -434,7 +436,9 @@ describe("CIPage", () => {
     expect(container.querySelector('svg[data-glyph="ci"]')).toBeInTheDocument();
     expect(container.querySelector('svg[data-glyph="branches"]')).toBeNull();
 
-    await userEvent.click(screen.getByRole("button", { name: "acme/widgets" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /^acme\/widgets / }),
+    );
 
     expect(
       (await screen.findByText("← Back")).closest("div"),
@@ -471,7 +475,7 @@ describe("CIPage", () => {
     render(<CIPane showError={() => {}} />);
 
     await userEvent.click(
-      await screen.findByRole("button", { name: "acme/widgets" }),
+      await screen.findByRole("button", { name: /^acme\/widgets / }),
     );
 
     expect(await screen.findByText("go test")).toBeInTheDocument();
@@ -549,7 +553,7 @@ describe("CIPage", () => {
     render(<CIPane showError={() => {}} />);
 
     await userEvent.click(
-      await screen.findByRole("button", { name: "acme/widgets" }),
+      await screen.findByRole("button", { name: /^acme\/widgets / }),
     );
 
     expect(
@@ -588,7 +592,7 @@ describe("CIPage", () => {
     render(<CIPane showError={() => {}} />);
 
     await userEvent.click(
-      await screen.findByRole("button", { name: "acme/widgets" }),
+      await screen.findByRole("button", { name: /^acme\/widgets / }),
     );
 
     // The link goes where the bytes are, which is the one route that
@@ -679,7 +683,7 @@ describe("CIPage", () => {
     render(<CIPane showError={() => {}} />);
 
     await userEvent.click(
-      await screen.findByRole("button", { name: "acme/widgets" }),
+      await screen.findByRole("button", { name: /^acme\/widgets / }),
     );
     expect(await screen.findByText(/was interrupted/)).toBeInTheDocument();
     expect(screen.getByText(/put through CI again/)).toBeInTheDocument();
@@ -710,7 +714,7 @@ describe("CIPage", () => {
     );
     render(<CIPane showError={() => {}} />);
     await userEvent.click(
-      await screen.findByRole("button", { name: "acme/widgets" }),
+      await screen.findByRole("button", { name: /^acme\/widgets / }),
     );
 
     // A run with no conclusion is still going and says so rather than
@@ -754,7 +758,7 @@ describe("CIPage", () => {
     );
     render(<CIPane showError={() => {}} />);
     await userEvent.click(
-      await screen.findByRole("button", { name: "acme/widgets" }),
+      await screen.findByRole("button", { name: /^acme\/widgets / }),
     );
     expect(await screen.findAllByText("Running")).not.toHaveLength(0);
 
@@ -796,7 +800,7 @@ describe("CIPage", () => {
     );
     render(<CIPane showError={() => {}} />);
     await userEvent.click(
-      await screen.findByRole("button", { name: "acme/widgets" }),
+      await screen.findByRole("button", { name: /^acme\/widgets / }),
     );
 
     expect(
@@ -824,7 +828,7 @@ describe("CIPage", () => {
     );
     const { unmount } = render(<CIPane showError={() => {}} />);
     await userEvent.click(
-      await screen.findByRole("button", { name: "acme/widgets" }),
+      await screen.findByRole("button", { name: /^acme\/widgets / }),
     );
     expect(
       await screen.findByText(/grain build acc97d35b0f1/),
@@ -849,7 +853,7 @@ describe("CIPage", () => {
     );
     render(<CIPane showError={() => {}} />);
     await userEvent.click(
-      await screen.findByRole("button", { name: "acme/widgets" }),
+      await screen.findByRole("button", { name: /^acme\/widgets / }),
     );
     expect(await screen.findByText(/asked by alice/)).toBeInTheDocument();
     expect(screen.queryByText(/grain build/)).not.toBeInTheDocument();
@@ -872,7 +876,7 @@ describe("CIPage", () => {
     );
     render(<CIPane showError={() => {}} />);
     await userEvent.click(
-      await screen.findByRole("button", { name: "acme/widgets" }),
+      await screen.findByRole("button", { name: /^acme\/widgets / }),
     );
     expect(await screen.findByText(/asked by task 3214/)).toBeInTheDocument();
   });
@@ -1496,7 +1500,9 @@ describe("CIPage", () => {
     expect(listCalls()).toBeGreaterThan(before);
 
     // An open, unfinished run polls while the listing stays fresh below it.
-    await userEvent.click(screen.getByRole("button", { name: "acme/widgets" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /^acme\/widgets / }),
+    );
     const listAtOpen = listCalls();
     const runCalls = () =>
       api.mock.calls.filter(([path]) => path === "/api/ci/runs/abc").length;
@@ -1606,6 +1612,49 @@ describe("CIPage", () => {
 });
 
 describe("CI helpers", () => {
+  it("names each run's open control by its branch, result and start, not its repo alone", async () => {
+    // Every row's visible link is the repo, so before this a screen reader
+    // heard "acme/widgets" once per run with nothing to tell them apart
+    // (docs/test-runs/2026-11-02-deployment-operations.md).
+    const at = "2026-11-02T09:04:16Z";
+    const runs = [
+      {
+        id: "r1",
+        repo: "acme/widgets",
+        ref: "main",
+        startedAt: at,
+        conclusion: "success",
+        jobs: [],
+      },
+      {
+        id: "r2",
+        repo: "acme/widgets",
+        ref: "walk/held-1",
+        startedAt: at,
+        conclusion: "failure",
+        jobs: [],
+      },
+    ];
+    const onOpen = vi.fn();
+    render(<RunList runs={runs} zone="UTC" onOpen={onOpen} />);
+    const started = formatDateTime(at, "UTC");
+    const held = screen.getByRole("button", {
+      name: `acme/widgets walk/held-1, failure, started ${started}`,
+    });
+    expect(held).toHaveTextContent(/^acme\/widgets$/);
+    expect(
+      screen.getByRole("button", {
+        name: `acme/widgets main, success, started ${started}`,
+      }),
+    ).toBeInTheDocument();
+    await userEvent.click(held);
+    expect(onOpen).toHaveBeenCalledWith("r2");
+    // On a repo's own page the visible link is the branch, and leads.
+    expect(runOpenLabel(runs[0], "Success", "UTC", false)).toBe(
+      `main, success, started ${started}`,
+    );
+  });
+
   it("puts failures first and leaves the rest in plan order", () => {
     const jobs = [
       { jobId: "a", conclusion: "success" },

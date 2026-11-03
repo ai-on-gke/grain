@@ -298,7 +298,7 @@ func TestSandboxProxyServesDBQueriesReadOnly(t *testing.T) {
 		t.Errorf("the task is gone after a refused DELETE: %v", err)
 	}
 	status, body = stage2Get(t, srv, "nogrant", "/cli/db/query?sql="+urlQuery("SELECT 1"))
-	if status != http.StatusForbidden || !strings.Contains(body, "db-read") {
+	if status != http.StatusForbidden || !strings.Contains(body, "grain#sql") {
 		t.Errorf("without the grant = %d %s", status, body)
 	}
 }

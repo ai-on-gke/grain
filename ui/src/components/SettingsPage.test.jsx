@@ -81,6 +81,7 @@ describe("SettingsPage", () => {
       "Sandboxes",
       "Legacy capabilities",
       "Access",
+      "Hostds",
       "Preferences",
       "Upgrade",
       "Caches",

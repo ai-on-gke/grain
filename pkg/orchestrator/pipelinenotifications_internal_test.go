@@ -62,6 +62,10 @@ func TestAConfirmedRedBaseRaisesBaseRedAndTheGreenVerdictClearsIt(t *testing.T) 
 		!slices.Contains(n.Actions, "open-repair") || !strings.Contains(n.Body, "/tasks/repair-1") {
 		t.Errorf("base-red = %+v, want a warning naming repair-1 with open-repair", n)
 	}
+	// The repository before its branch, as the title says it.
+	if !strings.HasPrefix(n.Body, "grain CI on acme/widgets `main` is confirmed red: ") {
+		t.Errorf("base-red body = %q, want it to name acme/widgets `main`", n.Body)
+	}
 	if n.ClearsWhen == nil || n.ClearsWhen.Kind != model.ClearsOnBaseGreen {
 		t.Errorf("clears_when = %+v, want base-green", n.ClearsWhen)
 	}

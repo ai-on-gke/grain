@@ -172,7 +172,54 @@ func TestRepoServerNormalizesGitPushAnyRef(t *testing.T) {
 	pass.Release(context.Background())
 
 	st := grainserver.RepoStatus()
-	if st.ID != grainserver.RepoID || !slices.Equal(st.Methods, []string{grainserver.RepoWriteMethod}) {
-		t.Fatalf("RepoStatus() = %+v, want %s with only %s", st, grainserver.RepoID, grainserver.RepoWriteMethod)
+	if want := []string{grainserver.RepoReadMethod, grainserver.RepoWriteMethod}; st.ID != grainserver.RepoID || !slices.Equal(st.Methods, want) {
+		t.Fatalf("RepoStatus() = %+v, want %s with %v", st, grainserver.RepoID, want)
+	}
+}
+
+// repo#read {repo} and repo#write {repo} -- a CI job's access to another
+// repository, formerly repo-read:/repo-write: -- validate and record as
+// model.RepoReadGrant / RepoWriteGrant, read back as their repository, and
+// are not the any-ref grant; neither method takes a repo beside anything
+// else, or a value that is not a repository.
+func TestRepoServerNormalizesRepoAccess(t *testing.T) {
+	t.Parallel()
+
+	lookup := grainserver.Lookup(nil)
+	tools := model.RepoRef{Owner: "acme", Name: "tools"}
+	for _, tc := range []struct {
+		grant  string
+		target func(string) (model.RepoRef, bool)
+	}{
+		{model.RepoReadGrant(tools), model.RepoReadTarget},
+		{model.RepoWriteGrant(tools), model.RepoWriteTarget},
+	} {
+		names, err := model.NormalizeCapabilityNames([]string{tc.grant}, lookup)
+		if err != nil || !slices.Equal(names, []string{tc.grant}) {
+			t.Fatalf("NormalizeCapabilityNames(%s) = %v, %v; want it unchanged", tc.grant, names, err)
+		}
+		if got, ok := tc.target(tc.grant); !ok || got != tools {
+			t.Errorf("target(%s) = %v, %v; want %v", tc.grant, got, ok, tools)
+		}
+		if !model.IsRepoAccessGrant(tc.grant) || !grainserver.IsInProcessGrant(tc.grant) {
+			t.Errorf("%s is not read as an in-process repository access grant", tc.grant)
+		}
+		if grainserver.IsGitPushAnyRefGrant(tc.grant) {
+			t.Errorf("IsGitPushAnyRefGrant(%s) = true; want only the any-ref value", tc.grant)
+		}
+	}
+	if model.IsRepoAccessGrant(grainserver.GitPushAnyRefGrant) {
+		t.Error("GitPushAnyRefGrant is read as repository access")
+	}
+	for _, bad := range []string{
+		grainserver.RepoReadRef,
+		grainserver.RepoReadRef + `={"repo":"acme"}`,
+		grainserver.RepoReadRef + `={"repo":"acme/tools","force":true}`,
+		grainserver.RepoWriteRef + `={"repo":"acme/tools","refs":["refs/heads/*","refs/tags/*"],"force":true}`,
+		grainserver.RepoWriteRef + `={"repo":7}`,
+	} {
+		if _, err := model.NormalizeCapabilityNames([]string{bad}, lookup); err == nil {
+			t.Errorf("NormalizeCapabilityNames(%s) validated; want it refused", bad)
+		}
 	}
 }

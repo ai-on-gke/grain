@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
-	"github.com/ai-on-gke/grain/pkg/capability/repowrite"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
@@ -394,14 +393,10 @@ func TestReadoptGrantsOnlyTheWriteScopesTheEventAdmits(t *testing.T) {
 	} {
 		t.Run(string(tc.event), func(t *testing.T) {
 			owner := CiSandboxes{
-				Scopes:      gitproxy.NewReadScopes(),
-				WriteScopes: gitproxy.NewWriteScopes(),
-				Teams:       gitproxy.NewSandboxTeams(),
-				Capabilities: func() *model.CapabilityRegistry {
-					reg := model.NewCapabilityRegistry()
-					reg.RegisterDynamic(repowrite.DynamicProvider)
-					return reg
-				},
+				Scopes:       gitproxy.NewReadScopes(),
+				WriteScopes:  gitproxy.NewWriteScopes(),
+				Teams:        gitproxy.NewSandboxTeams(),
+				Capabilities: func() *model.CapabilityRegistry { return model.NewCapabilityRegistry() },
 			}
 			sb := &CiSandbox{Owner: owner, Backing: &ciToolSandbox{}, SandboxName: "c0123abcd-2"}
 			if err := sb.readoptJob(context.Background(), model.RepoRef{Owner: "acme", Name: "widgets"},
@@ -412,5 +407,32 @@ func TestReadoptGrantsOnlyTheWriteScopesTheEventAdmits(t *testing.T) {
 				t.Fatalf("write scopes after readopting a %s job = %v, want %d", tc.event, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestCIAdmissionEnforcesPolicyAndUntrustedOnRepoAccessGrants(t *testing.T) {
+	h := newCIPassHarness(t)
+	target := model.RepoRef{Owner: "acme", Name: "deploy"}
+	for _, grant := range []string{model.RepoReadGrant(target), "repo-read:" + target.String()} {
+		untrusted := ci.SandboxRequest{
+			Name: "c0123abcd-1", Repo: "acme/widgets", Event: ci.EventPullRequest,
+			Capabilities: []string{grant}, Untrusted: true,
+		}
+		if _, err := h.acquire(untrusted); err == nil || !strings.Contains(err.Error(), "untrusted input") {
+			t.Fatalf("untrusted %q: err = %v, want untrusted denial", grant, err)
+		}
+	}
+
+	h.config.CapabilityPolicy = model.CapabilityPolicy{Rules: []model.CapabilityPolicyRule{{
+		Capability: model.RepoWriteRef, RunKinds: []string{model.CapabilityRunCI}, Deny: true,
+	}}}
+	for _, grant := range []string{model.RepoWriteGrant(target), "repo-write:" + target.String()} {
+		req := ci.SandboxRequest{
+			Name: "c0123abcd-1", Repo: "acme/widgets", Event: ci.EventRelease,
+			Capabilities: []string{grant},
+		}
+		if _, err := h.acquire(req); err == nil || !strings.Contains(err.Error(), "capability policy denies") {
+			t.Fatalf("policy-denied %q: err = %v, want policy denial", grant, err)
+		}
 	}
 }

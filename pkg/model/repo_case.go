@@ -371,7 +371,7 @@ var repoCaseTables = []repoCaseTable{
 	// cycle.
 	{
 		name: "merge_batch", owner: "owner", repo: "name", keyed: true,
-		rest: []string{"branch"},
+		rest: []string{"branch", "task_id"},
 		values: []string{"ref", "base_commit", "commit", "members", "run_id", "started_at",
 			"finished_at", "conclusion", "detail", "splits"},
 		merge: mergeDeclarationSyncRow,

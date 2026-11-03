@@ -163,7 +163,7 @@ const (
 	// written as the bare kind, or {kind, spec} when there is a spec.
 	shapeChangeTarget
 	// shapeRecurrence is the six cadence columns, written as one of the
-	// four blocks a declared schedule uses.
+	// cadence blocks a declared schedule uses (cadenceKeys).
 	shapeRecurrence
 	// shapeRepos is a companion table of (owner, name) -- `reads`.
 	shapeRepos
@@ -455,9 +455,16 @@ func (d declDocument) entryID(k declKind, i int, entry map[string]*yaml.Node) (s
 	return node.Value, nil
 }
 
+// cadenceKeys is every key recurrenceNode writes a cadence under, and so
+// every key recurrenceNodeOf has to look for: a key written here and not
+// looked for there is a schedule that exports and then cannot be
+// imported, its recurrence_kind left NULL (a `trigger:` schedule was
+// exactly that until grain/task-2649).
+var cadenceKeys = []string{"every", "daily", "weekly", "monthly", "trigger", "recurrence"}
+
 // recurrenceNodeOf finds whichever of the cadence keys an entry carries.
 func recurrenceNodeOf(entry map[string]*yaml.Node) (*yaml.Node, bool) {
-	for _, key := range []string{"every", "daily", "weekly", "monthly", "recurrence"} {
+	for _, key := range cadenceKeys {
 		if node, ok := entry[key]; ok {
 			node = &yaml.Node{Kind: yaml.MappingNode, Content: append([]*yaml.Node{
 				{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
@@ -720,7 +727,7 @@ func mine(rows []map[string]any, parent, id string) []map[string]any {
 
 // columnNode renders one field's columns, and reports the key it is
 // written under -- which is the field's own for every shape but the
-// cadence, where the key is which of the four blocks it is.
+// cadence, where the key is which of the cadence blocks (cadenceKeys) it is.
 func columnNode(f declFieldShape, row map[string]any) (string, *yaml.Node, error) {
 	switch f.shape {
 	case shapeTarget:
@@ -1225,7 +1232,7 @@ func decodeRecurrence(path, id string, node *yaml.Node, row map[string]any) erro
 		return fmt.Errorf("staterepo: %s, %s: %s", path, id, why)
 	}
 	if node.Kind != yaml.MappingNode || len(node.Content) != 2 {
-		return fail("a cadence is one of `every`, `daily`, `weekly`, `monthly` or `recurrence`")
+		return fail("a cadence is one of `every`, `daily`, `weekly`, `monthly`, `trigger` or `recurrence`")
 	}
 	block := node.Content[0].Value
 	body := node.Content[1]

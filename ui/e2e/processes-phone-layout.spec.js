@@ -101,6 +101,64 @@ test.describe("Processes rows on a phone", () => {
   });
 });
 
+// The 2026-11-02 walkthrough: a grant chip is nowrap, and the preview's
+// value column kept min-width:auto, so "api:ci-read@acme/widgets" and
+// its "from the template" chip pushed the Capabilities row 55px past the
+// pane at 390px and the pane scrolled sideways. The chip ellipsizes
+// inside its column now; its tooltip has the whole grant.
+test.describe("A template's Use… preview on a phone", () => {
+  test.use({ viewport: PHONE, hasTouch: true, isMobile: true });
+
+  test("keeps a long grant inside its row", async ({ page }) => {
+    const name = `phone-grant-${Date.now()}`;
+    const created = await page.request.post("/api/templates", {
+      data: {
+        name,
+        title: "Read the CI",
+        repo: "acme/widgets",
+        capabilities: ["api:ci-read@acme/widgets"],
+      },
+    });
+    expect(created.ok()).toBe(true);
+    const { id } = await created.json();
+    try {
+      await page.goto("/processes?kind=template");
+      await page
+        .locator('.process-row[data-kind="template"]')
+        .filter({ hasText: name })
+        .getByRole("button", { name: "Use…" })
+        .click();
+      const grant = page.locator("dd [data-grant-chip]").first();
+      await expect(grant).toBeVisible();
+
+      const row = grant.locator("xpath=ancestor::dd/..");
+      const widths = await row.evaluate((el) => ({
+        scroll: el.scrollWidth,
+        client: el.clientWidth,
+      }));
+      expect(widths.scroll).toBeLessThanOrEqual(widths.client);
+      const rowBox = await row.boundingBox();
+      const source = await row.locator(":scope > .MuiChip-root").boundingBox();
+      expect(source.x + source.width).toBeLessThanOrEqual(
+        rowBox.x + rowBox.width + 1,
+      );
+      // And the pane it sits in does not scroll sideways: the nearest
+      // ancestor that scrolls is as wide as what it holds.
+      const pane = await grant.evaluate((el) => {
+        let x = el.parentElement;
+        while (x && !/auto|scroll/.test(getComputedStyle(x).overflowX)) {
+          x = x.parentElement;
+        }
+        x = x || document.documentElement;
+        return { scroll: x.scrollWidth, client: x.clientWidth };
+      });
+      expect(pane.scroll).toBeLessThanOrEqual(pane.client);
+    } finally {
+      await page.request.delete(`/api/templates/${id}`);
+    }
+  });
+});
+
 for (const [label, viewport, extra] of [
   ["tablet", TABLET, { hasTouch: true, isMobile: true }],
   ["desktop", DESKTOP, {}],

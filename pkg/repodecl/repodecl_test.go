@@ -223,6 +223,19 @@ func TestATemplatesCapabilitiesAcceptArbitraryCapabilities(t *testing.T) {
 			t.Errorf("%q: error = %q, want it named and %q", tc.entry, msg, tc.want)
 		}
 	}
+	// The repo server's spelling of the same access answers to the same
+	// rule: no file reaches grain's own configuration through it either.
+	for _, entry := range []string{
+		model.RepoWriteGrant(model.RepoRef{Owner: "grain", Name: "config"}),
+		model.RepoReadGrant(model.RepoRef{Owner: "Grain", Name: "Config"}),
+	} {
+		msg := loadErr(t, map[string]string{
+			".grain/templates/nightly.yml": "title: Bump dependencies\ncapabilities: ['" + entry + "']\n",
+		})
+		if !strings.Contains(msg, "grain's own configuration") {
+			t.Errorf("%s: error = %q, want grain's own configuration refused", entry, msg)
+		}
+	}
 }
 
 // A schedule takes its repository access from the template it fires,
@@ -332,6 +345,61 @@ overlap: allow
 	}
 	if sched.Overlap != model.OverlapAllow || !sched.Enabled {
 		t.Errorf("schedule = %+v", sched)
+	}
+}
+
+func TestScheduleRunsADeclaredSuiteOnItsBase(t *testing.T) {
+	declared := load(t, map[string]string{
+		".grain/templates/nightly.yml": "title: Bump dependencies\n",
+		".grain/suites/sweep.yml":      "templates: [nightly]\n",
+		".grain/schedules/sweep.yml": `
+name: Nightly sweep
+suite: sweep
+base: " main "
+daily:
+  at: "02:30"
+`,
+	})
+	if len(declared.Schedules) != 1 {
+		t.Fatalf("declared %d schedules, want 1", len(declared.Schedules))
+	}
+	sched := declared.Schedules[0].Schedule
+	if sched.SuiteID == nil || *sched.SuiteID != model.RepoDeclaredID(model.DeclaredSuite, repo, "sweep") {
+		t.Errorf("suiteId = %v", sched.SuiteID)
+	}
+	if sched.Base != "main" {
+		t.Errorf("base = %q, want main", sched.Base)
+	}
+}
+
+// A suite run stacks its tasks against one named branch and has no default
+// branch to fall back to (ui.CreateSuiteRun, ui.CreateSchedule), so a
+// declared suite schedule with no `base:` is refused with the file's path
+// rather than synced to fire a base-less run.
+func TestASuiteScheduleNeedsABase(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		base string
+	}{
+		{"omitted", ""},
+		{"blank", "base: \"   \"\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := loadErr(t, map[string]string{
+				".grain/templates/nightly.yml": "title: Bump dependencies\n",
+				".grain/suites/sweep.yml":      "templates: [nightly]\n",
+				".grain/schedules/sweep.yml":   "suite: sweep\n" + tc.base + "daily:\n  at: \"02:30\"\n",
+			})
+			for _, want := range []string{
+				".grain/schedules/sweep.yml",
+				"needs `base:`",
+				"no default branch to fall back to",
+			} {
+				if !strings.Contains(msg, want) {
+					t.Fatalf("error = %q, want %q", msg, want)
+				}
+			}
+		})
 	}
 }
 
@@ -663,5 +731,30 @@ func TestDeclaredIssueImportIsRefusedAsAuthority(t *testing.T) {
 		if !strings.Contains(err, want) {
 			t.Fatalf("Load = %s\nwant it to say %q", err, want)
 		}
+	}
+}
+
+func TestDeclaredRepoCapabilityRejectsMissingRepoAndScheduleAccess(t *testing.T) {
+	for _, bad := range []string{
+		"https://grain.dev/capabilities/repo#read",
+		`https://grain.dev/capabilities/repo#read={"repo":"not-a-repo"}`,
+		"https://grain.dev/capabilities/repo#write",
+		`https://grain.dev/capabilities/repo#write={"repo":"not-a-repo"}`,
+	} {
+		err := loadErr(t, map[string]string{
+			".grain/templates/triage.yml": "title: Triage\ncapabilities:\n  - '" + bad + "'\n",
+		})
+		if !strings.Contains(err, "does not name a repository") {
+			t.Errorf("template capability %q: got %q, want 'does not name a repository'", bad, err)
+		}
+	}
+
+	schedErr := loadErr(t, map[string]string{
+		".grain/templates/triage.yml": "title: Triage\n",
+		".grain/schedules/nightly.yml": "template: triage\nevery:\n  hours: 6\ncapabilities:\n" +
+			"  - capability: https://grain.dev/capabilities/repo#write\n    with:\n      repo: acme/widgets\n",
+	})
+	if !strings.Contains(schedErr, "repository access belongs on the template it fires") {
+		t.Errorf("schedule with repo#write {repo}: got %q, want template-only refusal", schedErr)
 	}
 }

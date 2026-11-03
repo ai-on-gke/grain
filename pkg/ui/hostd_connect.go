@@ -15,9 +15,12 @@
 package ui
 
 import (
+	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/ai-on-gke/grain/pkg/apierror"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 )
 
 // hostdConnectRoute reports whether r is a grain hostd dialing in to
@@ -37,11 +40,60 @@ func hostdConnectRoute(r *http.Request) bool {
 // handleHostdConnect hands a grain hostd's upgrade of /api/hostd/connect
 // to Config.HostdRemote, which authenticates it with the hostd token and
 // serves the session host CLIs and run: host capability servers start
-// over.
+// over. Who is connecting (hostdConnectIdentity) goes with it, so that a
+// remote hostd is admitted only as its row's owner.
 func (s *Server) handleHostdConnect(w http.ResponseWriter, r *http.Request) {
 	if s.tasks == nil || s.tasks.Config.HostdRemote == nil {
 		writeError(w, http.StatusServiceUnavailable, apierror.Public("this daemon takes no grain hostd dialing in: start it with -hostd-token-file"))
 		return
 	}
-	s.tasks.Config.HostdRemote.ServeHTTP(w, r)
+	id, code, err := s.hostdConnectIdentity(r)
+	if err != nil {
+		log.Printf("grain daemon: refused a grain hostd on %s connecting from %s: %v", hostdHostOf(r), r.RemoteAddr, err)
+		http.Error(w, "grain hostd: "+err.Error(), code)
+		return
+	}
+	s.tasks.Config.HostdRemote.ServeHTTP(w, r.WithContext(hostd.WithConnectIdentity(r.Context(), id)))
+}
+
+// hostdConnectIdentity is who r, a hostd dialing in, is connecting as
+// (hostd.ConnectIdentity), or the status and error it is refused with:
+//
+//   - A verified identity (IAP, or another registered IdentityVerifier)
+//     makes it a remote hostd connecting as that principal, which the
+//     allowlist must admit. hostd.Remote then requires it to be the
+//     hostd row's owner.
+//   - With no verified identity, a request from loopback with no
+//     forwarding or proxy headers (relayedByProxy) is a local hostd,
+//     named by its token alone, as is any request to a daemon with no
+//     verifier configured.
+//   - Anything else -- relayed by a proxy, or from off this host, to a
+//     daemon that has a verifier -- is a remote hostd with no identity,
+//     which hostd.Remote refuses rather than fall back to the token.
+func (s *Server) hostdConnectIdentity(r *http.Request) (hostd.ConnectIdentity, int, error) {
+	cv := cachedOrVerifyCaller(r)
+	if cv.present {
+		if cv.err != nil {
+			// singleTenantGate refuses this first; this is for a daemon
+			// that does not run it.
+			return hostd.ConnectIdentity{}, http.StatusUnauthorized, fmt.Errorf("its identity did not verify: %v", cv.err)
+		}
+		if err := s.checkAllowedPrincipal(r.Context(), cv.id); err != nil {
+			return hostd.ConnectIdentity{}, http.StatusForbidden, err
+		}
+		return hostd.ConnectIdentity{Remote: true, Principal: normalizeIdentityEmail(cv.id.Email), Via: string(cv.method)}, 0, nil
+	}
+	local := isLoopbackRequest(r) && !relayedByProxy(r)
+	if local || len(activeVerifiers(r.Context())) == 0 {
+		return hostd.ConnectIdentity{}, 0, nil
+	}
+	return hostd.ConnectIdentity{Remote: true}, 0, nil
+}
+
+// hostdHostOf is the machine a connecting hostd says it runs on.
+func hostdHostOf(r *http.Request) string {
+	if host := r.Header.Get(hostd.HostHeader); host != "" {
+		return host
+	}
+	return "an unnamed host"
 }

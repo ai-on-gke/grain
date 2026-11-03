@@ -17,6 +17,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -67,6 +68,9 @@ type Settings struct {
 	// PollInterval is a Go duration string ("30s"), the same syntax
 	// -poll-interval itself parses.
 	PollInterval string `json:"pollInterval"`
+	// PollIntervalDefault is grain's own interval, shown beside the box
+	// as the placeholder a cleared box goes back to.
+	PollIntervalDefault string `json:"pollIntervalDefault"`
 	// There is deliberately no maxWorkers, maxMergers or maxCIJobs here.
 	// They were this deployment's three concurrency settings until
 	// grain/task-28: how many ordinary runs could be live, how much
@@ -1008,6 +1012,7 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 	out := Settings{
 		Configured:             true,
 		PollInterval:           cfg.PollInterval.String(),
+		PollIntervalDefault:    model.DefaultPollInterval.String(),
 		MaxWorkers:             cfg.MaxWorkers,
 		MaxMergesPerRepo:       cfg.MaxMergesPerRepo,
 		MaxAutoSubmitDepth:     cfg.AutoSubmitLimits().Depth,
@@ -1395,6 +1400,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			CIArtifactRunMBDefault:             ciStorageDefaults.artifactRunMB,
 			CIArtifactFileMBDefault:            ciStorageDefaults.artifactFileMB,
 			CIArtifactDaysDefault:              ciStorageDefaults.artifactDays,
+			PollIntervalDefault:                model.DefaultPollInterval.String(),
 			CIJobsPerRun:                       def.CIJobsPerRun,
 			CIAgeBoost:                         durationSetting(def.CIAgeBoost),
 			CIReserveAfter:                     durationSetting(def.CIReserveAfter),
@@ -1561,6 +1567,15 @@ func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) 
 	if err := c.Store.PutConfig(ctx, cfg); err != nil {
 		return Settings{}, err
 	}
+	// Who saved what, named here because nothing downstream can: the
+	// daemon applies the change from the stored row on its own tick
+	// (pkg/daemon's live config), long after the request has gone. A
+	// rehearsal wrote nothing, so it is not reported as a save.
+	if r, ok := model.WriteRehearsalFrom(ctx); !ok || !r.Rehearsing() {
+		if changed := changedConfigFields(current, cfg); len(changed) > 0 {
+			log.Printf("grain ui: settings saved by %s: changed %s", writerName(ctx), strings.Join(changed, ", "))
+		}
+	}
 	c.triggerIAPSync()
 	if req.AgentBackends != nil {
 		var before []model.AgentBackend
@@ -1600,7 +1615,15 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	}
 
 	if req.PollInterval != nil {
-		d, err := time.ParseDuration(*req.PollInterval)
+		// A cleared box is grain's default, shown beside it as the
+		// placeholder, rather than the parse error `time: invalid
+		// duration ""` it used to be. It is stored as that interval,
+		// since a stored zero means no interval at all.
+		raw := strings.TrimSpace(*req.PollInterval)
+		if raw == "" {
+			raw = model.DefaultPollInterval.String()
+		}
+		d, err := time.ParseDuration(raw)
 		if err != nil {
 			return model.Config{}, validationErrorf("pollInterval: %v", err)
 		}

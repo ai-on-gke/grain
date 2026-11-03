@@ -246,3 +246,54 @@ func TestLiveProposalOffTheTargetRepoListSaysItIsParked(t *testing.T) {
 		})
 	}
 }
+
+// A deployment default the capability policy denies is kept off a live
+// proposal, and the propose_task result says so, naming the grant and
+// the rule: the REST answer carries it (ui.Task.DroppedDefaults), and
+// the live filer used to drop it on the floor, so the run was told its
+// follow-up was filed and never that it lacked a grant
+// (docs/test-runs/2026-11-02-security-fixes-live.md, F3).
+func TestLiveProposalSaysWhichDefaultsThePolicyDropped(t *testing.T) {
+	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(t.TempDir(), "data")))
+	if err != nil {
+		t.Fatalf("opening embedded sqlite: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := model.New(db)
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("applying schema: %v", err)
+	}
+	srv := httptest.NewServer(ui.NewServer(ui.Config{
+		Actor:         ui.DefaultActor("operator"),
+		Capabilities:  ui.OfferedCapabilities(),
+		LocalAPIToken: testAccessCode,
+	}, store))
+	t.Cleanup(srv.Close)
+	client := accessCodeClient(srv.URL)
+	parent, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "parent", Description: "files a follow-up", Repo: "acme/widgets", Approved: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const journal = "https://grain.dev/capabilities/grain#journal"
+	if err := store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		cfg.DefaultCapabilities = append(cfg.DefaultCapabilities, journal+"={}")
+		cfg.CapabilityPolicy = model.CapabilityPolicy{Rules: []model.CapabilityPolicyRule{{Capability: journal, Deny: true}}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tool := mcp.NewLiveProposalTools(&mcp.MockSink{}, nil, parent.ID,
+		&daemonProposalFiler{client: client, parent: parent.ID, baseURL: srv.URL, filed: map[string]string{}})[0]
+	res := tool.Handler(ctx, map[string]any{"title": "follow-up", "body": "needs the journal"})
+	if res.IsError {
+		t.Fatalf("propose_task refused: %s", res.Text)
+	}
+	if !strings.Contains(res.Text, "Default grant "+journal+" was not attached to it: ") ||
+		!strings.Contains(res.Text, "rule 1: deny") {
+		t.Fatalf("propose_task answered %q, want it to name the dropped default and the rule", res.Text)
+	}
+}

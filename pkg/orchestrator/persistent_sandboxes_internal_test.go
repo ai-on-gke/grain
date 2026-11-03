@@ -20,7 +20,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -38,9 +37,7 @@ func persistentTestRepo(t *testing.T, files map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
 	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		writeExecutableStub(t, filepath.Join(dir, name), content)
 	}
 	for _, args := range [][]string{
 		{"init", "-q", "-b", "main"},
@@ -386,24 +383,13 @@ func TestK8sAndContainerSandboxesImplementSandboxPortDialer(t *testing.T) {
 	}
 }
 
-func writeExecutableForPersistentTest(t *testing.T, dst, script string) {
-	t.Helper()
-	src := dst + ".src"
-	if err := os.WriteFile(src, []byte(script), 0o644); err != nil {
-		t.Fatalf("writing %s: %v", src, err)
-	}
-	if out, err := exec.Command("install", "-m", "0755", src, dst).CombinedOutput(); err != nil {
-		t.Fatalf("installing %s: %v: %s", dst, err, out)
-	}
-}
-
 func TestPersistentSandboxSupervisorRunsAndDialsOnK8sGranuleAndK8sSandboxes(t *testing.T) {
 	repo := persistentTestRepo(t, map[string]string{
 		"serve.sh": "#!/bin/sh\necho persistent-ready\nexec sleep 600\n",
 	})
 	binDir := t.TempDir()
 	grainConnect := filepath.Join(binDir, "grain-connect")
-	writeExecutableForPersistentTest(t, grainConnect, "#!/bin/sh\necho \"dialed:$1\"\n")
+	writeExecutableStub(t, grainConnect, "#!/bin/sh\necho \"dialed:$1\"\n")
 	kubectl := filepath.Join(binDir, "kubectl")
 	kubectlScript := `#!/bin/sh
 export PATH="` + binDir + `:$PATH"
@@ -434,7 +420,7 @@ if [ "$1" = "granule" ] && [ "$2" = "exec" ] && [ "$3" = "--" ]; then
 fi
 exec "$@"
 `
-	writeExecutableForPersistentTest(t, kubectl, kubectlScript)
+	writeExecutableStub(t, kubectl, kubectlScript)
 
 	backends := []struct {
 		name      string

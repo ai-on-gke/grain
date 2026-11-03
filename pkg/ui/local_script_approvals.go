@@ -295,7 +295,7 @@ var errLocalScriptByPerson = forbiddenErrorf("a local-script approval is request
 var errLocalScriptByRun = forbiddenErrorf("a local-script call is approved or denied by a person who may act on the task, never by a run")
 
 func (s *Server) handleRequestLocalScriptApproval(w http.ResponseWriter, r *http.Request) {
-	if requestUser(r) != "" {
+	if requestPerson(r.Context()) != "" {
 		writeClientError(w, errLocalScriptByPerson)
 		return
 	}
@@ -389,7 +389,7 @@ func (s *Server) handleWaitLocalScriptApproval(w http.ResponseWriter, r *http.Re
 // handleExpireLocalScriptApproval is the mcpserver saying its call
 // stopped waiting.
 func (s *Server) handleExpireLocalScriptApproval(w http.ResponseWriter, r *http.Request) {
-	if requestUser(r) != "" {
+	if requestPerson(r.Context()) != "" {
 		writeClientError(w, errLocalScriptByPerson)
 		return
 	}
@@ -422,7 +422,7 @@ func (s *Server) handleAnswerLocalScriptApproval(w http.ResponseWriter, r *http.
 		return
 	}
 	id := r.PathValue("id")
-	by := requestUser(r)
+	by := requestPerson(r.Context())
 	approval, err := s.tasks.localScriptApprovals().Answer(id, r.PathValue("approval"), req.Approve, by, s.tasks.now())
 	if err != nil {
 		writeClientError(w, err)

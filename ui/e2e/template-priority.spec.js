@@ -96,9 +96,11 @@ test("a template's task priority is set, previewed, filed and cleared from the f
   }
 });
 
-// "1e2" is a number the box's own min and step let through, so the
-// browser submits it; the form used to read it with parseInt and save
-// priority 1. It is refused instead, the way the task pane refuses it.
+// "1e20" is a number the box's own min and step let through, so the
+// browser submits it, but not one the priority can hold exactly: it is
+// refused, the way the task pane refuses it. "1e2" is the 100 the box
+// takes it for, as on New task, Edit, Bulk edit and the API (the form
+// used to read it with parseInt and save priority 1).
 test("a template's task priority that is not a whole number from 1 is refused, not truncated", async ({
   page,
 }) => {
@@ -118,7 +120,7 @@ test("a template's task priority that is not a whole number from 1 is refused, n
     .fill(`walk-priority-bad-${Date.now()}`);
   await page.locator('input[name="title"]').fill("Urgent widget check");
   const priorityField = page.getByLabel("Task priority");
-  await priorityField.fill("1e2");
+  await priorityField.fill("1e20");
   await page.getByRole("button", { name: "Add template" }).click();
   const refusal = page.getByText(
     "a whole number, 1 or more; default 5, higher numbers run first",
@@ -136,6 +138,33 @@ test("a template's task priority that is not a whole number from 1 is refused, n
   expect(note.y).toBeGreaterThanOrEqual(box.y + box.height - 1);
   expect(Math.abs(note.x - box.x)).toBeLessThan(24);
 
-  await priorityField.fill("100");
+  // What the browser's own min/step check stops before submit runs is
+  // said in the same words, not in the browser's bubble.
+  for (const typed of ["0", "-1", "1.5"]) {
+    await priorityField.fill(typed);
+    await expect(refusal).toHaveCount(0);
+    await page.getByRole("button", { name: "Add template" }).click();
+    await expect(refusal).toBeVisible();
+    await expect(priorityField).toHaveAttribute("aria-invalid", "true");
+  }
+  expect(posts).toHaveLength(0);
+
+  await priorityField.fill("1e2");
   await expect(refusal).toHaveCount(0);
+  const created = page.waitForResponse(
+    (r) =>
+      r.request().method() === "POST" &&
+      new URL(r.url()).pathname === "/api/templates",
+  );
+  await page.getByRole("button", { name: "Add template" }).click();
+  const response = await created;
+  const template = await response.json();
+  try {
+    expect(response.ok()).toBe(true);
+    expect(JSON.parse(response.request().postData()).priority).toBe(100);
+    expect(template.priority).toBe(100);
+  } finally {
+    if (template?.id)
+      await page.request.delete(`/api/templates/${template.id}`);
+  }
 });

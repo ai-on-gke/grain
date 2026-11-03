@@ -1,0 +1,16 @@
+# after the fixes (this branch's grain-sandbox)
+log -n 1
+log -n x
+ls
+read
+grep x
+ci show
+task prompt
+task wait
+quarantine
+status
+memory doc
+ci frob
+read deploy://pipeline-changes --page 0
+read deploy://pipeline-changes --page 00
+read deploy://pipeline-changes --page 2
