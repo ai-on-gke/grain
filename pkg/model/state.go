@@ -288,9 +288,12 @@ type Transition struct {
 	// close or a reopen (MergeTaskEvents): who, what they said, and what
 	// grain did because of it. nil and "" on every step Transitions
 	// derives from the record.
-	By     *Principal
-	Reason string
-	Detail string
+	By *Principal
+	// OnBehalfOf is whose request By relayed (model.TaskEvent.OnBehalfOf),
+	// nil for By's own and on every derived step.
+	OnBehalfOf *Principal
+	Reason     string
+	Detail     string
 }
 
 // Transitions reconstructs, as far as the record allows, when a task

@@ -51,6 +51,7 @@ func (s *Server) deploymentRoutes() {
 	s.route("POST /api/deployment/broadcast", s.handleDeploymentBroadcast)
 	s.route("GET /api/deployment/secret-audit", s.handleGetDeploymentSecretAudit)
 	s.route("GET /api/deployment/audit-logs", s.handleGetDeploymentAuditLogs)
+	s.route("GET /api/deployment/config-audit", s.handleGetConfigAudit)
 }
 
 // deploymentRepo is the {owner}/{name} a deployment repo route names.
