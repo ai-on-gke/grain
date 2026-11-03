@@ -22,10 +22,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -299,15 +297,11 @@ const errPriorityNotPositive = "priority must be a positive integer (1 or more; 
 // digits past int -- is refused in errPriorityNotPositive's words. The
 // caller checks the 1-or-more bound.
 func decodeTaskPriority(raw json.RawMessage) (int, error) {
-	if n, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil {
-		return n, nil
-	}
-	const exact = 1 << 53
-	var x float64
-	if json.Unmarshal(raw, &x) != nil || x != math.Trunc(x) || math.Abs(x) > exact {
+	n, err := model.ParseTaskPriority(string(raw))
+	if err != nil {
 		return 0, errors.New(errPriorityNotPositive)
 	}
-	return int(x), nil
+	return n, nil
 }
 
 // UnmarshalJSON reads Priority with decodeTaskPriority; every other field
@@ -5901,7 +5895,12 @@ func (c *Client) Stop(ctx context.Context, id string) error {
 		return err
 	}
 
-	if err := c.cancelActiveRuns(ctx, id, now); err != nil {
+	// A run finished here rather than by the canceller is recorded as the
+	// stop it is (model.TurnStoppedDetail), as the orchestrator records
+	// one it cancels: "cancelled by user" reads as a plain cancellation,
+	// which counts toward the failure streak, and a person's Retry then
+	// waited out dispatch's failure backoff.
+	if err := c.cancelActiveRuns(ctx, id, now, model.TurnStoppedDetail); err != nil {
 		return err
 	}
 	if c.Config.Wake != nil {
@@ -5912,10 +5911,10 @@ func (c *Client) Stop(ctx context.Context, id string) error {
 
 // cancelActiveRuns stops the agent run working on id, if there is one:
 // through Config.TaskCanceller where this daemon dispatched it, and
-// otherwise by finishing whatever run the store still has open, so the
-// task stops reading as running either way. Stop's, and ForceMerge's
-// when the merge is forced over a live run.
-func (c *Client) cancelActiveRuns(ctx context.Context, id string, now time.Time) error {
+// otherwise by finishing whatever run the store still has open with
+// detail, so the task stops reading as running either way. Stop's, and
+// ForceMerge's when the merge is forced over a live run.
+func (c *Client) cancelActiveRuns(ctx context.Context, id string, now time.Time, detail string) error {
 	if c.Config.TaskCanceller != nil && c.Config.TaskCanceller.CancelTask(ctx, id) {
 		return nil
 	}
@@ -5927,7 +5926,7 @@ func (c *Client) cancelActiveRuns(ctx context.Context, id string, now time.Time)
 		if runs[i].FinishedAt != nil {
 			continue
 		}
-		if err := c.Store.FinishRun(ctx, runs[i].ID, now, "cancelled", "cancelled by user"); err != nil {
+		if err := c.Store.FinishRun(ctx, runs[i].ID, now, "cancelled", detail); err != nil {
 			return err
 		}
 	}
@@ -6353,7 +6352,7 @@ func (c *Client) ForceMerge(ctx context.Context, id, reason, head string) error 
 		return err
 	}
 	if state == model.StateRunning {
-		if err := c.cancelActiveRuns(ctx, id, now); err != nil {
+		if err := c.cancelActiveRuns(ctx, id, now, "cancelled by user"); err != nil {
 			return err
 		}
 	}

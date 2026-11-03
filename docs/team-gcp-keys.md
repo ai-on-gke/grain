@@ -1,5 +1,7 @@
 # GCP keys (`gcp-key:<name>`)
 
+> **Retired in schema migration 96:** In-process `gcp-key` and `gcp-key:<name>` are retired onto `https://grain.dev/capabilities/gcp#gcp-key` `{permission_set}` (see [GCP key permission sets](gcp-key-permission-sets.md)). Existing `gcp_key` rows are migrated automatically into `gcp` server permission sets named `<name>` (keeping `/home/debian/.gcp-service-account-<name>.json` placement), stored grants are rewritten, and `gcp-key:<name>` remains readable as a one-release alias.
+
 Plain `gcp-key` mints a short-lived key for one of the deployment's own
 agent service accounts (Settings -> Capabilities). Work that needs GCP
 access somewhere else -- another project, other accounts, a minter of its

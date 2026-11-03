@@ -440,13 +440,18 @@ import "strconv"
 // 94 adds `hostd` to `template` (model.Template.Hostd): the hostd pin or
 // label selector every task filed from it starts with.
 //
-// 95 retires the in-process `gcp-key` and `gcp-key:<name>` providers onto
+// 95 raises `grain_config`.`max_merges_per_repo`'s column default from 1
+// to 5 (model.DefaultMaxMergesPerRepo). Stored values are left alone: the
+// row is always written whole, so a 1 written because it was the default
+// cannot be told from a 1 somebody chose, and both keep it.
+//
+// 96 retires the in-process `gcp-key` and `gcp-key:<name>` providers onto
 // `https://grain.dev/capabilities/gcp#gcp-key`: seeds `sandbox-agent` and
 // `<name>` permission sets in `grain_config`.`mcp_servers` from the
 // deployment's pool and `gcp_key` rows, and rewrites stored grants across
 // tasks, templates, schedules, default_capabilities, ci_capabilities,
 // console_sessions and capability_policy.
-const SchemaVersion = 95
+const SchemaVersion = 96
 
 // configAuditTable is the `config_audit` table: one row per change to the
 // deployment's configuration somebody made (model.ConfigAuditEntry,
@@ -2214,7 +2219,7 @@ var Tables = []string{
   ` + "`poll_interval_ms`" + `           INTEGER NOT NULL,
   ` + "`max_workers`" + `                 INTEGER NOT NULL DEFAULT 1,
   ` + "`max_mergers`" + `                 INTEGER NOT NULL DEFAULT 1,
-  ` + "`max_merges_per_repo`" + `         INTEGER NOT NULL DEFAULT 1,
+  ` + "`max_merges_per_repo`" + `         INTEGER NOT NULL DEFAULT 5,
   ` + "`merge_batch_size`" + `            INTEGER NOT NULL DEFAULT 3,
   ` + "`merge_gather_window_ms`" + `      INTEGER NOT NULL DEFAULT 0,
   ` + "`max_ci_jobs`" + `                 INTEGER NOT NULL DEFAULT 1,

@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/change"
+	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/ghwebhook"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -549,7 +550,7 @@ func Run(opts Options) error {
 		}
 	}
 	if opts.Qualification {
-		if err := seedQualificationDemo(ctx, store, repo); err != nil {
+		if err := seedQualificationDemo(ctx, store, repo, githubSimRepo); err != nil {
 			return fmt.Errorf("grain demo: -qualification: %v", err)
 		}
 	}
@@ -986,13 +987,36 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	}
 	batchStartedAt := ago(5 * time.Minute)
 	batchRef := model.MergeRecheckRef(deploymentID, completed.ID, "main")
+	const batchCommit = "abcdef0123456789abcdef0123456789abcdef01"
+	var batchRunID string
+	if ciStore, ok := cfg.CI.(ci.RunStore); ok {
+		batchRunID = "demo-recheck-1"
+		ciStore.Put(ci.Run{
+			ID:          batchRunID,
+			Repo:        cfg.DefaultTarget.String(),
+			Ref:         batchRef,
+			Commit:      batchCommit,
+			Event:       ci.EventPullRequest,
+			RequestedBy: "merge-recheck:" + cfg.DefaultTarget.String() + ":main",
+			StartedAt:   &batchStartedAt,
+			Jobs: []ci.JobRun{
+				{
+					JobID:        ".grain/workflows/ci.yml:test",
+					Name:         "test",
+					WorkflowPath: ".grain/workflows/ci.yml",
+					StartedAt:    &batchStartedAt,
+				},
+			},
+		})
+	}
 	if err := store.PutMergeBatch(ctx, model.MergeBatch{
 		Repo:       *cfg.DefaultTarget,
 		Branch:     "main",
 		TaskID:     completed.ID,
 		Ref:        batchRef,
 		BaseCommit: "1234567890abcdef1234567890abcdef12345678",
-		Commit:     "abcdef0123456789abcdef0123456789abcdef01",
+		Commit:     batchCommit,
+		RunID:      batchRunID,
 		StartedAt:  batchStartedAt,
 		Queued:     1,
 		Members: []model.MergeBatchMember{

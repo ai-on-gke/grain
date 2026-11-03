@@ -3507,6 +3507,42 @@ func TestRetryResumesAStoppedTurn(t *testing.T) {
 	}
 }
 
+// TestRetryOfAStoppedTurnWithNoCancellerIsNotHeldByBackoff: with no
+// TaskCanceller to reach the run (consolerestserver, or a run this
+// process did not dispatch), Stop finishes the stored run itself. It
+// must record the stop as one, so the person's Retry dispatches at once
+// rather than waiting out the failure backoff a plain cancellation earns.
+func TestRetryOfAStoppedTurnWithNoCancellerIsNotHeldByBackoff(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	task := create(t, c, ctx)
+	if err := store.StartRun(ctx, model.Run{
+		ID: "r1", TaskID: task.ID, Sandbox: "s1", Attempt: 1, StartedAt: baseTime,
+	}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Stop(ctx, task.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	runs, err := store.Runs(ctx, task.ID)
+	if err != nil || len(runs) != 1 || runs[0].FinishedAt == nil {
+		t.Fatalf("after Stop: runs = %+v (err %v), want r1 finished", runs, err)
+	}
+	if got := model.EndingOf(runs[0].Outcome, runs[0].Detail); got != model.EndingTurnStopped {
+		t.Fatalf("Stop recorded %q/%q, which reads as %q; want %q", runs[0].Outcome, runs[0].Detail, got, model.EndingTurnStopped)
+	}
+	if err := c.Retry(ctx, task.ID); err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+	streak, err := store.FailureStreak(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if streak != nil && streak.BackoffCount != 0 {
+		t.Fatalf("after Stop and Retry: failure streak %+v, want none to back off from", *streak)
+	}
+}
+
 // TestRetryOfAStoppedTurnIsAPersonsToMake: a run with tasks:write on
 // another task can call retry through the agent API, but the stop it
 // would lift is waiting on a person -- the same rule a reply is held to.

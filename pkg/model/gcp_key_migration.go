@@ -72,7 +72,7 @@ type seededGCPSet struct {
 	secret   string
 }
 
-// migrateGCPKeyToCapabilityServer is schema migration 95's Up:
+// migrateGCPKeyToCapabilityServer is schema migration 96's Up:
 //  1. Seeds https://grain.dev/capabilities/gcp permission sets in
 //     grain_config.mcp_servers from the deployment's in-process pool
 //     (grain_config.gcp_project / gcp_service_account_email /

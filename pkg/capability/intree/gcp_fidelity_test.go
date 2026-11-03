@@ -56,9 +56,9 @@ func extractClientEmail(t *testing.T, keyJSON string) string {
 }
 
 // TestGCPKeyMigrationFidelity proves that a task holding bare gcp-key and
-// named gcp-key:<name> before schema migration 95 receives the exact same
+// named gcp-key:<name> before schema migration 96 receives the exact same
 // service accounts, IAM roles, max lease bounds, and sandbox credential file
-// placements after migration 95 seeds permission sets onto
+// placements after migration 96 seeds permission sets onto
 // https://grain.dev/capabilities/gcp and rewrites the stored grants -- and
 // that the one-release alias spellings normalize to the same grants.
 func TestGCPKeyMigrationFidelity(t *testing.T) {
@@ -189,12 +189,12 @@ func TestGCPKeyMigrationFidelity(t *testing.T) {
 	}
 	callsBeforeMigration := cloud.Calls["CreateServiceAccount"] + cloud.Calls["SetPolicy"]
 
-	// 2. Run real schema migration 95 on the store.
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 94 WHERE `id` = 1"); err != nil {
+	// 2. Run real schema migration 96 on the store.
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 95 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating store 94 -> 95: %v", err)
+		t.Fatalf("migrating store 95 -> 96: %v", err)
 	}
 
 	gotCfg, err := store.GetConfig(ctx)
