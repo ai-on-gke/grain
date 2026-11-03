@@ -121,6 +121,9 @@ func (m *Manager) Accounts(ctx context.Context, set *PermissionSet) ([]string, e
 // listAccounts is Accounts and every account in the set's project, which
 // a new account's name must not collide with.
 func (m *Manager) listAccounts(ctx context.Context, set *PermissionSet) ([]string, []ServiceAccount, error) {
+	if set.Existing() {
+		return []string{set.ServiceAccount}, nil, nil
+	}
 	if len(set.Accounts) > 0 {
 		return append([]string(nil), set.Accounts...), nil, nil
 	}
@@ -222,7 +225,10 @@ func (m *Manager) mint(ctx context.Context, attemptID, setName string, deadline 
 	if err != nil {
 		return "", Lease{}, err
 	}
-	if len(set.Accounts) == 0 && len(accounts) > 0 {
+	if set.TokenMode() {
+		return m.mintToken(ctx, c, attemptID, set, deadline)
+	}
+	if !set.fixed() && len(accounts) > 0 {
 		if err := m.reconcileSet(ctx, c, set, accounts); err != nil {
 			return "", Lease{}, err
 		}
@@ -234,7 +240,7 @@ func (m *Manager) mint(ctx context.Context, attemptID, setName string, deadline 
 			return "", Lease{}, err
 		}
 		if account == "" {
-			if len(set.Accounts) > 0 || len(accounts) >= set.PoolMax {
+			if set.fixed() || len(accounts) >= set.PoolMax {
 				return "", Lease{}, m.exhausted(set, now)
 			}
 			account, err = m.createAccount(ctx, c, set, accounts, all)
@@ -370,12 +376,14 @@ func (m *Manager) Release(ctx context.Context, attemptID string) error {
 	if set == nil {
 		return fmt.Errorf("lease %s names permission set %s, which is no longer configured", attemptID, l.Set)
 	}
-	c, err := m.cloud(ctx, set.Admin)
-	if err != nil {
-		return err
-	}
-	if err := c.DeleteKey(ctx, "projects/"+set.Project+"/serviceAccounts/"+l.Account, l.KeyID); err != nil && !isNotFound(err) {
-		return err
+	if l.KeyID != "" {
+		c, err := m.cloud(ctx, set.Admin)
+		if err != nil {
+			return err
+		}
+		if err := c.DeleteKey(ctx, "projects/"+set.Project+"/serviceAccounts/"+l.Account, l.KeyID); err != nil && !isNotFound(err) {
+			return err
+		}
 	}
 	m.mu.Lock()
 	delete(m.leases, attemptID)
@@ -415,8 +423,9 @@ func (m *Manager) Reap(ctx context.Context) ([]string, error) {
 	var errs []error
 	for i := range m.Config.Sets {
 		set := &m.Config.Sets[i]
-		if len(set.Accounts) > 0 {
-			// Migrated accounts hold keys this server never minted.
+		if set.fixed() {
+			// Migrated and existing accounts hold keys this server never
+			// minted.
 			continue
 		}
 		c, err := m.cloud(ctx, set.Admin)
@@ -456,7 +465,7 @@ func (m *Manager) Reap(ctx context.Context) ([]string, error) {
 // project, and nothing on the other. Members that are not the set's own
 // accounts are never touched.
 func (m *Manager) reconcileSet(ctx context.Context, c Cloud, set *PermissionSet, accounts []string) error {
-	if len(set.Accounts) > 0 || len(accounts) == 0 {
+	if set.fixed() || len(accounts) == 0 {
 		return nil
 	}
 	members := make([]string, 0, len(accounts))
@@ -606,7 +615,7 @@ func (m *Manager) Census(ctx context.Context) (Census, error) {
 // account email as its own.
 func (c *Config) adopts(project, email string, o Owner) bool {
 	s := c.Set(o.Set)
-	if s == nil || !s.AdoptLegacy || s.Project != project || len(s.Accounts) > 0 {
+	if s == nil || !s.AdoptLegacy || s.Project != project || s.fixed() {
 		return false
 	}
 	id, _, _ := strings.Cut(email, "@")
@@ -654,7 +663,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	var errs []error
 	for i := range m.Config.Sets {
 		set := &m.Config.Sets[i]
-		if len(set.Accounts) > 0 {
+		if set.fixed() {
 			continue
 		}
 		c, err := m.cloud(ctx, set.Admin)
@@ -672,4 +681,123 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// MaxTokenLifetime is the longest an impersonated access token lives:
+// generateAccessToken's own default and limit without the org policy
+// that extends it. A token-mode grant is refreshed well inside it.
+const MaxTokenLifetime = time.Hour
+
+// Impersonator is a Cloud that can act as another service account
+// through the IAM Credentials API: the admin needs
+// iam.serviceAccounts.getAccessToken (roles/iam.serviceAccountTokenCreator)
+// on it. Nothing it does creates a key or changes the account.
+type Impersonator interface {
+	// GenerateAccessToken is an OAuth access token for email with scopes,
+	// living lifetime.
+	GenerateAccessToken(ctx context.Context, email string, scopes []string, lifetime time.Duration) (token string, expiry time.Time, err error)
+	// GenerateIDToken is an OpenID Connect ID token for email whose aud
+	// is audience.
+	GenerateIDToken(ctx context.Context, email, audience string) (string, error)
+	// TestAccountPermissions is the permissions in perms the admin holds
+	// on the service account email (testIamPermissions on it).
+	TestAccountPermissions(ctx context.Context, email string, perms []string) ([]string, error)
+}
+
+func (m *Manager) impersonator(ctx context.Context, set *PermissionSet) (Impersonator, error) {
+	c, err := m.cloud(ctx, set.Admin)
+	if err != nil {
+		return nil, err
+	}
+	imp, ok := c.(Impersonator)
+	if !ok {
+		return nil, fmt.Errorf("admin %s's connection cannot impersonate service accounts", set.Admin)
+	}
+	return imp, nil
+}
+
+// mintToken is a token-mode grant's mint: it proves the admin can act as
+// the set's account by minting one access token, which it throws away,
+// and records the lease. No key is created; the sandbox fetches its
+// tokens through AccessToken as it needs them.
+func (m *Manager) mintToken(ctx context.Context, c Cloud, attemptID string, set *PermissionSet, deadline time.Time) (string, Lease, error) {
+	imp, ok := c.(Impersonator)
+	if !ok {
+		return "", Lease{}, fmt.Errorf("admin %s's connection cannot impersonate service accounts", set.Admin)
+	}
+	if _, _, err := imp.GenerateAccessToken(ctx, set.ServiceAccount, []string{cloudPlatform}, time.Minute); err != nil {
+		return "", Lease{}, err
+	}
+	l := Lease{Set: set.Name, Account: set.ServiceAccount, Deadline: deadline}
+	m.mu.Lock()
+	m.leases[attemptID] = l
+	m.mu.Unlock()
+	return "", l, nil
+}
+
+// remaining is how long a token minted now for a grant ending at
+// deadline may live: until the deadline, at most MaxTokenLifetime.
+func (m *Manager) remaining(set *PermissionSet, deadline time.Time) (time.Duration, error) {
+	left := deadline.Sub(m.Now())
+	if left <= 0 {
+		return 0, &Refusal{fmt.Sprintf("permission set %s: the grant's deadline %s has passed", set.Name, deadline.UTC().Format(time.RFC3339))}
+	}
+	if left > set.MaxLease {
+		left = set.MaxLease
+	}
+	if left > MaxTokenLifetime {
+		left = MaxTokenLifetime
+	}
+	return left.Round(time.Second) + time.Second, nil
+}
+
+func (m *Manager) tokenSet(setName string) (*PermissionSet, error) {
+	set := m.Config.Set(setName)
+	if set == nil {
+		return nil, &Refusal{"no permission set is called " + setName}
+	}
+	if !set.TokenMode() {
+		return nil, &Refusal{"permission set " + setName + " does not mint access tokens"}
+	}
+	return set, nil
+}
+
+// AccessToken is a fresh access token for token-mode set setName's
+// account, for a grant whose deadline is deadline: it lives until then,
+// at most MaxTokenLifetime, so a refresh is always another call here.
+func (m *Manager) AccessToken(ctx context.Context, setName string, deadline time.Time) (string, time.Time, error) {
+	set, err := m.tokenSet(setName)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	lifetime, err := m.remaining(set, deadline)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	imp, err := m.impersonator(ctx, set)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	tok, exp, err := imp.GenerateAccessToken(ctx, set.ServiceAccount, []string{cloudPlatform}, lifetime)
+	if _, ok := AsCredentialError(err); ok {
+		m.forget(set.Admin)
+	}
+	return tok, exp, err
+}
+
+// IDToken is an ID token for token-mode set setName's account with
+// audience, for a grant whose deadline has not passed.
+func (m *Manager) IDToken(ctx context.Context, setName, audience string, deadline time.Time) (string, error) {
+	set, err := m.tokenSet(setName)
+	if err != nil {
+		return "", err
+	}
+	if _, err := m.remaining(set, deadline); err != nil {
+		return "", err
+	}
+	imp, err := m.impersonator(ctx, set)
+	if err != nil {
+		return "", err
+	}
+	return imp.GenerateIDToken(ctx, set.ServiceAccount, audience)
 }

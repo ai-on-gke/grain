@@ -52,9 +52,17 @@ type Cloud struct {
 	ListErrs []error
 	// Connects counts Connect calls.
 	Connects int
-	// Calls counts mutating calls, by name.
+	// Calls counts mutating calls, by name, and the IAM Credentials
+	// calls (GenerateAccessToken, GenerateIDToken).
 	Calls map[string]int
-	n     int
+	// AccountGranted is, by service account email, the permissions
+	// TestAccountPermissions reports and the impersonation calls check
+	// (iam.serviceAccounts.getAccessToken, getOpenIdToken); an account
+	// missing from it grants all of them.
+	AccountGranted map[string][]string
+	// Lifetimes are the lifetimes GenerateAccessToken was asked for.
+	Lifetimes []time.Duration
+	n         int
 }
 
 // New is an empty fake.
@@ -310,6 +318,58 @@ func (c *Cloud) TestPermissions(_ context.Context, p string, perms []string) ([]
 			if g == w {
 				out = append(out, w)
 			}
+		}
+	}
+	return out, nil
+}
+
+func (c *Cloud) accountAllows(email, perm string) bool {
+	granted, ok := c.AccountGranted[email]
+	if !ok {
+		return true
+	}
+	for _, g := range granted {
+		if g == perm {
+			return true
+		}
+	}
+	return false
+}
+
+// GenerateAccessToken implements gcpsets.Impersonator: the token is
+// "tok-<n>-<email>".
+func (c *Cloud) GenerateAccessToken(_ context.Context, email string, _ []string, lifetime time.Duration) (string, time.Time, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.accountAllows(email, "iam.serviceAccounts.getAccessToken") {
+		return "", time.Time{}, fmt.Errorf("googleapi: Error 403: Permission 'iam.serviceAccounts.getAccessToken' denied on resource %s, PERMISSION_DENIED", email)
+	}
+	c.n++
+	c.Calls["GenerateAccessToken"]++
+	c.Lifetimes = append(c.Lifetimes, lifetime)
+	return fmt.Sprintf("tok-%d-%s", c.n, email), c.Now().Add(lifetime), nil
+}
+
+// GenerateIDToken implements gcpsets.Impersonator: the token is
+// "id-<audience>-<email>".
+func (c *Cloud) GenerateIDToken(_ context.Context, email, audience string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.accountAllows(email, "iam.serviceAccounts.getOpenIdToken") {
+		return "", fmt.Errorf("googleapi: Error 403: Permission 'iam.serviceAccounts.getOpenIdToken' denied on resource %s, PERMISSION_DENIED", email)
+	}
+	c.Calls["GenerateIDToken"]++
+	return "id-" + audience + "-" + email, nil
+}
+
+// TestAccountPermissions implements gcpsets.Impersonator.
+func (c *Cloud) TestAccountPermissions(_ context.Context, email string, perms []string) ([]string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []string
+	for _, p := range perms {
+		if c.accountAllows(email, p) {
+			out = append(out, p)
 		}
 	}
 	return out, nil
