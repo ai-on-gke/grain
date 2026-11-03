@@ -122,6 +122,38 @@ func putTaskHostd(ctx context.Context, tx *sql.Tx, taskID, selector string) erro
 	return err
 }
 
+// RepoDefaultHostd is the hostd pin or label selector repo's tasks start
+// with when neither their filing nor their template names one
+// (RepoConfig.DefaultHostd), "" for a repository that names none.
+func (s *Store) RepoDefaultHostd(ctx context.Context, repo RepoRef) (string, error) {
+	return repoDefaultHostd(ctx, s.db, repo)
+}
+
+func repoDefaultHostd(ctx context.Context, q querier, repo RepoRef) (string, error) {
+	cfg, err := getRepoConfig(ctx, q, repo)
+	if err != nil || cfg == nil {
+		return "", err
+	}
+	return cfg.DefaultHostd, nil
+}
+
+// applyRepoDefaultHostd fills a composition its template left on the
+// default hostd with its target repository's own default
+// (RepoConfig.DefaultHostd): the template's pin wins, and the repo's
+// beats the deployment's default hostd -- the same precedence
+// ui.(*Client).CreateTask applies to a filing.
+func applyRepoDefaultHostd(ctx context.Context, q querier, comp *Composition) error {
+	if comp.Hostd != "" || comp.Target == nil {
+		return nil
+	}
+	hostd, err := repoDefaultHostd(ctx, q, *comp.Target)
+	if err != nil || hostd == "" {
+		return err
+	}
+	comp.Hostd, comp.Sources.Hostd = hostd, LayerRepo
+	return nil
+}
+
 // TaskHostd is taskID's hostd selector, "" for the default hostd.
 func (s *Store) TaskHostd(ctx context.Context, taskID string) (string, error) {
 	var selector string

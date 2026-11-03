@@ -1056,11 +1056,19 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 			if json.Unmarshal(raw, &access) == nil && s.networkAccessWidens(ctx, acting.NetworkAccess, access) {
 				return errors.New("an agent with networkAccess \"none\" cannot widen networkAccess")
 			}
-		case "hostd":
+		case "hostd", "defaulthostd":
 			// Which grain hostd a task's agent CLI runs on (a filing's
-			// hostd, PUT /api/tasks/{id}/hostd): another machine, and
-			// whatever CLI login lives on it. An agent may hand out only
-			// the default hostd or the selector its own task runs under.
+			// hostd, PUT /api/tasks/{id}/hostd, or a repository's
+			// default for every task filed against it, PUT
+			// /api/repos/{owner}/{name}/settings' defaultHostd): another
+			// machine, and whatever CLI login lives on it. An agent may
+			// hand out only the default hostd or the selector its own
+			// task runs under.
+			//
+			// A filing that names none is not asked about the default
+			// its repository resolves it to (ui.Client.CreateTask):
+			// that one was set by whoever may set repository settings,
+			// which this case holds an agent to, and not by the filer.
 			var sel string
 			if json.Unmarshal(raw, &sel) != nil {
 				continue // the handler refuses a body it cannot read
