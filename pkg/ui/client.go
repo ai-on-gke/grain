@@ -450,7 +450,7 @@ func (c *Client) capabilityByID(id string) (Capability, bool) {
 		}
 		return Capability{ID: id, Name: ref, Description: "Granted by the capability server " + ref}, true
 	}
-	for _, capability := range c.Config.Capabilities {
+	for _, capability := range c.pickerCapabilities() {
 		if capability.ID == id {
 			return capability, true
 		}
