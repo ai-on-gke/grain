@@ -212,3 +212,25 @@ func TestOnlyDirectorOrRepolessConfigWritersGetTheStateCheckout(t *testing.T) {
 		}
 	}
 }
+
+// A repo-less grain/config writer changes it with propose_config_change
+// from its grain-state checkout, so the write-targets paragraph -- "you
+// cannot push to those ... call propose_task" -- leaves grain/config out
+// for it. A repository task holding grain/config still hears it
+// (docs/test-runs/2026-11-03-config-state.md, finding 3).
+func TestWriteTargetsSectionLeavesTheStateCheckoutsRepoOut(t *testing.T) {
+	t.Parallel()
+	config := model.WriteTarget{Repo: model.RepoRef{Owner: "grain", Name: "config"}}
+	other := model.WriteTarget{Repo: model.RepoRef{Owner: "acme", Name: "gadgets"}}
+	if got := writeTargetsSection(model.Task{Writes: []model.WriteTarget{config}}); got != "" {
+		t.Errorf("repo-less grain/config writer told to propose_task it: %q", got)
+	}
+	got := writeTargetsSection(model.Task{Writes: []model.WriteTarget{config, other}})
+	if !strings.Contains(got, "acme/gadgets") || strings.Contains(got, "grain/config") {
+		t.Errorf("repo-less writer of grain/config and acme/gadgets: %q", got)
+	}
+	target := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if got := writeTargetsSection(model.Task{Target: &target, Writes: []model.WriteTarget{config}}); !strings.Contains(got, "grain/config") {
+		t.Errorf("repository task writing grain/config lost the paragraph: %q", got)
+	}
+}
