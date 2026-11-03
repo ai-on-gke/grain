@@ -121,7 +121,7 @@ Agent calls from inside a sandbox never pass IAP and never carry a person's iden
 
 1. `IdentityVerifier` and the registry, with IAP as the first implementation. No behaviour change.
 2. Verified IAP callers pass `singleTenantGate` and become principals: `PrincipalService`, the allowlist, the CSRF check, and the UI header and logout.
-3. IAP mode for the CLI, and recording hostd's IAP principal (including matching a remote hostd's verified identity to its row's `owner`).
+3. IAP mode for the CLI, and recording hostd's IAP principal (including matching a remote hostd's verified identity to its row's `owner`). The hostd part is **done** (task 2316): `hostd.ConnectIdentity`, `-hostd-token-owner`, `grain hostds`.
 4. `-ui-require-iap`, and `docs/access-code.md` rewritten for the three modes. **Done** (task 2318).
 
 ## Open questions

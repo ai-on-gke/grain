@@ -381,6 +381,8 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		"servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each hostd in the hostd registry (/api/hostds) instead, "+
 		"which gives it a token of its own")
 	hostdTokenName := fs.String("hostd-token-name", hostd.DefaultSharedName, "the hostd name a hostd dialing in with -hostd-token-file's shared token is known by")
+	hostdTokenOwner := fs.String("hostd-token-owner", "", "the owner of -hostd-token-name's hostd: the email or service account a hostd dialing in with the shared token "+
+		"through IAP (or another identity verifier's proxy) must be verified as. A remote hostd with no owner is refused; one over loopback is not")
 	openAIAPIKeyFile := fs.String("openai-api-key-file", "", "file holding the OpenAI API key the agent "+
 		"authenticates as, passed to the codex subprocess as OPENAI_API_KEY. Optional, and the exact "+
 		"counterpart of the two files above: the UI stores one as the "+
@@ -1294,7 +1296,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		K8sGranuleAccess:      *k8sGranuleAccess, K8sGranuleReattachTimeout: *k8sGranuleReattachTimeout, SandboxCPUs: *sandboxCPUs, SandboxMemoryMB: *sandboxMemoryMB, SandboxDiskGB: *sandboxDiskGB,
 	}
 	grit.Apply(&cfg)
-	if cfg.HostdRemote, err = hostdRemote(*hostdTokenFile, *hostdTokenName); err != nil {
+	if cfg.HostdRemote, err = hostdRemote(*hostdTokenFile, *hostdTokenName, *hostdTokenOwner); err != nil {
 		return cfg, fs, unknownFlags, err
 	}
 	cfg, err = local(cfg, passed)
@@ -1302,8 +1304,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 }
 
 // hostdRemote is the acceptor for a grain hostd dialing in with the token
-// in tokenFile, or $GRAIN_HOSTD_TOKEN; nil when neither names one.
-func hostdRemote(tokenFile, name string) (*hostd.Remote, error) {
+// in tokenFile, or $GRAIN_HOSTD_TOKEN, as hostd name owned by owner; nil
+// when neither names a token.
+func hostdRemote(tokenFile, name, owner string) (*hostd.Remote, error) {
 	token := strings.TrimSpace(os.Getenv("GRAIN_HOSTD_TOKEN"))
 	if tokenFile != "" {
 		t, err := daemon.ReadTokenFile(tokenFile)
@@ -1324,8 +1327,12 @@ func hostdRemote(tokenFile, name string) (*hostd.Remote, error) {
 	if name == model.LocalHostd {
 		return nil, fmt.Errorf("-hostd-token-name: %q is the co-located hostd's name", name)
 	}
+	owner, err := model.NormalizeHostdOwner(owner)
+	if err != nil {
+		return nil, fmt.Errorf("-hostd-token-owner: %w", err)
+	}
 	log.Printf("grain daemon: -hostd-token-file is deprecated and goes in the next release: register hostd %s in the hostd registry (POST /api/hostds) and give it the token it answers with", name)
-	return &hostd.Remote{Token: token, SharedName: name, Logf: log.Printf}, nil
+	return &hostd.Remote{Token: token, SharedName: name, SharedOwner: owner, Logf: log.Printf}, nil
 }
 
 // checkConfig is every "these flags cannot be started with" rule daemon()
