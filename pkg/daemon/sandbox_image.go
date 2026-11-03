@@ -333,14 +333,40 @@ func upgradeSandboxImageArgs(cfg Config) []string {
 // to go and change. nil for the host-directory backend, whose sandbox is
 // a directory on this machine and has no image to name.
 func uiSandboxImage(cfg Config) *ui.SandboxImage {
-	if !cfg.GranuleSandboxes {
+	switch {
+	case cfg.DisableNativeSandboxes:
 		return nil
-	}
-	choice := chooseSandboxImage(cfg)
-	return &ui.SandboxImage{
-		Image:    orUnknownImage(choice.image),
-		Expected: DefaultSandboxImage,
-		Pinned:   choice.source == sandboxImagePinnedHere,
+	case cfg.GranuleSandboxes:
+		choice := chooseSandboxImage(cfg)
+		custom := customSandboxImageFor(cfg)
+		return &ui.SandboxImage{
+			Image:    firstNonEmpty(custom, orUnknownImage(choice.image)),
+			Expected: DefaultSandboxImage,
+			Pinned:   custom == "" && choice.source == sandboxImagePinnedHere,
+		}
+	case cfg.K8sGranuleSandboxes:
+		expectedCfg := cfg
+		expectedCfg.CustomSandboxImage = ""
+		expectedCfg.K8sGranuleImage = ""
+		return &ui.SandboxImage{
+			Image:    activeSandboxImageFor(cfg),
+			Expected: EffectiveK8sGranuleImage(expectedCfg),
+		}
+	case cfg.K8sSandboxes:
+		return &ui.SandboxImage{
+			Image:    activeSandboxImageFor(cfg),
+			Expected: EffectiveK8sSandboxImage(Config{K8sSandboxes: true}),
+		}
+	case cfg.ContainerSandboxes:
+		custom := customSandboxImageFor(cfg)
+		stock := stockSandboxImageFor(cfg)
+		return &ui.SandboxImage{
+			Image:    firstNonEmpty(custom, stock),
+			Expected: DefaultK8sSandboxImage,
+			Pinned:   custom == "" && cfg.ContainerImage != "" && cfg.ContainerImage != DefaultK8sSandboxImage && cfg.ContainerImage != model.DefaultK8sSandboxImage,
+		}
+	default:
+		return nil
 	}
 }
 
@@ -355,10 +381,14 @@ func uiSandboxImage(cfg Config) *ui.SandboxImage {
 // disagree -- and "" for the host-directory backend, whose sandbox is a
 // directory with no image to attribute to any repository.
 func sandboxGuestImage(cfg Config) string {
-	if !cfg.GranuleSandboxes {
+	switch {
+	case cfg.DisableNativeSandboxes:
+		return ""
+	case cfg.GranuleSandboxes, cfg.K8sGranuleSandboxes:
+		return activeSandboxImageFor(cfg)
+	default:
 		return ""
 	}
-	return chooseSandboxImage(cfg).image
 }
 
 // sandboxImagePin is upgrade.ImageConfig.SandboxImagePin: the sandbox
@@ -389,13 +419,14 @@ func sandboxImagePin(cfg Config) string {
 // (or flag-pinned) guest on granule, the backend's own image setting
 // otherwise. "" for a backend with no image at all (host, none).
 func stockSandboxImageFor(cfg Config) string {
+	cfg.CustomSandboxImage = ""
 	switch {
 	case cfg.DisableNativeSandboxes:
 		return ""
 	case cfg.GranuleSandboxes:
 		return chooseSandboxImage(cfg).image
 	case cfg.ContainerSandboxes:
-		return cfg.ContainerImage
+		return firstNonEmpty(cfg.ContainerImage, DefaultK8sSandboxImage)
 	case cfg.K8sSandboxes:
 		return EffectiveK8sSandboxImage(cfg)
 	case cfg.K8sGranuleSandboxes:
@@ -480,7 +511,7 @@ func sandboxImageMirrorRepo(cfg Config) string {
 		return ""
 	}
 	stampedRepo := imageRepository(DefaultSandboxImage)
-	for _, candidate := range []string{cfg.K8sGranuleImage, cfg.CustomSandboxImage, cfg.SandboxImage} {
+	for _, candidate := range []string{cfg.K8sGranuleImage, cfg.SandboxImage} {
 		candidate = strings.TrimSpace(candidate)
 		if candidate == "" {
 			continue
