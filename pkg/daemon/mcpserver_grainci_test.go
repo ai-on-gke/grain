@@ -100,13 +100,13 @@ func TestGrainCIReaderNeedsBothTheGrantAndADaemon(t *testing.T) {
 	t.Parallel()
 	client := ui.NewHTTPClient("http://daemon.invalid")
 
-	if r := grainCIReader(client, "t-1", GrantNames{grainci.CapabilityName}); r == nil {
+	if r := grainCIReader(client, "t-1", GrantNames{grainci.Grant}); r == nil {
 		t.Error("a run holding grain-ci with a daemon to ask got no reader")
 	}
 	if r := grainCIReader(client, "t-1", GrantNames{"self-debug"}); r != nil {
 		t.Errorf("a run without the grain-ci grant got a reader: %+v", r)
 	}
-	if r := grainCIReader(nil, "", GrantNames{grainci.CapabilityName}); r != nil {
+	if r := grainCIReader(nil, "", GrantNames{grainci.Grant}); r != nil {
 		t.Errorf("a run with no daemon to ask got a reader: %+v", r)
 	}
 }

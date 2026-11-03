@@ -99,11 +99,12 @@ var retiredGrants = []struct {
 	{82, "db-write", []string{model.GrainSQLWriteGrant}},
 	{84, "self-repair", []string{model.GrainHostExecGrant}},
 	{85, "git-push-any-ref", []string{model.GitPushAnyRefGrant}},
-	{88, "repo-read:acme/tools", []string{model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
-	{88, "repo-write:acme/tools", []string{model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
 	// corp-research is the Google build's: core has no alias for it, which
 	// that build registers with capability.Register (retiredAs).
 	{86, "corp-research", []string{model.CorpResearchGrant}},
+	{88, "repo-read:acme/tools", []string{model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
+	{88, "repo-write:acme/tools", []string{model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
+	{96, "grain-ci", []string{model.GrainCIGrant}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'

@@ -126,7 +126,7 @@ func workflowReviewTemplate(stem string) *Template {
 		Grants: []Grant{
 			// Named as a string rather than through
 			// pkg/capability/grainci, which imports this package.
-			{Capability: "grain-ci", Via: GrantByGrain},
+			{Capability: GrainCIGrant, Via: GrantByGrain},
 		},
 	}
 }
