@@ -259,6 +259,22 @@ func TestAHostdThatConnectsIsRidOfCLIsForFinishedRuns(t *testing.T) {
 	ctx := context.Background()
 	store := pool.Store
 	client := hostd.Client{Dial: cfg.HostdHub.Dialer("ws-a"), Build: daemonBuild()}
+	// The live run's CLI is left running on purpose, and hostd keeps a
+	// detached process past its own Serve: release every one before the
+	// hostd stops (cleanups run last-registered first), or its spool is
+	// still being written while t.TempDir removes it.
+	t.Cleanup(func() {
+		waitFor(t, func() bool {
+			procs, err := client.Processes(ctx)
+			if err != nil {
+				return false
+			}
+			for _, p := range procs {
+				_ = client.Cancel(ctx, p.ID)
+			}
+			return len(procs) == 0
+		})
+	})
 	// The daemon that started them is gone: its streams let go, and
 	// nothing re-attaches.
 	gone := &runhost.Hostd{Client: client, Detach: func(context.Context) bool { return true }}
@@ -285,16 +301,23 @@ func TestAHostdThatConnectsIsRidOfCLIsForFinishedRuns(t *testing.T) {
 	if err := store.FinishRun(ctx, "finished", time.Now().UTC(), model.InterruptedOutcome, "the daemon stopped"); err != nil {
 		t.Fatal(err)
 	}
-	running := func() map[string]bool {
+	tryRunning := func() (map[string]bool, error) {
 		procs, err := client.Processes(ctx)
 		if err != nil {
-			t.Fatal(err)
+			return nil, err
 		}
 		out := map[string]bool{}
 		for _, p := range procs {
 			if p.Detached && !p.Exited {
 				out[p.Run] = true
 			}
+		}
+		return out, nil
+	}
+	running := func() map[string]bool {
+		out, err := tryRunning()
+		if err != nil {
+			t.Fatal(err)
 		}
 		return out
 	}
@@ -303,7 +326,13 @@ func TestAHostdThatConnectsIsRidOfCLIsForFinishedRuns(t *testing.T) {
 	}
 
 	ws.drop()
-	waitFor(t, func() bool { return !running()["finished"] })
+	// A call made while ws-a is dropping and reconnecting can land on
+	// the connection being closed ("use of closed network connection");
+	// that is the reconnect in progress, not an answer, so ask again.
+	waitFor(t, func() bool {
+		got, err := tryRunning()
+		return err == nil && !got["finished"]
+	})
 	if !running()["live"] {
 		t.Error("ws-a reconnecting cancelled the CLI of a run that is still live")
 	}
