@@ -892,3 +892,72 @@ func TestSettingsProbesTheDaemonsMirroredK8sGranuleImage(t *testing.T) {
 		t.Errorf("K8sGranuleImageWarning = %q, want none for the image the daemon runs", settings.K8sGranuleImageWarning)
 	}
 }
+
+// The daemon's own answer for the 2026-10-30 trap: a kubernetes-granule
+// deployment whose only mirror is derived from a cross-project "sha-"
+// pin in k8s_granule_image. Settings says the pin is read as the mirror
+// and names what pods boot (the stamp, mirrored), and a save clearing the
+// pin writes the derived repository into sandbox_image_mirror, so the
+// restart that adopts the cleared pin mirrors exactly as before.
+func TestADerivedMirrorSurvivesClearingTheK8sGranuleImagePin(t *testing.T) {
+	ResetMirroredSandboxImageCacheForTest()
+	t.Cleanup(ResetMirroredSandboxImageCacheForTest)
+	stamped := "ghcr.io/example/grain/guest:sha-aaaa111"
+	savedStamp := DefaultSandboxImage
+	DefaultSandboxImage = stamped
+	t.Cleanup(func() { DefaultSandboxImage = savedStamp })
+
+	repo := "us-docker.pkg.dev/cluster-project/grain/guest"
+	pin := repo + ":sha-0000000@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	want := repo + ":sha-aaaa111"
+	running := Config{K8sGranuleSandboxes: true, K8sGranuleImage: pin}
+	if got := effectiveK8sGranuleImage(running, mirroredSandboxImageIfKnown); got != want {
+		t.Fatalf("effectiveK8sGranuleImage(pinned) = %q, want the stamp mirrored, %q", got, want)
+	}
+
+	store, closeStore := openTestStore(t, t.TempDir())
+	t.Cleanup(closeStore)
+	ctx := context.Background()
+	if err := store.PutConfig(ctx, model.Config{
+		PollInterval:    30 * time.Second,
+		MaxWorkers:      1,
+		GitHubHost:      "github.com",
+		SandboxBackend:  model.SandboxBackendKubernetesGranule,
+		K8sGranuleImage: pin,
+	}); err != nil {
+		t.Fatalf("PutConfig: %v", err)
+	}
+	client := ui.NewClient(ui.Config{
+		SandboxBackends:       model.SandboxBackends(),
+		K8sGranuleImage:       func(mc model.Config) string { return k8sGranuleImageForSettings(running, mc) },
+		SandboxImageMirrorFor: func(mc model.Config) ui.SandboxImageMirrorInfo { return sandboxImageMirrorForSettings(running, mc) },
+	}, store)
+	settings, err := client.GetSettings(ctx)
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if settings.K8sGranuleImageMirror != repo || settings.K8sGranuleImageEffective != want || settings.SandboxImageMirrorDerivedFrom != "k8s_granule_image" {
+		t.Errorf("Settings: pin read as %q, effective %q, derived from %q; want %q, %q, k8s_granule_image",
+			settings.K8sGranuleImageMirror, settings.K8sGranuleImageEffective, settings.SandboxImageMirrorDerivedFrom, repo, want)
+	}
+
+	cleared := ""
+	if _, err := client.UpdateSettings(ctx, ui.UpdateSettingsRequest{K8sGranuleImage: &cleared}); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	stored, err := store.GetConfig(ctx)
+	if err != nil || stored == nil {
+		t.Fatalf("GetConfig: %v, %v", stored, err)
+	}
+	if stored.K8sGranuleImage != "" || stored.SandboxImageMirror != repo {
+		t.Fatalf("stored k8s_granule_image, sandbox_image_mirror = %q, %q; want \"\", %q", stored.K8sGranuleImage, stored.SandboxImageMirror, repo)
+	}
+	// The restart that adopts the cleared pin.
+	restarted := Config{K8sGranuleSandboxes: true, K8sGranuleImage: stamped}.WithModelConfig(*stored)
+	if got := sandboxImageMirrorRepo(restarted); got != repo {
+		t.Errorf("sandboxImageMirrorRepo after the restart = %q, want %q", got, repo)
+	}
+	if got := effectiveK8sGranuleImage(restarted, mirroredSandboxImageIfKnown); got != want {
+		t.Errorf("effectiveK8sGranuleImage after the restart = %q, want %q", got, want)
+	}
+}

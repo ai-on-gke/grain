@@ -115,6 +115,13 @@ func Run(ctx context.Context, out io.Writer, dir string, opts Options) error {
 	for _, w := range unrunnable {
 		fmt.Fprintf(out, "warning: %s\n", w)
 	}
+	implicitMirror, err := ImplicitSandboxImageMirror(ctx, db)
+	if err != nil {
+		return err
+	}
+	for _, w := range implicitMirror {
+		fmt.Fprintf(out, "warning: %s\n", w)
+	}
 	if err := APIScopeSets(ctx, db, out, opts.PreviousAPIScopeSets); err != nil {
 		return err
 	}
