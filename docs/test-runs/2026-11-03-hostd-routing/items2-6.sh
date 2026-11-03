@@ -1,11 +1,25 @@
 #!/usr/bin/env bash
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Items 2, 3, 4 and 6 of §2 against env.sh's daemon and hostds: label
 # selectors, a disconnected pin waiting, capacity holding a second task,
 # a daemon restart under a run on ws-a, and a per-hostd usage-limit pause.
 # Prints each task's pin, its queue reason (activity) over time, and its
 # task_hostd / task_run_hostd / audit rows.
 set -uo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit
 . ./env.sh
 . ./lib.sh
 set +e
