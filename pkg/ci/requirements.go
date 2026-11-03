@@ -47,7 +47,7 @@ func JobSecrets(job Job, provided []string) []string { return jobSecrets(job, pr
 // workflow that declares it runs on grain's own repository whether or
 // not an operator has listed anything for it.
 func declaredOnly(id string) bool {
-	return IsRepoAccessCapability(id) || model.IsCapabilityRef(id) || id == model.ReleaseGateReadCapability ||
+	return IsRepoAccessCapability(id) || (model.IsCapabilityRef(id) && !model.IsRepoGrantedCIGrant(id)) || id == model.ReleaseGateReadCapability ||
 		strings.HasPrefix(strings.TrimSpace(id), model.APIGrantPrefix)
 }
 

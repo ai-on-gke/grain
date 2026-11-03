@@ -488,6 +488,11 @@ var legacyGrantReplacements = map[string]string{
 	"claude-proxy": ModelProxyGrant("claude"),
 	"openai-proxy": ModelProxyGrant("openai"),
 	"gemini-proxy": ModelProxyGrant("gemini"),
+	// Retired by schema migration 101 onto the in-process release
+	// server, which places what the providers placed on the same events.
+	"image-signing":          ImageSigningRef + "={}",
+	"registry-push":          RegistryPushRef + "={}",
+	CapabilityPackagePublish: PackagePublishRef + "={}",
 }
 
 // legacyGrantMultiReplacements maps retired bare capabilities that split into

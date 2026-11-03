@@ -111,6 +111,9 @@ func TestCIOnlyCapabilitiesAreRefusedEverywhereATaskCouldHoldOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range ciOnlyIDs {
+		// Recorded and offered as the release server's method each
+		// became (schema migration 101).
+		id = model.CanonicalLegacyGrant(id)
 		if !slices.Contains(defaults.CICapabilities, id) ||
 			!slices.Contains(defaults.AvailableCICapabilities, id) {
 			t.Errorf("the repo's CI picker lost %q: %+v", id, defaults)

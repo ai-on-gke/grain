@@ -67,6 +67,12 @@ type Method struct {
 	// .grain, an older grain/config, a capability policy entry). The store
 	// migration rewriting rows already stored is core's (pkg/model).
 	Aliases []string
+	// CI, when set, is the rule that decides which CI jobs the method is
+	// handed to (model.CIGrantRule): it is CI-only, and given to a job
+	// only on the events the rule names. Register declares it to grain,
+	// which enforces it ahead of the deployment's capability policy, so
+	// a policy can narrow the method but never widen it.
+	CI *model.CIGrantRule
 }
 
 // Ref is the method's capability reference: <Server>#<method>.
@@ -117,6 +123,9 @@ func Register(m Method) (unregister func()) {
 	}()
 	for _, alias := range m.Aliases {
 		undo = append(undo, model.RegisterLegacyGrantAlias(alias, m.Grant()))
+	}
+	if m.CI != nil {
+		undo = append(undo, model.RegisterCIGrantRule(ref, *m.CI))
 	}
 	registeredMethods[ref] = m
 	registered = true

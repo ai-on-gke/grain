@@ -181,6 +181,8 @@ The five release and image-building workflows under `.grain/workflows/` are port
 
 ## Mapping Grain CI Capabilities to GitHub Actions
 
+On grain CI these are methods of the in-process release server (`https://grain.dev/capabilities/release#package-publish`, `#image-signing`, `#registry-push`; the bare names are one-release aliases, see [ci-capabilities.md](ci-capabilities.md)). The names below are those grain CI capabilities; GitHub Actions has no capability grants and maps each to secrets and permissions instead.
+
 1. **`package-publish`**:
    - Mapped to job-level `permissions: packages: write` (and `id-token: write` for optional WIF) plus `PACKAGE_PUBLISH_REGISTRY`, `PACKAGE_PUBLISH_USERNAME`, and `PACKAGE_PUBLISH_TOKEN` populated from `secrets.GHCR_TOKEN` and `vars.GHCR_USERNAME` (default `bwsalmon`).
    - In `release-train.yml`, the credential step also writes `/home/debian/.package-publish-{registry,username,token}` (`chmod 600`) so the pre-flight `Require the publishing credential` check fails fast before tagging any git ref if no registry token is configured.
