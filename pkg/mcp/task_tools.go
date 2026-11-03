@@ -268,16 +268,24 @@ type TaskRecord struct {
 	Author      string
 	AuthorKind  string
 	// AuthorLabel is ui.Task.AuthorLabel: how whoever filed it reads.
-	AuthorLabel       string
-	Base              string
-	Capabilities      []string
-	PullRequest       string
-	FailedAttempts    int
-	LastFailureAt     *time.Time
-	LastFailureReason string
-	Attempts          []TaskAttempt
-	Transitions       []TaskTransition
-	Comments          []TaskComment
+	AuthorLabel  string
+	Base         string
+	Capabilities []string
+	PullRequest  string
+	// PullRequestMergedAt and PullRequestClosedAt are when grain saw that
+	// pull request merge, or close without merging (model.Observation's
+	// PrMergedAt and PrClosedAt): nil for both while it is open, or while
+	// grain has not read it settle. A task closed before its pull request
+	// merged says so here and nowhere else in the record -- its one close
+	// transition predates the merge (task 2350).
+	PullRequestMergedAt *time.Time
+	PullRequestClosedAt *time.Time
+	FailedAttempts      int
+	LastFailureAt       *time.Time
+	LastFailureReason   string
+	Attempts            []TaskAttempt
+	Transitions         []TaskTransition
+	Comments            []TaskComment
 	// Activity is what this task's live run is saying it is doing, for
 	// the reason the merge queue's own state is on the summary above: it
 	// is a question asked of a task that looks stuck, and until now the
@@ -855,7 +863,14 @@ func renderTaskRecord(t TaskRecord, now time.Time) string {
 		fmt.Fprintf(&b, "Capabilities: %s\n", strings.Join(t.Capabilities, ", "))
 	}
 	if t.PullRequest != "" {
-		fmt.Fprintf(&b, "Pull request: %s\n", t.PullRequest)
+		fmt.Fprintf(&b, "Pull request: %s", t.PullRequest)
+		switch {
+		case t.PullRequestMergedAt != nil:
+			b.WriteString(sinceWords(t.PullRequestMergedAt, now, " -- merged "))
+		case t.PullRequestClosedAt != nil:
+			b.WriteString(sinceWords(t.PullRequestClosedAt, now, " -- closed without merging "))
+		}
+		b.WriteByte('\n')
 	}
 	writeMergeQueue(&b, t.MergeQueue, t.State, now)
 	writeActivity(&b, t.Activity, now)

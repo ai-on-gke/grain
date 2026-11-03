@@ -50,5 +50,5 @@ export function commentAuthor(c) {
 // transitionActor is who asked for a timeline step (a close, a reopen):
 // its actorLabel, or the older "by" string.
 export function transitionActor(tr) {
-  return tr?.actorLabel || tr?.by || "";
+  return tr?.actorLabel || tr?.byLabel || tr?.by || "";
 }

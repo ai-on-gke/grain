@@ -390,6 +390,7 @@ for (const scheme of ["light", "dark"]) {
         "nothingNeededAction",
         "reviewTemplateId",
         "promptExtension",
+        "hostd",
         "sandboxShape",
         "description",
         "attachments",

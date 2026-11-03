@@ -105,7 +105,9 @@ daemon:
   `--memory`/`--memory-swap` at the shape's size, so they cannot swap
   past their own memory.
 - Granule VM sandboxes pass `-memory-limit-mb` (`shape.MemoryMB` plus
-  512 MiB VMM overhead) and `-oom-score-adj 500` on `granule vm create`,
+  `max(1 GiB, 25%)` VMM headroom, capped at host memory:
+  `orchestrator.GranuleMemoryLimitMB`, see
+  [sandbox budget](../../docs/sandbox-budget.md#vm-memory-headroom)) and `-oom-score-adj 500` on `granule vm create`,
   which `dockervm.Create` applies as `--oom-score-adj 500`,
   `--memory <limit>m` and `--memory-swap <limit>m` on the VM container
   (setting `memory.max` and bounding `memory.swap.max` to 0).

@@ -160,6 +160,28 @@ Pull-request and ordinary push runs cannot obtain it, and an agent's
 task-scoped CI request remains an ordinary push. The repository whose
 credential is resolved is the job's own, never one a workflow file names.
 
+That token is whatever the ladder answered when the job's sandbox was made,
+and most of what it answers with -- an App installation token, an OAuth access
+token -- lasts an hour. So a job is also handed a way to ask again, for the
+same repository and registry and through the same gate
+(`pkg/capability/packagepublish/refresh.go`):
+
+- `~/.docker/config.json` names `docker-credential-grain` in `credHelpers` for
+  the registry, and the helper is placed in `~/.grain/bin`, which every step
+  has on its `PATH`. Every `docker push` (and `docker buildx ... --push`) asks
+  it, and it asks grain, so a push two hours into a release is handed a token
+  that is valid then. `docker login` with the static token still succeeds and
+  stores nothing.
+- `docker-credential-grain refresh` rewrites `~/.package-publish-token` with a
+  current token, for a script that reads the file rather than going through
+  docker.
+
+The helper reaches grain's CI API listener with a per-job token at
+`~/.package-publish-refresh-{url,token}`, which works only for this job's
+repository and stops working when the job ends. Grain's log records each
+re-mint by run, repository and credential name, never the token. A daemon
+that is not serving its CI API listener places the static login alone.
+
 One `workflow_dispatch` run is started by Grain rather than typed by
 anybody, and it is worth naming here because it carries this credential:
 the jobs a repository lists in **post-merge dispatch jobs**

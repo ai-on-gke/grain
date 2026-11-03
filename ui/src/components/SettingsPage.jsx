@@ -31,9 +31,11 @@ import {
   useMediaQuery,
 } from "@mui/material";
 import { DISCARD_PROMPT } from "./Overlay.jsx";
+import { keepInView } from "../keepInView.js";
 import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
 import GeneralSection from "./settings/GeneralSection.jsx";
 import AccessSection from "./settings/AccessSection.jsx";
+import HostdsSection from "./settings/HostdsSection.jsx";
 import ConfigRepoSection from "./settings/ConfigRepoSection.jsx";
 import ModelsSection from "./settings/ModelsSection.jsx";
 import AgentsSection from "./settings/AgentsSection.jsx";
@@ -78,7 +80,13 @@ export { SETTINGS_SECTIONS, SETTINGS_GROUPS };
 // never lock the operator out), and Upgrade, which is an action -- so they
 // are never read-only under an external config repo. Upgrade has no save
 // state either, so its header leaves the "All changes saved" line off.
-const NOT_CONFIG = new Set(["config-repo", "preferences", "upgrade", "access"]);
+const NOT_CONFIG = new Set([
+  "config-repo",
+  "preferences",
+  "upgrade",
+  "access",
+  "hostds",
+]);
 const NO_SAVE_STATE = new Set(["upgrade"]);
 
 // Sections that read GET /api/settings, and so wait for it.
@@ -200,6 +208,10 @@ export default function SettingsPage({
   useEffect(() => {
     if (anchor) setFocusTarget(anchor);
   }, [anchor]);
+  // What still holds the last revealed card in view while the section
+  // around it draws (keepInView); revealing another, or leaving, lets go.
+  const settling = useRef(null);
+  useEffect(() => () => settling.current?.(), []);
   useEffect(() => {
     if (!focusTarget) return;
     const reveal = () => {
@@ -212,7 +224,10 @@ export default function SettingsPage({
       // centring it scrolls past its heading and the first field, which is
       // the one focused below without scrolling.
       const tall = el.getBoundingClientRect?.().height > window.innerHeight;
-      el.scrollIntoView?.({ block: tall ? "start" : "center" });
+      const scrollOptions = { block: tall ? "start" : "center" };
+      el.scrollIntoView?.(scrollOptions);
+      settling.current?.();
+      settling.current = keepInView(el, scrollOptions);
       const input = el.matches?.("input,textarea,select,button")
         ? el
         : el.querySelector?.("input:not([type=hidden]),textarea,select,button");
@@ -551,6 +566,9 @@ export default function SettingsPage({
             onLogout={onLogout}
           />
         );
+        break;
+      case "hostds":
+        body = <HostdsSection {...common} />;
         break;
       case "config-repo":
         body = (

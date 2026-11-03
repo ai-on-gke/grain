@@ -4,7 +4,9 @@
 
 [`contributions.playbook.md`](contributions.playbook.md) defines how designs, specifications, tasks, and code land on `main`, and [`merging.design.md`](../design/merging.design.md) defines how pull requests merge independently once they are clean, green, and through their gates. This playbook design defines how landed commits on `main` become official releases.
 
-**The core rule:** grain releases continuously from `main`—cutting a release candidate `vX.Y.Z-rc.N` from the newest known-good trunk commit, running the deterministic CI and agent qualification suite against it, promoting `vX.Y.Z` and `latest` automatically as soon as qualification passes, or triaging, fixing, and cutting `vX.Y.Z-rc.(N+1)` when qualification fails. Releases go out as fast as qualification passes, with no long-lived stabilization branch and no timed staging soak.
+**The core rule:** grain releases continuously from `main`—cutting a release candidate `vX.Y.Z-rc.N` from the newest known-good trunk commit, running the deterministic CI and agent qualification suite against it, promoting `vX.Y.Z` and `latest` as soon as qualification passes and a person approves (§0), or triaging, fixing, and cutting `vX.Y.Z-rc.(N+1)` when qualification fails. Releases go out as fast as qualification passes, with no long-lived stabilization branch and no timed staging soak.
+
+**The one-action rule (operator, 2026-11-02):** a release takes **at most one action from a person, always**, and that action is **approving the release**. Everything before and after the approval — cutting the RC, qualification, release notes, promotion, the Google edition's sync, merge and image publishing, and upgrading the deployment — is grain's. Where this rule and an older section disagree, this rule wins; [§0](#0-at-most-one-person-action-per-release) lays out the flow, who owns each step and the file that enforces it.
 
 ---
 
@@ -22,7 +24,7 @@ This playbook supersedes the staging-soak and human-staging flow in [`release-fr
 | **Mechanical release notes (`scripts/release-notes.sh`)** | **Survives (automated)** | `scripts/release-notes.sh` generates `docs/releases/vX.Y.Z.md` and the GitHub Release body deterministically during promotion, extended to flag breaking changes, replacing the per-release `.grain/templates/release-notes.yml` agent task. |
 | **24-hour staging soak (`check-soak`, `RELEASE_STAGING_URL`, persistent staging sandbox, `staging-ui-exploration`)** | **Superseded** | Retired. Qualification is an active, deterministic two-stage suite run against the RC commit rather than a 24-hour wall-clock wait on a staging sandbox. |
 | **Daily cron bottleneck (`04:15 UTC` once-a-day train)** | **Superseded** | Retired as the primary driver. The train runs event-driven back-to-back whenever an RC finishes and new LKG commits exist on `main`, with a periodic cron kept only as a safety wake. |
-| **`vX.Y.0-pending` staging and routine human Approve/Reject (`promote-release.yml`)** | **Superseded** | Retired for routine minor releases: a passing qualification promotes `vX.Y.Z` and `latest` automatically. Human gating moves to governing designs, qualification rules, trust-boundary paths, and `RELEASE_MAJOR` bumps. |
+| **`vX.Y.0-pending` staging and routine human Approve/Reject (`promote-release.yml`)** | **Survives as the one action (§0)** | A passing qualification stops at `vX.Y.0-pending` and raises `release.pending:vX.Y.0` in the Inbox; the person's Approve is the release's only person action, from the Inbox or from GitHub. Nothing else in the release waits on a person. (This replaces the earlier decision to auto-promote; see §1.) |
 
 ---
 
@@ -69,16 +71,101 @@ stateDiagram-v2
 
 ## Design decisions
 
+### 0. At most one person action per release
+
+**Rule (operator, 2026-11-02):** a release takes **no more than one action from a person, always**. That action is **approving the release**: one press of Approve on the `release.pending:vX.Y.0` Inbox notification, or the equivalent `promote-release.yml` dispatch on GitHub. Every other step, before and after it, is automatic. A step that needs a person anywhere else is a bug in the release machinery, not a part of the process. It gets a task, as each gap below did.
+
+Getting v3.1.0 out on 2026-11-01/02 took a long series of manual steps: re-submitting fixes whose auto-merge had flipped off, pressing Submit on release-script fixes, cutting the RC and pushing tags, starting the Google edition's sync and its release runs by hand, re-running flaked release jobs, resolving review threads, and upgrading the deployment from Settings. The rule exists so that list is empty.
+
+#### 0.1 End-to-end flow and owners
+
+| # | Step | Owner | Enforced by |
+| --- | --- | --- | --- |
+| 1 | A fix or feature merges to core `main`; an `auto_merge: true` task merges on green CI and a clean review without a Submit | grain | `pkg/model` auto-merge stickiness (task 2442 for `false`; gap 1 for `true`), `.grain/merge-rules.yml` |
+| 2 | Release-path changes clear on grain's security review alone, except the approval path (§0.3) | grain | `pkg/trustboundary/trustboundary.go`, `.grain/triggers/release-promotion.yml` |
+| 3 | `release images` publishes `:sha-<short>` for the merge, re-running on its own after an infrastructure failure (checkout 5xx, VM death) | grain | `.github/workflows/release.yml`, `scripts/release-images.sh`, `pkg/orchestrator/basebranchrelease.go` (`retryInfraBaseBranchRelease`), `pkg/orchestrator/infraverdict.go` |
+| 4 | The release train selects LKG, cuts `vX.Y.Z-rc.N`, and pushes the RC, `-pending` and `-discarded` tags with its own narrow grant (§0.4) | grain | `.grain/templates/release-train.yml` `push:` list (`pkg/model/ref_push.go`), `scripts/release-from-trunk.sh`, `scripts/candidate-gate.sh` |
+| 5 | Qualification: Stage 1 `nightly.yml`, Stage 2 `release-qualification` (§2) | grain | `.github/workflows/nightly.yml`, `.grain/suites/release-qualification.yml` |
+| 6 | Release notes generated mechanically (§8) | grain | `scripts/release-notes.sh` |
+| 7 | The deployment notices `vX.Y.0-pending` and raises `release.pending:vX.Y.0` in the Inbox with the notes | grain | `pkg/model/notification.go` (`FamilyReleasePending`), the deployment's outbound watcher (gap 4) |
+| **8** | **Approve the release** | **the person** | `pkg/ui/release_approval.go` (person-only route), `ui/src/notifications.js` (Approve button), `promote-release.yml` "Refuse anybody but a person" |
+| 9 | Promotion tags `vX.Y.0` and moves `latest` | grain (the approval's own run) | `promote-release.yml` → `scripts/release-from-trunk.sh approve` |
+| 10 | `:vX.Y.0` and `:latest` images retagged from the verified `:sha-<short>` images | grain | `.github/workflows/promote.yml`, `scripts/release-images.sh promote` |
+| 11 | The Google edition's sync pins exactly the release commit (`go get …@vX.Y.0`), files with `auto_merge: true` and merges on green with no Submit (§9) | grain | the edition's `sync-tags` and its "Sync OSS release" schedule (grain/config), the edition's merge rules |
+| 12 | Agents resolve their own review threads on the edition's forge, so the conversation-resolution rule doesn't wait on a person | grain | the edition's forge thread API (task 2634) |
+| 13 | The edition's merge to `main` starts its `release` workflow, which publishes the edition's `vX.Y.0` / `latest` images | grain | `pkg/orchestrator/basebranchrelease.go` (`reconcileBaseBranchRelease`, gap 6) |
+| 14 | The deployment upgrades itself to the new release through the existing drain-and-upgrade path, and a failure (the schema rehearsal above all) is reported to the Inbox, not left silent (§0.5) | grain | `pkg/orchestrator/autoupgrade.go`, `pkg/orchestrator/scheduledupgrade.go`, `pkg/upgrade` |
+
+A red RC adds no person action: the steward triages and files fixes (§5, §12). Escalation to the Inbox after `RELEASE_MAX_RC_ATTEMPTS` is a report, not a step of the release. A rollback (§11) is a separate person action on a bad release, not part of shipping one.
+
+#### 0.2 The one action: Approve, from grain or from GitHub
+
+`promote-release.yml`'s person check stays as it is: the approval is the one action, and an agent, executor, steward or schedule is refused. The person must be able to make the approval from grain's Inbox with one press, without opening GitHub. On a repository that publishes from GitHub Actions, that means the deployment raises `release.pending` itself, by watching for `-pending` tags outbound (a hosted runner can't reach it). It also means the Approve button dispatches the workflow that actually holds the publishing credentials, and carries proof that a person pressed it. Both are gap 4.
+
+#### 0.3 Which release-path changes need a person's Submit
+
+A release-path change that **can't reach the approval** clears on grain's security review alone, with no findings. One that **is** the approval, or decides who may act without it, waits for a person.
+
+| Needs a person's Submit | Clears on security review alone (no findings) |
+| --- | --- |
+| `.grain/workflows/promote-release.yml`, `.github/workflows/promote-release.yml` | `scripts/release-images.sh`, `scripts/release-from-trunk.sh`, `scripts/release-notes.sh`, `scripts/candidate-gate.sh` |
+| `pkg/ui/release_approval.go` | `.grain/workflows/release.yml`, `.github/workflows/release.yml` |
+| `pkg/trustboundary/trustboundary.go`, `.grain/triggers/**`, `.grain/merge-rules.yml` | `.grain/workflows/promote.yml`, `.github/workflows/promote.yml` (they follow the git `latest` tag the approval moved) |
+| Any template's `push:` list (the release train's tag grant, §0.4) | `.github/workflows/release-train.yml`, `.grain/workflows/release-train.yml` |
+| A `RELEASE_MAJOR` bump in `scripts/release.conf` | Other `scripts/release.conf` changes (`RELEASE_NEVER_PROMOTE`, `RELEASE_HOLD`, intervals) |
+
+For the right-hand column, the security review counts any of the following as a finding, and a finding (or a review that can't decide) sends the change to a person:
+- the change could move `vX.Y.Z` or `latest`, as a git tag or an image, other than as a result of the person's approval;
+- it widens a workflow's `permissions:`, the secrets it reads, or who may dispatch it;
+- it weakens a "refuse anybody but a person" check.
+
+This is the release-promotion rule narrowed to the approval path. The narrowing is gap 2, and that change itself waits for a person's Submit, because it changes the rules rather than shipping a release.
+
+#### 0.4 The release train's tag grant
+
+The release train runs as a grain task filed from `.grain/templates/release-train.yml`. Its tag pushes come from that template's `push:` list (`pkg/model/ref_push.go`), which is read from `main`, limited to this repository and to tasks filed from that template, and made by a person once, when the template merges (§0.3). It isn't the broad `repo#write {refs, force}` grant. The list holds the refs the train owns, and no more:
+
+```yaml
+push:
+  - refs/tags/v*-rc.*
+  - refs/tags/v*-pending
+  - refs/tags/v*-discarded
+  - ref: refs/heads/candidate
+    force: true
+```
+
+`vX.Y.Z` and `latest` are deliberately left out. They are the promotion's refs, pushed by the approval's own run. A train that can push them can release without the approval, and then the approval would no longer be the one action. That's gap 3.
+
+#### 0.5 Upgrading the deployment
+
+Upgrading the deployment that runs grain is part of the release, not a separate chore. A deployment may opt in to **upgrading on release**: once its image channel publishes a new release (the Google edition's images, for a deployment that runs that edition), it schedules an upgrade to `latest` or to the exact release tag, per its channel setting, through the existing drain-and-upgrade path (`model.ScheduledUpgrade`). It never follows `-rc.N`, `-discarded` or `-retracted`. A failed upgrade, the pre-cutover schema rehearsal above all, raises one Inbox notification naming the stage and the error, and isn't retried until the target changes. The setting is opt-in per deployment and **recommended on**. The daily `autoUpgradeTime` mode (§10) stays for deployments that prefer a fixed window. That's gap 8.
+
+#### 0.6 Gaps and the tasks that close them
+
+| Gap | Closed by |
+| --- | --- |
+| 1. Auto-merge doesn't stick | Task 2442 (explicit `false` sticks; merged) and the gap 1 follow-up (explicit `true` survives holds) |
+| 2. Release-path changes always wait for a Submit | Gap 2 task: narrow the release-promotion rule per §0.3 |
+| 3. The RC cut and pending tags need a person | Gap 3 task: release-train template with the §0.4 grant |
+| 4. The approval needs GitHub | Gap 4 task: the deployment raises `release.pending`, and the Inbox Approve dispatches the publishing workflow |
+| 5. The Google edition doesn't follow releases | Tasks 2533 (sync template) and 2315, and the gap 5 task in the edition's repository |
+| 6. Edition merges don't start `release` | Gap 6 task |
+| 7. Release-job flakes need a re-run | Tasks 2558, 2590, 2621 (fixes), and the gap 7 task (automatic infra retry) |
+| 8. Upgrading the deployment is manual | Gap 8 task |
+| 9. Edition review threads need a person | Task 2634 |
+
 ### 1. Promotion gate
 
-**Decision:** **Promote automatically on a clean qualification pass**, retiring `-pending` and the routine human one-click approval step in `promote-release.yml`. Keep synchronous human control via `RELEASE_NEVER_PROMOTE` / `RELEASE_HOLD` in `scripts/release.conf`, human review on all qualification and release-machinery files, and human approval on `RELEASE_MAJOR` increases.
+> **Amended 2026-11-02 (§0).** The operator kept the person's approval as the release's one action: a passing qualification stops at `vX.Y.0-pending` and promotes on the person's Approve, not on its own. The reasoning below still decides everything *around* that click — no other step waits on a person — and it is why the Approve must be reachable from the Inbox with one press rather than from a GitHub form. The original decision is kept for the record:
+
+**Original decision:** **Promote automatically on a clean qualification pass**, retiring `-pending` and the routine human one-click approval step in `promote-release.yml`. Keep synchronous human control via `RELEASE_NEVER_PROMOTE` / `RELEASE_HOLD` in `scripts/release.conf`, human review on all qualification and release-machinery files, and human approval on `RELEASE_MAJOR` increases.
 
 - **Why:** In a continuous release loop targeting multi-release-per-day throughput, a mandatory human click re-creates the exact queue latency that continuous qualification removes: `-pending` blocks the pipeline whenever an operator is asleep or away, or forces multiple releases to batch into large jumps that are harder to bisect. Under [`contributions.playbook.md`](contributions.playbook.md), humans govern *designs, qualification suites, and trust-boundary rules*, while clean, green artifacts flow automatically.
 - **Trade-off:** A product defect that escapes both `tests.yml`/`release.yml` and the two-stage RC qualification suite reaches `latest` immediately without a human eyeball pause. We accept that trade-off because:
   1. Qualification is deeper and more objective than a passive demo soak (§2);
   2. Unattended deployments on `autoUpgradeChannel: latest` upgrade once daily at their configured window rather than instantaneously (§10);
   3. Rollback re-points `latest` in minutes without mutating history (§11); and
-  4. Any edit to `.github/workflows/*`, `.grain/**`, `scripts/release*.sh`, or `design/playbook/releases.playbook.md` remains human-reviewed before merge.
+  4. Any edit to `.github/workflows/*`, `.grain/**`, `scripts/release*.sh`, or `design/playbook/releases.playbook.md` remains human-reviewed before merge. (Amended by §0.3: release-machinery edits that cannot reach the approval clear on grain's security review alone.)
 
 ---
 
@@ -150,6 +237,7 @@ Environmental failures must never discard a healthy RC, burn a version retry att
 - **How `infra` is handled:**
   - `infra` verdicts **never** mark the RC red and **never** consume the single flake-retry allowance (§3) or the 3-attempt RC cap (§5).
   - The controller re-queues the affected job or task automatically (with exponential backoff, and waiting out model quota reset windows before re-dispatching agent tasks).
+  - **`release images` itself (gap 7):** a trunk release run that failed only on infrastructure is re-run by the deployment, up to 2 times, before it counts as a failed release or files triage. On grain CI that is the existing `infraVerdict` re-run, which now also reads git's checkout/fetch 5xx (`The requested URL returned error: 502/503/504`, `RPC failed; HTTP 5xx`, from the first or checkout step only) and a sandbox VM lost mid-step (the job concludes errored with `infra: sandbox lost`). On `ci_mode: github` the deployment asks GitHub to `rerun-failed-jobs` when every failed job of the attempt matches the same signatures or a lost runner. The triage filed after the last re-run says `infra, retried N times`.
   - **Bounded patience:** If the same job or item hits **3 consecutive `infra` failures** or remains blocked on `infra` for **more than 2 hours**, the reconciler leaves the RC in `qualifying` (not `-discarded`) and raises `pipeline.release-infra-stalled:vX.Y.Z-rc.N` so the steward or operator repairs the underlying runner, quota, or credential issue.
 
 ---
@@ -229,6 +317,8 @@ A downstream edition repository imports core via Go modules (`go.mod`) and cuts 
 
 ### 10. Upgrades of deployments
 
+> **Amended 2026-11-02 (§0.5).** A deployment may also opt in (recommended) to upgrading as soon as its image channel publishes a release, rather than at a daily time, and a failed upgrade is reported to the Inbox.
+
 Continuous releases mean `latest` moves several times a day while individual deployments upgrade once a day, once a week, or on demand—routinely jumping across many minor versions at once (`v3.2.0 -> v3.11.0`).
 
 - **Strictly forward-only, sequential, multi-version-safe schema migrations:**
@@ -299,6 +389,7 @@ The train separates GitHub runner duties from private deployment duties so neith
 | --- | --- | --- | --- |
 | **Push tags & pointers (`vX.Y.Z-rc.N`, `-discarded`, `-retracted`, `vX.Y.Z`, `latest`, `refs/heads/candidate`, `release/vX.Y.Z`)** | GitHub Actions (`release-train.yml`, `promote.yml`) | Scoped **GitHub App installation token** (preferred) or fine-grained **`REPO_WRITE_TOKEN`** (`contents: write` on this repo only; `refs/heads/main` remains protected against force-push and unreviewed commits) | Default `GITHUB_TOKEN` (`github-actions[bot]`) is blocked by tag rulesets and **does not fire downstream `on: push: tags` / `on: release` workflows** when pushing tags. An App token or `REPO_WRITE_TOKEN` authorizes protected tag pushes and triggers downstream release events cleanly. |
 | **Dispatch, retry & cancel qualification workflows (`nightly.yml`, `gcp-smoke.yml`)** | GitHub Actions (`release-train.yml`) | Job permission **`actions: write`** on `GITHUB_TOKEN` (or App token) | A `release-train.yml` with `actions: read` cannot dispatch `nightly.yml` on `vX.Y.Z-rc.N`, invoke `rerun-failed-jobs` on flakes, or cancel superseded RC runs; `actions: write` grants all three within the repository. |
+| **Re-run an infra-failed `release images` (gap 7)** | **Grain deployment reconciler** (outbound) | The repository's forge connection with **`actions: write`** (`POST /actions/runs/{id}/rerun-failed-jobs`) | Without it GitHub answers 403; the release is recorded and triaged at once, its triage saying the re-run was refused. |
 | **Publish & retag container images (`:vX.Y.Z-rc.N`, `:rc`, `:candidate`, `:vX.Y.Z`, `:latest`, `:-discarded`, `:-retracted`)** | GitHub Actions (`release.yml`, `release-train.yml`, `promote.yml`) | **`GHCR_TOKEN`** (`write:packages`, `read:packages`), or native `GITHUB_TOKEN` `packages: write` once `RELEASE_IMAGE_REPO` lives under the same GitHub organization as the repository | `GITHUB_TOKEN` fails whenever `RELEASE_IMAGE_REPO` points to a package namespace outside the repository's own org, and cron-triggered runs fail when registry credentials are event-gated. Setting `GHCR_TOKEN` (or aligning `RELEASE_IMAGE_REPO` with the repo org) gives scheduled and dispatched runs identical registry access. |
 | **Sign release & RC images** | GitHub Actions (`release.yml`, `release-train.yml`, `promote.yml`) | **`IMAGE_SIGNING_KEY`** (+ optional `IMAGE_SIGNING_PASSWORD`), or keyless Cosign Sigstore OIDC via **`id-token: write`** | Without `IMAGE_SIGNING_KEY` or keyless OIDC, workflows fall back to publishing unsigned images. Requiring keyless OIDC (`id-token: write`) or `IMAGE_SIGNING_KEY` ensures every `:vX.Y.Z-rc.N` and `:vX.Y.Z` image carries a verifiable signature. |
 | **Run Stage 2 agent qualification & report verdict (`grain/release-qualification`)** | **Grain deployment reconciler** (outbound to GitHub via its existing forge GitHub App / token) | Existing repository forge connection (`checks: write`, `contents: read` on GitHub); **no inbound `GRAIN_API_URL`, `GRAIN_API_TOKEN`, or `RELEASE_STAGING_URL` required on GitHub-hosted runners** | A GitHub-hosted runner cannot reach a firewalled deployment on `localhost` (`GRAIN_API_URL` / `RELEASE_STAGING_URL`), causing live train runs to fail preflight whenever `GRAIN_API_TOKEN` or external URLs are unset. Dropping staging removes `RELEASE_STAGING_URL`, and having the Grain daemon watch GitHub outbound for `vX.Y.Z-rc.N` + green `nightly.yml`, run `release-qualification` locally, and post check run `grain/release-qualification` back to GitHub removes inbound runner-to-daemon network and token requirements altogether. (Deployments that expose `GRAIN_API_URL` may still optionally set `GRAIN_API_TOKEN` with `api:release-gate-read`.) |
@@ -347,3 +438,5 @@ Nothing in this playbook design is implemented by this document. Once approved, 
 
 9. **Downstream edition — Release-tag-following `go.mod` sync**
    - Configure the downstream edition repository's automated dependency sync to track core's `refs/tags/latest` release tag (never untagged `main` HEAD and never `-retracted` / `-discarded` tags), coalescing intermediate releases onto the newest promoted `vX.Y.Z` tag so every merged sync pins an exact core release tag and cuts a matching edition release.
+
+10. **One person action per release (§0)** — the gaps in §0.6, one task each: auto-merge stickiness, the narrowed release-promotion trust rule, the release train's tag grant, the Inbox Approve on GitHub-Actions repos, the edition's release-following sync, release-on-merge for the edition, automatic infra retry of `release images`, and upgrade-on-release.

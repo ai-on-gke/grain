@@ -4885,8 +4885,6 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		name := strings.TrimSpace(g.Capability)
 		grantNames = append(grantNames, name)
 		switch name {
-		case "grain-ci":
-			mayReadCI = true
 		case "self-debug":
 			mayReadCI = true
 			mayReadAllCI = true
@@ -4914,6 +4912,9 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		}
 		if IsGrainSQLGrant(name) {
 			mayReadDB = true
+		}
+		if IsGrainCIGrant(name) {
+			mayReadCI = true
 		}
 		// An api grant limited to one repository is spelt
 		// api:<scope-or-preset>@owner/repo (ParseAPIGrant); a name that
@@ -5349,6 +5350,43 @@ func (s *Store) PruneOffTargetPullRequestLinks(ctx context.Context) ([]TaskPullR
 // openPullRequestLinks is OpenPullRequestLinks' query, split into the
 // links it returns and those it leaves out for being off target.
 func (s *Store) openPullRequestLinks(ctx context.Context) (kept, off []TaskPullRequestLink, err error) {
+	return s.pullRequestLinksWhere(ctx,
+		"JOIN `task_state` AS `st` ON `st`.`task_id` = `l`.`task_id` "+
+			"LEFT JOIN `task` AS `t` ON `t`.`id` = `l`.`task_id` "+
+			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `l`.`task_id` "+
+			"WHERE `l`.`kind` = ? AND (`st`.`state` IN (?, ?) OR ("+
+			"`o`.`merge_queue_repair_at` IS NOT NULL AND `o`.`completed_at` IS NULL "+
+			"AND `o`.`closed_at` IS NULL))",
+		string(LinkFixes), string(StateCompleted), string(StateAwaitingSubmit))
+}
+
+// ClosedUnsettledPullRequestLinks returns the fixes-links of every task
+// that closed at or after since while grain still had no word of its pull
+// request merging or closing (Observation.PrMergedAt and PrClosedAt both
+// unset) -- the pull requests OpenPullRequestLinks stops returning the
+// moment their task closes, and which can still merge afterwards: a
+// person who closes the task, resolves what the merge queue gave up on,
+// and merges the pull request by hand (task 2350's PR #47). The merge
+// queue never acts on these; orchestrator.syncClosedPullRequests only
+// reads them, to record the merge or close when it comes. since bounds
+// the list, so a task closed long ago over a pull request nobody will
+// ever merge is not read forever. Off-target links are left out, as
+// OpenPullRequestLinks leaves them out.
+func (s *Store) ClosedUnsettledPullRequestLinks(ctx context.Context, since time.Time) ([]TaskPullRequestLink, error) {
+	kept, _, err := s.pullRequestLinksWhere(ctx,
+		"JOIN `task_observation` AS `o` ON `o`.`task_id` = `l`.`task_id` "+
+			"LEFT JOIN `task` AS `t` ON `t`.`id` = `l`.`task_id` "+
+			"WHERE `l`.`kind` = ? AND `o`.`closed_at` IS NOT NULL AND `o`.`closed_at` >= ? "+
+			"AND `o`.`pr_merged_at` IS NULL AND `o`.`pr_closed_at` IS NULL",
+		string(LinkFixes), since.UTC())
+	return kept, err
+}
+
+// pullRequestLinksWhere is the query both of the above share: from, the
+// joins and WHERE clause over task_link AS l (which must join task AS t),
+// split into the links it returns and those it leaves out for being off
+// target.
+func (s *Store) pullRequestLinksWhere(ctx context.Context, from string, args ...any) (kept, off []TaskPullRequestLink, err error) {
 	type row struct {
 		link   TaskPullRequestLink
 		target *RepoRef
@@ -5356,13 +5394,8 @@ func (s *Store) openPullRequestLinks(ctx context.Context) (kept, off []TaskPullR
 	var rows []row
 	err = each(ctx, s.db,
 		"SELECT `l`.`task_id`, `l`.`target`, `t`.`target_owner`, `t`.`target_name` FROM `task_link` AS `l` "+
-			"JOIN `task_state` AS `st` ON `st`.`task_id` = `l`.`task_id` "+
-			"LEFT JOIN `task` AS `t` ON `t`.`id` = `l`.`task_id` "+
-			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `l`.`task_id` "+
-			"WHERE `l`.`kind` = ? AND (`st`.`state` IN (?, ?) OR ("+
-			"`o`.`merge_queue_repair_at` IS NOT NULL AND `o`.`completed_at` IS NULL "+
-			"AND `o`.`closed_at` IS NULL)) ORDER BY `l`.`task_id`",
-		[]any{string(LinkFixes), string(StateCompleted), string(StateAwaitingSubmit)},
+			from+" ORDER BY `l`.`task_id`",
+		args,
 		func(r *sql.Rows) error {
 			var l TaskPullRequestLink
 			var owner, name sql.NullString
@@ -6424,7 +6457,7 @@ func newTemplateID(ctx context.Context, tx *sql.Tx) (string, error) {
 }
 
 const templateColumns = "`id`,`name`,`title`,`body`," +
-	"`target_owner`,`target_name`,`base`,`auto_merge`,`created_at`,`network_access`,`nothing_needed_action`,`agent_model`,`interactive`,`goal`,`change_target_kind`,`change_target_spec`,`reviewers`,`priority`,`keep_running`"
+	"`target_owner`,`target_name`,`base`,`auto_merge`,`created_at`,`network_access`,`nothing_needed_action`,`agent_model`,`interactive`,`goal`,`change_target_kind`,`change_target_spec`,`reviewers`,`priority`,`keep_running`,`hostd`"
 
 func scanTemplate(scan func(...any) error) (Template, error) {
 	var t Template
@@ -6434,7 +6467,7 @@ func scanTemplate(scan func(...any) error) (Template, error) {
 	var priority int
 	if err := scan(&t.ID, &t.Name, &t.Title, &t.Body,
 		&target.Owner, &target.Name, &base, &t.AutoMerge, &t.CreatedAt, &networkAccess, &nothingNeeded, &t.Model, &t.Interactive,
-		&goal, &ctKind, &ctSpec, &reviewers, &priority, &t.KeepRunning); err != nil {
+		&goal, &ctKind, &ctSpec, &reviewers, &priority, &t.KeepRunning, &t.Hostd); err != nil {
 		return Template{}, err
 	}
 	if priority != 0 {
@@ -6476,10 +6509,10 @@ func putTemplate(ctx context.Context, tx *sql.Tx, t Template) error {
 	}
 	_, err := tx.ExecContext(ctx, `REPLACE INTO `+"`template`"+` (
   `+templateColumns+`
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Name, t.Title, t.Body,
 		targetOwner, targetName, t.Base, t.AutoMerge, t.CreatedAt.UTC(), string(t.NetworkAccess), string(t.NothingNeededAction), t.Model, t.Interactive,
-		t.Goal.JSON(), changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(), joinCSV(NormalizeReviewers(t.Reviewers)), priority, t.KeepRunning)
+		t.Goal.JSON(), changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(), joinCSV(NormalizeReviewers(t.Reviewers)), priority, t.KeepRunning, t.Hostd)
 	if err != nil {
 		return fmt.Errorf("writing template %s: %w", t.ID, err)
 	}

@@ -347,6 +347,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // that says, in prose and in counts, that this deployment has nothing.
   const [loaded, setLoaded] = useState(false);
   const [tasks, setTasks] = useState([]);
+  // Whether /api/tasks has answered with a list at least once. Until it
+  // has, the empty `tasks` above is not "no tasks" but "not read yet",
+  // and a page that would say nothing is waiting must not say it.
+  const [tasksListed, setTasksListed] = useState(false);
   const [schedules, setSchedules] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [suites, setSuites] = useState([]);
@@ -975,6 +979,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
     // endpoint's own bytes, this covers a change those views do not care
     // about.
     setTasks((prev) => keepIfSame(prev, next));
+    setTasksListed(true);
     // Drop any selected id the store no longer reports, so a stale
     // selection never quietly outlives the task it named.
     const ids = new Set(next.map((t) => t.id));
@@ -1542,16 +1547,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // showing. Its second argument is a release the address named that the
   // repo does not have: the pane shows the newest instead, and the
   // address is corrected the way one naming a missing task is -- replaced
-  // rather than pushed, and saying what it could not find.
+  // rather than pushed. The pane says what it could not find itself, in
+  // place and until it is dismissed, so no toast repeats it here.
   const selectRelease = useCallback((release, missing) => {
     setOpenRelease((prev) => {
-      if (missing) {
-        const notes = droppedRef.current?.missing || [];
-        const message = missingMessage("release", missing);
-        droppedRef.current = {
-          missing: notes.includes(message) ? notes : [...notes, message],
-        };
-      } else if (release === null && prev !== null) {
+      if (missing || (release === null && prev !== null)) {
         droppedRef.current = droppedRef.current || { missing: [] };
       }
       return release;
@@ -3733,6 +3733,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                    flat list. */
                           <InboxPage
                             tasks={tasks}
+                            tasksLoaded={tasksListed}
                             config={config}
                             onOpenTask={openTask}
                             onOpenConfigRepo={() => openSettings("config-repo")}

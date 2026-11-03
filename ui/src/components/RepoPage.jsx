@@ -1970,12 +1970,12 @@ export default function RepoPage({
                     }}
                   />
                   <Typography variant="body2" color="text.secondary">
-                    Merge when green and clean. A pull request whose required
-                    checks have passed and that merges cleanly with its target
-                    branch merges straight away, instead of waiting behind pull
-                    requests ahead of it whose CI is still running. Those keep
-                    their place and merge once their own checks pass. With it
-                    off, {repo}&rsquo;s queue merges strictly in order.
+                    Merge when green and clean. The merge queue no longer keeps
+                    an order, so this no longer changes anything: on or off,
+                    every pull request into {repo} whose required checks have
+                    passed and that merges cleanly merges straight away, up to
+                    this deployment&rsquo;s merges per branch per cycle, and one
+                    still in CI holds only itself.
                   </Typography>
                 </Stack>
                 <Stack direction="row" alignItems="flex-start" spacing={1}>

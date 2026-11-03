@@ -52,10 +52,10 @@ test("a person's close names them, and its long reason wraps inside its timeline
   await page.getByRole("button", { name: "Close", exact: true }).click();
   const meta = page.locator(".timeline-transition-by");
   await expect(meta).toHaveCount(1);
-  // Named by the server's label (operator-attribution spec §4.1): the
-  // demo's browser holds the access code, so it is the operator, marked
-  // as such -- never a raw "human operator".
-  await expect(meta).toContainText(/^by operator \((access code|local)\)/);
+  // The demo is signed into with its access code, so the close is the
+  // operator's, said as such rather than as the deployment's own address
+  // (docs/test-runs/2026-11-03-operator-attribution.md F3).
+  await expect(meta).toContainText(/^by operator \(access code\)/);
 
   // Reopened, then closed again with a reason the meta line has to wrap.
   expect(

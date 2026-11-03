@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -617,6 +618,115 @@ var Migrations = []Migration{
 			schema90TaskEventTable,
 		}, principalSourceColumns()...),
 	},
+	{
+		Version:     92,
+		Description: "add the hostd registry (hostd, hostd_token), with the co-located hostd as local",
+		Statements: []string{
+			hostdTable,
+			hostdTokenTable,
+		},
+		Up: ensureLocalHostd,
+	},
+	{
+		Version:     93,
+		Description: "route host work per run: task_hostd, task_run_hostd, and the hostd of each task_run_capability_audit record",
+		Statements: []string{
+			taskHostdTable,
+			taskRunHostdTable,
+			// task_run_capability_audit postdates the 2.0 baseline and
+			// Init made it in place, so a store this old may not have it
+			// yet: create it in schema 92's shape first.
+			schema92CapabilityAuditTable,
+			"ALTER TABLE `task_run_capability_audit` ADD COLUMN `hostd` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     94,
+		Description: "add the hostd selector a template's tasks start pinned to",
+		Statements: []string{
+			"ALTER TABLE `template` ADD COLUMN `hostd` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     95,
+		Description: "raise grain_config.max_merges_per_repo's column default from 1 to 5 (stored values are kept)",
+		Up:          raiseMaxMergesPerRepoDefault,
+	},
+	{
+		Version:     96,
+		Description: "rewrite stored grain-ci grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/grain#ci={} (the in-process capability is retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames := map[string]string{GrainCICapability: GrainCIGrant}
+			if err := rewriteLegacyGrants(renames)(ctx, tx); err != nil {
+				return err
+			}
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities",
+				map[string][]string{GrainCICapability: {GrainCIGrant}})
+		},
+	},
+	{
+		Version:     97,
+		Description: "seed gcp#gcp-key permission sets from grain_config pool and gcp_key rows, and rewrite stored gcp-key and gcp-key:<name> grants (in-process gcp-key is retired)",
+		Up:          migrateGCPKeyToCapabilityServer,
+	},
+	{
+		Version:     98,
+		Description: "add allowed_principal and allowed_principal_migration for verified-identity sign-in access",
+		Statements: []string{
+			allowedPrincipalTable,
+			allowedPrincipalMigrationTable,
+		},
+	},
+}
+
+// maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as
+// schemas before 95 wrote it, with the default captured for replacing.
+var maxMergesPerRepoDefault1 = regexp.MustCompile("(`max_merges_per_repo`\\s+INTEGER\\s+NOT\\s+NULL\\s+DEFAULT\\s+)1\\b")
+
+// grainConfigTableName is the table name at the head of grain_config's
+// stored CREATE statement, however it was quoted.
+var grainConfigTableName = regexp.MustCompile("^(\\s*CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?)[`\"]?grain_config[`\"]?")
+
+// raiseMaxMergesPerRepoDefault is migration 95. Only the column default
+// changes, never a row: a deployment whose row holds 1 keeps 1, because the
+// row is written whole on every save and so cannot say whether that 1 was
+// chosen.
+//
+// Postgres changes a default in place. SQLite cannot, so there the table is
+// rebuilt from its own stored CREATE statement with only the default
+// edited -- the columns, their order and every row as they were. The two
+// are told apart by that statement: sqlite_master is a compatibility view
+// on Postgres whose sql column is always empty.
+func raiseMaxMergesPerRepoDefault(ctx context.Context, tx *sql.Tx) error {
+	var ddl string
+	if err := tx.QueryRowContext(ctx,
+		"SELECT `sql` FROM `sqlite_master` WHERE `type` = 'table' AND `name` = 'grain_config'").Scan(&ddl); err != nil {
+		return fmt.Errorf("reading grain_config's definition: %w", err)
+	}
+	if ddl == "" {
+		_, err := tx.ExecContext(ctx, "ALTER TABLE `grain_config` ALTER COLUMN `max_merges_per_repo` SET DEFAULT 5")
+		return err
+	}
+	raised := maxMergesPerRepoDefault1.ReplaceAllString(ddl, "${1}5")
+	if raised == ddl {
+		return nil
+	}
+	if !grainConfigTableName.MatchString(raised) {
+		return fmt.Errorf("grain_config's stored definition does not start as a CREATE TABLE: %.60q", ddl)
+	}
+	raised = grainConfigTableName.ReplaceAllString(raised, "${1}`grain_config_95`")
+	for _, stmt := range []string{
+		"DROP TABLE IF EXISTS `grain_config_95`",
+		raised,
+		"INSERT INTO `grain_config_95` SELECT * FROM `grain_config`",
+		"DROP TABLE `grain_config`",
+		"ALTER TABLE `grain_config_95` RENAME TO `grain_config`",
+	} {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // principalSourceColumns are migration 91's ALTERs: `<p>_source` beside
@@ -646,6 +756,19 @@ func principalSourceColumns() []string {
 	}
 	return out
 }
+
+// schema92CapabilityAuditTable is task_run_capability_audit as schema
+// 92 created it, frozen for migration 93.
+const schema92CapabilityAuditTable = `CREATE TABLE IF NOT EXISTS ` + "`task_run_capability_audit`" + ` (
+  ` + "`run_id`" + `     TEXT     NOT NULL,
+  ` + "`seq`" + `        INTEGER  NOT NULL,
+  ` + "`capability`" + ` TEXT     NOT NULL,
+  ` + "`attempt_id`" + ` TEXT     NOT NULL,
+  ` + "`at`" + `         DATETIME NOT NULL,
+  ` + "`record`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`note`" + `       TEXT     NOT NULL DEFAULT '',
+  PRIMARY KEY (` + "`run_id`" + `, ` + "`seq`" + `)
+)`
 
 // schema90TaskPauseTable and schema90TaskEventTable are task_pause and
 // task_event as schema 90 created them, frozen for migration 91.

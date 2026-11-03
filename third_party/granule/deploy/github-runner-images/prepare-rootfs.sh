@@ -5,8 +5,8 @@ if [[ $EUID -ne 0 ]]; then
   echo "prepare-rootfs.sh must run as root" >&2
   exit 1
 fi
-if [[ $# -ne 4 ]]; then
-  echo "usage: prepare-rootfs.sh ROOTFS AGENT_ARTIFACTS OUTPUT_DIR INSTALL_KERNEL" >&2
+if [[ $# -ne 5 ]]; then
+  echo "usage: prepare-rootfs.sh ROOTFS AGENT_ARTIFACTS OUTPUT_DIR INSTALL_KERNEL ACTIONS_RUNNER_TARBALL" >&2
   exit 2
 fi
 
@@ -14,15 +14,17 @@ rootfs=$(readlink -f "$1")
 agents=$(readlink -f "$2")
 output=$(readlink -m "$3")
 install_kernel=$4
+runner_tarball=$(readlink -f "$5")
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/../.." && pwd)
 
 case "$install_kernel" in true|false) ;; *) echo "INSTALL_KERNEL must be true or false" >&2; exit 2 ;; esac
 [[ -d $rootfs/etc ]] || { echo "$rootfs is not a Linux root filesystem" >&2; exit 1; }
-[[ -x $agents/granule-agent && -x $agents/granule-mem-agent ]] || {
+[[ -x $agents/granule-agent && -x $agents/granule-mem-agent && -x $agents/granule-container ]] || {
   echo "$agents does not contain the Granule guest agents" >&2
   exit 1
 }
+[[ -f $runner_tarball ]] || { echo "$runner_tarball is not an actions/runner release tarball" >&2; exit 1; }
 
 # The imported filesystem is x86-64 Ubuntu, so its package tools can run
 # directly in a chroot on the x86-64 image builder. Mount only for the
@@ -53,8 +55,6 @@ chroot "$rootfs" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
   apt-get update
 chroot "$rootfs" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
   apt-get install -y --no-install-recommends "${packages[@]}"
-chroot "$rootfs" apt-get clean
-rm -rf "$rootfs/var/lib/apt/lists"/*
 
 # Azure recreates the Packer administration user when it instantiates an
 # image; exporting the managed disk directly skips that deployment step.
@@ -69,6 +69,35 @@ chmod 0440 "$rootfs/etc/sudoers.d/runner"
 if chroot "$rootfs" getent group docker >/dev/null 2>&1; then
   chroot "$rootfs" usermod -aG docker runner
 fi
+
+# GitHub's images do not carry the Actions runner agent itself: a hosted
+# VM gets it at provisioning time. It goes where the runner user can
+# write, since the runner keeps its registration and its copy of
+# run-helper.sh beside its binaries. Its own dependency script fills in
+# whatever native libraries .NET needs and the image lacks (ubuntu-slim
+# especially); a release whose script does not yet know this Ubuntu is
+# not fatal here, because test-image.sh starts the runner's binary and
+# refuses an image it cannot run in.
+runner_dir=/home/runner/actions-runner
+install -d "$rootfs$runner_dir"
+tar -xzf "$runner_tarball" -C "$rootfs$runner_dir"
+chroot "$rootfs" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
+  "$runner_dir/bin/installdependencies.sh" ||
+  echo "warning: the Actions runner's installdependencies.sh failed; relying on the image's own libraries" >&2
+chroot "$rootfs" chown -R runner: "$runner_dir"
+
+chroot "$rootfs" apt-get clean
+rm -rf "$rootfs/var/lib/apt/lists"/*
+
+# The runner is the machine's workload: granule-container (enabled by
+# pack-guest below because this file exists) starts it from this spec,
+# with ACTIONS_RUNNER_INPUT_JITCONFIG carried in from the VM container,
+# and powers the VM off when it exits. See README.md's "Running under
+# Actions Runner Controller".
+install -D -m 0755 "$script_dir/guest/usr/local/libexec/granule-actions-runner" \
+  "$rootfs/usr/local/libexec/granule-actions-runner"
+install -D -m 0644 "$script_dir/guest/etc/granule/container.json" \
+  "$rootfs/etc/granule/container.json"
 
 # Granule's own guest-side half goes on the same way it goes onto every
 # other guest: deploy/guest-image/pack-guest lays the overlay trees and
@@ -87,6 +116,7 @@ cp -a "$repo_root/deploy/guest-image/overlay-common" \
   "$repo_root/deploy/guest-image/overlay-alpine" "$parts/"
 install -m 0755 "$agents/granule-agent" "$parts/granule-agent"
 install -m 0755 "$agents/granule-mem-agent" "$parts/granule-mem-agent"
+install -m 0755 "$agents/granule-container" "$parts/granule-container"
 
 # The udev naming mask goes down before the parts rather than with them,
 # because it has to be in the initramfs regenerated at the end of this

@@ -17,6 +17,7 @@ package runhost
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -174,6 +175,67 @@ func TestDockerListReadsInspect(t *testing.T) {
 	}
 	if !slices.Contains(calls[0], "label="+LabelDeployment+"=grain") {
 		t.Fatalf("List must filter by deployment: %v", calls[0])
+	}
+}
+
+// A run host removed between List's ps and its inspect is simply not
+// listed: docker inspect exits 1 for it but still prints the rest, and the
+// orphan sweep (docs/test-runs/2026-11-02-session-lifecycle-soak.md) used
+// to fail outright on it.
+func TestDockerListSkipsARunHostRemovedBeforeItsInspect(t *testing.T) {
+	l := Labels{Deployment: "grain", Run: "9", Task: "1", Protocol: Protocol, Spool: "/s"}
+	labels, err := json.Marshal(l.Map())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Docker{run: func(_ context.Context, args ...string) ([]byte, error) {
+		switch args[0] {
+		case "ps":
+			return []byte("abc\ngone\n"), nil
+		case "inspect":
+			return []byte(`[{"Name":"/grain-runhost-a","State":{"Running":true},"Config":{"Labels":` + string(labels) + `}}]`),
+				errors.New("docker inspect: exit status 1 (error: no such object: gone)")
+		}
+		return nil, nil
+	}}
+	infos, err := d.List(context.Background(), "grain")
+	if err != nil {
+		t.Fatalf("List with one run host gone before its inspect: %v", err)
+	}
+	if len(infos) != 1 || infos[0].Name != "grain-runhost-a" {
+		t.Fatalf("List = %+v, want the one run host still there", infos)
+	}
+
+	// Any other inspect failure is still a failure, even when another ID in
+	// the same batch vanished and docker inspect still wrote valid JSON.
+	d.run = func(_ context.Context, args ...string) ([]byte, error) {
+		if args[0] == "ps" {
+			return []byte("abc\n"), nil
+		}
+		return nil, errors.New("docker inspect: exit status 1 (Cannot connect to the Docker daemon)")
+	}
+	if _, err := d.List(context.Background(), "grain"); err == nil {
+		t.Fatal("List hid an inspect failure that was not a vanished container")
+	}
+
+	d.run = func(_ context.Context, args ...string) ([]byte, error) {
+		if args[0] == "ps" {
+			return []byte("gone\nlive\n"), nil
+		}
+		return []byte("[]"), errors.New("docker inspect: exit status 1 (error: no such object: gone\nCannot connect to the Docker daemon)")
+	}
+	if _, err := d.List(context.Background(), "grain"); err == nil {
+		t.Fatal("List hid a daemon failure alongside a vanished container")
+	}
+
+	d.run = func(_ context.Context, args ...string) ([]byte, error) {
+		if args[0] == "ps" {
+			return []byte("gone\nlive\n"), nil
+		}
+		return []byte("[]"), errors.New("docker inspect: signal: killed (error: no such object: gone)")
+	}
+	if _, err := d.List(context.Background(), "grain"); err == nil {
+		t.Fatal("List accepted a partial inspect output with an unaccounted container")
 	}
 }
 

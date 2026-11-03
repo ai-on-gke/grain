@@ -275,11 +275,11 @@ type queueEntry struct {
 	// that merges cleanly merges on the verdict it already holds, however
 	// far behind it is. See bringHeadUpToDate for the other direction.
 	requireUpToDate bool
-	// mergeOnGreen is this repository's answer to "may a green entry
-	// merge past one ahead of it whose CI is still running"
-	// (model.RepoConfig.MergeOnGreen), read once per repository per cycle
-	// beside requireUpToDate above. False -- the default -- is the strict
-	// lane: an entry still deciding closes it (passedOver).
+	// mergeOnGreen is this repository's model.RepoConfig.MergeOnGreen,
+	// read once per repository per cycle beside requireUpToDate above.
+	// Nothing in the walk reads it any more: with no order between
+	// members (mergeWalk, task 2346) a green entry always merges past one
+	// still deciding, whichever way it is set.
 	mergeOnGreen bool
 	// gateIsGrainCI is this repository's answer to "are GitHub's check
 	// runs a source of verdicts here at all"
@@ -771,6 +771,10 @@ type mergeWalk struct {
 	// laneKey, so the members the cap holds can say who spent it, and so
 	// the next merge into a lane knows to read its pull request again.
 	merges map[string][]string
+	// moved is every lane whose base a direct merge moved this cycle,
+	// including merges that did not spend the lane's cap
+	// (MergeRecheckEnforce, forced or non-member merges).
+	moved map[string]bool
 	// closed is why a lane was closed this cycle, where it was (closeEntry).
 	closed map[string]string
 	// leads is the first member read in each lane this cycle (noteRead).
@@ -824,9 +828,21 @@ func (w *mergeWalk) merged(lane, taskID string) {
 	w.merges[lane] = append(w.merges[lane], taskID)
 }
 
+// noteBaseMoved records that a merge into lane landed this cycle and moved
+// its base, whether or not that merge spent one of the lane's un-rechecked
+// slots.
+func (w *mergeWalk) noteBaseMoved(lane string) {
+	if w.moved == nil {
+		w.moved = map[string]bool{}
+	}
+	w.moved[lane] = true
+}
+
 // mergedThisCycle reports whether lane has had a merge already this cycle,
 // which moved its base since anything read before it.
-func (w *mergeWalk) mergedThisCycle(lane string) bool { return len(w.merges[lane]) > 0 }
+func (w *mergeWalk) mergedThisCycle(lane string) bool {
+	return len(w.merges[lane]) > 0 || w.moved[lane]
+}
 
 // closeEntry closes e's lane for the rest of the cycle after a merge whose
 // effect on the base is unknown (see mergeWalk). Where the lane has no
@@ -1004,7 +1020,10 @@ type StateRepoGate struct {
 	// CI receives the release event caused by every merged pull request. The
 	// run is against the destination branch's new head, so an `on: release`
 	// workflow is repository-agnostic and fires for both Grain-managed and
-	// externally merged pull requests when Grain next observes them.
+	// externally merged pull requests when Grain next observes them. A pull
+	// request merged after its task closed is recorded (closedprs.go) but
+	// starts nothing here: base-branch CI sees the branch's tip move either
+	// way.
 	CI ci.Runner
 	// Porter makes the ports a merge onto a paired branch calls for
 	// mechanically where it can (port.go); nil files every one as an
@@ -1264,6 +1283,13 @@ func SyncPullRequestsGuarding(ctx context.Context, store *model.Store, client gi
 			continue
 		}
 		if err := syncEntry(ctx, store, client, e, gate, walk, find, now); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	// The pull requests of tasks that closed before them, read only to
+	// record a merge or close nobody else will (closedprs.go).
+	if ctx.Err() == nil {
+		if err := syncClosedPullRequests(ctx, store, client, now); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -1850,6 +1876,27 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			}
 			break
 		} else if err != nil {
+			// A refusal (405, 403 or 422 -- never a 5xx or transport failure,
+			// whose effect on the base is unknown and must close the lane)
+			// that neither GitHub's words nor the branch's protection rules
+			// and review threads can place, straight after an earlier merge
+			// in this lane moved the base, is most likely that move: GitHub
+			// had not yet re-judged this pull request against it, and the
+			// clean read (even the one just taken again above) was its answer
+			// about the base before. Nothing is charged to the change for
+			// that, and a refused merge left the base as it was, so the rest
+			// of the lane goes on; this one is read fresh next cycle.
+			if member && !forcing && walk.mergedThisCycle(lane) &&
+				unplacedRefusalAfterBaseMove(client, e, ref, detail, err) {
+				log.Printf("orchestrator: %s was refused a merge right after another merge into %s this cycle; "+
+					"judging it again next cycle against the base as it now stands: %v", ref, detail.BaseRef, err)
+				if err := setMergeQueueState(ctx, store, e.obs, task.ID,
+					queueStatus{state: mergeStateWaitingQueue,
+						note: "another change just merged into " + detail.BaseRef + "; judged again next cycle"}, now); err != nil {
+					return err
+				}
+				break
+			}
 			// A merge GitHub will not do is the one dead end the queue
 			// used to retry forever in silence, with the row left saying
 			// "Merging" -- refusedMerge is what gives it words and an end.
@@ -1896,6 +1943,9 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			if !detail.Merged || recheck.verdict == nil || !recheck.verdict.hasFiles || recheck.mode != model.MergeRecheckEnforce {
 				walk.merged(lane, task.ID)
 			}
+		}
+		if !stacked {
+			walk.noteBaseMoved(lane)
 		}
 		gate.merged(ref)
 
@@ -1973,6 +2023,31 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		return err
 	}
 	return recordPullRequestEvents(ctx, store, task.ID, e.obs, detail, health, now)
+}
+
+// unplacedRefusalAfterBaseMove reports whether cause is a merge refusal (405,
+// 403 or 422 -- never a 5xx or transport failure, whose effect on the base is
+// unknown and must close the lane) that neither GitHub's message nor the
+// branch's protection rules and review threads can place as an approval,
+// required-check or rule violation.
+func unplacedRefusalAfterBaseMove(client github.Client, e queueEntry, ref model.PullRequestRef,
+	detail github.PullRequestDetail, cause error) bool {
+
+	if !github.IsMergeRuleStatus(cause) || github.ClassifyMergeRefusal(cause) != github.RefusalTransient {
+		return false
+	}
+	req, read := readMergeRequirements(client, ref, detail.BaseRef)
+	checks := e.checks
+	if read && len(req.RequiredChecks) > 0 {
+		checks = githubCheckRuns(client, ref, detail.HeadSHA, checks)
+	}
+	if refineRefusal(github.RefusalTransient, cause, req, read, checks) != github.RefusalTransient {
+		return false
+	}
+	if count, _ := unresolvedReviewThreads(client, e.task, ref); count > 0 {
+		return false
+	}
+	return true
 }
 
 // closeOutLanded is the closing write for a pull request closeIfLanded

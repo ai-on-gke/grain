@@ -1,0 +1,149 @@
+== scratch origin ~/scratch1/origin.git, main at ac1f0e6d3b41; tags: latest v3.0.0 v3.0.1 v3.0.2 v3.1.0 v3.1.0-rc.1
+
+== 1a interval, no FORCE:  release-from-trunk.sh 
+release-from-trunk: fetching origin's main, candidate and tags
+release-from-trunk: major 9 (floor minor 1); newest promoted release v3.1.0; next minor v9.1.0; notes from v3.1.0
+release-from-trunk: phase 1: nothing in qualification; the next rc must be after v3.1.0 (8a740f996c22)
+release-from-trunk: phase 2: v3.1.0 was tagged 1154m ago, under RELEASE_MIN_INTERVAL_MINUTES (100000000); nothing to cut yet (FORCE=true cuts anyway)
+== exit 0
+
+== 1b FORCE: FORCE=true release-from-trunk.sh 
+release-from-trunk: fetching origin's main, candidate and tags
+release-from-trunk: major 9 (floor minor 1); newest promoted release v3.1.0; next minor v9.1.0; notes from v3.1.0
+release-from-trunk: phase 1: nothing in qualification; the next rc must be after v3.1.0 (8a740f996c22)
+  Selecting the newest known-good commit on refs/remotes/origin/main after 8a740f996c22 (required: tests release).
+    ac1f0e6d3b41: tests.yml success release.yml success; known-good.
+  LKG ac1f0e6d3b413226a1c58ce19db4d1c48313ce63
+release-from-trunk: phase 2: the commits since the start make a minor release: v9.1.0
+release-from-trunk: phase 2: cutting v9.1.0-rc.1 on ac1f0e6d3b41
+release-from-trunk: output rc_tag=v9.1.0-rc.1
+release-from-trunk: release-images.sh rc v9.1.0-rc.1
+release-from-trunk: phase 2: v9.1.0-rc.1 is cut and candidate is on it; nightly.yml qualifies it (Stage 1), then grain/release-qualification (Stage 2)
+== exit 0
+-- tag v9.1.0-rc.1 on origin: ac1f0e6d3b41
+   | Release candidate v9.1.0-rc.1
+   | 
+   | Cut from main.
+   | 
+-- candidate on origin: ac1f0e6d3b41
+
+== 1c DRY_RUN while qualifying: DRY_RUN=true release-from-trunk.sh 
+release-from-trunk: fetching origin's main, candidate and tags
+release-from-trunk: major 9 (floor minor 1); newest promoted release v3.1.0; next minor v9.1.0; notes from v3.1.0
+release-from-trunk: phase 1: v9.1.0-rc.1 (ac1f0e6d3b41) is in qualification; asking the qualification gate
+  Qualification of v9.1.0-rc.1 (ac1f0e6d3b41).
+  PENDING nightly: nightly.yml has not run on v9.1.0-rc.1 (ac1f0e6d3b41) yet
+  PENDING grain/release-qualification: waits for Stage 1 (nightly.yml) to pass
+  Qualification: PENDING v9.1.0-rc.1 (nightly).
+release-from-trunk: output qualification=pending
+release-from-trunk: phase 1: v9.1.0-rc.1's qualification is pending; one rc qualifies at a time, so nothing is cut
+== exit 0
+
+== 1d qualification PASS:  release-from-trunk.sh 
+release-from-trunk: fetching origin's main, candidate and tags
+release-from-trunk: major 9 (floor minor 1); newest promoted release v3.1.0; next minor v9.1.0; notes from v3.1.0
+release-from-trunk: phase 1: v9.1.0-rc.1 (ac1f0e6d3b41) is in qualification; asking the qualification gate
+  Qualification of v9.1.0-rc.1 (ac1f0e6d3b41).
+  PASS cmd-grain-stress: passed (success)
+  PASS go-long: passed (success)
+  PASS installer-variants: passed (success)
+  PASS loadtest: passed (success)
+  PASS long-sim: passed (success)
+  PASS long-term-test: passed (success)
+  PASS merge-stress: passed (success)
+  PASS postgres-stress: passed (success)
+  PASS scalability: passed (success)
+  PASS staterepo-soak: passed (success)
+  PASS tunnel-stress: passed (success)
+  PASS ui-e2e-long: passed (success)
+  PASS upgrade-test: passed (success)
+  PASS vulns: passed (success)
+  PASS grain/release-qualification: passed (success)
+  Qualification: PASS v9.1.0-rc.1.
+release-from-trunk: phase 1: v9.1.0-rc.1 qualified; staging v9.1.0-pending for a person to approve (v9.1.0 and latest are not touched)
+release-from-trunk: output pending_version=v9.1.0
+release-from-trunk: release-images.sh pending v9.1.0
+release-from-trunk: RELEASE_NOTES_TASK=off: no release-notes task for v9.1.0 (notes from v3.1.0)
+release-from-trunk: RELEASE_NOTIFY=off: no notification that v9.1.0 is ready to promote
+release-from-trunk: phase 2: v9.1.0 was tagged 0m ago, under RELEASE_MIN_INTERVAL_MINUTES (100000000); nothing to cut yet (FORCE=true cuts anyway)
+== exit 0
+-- tag v9.1.0-pending on origin: ac1f0e6d3b41
+   | Release v9.1.0 pending approval
+   | 
+   | From v9.1.0-rc.1, which passed Stage 1 (nightly.yml) and Stage 2 (grain/release-qualification).
+   | 
+   | A person approves it (grain release approve v9.1.0) or rejects it (grain release reject v9.1.0).
+   | 
+   | Qualification: PASS
+   | 
+-- outputs:
+   pending_version=v9.1.0
+
+== 1e approve by an agent: GRAIN_CI_REQUESTED_BY_KIND=agent release-from-trunk.sh approve v9.1.0
+release-from-trunk: fetching origin's main, candidate and tags
+release-from-trunk: only a person may approve v9.1.0: GRAIN_CI_REQUESTED_BY_KIND is "agent", not "human" -- use `grain release approve v9.1.0` or the Upgrade pane, which run .grain/workflows/promote-release.yml for a person; nothing was done
+== exit 1
+
+== 1f approve by a person: GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=walkthrough@example.com release-from-trunk.sh approve v9.1.0
+release-from-trunk: fetching origin's main, candidate and tags
+  v9.1.0: no breaking changes since v3.1.0
+release-from-trunk: approve: walkthrough@example.com approved v9.1.0 (v9.1.0-rc.1, ac1f0e6d3b41, qualified); promoting it to v9.1.0 and latest
+Updated tag 'latest' (was e9d3db81)
+release-from-trunk: output promoted_version=v9.1.0
+release-from-trunk: release-images.sh promote v9.1.0
+release-from-trunk: approve: v9.1.0 is released (after v3.1.0); v9.1.0-pending is gone
+== exit 0
+-- tag v9.1.0 on origin: ac1f0e6d3b41
+   | Release v9.1.0
+   | 
+   | Promoted from v9.1.0-rc.1, approved by walkthrough@example.com
+   | 
+-- tag latest on origin: ac1f0e6d3b41
+   | Latest release v9.1.0
+   | 
+-- v9.1.0-pending left on origin: 
+-- tag v9.2.0-pending on origin: 4e49333da6a0
+   | Release v9.2.0 pending approval
+   | 
+   | From v9.2.0-rc.1, soaked 1h00m of 24h (FORCE=true).
+   | 
+   | SHORT SOAK: under the 22h minimum; approving it needs short_soak_ok: true.
+   | 
+   | Soak-Seconds: 3600
+   | Soak-Forced: true
+   | 
+
+== 1g soak-era approve without RELEASE_SHORT_SOAK_OK: GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=walkthrough@example.com release-from-trunk.sh approve v9.2.0
+release-from-trunk: fetching origin's main, candidate and tags
+release-from-trunk: v9.2.0 soaked 1h00m of 24h, under the 22h minimum: approve it with short_soak_ok: true if that is meant, or reject it; nothing was done
+== exit 1
+-- v9.2.0 on origin after the refusal: ''
+
+== 1h soak-era approve, RELEASE_SHORT_SOAK_OK=1 (not "true"): GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=walkthrough@example.com RELEASE_SHORT_SOAK_OK=1 release-from-trunk.sh approve v9.2.0
+release-from-trunk: fetching origin's main, candidate and tags
+release-from-trunk: v9.2.0 soaked 1h00m of 24h, under the 22h minimum: approve it with short_soak_ok: true if that is meant, or reject it; nothing was done
+== exit 1
+
+== 1i soak-era approve with RELEASE_SHORT_SOAK_OK=true: GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=walkthrough@example.com RELEASE_SHORT_SOAK_OK=true release-from-trunk.sh approve v9.2.0
+release-from-trunk: fetching origin's main, candidate and tags
+release-from-trunk: approve: v9.2.0 soaked 1h00m of 24h, under the 22h minimum; walkthrough@example.com passed short_soak_ok: true
+  v9.2.0: no breaking changes since v9.1.0
+release-from-trunk: approve: walkthrough@example.com approved v9.2.0 (v9.2.0-rc.1, 4e49333da6a0, soaked 1h00m of 24h); promoting it to v9.2.0 and latest
+Updated tag 'latest' (was e76f72d0)
+release-from-trunk: output promoted_version=v9.2.0
+release-from-trunk: release-images.sh promote v9.2.0
+release-from-trunk: approve: v9.2.0 is released (after v9.1.0); v9.2.0-pending is gone
+== exit 0
+-- tag v9.2.0 on origin: 4e49333da6a0
+   | Release v9.2.0
+   | 
+   | Promoted from v9.2.0-rc.1, approved by walkthrough@example.com; short soak (soaked 1h00m of 24h, under the 22h minimum) accepted with short_soak_ok: true
+   | 
+
+== images asked for:
+   rc v9.1.0-rc.1
+   pending v9.1.0
+   promote v9.1.0
+   promote v9.2.0
+== the scratch clone's local git config (no identity may be written):
+   (no user.* keys)

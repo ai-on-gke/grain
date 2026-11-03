@@ -43,6 +43,9 @@ type fakeActions struct {
 	total  int
 	jobs   map[int64][]github.ActionsRunJob
 	logs   map[int64]string
+	// notFound makes it a forge that answers every Actions read with a
+	// 404, as one with Actions off or unreadable to the credential does.
+	notFound bool
 }
 
 func (f *fakeActions) note(call, owner string) {
@@ -68,6 +71,9 @@ func (f *fakeActions) ListActionsRuns(owner, repo string, q github.ActionsRunsQu
 
 func (f *fakeActions) ListActionsRunsPage(owner, repo string, q github.ActionsRunsQuery) (github.ActionsRunsPage, error) {
 	f.note("runs", owner)
+	if f.notFound {
+		return github.ActionsRunsPage{NotFound: true}, nil
+	}
 	var out []github.WorkflowRun
 	wfFiltered := false
 	w := strings.TrimSpace(q.Workflow)
@@ -95,6 +101,9 @@ func (f *fakeActions) ListActionsRunsPage(owner, repo string, q github.ActionsRu
 
 func (f *fakeActions) GetActionsRun(owner, repo string, runID int64) (*github.WorkflowRun, error) {
 	f.note("run", owner)
+	if f.notFound {
+		return nil, nil
+	}
 	for _, r := range f.runs {
 		if r.ID == runID {
 			return &r, nil
@@ -157,6 +166,16 @@ func newFakeActions(now time.Time) *fakeActions {
 // that may read acme/widgets' CI and one that may read only another
 // repository's.
 func actionsServer(t *testing.T, forge *fakeActions, now time.Time) (*ui.Server, *ui.Client, *model.Store) {
+	t.Helper()
+	if forge == nil {
+		return actionsServerOver(t, nil, now)
+	}
+	return actionsServerOver(t, forge, now)
+}
+
+// actionsServerOver is actionsServer over any Actions reader, such as a
+// github.RESTClient in front of githubsim; nil leaves the client's own.
+func actionsServerOver(t *testing.T, forge github.ActionsReader, now time.Time) (*ui.Server, *ui.Client, *model.Store) {
 	t.Helper()
 	grainStarted := now.Add(-time.Hour)
 	runner := &fakeCIRunner{runs: []ci.Run{{ID: "run-g1", Repo: "acme/widgets", Ref: "main",
@@ -433,6 +452,110 @@ func TestActionsOffTheDefaultHostAreAskedWithTheHostInTheOwner(t *testing.T) {
 		if owner != "depot.code.example/experimental" {
 			t.Errorf("the forge was asked with owner %q, want host/owner", owner)
 		}
+	}
+}
+
+// TestActionsOffTheDefaultHostListFromPolledChecks is a repository on
+// another git host whose forge answers its Actions listing with a 404 and
+// whose jobs grain heard of only by polling its pull requests' checks --
+// which carry no run id, only each job's page. The runs are still listed
+// and shown, from that record, and the listing says the forge 404ed.
+func TestActionsOffTheDefaultHostListFromPolledChecks(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC().Truncate(time.Second)
+	forge := newFakeActions(now)
+	forge.notFound = true
+	_, client, store := actionsServer(t, forge, now)
+	ctx := context.Background()
+	repo := model.RepoRef{Host: "ghe.example.com", Owner: "acme", Name: "widgets"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo, CIMode: model.CIModeGitHub}); err != nil {
+		t.Fatal(err)
+	}
+	done := now.Add(-2 * time.Minute)
+	for _, j := range []model.GitHubCIJob{
+		{Repo: repo.String(), CheckRunID: 9001, App: model.GitHubActionsApp, Ref: "grain/task-9", Commit: "abc",
+			JobName: "go build, vet and test", Conclusion: "failure", CompletedAt: &done, Via: "poll",
+			JobURL: "https://ghe.example.com/acme/widgets/actions/runs/77/job/9001"},
+		{Repo: repo.String(), CheckRunID: 9002, App: model.GitHubActionsApp, Ref: "grain/task-9", Commit: "abc",
+			JobName: "changes", Conclusion: "success", CompletedAt: &done, Via: "poll",
+			JobURL: "https://ghe.example.com/acme/widgets/actions/runs/77/job/9002"},
+		{Repo: repo.String(), CheckRunID: 9003, App: "semgrep", Ref: "grain/task-9", Commit: "abc",
+			JobName: "scan-pr", Conclusion: "success", CompletedAt: &done, Via: "poll", JobURL: "https://semgrep.example/scan/1"},
+	} {
+		if err := store.PutGitHubCIJob(ctx, j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if j, err := store.GetGitHubCIJob(ctx, repo.String(), 9001); err != nil || j == nil || j.RunID != 77 ||
+		j.RunURL != "https://ghe.example.com/acme/widgets/actions/runs/77" {
+		t.Fatalf("a polled job was recorded as %+v (%v), want run 77 read from its page", j, err)
+	}
+
+	ext := client.ExternalCIRuns()
+	for _, f := range []ci.RunFilter{
+		{Repo: repo.String(), Provider: ci.ProviderGitHubActions},
+		{Repo: repo.String(), Ref: "grain/task-9"},
+	} {
+		runs, note := ext.FindExternalRuns(ctx, f, 20)
+		if len(runs) != 1 || runs[0].ID != "gha:ghe.example.com:acme:widgets:77" || runs[0].Repo != repo.String() ||
+			strings.Join(runs[0].Actions.FailedJobs, ",") != "go build, vet and test" {
+			t.Fatalf("%+v listed %+v (note %q)", f, runs, note)
+		}
+		if !strings.Contains(note, "404") || !strings.Contains(note, "ghe.example.com") {
+			t.Errorf("%+v: note = %q, want the forge's 404 named", f, note)
+		}
+	}
+	run, ok, err := ext.ExternalRun(ctx, "gha:ghe.example.com:acme:widgets:77")
+	if err != nil || !ok || run.Repo != repo.String() || len(run.Jobs) != 2 {
+		t.Errorf("show = %+v %v %v", run, ok, err)
+	}
+	for _, owner := range forge.owners {
+		if owner != "ghe.example.com/acme" {
+			t.Errorf("the forge was asked with owner %q, want host/owner", owner)
+		}
+	}
+
+	// Nothing recorded and nothing on the forge: still said, not silent.
+	empty := model.RepoRef{Host: "ghe.example.com", Owner: "acme", Name: "empty"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: empty, CIMode: model.CIModeGitHub}); err != nil {
+		t.Fatal(err)
+	}
+	if runs, note := ext.FindExternalRuns(ctx, ci.RunFilter{Repo: empty.String(), Provider: ci.ProviderGitHubActions}, 20); len(runs) != 0 ||
+		!strings.Contains(note, "404") || !strings.Contains(note, "recorded none") {
+		t.Errorf("an empty listing = %v, note %q", runs, note)
+	}
+	if _, _, err := ext.ExternalRun(ctx, "gha:ghe.example.com:acme:empty:5"); err == nil || !strings.Contains(err.Error(), "no GitHub Actions run 5") {
+		t.Errorf("show of a run nobody has = %v, want why", err)
+	}
+}
+
+// TestActionsListingSaysWhyARepositoryIsNotListed: a listing that asked
+// for GitHub Actions by name and got none because grain will not list
+// that repository's runs says so, rather than answering an empty list.
+func TestActionsListingSaysWhyARepositoryIsNotListed(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	_, client, store := actionsServer(t, newFakeActions(now), now)
+	ctx := context.Background()
+	grainRepo := model.RepoRef{Host: "ghe.example.com", Owner: "acme", Name: "gears"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: grainRepo, CIMode: model.CIModeGrain}); err != nil {
+		t.Fatal(err)
+	}
+	ext := client.ExternalCIRuns()
+	if _, note := ext.FindExternalRuns(ctx, ci.RunFilter{Repo: grainRepo.String(), Provider: ci.ProviderGitHubActions}, 20); !strings.Contains(note, "CI mode") {
+		t.Errorf("asked for Actions of a grain-CI repository: note %q, want its CI mode named", note)
+	}
+	if _, note := ext.FindExternalRuns(ctx, ci.RunFilter{Repo: grainRepo.String()}, 20); note != "" {
+		t.Errorf("a listing of any provider noted a grain-CI repository's missing Actions: %q", note)
+	}
+	if err := store.SetTargetRepos(ctx, []string{"acme/widgets"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, note := ext.FindExternalRuns(ctx, ci.RunFilter{Repo: "ghe.example.com/elsewhere/secrets"}, 20); !strings.Contains(note, "not a repository this deployment works in") {
+		t.Errorf("a repository off the deployment's list: note %q", note)
+	}
+	if _, note := ext.FindExternalRuns(ctx, ci.RunFilter{Repo: "not a repo", Provider: ci.ProviderGitHubActions}, 20); note == "" {
+		t.Errorf("an unparseable repository answered with no note")
 	}
 }
 

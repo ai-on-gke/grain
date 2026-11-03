@@ -80,6 +80,19 @@ func (h HostdHost) binary() string {
 // starts on the hostd that replaces this one.
 var ErrHostdDraining = errors.New("grain hostd is updating (draining for its own upgrade); the run goes back to the queue")
 
+// ErrHostdLost is HostdHost.Run's error, wrapped, for a CLI whose grain
+// hostd dropped mid-run and did not reconnect within the reattach
+// timeout (runhost.Hostd.ReattachTimeout, -hostd-reattach-timeout). It
+// is the machine's doing, not the task's: the run ends as an
+// infrastructure failure, without a strike, and goes back to the queue.
+var ErrHostdLost = errors.New("grain hostd disconnected mid-run and did not reconnect in time; the run goes back to the queue")
+
+// ErrHostdWaiting is matched (errors.Is) by a framework build refused
+// because the hostd a run is pinned or selected to is not connected
+// (the daemon's HostdWaitError): nothing ran, and the run goes back to
+// the queue, where its task waits for that hostd to reconnect.
+var ErrHostdWaiting = errors.New("waiting for grain hostd to reconnect")
+
 // Run implements Host with the same contract as LocalHost.Run: stdout is
 // returned and teed as it arrives, a non-zero exit is an error carrying
 // stderr, cancelling ctx kills the CLI's whole group, and a CLI whose
@@ -112,6 +125,9 @@ func (h HostdHost) Run(ctx context.Context, c Command, tee io.Writer) (string, e
 	}
 	if errors.Is(err, ErrDetached) || errors.Is(err, hostd.ErrDetached) {
 		return stdout.String(), ErrDetached
+	}
+	if errors.Is(err, ErrHostdLost) {
+		return stdout.String(), err
 	}
 	if exit.WaitDelay {
 		h.logf("agent: %s exited on the host, but something it started still held its output open after %s; stopped waiting for it", h.Entry, hostd.WaitDelay)

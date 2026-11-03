@@ -68,6 +68,14 @@ for (const width of [1440, 390]) {
       await expect(page.getByRole("tooltip")).toBeVisible();
       await pop.press("Enter");
       await expect(page.getByRole("tooltip")).toBeHidden();
+
+      // A mouse click opens it too, although the press hovers and focuses
+      // it first, and a second click closes it again.
+      await pop.blur();
+      await pop.click();
+      await expect(page.getByRole("tooltip")).toBeVisible();
+      await pop.click();
+      await expect(page.getByRole("tooltip")).toBeHidden();
     }
   });
 }

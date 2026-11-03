@@ -188,7 +188,7 @@ func retriggerKnownFlake(ctx context.Context, deps Deps, task model.Task, status
 // the steward used to start by hand.
 func operatorCIHold(task model.Task, status model.CIStatus, now time.Time) bool {
 	return status.Conclusion == string(ci.ConclusionCancelled) &&
-		status.CancelledBy == string(ci.CancelByOperator) &&
+		ci.CancelSource(status.CancelledBy).ByHand() &&
 		task.DeferredAt != nil && task.DeferredUntil != nil && now.Before(*task.DeferredUntil)
 }
 

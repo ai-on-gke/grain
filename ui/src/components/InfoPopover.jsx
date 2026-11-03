@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
@@ -23,6 +23,15 @@ import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 // inside links or interactive rows without nesting native <button> elements.
 export default function InfoPopover({ title, label, testId, sx }) {
   const [open, setOpen] = useState(false);
+  // A mouse click or a tap pins the popover open, so the pointer leaving
+  // it does not close it. The hover and the focus the press gives the
+  // button have already opened it by the time the click lands, so a
+  // click that toggled closed the popover it was meant to open.
+  const pinned = useRef(false);
+  const close = () => {
+    pinned.current = false;
+    setOpen(false);
+  };
   if (!title) return null;
   const cleanLabel =
     typeof label === "string" ? label.replace(/\s*\*$/, "").trim() : "";
@@ -31,7 +40,9 @@ export default function InfoPopover({ title, label, testId, sx }) {
     <Tooltip
       open={open}
       onOpen={() => setOpen(true)}
-      onClose={() => setOpen(false)}
+      onClose={() => {
+        if (!pinned.current) setOpen(false);
+      }}
       title={
         <span style={{ whiteSpace: "pre-line", display: "block" }}>
           {title}
@@ -57,11 +68,19 @@ export default function InfoPopover({ title, label, testId, sx }) {
         data-testid={testId || "info-popover"}
         data-info-for={cleanLabel || undefined}
         onFocus={() => setOpen(true)}
-        onBlur={() => setOpen(false)}
+        onBlur={close}
         onClick={(e) => {
           e.stopPropagation();
           e.preventDefault();
-          setOpen((prev) => !prev);
+          // detail counts a pointer's clicks; ButtonBase's Enter and
+          // Space clicks carry none, and toggle what focus opened.
+          if (e.detail > 0) {
+            pinned.current = !pinned.current;
+            setOpen(pinned.current);
+          } else {
+            pinned.current = false;
+            setOpen((prev) => !prev);
+          }
         }}
         onKeyDown={(e) => {
           // Enter and Space reach onClick above through ButtonBase, which
@@ -71,7 +90,7 @@ export default function InfoPopover({ title, label, testId, sx }) {
           if (e.key === "Enter" || e.key === " ") {
             e.stopPropagation();
           } else if (e.key === "Escape") {
-            setOpen(false);
+            close();
           }
         }}
         sx={{

@@ -188,8 +188,8 @@ func TestGranulePodShapeFillsEveryDimensionNobodyNamed(t *testing.T) {
 	k := NewK8sGranuleSandboxes(K8sGranuleConfig{Image: "example/granule"})
 	got := k.podShape(Shape{})
 	want := DefaultShape()
-	if got != (k8s.PodShape{CPUs: want.CPUs, MemoryMB: want.MemoryMB + GranuleVMMMemoryOverheadMB, DiskGB: want.DiskGB}) {
-		t.Errorf("podShape of an unset shape = %+v, want grain's own DefaultShape %+v plus %d MiB VMM overhead", got, want, GranuleVMMMemoryOverheadMB)
+	if got != (k8s.PodShape{CPUs: want.CPUs, MemoryMB: GranuleMemoryLimitMB(want.MemoryMB, 0), DiskGB: want.DiskGB}) {
+		t.Errorf("podShape of an unset shape = %+v, want grain's own DefaultShape %+v plus its VMM headroom", got, want)
 	}
 }
 
@@ -215,8 +215,8 @@ func TestGranuleSetOvercommitScalesPodShapeAndKeepsCHVAtFullShape(t *testing.T) 
 	})
 	resolved := Shape{}.orDefault(k.defaultShape())
 	gotShape := k.podShape(resolved)
-	if gotShape.CPUs != 8 || gotShape.MemoryMB != 16384+GranuleVMMMemoryOverheadMB || gotShape.CPUOvercommit != 10 || gotShape.MemoryOvercommit != 10 {
-		t.Fatalf("podShape = %+v, want 8 CPUs, 16384 MiB plus VMM overhead, 10x/10x overcommit", gotShape)
+	if gotShape.CPUs != 8 || gotShape.MemoryMB != 16384+4096 || gotShape.CPUOvercommit != 10 || gotShape.MemoryOvercommit != 10 {
+		t.Fatalf("podShape = %+v, want 8 CPUs, 16384 MiB plus its 4096 MiB VMM headroom, 10x/10x overcommit", gotShape)
 	}
 	opts := k.podOptions(resolved)
 	if opts.Env["CHV_CPUS"] != "8" || opts.Env["CHV_MEMORY_MB"] != "16384" || opts.Env["CHV_DISK_SIZE_MB"] != "30720" {
@@ -1079,5 +1079,33 @@ func TestK8sGranuleSandboxReleaseOutlivesACancelledContext(t *testing.T) {
 	}
 	if got := kubectl.takeDeleted(t); len(got) != 1 || got[0] != "grain-granule-784-1" {
 		t.Fatalf("Release on a cancelled context deleted %v, want grain-granule-784-1", got)
+	}
+}
+
+// fixedUsage is a k8s.UsageReader that always reads the same nodes.
+type fixedUsage k8s.ClusterUsage
+
+func (f fixedUsage) NodeUsage(context.Context, map[string]string) (k8s.ClusterUsage, error) {
+	return k8s.ClusterUsage(f), nil
+}
+
+func TestGranulePodMemoryLimitIsGuestPlusHeadroomCappedAtTheLargestNode(t *testing.T) {
+	t.Parallel()
+	k := NewK8sGranuleSandboxes(K8sGranuleConfig{Image: "example/granule", DefaultMemoryMB: 16384, MemoryOvercommit: 1})
+	resolved := Shape{}.orDefault(k.defaultShape())
+	if got := k.podShape(resolved).MemoryMB; got != 20480 {
+		t.Errorf("pod memory with no cluster reading = %d MiB, want 16384 + 4096 headroom", got)
+	}
+	req := k.podShape(resolved).Requests()
+	if req.MemoryBytes != 20480<<20 {
+		t.Errorf("pod memory request = %d bytes, want the same %d MiB as the limit", req.MemoryBytes, 20480)
+	}
+	k.fit = &k8s.FitChecker{Reader: fixedUsage{Nodes: []k8s.NodeUsage{
+		{Name: "small", Allocatable: k8s.Requests{MilliCPU: 8000, MemoryBytes: 12 << 30}},
+		{Name: "big", Allocatable: k8s.Requests{MilliCPU: 8000, MemoryBytes: 18 << 30}},
+	}}}
+	k.fit.Refresh(context.Background())
+	if got := k.podShape(resolved).MemoryMB; got != 18*1024 {
+		t.Errorf("pod memory on a cluster whose largest node has 18 GiB = %d MiB, want capped at %d", got, 18*1024)
 	}
 }

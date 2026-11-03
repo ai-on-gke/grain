@@ -47,6 +47,8 @@ var tablePrimaryKeys = map[string][]string{
 	"task_run_exec_failure":          {"run_id"},
 	"task_run_capability_audit":      {"run_id", "seq"},
 	"task_run_startup":               {"run_id"},
+	"task_run_hostd":                 {"run_id"},
+	"task_hostd":                     {"task_id"},
 	"task_run_sandbox_key":           {"run_id"},
 	"task_suspension":                {"run_id"},
 	"task_goal":                      {"task_id"},
@@ -141,6 +143,8 @@ var tablePrimaryKeys = map[string][]string{
 	"standing_sandbox_env":           {"sandbox_name", "name"},
 	"persistent_sandbox":             {"name"},
 	"external_agent_token":           {"id"},
+	"hostd":                          {"name"},
+	"hostd_token":                    {"token_hash"},
 	"external_agent_token_sequence":  {"id"},
 	"gcp_key":                        {"name"},
 	"secret_resolution_audit":        {"id"},
@@ -149,6 +153,8 @@ var tablePrimaryKeys = map[string][]string{
 	"task_notification_subscription": {"task_id", "family"},
 	"sandbox_access":                 {"sandbox"},
 	"ci_step_attachment":             {"run_id", "job_id", "step_id"},
+	"allowed_principal":              {"entry"},
+	"allowed_principal_migration":    {"id"},
 }
 
 // Auto-increment primary key column for tables that use sequences or SERIAL.

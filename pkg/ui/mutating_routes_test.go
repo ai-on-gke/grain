@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -49,6 +50,9 @@ type attributedRoute struct {
 	// idOnly is a write that keeps its principal as a bare ID (spec
 	// §1.3.2): only its kind and ID are compared.
 	idOnly bool
+	// bareID is a write that keeps its principal as one free string
+	// (spec §1.3.2), ci_run.cancelled_by: only its ID is compared.
+	bareID bool
 	// recorded reads back who the write recorded. created is the
 	// response's task id, for a route that files one.
 	recorded func(t *testing.T, ctx context.Context, client *ui.Client, id, created string) model.Principal
@@ -126,6 +130,16 @@ func lastConfigAudit(t *testing.T, ctx context.Context, client *ui.Client, _, _ 
 	return audit[0].By
 }
 
+// registerHostd puts hostd ws-1 in the registry, as what the hostd
+// routes act on.
+func registerHostd(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	if _, _, err := client.Store.CreateHostd(context.Background(), model.Hostd{Name: "ws-1"}); err != nil {
+		t.Fatalf("registering ws-1: %v", err)
+	}
+	return "ws-1"
+}
+
 // releaseClient is approvalServer's deployment: grain CI on
 // ai-on-gke/grain, with a fake runner recording what is started.
 func releaseClient(t *testing.T) *ui.Client {
@@ -154,6 +168,82 @@ func consoleSession(t *testing.T, client *ui.Client, _ sender) string {
 		t.Fatalf("creating a console session: %v", err)
 	}
 	return "ops-director"
+}
+
+// noted is who the newest note of kind on the task says took that action
+// (model.TaskEventSubmitted and the rest).
+func noted(kind model.TaskEventKind) func(*testing.T, context.Context, *ui.Client, string, string) model.Principal {
+	return func(t *testing.T, ctx context.Context, client *ui.Client, id, _ string) model.Principal {
+		t.Helper()
+		events, err := client.Store.TaskEvents(ctx, id)
+		if err != nil {
+			t.Fatalf("task events of %s: %v", id, err)
+		}
+		for i := len(events) - 1; i >= 0; i-- {
+			if events[i].Kind == kind {
+				return events[i].By
+			}
+		}
+		t.Fatalf("no %s note on %s: %+v", kind, id, events)
+		return model.Principal{}
+	}
+}
+
+// seededTasks are tasks 801 and 802 in the agent's repository, for a
+// route whose body names the tasks it acts on: 801 is the one returned.
+func seededTasks(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	seedAPITask(t, client, "801", "acme/widgets")
+	seedAPITask(t, client, "802", "acme/widgets")
+	return "801"
+}
+
+// secretsClient is testClient's deployment with a secret store.
+func secretsClient(t *testing.T) *ui.Client {
+	t.Helper()
+	client, _, _ := testClient(t)
+	client.Config.Secrets = secrets.New(t.TempDir())
+	return client
+}
+
+// externalToken issues an external agent credential for the token
+// routes to act on, and returns its id.
+func externalToken(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	ctx := ui.WithPrincipal(context.Background(), model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com"})
+	issued, err := client.CreateExternalAgentToken(ctx, ui.CreateExternalAgentTokenRequest{Name: "laptop", ScopeSet: "grain/task-admin"})
+	if err != nil {
+		t.Fatalf("issuing an external agent credential: %v", err)
+	}
+	return issued.ID
+}
+
+// releaseSecret stores release secret NPM_TOKEN on acme/widgets.
+func releaseSecret(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	if _, err := client.SetRepoReleaseSecret(context.Background(), "acme/widgets", "NPM_TOKEN", "v"); err != nil {
+		t.Fatalf("storing a release secret: %v", err)
+	}
+	return ""
+}
+
+// ciClient is testClient's deployment with a fake grain CI runner whose
+// every cancel succeeds.
+func ciClient(t *testing.T) *ui.Client {
+	t.Helper()
+	client, _, _ := testClient(t)
+	client.Config.CI = &fakeCIRunner{cancelOK: true}
+	return client
+}
+
+// cancelledBy is who the fake runner's last cancel was asked for by.
+func cancelledBy(t *testing.T, _ context.Context, client *ui.Client, _, _ string) model.Principal {
+	t.Helper()
+	runner := client.Config.CI.(*fakeCIRunner)
+	if len(runner.sources) == 0 {
+		t.Fatal("no CI run cancelled")
+	}
+	return model.Principal{ID: string(runner.sources[len(runner.sources)-1])}
 }
 
 // attributedRoutes are the write paths the matrix covers: spec §3's
@@ -236,6 +326,109 @@ var attributedRoutes = map[string]attributedRoute{
 		idOnly:   true,
 		recorded: releaseRequester,
 	},
+	"POST /api/tasks/{id}/withdraw-approval": {
+		setup:       fileTask(true),
+		agentGrants: []string{"api:tasks:write"},
+		recorded:    noted(model.TaskEventApprovalWithdrawn),
+	},
+	"POST /api/tasks/{id}/submit": {
+		setup:    taskWithPullRequest,
+		recorded: noted(model.TaskEventSubmitted),
+	},
+	"POST /api/tasks/{id}/retry": {
+		setup:       fileTask(true),
+		agentGrants: []string{"api:tasks:write"},
+		recorded:    noted(model.TaskEventRetried),
+	},
+	"POST /api/tasks/{id}/defer": {
+		setup:       fileTask(true),
+		body:        `{"deferredUntil":"2026-09-01T00:00:00Z"}`,
+		agentGrants: []string{"api:tasks:write"},
+		recorded:    noted(model.TaskEventDeferred),
+	},
+	"POST /api/tasks/{id}/undefer": {
+		setup: func(t *testing.T, client *ui.Client, send sender) string {
+			id := fileTask(true)(t, client, send)
+			if err := client.Defer(context.Background(), id, ui.DeferOptions{}); err != nil {
+				t.Fatalf("deferring %s: %v", id, err)
+			}
+			return id
+		},
+		agentGrants: []string{"api:tasks:write"},
+		recorded:    noted(model.TaskEventUndeferred),
+	},
+	"POST /api/tasks/{id}/park-until": {
+		setup:       seededTasks,
+		body:        `{"until":"2026-08-28T13:00:00Z"}`,
+		agentGrants: []string{"api:tasks:write"},
+		recorded:    noted(model.TaskEventParked),
+	},
+	"POST /api/tasks/{id}/wait-on": {
+		setup:       seededTasks,
+		body:        `{"ids":["802"],"park":true}`,
+		agentGrants: []string{"api:tasks:write"},
+		recorded:    noted(model.TaskEventParked),
+	},
+	"POST /api/tasks/{id}/depends-on": {
+		setup:       seededTasks,
+		body:        `{"id":"802","attach":true}`,
+		agentGrants: []string{"api:tasks:write"},
+		recorded:    noted(model.TaskEventDependencies),
+	},
+	"POST /api/tasks/reorder": {
+		setup:       seededTasks,
+		body:        `{"ids":["801"],"afterId":"802"}`,
+		agentGrants: []string{"api:tasks:write"},
+		recorded:    noted(model.TaskEventReordered),
+	},
+	"PUT /api/tasks/{id}/secret": {
+		client: secretsClient,
+		setup: func(t *testing.T, client *ui.Client, send sender) string {
+			id := fileTask(true)(t, client, send)
+			if err := client.Store.ObserveField(context.Background(), id, baseTime, func(o *model.Observation) {
+				o.PendingSecret = "stripe-api-key"
+			}); err != nil {
+				t.Fatal(err)
+			}
+			return id
+		},
+		body:        `{"value":"sk_test_not_logged"}`,
+		agentGrants: []string{"api:secrets:write"},
+		recorded:    noted(model.TaskEventSecretSet),
+	},
+	"PUT /api/repos/{owner}/{name}/release-secrets/{secret}": {
+		// Over a secret already listed, which writes no repo config for
+		// guardConfigWrite to see: only the value changes.
+		client:   secretsClient,
+		setup:    releaseSecret,
+		path:     "/api/repos/acme/widgets/release-secrets/NPM_TOKEN",
+		body:     `{"value":"not-logged"}`,
+		recorded: lastConfigAudit,
+	},
+	"DELETE /api/repos/{owner}/{name}/release-secrets/{secret}": {
+		client:   secretsClient,
+		setup:    releaseSecret,
+		path:     "/api/repos/acme/widgets/release-secrets/NPM_TOKEN",
+		recorded: lastConfigAudit,
+	},
+	"POST /api/external-agents/tokens/{id}/revoke": {
+		setup:    externalToken,
+		recorded: lastConfigAudit,
+	},
+	"DELETE /api/external-agents/tokens/{id}": {
+		setup:    externalToken,
+		recorded: lastConfigAudit,
+	},
+	"POST /api/external-agents/tokens/revoke-all": {
+		setup:    externalToken,
+		recorded: lastConfigAudit,
+	},
+	"DELETE /api/ci/runs/{id}": {
+		client:   ciClient,
+		path:     "/api/ci/runs/run-7",
+		bareID:   true,
+		recorded: cancelledBy,
+	},
 	"PUT /api/memory": {
 		body:        `{"text":"remember this"}`,
 		agentGrants: []string{"api:memory"},
@@ -257,6 +450,49 @@ var attributedRoutes = map[string]attributedRoute{
 			}
 			return notes[0].UpdatedBy
 		},
+	},
+	// The hostd registry (Settings -> Hostds): each change is a
+	// config_audit entry about hostd:<name>.
+	"POST /api/hostds": {
+		body:        `{"name":"ws-1"}`,
+		agentGrants: []string{"api:capabilities:admin"},
+		recorded:    lastConfigAudit,
+	},
+	"PATCH /api/hostds/{name}": {
+		setup:       registerHostd,
+		path:        "/api/hostds/{id}",
+		body:        `{"owner":"bob@example.com"}`,
+		agentGrants: []string{"api:capabilities:admin"},
+		recorded:    lastConfigAudit,
+	},
+	"POST /api/hostds/{name}/rotate": {
+		setup:       registerHostd,
+		path:        "/api/hostds/{id}/rotate",
+		agentGrants: []string{"api:capabilities:admin"},
+		recorded:    lastConfigAudit,
+	},
+	"POST /api/hostds/{name}/revoke": {
+		setup:       registerHostd,
+		path:        "/api/hostds/{id}/revoke",
+		agentGrants: []string{"api:capabilities:admin"},
+		recorded:    lastConfigAudit,
+	},
+	"POST /api/access/principals": {
+		body:        `{"entry":"user:newbie@example.com"}`,
+		agentGrants: []string{"api:access:write"},
+		recorded:    lastConfigAudit,
+	},
+	"DELETE /api/access/principals/{entry}": {
+		setup: func(t *testing.T, client *ui.Client, _ sender) string {
+			t.Helper()
+			if _, err := client.AllowPrincipal(context.Background(), ui.AllowPrincipalRequest{Entry: "user:temp@example.com"}); err != nil {
+				t.Fatalf("seeding allowed principal: %v", err)
+			}
+			return "user:temp@example.com"
+		},
+		path:        "/api/access/principals/{id}",
+		agentGrants: []string{"api:access:write"},
+		recorded:    lastConfigAudit,
 	},
 	"POST /api/pipeline-pause": {
 		body: `{"reason":"maintenance"}`,
@@ -340,18 +576,15 @@ var notYetAttributedRoutes = map[string]bool{
 	"DELETE /api/agent-keys/{framework}":                                   true,
 	"DELETE /api/boards/{id}":                                              true,
 	"DELETE /api/ci/cache":                                                 true,
-	"DELETE /api/ci/runs/{id}":                                             true,
 	"DELETE /api/codex-auth":                                               true,
 	"DELETE /api/console/{id}":                                             true,
 	"DELETE /api/deployment/agent-backends/{backendId}":                    true,
 	"DELETE /api/deployment/git-connections/{cred}":                        true,
-	"DELETE /api/external-agents/tokens/{id}":                              true,
 	"DELETE /api/gcp-keys/{name}":                                          true,
 	"DELETE /api/github-tokens/{name}":                                     true,
 	"DELETE /api/pause":                                                    true,
 	"DELETE /api/pipeline-pause":                                           true,
 	"DELETE /api/repos/{owner}/{name}":                                     true,
-	"DELETE /api/repos/{owner}/{name}/release-secrets/{secret}":            true,
 	"DELETE /api/repos/{owner}/{name}/releases/{release}":                  true,
 	"DELETE /api/schedules/{id}":                                           true,
 	"DELETE /api/secrets/{secret}":                                         true,
@@ -384,8 +617,6 @@ var notYetAttributedRoutes = map[string]bool{
 	"POST /api/deployment/broadcast":                                       true,
 	"POST /api/deployment/git-connections":                                 true,
 	"POST /api/external-agents/tokens":                                     true,
-	"POST /api/external-agents/tokens/revoke-all":                          true,
-	"POST /api/external-agents/tokens/{id}/revoke":                         true,
 	"POST /api/external-agents/tokens/{id}/rotate":                         true,
 	"POST /api/gcp-keys":                                                   true,
 	"POST /api/host/reboot":                                                true,
@@ -426,7 +657,6 @@ var notYetAttributedRoutes = map[string]bool{
 	"POST /api/suites":                                                     true,
 	"POST /api/suites/composition":                                         true,
 	"POST /api/tasks/from-template":                                        true,
-	"POST /api/tasks/reorder":                                              true,
 	"POST /api/tasks/{id}/activity":                                        true,
 	"POST /api/tasks/{id}/agent-messages":                                  true,
 	"POST /api/tasks/{id}/capabilities":                                    true,
@@ -440,9 +670,7 @@ var notYetAttributedRoutes = map[string]bool{
 	"POST /api/tasks/{id}/config-change/reject":                            true,
 	"POST /api/tasks/{id}/db/execute":                                      true,
 	"POST /api/tasks/{id}/db/query":                                        true,
-	"POST /api/tasks/{id}/defer":                                           true,
 	"POST /api/tasks/{id}/delivered":                                       true,
-	"POST /api/tasks/{id}/depends-on":                                      true,
 	"POST /api/tasks/{id}/local-script-approvals":                          true,
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/answer":        true,
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/expire":        true,
@@ -450,20 +678,14 @@ var notYetAttributedRoutes = map[string]bool{
 	"POST /api/tasks/{id}/messages":                                        true,
 	"POST /api/tasks/{id}/notes":                                           true,
 	"POST /api/tasks/{id}/notify":                                          true,
-	"POST /api/tasks/{id}/park-until":                                      true,
 	"POST /api/tasks/{id}/pull-request":                                    true,
 	"POST /api/tasks/{id}/resume":                                          true,
 	"POST /api/tasks/{id}/resume-later":                                    true,
-	"POST /api/tasks/{id}/retry":                                           true,
 	"POST /api/tasks/{id}/run-now":                                         true,
 	"POST /api/tasks/{id}/sandbox/recreate":                                true,
 	"POST /api/tasks/{id}/staged-attachments":                              true,
 	"POST /api/tasks/{id}/stop":                                            true,
-	"POST /api/tasks/{id}/submit":                                          true,
-	"POST /api/tasks/{id}/undefer":                                         true,
 	"POST /api/tasks/{id}/wait-credit":                                     true,
-	"POST /api/tasks/{id}/wait-on":                                         true,
-	"POST /api/tasks/{id}/withdraw-approval":                               true,
 	"POST /api/tests/quarantine":                                           true,
 	"POST /api/upgrade":                                                    true,
 	"POST /api/upgrade/postgres":                                           true,
@@ -490,7 +712,6 @@ var notYetAttributedRoutes = map[string]bool{
 	"PUT /api/repos/{owner}/{name}/prompt-extension":                       true,
 	"PUT /api/repos/{owner}/{name}/qualification-plan":                     true,
 	"PUT /api/repos/{owner}/{name}/release":                                true,
-	"PUT /api/repos/{owner}/{name}/release-secrets/{secret}":               true,
 	"PUT /api/repos/{owner}/{name}/require-branch-up-to-date":              true,
 	"PUT /api/repos/{owner}/{name}/settings":                               true,
 	"PUT /api/repos/{owner}/{name}/setup-command":                          true,
@@ -501,7 +722,7 @@ var notYetAttributedRoutes = map[string]bool{
 	"PUT /api/secrets/{secret}/{key}":                                      true,
 	"PUT /api/settings/cli-run":                                            true,
 	"PUT /api/tasks/{id}/goal":                                             true,
-	"PUT /api/tasks/{id}/secret":                                           true,
+	"PUT /api/tasks/{id}/hostd":                                            true,
 	"PUT /api/tasks/{id}/session-title":                                    true,
 }
 
@@ -685,8 +906,11 @@ func TestEveryMutatingRouteIsAttributed(t *testing.T) {
 				}
 				_ = json.Unmarshal(rec.Body.Bytes(), &created)
 				got, want := route.recorded(t, ctx, client, id, created.ID), way.want
-				if route.idOnly {
+				if route.idOnly || route.bareID {
 					got.Source, want.Source = "", ""
+				}
+				if route.bareID {
+					got.Kind, want.Kind = "", ""
 				}
 				if got != want {
 					t.Errorf("%s by %s recorded %+v, want %+v", pattern, way.name, got, want)

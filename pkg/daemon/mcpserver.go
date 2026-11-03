@@ -34,7 +34,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
-	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
@@ -193,7 +192,7 @@ func (d DaemonTasks) Task(ctx context.Context, id string) (mcp.TaskRecord, error
 	if err != nil {
 		return mcp.TaskRecord{}, err
 	}
-	record := mcp.TaskRecord{TaskSummary: taskSummary(detail.Task), Description: detail.Description, Author: detail.Author, AuthorKind: detail.AuthorKind, AuthorLabel: detail.AuthorLabel, Base: detail.Base, Capabilities: detail.Capabilities, PullRequest: detail.PullRequest, FailedAttempts: detail.FailedAttempts, LastFailureAt: detail.LastFailureAt, LastFailureReason: detail.LastFailureReason, Activity: mcp.TaskActivity{Note: detail.Activity, At: detail.ActivityAt, BySetup: detail.ActivityBySetup}}
+	record := mcp.TaskRecord{TaskSummary: taskSummary(detail.Task), Description: detail.Description, Author: detail.Author, AuthorKind: detail.AuthorKind, AuthorLabel: detail.AuthorLabel, Base: detail.Base, Capabilities: detail.Capabilities, PullRequest: detail.PullRequest, PullRequestMergedAt: detail.PrMergedAt, PullRequestClosedAt: detail.PrClosedAt, FailedAttempts: detail.FailedAttempts, LastFailureAt: detail.LastFailureAt, LastFailureReason: detail.LastFailureReason, Activity: mcp.TaskActivity{Note: detail.Activity, At: detail.ActivityAt, BySetup: detail.ActivityBySetup}}
 	for _, a := range detail.Attempts {
 		record.Attempts = append(record.Attempts, mcp.TaskAttempt{Number: a.Number, StartedAt: a.StartedAt, FinishedAt: a.FinishedAt, Outcome: a.Outcome, Detail: a.Detail, PromptBytes: a.PromptBytes, PromptTokens: a.PromptTokens, Model: a.Model, AgentFramework: a.AgentFramework})
 	}
@@ -726,7 +725,7 @@ func (d daemonNotifier) MessageTask(ctx context.Context, task, body string) (int
 // CI. There has to be a daemon to ask, because the verdict is a row on
 // the task and this process holds no store handle -- the same missing
 // handle daemonStatus and daemonChat work around. And the task has to
-// hold the grain-ci capability, because that capability is what decides
+// hold the grain#ci grant (model.HasGrainCI), because that grant is what decides
 // this branch is put through grain CI at all and therefore what decides
 // the verdict counts: orchestrator.grainCIVerdictOf reads a task that
 // does not hold it as silent however red its record, and a report that
@@ -736,7 +735,7 @@ func (d daemonNotifier) MessageTask(ctx context.Context, task, body string) (int
 // nil is returned as a nil interface rather than a nil *daemonGrainCI,
 // since what pkg/mcp switches on is the reader being absent.
 func grainCIReader(client *ui.HTTPClient, taskID string, grants GrantNames) mcp.GrainCIReader {
-	if client == nil || !grants.Has(grainci.CapabilityName) {
+	if client == nil || !model.HasGrainCI(grants) {
 		return nil
 	}
 	return DaemonGrainCI{Client: client, TaskID: taskID}
@@ -785,7 +784,7 @@ func CiRepoScope(prRepo string, grants GrantNames, deploymentWide []string) mcp.
 
 // ciReadRepoScope is which repositories list_ci_runs, get_ci_log and
 // get_ci_artifact may read when a run holds an api ci:read grant rather
-// than grain-ci: only the repositories its ci:read grants name (plus all
+// than grain#ci: only the repositories its ci:read grants name (plus all
 // repositories for deployment-wide self-debug or an unscoped api:ci-read),
 // never -pr-repo on its own when the grant was scoped elsewhere.
 func ciReadRepoScope(prRepo string, grants GrantNames, deploymentWide []string) mcp.CIRepoScope {
@@ -1424,7 +1423,8 @@ func (g GrantNames) Has(name string) bool { return slices.Contains(g, name) }
 // mid-upgrade, whose daemon knows a grant name the binary it forked does
 // not.
 //
-// grain-ci is in the list and serves no tools of its own: what it changes
+// grain#ci (and its retired grain-ci spelling) is in the list and serves
+// no tools of its own: what it changes
 // is what three tools already on the roster say (grainCIReader, and
 // mcp's grain_ci.go). It is here because the alternative is a warning on
 // every run of a repository this deployment puts through grain CI,
@@ -1435,7 +1435,7 @@ func (g GrantNames) Has(name string) bool { return slices.Contains(g, name) }
 // hook, say -- rather than by any tool of this process.
 var servedGrants = []string{
 	selfdebug.CapabilityName, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant, bootstrap.CapabilityName,
-	grainci.CapabilityName, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
+	grainserver.LegacyGrainCI, grainserver.CIRef, grainserver.CIGrant, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
@@ -2180,7 +2180,7 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 		// notify_operator and message_task are every run's, with no
 		// grant: the daemon applies their rules for -task.
 		registry.Register(mcp.NewNotifyTools(daemonNotifier{client: client, taskID: *taskID})...)
-		if grants.Has(grainci.CapabilityName) {
+		if model.HasGrainCI(grants) {
 			taskBranch := strings.TrimSpace(*prBranch)
 			if taskBranch == "" {
 				taskBranch = strings.TrimSpace(taskDetail.Task.Branch)
@@ -2276,7 +2276,7 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 		// /fs/ (model.Store.SandboxNamespaceScope); a bare "ci-read" is
 		// no capability and widens nothing.
 		apiGrants := model.APIGrantsOf(grants)
-		mayReadCI := grants.Has(grainci.CapabilityName) || grants.Has(selfdebug.CapabilityName) || apiGrants.Has("ci:read")
+		mayReadCI := model.HasGrainCI(grants) || grants.Has(selfdebug.CapabilityName) || apiGrants.Has("ci:read")
 		mayReadAllCI := ciScope.AllRepos || apiGrants.Allows("ci:read", "")
 		allowedCIRepos := make(map[string]bool)
 		addAllowedRepo := func(r string) {

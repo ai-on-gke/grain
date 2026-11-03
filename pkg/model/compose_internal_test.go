@@ -26,8 +26,8 @@ func TestAdjustGrainCIGrantDoesNotWriteIntoTheDeclaration(t *testing.T) {
 	declared := backing[:1]
 
 	got := adjustGrainCIGrant(declared, true)
-	if len(got) != 2 || got[1].Capability != "grain-ci" {
-		t.Fatalf("adjustGrainCIGrant(..., true) = %+v, want self-debug then grain-ci", got)
+	if len(got) != 2 || got[1].Capability != GrainCIGrant {
+		t.Fatalf("adjustGrainCIGrant(..., true) = %+v, want self-debug then grain#ci", got)
 	}
 	if spare := backing[:2][1]; spare != (Grant{}) {
 		t.Fatalf("adjustGrainCIGrant wrote %+v into the declaration's spare capacity", spare)
@@ -50,8 +50,8 @@ func TestApplyGrainCIGrantCreditsTheRepoNotTheDeclaration(t *testing.T) {
 	comp := ComposeScheduleTask(sched, nil)
 	applyGrainCIGrant(&comp, true)
 
-	if len(comp.Grants) != 2 || comp.Grants[0].Capability != "self-debug" || comp.Grants[1].Capability != "grain-ci" {
-		t.Fatalf("Grants = %+v, want [self-debug, grain-ci]", comp.Grants)
+	if len(comp.Grants) != 2 || comp.Grants[0].Capability != "self-debug" || comp.Grants[1].Capability != GrainCIGrant {
+		t.Fatalf("Grants = %+v, want [self-debug, grain#ci]", comp.Grants)
 	}
 	if len(comp.GrantSources) != 2 || comp.GrantSources[0] != LayerSchedule || comp.GrantSources[1] != LayerRepo {
 		t.Errorf("GrantSources = %v, want [%q, %q]", comp.GrantSources, LayerSchedule, LayerRepo)
@@ -68,7 +68,7 @@ func TestApplyGrainCIGrantCreditsTheRepoNotTheDeclaration(t *testing.T) {
 		Target: RepoRef{Owner: "acme", Name: "widgets"},
 	}, nil)
 	applyGrainCIGrant(&empty, true)
-	if len(empty.Grants) != 1 || empty.Grants[0].Capability != "grain-ci" {
+	if len(empty.Grants) != 1 || empty.Grants[0].Capability != GrainCIGrant {
 		t.Fatalf("empty.Grants = %+v, want [grain-ci]", empty.Grants)
 	}
 	if empty.Sources.Grants != LayerRepo {

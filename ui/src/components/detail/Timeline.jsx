@@ -379,6 +379,25 @@ function timelineEvents(t, zone, now = Date.now()) {
               same overlay the entry opens (CapabilityAudit). A line of its
               own: on the meta line it pushed a phone's "finished" time
               onto two lines. */}
+          {/* Which grain hostd its host work went to, the machine that
+              hostd ran on and its owner (ui.Attempt.Hostd), on a line of
+              its own for the same reason. */}
+          {a.hostd?.hostd && (
+            <div
+              className="timeline-meta timeline-attempt-hostd"
+              title={[
+                `Host work on grain hostd ${a.hostd.hostd}`,
+                a.hostd.instance && `on ${a.hostd.instance}`,
+                a.hostd.owner && `owned by ${a.hostd.owner}`,
+              ]
+                .filter(Boolean)
+                .join(", ")}
+            >
+              hostd {a.hostd.hostd}
+              {a.hostd.instance && <> on {a.hostd.instance}</>}
+              {a.hostd.owner && <> · {a.hostd.owner}</>}
+            </div>
+          )}
           {a.capabilityAuditCount > 0 && (
             <div className="timeline-meta">
               {a.capabilityAuditCount} capability audit record

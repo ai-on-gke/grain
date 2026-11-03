@@ -696,6 +696,9 @@ func attachmentFrom(a model.AttachmentMeta) Attachment {
 // attempts, last failure: reason").
 type TaskDetail struct {
 	Task
+	// Hostd is the task's hostd pin or label selector
+	// (model.SetTaskHostd), "" for the default hostd.
+	Hostd    string    `json:"hostd,omitempty"`
 	Comments []Comment `json:"comments"`
 	// LocalScriptApprovals is the local-script calls this task's run is
 	// waiting on a person for, and the ones answered recently
@@ -900,8 +903,11 @@ type Transition struct {
 	ActorKind   string      `json:"actorKind,omitempty"`
 	ActorSource string      `json:"actorSource,omitempty"`
 	ActorLabel  string      `json:"actorLabel,omitempty"`
-	Reason      string      `json:"reason,omitempty"`
-	Detail      string      `json:"detail,omitempty"`
+	// ByLabel is ActorLabel again, under the name the frontend first
+	// read it by.
+	ByLabel string `json:"byLabel,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Detail  string `json:"detail,omitempty"`
 }
 
 func transitionFrom(t model.Transition) Transition {
@@ -910,6 +916,7 @@ func transitionFrom(t model.Transition) Transition {
 		out.Actor, out.ActorKind, out.ActorSource = t.By.ID, string(t.By.Kind), string(t.By.Source)
 		out.ActorLabel = PrincipalLabel(*t.By, t.OnBehalfOf)
 		out.By = out.ActorLabel
+		out.ByLabel = out.ActorLabel
 	}
 	return out
 }
@@ -975,6 +982,10 @@ type Attempt struct {
 	// (model.CapabilityAuditRecord). The records are their own fetch
 	// (AttemptCapabilityAudit), for the transcript's reason.
 	CapabilityAuditCount int `json:"capabilityAuditCount,omitempty"`
+	// Hostd is the grain hostd this attempt's host work went to, the
+	// machine it ran on and its owner (model.TaskRunHostd); nil for an
+	// attempt that resolved none.
+	Hostd *model.TaskRunHostd `json:"hostd,omitempty"`
 	// QueuedAt, SandboxAcquiredAt, SandboxPreparedAt, AgentStartedAt and
 	// FirstTurnAt are the startup phase timestamps of this attempt
 	// (model.RunStartup, model.Run.AgentStartedAt), and Startup is the
@@ -1216,7 +1227,11 @@ func commentFrom(c model.Comment, attachments []Attachment) Comment {
 		Attachments: attachments,
 	}
 	out.AuthorSource = string(c.Author.Actor.Source)
-	out.AuthorLabel = PrincipalLabel(c.Author.Actor, c.Author.OnBehalfOf)
+	// grain's own notes keep their author ("console-session",
+	// "schedule"), which says more than "grain" would.
+	if c.Author.Actor.Kind != model.PrincipalAutomation {
+		out.AuthorLabel = PrincipalLabel(c.Author.Actor, c.Author.OnBehalfOf)
+	}
 	if b := c.Author.OnBehalfOf; b != nil {
 		out.OnBehalfOf = b.ID
 		out.OnBehalfOfKind = string(b.Kind)

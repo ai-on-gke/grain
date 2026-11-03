@@ -98,6 +98,12 @@ type Hello struct {
 	Running      string `json:"running,omitempty"`
 	Current      string `json:"current,omitempty"`
 	CurrentBuild string `json:"current_build,omitempty"`
+	// Capacity and Labels are the allowlist's capacity: and labels:, for
+	// the daemon holding host work to this hostd's capacity and showing
+	// its labels. Labels never route host work here: only the registry's
+	// labels for the hostd do. Set by hostd alone.
+	Capacity int               `json:"capacity,omitempty"`
+	Labels   map[string]string `json:"labels,omitempty"`
 
 	// Remote is set by a hostd answering over the session it dialed out
 	// to the controller on (grain hostd -server): a machine that shares

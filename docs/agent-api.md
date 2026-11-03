@@ -155,6 +155,8 @@ every `DELETE`.
 | `caches:write` | flush them | |
 | `settings:read` | read deployment settings and configuration | |
 | `settings:write` | change deployment settings, the database, the state repository | yes |
+| `access:read` | read the allowed users and groups list | |
+| `access:write` | add and remove allowed users and groups | yes |
 | `connections:read` | read git connections and model backends | |
 | `connections:write` | change them | yes |
 | `capabilities:read` | read capability servers and policy, check grants | |
@@ -273,7 +275,7 @@ A set is a row:
 | `includes` | JSON list of other sets, built-in or declared. Their resolved scopes are added, each keeping the repository limits it had. A missing set or a cycle (`a -> b -> a`, or a set including itself) is an error naming the path. |
 | `repos` | JSON list of `owner/name`. Limits every scope of the set, included ones too: a scope already limited by an included set keeps only the repositories in both, and one left with none is dropped. Empty means no limit of the set's own. |
 | `deny` | JSON list in the `scopes` syntax. Removed after composition. |
-| `requires_person` | 1 means only a person may grant the set. **Forced on** when the resolved set holds any dangerous scope (`capabilities:admin`, `secrets:write`, `settings:write`, `connections:write`, `merge:force`, `tasks:admin`, `deployment:*` except `deployment:read`). A set can turn it on, never off. |
+| `requires_person` | 1 means only a person may grant the set. **Forced on** when the resolved set holds any dangerous scope (`capabilities:admin`, `secrets:write`, `settings:write`, `access:write`, `connections:write`, `merge:force`, `tasks:admin`, `deployment:*` except `deployment:read`). A set can turn it on, never off. |
 | `version` | the author's revision number, shown in the check and in Settings |
 | `deprecated` | 1 to flag the set in Settings and the pickers. It still resolves and still grants. |
 

@@ -92,6 +92,25 @@ type DiscardedRC struct {
 	ReplacementRC string `json:"replacementRc,omitempty"`
 }
 
+// RetractedRelease reports when the promoted release this deployment
+// currently runs (e.g. "v3.5.0") has since been retracted
+// (scripts/release-from-trunk.sh rollback, design/playbook/releases.playbook.md
+// section 11): the registry carries <running>-retracted beside it and
+// latest has moved back. The deployment never downgrades by itself -- an
+// older release may not read the schema this one migrated to -- so it is
+// told to move instead: to Latest when that is safe, or to the next
+// release, which carries the fix, when it is not.
+type RetractedRelease struct {
+	// Running is the retracted release this deployment is on ("v3.5.0").
+	Running string `json:"running"`
+	// Latest is the newest release in the registry that is not
+	// retracted ("v3.4.0"), if any: where latest points again.
+	Latest string `json:"latest,omitempty"`
+	// Newer is the newest release after Running that is not retracted
+	// ("v3.6.0"), if one has been published yet: the fix-forward to move to.
+	Newer string `json:"newer,omitempty"`
+}
+
 // Targets is GET /api/upgrade/targets's answer.
 type Targets struct {
 	Targets []Target `json:"targets"`
@@ -114,6 +133,9 @@ type Targets struct {
 	// <running>-discarded tag or superseded by a newer vX.Y.Z-rc.M while
 	// vX.Y.Z has not been promoted).
 	DiscardedRC *DiscardedRC `json:"discardedRc,omitempty"`
+	// RetractedRelease is set when the release this deployment currently
+	// runs has been retracted: <running>-retracted is in the registry.
+	RetractedRelease *RetractedRelease `json:"retractedRelease,omitempty"`
 }
 
 // standardChannels is the order the selector offers the moving names in:
@@ -183,6 +205,9 @@ func (u *Upgrader) Targets(ctx context.Context) Targets {
 		if runningRC := u.runningCandidateRelease(); runningRC != "" {
 			out.DiscardedRC = discardedRCFromTags(runningRC, tags, ed)
 		}
+		if running := u.runningPromotedRelease(); running != "" {
+			out.RetractedRelease = retractedReleaseFromTags(running, tags, ed)
+		}
 	}
 	for _, pattern := range u.AllowedBranches() {
 		pattern = strings.TrimSpace(pattern)
@@ -242,6 +267,98 @@ func (u *Upgrader) CachedDiscardedRC(ctx context.Context) *DiscardedRC {
 		return u.DiscardedRC(ctx)
 	}
 	return nil
+}
+
+// CachedRetractedRelease reports whether the release this deployment runs
+// has been retracted, from the cached registry tag list (or
+// Config.ListTags when a caller or test provides one), without starting a
+// live network fetch on an uncached registry. Nil when the deployment does
+// not run a promoted release, when that release stands, or when there is
+// no tag list to read.
+func (u *Upgrader) CachedRetractedRelease(ctx context.Context) *RetractedRelease {
+	running := u.runningPromotedRelease()
+	if running == "" {
+		return nil
+	}
+	repository := u.registryRepository()
+	u.tags.mu.Lock()
+	cached := u.tags.repo == repository && !u.tags.fetched.IsZero() && time.Since(u.tags.fetched) < tagListTTL
+	tags := u.tags.tags
+	u.tags.mu.Unlock()
+	if !cached {
+		if u.cfg.ListTags == nil {
+			return nil
+		}
+		var err error
+		if tags, err = u.registryTags(ctx, repository); err != nil {
+			return nil
+		}
+	}
+	return retractedReleaseFromTags(running, tags, u.edition())
+}
+
+// runningPromotedRelease is the release (vX.Y.Z, or edition-qualified
+// vX.Y.Z-google) this deployment runs, or "" when it runs anything else:
+// a candidate, a branch build or a sha- pin.
+func (u *Upgrader) runningPromotedRelease() string {
+	if rel := strings.TrimSpace(u.runningRelease()); versionTag.MatchString(rel) {
+		return rel
+	}
+	if r, err := u.Running(); err == nil {
+		if rel := strings.TrimSpace(r.Build.Release); versionTag.MatchString(rel) {
+			return rel
+		}
+		ref, _, _ := strings.Cut(r.Ref, "@")
+		if slash, colon := strings.LastIndex(ref, "/"), strings.LastIndex(ref, ":"); colon > slash {
+			if tag := ref[colon+1:]; versionTag.MatchString(tag) {
+				return tag
+			}
+		}
+	}
+	return ""
+}
+
+// retractedReleaseFromTags is RetractedRelease for a deployment running
+// release running, given the registry's tags: nil unless the registry
+// carries running-retracted.
+func retractedReleaseFromTags(running string, tags []string, edition string) *RetractedRelease {
+	if !slices.Contains(tags, running+"-retracted") {
+		return nil
+	}
+	out := &RetractedRelease{Running: running}
+	rels := releasedVersions(tags, edition)
+	if len(rels) == 0 && edition == "" {
+		rels = releasedVersions(tags)
+	}
+	for _, v := range rels {
+		if v == running {
+			continue
+		}
+		if out.Latest == "" && !versionAfter(v, running) {
+			out.Latest = v
+		}
+		if out.Newer == "" && versionAfter(v, running) {
+			out.Newer = v
+		}
+	}
+	return out
+}
+
+// versionAfter is whether released version a is newer than b (both
+// vX.Y.Z, edition suffixes ignored).
+func versionAfter(a, b string) bool {
+	am, bm := versionTag.FindStringSubmatch(a), versionTag.FindStringSubmatch(b)
+	if am == nil || bm == nil {
+		return false
+	}
+	for i := 1; i <= 3; i++ {
+		x, _ := strconv.Atoi(am[i])
+		y, _ := strconv.Atoi(bm[i])
+		if x != y {
+			return x > y
+		}
+	}
+	return false
 }
 
 func (u *Upgrader) runningCandidateRelease() string {
@@ -411,6 +528,11 @@ func releasedVersions(tags []string, edition ...string) []string {
 	for _, t := range tags {
 		m := versionTag.FindStringSubmatch(t)
 		if m == nil {
+			continue
+		}
+		// A retracted release (scripts/release-from-trunk.sh rollback)
+		// is never offered as a target again.
+		if slices.Contains(tags, t+"-retracted") {
 			continue
 		}
 		tagEd := normalizeEdition(m[4])

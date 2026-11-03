@@ -84,6 +84,9 @@ type fakeCI struct {
 	rechecksAs recheckBehaviour
 	// flakes is what MarkFlake was told, by run id.
 	flakes map[string][]string
+	// workflowOptions is what WorkflowOptions answers a release with
+	// (answerWorkflows); nil answers as NopRunner does.
+	workflowOptions []ci.WorkflowOption
 }
 
 type recheckBehaviour int
@@ -373,7 +376,7 @@ func runCIReconcilerAt(t *testing.T, ctx context.Context, store *model.Store,
 // default sets that land in exactly this field when a task is created.
 func grantCI(t *testing.T, ctx context.Context, store *model.Store, task model.Task) model.Task {
 	t.Helper()
-	task.Grants = append(task.Grants, model.Grant{Capability: grainci.CapabilityName})
+	task.Grants = append(task.Grants, model.Grant{Capability: grainci.Grant})
 	if err := store.PutTask(ctx, task); err != nil {
 		t.Fatal(err)
 	}
@@ -1606,7 +1609,7 @@ func TestGrainCICancelsInFlightRunsWhenAnUnmergedTaskIsClosed(t *testing.T) {
 		Target:   &repo,
 		Base:     "main",
 		Approval: &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
-		Grants:   []model.Grant{{Capability: grainci.CapabilityName}},
+		Grants:   []model.Grant{{Capability: grainci.Grant}},
 	}
 	if err := store.PutTask(ctx, withoutPR); err != nil {
 		t.Fatal(err)
@@ -1697,7 +1700,7 @@ func TestGrainCIRetargetsStackedTaskBaseWhenUpstreamBranchMergesAndIsDeleted(t *
 		Target:   &repo,
 		Base:     upstream.Branch,
 		Approval: &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
-		Grants:   []model.Grant{{Capability: grainci.CapabilityName}},
+		Grants:   []model.Grant{{Capability: grainci.Grant}},
 		Links:    []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#4706"}},
 	}
 	if err := store.PutTask(ctx, stacked); err != nil {
@@ -1787,7 +1790,7 @@ func TestGrainCIRetargetedReviewLosesAutoMerge(t *testing.T) {
 		AutoMerge: true,
 		Origin:    model.Origin{Reason: model.ReasonReview},
 		Approval:  &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
-		Grants:    []model.Grant{{Capability: grainci.CapabilityName}},
+		Grants:    []model.Grant{{Capability: grainci.Grant}},
 		Links:     []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#4706"}},
 	}
 	if err := store.PutTask(ctx, review); err != nil {
@@ -1830,7 +1833,7 @@ func TestSwitchingRepoToGitHubCIModeCancelsInFlightRunsAndStopsStartingNewOnes(t
 
 	task, branch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t1", repo)
 	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
-		tk.Grants = []model.Grant{{Capability: grainci.CapabilityName, Via: model.GrantByDefault}}
+		tk.Grants = []model.Grant{{Capability: grainci.Grant, Via: model.GrantByDefault}}
 		return nil
 	}); err != nil {
 		t.Fatal(err)

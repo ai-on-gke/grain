@@ -56,12 +56,46 @@ describe("notificationAlerts", () => {
     const [row] = notificationAlerts([{ ...open, investigationTaskId: "40" }]);
     expect(row.actions[1].label).toBe("Open investigation");
   });
+
+  // The base-branch reconciler's red-base notification names its repair
+  // in taskId; the bell offered no way to it, only a markdown link drawn
+  // as text (2026-11-03 deployment-operations walkthrough).
+  it("opens the task a notification names, before anything else", () => {
+    const [row] = notificationAlerts([
+      { ...open, subject: "pipeline.base-red:acme/widgets@main", taskId: "5" },
+    ]);
+    expect(row.actions[0]).toEqual({
+      kind: "open-task",
+      label: "Open #5",
+      taskId: "5",
+    });
+    expect(row.actions.map((a) => a.kind)).toEqual([
+      "open-task",
+      "ack-notification",
+      "investigate-notification",
+    ]);
+  });
 });
 
 describe("notificationSentence", () => {
   it("is the body's first line and how often it was raised", () => {
     expect(notificationSentence(open)).toBe(
       "Retried three times. Raised 2 times.",
+    );
+  });
+
+  it("draws a markdown body's links and inline code as their text", () => {
+    expect(
+      notificationSentence({
+        ...open,
+        raiseCount: 1,
+        body:
+          'grain CI on acme/widgets `main` is confirmed red: at 55d6e7c ("failure: test"). ' +
+          "[Task #5](/tasks/5) is repairing it; everything waiting on the branch waits on that.",
+      }),
+    ).toBe(
+      'grain CI on acme/widgets main is confirmed red: at 55d6e7c ("failure: test"). ' +
+        "Task #5 is repairing it; everything waiting on the branch waits on that.",
     );
   });
 
