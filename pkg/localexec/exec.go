@@ -378,8 +378,7 @@ func (e *Executor) environ(script string) []string {
 }
 
 // baseEnv names the variables a script inherits from grain's own
-// environment. As for a custom agent backend (agent/custom's
-// inheritedEnv), everything else is withheld: the daemon's environment
+// environment. Everything else is withheld: the daemon's environment
 // carries provider keys and grain's own secrets, and a script gets the
 // credentials its declaration names and nothing more.
 var baseEnv = map[string]bool{

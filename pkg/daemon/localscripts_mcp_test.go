@@ -18,10 +18,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"slices"
 	"testing"
-
-	"github.com/ai-on-gke/grain/pkg/agent"
 )
 
 func localScriptsDeclaration(t *testing.T) string {
@@ -60,26 +57,5 @@ func TestLocalScriptToolsFollowTheTasksGrants(t *testing.T) {
 	defer closeNone()
 	if len(none) != 0 {
 		t.Fatalf("tools %+v: want none for a task that no longer holds local-scripts:ops", none)
-	}
-}
-
-// A custom backend's forked mcpserver is told the same declarations a
-// built-in framework's is.
-func TestCustomMCPServerArgsCarryLocalScripts(t *testing.T) {
-	args, err := CustomMCPServerArgs(context.Background(), Config{}, agent.RunConfig{
-		SandboxRoot:         t.TempDir(),
-		LocalScripts:        []agent.LocalScripts{{Name: "ops", Path: "/state/local-scripts/ops/local-scripts.yaml"}},
-		LocalScriptsEnvFile: "/tmp/grain-local-scripts-1.json",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	i := slices.Index(args, "-local-scripts")
-	if i < 0 || args[i+1] != "ops=/state/local-scripts/ops/local-scripts.yaml" {
-		t.Fatalf("args %v: want -local-scripts ops=...", args)
-	}
-	j := slices.Index(args, "-local-scripts-env-file")
-	if j < 0 || args[j+1] != "/tmp/grain-local-scripts-1.json" {
-		t.Fatalf("args %v: want -local-scripts-env-file", args)
 	}
 }

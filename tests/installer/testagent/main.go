@@ -12,35 +12,67 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Command testagent is the deterministic agent of tests/installer's
+// container lifecycle test. It stands in for the Antigravity CLI (agy):
+// an antigravity connection whose CLI path is this binary runs it. The
+// prompt arrives as one `--input-format stream-json` user event on stdin,
+// it makes its tool calls through the grain-sandbox MCP server grain
+// wrote into $HOME's mcp_config.json, and it answers in agy's
+// stream-json (init, step_update, result).
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/agent/custom"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 )
 
 func main() {
-	var request custom.Request
-	if err := json.NewDecoder(os.Stdin).Decode(&request); err != nil {
-		fail(fmt.Errorf("decode request: %w", err))
+	for _, arg := range os.Args[1:] {
+		switch arg {
+		case "--version":
+			fmt.Println("testagent 0.0.0 (tests/installer)")
+			return
+		case "models":
+			// Model discovery: the connection pins its model.
+			return
+		}
 	}
-	fields := parseFields(request.Prompt)
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && line == "" {
+		fail(fmt.Errorf("reading the prompt: %w", err))
+	}
+	var user struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(line), &user); err != nil {
+		fail(fmt.Errorf("decoding the prompt event: %w", err))
+	}
+	fields := parseFields(user.Message.Content)
 	for _, key := range []string{"branch", "repo", "host_marker", "signal", "gate"} {
 		if fields[key] == "" {
 			fail(fmt.Errorf("prompt has no %s field", key))
 		}
 	}
+	emit(map[string]any{"event": "init", "conversation_id": conversation,
+		"init": map[string]any{"tools": []string{}}})
 
-	server := exec.Command(request.MCPServer.Command, request.MCPServer.Args...)
-	server.Env = append(os.Environ(), request.MCPServer.Env...)
+	command, args := mcpServer(os.Getenv("HOME"))
+	if command == "" {
+		fail(fmt.Errorf("no %s server in %s", mcp.ToolNamespace, filepath.Join(os.Getenv("HOME"), ".gemini", "config", "mcp_config.json")))
+	}
+	server := exec.Command(command, args...)
+	server.Env = os.Environ()
 	stdin, err := server.StdinPipe()
 	if err != nil {
 		fail(err)
@@ -61,15 +93,23 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	var calls []custom.ToolCall
+	step := 0
 	call := func(name string, arguments map[string]any) string {
+		emit(map[string]any{"event": "step_update", "step_update": map[string]any{
+			"conversation_id": conversation, "step_index": step, "state": "ACTIVE", "step_type": "tool",
+			"tool_name": name, "tool_info": map[string]any{"name": name, "parameters": arguments}}})
 		result, err := client.CallTool(ctx, name, arguments)
 		if err != nil {
 			fail(fmt.Errorf("%s: %w", name, err))
 		}
-		calls = append(calls, custom.ToolCall{
-			Name: name, Arguments: arguments, Text: result.Text(), IsError: result.IsError,
-		})
+		state := "DONE"
+		if result.IsError {
+			state = "ERROR"
+		}
+		emit(map[string]any{"event": "step_update", "step_update": map[string]any{
+			"conversation_id": conversation, "step_index": step, "state": state, "step_type": "tool",
+			"tool_name": name, "tool_info": map[string]any{"name": name, "parameters": arguments, "output": result.Text()}}})
+		step++
 		if result.IsError {
 			fail(fmt.Errorf("%s: %s", name, result.Text()))
 		}
@@ -122,14 +162,39 @@ func main() {
 		"command": finish, "description": "committing and pushing from inside the sandbox",
 	})
 
-	_ = json.NewEncoder(os.Stdout).Encode(custom.Response{
-		ProtocolVersion: custom.ProtocolVersion,
-		Result: &custom.Result{
-			FinalText:  "checked out, edited through MCP, committed, and pushed inside the container",
-			ToolCalls:  calls,
-			Transcript: "The deterministic installer e2e agent completed the container lifecycle.",
-		},
-	})
+	const response = "checked out, edited through MCP, committed, and pushed inside the container"
+	emit(map[string]any{"event": "step_update", "step_update": map[string]any{
+		"conversation_id": conversation, "step_index": step, "state": "DONE", "step_type": "agent_response",
+		"text_delta": response}})
+	emit(map[string]any{"event": "result", "result": map[string]any{
+		"conversation_id": conversation, "status": "SUCCESS", "response": response, "num_turns": 1}})
+}
+
+const conversation = "installer-e2e-conversation"
+
+// mcpServer is the grain-sandbox server from the mcp_config.json grain
+// wrote into home, the file real agy reads: the command it forks.
+func mcpServer(home string) (string, []string) {
+	b, err := os.ReadFile(filepath.Join(home, ".gemini", "config", "mcp_config.json"))
+	if err != nil {
+		return "", nil
+	}
+	var cfg struct {
+		MCPServers map[string]struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	if json.Unmarshal(b, &cfg) != nil {
+		return "", nil
+	}
+	s := cfg.MCPServers[mcp.ToolNamespace]
+	return s.Command, s.Args
+}
+
+func emit(event map[string]any) {
+	b, _ := json.Marshal(event)
+	fmt.Println(string(b))
 }
 
 // parseFields reads this agent's instructions out of the prompt: the
@@ -162,9 +227,7 @@ func shellQuote(value string) string {
 }
 
 func fail(err error) {
-	_ = json.NewEncoder(os.Stdout).Encode(custom.Response{
-		ProtocolVersion: custom.ProtocolVersion,
-		Error:           &custom.ResponseError{Message: err.Error()},
-	})
+	emit(map[string]any{"event": "result", "result": map[string]any{
+		"conversation_id": conversation, "status": "FAILURE", "error": err.Error()}})
 	os.Exit(1)
 }

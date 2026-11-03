@@ -482,7 +482,11 @@ import "strconv"
 // 102 adds `default_hostd` to `repo_config` (model.RepoConfig.DefaultHostd):
 // the hostd pin or label selector a task filed against the repository
 // starts with when neither the filing nor its template names one.
-const SchemaVersion = 102
+//
+// 103 retires the custom command connection type: every stored
+// connection whose framework is "custom" is disabled and kept, with
+// model.RemovedCustomConnectionReason (custom_connection_migration.go).
+const SchemaVersion = 103
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified

@@ -703,6 +703,11 @@ var Migrations = []Migration{
 			"ALTER TABLE `repo_config` ADD COLUMN `default_hostd` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     103,
+		Description: "disable (and keep) every stored custom command connection: the connection type is removed",
+		Up:          disableCustomConnections,
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as
