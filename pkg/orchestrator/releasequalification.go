@@ -346,7 +346,7 @@ func (q *rcQualification) attempt(ctx context.Context, st model.SuiteTaskStatus)
 	if err != nil {
 		return a, err
 	}
-	a.Note = closingNote(comments)
+	a.Note = closingNote(comments, st.TaskID)
 	leaked, err := q.forge.BranchExists(q.repo.Owner, q.repo.Name, model.QualificationScratchBranch(st.TaskID))
 	if err != nil {
 		return a, fmt.Errorf("checking %s's scratch branch: %w", st.TaskID, err)
@@ -406,21 +406,38 @@ func (q *rcQualification) children(ctx context.Context, a *model.QualificationAt
 	return nil
 }
 
-// closingNote is the newest comment carrying a verdict footer, or failing
-// that the newest comment a run wrote -- which then fails for having
-// none.
-func closingNote(comments []model.Comment) string {
+// closingNote is the newest comment taskID's own runs wrote that carries
+// a verdict footer, or failing that the newest one they wrote -- which
+// then fails for having none.
+//
+// Only the task's own runs count. Anybody else in the thread -- a person,
+// a scratch fixture or any api:task-admin task writing in with
+// `grain task message` (ui.Client.PostTaskNote) -- could otherwise post
+// a PASS footer after the run's own FAIL and have it read as the verdict.
+func closingNote(comments []model.Comment, taskID string) string {
+	var newest string
+	found := false
 	for i := len(comments) - 1; i >= 0; i-- {
+		if !ownRunComment(comments[i], taskID) {
+			continue
+		}
 		if strings.Contains(comments[i].Body, "Qualification-Verdict:") {
 			return comments[i].Body
 		}
-	}
-	for i := len(comments) - 1; i >= 0; i-- {
-		if comments[i].Author.Actor.Kind == model.PrincipalAgent {
-			return comments[i].Body
+		if !found {
+			newest, found = comments[i].Body, true
 		}
 	}
-	return ""
+	return newest
+}
+
+// ownRunComment reports whether c is something taskID's own run said:
+// grain relaying it on the run's behalf (finish.go's relayComment), the
+// way a closing note is stored.
+func ownRunComment(c model.Comment, taskID string) bool {
+	by := c.Author.OnBehalfOf
+	return c.Author.Actor.Kind == model.PrincipalAutomation && by != nil &&
+		by.Kind == model.PrincipalAgent && by.ID == taskID
 }
 
 // post writes the check run on rc_sha: updating the one already there,

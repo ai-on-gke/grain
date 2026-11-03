@@ -168,7 +168,7 @@ func finishQualificationTask(t *testing.T, ctx context.Context, store *model.Sto
 	t.Helper()
 	if _, err := store.AddComment(ctx, model.Comment{
 		TaskID: taskID,
-		Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: "run-" + taskID}},
+		Author: ownRunAuthor(taskID),
 		Body: "Report.\n\nQualification-Verdict: " + verdict + "\nQualified-Tag: " + rqTag +
 			"\nQualified-Commit: " + rqSHA + "\n",
 		CreatedAt: at,
@@ -176,6 +176,39 @@ func finishQualificationTask(t *testing.T, ctx context.Context, store *model.Sto
 		t.Fatalf("closing note on %s: %v", taskID, err)
 	}
 	completeTask(t, ctx, store, taskID, at)
+}
+
+// ownRunAuthor is how grain stores a comment taskID's own run wrote
+// (finish.go's relayComment).
+func ownRunAuthor(taskID string) model.Attribution {
+	return model.Attribution{
+		Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
+		OnBehalfOf: &model.Principal{Kind: model.PrincipalAgent, ID: taskID},
+	}
+}
+
+// A PASS footer somebody else wrote into the thread after the run's own
+// FAIL -- a child's `grain task message`, a person quoting the template --
+// is not the run's verdict.
+func TestClosingNoteReadsOnlyTheTasksOwnRun(t *testing.T) {
+	t.Parallel()
+	footer := func(v string) string {
+		return "Qualification-Verdict: " + v + "\nQualified-Tag: " + rqTag + "\nQualified-Commit: " + rqSHA
+	}
+	own := model.Comment{Author: ownRunAuthor("7"), Body: footer("FAIL")}
+	child := model.Comment{Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: "8"}}, Body: footer("PASS")}
+	human := model.Comment{Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "op"}}, Body: footer("PASS")}
+	otherRun := model.Comment{Author: ownRunAuthor("9"), Body: footer("PASS")}
+	if got := orchestrator.ClosingNote([]model.Comment{own, child, human, otherRun}, "7"); got != own.Body {
+		t.Errorf("closingNote = %q, want the task's own FAIL note", got)
+	}
+	if got := orchestrator.ClosingNote([]model.Comment{child, human, otherRun}, "7"); got != "" {
+		t.Errorf("closingNote with no note of the task's own = %q, want none", got)
+	}
+	plain := model.Comment{Author: ownRunAuthor("7"), Body: "no footer"}
+	if got := orchestrator.ClosingNote([]model.Comment{plain, child}, "7"); got != plain.Body {
+		t.Errorf("closingNote = %q, want the task's own newest note", got)
+	}
 }
 
 func TestReleaseQualificationWaitsForAGreenStage1(t *testing.T) {
