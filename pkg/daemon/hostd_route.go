@@ -20,10 +20,10 @@ package daemon
 // for each run by SelectHostd. The run's framework is then built on a
 // copy of the config whose host executor is that hostd's, so the agent
 // CLI reaches it through its own client (HostExecutor.Hostd,
-// hostd.Remote.Dialer). run: host capability servers -- host scripts
-// among them -- are not routed: they are started once, through the
-// default hostd (Config.capabilityHostd), whichever hostd a run's CLI
-// went to, and their audit records say so (Deps.CapabilityHostd). A
+// hostd.Remote.Dialer), and starts detached through that hostd's own
+// runhost.Hostd (newHostdRuns). Its run: host capability servers -- host
+// scripts among them -- are started on the same hostd
+// (hostdCapabilityServers), and its capability audit records say so. A
 // task with no pin goes to the default hostd exactly as before.
 //
 // The pool also holds each hostd to its allowlist's capacity: (Hello.
@@ -73,10 +73,17 @@ func (e *errHostdFull) Error() string {
 // selector resolved now, or the default hostd. A pinned hostd that is
 // not connected is a *HostdWaitError; nothing falls back to another.
 func (p *AgentPool) routeHostd(ctx context.Context, live Config, taskID string) (hostdRoute, error) {
+	return resolveHostdRoute(ctx, live, p.Store, taskID)
+}
+
+// resolveHostdRoute is routeHostd with the store to read taskID's
+// selector from: what a run's agent CLI and its run: host capability
+// servers (hostdCapabilityServers) are both routed by.
+func resolveHostdRoute(ctx context.Context, live Config, store *model.Store, taskID string) (hostdRoute, error) {
 	selector := ""
-	if p.Store != nil && taskID != "" {
+	if store != nil && taskID != "" {
 		var err error
-		if selector, err = p.Store.TaskHostd(ctx, taskID); err != nil {
+		if selector, err = store.TaskHostd(ctx, taskID); err != nil {
 			return hostdRoute{}, err
 		}
 	}
@@ -91,19 +98,18 @@ func (p *AgentPool) routeHostd(ctx context.Context, live Config, taskID string) 
 	if err != nil {
 		return hostdRoute{}, err
 	}
-	exec, resolved, err := live.SelectHostd(ctx, p.Store, HostdSelector{Name: name, Labels: labels})
+	exec, resolved, err := live.SelectHostd(ctx, store, HostdSelector{Name: name, Labels: labels})
 	if err != nil {
 		return hostdRoute{}, err
 	}
 	return hostdRoute{Name: resolved, Exec: exec, Pinned: true}, nil
 }
 
-// apply is live with r's hostd as its host executor. The default hostd's
-// runs keep starting detached (newHostdRuns), so they outlive a daemon
-// upgrade; another hostd's runs start detached too, so a drop is
-// re-attached within -hostd-reattach-timeout, but die with this daemon
-// (newPinnedHostdRuns), since only the default hostd's runs are
-// re-adopted at start.
+// apply is live with r's hostd as its host executor. Its runs start
+// detached through that hostd's own runhost.Hostd (newHostdRuns), so a
+// drop is re-attached within -hostd-reattach-timeout, a run on any hostd
+// outlives a daemon upgrade, and it is re-adopted from the hostd it
+// recorded (adoptHostd).
 func (r hostdRoute) apply(live Config) Config {
 	if !r.Pinned {
 		return live
@@ -111,10 +117,7 @@ func (r hostdRoute) apply(live Config) Config {
 	exec := r.Exec
 	live.HostExec = &exec
 	if r.Name != live.DefaultHostd() {
-		live.hostdRuns = nil
-		if live.pinnedHostdRuns != nil {
-			live.hostdRuns = live.pinnedHostdRuns(exec)
-		}
+		live.hostdRuns = live.hostdRunSet.forHostd(r.Name, exec)
 	}
 	return live
 }

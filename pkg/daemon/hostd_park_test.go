@@ -75,7 +75,7 @@ func parkedHostdSetup(t *testing.T, reattach time.Duration) (Config, *AgentPool,
 	cfg := withExecutor(Config{HostdSocket: sock, AgyRun: model.CLIRunHost, HostdReattachTimeout: reattach},
 		whererun.Detection{Signal: "/.dockerenv"}, nil)
 	cfg.HostdHub = newHostdHub(cfg, store)
-	cfg.pinnedHostdRuns = newPinnedHostdRuns(cfg, store)
+	cfg.hostdRunSet = newHostdRuns(cfg, store)
 
 	f := &flakyHostd{}
 	ctl := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

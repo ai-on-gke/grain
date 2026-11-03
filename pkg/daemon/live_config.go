@@ -150,6 +150,10 @@ type LiveConfig struct {
 	// (startCapabilityServers); Refresh hands it each mcp_servers it
 	// reads. Nil where nothing attaches them (tests, `grain demo`).
 	capabilityServers *servers.Registry
+	// hostdCapabilityServers starts run: host servers on the hostd a
+	// pinned task's run is routed to; Refresh hands it each mcp_servers
+	// too. Nil beside a nil capabilityServers.
+	hostdCapabilityServers *hostdCapabilityServers
 
 	Mu      sync.Mutex
 	Applied Config
@@ -190,6 +194,17 @@ func (l *LiveConfig) WithSandboxImages(src *sandboximage.Source, stock string, l
 // grain_config.mcp_servers.
 func (l *LiveConfig) WithCapabilityServers(r *servers.Registry) *LiveConfig {
 	l.capabilityServers = r
+	return l
+}
+
+// withHostdCapabilityServers hands Refresh the hostds' registries of run:
+// host servers (hostdCapabilityServers) beside the deployment's.
+func (l *LiveConfig) withHostdCapabilityServers(h *hostdCapabilityServers) *LiveConfig {
+	if h != nil {
+		// Each run routed by the configuration as it stands.
+		h.live = l.Current
+	}
+	l.hostdCapabilityServers = h
 	return l
 }
 
@@ -434,7 +449,9 @@ func (l *LiveConfig) Refresh(ctx context.Context, deps *orchestrator.Deps) (poll
 	// unchanged one and attaches, refreshes and detaches off this
 	// goroutine (pkg/capability/servers).
 	if l.capabilityServers != nil {
-		l.capabilityServers.Update(registerBuiltinCapabilityServers(ctx, l.store, now.DataDir, stored.MCPServers))
+		configured := registerBuiltinCapabilityServers(ctx, l.store, now.DataDir, stored.MCPServers)
+		l.capabilityServers.Update(configured)
+		l.hostdCapabilityServers.update(configured)
 	}
 
 	wasCPUOvercommit, wasMemOvercommit := was.overcommitRatios()

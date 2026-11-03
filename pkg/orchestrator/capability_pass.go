@@ -49,6 +49,25 @@ type CapabilityServers interface {
 	Lookup(capabilityID string) (*protocol.Server, error)
 }
 
+// TaskCapabilityServers is CapabilityServers whose run: host servers are
+// started on the grain hostd each task's run is routed to: ForTask is
+// what taskID's run mints through, and the name of that hostd, recorded
+// on the run's capability audit (model.CapabilityAuditRecord.Hostd).
+// CapabilityServers that do not implement it start every run's on
+// Deps.CapabilityHostd.
+type TaskCapabilityServers interface {
+	ForTask(ctx context.Context, taskID string) (CapabilityServers, string, error)
+}
+
+// capabilityServersFor is the servers taskID's run mints through, and
+// the hostd their run: host servers started on.
+func (d Deps) capabilityServersFor(ctx context.Context, taskID string) (CapabilityServers, string, error) {
+	if routed, ok := d.CapabilityServers.(TaskCapabilityServers); ok {
+		return routed.ForTask(ctx, taskID)
+	}
+	return d.CapabilityServers, d.CapabilityHostd, nil
+}
+
 const (
 	// passTransientLimit is how many consecutive transient failures of
 	// one grant refuse the run (§4.2.4).
@@ -72,6 +91,10 @@ type CapabilityPasses struct {
 type heldPass struct {
 	pass     *protocol.Pass
 	deadline time.Time
+	// servers are what the pass was minted through, and hostd the grain
+	// hostd their run: host servers started on.
+	servers CapabilityServers
+	hostd   string
 }
 
 type passBackoff struct {
@@ -96,10 +119,10 @@ func (d Deps) capabilityPasses() *CapabilityPasses {
 	return defaultCapabilityPasses
 }
 
-func (h *CapabilityPasses) hold(runID string, p *protocol.Pass, deadline time.Time) {
+func (h *CapabilityPasses) hold(runID string, p *protocol.Pass, deadline time.Time, servers CapabilityServers, hostd string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.passes[runID] = &heldPass{pass: p, deadline: deadline}
+	h.passes[runID] = &heldPass{pass: p, deadline: deadline, servers: servers, hostd: hostd}
 }
 
 func (h *CapabilityPasses) take(runID string) *heldPass {
@@ -113,15 +136,22 @@ func (h *CapabilityPasses) take(runID string) *heldPass {
 // Release releases runID's pass, if it holds one (§4.4.1), and returns
 // the audit its grants' releases returned (§4.4.4).
 func (h *CapabilityPasses) Release(ctx context.Context, runID string) []protocol.GrantAudit {
+	audits, _ := h.release(ctx, runID)
+	return audits
+}
+
+// release is Release, with the hostd the pass's run: host servers
+// started on.
+func (h *CapabilityPasses) release(ctx context.Context, runID string) ([]protocol.GrantAudit, string) {
 	held := h.take(runID)
 	if held == nil {
-		return nil
+		return nil, ""
 	}
 	audits, err := held.pass.Release(ctx)
 	if err != nil {
 		log.Printf("orchestrator: run %s: releasing its capability grants: %v", runID, err)
 	}
-	return audits
+	return audits, held.hostd
 }
 
 // releaseRunCapabilities releases the pass runID ran with and records
@@ -133,13 +163,14 @@ func (h *CapabilityPasses) Release(ctx context.Context, runID string) []protocol
 // task's own are linked to taskID (recordTaskChangelists).
 func releaseRunCapabilities(ctx context.Context, deps Deps, taskID, runID string) {
 	publishRunReplies(ctx, deps, taskID, runID)
-	audits := deps.capabilityPasses().Release(ctx, runID)
+	audits, hostd := deps.capabilityPasses().release(ctx, runID)
 	records := capabilityAuditRecords(audits, deps.Config.now())
 	if len(records) == 0 || deps.Store == nil {
 		return
 	}
+	// The hostd this run's pass was minted on (TaskCapabilityServers).
 	for i := range records {
-		records[i].Hostd = deps.CapabilityHostd
+		records[i].Hostd = hostd
 	}
 	if err := deps.Store.AppendRunCapabilityAudit(ctx, runID, records); err != nil {
 		log.Printf("orchestrator: run %s: recording its capability audit: %v", runID, err)
@@ -252,6 +283,17 @@ func (h *CapabilityPasses) held(runID string) (*protocol.Pass, time.Time) {
 	return nil, time.Time{}
 }
 
+// heldDeps is deps with the servers runID's pass was minted through, so
+// its ports and endpoints are those of the servers that granted them.
+func (h *CapabilityPasses) heldDeps(runID string, deps Deps) Deps {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if held := h.passes[runID]; held != nil {
+		deps.CapabilityServers = held.servers
+	}
+	return deps
+}
+
 // Extend renews runID's pass when deadline is later than the one it was
 // minted for (§4.3.5): an attempt whose budget was extended past what
 // admission minted for.
@@ -342,8 +384,17 @@ func capabilityAdmitter(deps Deps, admit dispatch.Admitter) dispatch.Admitter {
 				Resource: b.reason, WaitingAt: at})
 			return decline("capability pass "+b.grant, "backing off: "+b.reason)
 		}
+		// The servers this task's run mints through: run: host ones on
+		// the hostd its run is routed to. One that cannot be reached now
+		// leaves the candidate queued, as its framework's route does.
+		servers, hostd, err := deps.capabilityServersFor(ctx, task.ID)
+		if err != nil {
+			return decline("capability pass", err.Error())
+		}
+		mintDeps := deps
+		mintDeps.CapabilityServers = servers
 		deadline := capabilityDeadline(at, deps.Config.maxRunRuntime())
-		p, err := mintCapabilityPass(ctx, deps, *task, candidate, at, deadline)
+		p, err := mintCapabilityPass(ctx, mintDeps, *task, candidate, at, deadline)
 		if err != nil {
 			if serr := admissionMintFailed(ctx, deps, passes, *task, err, at); serr != nil {
 				log.Printf("orchestrator: task %s: recording its failed capability admission: %v", task.ID, serr)
@@ -351,7 +402,7 @@ func capabilityAdmitter(deps Deps, admit dispatch.Admitter) dispatch.Admitter {
 			return decline("capability pass", err.Error())
 		}
 		passes.clearBackoff(task.ID)
-		passes.hold(candidate.RunID, p, deadline)
+		passes.hold(candidate.RunID, p, deadline, servers, hostd)
 		release := adm.Release
 		adm.Release = func() {
 			passes.Release(context.Background(), candidate.RunID)
