@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
@@ -245,4 +246,67 @@ func placedEntry(placed map[string]protocol.ServerConfig, capabilityID string) (
 		}
 	}
 	return protocol.ServerConfig{}, false
+}
+
+// NeedsHostd is the state Settings shows a placed server in while the
+// hostd it is placed on cannot be reached: "needs-hostd:<selector>".
+func NeedsHostd(selector string) servers.State {
+	return servers.State("needs-hostd:" + selector)
+}
+
+// placedStatusTimeout bounds resolving one placed server's hostd for
+// Settings.
+const placedStatusTimeout = 2 * time.Second
+
+// statuses is a Settings row for each placed server: its own hostd
+// registry's, once it has been attached there; pending until then; and
+// NeedsHostd while its hostd is not connected.
+func (h *hostdCapabilityServers) statuses() []servers.Status {
+	if h == nil || h.live == nil {
+		return nil
+	}
+	h.mu.Lock()
+	placed := h.configured
+	h.mu.Unlock()
+	if len(placed) == 0 {
+		return nil
+	}
+	cfg := h.live()
+	var out []servers.Status
+	for id, entry := range placed {
+		sel := string(entry.Hostd)
+		row := servers.Status{ID: id, State: servers.Pending, Transport: "stdio", Run: protocol.RunHost, Builtin: entry.Builtin, Aliases: entry.Aliases}
+		ctx, cancel := context.WithTimeout(h.ctx, placedStatusTimeout)
+		route, err := resolveHostdSelector(ctx, cfg, h.store, sel)
+		cancel()
+		if err != nil {
+			row.State, row.Error = NeedsHostd(sel), err.Error()
+			out = append(out, row)
+			continue
+		}
+		h.mu.Lock()
+		r := h.regs[route.Name]
+		h.mu.Unlock()
+		if r != nil {
+			for _, st := range r.reg.Statuses() {
+				if st.ID == id {
+					row = st
+				}
+			}
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+// placedStatusRegistry is the deployment's registry as Settings reads
+// it, with a row for each server placed on a hostd of its own, which the
+// deployment's registry does not attach.
+type placedStatusRegistry struct {
+	*servers.Registry
+	placed *hostdCapabilityServers
+}
+
+func (r placedStatusRegistry) Statuses() []servers.Status {
+	return append(r.Registry.Statuses(), r.placed.statuses()...)
 }

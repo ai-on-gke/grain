@@ -183,6 +183,10 @@ func gcpKeyPool(_ Config) []string {
 // interface, not a typed nil, when there is none.
 func capabilityServerStatuses(live *LiveConfig) ui.CapabilityServerStatuses {
 	if reg := live.CapabilityServers(); reg != nil {
+		// With the rows of the servers placed on hostds of their own.
+		if live.hostdCapabilityServers != nil {
+			return placedStatusRegistry{Registry: reg, placed: live.hostdCapabilityServers}
+		}
 		return reg
 	}
 	return nil

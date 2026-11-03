@@ -163,6 +163,22 @@ func TestAPlacedCapabilityServerRunsOnItsOwnHostd(t *testing.T) {
 		t.Errorf("a server on a disconnected hostd: Lookup = %v, want needs-hostd:ws-off", err)
 	}
 
+	// Settings lists the placed servers beside the deployment's: the one
+	// on ws-a as its own registry has it, the one on ws-off as waiting.
+	rows := map[string]servers.Status{}
+	for _, st := range capabilityServerStatuses(live).Statuses() {
+		rows[st.ID] = st
+	}
+	if got := rows[offScripts].State; got != NeedsHostd("ws-off") {
+		t.Errorf("the server on ws-off reads %q in Settings, want %q", got, NeedsHostd("ws-off"))
+	}
+	if got := rows[hostScriptsA].State; got != servers.Attached {
+		t.Errorf("the server on ws-a reads %q in Settings, want attached", got)
+	}
+	if _, ok := rows[inContainer]; !ok {
+		t.Error("Settings lost the deployment's own servers")
+	}
+
 	// A server dropped from mcp_servers goes from the hostd's registry too.
 	h.update(map[string]protocol.ServerConfig{inContainer: configured[inContainer]})
 	h.mu.Lock()
