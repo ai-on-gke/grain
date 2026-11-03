@@ -698,6 +698,13 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     102,
+		Description: "add the hostd selector a repository's tasks start pinned to",
+		Statements: []string{
+			"ALTER TABLE `repo_config` ADD COLUMN `default_hostd` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     103,
 		Description: "seed gcp#gemini-key on the gcp server where grain_config.gcp_project is set, minting with the gcp-key-minter secret, and rewrite stored gemini-key grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/gcp#gemini-key={} (the in-process gemini-key is retired)",
 		Up:          migrateGeminiKeyToCapabilityServer,
 	},

@@ -499,7 +499,7 @@ func (c *Client) checkable(id string) bool {
 // (pkg/cli/daemon.go), read back as the human-facing labels Settings'
 // Capabilities tab already uses. No provider grain ships is gated on a
 // setting since gemini-key, the last one that was (on the GCP project),
-// was retired onto the gcp server (schema migration 102).
+// was retired onto the gcp server (schema migration 103).
 func missingConfigFor(string, model.Config) []string {
 	return nil
 }

@@ -42,6 +42,7 @@
 //     is the opposite: it is why no answer came, and without it the chat
 //     simply goes quiet.
 import { outcomeLabel } from "./state.js";
+import { commentAuthor } from "./principal.js";
 
 // chatEntries is the ordered list TaskChat renders, from one TaskDetail.
 //
@@ -58,7 +59,7 @@ export function chatEntries(t) {
       kind: "message",
       at: t.createdAt ? new Date(t.createdAt) : null,
       direction: t.authorKind === "human" ? "outgoing" : "incoming",
-      sender: t.creator || t.author || "unknown",
+      sender: t.authorLabel || t.creator || t.author || "unknown",
       body: t.description,
       attachments: t.attachments || [],
     });
@@ -98,9 +99,8 @@ export function chatEntries(t) {
       // question from a dispatched run is grain speaking for an agent,
       // and the chat says so rather than putting grain's name on the
       // agent's sentence.
-      sender: c.onBehalfOf
-        ? `${c.author} on behalf of ${c.onBehalfOf}`
-        : c.author || (c.authorKind === "human" ? "human" : "grain"),
+      sender:
+        commentAuthor(c) || (c.authorKind === "human" ? "human" : "grain"),
       body: c.body || "",
       attachments: c.attachments || [],
     });

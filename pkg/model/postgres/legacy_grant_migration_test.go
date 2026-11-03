@@ -157,7 +157,7 @@ var retiredGrants = []struct {
 	{101, "image-signing", []string{model.ImageSigningRef + "={}"}},
 	{101, "registry-push", []string{model.RegistryPushRef + "={}"}},
 	{101, "package-publish", []string{model.PackagePublishRef + "={}"}},
-	{102, "gemini-key", []string{model.GCPGeminiKeyGrant}},
+	{103, "gemini-key", []string{model.GCPGeminiKeyGrant}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'

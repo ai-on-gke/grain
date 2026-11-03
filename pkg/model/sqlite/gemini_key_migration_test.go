@@ -66,7 +66,7 @@ func geminiSeedSet(admin string) map[string]any {
 }
 
 // geminiSeedCases are the shapes a gcp server entry can be in when
-// migration 102 seeds gemini_key into it, and the admin it must mint with.
+// migration 103 seeds gemini_key into it, and the admin it must mint with.
 var geminiSeedCases = []struct {
 	name      string
 	entry     *protocol.ServerConfig
@@ -135,11 +135,11 @@ var geminiSeedCases = []struct {
 	},
 }
 
-// Migration 102 seeds gemini_key: {project} into the gcp server entry
+// Migration 103 seeds gemini_key: {project} into the gcp server entry
 // wherever gcp_project is set, minting with the gcp-key-minter secret
 // whatever shape the entry's admins were in, keeps every existing set on
 // the admin it had, and changes nothing when it runs again.
-func TestMigration102SeedsGeminiKey(t *testing.T) {
+func TestMigration103SeedsGeminiKey(t *testing.T) {
 	t.Parallel()
 	for _, tc := range geminiSeedCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -160,7 +160,7 @@ func TestMigration102SeedsGeminiKey(t *testing.T) {
 				"acme-ai", raw); err != nil {
 				t.Fatal(err)
 			}
-			migrateFrom101(t, ctx, db)
+			migrateFrom102(t, ctx, db)
 
 			entry := storedGCPEntry(t, ctx, db)
 			c, err := parseGCPEntry(entry)
@@ -191,7 +191,7 @@ func TestMigration102SeedsGeminiKey(t *testing.T) {
 			}
 
 			before := storedMCPServers(t, ctx, db)
-			migrateFrom101(t, ctx, db)
+			migrateFrom102(t, ctx, db)
 			if after := storedMCPServers(t, ctx, db); after != before {
 				t.Errorf("a second run changed mcp_servers:\n%s\n->\n%s", before, after)
 			}
@@ -200,9 +200,9 @@ func TestMigration102SeedsGeminiKey(t *testing.T) {
 }
 
 // A deployment with no GCP project never registered the in-process
-// gemini-key, so migration 102 seeds nothing for it -- and still rewrites
+// gemini-key, so migration 103 seeds nothing for it -- and still rewrites
 // its grants, policy rules included.
-func TestMigration102WithoutAProjectOnlyRewritesGrants(t *testing.T) {
+func TestMigration103WithoutAProjectOnlyRewritesGrants(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 	cfg := testConfig()
@@ -221,7 +221,7 @@ func TestMigration102WithoutAProjectOnlyRewritesGrants(t *testing.T) {
 	if _, err := db.ExecContext(ctx, "UPDATE `grain_config` SET `gcp_project` = '', `mcp_servers` = '' WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
-	migrateFrom101(t, ctx, db)
+	migrateFrom102(t, ctx, db)
 	if got := storedMCPServers(t, ctx, db); got != "" {
 		t.Errorf("mcp_servers = %s, want nothing seeded", got)
 	}
@@ -241,7 +241,7 @@ func TestMigration102WithoutAProjectOnlyRewritesGrants(t *testing.T) {
 }
 
 // A gcp entry that already configures gemini_key is left as it is.
-func TestMigration102KeepsAConfiguredGeminiKey(t *testing.T) {
+func TestMigration103KeepsAConfiguredGeminiKey(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 	if err := store.PutConfig(ctx, testConfig()); err != nil {
@@ -259,13 +259,13 @@ func TestMigration102KeepsAConfiguredGeminiKey(t *testing.T) {
 	if _, err := db.ExecContext(ctx, "UPDATE `grain_config` SET `gcp_project` = 'acme-ai', `mcp_servers` = ? WHERE `id` = 1", string(b)); err != nil {
 		t.Fatal(err)
 	}
-	migrateFrom101(t, ctx, db)
+	migrateFrom102(t, ctx, db)
 	if got := storedMCPServers(t, ctx, db); got != string(b) {
 		t.Errorf("mcp_servers = %s, want %s untouched", got, b)
 	}
 }
 
-// A state-repo export written before schema 102 is migrated on import:
+// A state-repo export written before schema 103 is migrated on import:
 // gemini_key is seeded from its gcp_project and its gemini-key grants
 // arrive as gcp#gemini-key={}.
 func TestStateRepoImportRetiresGeminiKey(t *testing.T) {
@@ -289,13 +289,13 @@ func TestStateRepoImportRetiresGeminiKey(t *testing.T) {
 	if err := staterepo.Export(ctx, srcDB, dir); err != nil {
 		t.Fatal(err)
 	}
-	if err := staterepo.WriteSchemaVersion(dir, 101); err != nil {
+	if err := staterepo.WriteSchemaVersion(dir, 102); err != nil {
 		t.Fatal(err)
 	}
 
 	dst, dstDB, _ := openStore(t)
 	if err := staterepo.Import(ctx, dstDB, dir); err != nil {
-		t.Fatalf("importing a schema-101 export: %v", err)
+		t.Fatalf("importing a schema-102 export: %v", err)
 	}
 	got, err := dst.GetConfig(ctx)
 	if err != nil {
@@ -320,13 +320,13 @@ func TestStateRepoImportRetiresGeminiKey(t *testing.T) {
 	}
 }
 
-func migrateFrom101(t *testing.T, ctx context.Context, db *sql.DB) {
+func migrateFrom102(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 101 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 102 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-101 store: %v", err)
+		t.Fatalf("migrating a version-102 store: %v", err)
 	}
 }
 

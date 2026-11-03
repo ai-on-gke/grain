@@ -53,7 +53,7 @@ func testLiveConfig(cfg daemon.Config) *daemon.LiveConfig {
 }
 
 // gemini-key was retired onto the gcp server's gcp#gemini-key (schema
-// migration 102), so no deployment registers a provider for it any more,
+// migration 103), so no deployment registers a provider for it any more,
 // with or without a GCP project: a check says so rather than naming a
 // setting that would not register one either.
 func TestCapabilityCheckOfRetiredGeminiKeyFindsNoProvider(t *testing.T) {

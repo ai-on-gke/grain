@@ -479,12 +479,16 @@ import "strconv"
 // grants, repo_config.ci_capabilities among them, become
 // https://grain.dev/capabilities/release#<method>={}.
 //
-// 102 retires the in-process gemini-key onto the gcp server's
+// 102 adds `default_hostd` to `repo_config` (model.RepoConfig.DefaultHostd):
+// the hostd pin or label selector a task filed against the repository
+// starts with when neither the filing nor its template names one.
+//
+// 103 retires the in-process gemini-key onto the gcp server's
 // https://grain.dev/capabilities/gcp#gemini-key: where `gcp_project` is
 // set, seeds the gcp entry in `grain_config`.`mcp_servers` with
 // gemini_key: {project}, minting with the gcp-key-minter secret, and
 // rewrites stored gemini-key grants as 100 did the model proxies.
-const SchemaVersion = 102
+const SchemaVersion = 103
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified
@@ -3095,6 +3099,10 @@ var Tables = []string{
 	// issue importer (schema 65). DEFAULT 0 / '' imports nothing, and
 	// issue_import_approved DEFAULT 0 files what it does import
 	// unapproved.
+	//
+	// default_hostd is RepoConfig.DefaultHostd: the hostd pin or label
+	// selector a task filed here starts with when neither the filing nor
+	// its template names one (schema 102). DEFAULT '' is the default hostd.
 	`CREATE TABLE IF NOT EXISTS ` + "`repo_config`" + ` (
   ` + "`owner`" + `                TEXT NOT NULL,
   ` + "`name`" + `                 TEXT NOT NULL,
@@ -3131,6 +3139,7 @@ var Tables = []string{
   ` + "`issue_import_label`" + `       TEXT NOT NULL DEFAULT '',
   ` + "`issue_import_approved`" + `    INTEGER NOT NULL DEFAULT 0,
   ` + "`issue_import_interval_seconds`" + ` INTEGER NOT NULL DEFAULT 0,
+  ` + "`default_hostd`" + `            TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 

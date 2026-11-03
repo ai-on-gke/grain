@@ -85,7 +85,7 @@ func newCapabilityRegistryWithStore(_ *model.Store, local localscripts.Config, p
 func CapabilityProviders(cfg Config, store *model.Store, _ map[string]*modelproxy.Endpoint, githubTokens []string, githubCredentials githubCredentialLadder) []model.CapabilityProvider {
 	var providers []model.CapabilityProvider
 	// gemini-key is no longer a provider here: it was retired onto the
-	// gcp server's gemini-key (schema migration 102), which mints with
+	// gcp server's gemini-key (schema migration 103), which mints with
 	// the same gcp-key-minter secret and reaps keys older than 24h.
 	providers = append(providers, githubsandbox.NewProvider(githubsandbox.Config{
 		Host: cfg.GithubHost, InsecureHTTP: cfg.GithubInsecureHTTP,
@@ -183,7 +183,7 @@ func teamRepos(store *model.Store) func(context.Context) ([]string, error) {
 // gates a provider above. Keep the diagnosis for an absent provider on
 // this same predicate: if registration gains a prerequisite, a credential
 // check must name the same prerequisite. No provider has one since
-// gemini-key was retired onto the gcp server (schema migration 102).
+// gemini-key was retired onto the gcp server (schema migration 103).
 func missingCapabilityProviderConfig(Config, string) []string {
 	return nil
 }

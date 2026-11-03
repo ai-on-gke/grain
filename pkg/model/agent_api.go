@@ -493,7 +493,7 @@ var legacyGrantReplacements = map[string]string{
 	"image-signing":          ImageSigningRef + "={}",
 	"registry-push":          RegistryPushRef + "={}",
 	CapabilityPackagePublish: PackagePublishRef + "={}",
-	// Retired by schema migration 102 onto the gcp server's gemini-key,
+	// Retired by schema migration 103 onto the gcp server's gemini-key,
 	// which mints with the same gcp-key-minter secret.
 	"gemini-key": GCPGeminiKeyGrant,
 }
