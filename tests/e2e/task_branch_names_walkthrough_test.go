@@ -92,13 +92,16 @@ func TestTaskBranchNamesPushAndOpenPullRequests(t *testing.T) {
 	}
 
 	// The fake agent: one commit on the task's branch with a 300-character
-	// summary line, pushed through the proxy.
+	// summary line, pushed through the proxy. Each invocation keeps its
+	// request in a file of its own: two tasks' runs go at once, and a
+	// shared file let one run read the other's working directory.
 	longSummary := strings.Repeat("x", 300)
 	agentScript := filepath.Join(home, "fake-agent")
 	mustWriteFile(t, agentScript, fmt.Sprintf(`#!/bin/sh
 set -e
-cat > %[1]s
-dir="$(sed -n 's/.*"working_directory":"\([^"]*\)".*/\1/p' %[1]s)"
+req="%[1]s.$$"
+cat > "$req"
+dir="$(sed -n 's/.*"working_directory":"\([^"]*\)".*/\1/p' "$req")"
 HOME="$dir"
 export HOME
 cd "$dir/work"
