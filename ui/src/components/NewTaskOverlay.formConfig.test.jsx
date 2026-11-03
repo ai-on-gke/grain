@@ -42,6 +42,22 @@ describe("NewTaskOverlay with settings/new-task-form.yml", () => {
   beforeEach(() => localStorage.clear());
   afterEach(() => api.mockClear());
 
+  // 2026-11-03 walkthrough: a repo-bound template files on its own
+  // branch (ui.Client.fromTemplate), while Base branch could hold
+  // another, prefilled from the repo's last task; the helper named only
+  // the repo.
+  it("names a bound template's branch beside its repo", () => {
+    renderForm(undefined, {
+      templateId: "audit",
+      templates: [{ id: "audit", name: "audit", repo: "a/one", base: "main" }],
+    });
+    expect(
+      screen.getByText(
+        "fills what this form leaves blank; always files against a/one on main, whatever Repos and Base branch say",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("leaves hidden fields out and files their defaults", async () => {
     const user = userEvent.setup();
     renderForm({
@@ -104,6 +120,7 @@ describe("NewTaskOverlay with settings/new-task-form.yml", () => {
         "nothingNeededAction",
         "reviewTemplateId",
         "promptExtension",
+        "hostd",
         "sandboxShape",
       ].map((id) => [id, { visibility: "hidden" }]),
     );

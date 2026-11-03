@@ -37,7 +37,6 @@
 package model
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -73,9 +72,64 @@ func (k PrincipalKind) Valid() bool {
 // for an agent, the deployment name for automation — opaque here on
 // purpose, since this model records which principal acted and never
 // resolves one to an account.
+//
+// Source is how ID was established (operator-attribution spec §1.1): the
+// verifier that vouched for a person, the access code an operator
+// presented, the session or sandbox an agent called from. It is "" on
+// rows written before the column existed, which render as §1.2.2 says.
 type Principal struct {
-	Kind PrincipalKind
-	ID   string
+	Kind   PrincipalKind
+	ID     string
+	Source AuthSource
+}
+
+// Same reports whether p and o name the same actor, whatever each says
+// about how it was established: a row written before Source existed
+// names the same operator as one written after.
+func (p Principal) Same(o Principal) bool {
+	return p.Kind == o.Kind && p.ID == o.ID
+}
+
+// AuthSource is how a Principal's ID was established
+// (operator-attribution spec §1.1.3). A registered IdentityVerifier's
+// Name() is a valid source too.
+type AuthSource string
+
+const (
+	SourceIAP           AuthSource = "iap"            // a verified IAP assertion
+	SourceToken         AuthSource = "token"          // a per-user API token (future)
+	SourceAccessCode    AuthSource = "access-code"    // the shared access code or its session
+	SourceLoopback      AuthSource = "loopback"       // break-glass over loopback
+	SourceInProcess     AuthSource = "in-process"     // a caller with no RemoteAddr
+	SourceSession       AuthSource = "session"        // a console session's grants
+	SourceSandbox       AuthSource = "sandbox"        // a dispatched run's API grants
+	SourceExternalToken AuthSource = "external-token" // an external agent token (gma_…)
+	SourceInternal      AuthSource = "internal"       // grain itself
+)
+
+// unverifiedSources are the sources that establish nobody in particular:
+// the operator fallback and the agent and automation sources.
+var unverifiedSources = map[AuthSource]bool{
+	"":                  true,
+	SourceAccessCode:    true,
+	SourceLoopback:      true,
+	SourceInProcess:     true,
+	SourceSession:       true,
+	SourceSandbox:       true,
+	SourceExternalToken: true,
+	SourceInternal:      true,
+}
+
+// Verified reports whether p is a person or service account a verifier
+// vouched for (§1.1.4): only one of those may be shown as a person or
+// written into a Requested-by: / Approved-by: trailer. Any source that is
+// not one of the fallback, agent or automation sources is a verifier's
+// name, iap and token included.
+func (p Principal) Verified() bool {
+	if p.Kind != PrincipalHuman && p.Kind != PrincipalService {
+		return false
+	}
+	return !unverifiedSources[p.Source]
 }
 
 // Attribution is who performed an action and whose output they relayed.
@@ -811,65 +865,6 @@ func GitCredentialName(capability string) (name string, ok bool) {
 	return name, ok && name != ""
 }
 
-// GitPushAnyRefCapability is the retired bare name of GitPushAnyRefGrant:
-// the grant that lets a task's run push any ref of the repositories it
-// may write, not only its own task branch (Store.GitPushAnyRef). It is
-// still read as that grant wherever it was not rewritten (a repository's
-// own .grain declaration, an older grain/config); schema migration 85
-// rewrote the stored rows.
-const GitPushAnyRefCapability = "git-push-any-ref"
-
-// RepoCapabilityServerID is the canonical capability_id of the in-process
-// repository-access server (design/design/unified-grants.design.md §1, §4),
-// answered by grain itself like GrainCapabilityServerID.
-const RepoCapabilityServerID = "https://grain.dev/capabilities/repo"
-
-// The repo server's #write method, and the one value of it the git proxy
-// honours so far: every branch and tag, force-pushes and deletions
-// included (formerly git-push-any-ref).
-const (
-	RepoWriteMethod    = "write"
-	RepoWriteRef       = RepoCapabilityServerID + "#" + RepoWriteMethod
-	GitPushAnyRefGrant = RepoWriteRef + `={"force":true,"refs":["refs/heads/*","refs/tags/*"]}`
-)
-
-// gitPushAnyRefRefs are the ref patterns GitPushAnyRefGrant names.
-var gitPushAnyRefRefs = []string{"refs/heads/*", "refs/tags/*"}
-
-// IsGitPushAnyRefGrant reports whether grant lifts the git proxy's
-// one-branch push rule: GitPushAnyRefGrant, recorded or as a grant
-// string with its arguments in any order, or the retired bare
-// git-push-any-ref. A repo#write grant naming fewer refs, or without
-// force, is not it: the proxy does not honour narrower task-level refs
-// (design/design/unified-grants.design.md Q3), so it opens nothing rather than
-// everything.
-func IsGitPushAnyRefGrant(grant string) bool {
-	s := strings.TrimSpace(grant)
-	if s == GitPushAnyRefCapability {
-		return true
-	}
-	if !IsCapabilityRef(s) {
-		return false
-	}
-	spec, err := CapabilityGrantSpec(s)
-	if err != nil || spec.Capability != RepoWriteRef {
-		return false
-	}
-	if force, _ := spec.With["force"].(bool); !force {
-		return false
-	}
-	refs, _ := spec.With["refs"].([]any)
-	if len(refs) != len(gitPushAnyRefRefs) {
-		return false
-	}
-	for _, want := range gitPushAnyRefRefs {
-		if !slices.Contains(refs, any(want)) {
-			return false
-		}
-	}
-	return true
-}
-
 // ReleaseGateReadCapability is the CI capability a release workflow's job
 // reads CI runs, persistent sandboxes and tasks through, and files its
 // release-notes task with: an alias, in a CI job's `capabilities:`, for
@@ -892,157 +887,6 @@ const SelfDebugCapability = "self-debug"
 // baked-in copy instead, and a task that wants the repository itself
 // names it in its reads or a repo-read: grant like any other.
 func GrainSourceRepo() RepoRef { return RepoRef{Owner: "ai-on-gke", Name: "grain"} }
-
-// The repo server's #read method: CI read access to the one repository
-// its `repo` argument names (formerly repo-read:<repo>).
-const (
-	RepoReadMethod = "read"
-	RepoReadRef    = RepoCapabilityServerID + "#" + RepoReadMethod
-)
-
-// RepoReadCapabilityPrefix and RepoWriteCapabilityPrefix are the retired
-// bare spellings of CI repository access, repo-read:<owner>/<repo> and
-// repo-write:<owner>/<repo>. They are read as RepoReadGrant and
-// RepoWriteGrant everywhere -- indefinitely, since a repository's own
-// .grain/workflows job `capabilities:` lives in somebody else's
-// repository and nothing here rewrites it -- and schema migration 88
-// rewrote the stored rows.
-const (
-	RepoReadCapabilityPrefix  = "repo-read:"
-	RepoWriteCapabilityPrefix = "repo-write:"
-)
-
-// RepoReadGrant is the recorded grant of CI read access to repo:
-// https://grain.dev/capabilities/repo#read={"repo":"<repo>"}.
-func RepoReadGrant(repo RepoRef) string { return repoAccessGrant(RepoReadRef, repo) }
-
-// RepoWriteGrant is the recorded grant of CI write (push) access to repo:
-// https://grain.dev/capabilities/repo#write={"repo":"<repo>"}. It is not
-// GitPushAnyRefGrant, the other value #write takes, which widens a
-// task's own pushes rather than naming a repository.
-func RepoWriteGrant(repo RepoRef) string { return repoAccessGrant(RepoWriteRef, repo) }
-
-func repoAccessGrant(ref string, repo RepoRef) string {
-	data, err := json.Marshal(map[string]any{"repo": repo.String()})
-	if err != nil {
-		panic(fmt.Sprintf("model: encoding %s's repo: %v", ref, err))
-	}
-	return ref + "=" + string(data)
-}
-
-// RepoReadCapability is the capability id standing for "grant CI read
-// access to repo": RepoReadGrant.
-func RepoReadCapability(repo RepoRef) string { return RepoReadGrant(repo) }
-
-// RepoReadTarget returns the repository a grant of CI read access names
-// -- RepoReadGrant, or the retired repo-read:<repo> -- and false for any
-// other capability id.
-func RepoReadTarget(capability string) (RepoRef, bool) {
-	return repoAccessTarget(capability, RepoReadCapabilityPrefix, RepoReadRef)
-}
-
-// RepoWriteCapability is the capability id standing for "grant CI write
-// access to repo": RepoWriteGrant.
-func RepoWriteCapability(repo RepoRef) string { return RepoWriteGrant(repo) }
-
-// RepoWriteTarget returns the repository a grant of CI write access
-// names -- RepoWriteGrant, or the retired repo-write:<repo> -- and false
-// for any other capability id, GitPushAnyRefGrant among them.
-func RepoWriteTarget(capability string) (RepoRef, bool) {
-	return repoAccessTarget(capability, RepoWriteCapabilityPrefix, RepoWriteRef)
-}
-
-// repoAccessTarget reads capability as legacyPrefix<repo>, or as ref with
-// exactly one argument, repo.
-func repoAccessTarget(capability, legacyPrefix, ref string) (RepoRef, bool) {
-	s := strings.TrimSpace(capability)
-	name, ok := strings.CutPrefix(s, legacyPrefix)
-	if !ok {
-		if !IsCapabilityRef(s) || CapabilityGrantRef(s) != ref {
-			return RepoRef{}, false
-		}
-		spec, err := CapabilityGrantSpec(s)
-		if err != nil || len(spec.With) != 1 {
-			return RepoRef{}, false
-		}
-		name, ok = spec.With["repo"].(string)
-		if !ok {
-			return RepoRef{}, false
-		}
-	}
-	if name == "" {
-		return RepoRef{}, false
-	}
-	repo, err := ParseRepo(name)
-	if err != nil {
-		return RepoRef{}, false
-	}
-	return repo, true
-}
-
-// IsRepoAccessGrant reports whether capability grants a CI job read or
-// write access to another repository (RepoReadTarget, RepoWriteTarget).
-//
-// These are what the retired reporead and repowrite providers decided,
-// carried by the reference itself now that no provider stands behind it:
-// such a grant is CI-only (CapabilitySpec.CIOnly) -- a task holding one is
-// refused it (ResolveGrants, CIOnlyRefusal) -- and RepoAccessAdmitsCIEvent
-// is its event gate.
-func IsRepoAccessGrant(capability string) bool {
-	if _, ok := RepoReadTarget(capability); ok {
-		return true
-	}
-	_, ok := RepoWriteTarget(capability)
-	return ok
-}
-
-// RepoAccessAdmitsCIEvent reports whether a CI job run on event is
-// handed the repository access capability grants. Read access goes to
-// every event. Write access is the old repo-write provider's gate: a
-// post-merge release or an operator's own workflow_dispatch, and the
-// schedule run grain itself fired from a workflow's cron (trustedSchedule,
-// ci.Request.TrustedSchedule) -- that cron was written into a workflow on
-// the default branch whose job declared the grant, and runs as the
-// schedule's team, whose GitHub credential the push goes out with
-// (grain/task-1654), the same assurance a workflow_dispatch somebody
-// typed carries. A caller's own `-event schedule` run is refused, as is a
-// push or pull-request run. False for any other capability.
-func RepoAccessAdmitsCIEvent(capability, event string, trustedSchedule bool) bool {
-	if _, ok := RepoReadTarget(capability); ok {
-		return true
-	}
-	if _, ok := RepoWriteTarget(capability); !ok {
-		return false
-	}
-	switch event {
-	case "release", "workflow_dispatch":
-		return true
-	case "schedule":
-		return trustedSchedule
-	}
-	return false
-}
-
-// RepoAccessSpellings is every spelling of capability's repository
-// access -- the recorded reference and the retired bare name -- with
-// capability itself first, so a rule written in either matches a grant
-// held in the other. Just capability for anything else.
-func RepoAccessSpellings(capability string) []string {
-	out := []string{capability}
-	add := func(s string) {
-		if !slices.Contains(out, s) {
-			out = append(out, s)
-		}
-	}
-	if repo, ok := RepoReadTarget(capability); ok {
-		add(RepoReadGrant(repo))
-		add(RepoReadCapabilityPrefix + repo.String())
-	} else if repo, ok := RepoWriteTarget(capability); ok {
-		add(RepoWriteGrant(repo))
-		add(RepoWriteCapabilityPrefix + repo.String())
-	}
-	return out
-}
 
 // CapabilityRepos returns the repositories a grant of capability lets a
 // run reach beyond its task's own Target, Writes and Reads: the

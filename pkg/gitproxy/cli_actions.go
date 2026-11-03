@@ -563,7 +563,7 @@ func writeActionResult(w http.ResponseWriter, res CLIActionResult, err error) {
 // that decides whether its branch goes through grain CI at all.
 func requireOwnCI(scope namespace.Scope) error {
 	if !scope.MayReadCI && !scope.MayReadAllCI {
-		return namespace.RefuseCapability("grain ci", "grain-ci")
+		return namespace.RefuseCapability("grain ci", model.GrainCIRef)
 	}
 	if scope.TaskRepo == "" || scope.TaskBranch == "" {
 		return errNoTaskRepo
@@ -795,7 +795,7 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 		verdict = mcp.WaitVerdictFailed
 		if run.Conclusion == ci.ConclusionCancelled {
 			resp.CancelReason = strings.TrimSpace(run.CancelReason)
-			resp.CancelledByHand = run.CancelledBy == ci.CancelByOperator
+			resp.CancelledByHand = run.CancelledBy.ByHand()
 			if id, ok := ci.SupersedingRun(run); ok {
 				if next, found := p.CLIActions.CIRun(ctx, id); found && next.ID == id && next.Commit != run.Commit &&
 					strings.EqualFold(next.Repo, scope.TaskRepo) && next.Ref == scope.TaskBranch {

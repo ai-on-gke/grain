@@ -80,6 +80,14 @@ type ConfigChangeManager interface {
 // proposal's: answered 409.
 var ErrConfigChangeMoved = errors.New("branch tip changed since diff was rendered")
 
+// ErrConfigChangeRefused marks a ConfigChangeManager's refusal of the
+// proposal itself -- a branch that was never pushed, has moved, shares no
+// history with the base or changes nothing -- rather than a fault of its
+// own: ProposeConfigChange answers it 400 with its text, so the proposing
+// agent reads why (it was a bare 500 with a log reference before,
+// docs/test-runs/2026-11-03-config-state.md finding 4).
+var ErrConfigChangeRefused = errors.New("configuration change refused")
+
 var errConfigChangesUnavailable = errors.New("this deployment's UI does not manage a config repository to propose changes to")
 
 func (c *Client) configChangeManager(ctx context.Context) (ConfigChangeManager, error) {
@@ -126,6 +134,9 @@ func (c *Client) ProposeConfigChange(ctx context.Context, id string, proposal Co
 		return nil, err
 	}
 	pending, err := manager.ProposeConfigChange(ctx, proposal)
+	if errors.Is(err, ErrConfigChangeRefused) {
+		return nil, &ValidationError{err: err}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +152,7 @@ func (c *Client) ProposeConfigChange(ctx context.Context, id string, proposal Co
 // pendingConfigChangeFor is the change task id is parked on, refusing a
 // caller that is not a person and a decision about any other commit.
 func (c *Client) pendingConfigChangeFor(ctx context.Context, id, headSHA, verb string) (*model.PendingConfigChange, error) {
-	if c.actor(ctx).Kind != model.PrincipalHuman {
+	if c.requestActor(ctx).Actor.Kind != model.PrincipalHuman {
 		return nil, forbiddenErrorf("only a human operator may %s a configuration change", verb)
 	}
 	task, err := c.Store.GetTask(ctx, id)

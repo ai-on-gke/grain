@@ -752,6 +752,16 @@ func (s CiSandboxes) Readopt(ctx context.Context, req ci.SandboxRequest) (ci.San
 	if err := sandbox.readoptJob(ctx, repo, req.Event, req.TrustedSchedule, req.Capabilities, req.WithholdEventGated); err != nil {
 		return nil, err
 	}
+	cache := orchestrator.PackageCacheSource{Base: s.PackageCache, CA: s.PackageCacheCA, DNS: s.PackageCacheDNS}
+	if err := orchestrator.RefreshAdoptedSandbox(ctx, cache, backing); err != nil {
+		if s.PackageCacheDNS != nil && strings.TrimSpace(s.PackageCacheDNS(ctx)) != "" {
+			releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ciReleaseTimeout)
+			defer cancel()
+			_ = sandbox.Release(releaseCtx)
+			return nil, fmt.Errorf("sandbox %s could not refresh package-cache TLS trust across restart: %w", req.Name, err)
+		}
+		s.log("grain ci: %s: refreshing package cache on readopt: %v", sandbox.SandboxName, err)
+	}
 	return sandbox, nil
 }
 
@@ -1209,16 +1219,28 @@ func ResolveCICapabilities(ctx context.Context, reg *model.CapabilityRegistry, c
 		// event to be judged on.
 		CI: true,
 	}
+	// The job's own ceiling (ci.Service.MaxRunTime, carried as ctx's
+	// deadline) and its teardown, as its capability pass is bounded
+	// (ciPassDeadline): what a provider mints for the job -- the
+	// package-publish refresh token, a CI API or model proxy token --
+	// then dies with the job even if no Revoke comes, rather than at the
+	// provider's own longest lease. No deadline is no bound, as before.
+	if end, ok := ctx.Deadline(); ok {
+		cc.Deadline = end.Add(ciReleaseTimeout).UTC()
+	}
 	for _, id := range ids {
 		// A capability reference has no in-process provider: it is
 		// minted through its capability server by the grant admission
-		// (CiGrantReservations.Acquire). Repository access, in either
-		// spelling, is neither: grantRepoAccess widens the proxy's scope
-		// for it.
-		if id == grainci.CapabilityName || model.IsCapabilityRef(id) || model.IsRepoAccessGrant(id) {
+		// (CiGrantReservations.Acquire). grain#ci, in either spelling,
+		// is added below whatever the list says; repository access, in
+		// either spelling, is widened on the proxy by grantRepoAccess.
+		if grainci.IsGrant(id) || model.IsCapabilityRef(id) || model.IsRepoAccessGrant(id) {
 			continue
 		}
 		provider, ok := reg.LookupFor(id, true)
+		if !ok && model.IsCapabilityRef(model.CanonicalLegacyGrant(id)) {
+			continue
+		}
 		if !ok {
 			return cc, nil, &model.ResourceExhaustedError{
 				Capability: id,
@@ -1235,9 +1257,11 @@ func ResolveCICapabilities(ctx context.Context, reg *model.CapabilityRegistry, c
 		}
 		cc.Task.Grants = append(cc.Task.Grants, model.Grant{Capability: id, Via: model.GrantByDefault})
 	}
-	if _, ok := reg.Lookup(grainci.CapabilityName); ok {
-		cc.Task.Grants = append(cc.Task.Grants, model.Grant{Capability: grainci.CapabilityName, Via: model.GrantByDefault})
-	}
+	// Every job is grain CI's own, so its context holds grain#ci whether
+	// or not the job's list names it. No registry provider answers for it
+	// (it is a method of the in-process grain server), and ResolveGrants
+	// passes a capability reference by, so this is the whole of it.
+	cc.Task.Grants = append(cc.Task.Grants, model.Grant{Capability: grainci.Grant, Via: model.GrantByDefault})
 	resolved, err := model.ResolveGrants(ctx, reg, cc)
 	if err != nil {
 		return cc, nil, fmt.Errorf("resolving CI capabilities: %w", err)
@@ -1439,7 +1463,10 @@ func (s *CiSandbox) exec(ctx context.Context, cmd ci.Command, out func(string)) 
 	}
 	dir := strings.TrimSpace(cmd.Dir)
 	if strings.Contains(dir, "'") {
-		return ci.CommandResult{}, fmt.Errorf("%q is not a usable working directory", cmd.Dir)
+		// The workflow's own mistake, not the transport's: a failed step,
+		// never an error, which the engine reads as the sandbox lost
+		// (sandboxaccess.SandboxLostFault) and re-runs as infra.
+		return ci.CommandResult{ExitCode: 2, Output: fmt.Sprintf("%q is not a usable working directory\n", cmd.Dir)}, nil
 	}
 	if s.shell != nil {
 		// The checkout, then the step's own working directory inside it
@@ -2195,13 +2222,14 @@ func ciDeclaredSource(store *model.Store) ci.Source {
 const ciQueueHeadsTTL = 5 * time.Second
 
 // ciMergeQueuePriority is how this deployment ranks one CI run against
-// another at the job gate: the change at the front of its repository's
-// merge queue for its base branch goes first, because its verdict is the
-// one that unblocks everything queued behind it (ci.PriorityMergeHead,
-// grain/task-316).
+// another at the job gate: a change in a merge queue that merges as soon
+// as its CI passes goes first, because its verdict is the one that turns
+// into a merge (ci.PriorityMergeHead, grain/task-316). Every such member
+// of a lane ranks the same: members merge independently of each other,
+// so no one of them is the front the rest wait on.
 //
 // The heads come from orchestrator.MergeQueueHeads, so this is grain's own
-// queue order rather than a second opinion about it. Everything else --
+// reading of the queue rather than a second opinion about it. Everything else --
 // what the number means, how age eventually beats it, what happens to a
 // job that does not fit -- is pkg/ci's, which is told a number and nothing
 // about merge queues.
@@ -2539,8 +2567,8 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 		ReleaseSecrets: CiRepoReleaseSecrets(store),
 		DeployedImages: func() []string { return deployedImages(configCheckImage) },
 		SandboxImage: func() string {
-			if setter, ok := sandboxes.(orchestrator.SandboxImageSetter); ok {
-				if img := setter.CurrentImage(); img != "" {
+			if current, ok := sandboxes.(interface{ CurrentImage() string }); ok {
+				if img := current.CurrentImage(); img != "" {
 					return img
 				}
 			}

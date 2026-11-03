@@ -87,6 +87,10 @@ type HostExecutor struct {
 	// so for the UI.
 	Remote      *hostd.Remote `json:"-"`
 	RemoteHostd bool          `json:"remote,omitempty"`
+	// Hostd is the registry name of the hostd this executor reaches over
+	// Remote (model.Hostd); "" is Remote's default (the deprecated shared
+	// token's hostd).
+	Hostd string `json:"hostd,omitempty"`
 }
 
 // remoteHostExecutor is HostExecutorHostd through the hostd dialing in
@@ -101,6 +105,9 @@ func (e HostExecutor) hostdClient() hostd.Client {
 	c := hostd.Client{Socket: e.Socket, Build: daemonBuild()}
 	if e.Remote != nil {
 		c.Dial = e.Remote.Dial
+		if e.Hostd != "" {
+			c.Dial = e.Remote.Dialer(e.Hostd)
+		}
 	}
 	return c
 }
@@ -529,7 +536,7 @@ func (c Config) cliHostdHost(r CLIRunResolution) (agent.Host, error) {
 	}
 	h.Path = r.HostPath
 	if exec := c.hostExecutor(); exec.Remote != nil {
-		if err := remoteHostdHost(&h, exec.Remote); err != nil {
+		if err := remoteHostdHost(&h, exec.Remote.Carrier(exec.Hostd)); err != nil {
 			return nil, fmt.Errorf("%s is set to run on the host, through the grain hostd that dials in: %w", cliBinaryName(r.Framework), err)
 		}
 	}
@@ -542,8 +549,10 @@ const remoteHostdHostTimeout = 10 * time.Second
 // remoteHostdHost makes h a host on the machine of the grain hostd that
 // dialed in over remote: one that shares neither this daemon's
 // filesystem nor its loopback, so h stages there and carries grain's
-// endpoints there (agent/hostd_remote.go). Its hello says where.
-func remoteHostdHost(h *agent.HostdHost, remote *hostd.Remote) error {
+// endpoints there (agent/hostd_remote.go). Its hello says where. remote
+// is bound to the hostd h's Client reaches, so the carried endpoints
+// listen on the machine the CLI runs on, not the default hostd's.
+func remoteHostdHost(h *agent.HostdHost, remote *hostd.HostdCarrier) error {
 	ctx, cancel := context.WithTimeout(context.Background(), remoteHostdHostTimeout)
 	defer cancel()
 	hello, err := h.Client.Hello(ctx)
@@ -569,6 +578,7 @@ type hostdOffersCacheKey struct{}
 type hostdCacheTarget struct {
 	socket string
 	remote *hostd.Remote
+	name   string
 }
 
 type hostdSocketEntry struct {
@@ -606,7 +616,7 @@ func hostdOffersCLI(ctx context.Context, exec HostExecutor, entry string) (path,
 // hostdOffers is hostdOffersCLI for an entry of any kind.
 func hostdOffers(ctx context.Context, exec HostExecutor, kind hostd.Kind, entry string) (path, why string) {
 	if cache, ok := ctx.Value(hostdOffersCacheKey{}).(*hostdOffersCache); ok && cache != nil {
-		target := hostdCacheTarget{socket: exec.Socket, remote: exec.Remote}
+		target := hostdCacheTarget{socket: exec.Socket, remote: exec.Remote, name: exec.Hostd}
 		cache.mu.Lock()
 		se, ok := cache.sockets[target]
 		if !ok {
@@ -677,6 +687,15 @@ func (c Config) capabilityHostd() *hostd.Client {
 	}
 	client := exec.hostdClient()
 	return &client
+}
+
+// capabilityHostdName is the registry name of the hostd capabilityHostd
+// reaches, "" where there is none.
+func capabilityHostdName(c Config) string {
+	if c.capabilityHostd() == nil {
+		return ""
+	}
+	return c.DefaultHostd()
 }
 
 // storedHostWarned is the CLIs whose stored "host" this process has

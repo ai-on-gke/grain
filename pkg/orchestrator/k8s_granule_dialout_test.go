@@ -17,7 +17,6 @@ package orchestrator
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -59,12 +58,7 @@ case "$*" in
 esac
 printf 'Running|True|docker-pullable://example/granule@sha256:abc|\n'
 `
-	if err := os.WriteFile(bin+".src", []byte(script), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := exec.Command("install", "-m", "0755", bin+".src", bin).CombinedOutput(); err != nil {
-		t.Fatalf("installing fake kubectl: %v: %s", err, out)
-	}
+	writeExecutableStub(t, bin, script)
 	minter := &fakeMinter{}
 	k := NewK8sGranuleSandboxes(K8sGranuleConfig{
 		Namespace:         "grain",

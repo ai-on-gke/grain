@@ -247,7 +247,7 @@ type CapabilitySpec struct {
 // shell. Agent tool grants and agent Git credential selectors require an agent
 // run and are not offered for CI.
 func (s CapabilitySpec) SupportsCI() bool {
-	return s.Provision == ProvisionMint || s.Provision == ProvisionPlace || s.Name == "grain-ci"
+	return s.Provision == ProvisionMint || s.Provision == ProvisionPlace
 }
 
 // SupportsTask is SupportsCI's converse: whether a task may hold this
@@ -562,7 +562,7 @@ func ResolveGrants(ctx context.Context, reg *CapabilityRegistry, cc CapabilityCo
 		}
 		// A capability reference is a capability server's to mint, at
 		// admission (protocol.MintPass), not an in-process provider's.
-		if IsCapabilityRef(g.Capability) || IsCapabilityRef(CanonicalLegacyGrant(g.Capability)) {
+		if IsCapabilityRef(g.Capability) {
 			continue
 		}
 		granted[g.Capability] = g
@@ -636,7 +636,27 @@ func MissingGCPKeyRefusal(capability string) string {
 // grant it is, and where the setting that does work actually lives --
 // because the operator this was written for had ticked the box on a
 // task and had no way to find out why the task then failed.
+//
+// A read grant (repo#read, or a repo#read grant naming a repository) is
+// worded on its own: its material writes nothing and CI hands it to every
+// event, so the sentence the publishing credentials get would misstate it.
+//
+// Repository access, read or write, also says where it does work: a job
+// declares it in its own workflow file (IsRepoAccessGrant), and the repos
+// page's CI capabilities list, which the other CI-only capabilities point
+// to, does not grant it.
 func CIOnlyRefusal(capability string) string {
+	const declare = " Take it off this task. A CI job that needs it declares it in its own `capabilities:` " +
+		"in the repository's .grain/workflows file; the repos page's CI capabilities list does not grant it."
+	if _, ok := RepoReadTarget(capability); ok || CapabilityGrantRef(capability) == RepoReadRef {
+		return fmt.Sprintf("%s is a CI capability, not a task grant: it gives a CI job read access to "+
+			"another repository, and only a CI job is handed it -- a task run is not one."+declare, capability)
+	}
+	if _, ok := RepoWriteTarget(capability); ok {
+		return fmt.Sprintf("%s is a CI capability, not a task grant: it gives a CI job push access to "+
+			"another repository, released only to a release, a workflow_dispatch or grain's own scheduled "+
+			"run -- a task run is none of them."+declare, capability)
+	}
 	return fmt.Sprintf("%s is a CI capability, not a task grant: its material is a credential that "+
 		"writes to the repository itself, so it is released only to a trusted post-merge release or "+
 		"to a run an operator asked for by hand, and a task run is neither. Take it off this task, and "+

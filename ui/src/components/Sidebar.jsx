@@ -37,6 +37,7 @@ import TuneIcon from "@mui/icons-material/Tune";
 import PushPinIcon from "@mui/icons-material/PushPin";
 import PushPinOutlinedIcon from "@mui/icons-material/PushPinOutlined";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
+import AccountCircleOutlinedIcon from "@mui/icons-material/AccountCircleOutlined";
 import {
   DISPLAY_STATE_ORDER,
   INBOX_STATES,
@@ -65,6 +66,7 @@ import { NEW_SESSION_ID } from "./NewSessionPage.jsx";
 import GrainMark from "./GrainMark.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
 import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
+import { verifiedUserEmail } from "./settings/AccessSection.jsx";
 
 // Sidebar replaces TopBar and Filters with the one nav Plane builds every
 // view around: a fixed rail with the workspace identity up top, a state
@@ -302,6 +304,69 @@ function FooterItem({ kind, label, active, onClick, children }) {
   );
 }
 
+// SignedInRow is the phone's stand-in for the header rail's email badge
+// (PageHeader.jsx's GlobalButtons): who the deployment's identity
+// verifier says this browser is, as a row that opens Settings -> Access,
+// and Log out under it rather than behind a menu -- the drawer is
+// already the menu. Log out sits below the address, not beside it: in
+// the 232px drawer a button beside it left the address ~110px, which cut
+// even owner@example.com to "owner@example..." (2026-11-03 IAP deployment
+// walkthrough). A long address is still ellipsized inside the row, never
+// widening the drawer; the full address is its title.
+function SignedInRow({ email, onOpenAccess, onLogout }) {
+  return (
+    <Box
+      data-testid="phone-signed-in"
+      sx={{ display: "flex", flexDirection: "column", minWidth: 0 }}
+    >
+      <ListItemButton
+        onClick={onOpenAccess}
+        title={`Signed in as ${email}`}
+        aria-label={`Signed in as ${email}. Access settings`}
+        sx={{
+          flex: "1 1 auto",
+          minWidth: 0,
+          borderRadius: 1.5,
+          py: 0.6,
+          px: 0.9,
+          color: "text.secondary",
+        }}
+      >
+        <span className="nav-icon">
+          <AccountCircleOutlinedIcon sx={{ fontSize: 18 }} />
+        </span>
+        <ListItemText
+          primary="Signed in as"
+          secondary={email}
+          sx={{ ml: 1, my: 0, minWidth: 0 }}
+          primaryTypographyProps={{
+            fontSize: "0.7rem",
+            color: "inherit",
+            noWrap: true,
+          }}
+          secondaryTypographyProps={{
+            "data-testid": "phone-signed-in-email",
+            fontSize: "0.8rem",
+            fontWeight: 500,
+            color: "text.primary",
+            noWrap: true,
+          }}
+        />
+      </ListItemButton>
+      {onLogout ? (
+        <Button
+          size="small"
+          color="error"
+          onClick={onLogout}
+          sx={{ alignSelf: "flex-end", minWidth: 0, px: 1, py: 0.25 }}
+        >
+          Log out
+        </Button>
+      ) : null}
+    </Box>
+  );
+}
+
 // NavItem is one state's entry under Tasks in the rail, out here for the
 // reason FooterItem and BoardItem are. It used to be declared inside
 // Sidebar's render body, which made it a new component type on every
@@ -508,6 +573,12 @@ export default function Sidebar({
   // phone, where PhoneNav's bar has room for the gear alone, it is a row at the foot
   // of this rail instead (design/design/settings-panel.design.md §4.3).
   onOpenSystem,
+  // Who IAP (or another IdentityVerifier) says is signed in, and Log out:
+  // the header rail's email badge on desktop; on a phone, which has no
+  // header rail, a row under System at the foot of this rail (§4.3).
+  // onOpenAccess opens Settings -> Access.
+  onOpenAccess,
+  onLogout,
   // The build stamp at the foot is a link to Settings -> Upgrade.
   onOpenUpgrade,
   onOpenNewTask,
@@ -1594,6 +1665,13 @@ export default function Sidebar({
               <UnbackedStateDot {...stateDot(config)} />
             ) : null}
           </FooterItem>
+          {verifiedUserEmail(config) ? (
+            <SignedInRow
+              email={verifiedUserEmail(config)}
+              onOpenAccess={onOpenAccess}
+              onLogout={onLogout}
+            />
+          ) : null}
         </List>
       )}
 

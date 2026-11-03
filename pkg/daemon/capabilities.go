@@ -35,7 +35,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/geminikey"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
-	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
@@ -45,7 +44,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
-	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -53,9 +51,9 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-func newCapabilityRegistryWithStore(store *model.Store, local localscripts.Config, providers ...model.CapabilityProvider) *model.CapabilityRegistry {
+func newCapabilityRegistryWithStore(_ *model.Store, local localscripts.Config, providers ...model.CapabilityProvider) *model.CapabilityRegistry {
 	reg := model.NewCapabilityRegistry(providers...)
-	reg.RegisterDynamic(gcpkey.DynamicProvider(store),
+	reg.RegisterDynamic(
 		localscripts.DynamicProvider(local), ui.AgentAPIDynamicProvider)
 	// A CI job's api grants are a token for CIAPI rather than routes an
 	// agent may call (pkg/capability/ciapi).
@@ -91,12 +89,6 @@ func newCapabilityRegistryWithStore(store *model.Store, local localscripts.Confi
 // gemini-proxy providers resolve against (modelproxycap.Providers).
 func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*modelproxy.Endpoint, githubTokens []string, githubCredentials githubCredentialLadder) []model.CapabilityProvider {
 	var providers []model.CapabilityProvider
-	if len(missingCapabilityProviderConfig(cfg, "gcp-key")) == 0 {
-		providers = append(providers, gcpkey.NewProvider(gcpkey.Config{
-			ProjectID: cfg.GcpProject, ServiceAccountEmail: cfg.GcpServiceAccountEmail,
-			ServiceAccountCount: cfg.GcpServiceAccountCount,
-		}))
-	}
 	if len(missingCapabilityProviderConfig(cfg, "gemini-key")) == 0 {
 		providers = append(providers, geminikey.New(cfg.GcpProject, model.CredentialRef{Name: gcpkey.DefaultMinterCredential}))
 	}
@@ -106,7 +98,6 @@ func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*mod
 	providers = append(providers, admincaps.Providers()...)
 	providers = append(providers,
 		bootstrap.New(),
-		grainci.New(),
 		registrypush.NewWithConfig(registrypush.Config{}),
 		consolecap.New(),
 		readissues.New(),
@@ -125,8 +116,15 @@ func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*mod
 	// deployment publishes somewhere else and has no setting to say so
 	// yet; it gets a login that fails at the registry, which is the
 	// honest outcome until there is a configuration field for it.
+	//
+	// Its refresh route is mounted on the CI API listener (CIAPI), so a
+	// job whose release outlasts the ladder's hour-long token re-mints
+	// it there rather than failing at its last push; with no listener
+	// the job gets the static login alone, as it always did.
 	providers = append(providers, packagepublish.New(packagepublish.Config{
 		Credentials: githubCredentials,
+		Refresh:     PackagePublishRefresh,
+		RefreshURL:  CIAPI.URL,
 	}))
 	// image-signing registers unconditionally too, and for the same
 	// reason: what it needs is two secrets, which its own Resolve looks
@@ -211,13 +209,8 @@ func teamRepos(store *model.Store) func(context.Context) ([]string, error) {
 // prerequisite, a credential check must name the same prerequisite.
 func missingCapabilityProviderConfig(cfg Config, id string) []string {
 	var missing []string
-	if id == "gcp-key" || id == "gemini-key" {
-		if cfg.GcpProject == "" {
-			missing = append(missing, "GCP project ID")
-		}
-	}
-	if id == "gcp-key" && cfg.GcpServiceAccountEmail == "" {
-		missing = append(missing, "agent service-account email")
+	if id == "gemini-key" && cfg.GcpProject == "" {
+		missing = append(missing, "GCP project ID")
 	}
 	return missing
 }
@@ -271,12 +264,17 @@ func sourceDir(flagged string) string {
 	return flagged
 }
 
-// grantTools wires selfdebug/selfrepair's own tool-building functions
+// grantTools wires grainlog/bootstrap's own tool-building functions
 // into orchestrator.Config.GrantTools -- see that field's own doc
 // comment for why this indirection exists instead of a method on
 // model.CapabilityProvider. srcDir is whatever sourceDir resolved: the
 // image's baked-in copy of grain's own source, or the checkout
 // -upgrade-src-dir names on a deployment that has no such image.
+//
+// grain#host-exec's run_host_command is not here: it is served by the
+// run's forked mcpserver, which confirms each command over the daemon
+// (daemonHostExecConfirm), and an entry here would only build a second
+// copy no framework reads.
 func grantTools(srcDir, secretsDir string) map[string]func(store *model.Store, taskID string) []mcp.Tool {
 	return map[string]func(store *model.Store, taskID string) []mcp.Tool{
 		// Built per run rather than once here, so that a secret set
@@ -293,12 +291,6 @@ func grantTools(srcDir, secretsDir string) map[string]func(store *model.Store, t
 				TaskID:   taskID,
 				Redactor: grainLogRedactor(secretsDir),
 			})
-		},
-		selfrepair.CapabilityName: func(store *model.Store, taskID string) []mcp.Tool {
-			return selfrepair.HostCommandTools(store, taskID, 0, 0)
-		},
-		grainserver.HostExecGrant: func(store *model.Store, taskID string) []mcp.Tool {
-			return selfrepair.HostCommandTools(store, taskID, 0, 0)
 		},
 		bootstrap.CapabilityName: func(*model.Store, string) []mcp.Tool {
 			return bootstrap.PlaybookTools()
@@ -584,3 +576,10 @@ func storeGitConnections(ctx context.Context, store *model.Store) gitproxy.Conne
 // capability registry is rebuilt from live configuration, and every
 // build has to mint into the one registry being served.
 var CIAPI = ciapi.NewEndpoint()
+
+// PackagePublishRefresh is the route a CI job holding package-publish
+// re-mints its registry login through, mounted on CIAPI's listener: a
+// package-level value for the reason CIAPI is one.
+var PackagePublishRefresh = packagepublish.NewRefresher()
+
+func init() { CIAPI.Mount(packagepublish.RefreshRoute, PackagePublishRefresh) }

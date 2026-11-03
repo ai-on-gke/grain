@@ -17,11 +17,14 @@ package namespace
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/redact"
 )
 
 func writeTree(t *testing.T, root string, files map[string]string) {
@@ -235,4 +238,116 @@ func TestCoreSource(t *testing.T) {
 			t.Errorf("CoreSource = %q, %q", dir, m)
 		}
 	})
+}
+
+// src://pkg is bigger than maxWalkFiles -- core's pkg/ alone is over 3000
+// files -- and a grep of it has to reach the packages that sort last,
+// core's beneath a layer's included, or an agent reads a symbol that is
+// there as one that is not. node_modules/ is passed over unless named.
+func TestGrepOfSrcReachesPastTheDefaultWalkCap(t *testing.T) {
+	layer, core := t.TempDir(), t.TempDir()
+	layerFiles := map[string]string{"go.mod": layerGoMod}
+	for i := 0; i < maxWalkFiles+500; i++ {
+		layerFiles[fmt.Sprintf("pkg/aaa/f%04d.go", i)] = "package aaa\n"
+	}
+	writeTree(t, layer, layerFiles)
+	writeTree(t, core, map[string]string{
+		"go.mod":                       "module github.com/ai-on-gke/grain\n",
+		"pkg/namespace/coresrc.go":     "package namespace\n\nfunc CoreSource() {}\n",
+		"pkg/ui/node_modules/x/x.js":   "func CoreSource() {}\n",
+		"pkg/ui/node_modules/y/y.go":   "func CoreSource() {}\n",
+		"pkg/zzz/node_modules_note.go": "// not a node_modules/ dir\n",
+	})
+	s := &Server{SrcDir: layer, CoreSrcDir: core, CoreModule: CoreModulePath + "@v0.0.0-20261030003551-7e1761c2dc31"}
+	scope := Scope{MayReadSrc: true}
+	ctx := context.Background()
+
+	for _, root := range []string{"pkg", "", "core/pkg"} {
+		res, err := s.Grep(ctx, scope, "src", root, GrepOptions{Pattern: "func CoreSource"})
+		if err != nil {
+			t.Fatalf("grep src://%s: %v", root, err)
+		}
+		// src:// itself holds core twice: beneath the layer, and as core/.
+		if res.WalkTruncated || res.Truncated || res.Matches == 0 || strings.Contains(res.Output, "node_modules") ||
+			!strings.Contains(res.Output, "namespace/coresrc.go:3:func CoreSource") {
+			t.Errorf("grep src://%s = %+v, want core's coresrc.go, untruncated", root, res)
+		}
+	}
+	res, err := s.Grep(ctx, scope, "src", "pkg", GrepOptions{Pattern: "func CoreSource", GlobFilter: "**/node_modules/**"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Matches != 2 {
+		t.Errorf("grep src://pkg --glob '**/node_modules/**' = %q, want both node_modules files", res.Output)
+	}
+	matches, err := s.Glob(ctx, scope, "src", "pkg", "**/*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(matches, ","); !strings.Contains(got, "namespace/coresrc.go") || strings.Contains(got, "node_modules/") || len(matches) != maxWalkFiles+502 {
+		t.Errorf("glob src://pkg **/*.go = %d matches, want %d with core's and no node_modules/", len(matches), maxWalkFiles+502)
+	}
+}
+
+// The higher cap is src://'s alone: every other scheme still stops at
+// maxWalkFiles.
+func TestWalkCapIsHigherForSrcOnly(t *testing.T) {
+	if walkCap("src") != maxSrcWalkFiles || maxSrcWalkFiles <= maxWalkFiles {
+		t.Errorf("walkCap(src) = %d, want %d (> %d)", walkCap("src"), maxSrcWalkFiles, maxWalkFiles)
+	}
+	for _, scheme := range []string{"ci", "task", "config", "memory", "deploy"} {
+		if walkCap(scheme) != maxWalkFiles {
+			t.Errorf("walkCap(%s) = %d, want %d", scheme, walkCap(scheme), maxWalkFiles)
+		}
+	}
+}
+
+// A grep redacts only the lines it prints, through one redactor per
+// request, yet still never finds a secret by its value nor prints one in
+// a context line: redacting every line of every file first made a grep
+// of core's src://pkg take 15s (docs/test-runs/2026-11-03-sandbox-cli-edges.md).
+func TestGrepRedactsOnlyWhatItPrintsAndStillHidesSecrets(t *testing.T) {
+	const secret = "custom-secret-value-424242"
+	const ghToken = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+	root := t.TempDir()
+	files := map[string]string{
+		"pkg/a/a.go": "package a\n// token " + secret + " here\nfunc Before() {}\n" + ghToken + "\nfunc Wanted() {}\nvar after = \"" + secret + "\"\n",
+	}
+	for i := 0; i < 40; i++ {
+		files[fmt.Sprintf("pkg/b/f%02d.go", i)] = "package b\n"
+	}
+	writeTree(t, root, files)
+	builds := 0
+	s := &Server{SrcDir: root, NewRedactor: func() *redact.Redactor {
+		builds++
+		return redact.New([]redact.KnownValue{{Label: "secret custom", Value: secret}})
+	}}
+	scope := Scope{MayReadSrc: true}
+	grep := func(pattern string, ctxLines int) GrepResult {
+		t.Helper()
+		res, err := s.Grep(context.Background(), scope, "src", "pkg", GrepOptions{Pattern: pattern, ContextLines: ctxLines})
+		if err != nil {
+			t.Fatalf("grep %q: %v", pattern, err)
+		}
+		return res
+	}
+	for _, probe := range []string{secret, "custom-secret", ghToken, "ghp_[A-Z]+"} {
+		if res := grep(probe, 0); res.Matches != 0 || strings.Contains(res.Output, secret) || strings.Contains(res.Output, ghToken) {
+			t.Errorf("grep %q found a secret by its value: %d %q", probe, res.Matches, res.Output)
+		}
+	}
+	builds = 0
+	res := grep(`^func Wanted\(`, 2)
+	if res.Matches != 1 || !strings.Contains(res.Output, "a/a.go:5:func Wanted() {}") {
+		t.Errorf("grep for Wanted = %d %q", res.Matches, res.Output)
+	}
+	if strings.Contains(res.Output, secret) || strings.Contains(res.Output, ghToken) || !strings.Contains(res.Output, "[redacted: secret custom]") {
+		t.Errorf("a context line printed a secret: %q", res.Output)
+	}
+	if builds != 1 {
+		t.Errorf("one grep over %d files built %d redactors, want 1", len(files), builds)
+	}
+	if res := grep("token", 0); res.Matches != 1 || !strings.Contains(res.Output, "// token [redacted: secret custom] here") {
+		t.Errorf("a line that matches beside a secret = %d %q", res.Matches, res.Output)
+	}
 }

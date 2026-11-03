@@ -1318,7 +1318,7 @@ func repoPortDirections(rc model.RepoConfig) []RepoPortDirection {
 // no settings row yet refuses nobody. A refusal is a ForbiddenError, so
 // it reaches the API as a 403 rather than as a malformed request.
 func (c *Client) checkRepoPerson(ctx context.Context, repo model.RepoRef) error {
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
 	if actor.ID == "" || c.Store == nil {
 		return forbiddenErrorf("user %q does not have permission to modify repository %s", actor.ID, repo)
 	}
@@ -1653,7 +1653,7 @@ func (c *Client) cleanRepoCICapabilities(ids []string) ([]string, error) {
 			canonicalID = model.RepoReadCapability(target)
 		} else if target, ok := model.RepoWriteTarget(id); ok {
 			canonicalID = model.RepoWriteCapability(target)
-		} else if model.IsCapabilityRef(id) {
+		} else if model.IsCapabilityRef(id) || id == "gcp-key" || strings.HasPrefix(id, "gcp-key:") {
 			// A capability server method, with its with: arguments: a
 			// CI job's grant admission mints it through its server
 			// (daemon.CiGrantReservations), so the repo may grant it

@@ -95,6 +95,7 @@ var routeDocs = map[string]string{
 	"POST /api/tasks/{id}/stop":                                            "Stop a task's running attempt.",
 	"POST /api/tasks/{id}/pause":                                           "Pause a task in any open state, releasing everything it holds and keeping its place; immediate true skips a running task's grace period.",
 	"POST /api/tasks/{id}/resume":                                          "Resume a paused task, back to exactly the state and dispatch standing it had.",
+	"PUT /api/tasks/{id}/hostd":                                            "Pin a task's host work to one grain hostd by name, or to any hostd carrying label=value[,label=value]; \"\" is the default hostd.",
 	"PUT /api/tasks/{id}/goal":                                             "Set a task's goal -- {kind, spec, on_met, on_limit}, as propose_task's goal -- replacing any it had; grain closes or rests the task when it is met.",
 	"DELETE /api/tasks/{id}/goal":                                          "Remove a task's goal, making it an ordinary task again.",
 	"POST /api/tasks/{id}/reopen":                                          "Reopen a closed task.",
@@ -123,8 +124,8 @@ var routeDocs = map[string]string{
 	"PUT /api/repos/{owner}/{name}/release-secrets/{secret}":               "Set the value of one of a repository's release secrets.",
 	"DELETE /api/repos/{owner}/{name}/release-secrets/{secret}":            "Delete one of a repository's release secrets.",
 	"POST /api/repos/{owner}/{name}/release-runs":                          "Start a release run of a repository, at a branch, ref or commit, optionally only some jobs.",
-	"POST /api/repos/{owner}/{name}/pending-releases/{version}/approve":    "Approve a pending trunk release (vX.Y.0), making it official. Only a person may; an agent is refused.",
-	"POST /api/repos/{owner}/{name}/pending-releases/{version}/reject":     "Reject a pending trunk release (vX.Y.0), dropping its release candidate. Only a person may; an agent is refused.",
+	"POST /api/repos/{owner}/{name}/pending-releases/{version}/approve":    "Approve a pending trunk release (vX.Y.Z), making it official; short_soak_ok accepts a soak under the minimum, which is otherwise refused. Only a person may; an agent is refused.",
+	"POST /api/repos/{owner}/{name}/pending-releases/{version}/reject":     "Reject a pending trunk release (vX.Y.Z), dropping its release candidate. Only a person may; an agent is refused.",
 	"POST /api/repos/{owner}/{name}/base-branch-runs":                      "Start a grain CI run of one of a repository's base branches.",
 	"PUT /api/repos/{owner}/{name}/work-ownership":                         "Set who owns a repository's work: its default, or one work item's override.",
 	"PUT /api/repos/{owner}/{name}/capabilities":                           "Set the capabilities every task on a repository is granted by default.",
@@ -178,6 +179,10 @@ var routeDocs = map[string]string{
 	"PUT /api/deployment/repos/{owner}/{name}/config":                      "Set a repository's deployment-level configuration: only the fields given are changed.",
 	"PUT /api/deployment/repos/{owner}/{name}/git-connection":              "Set which git connection a repository is reached through.",
 	"POST /api/deployment/broadcast":                                       "Post a comment to every active task (running_only: only those with a run in flight).",
+	"POST /api/hostds":                                                     "Register a remote grain hostd; its token is shown once, in the answer.",
+	"PATCH /api/hostds/{name}":                                             "Set a hostd's owner or labels.",
+	"POST /api/hostds/{name}/rotate":                                       "Retire a hostd's token and mint a new one, shown once in the answer.",
+	"POST /api/hostds/{name}/revoke":                                       "Revoke a hostd and every token it has.",
 	"PUT /api/agent-keys/{framework}":                                      "Set an agent framework's credential.",
 	"DELETE /api/agent-keys/{framework}":                                   "Clear an agent framework's credential.",
 	"PUT /api/agent-backends/{id}/credential":                              "Set a model connection's credential.",
@@ -256,6 +261,9 @@ var routeDocs = map[string]string{
 	"POST /api/external-agents/tokens/{id}/revoke":                         "Revoke an external agent credential immediately.",
 	"DELETE /api/external-agents/tokens/{id}":                              "Delete an external agent credential record.",
 	"POST /api/external-agents/tokens/revoke-all":                          "Emergency kill switch: revoke every active external agent credential immediately.",
+	"GET /api/access/principals":                                           "List the allowed users and groups admitted through verified-identity sign-in.",
+	"POST /api/access/principals":                                          "Add a user:<email> or group:<email> entry to the allowed users and groups list (idempotent when already present).",
+	"DELETE /api/access/principals/{entry}":                                "Remove a user:<email> or group:<email> entry from the allowed users and groups list.",
 }
 
 // routeBodies is the request type a route reads its body into, which
@@ -263,12 +271,14 @@ var routeDocs = map[string]string{
 // handler hands to readJSON. Every route that reads a body has one, and
 // a route with none takes no body.
 var routeBodies = map[string]any{
-	"PUT /api/settings":                                              UpdateSettingsRequest{},
-	"POST /api/settings":                                             UpdateSettingsRequest{},
-	"POST /api/settings/plan":                                        UpdateSettingsRequest{},
-	"PUT /api/settings/cli-run":                                      updateCLIRunSettingsRequest{},
-	"POST /api/tasks":                                                CreateTaskRequest{},
-	"POST /api/tasks/from-template":                                  FromTemplateRequest{},
+	"PUT /api/settings":             UpdateSettingsRequest{},
+	"POST /api/settings":            UpdateSettingsRequest{},
+	"POST /api/settings/plan":       UpdateSettingsRequest{},
+	"PUT /api/settings/cli-run":     updateCLIRunSettingsRequest{},
+	"POST /api/tasks":               CreateTaskRequest{},
+	"POST /api/tasks/from-template": FromTemplateRequest{},
+	"POST /api/repos/{owner}/{name}/pending-releases/{version}/approve": ReleaseApproval{},
+	"POST /api/repos/{owner}/{name}/pending-releases/{version}/reject":  ReleaseApproval{},
 	"POST /api/tasks/reorder":                                        ReorderRequest{},
 	"PATCH /api/tasks/{id}":                                          UpdateTaskRequest{},
 	"POST /api/tasks/{id}/capabilities":                              setCapabilityRequest{},
@@ -277,6 +287,7 @@ var routeBodies = map[string]any{
 	"POST /api/sandbox-probe":                                        SandboxProbeRequest{},
 	"POST /api/tasks/{id}/pause":                                     pauseRequest{},
 	"PUT /api/tasks/{id}/goal":                                       setGoalRequest{},
+	"PUT /api/tasks/{id}/hostd":                                      setHostdRequest{},
 	"POST /api/tasks/{id}/run-now":                                   runNowRequest{},
 	"POST /api/tasks/{id}/comments":                                  addCommentRequest{},
 	"POST /api/tasks/{id}/change-mail":                               MailChangeRequest{},
@@ -335,6 +346,8 @@ var routeBodies = map[string]any{
 	"PUT /api/deployment/repos/{owner}/{name}/config":                SetDeploymentRepoConfigRequest{},
 	"PUT /api/deployment/repos/{owner}/{name}/git-connection":        SetTeamRepoGitConnectionRequest{},
 	"POST /api/deployment/broadcast":                                 BroadcastTeamRequest{},
+	"POST /api/hostds":                                               CreateHostdRequest{},
+	"PATCH /api/hostds/{name}":                                       UpdateHostdRequest{},
 	"PUT /api/agent-keys/{framework}":                                setAgentKeyRequest{},
 	"PUT /api/agent-backends/{id}/credential":                        setAgentKeyRequest{},
 	"PUT /api/agent-backends/{id}/codex-auth":                        setAgentKeyRequest{},
@@ -378,13 +391,14 @@ var routeBodies = map[string]any{
 	"POST /api/tests/quarantine":                                     QuarantineTestRequest{},
 	"POST /api/pipeline-pause":                                       pausePipelineRequest{},
 	"POST /api/external-agents/tokens":                               CreateExternalAgentTokenRequest{},
+	"POST /api/access/principals":                                    AllowPrincipalRequest{},
 }
 
 // routeQueries is the query parameters a route's handler reads, each
 // with what it means: its tool describes them as properties of query.
 // A route with none takes no query of its own, though the query object
-// still carries any parameter a caller adds (a repo= the agent API's
-// gate reads, a template composition's field.<name>).
+// still carries any parameter a caller adds (such as a template
+// composition's field.<name>).
 var routeQueries = map[string]map[string]string{
 	"GET /api/restart-watch": {
 		"quick": "1 to answer at once with whether grain is restarting, rather than holding the request until it is or 25 s pass.",
@@ -445,6 +459,7 @@ var routeQueries = map[string]map[string]string{
 		"ref":        "Only runs of a branch matching this, by any part of its name.",
 		"conclusion": "Only runs ending so: failure, errored, cancelled, skipped, success, running or pending; comma-separated for several.",
 		"job":        "Only runs with this job, by name or id.",
+		"workflow":   "Only runs of this workflow, by file name (e.g. nightly.yml), stem (nightly), path, or display name.",
 		"since":      "How far back: a span (24h, 7d) or a date.",
 		"until":      "Only runs started before this: a span back from now (24h, 7d) or a date; with since, a window.",
 		"view":       "compact for each run's identity, conclusion and a line per job that did not succeed -- no steps, faults named once by digest; full (the default) for the whole listing.",

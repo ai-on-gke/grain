@@ -163,7 +163,7 @@ func (c *Client) StartTaskCIRunOpt(ctx context.Context, id string, opt TaskCIRun
 		return ci.Run{}, validationErrorf("task %s has no target repository", id)
 	}
 	if !grainci.Granted(task.Grants) {
-		return ci.Run{}, forbiddenErrorf("task %s does not hold the %q capability", id, grainci.CapabilityName)
+		return ci.Run{}, forbiddenErrorf("task %s does not hold the %q grant", id, grainci.Grant)
 	}
 	// A review working on the reviewed change's own branch owns no CI of
 	// its own (model.Task.CIOwner): what it asks for is asked as the
@@ -532,7 +532,7 @@ func taskCIJobName(job ci.JobRun) string {
 }
 
 func taskCIDetail(run ci.Run) string {
-	if strings.TrimSpace(run.Error) != "" || strings.TrimSpace(run.CancelReason) != "" || run.CancelledBy == ci.CancelByOperator {
+	if strings.TrimSpace(run.Error) != "" || strings.TrimSpace(run.CancelReason) != "" || run.CancelledBy.ByHand() {
 		return ""
 	}
 	var failed []string
@@ -720,7 +720,7 @@ func (c *Client) resolveRecheckTarget(task *model.Task, previous *model.Observat
 	if first.Commit != run.Commit || first.RunID == "" || first.RunID == run.ID {
 		return model.CIStatus{}, false
 	}
-	if first.CancelledBy == string(ci.CancelByOperator) || !isRecheckableConclusion(first.Conclusion) {
+	if ci.CancelSource(first.CancelledBy).ByHand() || !isRecheckableConclusion(first.Conclusion) {
 		return model.CIStatus{}, false
 	}
 	if !rechecksAnyOf(run, opt.Jobs, first.Detail) {
@@ -735,7 +735,7 @@ func (c *Client) hydrateRecheckTarget(st model.CIStatus) model.CIStatus {
 		return st
 	}
 	if prior, ok := c.Config.CI.Get(st.RunID); ok {
-		if prior.Interrupted || strings.TrimSpace(prior.CancelReason) != "" || prior.CancelledBy == ci.CancelByOperator {
+		if prior.Interrupted || strings.TrimSpace(prior.CancelReason) != "" || prior.CancelledBy.ByHand() {
 			st.CancelledBy = string(ci.CancelByOperator)
 			return st
 		}
@@ -1002,14 +1002,14 @@ func (c *Client) ciEnabledFor(ctx context.Context, repo model.RepoRef) (bool, er
 
 // ciNotEnabledMessage is the refusal for a repo ciEnabledFor says no
 // to. It names the switch that does turn grain CI on -- the repo's CI
-// mode -- and says outright that the grain-ci capability does not: this
+// mode -- and says outright that the grain#ci grant does not: this
 // message once told operators to attach it, and somebody remembering
 // that advice should not be sent round the same loop again. Every
 // picker refuses the capability itself with grainci.Refusal.
 func ciNotEnabledMessage(repo model.RepoRef) string {
 	return fmt.Sprintf("grain CI is not enabled for %s: set its CI Mode to \"Use Grain CI\" on the repo's page (Settings, Repos). "+
-		"Attaching the %q capability does not turn it on by itself: the CI mode decides that, and grants %q to the repo's tasks",
-		repo, grainci.CapabilityName, grainci.CapabilityName)
+		"Attaching the %q grant does not turn it on by itself: the CI mode decides that, and grants it to the repo's tasks",
+		repo, model.GrainCIRef)
 }
 
 // ciEnabledAnywhere is the same question ciEnabledFor asks, for an
@@ -1112,7 +1112,7 @@ func (s *Server) handleStartCIRun(w http.ResponseWriter, r *http.Request) {
 		Ref:                    strings.TrimSpace(ref),
 		Commit:                 strings.TrimSpace(req.Commit),
 		Event:                  event,
-		RequestedBy:            s.tasks.actor(r.Context()).ID,
+		RequestedBy:            s.tasks.requestActor(r.Context()).Actor.ID,
 		Workflow:               strings.TrimSpace(req.Workflow),
 		Jobs:                   req.Jobs,
 		Recheck:                req.Recheck,
@@ -1157,7 +1157,7 @@ func (c *Client) withholdReleaseSecrets(ctx context.Context, repo model.RepoRef,
 	if event != ci.EventManual && event != ci.EventRelease {
 		return "", nil
 	}
-	if c.actor(ctx).Kind == model.PrincipalHuman {
+	if c.requestActor(ctx).Actor.Kind == model.PrincipalHuman {
 		return "", nil
 	}
 	return fmt.Sprintf("a %s run of %s started by a caller that is not a person places no capabilities or release secrets",
@@ -1297,9 +1297,10 @@ func (s *Server) writeCIRuns(w http.ResponseWriter, r *http.Request, page ci.Run
 		page = ci.RunPage{}
 	}
 	var actions []ci.Run
+	var actionsMatched int
 	var note string
 	if filter.Provider == "" || strings.EqualFold(filter.Provider, ci.ProviderGitHubActions) {
-		actions, note = s.tasks.listActionsRuns(r.Context(), repo, filter, limit)
+		actions, actionsMatched, note = s.tasks.listActionsRunsCounted(r.Context(), repo, filter, limit)
 	}
 	merged := make([]ci.Run, 0, len(page.Runs)+len(actions))
 	for _, run := range page.Runs {
@@ -1317,8 +1318,8 @@ func (s *Server) writeCIRuns(w http.ResponseWriter, r *http.Request, page ci.Run
 		merged = merged[:limit]
 	}
 	page.Runs = merged
-	page.Matched += len(actions)
-	page.Stored += len(actions)
+	page.Matched += actionsMatched
+	page.Stored += actionsMatched
 	faults := s.tasks.CISharedFaults(r.Context())
 	if compact {
 		resp := ciCompactRuns(page, faults)
@@ -1426,6 +1427,7 @@ func ciRunFilterFrom(query url.Values, now time.Time) (ci.RunFilter, error) {
 		Repo:       strings.TrimSpace(query.Get("repo")),
 		Ref:        strings.TrimSpace(query.Get("ref")),
 		Job:        strings.TrimSpace(query.Get("job")),
+		Workflow:   strings.TrimSpace(query.Get("workflow")),
 		Descending: true,
 	}
 	for _, value := range query["conclusion"] {
@@ -1675,8 +1677,7 @@ func (s *Server) handleClearCICache(w http.ResponseWriter, r *http.Request) {
 	}
 	if !enabled {
 		writeError(w, http.StatusForbidden, fmt.Errorf(
-			"grain CI is not enabled anywhere on this deployment, so there is no job cache to clear: attach the %q capability to a repo (Settings, Repos) or to this deployment's default capabilities",
-			grainci.CapabilityName))
+			"grain CI is not enabled anywhere on this deployment, so there is no job cache to clear: set a repo's CI Mode to \"Use Grain CI\" (Settings, Repos)"))
 		return
 	}
 	removed, ok, err := runner.ClearCache(r.Context())
@@ -1722,14 +1723,13 @@ func (s *Server) handleCancelCIRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	// The one door a person cancels through, and therefore the one place
-	// ci.CancelByOperator is said, so the run records whose hand was on
-	// it. It stops this run, not the task: the merge queue's reconciler
+	// The one door a person cancels a run alone through, so the run
+	// records whose hand was on it: their ID (ci.CancelByPrincipal). It stops this run, not the task: the merge queue's reconciler
 	// replaces it with another run for the same commit after
 	// ciRetryDelay, as it does any cancellation (orchestrator's
 	// ciReplacementFor). Stopping the task is withdrawing auto-merge or
 	// closing it.
-	if !runner.Cancel(id, strings.TrimSpace(req.Reason), ci.CancelByOperator) {
+	if !runner.Cancel(id, strings.TrimSpace(req.Reason), ci.CancelByPrincipal(s.tasks.requestActor(r.Context()).Actor.ID)) {
 		// Either it finished or it never existed; both are "there is
 		// nothing here to cancel", and telling them apart would mean
 		// reporting a 200 for a run that ignored the request.

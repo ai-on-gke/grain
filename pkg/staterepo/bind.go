@@ -515,6 +515,10 @@ func Apply(ctx context.Context, r *Repo, db *sql.DB, version int) (bool, error) 
 		}
 	}
 	if err := applySettings(ctx, r, db, head, marker); err != nil {
+		if pending, perr := r.unappliedCommits(ctx, marker, head); perr == nil && len(pending) > 0 {
+			return false, fmt.Errorf("%w (unapplied commits %s..%s: %s): %w",
+				ErrNotApplied, short(marker), short(head), formatUnappliedInline(pending), err)
+		}
 		return false, fmt.Errorf("%w: %w", ErrNotApplied, err)
 	}
 	if err := r.setLoadedHead(ctx, head); err != nil {
@@ -940,6 +944,10 @@ func SyncAll(ctx context.Context, r *Repo, db *sql.DB, version int) (bool, error
 // deployment did anything. A reviewer reading that diff a month later has
 // no way to tell it from a deployment that went mad, and the subject line
 // is the cheapest place to tell them.
+//
+// The other is the export straight after an API write (pkg/daemon's
+// StateManager.SyncAfterWrite), whose note names who made the write: the
+// diff says a setting changed, and only the request knew who changed it.
 func SyncNoted(ctx context.Context, r *Repo, db *sql.DB, version int, note string) (bool, error) {
 	return sync(ctx, r, db, version, note)
 }

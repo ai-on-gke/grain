@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/change"
+	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/ghwebhook"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -162,8 +163,9 @@ type Options struct {
 	// reconcile loop's suite step, and its release step too with
 	// -github-sim. Zero runs no loop at all.
 	Reconcile time.Duration
-	// HostExecutor is -host-executor: which deployment Settings -> Models'
-	// run locations are resolved as (demoCLIRunConfig).
+	// HostExecutor is -host-executor: which deployment Settings' run
+	// locations (agent CLIs and capability servers) are resolved as
+	// (demoCLIRunConfig).
 	HostExecutor string
 	// HostModeInstall is -host-mode-install: GET /api/config reports the
 	// install notice an unmigrated host-mode install gets
@@ -176,8 +178,8 @@ type Options struct {
 	GithubWebhookAddr string
 }
 
-// demoCLIRunConfig is the daemon config Settings -> Models' run locations
-// are resolved under, by -host-executor:
+// demoCLIRunConfig is the daemon config Settings' run locations (agent CLIs
+// and capability servers) are resolved under, by -host-executor:
 //   - "" (the default): a development daemon on the bare machine, which
 //     offers only host, with claude set to the container a release
 //     before v2.3.0 could have stored -- shown as running on the host,
@@ -194,7 +196,7 @@ type Options struct {
 //     in to it (grain hostd -server), with a real one dialing in over
 //     loopback (startDemoRemoteHostd), offering what "hostd"'s does;
 //   - "hostd-remote-down": the same daemon with no hostd dialed in.
-func demoCLIRunConfig(executor string) (daemon.Config, error) {
+func demoCLIRunConfig(ctx context.Context, executor string) (daemon.Config, error) {
 	inContainer := whererun.Detection{Host: false, Signal: whererun.InContainerEnv + "=1, which grain's deployment image sets"}
 	noSocketDir := func(string) bool { return false }
 	var c daemon.Config
@@ -210,7 +212,7 @@ func demoCLIRunConfig(executor string) (daemon.Config, error) {
 	case "hostd-down":
 		c = daemon.Config{AgyRun: model.CLIRunHost, HostdSocket: filepath.Join(os.TempDir(), "grain-demo-hostd-not-running.sock")}
 	case "hostd":
-		socket, err := startDemoHostd()
+		socket, err := startDemoHostd(ctx)
 		if err != nil {
 			return daemon.Config{}, err
 		}
@@ -218,7 +220,7 @@ func demoCLIRunConfig(executor string) (daemon.Config, error) {
 	case "hostd-remote", "hostd-remote-down":
 		remote := &hostd.Remote{Token: "grain-demo-hostd-token"}
 		if executor == "hostd-remote" {
-			if err := startDemoRemoteHostd(remote); err != nil {
+			if err := startDemoRemoteHostd(ctx, remote); err != nil {
 				return daemon.Config{}, err
 			}
 		}
@@ -229,6 +231,17 @@ func demoCLIRunConfig(executor string) (daemon.Config, error) {
 	exec := daemon.DetectHostExecutor(c, inContainer, noSocketDir)
 	c.HostExec = &exec
 	return c, nil
+}
+
+// demoCapabilityHostd is the client run: host capability servers reach the
+// demo's grain hostd through, or nil where -host-executor has none
+// (matching daemon.Config's capabilityHostd).
+func demoCapabilityHostd(c daemon.Config) *hostd.Client {
+	if c.HostExec == nil || c.HostExec.Kind != daemon.HostExecutorHostd {
+		return nil
+	}
+	client := c.HostExec.HostdClient()
+	return &client
 }
 
 // demoGitHubToken is the demo's one fake GitHub token, the "default"
@@ -258,7 +271,8 @@ func Run(opts Options) error {
 	if opts.CloudIdentityEndpoint != "" {
 		cfg.GroupChecker = ui.NewCloudIdentityGroupChecker(ui.WithCloudIdentityEndpoint(opts.CloudIdentityEndpoint))
 	}
-	runCfg, err := demoCLIRunConfig(opts.HostExecutor)
+	ctx := context.Background()
+	runCfg, err := demoCLIRunConfig(ctx, opts.HostExecutor)
 	if err != nil {
 		return err
 	}
@@ -341,7 +355,6 @@ func Run(opts Options) error {
 	}
 
 	store := model.New(db)
-	ctx := context.Background()
 	if err := store.Init(ctx); err != nil {
 		return fmt.Errorf("grain demo: applying the schema: %v", err)
 	}
@@ -375,7 +388,7 @@ func Run(opts Options) error {
 	storedCfg.DefaultModel = "gemini-2.5-pro"
 	storedCfg.GCPProject = "grain-sandbox-dev"
 	storedCfg.GCPServiceAccountEmail = "grain-sb-agent-0@grain-sandbox-dev.iam.gserviceaccount.com"
-	storedCfg.DefaultCapabilities = []string{"self-debug", "gcp-key", "gemini-key"}
+	storedCfg.DefaultCapabilities = []string{"self-debug", "gemini-key"}
 	storedCfg.TargetRepos = []string{"acme/widgets"}
 	// The deployment's git connection to the fake credential above, as
 	// `grain connections import` would record it.
@@ -394,7 +407,7 @@ func Run(opts Options) error {
 		}
 		v, err := cfg.Secrets.Resolve(ctx, name)
 		return v, err == nil
-	}, store)
+	}, store, demoCapabilityHostd(runCfg))
 	if err != nil {
 		return fmt.Errorf("grain demo: %v", err)
 	}
@@ -537,7 +550,7 @@ func Run(opts Options) error {
 		}
 	}
 	if opts.Qualification {
-		if err := seedQualificationDemo(ctx, store, repo); err != nil {
+		if err := seedQualificationDemo(ctx, store, repo, githubSimRepo); err != nil {
 			return fmt.Errorf("grain demo: -qualification: %v", err)
 		}
 	}
@@ -577,6 +590,9 @@ func Run(opts Options) error {
 		}
 	}
 	client := ui.NewClient(cfg, store)
+	if err := client.MigrateAllowedPrincipals(ctx); err != nil {
+		log.Printf("grain demo: WARNING: migrating allowed principals: %v", err)
+	}
 	if opts.ModelCatalog != "" {
 		interval := opts.ModelDiscoveryInterval
 		if interval <= 0 {
@@ -973,13 +989,37 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 		return fmt.Errorf("seeding a merge batch: %w", err)
 	}
 	batchStartedAt := ago(5 * time.Minute)
-	batchRef := model.MergeBatchRef(deploymentID, "main")
+	batchRef := model.MergeRecheckRef(deploymentID, completed.ID, "main")
+	const batchCommit = "abcdef0123456789abcdef0123456789abcdef01"
+	var batchRunID string
+	if ciStore, ok := cfg.CI.(ci.RunStore); ok {
+		batchRunID = "demo-recheck-1"
+		ciStore.Put(ci.Run{
+			ID:          batchRunID,
+			Repo:        cfg.DefaultTarget.String(),
+			Ref:         batchRef,
+			Commit:      batchCommit,
+			Event:       ci.EventPullRequest,
+			RequestedBy: "merge-recheck:" + cfg.DefaultTarget.String() + ":main",
+			StartedAt:   &batchStartedAt,
+			Jobs: []ci.JobRun{
+				{
+					JobID:        ".grain/workflows/ci.yml:test",
+					Name:         "test",
+					WorkflowPath: ".grain/workflows/ci.yml",
+					StartedAt:    &batchStartedAt,
+				},
+			},
+		})
+	}
 	if err := store.PutMergeBatch(ctx, model.MergeBatch{
 		Repo:       *cfg.DefaultTarget,
 		Branch:     "main",
+		TaskID:     completed.ID,
 		Ref:        batchRef,
 		BaseCommit: "1234567890abcdef1234567890abcdef12345678",
-		Commit:     "abcdef0123456789abcdef0123456789abcdef01",
+		Commit:     batchCommit,
+		RunID:      batchRunID,
 		StartedAt:  batchStartedAt,
 		Queued:     1,
 		Members: []model.MergeBatchMember{
@@ -1118,6 +1158,12 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	}
 	firstDone := ago(40 * time.Minute)
 	if err := store.FinishRun(ctx, firstRun, firstDone, "succeeded", "the run made 14 tool call(s)"); err != nil {
+		return fmt.Errorf("seeding a task under repair: %w", err)
+	}
+	// The hostd its host work went to (model.TaskRunHostd).
+	if err := store.RecordTaskRunHostd(ctx, model.TaskRunHostd{
+		RunID: firstRun, TaskID: repairing.ID, Hostd: "ws-a", Instance: "build-box", Owner: "dana@example.com", At: ago(48 * time.Minute),
+	}); err != nil {
 		return fmt.Errorf("seeding a task under repair: %w", err)
 	}
 	if err := store.AppendRunCapabilityAudit(ctx, firstRun, demoCapabilityAudit(repairing.ID, ago)); err != nil {
@@ -1485,6 +1531,12 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	if err := seedGitHubCIDemo(ctx, store, ago); err != nil {
 		return err
 	}
+	if err := seedDemoHostds(ctx, store); err != nil {
+		return err
+	}
+	if err := seedDemoAllowedPrincipals(ctx, store, cfg, ago); err != nil {
+		return err
+	}
 	if err := seedDemoMemory(ctx, store, cfg, ago); err != nil {
 		return err
 	}
@@ -1819,7 +1871,8 @@ func seedDemoNotifications(ctx context.Context, store *model.Store, taskID strin
 		Severity: model.NotificationWarning,
 		Title:    "v2.4.0 is ready to promote (v2.4.0-rc.2 passed its soak)",
 		Body: "v2.4.0-rc.2 passed its 24h staging soak and is staged as v2.4.0-pending: images built and " +
-			"published as :v2.4.0-pending, nothing left to build or test.",
+			"published as :v2.4.0-pending, nothing left to build or test.\n\n" +
+			"Soak: soaked 25h10m of 24h: PASS",
 		Repo:     model.GrainSourceRepo().String(),
 		RaisedBy: "system:release-gate",
 		RaisedAt: ago(90 * time.Minute),
@@ -1970,6 +2023,51 @@ func syncDemoDeclarations(ctx context.Context, store *model.Store, repo model.Re
 // Written straight to the store rather than through ui.Client.PutMemory,
 // which is the one place in this seed that matters: the client stamps
 // UpdatedAt with the current time, and every age here is the point.
+// seedDemoHostds fills Settings -> Hostds: local, a workstation with an
+// owner and labels, a runner registered with no owner (which may dial in
+// over loopback but not through IAP), and one revoked.
+func seedDemoHostds(ctx context.Context, store *model.Store) error {
+	if err := store.EnsureLocalHostd(ctx); err != nil {
+		return err
+	}
+	for _, h := range []model.Hostd{
+		{Name: "cloudtop-alice", Owner: "alice@example.com", Labels: map[string]string{"gpu": "yes", "os": "linux"}, CreatedBy: "operator"},
+		{Name: "build-runner", CreatedBy: "operator"},
+		{Name: "old-laptop", Owner: "bob@example.com", CreatedBy: "operator"},
+	} {
+		if _, _, err := store.CreateHostd(ctx, h); err != nil {
+			return fmt.Errorf("seeding hostd %s: %w", h.Name, err)
+		}
+	}
+	if _, err := store.RevokeHostd(ctx, "old-laptop"); err != nil {
+		return fmt.Errorf("seeding a revoked hostd: %w", err)
+	}
+	return nil
+}
+
+// seedDemoAllowedPrincipals populates Settings -> Access with a user and a
+// group when no explicit -ui-allowed-principals flag or environment variable
+// was given (so tests passing the deprecated flag still exercise its one-time
+// migration into an empty allowlist).
+func seedDemoAllowedPrincipals(ctx context.Context, store *model.Store, cfg ui.Config, ago func(time.Duration) time.Time) error {
+	if len(cfg.AllowedPrincipals) > 0 || strings.TrimSpace(os.Getenv("GRAIN_ALLOWED_PRINCIPALS")) != "" {
+		return nil
+	}
+	for _, item := range []struct {
+		entry   string
+		addedBy string
+		at      time.Time
+	}{
+		{"user:alice@example.com", "the access code", ago(48 * time.Hour)},
+		{"group:eng-oncall@example.com", "alice@example.com", ago(12 * time.Hour)},
+	} {
+		if _, _, err := store.AddAllowedPrincipal(ctx, item.entry, item.addedBy, item.at); err != nil {
+			return fmt.Errorf("seeding allowed principal %s: %w", item.entry, err)
+		}
+	}
+	return nil
+}
+
 func seedDemoMemory(ctx context.Context, store *model.Store, cfg ui.Config, ago func(time.Duration) time.Time) error {
 	day := 24 * time.Hour
 	agent := model.Principal{Kind: model.PrincipalAgent, ID: "demo-memory-run"}
@@ -2265,23 +2363,31 @@ func IsLoopbackHostPort(hostPort string) bool {
 // Neither binary need exist: nothing in the demo asks hostd to start one,
 // and Settings only lists what it offers. hostd refuses to run as root
 // and runs on Linux only; either way the demo shows hostd not answering.
-func startDemoHostd() (string, error) {
+func startDemoHostd(ctx context.Context) (string, error) {
 	srv, err := demoHostdServer("hostd")
 	if err != nil {
 		return "", err
 	}
 	srv.Socket = filepath.Join(filepath.Dir(srv.Allowlist), "hostd.sock")
+	failed := make(chan struct{})
 	go func() {
-		if err := srv.Serve(context.Background()); err != nil {
+		if err := srv.Serve(ctx); err != nil {
 			log.Printf("grain demo: the demo's grain hostd is not running, so Settings shows it not answering: %v", err)
+			close(failed)
 		}
+		<-ctx.Done()
+		_ = os.RemoveAll(filepath.Dir(srv.Allowlist))
 	}()
 	// Up before the first page asks, so Settings never catches it starting.
 	for i := 0; i < 200; i++ {
 		if _, err := os.Stat(srv.Socket); err == nil {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-failed:
+			return srv.Socket, nil
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 	return srv.Socket, nil
 }
@@ -2315,25 +2421,41 @@ func demoHostdServer(executor string) (*hostd.Server, error) {
 // in to a daemon in a cluster. It is connected before it returns, so
 // Settings never catches it connecting, or it is left to Settings to say
 // it is not.
-func startDemoRemoteHostd(remote *hostd.Remote) error {
+func startDemoRemoteHostd(ctx context.Context, remote *hostd.Remote) error {
 	srv, err := demoHostdServer("hostd-remote")
 	if err != nil {
 		return err
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
+		_ = os.RemoveAll(filepath.Dir(srv.Allowlist))
 		return fmt.Errorf("grain demo: -host-executor=hostd-remote: %v", err)
 	}
+	go func() {
+		<-ctx.Done()
+		_ = ln.Close()
+	}()
 	go func() { _ = http.Serve(ln, remote) }()
 	srv.Remote = hostd.Dialer{Server: "http://" + ln.Addr().String(), Token: remote.Token, Host: "cloudtop", Build: srv.Build}.Dial
+	failed := make(chan struct{})
 	go func() {
-		if err := srv.Serve(context.Background()); err != nil {
+		if err := srv.Serve(ctx); err != nil {
 			log.Printf("grain demo: the demo's grain hostd is not running, so Settings shows none connected: %v", err)
+			close(failed)
+		}
+		<-ctx.Done()
+		_ = os.RemoveAll(filepath.Dir(srv.Allowlist))
+	}()
+	wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	go func() {
+		select {
+		case <-failed:
+			cancel()
+		case <-wctx.Done():
 		}
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_ = remote.WaitConnected(ctx)
+	_ = remote.WaitConnected(wctx)
 	return nil
 }
 

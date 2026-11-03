@@ -89,6 +89,23 @@ func TestInProcessServerNormalizesAndMintsJournal(t *testing.T) {
 	if !grainserver.HasHostExec([]string{grainserver.HostExecGrant}) || !grainserver.HasHostExec([]string{"self-repair"}) {
 		t.Fatalf("HasHostExec failed to match canonical or legacy host-exec grant")
 	}
+
+	ciGrant, err := model.NormalizeCapabilityNames([]string{grainserver.CIRef}, lookup)
+	if err != nil || !slices.Equal(ciGrant, []string{grainserver.CIGrant}) {
+		t.Fatalf("NormalizeCapabilityNames(ci) = %v, %v; want [%s]", ciGrant, err, grainserver.CIGrant)
+	}
+	if !slices.Contains(st.Methods, grainserver.CIMethod) {
+		t.Fatalf("Status().Methods = %v, want %s", st.Methods, grainserver.CIMethod)
+	}
+	if model.IsDangerousGrant(grainserver.CIGrant) {
+		t.Fatalf("CIGrant should not be dangerous: it opens no credential")
+	}
+	if got := model.CanonicalLegacyGrant(grainserver.LegacyGrainCI); got != grainserver.CIGrant {
+		t.Fatalf("CanonicalLegacyGrant(grain-ci) = %q, want %q", got, grainserver.CIGrant)
+	}
+	if !grainserver.IsCIGrant(grainserver.CIGrant) || !grainserver.IsCIGrant("grain-ci") {
+		t.Fatalf("IsCIGrant failed to match canonical or legacy ci grant")
+	}
 }
 
 // A pass's deadline comes from the orchestrator's clock, which need not

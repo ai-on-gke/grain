@@ -1,0 +1,20 @@
+NOTICE:  database "grain85" does not exist, skipping
+== schema-85 daemon
+{"id":"sched-1","title":"Nightly CI review"}
+{"id":"2","title":"pre-upgrade task"}
+comment 200
+schema_version before: public|api_scope_set|table|grain
+public|auto_upgrade_run|table|grain
+public|base_branch_ci|table|grain
+== pre-create two columns migrations 91 and 93 add
+ALTER TABLE
+NOTICE:  relation "task_run_capability_audit" already exists, skipping
+CREATE TABLE
+ALTER TABLE
+== this build (schema 93) on the same database
+2026/11/03 05:16:13 grain: migrated the store in place from schema 85 to 93
+{"id":"sched-1","title":"Nightly CI review","recurrence":{"kind":"github_workflow_run","githubWorkflowRun":{"workflow":"nightly.yml","conclusions":["failure"],"branches":["main"]}}}
+{"title":null,"comments":["a comment written at 85"]}
+columns: task.origin_actor_source task_run_capability_audit.hostd task_comment.author_source hostd_token.hostd task_run_hostd.hostd
+hostd rows: 1
+merge_batch columns: recheck_at,started_at,finished_at,splits,queued,base_commit,commit,members,run_id,owner,recheck_of,conclusion,detail,recheck_detail,name,branch,task_id,ref

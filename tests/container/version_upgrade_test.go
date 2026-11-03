@@ -42,6 +42,18 @@ func TestUpgradeFromPreviousVersion(t *testing.T) {
 	requireGoToolchain(t)
 	requireGit(t)
 
+	// Determine the previous version tag (e.g. v1.7.0).
+	prevTag := resolvePreviousVersionTag(t)
+	t.Logf("testing upgrade from previous version %s to current version image %s", prevTag, image)
+
+	// In the registry, tag the previous version baseline image as prevTag.
+	upgradeFromBaseline(t, prevTag, buildPreviousVersionImage(t, prevTag))
+}
+
+// upgradeFromBaseline is the whole upgrade, from a deployment running
+// prevImage (which calls itself prevTag) onto the image under test.
+func upgradeFromBaseline(t *testing.T, prevTag, prevImage string) {
+	t.Helper()
 	repo := registry(t)
 	root := t.TempDir()
 
@@ -52,12 +64,6 @@ func TestUpgradeFromPreviousVersion(t *testing.T) {
 	refFile := filepath.Join(root, "data", "image.env")
 	restart := filepath.Join(control, "restart")
 
-	// Determine the previous version tag (e.g. v1.7.0).
-	prevTag := resolvePreviousVersionTag(t)
-	t.Logf("testing upgrade from previous version %s to current version image %s", prevTag, image)
-
-	// In the registry, tag the previous version baseline image as prevTag.
-	prevImage := buildPreviousVersionImage(t, prevTag)
 	writeRef(t, refFile, prevImage)
 
 	// Tag the current image under test as "current" in the local registry.
@@ -67,7 +73,7 @@ func TestUpgradeFromPreviousVersion(t *testing.T) {
 	docker(t, "push", currentRef)
 
 	// Start the daemon running the previous version image.
-	d := upgradeDaemon(t, root, repo, refFile, restart)
+	d := upgradeDaemonOn(t, prevImage, root, repo, refFile, restart)
 
 	// Populate deployment data in the previous version: create tasks and comments.
 	task1 := createTask(t, d, "Task created in previous version "+prevTag)

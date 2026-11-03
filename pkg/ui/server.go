@@ -144,14 +144,17 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer release()
-		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name}
+		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name, Source: model.SourceExternalToken}
 		r = r.WithContext(withExternalToken(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), tok))
 	}
 	if !s.singleTenantGate(w, r, cfg) {
 		return
 	}
+	if s.tasks != nil {
+		r = r.WithContext(s.tasks.withOperatorActor(r.Context()))
+	}
 	if tok := externalTokenFromContext(r.Context()); tok != nil {
-		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name}
+		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name, Source: model.SourceExternalToken}
 		r = r.WithContext(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted))
 	} else {
 		p, method, ok := extractPrincipal(r)
@@ -166,10 +169,13 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			// No verified principal at all. Only a caller this daemon
 			// already trusts as itself -- the access code's, or an
 			// in-process request -- runs as the deployment's own actor
-			// (Client.actor). The gate above already refused anybody else
+			// (RequestActor). The gate above already refused anybody else
 			// on every route but its own open ones (singleTenantOpenRoute).
 			writeError(w, http.StatusUnauthorized, errors.New(singleTenantRefusal))
 			return
+		}
+		if !ok {
+			r = r.WithContext(withRequestSource(r.Context(), trustedRequestSource(r)))
 		}
 	}
 	// Unarmed until a configuration write's guard finds the deployment
@@ -180,7 +186,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		ResponseWriter: w,
 		rehearsal:      rehearsal,
 		onSuccess: func() {
-			s.tasks.syncStateRepoAfterWrite(r.Context())
+			// Who made the write is who it was guarded as made by: an
+			// agent's principal is on the handler's context alone.
+			by := rehearsal.writer(r.Context())
+			s.tasks.recordConfigWrite(by, r)
+			s.tasks.syncStateRepoAfterWrite(by)
 		},
 	}
 	s.mux.ServeHTTP(rw, r)
@@ -255,6 +265,7 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/pause", s.handlePause)
 	s.route("POST /api/tasks/{id}/resume", s.handleResume)
 	s.route("PUT /api/tasks/{id}/goal", s.handleSetGoal)
+	s.route("PUT /api/tasks/{id}/hostd", s.handleSetTaskHostd)
 	s.route("DELETE /api/tasks/{id}/goal", s.handleClearGoal)
 	s.route("POST /api/tasks/{id}/reopen", s.handleReopen)
 	s.route("POST /api/tasks/{id}/retry", s.handleRetry)
@@ -627,6 +638,17 @@ func (s *Server) routes() {
 
 	// A grain hostd on another machine dialing in (hostd -server).
 	s.route("GET /api/hostd/connect", s.handleHostdConnect)
+	// The hostd registry (Settings -> Hostds).
+	s.route("GET /api/hostds", s.handleListHostds)
+	s.route("POST /api/hostds", s.handleCreateHostd)
+	s.route("PATCH /api/hostds/{name}", s.handleUpdateHostd)
+	s.route("POST /api/hostds/{name}/rotate", s.handleRotateHostdToken)
+	s.route("POST /api/hostds/{name}/revoke", s.handleRevokeHostd)
+
+	// Verified-identity sign-in allowlist (Settings -> Access).
+	s.route("GET /api/access/principals", s.handleListAccessPrincipals)
+	s.route("POST /api/access/principals", s.handleAllowPrincipal)
+	s.route("DELETE /api/access/principals/{entry}", s.handleDenyPrincipal)
 
 	static, err := fs.Sub(staticFS, "static")
 	if err != nil {

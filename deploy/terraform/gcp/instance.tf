@@ -15,6 +15,12 @@
 locals {
   agent_service_account_email = local.agent_account_needed ? google_service_account.agent[0].email : ""
 
+  # See variables.tf's allowed_principals: unset seeds the installing
+  # user, so they are admitted through IAP without the access code.
+  allowed_principals = var.allowed_principals != null ? var.allowed_principals : (
+    startswith(var.deployer_member, "user:") ? [var.deployer_member] : []
+  )
+
   # Empty together with gcp_agent_service_account above whenever no
   # agent account exists at all, mirroring v1's instance.tf's
   # own gemini_project_id local: a -gcp-project daemon flag with no
@@ -38,6 +44,8 @@ locals {
     credential_name           = var.credential_name
     default_target_repo       = var.default_target_repo
     target_repos              = join(",", var.test_repos)
+    iap_audience              = local.iap_audience
+    allowed_principals        = join(",", local.allowed_principals)
     ui_port                   = var.ui_port
     slots                     = var.slots
     poll_interval             = var.poll_interval
@@ -267,6 +275,13 @@ resource "google_compute_instance" "host" {
     precondition {
       condition     = !(var.enable_gemini_key || var.agent_can_manage_compute_instances || var.agent_can_manage_gke || var.agent_can_manage_cloud_sql) || var.deployer_member != ""
       error_message = "enable_gemini_key, agent_can_manage_compute_instances, agent_can_manage_gke, and agent_can_manage_cloud_sql all need a real key on the agent account to do anything -- set deployer_member so push-secrets.sh can mint one after apply (see iam.tf's deployer_manages_minter_keys)."
+    }
+
+    precondition {
+      condition = alltrue([
+        for p in local.allowed_principals : can(regex("^(user|group|serviceAccount):[^@,\\s\"'\\\\$%]+@[^@,\\s\"'\\\\$%]+$|^domain:[^@,/\\s\"'\\\\$%]+$", p))
+      ])
+      error_message = "allowed_principals (including deployer_member when allowed_principals is null and deployer_member starts with \"user:\") must be \"user:<email>\", \"group:<email>\", \"serviceAccount:<email>\" or \"domain:<domain>\", with no commas, slashes in domains, quotes or spaces."
     }
 
     # A guest image and an OCI image used to have to exist somewhere for

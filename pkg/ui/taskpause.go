@@ -70,11 +70,11 @@ func (c *Client) Pause(ctx context.Context, id string, opts PauseOptions) error 
 	if err != nil {
 		return err
 	}
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
 	if existing != nil {
-		if actor.Kind == model.PrincipalAgent && existing.PausedBy != actor {
-			return forbiddenErrorf("task %s was paused by %s %s; only they may change or lift that pause",
-				id, existing.PausedBy.Kind, principalName(existing.PausedBy))
+		if actor.Kind == model.PrincipalAgent && !existing.PausedBy.Same(actor) {
+			return forbiddenErrorf("task %s was paused by %s; only they may change or lift that pause",
+				id, PrincipalLabel(existing.PausedBy, nil))
 		}
 		if opts.Immediate && !existing.Immediate {
 			if err := c.Store.SetPauseImmediate(ctx, id); err != nil {
@@ -112,7 +112,7 @@ func (c *Client) Pause(ctx context.Context, id string, opts PauseOptions) error 
 	// session (pkg/mcp's addenda deliver a person's comments on the run's
 	// next tool result); everything else is grain's own note, so that it
 	// is never mistaken for a reply a parked task was waiting on.
-	body := fmt.Sprintf("Paused by %s.", principalName(actor))
+	body := fmt.Sprintf("Paused by %s.", PrincipalLabel(actor, nil))
 	author := model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}}
 	switch {
 	case state == model.StateRunning && !opts.Immediate:
@@ -144,15 +144,15 @@ func (c *Client) Resume(ctx context.Context, id string) error {
 	if task == nil {
 		return &NotFoundError{ID: id}
 	}
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
 	if actor.Kind == model.PrincipalAgent {
 		existing, err := c.Store.GetPause(ctx, id)
 		if err != nil {
 			return err
 		}
-		if existing != nil && existing.PausedBy != actor {
-			return forbiddenErrorf("task %s was paused by %s %s; only they may lift that pause",
-				id, existing.PausedBy.Kind, principalName(existing.PausedBy))
+		if existing != nil && !existing.PausedBy.Same(actor) {
+			return forbiddenErrorf("task %s was paused by %s; only they may lift that pause",
+				id, PrincipalLabel(existing.PausedBy, nil))
 		}
 	}
 	now := c.now()
@@ -163,7 +163,7 @@ func (c *Client) Resume(ctx context.Context, id string) error {
 	if _, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    id,
 		Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
-		Body:      fmt.Sprintf("Resumed by %s. %s", principalName(actor), model.ResumedNote(*lifted, now)),
+		Body:      fmt.Sprintf("Resumed by %s. %s", PrincipalLabel(actor, nil), model.ResumedNote(*lifted, PrincipalLabel(lifted.PausedBy, nil), now)),
 		CreatedAt: now,
 	}); err != nil {
 		return err
@@ -237,7 +237,7 @@ type TaskPaused struct {
 // withPause marks t paused, and takes its stall note away: a task a
 // person paused is waiting on that person, not stuck.
 func (t *Task) withPause(p model.TaskPause) {
-	t.Paused = &TaskPaused{At: p.PausedAt, By: principalName(p.PausedBy), FromState: p.FromState,
+	t.Paused = &TaskPaused{At: p.PausedAt, By: PrincipalLabel(p.PausedBy, nil), FromState: p.FromState,
 		Immediate: p.Immediate, GraceUntil: p.GraceUntil}
 	t.Stall = ""
 	// And its sub-case is the pause itself: held by a person, ended by

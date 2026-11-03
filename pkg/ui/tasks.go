@@ -72,10 +72,13 @@ type Task struct {
 	// which. The frontend needs the distinction to keep a task nobody
 	// filed by hand from steering a human's own defaults -- see
 	// state.js's lastBaseForRepo.
-	AuthorKind string      `json:"authorKind,omitempty"`
-	State      model.State `json:"state"`
-	Repo       string      `json:"repo,omitempty"`
-	Branch     string      `json:"branch,omitempty"`
+	AuthorKind string `json:"authorKind,omitempty"`
+	// AuthorLabel is how the filer reads to a person (shownLabel), empty
+	// for a task filed before sources were recorded.
+	AuthorLabel string      `json:"authorLabel,omitempty"`
+	State       model.State `json:"state"`
+	Repo        string      `json:"repo,omitempty"`
+	Branch      string      `json:"branch,omitempty"`
 	// Reads is every repo this task's run may read but never push to --
 	// model.Task.Reads, rendered as owner/name strings the same way Repo
 	// renders its single Target.
@@ -621,12 +624,16 @@ func grantWaitActivity(wait model.GrantWait) *model.RunActivity {
 // else's words, so a question from a dispatched run renders as grain
 // speaking for an agent rather than as grain's own.
 type Comment struct {
-	ID         int64     `json:"id"`
-	Author     string    `json:"author"`
-	AuthorKind string    `json:"authorKind"`
-	OnBehalfOf string    `json:"onBehalfOf,omitempty"`
-	Body       string    `json:"body"`
-	CreatedAt  time.Time `json:"createdAt"`
+	ID         int64  `json:"id"`
+	Author     string `json:"author"`
+	AuthorKind string `json:"authorKind"`
+	OnBehalfOf string `json:"onBehalfOf,omitempty"`
+	// AuthorLabel is how the author reads to a person (shownLabel), empty
+	// for grain's own notes and for a comment written before sources were
+	// recorded. OnBehalfOf stays separate, as the timeline shows it.
+	AuthorLabel string    `json:"authorLabel,omitempty"`
+	Body        string    `json:"body"`
+	CreatedAt   time.Time `json:"createdAt"`
 	// Handover marks this comment as the task's handover: a run's standing
 	// summary of the older part of the conversation, written for the next
 	// run on the task rather than for a person (model.Comment.Handover).
@@ -675,6 +682,9 @@ func attachmentFrom(a model.AttachmentMeta) Attachment {
 // attempts, last failure: reason").
 type TaskDetail struct {
 	Task
+	// Hostd is the task's hostd pin or label selector
+	// (model.SetTaskHostd), "" for the default hostd.
+	Hostd    string    `json:"hostd,omitempty"`
 	Comments []Comment `json:"comments"`
 	// LocalScriptApprovals is the local-script calls this task's run is
 	// waiting on a person for, and the ones answered recently
@@ -873,16 +883,33 @@ type Transition struct {
 	At       time.Time   `json:"at"`
 	Inferred bool        `json:"inferred,omitempty"`
 	By       string      `json:"by,omitempty"`
-	Reason   string      `json:"reason,omitempty"`
-	Detail   string      `json:"detail,omitempty"`
+	// ByLabel is how By reads to a person (shownLabel): "operator
+	// (access code)" rather than the deployment's own address for a
+	// change made with the access code. Empty for a row written before
+	// sources were recorded, which reads as By always has.
+	ByLabel string `json:"byLabel,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Detail  string `json:"detail,omitempty"`
 }
 
 func transitionFrom(t model.Transition) Transition {
 	out := Transition{State: t.State, At: t.At, Inferred: t.Inferred, Reason: t.Reason, Detail: t.Detail}
 	if t.By != nil {
 		out.By = principalLabel(*t.By)
+		out.ByLabel = shownLabel(*t.By, nil)
 	}
 	return out
+}
+
+// shownLabel is PrincipalLabel for a principal whose source is recorded,
+// and "" for one written before sources existed (schema 91): such a row
+// cannot be told apart from a verified one, so it keeps reading as its
+// bare id rather than as "(unverified)" noise.
+func shownLabel(p model.Principal, behalf *model.Principal) string {
+	if p.Source == "" {
+		return ""
+	}
+	return PrincipalLabel(p, behalf)
 }
 
 // Attempt is one of a task's runs, projected from model.Run.
@@ -946,6 +973,10 @@ type Attempt struct {
 	// (model.CapabilityAuditRecord). The records are their own fetch
 	// (AttemptCapabilityAudit), for the transcript's reason.
 	CapabilityAuditCount int `json:"capabilityAuditCount,omitempty"`
+	// Hostd is the grain hostd this attempt's host work went to, the
+	// machine it ran on and its owner (model.TaskRunHostd); nil for an
+	// attempt that resolved none.
+	Hostd *model.TaskRunHostd `json:"hostd,omitempty"`
 	// QueuedAt, SandboxAcquiredAt, SandboxPreparedAt, AgentStartedAt and
 	// FirstTurnAt are the startup phase timestamps of this attempt
 	// (model.RunStartup, model.Run.AgentStartedAt), and Startup is the
@@ -1002,6 +1033,7 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		Description:          t.Body,
 		Author:               t.Origin.Attribution.Actor.ID,
 		AuthorKind:           string(t.Origin.Attribution.Actor.Kind),
+		AuthorLabel:          shownLabel(t.Origin.Attribution.Actor, t.Origin.Attribution.OnBehalfOf),
 		State:                state,
 		Base:                 t.Base,
 		Priority:             priority,
@@ -1182,6 +1214,9 @@ func commentFrom(c model.Comment, attachments []Attachment) Comment {
 	}
 	if b := c.Author.OnBehalfOf; b != nil {
 		out.OnBehalfOf = b.ID
+	}
+	if c.Author.Actor.Kind != model.PrincipalAutomation {
+		out.AuthorLabel = shownLabel(c.Author.Actor, nil)
 	}
 	return out
 }
@@ -1907,7 +1942,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
-	actor := s.tasks.actor(r.Context())
+	actor := s.tasks.requestActor(r.Context()).Actor
 	_, authenticated := PrincipalFromContext(r.Context())
 	// /api/config is served to callers nobody has vouched for, since it
 	// is what the sign-in page reads. Only a trusted source runs as the
@@ -2277,10 +2312,7 @@ func (s *Server) handleGetTaskPrompt(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
-	user := requestUser(r)
-	if user == "" && s.tasks.Config.Actor.Kind == model.PrincipalHuman {
-		user = strings.TrimSpace(s.tasks.Config.Actor.ID)
-	}
+	user := s.tasks.requestPersonOrOperator(r.Context())
 	if user == "" {
 		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
 		return
@@ -2300,7 +2332,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	// A requester the body names (CreateTaskRequest.Author) is the
 	// operator's word about who asked, and only the operator's: a
 	// signed-in person may name nobody but themselves.
-	if author := strings.TrimSpace(req.Author); author != "" && requestUser(r) != "" && !strings.EqualFold(author, user) {
+	if author := strings.TrimSpace(req.Author); author != "" && requestPerson(r.Context()) != "" && !strings.EqualFold(author, user) {
 		writeError(w, http.StatusForbidden, fmt.Errorf("a signed-in user files tasks as themselves, not as %q", author))
 		return
 	}
@@ -2534,7 +2566,7 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	if !readAttachmentJSON(w, r, &req, func(req *addCommentRequest) []AttachmentUpload { return req.Attachments }) {
 		return
 	}
-	req.Author = actingUser(r, req.Author)
+	req.Author = requestPerson(r.Context())
 	id := r.PathValue("id")
 	if req.Reviewers != nil {
 		if _, err := s.tasks.UpdateTask(r.Context(), id, UpdateTaskRequest{Reviewers: req.Reviewers}); err != nil {
@@ -3004,15 +3036,6 @@ func writeBodyError(w http.ResponseWriter, err error) {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Errorf("request body exceeds %d bytes", tooLarge.Limit))
-		return
-	}
-	// A task priority that is not a whole number an int holds (1.5,
-	// 1e3, "8", 1e20) is refused in the words a 0 is, rather than as
-	// Go's "cannot unmarshal number 1.5 into Go struct field
-	// CreateTaskRequest.priority of type int" (2026-11-02 walkthrough).
-	var typeErr *json.UnmarshalTypeError
-	if errors.As(err, &typeErr) && typeErr.Field == "priority" && typeErr.Struct == "CreateTaskRequest" {
-		writeError(w, http.StatusBadRequest, errors.New(errPriorityNotPositive))
 		return
 	}
 	writeError(w, http.StatusBadRequest, err)

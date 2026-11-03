@@ -1209,12 +1209,13 @@ type CheckRun struct {
 	// the same response: ID is the check run's id (an Actions job's id),
 	// App the slug of the App that posted it, Output its whole output --
 	// title, summary and text -- bounded.
-	ID          int64
-	HeadSHA     string
-	App         string
-	StartedAt   *time.Time
-	CompletedAt *time.Time
-	Output      string
+	ID           int64
+	CheckSuiteID int64
+	HeadSHA      string
+	App          string
+	StartedAt    *time.Time
+	CompletedAt  *time.Time
+	Output       string
 }
 
 // JobLog is one failed GitHub Actions job and the tail of what it
@@ -1597,6 +1598,8 @@ type Client interface {
 	ListPullRequestCommits(owner, repo string, number int) ([]Commit, error)
 	ListCheckRuns(owner, repo, ref string) ([]CheckRun, error)
 	ListWorkflowRuns(owner, repo, headSHA string) ([]CheckRun, error)
+	RerequestCheckSuite(owner, repo string, checkSuiteID int64) error
+	RerequestCheckRun(owner, repo string, checkRunID int64) error
 	FailedJobLogs(owner, repo, headSHA string) ([]JobLog, error)
 	ActionsState(owner, repo, headSHA string) (ActionsState, error)
 	RecentRunStarts(owner, repo string, limit int) (RunStarts, error)
@@ -2236,8 +2239,8 @@ func (c *RESTClient) UpdateBranch(owner, repo, branch, sha string, force bool) e
 
 // DeleteBranch removes branch entirely. It is for a ref grain owns and
 // nobody has a pull request against -- the merge queue's own throwaway
-// batch ref (model.MergeBatchRef), destroyed when the batch it stood for
-// is dropped part-way through merging (orchestrator.dropBatchRef).
+// re-check ref (model.MergeRecheckRef), destroyed when the re-check it
+// stood for ends (orchestrator.dropRecheckRef).
 //
 // A branch that is already gone is not an error: GitHub answers 422 for a
 // ref that does not exist, and "make sure this is not there" is what every
@@ -2899,6 +2902,9 @@ func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) 
 				App         struct {
 					Slug string `json:"slug"`
 				} `json:"app"`
+				CheckSuite struct {
+					ID int64 `json:"id"`
+				} `json:"check_suite"`
 				Output struct {
 					Title   *string `json:"title"`
 					Summary *string `json:"summary"`
@@ -2929,6 +2935,7 @@ func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) 
 				FailureReason: reason,
 				StepsExecuted: len(item.Steps),
 				ID:            item.ID,
+				CheckSuiteID:  item.CheckSuite.ID,
 				HeadSHA:       item.HeadSHA,
 				App:           item.App.Slug,
 				StartedAt:     item.StartedAt,
@@ -2939,6 +2946,46 @@ func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) 
 		path = nextPagePath(resp.Headers["Link"])
 	}
 	return runs, nil
+}
+
+// RerequestCheckSuite asks GitHub to re-run a check suite in place on its
+// commit (POST /repos/{owner}/{repo}/check-suites/{check_suite_id}/rerequest).
+// GitHub answers 201 when the suite's app accepts re-requests and 403/404/422
+// when the credential or the app does not allow it.
+func (c *RESTClient) RerequestCheckSuite(owner, repo string, checkSuiteID int64) error {
+	if checkSuiteID <= 0 {
+		return &Error{Status: 422, Body: []byte(`{"message":"invalid check_suite_id"}`)}
+	}
+	resp, err := c.request(
+		"POST", fmt.Sprintf("/repos/%s/%s/check-suites/%d/rerequest", url.PathEscape(owner), url.PathEscape(repo), checkSuiteID),
+		c.headers(owner, repo, false), nil,
+	)
+	if err != nil {
+		return err
+	}
+	if resp.Status != 201 {
+		return &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	return nil
+}
+
+// RerequestCheckRun asks GitHub to re-run a single check run in place on its
+// commit (POST /repos/{owner}/{repo}/check-runs/{check_run_id}/rerequest).
+func (c *RESTClient) RerequestCheckRun(owner, repo string, checkRunID int64) error {
+	if checkRunID <= 0 {
+		return &Error{Status: 422, Body: []byte(`{"message":"invalid check_run_id"}`)}
+	}
+	resp, err := c.request(
+		"POST", fmt.Sprintf("/repos/%s/%s/check-runs/%d/rerequest", url.PathEscape(owner), url.PathEscape(repo), checkRunID),
+		c.headers(owner, repo, false), nil,
+	)
+	if err != nil {
+		return err
+	}
+	if resp.Status != 201 {
+		return &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	return nil
 }
 
 // ListWorkflowRuns returns the GitHub Actions workflow runs against one
@@ -3767,6 +3814,35 @@ type WorkflowRunsReader interface {
 }
 
 var _ WorkflowRunsReader = (*RESTClient)(nil)
+
+// WorkflowRunRerunner is the optional Client capability for asking GitHub
+// Actions to run a concluded run's failed jobs again, as a new attempt of
+// the same run: POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs.
+// The credential needs `actions: write` on the repository; one without it
+// is answered 403, which the caller reads as "not re-run" rather than a
+// fault.
+type WorkflowRunRerunner interface {
+	RerunFailedJobs(owner, repo string, runID int64) error
+}
+
+var _ WorkflowRunRerunner = (*RESTClient)(nil)
+
+// RerunFailedJobs asks GitHub to re-run the failed jobs of runID (and the
+// jobs that depend on them) as the run's next attempt.
+func (c *RESTClient) RerunFailedJobs(owner, repo string, runID int64) error {
+	if runID <= 0 {
+		return fmt.Errorf("re-running the failed jobs of %s/%s: no run id", owner, repo)
+	}
+	resp, err := c.request("POST", fmt.Sprintf("/repos/%s/%s/actions/runs/%d/rerun-failed-jobs", owner, repo, runID),
+		c.headers(owner, repo, true), []byte("{}"))
+	if err != nil {
+		return err
+	}
+	if resp.Status != http.StatusCreated && resp.Status != http.StatusOK && resp.Status != http.StatusNoContent {
+		return &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	return nil
+}
 
 // completedRunsETags caches the last ETag seen per (Transport, owner, repo) for
 // CompletedWorkflowRuns so unchanged polls cost 304 Not Modified. Keyed in a

@@ -443,12 +443,14 @@ func TestProposeTaskAcceptsAndValidatesPriority(t *testing.T) {
 	if got := len(sink.ProposedTasks()); got != 1 {
 		t.Errorf("ProposedTasks() after refused calls = %d, want 1", got)
 	}
-	// A whole number written with an exponent is that number.
-	if res := tool.Handler(context.Background(), map[string]any{
-		"title":    "exponent priority",
-		"body":     "fine",
-		"priority": float64(1e3),
-	}); res.IsError {
+	// A whole number written with an exponent is that number, as it is
+	// on New task, Edit, Bulk edit, the template form and the REST API:
+	// decoded from the arguments' own JSON, as the MCP server does.
+	var exponent map[string]any
+	if err := json.Unmarshal([]byte(`{"title": "exponent priority", "body": "fine", "priority": 1e3}`), &exponent); err != nil {
+		t.Fatal(err)
+	}
+	if res := tool.Handler(context.Background(), exponent); res.IsError {
 		t.Fatalf("propose_task with priority=1e3 errored: %s", res.Text)
 	}
 	if tasks := sink.ProposedTasks(); len(tasks) != 2 || tasks[1].Priority != 1000 {

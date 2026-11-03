@@ -1,0 +1,12 @@
+name: Nightly CI review
+base: main
+# Files a system:workflow-review:nightly triage task for every red,
+# timed-out or startup_failure run of .github/workflows/nightly.yml on main.
+# The release watchdog separately raises pipeline.nightly-missing when no
+# run at all has happened in 26h.
+trigger:
+  github_workflow_run:
+    workflow: nightly.yml
+    conclusions: [failure, timed_out, startup_failure]
+    branches: [main]
+overlap: skip

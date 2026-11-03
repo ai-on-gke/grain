@@ -40,7 +40,8 @@ func TestTeamBroadcastByAPersonKeepsTheirName(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(comments) != 1 || comments[0].Body != "freeze" ||
-		comments[0].Author != (model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}}) {
+		comments[0].Author.OnBehalfOf != nil ||
+		!comments[0].Author.Actor.Same(model.Principal{Kind: model.PrincipalHuman, ID: "alice"}) {
 		t.Errorf("comments = %+v, want alice's unprefixed broadcast", comments)
 	}
 }

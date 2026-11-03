@@ -67,6 +67,7 @@ describe("resolveNewTaskForm", () => {
       "nothingNeededAction",
       "reviewTemplateId",
       "promptExtension",
+      "hostd",
       "sandboxShape",
     ]);
     expect(formFieldsIn(r, "hidden")).toEqual([]);

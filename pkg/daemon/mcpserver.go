@@ -34,11 +34,11 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/bootstrap"
 	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
-	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
+	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -192,7 +192,7 @@ func (d DaemonTasks) Task(ctx context.Context, id string) (mcp.TaskRecord, error
 	if err != nil {
 		return mcp.TaskRecord{}, err
 	}
-	record := mcp.TaskRecord{TaskSummary: taskSummary(detail.Task), Description: detail.Description, Author: detail.Author, AuthorKind: detail.AuthorKind, Base: detail.Base, Capabilities: detail.Capabilities, PullRequest: detail.PullRequest, FailedAttempts: detail.FailedAttempts, LastFailureAt: detail.LastFailureAt, LastFailureReason: detail.LastFailureReason, Activity: mcp.TaskActivity{Note: detail.Activity, At: detail.ActivityAt, BySetup: detail.ActivityBySetup}}
+	record := mcp.TaskRecord{TaskSummary: taskSummary(detail.Task), Description: detail.Description, Author: detail.Author, AuthorKind: detail.AuthorKind, Base: detail.Base, Capabilities: detail.Capabilities, PullRequest: detail.PullRequest, PullRequestMergedAt: detail.PrMergedAt, PullRequestClosedAt: detail.PrClosedAt, FailedAttempts: detail.FailedAttempts, LastFailureAt: detail.LastFailureAt, LastFailureReason: detail.LastFailureReason, Activity: mcp.TaskActivity{Note: detail.Activity, At: detail.ActivityAt, BySetup: detail.ActivityBySetup}}
 	for _, a := range detail.Attempts {
 		record.Attempts = append(record.Attempts, mcp.TaskAttempt{Number: a.Number, StartedAt: a.StartedAt, FinishedAt: a.FinishedAt, Outcome: a.Outcome, Detail: a.Detail, PromptBytes: a.PromptBytes, PromptTokens: a.PromptTokens, Model: a.Model, AgentFramework: a.AgentFramework})
 	}
@@ -552,8 +552,15 @@ func (d daemonConfigChanges) ProposeConfigChange(ctx context.Context, p mcp.Conf
 	})
 }
 
-// writesConfigRepo reports whether t may push grain/config.
+// writesConfigRepo reports whether t may push grain/config from the
+// grain-state checkout propose_config_change's script starts in. That
+// checkout is made only for a task with no repo of its own
+// (orchestrator.wantsStateCheckout): one with a Repo is checked out into
+// that repo instead, so it is not offered a tool that could only fail.
 func writesConfigRepo(t ui.Task) bool {
+	if t.Repo != "" {
+		return false
+	}
 	for _, w := range t.Writes {
 		if ref, err := model.ParseRepo(w.Repo); err == nil && model.IsConfigRepo(ref) {
 			return true
@@ -718,7 +725,7 @@ func (d daemonNotifier) MessageTask(ctx context.Context, task, body string) (int
 // CI. There has to be a daemon to ask, because the verdict is a row on
 // the task and this process holds no store handle -- the same missing
 // handle daemonStatus and daemonChat work around. And the task has to
-// hold the grain-ci capability, because that capability is what decides
+// hold the grain#ci grant (model.HasGrainCI), because that grant is what decides
 // this branch is put through grain CI at all and therefore what decides
 // the verdict counts: orchestrator.grainCIVerdictOf reads a task that
 // does not hold it as silent however red its record, and a report that
@@ -728,7 +735,7 @@ func (d daemonNotifier) MessageTask(ctx context.Context, task, body string) (int
 // nil is returned as a nil interface rather than a nil *daemonGrainCI,
 // since what pkg/mcp switches on is the reader being absent.
 func grainCIReader(client *ui.HTTPClient, taskID string, grants GrantNames) mcp.GrainCIReader {
-	if client == nil || !grants.Has(grainci.CapabilityName) {
+	if client == nil || !model.HasGrainCI(grants) {
 		return nil
 	}
 	return DaemonGrainCI{Client: client, TaskID: taskID}
@@ -777,7 +784,7 @@ func CiRepoScope(prRepo string, grants GrantNames, deploymentWide []string) mcp.
 
 // ciReadRepoScope is which repositories list_ci_runs, get_ci_log and
 // get_ci_artifact may read when a run holds an api ci:read grant rather
-// than grain-ci: only the repositories its ci:read grants name (plus all
+// than grain#ci: only the repositories its ci:read grants name (plus all
 // repositories for deployment-wide self-debug or an unscoped api:ci-read),
 // never -pr-repo on its own when the grant was scoped elsewhere.
 func ciReadRepoScope(prRepo string, grants GrantNames, deploymentWide []string) mcp.CIRepoScope {
@@ -1416,7 +1423,8 @@ func (g GrantNames) Has(name string) bool { return slices.Contains(g, name) }
 // mid-upgrade, whose daemon knows a grant name the binary it forked does
 // not.
 //
-// grain-ci is in the list and serves no tools of its own: what it changes
+// grain#ci (and its retired grain-ci spelling) is in the list and serves
+// no tools of its own: what it changes
 // is what three tools already on the roster say (grainCIReader, and
 // mcp's grain_ci.go). It is here because the alternative is a warning on
 // every run of a repository this deployment puts through grain CI,
@@ -1427,10 +1435,11 @@ func (g GrantNames) Has(name string) bool { return slices.Contains(g, name) }
 // hook, say -- rather than by any tool of this process.
 var servedGrants = []string{
 	selfdebug.CapabilityName, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant, bootstrap.CapabilityName,
-	grainci.CapabilityName, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
+	grainserver.LegacyGrainCI, grainserver.CIRef, grainserver.CIGrant, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
+	selfrepair.CapabilityName, grainserver.HostExecRef, grainserver.HostExecGrant,
 }
 
 func warnUnknownGrants(grants GrantNames) {
@@ -2148,8 +2157,8 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 		// task), and this gate is so an ordinary run is not shown a
 		// tool that could only ever refuse.
 		// propose_config_change is a grain/config writer's: the director,
-		// as grain_config.console_sessions declares it, or any task
-		// somebody granted grain/config as a write target.
+		// as grain_config.console_sessions declares it, or any repo-less
+		// task somebody granted grain/config as a write target.
 		if writesConfigRepo(taskDetail.Task) {
 			registry.Register(mcp.NewProposeConfigChangeTools(
 				daemonConfigChanges{client: client, taskID: *taskID}, *taskID, tools)...)
@@ -2171,7 +2180,7 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 		// notify_operator and message_task are every run's, with no
 		// grant: the daemon applies their rules for -task.
 		registry.Register(mcp.NewNotifyTools(daemonNotifier{client: client, taskID: *taskID})...)
-		if grants.Has(grainci.CapabilityName) {
+		if model.HasGrainCI(grants) {
 			taskBranch := strings.TrimSpace(*prBranch)
 			if taskBranch == "" {
 				taskBranch = strings.TrimSpace(taskDetail.Task.Branch)
@@ -2267,7 +2276,7 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 		// /fs/ (model.Store.SandboxNamespaceScope); a bare "ci-read" is
 		// no capability and widens nothing.
 		apiGrants := model.APIGrantsOf(grants)
-		mayReadCI := grants.Has(grainci.CapabilityName) || grants.Has(selfdebug.CapabilityName) || apiGrants.Has("ci:read")
+		mayReadCI := model.HasGrainCI(grants) || grants.Has(selfdebug.CapabilityName) || apiGrants.Has("ci:read")
 		mayReadAllCI := ciScope.AllRepos || apiGrants.Allows("ci:read", "")
 		allowedCIRepos := make(map[string]bool)
 		addAllowedRepo := func(r string) {
@@ -2342,6 +2351,18 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 			registry.Register(mcp.NewChatTools(daemonChat{client: client, taskID: *taskID, writeFile: writeFile,
 				delivered: delivered}, mcp.SandboxFileReaderOf(tools))...)
 			liveFiler = proposals
+			// run_host_command waits on the same person chat does, for
+			// each command it is asked to run, and so is gated the same
+			// way: a background run is given no tool rather than one
+			// whose every call would time out unanswered.
+			if grainserver.HasHostExec(grants) {
+				registry.Register(selfrepair.ConfirmedHostCommandTools(daemonHostExecConfirm{client: client, taskID: *taskID,
+					timeout: selfrepair.DefaultConfirmTimeout, delivered: delivered}.Confirm)...)
+			}
+		}
+		if grainserver.HasHostExec(grants) && !*interactive {
+			fmt.Fprintln(os.Stderr, "grain mcpserver: run_host_command is not served to this run: "+
+				"grain#host-exec confirms every command with a person in the task's chat, and this run is not -interactive")
 		}
 		registry.Register(mcp.NewLiveProposalTools(escapeSink, proposeRepoList.Nameable(), *taskID,
 			liveFiler)...)

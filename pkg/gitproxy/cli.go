@@ -38,6 +38,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/namespace"
 )
 
@@ -308,7 +309,7 @@ func (p *GitProxy) ciReadRepo(scope namespace.Scope, repo string) (string, ci.Ru
 		repo = scope.TaskRepo
 	}
 	if !scope.PermitsCI("") {
-		return "", nil, namespace.RefuseCapability("grain ci", "grain-ci")
+		return "", nil, namespace.RefuseCapability("grain ci", model.GrainCIRef)
 	}
 	if repo == "" && !scope.MayReadAllCI {
 		// An empty filter matches every repository's runs (ci.RunFilter),
@@ -353,7 +354,7 @@ type TaskRefLookup interface {
 func (p *GitProxy) taskCIRef(ctx context.Context, scope namespace.Scope, task string) (repo, branch string, err error) {
 	task = strings.TrimSpace(strings.TrimPrefix(task, "#"))
 	if !scope.PermitsCI("") {
-		return "", "", namespace.RefuseCapability("grain ci", "grain-ci")
+		return "", "", namespace.RefuseCapability("grain ci", model.GrainCIRef)
 	}
 	if own := scope.TaskIDStr; own != "" && strings.EqualFold(own, task) {
 		if scope.TaskRepo == "" {
@@ -402,7 +403,13 @@ func (p *GitProxy) serveCIRuns(w http.ResponseWriter, r *http.Request, scope nam
 		}
 		ref = scope.TaskBranch
 	}
-	f := ci.RunFilter{Repo: repo, Ref: ref, Job: q.Get("job"), Descending: true}
+	f := ci.RunFilter{
+		Repo:       repo,
+		Ref:        ref,
+		Job:        q.Get("job"),
+		Workflow:   strings.TrimSpace(q.Get("workflow")),
+		Descending: true,
+	}
 	for _, c := range strings.Split(q.Get("conclusion"), ",") {
 		if c = strings.TrimSpace(c); c != "" {
 			f.States = append(f.States, c)
@@ -480,8 +487,10 @@ func (p *GitProxy) findCIRuns(ctx context.Context, store ci.RunStore, f ci.RunFi
 	if p.Namespace == nil || p.Namespace.ExternalCI == nil || f.Repo == "" || f.Provider == ci.ProviderGrain {
 		return ciRunsPage{RunPage: page}
 	}
-	external, note := p.Namespace.ExternalCI.FindExternalRuns(ctx, f, limit)
+	external, extMatched, note := ci.FindExternalRunsCounted(ctx, p.Namespace.ExternalCI, f, limit)
 	if len(external) == 0 {
+		page.Matched += extMatched
+		page.Stored += extMatched
 		return ciRunsPage{RunPage: page, note: note}
 	}
 	runs := append(append([]ci.Run(nil), page.Runs...), external...)
@@ -499,8 +508,8 @@ func (p *GitProxy) findCIRuns(ctx context.Context, store ci.RunStore, f ci.RunFi
 		runs = runs[:limit]
 	}
 	page.Runs = runs
-	page.Matched += len(external)
-	page.Stored += len(external)
+	page.Matched += extMatched
+	page.Stored += extMatched
 	return ciRunsPage{RunPage: page, note: note}
 }
 
@@ -514,7 +523,7 @@ func (p *GitProxy) serveCIRunRepo(w http.ResponseWriter, q url.Values, scope nam
 		return
 	}
 	if !scope.PermitsCI("") {
-		cliError(w, namespace.RefuseCapability("grain ci", "grain-ci"))
+		cliError(w, namespace.RefuseCapability("grain ci", model.GrainCIRef))
 		return
 	}
 	if p.Namespace == nil || p.Namespace.CIStore == nil {
@@ -544,7 +553,7 @@ func (p *GitProxy) serveCIShow(w http.ResponseWriter, r *http.Request, scope nam
 		return
 	}
 	if !scope.PermitsCI("") {
-		cliError(w, namespace.RefuseCapability("grain ci", "grain-ci"))
+		cliError(w, namespace.RefuseCapability("grain ci", model.GrainCIRef))
 		return
 	}
 	if p.Namespace == nil || p.Namespace.CIStore == nil {

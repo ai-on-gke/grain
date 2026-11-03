@@ -25,25 +25,25 @@ import (
 // set it -- or every other job's key would move with it.
 func TestRequestedByKindReachesStepsOnlyFromGrainsOwnCallers(t *testing.T) {
 	plain := runEnv(Request{Repo: "a/b", Ref: "main", RequestedBy: "alice"}, "w", "j")
-	for _, k := range []string{RequestedByKindEnv, RequestedByEnv, ReleaseVersionEnv} {
+	for _, k := range []string{RequestedByKindEnv, RequestedByEnv, ReleaseVersionEnv, ReleaseShortSoakOKEnv} {
 		if _, ok := plain[k]; ok {
 			t.Errorf("%s is set on a run nobody vouched for: %v", k, plain)
 		}
 	}
 	vouched := runEnv(Request{Repo: "a/b", Ref: "main", RequestedBy: "alice@example.com",
-		RequestedByKind: "human", ReleaseVersion: "v2.4.0"}, "w", "j")
+		RequestedByKind: "human", ReleaseVersion: "v2.4.0", ReleaseShortSoakOK: true}, "w", "j")
 	if vouched[RequestedByKindEnv] != "human" || vouched[RequestedByEnv] != "alice@example.com" ||
-		vouched[ReleaseVersionEnv] != "v2.4.0" {
+		vouched[ReleaseVersionEnv] != "v2.4.0" || vouched[ReleaseShortSoakOKEnv] != "true" {
 		t.Errorf("a vouched run's env = %v, want the person and the release", vouched)
 	}
 
 	var req Request
-	if err := json.Unmarshal([]byte(`{"Repo":"a/b","Ref":"main","RequestedByKind":"human","ReleaseVersion":"v2.4.0"}`), &req); err != nil {
+	if err := json.Unmarshal([]byte(`{"Repo":"a/b","Ref":"main","RequestedByKind":"human","ReleaseVersion":"v2.4.0","ReleaseShortSoakOK":true}`), &req); err != nil {
 		t.Fatal(err)
 	}
-	if req.RequestedByKind != "" || req.ReleaseVersion != "" {
-		t.Errorf("JSON set RequestedByKind=%q ReleaseVersion=%q, want neither settable by a caller",
-			req.RequestedByKind, req.ReleaseVersion)
+	if req.RequestedByKind != "" || req.ReleaseVersion != "" || req.ReleaseShortSoakOK {
+		t.Errorf("JSON set RequestedByKind=%q ReleaseVersion=%q ReleaseShortSoakOK=%v, want none settable by a caller",
+			req.RequestedByKind, req.ReleaseVersion, req.ReleaseShortSoakOK)
 	}
 
 	// A workflow, job or step env: block may override ordinary variables
@@ -52,29 +52,32 @@ func TestRequestedByKindReachesStepsOnlyFromGrainsOwnCallers(t *testing.T) {
 	forgedLayers := PlannedJob{
 		Workflow: "w",
 		WorkflowEnv: map[string]string{
-			RequestedByKindEnv: "human",
-			RequestedByEnv:     "forged@example.com",
-			ReleaseVersionEnv:  "v9.9.0",
-			"GRAIN_CI_REF":     "overridden-ref",
+			RequestedByKindEnv:    "human",
+			RequestedByEnv:        "forged@example.com",
+			ReleaseVersionEnv:     "v9.9.0",
+			ReleaseShortSoakOKEnv: "true",
+			"GRAIN_CI_REF":        "overridden-ref",
 		},
 		Job: Job{
 			ID: "j",
 			Env: map[string]string{
-				RequestedByKindEnv: "human",
-				RequestedByEnv:     "forged-job@example.com",
-				ReleaseVersionEnv:  "v9.9.1",
+				RequestedByKindEnv:    "human",
+				RequestedByEnv:        "forged-job@example.com",
+				ReleaseVersionEnv:     "v9.9.1",
+				ReleaseShortSoakOKEnv: "true",
 			},
 		},
 	}
 	forgedStep := Step{
 		Env: map[string]string{
-			RequestedByKindEnv: "human",
-			RequestedByEnv:     "forged-step@example.com",
-			ReleaseVersionEnv:  "v9.9.2",
+			RequestedByKindEnv:    "human",
+			RequestedByEnv:        "forged-step@example.com",
+			ReleaseVersionEnv:     "v9.9.2",
+			ReleaseShortSoakOKEnv: "true",
 		},
 	}
 	unvouchedStepEnv := stepEnv(Plan{Request: Request{Repo: "a/b", Ref: "main", RequestedBy: "agent-1"}}, forgedLayers, forgedStep)
-	for _, k := range []string{RequestedByKindEnv, RequestedByEnv, ReleaseVersionEnv} {
+	for _, k := range []string{RequestedByKindEnv, RequestedByEnv, ReleaseVersionEnv, ReleaseShortSoakOKEnv} {
 		if got, ok := unvouchedStepEnv[k]; ok {
 			t.Errorf("stepEnv let workflow/job/step env set %s=%q on an unvouched run", k, got)
 		}
@@ -91,5 +94,8 @@ func TestRequestedByKindReachesStepsOnlyFromGrainsOwnCallers(t *testing.T) {
 		vouchedStepEnv[RequestedByEnv] != "alice@example.com" ||
 		vouchedStepEnv[ReleaseVersionEnv] != "v2.4.0" {
 		t.Errorf("stepEnv let workflow/job/step env override vouched identity: %v", vouchedStepEnv)
+	}
+	if _, ok := vouchedStepEnv[ReleaseShortSoakOKEnv]; ok {
+		t.Errorf("stepEnv let workflow/job/step env accept a short soak no person accepted: %v", vouchedStepEnv)
 	}
 }

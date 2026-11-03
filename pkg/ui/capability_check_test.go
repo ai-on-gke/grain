@@ -199,7 +199,7 @@ func TestCapabilityStatusReportsWhichCapabilitiesCanBeChecked(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	settings := decode[ui.Settings](t, rec)
-	for _, id := range []string{"gcp-key", "gemini-key", "github-sandbox"} {
+	for _, id := range []string{"gemini-key", "github-sandbox"} {
 		if !capabilityStatus(t, settings.Capabilities, id).Checkable {
 			t.Errorf("%s: Checkable = false, but it holds a standing credential that can go stale", id)
 		}
@@ -219,8 +219,8 @@ func TestCapabilityStatusIsUncheckableWithNoCheckerWired(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	settings := decode[ui.Settings](t, rec)
-	if capabilityStatus(t, settings.Capabilities, "gcp-key").Checkable {
-		t.Error("gcp-key: Checkable = true on a UI with nothing to run a check through")
+	if capabilityStatus(t, settings.Capabilities, "gemini-key").Checkable {
+		t.Error("gemini-key: Checkable = true on a UI with nothing to run a check through")
 	}
 }
 

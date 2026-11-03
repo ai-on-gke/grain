@@ -1,20 +1,18 @@
-# GitHub Actions CI (`tests.yml`, `nightly.yml`, `post-reset-e2e.yml`, `kvm-route-stress.yml`, `gcp-smoke.yml`)
+# GitHub Actions CI (`tests.yml`, `nightly.yml`, `post-reset-e2e.yml`, `gcp-smoke.yml`)
 
 This document describes the GitHub Actions ports in `.github/workflows/` of the non-agent test suites defined in `.grain/workflows/`, targeting GitHub-hosted `ubuntu-latest` runners:
 
 - `.github/workflows/tests.yml`: per-PR and per-push suite (`.grain/workflows/tests.yml`)
-- `.github/workflows/nightly.yml`: scheduled nightly and on-demand long/soak/stress suite (`.grain/workflows/nightly.yml`)
+- `.github/workflows/nightly.yml`: scheduled nightly and on-demand long/soak/stress suite (`.grain/workflows/nightly.yml`, plus on-demand `kvm-route-stress` for `.grain/workflows/kvm-route-stress.yml`)
 - `.github/workflows/post-reset-e2e.yml`: scheduled and on-demand post-reset end-to-end qualification suite (`.grain/workflows/post-reset-e2e.yml`)
-- `.github/workflows/kvm-route-stress.yml`: on-demand 20-boot two-VM KVM route stress suite (`.grain/workflows/kvm-route-stress.yml`)
 - `.github/workflows/gcp-smoke.yml`: scheduled and on-demand GCE VM and GKE cluster lifecycle smoke suite (`.grain/workflows/gcp-smoke.yml`)
 
 ## Triggers, Concurrency, and Permissions
 
 - **Triggers (`on:`)**:
   - `tests.yml`: `push` on `main`, `pull_request`, `merge_group`, and `workflow_dispatch` (with optional comma-separated `jobs` input for selective job execution)
-  - `nightly.yml`: `schedule` (`cron: "11 2 * * *"`) and `workflow_dispatch`
+  - `nightly.yml`: `push` of release-candidate tags (`v*-rc.*`, excluding `v*-rc.*-*` markers such as `-discarded`), `schedule` (`cron: "11 2 * * *"`, a safety net on `main`) and `workflow_dispatch` (with optional comma-separated `jobs` input, e.g. `upgrade-test` for a single-job flake retry on an RC, or `kvm-route-stress`). It is Stage 1 of RC qualification (`design/playbook/releases.playbook.md`); runs on `main` and on `refs/tags/v*` are never cancelled by a later run on the same ref, and its `stage-1` job fails unless all 14 hosted Stage 1 jobs ended `success` (a skipped job fails it). A tag pushed with the default `GITHUB_TOKEN` starts no `push` workflow, so a train pushing with it must dispatch `nightly.yml` on the tag instead
   - `post-reset-e2e.yml`: `schedule` (`cron: "23 5 * * *"`) and `workflow_dispatch`
-  - `kvm-route-stress.yml`: `workflow_dispatch`
   - `gcp-smoke.yml`: `schedule` (`cron: "41 4 * * *"`) and `workflow_dispatch`
 - **Concurrency (`concurrency:`)**:
   - Every job defines its own concurrency group keyed on `${{ github.workflow }}-<job-id>-${{ github.ref }}` with `cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}`, so superseded pushes to an open PR cancel in-flight runs for that job and ref without cancelling sibling jobs in the same workflow run or `main` branch runs.
@@ -47,8 +45,8 @@ This document describes the GitHub Actions ports in `.github/workflows/` of the 
 | `terraform` | `terraform` | Runs `terraform fmt -check`, `init -backend=false`, and `validate` for `deploy/terraform/gcp` | Pins Terraform `1.9.8` via `hashicorp/setup-terraform` and runs the same format/init/validate steps | Active (`ubuntu-latest`) |
 | `installer-e2e` | `installer` | Assembles `grain-installer:test` via `scripts/installer-test-image.sh` and runs `./tests/installer` (`GRAIN_INSTALLER_E2E=1`) | Same commands on `ubuntu-latest` (uses anonymous GHCR pulls from `ghcr.io/bwsalmon/grain/*` and host systemd/Docker) | Active (`ubuntu-latest`) |
 | `package-cache` | `package cache` | Runs `pkg/orchestrator` real-dockerd cache tests (`GRAIN_REAL_DOCKER_CACHE_TESTS=1`) and `pkg/daemon` transparent interception test (`GRAIN_REAL_INTERCEPT_TESTS=1`) | Seeds `/etc/docker/daemon.json` with `Granulefile`'s `bip`/`default-address-pools`/`mtu`, restarts Docker, and runs the same tests | Active (`ubuntu-latest`) |
-| `real-vm` | `real vm` | Formerly in `tests.yml` (now in `nightly.yml` as `kvm-sandboxes`): boots real Firecracker/Cloud-Hypervisor VMs | Present in `.github/workflows/tests.yml` behind `if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'` and `runs-on: ${{ vars.SELF_HOSTED_RUNNER \|\| 'ubuntu-latest' }}` | Disabled by default (self-hosted target) |
-| `real-kubernetes` | `real kubernetes` | Boots a `kind` + Calico cluster and exercises Kubernetes pod sandboxes | Present in `.github/workflows/tests.yml` behind `if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'` and `runs-on: ${{ vars.SELF_HOSTED_RUNNER \|\| 'ubuntu-latest' }}` | Disabled by default (self-hosted target) |
+| `real-vm` | `real vm` | Formerly in `tests.yml` (now in `nightly.yml` as `kvm-sandboxes`): boots real Firecracker/Cloud-Hypervisor VMs | Resolves `grain-guest:e2e-test` (`scripts/granule-guest-resolve.sh`), configures `/dev/kvm` udev permissions, and runs the 3 PR real-VM tests on `ubuntu-latest` at 2 vCPUs / 2,048 MiB per VM (`GRAIN_REAL_VM_CPUS=2`, `GRAIN_REAL_VM_MEMORY_MB=2048`), gated on `needs.changes.outputs.real-vm` | Active (`ubuntu-latest`) |
+| `real-kubernetes` | `real kubernetes` | Boots a single-node `kind` + Calico (`v3.33.0`) cluster and exercises Kubernetes `NetworkPolicy` egress isolation and real pod sandboxes (`TestK8sSandboxesAgainstARealKindCluster`) | Frees unused runner toolchains, restores cached `kindest/node:v1.36.1` + Calico/workload image archives (`~/.cache/grain-k8s` via `scripts/prepare-real-k8s-ci.sh`), trims control-plane and Calico CPU requests, and runs `TestK8sSandboxesAgainstARealKindCluster` | Active (`ubuntu-latest`) |
 
 #### Per-Job Path Filtering (`pull_request`) and `workflow_dispatch` Job Selection
 
@@ -67,7 +65,7 @@ Because GitHub Actions only supports native `paths:` / `paths-ignore:` filters a
 
 ### 2. Nightly Suite (`.grain/workflows/nightly.yml` -> `.github/workflows/nightly.yml`)
 
-Schedule: `cron: "11 2 * * *"` and `workflow_dispatch`.
+Triggers: every pushed `vX.Y.Z-rc.N` tag, `cron: "11 2 * * *"`, and `workflow_dispatch` (optional `jobs`). The `stage-1` job (`stage 1 qualification verdict`) needs the 14 hosted jobs from `go-long` through `upgrade-test` below (KVM and `real-kubernetes` excluded until they are required) and is the run's Stage 1 verdict.
 
 | Job ID | Display Name | Grain CI (`.grain/workflows/nightly.yml`) | GitHub Actions (`.github/workflows/nightly.yml`) | Hosted Runner Status |
 | :--- | :--- | :--- | :--- | :--- |
@@ -84,9 +82,10 @@ Schedule: `cron: "11 2 * * *"` and `workflow_dispatch`.
 | `installer-variants` | `installer trixie and hostmode` | Assembles `grain-installer:test` (`GRAIN_INSTALLER_SANDBOX_IMAGE=debian:trixie`) and runs `./tests/installer/trixie` + `./tests/installer/hostmode` | Same commands on `ubuntu-latest` with `fetch-depth: 0` (required by `scripts/export-source.sh`), Go/Node setup, caches, and `git config` | Active (`ubuntu-latest`) |
 | `vulns` | `govulncheck` | Runs `make vuln` (`govulncheck ./...` under `go.mod` toolchain) | Same commands on `ubuntu-latest` with Go setup and cache | Active (`ubuntu-latest`) |
 | `cmd-grain-stress` | `pkg/cli stress under load` | Runs 4-way parallel `go test -race -count=1 ./pkg/cli` rounds within a 1,800s budget | Same stress loop on `ubuntu-latest` with Go setup, cache, `bubblewrap`, and `git config` | Active (`ubuntu-latest`) |
-| `kvm-sandboxes` | `real KVM sandboxes` | Resolves guest image (`scripts/granule-guest-resolve.sh`) and runs real KVM VM tests in `./pkg/orchestrator/` | Present in `.github/workflows/nightly.yml` behind `if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'` and `runs-on: ${{ vars.SELF_HOSTED_RUNNER \|\| 'ubuntu-latest' }}` | Disabled by default (self-hosted target) |
-| `kvm-route-stress` | `twenty two-VM boots` | Resolves guest image and runs 20 consecutive boots of `TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently` | Present in `.github/workflows/nightly.yml` behind `if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'` and `runs-on: ${{ vars.SELF_HOSTED_RUNNER \|\| 'ubuntu-latest' }}` | Disabled by default (self-hosted target) |
-| `upgrade-test` | `upgrade from previous version` | Builds `grain-e2e:test` (`scripts/ci-docker-build.sh`) and runs `make test-upgrade` (`./tests/container/ -run 'TestUpgradeFromPreviousVersion\|TestAnUpgrade'`) | Same commands on `ubuntu-latest` with `fetch-depth: 0`, Go setup, cache, and `git config` | Active (`ubuntu-latest`) |
+| `kvm-sandboxes` | `real KVM sandboxes` | Resolves guest image (`scripts/granule-guest-resolve.sh`) and runs real KVM VM tests in `./pkg/orchestrator/` | Resolves `grain-guest:e2e-test` (`scripts/granule-guest-resolve.sh`), configures `/dev/kvm` udev permissions, and runs all 5 real KVM sandbox tests on `ubuntu-latest` at 2 vCPUs / 2,048 MiB per VM (`GRAIN_REAL_VM_CPUS=2`, `GRAIN_REAL_VM_MEMORY_MB=2048`) | Active (`ubuntu-latest`) |
+| `kvm-route-stress` | `twenty two-VM boots` | Resolves guest image and runs 20 consecutive boots of `TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently` | Same 20-boot two-VM stress suite on `ubuntu-latest` at 2 vCPUs / 2,048 MiB per VM (`GRAIN_REAL_VM_CPUS=2`, `GRAIN_REAL_VM_MEMORY_MB=2048`); also dispatchable standalone via `nightly.yml` `workflow_dispatch` with `jobs=kvm-route-stress` | Active (`ubuntu-latest`) |
+| `upgrade-test` | `upgrade from previous versions` | Builds `grain-e2e:test` (`scripts/ci-docker-build.sh`) and runs `make test-upgrade` (`./tests/container/ -run 'TestUpgradeFromPreviousVersion\|TestUpgradeFromReleasedVersions\|TestAnUpgrade'`); on GitHub Actions `GRAIN_UPGRADE_RELEASE_IMAGE=ghcr.io/<RELEASE_IMAGE_REPO>/grain` adds real `latest -> RC` and `floor -> RC` upgrades from published releases, each of which must print `--- PASS` | Same commands on `ubuntu-latest` with `fetch-depth: 0`, Go setup, cache, and `git config` | Active (`ubuntu-latest`) |
+| `real-kubernetes` | `real kubernetes` | Runs in `tests.yml` on path match; included in `nightly.yml` for continuous-release qualification | Same single-node `kind` + Calico (`v3.33.0`) setup and `TestK8sSandboxesAgainstARealKindCluster` suite on `ubuntu-latest` | Active (`ubuntu-latest`) |
 
 ### 3. Post-Reset End-to-End Qualification (`.grain/workflows/post-reset-e2e.yml` -> `.github/workflows/post-reset-e2e.yml`)
 
@@ -98,15 +97,7 @@ Schedule: `cron: "23 5 * * *"` and `workflow_dispatch`.
 | `harness` | `e2e harness (githubsim)` | Runs `go test -count=1 -timeout 25m ./tests/e2e/` | Same commands on `ubuntu-latest` with Go/Node setup, caches, `bubblewrap`, `git config`, and `make frontend` | Active (`ubuntu-latest`) |
 | `security` | `route authorization` | Runs `go test -count=1 -timeout 15m ./tests/security/...` | Same commands on `ubuntu-latest` with Go setup and cache | Active (`ubuntu-latest`) |
 
-### 4. KVM Route Stress (`.grain/workflows/kvm-route-stress.yml` -> `.github/workflows/kvm-route-stress.yml`)
-
-Trigger: `workflow_dispatch`.
-
-| Job ID | Display Name | Grain CI (`.grain/workflows/kvm-route-stress.yml`) | GitHub Actions (`.github/workflows/kvm-route-stress.yml`) | Hosted Runner Status |
-| :--- | :--- | :--- | :--- | :--- |
-| `kvm-route-stress` | `twenty two-VM boots` | Resolves `grain-guest:e2e-test` via `scripts/granule-guest-resolve.sh` and runs `TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently` with `-count=20` | Present in `.github/workflows/kvm-route-stress.yml` behind `if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'` and `runs-on: ${{ vars.SELF_HOSTED_RUNNER \|\| 'ubuntu-latest' }}` | Disabled by default (self-hosted target) |
-
-### 5. GCP Smoke (`.grain/workflows/gcp-smoke.yml` -> `.github/workflows/gcp-smoke.yml`)
+### 4. GCP Smoke (`.grain/workflows/gcp-smoke.yml` -> `.github/workflows/gcp-smoke.yml`)
 
 Schedule: `cron: "41 4 * * *"` and `workflow_dispatch`.
 
@@ -128,30 +119,30 @@ Grain CI runs jobs inside a pre-provisioned VM/container image built from `Granu
    - Go jobs cache `~/go/pkg/mod` and `~/.cache/go-build` keyed on `hashFiles('go.sum', 'third_party/granule/go.sum')`.
    - Frontend/UI jobs cache `~/.npm` and `ui/node_modules` keyed on `hashFiles('ui/package-lock.json')`.
    - `ui-e2e` and `ui-e2e-long` cache `/var/cache/playwright` keyed on `hashFiles('ui/package-lock.json')` after creating `/var/cache/playwright` owned by `$USER`.
+   - `real-kubernetes` (`tests.yml` and `nightly.yml`) caches `~/.cache/grain-k8s` (`kind` binary, pinned Calico `v3.33.0` manifest, and `zstd`-compressed `linux/amd64` `kindest/node:v1.36.1` + workload image archives, ~691 MB total) keyed on `hashFiles('scripts/prepare-real-k8s-ci.sh')`.
 4. **Bubblewrap (`bwrap`) and Ubuntu 24.04 AppArmor User Namespaces**:
    - Confinement tests in `pkg/mcp`, `pkg/daemon`, and `pkg/orchestrator` (`host_confine_test.go`, `host_sandbox_hide_test.go`) require `bwrap` to create unprivileged user namespaces when `bwrap` is installed.
    - Ubuntu 24.04 (`ubuntu-latest`) sets `kernel.apparmor_restrict_unprivileged_userns=1` by default, blocking `bwrap` from creating user namespaces. Go test jobs install `bubblewrap` alongside `expect`, `zstd`, `socat`, and `psmisc` and set `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`.
 5. **PostgreSQL (`services: postgres` + Local Binaries)**:
    - `postgres` (`tests.yml`) and `postgres-stress` (`nightly.yml`) declare a `postgres:16-bookworm` service container (mapped to `5433:5432` with `pg_isready` health checks and tmpfs storage).
    - `postgres`, `postgres-stress`, `go-long`, and `post-reset-e2e`'s `deployments` stop and disable the runner's default system `postgresql` service so port `5432` remains free for `postgres.EnsureRunning` and `postgrestest` (which tune `max_connections = 200` for high-concurrency parallel store tests).
-6. **`/dev/kvm` udev Rule (`granule`, `kvm-sandboxes`, `kvm-route-stress`)**:
+6. **`/dev/kvm` udev Rule and Nested-VM Sizing (`granule`, `real-vm`, `kvm-sandboxes`, `kvm-route-stress`)**:
    - Jobs that access `/dev/kvm` write `/etc/udev/rules.d/99-kvm4all.rules` (`KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"`), reload udev rules, and apply `chmod 0666 /dev/kvm` when `/dev/kvm` is present on the runner.
+   - `real-vm` (`tests.yml`) and `kvm-sandboxes` / `kvm-route-stress` (`nightly.yml`) ensure at least 35 GB of free root disk space (reclaiming `/usr/share/dotnet`, `/usr/local/lib/android`, `/opt/ghc`, and `/opt/hostedtoolcache/CodeQL` if free space is below 35 GB), resolve the content-addressed guest image (`ghcr.io/bwsalmon/grain/guest:inputs-<key>`) via `scripts/granule-guest-resolve.sh`, and set `GRAIN_REAL_VM_CPUS=2` and `GRAIN_REAL_VM_MEMORY_MB=2048` so two concurrent microVMs (`2,560 MiB` cgroup limit each; ~510–580 MiB actual RSS per VM and ~2.3–2.7 GiB peak host memory used) fit comfortably without overcommit on 4-vCPU / 16 GiB `ubuntu-latest` runners (overriding `orchestrator.DefaultShape()`'s 8,192 MiB production VM default).
 7. **Docker Daemon Bridge & Containerd Snapshotter Configuration (`package-cache`)**:
    - `TestPackageCachePullsThroughARealDockerd` verifies that `orchestrator.ConfigurePackageCache` preserves the sandbox's existing `/etc/docker/daemon.json` settings (`bip: "10.240.0.1/24"` and `default-address-pools: [{"base": "10.241.0.0/16", "size": 24}]` from `Granulefile`) and pulls images through `registry-mirrors` (`docker.io`) as well as `/etc/docker/certs.d/{ghcr.io,gcr.io}/hosts.toml`.
    - Stock `ubuntu-latest` runners do not include those keys in `/etc/docker/daemon.json`. The `package-cache` job seeds `/etc/docker/daemon.json` with `Granulefile`'s configuration plus `"features": {"containerd-snapshotter": true}` (so `dockerd` honors `certs.d/*/hosts.toml` mirrors) and restarts `docker.service` before running the package-cache and transparent-interception tests.
 8. **Playwright & APT Third-Party Sources (`ui-e2e`, `ui-e2e-long`, `gcp-smoke`)**:
    - `ubuntu-latest` includes third-party apt lists (`/etc/apt/sources.list.d/google-chrome.list`, `/etc/apt/sources.list.d/microsoft-prod.list`) whose signing keys can cause `apt-get update` to fail. Jobs that run `apt-get update` or `make playwright-browsers` remove those unused lists first.
+9. **Single-Node `kind` + Calico Trimming (`real-kubernetes`)**:
+   - `TestK8sSandboxesAgainstARealKindCluster` boots a single-node `kind` cluster (`control-plane` only, `kindest/node:v1.36.1`) with Calico CNI (`v3.33.0`) to enforce `deploy/kubernetes/networkpolicy.yaml` (`grain-sandbox-network-none`: Calico Felix enforces per-pod `cali*` veth egress rules blocking internet egress such as `1.1.1.1` while permitting traffic to `app.kubernetes.io/name: grain` pods) and exercise real pod sandbox lifecycles (`Acquire`, MCP SSH tools, workspace snapshot/seed, `ConfigurePackageCacheTransparent`, `Release`). Cross-node overlay routing is not what the suite tests, so keeping a single node avoids ~1.1 GB of duplicate `containerd` image layers and ~500 MB of extra node RAM.
+   - Before booting the cluster, the job removes unused preinstalled toolchains (`/usr/share/dotnet`, `/usr/local/lib/android`, `/opt/ghc`, `/opt/hostedtoolcache/CodeQL`, `/usr/local/share/boost`, `/opt/az`), `scripts/prepare-real-k8s-ci.sh` exports single-platform `linux/amd64` workload images (`quay.io/calico/{calico,node,third-party-cni-plugins}:v3.33.0`, `buildpack-deps:bookworm-curl`, `nginx:1.27-alpine`, 333 MB uncompressed) for `kind load image-archive` (avoiding `kind load docker-image` multi-arch manifest errors under Docker's `containerd-snapshotter` and freeing unpacked workload layers from host `/var/lib/docker`), and `TestK8sSandboxesAgainstARealKindCluster` trims kubeadm static-pod CPU requests (`650m` -> `175m`), `calico-node` CPU requests (`250m` -> `50m`), CoreDNS replicas (`2` -> `1`), and sandbox pod CPU requests (`CPUOvercommit: 4`, `250m` per 1-CPU sandbox).
 
-## Jobs Gated for Self-Hosted Runners (`vars.ENABLE_SELF_HOSTED_TESTS`)
+## Jobs Formerly Gated for Self-Hosted Runners (`vars.ENABLE_SELF_HOSTED_TESTS`)
 
-Heavyweight nested-VM and multi-node Kubernetes suites are included in `.github/workflows/tests.yml`, `.github/workflows/nightly.yml`, and `.github/workflows/kvm-route-stress.yml` behind `if: vars.ENABLE_SELF_HOSTED_TESTS == 'true'` and `runs-on: ${{ vars.SELF_HOSTED_RUNNER || 'ubuntu-latest' }}` so they are documented in-place and ready to enable once self-hosted runners (or pre-published guest VM images in GHCR) are configured:
+No job in `.github/workflows/` is gated on `vars.ENABLE_SELF_HOSTED_TESTS` any more. The nested-VM suites that used to be (`real-vm` in `tests.yml`, `kvm-sandboxes` and `kvm-route-stress` in `nightly.yml`, and the duplicate `kvm-route-stress.yml`, now removed) run directly on 4-vCPU / 16 GiB `ubuntu-latest` runners: the jobs configure `/dev/kvm` udev permissions (as `granule` does), resolve the guest image with `scripts/granule-guest-resolve.sh`, free runner disk when less than 35 GB is available, and size each microVM at 2 vCPUs / 2,048 MiB (`GRAIN_REAL_VM_CPUS=2`, `GRAIN_REAL_VM_MEMORY_MB=2048`) instead of the `Granulefile` defaults. The tests themselves are unchanged and prove the same thing (real VM boot, two concurrent VMs, model-proxy reachability, `network: none` isolation, host-script grants); only the guest shape is parameterised. Probe runs measured ~510–580 MiB RSS per VM and ~2.3–2.7 GiB peak host memory. `real-kubernetes` runs on `ubuntu-latest` as a single-node `kind` cluster (see item 9 above).
 
-1. **`real-vm` (`tests.yml`), `kvm-sandboxes` (`nightly.yml`), and `kvm-route-stress` (`nightly.yml` and `kvm-route-stress.yml`)**:
-   - **Why they are disabled by default on `ubuntu-latest`**: Each boots concurrent Firecracker / Cloud-Hypervisor microVMs (`Granulefile` configures 4 vCPUs and 4,096 MiB RAM per VM) inside Docker containers (`TestGranuleSandboxesAgainstARealDockerBackedVM`, `TestGranuleSandboxesAcquireCreatesTwoRealVMsConcurrently`, `TestTheModelProxiesAreReachableFromInsideARealGuest`, `TestGranuleSandboxNetworkNoneIsolationOutsideGuestVM`, `TestHostScriptGrantInARealGranuleVM`). `scripts/granule-guest-resolve.sh` requires a pre-published microVM guest image in GHCR matching `./scripts/granule/guest-inputs.sh` (or a host-level Docker cache); on a cold cache miss, building `Granulefile` inline takes 50–110 minutes and >30 GB of free disk space, exceeding standard hosted runner disk budgets (~14–20 GB free).
-2. **`real-kubernetes` (`tests.yml`)**:
-   - **Why it is disabled by default on `ubuntu-latest`**: Provisions a multi-node `kind` cluster with Calico CNI to test Kubernetes NetworkPolicy egress isolation and real pod sandboxes, exceeding standard hosted runner memory and disk budgets.
-
-## Required Repository Variables and Secrets (`tests.yml`, `nightly.yml`, `post-reset-e2e.yml`, `kvm-route-stress.yml`, `gcp-smoke.yml`)
+## Required Repository Variables and Secrets (`tests.yml`, `nightly.yml`, `post-reset-e2e.yml`, `gcp-smoke.yml`)
 
 - **Secrets required**: **None**.
   - All test suites authenticate either anonymously (public GHCR images) or via keyless OIDC Workload Identity Federation (`gcp-smoke.yml`).
@@ -159,8 +150,8 @@ Heavyweight nested-VM and multi-node Kubernetes suites are included in `.github/
   - `GCP_WIF_PROVIDER` *(required to run `gcp-smoke.yml`, optional otherwise)*: Full resource name of the Google Cloud Workload Identity Provider (e.g. `projects/123456789/locations/global/workloadIdentityPools/github-pool/providers/github-provider`). When unset, `gcp-smoke.yml` emits a `::notice` annotation and skips cleanly.
   - `GCP_SA_EMAIL` *(required to run `gcp-smoke.yml`, optional otherwise)*: Email address of the GCP service account to impersonate for GCE/GKE lifecycle smoke tests (e.g. `grain-smoke@<project>.iam.gserviceaccount.com`). When unset, `gcp-smoke.yml` emits a `::notice` annotation and skips cleanly.
   - `GCP_PROJECT_ID` *(optional, for `gcp-smoke.yml`)*: Explicit GCP project ID to configure in `gcloud`; if omitted, `gcp-smoke.yml` derives the project ID from `GCP_SA_EMAIL`.
-  - `ENABLE_SELF_HOSTED_TESTS` *(optional)*: Set to `'true'` to enable the self-hosted nested-VM and Kubernetes jobs (`real-vm`, `real-kubernetes`, `kvm-sandboxes`, `kvm-route-stress`).
-  - `SELF_HOSTED_RUNNER` *(optional)*: Runner label for self-hosted jobs (defaults to `'ubuntu-latest'` when unset).
+  - `ENABLE_SELF_HOSTED_TESTS` *(unused)*: No workflow job reads it any more; every former self-hosted job runs on `ubuntu-latest`. It can be deleted from repository variables.
+  - `SELF_HOSTED_RUNNER` *(unused)*: Formerly the runner label for self-hosted jobs; no workflow job reads it any more.
 
 ---
 
@@ -231,7 +222,7 @@ Configure the following in `ai-on-gke/grain` under **GitHub Repository -> Settin
 | `IMAGE_SIGNING_KEY` | Secret | Settings -> Secrets and variables -> Actions -> **Secrets** | Optional | PEM-encoded Cosign private key (`cosign.key` from the deployment's `image-signing` capability store). Used by `scripts/release-images.sh` to sign published image digests; when unset, workflows log a warning and publish unsigned. |
 | `IMAGE_SIGNING_PASSWORD` | Secret | Settings -> Secrets and variables -> Actions -> **Secrets** | Optional | Passphrase for `IMAGE_SIGNING_KEY` (leave empty or unset if the Cosign key is unencrypted). |
 | `GRAIN_API_TOKEN` | Secret | Settings -> Secrets and variables -> Actions -> **Secrets** | **Required** for live `release-train.yml` | Bearer token from the Grain deployment's `api:release-gate-read` capability grant. Used by `scripts/release-from-trunk.sh`, `scripts/select-lkg.sh`, and `scripts/check-soak.sh` to read `/api/ci/runs` and `/api/tasks`, file the `release-notes` task, and post the `release-pending` notification. |
-| `REPO_WRITE_TOKEN` | Secret | Settings -> Secrets and variables -> Actions -> **Secrets** | Optional (falls back to `GITHUB_TOKEN`) | Fine-grained PAT or GitHub App token with `contents: write` on `ai-on-gke/grain` if branch/tag protection rules block `github-actions[bot]` (`GITHUB_TOKEN`) from pushing `v*` / `latest` tags or force-updating `refs/heads/candidate` in `release-train.yml` and `promote-release.yml`. |
+| `REPO_WRITE_TOKEN` | Secret | Settings -> Secrets and variables -> Actions -> **Secrets** | Required for release qualification (falls back to `GITHUB_TOKEN`) | Fine-grained PAT or GitHub App token with `contents: write` on `ai-on-gke/grain`. Without it `release-train.yml` pushes `vX.Y.Z-rc.N` with `GITHUB_TOKEN`, and a tag pushed with `GITHUB_TOKEN` starts no workflow: `nightly.yml` (Stage 1) never runs on the rc, which stays `PENDING nightly` until someone dispatches `nightly.yml` on the tag by hand. It is also needed if branch/tag protection rules block `github-actions[bot]` from pushing `v*` / `latest` tags or force-updating `refs/heads/candidate` in `release-train.yml` and `promote-release.yml`. |
 | `GHCR_USERNAME` | Variable | Settings -> Secrets and variables -> Actions -> **Variables** | Optional (defaults to `bwsalmon`) | GitHub username corresponding to `GHCR_TOKEN` for `docker login ghcr.io` (`PACKAGE_PUBLISH_USERNAME`). |
 | `RELEASE_IMAGE_REPO` | Variable | Settings -> Secrets and variables -> Actions -> **Variables** | Optional (defaults to `bwsalmon/grain`) | Image repository path under the registry (`<owner>/<repo>`). Keep at default `bwsalmon/grain` so image names match `ghcr.io/bwsalmon/grain/{grain,guest,guest-base,k8s-sandbox,k8s-sandbox-base}`. |
 | `PACKAGE_PUBLISH_REGISTRY` | Variable | Settings -> Secrets and variables -> Actions -> **Variables** | Optional (defaults to `ghcr.io`) | Container registry hostname passed to `scripts/release-images.sh` (`ghcr.io` or `us-docker.pkg.dev`). |
@@ -293,7 +284,7 @@ To check whether the latest `release.yml` on `main` passed, and read the
 failing job's log if it did not:
 
 ```sh
-grain ci list --repo ai-on-gke/grain --ref main --provider github-actions
+grain ci list --repo ai-on-gke/grain --ref main --provider github-actions --workflow release.yml
 # gha:ai-on-gke:grain:123 github-actions/release.yml main 1a2b3c4d5e6f failure 2026-11-01T10:00:00Z failing: publish
 grain ci show gha:ai-on-gke:grain:123
 grain ci log gha:ai-on-gke:grain:123 --job publish --lines 80
@@ -301,7 +292,7 @@ grain ci log gha:ai-on-gke:grain:123 --job publish --lines 80
 
 The same reads over the API:
 
-- `GET /api/ci/runs?repo=ai-on-gke/grain&ref=main&provider=github-actions`
+- `GET /api/ci/runs?repo=ai-on-gke/grain&ref=main&provider=github-actions&workflow=release.yml`
 - `GET /api/ci/runs/gha:ai-on-gke:grain:123`
 - `GET /api/ci/runs/gha:ai-on-gke:grain:123/log?job=publish&tail=80`
 

@@ -170,6 +170,28 @@ func (t *CommandForgeTransport) endpoint(u *url.URL) string {
 	return full
 }
 
+// checkHost refuses u when it is on neither Host nor the host of APIBase.
+// The tool is logged in to Host and sends its own login with whatever it
+// is given, and a whole URL is sent where it points (endpoint): a request
+// bound for some other forge -- a GraphQL call built for api.github.com,
+// say -- would carry this host's login there, so it is never run.
+func (t *CommandForgeTransport) checkHost(u *url.URL) error {
+	got := strings.ToLower(u.Hostname())
+	allowed := []string{strings.ToLower(hostName(t.Host))}
+	if t.APIBase != "" {
+		if base, err := url.Parse(t.APIBase); err == nil && base.Hostname() != "" {
+			allowed = append(allowed, strings.ToLower(base.Hostname()))
+		}
+	}
+	for _, h := range allowed {
+		if got == h {
+			return nil
+		}
+	}
+	return fmt.Errorf("refusing to send %s through %s: it is bound for %s, and %s is logged in to %s",
+		redactQuery(u.Path), t.Command, u.Hostname(), t.Command, t.Host)
+}
+
 // isGitSmartHTTP reports whether u is one of a repository's smart-HTTP
 // endpoints (info/refs, git-upload-pack, git-receive-pack) rather than
 // a call to the host's REST API.
@@ -278,6 +300,12 @@ func (t *CommandForgeTransport) env() []string {
 // the command and what it said on stderr (never its stdout, which is the
 // response body); one answered with a login page is LoginRedirectError.
 func (t *CommandForgeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if err := t.checkHost(req.URL); err != nil {
+		if req.Body != nil {
+			req.Body.Close()
+		}
+		return nil, err
+	}
 	if c := activeHostGit(); c != nil {
 		return c.forge(t, req)
 	}

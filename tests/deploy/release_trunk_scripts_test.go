@@ -24,16 +24,20 @@ import (
 // The release train's scripts (design/design/release-from-trunk.design.md, RFT-4)
 // carry their own unit tests as shell, beside them, because what they
 // test is shell: scripts/candidate-gate_test.sh drives select-lkg and
-// check-soak against JSON shaped like the release gate's answers, and
+// check-qualification against JSON shaped like the CI answers, and
 // scripts/release-from-trunk_test.sh drives both phases of the train
-// against a bare remote. This is what runs them in CI.
+// against a bare remote, scripts/release-patch_test.sh drives the
+// patch-release script and the guard release.yml and promote.yml run
+// on a vX.Y.Z tag, and scripts/release-notes_test.sh drives the release
+// notes, the release body and the breaking-change gate against a
+// throwaway history. This is what runs them in CI.
 func TestReleaseTrainShellSuites(t *testing.T) {
 	for _, tool := range []string{"git", "jq"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("%s not on PATH: %v", tool, err)
 		}
 	}
-	for _, suite := range []string{"candidate-gate_test.sh", "release-from-trunk_test.sh"} {
+	for _, suite := range []string{"candidate-gate_test.sh", "release-from-trunk_test.sh", "release-patch_test.sh", "release-notes_test.sh"} {
 		t.Run(suite, func(t *testing.T) {
 			cmd := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", suite))
 			out, err := cmd.CombinedOutput()

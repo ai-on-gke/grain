@@ -348,6 +348,61 @@ overlap: allow
 	}
 }
 
+func TestScheduleRunsADeclaredSuiteOnItsBase(t *testing.T) {
+	declared := load(t, map[string]string{
+		".grain/templates/nightly.yml": "title: Bump dependencies\n",
+		".grain/suites/sweep.yml":      "templates: [nightly]\n",
+		".grain/schedules/sweep.yml": `
+name: Nightly sweep
+suite: sweep
+base: " main "
+daily:
+  at: "02:30"
+`,
+	})
+	if len(declared.Schedules) != 1 {
+		t.Fatalf("declared %d schedules, want 1", len(declared.Schedules))
+	}
+	sched := declared.Schedules[0].Schedule
+	if sched.SuiteID == nil || *sched.SuiteID != model.RepoDeclaredID(model.DeclaredSuite, repo, "sweep") {
+		t.Errorf("suiteId = %v", sched.SuiteID)
+	}
+	if sched.Base != "main" {
+		t.Errorf("base = %q, want main", sched.Base)
+	}
+}
+
+// A suite run stacks its tasks against one named branch and has no default
+// branch to fall back to (ui.CreateSuiteRun, ui.CreateSchedule), so a
+// declared suite schedule with no `base:` is refused with the file's path
+// rather than synced to fire a base-less run.
+func TestASuiteScheduleNeedsABase(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		base string
+	}{
+		{"omitted", ""},
+		{"blank", "base: \"   \"\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := loadErr(t, map[string]string{
+				".grain/templates/nightly.yml": "title: Bump dependencies\n",
+				".grain/suites/sweep.yml":      "templates: [nightly]\n",
+				".grain/schedules/sweep.yml":   "suite: sweep\n" + tc.base + "daily:\n  at: \"02:30\"\n",
+			})
+			for _, want := range []string{
+				".grain/schedules/sweep.yml",
+				"needs `base:`",
+				"no default branch to fall back to",
+			} {
+				if !strings.Contains(msg, want) {
+					t.Fatalf("error = %q, want %q", msg, want)
+				}
+			}
+		})
+	}
+}
+
 func TestADeclarationNamingAnotherTeamIsRefused(t *testing.T) {
 	for _, tc := range []struct{ name, path, file string }{
 		{"template", ".grain/templates/nightly.yml", "title: Bump dependencies\nteam: security\n"},

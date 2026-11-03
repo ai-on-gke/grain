@@ -59,7 +59,7 @@ func TestProcessResultAppliesDefaultsToProposedTasks(t *testing.T) {
 	for _, grant := range proposal.Grants {
 		got[grant.Capability] = grant.Via
 	}
-	for _, capability := range []string{"self-debug", grainci.CapabilityName} {
+	for _, capability := range []string{"self-debug", grainci.Grant} {
 		if via, ok := got[capability]; !ok || via != model.GrantByDefault {
 			t.Errorf("%s grant = %q, %v; want %q, true", capability, via, ok, model.GrantByDefault)
 		}

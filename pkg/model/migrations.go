@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -552,7 +553,247 @@ var Migrations = []Migration{
 			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", renames)
 		},
 	},
+	{
+		Version:     89,
+		Description: "rebuild merge_batch keyed by task as well as branch: one overlap re-check per change",
+		// Neither engine changes a primary key in place. The rows are
+		// copied out to a table with no constraints at all (CREATE TABLE
+		// ... AS, so that no constraint name is left behind to collide
+		// with the new table's on Postgres), and back into merge_batch
+		// created afresh from the statement a new store uses.
+		Statements: []string{
+			"CREATE TABLE `merge_batch_v88` AS SELECT * FROM `merge_batch`",
+			"DROP TABLE `merge_batch`",
+			mergeBatchTable,
+			"INSERT INTO `merge_batch` (`owner`,`name`,`branch`,`task_id`,`ref`,`base_commit`,`commit`," +
+				"`members`,`run_id`,`started_at`,`finished_at`,`conclusion`,`detail`,`splits`,`queued`," +
+				"`recheck_of`,`recheck_detail`,`recheck_at`) " +
+				"SELECT `owner`,`name`,`branch`,'',`ref`,`base_commit`,`commit`," +
+				"`members`,`run_id`,`started_at`,`finished_at`,`conclusion`,`detail`,`splits`,`queued`," +
+				"`recheck_of`,`recheck_detail`,`recheck_at` FROM `merge_batch_v88`",
+			"DROP TABLE `merge_batch_v88`",
+		},
+	},
+	{
+		Version:     90,
+		Description: "fold retired in-process catalogue entries into api_scopes.presets in grain_config.capability_policy",
+		Up: foldRetiredCatalogueInProcess(
+			map[string]string{
+				"team-broadcast":   "team-broadcast",
+				"dispatch-control": "dispatch-control",
+				"pipeline-control": "pipeline-control",
+				"memory":           "memory",
+				"release-notes":    "release-notes",
+				"self-upgrade":     "self-upgrade",
+				"test-quarantine":  "test-quarantine",
+			},
+			map[string][]string{
+				"team-broadcast":        {"api:team-broadcast"},
+				"dispatch-control":      {"api:dispatch-control"},
+				"pipeline-control":      {"api:pipeline-control"},
+				"memory":                {"api:memory"},
+				"release-notes":         {"api:release-notes"},
+				"self-upgrade":          {"api:self-upgrade"},
+				"test-quarantine":       {"api:test-quarantine"},
+				"grain-log":             {GrainJournalGrant},
+				"deployment-health":     {"api:deployment:read", GrainHealthGrant},
+				"db-read":               {GrainSQLReadGrant},
+				"db-write":              {GrainSQLWriteGrant},
+				"self-repair":           {GrainHostExecGrant},
+				GitPushAnyRefCapability: {GitPushAnyRefGrant},
+				"corp-research":         {CorpResearchGrant},
+			},
+		),
+	},
+	{
+		Version:     91,
+		Description: "add a *_source column beside every principal's *_kind/*_id pair, task_event's on-behalf-of, and config_audit (operator-attribution spec §1.3, §7.1)",
+		Statements: append([]string{
+			// task_pause and task_event postdate the 2.0 baseline and
+			// Init's CREATE TABLE IF NOT EXISTS made them in place, so a
+			// store this old may not have them yet: create them in the
+			// shape schema 90 knew first, so that the ALTERs below meet
+			// the same table whichever store they run on.
+			schema90TaskPauseTable,
+			schema90TaskEventTable,
+		}, principalSourceColumns()...),
+	},
+	{
+		Version:     92,
+		Description: "add the hostd registry (hostd, hostd_token), with the co-located hostd as local",
+		Statements: []string{
+			hostdTable,
+			hostdTokenTable,
+		},
+		Up: ensureLocalHostd,
+	},
+	{
+		Version:     93,
+		Description: "route host work per run: task_hostd, task_run_hostd, and the hostd of each task_run_capability_audit record",
+		Statements: []string{
+			taskHostdTable,
+			taskRunHostdTable,
+			// task_run_capability_audit postdates the 2.0 baseline and
+			// Init made it in place, so a store this old may not have it
+			// yet: create it in schema 92's shape first.
+			schema92CapabilityAuditTable,
+			"ALTER TABLE `task_run_capability_audit` ADD COLUMN `hostd` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     94,
+		Description: "add the hostd selector a template's tasks start pinned to",
+		Statements: []string{
+			"ALTER TABLE `template` ADD COLUMN `hostd` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     95,
+		Description: "raise grain_config.max_merges_per_repo's column default from 1 to 5 (stored values are kept)",
+		Up:          raiseMaxMergesPerRepoDefault,
+	},
+	{
+		Version:     96,
+		Description: "rewrite stored grain-ci grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/grain#ci={} (the in-process capability is retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames := map[string]string{GrainCICapability: GrainCIGrant}
+			if err := rewriteLegacyGrants(renames)(ctx, tx); err != nil {
+				return err
+			}
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities",
+				map[string][]string{GrainCICapability: {GrainCIGrant}})
+		},
+	},
+	{
+		Version:     97,
+		Description: "seed gcp#gcp-key permission sets from grain_config pool and gcp_key rows, and rewrite stored gcp-key and gcp-key:<name> grants (in-process gcp-key is retired)",
+		Up:          migrateGCPKeyToCapabilityServer,
+	},
+	{
+		Version:     98,
+		Description: "add allowed_principal and allowed_principal_migration for verified-identity sign-in access",
+		Statements: []string{
+			allowedPrincipalTable,
+			allowedPrincipalMigrationTable,
+		},
+	},
 }
+
+// maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as
+// schemas before 95 wrote it, with the default captured for replacing.
+var maxMergesPerRepoDefault1 = regexp.MustCompile("(`max_merges_per_repo`\\s+INTEGER\\s+NOT\\s+NULL\\s+DEFAULT\\s+)1\\b")
+
+// grainConfigTableName is the table name at the head of grain_config's
+// stored CREATE statement, however it was quoted.
+var grainConfigTableName = regexp.MustCompile("^(\\s*CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?)[`\"]?grain_config[`\"]?")
+
+// raiseMaxMergesPerRepoDefault is migration 95. Only the column default
+// changes, never a row: a deployment whose row holds 1 keeps 1, because the
+// row is written whole on every save and so cannot say whether that 1 was
+// chosen.
+//
+// Postgres changes a default in place. SQLite cannot, so there the table is
+// rebuilt from its own stored CREATE statement with only the default
+// edited -- the columns, their order and every row as they were. The two
+// are told apart by that statement: sqlite_master is a compatibility view
+// on Postgres whose sql column is always empty.
+func raiseMaxMergesPerRepoDefault(ctx context.Context, tx *sql.Tx) error {
+	var ddl string
+	if err := tx.QueryRowContext(ctx,
+		"SELECT `sql` FROM `sqlite_master` WHERE `type` = 'table' AND `name` = 'grain_config'").Scan(&ddl); err != nil {
+		return fmt.Errorf("reading grain_config's definition: %w", err)
+	}
+	if ddl == "" {
+		_, err := tx.ExecContext(ctx, "ALTER TABLE `grain_config` ALTER COLUMN `max_merges_per_repo` SET DEFAULT 5")
+		return err
+	}
+	raised := maxMergesPerRepoDefault1.ReplaceAllString(ddl, "${1}5")
+	if raised == ddl {
+		return nil
+	}
+	if !grainConfigTableName.MatchString(raised) {
+		return fmt.Errorf("grain_config's stored definition does not start as a CREATE TABLE: %.60q", ddl)
+	}
+	raised = grainConfigTableName.ReplaceAllString(raised, "${1}`grain_config_95`")
+	for _, stmt := range []string{
+		"DROP TABLE IF EXISTS `grain_config_95`",
+		raised,
+		"INSERT INTO `grain_config_95` SELECT * FROM `grain_config`",
+		"DROP TABLE `grain_config`",
+		"ALTER TABLE `grain_config_95` RENAME TO `grain_config`",
+	} {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// principalSourceColumns are migration 91's ALTERs: `<p>_source` beside
+// every stored principal, `”` for every row already there.
+func principalSourceColumns() []string {
+	cols := []struct{ table, column string }{
+		{"task", "origin_actor_source"},
+		{"task", "origin_behalf_source"},
+		{"task", "approval_actor_source"},
+		{"task", "approval_behalf_source"},
+		{"task_comment", "author_source"},
+		{"task_comment", "author_behalf_source"},
+		{"task_pause", "paused_by_source"},
+		{"pipeline_pause", "actor_source"},
+		{"scheduled_upgrade", "actor_source"},
+		{"memory", "updated_by_source"},
+		{"memory_document", "updated_by_source"},
+		{"release_note", "updated_by_source"},
+		{"task_event", "actor_source"},
+		{"task_event", "behalf_kind"},
+		{"task_event", "behalf_id"},
+		{"task_event", "behalf_source"},
+	}
+	out := make([]string, 0, len(cols))
+	for _, c := range cols {
+		out = append(out, "ALTER TABLE `"+c.table+"` ADD COLUMN `"+c.column+"` TEXT NOT NULL DEFAULT ''")
+	}
+	return out
+}
+
+// schema92CapabilityAuditTable is task_run_capability_audit as schema
+// 92 created it, frozen for migration 93.
+const schema92CapabilityAuditTable = `CREATE TABLE IF NOT EXISTS ` + "`task_run_capability_audit`" + ` (
+  ` + "`run_id`" + `     TEXT     NOT NULL,
+  ` + "`seq`" + `        INTEGER  NOT NULL,
+  ` + "`capability`" + ` TEXT     NOT NULL,
+  ` + "`attempt_id`" + ` TEXT     NOT NULL,
+  ` + "`at`" + `         DATETIME NOT NULL,
+  ` + "`record`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`note`" + `       TEXT     NOT NULL DEFAULT '',
+  PRIMARY KEY (` + "`run_id`" + `, ` + "`seq`" + `)
+)`
+
+// schema90TaskPauseTable and schema90TaskEventTable are task_pause and
+// task_event as schema 90 created them, frozen for migration 91.
+const schema90TaskPauseTable = `CREATE TABLE IF NOT EXISTS ` + "`task_pause`" + ` (
+  ` + "`task_id`" + `           TEXT     NOT NULL,
+  ` + "`paused_at`" + `         DATETIME NOT NULL,
+  ` + "`paused_by_kind`" + `    TEXT     NOT NULL,
+  ` + "`paused_by_id`" + `      TEXT     NOT NULL,
+  ` + "`from_state`" + `        TEXT     NOT NULL,
+  ` + "`immediate`" + `         INTEGER  NOT NULL DEFAULT 0,
+  ` + "`grace_until`" + `       DATETIME NULL,
+  ` + "`run_id`" + `            TEXT     NULL,
+  PRIMARY KEY (` + "`task_id`" + `)
+)`
+
+const schema90TaskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
+  ` + "`id`" + `         INTEGER PRIMARY KEY AUTOINCREMENT,
+  ` + "`task_id`" + `    TEXT     NOT NULL,
+  ` + "`kind`" + `       TEXT     NOT NULL,
+  ` + "`at`" + `         DATETIME NOT NULL,
+  ` + "`actor_kind`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_id`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`reason`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`detail`" + `     TEXT     NOT NULL DEFAULT ''
+)`
 
 // CorpResearchGrant is what migration 86 rewrote stored corp-research grants
 // to: the method a wrapper distribution's build registers (capability.Register) in place

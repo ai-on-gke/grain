@@ -140,9 +140,10 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	gcpPoolSAs := ui.GCPKeyPoolEmails(cfg.GcpServiceAccountEmail, cfg.GcpServiceAccountCount, cfg.GcpProject)
 	combinedPoolSAs := append([]string(nil), gcpPoolSAs...)
 	if store != nil {
-		if mc, err := store.GetConfig(context.Background()); err == nil && mc != nil {
-			combinedPoolSAs = append(combinedPoolSAs, ui.GCPKeyPoolEmails(mc.GCPServiceAccountEmail, mc.GCPServiceAccountCount, mc.GCPProject)...)
-		}
+		ctx := context.Background()
+		mc, _ := store.GetConfig(ctx)
+		keys, _ := store.ListGCPKeys(ctx)
+		combinedPoolSAs = append(combinedPoolSAs, ui.ConfigGCPKeyServiceAccounts(mc, keys)...)
 	}
 	if err := checkUIAllowedPrincipalsWithPool(cfg, combinedPoolSAs); err != nil {
 		return nil, err
@@ -181,7 +182,10 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// GitHub token this deployment has beyond its default one
 		// (grain/task-117) -- the same names capabilityProviders builds
 		// the matching providers from, so every id the picker offers is
-		// one a dispatch can actually resolve.
+		// one a dispatch can actually resolve. The api rows appended last
+		// are only a marker that this picker offers the agent API: the
+		// Client reads them again per request (pickerCapabilities), so a
+		// scope set declared after startup is offered too.
 		Capabilities: append(append(ui.OfferedCapabilities(), ui.GitHubTokenCapabilities(live.GitHubTokens())...),
 			ui.APICapabilities()...),
 		Consoles: consoleSessions,
@@ -331,7 +335,8 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// looks when a sandbox is behaving like an older commit's, and
 		// the startup warning about the two disagreeing has scrolled out
 		// of the journal by then (uiSandboxImage, grain/task-306).
-		SandboxImage: uiSandboxImage(cfg),
+		SandboxImage:     uiSandboxImage(cfg),
+		SandboxImageFunc: func() *ui.SandboxImage { return uiSandboxImage(live.Current()) },
 		// Whether the three sandbox-shape settings on that same pane
 		// actually shape anything here, which is a property of the
 		// backend built above rather than of the row they are stored in
@@ -575,7 +580,9 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	uiCfg.RepoComparer = repoComparisonGate{local: localRepoComparer}
 	// Assigned only when there is one, as Upgrader below: a nil
 	// *hostd.Remote in the interface would not read as nil.
-	if cfg.HostdRemote != nil {
+	if cfg.HostdHub != nil {
+		uiCfg.HostdRemote = cfg.HostdHub
+	} else if cfg.HostdRemote != nil {
 		uiCfg.HostdRemote = cfg.HostdRemote
 	}
 	branchGate := repoBranchGate{remote: githubTokens}
@@ -627,6 +634,9 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	}
 
 	uiClient := ui.NewClient(uiCfg, store)
+	if err := uiClient.MigrateAllowedPrincipals(context.Background()); err != nil {
+		log.Printf("grain daemon: WARNING: migrating allowed principals: %v", err)
+	}
 	// The sandbox proxy's acting /cli/ routes act through this same
 	// client (sandbox_cli.go).
 	liveSandboxCLI.Store(uiClient)

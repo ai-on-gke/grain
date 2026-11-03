@@ -31,6 +31,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -46,7 +47,7 @@ const DemoCapabilityID = "https://capabilities.demo.grain.example/cloud"
 // capability (admin accounts and permission sets), over gcpfake's
 // in-memory IAM rather than GCP -- the one external boundary it stubs --
 // so Settings can add admins and sets, Test them, and grant a set.
-const DemoGCPCapabilityID = "https://capabilities.demo.grain.example/gcp"
+const DemoGCPCapabilityID = "https://grain.dev/capabilities/gcp"
 
 // The demo's gchat server is grain's own built-in, registered under its
 // canonical capability_id with nothing configured, so Settings shows it
@@ -226,8 +227,10 @@ var demoCapabilityConfigSchema = map[string]any{
 // configureCapabilityServerDemo starts the demo's capability server on a
 // loopback port, records it in stored's mcpServers, and returns the
 // registry that attaches it, already running until ctx ends. lookup
-// resolves the $secret: references a saved configuration holds.
-func configureCapabilityServerDemo(ctx context.Context, stored *model.Config, lookup protocol.SecretLookup, identity servers.IdentitySource) (*servers.Registry, error) {
+// resolves the $secret: references a saved configuration holds; hostdClient,
+// when set (-host-executor=hostd or hostd-remote), lets Settings list and
+// probe run: host capability servers against the demo's grain hostd.
+func configureCapabilityServerDemo(ctx context.Context, stored *model.Config, lookup protocol.SecretLookup, identity servers.IdentitySource, hostdClient *hostd.Client) (*servers.Registry, error) {
 	methods, err := demoCapabilityMethods()
 	if err != nil {
 		return nil, err
@@ -260,6 +263,7 @@ func configureCapabilityServerDemo(ctx context.Context, stored *model.Config, lo
 	if err != nil {
 		return nil, err
 	}
+	gcpEntry.Builtin = "gcp"
 	gcpEntry.Config = demoGCPConfig()
 	stored.MCPServers[DemoGCPCapabilityID] = gcpEntry
 
@@ -283,7 +287,7 @@ func configureCapabilityServerDemo(ctx context.Context, stored *model.Config, lo
 	}
 	gchatEntry.Builtin = "gchat"
 	stored.MCPServers[intree.CanonicalID("gchat")] = gchatEntry
-	opts := servers.Options{Secrets: lookup}
+	opts := servers.Options{Secrets: lookup, Hostd: hostdClient}
 	if identity != nil {
 		opts.Identity = servers.StoreIdentity(identity, nil)
 	}

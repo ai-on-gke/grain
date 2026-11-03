@@ -746,6 +746,12 @@ func (c *Client) UpdateConsoleSession(ctx context.Context, id string, req Update
 			return nil, err
 		}
 	}
+	// An open session's edit went to its task without the settings guard
+	// above, and is a change to the session all the same: audited as one
+	// (operator-attribution spec §3.5).
+	if openTask != nil {
+		noteConfigWrite(ctx)
+	}
 	return c.ListConsoleSessions(ctx)
 }
 
@@ -1026,7 +1032,7 @@ func (c *Client) createConsoleSession(ctx context.Context, req CreateConsoleSess
 		// makes, so it lifts the opening park the task was filed on and
 		// queues the session's first exchange exactly as a message typed
 		// into an existing session would.
-		by := model.Attribution{Actor: c.actor(ctx)}
+		by := model.Attribution{Actor: c.requestActor(ctx).Actor}
 		if err := c.addAttributedComment(ctx, taskID, message, attachments, by, now, true); err != nil {
 			return "", nil, err
 		}
@@ -1092,7 +1098,7 @@ func (c *Client) stopAndCloseConsoleSessionTask(ctx context.Context, taskID stri
 		return err
 	}
 	if obs == nil || obs.ClosedAt == nil {
-		if err := c.Store.ObserveClose(ctx, taskID, now, c.actor(ctx), reason, func(o *model.Observation) {
+		if err := c.Store.ObserveClose(ctx, taskID, now, c.requestActor(ctx).Actor, reason, func(o *model.Observation) {
 			o.ClosedAt = &now
 			o.PendingQuestionCommentID = nil
 			o.PendingSecret = ""

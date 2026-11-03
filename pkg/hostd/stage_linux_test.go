@@ -320,7 +320,7 @@ func TestCarryHTTPGuardsLoopbackAndScopesListenersToTheSession(t *testing.T) {
 	// Reconnect: the old session's carry registry does not carry over to
 	// the new session even before release() is called.
 	ctl.remote.mu.Lock()
-	oldSess := ctl.remote.cur
+	oldSess := ctl.remote.cur[ctl.remote.DefaultName()]
 	ctl.remote.mu.Unlock()
 	var oldID string
 	oldSess.carries.mu.Lock()
@@ -335,7 +335,7 @@ func TestCarryHTTPGuardsLoopbackAndScopesListenersToTheSession(t *testing.T) {
 	ctl.drop()
 	waitConnected(t, ctl.remote, 2)
 	ctl.remote.mu.Lock()
-	newSess := ctl.remote.cur
+	newSess := ctl.remote.cur[ctl.remote.DefaultName()]
 	ctl.remote.mu.Unlock()
 	if newSess == oldSess || newSess.carries.lookup(oldID) != nil {
 		t.Fatal("session 1's carry listener ID remained reachable on session 2")

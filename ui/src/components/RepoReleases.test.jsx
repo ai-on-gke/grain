@@ -338,6 +338,32 @@ describe("RepoReleases", () => {
     expect(screen.getByRole("combobox", { name: "Release" })).toHaveTextContent(
       "newer",
     );
+    // In place, naming both the release asked for and the one shown,
+    // rather than as a toast that is gone before it is read.
+    expect(
+      screen.getByText(/acme\/widgets has no release named “gone”/),
+    ).toHaveTextContent(
+      "acme/widgets has no release named “gone” -- showing newer instead.",
+    );
+  });
+
+  it("drops the unknown-release notice once another release is picked", async () => {
+    setupApi({ releases: [newerRelease, activeRelease] });
+    const user = userEvent.setup();
+    render(
+      <RepoReleases
+        repo="acme/widgets"
+        release="gone"
+        onSelectRelease={() => {}}
+        onBack={() => {}}
+        showError={() => {}}
+      />,
+    );
+
+    await screen.findByText(/has no release named “gone”/);
+    await user.click(screen.getByRole("combobox", { name: "Release" }));
+    await user.click(screen.getByRole("option", { name: /^myfeat/ }));
+    expect(screen.queryByText(/has no release named/)).toBeNull();
   });
 
   it("says why Cut new RC is off while the current candidate is active", async () => {
@@ -460,6 +486,55 @@ describe("RepoReleases", () => {
       body: JSON.stringify({ name: "myfeat" }),
     });
     await screen.findByLabelText("Release");
+  });
+
+  it("shows a refused release name on the box and clears it once a name is created", async () => {
+    setupApi({ releases: [] });
+    const refusal =
+      'invalid release name: use letters, digits, ".", "_" and "-"';
+    const created = api.getMockImplementation();
+    api.mockImplementation((path, opts) => {
+      if (
+        path === "/api/repos/acme/widgets/releases" &&
+        opts?.method === "POST" &&
+        JSON.parse(opts.body).name === "bad name"
+      ) {
+        const err = new Error(refusal);
+        err.status = 400;
+        return Promise.reject(err);
+      }
+      return created(path, opts);
+    });
+    const showError = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <RepoReleases
+        repo="acme/widgets"
+        onBack={() => {}}
+        showError={showError}
+      />,
+    );
+    const name = await screen.findByLabelText(/New release name/);
+
+    await user.type(name, "bad name");
+    await user.click(screen.getByRole("button", { name: "Create release" }));
+    expect(await screen.findByText(refusal)).toBeInTheDocument();
+    expect(name).toHaveAttribute("aria-invalid", "true");
+    expect(showError).not.toHaveBeenCalled();
+
+    await user.clear(name);
+    expect(screen.queryByText(refusal)).not.toBeInTheDocument();
+    await user.type(name, "bad name");
+    await user.click(screen.getByRole("button", { name: "Create release" }));
+    await screen.findByText(refusal);
+
+    // A create that succeeds takes the refusal down too, even with no
+    // edit in between that would have (the box set without an input event).
+    name.value = "myfeat";
+    await user.click(screen.getByRole("button", { name: "Create release" }));
+    await screen.findByLabelText("Release");
+    expect(screen.queryByText(refusal)).not.toBeInTheDocument();
+    expect(showError).not.toHaveBeenCalled();
   });
 
   it("cuts a new RC when eligible", async () => {

@@ -17,6 +17,7 @@ package ui
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -304,8 +305,8 @@ type Settings struct {
 	K8sGranuleImage        string   `json:"k8sGranuleImage"`
 	K8sGranuleImageDefault string   `json:"k8sGranuleImageDefault"`
 	DaemonBuildVersion     string   `json:"daemonBuildVersion,omitempty"`
-	K8sSandboxImageWarning string   `json:"k8sSandboxImageWarning,omitempty"`
-	K8sGranuleImageWarning string   `json:"k8sGranuleImageWarning,omitempty"`
+	K8sSandboxImageWarning string   `json:"k8sSandboxImageWarning"`
+	K8sGranuleImageWarning string   `json:"k8sGranuleImageWarning"`
 	K8sWorkspace           string   `json:"k8sWorkspace"`
 	K8sWorkspaceDefault    string   `json:"k8sWorkspaceDefault"`
 	K8sGitProxyHost        string   `json:"k8sGitProxyHost"`
@@ -1565,6 +1566,15 @@ func (c *Client) UpdateSettings(ctx context.Context, req UpdateSettingsRequest) 
 	}
 	if err := c.Store.PutConfig(ctx, cfg); err != nil {
 		return Settings{}, err
+	}
+	// Who saved what, named here because nothing downstream can: the
+	// daemon applies the change from the stored row on its own tick
+	// (pkg/daemon's live config), long after the request has gone. A
+	// rehearsal wrote nothing, so it is not reported as a save.
+	if r, ok := model.WriteRehearsalFrom(ctx); !ok || !r.Rehearsing() {
+		if changed := changedConfigFields(current, cfg); len(changed) > 0 {
+			log.Printf("grain ui: settings saved by %s: changed %s", writerName(ctx), strings.Join(changed, ", "))
+		}
 	}
 	c.triggerIAPSync()
 	if req.AgentBackends != nil {
