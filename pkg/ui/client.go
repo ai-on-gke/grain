@@ -2067,6 +2067,9 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err != nil {
 		return Task{}, validationErrorf("%v", err)
 	}
+	if err := c.checkHostdSelector(ctx, hostdSelector); err != nil {
+		return Task{}, err
+	}
 	priority := model.DefaultTaskPriority
 	if req.Priority != nil {
 		if *req.Priority < 1 {
