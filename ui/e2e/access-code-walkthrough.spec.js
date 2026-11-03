@@ -173,6 +173,27 @@ test("the access code signs a browser in, survives a reload, and rotating it sig
   await context.close();
 });
 
+// task 2727: a deep link followed while signed out is the login page at
+// that link, and signing in there lands on it -- not on "/".
+test("signing in at a deep link returns to it", async ({
+  browser,
+  baseURL,
+}) => {
+  const url = externalURL(baseURL);
+  test.skip(!url, "this machine has no non-loopback IPv4 address");
+  const context = await browser.newContext({ baseURL: url });
+  const page = await context.newPage();
+
+  const first = await page.goto("/settings/access?from=link");
+  expect(first.status()).toBe(401);
+  await expect(loginHeading(page)).toBeVisible();
+  await signIn(page, readCode());
+  await expect(page).toHaveURL(`${url}/settings/access?from=link`);
+  await expect(loginHeading(page)).toHaveCount(0);
+  await expect(page.locator("#root")).toHaveCount(1);
+  await context.close();
+});
+
 test.afterAll(() => {
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
