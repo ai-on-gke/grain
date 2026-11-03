@@ -664,6 +664,11 @@ var Migrations = []Migration{
 				map[string][]string{GrainCICapability: {GrainCIGrant}})
 		},
 	},
+	{
+		Version:     97,
+		Description: "seed gcp#gcp-key permission sets from grain_config pool and gcp_key rows, and rewrite stored gcp-key and gcp-key:<name> grants (in-process gcp-key is retired)",
+		Up:          migrateGCPKeyToCapabilityServer,
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as

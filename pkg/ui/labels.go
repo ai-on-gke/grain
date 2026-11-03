@@ -183,8 +183,6 @@ type Capability struct {
 // whoever is looking at the failure.
 func OfferedCapabilities() []Capability {
 	offered := []Capability{
-		{ID: "gcp-key", Name: "GCP key",
-			Description: "Mint a short-lived GCP service-account key for this task and place it in its sandbox"},
 		{ID: "gemini-key", Name: "Gemini key",
 			Description: "Mint a short-lived Gemini API key for this task"},
 		{ID: "self-debug", Name: "Self debug",

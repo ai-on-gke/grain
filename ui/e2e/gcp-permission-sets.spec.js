@@ -26,7 +26,7 @@ import { expect, test } from "./fixtures.js";
 // the new set -- saves it, and grants the new set on a task from the
 // grant form's dropdown.
 
-const GCP = "https://capabilities.demo.grain.example/gcp";
+const GCP = "https://grain.dev/capabilities/gcp";
 const KEY = `${GCP}#gcp-key`;
 
 function field(scope, path) {
