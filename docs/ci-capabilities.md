@@ -119,7 +119,7 @@ without minting again.
 
 The model proxies are retired onto grain's in-process
 `https://grain.dev/capabilities/model-proxy#model-proxy` `{vendor}`
-(schema migration 99 rewrote stored `claude-proxy`, `openai-proxy` and
+(schema migration 100 rewrote stored `claude-proxy`, `openai-proxy` and
 `gemini-proxy`, `repo_config.ci_capabilities` included). It forwards with
 the run's own team connection, as the in-process providers did; the bare
 names remain one-release aliases.

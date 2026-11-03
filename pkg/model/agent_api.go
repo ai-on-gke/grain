@@ -483,7 +483,7 @@ var legacyGrantReplacements = map[string]string{
 	"git-push-any-ref": GitPushAnyRefGrant,
 	"gcp-key":          GCPKeySandboxAgentGrant,
 	GrainCICapability:  GrainCIGrant,
-	// Retired by schema migration 99 onto the in-process model-proxy
+	// Retired by schema migration 100 onto the in-process model-proxy
 	// server, which forwards with the same team connection.
 	"claude-proxy": ModelProxyGrant("claude"),
 	"openai-proxy": ModelProxyGrant("openai"),

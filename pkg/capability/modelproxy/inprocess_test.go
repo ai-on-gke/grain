@@ -67,7 +67,7 @@ func fidelityEndpoints(teamHasConnection bool) map[string]*modelproxy.Endpoint {
 	return out
 }
 
-// mintRewritten mints grant, as migration 99 rewrote it, on the
+// mintRewritten mints grant, as migration 100 rewrote it, on the
 // in-process model-proxy server for a run whose agent spends connection,
 // the way the orchestrator mints a capability pass.
 func mintRewritten(t *testing.T, grant, connection string) (*protocol.Pass, error) {
@@ -84,7 +84,7 @@ func mintRewritten(t *testing.T, grant, connection string) (*protocol.Pass, erro
 		t.Fatal(err)
 	}
 	if len(recorded) != 1 || recorded[0].Capability != grant {
-		t.Fatalf("%s normalizes to %+v, want itself: migration 99 writes recorded grants", grant, recorded)
+		t.Fatalf("%s normalizes to %+v, want itself: migration 100 writes recorded grants", grant, recorded)
 	}
 	grants, err := model.CapabilityGrants(recorded, lookup)
 	if err != nil {
@@ -98,7 +98,7 @@ func mintRewritten(t *testing.T, grant, connection string) (*protocol.Pass, erro
 
 // A run holding a retired <vendor>-proxy grant, minted by the retired
 // in-process provider, and a run holding the model-proxy {vendor} grant
-// migration 99 rewrote it to, minted by the in-process model-proxy
+// migration 100 rewrote it to, minted by the in-process model-proxy
 // server, receive the same two files at the same paths with the same mode
 // and address, a token forwarding with the same team connection, and the
 // same prompt text -- whether the run's own agent spends a connection of

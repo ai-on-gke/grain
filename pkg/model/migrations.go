@@ -678,7 +678,16 @@ var Migrations = []Migration{
 		},
 	},
 	{
+		// The table itself is created by Statements, which Migrate
+		// applies after every rung; only the column needs saying here.
 		Version:     99,
+		Description: "add grain_config.auto_upgrade_on, which turns on upgrading when a release is published",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `auto_upgrade_on` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     100,
 		Description: "rewrite stored claude-proxy, openai-proxy and gemini-proxy grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/model-proxy#model-proxy={\"vendor\":\"<vendor>\"} (the in-process providers are retired)",
 		Up:          migrateModelProxyGrants,
 	},

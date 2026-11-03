@@ -28,7 +28,7 @@ import (
 // ServerID is the canonical capability_id of the in-process model-proxy
 // server, and MethodName its one method: model-proxy {vendor}, which the
 // retired claude-proxy, openai-proxy and gemini-proxy grants became
-// (schema migration 99, model.ModelProxyGrant).
+// (schema migration 100, model.ModelProxyGrant).
 const (
 	ServerID   = model.ModelProxyCapabilityServerID
 	MethodName = model.ModelProxyMethod

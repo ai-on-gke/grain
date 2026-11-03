@@ -21,7 +21,7 @@ import (
 	"strings"
 )
 
-// modelProxyRenames is migration 99's renames: each retired
+// modelProxyRenames is migration 100's renames: each retired
 // <vendor>-proxy to model-proxy {vendor}. The migration's own copy, as
 // rewriteLegacyGrants asks, so a later vendor never changes what it did.
 var modelProxyRenames = map[string][]string{
@@ -30,7 +30,7 @@ var modelProxyRenames = map[string][]string{
 	"gemini-proxy": {ModelProxyRef + `={"vendor":"gemini"}`},
 }
 
-// migrateModelProxyGrants is schema migration 99's Up: the in-process
+// migrateModelProxyGrants is schema migration 100's Up: the in-process
 // claude-proxy, openai-proxy and gemini-proxy providers are retired onto
 // the in-process model-proxy server, so every stored grant of one is
 // rewritten to model-proxy {vendor} -- the three grant tables, the

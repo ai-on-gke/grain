@@ -23,10 +23,10 @@ import (
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
-// Migration 99 rewrites a capability policy's rules and catalogue
+// Migration 100 rewrites a capability policy's rules and catalogue
 // defaults naming a retired <vendor>-proxy, leaves everything else in it
 // as it was, and changes nothing when it runs again.
-func TestMigration99RewritesModelProxyPolicy(t *testing.T) {
+func TestMigration100RewritesModelProxyPolicy(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
@@ -50,11 +50,11 @@ func TestMigration99RewritesModelProxyPolicy(t *testing.T) {
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 98 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 99 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-98 store: %v", err)
+		t.Fatalf("migrating a version-99 store: %v", err)
 	}
 	got, err := store.GetConfig(ctx)
 	if err != nil {
@@ -87,7 +87,7 @@ func TestMigration99RewritesModelProxyPolicy(t *testing.T) {
 	if err := db.QueryRowContext(ctx, "SELECT `capability_policy` FROM `grain_config` WHERE `id` = 1").Scan(&policyBefore); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 98 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 99 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
@@ -105,7 +105,7 @@ func TestMigration99RewritesModelProxyPolicy(t *testing.T) {
 	}
 }
 
-// A state-repo export written before schema 99 is rewritten on import:
+// A state-repo export written before schema 100 is rewritten on import:
 // the retired <vendor>-proxy grants it carries arrive as model-proxy
 // {vendor}.
 func TestStateRepoImportRewritesModelProxyGrants(t *testing.T) {
@@ -128,13 +128,13 @@ func TestStateRepoImportRewritesModelProxyGrants(t *testing.T) {
 	if err := staterepo.Export(ctx, srcDB, dir); err != nil {
 		t.Fatal(err)
 	}
-	if err := staterepo.WriteSchemaVersion(dir, 98); err != nil {
+	if err := staterepo.WriteSchemaVersion(dir, 99); err != nil {
 		t.Fatal(err)
 	}
 
 	dst, dstDB, _ := openStore(t)
 	if err := staterepo.Import(ctx, dstDB, dir); err != nil {
-		t.Fatalf("importing a schema-98 export: %v", err)
+		t.Fatalf("importing a schema-99 export: %v", err)
 	}
 	got, err := dst.GetConfig(ctx)
 	if err != nil {

@@ -1358,17 +1358,36 @@ export function UpgradeCheckSettings({ settings, onSave }) {
 // -- pkg/upgrade/targets.go's standardChannels, in the same order.
 const AUTO_UPGRADE_CHANNELS = ["latest", "candidate", "main"];
 
-// AutoUpgradeSettings is the daily automatic upgrade: a channel to
-// follow, or Off, and the time of day on this deployment's own clock at
-// which grain schedules the upgrade onto it (orchestrator's
-// reconcileAutoUpgrade). The upgrade is a scheduled one -- the queue is
-// held and the runs in flight finish before the restart -- so the time
-// is when that starts, not when the restart happens.
+// AUTO_UPGRADE_MODES are model.AutoUpgradeModes' labels, in the order the
+// picker offers them: the recommended one first after Off.
+const AUTO_UPGRADE_MODES = [
+  ["off", "Off (manual only)"],
+  ["release", "On each release (recommended)"],
+  ["daily", "Once a day"],
+];
+
+// autoUpgradeMode is the mode settings are in. A server that predates
+// autoUpgradeOn sends none, and its rule applies: daily when a channel is
+// set, off when not.
+function autoUpgradeMode(settings) {
+  if (settings.autoUpgradeOn) return settings.autoUpgradeOn;
+  return settings.autoUpgradeChannel ? "daily" : "off";
+}
+
+// AutoUpgradeSettings is how this deployment upgrades itself
+// (model.Config.AutoUpgradeOn): not at all, when a release is published
+// (orchestrator's reconcileReleaseUpgrade), or once a day onto a channel
+// at a time of day on this deployment's own clock (reconcileAutoUpgrade).
+// Either way the upgrade is a scheduled one -- the queue is held and the
+// runs in flight finish before the restart.
 //
-// A channel saved some other way (the CLI, a settings import) that is
-// not one of the three is offered too, so the picker can show what is
+// In release mode the channel says what is scheduled: "latest", or the
+// exact release tag when it is anything else (saved as ""). In daily
+// mode a channel saved some other way (the CLI, a settings import) that
+// is not one of the three is offered too, so the picker can show what is
 // actually set.
 export function AutoUpgradeSettings({ settings, onSave }) {
+  const [mode, setMode] = useState(autoUpgradeMode(settings));
   const [channel, setChannel] = useState(settings.autoUpgradeChannel || "");
   const [time, setTime] = useState(settings.autoUpgradeTime || "03:00");
   const zone = settings.timeZone || "UTC";
@@ -1376,66 +1395,131 @@ export function AutoUpgradeSettings({ settings, onSave }) {
     AUTO_UPGRADE_CHANNELS.includes(channel) || !channel
       ? AUTO_UPGRADE_CHANNELS
       : [...AUTO_UPGRADE_CHANNELS, channel];
+  const releaseTarget = channel === "latest" ? "latest" : "exact";
+
+  const chooseMode = (next) => {
+    setMode(next);
+    if (next === "daily") {
+      const daily = channel || "latest";
+      setChannel(daily);
+      onSave({
+        autoUpgradeOn: "daily",
+        autoUpgradeChannel: daily,
+        autoUpgradeTime: time,
+      });
+    } else if (next === "release") {
+      const target = channel === "latest" || !channel ? "latest" : "";
+      setChannel(target);
+      onSave({ autoUpgradeOn: "release", autoUpgradeChannel: target });
+    } else {
+      onSave({ autoUpgradeOn: "off" });
+    }
+  };
 
   return (
     <Box className="auto-upgrade-settings">
       <Typography variant="subtitle2" sx={{ mt: 3 }}>
         Automatic upgrades
       </Typography>
-      <Stack direction={{ xs: "column", sm: "row" }} spacing={{ xs: 0, sm: 2 }}>
+      <TextField
+        select
+        name="autoUpgradeOn"
+        data-setting-id="autoUpgradeOn"
+        label="Upgrade automatically"
+        value={mode}
+        onChange={(e) => chooseMode(e.target.value)}
+        fullWidth
+        margin="normal"
+        slotProps={{ inputLabel: { shrink: true } }}
+        helperText={
+          mode === "release"
+            ? "Within about an hour of a new release appearing on this " +
+              "deployment's image channel, grain holds the queue, lets the work " +
+              "in flight finish, and upgrades. Release candidates are never " +
+              "followed. A failed upgrade is reported in the Inbox and is not " +
+              "retried until the next release."
+            : mode === "daily"
+              ? `Upgrade onto ${channel || "latest"} once a day, after the work in flight finishes.`
+              : "grain upgrades only when somebody presses Upgrade. " +
+                "Upgrading when a release is published is recommended."
+        }
+      >
+        {AUTO_UPGRADE_MODES.map(([value, label]) => (
+          <MenuItem key={value} value={value}>
+            {label}
+          </MenuItem>
+        ))}
+      </TextField>
+      {mode === "release" && (
         <TextField
           select
-          name="autoUpgradeChannel"
+          name="autoUpgradeTarget"
           data-setting-id="autoUpgradeChannel"
-          label="Channel"
-          value={channel}
-          slotProps={{
-            select: { displayEmpty: true },
-            inputLabel: { shrink: true },
-          }}
+          label="Upgrade to"
+          value={releaseTarget}
           onChange={(e) => {
-            const next = e.target.value;
+            const next = e.target.value === "latest" ? "latest" : "";
             setChannel(next);
-            onSave(
-              next
-                ? { autoUpgradeChannel: next, autoUpgradeTime: time }
-                : { autoUpgradeChannel: "" },
-            );
+            onSave({ autoUpgradeChannel: next });
           }}
           fullWidth
           margin="normal"
+          slotProps={{ inputLabel: { shrink: true } }}
           helperText={
-            channel
-              ? `Upgrade onto ${channel} once a day, after the work in flight finishes.`
-              : "grain upgrades only when somebody presses Upgrade."
+            releaseTarget === "latest"
+              ? "Follows the latest tag, which moves with each release."
+              : "Pins the exact release tag (vX.Y.Z) each upgrade lands on."
           }
         >
-          <MenuItem value="">Off (manual only)</MenuItem>
-          {channels.map((c) => (
-            <MenuItem key={c} value={c}>
-              {c}
-            </MenuItem>
-          ))}
+          <MenuItem value="latest">latest</MenuItem>
+          <MenuItem value="exact">The exact release tag</MenuItem>
         </TextField>
-        <TextField
-          type="time"
-          name="autoUpgradeTime"
-          data-setting-id="autoUpgradeTime"
-          label="Time of day"
-          value={time}
-          disabled={!channel}
-          onChange={(e) => setTime(e.target.value)}
-          onBlur={() => {
-            if (channel && time && time !== settings.autoUpgradeTime) {
-              onSave({ autoUpgradeTime: time });
-            }
-          }}
-          fullWidth
-          margin="normal"
-          slotProps={{ inputLabel: { shrink: true }, htmlInput: { step: 60 } }}
-          helperText={`24-hour, ${zone}. A day whose time has already passed upgrades at once.`}
-        />
-      </Stack>
+      )}
+      {mode === "daily" && (
+        <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+          <TextField
+            select
+            name="autoUpgradeChannel"
+            data-setting-id="autoUpgradeChannel"
+            label="Channel"
+            value={channel || "latest"}
+            slotProps={{ inputLabel: { shrink: true } }}
+            onChange={(e) => {
+              const next = e.target.value;
+              setChannel(next);
+              onSave({ autoUpgradeChannel: next, autoUpgradeTime: time });
+            }}
+            fullWidth
+            margin="normal"
+          >
+            {channels.map((c) => (
+              <MenuItem key={c} value={c}>
+                {c}
+              </MenuItem>
+            ))}
+          </TextField>
+          <TextField
+            type="time"
+            name="autoUpgradeTime"
+            data-setting-id="autoUpgradeTime"
+            label="Time of day"
+            value={time}
+            onChange={(e) => setTime(e.target.value)}
+            onBlur={() => {
+              if (time && time !== settings.autoUpgradeTime) {
+                onSave({ autoUpgradeTime: time });
+              }
+            }}
+            fullWidth
+            margin="normal"
+            slotProps={{
+              inputLabel: { shrink: true },
+              htmlInput: { step: 60 },
+            }}
+            helperText={`24-hour, ${zone}. A day whose time has already passed upgrades at once.`}
+          />
+        </Stack>
+      )}
     </Box>
   );
 }

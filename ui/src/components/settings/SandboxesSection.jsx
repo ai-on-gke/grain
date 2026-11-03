@@ -18,6 +18,7 @@ import {
   Checkbox,
   FormControlLabel,
   TextField,
+  Typography,
 } from "@mui/material";
 import SandboxCommitmentNote from "../SandboxCommitmentNote.jsx";
 import CustomSandboxImageCard from "./CustomSandboxImageCard.jsx";
@@ -649,6 +650,7 @@ export default function SandboxesSection({ s }) {
           }
           endAdornment={restartChip("k8sGranuleImage")}
         />
+        <K8sGranuleImageEffective settings={settings} />
         <DefaultableField
           s={s}
           name="k8sWorkspace"
@@ -868,5 +870,68 @@ export default function SandboxesSection({ s }) {
       </SettingsCard>
       <CustomSandboxImageCard s={s} />
     </>
+  );
+}
+
+// K8sGranuleImageEffective is what the Kubernetes Granule VM pod image
+// field's stored value comes to: the image pods really boot
+// (k8sGranuleImageEffective), and when the stored value is a mirrored
+// guest ref the daemon reads as its mirror repository rather than as an
+// image (k8sGranuleImageMirror), that it is -- which nothing else on the
+// page said on 2026-10-30, when clearing such a pin looked like the fix.
+function K8sGranuleImageEffective({ settings }) {
+  const effective = settings.k8sGranuleImageEffective || "";
+  const stored = (settings.k8sGranuleImage || "").trim();
+  const hint = settings.k8sGranuleImageMirror || "";
+  const mirror = settings.sandboxImageMirrorEffective || "";
+  const onGranule =
+    (settings.sandboxBackend || settings.sandboxImageBackend) ===
+    "kubernetes-granule";
+  if (!effective || (!onGranule && !hint)) return null;
+  const code = (text) => (
+    <Box
+      component="code"
+      sx={{
+        fontFamily:
+          "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace",
+        fontSize: "0.8125rem",
+        overflowWrap: "anywhere",
+      }}
+    >
+      {text}
+    </Box>
+  );
+  if (hint) {
+    return (
+      <Alert
+        severity="info"
+        data-testid="k8s-granule-image-mirror"
+        sx={{ mt: 0.5, mb: 1, "& .MuiAlert-message": { minWidth: 0 } }}
+      >
+        Treated as mirror repository {code(hint)}, not booted; sandboxes boot{" "}
+        {code(effective)}. Clearing it keeps that mirror as
+        sandbox_image_mirror.
+      </Alert>
+    );
+  }
+  if (effective === stored && !mirror) return null;
+  return (
+    <Typography
+      variant="body2"
+      color="text.secondary"
+      data-testid="k8s-granule-image-effective"
+      sx={{ mt: 0.5, mb: 1, minWidth: 0 }}
+    >
+      Sandboxes boot {code(effective)}
+      {mirror && (
+        <>
+          , mirrored into {code(mirror)}
+          {settings.sandboxImageMirrorDerivedFrom
+            ? ` (derived from ${settings.sandboxImageMirrorDerivedFrom})`
+            : " (sandbox_image_mirror)"}
+        </>
+      )}
+      .
+    </Typography>
   );
 }

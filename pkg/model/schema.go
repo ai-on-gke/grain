@@ -463,12 +463,17 @@ import "strconv"
 // SettingsTables so a config-repo pull request cannot lock operators out
 // or grant sign-in access (design/design/settings.design.md §1).
 //
-// 99 retires the in-process claude-proxy, openai-proxy and gemini-proxy
+// 99 adds `grain_config`.`auto_upgrade_on` (model.Config.AutoUpgradeOn:
+// off, daily, or release) and the `auto_upgrade_release` table, what the
+// release-triggered automatic upgrade has seen and scheduled
+// (model.AutoUpgradeRelease).
+//
+// 100 retires the in-process claude-proxy, openai-proxy and gemini-proxy
 // providers onto the in-process model-proxy server: stored grants across
 // tasks, templates, schedules, default_capabilities, ci_capabilities,
 // console_sessions and capability_policy become
 // https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"<vendor>"}.
-const SchemaVersion = 99
+const SchemaVersion = 100
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified
@@ -2362,6 +2367,7 @@ var Tables = []string{
   ` + "`session_sandbox_idle_ttl_ms`" + `  INTEGER NOT NULL DEFAULT 0,
   ` + "`settings_locked`" + `              INTEGER NOT NULL DEFAULT 0,
   ` + "`new_task_form`" + `                TEXT    NOT NULL DEFAULT '',
+  ` + "`auto_upgrade_on`" + `              TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2800,6 +2806,23 @@ var Tables = []string{
   ` + "`day`" + `      TEXT     NOT NULL,
   ` + "`branch`" + `   TEXT     NOT NULL,
   ` + "`fired_at`" + ` DATETIME NOT NULL,
+  PRIMARY KEY (` + "`id`" + `)
+)`,
+
+	// What the release-triggered automatic upgrade has seen and done
+	// (model.AutoUpgradeRelease): at most one row, written by
+	// orchestrator's reconcileReleaseUpgrade -- the newest release tag
+	// and since when, the release it last scheduled an upgrade for, and
+	// how that upgrade ended. Off SettingsTables for auto_upgrade_run's
+	// reason.
+	`CREATE TABLE IF NOT EXISTS ` + "`auto_upgrade_release`" + ` (
+  ` + "`id`" + `           INTEGER  NOT NULL,
+  ` + "`newest`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`seen_at`" + `      DATETIME NOT NULL,
+  ` + "`release_tag`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`target`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`scheduled_at`" + ` DATETIME NULL,
+  ` + "`outcome`" + `      TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

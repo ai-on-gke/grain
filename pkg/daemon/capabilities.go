@@ -141,7 +141,7 @@ func CapabilityProviders(cfg Config, store *model.Store, _ map[string]*modelprox
 		ciapi.Aliases[model.ReleaseGateReadCapability]))
 	// claude-proxy, openai-proxy and gemini-proxy are no longer
 	// providers here: they were retired onto the in-process model-proxy
-	// server (modelProxyMethod below, schema migration 99), which mints
+	// server (modelProxyMethod below, schema migration 100), which mints
 	// the same token on the same endpoints with the run's connection.
 	// One per named GitHub token beyond this deployment's default one
 	// (grain/task-117). Registered last, and unconditionally on the names
