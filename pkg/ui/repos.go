@@ -1653,7 +1653,7 @@ func (c *Client) cleanRepoCICapabilities(ids []string) ([]string, error) {
 			canonicalID = model.RepoReadCapability(target)
 		} else if target, ok := model.RepoWriteTarget(id); ok {
 			canonicalID = model.RepoWriteCapability(target)
-		} else if model.IsCapabilityRef(id) {
+		} else if model.IsCapabilityRef(id) || id == "gcp-key" || strings.HasPrefix(id, "gcp-key:") {
 			// A capability server method, with its with: arguments: a
 			// CI job's grant admission mints it through its server
 			// (daemon.CiGrantReservations), so the repo may grant it

@@ -449,13 +449,20 @@ import "strconv"
 // included, to `https://grain.dev/capabilities/grain#ci={}`: the
 // in-process `grain-ci` provider is retired for the `grain#ci` method.
 //
-// 97 adds `allowed_principal` and `allowed_principal_migration`: the
+// 97 retires the in-process `gcp-key` and `gcp-key:<name>` providers onto
+// `https://grain.dev/capabilities/gcp#gcp-key`: seeds `sandbox-agent` and
+// `<name>` permission sets in `grain_config`.`mcp_servers` from the
+// deployment's pool and `gcp_key` rows, and rewrites stored grants across
+// tasks, templates, schedules, default_capabilities, ci_capabilities,
+// console_sessions and capability_policy.
+//
+// 98 adds `allowed_principal` and `allowed_principal_migration`: the
 // database-backed list of `user:<email>` and `group:<email>` entries
 // admitted when authenticated by IAP or another IdentityVerifier, plus the
 // one-time startup migration record off `-ui-allowed-principals`. Kept off
 // SettingsTables so a config-repo pull request cannot lock operators out
 // or grant sign-in access (design/design/settings.design.md §1).
-const SchemaVersion = 97
+const SchemaVersion = 98
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified

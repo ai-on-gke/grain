@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 	"github.com/golang-jwt/jwt/v5"
@@ -1082,5 +1083,78 @@ func TestRefusedPrincipalsAreLoggedOnce(t *testing.T) {
 	}
 	if strings.Contains(out, `refused verified principal "owner@example.com"`) {
 		t.Errorf("the admitted owner was logged as refused:\n%s", out)
+	}
+}
+
+func TestAllowedPrincipalsRefusesGCPPermissionSetServiceAccounts(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+	t.Setenv("GRAIN_ALLOWED_PRINCIPALS", "")
+
+	priv, pemStr := generateECDSATestKey(t)
+	assertionKeys(t, priv, pemStr, false)
+	ui.SetIAPAudience(tunnelAudience)
+	mint := func(email string) string {
+		return signIAPToken(t, priv, tunnelKid, tunnelAudience, email, "sub", ui.GoogleIAPIssuer, time.Now().Add(10*time.Minute))
+	}
+
+	srv, client := testServer(t)
+	storeSettingsRow(t, client)
+	ctx := context.Background()
+	mc, err := client.Store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Legacy GCPServiceAccountEmail is retired/empty; accounts live in gcp#gcp-key permission_sets and gcp_key rows.
+	mc.DeploymentID = "049f1e09"
+	mc.GCPProject = ""
+	mc.GCPServiceAccountEmail = ""
+	mc.MCPServers = map[string]protocol.ServerConfig{
+		model.GCPCapabilityServerID: {
+			Command: "grain",
+			Args:    []string{"capability", "gcp"},
+			Builtin: "gcp",
+			Config: map[string]any{
+				"permission_sets": []any{
+					map[string]any{
+						"name":     "sandbox-agent",
+						"project":  "acme-pool",
+						"accounts": []any{"retired-pool-0@acme-pool.iam.gserviceaccount.com"},
+					},
+					map[string]any{
+						"name":         "ci-dynamic",
+						"project":      "acme-dyn",
+						"adopt_legacy": true,
+					},
+				},
+			},
+		},
+	}
+	if err := client.Store.PutConfig(ctx, *mc); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Store.PutGCPKey(ctx, model.GCPKey{
+		Name:                "deploy",
+		ProjectID:           "acme-deploy",
+		ServiceAccountEmail: "deploy-sa@acme-deploy.iam.gserviceaccount.com",
+		ServiceAccountCount: 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, sandboxSA := range []string{
+		"retired-pool-0@acme-pool.iam.gserviceaccount.com",
+		"grain-049f1e09-ci-dynamic-1@acme-dyn.iam.gserviceaccount.com",
+		"grain-ci-dynamic-1@acme-dyn.iam.gserviceaccount.com",
+		"deploy-sa-0@acme-deploy.iam.gserviceaccount.com",
+	} {
+		// Even if an operator attempts to list the sandbox SA in AllowedPrincipals, it is refused.
+		client.Config.AllowedPrincipals = []string{"user:owner@example.com", "serviceAccount:" + sandboxSA}
+		rec := serveFrom(srv, "203.0.113.50:443", http.MethodGet, "/api/tasks", "", map[string]string{
+			ui.IAPAssertionHeader: mint(sandboxSA),
+		})
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("sandbox SA %s admitted with %d, want 403: %s", sandboxSA, rec.Code, rec.Body)
+		}
 	}
 }

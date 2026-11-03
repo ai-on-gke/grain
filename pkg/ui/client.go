@@ -400,6 +400,7 @@ func (c *Client) capabilityLookup() protocol.Lookup {
 // validated against its server and in recorded form
 // (model.NormalizeCapabilityNames).
 func (c *Client) normalizeCapabilityID(id string) (string, error) {
+	orig := strings.TrimSpace(id)
 	id = model.CanonicalLegacyGrant(id)
 	if !model.IsCapabilityRef(id) {
 		return id, nil
@@ -408,11 +409,48 @@ func (c *Client) normalizeCapabilityID(id string) (string, error) {
 	if lookup == nil && grainserver.IsInProcessGrant(id) {
 		lookup = grainserver.Lookup(nil)
 	}
+	if orig != id && model.CapabilityGrantRef(id) == model.GCPKeyRef {
+		if lookup == nil {
+			return id, nil
+		}
+		if _, err := lookup(model.GCPCapabilityServerID); err != nil {
+			return id, nil
+		}
+	}
 	names, err := model.NormalizeCapabilityNames([]string{id}, lookup)
 	if err != nil {
 		return "", validationErrorf("%v", err)
 	}
 	return names[0], nil
+}
+
+func (c *Client) hasConfiguredGCPKeyOrSet(ctx context.Context, set string) (bool, error) {
+	if c.Store == nil {
+		return true, nil
+	}
+	if k, err := c.Store.GetGCPKey(ctx, set); err != nil {
+		return false, err
+	} else if k != nil {
+		return true, nil
+	}
+	mc, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		return false, err
+	}
+	if mc != nil {
+		if srv, ok := mc.MCPServers[model.GCPCapabilityServerID]; ok {
+			if sets, ok := srv.Config["permission_sets"].([]any); ok {
+				for _, item := range sets {
+					if m, ok := item.(map[string]any); ok {
+						if n, _ := m["name"].(string); strings.TrimSpace(n) == set {
+							return true, nil
+						}
+					}
+				}
+			}
+		}
+	}
+	return false, nil
 }
 
 // normalizeCapabilityIDs expands 1-to-many retired legacy grants (such as
@@ -2003,15 +2041,21 @@ func (c *Client) defaultCapabilities(ctx context.Context, teamID string, target 
 	}
 	ids := make([]string, 0, len(stored))
 	seen := make(map[string]bool, len(stored))
-	for _, id := range stored {
-		if seen[id] {
+	for _, raw := range stored {
+		normalized, err := c.normalizeCapabilityIDs(raw)
+		if err != nil {
 			continue
 		}
-		if _, ok := c.capabilityByID(id); !ok {
-			continue
+		for _, id := range normalized {
+			if seen[id] {
+				continue
+			}
+			if _, ok := c.capabilityByID(id); !ok {
+				continue
+			}
+			seen[id] = true
+			ids = append(ids, id)
 		}
-		seen[id] = true
-		ids = append(ids, id)
 	}
 	return ids, nil
 }
@@ -3571,21 +3615,29 @@ func (c *Client) creationGrants(ctx context.Context, req CreateTaskRequest, targ
 	var droppedRefusals []string
 	for _, g := range grants {
 		if !grainci.IsGrant(g.Capability) {
-			if keyName, ok := model.GCPKeyName(g.Capability); ok && keyName != "" && c.Store != nil {
-				k, err := c.Store.GetGCPKey(ctx, keyName)
-				if err != nil {
-					return nil, nil, err
+			if set, ok := model.ParseGCPKeyServerGrant(g.Capability); ok && set != "" && set != model.GCPKeyDefaultPermissionSet && c.Store != nil {
+				liveValidated := false
+				if lookup := c.capabilityLookup(); lookup != nil {
+					if _, err := lookup(model.GCPCapabilityServerID); err == nil {
+						liveValidated = true
+					}
 				}
-				if k == nil {
-					if g.Via == model.GrantByDefault {
-						continue
+				if !liveValidated {
+					configured, err := c.hasConfiguredGCPKeyOrSet(ctx, set)
+					if err != nil {
+						return nil, nil, err
 					}
-					refusal := model.MissingGCPKeyRefusal(g.Capability)
-					if g.Via.IsDeclaration() {
-						droppedRefusals = append(droppedRefusals, refusal)
-						continue
+					if !configured {
+						if g.Via == model.GrantByDefault {
+							continue
+						}
+						refusal := model.MissingGCPKeyRefusal(model.GCPKeyCapability(set))
+						if g.Via.IsDeclaration() {
+							droppedRefusals = append(droppedRefusals, refusal)
+							continue
+						}
+						return nil, nil, validationErrorf("%s", refusal)
 					}
-					return nil, nil, validationErrorf("%s", refusal)
 				}
 			}
 		}

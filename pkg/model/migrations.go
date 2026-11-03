@@ -666,6 +666,11 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     97,
+		Description: "seed gcp#gcp-key permission sets from grain_config pool and gcp_key rows, and rewrite stored gcp-key and gcp-key:<name> grants (in-process gcp-key is retired)",
+		Up:          migrateGCPKeyToCapabilityServer,
+	},
+	{
+		Version:     98,
 		Description: "add allowed_principal and allowed_principal_migration for verified-identity sign-in access",
 		Statements: []string{
 			allowedPrincipalTable,

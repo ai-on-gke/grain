@@ -828,8 +828,8 @@ func TestCreateTaskSeedsDeploymentDefaultCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(task.Capabilities, "gcp-key") {
-		t.Fatalf("capabilities = %v, want gcp-key among them: the deployment defaults it", task.Capabilities)
+	if !slices.Contains(task.Capabilities, model.GCPKeySandboxAgentGrant) {
+		t.Fatalf("capabilities = %v, want %s among them: the deployment defaults it", task.Capabilities, model.GCPKeySandboxAgentGrant)
 	}
 	stored, err := store.GetTask(ctx, task.ID)
 	if err != nil {
@@ -839,7 +839,7 @@ func TestCreateTaskSeedsDeploymentDefaultCapabilities(t *testing.T) {
 		t.Fatalf("grants = %+v, want one gcp-key grant recorded as %q", stored.Grants, model.GrantByDefault)
 	}
 	// Detachable like any other grant: a default is a starting point, not
-	// something the task is stuck with.
+	// something the task is stuck with (including via the legacy alias).
 	if err := c.SetCapability(ctx, task.ID, "gcp-key", false); err != nil {
 		t.Fatalf("detaching a defaulted capability: %v", err)
 	}
@@ -944,9 +944,9 @@ func TestCreateTaskUnionsRepoDefaultCapabilities(t *testing.T) {
 	// Compared sorted: a task's capabilities come back in the order
 	// Store.grantsOf reads them (by capability), not in the order they
 	// were seeded.
-	if !reflect.DeepEqual(here.Capabilities, []string{"gcp-key", "gemini-key"}) {
-		t.Errorf("capabilities = %v, want both the deployment's gemini-key and the repo's gcp-key",
-			here.Capabilities)
+	if !reflect.DeepEqual(here.Capabilities, []string{"gemini-key", model.GCPKeySandboxAgentGrant}) {
+		t.Errorf("capabilities = %v, want both the deployment's gemini-key and the repo's %s",
+			here.Capabilities, model.GCPKeySandboxAgentGrant)
 	}
 	stored, err := store.GetTask(ctx, here.ID)
 	if err != nil {
@@ -985,8 +985,8 @@ func TestCreateTaskUsesDefaultTargetRepoDefaultCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{"gcp-key"}) {
-		t.Fatalf("capabilities = %v, want [gcp-key]: the default target repo's own defaults", task.Capabilities)
+	if !reflect.DeepEqual(task.Capabilities, []string{model.GCPKeySandboxAgentGrant}) {
+		t.Fatalf("capabilities = %v, want [%s]: the default target repo's own defaults", task.Capabilities, model.GCPKeySandboxAgentGrant)
 	}
 }
 
@@ -1040,8 +1040,8 @@ func TestCreateTaskDeduplicatesOverlappingDefaultCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{"gcp-key"}) {
-		t.Fatalf("capabilities = %v, want [gcp-key] once", task.Capabilities)
+	if !reflect.DeepEqual(task.Capabilities, []string{model.GCPKeySandboxAgentGrant}) {
+		t.Fatalf("capabilities = %v, want [%s] once", task.Capabilities, model.GCPKeySandboxAgentGrant)
 	}
 	stored, err := store.GetTask(ctx, task.ID)
 	if err != nil {
@@ -2165,7 +2165,7 @@ func TestGCPKeyAndGitHubSandboxCanBeGranted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating a task granting gcp-key and github-sandbox: %v", err)
 	}
-	for _, want := range []string{"gcp-key", "github-sandbox"} {
+	for _, want := range []string{model.GCPKeySandboxAgentGrant, "github-sandbox"} {
 		if !slices.Contains(task.Capabilities, want) {
 			t.Errorf("capabilities = %v, want %s among them", task.Capabilities, want)
 		}
