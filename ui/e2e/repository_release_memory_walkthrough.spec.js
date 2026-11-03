@@ -328,7 +328,7 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
         res.request().method() === "PUT" &&
         /\/api\/repos\/acme\/widgets\/ci-capabilities(\?|$)/.test(res.url()),
     );
-    await page.getByRole("option", { name: /Gemini key/i }).click();
+    await page.getByRole("option", { name: /GitHub sandbox/i }).click();
     expect((await ciCapsSaved).ok()).toBeTruthy();
     await page.keyboard.press("Escape");
     await expect(page.locator(".MuiAlert-filledError")).not.toBeVisible();
@@ -354,7 +354,7 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
     await page.reload();
     await deploymentWide("CI");
     await expect(
-      page.locator(".MuiChip-root").filter({ hasText: /Gemini key/i }),
+      page.locator(".MuiChip-root").filter({ hasText: /GitHub sandbox/i }),
     ).toBeVisible();
     await page.getByRole("tab", { name: "Agents" }).click();
     await expect(
