@@ -509,12 +509,13 @@ func TestK8sGranuleRestartReadmitsFromStoredHashAndRefusesReleased(t *testing.T)
 	w2Cancel()
 
 	// granule's DialOut keeps retrying a refused handshake until its
-	// context ends (gke-labs/granule#230), then reports the refusal.
+	// context ends (gke-labs/granule#230), then reports the refusal. Wait
+	// for a second refusal: by then the wrapper has read the first.
 	refusals := acc2.Refusals()
 	refusedCtx, refusedCancel := context.WithCancel(ctx)
 	defer refusedCancel()
 	refusedDone := startInProcessGranuleWrapper(t, refusedCtx, acc2.Addr().String(), sandboxID, rawToken, mountDir)
-	for deadline := time.Now().Add(10 * time.Second); acc2.Refusals() == refusals; time.Sleep(10 * time.Millisecond) {
+	for deadline := time.Now().Add(10 * time.Second); acc2.Refusals() < refusals+2; time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("wrapper was not refused after Release")
 		}
@@ -610,12 +611,13 @@ func TestK8sGranuleSweepOrphansClearsStoredHashAndRefusesWrapper(t *testing.T) {
 	}
 
 	// granule's DialOut keeps retrying a refused handshake until its
-	// context ends (gke-labs/granule#230), then reports the refusal.
+	// context ends (gke-labs/granule#230), then reports the refusal. Wait
+	// for a second refusal: by then the wrapper has read the first.
 	refusals := acc.Refusals()
 	refusedCtx, refusedCancel := context.WithCancel(ctx)
 	defer refusedCancel()
 	refusedDone := startInProcessGranuleWrapper(t, refusedCtx, acc.Addr().String(), sandboxID, rawToken, mountDir)
-	for deadline := time.Now().Add(10 * time.Second); acc.Refusals() == refusals; time.Sleep(10 * time.Millisecond) {
+	for deadline := time.Now().Add(10 * time.Second); acc.Refusals() < refusals+2; time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("wrapper was not refused after ReapOrphans")
 		}

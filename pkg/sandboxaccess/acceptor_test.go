@@ -150,12 +150,15 @@ func startWrapper(t *testing.T, ctx context.Context, a *Acceptor, sandboxID, tok
 // refused waits for a wrapper's dial-out to be turned away. granule's
 // DialOut keeps retrying a refused handshake until its context ends
 // (gke-labs/granule#230, so a restarting controller does not strand a
-// live sandbox), so this waits for the acceptor to count the refusal,
+// live sandbox), so this waits for the acceptor to count two refusals,
 // stops the wrapper, and checks DialOut's last error was ErrAuthFailed.
+// Two, because the acceptor counts a refusal as it sends it: stopping the
+// wrapper then could cut its read of the answer short, while a wrapper
+// that has dialled again has already read the first one.
 func (w *wrapper) refused(t *testing.T) error {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
-	for w.acceptor.Refusals() == w.refusals {
+	for w.acceptor.Refusals() < w.refusals+2 {
 		if time.Now().After(deadline) {
 			t.Fatal("wrapper was not refused")
 		}
