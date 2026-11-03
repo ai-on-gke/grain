@@ -145,7 +145,7 @@ Upgrading the deployment that runs grain is part of the release, not a separate 
 | Gap | Closed by |
 | --- | --- |
 | 1. Auto-merge doesn't stick | Task 2442 (explicit `false` sticks; merged) and the gap 1 follow-up (explicit `true` survives holds) |
-| 2. Release-path changes always wait for a Submit | Gap 2 task: narrow the release-promotion rule per §0.3 |
+| 2. Release-path changes always wait for a Submit | Task 2664: `release-promotion` narrowed to the approval path, the rest moved to `release-machinery` (`trust-boundary/v12`) |
 | 3. The RC cut and pending tags need a person | Gap 3 task: release-train template with the §0.4 grant |
 | 4. The approval needs GitHub | Gap 4 task: the deployment raises `release.pending`, and the Inbox Approve dispatches the publishing workflow |
 | 5. The Google edition doesn't follow releases | Tasks 2533 (sync template) and 2315, and the gap 5 task in the edition's repository |

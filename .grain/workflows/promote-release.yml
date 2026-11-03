@@ -37,7 +37,9 @@
 #     route -- `grain ci run`, POST /api/ci/runs, an agent's run -- fails
 #     at its first step and pushes nothing;
 #   - .grain/triggers/release-promotion.yml holds every change to this
-#     file and the scripts it runs for a person's Submit.
+#     file for a person's Submit; the scripts it runs are held for grain's
+#     security review, which checks they cannot move vX.Y.Z or latest
+#     but through this approval (release-machinery.yml).
 #
 # approve refuses a pending release whose recorded staging soak is under
 # the minimum (24h less the slack; release-from-trunk.sh writes it on the

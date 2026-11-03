@@ -1037,6 +1037,13 @@ func matchList(matches []trustboundary.Match, known bool) string {
 		for _, p := range m.Paths {
 			fmt.Fprintf(&b, "  - `%s`\n", p)
 		}
+		if len(m.Category.Review) > 0 {
+			b.WriteString("  Check each of these, and report it as a finding if the change violates it " +
+				"or you cannot tell -- either leaves the change for a person:\n")
+			for _, r := range m.Category.Review {
+				fmt.Fprintf(&b, "  - %s\n", r)
+			}
+		}
 	}
 	if !known {
 		b.WriteString("- grain could not read the full list of files this pull request touches, " +
