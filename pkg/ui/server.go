@@ -135,7 +135,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	cv := verifyCallerNow(r)
 	r = r.WithContext(withCallerVerification(r.Context(), &cv))
 	if cv.present && cv.err != nil {
-		writeError(w, http.StatusUnauthorized, fmt.Errorf("identity assertion was not accepted: %w", cv.err))
+		writeAssertionRefused(w, r, cv.err)
 		return
 	}
 	if externalTokenFromContext(r.Context()) == nil && presentsExternalAgentToken(r) {
@@ -144,14 +144,17 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer release()
-		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name}
+		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name, Source: model.SourceExternalToken}
 		r = r.WithContext(withExternalToken(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), tok))
 	}
 	if !s.singleTenantGate(w, r, cfg) {
 		return
 	}
+	if s.tasks != nil {
+		r = r.WithContext(s.tasks.withOperatorActor(r.Context()))
+	}
 	if tok := externalTokenFromContext(r.Context()); tok != nil {
-		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name}
+		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name, Source: model.SourceExternalToken}
 		r = r.WithContext(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted))
 	} else {
 		p, method, ok := extractPrincipal(r)
@@ -166,10 +169,13 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			// No verified principal at all. Only a caller this daemon
 			// already trusts as itself -- the access code's, or an
 			// in-process request -- runs as the deployment's own actor
-			// (Client.actor). The gate above already refused anybody else
+			// (RequestActor). The gate above already refused anybody else
 			// on every route but its own open ones (singleTenantOpenRoute).
 			writeError(w, http.StatusUnauthorized, errors.New(singleTenantRefusal))
 			return
+		}
+		if !ok {
+			r = r.WithContext(withRequestSource(r.Context(), trustedRequestSource(r)))
 		}
 	}
 	// Unarmed until a configuration write's guard finds the deployment
@@ -180,7 +186,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		ResponseWriter: w,
 		rehearsal:      rehearsal,
 		onSuccess: func() {
-			s.tasks.syncStateRepoAfterWrite(r.Context())
+			// Who made the write is who it was guarded as made by: an
+			// agent's principal is on the handler's context alone.
+			by := rehearsal.writer(r.Context())
+			s.tasks.recordConfigWrite(by, r)
+			s.tasks.syncStateRepoAfterWrite(by)
 		},
 	}
 	s.mux.ServeHTTP(rw, r)
@@ -190,9 +200,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 // requiresAccess reports whether r is an API request that needs an
 // allowed caller. The frontend's static files, /api/config (what the
 // sign-in page reads) and /api/auth/* (signing in itself) are the only
-// things served to a caller nobody has vouched for. Remote execution's
-// routes under /api/executors/ authenticate in their own protocol
-// (executorBootstrapRoute), as their twins outside /api/ always have.
+// things served to a caller nobody has vouched for. A grain hostd dialing
+// in to /api/hostd/connect authenticates in its own protocol
+// (hostdConnectRoute).
 //
 // A persistent sandbox's staging environment under /staging/ is held to
 // the same gate as the API: it is somebody's running service, not a page
@@ -204,7 +214,7 @@ func requiresAccess(r *http.Request) bool {
 	return strings.HasPrefix(r.URL.Path, "/api/") &&
 		!(r.URL.Path == "/api/config" && (r.Method == http.MethodGet || r.Method == http.MethodHead)) &&
 		!strings.HasPrefix(r.URL.Path, "/api/auth/") &&
-		!executorBootstrapRoute(r)
+		!hostdConnectRoute(r)
 }
 
 func (s *Server) routes() {
@@ -255,6 +265,7 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/pause", s.handlePause)
 	s.route("POST /api/tasks/{id}/resume", s.handleResume)
 	s.route("PUT /api/tasks/{id}/goal", s.handleSetGoal)
+	s.route("PUT /api/tasks/{id}/hostd", s.handleSetTaskHostd)
 	s.route("DELETE /api/tasks/{id}/goal", s.handleClearGoal)
 	s.route("POST /api/tasks/{id}/reopen", s.handleReopen)
 	s.route("POST /api/tasks/{id}/retry", s.handleRetry)
@@ -450,12 +461,6 @@ func (s *Server) routes() {
 
 	s.route("GET /api/agent-models", s.handleListAgentModels)
 
-	s.route("GET /api/executors/tokens", s.handleListExecutorTokens)
-	s.route("POST /api/executors/tokens", s.handleCreateExecutorToken)
-	s.route("POST /api/executors/tokens/{id}/revoke", s.handleRevokeExecutorToken)
-	s.route("DELETE /api/executors/tokens/{id}", s.handleRevokeExecutorToken)
-	s.route("DELETE /api/executors/tokens/{id}/revoke", s.handleRevokeExecutorToken)
-
 	s.route("GET /api/external-agents/tokens", s.handleListExternalAgentTokens)
 	s.route("POST /api/external-agents/tokens", s.handleCreateExternalAgentToken)
 	s.route("POST /api/external-agents/tokens/{id}/rotate", s.handleRotateExternalAgentToken)
@@ -631,20 +636,14 @@ func (s *Server) routes() {
 	s.route("POST /api/pipeline-pause", s.handlePausePipeline)
 	s.route("DELETE /api/pipeline-pause", s.handleResumePipeline)
 
-	// Remote executors / model servers API and bootstrap scripts.
-	s.route("GET /api/executors", s.handleListExecutors)
-	s.route("GET /api/model-servers/install.sh", s.handleExecutorInstallScript)
-	s.route("GET /api/executors/install.sh", s.handleExecutorInstallScript)
-	s.route("GET /install-executor.sh", s.handleExecutorInstallScript)
-	s.route("GET /api/executors/bin/{binary}", s.handleExecutorBinary)
-	s.route("GET /install/{os}/{arch}", s.handleExecutorBinaryByArch)
-
-	// Remote executor inbound connections over HTTP Upgrade / Cloud Run reverse tunnel.
-	s.route("GET /_grain/executor", s.handleExecutorConnect)
-	s.route("GET /api/executors/connect", s.handleExecutorConnect)
-	s.route("GET /api/executors/stream", s.handleExecutorConnect)
 	// A grain hostd on another machine dialing in (hostd -server).
 	s.route("GET /api/hostd/connect", s.handleHostdConnect)
+	// The hostd registry (Settings -> Hostds).
+	s.route("GET /api/hostds", s.handleListHostds)
+	s.route("POST /api/hostds", s.handleCreateHostd)
+	s.route("PATCH /api/hostds/{name}", s.handleUpdateHostd)
+	s.route("POST /api/hostds/{name}/rotate", s.handleRotateHostdToken)
+	s.route("POST /api/hostds/{name}/revoke", s.handleRevokeHostd)
 
 	static, err := fs.Sub(staticFS, "static")
 	if err != nil {

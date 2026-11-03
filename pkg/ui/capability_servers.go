@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
@@ -79,6 +80,50 @@ type CapabilityServer struct {
 	// configured and disabled but not renamed or removed. Nil for an
 	// operator's own entry.
 	Builtin *intree.Builtin `json:"builtin,omitempty"`
+	// InProcess is set on a server grain runs inside its own process
+	// (pkg/capability/grainserver): built in, attached always, and with
+	// nothing to configure, disable or remove. It has no mcp_servers
+	// entry, so its Config is empty; it is listed so Settings shows its
+	// methods and who holds them beside the configured servers.
+	InProcess *CapabilityInProcessServer `json:"inProcess,omitempty"`
+}
+
+// CapabilityInProcessServer names an in-process server for Settings.
+type CapabilityInProcessServer struct {
+	// Name is its short name: grain, repo, or the last path element of
+	// a server a build contributed methods to (capability.Register).
+	Name    string `json:"name"`
+	Summary string `json:"summary,omitempty"`
+}
+
+// inProcessSummaries are what core's in-process servers give a task.
+var inProcessSummaries = map[string]string{
+	grainserver.ID:     "grain's own host and database: its journal, health probes, SQL against its database and confirmed shell commands on its host.",
+	grainserver.RepoID: "Access to repositories beyond a run's own: a CI job's read or write access to another repository, or pushing any ref of a repository a task may write.",
+}
+
+// inProcessServers are the in-process servers' rows, by capability_id,
+// leaving out any id configured mcp_servers also hold (which the
+// in-process server shadows; that entry is listed as configured).
+func inProcessServers(configured map[string]protocol.ServerConfig) []CapabilityServer {
+	var out []CapabilityServer
+	for _, s := range grainserver.Statuses() {
+		if _, ok := configured[s.ID]; ok {
+			continue
+		}
+		name := s.ID
+		if i := strings.LastIndex(strings.TrimRight(name, "/"), "/"); i >= 0 {
+			name = strings.TrimRight(name, "/")[i+1:]
+		}
+		status := s
+		out = append(out, CapabilityServer{
+			ID:        s.ID,
+			Secrets:   []CapabilityServerSecret{},
+			Status:    &status,
+			InProcess: &CapabilityInProcessServer{Name: name, Summary: inProcessSummaries[s.ID]},
+		})
+	}
+	return out
 }
 
 // CapabilityServerManagedField is one configure field grain manages for
@@ -273,10 +318,21 @@ func (c *Client) ListCapabilityServers(ctx context.Context) ([]CapabilityServer,
 		}
 		out = append(out, row)
 	}
-	// Built-ins first, then the operator's own, each by capability_id.
+	out = append(out, inProcessServers(configured)...)
+	// Built-ins first, then the in-process servers, then the operator's
+	// own, each by capability_id.
+	rank := func(s CapabilityServer) int {
+		switch {
+		case s.Builtin != nil:
+			return 0
+		case s.InProcess != nil:
+			return 1
+		}
+		return 2
+	}
 	sort.Slice(out, func(i, j int) bool {
-		if bi, bj := out[i].Builtin != nil, out[j].Builtin != nil; bi != bj {
-			return bi
+		if ri, rj := rank(out[i]), rank(out[j]); ri != rj {
+			return ri < rj
 		}
 		return out[i].ID < out[j].ID
 	})
@@ -337,6 +393,9 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 	id := strings.TrimSpace(req.ID)
 	if id == "" {
 		return validationErrorf("a capability_id is required")
+	}
+	if grainserver.IsInProcessID(id) {
+		return validationErrorf("capability server %s runs inside grain itself and has nothing to configure", id)
 	}
 	cfg := req.Config
 	if err := c.checkRunLocation(ctx, cfg); err != nil {
@@ -1043,7 +1102,11 @@ func (c *Client) BindCapabilityServerSecret(ctx context.Context, req BindCapabil
 	if req.Kind != "env" && req.Kind != "header" {
 		return validationErrorf(`kind must be "env" or "header", not %q`, req.Kind)
 	}
-	if err := c.checkBootstrapWritableUnrehearsed(ctx, "grain_config"); err != nil {
+	// Rehearsed, so an external config repository's refusal carries the
+	// mcp_servers edit updateCapabilityServers would have made, as
+	// settings_locked's does; nothing below the guard stores the value
+	// while it is armed (configRepoFor reports the write as managed).
+	if err := c.checkBootstrapWritable(ctx, "grain_config"); err != nil {
 		return err
 	}
 	// The value is bootstrap, but the binding is a write of mcp_servers
@@ -1063,7 +1126,7 @@ func (c *Client) BindCapabilityServerSecret(ctx context.Context, req BindCapabil
 		}
 	}
 	value := req.Prefix + "$secret:" + ref
-	return c.updateCapabilityServers(ctx, func(m map[string]protocol.ServerConfig) error {
+	err := c.updateCapabilityServers(ctx, func(m map[string]protocol.ServerConfig) error {
 		sc, ok := m[req.ID]
 		if !ok {
 			return validationErrorf("no capability server %q is configured", req.ID)
@@ -1076,6 +1139,23 @@ func (c *Client) BindCapabilityServerSecret(ctx context.Context, req BindCapabil
 		m[req.ID] = sc
 		return nil
 	})
+	// The refusal's edit commits only the reference: say that the value
+	// it names was not stored and has to be set apart from the change.
+	var refusal *externalConfigRepoError
+	if req.Value != "" && errors.As(err, &refusal) {
+		refusal.Description = secretNote(ref)
+	}
+	return err
+}
+
+// secretNote tells the operator of a refused binding where its value
+// goes: the secret store, which the refusal's edit only names.
+func secretNote(ref string) string {
+	secret, key, explicit := strings.Cut(ref, "/")
+	if !explicit {
+		key = "value"
+	}
+	return fmt.Sprintf("the value was not stored: set it as secret %s separately (PUT /api/secrets/%s/%s, or Settings → Secrets), since the change commits only its $secret:%s reference", ref, secret, key, ref)
 }
 
 func withEntry(in map[string]string, k, v string) map[string]string {

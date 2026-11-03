@@ -71,7 +71,7 @@ Kinds:
 | Task fields (custom fields) | `workflow`, `CustomFieldsSection` | `/admin/workflow` | `PUT /api/deployment` (`customFields`) | D |
 | Relay (URL, audiences, token) | Access (`access`), `RelayPanel` | `/admin/access` | `GET`/`PUT /api/relay-settings`, `POST /api/relay-settings/test` | D |
 | Poll interval | Engine & Concurrency (`engine`) | `/admin/engine` | `/api/settings` (`pollInterval`) | D |
-| Merge queue: max merges per repo branch, batch size, gather window | `engine` | `/admin/engine` | `/api/settings` | D |
+| Merge queue: max merges per repo branch | `engine` | `/admin/engine` | `/api/settings` | D |
 | CI queue: jobs per run, age boost, reserve after | `engine`, "CI queue" | `/admin/engine` | `/api/settings` | D |
 | CI history: runs kept, step output kept/age, output per run | `engine`, "CI history" | `/admin/engine` | `/api/settings` | D |
 | CI job cache: size, entries, age | `engine`, "CI job cache" | `/admin/engine` | `/api/settings` | D |
@@ -103,7 +103,7 @@ Kinds:
 | Database (SQLite → Postgres) | `upgrade`, `UpgradePanel` "Database" | `/admin/upgrade` | `GET /api/database`, `POST /api/database/{test,upgrade}`, `POST /api/upgrade/postgres` | S |
 | Metrics, release notes | `MetricsOverlay` (+ `ReleaseNotesPanel`), sidebar footer | `/metrics` | `GET /api/metrics`, `/api/release-notes*` | S |
 | Health (standing alerts) | `AlertsButton` in the page header rail (`alerts.js` `collectAlerts`) | none | `GET /api/config` and what it carries | S |
-| Merge batches, CI | the CI view | `/ci`, `/ci/<run>` | `/api/ci/*`, `/api/merge-batches` | S, unchanged by this design |
+| Merge re-checks, CI | the CI view | `/ci`, `/ci/<run>` | `/api/ci/*`, `/api/merge-batches` | S, unchanged by this design |
 
 ### 1.3 Personal preferences (`SettingsOverlay.jsx`)
 
@@ -340,7 +340,7 @@ it while Settings is open):
 - **Matching.** `fuzzy.js` (already used by the model picker) ranks
   entries by label, then keywords.
 - **Results.** While the box holds text, the nav shows a flat list of
-  matches ("Merge batch size, Engine"), grouped by section, in place of
+  matches ("Max merges per repo branch, Engine"), grouped by section, in place of
   the groups. Choosing one navigates to `/settings/<section>#<anchor>`,
   scrolls the field into view, focuses it and outlines it for two
   seconds. Escape clears the filter and restores the groups.
@@ -476,9 +476,9 @@ Desktop, `/settings/engine`:
 │  Boards      │   Config repo  ● │ └──────────────────────────────────────┘   │
 │  Sessions    │ AGENTS           │ ┌ Merge queue ─────────────────────────┐   │
 │  Processes   │   Models         │ │ Max merges per repo branch [ 3  ]    │   │
-│  CI          │   Agents         │ │ Merge batch size           [    ]    │   │
-│  Repos     6 │   Memory         │ │ Merge gather window        [    ]    │   │
-│              │ WORK             │ └──────────────────────────────────────┘   │
+│  CI          │   Agents         │ └──────────────────────────────────────┘   │
+│  Repos     6 │   Memory         │                                            │
+│              │ WORK             │                                            │
 │              │   Tasks          │                                            │
 │              │   Repositories   │                                            │
 │              │ CONNECTIONS      │                                            │
@@ -627,7 +627,7 @@ own controls before the buttons every page shares.
 
 On a phone there is no rail: `PhoneNav`'s bar is the rail there, with
 the bell and the gear between the environment chip and "+", and System
-at the foot of the drawer (§4.3). Each page keeps its own header row in
+and the signed-in identity at the foot of the drawer (§4.3). Each page keeps its own header row in
 its body, as it always has, so nothing is drawn twice. The drawer holds
 the sidebar alone; it no longer carries a copy of the top bar.
 
@@ -702,7 +702,21 @@ sits under the user tile today (`buildStampLabel`, title
 build is this, and is there a newer one" is one click.
 
 On a phone (`pinFooter`), the drawer's foot holds a **System** row with
-its unbacked-state dot, then the build stamp. (Settings is on the bar.)
+its unbacked-state dot, then the signed-in row, then the build stamp.
+(Settings is on the bar.)
+
+The **signed-in row** (`data-testid="phone-signed-in"`) is the phone's
+stand-in for the header rail's email badge (`top-bar-user`), which has
+no rail to sit on there. It shows only when `verifiedUserEmail(config)`
+is set -- IAP or another IdentityVerifier vouched for the browser; an
+access-code session has no identity to show and gets no row. It reads
+"Signed in as" over the email, which is ellipsized on one line (the full
+address is the row's title) so a long service-account address never
+widens the 232px drawer. Tapping the row opens Settings → Access; a
+**Log out** button on its right does what the badge menu's Log out does
+(`POST /api/auth/logout`, then `/_gcp_iap/clear_login_cookie` under
+IAP). The drawer is already a menu, so the badge's own menu is not
+repeated. `phone-signed-in-logout.spec.js` checks the row at 390px.
 
 **Decision:** The footer is the build stamp alone, linked to System →
 Upgrade. *Recommended: yes.*

@@ -140,7 +140,7 @@ func capTask(grants ...string) Task {
 	t := Task{
 		ID: "cap-task", Intent: IntentImplement, Title: "t",
 		Origin: Origin{
-			Attribution: Attribution{Actor: Principal{PrincipalHuman, "someone"}},
+			Attribution: Attribution{Actor: Principal{Kind: PrincipalHuman, ID: "someone"}},
 			Reason:      ReasonDirect,
 		},
 		Binding: BindingDirective,

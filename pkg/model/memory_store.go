@@ -33,19 +33,19 @@ type MemoryScope struct {
 // or nil (with no error) when nothing has been written for that scope.
 func (s *Store) GetMemory(ctx context.Context, repo *RepoRef) (*Memory, error) {
 	owner, name := memoryKey(repo)
-	var text, byKind, byID string
+	var text, byKind, byID, bySource string
 	var updated sql.NullTime
 	err := s.db.QueryRowContext(ctx,
-		"SELECT `text`,`updated_at`,`updated_by_kind`,`updated_by_id` FROM `memory` "+
+		"SELECT `text`,`updated_at`,`updated_by_kind`,`updated_by_id`,`updated_by_source` FROM `memory` "+
 			"WHERE `owner` = ? AND `name` = ?",
-		owner, name).Scan(&text, &updated, &byKind, &byID)
+		owner, name).Scan(&text, &updated, &byKind, &byID, &bySource)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("reading memory for %s: %w", memoryScope(repo), err)
 	}
-	m := &Memory{Repo: repo, Text: text, UpdatedBy: Principal{Kind: PrincipalKind(byKind), ID: byID}}
+	m := &Memory{Repo: repo, Text: text, UpdatedBy: Principal{Kind: PrincipalKind(byKind), ID: byID, Source: AuthSource(bySource)}}
 	if updated.Valid {
 		m.UpdatedAt = updated.Time
 	}
@@ -57,16 +57,16 @@ func (s *Store) GetMemory(ctx context.Context, repo *RepoRef) (*Memory, error) {
 func (s *Store) ListMemories(ctx context.Context) ([]Memory, error) {
 	var out []Memory
 	err := each(ctx, s.db,
-		"SELECT `owner`,`name`,`text`,`updated_at`,`updated_by_kind`,`updated_by_id` FROM `memory` "+
+		"SELECT `owner`,`name`,`text`,`updated_at`,`updated_by_kind`,`updated_by_id`,`updated_by_source` FROM `memory` "+
 			"ORDER BY `owner`,`name`",
 		nil,
 		func(rows *sql.Rows) error {
-			var owner, name, text, byKind, byID string
+			var owner, name, text, byKind, byID, bySource string
 			var updated sql.NullTime
-			if err := rows.Scan(&owner, &name, &text, &updated, &byKind, &byID); err != nil {
+			if err := rows.Scan(&owner, &name, &text, &updated, &byKind, &byID, &bySource); err != nil {
 				return err
 			}
-			m := Memory{Text: text, UpdatedBy: Principal{Kind: PrincipalKind(byKind), ID: byID}}
+			m := Memory{Text: text, UpdatedBy: Principal{Kind: PrincipalKind(byKind), ID: byID, Source: AuthSource(bySource)}}
 			if owner != "" || name != "" {
 				m.Repo = &RepoRef{Owner: owner, Name: name}
 			}
@@ -104,9 +104,9 @@ func (s *Store) PutMemory(ctx context.Context, m Memory) error {
 			return err
 		}
 		_, err := tx.ExecContext(ctx,
-			"REPLACE INTO `memory` (`owner`,`name`,`text`,`updated_at`,`updated_by_kind`,`updated_by_id`) "+
-				"VALUES (?,?,?,?,?,?)",
-			owner, name, text, m.UpdatedAt.UTC(), string(m.UpdatedBy.Kind), m.UpdatedBy.ID)
+			"REPLACE INTO `memory` (`owner`,`name`,`text`,`updated_at`,`updated_by_kind`,`updated_by_id`,`updated_by_source`) "+
+				"VALUES (?,?,?,?,?,?,?)",
+			owner, name, text, m.UpdatedAt.UTC(), string(m.UpdatedBy.Kind), m.UpdatedBy.ID, string(m.UpdatedBy.Source))
 		return err
 	})
 }
@@ -117,12 +117,12 @@ func (s *Store) PutMemory(ctx context.Context, m Memory) error {
 // GetMemory returns.
 func (s *Store) GetMemoryDocument(ctx context.Context, repo *RepoRef, name string) (*MemoryDocument, error) {
 	owner, scope := memoryKey(repo)
-	var summary, text, byKind, byID string
+	var summary, text, byKind, byID, bySource string
 	var updated sql.NullTime
 	err := s.db.QueryRowContext(ctx,
-		"SELECT `summary`,`text`,`updated_at`,`updated_by_kind`,`updated_by_id` FROM `memory_document` "+
+		"SELECT `summary`,`text`,`updated_at`,`updated_by_kind`,`updated_by_id`,`updated_by_source` FROM `memory_document` "+
 			"WHERE `owner` = ? AND `name` = ? AND `document` = ?",
-		owner, scope, name).Scan(&summary, &text, &updated, &byKind, &byID)
+		owner, scope, name).Scan(&summary, &text, &updated, &byKind, &byID, &bySource)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -131,7 +131,7 @@ func (s *Store) GetMemoryDocument(ctx context.Context, repo *RepoRef, name strin
 	}
 	d := &MemoryDocument{
 		Repo: repo, Name: name, Summary: summary, Text: text, Length: len(text),
-		UpdatedBy: Principal{Kind: PrincipalKind(byKind), ID: byID},
+		UpdatedBy: Principal{Kind: PrincipalKind(byKind), ID: byID, Source: AuthSource(bySource)},
 	}
 	if updated.Valid {
 		d.UpdatedAt = updated.Time
@@ -147,7 +147,7 @@ func (s *Store) GetMemoryDocument(ctx context.Context, repo *RepoRef, name strin
 // own come first.
 func (s *Store) ListMemoryDocuments(ctx context.Context, scopes ...MemoryScope) ([]MemoryDocument, error) {
 	query := "SELECT `owner`,`name`,`document`,`summary`,LENGTH(CAST(`text` AS BLOB)),`updated_at`," +
-		"`updated_by_kind`,`updated_by_id` FROM `memory_document`"
+		"`updated_by_kind`,`updated_by_id`,`updated_by_source` FROM `memory_document`"
 	var args []any
 	if len(scopes) > 0 {
 		var where []string
@@ -161,15 +161,15 @@ func (s *Store) ListMemoryDocuments(ctx context.Context, scopes ...MemoryScope) 
 	query += " ORDER BY `owner`,`name`,`document`"
 	var out []MemoryDocument
 	err := each(ctx, s.db, query, args, func(rows *sql.Rows) error {
-		var owner, name, document, summary, byKind, byID string
+		var owner, name, document, summary, byKind, byID, bySource string
 		var length int
 		var updated sql.NullTime
-		if err := rows.Scan(&owner, &name, &document, &summary, &length, &updated, &byKind, &byID); err != nil {
+		if err := rows.Scan(&owner, &name, &document, &summary, &length, &updated, &byKind, &byID, &bySource); err != nil {
 			return err
 		}
 		d := MemoryDocument{
 			Name: document, Summary: summary, Length: length,
-			UpdatedBy: Principal{Kind: PrincipalKind(byKind), ID: byID},
+			UpdatedBy: Principal{Kind: PrincipalKind(byKind), ID: byID, Source: AuthSource(bySource)},
 		}
 		if owner != "" || name != "" {
 			d.Repo = &RepoRef{Owner: owner, Name: name}
@@ -207,10 +207,10 @@ func (s *Store) PutMemoryDocument(ctx context.Context, d MemoryDocument) error {
 		}
 		_, err := tx.ExecContext(ctx,
 			"REPLACE INTO `memory_document` "+
-				"(`owner`,`name`,`document`,`summary`,`text`,`updated_at`,`updated_by_kind`,`updated_by_id`) "+
-				"VALUES (?,?,?,?,?,?,?,?)",
+				"(`owner`,`name`,`document`,`summary`,`text`,`updated_at`,`updated_by_kind`,`updated_by_id`,`updated_by_source`) "+
+				"VALUES (?,?,?,?,?,?,?,?,?)",
 			owner, scope, d.Name, summary, text, d.UpdatedAt.UTC(),
-			string(d.UpdatedBy.Kind), d.UpdatedBy.ID)
+			string(d.UpdatedBy.Kind), d.UpdatedBy.ID, string(d.UpdatedBy.Source))
 		return err
 	})
 }

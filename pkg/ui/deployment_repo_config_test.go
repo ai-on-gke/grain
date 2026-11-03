@@ -244,8 +244,9 @@ func TestDeploymentRepoConfigRefusesUnknownAndInvalidCapabilities(t *testing.T) 
 	if err != nil {
 		t.Fatalf("SetDeploymentRepoConfig(repo-read/write): %v", err)
 	}
-	if !slices.Equal(resp.Effective.CICapabilities, crossRepoCI) {
-		t.Fatalf("CI capabilities = %+v, want %v", resp.Effective, crossRepoCI)
+	// Saved as the repo server grants the retired names became.
+	if want := []string{model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"}), model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "tools"})}; !slices.Equal(resp.Effective.CICapabilities, want) {
+		t.Fatalf("CI capabilities = %+v, want %v", resp.Effective, want)
 	}
 
 	// 7. Stored legacy or tightened capabilities are let through on subsequent saves
@@ -271,8 +272,8 @@ func TestDeploymentRepoConfigRefusesUnknownAndInvalidCapabilities(t *testing.T) 
 	if err != nil {
 		t.Fatalf("SetDeploymentRepoConfig keeping legacy CI: %v", err)
 	}
-	if !slices.Equal(resp.Effective.CICapabilities, keepStoredCI) {
-		t.Fatalf("CI capabilities = %+v, want %v", resp.Effective, keepStoredCI)
+	if want := []string{"legacy-ci-cap", model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"})}; !slices.Equal(resp.Effective.CICapabilities, want) {
+		t.Fatalf("CI capabilities = %+v, want %v", resp.Effective, want)
 	}
 }
 

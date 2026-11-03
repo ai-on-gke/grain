@@ -191,6 +191,10 @@ func TestClassifyWhatThe24AuditFoundOutsideV5(t *testing.T) {
 		"pkg/model/agent_api.go":                 "auth-routes",
 		"pkg/ui/config_refusal.go":               "auth-routes",
 		"pkg/ui/persistent_sandboxes.go":         "auth-routes",
+		"pkg/ui/accesscode.go":                   "auth-routes",
+		"pkg/ui/single_tenant.go":                "auth-routes",
+		"pkg/ui/allowlist.go":                    "auth-routes",
+		"pkg/ui/verifier.go":                     "auth-routes",
 		"pkg/policy/policy.go":                   "auth-routes",
 		"pkg/jwks/jwks.go":                       "auth-routes",
 		"pkg/redact/redact.go":                   "capabilities-secrets",
@@ -220,6 +224,8 @@ func TestClassifyWhatThe24AuditFoundOutsideV5(t *testing.T) {
 // the boundary without a list entry fails here rather than being found by
 // the next audit -- add it to this list when it lands, and to Categories.
 var knownBoundaryFiles = []string{
+	"pkg/ui/accesscode.go", "pkg/ui/single_tenant.go",
+	"pkg/ui/allowlist.go", "pkg/ui/verifier.go",
 	"pkg/ui/agent_api_gate.go", "pkg/ui/route_scopes.go", "pkg/ui/agent_api.go",
 	"pkg/ui/agent_api_tools.go", "pkg/model/agent_api.go",
 	"pkg/ui/config_refusal.go", "pkg/ui/persistent_sandboxes.go",

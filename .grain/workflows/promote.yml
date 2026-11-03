@@ -107,5 +107,11 @@ jobs:
       memory-mb: 16384
       disk-gb: 60
     steps:
+      # What this publishes as vX.Y.Z (Z >= 1) -- the release `latest`
+      # names -- must have been cut on release/vX.Y.Z from vX.Y.<Z-1>, or
+      # carry nothing but fix: commits past vX.Y.0
+      # (docs/release-candidate-management.md, section 9).
+      - name: Refuse a patch tag that did not come from its release branch
+        run: bash ./scripts/patch-tag-guard.sh --latest "${GRAIN_CI_REF:-}"
       - name: Publish the last promoted release as latest
         run: bash ./scripts/release-images.sh promote

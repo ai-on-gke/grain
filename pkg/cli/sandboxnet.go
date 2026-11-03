@@ -75,7 +75,7 @@ import "flag"
 //   - Aligned to SandboxPortBlockSize, so the block is maskable as well
 //     as rangeable. 9728 is 0x2600.
 //   - Clear of what grain already uses: 4242 for the UI (80 and 8420 on
-//     older installs), 8422 for the executor listener, 12000-12255 for
+//     older installs), 8422 for the retired executor listener, 12000-12255 for
 //     -granule-base-port's NAT forwards, and 443/80/53 for the package
 //     cache's interception and resolver -- which are fixed by their protocols and so are not in
 //     this block at all (see Fabric.Host).

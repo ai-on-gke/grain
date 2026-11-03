@@ -167,6 +167,41 @@ func TestTasksAdminCapabilityAllowsEditingPriorityViaREST(t *testing.T) {
 	if stored, err := client.Store.GetTask(context.Background(), "2"); err != nil || stored.Priority != 9 {
 		t.Errorf("after PATCH priority=0, stored Priority = %d (err=%v), want 9 kept", stored.Priority, err)
 	}
+	// Not a whole number an int holds: the same words, not Go's
+	// decoding error, on an edit and on a filing alike.
+	for _, bad := range []string{"1.5", "1e-1", "1e20", `"8"`, "99999999999999999999"} {
+		// A person's edit: the agent gate above refuses these first.
+		if rec := do(t, srv, http.MethodPatch, "/api/tasks/2", `{"priority": `+bad+`}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "positive integer") || strings.Contains(rec.Body.String(), "unmarshal") {
+			t.Errorf("PATCH /api/tasks/2 with priority=%s: status %d (%s), want 400 naming a positive integer", bad, rec.Code, rec.Body.String())
+		}
+		rec := do(t, srv, http.MethodPost, "/api/tasks", `{"title":"odd priority","repo":"acme/widgets","priority": `+bad+`}`)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "positive integer") || strings.Contains(rec.Body.String(), "unmarshal") {
+			t.Errorf("POST /api/tasks with priority=%s: status %d (%s), want 400 naming a positive integer", bad, rec.Code, rec.Body.String())
+		}
+	}
+
+	// A whole number written with an exponent is that number, as on New
+	// task, Edit, Bulk edit, the template form and propose_task: one
+	// entry, one answer (2026-11-02 walkthrough). On a person's edit, an
+	// api:tasks:admin agent's edit, and a filing alike.
+	if rec := do(t, srv, http.MethodPatch, "/api/tasks/2", `{"priority": 1e3}`); rec.Code != http.StatusOK {
+		t.Errorf("PATCH /api/tasks/2 with priority=1e3: status %d (%s), want 200", rec.Code, rec.Body.String())
+	} else if stored, err := client.Store.GetTask(context.Background(), "2"); err != nil || stored.Priority != 1000 {
+		t.Errorf("after PATCH priority=1e3, stored Priority = %d (err=%v), want 1000", stored.Priority, err)
+	}
+	if code, resp := asAgent(t, srv, "1", http.MethodPatch, "/api/tasks/2", `{"priority": 9.0}`, ""); code != http.StatusOK {
+		t.Errorf("PATCH /api/tasks/2 with priority=9.0 under api:tasks:admin: status %d (%s), want 200", code, resp)
+	} else if stored, err := client.Store.GetTask(context.Background(), "2"); err != nil || stored.Priority != 9 {
+		t.Errorf("after PATCH priority=9.0, stored Priority = %d (err=%v), want 9", stored.Priority, err)
+	}
+	if rec := do(t, srv, http.MethodPost, "/api/tasks", `{"title":"exponent priority","repo":"acme/widgets","priority": 1e3}`); rec.Code != http.StatusCreated {
+		t.Errorf("POST /api/tasks with priority=1e3: status %d (%s), want 201", rec.Code, rec.Body.String())
+	} else {
+		var filed ui.Task
+		if err := json.Unmarshal(rec.Body.Bytes(), &filed); err != nil || filed.Priority != 1000 {
+			t.Errorf("POST /api/tasks with priority=1e3 filed Priority = %d (err=%v), want 1000", filed.Priority, err)
+		}
+	}
 
 	// api:tasks:admin without api:tasks:write cannot edit title or toggle priority-dispatch.
 	if code, _ := asAgent(t, srv, "1", http.MethodPatch, "/api/tasks/2", `{"title": "hijacked"}`, ""); code != http.StatusForbidden {

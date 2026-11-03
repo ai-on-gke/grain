@@ -16,7 +16,9 @@ package orchestrator
 
 import (
 	"context"
+	"net/netip"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
@@ -26,6 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/forge"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/granule"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
 )
@@ -248,6 +251,23 @@ func StubHostFirewall() func() {
 	return func() { hostNFT, hostGuestNetworks, hostGuestPorts = prevNFT, prevNets, prevPorts }
 }
 
+// StubHostFirewallAddresses narrows StubHostFirewall for one test whose
+// granule VMs are given addresses from a pool: the stub's container
+// reports runAddr's answer for the run its VM is named after, so the
+// open-network fence's check that the VM holds the address it was
+// allocated (checkAllocatedAddress) has the address to find. A run
+// runAddr has no answer for reports the stub's usual one.
+func StubHostFirewallAddresses(runAddr func(runID string) (netip.Addr, bool)) func() {
+	prevNets := hostGuestNetworks
+	hostGuestNetworks = func(ctx context.Context, container string) ([]guestNetwork, error) {
+		if addr, ok := runAddr(strings.TrimPrefix(container, granule.PodName(VMNamePrefix))); ok {
+			return parseGuestNetworks(addr.String() + "|16||||\n")
+		}
+		return prevNets(ctx, container)
+	}
+	return func() { hostGuestNetworks = prevNets }
+}
+
 // UseRealHostFirewall undoes StubHostFirewall for one test, and returns
 // the function that puts back whatever was there before it.
 func UseRealHostFirewall() func() {
@@ -408,3 +428,6 @@ func ReconcileTaskCI(ctx context.Context, deps Deps, task model.Task, now time.T
 func SessionKeysForTest(ctx context.Context, deps Deps, task model.Task) (sandboxKey, grantsKey string) {
 	return sessionSandboxKey(adoptedSessionShape(ctx, deps, task), task, nil), sessionGrantsKey(task)
 }
+
+// WriteExecutableStub is writeExecutableStub for tests in orchestrator_test.
+var WriteExecutableStub = writeExecutableStub

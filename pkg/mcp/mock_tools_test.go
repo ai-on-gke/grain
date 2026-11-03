@@ -427,8 +427,34 @@ func TestProposeTaskAcceptsAndValidatesPriority(t *testing.T) {
 	if !zeroRes.IsError || !strings.Contains(zeroRes.Text, "positive integer") {
 		t.Errorf("propose_task with priority=0 = %+v, want a positive-integer error", zeroRes)
 	}
+	// Not whole, past what a JSON number holds exactly, or not a number
+	// at all: refused in the same words, never filed as some other
+	// priority (1.5 used to file 1, and "8" the default 5).
+	for _, bad := range []any{1.5, float64(1e20), float64(1<<53 + 2), "8", true} {
+		res := tool.Handler(context.Background(), map[string]any{
+			"title":    "odd priority",
+			"body":     "nope",
+			"priority": bad,
+		})
+		if !res.IsError || !strings.Contains(res.Text, "positive integer") {
+			t.Errorf("propose_task with priority=%v = %+v, want a positive-integer error", bad, res)
+		}
+	}
 	if got := len(sink.ProposedTasks()); got != 1 {
 		t.Errorf("ProposedTasks() after refused calls = %d, want 1", got)
+	}
+	// A whole number written with an exponent is that number, as it is
+	// on New task, Edit, Bulk edit, the template form and the REST API:
+	// decoded from the arguments' own JSON, as the MCP server does.
+	var exponent map[string]any
+	if err := json.Unmarshal([]byte(`{"title": "exponent priority", "body": "fine", "priority": 1e3}`), &exponent); err != nil {
+		t.Fatal(err)
+	}
+	if res := tool.Handler(context.Background(), exponent); res.IsError {
+		t.Fatalf("propose_task with priority=1e3 errored: %s", res.Text)
+	}
+	if tasks := sink.ProposedTasks(); len(tasks) != 2 || tasks[1].Priority != 1000 {
+		t.Errorf("ProposedTasks() = %+v, want a second task at priority 1000", tasks)
 	}
 }
 

@@ -31,19 +31,19 @@ import (
 // waiting to upgrade or it is not.
 func (s *Store) GetScheduledUpgrade(ctx context.Context) (*ScheduledUpgrade, error) {
 	row := s.db.QueryRowContext(ctx,
-		"SELECT `branch`,`requested_at`,`actor_kind`,`actor_id` "+
+		"SELECT `branch`,`requested_at`,`actor_kind`,`actor_id`,`actor_source` "+
 			"FROM `scheduled_upgrade` WHERE `id` = 1")
 	var u ScheduledUpgrade
 	var requestedAt time.Time
-	var kind string
-	if err := row.Scan(&u.Branch, &requestedAt, &kind, &u.By.ID); err != nil {
+	var kind, source string
+	if err := row.Scan(&u.Branch, &requestedAt, &kind, &u.By.ID, &source); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("reading the scheduled upgrade: %w", err)
 	}
 	u.RequestedAt = requestedAt.UTC()
-	u.By.Kind = PrincipalKind(kind)
+	u.By.Kind, u.By.Source = PrincipalKind(kind), AuthSource(source)
 	return &u, nil
 }
 
@@ -56,8 +56,8 @@ func (s *Store) SetScheduledUpgrade(ctx context.Context, u ScheduledUpgrade) err
 	return s.write(ctx, "schedule an upgrade", func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
 			"REPLACE INTO `scheduled_upgrade` "+
-				"(`id`,`branch`,`requested_at`,`actor_kind`,`actor_id`) VALUES (1,?,?,?,?)",
-			u.Branch, u.RequestedAt.UTC(), string(u.By.Kind), u.By.ID)
+				"(`id`,`branch`,`requested_at`,`actor_kind`,`actor_id`,`actor_source`) VALUES (1,?,?,?,?,?)",
+			u.Branch, u.RequestedAt.UTC(), string(u.By.Kind), u.By.ID, string(u.By.Source))
 		return err
 	})
 }

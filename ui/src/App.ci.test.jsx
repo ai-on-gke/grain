@@ -97,7 +97,7 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: /^CI/ }));
 
     await user.click(
-      (await screen.findAllByRole("button", { name: "acme/widgets" }))[0],
+      (await screen.findAllByRole("button", { name: /^acme\/widgets / }))[0],
     );
 
     expect(

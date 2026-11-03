@@ -365,12 +365,29 @@ func BuildOf(info version.Info) *Build {
 }
 
 // CancelSource is who wanted a run stopped (Run.CancelledBy). Two
-// answers, and they are told apart by which door the cancellation came
-// through rather than by reading the note left with it: everything
-// inside grain that stops a run says so at the call site, and the API
-// route a person reaches (ui.Server's DELETE /api/ci/runs/{id}) is the
-// only one that says CancelByOperator.
+// kinds of answer, and they are told apart by which door the
+// cancellation came through rather than by reading the note left with
+// it: everything inside grain that stops a run says CancelBySystem at
+// the call site, and the API route a person reaches (ui.Server's DELETE
+// /api/ci/runs/{id}), or a close, says who asked (CancelByPrincipal):
+// the principal's ID (operator-attribution spec §1.3.2), or
+// CancelByOperator where there is none, as every such run stored before
+// that reads back.
 type CancelSource string
+
+// CancelByPrincipal is the CancelSource of a cancellation the principal
+// with id asked for: id itself, or CancelByOperator for none.
+func CancelByPrincipal(id string) CancelSource {
+	if id = strings.TrimSpace(id); id != "" {
+		return CancelSource(id)
+	}
+	return CancelByOperator
+}
+
+// ByHand reports whether somebody asked for the cancellation -- a person
+// or an agent through grain's API -- rather than grain stopping its own
+// run.
+func (s CancelSource) ByHand() bool { return s != CancelBySystem }
 
 const (
 	// CancelBySystem is grain stopping its own run: a job that ran past
@@ -381,9 +398,10 @@ const (
 	// claims is far more likely to be a timeout than a person.
 	CancelBySystem CancelSource = ""
 	// CancelByOperator is a person asking, through grain's own API --
-	// the CI pane's cancel button, `grain ci cancel`, a DELETE by hand.
-	// Whatever they meant by it, they meant it about this commit, so
-	// grain does not quietly start the run again.
+	// the CI pane's cancel button, `grain ci cancel`, a DELETE by hand --
+	// with no ID to name them by (CancelByPrincipal). Whatever they meant
+	// by it, they meant it about this commit, so grain does not quietly
+	// start the run again. Test a source with ByHand, not against this.
 	CancelByOperator CancelSource = "operator"
 )
 

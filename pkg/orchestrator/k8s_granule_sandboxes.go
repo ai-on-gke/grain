@@ -643,17 +643,21 @@ func (k *K8sGranuleSandboxes) create(ctx context.Context, sandbox, name string, 
 // own podShape, unchanged: the pod's own cpu/memory/ephemeral-storage
 // request-and-limit, not the VM's boot size, which podOptions' CHV_*
 // variables carry separately. The one difference is memory: the pod's
-// limit is the guest's RAM plus GranuleVMMMemoryOverheadMB (the same
-// headroom GranuleSandboxes' -memory-limit-mb carries), because the
-// cloud-hypervisor process holding a guest that has touched all of its
-// RAM is bigger than that RAM, and a limit of exactly CHV_MEMORY_MB gets
-// the whole VM OOM-killed the first time the guest uses it all.
+// limit is GranuleMemoryLimitMB -- the guest's RAM plus the same headroom
+// GranuleSandboxes' -memory-limit-mb carries, capped at the largest
+// node's allocatable memory -- because the cloud-hypervisor process
+// holding a guest that has touched all of its RAM, and the host page
+// cache its disk writes go through, are bigger than that RAM, and a limit
+// of exactly CHV_MEMORY_MB gets the whole VM OOM-killed the first time
+// the guest uses it all. The request is that same figure (over the
+// memory overcommit ratio, as every pod's is), so what the scheduler
+// places and what the cgroup allows agree.
 func (k *K8sGranuleSandboxes) podShape(shape Shape) k8s.PodShape {
 	resolved := shape.orDefault(DefaultShape())
 	cpuOvercommit, memOvercommit, diskOvercommit := k.Overcommit()
 	return k8s.PodShape{
 		CPUs:             resolved.CPUs,
-		MemoryMB:         resolved.MemoryMB + GranuleVMMMemoryOverheadMB,
+		MemoryMB:         GranuleMemoryLimitMB(resolved.MemoryMB, k.fit.LargestAllocatableMemoryMB()),
 		DiskGB:           resolved.DiskGB,
 		CPUOvercommit:    cpuOvercommit,
 		MemoryOvercommit: memOvercommit,

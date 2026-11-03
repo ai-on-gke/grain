@@ -27,31 +27,40 @@ body: |
   - Schedules: create both task-filing and suite-running schedules;
     exercise recurrence variants (every N minutes and its ten-minute
     floor included), overlap policy, template/raw task composition,
-    repo/base/writes/reads, capabilities (the Grain API group included),
+    repo/base/writes/reads, capabilities (the Grain API group and
+    capability policy verdicts included), Keep running (`keep_running`),
     network/custom fields, the agent and model picker (only models the
     deployment's enabled connections advertise, and what a model no
     connection serves looks like), validation and preview. Edit, pause,
     resume, run now, and delete throwaway schedules, verifying
     confirmations, persisted next/last-run presentation, and that the
     row and its template's and suite's rows follow without a reload.
-  - Templates: create a fully populated template (its model picker and
-    the interactive switch included), use it from Use… (and read the
-    note an interactive template shows there); edit and reopen it; use
-    it from a schedule and from a suite; test dependency-aware delete
-    behaviour and then remove only throwaway data.
+  - Templates: create a fully populated template (its Task priority
+    whole-number validation, Keep running, interactive switch,
+    capability policy verdicts and model picker included); file from it
+    via New task from this template (confirming New task opens on that
+    template with its priority carried across, whereas a template with
+    input fields opens Use… instead) and via Use… (reading the note an
+    interactive template shows there); edit and reopen it; use it from a
+    schedule and from a suite (confirming composition previews show its
+    priority and keep long grant chips inside the pane at phone width);
+    test dependency-aware delete behaviour and then remove only
+    throwaway data.
   - Suites: create and edit a suite, create a template inline, exercise
     run modes/pass limits/approval/auto-merge, and delete a throwaway
     suite with confirmation.
   - Start a suite run from both the suite row and the generic Run
     action. Inspect the Suite runs list under Processes,
-    scheduled/running/finished/failure presentations, direct URLs
-    (`/processes/suites/runs/<id>`), pass grouping, spawned tasks and
-    proposed follow-ups, and task-detail navigation.
+    scheduled/running/finished/failure presentations (confirming a
+    base-less suite run shows "default branch" on its row and pane),
+    direct URLs (`/processes/suites/runs/<id>`), pass grouping, spawned
+    tasks and proposed follow-ups, and task-detail navigation.
   - Repository-declared templates, suites, schedules, workflow schedules
     and triggers (`docs/declarations.md`): confirm that a declared row is
     shown as declared, names the repository and file it came from, and
     that the UI refuses to edit or delete it with an explanation rather
-    than failing silently; a trigger row opens its file on the
+    than failing silently; a workflow schedule's Run now says it starts
+    the run straight away, and a trigger row opens its file on the
     repository's Advanced tab.
   - The demo may not run real agents. Stub only the agent/execution
     boundary, or seed through the real server's supported store/demo

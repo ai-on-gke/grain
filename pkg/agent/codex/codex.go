@@ -164,15 +164,23 @@ type Framework struct {
 	// endpoint in its own process and writes codex a URL.
 	host            agent.Host
 	grainBinaryPath string
-	startMCP        func(context.Context, string, []string) (*mcp.ManagedHTTP, error)
-	detachedMCP     bool
+	// hostAuthFile says authFile is on the CLI's machine, not this one
+	// (WithHostAuthFile).
+	hostAuthFile bool
+	startMCP     func(context.Context, string, []string) (*mcp.ManagedHTTP, error)
+	detachedMCP  bool
 	// binPath is the codex binary itself, held here as well as inside
 	// the runner above because an interactive session is not run through
 	// that seam: TerminalCommand hands the argv to pkg/console, which
 	// starts it on a pseudo-terminal of its own (agent.TerminalCommand).
 	// A Framework built by a test's own runner has none, and refuses to
 	// be driven by hand rather than pretending it can be.
-	binPath          string
+	binPath string
+	// dumpModels prints the model catalog codex resolves in a home, for
+	// writeModelCatalog to strip apply_patch out of. New sets it to the
+	// real binary's `debug models` (hostModelDump); nil -- a test's own
+	// runner -- writes no catalog.
+	dumpModels       func(ctx context.Context, home string, env []string) (string, error)
 	checkRuntime     func(context.Context) error
 	apiKey           func(context.Context) (string, error)
 	authFile         string
@@ -297,6 +305,14 @@ func WithAuthFile(path string) Option {
 	return func(f *Framework) { f.authFile = path }
 }
 
+// WithHostAuthFile is WithAuthFile for a login on the machine the CLI
+// runs on rather than this one -- a grain hostd's own codex login
+// (hostd.Hello.CodexAuth). path is that machine's, so it is linked as
+// it is, and not checked here, where it is not.
+func WithHostAuthFile(path string) Option {
+	return func(f *Framework) { f.authFile, f.hostAuthFile = path, true }
+}
+
 // WithGranuleSSH gives a Framework what it needs to reach a
 // RunConfig.GranuleVM instead of a RunConfig.SandboxRoot: the same
 // deployment-wide sshUser/execKey/workspace triple
@@ -410,6 +426,7 @@ func New(codexPath, grainBinaryPath string, opts ...Option) *Framework {
 	// same ordering agent/claude's and agent/antigravity's New keep.
 	f.run = hostRunner{host: f.host, codexPath: codexPath}
 	f.checkRuntime = func(ctx context.Context) error { return validateRuntime(ctx, f.host, codexPath) }
+	f.dumpModels = hostModelDump(f.host, codexPath)
 	return f
 }
 
@@ -503,7 +520,6 @@ func (f *Framework) mcpServerArgs(ctx context.Context, cfg agent.RunConfig) ([]s
 	args = append(args, agent.InteractiveArgs(cfg)...)
 	args = append(args, agent.AddendaArgs(cfg)...)
 	args = append(args, agent.RunDeadlineArgs(ctx, cfg)...)
-	agent.AuthorizeMCPArgs(f.host, args)
 	return args, nil
 }
 
@@ -663,8 +679,12 @@ const frameworkName = "codex"
 const authFileName = "auth.json"
 
 // configTOML gives Codex only a Grain-owned HTTP MCP endpoint. The
-// no-environment manifest written alongside this file removes native
-// environment-backed tools from the registry, including read access.
+// [features] switches below keep shell/exec, write_stdin and view_image
+// out of the registry -- codex 0.166.0 registers them whether or not the
+// turn has an environment -- and the stripped model catalog
+// (writeModelCatalog) does the same for apply_patch. The no-environment
+// manifest written alongside this file is a second layer: a native tool
+// that still slipped in would find no environment to run in.
 // read-only/never are defense in depth, not the isolation mechanism.
 // Code Mode remains available for models that require it; its JS host
 // orchestrates MCP calls without getting a local execution environment.
@@ -690,7 +710,7 @@ func (f *Framework) configTOML(endpoint *mcp.ManagedHTTP, servers ...agent.Capab
 	if extra := strings.TrimSpace(f.extraConfig); extra != "" {
 		b.WriteString(extra + "\n")
 	}
-	b.WriteString("[features]\ncode_mode_host = true\napps = false\nplugins = false\nmulti_agent = false\nmulti_agent_v2 = false\n")
+	b.WriteString("[features]\ncode_mode_host = true\nshell_tool = false\nunified_exec = false\nview_image = false\napps = false\nplugins = false\nmulti_agent = false\nmulti_agent_v2 = false\n")
 	b.WriteString("[orchestrator.skills]\nenabled = false\n")
 	b.WriteString("[skills.bundled]\nenabled = false\n")
 	if endpoint != nil {
@@ -830,6 +850,15 @@ func (f *Framework) writeConfig(ctx context.Context, mcpArgs []string, taskID st
 			releaseServers()
 			return "", false, nil, err
 		}
+		// Before mcpserver.json, so the wrapper this dump goes through on
+		// a detached host starts no MCP server for it; and before the
+		// spec, whose BaseConfig is what the wrapper writes back.
+		config, err = f.writeModelCatalog(ctx, home, config)
+		if err != nil {
+			removeHome()
+			releaseServers()
+			return "", false, nil, err
+		}
 		specData, err := json.Marshal(detachedMCPSpec{
 			Args:       mcpArgs,
 			BaseConfig: string(config),
@@ -851,19 +880,37 @@ func (f *Framework) writeConfig(ctx context.Context, mcpArgs []string, taskID st
 		releaseServers()
 		return "", false, nil, err
 	}
-	config, err := f.configTOML(endpoint, servers...)
+	// A codex on another machine reaches the endpoint carried to its own
+	// loopback (agent.CarryMCPEndpoint); the copy keeps endpoint's own
+	// URL for Close.
+	carriedURL, releaseMCP, err := agent.CarryMCPEndpoint(f.host, endpoint.URL, endpoint.Token)
 	if err != nil {
 		endpoint.Close()
+		releaseServers()
+		return "", false, nil, fmt.Errorf("codex: %w", err)
+	}
+	stop := func() { releaseMCP(); endpoint.Close() }
+	carried := *endpoint
+	carried.URL = carriedURL
+	config, err := f.configTOML(&carried, servers...)
+	if err != nil {
+		stop()
 		releaseServers()
 		return "", false, nil, err
 	}
 	home, persistent, removeHome, err := f.writeHome(ctx, config, taskID)
 	if err != nil {
-		endpoint.Close()
+		stop()
 		releaseServers()
 		return "", false, nil, err
 	}
-	return home, persistent, func() { endpoint.Close(); releaseServers(); removeHome() }, nil
+	if _, err := f.writeModelCatalog(ctx, home, config); err != nil {
+		removeHome()
+		stop()
+		releaseServers()
+		return "", false, nil, err
+	}
+	return home, persistent, func() { stop(); releaseServers(); removeHome() }, nil
 }
 
 // openHome is the directory this run's CODEX_HOME will be, and how to
@@ -899,7 +946,25 @@ func (f *Framework) openHome(ctx context.Context, taskID string) (home string, p
 			remove(removeCtx)
 		}
 	}
-	if dir, release, ok := f.sessions.Open(frameworkName, taskID); ok {
+	if agent.ServesMCPOverHTTP(f.host) {
+		// A grain hostd on another machine: the store is this daemon's
+		// disk, and the task's home has to be on that machine, kept
+		// where agy keeps its own there.
+		if f.sessions != nil && sessionstore.ValidName(taskID) {
+			root := remoteSessionRoot
+			if r, ok := f.host.(interface{ SessionRoot() string }); ok && r.SessionRoot() != "" {
+				root = r.SessionRoot()
+			}
+			base := filepath.Join(root, frameworkName)
+			if p, ok := f.host.(agent.DirPruner); ok {
+				_ = p.PruneDir(ctx, base, 7*24*time.Hour, 64)
+			}
+			dir := filepath.Join(base, taskID)
+			if err := f.host.MkdirAll(ctx, dir, 0o700); err == nil {
+				return dir, true, detached(func(removeCtx context.Context) { f.clearRunFiles(removeCtx, dir) }), nil
+			}
+		}
+	} else if dir, release, ok := f.sessions.Open(frameworkName, taskID); ok {
 		return dir, true, detached(func(removeCtx context.Context) {
 			f.clearRunFiles(removeCtx, dir)
 			release()
@@ -915,7 +980,8 @@ func (f *Framework) openHome(ctx context.Context, taskID string) (home string, p
 // runFileNames are the files grain itself writes into a CODEX_HOME, and
 // the whole of what a run must not inherit from the one before it: the
 // config naming this run's own MCP endpoint and the bearer token for it,
-// the manifest that withholds codex's execution environments, and the
+// the manifest that withholds codex's execution environments, the model
+// catalog with apply_patch stripped out of it (modelcatalog.go), and the
 // link to the deployment's login. Everything else in there was written
 // by codex and is the conversation this store exists to keep.
 //
@@ -923,7 +989,7 @@ func (f *Framework) openHome(ctx context.Context, taskID string) (home string, p
 // rather than only written: a daemon killed mid-run would otherwise
 // leave a task's home holding a link to a credential for as long as the
 // store keeps that task.
-var runFileNames = []string{configFileName, environmentsFileName, authFileName, mcpServerFileName}
+var runFileNames = []string{configFileName, environmentsFileName, modelCatalogFileName, authFileName, mcpServerFileName}
 
 // clearRunFiles takes this run's own files back out of a home that
 // outlives it. Failures are not reported: this runs in a deferred
@@ -983,6 +1049,9 @@ func (f *Framework) writeHome(ctx context.Context, config []byte, taskID string)
 // back through, is a run that fails minutes later saying nothing at all
 // about auth.json.
 func (f *Framework) resolveAuthFile() (string, error) {
+	if f.hostAuthFile {
+		return f.authFile, nil
+	}
 	authFile, err := filepath.Abs(f.authFile)
 	if err != nil {
 		return "", fmt.Errorf("codex: resolving shared auth file: %w", err)
@@ -992,6 +1061,10 @@ func (f *Framework) resolveAuthFile() (string, error) {
 	}
 	return authFile, nil
 }
+
+// remoteSessionRoot is where a task's CODEX_HOME is kept on a grain
+// hostd's machine, beside agy's (antigravity's defaultRemoteSessionRoot).
+const remoteSessionRoot = "~/.grain/sessions"
 
 // homeRemovalTimeout bounds that removal. It is generous: the cost of
 // waiting is one goroutine at the end of a run, and the cost of giving

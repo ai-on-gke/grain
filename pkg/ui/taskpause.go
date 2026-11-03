@@ -70,9 +70,9 @@ func (c *Client) Pause(ctx context.Context, id string, opts PauseOptions) error 
 	if err != nil {
 		return err
 	}
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
 	if existing != nil {
-		if actor.Kind == model.PrincipalAgent && existing.PausedBy != actor {
+		if actor.Kind == model.PrincipalAgent && !existing.PausedBy.Same(actor) {
 			return forbiddenErrorf("task %s was paused by %s %s; only they may change or lift that pause",
 				id, existing.PausedBy.Kind, principalName(existing.PausedBy))
 		}
@@ -144,13 +144,13 @@ func (c *Client) Resume(ctx context.Context, id string) error {
 	if task == nil {
 		return &NotFoundError{ID: id}
 	}
-	actor := c.actor(ctx)
+	actor := c.requestActor(ctx).Actor
 	if actor.Kind == model.PrincipalAgent {
 		existing, err := c.Store.GetPause(ctx, id)
 		if err != nil {
 			return err
 		}
-		if existing != nil && existing.PausedBy != actor {
+		if existing != nil && !existing.PausedBy.Same(actor) {
 			return forbiddenErrorf("task %s was paused by %s %s; only they may lift that pause",
 				id, existing.PausedBy.Kind, principalName(existing.PausedBy))
 		}

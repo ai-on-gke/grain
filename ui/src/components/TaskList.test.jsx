@@ -2465,6 +2465,41 @@ describe("TaskList", () => {
       defaultRow.querySelector('[data-testid="task-priority-badge"]'),
     ).toBeNull();
   });
+
+  it("marks a keep_running task's row, and only that one", () => {
+    renderList({
+      tasks: [
+        {
+          id: 12,
+          title: "Standing worker",
+          state: "proposed",
+          keepRunning: true,
+          capabilities: [],
+          blocked: false,
+        },
+        {
+          id: 13,
+          title: "One-off task",
+          state: "proposed",
+          capabilities: [],
+          blocked: false,
+        },
+      ],
+    });
+    const badge = rowFor("Standing worker").querySelector(
+      '[data-testid="task-keep-running-badge"]',
+    );
+    expect(badge).toHaveTextContent("keeps running");
+    expect(badge).toHaveAttribute(
+      "title",
+      expect.stringMatching(/never completes on its own/),
+    );
+    expect(
+      rowFor("One-off task").querySelector(
+        '[data-testid="task-keep-running-badge"]',
+      ),
+    ).toBeNull();
+  });
 });
 
 // The operator's ask on grain task 1402: a row parked on a question says

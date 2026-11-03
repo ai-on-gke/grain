@@ -118,7 +118,7 @@ func clearPipelineNotification(ctx context.Context, store *model.Store, subject,
 // does not pass through there.
 func raiseBaseRed(ctx context.Context, deps Deps, row model.BaseBranchCI, reason string, now time.Time) error {
 	key := model.BranchKey(row.Repo, row.Branch)
-	body := fmt.Sprintf("grain CI on `%s` %s is confirmed red: %s.", row.Branch, row.Repo, reason)
+	body := fmt.Sprintf("grain CI on %s `%s` is confirmed red: %s.", row.Repo, row.Branch, reason)
 	n := model.Notification{
 		Subject:  model.NotificationSubject(model.FamilyBaseRed, key),
 		Severity: model.NotificationWarning,
@@ -248,10 +248,9 @@ func reconcilePublishingNotifications(ctx context.Context, deps Deps, now time.T
 }
 
 // reconcileMergeStalledClears clears each open pipeline.merge-stalled
-// whose task the merge queue is driving again: its block lifted by Retry
-// merge, a new push, or the pull request landing. grain no longer raises
-// it (the automatic stall escalation is gone); this clears ones an older
-// grain raised.
+// whose task the merge queue is driving normally again: its block or external
+// check stall cleared by Retry merge, the check reporting, a fresh push, or
+// the pull request landing or closing.
 func reconcileMergeStalledClears(ctx context.Context, store *model.Store) error {
 	open, err := store.ListNotifications(ctx, model.NotificationFilter{
 		Open: true, Family: model.FamilyMergeStalled, Limit: 1000,
@@ -270,7 +269,9 @@ func reconcileMergeStalledClears(ctx context.Context, store *model.Store) error 
 			errs = append(errs, err)
 			continue
 		}
-		if obs != nil && obs.MergeQueueBlockedAt != nil {
+		if obs != nil && (obs.MergeQueueBlockedAt != nil ||
+			(obs.PrMergedAt == nil && obs.PrClosedAt == nil &&
+				obs.MergeQueueState == mergeStateWaitingCI && obs.MergeQueueStallRetryAt != nil)) {
 			continue
 		}
 		if _, err := store.ClearNotification(ctx, n.Subject, mergeQueueNotifier); err != nil {

@@ -64,6 +64,14 @@ type Observation struct {
 	// MissingChecks is the GitHub checks the pull request's merge rules
 	// require (Policy.RequiredChecks) that are not on the commit at all.
 	MissingChecks []string
+	// ExternalPending is the unfinished third-party checks on Detail.HeadSHA
+	// when only external checks are holding the pull request pending, with
+	// how long they have gone without progress on this head and whether that
+	// wait has crossed ExternalStallThreshold.
+	ExternalPending        []github.CheckRun
+	ExternalPendingFor     time.Duration
+	ExternalStalled        bool
+	ExternalStallThreshold time.Duration
 }
 
 // Policy is a pull request's own merge rules as far as CI goes
@@ -287,12 +295,26 @@ func Observe(client github.Client, ref Ref, in Input, now time.Time) (Observatio
 	// a clock still reading hours, and the very next cycle would give up
 	// on it again before anyone could see it try.
 	stalled, stallDeadline := false, time.Duration(0)
+	var (
+		externalPending        []github.CheckRun
+		externalPendingFor     time.Duration
+		externalStalled        bool
+		externalStallThreshold time.Duration
+	)
 	if health == Pending && !in.Blocked {
 		var timeout time.Duration
 		if policy != nil {
 			timeout = policy.StallTimeout
 		}
 		stalled, stallDeadline = ChecksStalledWithin(ref, detail.HeadSHA, now, timeout)
+		if len(missing) == 0 {
+			gated := gatedChecks(checks, policy, in.RequiredCheck)
+			externalPending, externalPendingFor, externalStalled, externalStallThreshold = ExternalChecksStalledWithin(
+				ref, detail.HeadSHA, gated, in.RequiredCheck, grain, now, timeout,
+			)
+		} else {
+			ForgetExternalChecks(ref)
+		}
 	} else {
 		// Any other answer -- clean, failing, conflicted, unknown, closed
 		// -- is CI having reported, or having stopped being the question,
@@ -300,6 +322,7 @@ func Observe(client github.Client, ref Ref, in Input, now time.Time) (Observatio
 		// PENDING on this same commit (a re-run of a check, hours after
 		// the first round finished) is timed from itself.
 		ForgetPendingChecks(ref)
+		ForgetExternalChecks(ref)
 	}
 
 	// Both reads answered, so whatever run of failed reads was being
@@ -311,15 +334,19 @@ func Observe(client github.Client, ref Ref, in Input, now time.Time) (Observatio
 	ForgetReadFailures(ref)
 
 	return Observation{
-		Detail:        detail,
-		Checks:        checks,
-		ChecksKnown:   checksKnown,
-		ChecksSettled: checksSettled,
-		Health:        health,
-		GrainCI:       grain,
-		Stalled:       stalled,
-		StallDeadline: stallDeadline,
-		MissingChecks: missing,
+		Detail:                 detail,
+		Checks:                 checks,
+		ChecksKnown:            checksKnown,
+		ChecksSettled:          checksSettled,
+		Health:                 health,
+		GrainCI:                grain,
+		Stalled:                stalled,
+		StallDeadline:          stallDeadline,
+		MissingChecks:          missing,
+		ExternalPending:        externalPending,
+		ExternalPendingFor:     externalPendingFor,
+		ExternalStalled:        externalStalled,
+		ExternalStallThreshold: externalStallThreshold,
 	}, nil
 }
 
@@ -397,4 +424,24 @@ func policyHealth(detail github.PullRequestDetail, checks []github.CheckRun, req
 func recordFailedRead(ref Ref, cause error, now time.Time, out error) error {
 	RecordReadFailure(ref, cause, now)
 	return out
+}
+
+func gatedChecks(checks []github.CheckRun, p *Policy, requiredCheck string) []github.CheckRun {
+	if p == nil || p.AllChecks || (p.Mode != "github" && p.Mode != "both") {
+		return checks
+	}
+	var gated []github.CheckRun
+	for _, c := range checks {
+		if requiredCheck != "" && c.Name == requiredCheck {
+			gated = append(gated, c)
+			continue
+		}
+		for _, n := range p.RequiredChecks {
+			if c.Name == n {
+				gated = append(gated, c)
+				break
+			}
+		}
+	}
+	return gated
 }

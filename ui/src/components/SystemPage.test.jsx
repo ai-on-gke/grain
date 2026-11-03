@@ -47,6 +47,28 @@ describe("SystemPage", () => {
     expect(screen.getByTestId("system-health")).toBeInTheDocument();
   });
 
+  it("puts the open tab in a tabpanel its tab names and controls", () => {
+    render(
+      <SystemPage
+        config={{ restartEnabled: true }}
+        tab="power"
+        onTab={() => {}}
+        showError={vi.fn()}
+      />,
+    );
+    const tab = screen.getByRole("tab", { name: "Power" });
+    const panel = screen.getByRole("tabpanel", { name: "Power" });
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(tab).toHaveAttribute("aria-controls", panel.id);
+    expect(
+      within(panel).getByRole("button", { name: "Restart grain" }),
+    ).toBeInTheDocument();
+    // A closed tab names no panel, since none of its is in the document.
+    expect(screen.getByRole("tab", { name: "Logs" })).not.toHaveAttribute(
+      "aria-controls",
+    );
+  });
+
   it("reports a picked tab, and Health as the bare path", async () => {
     const onTab = vi.fn();
     const user = userEvent.setup();
@@ -204,40 +226,6 @@ describe("SystemPage", () => {
     );
     await user.click(screen.getByRole("button", { name: "Config repo" }));
     expect(onOpenSettings).toHaveBeenCalledWith("config-repo");
-  });
-
-  it("points ConnectedExecutors on Sandboxes to Settings → Executors and surfaces a load error instead of a false empty state", async () => {
-    api.mockImplementation((path) => {
-      if (path === "/api/executors") {
-        return Promise.reject(new Error("executor registry offline"));
-      }
-      return Promise.resolve({
-        enabled: true,
-        sandboxes: [],
-        host: null,
-      });
-    });
-    render(
-      <SystemPage
-        config={{}}
-        tab="sandboxes"
-        onTab={() => {}}
-        showError={vi.fn()}
-      />,
-    );
-    expect(
-      await screen.findByText(
-        /The tokens they connect with are on Settings → Executors\./,
-      ),
-    ).toBeInTheDocument();
-    expect(
-      await screen.findByText(
-        /Model servers could not be read \(executor registry offline\)\./,
-      ),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText("No model servers connected."),
-    ).not.toBeInTheDocument();
   });
 
   // Upgrade moved into Settings (/settings/upgrade): System no longer

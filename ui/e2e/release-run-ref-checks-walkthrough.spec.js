@@ -117,7 +117,10 @@ test("fake CI runs show pending on the CI page until cancelled there", async ({
   }
 
   // The newest is the pinned grain/task-9 run; its repo is its link.
-  await rows.first().getByRole("button", { name: "acme/widgets" }).click();
+  await rows
+    .first()
+    .getByRole("button", { name: /^acme\/widgets / })
+    .click();
   // CIRunOverlay asks for a reason with the browser's own prompt() first.
   page.once("dialog", (dialog) => dialog.accept("walkthrough"));
   await page.getByRole("button", { name: "Cancel run" }).click();

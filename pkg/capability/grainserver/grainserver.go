@@ -18,10 +18,13 @@
 //
 //   - https://grain.dev/capabilities/grain: the host- and controller-side
 //     diagnostic and database grants.
-//   - https://grain.dev/capabilities/repo: repository access. Its #write
-//     method so far carries one value, GitPushAnyRefGrant (formerly
-//     git-push-any-ref), which the git proxy reads off the live task
-//     (model.Store.GitPushAnyRef).
+//   - https://grain.dev/capabilities/repo: repository access. #read {repo}
+//     and #write {repo} are a CI job's access to another repository
+//     (formerly repo-read:<repo> and repo-write:<repo>), CI-only and
+//     event-gated by the reference itself (model.IsRepoAccessGrant,
+//     model.RepoAccessAdmitsCIEvent). #write's other value,
+//     GitPushAnyRefGrant (formerly git-push-any-ref), the git proxy reads
+//     off the live task (model.Store.GitPushAnyRef).
 package grainserver
 
 import (
@@ -76,8 +79,15 @@ const (
 	// RepoID is the canonical capability_id of the in-process repo server.
 	RepoID = model.RepoCapabilityServerID
 
-	// RepoWriteMethod widens which refs of the repositories a task may
-	// write its run may push (formerly git-push-any-ref).
+	// RepoReadMethod is a CI job's read access to another repository
+	// (formerly repo-read:<repo>).
+	RepoReadMethod = model.RepoReadMethod
+	RepoReadRef    = model.RepoReadRef
+
+	// RepoWriteMethod is a CI job's write access to another repository
+	// (formerly repo-write:<repo>), or widens which refs of the
+	// repositories a task may write its run may push (formerly
+	// git-push-any-ref).
 	RepoWriteMethod    = model.RepoWriteMethod
 	RepoWriteRef       = model.RepoWriteRef
 	GitPushAnyRefGrant = model.GitPushAnyRefGrant
@@ -175,35 +185,74 @@ func buildServer() *protocol.Server {
 	return srv
 }
 
+// repoArg is the schema of the one repository a #read or #write grant
+// of CI access names: owner/name, or host/owner/name off the default host.
+var repoArg = map[string]any{
+	"type":        "string",
+	"pattern":     `^[^/\s]+(/[^/\s]+){1,2}$`,
+	"description": "The repository, owner/name (or host/owner/name), the CI job may reach through the git proxy.",
+}
+
+// repoAccessArgs is the schema of a grant naming one repository.
+func repoAccessArgs() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"repo"},
+		"properties":           map[string]any{"repo": repoArg},
+	}
+}
+
 func buildRepoServer() *protocol.Server {
+	read, err := protocol.NewMethod(protocol.MethodSpec{
+		Name: RepoReadMethod,
+		Description: "Let a CI job fetch one other repository, read-only, through the git proxy with the " +
+			"deployment's own git credential (formerly repo-read:<repo>). CI only: a task is refused it.",
+		Args: repoAccessArgs(),
+		// Nothing is placed in the sandbox: the git proxy's read scope
+		// is widened to the repository for the job's sandbox
+		// (daemon's CiSandbox.grantRepoAccess).
+		Mint: func(_ context.Context, _ string, _ time.Time, _ map[string]any) (*protocol.MintResponse, error) {
+			return &protocol.MintResponse{Status: protocol.StatusOK}, nil
+		},
+		Now: callerClock,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("grainserver: building repo#%s: %v", RepoReadMethod, err))
+	}
 	write, err := protocol.NewMethod(protocol.MethodSpec{
 		Name: RepoWriteMethod,
-		Description: "Let this task's run push any branch or tag of the repositories it may write -- the " +
-			"default branch, force-pushes and deletions included -- rather than only its own task branch, " +
-			"with the team's own git credential. Standing jobs declare the refs they push under `push:` in " +
-			"their .grain template instead.",
+		Description: "Either {repo}: let a CI job push to one other repository through the git proxy, on a " +
+			"release, a workflow_dispatch or grain's own scheduled run only (formerly repo-write:<repo>; CI " +
+			"only). Or {refs, force}: let this task's run push any branch or tag of the repositories it may " +
+			"write -- the default branch, force-pushes and deletions included -- rather than only its own " +
+			"task branch, with the team's own git credential (formerly git-push-any-ref). Standing jobs " +
+			"declare the refs they push under `push:` in their .grain template instead.",
 		Args: map[string]any{
-			"type":                 "object",
-			"additionalProperties": false,
-			"required":             []any{"refs", "force"},
-			"properties": map[string]any{
-				"refs": map[string]any{
-					"type":        "array",
-					"description": "Ref patterns the run may update beyond its own task branch. Only every branch and every tag together is honoured so far.",
-					"items":       map[string]any{"type": "string", "enum": []any{"refs/heads/*", "refs/tags/*"}},
-					"minItems":    2,
-					"maxItems":    2,
-					"uniqueItems": true,
+			"oneOf": []any{repoAccessArgs(), map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"required":             []any{"refs", "force"},
+				"properties": map[string]any{
+					"refs": map[string]any{
+						"type":        "array",
+						"description": "Ref patterns the run may update beyond its own task branch. Only every branch and every tag together is honoured so far.",
+						"items":       map[string]any{"type": "string", "enum": []any{"refs/heads/*", "refs/tags/*"}},
+						"minItems":    2,
+						"maxItems":    2,
+						"uniqueItems": true,
+					},
+					"force": map[string]any{
+						"type":        "boolean",
+						"const":       true,
+						"description": "Allow force-pushes and deletions of those refs as well as fast-forwards.",
+					},
 				},
-				"force": map[string]any{
-					"type":        "boolean",
-					"const":       true,
-					"description": "Allow force-pushes and deletions of those refs as well as fast-forwards.",
-				},
-			},
+			}},
 		},
 		// Nothing is placed in the sandbox: the git proxy reads the grant
-		// off the live task when a push names another ref.
+		// off the live task when a push names another ref, or has its
+		// write scope widened for a CI job's sandbox.
 		Mint: func(_ context.Context, _ string, _ time.Time, _ map[string]any) (*protocol.MintResponse, error) {
 			return &protocol.MintResponse{Status: protocol.StatusOK}, nil
 		},
@@ -212,7 +261,7 @@ func buildRepoServer() *protocol.Server {
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building repo#%s: %v", RepoWriteMethod, err))
 	}
-	cs, err := protocol.NewCapabilityServer("repo", write)
+	cs, err := protocol.NewCapabilityServer("repo", read, write)
 	if err != nil {
 		panic(fmt.Sprintf("grainserver: building repo capability server: %v", err))
 	}

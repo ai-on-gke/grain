@@ -705,6 +705,25 @@ function StateSyncGroup({ failure, onOpenConfigRepo }) {
   );
 }
 
+// ReleaseSoak is what a pending release's Approve needs said beside it:
+// how long it soaked, and when that was under the minimum, the release
+// train's SHORT SOAK warning -- approving it then accepts the short soak
+// (short_soak_ok), which the approve job otherwise refuses.
+function ReleaseSoak({ release }) {
+  if (!release.soak && !release.shortSoak) return null;
+  return (
+    <span
+      className="inbox-release-soak"
+      data-testid="inbox-release-soak"
+      title={release.shortSoak || undefined}
+    >
+      {release.shortSoak && (
+        <span className="inbox-release-short-soak">SHORT SOAK</span>
+      )}
+      {release.soak || "no recorded soak"}
+    </span>
+  );
+}
 // NotificationsGroup is the open operator notifications
 // (notifications.js, design/design/durable-tasks.design.md DT-5), above the task
 // rows: one row each, with what a person can do about it. An
@@ -769,13 +788,19 @@ function NotificationsGroup({
               <div className="inbox-actions">
                 {pendingReleaseOf(n) && (
                   <>
+                    <ReleaseSoak release={pendingReleaseOf(n)} />
                     <Button
                       size="small"
                       variant="contained"
+                      color={
+                        pendingReleaseOf(n).shortSoak ? "warning" : "primary"
+                      }
                       disabled={busy !== null}
                       onClick={() => act(n, "approve")}
                     >
-                      Approve
+                      {pendingReleaseOf(n).shortSoak
+                        ? "Approve short soak"
+                        : "Approve"}
                     </Button>
                     <Button
                       size="small"
@@ -902,6 +927,7 @@ function NotificationSwitch() {
 
 export default function InboxPage({
   tasks,
+  tasksLoaded = true,
   config,
   onOpenTask,
   onAct,
@@ -967,7 +993,17 @@ export default function InboxPage({
       {/* Deliberately the same sentence it always was, and about tasks
           only: a line promising that every base branch is tested is the
           exact reassurance this page was extended to stop giving. */}
-      {groups.length === 0 &&
+      {/* A task list that has never been read is not an empty one: say
+          so rather than promise nothing is waiting (2026-11-03
+          walkthrough, with GET /api/tasks failing on a cold load). */}
+      {!tasksLoaded && (
+        <ListEmpty>
+          The task list could not be read, so this page cannot show what is
+          waiting on you yet. It tries again on its own.
+        </ListEmpty>
+      )}
+      {tasksLoaded &&
+        groups.length === 0 &&
         localScripts.length === 0 &&
         notifications.length === 0 &&
         !syncFailure && (

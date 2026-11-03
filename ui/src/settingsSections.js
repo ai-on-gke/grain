@@ -39,7 +39,6 @@ export const SETTINGS_GROUPS = [
     sections: [
       { id: "models", label: "Models" },
       { id: "sandboxes", label: "Sandboxes" },
-      { id: "executors", label: "Executors" },
     ],
   },
   {
@@ -52,6 +51,13 @@ export const SETTINGS_GROUPS = [
         keywords: ["credentials", "secrets", "legacy capabilities"],
       },
       { id: "access", label: "Access" },
+      // The hostd registry (pkg/model/hostd.go): created, rotated and
+      // revoked here, never declared in the config repo.
+      {
+        id: "hostds",
+        label: "Hostds",
+        keywords: ["hostd", "host", "remote", "token", "workstation"],
+      },
     ],
   },
   {
@@ -174,7 +180,9 @@ const OLD_SETTINGS_TABS = {
   accounts: "access",
   engine: "engine",
   sandbox: "sandboxes",
-  executors: "executors",
+  // Executors were retired with remote executors; the grain hostds that
+  // replaced them are registered under Hostds.
+  executors: "hostds",
   integrations: "credentials",
   state: "config-repo",
   // Upgrade was a System tab (/system/upgrade) until it moved into

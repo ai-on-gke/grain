@@ -17,8 +17,7 @@
 # `grain init`: /var/lib/grain, grain-daemon.service, grain-hostd.service,
 # /etc/grain/hostd.yaml) into an in-cluster grain controller on GKE
 # (deploy/kubernetes/grain-granule.yaml, the kubernetes-granule backend)
-# with this host's grain hostd -- and, for host-bound CLIs such as agy, a
-# grain model-server -- dialing out to it.
+# with this host's grain hostd dialing out to it.
 #
 # docs/grain-init-platforms.md ("Migrating a local install to GKE") says
 # what each stage does and why; docs/k8s-granule-design.md ("Migrating a
@@ -64,9 +63,9 @@ NODE_SELECTOR=""
 MANIFEST="${REPO_ROOT}/deploy/kubernetes/grain-granule.yaml"
 TRANSFER_IMAGE="${GRAIN_MIGRATE_TRANSFER_IMAGE:-}"
 SERVER_URL=""
+HOSTD_OWNER=""
+IAP_AUDIENCE=""
 FORWARD_PORT=4280
-MODEL_SERVER=auto
-AGY_PATH=""
 TOKEN_FILE=""
 API_TOKEN_FILE=""
 DRAIN_WAIT=0
@@ -85,6 +84,9 @@ DAEMON_UNIT=grain-daemon.service
 ASIDE_SUFFIX=.pre-gke
 HOSTD_UNIT=grain-hostd.service
 FORWARD_UNIT=grain-gke-forward.service
+# MODEL_UNIT is the grain model-server unit an earlier version of this
+# script installed beside hostd; remote executors are retired, and
+# --rollback still removes the unit where one is left.
 MODEL_UNIT=grain-model-server.service
 TRANSFER_POD=grain-data-transfer
 SECRET_NAME=grain-migration
@@ -95,9 +97,8 @@ usage() {
 Usage: scripts/migrate-local-to-gke.sh [options]
 
 Migrate this host's local grain install to an in-cluster grain controller on
-GKE (kubernetes-granule sandboxes), keeping grain hostd -- and grain
-model-server, for host-bound CLIs such as agy -- running here and dialing out
-to it. Run as root on the host the local install lives on.
+GKE (kubernetes-granule sandboxes), keeping grain hostd running here and
+dialing out to it. Run as root on the host the local install lives on.
 
 Where the cluster is:
   --kubeconfig <path>       Admin kubeconfig for the cluster (default: the one
@@ -129,16 +130,20 @@ This host:
   --data-dir <dir>          Local data directory (default: GRAIN_DATA_DIR from
                             /etc/grain/cli.env, else /var/lib/grain/data, else
                             /var/lib/grain)
-  --server-url <url>        How hostd and model-server reach the controller
+  --server-url <url>        How hostd reaches the controller
                             (a Gateway/IAP URL). Default: a local
                             grain-gke-forward.service running kubectl
                             port-forward to http://127.0.0.1:<forward-port>
+  --hostd-owner <email>     With --server-url: the identity hostd dials in
+                            through IAP as -- its service account (Workload
+                            Identity or a key) or the login it runs with.
+                            Recorded as its owner (-hostd-token-owner); the
+                            controller refuses a remote hostd that is not
+                            verified as its owner. Required with --server-url
+  --iap-audience <id>       With --server-url: the IAP OAuth client ID hostd
+                            gets its ID token for (grain hostd -iap-audience)
   --forward-port <port>     Local port of that forward (default: 4280)
-  --model-server <auto|yes|no>
-                            Run grain model-server here (default: auto, which
-                            is yes when agy is installed)
-  --agy <path>              agy binary for model-server (default: command -v agy)
-  --token-file <path>       Shared hostd/model-server token (default:
+  --token-file <path>       Shared hostd token (default:
                             /etc/grain/hostd.token; created when missing)
   --api-token-file <path>   Bearer token for the controller's API in the
                             readiness checks (default: <data-dir>/local-api-token,
@@ -234,12 +239,12 @@ parse_args() {
       --data-dir=*) DATA_DIR="${1#*=}" ;;
       --server-url) SERVER_URL="$2"; shift ;;
       --server-url=*) SERVER_URL="${1#*=}" ;;
+      --hostd-owner) HOSTD_OWNER="$2"; shift ;;
+      --hostd-owner=*) HOSTD_OWNER="${1#*=}" ;;
+      --iap-audience) IAP_AUDIENCE="$2"; shift ;;
+      --iap-audience=*) IAP_AUDIENCE="${1#*=}" ;;
       --forward-port) FORWARD_PORT="$2"; shift ;;
       --forward-port=*) FORWARD_PORT="${1#*=}" ;;
-      --model-server) MODEL_SERVER="$2"; shift ;;
-      --model-server=*) MODEL_SERVER="${1#*=}" ;;
-      --agy) AGY_PATH="$2"; shift ;;
-      --agy=*) AGY_PATH="${1#*=}" ;;
       --token-file) TOKEN_FILE="$2"; shift ;;
       --token-file=*) TOKEN_FILE="${1#*=}" ;;
       --api-token-file) API_TOKEN_FILE="$2"; shift ;;
@@ -258,13 +263,24 @@ parse_args() {
     esac
     shift
   done
-  case "${MODEL_SERVER}" in
-    auto | yes | no) ;;
-    *) die "--model-server must be auto, yes or no, not ${MODEL_SERVER}" ;;
-  esac
   [[ "${DRAIN_WAIT}" =~ ^[0-9]+$ ]] || die "--drain-wait takes whole seconds, not ${DRAIN_WAIT}"
   [[ "${VERIFY_TIMEOUT}" =~ ^[0-9]+$ ]] || die "--verify-timeout takes whole seconds, not ${VERIFY_TIMEOUT}"
   [[ "${FORWARD_PORT}" =~ ^[0-9]+$ ]] || die "--forward-port takes a port number, not ${FORWARD_PORT}"
+  HOSTD_OWNER="$(printf '%s' "${HOSTD_OWNER}" | tr '[:upper:]' '[:lower:]')"
+  # The owner goes through awk -v into the manifest, which would expand a
+  # backslash escape, and the audience into a systemd ExecStart line, so
+  # neither may carry a backslash, a quote or whitespace.
+  local owner_re='^[^@[:space:],\\"'"'"']+@[^@[:space:],\\"'"'"']+$'
+  if [[ -n "${HOSTD_OWNER}" && ! "${HOSTD_OWNER}" =~ ${owner_re} ]]; then
+    die "--hostd-owner takes a full email address or service account, not ${HOSTD_OWNER}"
+  fi
+  local audience_re='^[^[:space:]\\"'"'"']+$'
+  if [[ -n "${IAP_AUDIENCE}" && ! "${IAP_AUDIENCE}" =~ ${audience_re} ]]; then
+    die "--iap-audience takes an IAP OAuth client ID, not ${IAP_AUDIENCE}"
+  fi
+  if [[ -n "${SERVER_URL}" && -z "${HOSTD_OWNER}" && "${PRINT_MANIFEST}" != "true" && "${ROLLBACK}" != "true" ]]; then
+    die "--server-url needs --hostd-owner <email>: the identity hostd dials in through IAP as (its service account, or the login it runs with); the controller refuses a remote hostd that is not verified as its owner"
+  fi
   TOKEN_FILE="${TOKEN_FILE:-${GRAIN_ETC_DIR}/hostd.token}"
 }
 
@@ -377,15 +393,6 @@ hostd_grain_bin() {
   printf '%s\n' "${exec%% *}"
 }
 
-model_server_wanted() {
-  case "${MODEL_SERVER}" in
-    yes) return 0 ;;
-    no) return 1 ;;
-  esac
-  [[ -n "${AGY_PATH}" ]] || AGY_PATH="$(command -v agy 2>/dev/null || true)"
-  [[ -n "${AGY_PATH}" ]]
-}
-
 controller_url() {
   if [[ -n "${SERVER_URL}" ]]; then
     printf '%s\n' "${SERVER_URL%/}"
@@ -456,11 +463,6 @@ preflight() {
   log "  sandbox image:    ${SANDBOX_IMAGE}"
   log "  target repo:      ${TARGET_REPO}"
   log "  controller URL:   $(controller_url)$([[ -z "${SERVER_URL}" ]] && printf ' (via %s)' "${FORWARD_UNIT}")"
-  if model_server_wanted; then
-    log "  model server:     yes${AGY_PATH:+ (agy=${AGY_PATH})}"
-  else
-    log "  model server:     no"
-  fi
 }
 
 # hostd_capabilities prints the capability entries hostd.yaml offers.
@@ -531,12 +533,12 @@ cluster() {
 
 # render_manifest REPLICAS prints grain-granule.yaml with its CHANGEMEs
 # filled in, the controller's replicas set to REPLICAS, and the
-# migration's Secret mounted for the hostd and model-server token.
+# migration's Secret mounted for the hostd token.
 render_manifest() {
   local replicas="$1"
   awk -v image="${IMAGE}" -v sandbox="${SANDBOX_IMAGE}" -v repo="${TARGET_REPO}" \
     -v selector="${NODE_SELECTOR}" -v replicas="${replicas}" -v secret="${SECRET_NAME}" \
-    -v mount="${SECRET_MOUNT}" '
+    -v mount="${SECRET_MOUNT}" -v owner="${HOSTD_OWNER}" '
     /^  replicas: [0-9]+$/ { print "  replicas: " replicas; next }
     /^          image: ghcr\.io\/.*\/grain:/ { sub(/image: .*/, "image: " image) }
     /^            - -k8s-granule-image=CHANGEME$/ { sub(/CHANGEME/, sandbox) }
@@ -548,10 +550,12 @@ render_manifest() {
     { print }
     /^            - -k8s-container=grain$/ {
       print "            # Added by scripts/migrate-local-to-gke.sh: the shared token this"
-      print "            # host'"'"'s grain hostd and grain model-server dial in with."
+      print "            # host'"'"'s grain hostd dials in with."
       print "            - -hostd-token-file=" mount "/hostd-token"
-      print "            - -executor-addr=:4243"
-      print "            - -executor-token-file=" mount "/hostd-token"
+      if (owner != "") {
+        print "            # The identity that hostd dials in through IAP as."
+        print "            - -hostd-token-owner=" owner
+      }
     }
     in_containers && /^              mountPath: \/data$/ {
       print "            - name: migration"
@@ -619,10 +623,10 @@ backup() {
 
 ensure_token() {
   if [[ -s "${TOKEN_FILE}" ]]; then
-    log "  shared hostd/model-server token: ${TOKEN_FILE} (kept)"
+    log "  shared hostd token: ${TOKEN_FILE} (kept)"
     return 0
   fi
-  log "  minting the shared hostd/model-server token at ${TOKEN_FILE}"
+  log "  minting the shared hostd token at ${TOKEN_FILE}"
   if [[ "${DRY_RUN}" == "true" ]]; then
     printf '+ write %s (mode 0600, 32 random bytes, hex)\n' "${TOKEN_FILE}"
     return 0
@@ -776,7 +780,7 @@ deploy_controller() {
   run kc rollout status deployment/grain --timeout=600s
 }
 
-# --- Stage 5: hostd and model-server --------------------------------------
+# --- Stage 5: hostd -------------------------------------------------------
 
 configure_forward() {
   [[ -z "${SERVER_URL}" ]] || return 0
@@ -787,7 +791,7 @@ configure_forward() {
   run install -m 0600 -o "${user}" "${KUBECONFIG_PATH}" "${kubeconfig}"
   write_file "${SYSTEMD_DIR}/${FORWARD_UNIT}" 0644 <<EOF
 # Managed by scripts/migrate-local-to-gke.sh: the local end of the grain
-# controller in ${NAMESPACE}, for grain-hostd.service and ${MODEL_UNIT}.
+# controller in ${NAMESPACE}, for grain-hostd.service.
 [Unit]
 Description=grain: forward 127.0.0.1:${FORWARD_PORT} to the GKE grain controller (svc/grain)
 After=network-online.target
@@ -817,6 +821,7 @@ configure_hostd() {
   url="$(controller_url)"
   dropin="${SYSTEMD_DIR}/${HOSTD_UNIT}.d/gke.conf"
   log "  ${HOSTD_UNIT}: dial out to ${url}"
+  [[ -z "${HOSTD_OWNER}" ]] || log "  hostd owner: ${HOSTD_OWNER} (the identity it dials in through IAP as)"
   run chown "${user}" "${TOKEN_FILE}"
   run chmod 0600 "${TOKEN_FILE}"
   if [[ -z "${SERVER_URL}" ]]; then
@@ -832,44 +837,10 @@ ${after}
 
 [Service]
 ExecStart=
-ExecStart=${exec} -server ${url} -token-file ${TOKEN_FILE}
+ExecStart=${exec} -server ${url} -token-file ${TOKEN_FILE}${IAP_AUDIENCE:+ -iap-audience ${IAP_AUDIENCE}}
 EOF
   run systemctl daemon-reload
   run systemctl restart "${HOSTD_UNIT}"
-}
-
-configure_model_server() {
-  model_server_wanted || return 0
-  local user bin url binaries after="${FORWARD_UNIT}"
-  [[ -z "${SERVER_URL}" ]] || after=""
-  user="$(hostd_user)"
-  bin="$(hostd_grain_bin)"
-  url="$(controller_url)"
-  binaries="-binary grain=${bin}"
-  [[ -n "${AGY_PATH}" ]] && binaries+=" -binary agy=${AGY_PATH}"
-  log "  ${MODEL_UNIT}: grain model-server against ${url}${AGY_PATH:+ (agy=${AGY_PATH})}"
-  write_file "${SYSTEMD_DIR}/${MODEL_UNIT}" 0644 <<EOF
-# Managed by scripts/migrate-local-to-gke.sh -- --rollback removes it.
-# Runs this host's ambient CLIs for the GKE grain controller.
-[Unit]
-Description=grain model-server: this host's agent CLIs for the GKE grain controller
-After=network-online.target ${after}
-Wants=network-online.target
-StartLimitIntervalSec=0
-
-[Service]
-Type=simple
-User=${user}
-ExecStart=${bin} model-server -server ${url} -token-file ${TOKEN_FILE} -name $(hostname -s 2>/dev/null || hostname) ${binaries}
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-  run systemctl daemon-reload
-  run systemctl enable "${MODEL_UNIT}"
-  run systemctl restart "${MODEL_UNIT}"
 }
 
 # --- Stage 5b: readiness --------------------------------------------------
@@ -880,7 +851,6 @@ verify() {
     printf '+ curl -fsS %s/api/auth/access-code\n' "$(controller_url)"
     printf '+ curl -fsS -X PUT %s/api/settings -d {"sandboxBackend":"kubernetes-granule"}\n' "$(controller_url)"
     printf '+ curl -fsS %s/api/capability-servers (every run: host server attached)\n' "$(controller_url)"
-    model_server_wanted && printf '+ curl -fsS %s/api/executors (this host connected)\n' "$(controller_url)"
     printf '+ curl -fsS -X DELETE %s/api/pipeline-pause\n' "$(controller_url)"
     return 0
   fi
@@ -910,15 +880,6 @@ verify() {
       sleep 3
     done
     log "  hostd attached: $(jq -r '[.[] | select(.status.run == "host") | .id] | join(", ")' <<<"${servers}")"
-    if model_server_wanted; then
-      local host
-      host="$(hostname -s 2>/dev/null || hostname)"
-      until api GET /api/executors 2>/dev/null | jq -e --arg h "${host}" 'any(.[]; .host == $h)' >/dev/null 2>&1; do
-        [[ "${SECONDS}" -lt "${deadline}" ]] || die "model-server ${host} did not connect within ${VERIFY_TIMEOUT}s"
-        sleep 3
-      done
-      log "  model-server ${host} connected"
-    fi
   fi
   api DELETE /api/pipeline-pause >/dev/null || warn "could not lift the migration's dispatch pause: grain resume against $(controller_url)"
   log "  dispatch resumed on the cluster controller"
@@ -934,7 +895,6 @@ migrate() {
   log "Stage 5: point this host at the cluster controller"
   configure_forward
   configure_hostd
-  configure_model_server
   verify
   log "Done. The controller runs in ${NAMESPACE}; ${DAEMON_UNIT} is masked here."
   log "Backup: ${BACKUP_ARCHIVE}. Undo with: $0 --rollback --kubeconfig ${KUBECONFIG_PATH}"

@@ -43,6 +43,22 @@ type ExternalRuns interface {
 	ExternalJobLog(ctx context.Context, id, job string) (string, error)
 }
 
+// ExternalRunsCounter is an optional extension of ExternalRuns that reports
+// the total number of runs matching f before limit truncated them.
+type ExternalRunsCounter interface {
+	FindExternalRunsCounted(ctx context.Context, f RunFilter, limit int) (runs []Run, matched int, note string)
+}
+
+// FindExternalRunsCounted calls ext's ExternalRunsCounter when it has one,
+// falling back to FindExternalRuns with len(runs) as matched.
+func FindExternalRunsCounted(ctx context.Context, ext ExternalRuns, f RunFilter, limit int) (runs []Run, matched int, note string) {
+	if c, ok := ext.(ExternalRunsCounter); ok {
+		return c.FindExternalRunsCounted(ctx, f, limit)
+	}
+	runs, note = ext.FindExternalRuns(ctx, f, limit)
+	return runs, len(runs), note
+}
+
 // ActionsRunIDPrefix starts every GitHub Actions run id ci:read serves.
 const ActionsRunIDPrefix = "gha:"
 

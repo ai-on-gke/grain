@@ -104,7 +104,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/k8s"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/postgres"
-	"github.com/ai-on-gke/grain/pkg/modelexec"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
@@ -377,9 +376,16 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	hostdSocket := fs.String("hostd-socket", "", "grain hostd's unix socket, for a daemon in a container whose host "+
 		"CLIs run through hostd; empty uses "+hostd.DefaultSocketPath+" when its directory is mounted into the container. "+
 		"Refused on Kubernetes, which has no host")
-	hostdTokenFile := fs.String("hostd-token-file", "", "file holding the shared token a grain hostd on another machine dials in to "+
-		hostd.RemotePath+" with (grain hostd -server <this daemon's URL> -token-file ...): its host CLIs and run: host capability "+
-		"servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset; neither means no hostd may dial in")
+	hostdTokenFile := fs.String("hostd-token-file", "", "deprecated, for one release: file holding a shared token a grain hostd on another machine dials in to "+
+		hostd.RemotePath+" with (grain hostd -server <this daemon's URL> -token-file ...), as the one hostd -hostd-token-name names: its host CLIs and run: host capability "+
+		"servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each hostd in the hostd registry (/api/hostds) instead, "+
+		"which gives it a token of its own")
+	hostdReattachTimeout := fs.Duration("hostd-reattach-timeout", 15*time.Minute, "how long a run's agent CLI, running detached on a grain hostd whose "+
+		"connection drops, waits for that same hostd to reconnect before the run fails as an infrastructure failure (no strike against the task); "+
+		"re-attached in time, it carries on from where its output stood. Runs queued for a hostd that is not connected wait for it whatever this is. 0 fails at once")
+	hostdTokenName := fs.String("hostd-token-name", hostd.DefaultSharedName, "the hostd name a hostd dialing in with -hostd-token-file's shared token is known by")
+	hostdTokenOwner := fs.String("hostd-token-owner", "", "the owner of -hostd-token-name's hostd: the email or service account a hostd dialing in with the shared token "+
+		"through IAP (or another identity verifier's proxy) must be verified as. A remote hostd with no owner is refused; one over loopback is not")
 	openAIAPIKeyFile := fs.String("openai-api-key-file", "", "file holding the OpenAI API key the agent "+
 		"authenticates as, passed to the codex subprocess as OPENAI_API_KEY. Optional, and the exact "+
 		"counterpart of the two files above: the UI stores one as the "+
@@ -411,17 +417,6 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		"repository's answer complete, as owner/name=check,check;owner/other=check -- a "+
 		"repository not named here is always read from GitHub")
 	githubWebhookURL, githubWebhookAddr := githubWebhookFlags(fs)
-
-	executorAddr := fs.String("executor-addr", "", "address to listen on for remote model executors (host:port, e.g. :4243); empty disables remote execution")
-	modelExecAddr := fs.String("model-exec-addr", "", "legacy alias for -executor-addr")
-	executorTokenFile := fs.String("executor-token-file", "", "file holding the shared token remote executors authenticate with (required with -executor-addr)")
-	modelExecTokenFile := fs.String("model-exec-token-file", "", "legacy alias for -executor-token-file")
-	executorWait := fs.Duration("executor-wait", modelexec.DefaultWait, "how long a dispatch waits for a remote executor to connect before giving up")
-	modelExecWait := fs.Duration("model-exec-wait", 0, "legacy alias for -executor-wait")
-	executorCertFile := fs.String("executor-cert-file", "", "PEM certificate file for TLS on -executor-addr (required with -executor-key-file)")
-	modelExecCertFile := fs.String("model-exec-cert-file", "", "legacy alias for -executor-cert-file")
-	executorKeyFile := fs.String("executor-key-file", "", "PEM private key file for TLS on -executor-addr (required with -executor-cert-file)")
-	modelExecKeyFile := fs.String("model-exec-key-file", "", "legacy alias for -executor-key-file")
 
 	gcpProject := fs.String("gcp-project", "", "GCP project the gcp-key/gemini-key capabilities mint into; empty disables both"+seedOnly)
 	gcpServiceAccountEmail := fs.String("gcp-agent-service-account", "", "the narrow agent service account gcp-key mints keys for"+seedOnly)
@@ -657,9 +652,10 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 
 	// Every deployment names its sandbox backend: -container-sandboxes,
 	// -granule-sandboxes, -k8s-sandboxes, -host-sandboxes, or
-	// -disable-native-sandboxes for one whose sandboxes are all remote.
+	// -disable-native-sandboxes for a control-plane-only daemon (backend
+	// "none"), which creates no sandboxes and so runs no task.
 	disableNativeSandboxes := fs.Bool("disable-native-sandboxes", false,
-		"disable native sandboxes on this host -- in this mode only remote execution sandboxes can exist")
+		"select sandbox backend \"none\": run the control plane only -- no sandbox is created, so no task runs (for tests and walkthroughs)")
 	nativeSandboxes := fs.Bool("native-sandboxes", true,
 		"enable native sandboxes on this host; set to false to disable native sandboxes")
 	// A flag rather than a setting, unlike the switch that decides
@@ -1188,22 +1184,6 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		return daemon.Config{}, fs, unknownFlags, err
 	}
 
-	if *executorAddr == "" && *modelExecAddr != "" {
-		*executorAddr = *modelExecAddr
-	}
-	if *executorTokenFile == "" && *modelExecTokenFile != "" {
-		*executorTokenFile = *modelExecTokenFile
-	}
-	if *executorWait == modelexec.DefaultWait && *modelExecWait > 0 {
-		*executorWait = *modelExecWait
-	}
-	if *executorCertFile == "" && *modelExecCertFile != "" {
-		*executorCertFile = *modelExecCertFile
-	}
-	if *executorKeyFile == "" && *modelExecKeyFile != "" {
-		*executorKeyFile = *modelExecKeyFile
-	}
-
 	cfg := daemon.Config{
 		UnitFlags: unitFlags, UnknownFlags: unknownFlags,
 		DataDir: *dataDir, DbDriver: *dbDriver, DbDSN: *dbDSN, SandboxDir: *sandboxDir, DockerRootDir: *dockerRootDir,
@@ -1224,11 +1204,6 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		UiIAPKeysURL:            *uiIAPKeysURL,
 		UiRequireIAP:            *uiRequireIAP,
 		UiAllowedPrincipals:     ui.SplitAllowedPrincipals(*uiAllowedPrincipals),
-		ExecutorAddr:            *executorAddr,
-		ExecutorTokenFile:       *executorTokenFile,
-		ExecutorWait:            *executorWait,
-		ExecutorCertFile:        *executorCertFile,
-		ExecutorKeyFile:         *executorKeyFile,
 		GeminiAPIKeyFile:        *geminiAPIKeyFile,
 		MaxAgentTurns:           *maxAgentTurns,
 		AgyPath:                 *agyPath,
@@ -1236,8 +1211,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		ModelProxyUnrestricted: *modelProxyUnrestricted, ModelProxyMaxConcurrent: *modelProxyMaxConcurrent, ModelProxySlotWait: *modelProxySlotWait,
 		CodexPath: *codexPath, OpenAIAPIKeyFile: *openAIAPIKeyFile, CodexAuthFile: *codexAuthFile,
 		ClaudeRun: *claudeRun, CodexRun: *codexRun, AgyRun: *agyRun,
-		HostdSocket: *hostdSocket,
-		GithubHost:  *githubHost, GithubInsecureHTTP: *githubInsecureHTTP,
+		HostdSocket:          *hostdSocket,
+		HostdReattachTimeout: *hostdReattachTimeout,
+		GithubHost:           *githubHost, GithubInsecureHTTP: *githubInsecureHTTP,
 		CheckpostURL: *checkpostURL, CheckpostExpect: *checkpostExpect,
 		GithubWebhookURL: *githubWebhookURL, GithubWebhookAddr: *githubWebhookAddr,
 		GcpProject: *gcpProject, GcpServiceAccountEmail: *gcpServiceAccountEmail, GcpServiceAccountCount: *gcpServiceAccountCount,
@@ -1324,7 +1300,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		K8sGranuleAccess:      *k8sGranuleAccess, K8sGranuleReattachTimeout: *k8sGranuleReattachTimeout, SandboxCPUs: *sandboxCPUs, SandboxMemoryMB: *sandboxMemoryMB, SandboxDiskGB: *sandboxDiskGB,
 	}
 	grit.Apply(&cfg)
-	if cfg.HostdRemote, err = hostdRemote(*hostdTokenFile); err != nil {
+	if cfg.HostdRemote, err = hostdRemote(*hostdTokenFile, *hostdTokenName, *hostdTokenOwner); err != nil {
 		return cfg, fs, unknownFlags, err
 	}
 	cfg, err = local(cfg, passed)
@@ -1332,8 +1308,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 }
 
 // hostdRemote is the acceptor for a grain hostd dialing in with the token
-// in tokenFile, or $GRAIN_HOSTD_TOKEN; nil when neither names one.
-func hostdRemote(tokenFile string) (*hostd.Remote, error) {
+// in tokenFile, or $GRAIN_HOSTD_TOKEN, as hostd name owned by owner; nil
+// when neither names a token.
+func hostdRemote(tokenFile, name, owner string) (*hostd.Remote, error) {
 	token := strings.TrimSpace(os.Getenv("GRAIN_HOSTD_TOKEN"))
 	if tokenFile != "" {
 		t, err := daemon.ReadTokenFile(tokenFile)
@@ -1345,7 +1322,21 @@ func hostdRemote(tokenFile string) (*hostd.Remote, error) {
 	if token == "" {
 		return nil, nil
 	}
-	return &hostd.Remote{Token: token, Logf: log.Printf}, nil
+	if name == "" {
+		name = hostd.DefaultSharedName
+	}
+	if err := model.ValidateHostdName(name); err != nil {
+		return nil, fmt.Errorf("-hostd-token-name: %w", err)
+	}
+	if name == model.LocalHostd {
+		return nil, fmt.Errorf("-hostd-token-name: %q is the co-located hostd's name", name)
+	}
+	owner, err := model.NormalizeHostdOwner(owner)
+	if err != nil {
+		return nil, fmt.Errorf("-hostd-token-owner: %w", err)
+	}
+	log.Printf("grain daemon: -hostd-token-file is deprecated and goes in the next release: register hostd %s in the hostd registry (POST /api/hostds) and give it the token it answers with", name)
+	return &hostd.Remote{Token: token, SharedName: name, SharedOwner: owner, Logf: log.Printf}, nil
 }
 
 // checkConfig is every "these flags cannot be started with" rule daemon()
@@ -1435,12 +1426,6 @@ func checkConfig(cfg daemon.Config) error {
 				"this Deployment's image by hand instead (`kubectl set image deployment/<name> " +
 				"<container>=<image>`)")
 		}
-	}
-	if cfg.ExecutorAddr != "" && cfg.ExecutorTokenFile == "" {
-		return errors.New("-executor-token-file is required with -executor-addr")
-	}
-	if (cfg.ExecutorCertFile != "" && cfg.ExecutorKeyFile == "") || (cfg.ExecutorCertFile == "" && cfg.ExecutorKeyFile != "") {
-		return errors.New("both -executor-cert-file and -executor-key-file are required for TLS")
 	}
 	if err := checkPackageCacheUpstreams(cfg); err != nil {
 		return err

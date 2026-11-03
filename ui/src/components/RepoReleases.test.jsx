@@ -462,6 +462,55 @@ describe("RepoReleases", () => {
     await screen.findByLabelText("Release");
   });
 
+  it("shows a refused release name on the box and clears it once a name is created", async () => {
+    setupApi({ releases: [] });
+    const refusal =
+      'invalid release name: use letters, digits, ".", "_" and "-"';
+    const created = api.getMockImplementation();
+    api.mockImplementation((path, opts) => {
+      if (
+        path === "/api/repos/acme/widgets/releases" &&
+        opts?.method === "POST" &&
+        JSON.parse(opts.body).name === "bad name"
+      ) {
+        const err = new Error(refusal);
+        err.status = 400;
+        return Promise.reject(err);
+      }
+      return created(path, opts);
+    });
+    const showError = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <RepoReleases
+        repo="acme/widgets"
+        onBack={() => {}}
+        showError={showError}
+      />,
+    );
+    const name = await screen.findByLabelText(/New release name/);
+
+    await user.type(name, "bad name");
+    await user.click(screen.getByRole("button", { name: "Create release" }));
+    expect(await screen.findByText(refusal)).toBeInTheDocument();
+    expect(name).toHaveAttribute("aria-invalid", "true");
+    expect(showError).not.toHaveBeenCalled();
+
+    await user.clear(name);
+    expect(screen.queryByText(refusal)).not.toBeInTheDocument();
+    await user.type(name, "bad name");
+    await user.click(screen.getByRole("button", { name: "Create release" }));
+    await screen.findByText(refusal);
+
+    // A create that succeeds takes the refusal down too, even with no
+    // edit in between that would have (the box set without an input event).
+    name.value = "myfeat";
+    await user.click(screen.getByRole("button", { name: "Create release" }));
+    await screen.findByLabelText("Release");
+    expect(screen.queryByText(refusal)).not.toBeInTheDocument();
+    expect(showError).not.toHaveBeenCalled();
+  });
+
   it("cuts a new RC when eligible", async () => {
     setupApi({
       releases: [activeRelease],

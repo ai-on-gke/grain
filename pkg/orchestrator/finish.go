@@ -114,14 +114,14 @@ func isTruncated(s string) bool {
 }
 
 // effectiveCommentOnIssue returns the comment to relay from a comment_on_issue tool call.
-// Antigravity (Gemini via agy) and other agents frequently provide abbreviated
-// summaries in the comment_on_issue tool call argument (often ending in …),
-// while generating their complete report in the assistant conversational text
-// channel (result.FinalText).
+// The tool's contract is that its comment argument is what grain relays into the
+// task's conversation; conversational text emitted after the tool call returns
+// (result.FinalText) must not overwrite a complete tool argument, or concise
+// structured reports (such as the pipeline steward's cited wake reports or
+// one-line "nothing needed doing" notes) get replaced by free-text prose.
 //
-// When recording the task's comment, we use the final assistant text if
-// comment_on_issue is truncated, ends with an ellipsis (… / ...), or when
-// FinalText contains the more complete report.
+// FinalText is used only when comment_on_issue's comment was visibly truncated
+// with a trailing ellipsis (… or ...) and FinalText carries a longer body.
 func effectiveCommentOnIssue(result *agent.Result) (string, bool) {
 	if result == nil {
 		return "", false
@@ -133,10 +133,7 @@ func effectiveCommentOnIssue(result *agent.Result) (string, bool) {
 	if !ok || comment == "" {
 		return "", false
 	}
-	if isTruncated(comment) && finalText != "" {
-		return finalText, true
-	}
-	if finalText != "" && len(finalText) > len(comment) {
+	if isTruncated(comment) && len(finalText) > len(comment) {
 		return finalText, true
 	}
 	return comment, true
@@ -250,7 +247,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 		if _, err := relayCommentWithAttachments(ctx, store, task, withDroppedAttachments(comment, dropped), attachments, now); err != nil {
 			return fmt.Errorf("orchestrator: posting comment for %s: %w", task.ID, err)
 		}
-		checkAndRecordStewardReport(ctx, store, task, runID, result, now)
+		checkAndRecordStewardReportText(ctx, store, task, runID, comment, result, now)
 	}
 
 	// nothing_needed's reason is relayed up front for the same reason
@@ -482,9 +479,11 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 			}
 			if goal != nil {
 				if finalText {
-					if _, err := relayCommentWithAttachments(ctx, store, task, strings.TrimSpace(result.FinalText), nil, now); err != nil {
+					posted := strings.TrimSpace(result.FinalText)
+					if _, err := relayCommentWithAttachments(ctx, store, task, posted, nil, now); err != nil {
 						return fmt.Errorf("orchestrator: posting closing comment for %s: %w", task.ID, err)
 					}
+					checkAndRecordStewardReportText(ctx, store, task, runID, posted, result, now)
 					hasComment = true
 				}
 				if msgWaiting, merr := interactiveMessageWaiting(ctx, store, task); merr == nil && msgWaiting {
@@ -543,6 +542,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 		if _, err := relayCommentWithAttachments(ctx, store, task, comment, nil, now); err != nil {
 			return fmt.Errorf("orchestrator: posting closing comment for %s: %w", task.ID, err)
 		}
+		checkAndRecordStewardReportText(ctx, store, task, runID, comment, result, now)
 		hasComment = true
 	} else if relayedInProcess {
 		hasComment = true
@@ -2081,7 +2081,9 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// proposals are judged on its own permission when it runs. A
 		// proposal grain itself files for a person (needsPersonWhy) waits
 		// too, but its note above already says why, and it is not marked
-		// as held: the run made no choice there.
+		// as held: the run made no choice there -- nor when the run also
+		// asked, since its permission would not have queued it either
+		// (AutoSubmits knows nothing of keep_running or priority).
 		heldByRun, _ := p["hold_for_approval"].(bool)
 		hold := heldByRun || needsPersonWhy != ""
 		switch {
@@ -2089,7 +2091,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			proposal.Body += model.ProposalEscalationNote(task.ID, proposal, escalated)
 		case len(ungranted) > 0, len(ungrantedReads) > 0:
 			// Filed for a person; the notes above say why.
-		case heldByRun && (approved || model.AutoSubmits(proposal, task)):
+		case heldByRun && needsPersonWhy == "" && (approved || model.AutoSubmits(proposal, task)):
 			proposal.Body += model.HeldForApprovalNote(task.ID)
 			proposal.Tags = append(proposal.Tags, model.HeldForApprovalTag)
 		case hold:
@@ -2129,6 +2131,13 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			proposal.AutoMerge = false
 		} else if asked && !proposal.AutoMerge && len(ungranted) == 0 {
 			proposal.Body += otherBranchAutoMergeNote(task, proposal)
+		}
+		// An explicit auto_merge: false is the run's own "this deserves
+		// a review", which nothing grain does later may overturn
+		// (model.DeclineAutoMerge) -- the same as the identical call
+		// filed live (ui.CreateTaskRequest.DeclineAutoMerge).
+		if said, ok := p["auto_merge"].(bool); ok && !said {
+			model.DeclineAutoMerge(&proposal, model.PrincipalString(model.Principal{Kind: model.PrincipalAgent, ID: task.ID}))
 		}
 		if err := store.PutTask(ctx, proposal); err != nil {
 			return fmt.Errorf("orchestrator: filing proposed task %q: %w", title, err)

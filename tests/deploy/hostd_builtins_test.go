@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/hostd"
@@ -70,16 +71,10 @@ func TestSetupWritesGrainsOwnHostdEntriesAsTheBinaryDoes(t *testing.T) {
 	if len(a.Capabilities) != len(want) {
 		t.Errorf("setup.sh writes %d capabilities entries, the binary knows %d:\n%s", len(a.Capabilities), len(want), content)
 	}
-	for _, b := range want {
-		have := a.Capabilities[b.Name]
-		if have == nil || !reflect.DeepEqual(have, b.Entry(bin)) {
-			t.Errorf("%s: setup.sh writes %+v, the binary %+v", b.Name, have, b.Entry(bin))
-		}
-		// The text too, entry by entry: what an operator is told to
-		// copy is the same whichever wrote it.
-		if !strings.Contains(content, b.YAML(bin, "  ", "  ")) {
-			t.Errorf("%s: setup.sh's text differs from the binary's:\n%s\nwant:\n%s", b.Name, content, b.YAML(bin, "  ", "  "))
-		}
+	// Entry by entry, parsed and as text: what an operator is told to
+	// copy is the same whichever wrote it.
+	for _, bad := range hostd.CheckInstallerEntries(content, bin, want) {
+		t.Errorf("setup.sh: %s\n%s", bad, content)
 	}
 	// And each ensure_ function's own entry.
 	for name, fn := range map[string]string{"host-git": "hostd_host_git_entry", "grain-gcp": "hostd_builtin_capability_entry gcp"} {
@@ -174,5 +169,69 @@ capabilities:
 	}
 	if again, _ := os.ReadFile(allow); string(again) != string(data) {
 		t.Errorf("a second run changed the allowlist")
+	}
+}
+
+// An edition that registers an entry of its own that is not a capability
+// server's (intree.RegisterHostdEntry: another grain subcommand, with a
+// max_duration) has it held to its installer by the same check, and gains
+// it on an allowlist an older release wrote across an upgrade, as core's
+// own entries are.
+func TestAnEditionsRegisteredHostdEntryIsHeldToItsInstallerAndAddedOnUpgrade(t *testing.T) {
+	const bin = "/usr/local/bin/grain"
+	uptick := hostd.BuiltinEntry{Name: "grain-edition-uptick", Args: []string{"edition-verify-uptick"}, MaxDuration: time.Minute}
+	t.Cleanup(intree.SwapHostdEntriesForTest(nil))
+	intree.RegisterHostdEntry(uptick)
+	all := intree.HostdBuiltins()
+	if got := all[len(all)-1]; !reflect.DeepEqual(got, uptick) {
+		t.Fatalf("HostdBuiltins ends %+v, want the registered %+v", got, uptick)
+	}
+
+	fns := proxyVarsLine(t) + shellFunction(t, "hostd_host_git_entry") +
+		shellFunction(t, "hostd_builtin_capability_entry") + shellFunction(t, "hostd_allowlist_content")
+	core := runBash(t, fns+"hostd_allowlist_content", "GRAIN_INSTALL_TRACK=oss", "HOSTD_AGY_PATH=", "HOST_GRAIN_BIN="+bin)
+	// An edition's installer that forgot the entry, or wrote it without
+	// its max_duration, disagrees with its registration.
+	bad := hostd.CheckInstallerEntries(core, bin, all)
+	if len(bad) != 1 || !strings.Contains(bad[0], "grain-edition-uptick") {
+		t.Errorf("an installer without the registered entry: %q", bad)
+	}
+	entry := "  grain-edition-uptick:\n    command: " + bin + "\n    args: [edition-verify-uptick]\n    pass_env: [" + strings.Join(hostd.ProxyVars, ", ") + "]\n"
+	if bad := hostd.CheckInstallerEntries(core+entry, bin, all); len(bad) != 2 {
+		t.Errorf("an installer without the entry's max_duration: %q", bad)
+	}
+	// One that writes it as registered agrees.
+	if bad := hostd.CheckInstallerEntries(core+entry+"    max_duration: 1m\n", bin, all); len(bad) != 0 {
+		t.Errorf("an installer writing the registered entry: %q", bad)
+	}
+
+	// -ensure-builtins adds it to an allowlist without it, and leaves an
+	// operator's edit of it alone, saying how it differs.
+	allow := filepath.Join(t.TempDir(), "hostd.yaml")
+	if err := os.WriteFile(allow, []byte(core), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := hostd.EnsureBuiltins(allow, bin, all)
+	if err != nil || !reflect.DeepEqual(res.Added, []string{"grain-edition-uptick"}) {
+		t.Fatalf("added %v (%v)", res.Added, err)
+	}
+	data, _ := os.ReadFile(allow)
+	a, err := hostd.ParseAllowlist(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := a.Capabilities["grain-edition-uptick"]; e == nil || e.MaxDuration != time.Minute {
+		t.Fatalf("the added entry is %+v:\n%s", e, data)
+	}
+	edited := strings.Replace(string(data), "max_duration: 1m", "max_duration: 2m", 1)
+	if err := os.WriteFile(allow, []byte(edited), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err = hostd.EnsureBuiltins(allow, bin, all)
+	if err != nil || len(res.Added) != 0 || len(res.Differs) != 1 || !strings.Contains(res.Differs[0], "grain-edition-uptick: max_duration") {
+		t.Errorf("on an edited entry: added %v, differs %q (%v)", res.Added, res.Differs, err)
+	}
+	if again, _ := os.ReadFile(allow); string(again) != edited {
+		t.Error("the operator's edit was changed")
 	}
 }

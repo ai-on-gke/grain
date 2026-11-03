@@ -532,6 +532,9 @@ func fireSuitePass(ctx context.Context, tx *sql.Tx, runID int64, items []SuiteIt
 		if err := putTask(ctx, tx, task); err != nil {
 			return err
 		}
+		if err := putTaskHostd(ctx, tx, id, composed[i].Hostd); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx,
 			"INSERT INTO `suite_run_task` (`run_id`,`task_id`,`template_id`,`template_name`,`pass_number`) VALUES (?,?,?,?,?)",
 			runID, id, it.TemplateID, templates[it.TemplateID].Name, passNumber); err != nil {

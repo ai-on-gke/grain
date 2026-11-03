@@ -530,7 +530,189 @@ var Migrations = []Migration{
 				map[string][]string{"corp-research": {CorpResearchGrant}})
 		},
 	},
+	{
+		Version:     87,
+		Description: "drop executor_token and executor_token_sequence (remote executors are retired)",
+		Statements: []string{
+			"DROP TABLE IF EXISTS `executor_token`",
+			"DROP TABLE IF EXISTS `executor_token_sequence`",
+		},
+	},
+	{
+		Version:     88,
+		Description: "rewrite stored repo-read:<repo> and repo-write:<repo> grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/repo#read / #write {repo} (the in-process providers are retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames, err := legacyRepoAccessRenames(ctx, tx)
+			if err != nil || len(renames) == 0 {
+				return err
+			}
+			if err := rewriteLegacyGrantsMulti(renames)(ctx, tx); err != nil {
+				return err
+			}
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities", renames)
+		},
+	},
+	{
+		Version:     89,
+		Description: "rebuild merge_batch keyed by task as well as branch: one overlap re-check per change",
+		// Neither engine changes a primary key in place. The rows are
+		// copied out to a table with no constraints at all (CREATE TABLE
+		// ... AS, so that no constraint name is left behind to collide
+		// with the new table's on Postgres), and back into merge_batch
+		// created afresh from the statement a new store uses.
+		Statements: []string{
+			"CREATE TABLE `merge_batch_v88` AS SELECT * FROM `merge_batch`",
+			"DROP TABLE `merge_batch`",
+			mergeBatchTable,
+			"INSERT INTO `merge_batch` (`owner`,`name`,`branch`,`task_id`,`ref`,`base_commit`,`commit`," +
+				"`members`,`run_id`,`started_at`,`finished_at`,`conclusion`,`detail`,`splits`,`queued`," +
+				"`recheck_of`,`recheck_detail`,`recheck_at`) " +
+				"SELECT `owner`,`name`,`branch`,'',`ref`,`base_commit`,`commit`," +
+				"`members`,`run_id`,`started_at`,`finished_at`,`conclusion`,`detail`,`splits`,`queued`," +
+				"`recheck_of`,`recheck_detail`,`recheck_at` FROM `merge_batch_v88`",
+			"DROP TABLE `merge_batch_v88`",
+		},
+	},
+	{
+		Version:     90,
+		Description: "fold retired in-process catalogue entries into api_scopes.presets in grain_config.capability_policy",
+		Up: foldRetiredCatalogueInProcess(
+			map[string]string{
+				"team-broadcast":   "team-broadcast",
+				"dispatch-control": "dispatch-control",
+				"pipeline-control": "pipeline-control",
+				"memory":           "memory",
+				"release-notes":    "release-notes",
+				"self-upgrade":     "self-upgrade",
+				"test-quarantine":  "test-quarantine",
+			},
+			map[string][]string{
+				"team-broadcast":        {"api:team-broadcast"},
+				"dispatch-control":      {"api:dispatch-control"},
+				"pipeline-control":      {"api:pipeline-control"},
+				"memory":                {"api:memory"},
+				"release-notes":         {"api:release-notes"},
+				"self-upgrade":          {"api:self-upgrade"},
+				"test-quarantine":       {"api:test-quarantine"},
+				"grain-log":             {GrainJournalGrant},
+				"deployment-health":     {"api:deployment:read", GrainHealthGrant},
+				"db-read":               {GrainSQLReadGrant},
+				"db-write":              {GrainSQLWriteGrant},
+				"self-repair":           {GrainHostExecGrant},
+				GitPushAnyRefCapability: {GitPushAnyRefGrant},
+				"corp-research":         {CorpResearchGrant},
+			},
+		),
+	},
+	{
+		Version:     91,
+		Description: "add a *_source column beside every principal's *_kind/*_id pair, task_event's on-behalf-of, and config_audit (operator-attribution spec §1.3, §7.1)",
+		Statements: append([]string{
+			// task_pause and task_event postdate the 2.0 baseline and
+			// Init's CREATE TABLE IF NOT EXISTS made them in place, so a
+			// store this old may not have them yet: create them in the
+			// shape schema 90 knew first, so that the ALTERs below meet
+			// the same table whichever store they run on.
+			schema90TaskPauseTable,
+			schema90TaskEventTable,
+		}, principalSourceColumns()...),
+	},
+	{
+		Version:     92,
+		Description: "add the hostd registry (hostd, hostd_token), with the co-located hostd as local",
+		Statements: []string{
+			hostdTable,
+			hostdTokenTable,
+		},
+		Up: ensureLocalHostd,
+	},
+	{
+		Version:     93,
+		Description: "route host work per run: task_hostd, task_run_hostd, and the hostd of each task_run_capability_audit record",
+		Statements: []string{
+			taskHostdTable,
+			taskRunHostdTable,
+			// task_run_capability_audit postdates the 2.0 baseline and
+			// Init made it in place, so a store this old may not have it
+			// yet: create it in schema 92's shape first.
+			schema92CapabilityAuditTable,
+			"ALTER TABLE `task_run_capability_audit` ADD COLUMN `hostd` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     94,
+		Description: "add the hostd selector a template's tasks start pinned to",
+		Statements: []string{
+			"ALTER TABLE `template` ADD COLUMN `hostd` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
+
+// principalSourceColumns are migration 91's ALTERs: `<p>_source` beside
+// every stored principal, `”` for every row already there.
+func principalSourceColumns() []string {
+	cols := []struct{ table, column string }{
+		{"task", "origin_actor_source"},
+		{"task", "origin_behalf_source"},
+		{"task", "approval_actor_source"},
+		{"task", "approval_behalf_source"},
+		{"task_comment", "author_source"},
+		{"task_comment", "author_behalf_source"},
+		{"task_pause", "paused_by_source"},
+		{"pipeline_pause", "actor_source"},
+		{"scheduled_upgrade", "actor_source"},
+		{"memory", "updated_by_source"},
+		{"memory_document", "updated_by_source"},
+		{"release_note", "updated_by_source"},
+		{"task_event", "actor_source"},
+		{"task_event", "behalf_kind"},
+		{"task_event", "behalf_id"},
+		{"task_event", "behalf_source"},
+	}
+	out := make([]string, 0, len(cols))
+	for _, c := range cols {
+		out = append(out, "ALTER TABLE `"+c.table+"` ADD COLUMN `"+c.column+"` TEXT NOT NULL DEFAULT ''")
+	}
+	return out
+}
+
+// schema92CapabilityAuditTable is task_run_capability_audit as schema
+// 92 created it, frozen for migration 93.
+const schema92CapabilityAuditTable = `CREATE TABLE IF NOT EXISTS ` + "`task_run_capability_audit`" + ` (
+  ` + "`run_id`" + `     TEXT     NOT NULL,
+  ` + "`seq`" + `        INTEGER  NOT NULL,
+  ` + "`capability`" + ` TEXT     NOT NULL,
+  ` + "`attempt_id`" + ` TEXT     NOT NULL,
+  ` + "`at`" + `         DATETIME NOT NULL,
+  ` + "`record`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`note`" + `       TEXT     NOT NULL DEFAULT '',
+  PRIMARY KEY (` + "`run_id`" + `, ` + "`seq`" + `)
+)`
+
+// schema90TaskPauseTable and schema90TaskEventTable are task_pause and
+// task_event as schema 90 created them, frozen for migration 91.
+const schema90TaskPauseTable = `CREATE TABLE IF NOT EXISTS ` + "`task_pause`" + ` (
+  ` + "`task_id`" + `           TEXT     NOT NULL,
+  ` + "`paused_at`" + `         DATETIME NOT NULL,
+  ` + "`paused_by_kind`" + `    TEXT     NOT NULL,
+  ` + "`paused_by_id`" + `      TEXT     NOT NULL,
+  ` + "`from_state`" + `        TEXT     NOT NULL,
+  ` + "`immediate`" + `         INTEGER  NOT NULL DEFAULT 0,
+  ` + "`grace_until`" + `       DATETIME NULL,
+  ` + "`run_id`" + `            TEXT     NULL,
+  PRIMARY KEY (` + "`task_id`" + `)
+)`
+
+const schema90TaskEventTable = `CREATE TABLE IF NOT EXISTS ` + "`task_event`" + ` (
+  ` + "`id`" + `         INTEGER PRIMARY KEY AUTOINCREMENT,
+  ` + "`task_id`" + `    TEXT     NOT NULL,
+  ` + "`kind`" + `       TEXT     NOT NULL,
+  ` + "`at`" + `         DATETIME NOT NULL,
+  ` + "`actor_kind`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`actor_id`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`reason`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`detail`" + `     TEXT     NOT NULL DEFAULT ''
+)`
 
 // CorpResearchGrant is what migration 86 rewrote stored corp-research grants
 // to: the method a wrapper distribution's build registers (capability.Register) in place
@@ -625,12 +807,7 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 	for v := from + 1; v <= SchemaVersion; v++ {
 		m, _ := migrationFor(v)
 		for _, stmt := range m.Statements {
-			if _, err := tx.ExecContext(ctx, stmt); err != nil {
-				if strings.Contains(strings.ToUpper(stmt), " ADD COLUMN ") &&
-					(strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") ||
-						strings.Contains(strings.ToLower(err.Error()), "already exists")) {
-					continue
-				}
+			if err := execMigrationStatement(ctx, tx, stmt); err != nil {
 				return fmt.Errorf("migrating schema to %d (%s): %w", v, m.Description, err)
 			}
 		}
@@ -650,6 +827,32 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 		return fmt.Errorf("migrating schema %d to %d: restamping: %w", from, SchemaVersion, err)
 	}
 	return tx.Commit()
+}
+
+// execMigrationStatement runs one of a migration's Statements, passing over
+// an ADD COLUMN whose column the store already has. That statement runs
+// under a savepoint: Postgres aborts the whole transaction on any failed
+// statement (SQLSTATE 25P02 on everything after it), so without rolling
+// back to the savepoint the error it passes over would fail the next
+// statement instead, under that statement's name.
+func execMigrationStatement(ctx context.Context, tx *sql.Tx, stmt string) error {
+	if !strings.Contains(strings.ToUpper(stmt), " ADD COLUMN ") {
+		_, err := tx.ExecContext(ctx, stmt)
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "SAVEPOINT grain_add_column"); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, stmt); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") &&
+			!strings.Contains(strings.ToLower(err.Error()), "already exists") {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT grain_add_column")
+		return err
+	}
+	_, err := tx.ExecContext(ctx, "RELEASE SAVEPOINT grain_add_column")
+	return err
 }
 
 // storeViews names the views the store holds, whichever build made

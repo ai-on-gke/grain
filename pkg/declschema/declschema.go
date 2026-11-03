@@ -595,6 +595,12 @@ func templateSchema() Schema {
 			// work may touch.
 			{Model: "Interactive", Keys: carried("interactive"), Columns: []string{"interactive"}},
 			{Model: "KeepRunning", Keys: carried("keep-running"), Columns: []string{"keep_running"}},
+			// The hostd every task it files starts pinned to
+			// (model.Template.Hostd). Settings only: which machine runs
+			// the work's host side, under whose credentials, is the
+			// deployment's to say -- a repository naming one would be
+			// routing its own work onto somebody's hostd.
+			{Model: "Hostd", Keys: []Key{settingsOnly("hostd", Authority)}, Columns: []string{"hostd"}},
 			{Model: "CustomFields", Keys: carried("custom-fields"), Table: "template_custom_field"},
 
 			// The refusals. Each of these would be perfectly natural to

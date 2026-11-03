@@ -104,7 +104,7 @@ func (c *Client) auditCLIRunChanges(ctx context.Context, before, after map[strin
 	if c.Store == nil {
 		return
 	}
-	user := c.actor(ctx).ID
+	user := c.requestActor(ctx).Actor.ID
 	for _, name := range model.CLIRunFrameworks {
 		was, now := trimCLIRun(before[name]), trimCLIRun(after[name])
 		if was == now {

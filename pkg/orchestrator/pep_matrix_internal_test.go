@@ -363,6 +363,12 @@ func TestLocalPolicyMatrixAtTheDispatchHoldAndBeforeTheSandbox(t *testing.T) {
 			// refused task mints nothing and keeps the hold's reason.
 			var minters []model.CapabilityProvider
 			for _, grant := range task.Grants {
+				// Repository access has no provider to mint it
+				// (model.IsRepoAccessGrant): the policy is all this
+				// matrix asks of it.
+				if model.IsRepoAccessGrant(grant.Capability) {
+					continue
+				}
 				minters = append(minters, &mintCountingCapability{name: grant.Capability})
 			}
 			admitDeps := deps
