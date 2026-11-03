@@ -109,7 +109,7 @@ func cmdHostdsRegister(ctx context.Context, c *ui.HTTPClient, out *printer, args
 		return err
 	}
 	if *tokenFile != "" {
-		if err := os.WriteFile(*tokenFile, []byte(issued.Token+"\n"), 0o600); err != nil {
+		if err := writeTokenFile(*tokenFile, issued.Token); err != nil {
 			return fmt.Errorf("writing -token-file: %w", err)
 		}
 	}
@@ -168,4 +168,22 @@ func printHostds(out *printer, list []ui.HostdView) {
 		sort.Strings(labels)
 		fmt.Printf("%s\towner %s\t%s\t%s\n", h.Name, ownerOrNone(h.Owner), state, strings.Join(labels, ","))
 	}
+}
+
+// writeTokenFile writes token to path readable by its owner alone, even
+// when path already exists with a wider mode (which os.WriteFile keeps).
+func writeTokenFile(path, token string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.WriteString(token + "\n"); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }

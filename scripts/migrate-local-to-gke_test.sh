@@ -388,6 +388,14 @@ migrate --server-url https://grain.example.com/
 check "a --server-url migration needs the identity hostd connects as" 1 "--server-url needs --hostd-owner"
 
 fresh
+migrate --server-url https://grain.example.com/ --hostd-owner 'a\nb@example.com'
+check "an owner with a backslash escape is refused" 1 "--hostd-owner takes a full email address"
+
+fresh
+migrate --server-url https://grain.example.com/ --hostd-owner a@example.com --iap-audience 'id -x'
+check "an audience with whitespace is refused" 1 "--iap-audience takes an IAP OAuth client ID"
+
+fresh
 migrate --server-url https://grain.example.com/ --hostd-owner Hostd@Proj.iam.gserviceaccount.com --iap-audience iap-client.apps.example.com
 check "a --server-url migration completes" 0 "Done." "hostd owner: hostd@proj.iam.gserviceaccount.com"
 lacks "and sets up no model server" "$out" "model-server"

@@ -267,8 +267,16 @@ parse_args() {
   [[ "${VERIFY_TIMEOUT}" =~ ^[0-9]+$ ]] || die "--verify-timeout takes whole seconds, not ${VERIFY_TIMEOUT}"
   [[ "${FORWARD_PORT}" =~ ^[0-9]+$ ]] || die "--forward-port takes a port number, not ${FORWARD_PORT}"
   HOSTD_OWNER="$(printf '%s' "${HOSTD_OWNER}" | tr '[:upper:]' '[:lower:]')"
-  if [[ -n "${HOSTD_OWNER}" && ! "${HOSTD_OWNER}" =~ ^[^@[:space:],]+@[^@[:space:],]+$ ]]; then
+  # The owner goes through awk -v into the manifest, which would expand a
+  # backslash escape, and the audience into a systemd ExecStart line, so
+  # neither may carry a backslash, a quote or whitespace.
+  local owner_re='^[^@[:space:],\\"'"'"']+@[^@[:space:],\\"'"'"']+$'
+  if [[ -n "${HOSTD_OWNER}" && ! "${HOSTD_OWNER}" =~ ${owner_re} ]]; then
     die "--hostd-owner takes a full email address or service account, not ${HOSTD_OWNER}"
+  fi
+  local audience_re='^[^[:space:]\\"'"'"']+$'
+  if [[ -n "${IAP_AUDIENCE}" && ! "${IAP_AUDIENCE}" =~ ${audience_re} ]]; then
+    die "--iap-audience takes an IAP OAuth client ID, not ${IAP_AUDIENCE}"
   fi
   if [[ -n "${SERVER_URL}" && -z "${HOSTD_OWNER}" && "${PRINT_MANIFEST}" != "true" && "${ROLLBACK}" != "true" ]]; then
     die "--server-url needs --hostd-owner <email>: the identity hostd dials in through IAP as (its service account, or the login it runs with); the controller refuses a remote hostd that is not verified as its owner"

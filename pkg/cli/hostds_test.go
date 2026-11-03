@@ -57,6 +57,10 @@ func TestHostdsRegisterAndSetOwner(t *testing.T) {
 	ctx := context.Background()
 
 	tokenFile := filepath.Join(t.TempDir(), "hostd.token")
+	// A token file left world-readable from before is narrowed to 0600.
+	if err := os.WriteFile(tokenFile, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := cmdHostds(ctx, c, &printer{json: true}, []string{"register", "-owner", "Alice@Example.com", "-label", "os=linux", "-token-file", tokenFile, "ws-1"}); err != nil {
 		t.Fatal(err)
 	}
