@@ -49,14 +49,13 @@ test.describe("Sidebar Navigation Restructuring & Foldable Controls", () => {
     const wordmark = aside.getByRole("heading", { name: "grain" });
     await expect(wordmark).toBeVisible();
 
-    // 2. Primary "+ New task" button
-    const newTaskBtn = aside.getByRole("button", { name: "+ New task" });
+    // 2. Primary "+ New task" split button in the shared header rail tray,
+    // aligned on the same horizontal baseline as the brand mark.
+    const globals = page.getByTestId("page-header-globals");
+    const newTaskBtn = globals.getByRole("button", { name: "+ New task" });
     await expect(newTaskBtn).toBeVisible();
 
-    // The primary action and its dropdown share one full-width split button.
-    // Keep the arrow as a compact affordance instead of letting either child
-    // claim the whole row and wrap the task label.
-    const createOptionsBtn = aside.getByRole("button", {
+    const createOptionsBtn = globals.getByRole("button", {
       name: "Create options",
     });
     const [newTaskBox, createOptionsBox] = await Promise.all([
@@ -66,7 +65,7 @@ test.describe("Sidebar Navigation Restructuring & Foldable Controls", () => {
     expect(newTaskBox).not.toBeNull();
     expect(createOptionsBox).not.toBeNull();
     expect(createOptionsBox.width).toBeLessThanOrEqual(40);
-    expect(newTaskBox.width).toBeGreaterThan(createOptionsBox.width * 3);
+    expect(newTaskBox.width).toBeGreaterThan(createOptionsBox.width * 2);
     const newTaskLabelLines = await newTaskBtn.evaluate((button) => {
       const range = document.createRange();
       range.selectNodeContents(button);

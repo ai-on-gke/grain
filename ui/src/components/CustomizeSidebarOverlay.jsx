@@ -41,6 +41,7 @@ import AddIcon from "@mui/icons-material/Add";
 import PaletteOutlinedIcon from "@mui/icons-material/PaletteOutlined";
 import CheckIcon from "@mui/icons-material/Check";
 import FormatColorResetIcon from "@mui/icons-material/FormatColorReset";
+import { NavGlyph } from "./AppIcon.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
 import Overlay from "./Overlay.jsx";
 import {
@@ -362,7 +363,11 @@ export default function CustomizeSidebarOverlay({
                   >
                     <span className="nav-icon" style={iconStyle}>
                       {info.glyph ? (
-                        <ItemGlyph kind={info.glyph} />
+                        item.icon || item.glyph ? (
+                          <ItemGlyph kind={info.glyph} />
+                        ) : (
+                          <NavGlyph kind={info.glyph} />
+                        )
                       ) : (
                         <span
                           className="dot dot-all"

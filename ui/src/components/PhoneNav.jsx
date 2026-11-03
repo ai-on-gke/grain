@@ -13,8 +13,6 @@
 // limitations under the License.
 
 import { useState } from "react";
-import AddIcon from "@mui/icons-material/Add";
-import MenuIcon from "@mui/icons-material/Menu";
 import {
   AppBar,
   Badge,
@@ -25,8 +23,8 @@ import {
   Toolbar,
   Typography,
 } from "@mui/material";
+import AppIcon from "./AppIcon.jsx";
 import GrainMark from "./GrainMark.jsx";
-import ItemGlyph from "./ItemGlyph.jsx";
 import { stateDot } from "./UnbackedStateDot.jsx";
 
 // PhoneNav is what the sidebar becomes on a phone (phone.js): the rail
@@ -90,11 +88,22 @@ export default function PhoneNav({
           borderColor: "divider",
         }}
       >
-        <Toolbar variant="dense" sx={{ gap: 1, minHeight: 52 }}>
+        <Toolbar
+          disableGutters
+          variant="dense"
+          sx={{
+            px: 1.5,
+            gap: 1,
+            minHeight: 56,
+            alignItems: "center",
+          }}
+        >
           <IconButton
-            edge="start"
+            size="small"
+            className="header-control-icon"
             aria-label="Open navigation"
             onClick={() => setOpen(true)}
+            sx={{ color: "text.secondary" }}
           >
             {/* The rail's own marker for the State pane
                 (UnbackedStateDot.jsx: a state repository nobody has a
@@ -111,20 +120,33 @@ export default function PhoneNav({
               overlap="circular"
               invisible={!stateDot(config)}
             >
-              <MenuIcon />
+              <AppIcon name="menu" size={20} />
             </Badge>
           </IconButton>
           {/* Animated while anything is running, exactly as in the rail:
               on a phone this is the only piece of the deployment's live
               state that is always on screen. */}
-          <GrainMark size={24} animated={running} />
+          <Box
+            component="span"
+            className="header-logo-box"
+            data-testid="brand-logo-box"
+          >
+            <GrainMark size={24} animated={running} />
+          </Box>
           <Typography
             component="h1"
             variant="subtitle1"
             fontWeight={600}
             letterSpacing="-0.01em"
             noWrap
-            sx={{ m: 0, flex: 1, minWidth: 0 }}
+            sx={{
+              m: 0,
+              flex: 1,
+              minWidth: 0,
+              lineHeight: 1,
+              display: "flex",
+              alignItems: "center",
+            }}
           >
             grain
           </Typography>
@@ -134,7 +156,7 @@ export default function PhoneNav({
               size="small"
               color="warning"
               title={`Environment: ${config.environmentName}`}
-              sx={{ maxWidth: 110, fontWeight: 600 }}
+              sx={{ maxWidth: 96, fontWeight: 600 }}
             />
           ) : null}
           {/* The alerts bell, on the bar rather than in the drawer with
@@ -144,22 +166,33 @@ export default function PhoneNav({
           {onOpenSettings && (
             <IconButton
               size="small"
+              className="header-control-icon"
               aria-label="Settings"
               aria-pressed={settingsOpen}
               data-testid="phone-settings"
               onClick={onOpenSettings}
-              color={settingsOpen ? "primary" : "inherit"}
+              sx={{
+                color: settingsOpen ? "primary.main" : "text.secondary",
+                bgcolor: settingsOpen ? "action.selected" : "transparent",
+              }}
             >
-              <ItemGlyph kind="settings" size={20} />
+              <AppIcon name="settings" size={18} />
             </IconButton>
           )}
           {onOpenNewTask && (
             <IconButton
-              edge="end"
+              size="small"
+              className="header-control-icon"
               aria-label="New task"
               onClick={onOpenNewTask}
+              sx={{
+                bgcolor: "primary.main",
+                color: "primary.contrastText",
+                borderRadius: 1.5,
+                "&:hover": { bgcolor: "primary.dark" },
+              }}
             >
-              <AddIcon />
+              <AppIcon name="add" size={20} />
             </IconButton>
           )}
         </Toolbar>
