@@ -59,7 +59,7 @@
 // frontend change with no settings key and no migration behind it -- and
 // normalizeView below is what makes a stored value from an older build
 // safe to read back.
-import { STATE_LABELS, STATE_ORDER, displayState } from "./state.js";
+import { DISPLAY_STATE_ORDER, STATE_LABELS, displayState } from "./state.js";
 import { formatDate, formatHour, zoneOffset } from "./time.js";
 
 export const GANTT_STORAGE_KEY = "grain.gantt.view";
@@ -390,7 +390,10 @@ export function laneOf(task, lanes) {
 // declared anywhere, so they are discovered from the tasks themselves.
 //
 // Which means the lane order has to come from somewhere. States take
-// STATE_ORDER, the same order they appear in everywhere else in the UI;
+// DISPLAY_STATE_ORDER, the same order they appear in everywhere else in
+// the UI. Not STATE_ORDER: a state lane is keyed by its display state, so
+// the two asked states share an "asked" lane that STATE_ORDER does not
+// name, and that lane sorted after Closed;
 // everything else is alphabetical, with the "no value" lane last, since
 // a lane of tasks that are missing the thing being grouped by is the
 // footnote and not the headline.
@@ -410,8 +413,8 @@ export function groupIntoLanes(tasks, lanes) {
   const rank =
     lanes === "state"
       ? (l) => {
-          const i = STATE_ORDER.indexOf(l.key);
-          return i < 0 ? STATE_ORDER.length : i;
+          const i = DISPLAY_STATE_ORDER.indexOf(l.key);
+          return i < 0 ? DISPLAY_STATE_ORDER.length : i;
         }
       : null;
   out.sort((a, b) => {

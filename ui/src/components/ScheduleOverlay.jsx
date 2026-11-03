@@ -386,6 +386,7 @@ function ScheduleOverlay({
   const [title, setTitle] = useState(schedule?.title || "");
   const [description, setDescription] = useState(schedule?.description || "");
   const [autoMerge, setAutoMerge] = useState(!!schedule?.autoMerge);
+  const [keepRunning, setKeepRunning] = useState(!!schedule?.keepRunning);
   const [networkAccess, setNetworkAccess] = useState(
     schedule?.networkAccess || "",
   );
@@ -467,6 +468,7 @@ function ScheduleOverlay({
       req.title = title;
       req.description = description;
       req.autoMerge = autoMerge;
+      req.keepRunning = keepRunning;
       req.networkAccess = networkAccess;
       req.nothingNeededAction = nothingNeededAction;
       req.reads = reads;
@@ -995,6 +997,18 @@ function ScheduleOverlay({
                 }
                 label="Auto-merge once checks pass"
                 sx={{ display: "flex", mt: 1 }}
+              />
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    name="keepRunning"
+                    defaultChecked={schedule?.keepRunning}
+                    onChange={(e) => setKeepRunning(e.target.checked)}
+                  />
+                }
+                label="Keep running"
+                title="Immediately restart every task this schedule files when its run exits, instead of completing or parking it."
+                sx={{ display: "flex" }}
               />
               <TextField
                 select

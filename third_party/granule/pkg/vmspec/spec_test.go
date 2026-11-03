@@ -997,3 +997,17 @@ func TestMemoryLimitAndOOMScoreAdj(t *testing.T) {
 		t.Errorf("OOMScoreAdj > 1000: Validate() = %v, want oom-score-adj error", err)
 	}
 }
+
+func TestContainerMemoryLimitMBGrowsWithTheGuest(t *testing.T) {
+	for _, tc := range []struct{ guest, want int }{
+		{256, 768},
+		{2048, 2560},
+		{8192, 8704},
+		{16384, 17408},
+		{65536, 69632},
+	} {
+		if got := (VMSpec{MemoryMB: tc.guest}).ContainerMemoryLimitMB(); got != tc.want {
+			t.Errorf("ContainerMemoryLimitMB() for a %d MiB guest = %d, want %d", tc.guest, got, tc.want)
+		}
+	}
+}

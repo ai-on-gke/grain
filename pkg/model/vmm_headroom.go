@@ -20,11 +20,12 @@ package model
 //
 // The headroom is not only cloud-hypervisor's own few hundred MiB. Its
 // disk writes go through host page cache charged to the same cgroup, and
-// there is no balloon, so a guest that has filled its RAM with page cache
-// and then writes a multi-GB file (pack-guest's mke2fs) pushes the
-// cgroup past guest + 512 MiB -- granule's own default -- and the kernel
-// OOM-kills the VMM. The guest just sees its connection close. Dirty
-// pages the cgroup has charged are written back and reclaimed within its
+// (until gke-labs/granule#238) there was no balloon, so a guest that has
+// filled its RAM with page cache and then writes a multi-GB file
+// (pack-guest's mke2fs) pushes the cgroup past guest + 512 MiB --
+// granule's default until #238 made it guest + max(512 MiB, guest/16) --
+// and the kernel OOM-kills the VMM. The guest just sees its connection
+// close. Dirty pages the cgroup has charged are written back and reclaimed within its
 // limit, but only if the limit leaves room for the writeback in flight;
 // a quarter of the guest does on every shape grain builds, and the 1 GiB
 // floor covers the small ones where a quarter would not.

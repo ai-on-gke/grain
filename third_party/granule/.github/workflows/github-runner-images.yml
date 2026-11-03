@@ -1,0 +1,121 @@
+name: GitHub runner images
+
+# The GitHub Actions port of .grain/workflows/github-runner-images.yml,
+# gated on a self-hosted builder; see docs/github-actions-ci.md.
+
+on:
+  schedule:
+    # GitHub refreshes the hosted images weekly. Build after that cadence
+    # rather than putting three multi-hour, 75 GB Packer jobs on every
+    # Granule commit.
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+    inputs:
+      image:
+        description: Image to build
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - ubuntu-22.04
+          - ubuntu-24.04
+          - ubuntu-26.04
+          - ubuntu-slim
+      runner_images_ref:
+        description: actions/runner-images commit, tag, or branch
+        required: true
+        default: main
+        type: string
+
+concurrency:
+  group: github-runner-images-${{ github.event_name }}-${{ inputs.image || 'all' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # These builds need roughly 250 GB of scratch space, which no hosted
+  # runner has (ubuntu-latest has about 14 GB free), so they run only on a
+  # self-hosted image builder, and only once the operator says one exists:
+  # vars.ENABLE_SELF_HOSTED_TESTS set to "true". vars.SELF_HOSTED_RUNNER
+  # may name its labels as a JSON array; the default is the label set this
+  # workflow has always asked for. Until then this job says so and "build"
+  # is skipped rather than queued forever for a runner nobody registered.
+  self-hosted:
+    name: self-hosted image builder
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+    steps:
+      - name: is a self-hosted image builder enabled
+        id: check
+        env:
+          ENABLED: ${{ vars.ENABLE_SELF_HOSTED_TESTS }}
+        run: |
+          if [ "$ENABLED" = true ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            msg="vars.ENABLE_SELF_HOSTED_TESTS is not \"true\", so the runner image builds, which need a ~250 GB self-hosted builder, are skipped. See docs/github-actions-ci.md."
+            echo "::notice title=runner image builds skipped::$msg"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: [self-hosted]
+    if: needs.self-hosted.outputs.enabled == 'true'
+    runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER || '["self-hosted","linux","x64","kontur-image-builder"]') }}
+    permissions:
+      contents: read
+      # azure/login's OIDC exchange, and the push to GHCR.
+      id-token: write
+      packages: write
+    timeout-minutes: 720
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.image != 'all' && format('[\"{0}\"]', inputs.image) || '[\"ubuntu-22.04\",\"ubuntu-24.04\",\"ubuntu-26.04\",\"ubuntu-slim\"]') }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Log in to Azure
+        if: matrix.image != 'ubuntu-slim'
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish ${{ matrix.image }}
+        env:
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RUNNER_IMAGE_RESOURCE_GROUP }}
+          AZURE_LOCATION: ${{ vars.AZURE_RUNNER_IMAGE_LOCATION }}
+          # The scheduled build follows actions/runner-images' main on
+          # purpose, unlike the Dockerfile's digest-pinned bases. These
+          # images exist to be what GitHub's hosted runners are, and that
+          # repository is the definition GitHub builds those from: the
+          # party who can move its main is the party whose runners this
+          # mirrors, so a pin would put no one new out of reach -- it
+          # would only make the mirror lag. What is pinned is the record:
+          # build.sh resolves the ref to a commit, labels the image with
+          # it (RUNNER_IMAGES_REVISION) and pushes an immutable tag
+          # ending in that commit, so any published image names exactly
+          # what it was built from. Dispatch with runner_images_ref set to
+          # a commit or release tag to rebuild a known state.
+          RUNNER_IMAGES_REF: ${{ inputs.runner_images_ref || 'main' }}
+          OUTPUT_IMAGE: ghcr.io/${{ github.repository }}/github-${{ matrix.image }}:latest
+          PUSH: "true"
+          IMAGE: ${{ matrix.image }}
+        run: deploy/github-runner-images/build.sh "$IMAGE"

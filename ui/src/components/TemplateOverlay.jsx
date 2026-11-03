@@ -193,6 +193,9 @@ function TemplateOverlay({
       // Every task this template files is a live chat
       // (model.Template.Interactive).
       interactive: form.elements.interactive.checked,
+      // Every task this template files restarts when its run exits
+      // (model.Template.KeepRunning), as the new-task form's own box.
+      keepRunning: form.elements.keepRunning.checked,
       // How much of the internet the sandbox of every task this
       // template files may reach (grain/task-269). "" is a template
       // that fixes nothing, so each firing takes the deployment's own
@@ -446,6 +449,17 @@ function TemplateOverlay({
               />
             }
             label="Interactive (agent can chat with you)"
+            sx={{ display: "flex" }}
+          />
+          <FormControlLabel
+            control={
+              <Checkbox
+                name="keepRunning"
+                defaultChecked={template?.keepRunning}
+              />
+            }
+            label="Keep running"
+            title="Immediately restart every task this template files when its run exits, instead of completing or parking it."
             sx={{ display: "flex" }}
           />
           <TextField
