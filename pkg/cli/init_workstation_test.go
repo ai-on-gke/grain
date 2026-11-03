@@ -136,9 +136,22 @@ func TestTheStarterPolicyFailsClosed(t *testing.T) {
 	// grain grants grain-ci to every task on a repository using grain
 	// CI; refusing it held every such task forever (grain/task-4160).
 	ownWithCI := own
-	ownWithCI.Grants = []model.Grant{{Capability: grainci.CapabilityName, Via: model.GrantByDefault}}
+	ownWithCI.Grants = []model.Grant{{Capability: grainci.Grant, Via: model.GrantByDefault}}
 	if err := p.Check(ownWithCI, model.NetworkNone); err != nil {
 		t.Errorf("the owner's own task on a grain CI repository was refused: %v", err)
+	}
+	// The deployment's own state repository is this machine's too: the
+	// Director reads it and a config-writing session writes it.
+	director := model.Task{Creator: "me@example.com", NetworkAccess: model.NetworkNone, Reads: []model.RepoRef{model.ConfigRepo()}}
+	if err := p.Check(director, model.NetworkNone); err != nil {
+		t.Errorf("a task reading grain/config was refused: %v", err)
+	}
+	writer := model.Task{Creator: "me@example.com", NetworkAccess: model.NetworkNone, Writes: []model.WriteTarget{{Repo: model.ConfigRepo()}}}
+	if err := p.Check(writer, model.NetworkNone); err != nil {
+		t.Errorf("a repo-less grain/config writer was refused: %v", err)
+	}
+	if got := withConfigRepo([]string{"acme/widgets", "grain/config"}); len(got) != 2 {
+		t.Errorf("grain/config named twice: %v", got)
 	}
 	for name, task := range map[string]model.Task{
 		"another repository":  {Target: &model.RepoRef{Owner: "acme", Name: "other"}, Creator: "me@example.com"},
@@ -166,7 +179,7 @@ func TestTheStarterPolicyFailsClosed(t *testing.T) {
 	if err := withCaps.Check(model.Task{Target: widgets, Creator: "me", Grants: []model.Grant{{Capability: "self-debug"}}}, ""); err == nil {
 		t.Error("a capability nobody named was allowed")
 	}
-	if err := withCaps.Check(model.Task{Target: widgets, Creator: "me", Grants: []model.Grant{{Capability: grainci.CapabilityName}}}, ""); err != nil {
+	if err := withCaps.Check(model.Task{Target: widgets, Creator: "me", Grants: []model.Grant{{Capability: grainci.Grant}}}, ""); err != nil {
 		t.Errorf("naming a capability took grain-ci away: %v", err)
 	}
 }

@@ -108,7 +108,7 @@ func TestACandidateMergesBehindAMainHeadStillInCIWithBatchingOff(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	syncWithCI(t, ctx, store, fix.client, runner, baseTime.Add(time.Minute))
+	syncWithCIOneMergePerCycle(t, ctx, store, fix.client, runner, baseTime.Add(time.Minute))
 
 	if mergedBranch(fix.sim, portBranch) {
 		t.Fatal("the main change merged while its own CI was still running")
@@ -171,7 +171,7 @@ func TestAnUnreadableMainHeadHoldsOnlyMain(t *testing.T) {
 
 	// The unreadable head is reported, and the cycle carries on.
 	if err := orchestrator.SyncPullRequestsGuarding(ctx, store, client, nil,
-		orchestrator.StateRepoGate{CI: runner}, model.DefaultMaxMergesPerRepo,
+		orchestrator.StateRepoGate{CI: runner}, 1,
 		baseTime.Add(time.Minute)); err == nil {
 		t.Fatal("a pull request nobody could read was not reported")
 	}

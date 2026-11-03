@@ -386,6 +386,9 @@ func (s *Store) CreateQualificationRun(ctx context.Context, candidate Candidate,
 				if err := putTask(ctx, tx, task); err != nil {
 					return err
 				}
+				if err := putTaskHostd(ctx, tx, id, comp.Hostd); err != nil {
+					return err
+				}
 				if _, err := tx.ExecContext(ctx,
 					"INSERT INTO `qualification_task` "+
 						"(`run_id`,`task_id`,`template_id`,`template_name`,`instance_index`,`repeat_count`) "+

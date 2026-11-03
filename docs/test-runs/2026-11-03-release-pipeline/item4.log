@@ -1,0 +1,28 @@
+== 4a the route with short_soak_ok, as the person the access code is
+202 {"version":"v2.8.0","approve":true,"shortSoakOk":true,"run":{"id":"fake-ci-1","key":"","repo":"ai-on-gke/grain","ref":"main","event":"workflow_dispatch","requestedBy":"debian","startedAt":"2026-11-03T06:22:22.856999077Z","jobs":[{"workflow":"","workflowPath":".grain/workflows/promote-release.yml","jobId":".grain/workflows/promote-release.yml:promote","name":".grain/workflows/promote-release.yml:pr
+== 4b reject with short_soak_ok is refused
+400 {"error":"short_soak_ok is an approval's answer: rejecting v2.8.0 needs no soak"}
+== 4c grain release approve -short-soak-ok v2.9.0
+approved v2.9.0, short soak accepted: promote-release is tagging it and moving latest onto it
+started run fake-ci-2: ai-on-gke/grain at main
+  .grain/workflows/promote-release.yml:promote
+
+follow it with "grain ci watch fake-ci-2", read it with "grain ci show fake-ci-2",
+or cancel it with "grain ci cancel fake-ci-2"
+   exit 0
+== 4d grain release reject -short-soak-ok v2.9.0 (refused by the CLI)
+grain: -short-soak-ok is for grain release approve
+   exit 1
+== 4e the promote-release runs the decisions started (GRAIN_CI_RELEASE_SHORT_SOAK_OK on each)
+200 
+== 4g a patch release the train stages (vX.Y.Z-pending, Z >= 1)
+202 {"version":"v3.1.1","approve":true,"run":{"id":"fake-ci-3","key":"","repo":"ai-on-gke/grain","ref":"main","event":"workflow_dispatch","requestedBy":"debian","startedAt":"2026-11-03T06:22:23.010489124Z","jobs":[{"workflow":"","workflowPath":".grain/workflows/promote-release.yml","jobId":".grain/workflows/promote-release.yml:promote","name":".grain/workflows/promote-release.yml:promote","key":"","st
+approved v3.1.1: promote-release is tagging it and moving latest onto it
+started run fake-ci-4: ai-on-gke/grain at main
+  .grain/workflows/promote-release.yml:promote
+
+follow it with "grain ci watch fake-ci-4", read it with "grain ci show fake-ci-4",
+or cancel it with "grain ci cancel fake-ci-4"
+   exit 0
+== 4h not a version
+400 {"error":"\"latest\" is not a release a person is asked about: name it vX.Y.Z"}

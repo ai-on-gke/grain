@@ -17,14 +17,16 @@ package ui
 // The hostd registry's API (model.Hostd): Settings -> Hostds lists the
 // hostds this daemon takes host work through, creates one and shows its
 // token once, rotates and revokes tokens, and sets a hostd's owner and
-// labels. A hostd dialing in is named by its token alone
-// (hostd.Remote.ServeHTTP).
+// labels. A hostd dialing in is named by its token
+// (hostd.Remote.ServeHTTP); one dialing in through IAP or another
+// verifier's proxy must also be verified as its owner.
 
 import (
 	"context"
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/hostd"
@@ -262,4 +264,26 @@ func (c *Client) auditHostd(ctx context.Context, name, summary string) {
 	}); err != nil {
 		log.Printf("grain hostd: recording %q in the config audit: %v", summary, err)
 	}
+}
+
+// ListHostds is GET /api/hostds.
+func (c *HTTPClient) ListHostds(ctx context.Context) ([]HostdView, error) {
+	var out []HostdView
+	err := c.do(ctx, http.MethodGet, "/api/hostds", nil, &out)
+	return out, err
+}
+
+// CreateHostd is POST /api/hostds: the new hostd and its token, shown
+// this once.
+func (c *HTTPClient) CreateHostd(ctx context.Context, req CreateHostdRequest) (IssuedHostdToken, error) {
+	var out IssuedHostdToken
+	err := c.do(ctx, http.MethodPost, "/api/hostds", req, &out)
+	return out, err
+}
+
+// UpdateHostd is PATCH /api/hostds/{name}.
+func (c *HTTPClient) UpdateHostd(ctx context.Context, name string, req UpdateHostdRequest) (model.Hostd, error) {
+	var out model.Hostd
+	err := c.do(ctx, http.MethodPatch, "/api/hostds/"+url.PathEscape(name), req, &out)
+	return out, err
 }

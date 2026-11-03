@@ -1,0 +1,23 @@
+# Run 1 (before 7cacce12): the daemon's proxy log for the first 18 greps of sweep.sh's walk,
+# alternating src://pkg and src:// for orchestrator, pkgcache, policy, ... The gap between
+# consecutive lines is one grep's time: ~16s for src://pkg, ~50s for src://.
+2026/11/03 05:06:13 grain: sandbox proxy call run 2-1 -> grain_ls (status 200, 315 bytes)
+2026/11/03 05:06:13 grain: sandbox proxy call run 2-1 -> grain_ls (status 200, 754 bytes)
+2026/11/03 05:06:13 grain: sandbox proxy call run 2-1 -> grain_ls (status 404, 22 bytes)
+2026/11/03 05:06:29 grain: sandbox proxy call run 2-1 -> grain_grep (status 200, 119 bytes)
+2026/11/03 05:07:21 grain: sandbox proxy call run 2-1 -> grain_grep (status 200, 123 bytes)
+2026/11/03 05:07:38 grain: sandbox proxy call run 2-1 -> grain_grep (status 200, 60 bytes)
+2026/11/03 05:08:29 grain: sandbox proxy call run 2-1 -> grain_grep (status 200, 64 bytes)
+2026/11/03 05:08:45 grain: sandbox proxy call run 2-1 -> grain_grep (status 200, 71 bytes)
+2026/11/03 05:09:38 grain: sandbox proxy call run 2-1 -> grain_grep (status 200, 75 bytes)
+2026/11/03 05:09:54 grain: sandbox proxy call run 2-1 -> grain_grep (status 200, 44 bytes)
+2026/11/03 05:10:41 grain: sandbox proxy call run 2-1 -> grain_grep (status 200, 48 bytes)
+2026/11/03 05:10:57 grain: sandbox proxy call run 2-1 -> grain_grep (status 200, 53 bytes)
+2026/11/03 05:11:44 grain: sandbox proxy call run 2-1 -> grain_grep (status 200, 57 bytes)
+2026/11/03 05:11:59 grain: sandbox proxy call run 2-1 -> grain_grep (status 200, 56 bytes)
+2026/11/03 05:12:46 grain: sandbox proxy call run 2-1 -> grain_grep (status 200, 60 bytes)
+2026/11/03 05:13:02 grain: sandbox proxy call run 2-1 -> grain_grep (status 200, 43 bytes)
+2026/11/03 05:13:49 grain: sandbox proxy call run 2-1 -> grain_grep (status 200, 47 bytes)
+2026/11/03 05:14:05 grain: sandbox proxy call run 2-1 -> grain_grep (status 200, 74 bytes)
+2026/11/03 05:14:53 grain: sandbox proxy call run 2-1 -> grain_grep (status 200, 78 bytes)
+2026/11/03 05:15:09 grain: sandbox proxy call run 2-1 -> grain_grep (status 200, 86 bytes)

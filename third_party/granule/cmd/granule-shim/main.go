@@ -477,9 +477,8 @@ func forwardWorkloadOutput(ctx context.Context, vmExited <-chan struct{}, cfg co
 //
 // The stdin is read once, to its end: a FIFO is waited on for its writer,
 // and that writer closing it is the container's end-of-file. The resize
-// FIFO is waited on for its first writer and then held open, with a write
-// end of the shim's own, so that a caller may open it again for each size
-// without ever finding its reader gone; a regular file is read once.
+// FIFO is kept open until ctx is cancelled, so that a caller may open it
+// for each size, writing whole lines; a regular file is read once.
 func workloadInput(ctx context.Context, cfg config.Config) *workloadio.HostInput {
 	if cfg.WorkloadStdin == "" && cfg.WorkloadResize == "" {
 		return nil
@@ -509,23 +508,28 @@ func workloadInput(ctx context.Context, cfg config.Config) *workloadio.HostInput
 				}
 				return
 			}
+			defer f.Close()
 			if st, err := f.Stat(); err == nil && st.Mode()&os.ModeNamedPipe != 0 {
-				// Reopening the FIFO after each writer's close left a gap: a
-				// writer opening it after this end read EOF but before it
-				// closed found a reader, which then closed under it, and its
-				// size was lost to EPIPE. Holding a write end here means this
-				// end never reads EOF, so it never closes until ctx is done.
-				hold, err := os.OpenFile(cfg.WorkloadResize, os.O_WRONLY, 0)
+				// Hold a writer of our own on the FIFO, so that its
+				// writers closing it is no end-of-file and the pipe
+				// lasts from one writer to the next: closing and
+				// reopening the reader between them would lose what
+				// a writer that opened it meanwhile wrote, or fail
+				// its write with EPIPE. Closing both ends when ctx is
+				// cancelled ends the read.
+				w, err := os.OpenFile(cfg.WorkloadResize, os.O_WRONLY, 0)
 				if err != nil {
 					log.Printf("cannot hold the workload's terminal sizes open: %v", err)
-				} else {
-					defer hold.Close()
+					return
 				}
-				stop := context.AfterFunc(ctx, func() { f.Close() })
+				defer w.Close()
+				stop := context.AfterFunc(ctx, func() {
+					w.Close()
+					f.Close()
+				})
 				defer stop()
 			}
 			readSizes(f, in)
-			f.Close()
 		}()
 	}
 	return in

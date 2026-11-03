@@ -293,6 +293,20 @@ func (c *CapabilityCatalogue) judgeServerRef(g string, gc GrantContext) (bool, e
 	if spec, err := CapabilityGrantSpec(g); err == nil {
 		ref, with = spec.Capability, spec.With
 	}
+	unnamedGCPKey := false
+	if ref == GCPKeyRef {
+		unnamedGCPKey = GCPKeySetUnnamed(g)
+		eff := make(map[string]any, len(with)+1)
+		for k, v := range with {
+			eff[k] = v
+		}
+		if old, _ := eff["account"].(string); old != "" {
+			eff["permission_set"] = old
+		} else if _, has := eff["permission_set"]; !has {
+			eff["permission_set"] = ""
+		}
+		with = eff
+	}
 	id, method, _ := strings.Cut(ref, "#")
 	srv, ok := c.server(id)
 	if !ok {
@@ -328,7 +342,14 @@ func (c *CapabilityCatalogue) judgeServerRef(g string, gc GrantContext) (bool, e
 			}
 		}
 	}
-	return r.judge(ref, gc, with)
+	person, err := r.judge(ref, gc, with)
+	if err != nil {
+		return false, err
+	}
+	if unnamedGCPKey && r != nil && len(r.RequiresPersonWhen["permission_set"]) > 0 {
+		person = true
+	}
+	return person, nil
 }
 
 func (c *CapabilityCatalogue) judgeAPI(g string, gc GrantContext) (bool, error) {
@@ -360,7 +381,18 @@ func (c *CapabilityCatalogue) judgeAPI(g string, gc GrantContext) (bool, error) 
 // finding 5; design/design/config-repo-settings.design.md §3.4.1).
 func (c *CapabilityCatalogue) judgeRetiredInProcess(g string, gc GrantContext) (bool, error) {
 	person := false
-	for _, legacy := range retiredInProcessNames(g) {
+	names := retiredInProcessNames(g)
+	if GCPKeySetUnnamed(g) {
+		var extra []string
+		for k := range c.InProcess {
+			if strings.HasPrefix(k, "gcp-key:") && !slices.Contains(names, k) {
+				extra = append(extra, k)
+			}
+		}
+		sort.Strings(extra)
+		names = append(names, extra...)
+	}
+	for _, legacy := range names {
 		entry, key, ok := c.inProcessEntry(legacy)
 		if !ok {
 			continue
@@ -453,6 +485,20 @@ func retiredInProcessNames(g string) []string {
 	for legacy, tos := range legacyGrantMultiReplacements {
 		if slices.Contains(tos, grant) {
 			out = append(out, legacy)
+		}
+	}
+	if set, ok := ParseGCPKeyServerGrant(grant); ok {
+		if !slices.Contains(out, "gcp-key") {
+			out = append(out, "gcp-key")
+		}
+		if set != "" {
+			named := GCPKeyCapability(set)
+			if !slices.Contains(out, named) {
+				out = append(out, named)
+			}
+			if set == GCPKeyDefaultPermissionSet && !slices.Contains(out, "gcp-key:default") {
+				out = append(out, "gcp-key:default")
+			}
 		}
 	}
 	sort.Strings(out)

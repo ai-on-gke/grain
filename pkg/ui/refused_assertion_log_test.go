@@ -63,3 +63,43 @@ func TestRefusedAssertionLoggedOncePerKindNotOncePerAudience(t *testing.T) {
 		t.Errorf("forged assertion logged %d times, want once:\n%s", n, logs.String())
 	}
 }
+
+// TestRefusedAssertionForOwnAudienceDoesNotSayToSetTheAudience pins the
+// 2026-11-03 IAP deployment walkthrough's F2: an expired or forged
+// assertion for the audience this daemon already checks was logged with
+// "set -ui-iap-audience ... to match", sending the operator after a
+// setting that was already right.
+func TestRefusedAssertionForOwnAudienceDoesNotSayToSetTheAudience(t *testing.T) {
+	logs := ui.LogBufferForTest(t)
+	priv, pemStr := generateECDSATestKey(t)
+	assertionKeys(t, priv, pemStr, true)
+	// A second audience, so the one assertions carry is one of several and
+	// the dedup key (issuer, audience, kind) is not one an earlier test used.
+	const own = "/projects/111/global/backendServices/222"
+	ui.SetIAPAudience(own + "," + tunnelAudience)
+	other, _ := generateECDSATestKey(t)
+
+	srv, client := testServer(t)
+	client.Config.AllowedPrincipals = []string{"user:alice@example.com"}
+
+	forged := signIAPToken(t, other, tunnelKid, own, "alice@example.com", "s", ui.GoogleIAPIssuer, time.Now().Add(5*time.Minute))
+	rec := serveFrom(srv, "203.0.113.20:443", http.MethodGet, "/api/tasks", "", map[string]string{ui.IAPAssertionHeader: forged})
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("forged: got %d, want 401: %s", rec.Code, rec.Body)
+	}
+	var line string
+	for _, l := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(l, own) && strings.Contains(l, "token signature is invalid") {
+			line = l
+		}
+	}
+	if line == "" {
+		t.Fatalf("no refused-assertion line for the forged assertion; log:\n%s", logs.String())
+	}
+	if strings.Contains(line, "set -ui-iap-audience") {
+		t.Errorf("forged assertion for the configured audience told the operator to set it:\n%s", line)
+	}
+	if !strings.Contains(line, "this deployment's own") || !strings.Contains(line, "did not sign") {
+		t.Errorf("line does not say the audience is this deployment's own and the issuer did not sign it:\n%s", line)
+	}
+}

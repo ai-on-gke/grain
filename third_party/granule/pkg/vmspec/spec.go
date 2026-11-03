@@ -147,7 +147,8 @@ type VMSpec struct {
 	// (memory.max, with memory.swap.max bounded to 0 via --memory-swap
 	// equal to --memory). Zero derives ContainerMemoryLimitMB() as the
 	// guest memory ceiling (max(MemoryMB, MemoryMaxMB)) plus
-	// VMMMemoryOverheadMB (512 MiB) whenever guest memory is set.
+	// ContainerMemoryHeadroomMB of it (at least 512 MiB) whenever guest
+	// memory is set.
 	MemoryLimitMB int `json:"memoryLimitMB,omitempty"`
 
 	// OOMScoreAdj is the host oom_score_adj applied to the VM container or
@@ -390,16 +391,41 @@ const (
 	DefaultCPUs     = 2
 	DefaultMemoryMB = 2048
 
-	// VMMMemoryOverheadMB is the host/container cgroup memory headroom (in MiB)
-	// added on top of the guest's memory ceiling (max(MemoryMB, MemoryMaxMB))
-	// for cloud-hypervisor / VMM overhead when MemoryLimitMB is not explicitly
-	// set (matching the 512 MiB overhead in deploy/k8s/gke-pod-example.yaml).
+	// VMMMemoryOverheadMB is the least host/container cgroup memory
+	// headroom (in MiB) added on top of the guest's memory ceiling
+	// (max(MemoryMB, MemoryMaxMB)) when MemoryLimitMB is not explicitly
+	// set (matching the 512 MiB overhead in deploy/k8s/gke-pod-example.yaml);
+	// a guest over 8 GiB gets a sixteenth of its memory instead. See
+	// ContainerMemoryHeadroomMB.
 	VMMMemoryOverheadMB = 512
 
 	// DefaultOOMScoreAdj is the default host/container oom_score_adj for a VM
 	// so the kernel OOM killer picks a sandbox VM before host daemons (-900).
 	DefaultOOMScoreAdj = 500
 )
+
+// ContainerMemoryHeadroomMB is the memory a VM's container needs beyond
+// the guest's own RAM: cloud-hypervisor's heap and threads, the kernel's
+// page tables and KVM state for guestMemoryMB of guest memory, granule's
+// own processes (the shim, an exec or cp session, the memory agent
+// listener) and whatever host page cache the VMM's disk I/O still goes
+// through -- none, for a disk attached direct=on (config's
+// CHV_DISK_DIRECT), but a read-only image and a disk whose filesystem
+// cannot take O_DIRECT are still cached.
+//
+// Measured (test/oom-pagecache.sh, a 4 GiB guest filled with page cache
+// and then writing 6 GB), the container's peak was the guest's RAM plus
+// about 50 MiB with direct I/O and the free-page-reporting balloon on;
+// without them it reached whatever limit it was given. The floor of 512
+// MiB (VMMMemoryOverheadMB) leaves room for an exec session's buffers and a buffered disk, and
+// the proportional part for the page tables and per-page KVM state that
+// grow with the guest, which a flat number does not.
+func ContainerMemoryHeadroomMB(guestMemoryMB int) int {
+	if h := guestMemoryMB / 16; h > VMMMemoryOverheadMB {
+		return h
+	}
+	return VMMMemoryOverheadMB
+}
 
 // EffectiveOOMScoreAdj returns the oom_score_adj to apply to the VM container
 // or process, defaulting to DefaultOOMScoreAdj (500) when unset (0).
@@ -413,7 +439,8 @@ func (s VMSpec) EffectiveOOMScoreAdj() int {
 // ContainerMemoryLimitMB returns the cgroup memory limit in MiB for the VM
 // container or process. When MemoryLimitMB is explicitly set (> 0), it is
 // returned directly; otherwise, when guest memory is positive, it returns the
-// guest memory ceiling (max(MemoryMB, MemoryMaxMB)) plus VMMMemoryOverheadMB.
+// guest memory ceiling (max(MemoryMB, MemoryMaxMB)) plus
+// ContainerMemoryHeadroomMB of it.
 func (s VMSpec) ContainerMemoryLimitMB() int {
 	if s.MemoryLimitMB > 0 {
 		return s.MemoryLimitMB
@@ -423,7 +450,7 @@ func (s VMSpec) ContainerMemoryLimitMB() int {
 		guestMB = s.MemoryMaxMB
 	}
 	if guestMB > 0 {
-		return guestMB + VMMMemoryOverheadMB
+		return guestMB + ContainerMemoryHeadroomMB(guestMB)
 	}
 	return 0
 }

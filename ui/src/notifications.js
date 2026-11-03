@@ -69,6 +69,18 @@ export function notificationAlerts(notifications) {
         scope: { kind: "deployment" },
         since: n.raisedAt,
         actions: [
+          // The task the notification is about -- a red base branch's
+          // repair -- as the Inbox's row offers it ("Open task"); its
+          // body names it only as a markdown link the bell draws as text.
+          ...(n.taskId
+            ? [
+                {
+                  kind: "open-task",
+                  label: `Open #${n.taskId}`,
+                  taskId: n.taskId,
+                },
+              ]
+            : []),
           ...(release
             ? [
                 {
@@ -150,8 +162,16 @@ export async function decideRelease(release, approve) {
 
 // notificationSentence is a notification's body as one line under its
 // title, with how often it has been raised when that is more than once.
+// A body is written as markdown (the base-branch reconciler's names the
+// branch as `main` and its repair as [Task #5](/tasks/5)), but the bell
+// and the Inbox draw this line as text, so a link is reduced to its text
+// and inline code to its contents rather than shown as markup.
 export function notificationSentence(n) {
-  const body = (n.body || "").trim().split("\n")[0];
+  const body = (n.body || "")
+    .trim()
+    .split("\n")[0]
+    .replace(/\[([^\]\n]+)\]\([^)\s]+\)/g, "$1")
+    .replace(/`([^`\n]+)`/g, "$1");
   const again = n.raiseCount > 1 ? ` Raised ${n.raiseCount} times.` : "";
   return `${body || n.subject}${again}`;
 }

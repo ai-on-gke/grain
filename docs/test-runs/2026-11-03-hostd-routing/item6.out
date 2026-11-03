@@ -1,0 +1,15 @@
+=== item 6: a usage limit on ws-a's ambient login pauses ws-a only
+06:39:12 {"id":"16","state":"queued","pin":"ws-a","activity":null,"attempts":[]}
+06:39:14 {"id":"16","state":"queued","pin":"ws-a","activity":"waiting: model fake-agy-model on connection \"agy-ambient\" is paused after a usage limit -- the task is pinned to fake-agy-model on connection \"agy-ambient\"; it does not fall back","attempts":[{"outcome":"paused","hostd":"ws-a"}]}
+scope_key                                         connection_id           model           until_at                               
+------------------------------------------------  ----------------------  --------------  ---------------------------------------
+connection|agy-ambient@hostd/ws-a|fake-agy-model  agy-ambient@hostd/ws-a  fake-agy-model  2026-11-03 08:39:14.554823234 +0000 UTC
+Settings -> Models pauses (API):
+[]
+06:39:15 {"id":"18","state":"queued","pin":"ws-b","activity":null,"attempts":[]}
+06:39:18 {"id":"18","state":"running","pin":"ws-b","activity":null,"attempts":[{"outcome":null,"hostd":null}]}
+06:39:18 {"id":"18","state":"awaiting_reply","pin":"ws-b","activity":null,"attempts":[{"outcome":"succeeded","hostd":"ws-b"}]}
+06:39:18 {"id":"19","state":"awaiting_reply","pin":null,"activity":null,"attempts":[{"outcome":"succeeded","hostd":null}]}
+06:39:18 {"id":"17","state":"queued","pin":"ws-a","activity":"waiting: model fake-agy-model on connection \"agy-ambient\" is paused after a usage limit -- the task is pinned to fake-agy-model on connection \"agy-ambient\"; it does not fall back","attempts":[]}
+ws-b ran in: ws-b/home/.grain/hostd-stage/sessions/antigravity/18; local ran in: daemon/state/agent-sessions/antigravity/19
+./items2-6.sh: line 78: t2a: unbound variable

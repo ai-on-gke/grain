@@ -200,6 +200,10 @@ type GranuleConfig struct {
 	DefaultCPUs     int
 	DefaultMemoryMB int
 	DefaultDiskGB   int
+	// HostMemoryMB is this host's total memory, the cap on every VM's
+	// cgroup memory limit (GranuleMemoryLimitMB). Zero is unknown and
+	// caps nothing.
+	HostMemoryMB int
 	// DefaultNetworkAccess seeds the deployment-wide network a run that
 	// asked for none of its own gets (model.Config.NetworkAccess,
 	// grain/task-269), exactly as the three defaults above seed the
@@ -339,10 +343,22 @@ func (c GranuleConfig) readyPollInterval() time.Duration {
 // so the conversion lives at the one place they meet (createArgs).
 const mibPerGiB = 1024
 
-// GranuleVMMMemoryOverheadMB is the host cgroup memory headroom (in MiB)
-// added to a sandbox's guest MemoryMB for cloud-hypervisor / qemu overhead
-// when sizing the VM container's cgroup memory limit (-memory-limit-mb).
-const GranuleVMMMemoryOverheadMB = 512
+// GranuleMemoryLimitMB is the cgroup memory limit (-memory-limit-mb, or
+// a kubernetes-granule pod's memory limit) for a VM whose guest has
+// guestMB of RAM: the guest plus model.DefaultVMMHeadroom -- the larger
+// of a quarter of the guest and 1 GiB -- capped at capMB, the host's or
+// the largest node's memory, when that is known (zero is unknown).
+//
+// It used to be the guest plus a flat 512 MiB, granule's default then,
+// and an IO-heavy guest that filled its RAM with page cache and then
+// wrote a multi-GB file had its VMM OOM-killed from the host: the VMM's
+// disk writes go through host page cache charged to the same cgroup,
+// and there is no balloon to give guest memory back. The budget charges
+// the same headroom (model.Budget.VMMHeadroom), so the larger limit
+// never oversubscribes a host.
+func GranuleMemoryLimitMB(guestMB, capMB int) int {
+	return model.DefaultVMMHeadroom().LimitMB(guestMB, capMB)
+}
 
 // GranuleOOMScoreAdj is the positive oom_score_adj passed on every
 // `granule vm create` so the kernel OOM killer picks a sandbox VM
@@ -456,7 +472,7 @@ func (c GranuleConfig) createArgs(shape Shape) []string {
 	// shrink one, so a VM never comes up smaller than this.
 	args = append(args,
 		"-disk-size-mb", strconv.Itoa(shape.DiskGB*mibPerGiB),
-		"-memory-limit-mb", strconv.Itoa(shape.MemoryMB+GranuleVMMMemoryOverheadMB),
+		"-memory-limit-mb", strconv.Itoa(GranuleMemoryLimitMB(shape.MemoryMB, c.HostMemoryMB)),
 		"-oom-score-adj", strconv.Itoa(GranuleOOMScoreAdj),
 	)
 	return args
@@ -584,6 +600,7 @@ type GranuleSandboxes struct {
 	// piece of a GranuleSandboxes' configuration that changes after
 	// construction, so it is the only one that needs mu.
 	defaults Shape
+	image    string
 	// breakers is what the last health probe of each live sandbox found,
 	// keyed by sandbox name, so that a guest which has stopped answering
 	// is not re-probed at full price by every sweep for as long as it
@@ -613,6 +630,9 @@ type GranuleSandboxes struct {
 	// granule.DockerContainerExit and granule.DockerContainerLogTail.
 	vmExit     func(ctx context.Context, vmName string) (granule.ContainerExit, error)
 	consoleLog func(ctx context.Context, vmName string) (string, error)
+	// cgroupOOMKills reads a VM container's memory.events oom_kill count
+	// for SandboxOOM; nil is granule.DockerContainerOOMKills.
+	cgroupOOMKills func(ctx context.Context, vmName string) (int, error)
 }
 
 // now is the clock the health breaker's own intervals are measured
@@ -656,6 +676,44 @@ func (k *GranuleSandboxes) SetDefaultShape(shape Shape) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.defaults = shape
+}
+
+// SetImage implements SandboxImageSetter: the guest image the next VM is
+// created from when GranuleConfig.SandboxImage is not wired.
+func (k *GranuleSandboxes) SetImage(image string) {
+	k.mu.Lock()
+	k.image = strings.TrimSpace(image)
+	k.mu.Unlock()
+}
+
+// CurrentImage implements SandboxImageSetter: the guest image new VMs are
+// created from right now, consulting GranuleConfig.SandboxImage when wired and
+// falling back to SetImage or any -kontur-image flag in CreateArgs.
+func (k *GranuleSandboxes) CurrentImage() string {
+	if k == nil {
+		return ""
+	}
+	if k.cfg.SandboxImage != nil {
+		if img, err := k.cfg.SandboxImage(context.Background()); err == nil && strings.TrimSpace(img) != "" {
+			return strings.TrimSpace(img)
+		}
+	}
+	k.mu.Lock()
+	img := k.image
+	k.mu.Unlock()
+	if img != "" {
+		return img
+	}
+	for i := 0; i < len(k.cfg.CreateArgs); i++ {
+		arg := k.cfg.CreateArgs[i]
+		if strings.HasPrefix(arg, granuleImageFlag+"=") {
+			return strings.TrimSpace(strings.TrimPrefix(arg, granuleImageFlag+"="))
+		}
+		if arg == granuleImageFlag && i+1 < len(k.cfg.CreateArgs) {
+			return strings.TrimSpace(k.cfg.CreateArgs[i+1])
+		}
+	}
+	return ""
 }
 
 // DefaultShape reads back the deployment-wide default VM shape currently in
@@ -902,7 +960,13 @@ func (k *GranuleSandboxes) create(ctx context.Context, name string, shape Shape,
 	// Before the stale VM is torn down, not after: this is the step that
 	// can wait minutes for a guest build, and a delete followed by a
 	// long wait would leave the slot with nothing in it for no reason.
-	args, err := k.cfg.createArgsWithImage(ctx, shape.orDefault(k.defaultShape()), image)
+	override := image
+	if override == "" && k.cfg.SandboxImage == nil {
+		k.mu.Lock()
+		override = k.image
+		k.mu.Unlock()
+	}
+	args, err := k.cfg.createArgsWithImage(ctx, shape.orDefault(k.defaultShape()), override)
 	if err != nil {
 		return err
 	}

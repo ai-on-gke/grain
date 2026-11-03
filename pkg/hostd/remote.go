@@ -56,6 +56,9 @@ type Remote struct {
 	Token string
 	// SharedName is the hostd Token names; DefaultSharedName when "".
 	SharedName string
+	// SharedOwner is the owner of the hostd Token names (-hostd-token-owner),
+	// "" for none: what a remote connection with Token must be verified as.
+	SharedOwner string
 	// Resolve is the hostd registry: the name and owner of the hostd a
 	// token belongs to, ok false for a token that names none (never
 	// minted, rotated away, or its hostd revoked).
@@ -94,6 +97,9 @@ type RemotePeer struct {
 	Name string `json:"name,omitempty"`
 	// Owner is that hostd's registry owner, "" for none.
 	Owner string `json:"owner,omitempty"`
+	// Principal is the verified identity the connection came in as
+	// (ConnectIdentity), "" for a local hostd named by its token alone.
+	Principal string `json:"principal,omitempty"`
 	// Host is the machine the hostd runs on (HostHeader): its instance.
 	Host     string `json:"host,omitempty"`
 	Build    string `json:"build,omitempty"`
@@ -156,7 +162,7 @@ func (r *Remote) Identify(ctx context.Context, token string) (name, owner string
 		return "", "", false, nil
 	}
 	if r.Authorize(token) {
-		return r.sharedName(), "", true, nil
+		return r.sharedName(), strings.ToLower(strings.TrimSpace(r.SharedOwner)), true, nil
 	}
 	if r.Resolve == nil {
 		return "", "", false, nil
@@ -382,10 +388,7 @@ func (r *Remote) logRefused(req *http.Request, why string) {
 	more := r.refused
 	r.refusedAt, r.refused = t, 0
 	r.mu.Unlock()
-	host := req.Header.Get(HostHeader)
-	if host == "" {
-		host = "an unnamed host"
-	}
+	host := hostOf(req)
 	since := ""
 	if more > 0 {
 		since = fmt.Sprintf(" (%d more refused since the last line like this)", more)
@@ -393,10 +396,20 @@ func (r *Remote) logRefused(req *http.Request, why string) {
 	r.logf("grain daemon: refused a grain hostd on %s connecting from %s: %s%s", host, req.RemoteAddr, why, since)
 }
 
+// hostOf is the machine a connecting hostd says it runs on, for a log line.
+func hostOf(req *http.Request) string {
+	if host := req.Header.Get(HostHeader); host != "" {
+		return host
+	}
+	return "an unnamed host"
+}
+
 // ServeHTTP takes a hostd's upgrade of RemotePath (Dialer.Dial): it is
-// refused unless its token names a hostd (Identify), and refused again if
-// it calls itself any other (NameHeader); it is otherwise answered 101
-// and served as the session to that hostd until it drops.
+// refused unless its token names a hostd (Identify), refused again if it
+// calls itself any other (NameHeader), and, for a remote connection
+// (ConnectIdentity), refused unless its verified identity is that hostd's
+// owner; it is otherwise answered 101 and served as the session to that
+// hostd until it drops.
 func (r *Remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	tok := RequestToken(req)
 	name, owner, ok, err := r.Identify(req.Context(), tok)
@@ -417,6 +430,16 @@ func (r *Remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if claimed := strings.TrimSpace(req.Header.Get(NameHeader)); claimed != "" && claimed != name {
 		r.logRefused(req, fmt.Sprintf("it calls itself hostd %q, but its token is hostd %q's", claimed, name))
 		http.Error(w, fmt.Sprintf("grain hostd: this token belongs to hostd %q, not %q", name, claimed), http.StatusForbidden)
+		return
+	}
+	id := ConnectIdentityFrom(req.Context())
+	if why := ownerRefusal(id, name, owner, r.Authorize(tok)); why != "" {
+		r.logf("grain daemon: refused a grain hostd on %s connecting from %s: %s", hostOf(req), req.RemoteAddr, why)
+		code := http.StatusForbidden
+		if id.Principal == "" {
+			code = http.StatusUnauthorized
+		}
+		http.Error(w, "grain hostd: "+why, code)
 		return
 	}
 	if !strings.EqualFold(req.Header.Get("Upgrade"), wsupgrade.Protocol) {
@@ -445,11 +468,12 @@ func (r *Remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		c = &bufferedConn{Conn: conn, r: io.MultiReader(brw.Reader, conn)}
 	}
 	r.Serve(req.Context(), c, RemotePeer{
-		Name:     name,
-		Owner:    owner,
-		Host:     req.Header.Get(HostHeader),
-		Build:    req.Header.Get(BuildHeader),
-		Protocol: req.Header.Get(ProtocolHeader),
-		Addr:     req.RemoteAddr,
+		Name:      name,
+		Owner:     owner,
+		Principal: id.Principal,
+		Host:      req.Header.Get(HostHeader),
+		Build:     req.Header.Get(BuildHeader),
+		Protocol:  req.Header.Get(ProtocolHeader),
+		Addr:      req.RemoteAddr,
 	})
 }

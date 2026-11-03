@@ -64,10 +64,10 @@ func (m *StateManager) ProposeConfigChange(ctx context.Context, proposal ui.Conf
 	}
 	head, err := localResolve(dir, proposal.Branch)
 	if err != nil {
-		return nil, fmt.Errorf("branch %s is not in %s: push it first: %w", proposal.Branch, model.ConfigRepo(), err)
+		return nil, fmt.Errorf("%w: branch %s is not in %s: push it first: %v", ui.ErrConfigChangeRefused, proposal.Branch, model.ConfigRepo(), err)
 	}
 	if proposal.HeadSHA != "" && head != proposal.HeadSHA {
-		return nil, fmt.Errorf("branch %s is at %s, not the %s that was pushed", proposal.Branch, shortCommitSHA(head), shortCommitSHA(proposal.HeadSHA))
+		return nil, fmt.Errorf("%w: branch %s is at %s, not the %s that was pushed", ui.ErrConfigChangeRefused, proposal.Branch, shortCommitSHA(head), shortCommitSHA(proposal.HeadSHA))
 	}
 	baseSHA, err := localResolve(dir, base)
 	if err != nil {
@@ -75,7 +75,7 @@ func (m *StateManager) ProposeConfigChange(ctx context.Context, proposal ui.Conf
 	}
 	mergeBase, err := localGit(dir, "merge-base", "--end-of-options", baseSHA, head)
 	if err != nil {
-		return nil, fmt.Errorf("branch %s shares no history with %s: %w", proposal.Branch, base, err)
+		return nil, fmt.Errorf("%w: branch %s shares no history with %s: %v", ui.ErrConfigChangeRefused, proposal.Branch, base, err)
 	}
 	names, err := localGit(dir, "diff", "--name-only", "--no-renames", "--end-of-options", mergeBase, head, "--")
 	if err != nil {
@@ -88,7 +88,7 @@ func (m *StateManager) ProposeConfigChange(ctx context.Context, proposal ui.Conf
 		}
 	}
 	if len(files) == 0 {
-		return nil, fmt.Errorf("branch %s changes nothing against %s: edit and commit something first", proposal.Branch, base)
+		return nil, fmt.Errorf("%w: branch %s changes nothing against %s: edit and commit something first", ui.ErrConfigChangeRefused, proposal.Branch, base)
 	}
 	diff, err := localDiff(dir, baseSHA, head)
 	if err != nil {

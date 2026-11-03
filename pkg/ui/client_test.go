@@ -828,8 +828,8 @@ func TestCreateTaskSeedsDeploymentDefaultCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(task.Capabilities, "gcp-key") {
-		t.Fatalf("capabilities = %v, want gcp-key among them: the deployment defaults it", task.Capabilities)
+	if !slices.Contains(task.Capabilities, model.GCPKeySandboxAgentGrant) {
+		t.Fatalf("capabilities = %v, want %s among them: the deployment defaults it", task.Capabilities, model.GCPKeySandboxAgentGrant)
 	}
 	stored, err := store.GetTask(ctx, task.ID)
 	if err != nil {
@@ -839,7 +839,7 @@ func TestCreateTaskSeedsDeploymentDefaultCapabilities(t *testing.T) {
 		t.Fatalf("grants = %+v, want one gcp-key grant recorded as %q", stored.Grants, model.GrantByDefault)
 	}
 	// Detachable like any other grant: a default is a starting point, not
-	// something the task is stuck with.
+	// something the task is stuck with (including via the legacy alias).
 	if err := c.SetCapability(ctx, task.ID, "gcp-key", false); err != nil {
 		t.Fatalf("detaching a defaulted capability: %v", err)
 	}
@@ -944,9 +944,9 @@ func TestCreateTaskUnionsRepoDefaultCapabilities(t *testing.T) {
 	// Compared sorted: a task's capabilities come back in the order
 	// Store.grantsOf reads them (by capability), not in the order they
 	// were seeded.
-	if !reflect.DeepEqual(here.Capabilities, []string{"gcp-key", "gemini-key"}) {
-		t.Errorf("capabilities = %v, want both the deployment's gemini-key and the repo's gcp-key",
-			here.Capabilities)
+	if !reflect.DeepEqual(here.Capabilities, []string{"gemini-key", model.GCPKeySandboxAgentGrant}) {
+		t.Errorf("capabilities = %v, want both the deployment's gemini-key and the repo's %s",
+			here.Capabilities, model.GCPKeySandboxAgentGrant)
 	}
 	stored, err := store.GetTask(ctx, here.ID)
 	if err != nil {
@@ -985,8 +985,8 @@ func TestCreateTaskUsesDefaultTargetRepoDefaultCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{"gcp-key"}) {
-		t.Fatalf("capabilities = %v, want [gcp-key]: the default target repo's own defaults", task.Capabilities)
+	if !reflect.DeepEqual(task.Capabilities, []string{model.GCPKeySandboxAgentGrant}) {
+		t.Fatalf("capabilities = %v, want [%s]: the default target repo's own defaults", task.Capabilities, model.GCPKeySandboxAgentGrant)
 	}
 }
 
@@ -1040,8 +1040,8 @@ func TestCreateTaskDeduplicatesOverlappingDefaultCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{"gcp-key"}) {
-		t.Fatalf("capabilities = %v, want [gcp-key] once", task.Capabilities)
+	if !reflect.DeepEqual(task.Capabilities, []string{model.GCPKeySandboxAgentGrant}) {
+		t.Fatalf("capabilities = %v, want [%s] once", task.Capabilities, model.GCPKeySandboxAgentGrant)
 	}
 	stored, err := store.GetTask(ctx, task.ID)
 	if err != nil {
@@ -1064,7 +1064,7 @@ func TestCreateConfigTaskGetsRequiredGrainCI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(task.Capabilities, "grain-ci") {
+	if !slices.Contains(task.Capabilities, model.GrainCIGrant) {
 		t.Fatalf("capabilities = %v, want mandatory grain-ci", task.Capabilities)
 	}
 }
@@ -1082,7 +1082,7 @@ func TestCreateConfigTaskKeepsRequiredGrainCIWithExplicitCapabilities(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(task.Capabilities, "grain-ci") {
+	if !slices.Contains(task.Capabilities, model.GrainCIGrant) {
 		t.Fatalf("capabilities = %v, want mandatory grain-ci", task.Capabilities)
 	}
 }
@@ -2165,7 +2165,7 @@ func TestGCPKeyAndGitHubSandboxCanBeGranted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating a task granting gcp-key and github-sandbox: %v", err)
 	}
-	for _, want := range []string{"gcp-key", "github-sandbox"} {
+	for _, want := range []string{model.GCPKeySandboxAgentGrant, "github-sandbox"} {
 		if !slices.Contains(task.Capabilities, want) {
 			t.Errorf("capabilities = %v, want %s among them", task.Capabilities, want)
 		}
@@ -3504,6 +3504,42 @@ func TestRetryResumesAStoppedTurn(t *testing.T) {
 	}
 	if woken == 0 {
 		t.Error("Retry of a stopped turn did not wake the dispatch loop")
+	}
+}
+
+// TestRetryOfAStoppedTurnWithNoCancellerIsNotHeldByBackoff: with no
+// TaskCanceller to reach the run (consolerestserver, or a run this
+// process did not dispatch), Stop finishes the stored run itself. It
+// must record the stop as one, so the person's Retry dispatches at once
+// rather than waiting out the failure backoff a plain cancellation earns.
+func TestRetryOfAStoppedTurnWithNoCancellerIsNotHeldByBackoff(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	task := create(t, c, ctx)
+	if err := store.StartRun(ctx, model.Run{
+		ID: "r1", TaskID: task.ID, Sandbox: "s1", Attempt: 1, StartedAt: baseTime,
+	}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Stop(ctx, task.ID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	runs, err := store.Runs(ctx, task.ID)
+	if err != nil || len(runs) != 1 || runs[0].FinishedAt == nil {
+		t.Fatalf("after Stop: runs = %+v (err %v), want r1 finished", runs, err)
+	}
+	if got := model.EndingOf(runs[0].Outcome, runs[0].Detail); got != model.EndingTurnStopped {
+		t.Fatalf("Stop recorded %q/%q, which reads as %q; want %q", runs[0].Outcome, runs[0].Detail, got, model.EndingTurnStopped)
+	}
+	if err := c.Retry(ctx, task.ID); err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+	streak, err := store.FailureStreak(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if streak != nil && streak.BackoffCount != 0 {
+		t.Fatalf("after Stop and Retry: failure streak %+v, want none to back off from", *streak)
 	}
 }
 

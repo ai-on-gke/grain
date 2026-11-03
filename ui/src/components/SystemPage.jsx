@@ -39,6 +39,9 @@ import { useIsPhone } from "../phone.js";
 
 export { SYSTEM_TABS };
 
+// SYSTEM_TABPANEL_ID is the open tab's panel, which its tab controls.
+const SYSTEM_TABPANEL_ID = "system-tabpanel";
+
 export const POWER_ACTIONS = [
   {
     id: "restart",
@@ -170,7 +173,15 @@ export default function SystemPage({
       sx={{ borderBottom: 1, borderColor: "divider", mb: 2 }}
     >
       {SYSTEM_TABS.map((t) => (
-        <Tab key={t.id} value={t.id} label={t.label} />
+        <Tab
+          key={t.id}
+          value={t.id}
+          label={t.label}
+          id={`system-tab-${t.id}`}
+          // Only the open tab's panel is in the document, so only it
+          // names one.
+          aria-controls={t.id === current ? SYSTEM_TABPANEL_ID : undefined}
+        />
       ))}
     </Tabs>
   );
@@ -297,7 +308,21 @@ export default function SystemPage({
           </Typography>
         </Box>
         {tabs}
-        {body}
+        {/* The open tab's panel, named by its tab, so a screen reader
+            leaving the tab strip lands in a region tied to it (WAI-ARIA
+            tabs pattern). A phone has no tab strip: the heading above
+            names the section instead. */}
+        {isPhone ? (
+          body
+        ) : (
+          <Box
+            role="tabpanel"
+            id={SYSTEM_TABPANEL_ID}
+            aria-labelledby={`system-tab-${current}`}
+          >
+            {body}
+          </Box>
+        )}
       </Box>
     </div>
   );

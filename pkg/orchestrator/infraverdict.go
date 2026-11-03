@@ -97,12 +97,22 @@ func releaseGatePriority(deps Deps, repo model.RepoRef, branch string) ci.Priori
 }
 
 // isTrunk reports whether branch is repo's default branch.
+//
+// The repository is named to the forge client by its stored owner
+// ("host/owner" off the default host), which is how the daemon's
+// client is told which forge to ask (pkg/daemon's forgeRouter). Named
+// by its bare owner, a repository off the default host was routed by
+// guess -- the one host this deployment knows that owner/name on -- and
+// where the guess fell through it was asked of GitHub, which answered
+// for some other repository or for none. A false here releases nothing
+// (startDueBaseBranchRelease), and the only trace was the sayOnce line
+// below; reconcileReleaseStalls is what says so now.
 func isTrunk(deps Deps, repo model.RepoRef, branch string) bool {
 	branch = strings.TrimPrefix(branch, "refs/heads/")
 	if deps.Client == nil || branch == "" {
 		return false
 	}
-	def, err := deps.Client.DefaultBranch(repo.Owner, repo.Name)
+	def, err := deps.Client.DefaultBranch(repo.StoredOwner(), repo.Name)
 	if err != nil {
 		sayOnce("trunk-unknown:"+repo.String(), "orchestrator: reading %s's default branch: %v", repo, err)
 		return false

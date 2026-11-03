@@ -331,9 +331,33 @@ func TestCapabilityPolicyEnforcesCIOnlyForRepoAccessGrants(t *testing.T) {
 		if err := p.Permits(branchPushGrant, CapabilitySubject{Repo: acme, Kind: kind}); err != nil {
 			t.Errorf("Permits(branchPushGrant, kind=%s) = %v, want nil", kind, err)
 		}
-		if got := p.VerdictForKind(RepoReadRef, kind); got != CapabilityPolicyDenied {
-			t.Errorf("VerdictForKind(RepoReadRef, %s) = %q, want denied", kind, got)
+		if got := p.VerdictForKind(RepoReadRef, kind); got != CapabilityPolicyCIOnly {
+			t.Errorf("VerdictForKind(RepoReadRef, %s) = %q, want ci_only", kind, got)
 		}
+	}
+	// A read grant's refusal says it reads; only the write grant's says
+	// it writes to the repository.
+	for _, g := range []string{RepoReadRef, readGrant} {
+		if got := CIOnlyRefusal(g); strings.Contains(got, "writes") || !strings.Contains(got, "read access") {
+			t.Errorf("CIOnlyRefusal(%q) = %q, want the read wording", g, got)
+		}
+	}
+	if got := CIOnlyRefusal(writeRepoGrant); !strings.Contains(got, "push access to another repository") {
+		t.Errorf("CIOnlyRefusal(%q) = %q, want the write wording", writeRepoGrant, got)
+	}
+	// Repository access is declared in the job's workflow file, not
+	// granted from the repos page's CI capabilities list (where the
+	// other CI-only capabilities' refusal points): a walk that followed
+	// the old advice put repo#read there, and the job still could not
+	// clone (docs/test-runs/2026-11-03-capabilities-ci-repo.md, F1).
+	for _, g := range []string{RepoReadRef, readGrant, writeRepoGrant, "repo-read:acme/other", "repo-write:acme/other"} {
+		got := CIOnlyRefusal(g)
+		if !strings.Contains(got, ".grain/workflows") || strings.Contains(got, "under CI capabilities") {
+			t.Errorf("CIOnlyRefusal(%q) = %q, want it to point at the workflow's capabilities:, not the repos page", g, got)
+		}
+	}
+	if got := CIOnlyRefusal("package-publish"); !strings.Contains(got, "under CI capabilities") {
+		t.Errorf("CIOnlyRefusal(package-publish) = %q, want the repos page", got)
 	}
 	for _, g := range []string{readGrant, writeRepoGrant} {
 		if err := p.Permits(g, CapabilitySubject{Repo: acme, Kind: CapabilityRunCI, Event: "release"}); err != nil {

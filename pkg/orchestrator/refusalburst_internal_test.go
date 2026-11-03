@@ -81,3 +81,29 @@ func TestIsFastFailure(t *testing.T) {
 		}
 	}
 }
+
+// A run of a burst that writes its own failure after the burst was declared
+// finds its claim (and only once), so it can put the re-record back; a run
+// no burst claimed finds none, and a claim older than the window is gone.
+func TestABurstClaimIsReadBackOnceByTheRunItClaimed(t *testing.T) {
+	p := &Pause{}
+	at := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	p.claimBurst(at, []string{"r1", "r2"}, "paused by a refusal burst")
+	if d, ok := p.claimedByBurst("r2"); !ok || d != "paused by a refusal burst" {
+		t.Fatalf("claimedByBurst(r2) = %q, %v; want the burst's detail", d, ok)
+	}
+	if _, ok := p.claimedByBurst("r2"); ok {
+		t.Fatal("a claim was read back twice")
+	}
+	if _, ok := p.claimedByBurst("r3"); ok {
+		t.Fatal("a run no burst claimed found a claim")
+	}
+	p.claimBurst(at.Add(refusalBurstWindow), []string{"r4"}, "later")
+	if _, ok := p.claimedByBurst("r1"); ok {
+		t.Fatal("a claim older than the window survived the next burst")
+	}
+	var none *Pause
+	if _, ok := none.claimedByBurst("r4"); ok {
+		t.Fatal("a nil pause reported a claim")
+	}
+}

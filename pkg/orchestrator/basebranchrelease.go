@@ -151,6 +151,9 @@ func reconcileBaseBranchRelease(ctx context.Context, deps Deps, now time.Time) e
 	if err := startDueBaseBranchRelease(ctx, deps, busy, now); err != nil {
 		errs = append(errs, err)
 	}
+	if err := reconcileReleaseStalls(ctx, deps, now); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }
 
@@ -268,6 +271,7 @@ func startBaseBranchRelease(ctx context.Context, deps Deps, repo model.RepoRef,
 		return false, err
 	}
 	if refusal != "" {
+		noteReleaseSkip(deps.Store, repo, branch, "grain refuses to release it: "+refusal)
 		sayOnce("release-branch-refused:"+repo.String()+":"+branch,
 			"orchestrator: not releasing %s %s, though grain has a base-branch row for it: %s", repo, branch, refusal)
 		return false, nil
@@ -339,6 +343,8 @@ func startBaseBranchRelease(ctx context.Context, deps Deps, repo model.RepoRef,
 		// just collected every other branch's run report a failure. The
 		// row is left alone, so the next cycle asks again.
 		log.Printf("orchestrator: releasing %s %s at %s: %v", repo, branch, shortSHA(tip), err)
+		noteReleaseSkip(deps.Store, repo, branch, fmt.Sprintf("starting the release run of %s failed: %v",
+			shortSHA(tip), err))
 		return false, nil
 	}
 	started := run.StartedAt
@@ -353,6 +359,7 @@ func startBaseBranchRelease(ctx context.Context, deps Deps, repo model.RepoRef,
 	}); err != nil {
 		return false, err
 	}
+	noteReleaseSkip(deps.Store, repo, branch, "")
 	log.Printf("orchestrator: %s %s is at %s: run %s is publishing it, and nothing is gated on "+
 		"that -- what judges this tree is the push run on the branch's own row",
 		repo, branch, shortSHA(tip), run.ID)
@@ -395,7 +402,7 @@ func ReleaseBranchRefusal(ctx context.Context, store *model.Store, client github
 		return "", nil
 	}
 	if client != nil {
-		def, err := client.DefaultBranch(repo.Owner, repo.Name)
+		def, err := client.DefaultBranch(repo.StoredOwner(), repo.Name)
 		if err != nil {
 			return "", fmt.Errorf("orchestrator: reading %s's default branch: %w", repo, err)
 		}
@@ -797,7 +804,7 @@ func fileBaseBranchReleaseTriage(ctx context.Context, deps Deps, row model.BaseB
 
 	if !grainci.Granted(grants) {
 		grants = append(grants, model.Grant{
-			Capability: grainci.CapabilityName,
+			Capability: grainci.Grant,
 			Via:        model.GrantByGrain,
 		})
 	}

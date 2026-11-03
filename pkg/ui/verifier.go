@@ -219,12 +219,12 @@ func (v *iapVerifier) Verify(r *http.Request) (VerifiedIdentity, bool, error) {
 		claims, err = defaultIAPValidator(ctx, tokenStr, aud)
 	}
 	if err != nil {
-		logRefusedAssertion(tokenStr, err)
+		logRefusedAssertion(tokenStr, aud, err)
 		return VerifiedIdentity{}, false, err
 	}
 	if claims == nil {
 		err = errors.New("nil IAP claims")
-		logRefusedAssertion(tokenStr, err)
+		logRefusedAssertion(tokenStr, aud, err)
 		return VerifiedIdentity{}, false, err
 	}
 	email := strings.TrimSpace(claims.Email)
@@ -234,7 +234,7 @@ func (v *iapVerifier) Verify(r *http.Request) (VerifiedIdentity, bool, error) {
 	email = normalizeIdentityEmail(email)
 	if email == "" {
 		err = errors.New("no email or subject found in verified IAP token claims")
-		logRefusedAssertion(tokenStr, err)
+		logRefusedAssertion(tokenStr, aud, err)
 		return VerifiedIdentity{}, false, err
 	}
 	return VerifiedIdentity{
@@ -382,7 +382,7 @@ func verifyCallerNow(r *http.Request) callerVerification {
 	// IAP is unconfigured, log it once so an operator setting up a proxy can
 	// see what audience it sent; otherwise log any unsigned plaintext header.
 	if raw := strings.TrimSpace(r.Header.Get(IAPAssertionHeader)); raw != "" {
-		logRefusedAssertion(raw, errors.New("no IAP audience is configured (GRAIN_IAP_AUDIENCE / -ui-iap-audience), so no assertion can be verified"))
+		logRefusedAssertion(raw, "", errors.New("no IAP audience is configured (GRAIN_IAP_AUDIENCE / -ui-iap-audience), so no assertion can be verified"))
 	} else {
 		logIgnoredIdentityHeader(r)
 	}

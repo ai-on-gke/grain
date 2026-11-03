@@ -15,9 +15,10 @@
 import { expect, test } from "./fixtures.js";
 
 // Settings → Hostds: the registry the demo seeds (local, a workstation
-// with an owner and labels, a revoked laptop) in its table, the actions
-// in the right-hand column, and the add form inside its card -- on a
-// wide screen and on a phone, with nothing pushing the page sideways.
+// with an owner and labels, a runner with no owner, a revoked laptop) in
+// its table, the actions in the right-hand column, and the add form
+// inside its card -- on a wide screen and on a phone, with nothing
+// pushing the page sideways.
 const DESKTOP = { width: 1440, height: 900 };
 const PHONE = { width: 390, height: 844 };
 
@@ -38,6 +39,9 @@ for (const [name, viewport] of [
     await expect(page.getByTestId("hostd-row-old-laptop")).toContainText(
       "Revoked",
     );
+    await expect(
+      page.getByTestId("hostd-owner-missing-build-runner"),
+    ).toContainText("needed to dial in through IAP");
     const local = page.getByTestId("hostd-row-local");
     await expect(local).toContainText("Co-located (socket)");
     await expect(local.getByRole("button", { name: "Revoke" })).toHaveCount(0);

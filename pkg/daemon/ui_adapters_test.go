@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
@@ -64,5 +65,32 @@ func TestSandboxHealthAdapterCarriesStartedAt(t *testing.T) {
 	}
 	if strings.Count(string(raw), `"startedAt"`) != 1 {
 		t.Errorf("JSON %s carries startedAt on a row whose backend gave none", raw)
+	}
+}
+
+// A granule backend charges each VM its guest plus the VMM headroom
+// (model.DefaultVMMHeadroom), and committedMemoryMB says so; the pool
+// breakdown beside it on Sandbox health has to add up to the same
+// figure rather than listing bare guest sizes. One 2 GiB VM is 3 GiB
+// committed, and 3 GiB in its pool (docs/test-runs/2026-11-03-sandbox-resources.md).
+func TestSandboxBudgetPoolsIncludeTheVMMHeadroom(t *testing.T) {
+	ledger := &model.Ledger{VMMHeadroom: model.DefaultVMMHeadroom()}
+	budget := model.NewBudget(model.Commitment{CPUs: 8, MemoryMB: 32768}, 0, 1, 1)
+	shape := model.Commitment{CPUs: 2, MemoryMB: 2048}
+	if verdict, _ := ledger.Admit(budget, model.PoolAgent, "run-1", shape); !verdict.OK {
+		t.Fatalf("Admit = %+v, want admitted", verdict)
+	}
+	adapter := daemon.SandboxHealthAdapter{Limits: func() model.Limits {
+		return model.Limits{Budget: budget, Ledger: ledger}
+	}}
+	report, _ := adapter.BudgetAndReconciliation()
+	if report == nil {
+		t.Fatal("no budget report")
+	}
+	if report.CommittedMemoryMB != 3072 {
+		t.Fatalf("CommittedMemoryMB = %d, want 3072 (2048 + 1024 headroom)", report.CommittedMemoryMB)
+	}
+	if len(report.Pools) != 1 || report.Pools[0].MemoryMB != report.CommittedMemoryMB {
+		t.Fatalf("Pools = %+v, want one pool charged the same %d MiB as CommittedMemoryMB", report.Pools, report.CommittedMemoryMB)
 	}
 }

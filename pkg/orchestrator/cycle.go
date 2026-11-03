@@ -102,7 +102,13 @@ type Deps struct {
 	// and rewriting the choice it hands Framework -- and it deliberately
 	// does not do so today (docs/connections-and-models.md).
 	ModelAvailability func(ctx context.Context, choice AgentChoice) string
-	Config            Config
+	// CapabilityHostd is the grain hostd run: host capability servers
+	// are started through where CapabilityServers does not route them
+	// per task (TaskCapabilityServers), recorded on each capability
+	// audit record (model.CapabilityAuditRecord.Hostd). "" where they
+	// have none.
+	CapabilityHostd string
+	Config          Config
 	// RequireTeamGitCredential holds back every task whose team has no
 	// GitHub credential for its target (model.Store.TaskGitCredential):
 	// its sandbox could neither clone nor push, since the git proxy has
@@ -622,6 +628,9 @@ type AgentChoice struct {
 	// back to the rest of the rotation only when unavailable or paused.
 	PreferFramework string
 	PreferModel     string
+	// TaskID is the task the run is for, whose hostd pin or selector
+	// (model.Store.TaskHostd) routes its host work.
+	TaskID string
 }
 
 // ChoiceFor is the AgentChoice task's own fields make: the one runOne
@@ -634,6 +643,7 @@ func ChoiceFor(task model.Task) AgentChoice {
 		Model:     task.Model,
 		Priority:  task.HasPriorityDispatch(),
 		Durable:   task.IsDurable(),
+		TaskID:    task.ID,
 	}
 }
 
@@ -1500,7 +1510,7 @@ func grantAdmitterWithFrameworks(ctx context.Context, deps Deps, prepared map[st
 			if err := deps.Store.UpdateTask(callCtx, task.ID, func(t *model.Task) error {
 				if !grainci.Granted(t.Grants) {
 					t.Grants = append(t.Grants, model.Grant{
-						Capability: grainci.CapabilityName,
+						Capability: grainci.Grant,
 						Via:        model.GrantByDefault,
 					})
 				}
@@ -1509,7 +1519,7 @@ func grantAdmitterWithFrameworks(ctx context.Context, deps Deps, prepared map[st
 				return dispatch.Admission{}, err
 			}
 			task.Grants = append(task.Grants, model.Grant{
-				Capability: grainci.CapabilityName,
+				Capability: grainci.Grant,
 				Via:        model.GrantByDefault,
 			})
 			_ = clearAdmissionWait(callCtx, deps.Store, task.ID)
@@ -2810,7 +2820,8 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// forwards close when this run ends, before the pass is released.
 	if pass, deadline := deps.capabilityPasses().held(d.RunID); pass != nil {
 		notes.say(ctx, capabilityGrantsNote)
-		mat, err := materializePass(ctx, cfg, sandbox, pass, deadline, deps.capabilityService)
+		passDeps := deps.capabilityPasses().heldDeps(d.RunID, deps)
+		mat, err := materializePass(ctx, cfg, sandbox, pass, deadline, passDeps.capabilityService)
 		if err == nil {
 			// Then every grant's mcp_endpoint proxied, handshaken and
 			// named, and its prompt_section rendered (§5.2, §5.4), each
@@ -2818,7 +2829,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 			if deps.Store != nil {
 				mat.narrator = mcp.NewCapabilityNarrator(taskActivityReporter{store: deps.Store, taskID: d.TaskID, now: cfg.now})
 			}
-			if err = mat.wireEndpoints(ctx, deps.capabilityDataPlane); err != nil {
+			if err = mat.wireEndpoints(ctx, passDeps.capabilityDataPlane); err != nil {
 				mat.Close()
 			}
 		}
@@ -2971,8 +2982,30 @@ func afterAgentRun(ctx context.Context, deps Deps, task model.Task, runID string
 		}
 		return runErr
 	}
-	return noteFinishFailure(ctx, deps.Store, runID,
-		processResultFrom(ctx, deps.Store, deps.GitReach, deps.Client, deps.AppBotIdentity, task, result, runID, dispatchBranchSHA, now))
+	err := processResultFrom(ctx, deps.Store, deps.GitReach, deps.Client, deps.AppBotIdentity, task, result, runID, dispatchBranchSHA, now)
+	if err != nil && ctx.Err() != nil {
+		// ctx is the daemon's: it stopped between the agent returning and
+		// its result being turned into effects, so the finish failed on
+		// the shutdown rather than on anything about the run. Interrupted,
+		// as a run stopped a moment earlier is -- no strike, no backoff --
+		// and the next dispatch processes the conversation afresh.
+		return finishInterruptedResult(ctx, deps.Store, task.ID, runID, now, err)
+	}
+	return noteFinishFailure(ctx, deps.Store, runID, err)
+}
+
+// finishInterruptedResult records runID, whose result the daemon stopped
+// in the middle of processing, as interrupted by the shutdown and says so
+// on the task, then hands back err joined with errDaemonStopped.
+func finishInterruptedResult(ctx context.Context, store *model.Store, taskID, runID string, now time.Time, err error) error {
+	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runCleanupTimeout)
+	defer cancel()
+	if serr := store.SetRunOutcome(finishCtx, runID, model.InterruptedOutcome, model.InterruptedDetail); serr != nil {
+		return errors.Join(err, fmt.Errorf("orchestrator: recording run %s as interrupted: %w", runID, serr))
+	}
+	interruptedRuns.Add(1)
+	noteInterrupted(finishCtx, store, taskID, runID, now)
+	return fmt.Errorf("orchestrator: run %s: %w", runID, errors.Join(errDaemonStopped, err))
 }
 
 // noteFinishFailure records, on the run's own row, that turning a
@@ -3040,11 +3073,22 @@ func noteFinishFailure(ctx context.Context, store *model.Store, runID string, er
 // task -- but it does count for retry backoff, which is what spaces the
 // requeued attempts out while the cluster stays full. A pod no node
 // could ever fit is not ErrClusterFull (admitPod, unschedulableOutcome)
-// and stays a setup failure, so it surfaces rather than looping.
+// and stays a setup failure, so it surfaces rather than looping. A
+// framework build refused because the run's hostd is not connected
+// (agent.ErrHostdWaiting) is interrupted, without a strike: admission
+// parks the task on that hostd until it reconnects.
 func setupFailedEnding(err error) (outcome, detail string) {
 	if errors.Is(err, ErrClusterFull) {
 		return model.CapacityOutcome, "this run's sandbox could not be scheduled: " + err.Error() +
 			"; the task is not counted as failed and will be retried once the cluster has room"
+	}
+	if errors.Is(err, agent.ErrHostdWaiting) {
+		// The run's hostd dropped between admission and its framework
+		// being built: nothing ran, and the task goes back to the queue,
+		// where admission holds it until that hostd reconnects
+		// (Deps.ModelAvailability). It never moves to another hostd.
+		return model.InterruptedOutcome, "this run's hostd is not connected: " + err.Error() +
+			"; the task is not counted as failed, and waits in the queue for it to reconnect"
 	}
 	return "setup-failed", "this run's sandbox could not be prepared: " + err.Error()
 }
