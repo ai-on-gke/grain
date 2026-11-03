@@ -154,7 +154,10 @@ var retiredGrants = []struct {
 	{100, "claude-proxy", []string{model.ModelProxyGrant("claude")}},
 	{100, "openai-proxy", []string{model.ModelProxyGrant("openai")}},
 	{100, "gemini-proxy", []string{model.ModelProxyGrant("gemini")}},
-	{101, "gemini-key", []string{model.GCPGeminiKeyGrant}},
+	{101, "image-signing", []string{model.ImageSigningRef + "={}"}},
+	{101, "registry-push", []string{model.RegistryPushRef + "={}"}},
+	{101, "package-publish", []string{model.PackagePublishRef + "={}"}},
+	{102, "gemini-key", []string{model.GCPGeminiKeyGrant}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'
@@ -195,7 +198,7 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 	}
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: widgets, DefaultCapabilities: []string{"self-debug", legacy},
-		CICapabilities: []string{"package-publish", legacy}}); err != nil {
+		CICapabilities: []string{"github-sandbox", legacy}}); err != nil {
 		t.Fatal(err)
 	}
 	fixture := map[string]map[string][]string{
@@ -263,10 +266,10 @@ func testMigrationRewrites(t *testing.T, version int, legacy string, replacement
 	if want := append([]string{"self-debug"}, replacements...); !slices.Equal(repo.DefaultCapabilities, want) {
 		t.Errorf("repo default capabilities = %v, want %v", repo.DefaultCapabilities, want)
 	}
-	if want := append([]string{"package-publish"}, replacements...); !slices.Equal(repo.CICapabilities, want) {
+	if want := append([]string{"github-sandbox"}, replacements...); !slices.Equal(repo.CICapabilities, want) {
 		t.Errorf("repo CI capabilities = %v, want %v", repo.CICapabilities, want)
 	}
-	sameGrantMeaning(t, "repo CI capabilities", []string{"package-publish", legacy}, repo.CICapabilities)
+	sameGrantMeaning(t, "repo CI capabilities", []string{"github-sandbox", legacy}, repo.CICapabilities)
 }
 
 func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
@@ -280,7 +283,7 @@ func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 
 		if err := store.PutRepoConfig(ctx, model.RepoConfig{
 			Repo:           widgets,
-			CICapabilities: []string{"package-publish", r.legacy, "release-gate-read"},
+			CICapabilities: []string{"github-sandbox", r.legacy, "release-gate-read"},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -314,12 +317,12 @@ func TestMigration83RewritesRetiredCICapabilities(t *testing.T) {
 		dedup := model.RepoRef{Owner: "dedup", Name: r.legacy}
 		jsonEncoded := model.RepoRef{Owner: "json", Name: r.legacy}
 
-		beforeWidgets := []string{"package-publish", r.legacy, "release-gate-read"}
+		beforeWidgets := []string{"github-sandbox", r.legacy, "release-gate-read"}
 		gotWidgets, err := store.GetRepoConfig(ctx, widgets)
 		if err != nil || gotWidgets == nil {
 			t.Fatalf("%s widgets: %v, %+v", r.legacy, err, gotWidgets)
 		}
-		wantWidgets := append(append([]string{"package-publish"}, r.to...), "release-gate-read")
+		wantWidgets := append(append([]string{"github-sandbox"}, r.to...), "release-gate-read")
 		if !slices.Equal(gotWidgets.CICapabilities, wantWidgets) {
 			t.Errorf("%s: widgets CI capabilities = %v, want %v", r.legacy, gotWidgets.CICapabilities, wantWidgets)
 		}
@@ -436,7 +439,7 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 				Repos: map[string]model.CatalogueRepoDefaults{
 					"acme/widgets": {
 						Task: []string{"gcp-key", "gcp-key:deploy", "self-debug"},
-						CI:   []string{"package-publish", "gcp-key", "gcp-key:staging"},
+						CI:   []string{"github-sandbox", "gcp-key", "gcp-key:staging"},
 					},
 				},
 			},
@@ -471,7 +474,7 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:                widgets,
 		DefaultCapabilities: []string{"gcp-key", "gcp-key:deploy", "self-debug"},
-		CICapabilities:      []string{"package-publish", "gcp-key", "gcp-key:staging"},
+		CICapabilities:      []string{"github-sandbox", "gcp-key", "gcp-key:staging"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -588,7 +591,7 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		if want := []string{sandboxGrant, deployGrant, "self-debug"}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].Task, want) {
 			t.Errorf("Catalogue.Defaults.Repos[acme/widgets].Task = %v, want %v", gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].Task, want)
 		}
-		if want := []string{"package-publish", sandboxGrant, stagingGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].CI, want) {
+		if want := []string{"github-sandbox", sandboxGrant, stagingGrant}; !slices.Equal(gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].CI, want) {
 			t.Errorf("Catalogue.Defaults.Repos[acme/widgets].CI = %v, want %v", gotCfg.CapabilityPolicy.Catalogue.Defaults.Repos["acme/widgets"].CI, want)
 		}
 
@@ -599,7 +602,7 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		if want := []string{sandboxGrant, deployGrant, "self-debug"}; !slices.Equal(gotRepo.DefaultCapabilities, want) {
 			t.Errorf("repo DefaultCapabilities = %v, want %v", gotRepo.DefaultCapabilities, want)
 		}
-		if want := []string{"package-publish", sandboxGrant, stagingGrant}; !slices.Equal(gotRepo.CICapabilities, want) {
+		if want := []string{"github-sandbox", sandboxGrant, stagingGrant}; !slices.Equal(gotRepo.CICapabilities, want) {
 			t.Errorf("repo CICapabilities = %v, want %v", gotRepo.CICapabilities, want)
 		}
 

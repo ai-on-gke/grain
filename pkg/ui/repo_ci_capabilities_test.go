@@ -46,7 +46,7 @@ func TestRepoCICapabilitiesAPIKeepsTaskDefaultsIndependent(t *testing.T) {
 	// package-publish is here beside gcp-key because it is the grant a
 	// release workflow is turned on with, and a capability the picker
 	// does not offer is one SetRepoCICapabilities refuses to save.
-	for _, id := range []string{"github-sandbox", "package-publish"} {
+	for _, id := range []string{"github-sandbox", model.PackagePublishRef + "={}"} {
 		if !slices.Contains(got.AvailableCICapabilities, id) {
 			t.Fatalf("CI picker does not offer %q: %v", id, got.AvailableCICapabilities)
 		}
@@ -113,7 +113,7 @@ func TestConfigIncludesCICapabilitiesCatalogWithCIOnlyCapabilities(t *testing.T)
 	}
 
 	// CI capabilities catalog must include CI-only capabilities with their names and descriptions
-	for _, id := range []string{"package-publish", "registry-push"} {
+	for _, id := range []string{model.PackagePublishRef + "={}", model.RegistryPushRef + "={}"} {
 		idx := slices.IndexFunc(cfg.CICapabilities, func(c ui.Capability) bool { return c.ID == id })
 		if idx < 0 {
 			t.Fatalf("ciCapabilities does not offer %q: %+v", id, cfg.CICapabilities)

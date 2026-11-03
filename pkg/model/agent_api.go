@@ -488,7 +488,12 @@ var legacyGrantReplacements = map[string]string{
 	"claude-proxy": ModelProxyGrant("claude"),
 	"openai-proxy": ModelProxyGrant("openai"),
 	"gemini-proxy": ModelProxyGrant("gemini"),
-	// Retired by schema migration 101 onto the gcp server's gemini-key,
+	// Retired by schema migration 101 onto the in-process release
+	// server, which places what the providers placed on the same events.
+	"image-signing":          ImageSigningRef + "={}",
+	"registry-push":          RegistryPushRef + "={}",
+	CapabilityPackagePublish: PackagePublishRef + "={}",
+	// Retired by schema migration 102 onto the gcp server's gemini-key,
 	// which mints with the same gcp-key-minter secret.
 	"gemini-key": GCPGeminiKeyGrant,
 }

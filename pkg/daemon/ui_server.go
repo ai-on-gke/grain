@@ -226,7 +226,7 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		Stall: orchestrator.TaskStallNote,
 		// And the sub-case of that state, with its control
 		// (ui.Config.Reasons) -- joined here for the same reason.
-		Reasons: ReasonClassifier{},
+		Reasons: ReasonClassifier{PolicyFile: cfg.PolicyFile},
 		// The same action for the other kind of credential this
 		// deployment holds (ui.Config.AgentKeyChecks): the key each agent
 		// framework runs as, which the Agents tab can otherwise only

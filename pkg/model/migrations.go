@@ -693,6 +693,11 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     101,
+		Description: "rewrite stored image-signing, registry-push and package-publish grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/release#<method>={} (the in-process providers are retired)",
+		Up:          migrateReleaseGrants,
+	},
+	{
+		Version:     102,
 		Description: "seed gcp#gemini-key on the gcp server where grain_config.gcp_project is set, minting with the gcp-key-minter secret, and rewrite stored gemini-key grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/gcp#gemini-key={} (the in-process gemini-key is retired)",
 		Up:          migrateGeminiKeyToCapabilityServer,
 	},

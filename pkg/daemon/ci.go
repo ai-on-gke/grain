@@ -458,7 +458,7 @@ func (g *CiGrantReservations) Acquire(ctx context.Context, req ci.SandboxRequest
 	if err != nil {
 		return nil, err
 	}
-	refs := ciCapabilityRefs(req.Capabilities)
+	refs := ciCapabilityRefs(req.Capabilities, req.Event, req.TrustedSchedule, req.WithholdEventGated)
 	var streak ciPassStreak
 	reported := ""
 	report := func(reason string, err error) {
@@ -673,7 +673,10 @@ func (s CiSandboxes) Acquire(ctx context.Context, req ci.SandboxRequest) (ci.San
 	if err != nil {
 		return nil, err
 	}
-	sandbox := &CiSandbox{Owner: s, Backing: backing, SandboxName: backing.Name(), counted: counted}
+	sandbox := &CiSandbox{
+		Owner: s, Backing: backing, SandboxName: backing.Name(),
+		counted: counted, implicitCapabilities: req.ImplicitCapabilities,
+	}
 	if s.Grants != nil {
 		sandbox.reservation = s.Grants.take(req.Name)
 	}
@@ -748,7 +751,10 @@ func (s CiSandboxes) Readopt(ctx context.Context, req ci.SandboxRequest) (ci.San
 	if err != nil {
 		return nil, fmt.Errorf("sandbox %s could not be readopted from backend %T: %w", req.Name, s.Sandboxes, err)
 	}
-	sandbox := &CiSandbox{Owner: s, Backing: backing, SandboxName: backing.Name()}
+	sandbox := &CiSandbox{
+		Owner: s, Backing: backing, SandboxName: backing.Name(),
+		implicitCapabilities: req.ImplicitCapabilities,
+	}
 	if err := sandbox.readoptJob(ctx, repo, req.Event, req.TrustedSchedule, req.Capabilities, req.WithholdEventGated); err != nil {
 		return nil, err
 	}
@@ -844,7 +850,23 @@ type CiSandbox struct {
 	// shell is orchestrator.SandboxShell where the backend has one,
 	// which both real backends do, and is preferred over run for a
 	// step's script -- see ciSandbox.Exec.
-	shell orchestrator.SandboxShell
+	shell                orchestrator.SandboxShell
+	implicitCapabilities bool
+	warning              string
+	stepPrefix           string
+	stepPrefixOnce       sync.Once
+}
+
+// Warning implements ci.WarningSandbox: any declared capabilities withheld
+// from this job by the run's event gate.
+func (s *CiSandbox) Warning() string { return s.warning }
+
+func (s *CiSandbox) takeStepPrefix() string {
+	var prefix string
+	s.stepPrefixOnce.Do(func() {
+		prefix = s.stepPrefix
+	})
+	return prefix
 }
 
 // jobShape is the sandbox a CI job is built in: what its workflow asks
@@ -985,6 +1007,7 @@ func (s *CiSandbox) prepareJob(ctx context.Context, repo model.RepoRef, ref stri
 			return fmt.Errorf("materializing CI capabilities: %w", err)
 		}
 		s.grantRepoAccess(event, trustedSchedule, ids, withholdEventGated)
+		s.recordWithheldCapabilities(reg, event, trustedSchedule, withholdEventGated, ids, true)
 	}
 	placements := append([]model.Materialized(nil), s.materialized...)
 	if len(releaseSecrets) > 0 {
@@ -1070,7 +1093,9 @@ func (s *CiSandbox) readoptJob(ctx context.Context, repo model.RepoRef, event ci
 			return fmt.Errorf("CI capability %q refused: %s", grant.Grant.Capability, grant.Resolution.Reason)
 		}
 	}
-	s.grantRepoAccess(event, trustedSchedule, ids, len(withholdEventGated) > 0 && withholdEventGated[0])
+	withhold := len(withholdEventGated) > 0 && withholdEventGated[0]
+	s.grantRepoAccess(event, trustedSchedule, ids, withhold)
+	s.recordWithheldCapabilities(reg, event, trustedSchedule, withhold, ids, false)
 	return nil
 }
 
@@ -1081,6 +1106,10 @@ func (s *CiSandbox) readoptJob(ctx context.Context, repo model.RepoRef, event ci
 func (s *CiSandbox) grantRepoAccess(event ci.Event, trustedSchedule bool, ids []string, withholdEventGated bool) {
 	for _, id := range ids {
 		if !ciRepoAccessAdmitted(id, event, trustedSchedule, withholdEventGated) {
+			if otherRepo, ok := model.RepoWriteTarget(id); ok && s.Owner.WriteScopes != nil {
+				s.Owner.WriteScopes.NoteWithheld(s.SandboxName, otherRepo,
+					fmt.Sprintf("this job's %s grant is %s", id, ciEventGateWithheldClause(event, trustedSchedule, withholdEventGated, ciRepoWriteAllowedEvents)))
+			}
 			continue
 		}
 		if otherRepo, ok := model.RepoReadTarget(id); ok && s.Owner.Scopes != nil {
@@ -1089,6 +1118,96 @@ func (s *CiSandbox) grantRepoAccess(event ci.Event, trustedSchedule bool, ids []
 		if otherRepo, ok := model.RepoWriteTarget(id); ok && s.Owner.WriteScopes != nil {
 			s.Owner.WriteScopes.Grant(s.SandboxName, otherRepo)
 		}
+	}
+}
+
+const ciRepoWriteAllowedEvents = "release, workflow_dispatch, and grain's scheduled runs"
+
+func (s *CiSandbox) recordWithheldCapabilities(reg *model.CapabilityRegistry, event ci.Event, trustedSchedule, withholdEventGated bool, ids []string, prependStep bool) {
+	notes := ciWithheldCapabilityNotes(reg, event, trustedSchedule, withholdEventGated, s.implicitCapabilities, ids)
+	if len(notes) == 0 {
+		return
+	}
+	s.warning = strings.Join(notes, "; ")
+	if prependStep {
+		var b strings.Builder
+		for _, note := range notes {
+			b.WriteString("grain ci: ")
+			b.WriteString(note)
+			b.WriteByte('\n')
+		}
+		s.stepPrefix = b.String()
+	}
+}
+
+func ciWithheldCapabilityNotes(reg *model.CapabilityRegistry, event ci.Event, trustedSchedule, withholdEventGated, implicitCapabilities bool, ids []string) []string {
+	var notes []string
+	for _, id := range ids {
+		if _, ok := model.RepoWriteTarget(id); ok {
+			if !ciRepoAccessAdmitted(id, event, trustedSchedule, withholdEventGated) {
+				notes = append(notes, fmt.Sprintf("capability %s is %s", id,
+					ciEventGateWithheldClause(event, trustedSchedule, withholdEventGated, ciRepoWriteAllowedEvents)))
+			}
+			continue
+		}
+		if implicitCapabilities || reg == nil || grainci.IsGrant(id) || model.IsCapabilityRef(id) || model.IsRepoAccessGrant(id) {
+			continue
+		}
+		provider, ok := reg.LookupFor(id, true)
+		if !ok || !provider.Spec().SupportsCI() {
+			continue
+		}
+		events, ok := provider.(model.CIEventCapability)
+		if !ok {
+			continue
+		}
+		if withholdEventGated || (!events.SupportsCIEvent(string(event)) && !ciTrustedScheduleAdmits(provider, event, trustedSchedule)) {
+			notes = append(notes, fmt.Sprintf("capability %s is %s", id,
+				ciEventGateWithheldClause(event, trustedSchedule, withholdEventGated, ciProviderAllowedEvents(events, provider))))
+		}
+	}
+	return notes
+}
+
+func ciProviderAllowedEvents(events model.CIEventCapability, provider model.CapabilityProvider) string {
+	var parts []string
+	for _, ev := range []ci.Event{ci.EventRelease, ci.EventManual} {
+		if events.SupportsCIEvent(string(ev)) {
+			parts = append(parts, string(ev))
+		}
+	}
+	switch {
+	case events.SupportsCIEvent(string(ci.EventSchedule)):
+		parts = append(parts, string(ci.EventSchedule))
+	default:
+		if trusted, ok := provider.(model.TrustedScheduleCapability); ok && trusted.SupportsTrustedSchedule() {
+			parts = append(parts, "grain's scheduled")
+		}
+	}
+	switch len(parts) {
+	case 0:
+		return "trusted CI runs"
+	case 1:
+		return parts[0] + " runs"
+	case 2:
+		return parts[0] + " and " + parts[1] + " runs"
+	default:
+		return strings.Join(parts[:len(parts)-1], ", ") + ", and " + parts[len(parts)-1] + " runs"
+	}
+}
+
+func ciEventGateWithheldClause(event ci.Event, trustedSchedule, withholdEventGated bool, allowed string) string {
+	ev := string(event)
+	if ev == "" {
+		ev = "unspecified-event"
+	}
+	switch {
+	case withholdEventGated:
+		return fmt.Sprintf("withheld because this %s run was not started by a person (released only to %s)", ev, allowed)
+	case event == ci.EventSchedule && !trustedSchedule:
+		return fmt.Sprintf("withheld on caller-requested schedule runs (released only to %s)", allowed)
+	default:
+		return fmt.Sprintf("withheld on %s runs (released only to %s)", ev, allowed)
 	}
 }
 
@@ -1468,6 +1587,13 @@ func (s *CiSandbox) exec(ctx context.Context, cmd ci.Command, out func(string)) 
 		// (sandboxaccess.SandboxLostFault) and re-runs as infra.
 		return ci.CommandResult{ExitCode: 2, Output: fmt.Sprintf("%q is not a usable working directory\n", cmd.Dir)}, nil
 	}
+	var prefix string
+	if cmd.Attach == nil || cmd.Attach.ExecID == "" {
+		prefix = s.takeStepPrefix()
+		if prefix != "" && out != nil {
+			out(prefix)
+		}
+	}
 	if s.shell != nil {
 		// The checkout, then the step's own working directory inside it
 		// -- the join ciStepScript does with two `cd`s, said once here
@@ -1486,9 +1612,9 @@ func (s *CiSandbox) exec(ctx context.Context, cmd ci.Command, out func(string)) 
 			// The transport, not the command: the machine gone or the
 			// connection dropped. That fails the job rather than the
 			// step -- see ci.Sandbox.Exec.
-			return ci.CommandResult{Output: result.Output}, fmt.Errorf("running a step in %s: %w", s.SandboxName, err)
+			return ci.CommandResult{Output: prefix + result.Output}, fmt.Errorf("running a step in %s: %w", s.SandboxName, err)
 		}
-		return ci.CommandResult{Output: result.Output, ExitCode: result.ExitCode}, nil
+		return ci.CommandResult{Output: prefix + result.Output, ExitCode: result.ExitCode}, nil
 	}
 	if cmd.Attach != nil && cmd.Attach.ExecID != "" {
 		// No channel, so no exec to find (orchestrator.ShellRequest.Attach).
@@ -1508,7 +1634,7 @@ func (s *CiSandbox) exec(ctx context.Context, cmd ci.Command, out func(string)) 
 		// No status at all: the tool refused the call rather than the
 		// command failing, which is the transport being gone. That fails
 		// the job rather than the step -- see ci.Sandbox.Exec.
-		return ci.CommandResult{Output: result.Text}, fmt.Errorf("running a step in %s: %s",
+		return ci.CommandResult{Output: prefix + result.Text}, fmt.Errorf("running a step in %s: %s",
 			s.SandboxName, strings.TrimSpace(result.Text))
 	}
 	if code == -1 && strings.Contains(result.Text, mcp.SessionCutOffNotice) {
@@ -1517,10 +1643,10 @@ func (s *CiSandbox) exec(ctx context.Context, cmd ci.Command, out func(string)) 
 		// nor failed, the transport dropped it. That too fails the job
 		// rather than the step, and is not retried as one -- the step
 		// may have done half of what it does.
-		return ci.CommandResult{Output: result.Text}, fmt.Errorf("running a step in %s: %s",
+		return ci.CommandResult{Output: prefix + result.Text}, fmt.Errorf("running a step in %s: %s",
 			s.SandboxName, mcp.SessionCutOffNotice)
 	}
-	return ci.CommandResult{Output: result.Text, ExitCode: code}, nil
+	return ci.CommandResult{Output: prefix + result.Text, ExitCode: code}, nil
 }
 
 // ciStepFollower adapts pkg/ci's chunk-at-a-time sink to the io.Writer a
@@ -2882,11 +3008,12 @@ func AdoptCIRuns(ctx context.Context, service *ci.Service) (adopted, lost []orch
 				// set would hand a readopted job repository scopes (and
 				// explicit-only capabilities) it never declared, and drop
 				// the repo-read:/repo-write: it did.
-				Capabilities:   service.Engine.JobCapabilities(pj.Job, plan.Request.Capabilities),
-				ReleaseSecrets: ci.JobSecrets(pj.Job, plan.Request.ReleaseSecrets),
-				Builtin:        pj.Job.Builtin,
-				Shape:          pj.Job.Sandbox,
-				Timeout:        pj.Job.Timeout(),
+				Capabilities:         service.Engine.JobCapabilities(pj.Job, plan.Request.Capabilities),
+				ImplicitCapabilities: pj.Job.ImplicitCapabilities(),
+				ReleaseSecrets:       ci.JobSecrets(pj.Job, plan.Request.ReleaseSecrets),
+				Builtin:              pj.Job.Builtin,
+				Shape:                pj.Job.Sandbox,
+				Timeout:              pj.Job.Timeout(),
 			}
 			// Find the step that was in flight (or about to start), and the
 			// exec it was attached to if the previous process wrote one.

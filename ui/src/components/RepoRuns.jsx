@@ -22,7 +22,7 @@ import {
 } from "@mui/material";
 import api from "../api.js";
 import { REFRESH_MS, RunList, StartRunForm } from "./CIPage.jsx";
-import ItemGlyph from "./ItemGlyph.jsx";
+import { NavGlyph } from "./AppIcon.jsx";
 import { useTimeZone } from "../TimeZoneContext.jsx";
 
 // RepoRuns is one repo's own grain CI runs, on that repo's page
@@ -104,7 +104,7 @@ export default function RepoRuns({ repo, onOpenRun, showError }) {
           variant="subtitle2"
           sx={{ display: "flex", alignItems: "center", gap: 0.8 }}
         >
-          <ItemGlyph kind="ci" size={20} />
+          <NavGlyph kind="ci" size={20} />
           CI runs
         </Typography>
         {data?.enabled && (

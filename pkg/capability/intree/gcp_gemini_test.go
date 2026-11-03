@@ -195,7 +195,7 @@ func TestGeminiKeyConfigurationIsValidated(t *testing.T) {
 }
 
 // A run granted the retired bare gemini-key and one granted the
-// gcp#gemini-key={} schema migration 101 rewrote it to reach the same
+// gcp#gemini-key={} schema migration 102 rewrote it to reach the same
 // method with the same arguments, and get the same placement and prompt.
 func TestGeminiKeyLegacyGrantFidelity(t *testing.T) {
 	s, err := newConfigurableGCP(GCPConfig{GeminiMinter: (&fakeAPIKeys{}).factory})

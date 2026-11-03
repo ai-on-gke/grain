@@ -182,7 +182,7 @@ type Capability struct {
 func OfferedCapabilities() []Capability {
 	offered := []Capability{
 		// No gemini-key row: it was retired onto the gcp server's
-		// gcp#gemini-key (schema migration 101), which is offered with
+		// gcp#gemini-key (schema migration 102), which is offered with
 		// the other capability-server methods.
 		{ID: "self-debug", Name: "Self debug",
 			Description: "Let this task read grain's own source checkout, this deployment's own tasks and runs, and the measurements it keeps about itself -- throughput, latency, the tool-use census -- to help it debug or explain grain's own behavior. All read-only, and all of it is what anyone with this UI open can already see."},

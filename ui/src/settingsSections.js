@@ -207,6 +207,9 @@ const OLD_SYSTEM_TABS = [
 // Secrets & access.
 const SETTINGS_SECTION_ALIASES = {
   "capability-servers": "capabilities",
+  // Settings -> Executors was retired with remote executors; the grain
+  // hostds that replaced them are registered under Hostds.
+  executors: "hostds",
   "legacy-capabilities": "credentials",
   secrets: "credentials",
 };

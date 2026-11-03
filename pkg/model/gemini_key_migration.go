@@ -25,14 +25,14 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
-// geminiKeyRenames is migration 101's renames, the migration's own copy as
+// geminiKeyRenames is migration 102's renames, the migration's own copy as
 // rewriteLegacyGrants asks.
 var geminiKeyRenames = map[string][]string{
 	"gemini-key": {GCPGeminiKeyRef + "={}"},
 }
 
 // geminiKeyMinterSecret is the secret the in-process gemini-key minted
-// with (gcpkey.DefaultMinterCredential), named here so migration 101 does
+// with (gcpkey.DefaultMinterCredential), named here so migration 102 does
 // not change if that constant ever does.
 const geminiKeyMinterSecret = "$secret:gcp-key-minter"
 
@@ -45,7 +45,7 @@ const geminiKeyMigrationNotice = "In-process gemini-key was migrated to gcp#gemi
 	"Bare gemini-key remains accepted as an alias for one release; " +
 	"update .grain declarations and external configs to https://grain.dev/capabilities/gcp#gemini-key."
 
-// migrateGeminiKeyToCapabilityServer is schema migration 101's Up: the
+// migrateGeminiKeyToCapabilityServer is schema migration 102's Up: the
 // in-process gemini-key is retired onto the gcp server's gemini-key
 // method.
 //  1. Where grain_config.gcp_project is set -- when the in-process
