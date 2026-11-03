@@ -179,4 +179,3 @@ func TestUntilMergedParkWaitsOnATargetClosedWithItsPullRequestOpen(t *testing.T)
 		t.Fatalf("after its pull request closed unmerged: waits on %q, want none", got)
 	}
 }
-
