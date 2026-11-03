@@ -664,6 +664,13 @@ var Migrations = []Migration{
 				map[string][]string{GrainCICapability: {GrainCIGrant}})
 		},
 	},
+	{
+		Version:     97,
+		Description: "add the hostd selector a repository's tasks start pinned to",
+		Statements: []string{
+			"ALTER TABLE `repo_config` ADD COLUMN `default_hostd` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as

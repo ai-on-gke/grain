@@ -775,6 +775,9 @@ func (s *Store) composeScheduleTask(ctx context.Context, sched Schedule, stateRe
 			return Composition{}, nil, err
 		}
 		applyGrainCIGrant(&comp, usesGrainCI)
+		if err := applyRepoDefaultHostd(ctx, s.db, &comp); err != nil {
+			return Composition{}, nil, err
+		}
 		if !usesGrainCI {
 			if from, ok := scheduleReviewsWorkflowRun(sched, tmpl); ok {
 				applyWorkflowReviewCIReadGrant(&comp, from)
@@ -808,6 +811,9 @@ func composeSuitePass(ctx context.Context, q querier, items []SuiteItem, templat
 				return nil, err
 			}
 			applyGrainCIGrant(&comp, usesGrainCI)
+			if err := applyRepoDefaultHostd(ctx, q, &comp); err != nil {
+				return nil, err
+			}
 		}
 		out = append(out, comp)
 	}
@@ -879,6 +885,9 @@ func (s *Store) TemplateComposition(ctx context.Context, tmpl Template, values m
 			return Composition{}, err
 		}
 		applyGrainCIGrant(&comp, usesGrainCI)
+		if err := applyRepoDefaultHostd(ctx, s.db, &comp); err != nil {
+			return Composition{}, err
+		}
 	}
 	return comp, nil
 }

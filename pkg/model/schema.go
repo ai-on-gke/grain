@@ -448,7 +448,11 @@ import "strconv"
 // 96 rewrites stored `grain-ci` grants, `repo_config`.`ci_capabilities`
 // included, to `https://grain.dev/capabilities/grain#ci={}`: the
 // in-process `grain-ci` provider is retired for the `grain#ci` method.
-const SchemaVersion = 96
+//
+// 97 adds `default_hostd` to `repo_config` (model.RepoConfig.DefaultHostd):
+// the hostd pin or label selector a task filed against the repository
+// starts with when neither the filing nor its template names one.
+const SchemaVersion = 97
 
 // configAuditTable is the `config_audit` table: one row per change to the
 // deployment's configuration somebody made (model.ConfigAuditEntry,
@@ -3020,6 +3024,10 @@ var Tables = []string{
 	// issue importer (schema 65). DEFAULT 0 / '' imports nothing, and
 	// issue_import_approved DEFAULT 0 files what it does import
 	// unapproved.
+	//
+	// default_hostd is RepoConfig.DefaultHostd: the hostd pin or label
+	// selector a task filed here starts with when neither the filing nor
+	// its template names one (schema 97). DEFAULT '' is the default hostd.
 	`CREATE TABLE IF NOT EXISTS ` + "`repo_config`" + ` (
   ` + "`owner`" + `                TEXT NOT NULL,
   ` + "`name`" + `                 TEXT NOT NULL,
@@ -3056,6 +3064,7 @@ var Tables = []string{
   ` + "`issue_import_label`" + `       TEXT NOT NULL DEFAULT '',
   ` + "`issue_import_approved`" + `    INTEGER NOT NULL DEFAULT 0,
   ` + "`issue_import_interval_seconds`" + ` INTEGER NOT NULL DEFAULT 0,
+  ` + "`default_hostd`" + `            TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 
