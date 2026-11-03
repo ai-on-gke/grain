@@ -44,7 +44,7 @@ func TestEveryRepoTaskIsGivenTheRedCIProcedure(t *testing.T) {
 	task := model.Task{
 		ID: "t1", Title: "Do the thing", Body: "details",
 		Target: &model.RepoRef{Owner: "acme", Name: "widgets"},
-		Grants: []model.Grant{{Capability: grainci.CapabilityName}},
+		Grants: []model.Grant{{Capability: grainci.Grant}},
 	}
 	for _, history := range []History{{}, {Repair: true}} {
 		prompt := BuildPrompt(task, "", "", false, DefaultMaxRunRuntime, history, nil)
@@ -64,7 +64,7 @@ func TestATaskWithNoRepoIsNotGivenTheRedCIProcedure(t *testing.T) {
 	t.Parallel()
 	task := model.Task{
 		ID: "t1", Title: "Do the thing", Body: "details",
-		Grants: []model.Grant{{Capability: grainci.CapabilityName}},
+		Grants: []model.Grant{{Capability: grainci.Grant}},
 	}
 	prompt := BuildPrompt(task, "", "", false, DefaultMaxRunRuntime, History{}, nil)
 	if strings.Contains(prompt, model.RedCIProcedure) || strings.Contains(prompt, "1. Get the failing job") {
@@ -158,7 +158,7 @@ func TestFixesBaseBranchRepairPromptsDoNotSkipInheritedBaseFailures(t *testing.T
 			// carve-out and never includes the GitHub-checks "not yours to fix"
 			// paragraph.
 			withGrainCI := tc.task
-			withGrainCI.Grants = []model.Grant{{Capability: grainci.CapabilityName}}
+			withGrainCI.Grants = []model.Grant{{Capability: grainci.Grant}}
 			prompt := BuildPrompt(withGrainCI, "", "", false, DefaultMaxRunRuntime, History{}, nil)
 			if strings.Contains(prompt, "not yours to fix") || strings.Contains(prompt, "leave it alone") {
 				t.Errorf("with grain-ci: repair task was told to skip inherited base failures:\n%s", prompt)

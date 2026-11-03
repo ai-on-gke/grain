@@ -149,7 +149,8 @@ var retiredGrants = []struct {
 	{85, "git-push-any-ref", []string{model.GitPushAnyRefGrant}},
 	{88, "repo-read:acme/tools", []string{model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
 	{88, "repo-write:acme/tools", []string{model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
-	{96, "gcp-key", []string{model.GCPKeySandboxAgentGrant}},
+	{96, "grain-ci", []string{model.GrainCIGrant}},
+	{97, "gcp-key", []string{model.GCPKeySandboxAgentGrant}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'
@@ -486,17 +487,17 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		}
 	}
 
-	rewindSchemaTo(t, ctx, db, 95)
+	rewindSchemaTo(t, ctx, db, 96)
 	exportDir := t.TempDir()
 	if err := staterepo.Export(ctx, db, exportDir); err != nil {
-		t.Fatalf("exporting version-95 store: %v", err)
+		t.Fatalf("exporting version-96 store: %v", err)
 	}
-	if err := staterepo.WriteSchemaVersion(exportDir, 95); err != nil {
-		t.Fatalf("stamping version-95 export: %v", err)
+	if err := staterepo.WriteSchemaVersion(exportDir, 96); err != nil {
+		t.Fatalf("stamping version-96 export: %v", err)
 	}
 
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating version-95 store to 96: %v", err)
+		t.Fatalf("migrating version-96 store to 97: %v", err)
 	}
 
 	assertMigrated := func(t *testing.T, s *model.Store, sqlDB *sql.DB) {
@@ -614,16 +615,16 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 
 	assertMigrated(t, store, db)
 
-	rewindSchemaTo(t, ctx, db, 95)
+	rewindSchemaTo(t, ctx, db, 96)
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("re-running migration 96: %v", err)
+		t.Fatalf("re-running migration 97: %v", err)
 	}
 	assertMigrated(t, store, db)
 
 	importedStore, importedDB, importCtx := openStore(t)
 	_ = importCtx
 	if err := staterepo.Import(ctx, importedDB, exportDir); err != nil {
-		t.Fatalf("staterepo.Import of schema-95 export: %v", err)
+		t.Fatalf("staterepo.Import of schema-96 export: %v", err)
 	}
 	assertMigrated(t, importedStore, importedDB)
 }

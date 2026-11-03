@@ -10,7 +10,9 @@ Every registry-run instance is **stateless on the VM and replaceable**. Its data
 
 This document is written for the open-source core. It uses public GCP products (GKE, Cloud SQL for PostgreSQL, Secret Manager, Cloud Storage, Cloud KMS, IAP, Certificate Manager, Compute Engine, Cloud NAT) and keeps each cloud- or forge-specific piece behind a small interface, so another cloud or an internal edition can swap one out. A company-wide deployment, with its own Terraform, belongs in a wrapper distribution and is not described here.
 
-Read with: [`authentication.design.md`](authentication.design.md) (the `IdentityVerifier` seam, the allowlist, `-ui-require-iap`), [`operator-attribution.design.md`](operator-attribution.design.md), [`architecture.design.md`](architecture.design.md), [`settings.design.md`](settings.design.md), [`non-disruptive-upgrade.design.md`](non-disruptive-upgrade.design.md), [`grain-on-gke.design.md`](grain-on-gke.design.md) (Gateway, IAP backend policy, Cloud SQL), [`docs/cloudsql-postgres.md`](../../docs/cloudsql-postgres.md), [`docs/external-config-repo.md`](../../docs/external-config-repo.md), and the reference Terraform in `deploy/terraform/gcp/`.
+Read with: [`authentication.design.md`](authentication.design.md) and [`authentication.spec.md`](../spec/authentication/authentication.spec.md) (`ui.IdentityVerifier`, `ui.AccessCodePrecedence`, `-ui-allowed-principals`, `-ui-require-iap`, `checkVerifiedIdentityCSRF`), [`operator-attribution.design.md`](operator-attribution.design.md), `rbac.design.md` (task 2764), [`architecture.design.md`](architecture.design.md), [`settings.design.md`](settings.design.md), [`non-disruptive-upgrade.design.md`](non-disruptive-upgrade.design.md), [`grain-on-gke.design.md`](grain-on-gke.design.md) (Gateway, IAP backend policy, Cloud SQL), [`docs/cloudsql-postgres.md`](../../docs/cloudsql-postgres.md), [`docs/external-config-repo.md`](../../docs/external-config-repo.md), and the reference Terraform in `deploy/terraform/gcp/`.
+
+**The core rule:** Every registry-managed grain instance remains a single-tenant controller on replaceable compute whose persistent state lives in isolated Cloud SQL, Secret Manager, Git config-repo, and Cloud Storage resources, and whose caller identity arrives solely as a short-lived, single-audience JWT verified by the instance's `registry` `IdentityVerifier`.
 
 ## Goals
 
@@ -389,8 +391,8 @@ After IAP verifies, the registry signs a JWT for the single target instance and 
 | `iss` | The registry's issuer URL, `https://<registry-host>` (configured, never taken from the request) |
 | `aud` | The instance's origin URL, `https://<name>.<instance-domain>`. Exactly one audience. |
 | `sub` | The verified email, lower-cased |
-| `email` | The same email, reusing grain's IAP claim handling |
-| `kind` | `human` or `service` (`.gserviceaccount.com`, as [`authentication.design.md`](authentication.design.md) decides) |
+| `email` | The same email, reusing grain's `normalizeIdentityEmail` handling (`pkg/ui/principal.go`) |
+| `kind` | `human` (`model.PrincipalHuman`) or `service` (`model.PrincipalService` for `.gserviceaccount.com`, matching `VerifiedIdentity` in [`authentication.design.md`](authentication.design.md) §2 and `{#AU-5}` in [`authentication.spec.md`](../spec/authentication/authentication.spec.md)) |
 | `iat`, `nbf` | Now, with `nbf` 30 s back for clock skew |
 | `exp` | `iat + 60 s` |
 | `jti` | Random identifier, logged with the request id |
@@ -402,7 +404,7 @@ After IAP verifies, the registry signs a JWT for the single target instance and 
 
 ### The instance-side verifier
 
-A new `IdentityVerifier` in core, `registry`, registered on the seam [`authentication.design.md`](authentication.design.md) defines:
+A new `ui.IdentityVerifier` in core, `registry`, registered via `ui.RegisterIdentityVerifier` on the seam [`authentication.design.md`](authentication.design.md) §1 ([`authentication.spec.md`](../spec/authentication/authentication.spec.md) `{#AU-1}`–`{#AU-2}`) defines:
 
 ```
 -ui-registry-issuer=https://grain.example.com
@@ -411,10 +413,11 @@ A new `IdentityVerifier` in core, `registry`, registered on the seam [`authentic
 -ui-require-verifier=registry
 ```
 
-- `Name()` is `registry` (`AuthMethod` and attribution `Source`: `{human, alice@example.com, via registry}`).
-- `Headers()` is `X-Grain-Registry-Assertion`, counting as a proxy header for `relayedByProxy`.
-- `Verify` validates the signature via `pkg/jwks`, pins `alg` to `ES256` (never `none` or HMAC), checks `iss` and `aud` for exact equality, enforces `exp`, `nbf`, and `iat` with 30 s skew and `exp - iat <= 5 min`, and fails closed with `401` on any invalid present assertion.
-- The instance's own `-ui-allowed-principals` (seeded to `user:<owner>`), operator attribution ([`operator-attribution.design.md`](operator-attribution.design.md)), and `pkg/ui/csrf.go` checks then apply unchanged.
+- `Name()` is `registry` (`AuthMethod` and `model.Principal.Source` `model.AuthSource("registry")`: `{human, alice@example.com, registry}`, rendered by `ui.PrincipalLabel` as `alice@example.com (via registry)`).
+- `AccessCodeWins()` is `false` (default `ui.AccessCodePrecedence`: the verified `registry` assertion takes precedence over any access code, matching IAP under `{#AU-10}`).
+- `Headers()` is `["X-Grain-Registry-Assertion"]`, which `Server.relayedByProxy` automatically treats as a proxy header (`{#AU-1}`, `{#AU-13}`).
+- `Verify` validates the signature via `pkg/jwks`, pins `alg` to `ES256` (never `none` or HMAC), checks `iss` and `aud` for exact equality, enforces `exp`, `nbf`, and `iat` with 30 s skew and `exp - iat <= 5 min`, and fails closed with `401` (`writeAssertionRefused`, `{#AU-2}`, `{#AU-16}`) on any invalid present assertion.
+- The instance's own `-ui-allowed-principals` (`checkAllowedPrincipal` in `pkg/ui/allowlist.go`, seeded to `user:<owner>`), refusal pages (`writePrincipalRefusedPage` in `pkg/ui/principalrefusal.go`), remote `hostd` owner verification (`hostdConnectIdentity` in `pkg/ui/hostd_connect.go`, `{#AU-17}`–`{#AU-18}`), operator attribution (`ui.RequestActor(ctx)`, [`operator-attribution.design.md`](operator-attribution.design.md)), and `checkVerifiedIdentityCSRF` (`pkg/ui/csrf.go`, `{#AU-14}`) then apply unchanged.
 
 ### Defence against a VM forging requests to other VMs
 
@@ -426,7 +429,7 @@ Assuming an attacker compromises a whole instance VM, it still cannot act on ano
 
 ### The access code on registry-created instances
 
-Registry instances run with **`-ui-require-verifier=registry`** (generalising `-ui-require-iap`, kept as an alias). Over the network listener, `grain_access` cookies and bearer access codes are disabled and there is no login page. Over **loopback with no forwarding headers**, the access code (`local-api-token`) remains accepted as the **break-glass path**: the owner (granted conditional `roles/iap.tunnelResourceAccessor` and `roles/compute.osAdminLogin` on `<prefix><name>`) runs `gcloud compute ssh --tunnel-through-iap` and invokes `grain` locally or over a forwarded port. Storing `local-api-token` in the instance's Secret Manager prefix keeps the break-glass credential intact across VM replacements. Deployments that forbid SSH can set `ssh_break_glass: false`.
+Registry instances run with **`-ui-require-verifier=registry`** (generalising `-ui-require-iap` in `accessCodeAccepted`, `pkg/ui/accesscode.go`, [`authentication.design.md`](authentication.design.md) §4 and `{#AU-12}`–`{#AU-13}`, with `-ui-require-iap` kept as an alias). Over the network listener, `grain_access` cookies and bearer access codes are disabled and unauthenticated browser navigations receive a `401` sign-in refusal page rather than the access-code form. Over **unproxied loopback** (`isLoopbackRequest && !relayedByProxy`), the access code (`local-api-token`) remains accepted as the **break-glass path**: the owner (granted conditional `roles/iap.tunnelResourceAccessor` and `roles/compute.osAdminLogin` on `<prefix><name>`) runs `gcloud compute ssh --tunnel-through-iap` and invokes `grain` locally or over a forwarded port. Storing `local-api-token` in the instance's Secret Manager prefix keeps the break-glass credential intact across VM replacements. Deployments that forbid SSH can set `ssh_break_glass: false`.
 
 ## Replaceable instances and externalised state
 

@@ -63,7 +63,7 @@ func TestMergedPullRequestRecordsTheBaseBranchsNewTip(t *testing.T) {
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	task := model.Task{
 		ID: "42", Target: &repo,
-		Grants: []model.Grant{{Capability: grainci.CapabilityName}},
+		Grants: []model.Grant{{Capability: grainci.Grant}},
 	}
 	ref := model.PullRequestRef{Repo: repo, Number: 7}
 	err := recordPostMergeCI(ctx, store, postMergeHeadClient{
@@ -211,7 +211,7 @@ func TestMergedPullRequestWithReleasesOffAndNoJobsStillRecordsTheTip(t *testing.
 	runner := &postMergeCI{}
 	task := model.Task{
 		ID: "42", Target: &repo,
-		Grants: []model.Grant{{Capability: grainci.CapabilityName}},
+		Grants: []model.Grant{{Capability: grainci.Grant}},
 	}
 	err := recordPostMergeCI(ctx, store, postMergeHeadClient{
 		head: &github.BranchHead{SHA: "0123456789abcdef"},
@@ -1696,7 +1696,7 @@ func TestBranchExistsSettledDoesNotProbeTheRepoOnAPositive(t *testing.T) {
 // test below is one line of it.
 
 func grantedTask() model.Task {
-	return model.Task{ID: "t1", Grants: []model.Grant{{Capability: grainci.CapabilityName}}}
+	return model.Task{ID: "t1", Grants: []model.Grant{{Capability: grainci.Grant}}}
 }
 
 func ciObservation(commit, conclusion string) *model.Observation {

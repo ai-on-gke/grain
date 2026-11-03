@@ -1064,7 +1064,7 @@ func TestCreateConfigTaskGetsRequiredGrainCI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(task.Capabilities, "grain-ci") {
+	if !slices.Contains(task.Capabilities, model.GrainCIGrant) {
 		t.Fatalf("capabilities = %v, want mandatory grain-ci", task.Capabilities)
 	}
 }
@@ -1082,7 +1082,7 @@ func TestCreateConfigTaskKeepsRequiredGrainCIWithExplicitCapabilities(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(task.Capabilities, "grain-ci") {
+	if !slices.Contains(task.Capabilities, model.GrainCIGrant) {
 		t.Fatalf("capabilities = %v, want mandatory grain-ci", task.Capabilities)
 	}
 }

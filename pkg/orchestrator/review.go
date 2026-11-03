@@ -466,18 +466,18 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 		if usesGrainCI {
 			found := false
 			for _, g := range grants {
-				if g.Capability == grainci.CapabilityName {
+				if grainci.IsGrant(g.Capability) {
 					found = true
 					break
 				}
 			}
 			if !found {
-				grants = append(grants, model.Grant{Capability: grainci.CapabilityName, Via: model.GrantByDefault})
+				grants = append(grants, model.Grant{Capability: grainci.Grant, Via: model.GrantByDefault})
 			}
 		} else {
 			filtered := make([]model.Grant, 0, len(grants))
 			for _, g := range grants {
-				if g.Capability != grainci.CapabilityName {
+				if !grainci.IsGrant(g.Capability) {
 					filtered = append(filtered, g)
 				}
 			}

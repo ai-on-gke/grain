@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/whererun"
@@ -94,6 +95,13 @@ func TestRunsRouteToTheirTasksHostdWithCapacityAndPerHostdPauses(t *testing.T) {
 		host, err := live.cliHostdHost(r)
 		if err != nil {
 			t.Fatalf("%s: cliHostdHost = %v", tc.task, err)
+		}
+		// A remote hostd's endpoints are carried to its own machine, not
+		// the default hostd's.
+		if tc.hostd != model.LocalHostd {
+			if c, ok := host.(agent.HostdHost).Remote.(*hostd.HostdCarrier); !ok || c.Name != tc.hostd {
+				t.Errorf("%s: the run's CLI host carries its endpoints over %#v, want %s's", tc.task, host.(agent.HostdHost).Remote, tc.hostd)
+			}
 		}
 		offers, err := host.(agent.HostdHost).Client.Offers(ctx)
 		if err != nil {

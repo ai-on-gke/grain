@@ -102,12 +102,13 @@ var retiredGrants = []struct {
 	{82, "db-write", []string{model.GrainSQLWriteGrant}},
 	{84, "self-repair", []string{model.GrainHostExecGrant}},
 	{85, "git-push-any-ref", []string{model.GitPushAnyRefGrant}},
-	{88, "repo-read:acme/tools", []string{model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
-	{88, "repo-write:acme/tools", []string{model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
 	// corp-research is the Google build's: core has no alias for it, which
 	// that build registers with capability.Register (retiredAs).
 	{86, "corp-research", []string{model.CorpResearchGrant}},
-	{96, "gcp-key", []string{model.GCPKeySandboxAgentGrant}},
+	{88, "repo-read:acme/tools", []string{model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
+	{88, "repo-write:acme/tools", []string{model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
+	{96, "grain-ci", []string{model.GrainCIGrant}},
+	{97, "gcp-key", []string{model.GCPKeySandboxAgentGrant}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'
@@ -699,21 +700,21 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		}
 	}
 
-	// Rewind to schema 95 and export a pre-migration state-repo dump before migrating in place.
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 95 WHERE `id` = 1"); err != nil {
+	// Rewind to schema 96 and export a pre-migration state-repo dump before migrating in place.
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 96 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	exportDir := t.TempDir()
 	if err := staterepo.Export(ctx, db, exportDir); err != nil {
-		t.Fatalf("exporting version-95 store: %v", err)
+		t.Fatalf("exporting version-96 store: %v", err)
 	}
-	if err := staterepo.WriteSchemaVersion(exportDir, 95); err != nil {
-		t.Fatalf("stamping version-95 export: %v", err)
+	if err := staterepo.WriteSchemaVersion(exportDir, 96); err != nil {
+		t.Fatalf("stamping version-96 export: %v", err)
 	}
 
-	// Migrate in place to 96.
+	// Migrate in place to 97.
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating version-95 store to 96: %v", err)
+		t.Fatalf("migrating version-96 store to 97: %v", err)
 	}
 
 	assertMigrated := func(t *testing.T, s *model.Store, sqlDB *sql.DB) {
@@ -831,20 +832,20 @@ func TestMigration96SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 
 	assertMigrated(t, store, db)
 
-	// Re-running migration 96 is idempotent.
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 95 WHERE `id` = 1"); err != nil {
+	// Re-running migration 97 is idempotent.
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 96 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("re-running migration 96: %v", err)
+		t.Fatalf("re-running migration 97: %v", err)
 	}
 	assertMigrated(t, store, db)
 
-	// Importing the pre-migration schema-95 state-repo export into a fresh store rewrites grants and seeds permission sets.
+	// Importing the pre-migration schema-96 state-repo export into a fresh store rewrites grants and seeds permission sets.
 	importedStore, importedDB, importCtx := openStore(t)
 	_ = importCtx
 	if err := staterepo.Import(ctx, importedDB, exportDir); err != nil {
-		t.Fatalf("staterepo.Import of schema-95 export: %v", err)
+		t.Fatalf("staterepo.Import of schema-96 export: %v", err)
 	}
 	assertMigrated(t, importedStore, importedDB)
 }
@@ -870,11 +871,11 @@ func TestMigration96HandlesPreexistingAdminConfigShapes(t *testing.T) {
 		if err := store.PutConfig(ctx, cfg); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 95 WHERE `id` = 1"); err != nil {
+		if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 96 WHERE `id` = 1"); err != nil {
 			t.Fatal(err)
 		}
 		if err := model.New(db).Init(ctx); err != nil {
-			t.Fatalf("migrating 95 -> 96: %v", err)
+			t.Fatalf("migrating 96 -> 97: %v", err)
 		}
 		gotCfg, err := store.GetConfig(ctx)
 		if err != nil {
@@ -919,11 +920,11 @@ func TestMigration96HandlesPreexistingAdminConfigShapes(t *testing.T) {
 		if err := store.PutConfig(ctx, cfg); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 95 WHERE `id` = 1"); err != nil {
+		if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 96 WHERE `id` = 1"); err != nil {
 			t.Fatal(err)
 		}
 		if err := model.New(db).Init(ctx); err != nil {
-			t.Fatalf("migrating 95 -> 96: %v", err)
+			t.Fatalf("migrating 96 -> 97: %v", err)
 		}
 		gotCfg, err := store.GetConfig(ctx)
 		if err != nil {
