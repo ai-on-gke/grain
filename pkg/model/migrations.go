@@ -698,6 +698,13 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     102,
+		Description: "add the hostd selector a repository's tasks start pinned to",
+		Statements: []string{
+			"ALTER TABLE `repo_config` ADD COLUMN `default_hostd` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     103,
 		Description: "add external_agent_token.owner, task.filed_via, task_comment.filed_via and grain_config.owner_trust (external agent owner attribution and owner-trust approval)",
 		Statements: []string{
 			"ALTER TABLE `external_agent_token` ADD COLUMN `owner` TEXT NOT NULL DEFAULT ''",

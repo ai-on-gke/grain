@@ -441,6 +441,7 @@ var routeQueries = map[string]map[string]string{
 	"GET /api/suites/{id}/composition":          {"repo": "The repository (owner/name) the composition is for.", "base": "The base branch the composition is for."},
 	"POST /api/suites/composition":              {"repo": "The repository (owner/name) the composition is for.", "base": "The base branch the composition is for."},
 	"GET /api/deployment/audit-logs":            {"limit": "At most this many entries."},
+	"GET /api/deployment/config-audit":          {"limit": "At most this many entries."},
 	"GET /api/agent-models":                     {"framework": "Only this framework's models.", "backend": "Only this model connection's models."},
 	"GET /api/state-repo/file":                  {"path": "The file's path in the state repository.", "limit": "At most this many bytes of it."},
 	"GET /api/host/top":                         {"lines": "At most this many processes."},
