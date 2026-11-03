@@ -1,0 +1,26 @@
+== a. PUT /api/settings with retired fields
+"k8sSandboxImage","k8sGranuleImage","k8sWorkspace","k8sGitProxyHost","k8sSandboxService","k8sServiceAccount","k8sNodeSelector","k8sPrivileged","k8sNetworkPolicy","k8sDeployment","k8sContainer","k8sPriorityClassInteractive","k8sPriorityClassAgent","k8sPriorityClassCi","githubHost","githubInsecureHttp"],"pendingRestart":null,"unrunnable":null,"settingsLocked":false,"configRepoOnly":false}
+
+HTTP 200
+{}
+== b1. state check, merge_batch_size = 9
+schema:  93, which is what this build of grain knows
+loaded:  28 rows across 5 tables
+  grain_config                 1
+  schedule                     6
+  schedule_grant               15
+  schedule_read                5
+  schedule_sequence            1
+ok: grain can load this
+exit=0
+== b2. state check, unknown key merge_batching_enabled
+warning: tables/grain_config.json row 0 has a column "merge_batching_enabled" that grain_config does not; it would be ignored
+schema:  93, which is what this build of grain knows
+loaded:  28 rows across 5 tables
+  grain_config                 1
+  schedule                     6
+  schedule_grant               15
+  schedule_read                5
+  schedule_sequence            1
+ok: grain can load this
+exit=0
