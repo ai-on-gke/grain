@@ -383,6 +383,14 @@ release, as one hostd named by `-hostd-token-name` (default `remote`),
 and is removed in the next. A hostd's allowlist (`/etc/grain/hostd.yaml`)
 may set `capacity:` and `labels:`, which it reports to the daemon.
 
+While a hostd is disconnected, tasks pinned to it wait in the queue
+(`waiting for hostd <name>`) and never move to another hostd; they
+resume when it reconnects. An agent CLI already running there keeps
+running, and is re-attached from where its output stood if the same
+hostd reconnects within `grain daemon -hostd-reattach-timeout` (default
+15m). Past that the run fails as an infrastructure failure, with no
+strike against the task.
+
 The remote model executors (`grain executor` / `grain model-server`,
 `scripts/run-remote-executor.sh`) were removed; see
 [docs/executors-removed.md](docs/executors-removed.md) for what a remote

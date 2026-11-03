@@ -48,9 +48,12 @@ func newHostdHub(cfg Config, store *model.Store) *hostd.Remote {
 func hostdDisconnectedSubject(name string) string { return "hostd-disconnected:" + name }
 
 // hostdConnectionNotifier raises hostd-disconnected:<name> when a hostd
-// that dials in drops, and clears it when that hostd connects again.
-// Work pinned to it waits meanwhile (HostdWaitError); nothing moves to
-// another hostd.
+// that dials in drops, and clears it when that hostd connects again,
+// waking dispatch so the work parked on it resumes at once. Work pinned
+// to it waits meanwhile (HostdWaitError): a queued run is parked saying
+// "waiting for hostd <name>", and a CLI running there detached is
+// re-attached if it is back within -hostd-reattach-timeout
+// (runhost.Hostd.ReattachTimeout). Nothing moves to another hostd.
 func hostdConnectionNotifier(store *model.Store) func(name string, connected bool) {
 	return func(name string, connected bool) {
 		go func() {
@@ -61,6 +64,9 @@ func hostdConnectionNotifier(store *model.Store) func(name string, connected boo
 				if _, err := store.ClearNotification(ctx, subject, "automation:hostd"); err != nil {
 					log.Printf("grain daemon: clearing %s: %v", subject, err)
 				}
+				// Tasks parked waiting for it are admitted on the next
+				// cycle; wake it rather than wait out -poll-interval.
+				wakeCycle()
 				return
 			}
 			if h, err := store.GetHostd(ctx, name); err == nil && h != nil && h.Revoked() {
