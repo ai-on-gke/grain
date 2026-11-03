@@ -270,6 +270,16 @@ func TestReleaseQualification(t *testing.T) {
 				t.Errorf("Qualification template %s expected %q, got:\n%s", filename, want, data)
 			}
 		}
+		// Only {{name}} is filled in (model.SubstituteFields): a single-brace
+		// {rc_tag} reaches the run verbatim.
+		if m := regexp.MustCompile(`(^|[^{])\{rc_(tag|sha)\}`).Find(data); m != nil {
+			t.Errorf("Qualification template %s has a placeholder grain does not fill: %q", filename, m)
+		}
+		// nothing_needed closes the task, and a closed item fails
+		// (model.JudgeQualificationAttempt), so a template may not offer it.
+		if strings.Contains(string(data), "(or `nothing_needed`)") {
+			t.Errorf("Qualification template %s offers nothing_needed as a way to finish", filename)
+		}
 		if filename != "qualification-system-smoke.yml" &&
 			!strings.Contains(string(data), "git push origin :refs/heads/qualification/<this task id>") {
 			t.Errorf("Qualification template %s does not delete its scratch branch", filename)

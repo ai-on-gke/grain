@@ -28,7 +28,7 @@ body: |
 
   Build and run `grain demo` from that commit. This item is filed only after
   `qualification-mergequeue`, `qualification-ci-diagnostics` and
-  `qualification-base-triage` have passed on `{rc_tag}`. It needs no
+  `qualification-base-triage` have passed on `{{rc_tag}}`. It needs no
   scratch branch, so create none.
 
   ## 1. Multi-Team UI Walkthroughs
@@ -54,7 +54,7 @@ body: |
 
   ## 4. Report
 
-  - Deliver the final qualification report for `{rc_tag}` in the closing
+  - Deliver the final qualification report for `{{rc_tag}}` in the closing
     note.
 
   ## What makes this a pass
@@ -65,8 +65,9 @@ body: |
     Any pull request fails qualification, including a real fix. Report a bug
     you find in the closing note with `Qualification-Verdict: FAIL`. The
     pipeline steward files the fix.
-  - Finish with `comment_on_issue` (or `nothing_needed`), never
-    `ask_question`.
+  - Finish with `comment_on_issue`, never `nothing_needed` or
+    `ask_question`: `nothing_needed` closes the task, and a closed
+    qualification task fails whatever its note says.
   - End the closing note with exactly these three lines, the commit in full:
 
     ```text
