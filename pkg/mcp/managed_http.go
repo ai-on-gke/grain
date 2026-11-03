@@ -115,7 +115,7 @@ func StartCommandHTTP(ctx context.Context, binary string, args []string) (*Manag
 	// server on the other end said, and here that server happens to be
 	// grain's own rather than by construction.
 	for _, info := range tools {
-		registry.Register(Tool{Name: info.Name, Description: info.Description, InputSchema: info.InputSchema,
+		registry.Register(Tool{Name: info.Name, Description: info.Description, InputSchema: info.InputSchema, Meta: info.Meta,
 			Handler: func(ctx context.Context, args map[string]any) Result {
 				result, err := client.CallTool(ctx, info.Name, args)
 				if err != nil {
@@ -149,35 +149,20 @@ func StartCommandHTTP(ctx context.Context, binary string, args []string) (*Manag
 	return &ManagedHTTP{URL: "http://" + authority + "/mcp", Token: token, Tools: tools, close: stop}, nil
 }
 
-// Stateless Streamable HTTP: JSON POST responses, no optional GET/SSE
-// stream or shared sessions. Each endpoint already represents one run.
-// Reject browser origins and unexpected Host headers as defense in depth
-// against cross-origin requests and DNS rebinding; every request also
-// requires a cryptographically random per-run bearer token.
-//
-// host is the authority the endpoint bound to: a request has to name the
-// address this run's CLI was actually given.
-func streamableHTTPHandler(registry *Registry, token, host string) http.Handler {
+// StatelessHTTPHandler serves registry over stateless Streamable HTTP POST:
+// 202 Accepted on JSON-RPC notifications, 2025-03-26 / 2024-11-05 protocol
+// version negotiation on initialize, and no loopback-only Host check (so a
+// server with its own authentication and host guard, such as ui.Server's
+// POST /api/mcp, can mount it directly).
+func StatelessHTTPHandler(registry *Registry) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		if r.Host != host || r.Header.Get("Origin") != "" {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-		if token == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) != 1 {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		if r.URL.Path != "/mcp" {
-			http.NotFound(w, r)
-			return
-		}
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", "POST")
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		if strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]) != "application/json" {
+		if !strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]), "application/json") {
 			http.Error(w, "expected application/json", http.StatusUnsupportedMediaType)
 			return
 		}
@@ -195,13 +180,50 @@ func streamableHTTPHandler(registry *Registry, token, host string) http.Handler 
 			w.WriteHeader(http.StatusAccepted)
 			return
 		}
-		response := registry.Handle(r.Context(), body)
+		initVersion := protocolVersion
 		if req.Method == "initialize" {
-			// HTTP transport was introduced after the stdio server's
-			// original version. Our tools need no newer capabilities.
-			response = []byte(strings.Replace(string(response), `"protocolVersion":"2024-11-05"`, `"protocolVersion":"2025-03-26"`, 1))
+			initVersion = negotiatedHTTPProtocolVersion(req.Params)
 		}
+		response := registry.handle(r.Context(), body, initVersion)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(response)
+	})
+}
+
+func negotiatedHTTPProtocolVersion(params json.RawMessage) string {
+	var p struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	if len(params) > 0 && json.Unmarshal(params, &p) == nil && p.ProtocolVersion == protocolVersion {
+		return protocolVersion
+	}
+	return "2025-03-26"
+}
+
+// Stateless Streamable HTTP: JSON POST responses, no optional GET/SSE
+// stream or shared sessions. Each endpoint already represents one run.
+// Reject browser origins and unexpected Host headers as defense in depth
+// against cross-origin requests and DNS rebinding; every request also
+// requires a cryptographically random per-run bearer token.
+//
+// host is the authority the endpoint bound to: a request has to name the
+// address this run's CLI was actually given.
+func streamableHTTPHandler(registry *Registry, token, host string) http.Handler {
+	post := StatelessHTTPHandler(registry)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if r.Host != host || r.Header.Get("Origin") != "" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if token == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path != "/mcp" {
+			http.NotFound(w, r)
+			return
+		}
+		post.ServeHTTP(w, r)
 	})
 }

@@ -280,3 +280,93 @@ func TestIsNarrowTestRecognisesTheRunnersSelectionFlags(t *testing.T) {
 		}
 	}
 }
+
+func TestRunTelemetryUnwrapsGrainControllerInvokeAndExtractsTargetIDs(t *testing.T) {
+	t.Parallel()
+	result := &agent.Result{ToolCalls: []agent.ToolCall{
+		{
+			Name:      "mcp__grain-controller__grain_explore_scope",
+			Arguments: map[string]any{"scope": "tasks"},
+			Text:      `{"scope":"tasks"}`,
+		},
+		{
+			Name: "mcp__grain-controller__grain_invoke",
+			Arguments: map[string]any{
+				"tool":      "api_get_task",
+				"arguments": map[string]any{"id": "41"},
+			},
+			Text: `{"task":{"id":"41"}}`,
+		},
+		{
+			Name: "mcp_grain-controller_grain_invoke",
+			Arguments: map[string]any{
+				"tool":      "reorder",
+				"arguments": map[string]any{"id": "41", "body": map[string]any{"priority": 1}},
+				"reason":    "bump urgent fix",
+			},
+			Text: `{"id":"41"}`,
+		},
+		{
+			Name: "call_mcp_tool",
+			Arguments: map[string]any{
+				"ServerName": "grain-controller",
+				"ToolName":   "grain_invoke",
+				"Arguments": map[string]any{
+					"tool":      "api_get_ci_run",
+					"arguments": map[string]any{"id": "ci-abc123"},
+				},
+			},
+			Text: `{"id":"ci-abc123"}`,
+		},
+		{
+			Name:      "mcp__grain-controller__grain_get_task",
+			Arguments: map[string]any{"id": "77"},
+			Text:      "Task 77 [queued]",
+		},
+		{
+			Name:      "grain_list_tasks",
+			Arguments: map[string]any{"state": "queued"},
+			Text:      `[{"id":"88","title":"A"},{"id":"89","title":"B"}]`,
+		},
+	}}
+
+	got := runTelemetry(result)
+	wantTools := []string{
+		"grain_explore_scope",
+		"api_get_task",
+		"api_reorder",
+		"api_get_ci_run",
+		"grain_get_task",
+		"grain_list_tasks",
+	}
+	if len(got.Tools) != len(wantTools) {
+		t.Fatalf("got.Tools = %+v, want %v", got.Tools, wantTools)
+	}
+	for i, want := range wantTools {
+		if got.Tools[i].Tool != want || got.Tools[i].Calls != 1 {
+			t.Errorf("got.Tools[%d] = %+v, want Tool=%q Calls=1", i, got.Tools[i], want)
+		}
+	}
+
+	if len(got.APICalls) != 6 {
+		t.Fatalf("got.APICalls = %+v, want 6 entries", got.APICalls)
+	}
+	wantTargets := map[string]string{
+		"api_get_task":     "41",
+		"api_reorder":      "41",
+		"api_get_ci_run":   "ci-abc123",
+		"grain_get_task":   "77",
+		"grain_list_tasks": "88,89",
+	}
+	for _, apiCall := range got.APICalls {
+		if want, ok := wantTargets[apiCall.Tool]; ok && apiCall.TargetIDs != want {
+			t.Errorf("APICall %s TargetIDs = %q, want %q", apiCall.Tool, apiCall.TargetIDs, want)
+		}
+	}
+	readIDs := ReadIDsFromAPICalls(got.APICalls)
+	for _, id := range []string{"41", "ci-abc123", "77", "88", "89"} {
+		if !readIDs[id] {
+			t.Errorf("ReadIDsFromAPICalls missing %q: %v", id, readIDs)
+		}
+	}
+}

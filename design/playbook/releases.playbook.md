@@ -82,7 +82,7 @@ Getting v3.1.0 out on 2026-11-01/02 took a long series of manual steps: re-submi
 | # | Step | Owner | Enforced by |
 | --- | --- | --- | --- |
 | 1 | A fix or feature merges to core `main`; an `auto_merge: true` task merges on green CI and a clean review without a Submit | grain | `pkg/model` auto-merge stickiness (task 2442 for `false`; gap 1 for `true`), `.grain/merge-rules.yml` |
-| 2 | Release-path changes clear on grain's security review alone, except the approval path (§0.3) | grain | `pkg/trustboundary/trustboundary.go`, `.grain/triggers/release-promotion.yml` |
+| 2 | Release-path changes clear on grain's security review alone, except the approval path (§0.3) | grain | `pkg/trustboundary/trustboundary.go`, `.grain/triggers/release-promotion.yml`, `.grain/triggers/release-machinery.yml` |
 | 3 | `release images` publishes `:sha-<short>` for the merge, re-running on its own after an infrastructure failure (checkout 5xx, VM death) | grain | `.github/workflows/release.yml`, `scripts/release-images.sh`, `pkg/orchestrator/basebranchrelease.go` (`retryInfraBaseBranchRelease`), `pkg/orchestrator/infraverdict.go` |
 | 4 | The release train selects LKG, cuts `vX.Y.Z-rc.N`, and pushes the RC, `-pending` and `-discarded` tags with its own narrow grant (§0.4) | grain | `.grain/templates/release-train.yml` `push:` list (`pkg/model/ref_push.go`), `scripts/release-from-trunk.sh`, `scripts/candidate-gate.sh` |
 | 5 | Qualification: Stage 1 `nightly.yml`, Stage 2 `release-qualification` (§2) | grain | `.github/workflows/nightly.yml`, `.grain/suites/release-qualification.yml` |
@@ -117,7 +117,7 @@ A release-path change that **can't reach the approval** clears on grain's securi
 
 | Needs a person's Submit | Clears on security review alone (no findings) |
 | --- | --- |
-| `.grain/workflows/promote-release.yml`, `.github/workflows/promote-release.yml` | `scripts/release-images.sh`, `scripts/release-from-trunk.sh`, `scripts/release-notes.sh`, `scripts/candidate-gate.sh` |
+| `.grain/workflows/promote-release.yml`, `.github/workflows/promote-release.yml` | `scripts/release-images.sh`, `scripts/release-from-trunk.sh`, `scripts/release-notes.sh`, `scripts/candidate-gate.sh`, and the helpers the release jobs run (`scripts/patch-tag-guard.sh`, `scripts/build-version.sh`, `scripts/grain-ci-host.sh`) |
 | `pkg/ui/release_approval.go`, `pkg/ui/release_approval_github.go`, `pkg/releaseapproval/`, `scripts/verify-release-approval.sh` | `.grain/workflows/release.yml`, `.github/workflows/release.yml` |
 | `pkg/trustboundary/trustboundary.go`, `.grain/triggers/**`, `.grain/merge-rules.yml` | `.grain/workflows/promote.yml`, `.github/workflows/promote.yml` (they follow the git `latest` tag the approval moved) |
 | Any template's `push:` list (the release train's tag grant, §0.4) | `.github/workflows/release-train.yml`, `.grain/workflows/release-train.yml` |
@@ -154,7 +154,7 @@ Upgrading the deployment that runs grain is part of the release, not a separate 
 | Gap | Closed by |
 | --- | --- |
 | 1. Auto-merge doesn't stick | Task 2442 (explicit `false` sticks; merged) and the gap 1 follow-up (explicit `true` survives holds) |
-| 2. Release-path changes always wait for a Submit | Gap 2 task: narrow the release-promotion rule per §0.3 |
+| 2. Release-path changes always wait for a Submit | Task 2664: `release-promotion` narrowed to the approval path, the rest moved to `release-machinery` (`trust-boundary/v12`) |
 | 3. The RC cut and pending tags need a person | Gap 3 task: release-train template with the §0.4 grant |
 | 4. The approval needs GitHub | Gap 4 task: the deployment raises `release.pending`, and the Inbox Approve dispatches the publishing workflow |
 | 5. The Google edition doesn't follow releases | Tasks 2533 (sync template) and 2315, and the gap 5 task in the edition's repository |

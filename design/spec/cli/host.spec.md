@@ -21,7 +21,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 | Kind | Commands |
 |---|---|
 | Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume` |
-| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `declarations check` |
+| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|deny`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `declarations check` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
 | Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db [upgrade-postgres]`), `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
 | Modes: build information | `version`, `schema-version`, `release-notes`, `sandbox-image`, `container-sandbox-image`, `k8s-sandbox-image`, `image` |
@@ -667,7 +667,7 @@ _No flags._
 
 ### 4.10 `grain release approve|reject vX.Y.Z` {#CLI-39}
 
-Calls `POST /api/repos/{owner}/{name}/…` (`DecideRelease`). `-repo` defaults to grain's own source repository. `-short-soak-ok` and `-allow-breaking` are an approval's answers: the first accepts a soak under the minimum, the second breaking changes in a release that is not the major one `RELEASE_MAJOR` asks for. On a repository that publishes from GitHub Actions (`ci_mode: github`) the answer is a signed dispatch of `.github/workflows/promote-release.yml`, and the command prints the dispatch instead of a grain CI run.
+Calls `POST /api/repos/{owner}/{name}/…` (`DecideRelease`). `-repo` defaults to grain's own source repository. On a repository that publishes from GitHub Actions (`ci_mode: github`) the answer is a signed dispatch of `.github/workflows/promote-release.yml`, and the command prints the dispatch instead of a grain CI run.
 
 `grain release approval-key` prints the deployment's release-approval public key (`GET /api/release-approval-key`): the value for the GitHub repository variable `GRAIN_RELEASE_APPROVAL_KEY`, which that workflow verifies an Inbox approval against.
 
@@ -676,6 +676,8 @@ Errors:
 - the wrong number of arguments: `grain release <verb> takes the pending release, vX.Y.Z`;
 - `-short-soak-ok` on reject: `-short-soak-ok is for grain release approve`;
 - `-allow-breaking` on reject: `-allow-breaking is for grain release approve`.
+
+`-allow-breaking` approves a release that carries breaking changes without being the major release `RELEASE_MAJOR` asks for; it reaches the approval as `allow_breaking: true`.
 
 With no arguments it prints the usage and returns `flag: help requested`. **Scope:** person; an agent is refused.
 
@@ -849,6 +851,18 @@ Reads a checkout's `.grain/templates`, `.grain/suites` and `.grain/schedules` an
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/declcmd_test.go`: `TestDeclarationsCheckPrintsWhatATreeDeclares`, `TestDeclarationsCheckReportsEveryProblemAtOnce`, `TestDeclarationsCheckJSONCarriesTheVerdict`, `TestDeclarationsCheckDefaultsToTheWorkingDirectory`.
+
+---
+
+### 4.14 `grain access list|allow|deny` {#CLI-107}
+
+Manages the allowed users and groups (Settings -> Access) through `/api/access/principals`: who may sign in when authenticated by Cloud IAP or another registered IdentityVerifier. `list` (the default, also `ls`) prints each entry with who added it and when, and warns about `-ui-allowed-principals` entries that were dropped on import. `allow <user:<email>|group:<email>>` (also `add`) adds one; adding an existing entry is a no-op. `deny` (also `remove`, `rm`) removes one.
+
+<!-- BEGIN GENERATED FLAGS: grain access -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/access_test.go`: `TestGrainAccessCLI`.
 
 ---
 
@@ -1722,13 +1736,3 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/sandboximage_test.go`: `TestSandboxImageCommandPrintsDefaultAndBase`, `TestSandboxImageContractSubcommand`, `TestSandboxImageCheckSubcommand`.
-
-## Unplaced commands
-
-### `grain access`
-
-Manages the deployment's allowed users and groups (Settings → Access); its subcommands are described with the access settings.
-
-<!-- BEGIN GENERATED FLAGS: grain access -->
-_No flags._
-<!-- END GENERATED FLAGS -->

@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v12"
+const Version = "trust-boundary/v13"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -62,6 +62,12 @@ type Category struct {
 	// (grain/task-1714) -- since a change that could be let through by
 	// whoever it is trying to get past would guard nothing.
 	OwnerApproval bool
+	// Review is what the security review must check on these paths
+	// beyond its usual brief, each item one it reports as a finding when
+	// the change violates it. A finding, or a review that cannot decide,
+	// leaves the change for a person, so a category that a clean review
+	// releases can still keep the part of its paths that matter for one.
+	Review []string
 
 	// prefixes are directory prefixes ("pkg/gitproxy/"), files are exact
 	// repository paths, and bases are file-name patterns matched against
@@ -75,6 +81,18 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v13 added the GitHub Actions Inbox approval (grain/task-2666,
+// design/playbook/releases.playbook.md §0.2) to release-promotion: the
+// route that signs a person's answer and dispatches promote-release.yml,
+// the signed record, and the script the workflow verifies it with.
+//
+// v12 narrowed release-promotion to the approval path (grain/task-2664,
+// design/playbook/releases.playbook.md §0.3): the approval workflow, in
+// both its .grain and .github copies, the route that starts it and the
+// release train's template stay person-only; the release jobs and the
+// scripts they run moved to release-machinery, which a clean security
+// review releases once it has checked they cannot reach the approval.
 //
 // v11 added the hostd registry, the host-exec confirmation and CI
 // repository access (grain/task-2723, 2026-11-03 security review finding 2):
@@ -223,20 +241,45 @@ var Categories = []Category{
 	{
 		ID: "release-promotion",
 		Description: "the person-only approval that makes a pending release official: the workflow that " +
-			"pushes vX.Y.0 and latest, the release scripts it runs, and the route that starts it",
+			"pushes vX.Y.0 and latest, the route that starts it, and the release train's template, whose " +
+			"push: list decides which tags the train may move without it",
 		RequiresHuman: true,
-		// Ahead of github-workflows, whose .github/workflows/ prefix would
-		// otherwise claim .github/workflows/promote-release.yml first: a
-		// path belongs to the first category that names it.
+		// Before github-workflows and grain-config, which would otherwise
+		// take the workflow's two copies and the template.
 		files: []string{
-			".grain/workflows/promote-release.yml", ".grain/workflows/promote.yml",
-			"scripts/release-from-trunk.sh", "scripts/release-images.sh",
-			"pkg/ui/release_approval.go",
+			".grain/workflows/promote-release.yml", ".github/workflows/promote-release.yml",
+			"pkg/ui/release_approval.go", ".grain/templates/release-train.yml",
 			// The Inbox approval of a release on GitHub Actions (gap 4):
 			// the signed record, the route that signs and dispatches it,
 			// and the check the workflow verifies it with.
-			".github/workflows/promote-release.yml", "pkg/ui/release_approval_github.go",
-			"pkg/releaseapproval/releaseapproval.go", "scripts/verify-release-approval.sh",
+			"pkg/ui/release_approval_github.go", "pkg/releaseapproval/releaseapproval.go",
+			"scripts/verify-release-approval.sh",
+		},
+	},
+	{
+		ID: "release-machinery",
+		Description: "the release jobs and the scripts they run, which cut, build, publish and tag " +
+			"releases but cannot make one official: that is the approval's (release-promotion)",
+		// Released by a clean review, which checks they still cannot
+		// reach the approval (design/playbook/releases.playbook.md §0.3).
+		Review: []string{
+			"the change cannot move a `vX.Y.Z` or `latest` git tag or image except as a result of a person's " +
+				"approval in promote-release.yml",
+			"it does not widen any workflow's `permissions:`, the secrets it reads, or who may dispatch it",
+			"it does not weaken a check that refuses anybody but a person (`GRAIN_CI_REQUESTED_BY_KIND`)",
+			"in scripts/release.conf, it does not raise `RELEASE_MAJOR`, which only a person may do",
+		},
+		files: []string{
+			"scripts/release-images.sh", "scripts/release-from-trunk.sh",
+			"scripts/release-notes.sh", "scripts/candidate-gate.sh", "scripts/release.conf",
+			// What the release jobs run besides: the patch-tag guard
+			// that refuses a vX.Y.Z not cut from its release branch, the
+			// version every published image is tagged with, and the host
+			// setup the publishing job sources.
+			"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
+			".grain/workflows/release.yml", ".github/workflows/release.yml",
+			".grain/workflows/promote.yml", ".github/workflows/promote.yml",
+			".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
 		},
 	},
 	{
