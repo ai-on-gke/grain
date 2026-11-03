@@ -646,6 +646,11 @@ func (s *Server) routes() {
 	s.route("POST /api/hostds/{name}/rotate", s.handleRotateHostdToken)
 	s.route("POST /api/hostds/{name}/revoke", s.handleRevokeHostd)
 
+	// Verified-identity sign-in allowlist (Settings -> Access).
+	s.route("GET /api/access/principals", s.handleListAccessPrincipals)
+	s.route("POST /api/access/principals", s.handleAllowPrincipal)
+	s.route("DELETE /api/access/principals/{entry}", s.handleDenyPrincipal)
+
 	static, err := fs.Sub(staticFS, "static")
 	if err != nil {
 		// staticFS is embedded at build time from a directory this package

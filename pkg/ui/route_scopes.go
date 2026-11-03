@@ -353,5 +353,8 @@ var routeScopes = map[string]APIScope{
 	"PATCH /api/hostds/{name}":                                             "capabilities:admin",
 	"POST /api/hostds/{name}/rotate":                                       "capabilities:admin",
 	"POST /api/hostds/{name}/revoke":                                       "capabilities:admin",
+	"GET /api/access/principals":                                           "access:read",
+	"POST /api/access/principals":                                          "access:write",
+	"DELETE /api/access/principals/{entry}":                                "access:write",
 	"POST /mcp":                                                            "internal",
 }

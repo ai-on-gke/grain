@@ -262,6 +262,9 @@ var routeDocs = map[string]string{
 	"POST /api/external-agents/tokens/{id}/revoke":                         "Revoke an external agent credential immediately.",
 	"DELETE /api/external-agents/tokens/{id}":                              "Delete an external agent credential record.",
 	"POST /api/external-agents/tokens/revoke-all":                          "Emergency kill switch: revoke every active external agent credential immediately.",
+	"GET /api/access/principals":                                           "List the allowed users and groups admitted through verified-identity sign-in.",
+	"POST /api/access/principals":                                          "Add a user:<email> or group:<email> entry to the allowed users and groups list (idempotent when already present).",
+	"DELETE /api/access/principals/{entry}":                                "Remove a user:<email> or group:<email> entry from the allowed users and groups list.",
 }
 
 // routeBodies is the request type a route reads its body into, which
@@ -389,6 +392,7 @@ var routeBodies = map[string]any{
 	"POST /api/tests/quarantine":                                     QuarantineTestRequest{},
 	"POST /api/pipeline-pause":                                       pausePipelineRequest{},
 	"POST /api/external-agents/tokens":                               CreateExternalAgentTokenRequest{},
+	"POST /api/access/principals":                                    AllowPrincipalRequest{},
 }
 
 // routeQueries is the query parameters a route's handler reads, each

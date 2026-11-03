@@ -963,7 +963,7 @@ func branchTip(ctx context.Context, deps Deps, repo model.RepoRef, branch string
 	if deps.Client == nil {
 		return "", nil
 	}
-	head, err := deps.Client.GetBranchHead(repo.Owner, repo.Name, branch)
+	head, err := deps.Client.GetBranchHead(repo.StoredOwner(), repo.Name, branch)
 	if err != nil {
 		return "", fmt.Errorf("orchestrator: reading %s's head on %s: %w", branch, repo, err)
 	}

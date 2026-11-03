@@ -1369,6 +1369,11 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 // with sandboxaccess.ErrChannelLost (design/design/grain-on-gke.design.md#GKE-3).
 const ChannelLostFaultPrefix = sandboxaccess.ChannelLostFault
 
+// SandboxLostFaultPrefix is the JobRun.Error prefix recorded when a step's
+// sandbox transport failed with anything other than ErrChannelLost: the
+// machine died under it (sandboxaccess.SandboxLostFault).
+const SandboxLostFaultPrefix = sandboxaccess.SandboxLostFault
+
 // OOMRetryReasonPrefix starts a job's RetryReason (and Error, Warning)
 // when its sandbox was OOM-killed, so a reader can tell an infrastructure
 // retry from a flaky one.
@@ -1631,10 +1636,21 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 			notSuccess = workflows.ConclusionErrored
 		}
 		channelLostStep := errors.Is(err, sandboxaccess.ErrChannelLost)
+		// Any other transport error, under a step whose bounds and run are
+		// all still live, is the machine going away under it
+		// (gritsteps.Sandbox.Exec): errored, like a lost channel, so the
+		// job carries an infra error rather than a verdict on the tree. A
+		// context's own error is a bound or a cancel, which are told apart
+		// below as they always were.
+		sandboxLostStep := !channelLostStep && err != nil && ctx.Err() == nil && !expired && !ownExpired &&
+			!errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled)
 		switch {
 		case channelLostStep:
 			record.Conclusion = workflows.ConclusionErrored
 			record.Error = fmt.Sprintf("%s: %v", ChannelLostFaultPrefix, err)
+		case sandboxLostStep:
+			record.Conclusion = workflows.ConclusionErrored
+			record.Error = fmt.Sprintf("%s: %v", SandboxLostFaultPrefix, err)
 		case err != nil:
 			record.Conclusion = notSuccess
 			record.Error = err.Error()
@@ -1643,7 +1659,7 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 		default:
 			record.Conclusion = notSuccess
 		}
-		if record.Conclusion != workflows.ConclusionSuccess && !channelLostStep {
+		if record.Conclusion != workflows.ConclusionSuccess && !channelLostStep && !sandboxLostStep {
 			switch {
 			case ctx.Err() != nil:
 				// The run ended under this job -- cancelled, superseded, a
@@ -1663,7 +1679,7 @@ func (e *Engine) runSteps(ctx context.Context, clock *jobClock, plan workflows.P
 			progress(jobRunSnapshot(*result))
 		}
 
-		if channelLostStep {
+		if channelLostStep || sandboxLostStep {
 			failed = true
 			channelLost = record.Error
 			continue

@@ -634,6 +634,9 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	}
 
 	uiClient := ui.NewClient(uiCfg, store)
+	if err := uiClient.MigrateAllowedPrincipals(context.Background()); err != nil {
+		log.Printf("grain daemon: WARNING: migrating allowed principals: %v", err)
+	}
 	// The sandbox proxy's acting /cli/ routes act through this same
 	// client (sandbox_cli.go).
 	liveSandboxCLI.Store(uiClient)
