@@ -110,18 +110,39 @@ func (c *Client) actionsReader() github.ActionsReader {
 // not ignored. The config repository grain CI always runs, and a repo on
 // grain CI or none, are not.
 func (c *Client) actionsListedFor(ctx context.Context, repo model.RepoRef) bool {
-	if c.Store == nil || grainci.RequiredFor(repo) || c.actionsRepoServed(ctx, repo) != nil {
-		return false
+	return c.actionsRefusal(ctx, repo) == nil
+}
+
+// actionsRefusal is why repo's Actions runs are not listed, or nil when
+// they are (actionsListedFor).
+func (c *Client) actionsRefusal(ctx context.Context, repo model.RepoRef) *actionsRefused {
+	if c.Store == nil {
+		return &actionsRefused{reason: "this deployment has no store to read a repository's CI mode from"}
+	}
+	if grainci.RequiredFor(repo) {
+		return &actionsRefused{byMode: true, reason: fmt.Sprintf("%s is grain's config repository, which grain CI always runs", repo)}
+	}
+	if err := c.actionsRepoServed(ctx, repo); err != nil {
+		return &actionsRefused{reason: err.Error()}
 	}
 	eff, err := c.Store.EffectiveRepoConfig(ctx, repo)
 	if err != nil {
-		return false
+		return &actionsRefused{reason: fmt.Sprintf("reading %s's CI mode failed (%v), so grain lists none of its GitHub Actions runs", repo, err)}
 	}
 	switch eff.CIMode {
 	case model.CIModeGrain, model.CIModeNone:
-		return false
+		return &actionsRefused{byMode: true,
+			reason: fmt.Sprintf("%s's CI mode is %q, so grain lists none of its GitHub Actions runs", repo, eff.CIMode)}
 	}
-	return true
+	return nil
+}
+
+// actionsRefused is actionsRefusal's answer. byMode is a refusal that is
+// the repository's own setting -- its CI is grain's, or none -- which a
+// listing that did not ask for Actions by name need not mention.
+type actionsRefused struct {
+	reason string
+	byMode bool
 }
 
 // actionsRepoServed refuses repo unless this deployment works in it
@@ -269,7 +290,7 @@ func (c *Client) listActionsRunsCounted(ctx context.Context, repo model.RepoRef,
 	if limit <= 0 {
 		limit = ci.MaxListedRuns
 	}
-	recorded := c.recordedActionsRuns(ctx, repo, filter.Since)
+	recorded, rec := c.recordedActionsRuns(ctx, repo, filter.Since)
 	byID := map[string]ci.Run{}
 	var out []ci.Run
 	add := func(run ci.Run) {
@@ -279,8 +300,11 @@ func (c *Client) listActionsRunsCounted(ctx context.Context, repo model.RepoRef,
 		byID[run.ID] = run
 		out = append(out, run)
 	}
-	forge, forgeTotal, serverExact, err := c.forgeActionsRuns(repo, filter, limit)
+	forge, forgeTotal, serverExact, notFound, err := c.forgeActionsRuns(repo, filter, limit)
 	switch {
+	case err == nil && notFound:
+		note = fmt.Sprintf("the forge answered 404 for %s's Actions runs on %s (Actions off there, or not readable "+
+			"with this deployment's credential); listing what grain recorded of them", repo, repo.GitHost())
 	case err == nil:
 		for _, run := range forge {
 			if rec, ok := recorded[run.ID]; ok {
@@ -308,6 +332,9 @@ func (c *Client) listActionsRunsCounted(ctx context.Context, repo model.RepoRef,
 		}
 	}
 	sortRunsNewestFirst(kept)
+	if len(kept) == 0 {
+		note = emptyActionsNote(repo, note, err == nil && !notFound, rec)
+	}
 	matched = len(kept)
 	if err == nil && serverExact && forgeTotal > matched {
 		matched = forgeTotal
@@ -321,10 +348,10 @@ func (c *Client) listActionsRunsCounted(ctx context.Context, repo model.RepoRef,
 // forgeActionsRuns is the forge's pages of repo's runs, as rows. A ref is
 // asked of the forge as a branch first, since GitHub matches only an
 // exact one, and then unnarrowed for the substring match ?ref= means.
-func (c *Client) forgeActionsRuns(repo model.RepoRef, filter ci.RunFilter, limit int) (out []ci.Run, total int, serverExact bool, err error) {
+func (c *Client) forgeActionsRuns(repo model.RepoRef, filter ci.RunFilter, limit int) (out []ci.Run, total int, serverExact, notFound bool, err error) {
 	reader := c.actionsReader()
 	if reader == nil {
-		return nil, 0, false, errNoActionsReader
+		return nil, 0, false, false, errNoActionsReader
 	}
 	clientFilters := len(filter.States) > 0 || strings.TrimSpace(filter.Job) != "" || !filter.Until.IsZero()
 	fetchLimit := max(limit, 100)
@@ -360,7 +387,7 @@ func (c *Client) forgeActionsRuns(repo model.RepoRef, filter ci.RunFilter, limit
 	branchMatched := filter.Ref == ""
 	if filter.Ref != "" {
 		if page, err = ask(filter.Ref, fetchLimit); err != nil {
-			return nil, 0, false, err
+			return nil, 0, false, false, err
 		}
 		branchMatched = len(page.Runs) > 0
 	}
@@ -370,7 +397,7 @@ func (c *Client) forgeActionsRuns(repo model.RepoRef, filter ci.RunFilter, limit
 			fallbackLimit = github.MaxActionsRunsLimit
 		}
 		if page, err = ask("", fallbackLimit); err != nil {
-			return nil, 0, false, err
+			return nil, 0, false, false, err
 		}
 	}
 	if strings.TrimSpace(filter.Workflow) != "" && !page.WorkflowFiltered && fetchLimit < github.MaxActionsRunsLimit && len(page.Runs) >= fetchLimit {
@@ -389,7 +416,7 @@ func (c *Client) forgeActionsRuns(repo model.RepoRef, filter ci.RunFilter, limit
 	for _, r := range page.Runs {
 		out = append(out, actionsRunRow(repo, r))
 	}
-	return out, page.TotalCount, exact, nil
+	return out, page.TotalCount, exact, page.NotFound, nil
 }
 
 // actionsRunRow is a forge workflow run as a listed run.
@@ -437,20 +464,28 @@ func actionsConclusion(status, conclusion string) ci.Conclusion {
 }
 
 // recordedActionsRuns is grain's own polled record of repo's Actions
-// jobs (model.GitHubCIJob), as runs keyed by their ci:read id.
-func (c *Client) recordedActionsRuns(ctx context.Context, repo model.RepoRef, since time.Time) map[string]ci.Run {
+// jobs (model.GitHubCIJob), as runs keyed by their ci:read id, and what
+// was read to make them.
+func (c *Client) recordedActionsRuns(ctx context.Context, repo model.RepoRef, since time.Time) (map[string]ci.Run, actionsRecord) {
 	out := map[string]ci.Run{}
+	var rec actionsRecord
 	if c.Store == nil {
-		return out
+		rec.err = errors.New("this deployment has no store")
+		return out, rec
 	}
 	jobs, err := c.Store.ListGitHubCIJobs(ctx, model.GitHubCIFilter{Repo: repo.String(), Since: since, Limit: 5000})
 	if err != nil {
-		return out
+		rec.err = err
+		return out, rec
 	}
+	rec.jobs = len(jobs)
 	byRun := map[int64][]model.GitHubCIJob{}
 	for _, j := range jobs {
-		if j.RunID != 0 {
-			byRun[j.RunID] = append(byRun[j.RunID], j)
+		if id := recordedRunID(j); id != 0 {
+			j.RunID = id
+			byRun[id] = append(byRun[id], j)
+		} else {
+			rec.noRun++
 		}
 	}
 	for runID, js := range byRun {
@@ -458,7 +493,51 @@ func (c *Client) recordedActionsRuns(ctx context.Context, repo model.RepoRef, si
 			out[run.ID] = run
 		}
 	}
-	return out
+	return out, rec
+}
+
+// actionsRecord is what recordedActionsRuns read: how many recorded jobs,
+// how many of them it could not place in a workflow run, and why it read
+// none at all.
+type actionsRecord struct {
+	jobs, noRun int
+	err         error
+}
+
+// recordedRunID is the workflow run a recorded job belongs to: its own
+// run id, or for a row recorded before that was filled in from the job's
+// page (model.PutGitHubCIJob does it now), the one its page names.
+func recordedRunID(j model.GitHubCIJob) int64 {
+	if j.RunID != 0 {
+		return j.RunID
+	}
+	if id := model.ActionsRunIDFromURL(j.JobURL); id != 0 {
+		return id
+	}
+	return model.ActionsRunIDFromURL(j.RunURL)
+}
+
+// emptyActionsNote is the note for a listing of repo's Actions runs that
+// came back empty: note, what the forge said (asked is whether it
+// answered, and with no runs), and what grain's record held.
+func emptyActionsNote(repo model.RepoRef, note string, asked bool, rec actionsRecord) string {
+	var parts []string
+	if note != "" {
+		parts = append(parts, note)
+	} else if asked {
+		parts = append(parts, fmt.Sprintf("the forge listed no Actions runs of %s matching this", repo))
+	}
+	switch {
+	case rec.err != nil:
+		parts = append(parts, fmt.Sprintf("reading grain's record of its Actions jobs failed (%v)", rec.err))
+	case rec.jobs == 0:
+		parts = append(parts, "grain has recorded none of its Actions jobs in this window")
+	case rec.noRun == rec.jobs:
+		parts = append(parts, fmt.Sprintf("grain recorded %d of its jobs, none of them naming a workflow run", rec.jobs))
+	default:
+		parts = append(parts, fmt.Sprintf("none of the %d jobs grain recorded of it match this", rec.jobs))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // recordedActionsRun is one run out of grain's record of its jobs.
@@ -548,11 +627,8 @@ func (c *Client) actionsRunDetail(ctx context.Context, repo model.RepoRef, runID
 		forgeErr = errNoActionsReader
 	}
 	if c.Store != nil {
-		jobs, err := c.Store.ListGitHubCIJobs(ctx, model.GitHubCIFilter{Repo: repo.String(), RunID: runID})
-		if err == nil {
-			if run, ok := recordedActionsRun(repo, runID, jobs); ok {
-				return run, nil, nil
-			}
+		if run, ok := c.recordedActionsRunByID(ctx, repo, runID); ok {
+			return run, nil, nil
 		}
 	}
 	if forgeErr == nil {
@@ -560,6 +636,29 @@ func (c *Client) actionsRunDetail(ctx context.Context, repo model.RepoRef, runID
 			message: fmt.Sprintf("no GitHub Actions run %d in %s", runID, repo)}
 	}
 	return ci.Run{}, nil, forgeErr
+}
+
+// recordedActionsRunByID is run runID of repo out of grain's record: the
+// jobs stored under that run id, or failing those the ones whose pages
+// name it (recordedRunID).
+func (c *Client) recordedActionsRunByID(ctx context.Context, repo model.RepoRef, runID int64) (ci.Run, bool) {
+	jobs, err := c.Store.ListGitHubCIJobs(ctx, model.GitHubCIFilter{Repo: repo.String(), RunID: runID})
+	if err != nil {
+		return ci.Run{}, false
+	}
+	if len(jobs) == 0 {
+		all, err := c.Store.ListGitHubCIJobs(ctx, model.GitHubCIFilter{Repo: repo.String(), Limit: 5000})
+		if err != nil {
+			return ci.Run{}, false
+		}
+		for _, j := range all {
+			if j.RunID == 0 && recordedRunID(j) == runID {
+				j.RunID = runID
+				jobs = append(jobs, j)
+			}
+		}
+	}
+	return recordedActionsRun(repo, runID, jobs)
 }
 
 // actionsRunWithJobs is a forge run and its jobs as one run in full.
@@ -693,8 +792,16 @@ func (a actionsExternalRuns) FindExternalRunsCounted(ctx context.Context, f ci.R
 		return nil, 0, ""
 	}
 	repo, err := a.c.parseRepo(f.Repo)
-	if err != nil || !a.c.actionsListedFor(ctx, repo) {
-		return nil, 0, ""
+	if err != nil {
+		return nil, 0, fmt.Sprintf("%q is not a repository grain can read GitHub Actions runs of: %v", f.Repo, err)
+	}
+	if refused := a.c.actionsRefusal(ctx, repo); refused != nil {
+		if refused.byMode && f.Provider == "" {
+			// A listing of whatever CI the repository has: a repository on
+			// grain CI having no Actions runs is not news.
+			return nil, 0, ""
+		}
+		return nil, 0, refused.reason
 	}
 	return a.c.listActionsRunsCounted(ctx, repo, f, limit)
 }

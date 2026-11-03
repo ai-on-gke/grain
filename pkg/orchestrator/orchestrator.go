@@ -960,6 +960,12 @@ type Config struct {
 	// error, or an answer slower than autoUpgradeProbeTimeout schedules
 	// the upgrade as if it had not been asked.
 	UpgradeUnchanged func(ctx context.Context, branch string) (bool, error)
+	// LatestRelease, when set, is the newest release tag on this
+	// deployment's image channel -- (*upgrade.Upgrader).LatestRelease,
+	// which never answers a release candidate or a retracted release.
+	// The release-triggered automatic upgrade (reconcileReleaseUpgrade)
+	// follows it; nil leaves that mode with nothing to follow.
+	LatestRelease func(ctx context.Context) (string, error)
 	// UpgradeDrainWindow, when non-zero, bounds how long a scheduled upgrade
 	// will wait for in-flight tasks and CI jobs to complete before proceeding
 	// with the upgrade. If the draining window elapses and runs are still active,

@@ -165,4 +165,45 @@ describe("CustomSandboxImageCard", () => {
     expect(screen.queryByTestId("sandbox-image-warning")).toBeNull();
     expect(screen.queryByTestId("sandbox-image-contract-ok")).toBeNull();
   });
+
+  it("offers to clear a k8s_granule_image holding the custom image's reference on kubernetes-granule", () => {
+    const ref = "us-docker.pkg.dev/example-project/grain/guest:sha-31d0973";
+    const settings = {
+      sandboxBackend: "kubernetes-granule",
+      sandboxImageBackend: "kubernetes-granule",
+      sandboxImage: ref,
+      k8sGranuleImage: ref,
+      k8sGranuleImageMirror: "us-docker.pkg.dev/example-project/grain/guest",
+    };
+    const { s, saveChoice } = section(settings);
+    const { rerender } = render(<CustomSandboxImageCard s={s} />);
+    const pin = screen.getByTestId("sandbox-image-k8s-granule-pin");
+    expect(pin).toHaveTextContent("k8s_granule_image");
+    expect(pin).toHaveTextContent(ref);
+    expect(pin).toHaveTextContent("read as mirror repository");
+
+    // Resetting the custom image alone leaves the pin, and the card still
+    // says so, now offering to clear just the pin.
+    fireEvent.click(screen.getByTestId("sandboxImage-reset"));
+    expect(saveChoice).toHaveBeenLastCalledWith({ sandboxImage: "" });
+    s.settings = { ...settings, sandboxImage: "" };
+    rerender(<CustomSandboxImageCard s={{ ...s }} />);
+    expect(
+      screen.getByTestId("sandbox-image-k8s-granule-pin"),
+    ).toHaveTextContent("this card just cleared");
+    fireEvent.click(screen.getByTestId("sandbox-image-k8s-granule-pin-clear"));
+    expect(saveChoice).toHaveBeenLastCalledWith({ k8sGranuleImage: "" });
+  });
+
+  it("says nothing of k8s_granule_image on other backends or when it differs", () => {
+    const ref = "us-docker.pkg.dev/example-project/grain/guest:sha-31d0973";
+    const { s } = section({
+      sandboxBackend: "kubernetes-granule",
+      sandboxImageBackend: "kubernetes-granule",
+      sandboxImage: "registry.example/team/guest:v1",
+      k8sGranuleImage: ref,
+    });
+    render(<CustomSandboxImageCard s={s} />);
+    expect(screen.queryByTestId("sandbox-image-k8s-granule-pin")).toBeNull();
+  });
 });

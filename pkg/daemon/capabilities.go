@@ -39,7 +39,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
-	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
@@ -85,9 +84,10 @@ func newCapabilityRegistryWithStore(_ *model.Store, local localscripts.Config, p
 // at all (they mint nothing and place nothing), so only the check misses
 // it, and it says so rather than failing the token.
 //
-// proxies is the model proxy endpoints the claude-, openai- and
-// gemini-proxy providers resolve against (modelproxycap.Providers).
-func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*modelproxy.Endpoint, githubTokens []string, githubCredentials githubCredentialLadder) []model.CapabilityProvider {
+// proxies is unused since the claude-, openai- and gemini-proxy
+// providers were retired onto the in-process model-proxy server
+// (modelProxyMethod); the parameter stays for the callers that pass it.
+func CapabilityProviders(cfg Config, store *model.Store, _ map[string]*modelproxy.Endpoint, githubTokens []string, githubCredentials githubCredentialLadder) []model.CapabilityProvider {
 	var providers []model.CapabilityProvider
 	if len(missingCapabilityProviderConfig(cfg, "gemini-key")) == 0 {
 		providers = append(providers, geminikey.New(cfg.GcpProject, model.CredentialRef{Name: gcpkey.DefaultMinterCredential}))
@@ -139,19 +139,10 @@ func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*mod
 	// which it refuses every other one for (design/design/release-from-trunk.design.md §6).
 	providers = append(providers, ciapi.NewAlias(CIAPI, ciapi.Config{}, model.ReleaseGateReadCapability,
 		ciapi.Aliases[model.ReleaseGateReadCapability]))
-	// claude-proxy, openai-proxy and gemini-proxy register
-	// unconditionally, like github-sandbox above: there is no deployment
-	// setting to gate them on. What each needs is a running proxy and
-	// that vendor's credential, and both are things it can see for
-	// itself at resolve time (its own Resolve refuses with a sentence
-	// naming whichever is missing) rather than facts about this config
-	// value. The endpoints are whichever set this registry is being built
-	// over -- this process's own modelProxies for every caller in this
-	// file -- see pkg/cli/modelproxy.go for why those are a
-	// package-level value that is nonetheless passed in.
-	for _, p := range modelproxycap.Providers(proxies) {
-		providers = append(providers, p)
-	}
+	// claude-proxy, openai-proxy and gemini-proxy are no longer
+	// providers here: they were retired onto the in-process model-proxy
+	// server (modelProxyMethod below, schema migration 100), which mints
+	// the same token on the same endpoints with the run's connection.
 	// One per named GitHub token beyond this deployment's default one
 	// (grain/task-117). Registered last, and unconditionally on the names
 	// being there: a token is a capability because an operator's own file

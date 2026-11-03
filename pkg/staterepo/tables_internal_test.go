@@ -338,6 +338,10 @@ var notSettings = []string{
 	// reason: importing an older one would have a deployment schedule a
 	// day's upgrade it has already applied.
 	"auto_upgrade_run",
+	// What the release-triggered automatic upgrade has seen and
+	// scheduled (model.AutoUpgradeRelease), for auto_upgrade_run's
+	// reason.
+	"auto_upgrade_release",
 	// The usage-limit pauses in force (model.StoredUsageLimitPause,
 	// grain/task-1259): runtime state, a provider's refusal of one
 	// credential as this deployment met it. Importing one would stop a
@@ -407,6 +411,13 @@ var notSettings = []string{
 	// (LocalTables).
 	"hostd",
 	"hostd_token",
+	// Verified-identity sign-in access (model.AllowedPrincipal) and its
+	// one-time flag migration record: managed live in Settings -> Access
+	// and `grain access`, and intentionally kept out of `grain/config` so
+	// a bad or compromised config-repo pull request can neither lock
+	// operators out nor grant sign-in access (design/design/settings.design.md §1).
+	"allowed_principal",
+	"allowed_principal_migration",
 	// Security audit log. Dynamic runtime records, not state repo
 	// declarative settings.
 	"secret_resolution_audit",

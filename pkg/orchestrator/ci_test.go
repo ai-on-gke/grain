@@ -84,6 +84,9 @@ type fakeCI struct {
 	rechecksAs recheckBehaviour
 	// flakes is what MarkFlake was told, by run id.
 	flakes map[string][]string
+	// workflowOptions is what WorkflowOptions answers a release with
+	// (answerWorkflows); nil answers as NopRunner does.
+	workflowOptions []ci.WorkflowOption
 }
 
 type recheckBehaviour int

@@ -109,23 +109,27 @@ export function notificationAlerts(notifications) {
 }
 
 // PENDING_RELEASE_FAMILY is the family the release train raises a
-// release whose soak passed under ("release.pending:vX.Y.0",
+// qualified release under ("release.pending:vX.Y.Z", minor or patch;
+// design/playbook/releases.playbook.md,
 // design/design/release-from-trunk.design.md §4).
 const PENDING_RELEASE_FAMILY = "release.pending";
 
 // pendingReleaseOf is the release a notification asks a person to
 // approve, { repo, version, soak, shortSoak }, or null when it asks
-// nothing of the kind. soak is how long it soaked ("soaked 1h00m of 24h
-// (FORCE=true)") and shortSoak the SHORT SOAK warning, both as the
-// release train wrote them into the body from the -pending tag's
-// Soak-Seconds and Soak-Forced trailers; either is null when the body
-// does not say.
+// nothing of the kind: a minor release (vX.Y.0) or a patch release the
+// train staged (vX.Y.Z, Z >= 1).
+//
+// soak ("soaked 1h00m of 24h (FORCE=true)") and shortSoak (the SHORT
+// SOAK warning) are read off the body only for soak-era -pending tags
+// whose Soak-Seconds and Soak-Forced trailers wrote them there; the
+// qualification-driven train writes "Qualification: PASS" instead, so
+// both are null on new notifications.
 export function pendingReleaseOf(n) {
   const family = n?.family || (n?.subject || "").split(":")[0];
   if (family !== PENDING_RELEASE_FAMILY) return null;
   if (!(n.actions || []).includes("approve-release")) return null;
   const version = (n.subject || "").slice(PENDING_RELEASE_FAMILY.length + 1);
-  if (!/^v\d+\.\d+\.0$/.test(version)) return null;
+  if (!/^v\d+\.\d+\.\d+$/.test(version)) return null;
   const lines = (n.body || "").split("\n").map((l) => l.trim());
   const soak =
     lines
@@ -136,9 +140,9 @@ export function pendingReleaseOf(n) {
 }
 
 // decideRelease approves (or rejects) a pending release, after asking:
-// approving makes it official -- vX.Y.0 tagged, `latest` moved -- and
+// approving makes it official -- vX.Y.Z tagged, `latest` moved -- and
 // rejecting drops its release candidate. The daemon refuses anybody but
-// a person. A release whose soak was short is approved with
+// a person. A soak-era release whose soak was short is approved with
 // short_soak_ok, and only after a question that says so: without it the
 // approve job refuses the release. Resolves to false when the person
 // thought better of it.

@@ -1516,7 +1516,10 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// And whether the daily automatic upgrade's channel has
 			// anything new on it, asked of the registry or origin before
 			// the queue is held for it.
-			UpgradeUnchanged:   upgradeUnchanged(upgrader),
+			UpgradeUnchanged: upgradeUnchanged(upgrader),
+			// And the newest release on its image channel, which the
+			// release-triggered automatic upgrade follows.
+			LatestRelease:      latestRelease(upgrader),
 			UpgradeDrainWindow: cfg.UpgradeDrainWindow,
 		},
 		MintSandboxGrant:   tokens.EnsureGrant,

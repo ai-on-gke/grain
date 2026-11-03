@@ -438,13 +438,28 @@ export default function ConsoleSessionPage({
           component="p"
           sx={{ mb: 1 }}
         >
-          Repositories this session may clone or fetch.
+          {session.readsAll === false
+            ? "Repositories this session may clone or fetch. It does not read the rest of this deployment's repositories (readsAll is off)."
+            : "Repositories this session may clone or fetch, besides every repository this deployment works in, which every session reads by default."}
         </Typography>
         <ReadOnlyReposField
           options={knownRepos(config, tasks)}
-          value={session.reads || []}
+          value={(session.reads || []).filter(
+            (r) => !(session.autoReads || []).includes(r),
+          )}
           onChange={(next) => save({ reads: next }, "reads")}
         />
+        {(session.autoReads || []).length > 0 && (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            component="p"
+            sx={{ mt: 1, overflowWrap: "anywhere" }}
+            data-testid="session-auto-reads"
+          >
+            Also reads, by default: {session.autoReads.join(", ")}
+          </Typography>
+        )}
       </Box>
 
       <Box sx={{ mt: 2 }}>

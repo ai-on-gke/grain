@@ -46,6 +46,8 @@ const settings = {
   actionsCacheEnabled: true,
   upgradeCheckModes: ["off", "approve", "auto"],
   upgradeCheckMode: "auto",
+  // Daily draws the channel and time of day as well as the mode.
+  autoUpgradeOn: "daily",
   capabilities: [],
 };
 

@@ -100,9 +100,9 @@ type ResumeOn struct {
 	UntilMerged bool     `json:"until_merged,omitempty"`
 	// At is a wake time: the task is deferred until it.
 	At *time.Time `json:"at,omitempty"`
-	// CI is a grain CI run id, or ResumeOnMyBranch for the latest run on
-	// the task's own branch: the task is queued again once it has a
-	// verdict.
+	// CI is a CI run id (grain CI or gha:<owner>:<name>:<run-id> for GitHub
+	// Actions), or ResumeOnMyBranch for the latest verdict on the task's
+	// own branch: the task is queued again once it has a verdict.
 	CI string `json:"ci,omitempty"`
 	// Message is "or when anybody posts to this task".
 	Message bool `json:"message,omitempty"`
@@ -160,7 +160,7 @@ func (r ResumeOn) Describe() string {
 		parts = append(parts, r.At.UTC().Format(time.RFC3339)+" has passed")
 	}
 	if r.CI != "" {
-		parts = append(parts, "grain CI ("+r.CI+") has a verdict")
+		parts = append(parts, "CI ("+r.CI+") has a verdict")
 	}
 	if r.Message {
 		parts = append(parts, "anybody posts to this task")

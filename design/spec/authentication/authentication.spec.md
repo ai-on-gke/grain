@@ -12,7 +12,7 @@ Every normative requirement below is derived from the implementation on `main` a
 
 - [1. Verifier Registration and Evaluation](#1-verifier-registration-and-evaluation)
 - [2. IAP Assertion Verification and Principal Normalization](#2-iap-assertion-verification-and-principal-normalization)
-- [3. Principal Allowlist (`-ui-allowed-principals`)](#3-principal-allowlist--ui-allowed-principals)
+- [3. Database Principal Allowlist (`allowed_principal`)](#3-database-principal-allowlist-allowed_principal)
 - [4. Access-Code Precedence and Credential Interaction](#4-access-code-precedence-and-credential-interaction)
 - [5. `-ui-require-iap` and Loopback Break-Glass](#5--ui-require-iap-and-loopback-break-glass)
 - [6. Cross-Origin and CSRF Protection](#6-cross-origin-and-csrf-protection)
@@ -93,56 +93,54 @@ Every normative requirement below is derived from the implementation on `main` a
 
 ---
 
-## 3. Principal Allowlist (`-ui-allowed-principals`)
+## 3. Database Principal Allowlist (`allowed_principal`)
 
-### 3.1 Allowlist grammar and startup validation {#AU-6}
+### 3.1 Allowlist grammar, API/CLI management, and one-time flag migration {#AU-6}
 
-1. The principal allowlist MUST be read from `Config.AllowedPrincipals` (`-ui-allowed-principals`), falling back to `$GRAIN_ALLOWED_PRINCIPALS` when empty, as a comma-separated list of whitespace-trimmed entries (`pkg/ui/allowlist.go`, `pkg/cli/daemon.go`). Empty segments between commas MUST be ignored.
-2. Each non-empty entry MUST match `<prefix>:<value>` with one of four case-sensitive prefixes and a non-empty lower-cased `<value>`:
-   - `user:<email>` — `<email>` MUST contain `@` with non-empty local and domain parts and MUST NOT end in `.gserviceaccount.com`;
-   - `serviceAccount:<email>` — `<email>` MUST contain `@` and MUST end in `.gserviceaccount.com`;
-   - `group:<email>` — `<email>` MUST contain `@` with non-empty local and domain parts;
-   - `domain:<domain>` — `<domain>` MUST NOT contain `@`, MUST NOT start or end with `.`, and MUST contain at least one `.`.
-3. `ValidateAllowedPrincipals` and `daemon.CheckUIAllowedPrincipals` MUST reject malformed entries at daemon startup before serving traffic.
+1. Verified-identity sign-in admission MUST be backed by the `allowed_principal` database table (`entry`, `added_by`, `added_at`; `pkg/model/allowed_principals.go`, `pkg/ui/access_principals.go`), managed live without daemon restart via `GET`/`POST`/`DELETE /api/access/principals`, `Settings → Access`, and `grain access list|allow|deny` (`pkg/cli/access.go`), with every mutation attributed in `config_audit` (`surface = "access"`). `allowed_principal` and `allowed_principal_migration` MUST be excluded from `staterepo.SettingsTables` while preserved in cold backups.
+2. Each stored entry MUST normalize via `model.NormalizeAllowedPrincipalEntry` to `<prefix>:<email>` with case-sensitive prefix `user` or `group` and a lower-cased valid email address that MUST NOT end in `.gserviceaccount.com`.
+3. When `-ui-allowed-principals` or `$GRAIN_ALLOWED_PRINCIPALS` is non-empty on startup, `Client.MigrateAllowedPrincipals` MUST import supported `user:` and `group:` entries (excluding `*.gserviceaccount.com` and `gcp-key` pool emails) at most once when `allowed_principal` is empty and `allowed_principal_migration` has no record, recording dropped entries in `allowed_principal_migration.dropped` (`droppedFlagEntries`) and ignoring the deprecated flag with a warning on subsequent starts (`daemon.CheckUIAllowedPrincipals` still validates syntax and rejects `gcp-key` pool accounts at startup).
+4. For agent callers, `GET /api/access/principals` MUST require `api:access:read`, and `POST`/`DELETE /api/access/principals` MUST require dangerous `api:access:write` (person-grantable only, requiring non-empty `X-Grain-Acting-Reason`, and refused on `X-Grain-Channel: sandbox-cli`).
 
 **Pinned by:**
-- `pkg/ui/verifier_allowlist_test.go`: `TestAllowedPrincipalsDefaultsAndCloudIdentityGroups`
+- `pkg/ui/access_principals_test.go`: `TestAllowedPrincipalsFlagMigrationHappensExactlyOnce`, `TestAllowedPrincipalsLiveEnforcementEqualPrivilegesAndIdempotency`, `TestAllowedPrincipalsAgentScopeAndSandboxIsolation`, `TestMigrateAllowedPrincipalsRetriesAfterTransientFailureAndDropsServiceAccounts`
+- `pkg/cli/access_test.go`: `TestAccessAllowListDenyCLI`
 
 ### 3.2 Direct entry matching semantics {#AU-7}
 
-1. All principal email and domain comparisons MUST be case-insensitive after `normalizeIdentityEmail` (`pkg/ui/allowlist.go`).
+1. All principal email comparisons MUST be case-insensitive after `normalizeIdentityEmail` (`pkg/ui/allowlist.go`).
 2. `user:<email>` MUST match only `VerifiedIdentity` values with `Kind == model.PrincipalHuman` and exact normalized `Email == <email>`.
-3. `serviceAccount:<email>` MUST match only `VerifiedIdentity` values with `Kind == model.PrincipalService` and exact normalized `Email == <email>`.
-4. `domain:<domain>` MUST match only `VerifiedIdentity` values with `Kind == model.PrincipalHuman` whose substring after `@` equals `<domain>` exactly; it MUST NOT match subdomains (`sub.<domain>`) and MUST NOT match `model.PrincipalService`.
+3. In-memory `serviceAccount:<email>` entries (synthesized exclusively for daemon-provisioned non-pool service accounts) MUST match only `VerifiedIdentity` values with `Kind == model.PrincipalService` and exact normalized `Email == <email>`.
 
 **Pinned by:**
 - `pkg/ui/verifier_allowlist_test.go`: `TestAllowedPrincipalsDefaultsAndCloudIdentityGroups`, `TestIAPPrincipalsNormalizationClockSkewAndServiceAccounts`
+- `pkg/ui/access_principals_test.go`: `TestAllowedPrincipalsLiveEnforcementEqualPrivilegesAndIdempotency`
 
-### 3.3 Default allowlist and `gcp-key` sandbox pool exclusion {#AU-8}
+### 3.3 Provisioned daemon service accounts and `gcp-key` sandbox pool exclusion {#AU-8}
 
-1. When both `-ui-allowed-principals` and `$GRAIN_ALLOWED_PRINCIPALS` are empty, the effective allowlist MUST admit only:
-   - `Config.Actor` (`-as`), as `user:` or `serviceAccount:` according to its suffix, if and only if it contains `@` and is not in `GCPKeyPoolEmails`;
-   - Daemon-owned service accounts in `Config.ProvisionedServiceAccounts` and `grain-daemon@<gcp-project>.iam.gserviceaccount.com` (from startup flags and stored `model.Config.GCPProject`), excluding any address in `GCPKeyPoolEmails` (`pkg/ui/allowlist.go`, `pkg/daemon/ui_server.go`).
-2. `GCPKeyPoolEmails`—comprising the `gcp-key` capability's base service account and every numbered pool account `<prefix>-1@<domain>` through `<prefix>-N@<domain>` whose keys enter task sandboxes—MUST:
-   - be rejected at startup by `ValidateAllowedPrincipals` and `daemon.CheckUIAllowedPrincipals` if explicitly listed in `-ui-allowed-principals` or `$GRAIN_ALLOWED_PRINCIPALS`;
-   - be excluded from the default allowlist even when `gcp-key` shares the base `grain-daemon@…` email; and
+1. Alongside `allowed_principal` rows from the store, the effective allowlist MUST admit only daemon-owned service accounts in `Config.ProvisionedServiceAccounts` and `grain-daemon@<gcp-project>.iam.gserviceaccount.com` (from startup flags and stored `model.Config.GCPProject`), excluding any address in `GCPKeyPoolEmails` (`pkg/ui/allowlist.go`, `pkg/daemon/ui_server.go`). Human principals are admitted only when matched by `allowed_principal` (never implicitly from `Config.Actor`).
+2. `GCPKeyPoolEmails`—comprising the `gcp-key` capability's base service account and every numbered pool account `<prefix>-0@<domain>` / `<prefix>-1@<domain>` through `<prefix>-(N-1)@<domain>` whose keys enter task sandboxes—MUST:
+   - be rejected at startup by `ValidateAllowedPrincipals` and `daemon.CheckUIAllowedPrincipals` if explicitly listed in `-ui-allowed-principals` or `$GRAIN_ALLOWED_PRINCIPALS`, and dropped by `MigrateAllowedPrincipals`;
+   - be excluded from provisioned daemon service accounts and `isRegisteredHostdServiceOwner` even when `gcp-key` shares the base `grain-daemon@…` email; and
    - be unconditionally refused (`403`) at request time by `checkAllowedPrincipal`, before consulting direct or `group:` entries.
 
 **Pinned by:**
 - `pkg/ui/verifier_allowlist_test.go`: `TestAllowedPrincipalsDefaultsAndCloudIdentityGroups`, `TestGCPKeyPoolAccountsAreNotAdmittedByDefault`, `TestRefusedPrincipalsAreLoggedOnce`
 - `pkg/daemon/allowed_principals_test.go`: `TestCheckUIAllowedPrincipalsRefusesGCPKeyPoolAccounts`
+- `tests/security/gcpkey_iap_allowlist_test.go`: `TestUnlistedServicePrincipalCannotMintDangerousExternalAgentToken`
 
 ### 3.4 Optional Cloud Identity `group:` lookup, caching, and timeouts {#AU-9}
 
-1. Grain MUST NOT initialize or call the Cloud Identity Groups API unless at least one `group:` entry is present in the configured allowlist (`pkg/ui/allowlist.go`).
-2. Direct entries (`user:`, `serviceAccount:`, `domain:`) MUST be evaluated before `group:` entries; if a direct entry matches, the caller MUST be admitted without performing any Cloud Identity lookup.
-3. When evaluating `group:` entries, `CloudIdentityGroupChecker` (`pkg/ui/allowlist.go`) MUST resolve the group resource via `GET /v1/groups:lookup?groupKey.id=<group>` and check transitive membership via `GET /v1/<groupName>/memberships:checkTransitiveMembership?query=member_key_id == '<member>'` using OAuth scope `https://www.googleapis.com/auth/cloud-identity.groups.readonly`.
-4. Positive and negative `(group, member)` membership results MUST be cached in memory for `5m` (`defaultGroupCacheTTL`); lookup or token errors MUST NOT be cached and MUST fail closed (`allowed = false`, HTTP `403`).
-5. Each Cloud Identity call context, HTTP client timeout, and OAuth token-endpoint `ResponseHeaderTimeout` MUST be bounded to `10s` (`cloudIdentityCallTimeout`).
+1. Grain MUST NOT initialize or call the Cloud Identity Groups API unless at least one `group:` entry is present in `allowed_principal` AND the caller has `Kind == model.PrincipalHuman` (`pkg/ui/allowlist.go`); `model.PrincipalService` callers MUST NOT resolve through `group:` entries.
+2. Direct entries (`user:`, `serviceAccount:`) MUST be evaluated before `group:` entries; if a direct entry matches, the caller MUST be admitted without performing any Cloud Identity lookup.
+3. When evaluating `group:` entries for a `model.PrincipalHuman` caller, `CloudIdentityGroupChecker` (`pkg/ui/allowlist.go`) MUST resolve the group resource via `GET /v1/groups:lookup?groupKey.id=<group>` and check transitive membership via `GET /v1/<groupName>/memberships:checkTransitiveMembership?query=member_key_id == '<member>'` using OAuth scope `https://www.googleapis.com/auth/cloud-identity.groups.readonly`.
+4. Positive and negative `(group, member)` membership results MUST be cached in memory for `5m` (`DefaultGroupMembershipCacheTTL`); lookup or token errors MUST NOT be cached and MUST fail closed (`allowed = false`, HTTP `403`).
+5. Each Cloud Identity call context, HTTP client timeout, and OAuth token-endpoint `ResponseHeaderTimeout` MUST be bounded to `10s` (`cloudIdentityTimeout`).
 
 **Pinned by:**
 - `pkg/ui/verifier_allowlist_test.go`: `TestAllowedPrincipalsDefaultsAndCloudIdentityGroups`
 - `pkg/ui/group_lookup_timeout_test.go`: `TestGroupAllowlistRefusesWhenTokenEndpointNeverAnswers`
+- `tests/security/gcpkey_iap_allowlist_test.go`: `TestUnlistedServicePrincipalCannotMintDangerousExternalAgentToken`
 
 ---
 
@@ -151,10 +149,10 @@ Every normative requirement below is derived from the implementation on `main` a
 ### 4.1 Per-verifier access-code precedence {#AU-10}
 
 1. A verifier that does not implement `AccessCodePrecedence`, or whose `AccessCodeWins()` returns `false` (including `IAPVerifier`), MUST take precedence over the deployment access code (`pkg/ui/verifier.go`, `pkg/ui/accesscode.go`):
-   - When its assertion is present and valid on a request that also carries a bearer access code or `grain_access` cookie, `singleTenantGate` MUST evaluate `-ui-allowed-principals` and `checkVerifiedIdentityCSRF` against the verified identity, and the request's principal MUST be the verified identity rather than `DefaultActor`.
+   - When its assertion is present and valid on a request that also carries a bearer access code or `grain_access` cookie, `singleTenantGate` MUST evaluate `checkAllowedPrincipal` and `checkVerifiedIdentityCSRF` against the verified identity, and the request's principal MUST be the verified identity rather than `DefaultActor`.
    - When such a request also carries a valid external-agent `gma_…` token, `singleTenantGate` MUST still require the proxy's verified identity to pass `checkAllowedPrincipal` (`403` if disallowed), while `authenticateExternalAgent` sets the acting principal to `{agent, external:<name>, external-token}`.
 2. A verifier that implements `AccessCodePrecedence` with `AccessCodeWins() == true` MUST yield to a valid access code or valid `gma_…` token:
-   - If the request carries a valid `gma_…` token or a valid access code (where `accessCodeAccepted` permits it), `singleTenantGate` MUST admit the request under that credential without requiring the proxy identity to match `-ui-allowed-principals`.
+   - If the request carries a valid `gma_…` token or a valid access code (where `accessCodeAccepted` permits it), `singleTenantGate` MUST admit the request under that credential without requiring the proxy identity to match `checkAllowedPrincipal`.
    - If the request carries neither a valid access code nor a valid `gma_…` token, `singleTenantGate` MUST evaluate the verified identity through `checkAllowedPrincipal` and `checkVerifiedIdentityCSRF`.
 3. Regardless of `AccessCodeWins()`, any present assertion that fails `Verify` MUST fail closed with `401` (`{#AU-2}`).
 
@@ -165,14 +163,12 @@ Every normative requirement below is derived from the implementation on `main` a
 
 ### 4.2 Dangerous external-agent scope minting guard {#AU-11}
 
-1. Creating (`POST /api/external-agents/tokens`) or rotating (`POST /api/external-agents/tokens/{id}/rotate`) an external-agent credential that grants any dangerous scope (`model.IsDangerousScope`) or references a scope set with `requires_person: true` MUST be permitted only when `RequestActor(ctx)` is either:
-   - a `model.PrincipalHuman` principal, or
-   - a `model.PrincipalService` principal that is explicitly listed via `serviceAccount:<email>` in `-ui-allowed-principals` / `$GRAIN_ALLOWED_PRINCIPALS` (`isExplicitlyAllowedServiceAccount`, `pkg/ui/allowlist.go`, `pkg/ui/external_agents.go`).
-2. An in-grain task agent (`model.PrincipalAgent`) or a `model.PrincipalService` caller admitted solely via the default allowlist (or via `group:`) MUST be refused with `403 Forbidden`.
+1. Creating (`POST /api/external-agents/tokens`) or rotating (`POST /api/external-agents/tokens/{id}/rotate`) an external-agent credential that grants any dangerous scope (`model.IsDangerousAPIScope`) or references a scope set with `requires_person: true` MUST be permitted only when `RequestActor(ctx).Actor.Kind == model.PrincipalHuman` (`canIssuePersonExternalAgentToken`, `pkg/ui/external_agents.go`).
+2. Any `model.PrincipalService` caller or in-grain task agent (`model.PrincipalAgent`) MUST be refused with `403 Forbidden`.
 
 **Pinned by:**
 - `pkg/ui/external_agents_test.go`: `TestExternalAgentDangerousScopeRequiresPerson`
-- **Untested:** `PrincipalService` caller admitted via explicit `serviceAccount:` succeeding vs default-allowlist `PrincipalService` caller being refused by `isExplicitlyAllowedServiceAccount`.
+- `tests/security/gcpkey_iap_allowlist_test.go`: `TestUnlistedServicePrincipalCannotMintDangerousExternalAgentToken`
 
 ---
 
@@ -227,10 +223,10 @@ Every normative requirement below is derived from the implementation on `main` a
 ### 7.1 Disallowed principal refusal (`403`) and `PrincipalAdvice` {#AU-15}
 
 1. When a caller's assertion verifies (`cv.err == nil`) but `checkAllowedPrincipal` denies admission, the server MUST respond with HTTP `403 Forbidden` and `Cache-Control: no-store` (`pkg/ui/principalrefusal.go`, `pkg/ui/accesscode.go`).
-2. On API requests (`/api/` or `/api/*`) and non-`GET`/`HEAD` methods, the response body MUST be JSON naming the verified email and how to admit it (`-ui-allowed-principals`), plus any underlying lookup error.
+2. On API requests (`/api/` or `/api/*`) and non-`GET`/`HEAD` methods, the response body MUST be JSON naming the verified email and how to admit it (`Settings → Access` or `grain access allow`), plus any underlying lookup error.
 3. On browser navigations (`GET` or `HEAD` outside `/api/`), `writePrincipalRefusedPage` MUST return `text/html; charset=utf-8` titled `"Not allowed on this grain"` containing:
    - the HTML-escaped verified email and verifier name (and any underlying lookup error);
-   - remediation prose from the callback registered via `RegisterPrincipalAdvice`, or by default the exact `user:<email>` / `serviceAccount:<email>` token and a `grain init -daemon-arg -ui-allowed-principals='…'` command (including existing entries only when every existing entry passes `plainPrincipalList`);
+   - remediation prose from the callback registered via `RegisterPrincipalAdvice`, or by default `Settings → Access` and `grain access allow 'user:<email>'` for human callers (or `grain hostds register --owner '<email>'` for service accounts);
    - an `"Owner: sign in with the access code"` section that renders `<form method="post" action="/api/auth/access-code">` if and only if the deciding verifier has `AccessCodeWins() == true`, and otherwise explains that the verifier's identity takes precedence over the access code.
 
 **Pinned by:**
@@ -255,11 +251,12 @@ Every normative requirement below is derived from the implementation on `main` a
 ### 8.1 Local vs remote `hostd` classification and allowlist gate {#AU-17}
 
 1. `GET /api/hostd/connect` MUST remain in `singleTenantOpenRoute` (requiring no deployment access code), while still running behind `verifyCallerNow` so any invalid assertion fails closed with `401` (`pkg/ui/accesscode.go`, `pkg/ui/hostd_connect.go`).
-2. When a verifier header is present and valid on `GET /api/hostd/connect`, `hostdConnectIdentity` MUST enforce `checkAllowedPrincipal` (`403 Forbidden` if disallowed) and pass `hostd.ConnectIdentity{Principal: cv.id.Email, Verifier: cv.method, Remote: true}` to the `hostd` handler.
+2. When a verifier header is present and valid on `GET /api/hostd/connect`, `hostdConnectIdentity` MUST admit the caller only if `isRegisteredHostdServiceOwner` is true (active registered non-pool `hostd` service-account owner) or `checkAllowedPrincipal` succeeds (`403 Forbidden` otherwise), and pass `hostd.ConnectIdentity{Principal: cv.id.Email, Via: string(cv.method), Remote: true}` to the `hostd` handler.
 3. When no verifier header is present on `GET /api/hostd/connect`, `hostdConnectIdentity` MUST classify the connection as local (`Remote: false`) if and only if either no verifiers are active (`len(activeVerifiers()) == 0`) OR `isLoopbackRequest(r) && !relayedByProxy(r)`; otherwise it MUST classify the connection as `Remote: true` with `Principal: ""`.
 
 **Pinned by:**
 - `pkg/ui/hostd_owner_test.go`: `TestRemoteHostdMustConnectAsItsOwner`
+- `pkg/ui/access_principals_test.go`: `TestRegisteredHostdServiceOwnerDialsCleanlyWithoutOperatorAccessOrRefusalLog`
 - `pkg/ui/hostd_connect_test.go`: `TestHostdConnectEndpoint`
 - `tests/security/single_tenant_test.go`: `TestASingleTenantDaemonAcceptsARemoteHostd`
 
@@ -333,12 +330,12 @@ Every normative requirement below is derived from the implementation on `main` a
 | `AU-3` | IAP audience, issuer, and key fetching/caching | Implemented | `TestIAPAssertionVerification`, `TestIAPAssertionKeysAreFetchedFromTheEndpoint` (*JWKS/RSA/refetch-floor/stale-fallback branches untested*) |
 | `AU-4` | Signature, pinned `alg`, `iss`, `aud`, and `30s` skew | Implemented | `TestIAPAssertionVerification`, `TestIAPPrincipalsNormalizationClockSkewAndServiceAccounts`, `TestRefusedAssertionLoggedOncePerKindNotOncePerAudience` |
 | `AU-5` | Email normalization, `PrincipalService`, `Source`, `RequestActor` | Implemented | `TestIAPPrincipalsNormalizationClockSkewAndServiceAccounts`, `TestPrincipalLabel`, `TestPrincipalVerified`, `TestEveryMutatingRouteIsAttributed`, `TestAuthUserReportsHowTheCallerAuthenticated` |
-| `AU-6` | Allowlist grammar and startup validation | Implemented | `TestAllowedPrincipalsDefaultsAndCloudIdentityGroups` |
-| `AU-7` | Direct entry matching (`user:`, `serviceAccount:`, `domain:`) | Implemented | `TestAllowedPrincipalsDefaultsAndCloudIdentityGroups`, `TestIAPPrincipalsNormalizationClockSkewAndServiceAccounts` |
-| `AU-8` | Default allowlist and `gcp-key` sandbox pool exclusion | Implemented | `TestAllowedPrincipalsDefaultsAndCloudIdentityGroups`, `TestGCPKeyPoolAccountsAreNotAdmittedByDefault`, `TestCheckUIAllowedPrincipalsRefusesGCPKeyPoolAccounts` |
-| `AU-9` | Optional Cloud Identity `group:` lookup, `5m` cache, `10s` timeout | Implemented | `TestAllowedPrincipalsDefaultsAndCloudIdentityGroups`, `TestGroupAllowlistRefusesWhenTokenEndpointNeverAnswers` |
+| `AU-6` | Database `allowed_principal` grammar, live API/CLI, and one-time flag migration | Implemented | `TestAllowedPrincipalsFlagMigrationHappensExactlyOnce`, `TestAllowedPrincipalsLiveEnforcementEqualPrivilegesAndIdempotency`, `TestAllowedPrincipalsAgentScopeAndSandboxIsolation`, `TestAccessAllowListDenyCLI` |
+| `AU-7` | Direct entry matching (`user:`, provisioned `serviceAccount:`) | Implemented | `TestAllowedPrincipalsDefaultsAndCloudIdentityGroups`, `TestIAPPrincipalsNormalizationClockSkewAndServiceAccounts` |
+| `AU-8` | Provisioned daemon SAs and `gcp-key` sandbox pool exclusion | Implemented | `TestAllowedPrincipalsDefaultsAndCloudIdentityGroups`, `TestGCPKeyPoolAccountsAreNotAdmittedByDefault`, `TestCheckUIAllowedPrincipalsRefusesGCPKeyPoolAccounts`, `TestUnlistedServicePrincipalCannotMintDangerousExternalAgentToken` |
+| `AU-9` | Human-only optional Cloud Identity `group:` lookup, `5m` cache, `10s` timeout | Implemented | `TestAllowedPrincipalsDefaultsAndCloudIdentityGroups`, `TestGroupAllowlistRefusesWhenTokenEndpointNeverAnswers`, `TestUnlistedServicePrincipalCannotMintDangerousExternalAgentToken` |
 | `AU-10` | Per-verifier `AccessCodePrecedence` | Implemented | `TestFakeVerifierContractPinsBothAccessCodePrecedenceModes`, `TestRequireIAPKeepsTheCodeForAVerifierWhoseCodeWins` (*`gma_` + assertion combination untested*) |
-| `AU-11` | Dangerous `gma_` scope minting guard | Implemented | `TestExternalAgentDangerousScopeRequiresPerson` (*`PrincipalService` explicit-vs-default branch untested*) |
+| `AU-11` | Dangerous `gma_` scope minting restricted to `PrincipalHuman` | Implemented | `TestExternalAgentDangerousScopeRequiresPerson`, `TestUnlistedServicePrincipalCannotMintDangerousExternalAgentToken` |
 | `AU-12` | `-ui-require-iap` startup audience validation | Implemented | `TestCheckConfigRefusesRequireIAPWithoutAnAudience`, `TestRequireIAPFromTheEnvironment` |
 | `AU-13` | `-ui-require-iap` network refusal and loopback break-glass | Implemented | `TestRequireIAPRefusesTheAccessCodeOverTheNetwork`, `TestWithoutRequireIAPTheCodeStillWorksOverTheNetwork`, `TestAccessCodeNotesAServerThatRequiresIAP` |
 | `AU-14` | Global and verified-identity CSRF checks + IAP logout | Implemented | `TestCrossOriginStateChangeRefused`, `TestVerifiedIdentityCSRFLogoutAndUnchangedNoIAPPath`, `PageHeader.test.jsx`, `AccessSection.test.jsx`, `iap-header-logout.spec.js`, `phone-signed-in-logout.spec.js` |
