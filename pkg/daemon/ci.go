@@ -3003,9 +3003,9 @@ func AdoptCIRuns(ctx context.Context, service *ci.Service) (adopted, lost []orch
 				Capabilities:         service.Engine.JobCapabilities(pj.Job, plan.Request.Capabilities),
 				ImplicitCapabilities: pj.Job.ImplicitCapabilities(),
 				ReleaseSecrets:       ci.JobSecrets(pj.Job, plan.Request.ReleaseSecrets),
-				Builtin:        pj.Job.Builtin,
-				Shape:          pj.Job.Sandbox,
-				Timeout:        pj.Job.Timeout(),
+				Builtin:              pj.Job.Builtin,
+				Shape:                pj.Job.Sandbox,
+				Timeout:              pj.Job.Timeout(),
 			}
 			// Find the step that was in flight (or about to start), and the
 			// exec it was attached to if the previous process wrote one.
