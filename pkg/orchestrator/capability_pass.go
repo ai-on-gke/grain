@@ -456,6 +456,9 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 		if model.IsRepoAccessGrant(g.Capability) {
 			return nil, &grainRefusalError{Reason: model.CIOnlyRefusal(g.Capability)}
 		}
+		if rule, ok := model.CIGrantRuleFor(g.Capability); ok {
+			return nil, &grainRefusalError{Reason: model.CIGrantRuleCIOnlyRefusal(g.Capability, rule)}
+		}
 	}
 	external := hasExternalCapabilityRef(task.Grants)
 	if external && deps.CapabilityServers == nil {

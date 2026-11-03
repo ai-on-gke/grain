@@ -6303,6 +6303,34 @@ func (s *Store) OpenTasksWithLink(ctx context.Context, kind LinkKind) ([]string,
 	return out, nil
 }
 
+// TasksWithLinkTarget is every task carrying a link of kind to target,
+// whatever state it is in, oldest first -- OpenTasksWithLinkTarget
+// without the closed filter, for a caller that must also see the ones
+// already finished (the release-qualification reconciler, telling a
+// qualification task's own scratch fixtures from the defects it filed).
+func (s *Store) TasksWithLinkTarget(ctx context.Context, kind LinkKind, target string) ([]string, error) {
+	var out []string
+	err := each(ctx, s.db,
+		"SELECT DISTINCT `l`.`task_id`, `t`.`created_at` FROM `task_link` AS `l` "+
+			"JOIN `task` AS `t` ON `t`.`id` = `l`.`task_id` "+
+			"WHERE `l`.`kind` = ? AND `l`.`target` = ? "+
+			"ORDER BY `t`.`created_at`, `l`.`task_id`",
+		[]any{string(kind), target},
+		func(rows *sql.Rows) error {
+			var id string
+			var created any
+			if err := rows.Scan(&id, &created); err != nil {
+				return err
+			}
+			out = append(out, id)
+			return nil
+		})
+	if err != nil {
+		return nil, fmt.Errorf("listing the tasks linked %s to %s: %w", kind, target, err)
+	}
+	return out, nil
+}
+
 // OpenTasksWithLinkTarget is every open task carrying a link of kind to
 // target (the open tasks whose own pull request is "owner/name#7", say),
 // oldest first.

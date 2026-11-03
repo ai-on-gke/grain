@@ -115,8 +115,10 @@ func TestDeepRCQualificationTemplates(t *testing.T) {
 		if !strings.Contains(content, "qualification/<this task id>") && filename != "qualification-system-smoke.yml" {
 			t.Errorf("Qualification template %s expected to stage its experiments on a qualification/<this task id> scratch branch", filename)
 		}
-		if !strings.Contains(content, "auto-merge: true") {
-			t.Errorf("Qualification template %s expected to declare 'auto-merge: true', content:\n%s", filename, content)
+		// A qualification run that opens a pull request fails Stage 2
+		// (design/playbook/releases.playbook.md §2), so none auto-merges.
+		if !strings.Contains(content, "auto-merge: false") {
+			t.Errorf("Qualification template %s expected to declare 'auto-merge: false', content:\n%s", filename, content)
 		}
 	}
 
@@ -255,8 +257,37 @@ func TestReleaseQualification(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Qualification template %s not found: %v", filename, err)
 		}
-		if !strings.Contains(string(data), "auto-merge: true") {
-			t.Errorf("Qualification template %s expected 'auto-merge: true', got:\n%s", filename, data)
+		// Stage 2 is judged objectively (design/playbook/releases.playbook.md
+		// §2): a qualification run that opens a pull request fails, so none
+		// of them auto-merges, every one is filed for a candidate, and every
+		// one ends with the footer the reconciler reads.
+		for _, want := range []string{
+			"auto-merge: false",
+			"- name: rc_tag", "- name: rc_sha",
+			"Qualification-Verdict: PASS", "Qualified-Tag: {{rc_tag}}", "Qualified-Commit: {{rc_sha}}",
+		} {
+			if !strings.Contains(string(data), want) {
+				t.Errorf("Qualification template %s expected %q, got:\n%s", filename, want, data)
+			}
 		}
+		if filename != "qualification-system-smoke.yml" &&
+			!strings.Contains(string(data), "git push origin :refs/heads/qualification/<this task id>") {
+			t.Errorf("Qualification template %s does not delete its scratch branch", filename)
+		}
+	}
+
+	suite, err := os.ReadFile(filepath.Join(repoRoot(t), ".grain", "suites", "release-qualification.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"mode: until_clean", "max-passes: 1", "auto-merge: false"} {
+		if !strings.Contains(string(suite), want) {
+			t.Errorf("release-qualification suite expected %q, got:\n%s", want, suite)
+		}
+	}
+	// The reconciler files the suite's last item only after the others pass.
+	if !regexp.MustCompile(`qualification-system-smoke\s*\n#`).Match(suite) &&
+		!regexp.MustCompile(`- qualification-system-smoke\s*\n[a-z#]`).Match(suite) {
+		t.Errorf("qualification-system-smoke must be the suite's last template, got:\n%s", suite)
 	}
 }

@@ -290,3 +290,49 @@ func TestResumeLaterPreservesReasonOnTaskAndTimedParks(t *testing.T) {
 		}
 	}
 }
+
+// A wait_for_task park until "merged" keeps that in its suspension's
+// ResumeOn -- what model.Store.UntilMergedParkWaitsOn reads to hold the
+// task past a target that closes with its pull request still open -- and
+// one until "closed" does not.
+func TestParkUntilMergedIsRecordedOnTheSuspension(t *testing.T) {
+	t.Parallel()
+	for _, until := range []string{"merged", "closed"} {
+		t.Run(until, func(t *testing.T) {
+			store, ctx := openStore(t)
+			_, client := newSim(t, "acme", "widgets", "main")
+			repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+			target := filedTask(t, ctx, store, "b1", repo)
+			task := filedTask(t, ctx, store, "a1", repo)
+			runID := "a1-1"
+			if err := store.StartRun(ctx, model.Run{ID: runID, TaskID: task.ID, Sandbox: "s1", Attempt: 1, StartedAt: baseTime}, model.Limits{}); err != nil {
+				t.Fatal(err)
+			}
+			parked := task
+			parked.Links = append(slices.Clone(parked.Links), model.Link{Kind: model.LinkDependsOn, Target: target.ID})
+			if err := store.PutTask(ctx, parked); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.FinishRun(ctx, runID, baseTime, "succeeded", ""); err != nil {
+				t.Fatal(err)
+			}
+			result := toolResult(agent.ToolCall{Name: "wait_for_task",
+				Arguments: map[string]any{"task_id": target.ID, "park": true, "until": until},
+				Text:      "Parked. This task now depends on #" + target.ID})
+			if err := orchestrator.ProcessResult(ctx, store, client, task, result, runID, baseTime); err != nil {
+				t.Fatalf("ProcessResult: %v", err)
+			}
+			susps, err := store.Suspensions(ctx, task.ID)
+			if err != nil || len(susps) != 1 {
+				t.Fatalf("suspensions = %+v (%v), want the park's one", susps, err)
+			}
+			on, err := model.ParseResumeOn(susps[0].ResumeOn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(on.Tasks, []string{target.ID}) || on.UntilMerged != (until == "merged") {
+				t.Fatalf("ResumeOn = %+v, want tasks [%s] with UntilMerged %v", on, target.ID, until == "merged")
+			}
+		})
+	}
+}

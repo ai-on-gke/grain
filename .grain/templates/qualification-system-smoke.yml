@@ -1,19 +1,35 @@
 name: Release qualification - Full system multi-team & upgrade smoke
-title: Execute multi-team UI walkthroughs, state repository sync soak, and deployment health checks
+title: "Qualify {{rc_tag}}: multi-team UI walkthroughs, state repository sync and deployment health"
 base: main
-auto-merge: true
+auto-merge: false
+# The reconciler files this item last, and only after
+# qualification-mergequeue, qualification-ci-diagnostics and
+# qualification-base-triage have all passed on the same candidate.
+# Stage 2 of release-candidate qualification
+# (design/playbook/releases.playbook.md §2). Filed by grain's
+# release-qualification reconciler (pkg/orchestrator/releasequalification.go)
+# with rc_tag and rc_sha filled in, and judged by it objectively: the run
+# passes only if it opens no pull request, proposes nothing outside its own
+# scratch branch, leaves no scratch branch or fixture task behind, and ends
+# its closing note with the footer the body asks for.
+fields:
+  - name: rc_tag
+    label: Release candidate tag (vX.Y.Z-rc.N)
+  - name: rc_sha
+    label: Release candidate commit (full sha)
 body: |
   Execute full-system end-to-end multi-team UI walkthroughs, state repository
   synchronization soak tests, and deployment health validations against the
-  current release candidate before a person approves it.
+  release candidate.
 
-  Grain releases from trunk (`docs/release-candidate-management.md`): the release
-  candidate is the `vX.Y.0-rc.N` tag on `main` that `refs/heads/candidate` points
-  at, and staging (`grain-candidate`) runs it. Build and run `grain demo` from
-  that commit (`git fetch origin candidate && git checkout --detach FETCH_HEAD`),
-  and say in the report which rc tag and commit you tested. Pull requests to
-  `candidate` are refused: anything this run fixes lands on `main` through this
-  task's own branch.
+  You are qualifying release candidate `{{rc_tag}}` at commit `{{rc_sha}}`.
+  Check it out (`git fetch origin tag {{rc_tag}} && git checkout --detach {{rc_sha}}`)
+  and judge that commit, not `main`'s tip.
+
+  Build and run `grain demo` from that commit. This item is filed only after
+  `qualification-mergequeue`, `qualification-ci-diagnostics` and
+  `qualification-base-triage` have passed on `{rc_tag}`. It needs no
+  scratch branch, so create none.
 
   ## 1. Multi-Team UI Walkthroughs
 
@@ -34,12 +50,31 @@ body: |
   - Execute `read_deployment_health` and inspect systemd journal logs using `read_grain_log`:
     - Confirm zero unhandled panics, error loops, or reconciler crashes.
     - Validate host RAM, swap, disk utilisation, and standing microVM sandbox counts.
-    - Verify that reconciler cycle times remain well within latency thresholds (<1ms).
+    - Verify that reconciler cycle times remain well within latency thresholds.
 
-  ## 4. Final RC Validation Gate
+  ## 4. Report
 
-  - Confirm that all preceding qualification items (`qualification-mergequeue`,
-    `qualification-ci-diagnostics`, and `qualification-base-triage`) have passed.
-  - Deliver a comprehensive final RC qualification report in the task closing note,
-    naming the rc tag it qualifies, for the person deciding whether to approve the
-    pending release.
+  - Deliver the final qualification report for `{rc_tag}` in the closing
+    note.
+
+  ## What makes this a pass
+
+  The verdict is read mechanically, not from your prose:
+
+  - Do not push to this task's own branch and do not open a pull request.
+    Any pull request fails qualification, including a real fix. Report a bug
+    you find in the closing note with `Qualification-Verdict: FAIL`. The
+    pipeline steward files the fix.
+  - Finish with `comment_on_issue` (or `nothing_needed`), never
+    `ask_question`.
+  - End the closing note with exactly these three lines, the commit in full:
+
+    ```text
+    Qualification-Verdict: PASS
+    Qualified-Tag: {{rc_tag}}
+    Qualified-Commit: {{rc_sha}}
+    ```
+
+    Use `FAIL` when anything above did not behave as described. Use `INFRA`
+    only when the environment stopped you (sandbox, git proxy, model quota,
+    a daemon restart), and name the error. INFRA is re-run, not judged.

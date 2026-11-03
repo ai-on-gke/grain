@@ -72,7 +72,9 @@ async function expectOneRail(page, title) {
   await expect(rail).toHaveCount(1);
   await expect(page.getByTestId("top-bar")).toHaveCount(0);
   await expect(
-    rail.locator(".header-icon svg[data-glyph]").first(),
+    rail
+      .locator(".header-icon svg[data-glyph], .header-icon svg[data-icon]")
+      .first(),
   ).toBeVisible();
   await expect(rail.getByTestId("page-header-title")).toHaveText(title);
   await expect(rail.getByTestId("top-bar-page")).toHaveAttribute(
@@ -83,6 +85,9 @@ async function expectOneRail(page, title) {
   await expect(globals.getByTestId("alerts-button")).toBeVisible();
   await expect(globals.getByTestId("top-bar-system")).toBeVisible();
   await expect(globals.getByTestId("top-bar-settings")).toBeVisible();
+  await expect(
+    globals.getByRole("button", { name: "+ New task" }),
+  ).toBeVisible();
   // One row: the rail is exactly as tall wherever it is.
   const box = await rail.boundingBox();
   expect(Math.round(box.height)).toBe(77);
@@ -245,6 +250,55 @@ test.describe("the page header rail", () => {
       );
     });
   }
+
+  test("aligns the brand logo, tray icons and New task on one shared horizontal baseline", async ({
+    page,
+  }) => {
+    for (const width of [1440, 960]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/");
+      await expect(page.locator(".task-row").first()).toBeVisible();
+      const boxes = await Promise.all(
+        [
+          page.locator("aside .header-logo-box"),
+          page.getByTestId("sidebar-toggle"),
+          page.getByTestId("alerts-button"),
+          page.getByTestId("top-bar-system"),
+          page.getByTestId("top-bar-settings"),
+          page
+            .getByTestId("page-header-globals")
+            .getByRole("button", { name: "+ New task" }),
+          page
+            .getByTestId("page-header-globals")
+            .getByRole("button", { name: "Create options" }),
+        ].map((loc) => loc.boundingBox()),
+      );
+      const heights = boxes.map((b) => Math.round(b.height));
+      const mids = boxes.map((b) => b.y + b.height / 2);
+      expect(new Set(heights).size, `width=${width} heights=${heights}`).toBe(
+        1,
+      );
+      expect(Math.max(...mids) - Math.min(...mids)).toBeLessThanOrEqual(1);
+    }
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    const phoneBoxes = await Promise.all(
+      [
+        page.getByRole("button", { name: "Open navigation" }),
+        page.locator(".MuiToolbar-root .header-logo-box"),
+        page.getByTestId("alerts-button"),
+        page.getByTestId("phone-settings"),
+        page.getByRole("button", { name: "New task" }),
+      ].map((loc) => loc.boundingBox()),
+    );
+    const phoneHeights = phoneBoxes.map((b) => Math.round(b.height));
+    const phoneMids = phoneBoxes.map((b) => b.y + b.height / 2);
+    expect(new Set(phoneHeights).size).toBe(1);
+    expect(Math.max(...phoneMids) - Math.min(...phoneMids)).toBeLessThanOrEqual(
+      1,
+    );
+  });
 });
 
 // measureCounts runs in the page: every visible .count, the label it

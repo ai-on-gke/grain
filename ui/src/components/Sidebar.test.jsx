@@ -947,19 +947,19 @@ describe("Sidebar", () => {
   it("marks each list entry with its own glyph", () => {
     render(<Sidebar {...baseProps} config={null} tasks={[]} />);
 
-    for (const [label, kind] of [
-      ["Tasks", "tasks"],
-      ["Boards", "boards"],
-      ["Sessions", "sessions"],
-      ["Processes", "processes"],
-      ["CI", "ci"],
-      ["Repos", "repos"],
+    for (const [label, kind, attr] of [
+      ["Tasks", "tasks", "glyph"],
+      ["Boards", "boards", "glyph"],
+      ["Sessions", "sessions", "glyph"],
+      ["Processes", "processes", "glyph"],
+      ["CI", "ci", "icon"],
+      ["Repos", "repos", "glyph"],
     ]) {
       const entry = screen.getByRole("button", {
         name: new RegExp(`^${label}`),
       });
       expect(
-        entry.querySelector(`svg[data-glyph="${kind}"]`),
+        entry.querySelector(`svg[data-${attr}="${kind}"]`),
       ).toBeInTheDocument();
     }
   });
@@ -1078,14 +1078,14 @@ describe("Sidebar", () => {
       <Sidebar {...baseProps} config={null} tasks={[]} />,
     );
 
-    for (const [label, kind] of [
-      ["Inbox", "inbox"],
-      ["Repos", "repos"],
+    for (const [label, kind, attr] of [
+      ["Inbox", "inbox", "icon"],
+      ["Repos", "repos", "glyph"],
     ]) {
       const entry = screen.getByRole("button", {
         name: new RegExp(`^${label}\\b`),
       });
-      const glyph = entry.querySelector(`svg[data-glyph="${kind}"]`);
+      const glyph = entry.querySelector(`svg[data-${attr}="${kind}"]`);
       expect(glyph).toBeInTheDocument();
       expect(glyph.closest(".nav-icon")).not.toBeNull();
     }
@@ -1097,7 +1097,10 @@ describe("Sidebar", () => {
 
     expect(screen.queryByTestId("user-settings-button")).toBeNull();
 
-    expect(container.querySelectorAll("svg[data-glyph]")).toHaveLength(7);
+    expect(container.querySelectorAll("svg[data-glyph]")).toHaveLength(5);
+    expect(container.querySelectorAll(".nav-icon svg[data-icon]")).toHaveLength(
+      2,
+    );
   });
 
   it("shows Merged in sidebar under tasks and separates its count from Closed", async () => {

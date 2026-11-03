@@ -473,7 +473,12 @@ import "strconv"
 // tasks, templates, schedules, default_capabilities, ci_capabilities,
 // console_sessions and capability_policy become
 // https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"<vendor>"}.
-const SchemaVersion = 100
+//
+// 101 retires the in-process image-signing, registry-push and
+// package-publish providers onto the in-process release server: stored
+// grants, repo_config.ci_capabilities among them, become
+// https://grain.dev/capabilities/release#<method>={}.
+const SchemaVersion = 101
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified

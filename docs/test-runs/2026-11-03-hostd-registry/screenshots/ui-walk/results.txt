@@ -1,0 +1,19 @@
+PASS register shows the token -- ghd_231f63…
+PASS new row lists owner and labels
+PASS row shows only the token prefix
+PASS token gone on reload
+PASS GET /api/hostds never carries the token
+PASS edit saved owner and labels
+PASS rotate shows a new token
+PASS revoke marks the row Revoked and hides its actions
+PASS revoke clears the shown token
+PASS no page errors
+PASS page has no horizontal overflow at 1440 light -- 0px
+  rows at 1440 light: local — Co-located (socket) — edit | ui-93312 owner-ui2@example.com gpu=no Revoked — | ws-a owner-a@example.com gpu=yes zone=a Connected from debuerreotype (v0.0.0-20261103081638-314e6e2e4c67) ghd_1be6e2… editrotaterevoke | ws-b owner-b@example.com gpu=yes zone=b Connected from debuerreotype (v0.0.0-20261103081638-314e6e2e4c67) ghd_d320fe… editrotaterevoke | ws-c — Revoked — | ws-d ops@example.com Never connected ghd_3b1f7f… editrotaterevoke
+PASS page has no horizontal overflow at 1440 dark -- 0px
+  rows at 1440 dark: local — Co-located (socket) — edit | ui-93312 owner-ui2@example.com gpu=no Revoked — | ws-a owner-a@example.com gpu=yes zone=a Connected from debuerreotype (v0.0.0-20261103081638-314e6e2e4c67) ghd_1be6e2… editrotaterevoke | ws-b owner-b@example.com gpu=yes zone=b Connected from debuerreotype (v0.0.0-20261103081638-314e6e2e4c67) ghd_d320fe… editrotaterevoke | ws-c — Revoked — | ws-d ops@example.com Never connected ghd_3b1f7f… editrotaterevoke
+PASS page has no horizontal overflow at 390 light -- 0px
+  rows at 390 light: local — Co-located (socket) — edit | ui-93312 owner-ui2@example.com gpu=no Revoked — | ws-a owner-a@example.com gpu=yes zone=a Connected from debuerreotype (v0.0.0-20261103081638-314e6e2e4c67) ghd_1be6e2… editrotaterevoke | ws-b owner-b@example.com gpu=yes zone=b Connected from debuerreotype (v0.0.0-20261103081638-314e6e2e4c67) ghd_d320fe… editrotaterevoke | ws-c — Revoked — | ws-d ops@example.com Never connected ghd_3b1f7f… editrotaterevoke
+PASS page has no horizontal overflow at 390 dark -- 0px
+  rows at 390 dark: local — Co-located (socket) — edit | ui-93312 owner-ui2@example.com gpu=no Revoked — | ws-a owner-a@example.com gpu=yes zone=a Connected from debuerreotype (v0.0.0-20261103081638-314e6e2e4c67) ghd_1be6e2… editrotaterevoke | ws-b owner-b@example.com gpu=yes zone=b Connected from debuerreotype (v0.0.0-20261103081638-314e6e2e4c67) ghd_d320fe… editrotaterevoke | ws-c — Revoked — | ws-d ops@example.com Never connected ghd_3b1f7f… editrotaterevoke
+  /settings/executors -> /settings/models: 

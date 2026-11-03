@@ -24,6 +24,7 @@ import {
   Typography,
 } from "@mui/material";
 import api from "../api.js";
+import AppIcon from "./AppIcon.jsx";
 import { identifierField } from "../identifierField.js";
 import { serverPath } from "./CapabilityServersPanel.jsx";
 
@@ -239,7 +240,15 @@ export default function SecretsPanel({ showError, claimed, onSecretsChanged }) {
                       label={key}
                       onDelete={() => deleteKey(s.name, key)}
                       deleteIcon={
-                        <span title={`delete ${s.name}/${key}`}>×</span>
+                        <span
+                          title={`delete ${s.name}/${key}`}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                          }}
+                        >
+                          <AppIcon name="close" size={14} />
+                        </span>
                       }
                     />
                   ))}
@@ -247,6 +256,7 @@ export default function SecretsPanel({ showError, claimed, onSecretsChanged }) {
                 <Button
                   size="small"
                   variant="outlined"
+                  startIcon={<AppIcon name="delete" size={15} />}
                   onClick={() => deleteSecret(s.name)}
                 >
                   Delete secret

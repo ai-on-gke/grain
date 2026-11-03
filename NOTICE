@@ -1,2 +1,10 @@
 grain
 Copyright 2026 Brandon Salmon
+
+---
+
+Third-party notices:
+
+@mui/material and @mui/icons-material
+Copyright (c) 2014 Call-Em-All
+Licensed under the MIT License (https://opensource.org/licenses/MIT).

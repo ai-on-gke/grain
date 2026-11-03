@@ -133,6 +133,7 @@ Why these choices:
 | `queued/ready` | a worker slot and a sandbox | reconcileDispatch | person (inbox stalled group, "Run now") |
 | `queued/blocked_on_task` | the task it depends on | reconcileDispatch | resource |
 | `queued/usage_limit_paused` | the connection's limit window | reconcileDispatch | person ("Run now") |
+| `queued/held_by_local_policy` | an edit to the `-policy` file allowing the refused claim, and a restart (external) | -- | resource |
 | `running/live_run` | (executing) | ProcessResult | person ("Cancel") |
 | `completed/on_merge_queue` | the merge queue landing it | syncEntry | resource (the merge lane) |
 | `completed/merge_failed` | a person: "Retry merge" | -- | -- |

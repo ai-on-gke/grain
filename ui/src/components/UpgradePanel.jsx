@@ -577,6 +577,77 @@ function DiscardedRCAlert({ discardedRc, onSelectBranch, disabled }) {
   );
 }
 
+// RetractedReleaseAlert says the promoted release this deployment runs has
+// been retracted (<running>-retracted in the registry; scripts/
+// release-from-trunk.sh rollback, design/playbook/releases.playbook.md
+// section 11), and offers the two ways off it: forward to the release
+// that carries the fix, once one is published, or back to latest. Back is
+// only safe when the schema has not changed between the two, which is why
+// the deployment never makes that move by itself.
+function RetractedReleaseAlert({ retractedRelease, onSelectBranch, disabled }) {
+  if (!retractedRelease?.running) return null;
+  const { running, latest, newer } = retractedRelease;
+  const latestLabel = latest ? `latest (${latest})` : "latest";
+  return (
+    <Alert
+      severity="warning"
+      className="upgrade-retracted-release"
+      sx={{ mb: 2 }}
+    >
+      <Box>
+        <strong>Release {running} was retracted.</strong>{" "}
+        {newer ? (
+          <>
+            <strong>{newer}</strong> has been published to fix forward from it.
+          </>
+        ) : (
+          <>No release after it has been published yet.</>
+        )}{" "}
+        This deployment is staying on <code>{running}</code>: it will never
+        downgrade on its own. Moving back to <strong>latest</strong>
+        {latest ? (
+          <>
+            {" "}
+            (<code>{latest}</code>)
+          </>
+        ) : null}{" "}
+        is only safe if the database schema has not changed since then &mdash;
+        an older release may not read a schema {running} migrated to.
+        {newer
+          ? " Upgrading forward is the safe move."
+          : " If it has changed, wait for the fix-forward release instead."}
+      </Box>
+      <Stack
+        direction="row"
+        spacing={1}
+        useFlexGap
+        sx={{ mt: 1, flexWrap: "wrap", alignItems: "center" }}
+      >
+        {newer && (
+          <Button
+            color="inherit"
+            size="small"
+            variant="outlined"
+            disabled={disabled}
+            onClick={() => onSelectBranch(newer)}
+          >
+            {`Upgrade to ${newer}`}
+          </Button>
+        )}
+        <Button
+          color="inherit"
+          size="small"
+          variant={newer ? "text" : "outlined"}
+          disabled={disabled}
+          onClick={() => onSelectBranch("latest")}
+        >
+          {`Move back to ${latestLabel}`}
+        </Button>
+      </Stack>
+    </Alert>
+  );
+}
+
 // targetName is an Autocomplete value's branch, whether it is one of
 // the listed targets or a branch typed by hand (freeSolo hands over the
 // bare string for those).
@@ -1120,6 +1191,17 @@ export default function UpgradePanel({
           <RunningNow running={status.running} />
           <DiscardedRCAlert
             discardedRc={status.discardedRc || targetsData?.discardedRc}
+            disabled={running}
+            onSelectBranch={(next) => {
+              setBranch(next);
+              setUnchangedBranch("");
+              setChosen(true);
+            }}
+          />
+          <RetractedReleaseAlert
+            retractedRelease={
+              status.retractedRelease || targetsData?.retractedRelease
+            }
             disabled={running}
             onSelectBranch={(next) => {
               setBranch(next);
