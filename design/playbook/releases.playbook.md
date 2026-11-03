@@ -82,7 +82,7 @@ Getting v3.1.0 out on 2026-11-01/02 took a long series of manual steps: re-submi
 | # | Step | Owner | Enforced by |
 | --- | --- | --- | --- |
 | 1 | A fix or feature merges to core `main`; an `auto_merge: true` task merges on green CI and a clean review without a Submit | grain | `pkg/model` auto-merge stickiness (task 2442 for `false`; gap 1 for `true`), `.grain/merge-rules.yml` |
-| 2 | Release-path changes clear on grain's security review alone, except the approval path (§0.3) | grain | `pkg/trustboundary/trustboundary.go`, `.grain/triggers/release-promotion.yml` |
+| 2 | Release-path changes clear on grain's security review alone, except the approval path (§0.3) | grain | `pkg/trustboundary/trustboundary.go`, `.grain/triggers/release-promotion.yml`, `.grain/triggers/release-machinery.yml` |
 | 3 | `release images` publishes `:sha-<short>` for the merge, re-running on its own after an infrastructure failure (checkout 5xx, VM death) | grain | `.github/workflows/release.yml`, `scripts/release-images.sh`, `pkg/orchestrator/basebranchrelease.go` (`retryInfraBaseBranchRelease`), `pkg/orchestrator/infraverdict.go` |
 | 4 | The release train selects LKG, cuts `vX.Y.Z-rc.N`, and pushes the RC, `-pending` and `-discarded` tags with its own narrow grant (§0.4) | grain | `.grain/templates/release-train.yml` `push:` list (`pkg/model/ref_push.go`), `scripts/release-from-trunk.sh`, `scripts/candidate-gate.sh` |
 | 5 | Qualification: Stage 1 `nightly.yml`, Stage 2 `release-qualification` (§2) | grain | `.github/workflows/nightly.yml`, `.grain/suites/release-qualification.yml` |
