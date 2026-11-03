@@ -231,6 +231,15 @@ const PersonGrantedArgKey = "x-grain-person-granted"
 // them (NotePersonGrantedArgs).
 var personGrantedArgs sync.Map
 
+// reservedArg is one argument's values only a person may grant, and the
+// schema's default for it, which a grant that leaves the argument out
+// gets.
+type reservedArg struct {
+	vals       []any
+	def        any
+	hasDefault bool
+}
+
 // NotePersonGrantedArgs records, from each discovered method's argument
 // schema, the values its arguments' PersonGrantedArgKey reserve to a
 // person, replacing what capabilityID advertised before. Discovery calls
@@ -239,12 +248,13 @@ var personGrantedArgs sync.Map
 func NotePersonGrantedArgs(capabilityID string, methods map[string]*MethodInfo) {
 	for name, m := range methods {
 		key := capabilityID + "#" + name
-		reserved := map[string][]any{}
+		reserved := map[string]reservedArg{}
 		props, _ := m.ArgsSchema["properties"].(map[string]any)
 		for arg, raw := range props {
 			ps, _ := raw.(map[string]any)
 			if vals, ok := ps[PersonGrantedArgKey].([]any); ok && len(vals) > 0 {
-				reserved[arg] = vals
+				def, hasDefault := ps["default"]
+				reserved[arg] = reservedArg{vals: vals, def: def, hasDefault: hasDefault}
 			}
 		}
 		if len(reserved) == 0 {
@@ -256,19 +266,26 @@ func NotePersonGrantedArgs(capabilityID string, methods map[string]*MethodInfo) 
 }
 
 // personGrantedArg reports whether one of g's args has a value its
-// method reserves to a person (NotePersonGrantedArgs).
+// method reserves to a person (NotePersonGrantedArgs). An argument g
+// leaves out counts as its schema default, which is what the grant gets:
+// the args of a grant string as written are not yet normalized, so a
+// bare reference whose default is reserved must not pass for one that
+// is not.
 func personGrantedArg(g Grant) bool {
 	v, ok := personGrantedArgs.Load(g.Ref.CapabilityID + "#" + g.Ref.Method)
 	if !ok {
 		return false
 	}
-	for arg, vals := range v.(map[string][]any) {
+	for arg, r := range v.(map[string]reservedArg) {
 		have, ok := g.Args[arg]
 		if !ok {
-			continue
+			if !r.hasDefault {
+				continue
+			}
+			have = r.def
 		}
-		for _, r := range vals {
-			if reflect.DeepEqual(have, r) {
+		for _, val := range r.vals {
+			if reflect.DeepEqual(have, val) {
 				return true
 			}
 		}

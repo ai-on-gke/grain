@@ -231,7 +231,7 @@ func (t *gcpTokens) idToken(w http.ResponseWriter, r *http.Request, attemptID st
 		t.failed(w, attemptID, a, "an ID token", err)
 		return
 	}
-	t.log.Printf("gcp: audit: attempt %s: permission set %s: minted an ID token for %s, audience %s", attemptID, a.set, a.account, aud)
+	t.log.Printf("gcp: audit: attempt %s: permission set %s: minted an ID token for %s, audience %q", attemptID, a.set, a.account, aud)
 	w.Header().Set("Content-Type", "text/plain")
 	w.Header().Set("Cache-Control", "no-store")
 	fmt.Fprint(w, tok)
