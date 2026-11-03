@@ -224,11 +224,14 @@ if [ "$mode" = check ]; then
   release_conf="$(git show "${to_ref}:scripts/release.conf" 2>/dev/null || true)"
   conf_major="${RELEASE_MAJOR:-$(printf '%s\n' "$release_conf" | sed -nE 's/^RELEASE_MAJOR="?([0-9]+)"?[[:space:]]*(#.*)?$/\1/p' | tail -n 1)}"
   new_major="$(major "$version" || true)"
-  # The previous release's major, from its name, or from the tag on it
-  # when it was named by commit.
+  # The previous release's major, from its name, or from the newest
+  # release tag on its commit when it was named by commit or by another
+  # tag (`latest`, which git describe would pick over vX.Y.Z on the same
+  # commit).
   prev_major="$(major "$from_ref" || true)"
   [ -n "$prev_major" ] ||
-    prev_major="$(major "$(git describe --tags --exact-match "${from_ref}^{commit}" 2>/dev/null || true)" || true)"
+    prev_major="$(major "$(git tag --points-at "${from_ref}^{commit}" 2>/dev/null |
+      grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)" || true)"
   if [ -n "$new_major" ] && [ -n "$prev_major" ] && [ -n "$conf_major" ] &&
     [ "$new_major" -gt "$prev_major" ] && [ "$conf_major" -ge "$new_major" ]; then
     echo "${version}: promoting with breaking changes: a major release over ${from_ref}, as RELEASE_MAJOR=${conf_major} asks"

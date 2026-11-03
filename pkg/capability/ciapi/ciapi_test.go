@@ -283,8 +283,17 @@ func TestReleaseGateReadRaisesOnlyTheReleasePendingNotification(t *testing.T) {
 		t.Errorf("actions = %v, want Approve and Reject", body.Actions)
 	}
 
+	// A patch release the train staged from fixes alone is announced too.
+	if w := call(e, "POST", "/api/notifications/release-pending", token,
+		`{"version":"v2.4.1","rc":"v2.4.1-rc.1"}`); w.Code != http.StatusOK {
+		t.Errorf("raising release-pending for the patch release v2.4.1 = %d %s", w.Code, w.Body)
+	} else if !strings.Contains(up.body[len(up.body)-1], `"subject":"release.pending:v2.4.1"`) {
+		t.Errorf("patch body = %s, want release.pending:v2.4.1", up.body[len(up.body)-1])
+	}
+
 	for _, refused := range []string{
-		`{"version":"v2.4.1"}`,
+		`{"version":"v2.4.0-rc.1"}`,
+		`{"version":"v2.4"}`,
 		`{"version":"latest"}`,
 		`{"version":"v2.4.0","rc":"v2.5.0-rc.1"}`,
 		`{"version":"v2.4.0","subject":"pipeline.base-red:x"}`,
