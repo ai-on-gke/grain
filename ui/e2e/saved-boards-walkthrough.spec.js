@@ -502,6 +502,25 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     await page.getByRole("option", { name: "By state" }).click();
     await expect(page.locator(".gantt-lane-title").first()).toBeVisible();
 
+    // Both asked states share one "Asked" lane, drawn straight after
+    // Running as the rail and the kanban order it -- not below Closed,
+    // where ranking its "asked" key against the raw states put it.
+    const laneTitles = (
+      await page.locator(".gantt-lane-title").allInnerTexts()
+    ).map((t) => t.trim().toLowerCase());
+    const asked = laneTitles.indexOf("asked");
+    expect(asked, laneTitles.join(", ")).toBe(
+      laneTitles.indexOf("running") + 1,
+    );
+    expect(laneTitles.at(-1), laneTitles.join(", ")).toBe("closed");
+    const askedBox = await page
+      .locator(".gantt-lane-header", { hasText: /^asked/i })
+      .boundingBox();
+    const closedBox = await page
+      .locator(".gantt-lane-header", { hasText: /^closed/i })
+      .boundingBox();
+    expect(askedBox.y).toBeLessThan(closedBox.y);
+
     // Open task detail overlay from Gantt bar click
     await runningRow.click();
     await expect(page.locator(".detail-header")).toContainText(
