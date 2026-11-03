@@ -38,13 +38,29 @@ pool's is granted one of the deployment's named GCP keys,
 `gcp-key:<name>`, here instead. See [GCP keys](team-gcp-keys.md) for the
 setup.
 
+`image-signing`, `registry-push` and `package-publish` are methods of grain's
+in-process release server, `https://grain.dev/capabilities/release#<name>`
+(`pkg/capability/release`), since schema migration 101 rewrote the stored bare
+names to `https://grain.dev/capabilities/release#<name>={}`. The bare names
+are read as those grants for one release (a repository's `.grain`, an older
+grain/config), and the repos page's CI picker offers the methods. When each
+one may be handed out is declared by the server in code (`model.CIGrantRule`)
+and enforced by grain before the capability policy is read, so a policy rule
+can narrow them but never widen them: a rule allowing `image-signing` on
+`pull_request` is refused by `CapabilityPolicy.Permits` and the job is still
+not handed the key. `image-signing` goes to `release` jobs only;
+`registry-push` and `package-publish` to `release` and `workflow_dispatch`,
+and `package-publish` also to grain's own `on: schedule` run. A job of any
+other event is simply not handed the grant (its pass leaves it out), as the
+retired providers' event gate skipped it.
+
 The publishing credentials go the other way as well: `package-publish` and
-`registry-push` are **CI-only** (`model.CapabilitySpec.CIOnly`), so this
+`registry-push` are **CI-only** (`model.CIGrantRule`), so this
 repository setting is the only place either is granted. The task capability
 picker does not offer them, they cannot be put in a deployment-wide or
 per-repo task default set, and a task that holds one anyway -- seeded before
 this rule existed, or written straight into the store -- is refused at
-`model.ResolveGrants` before its provider resolves anything, so no credential
+`model.ResolveGrants` before its server mints anything, so no credential
 is minted and nothing is placed. The reason is the event gate below: the
 material is a token that can write to the repository's own packages, and it
 is released only to a trusted post-merge release, an operator's own
