@@ -387,7 +387,6 @@ func abbreviate(s string) string {
 // that posts to the pull request the merge arrived on, to find that pull
 // request at all.
 func applySettings(ctx context.Context, r *Repo, db *sql.DB, head, marker string) error {
-	dir := r.Dir()
 	// What the arriving commit changed, against the commit this host last
 	// agreed with the repository at (merge.go). Everything below that is
 	// read before the import is read against the merge, so that a row the
@@ -401,6 +400,10 @@ func applySettings(ctx context.Context, r *Repo, db *sql.DB, head, marker string
 		return refuseApply(err)
 	}
 	defer os.RemoveAll(baseDir)
+	return applySettingsFromDirs(ctx, r, db, head, base, baseDir, r.Dir())
+}
+
+func applySettingsFromDirs(ctx context.Context, r *Repo, db *sql.DB, head, base, baseDir, dir string) error {
 	tables := append(append([]string{}, SettingsTables...), memoryTables...)
 	plan, err := planMerge(ctx, db, base, baseDir, dir, tables)
 	if err != nil {

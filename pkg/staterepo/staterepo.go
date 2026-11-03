@@ -940,6 +940,58 @@ func (r *Repo) HasSecrets(ctx context.Context) (bool, error) {
 // the repository, and a clone onto a new machine must arrive without one.
 const loadedHeadFile = "grain-loaded-head"
 
+// LoadedHead returns the commit this host last loaded or exported, or "" when
+// no marker has been recorded yet.
+func (r *Repo) LoadedHead(ctx context.Context) (string, error) {
+	return r.loadedHead(ctx)
+}
+
+// SetLoadedHead records commit as the commit this host's database reflects.
+func (r *Repo) SetLoadedHead(ctx context.Context, commit string) error {
+	return r.setLoadedHead(ctx, commit)
+}
+
+// ReadLoadedHead reads the loaded-head marker of the repository at dir, or ""
+// when dir is not a repository or holds no marker yet.
+func ReadLoadedHead(ctx context.Context, dir string) string {
+	if _, err := os.Stat(dir); err != nil {
+		return ""
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--absolute-git-dir")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	gitDir := strings.TrimSpace(string(out))
+	if gitDir == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(gitDir, loadedHeadFile))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// WriteLoadedHead writes commit to the loaded-head marker of the repository at
+// dir when dir is already an initialised git repository.
+func WriteLoadedHead(ctx context.Context, dir, commit string) error {
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--absolute-git-dir")
+	out, err := cmd.Output()
+	if err != nil {
+		return err
+	}
+	gitDir := strings.TrimSpace(string(out))
+	if gitDir == "" {
+		return fmt.Errorf("staterepo: empty git-dir for %s", dir)
+	}
+	path := filepath.Join(gitDir, loadedHeadFile)
+	if err := os.WriteFile(path, []byte(commit+"\n"), 0o600); err != nil {
+		return fmt.Errorf("staterepo: writing %s: %w", path, err)
+	}
+	return nil
+}
+
 // loadedHead reads the marker, reporting "" when there is none.
 func (r *Repo) loadedHead(ctx context.Context) (string, error) {
 	path, err := r.loadedHeadPath(ctx)
