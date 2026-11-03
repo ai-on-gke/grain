@@ -333,6 +333,8 @@ VM WRAP redis AS redis_vm
 docker run ... -e CHV_CONTAINER_OVERRIDE='{"cmd":["redis-server","--port","6380"],"env":["TZ=UTC"]}' redis_vm
 ```
 
+* **Passing variables through**: `GRANULE_WORKLOAD_ENV`, a comma-separated list of variable names, adds each one that is set on the VM's container to the workload's environment by the same route. It is meant for a value that something else injects as a plain variable at start time, such as a controller's per-pod token: the image sets the list and whoever starts the container sets the values. `env` entries in `CHV_CONTAINER_OVERRIDE` for the same name win. The GitHub runner images use it to carry Actions Runner Controller's `ACTIONS_RUNNER_INPUT_JITCONFIG` to the runner in the guest (see [deploy/github-runner-images](deploy/github-runner-images/README.md)).
+
 * **Volumes**: a virtio-fs share given a destination in `CHV_FS` or `CHV_VOLUMES` (`tag:/run/vfs.sock:/data[:ro]`, or `tag=...,socket=...,destination=/data`) is mounted at that path inside the wrapped container before its process starts, resolved so it cannot escape the container's root, and read-only when asked. `granule exec --container` sees it too. See [docs/volumes.md](docs/volumes.md).
 
 * **Separate output streams**: the wrapped container's stdout and stderr reach the VM's console (and so `docker logs`) merged with the kernel's and init's, as they always have. A caller that needs them apart -- a container runtime keeping CRI's stream identity -- sets `GRANULE_WORKLOAD_STDOUT` and/or `GRANULE_WORKLOAD_STDERR` on the VM's container to absolute paths: regular files are appended to, and FIFOs are waited on until something reads them. Each stream arrives on its own over vsock from `granule-container` (see `pkg/workloadio`), which keeps up to 4 MiB of what the workload writes before anything is attached, and before a finished workload's VM powers off waits up to 5s for the host to have the rest.
@@ -644,6 +646,16 @@ By default (`auto`) a networked guest resolves through the sandbox's own resolve
 
 * **Memory Hotplug (`virtio-mem`)**: Granule supports live memory expansion via `virtio-mem`. The in-guest memory agent monitors memory pressure (`PSI`) and dynamically requests memory allocations from the host hypervisor.
 * **CPU Hotplug**: Adjust vCPU allocation dynamically using Cloud-Hypervisor resize APIs.
+
+### Container Memory Limits
+
+Once a guest has touched a page of its RAM, cloud-hypervisor keeps it resident, as shared memory charged to the VM's container. A guest that fills its RAM with page cache, which any IO-heavy guest does, therefore uses the container's whole memory limit for its RAM alone. Three settings keep that from getting the VMM OOM-killed from the host, which the guest never sees:
+
+* **Free page reporting (`CHV_BALLOON`, on by default)**: a virtio-balloon with `free_page_reporting=on`. The guest hands back every 2 MiB of memory it frees, including page cache it drops, so the VMM's resident size follows what the guest is using rather than the most it ever touched. The bundled kernel and Debian's both have `CONFIG_VIRTIO_BALLOON` and `CONFIG_PAGE_REPORTING`.
+* **Direct disk I/O (`CHV_DISK_DIRECT`: `auto` by default, or `on`/`off`)**: writable disks are opened `direct=on`, so the VMM's disk writes do not also sit in host page cache charged to the same container. `auto` turns it on for every disk whose image and backing chain can be opened with `O_DIRECT`. Read-only disks are never opened direct.
+* **Headroom**: `VMSpec.ContainerMemoryLimitMB()` is the limit the docker backend gives the container (`--memory`, no swap), unless `-memory-limit-mb` sets one: the guest's RAM (its hotplug ceiling, if it can grow), plus `max(512 MiB, guest/16)`.
+
+When the VMM is killed anyway, `granule exec` and the VM container's log both say `VM killed: host memory limit, cgroup OOM` and name the limit, from the cgroup's `memory.events` `oom_kill` count. Without that, the only symptom is a closed connection. `test/oom-pagecache.sh` reproduces the workload: it fills a guest's page cache, then writes a multi-GB image with `mke2fs` and `cp` under a guest + 512 MiB, no-swap limit.
 
 ### Disk Sizing & Expansion
 

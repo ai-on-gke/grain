@@ -40,6 +40,11 @@ import (
 	"github.com/bwsalmon/granule/pkg/execwire"
 )
 
+// exit is os.Exit, as a variable so that a test on a host where run
+// really listens -- one with a vsock transport, such as a Hyper-V CI
+// runner -- can see the stop without it ending the test binary.
+var exit = os.Exit
+
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("granule-agent: ")
@@ -93,7 +98,7 @@ func run(ctx context.Context) error {
 	go func() {
 		<-ctx.Done()
 		_ = unix.Close(fd)
-		os.Exit(0)
+		exit(0)
 	}()
 
 	log.Printf("listening on vsock port %d", execwire.Port)
