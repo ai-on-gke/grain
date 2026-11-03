@@ -1217,7 +1217,14 @@ func reconcileDispatch(ctx context.Context, deps Deps, now time.Time) error {
 	// even when no scarce capability providers are configured: a missing
 	// grain-ci task grant is itself the condition admission must expose.
 	opts = append(opts, dispatch.Preempt(preempter(deps, now)))
-	opts = append(opts, dispatch.Admit(capabilityAdmitter(deps, grantAdmitterWithFrameworks(ctx, deps, prepared, frameworks, now))))
+	opts = append(opts, dispatch.Admit(capabilityAdmitterFor(deps, grantAdmitterWithFrameworks(ctx, deps, prepared, frameworks, now),
+		func(runID string) string {
+			if connection, ok := frameworks[runID].framework.(CredentialConnection); ok {
+				c, _ := connection.CredentialConnection()
+				return c
+			}
+			return ""
+		})))
 	limits := model.Limits{
 		Workers: deps.MaxWorkers, Mergers: deps.MaxMergers, CIJobs: deps.MaxCIJobs,
 		Durable: deps.Config.maxDurableRuns(),

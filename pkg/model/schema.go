@@ -467,7 +467,13 @@ import "strconv"
 // off, daily, or release) and the `auto_upgrade_release` table, what the
 // release-triggered automatic upgrade has seen and scheduled
 // (model.AutoUpgradeRelease).
-const SchemaVersion = 99
+//
+// 100 retires the in-process claude-proxy, openai-proxy and gemini-proxy
+// providers onto the in-process model-proxy server: stored grants across
+// tasks, templates, schedules, default_capabilities, ci_capabilities,
+// console_sessions and capability_policy become
+// https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"<vendor>"}.
+const SchemaVersion = 100
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified

@@ -43,7 +43,11 @@ func CanonicalID(name string) string { return CanonicalIDPrefix + name }
 // longer lingers as "needs configuring" in Settings; an entry an
 // operator configured or aliased is left in place as an external server
 // (Builtin cleared).
-var retiredBuiltins = []string{"self-debug"}
+//
+// model-proxy's canonical id is grain's in-process model-proxy server
+// now (pkg/capability/modelproxy.Method), so its default entry is
+// dropped the same way.
+var retiredBuiltins = []string{"self-debug", "model-proxy"}
 
 // BuiltinCommand is the stdio command a built-in entry starts in the
 // daemon's own environment: the grain binary, found on PATH, as

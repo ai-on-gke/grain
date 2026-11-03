@@ -31,7 +31,9 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
 
+	"github.com/ai-on-gke/grain/pkg/capability"
 	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -188,46 +190,34 @@ func TestTheModelProxiesAreAdvertisedWhereAGranuleGuestCanReachThem(t *testing.T
 }
 
 // The capability a task is granted and the proxy this process serves are
-// two ends of one thing: the provider the registry builds has to mint a
-// token the running proxy actually honours, and stop honouring it when
-// the run's lease is revoked -- for each vendor, against that vendor's
-// own proxy.
+// two ends of one thing: the in-process model-proxy method the daemon
+// registers has to mint a token the running proxy actually honours, and
+// stop honouring it when the run's pass is released -- for each vendor,
+// against that vendor's own proxy.
 func TestTheGrantedCapabilitiesMintTokensTheseProxiesHonour(t *testing.T) {
 	t.Parallel()
 	secretStore := testSecrets(t)
 	proxies := startTestModelProxies(t, teamConnections(t, secretStore), secretStore)
 
-	// Built over this test's own endpoints, the way runDaemon builds
-	// them over the ones it just started: what is under test is that the
-	// provider capabilityProviders registers mints into the very proxy
-	// this process is serving, whichever set of endpoints that is.
-	registered := map[string]model.CapabilityProvider{}
-	for _, p := range daemon.CapabilityProviders(daemon.Config{}, nil, proxies, nil, nil) {
-		registered[p.Spec().Name] = p
-	}
+	// Built over this test's own endpoints, the way the daemon builds it
+	// over the ones it serves: what is under test is that the method
+	// mints into the very proxy this process is serving, whichever set of
+	// endpoints that is.
+	method := modelproxycap.Method(proxies).Spec
 
 	for _, vendor := range modelproxy.Vendors() {
-		name := modelproxycap.CapabilityName(vendor)
-		provider := registered[name]
-		if provider == nil {
-			t.Fatalf("no %q provider is registered", name)
-		}
-
-		cc := model.CapabilityContext{Run: model.Run{ID: "run-7"}, Now: time.Now().UTC()}
-		resolution, err := provider.Resolve(t.Context(), cc)
+		attempt := "grain-7-1-0"
+		resp, err := method.Mint(model.WithRunConnection(t.Context(), ""), attempt, time.Now().Add(time.Hour),
+			map[string]any{"vendor": vendor.Name})
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("minting model-proxy for %s: %v", vendor.Name, err)
 		}
-		if resolution.Refused {
-			t.Fatalf("a deployment serving a proxy and holding a credential refused %q: %s", name, resolution.Reason)
-		}
-		materialization, err := provider.Materialize(t.Context(), cc)
-		if err != nil {
-			t.Fatalf("Materialize %q: %v", name, err)
+		if resp.Status != protocol.StatusOK {
+			t.Fatalf("a deployment serving a proxy and holding a credential refused %s: %s", vendor.Name, resp.Reason)
 		}
 
 		var url, token string
-		for _, p := range materialization.Placements {
+		for _, p := range resp.Placements {
 			switch p.Path {
 			case modelproxycap.URLPath(vendor):
 				url = strings.TrimSpace(p.Content)
@@ -240,14 +230,14 @@ func TestTheGrantedCapabilitiesMintTokensTheseProxiesHonour(t *testing.T) {
 			t.Fatalf("the sandbox is told the %s proxy is at %q, this process serves it at %q",
 				vendor.Name, url, want)
 		}
-		if owner, connection, ok := endpoint.Tokens.Lookup(token); !ok || owner != "run-7" || connection.ID != vendor.Name+"-conn" {
-			t.Fatalf("the placed %s token authenticates as %q on %+v, %v, want run-7 on %s-conn", vendor.Name, owner, connection, ok, vendor.Name)
+		if owner, connection, ok := endpoint.Tokens.Lookup(token); !ok || owner != attempt || connection.ID != vendor.Name+"-conn" {
+			t.Fatalf("the placed %s token authenticates as %q on %+v, %v, want %s on %s-conn", vendor.Name, owner, connection, ok, attempt, vendor.Name)
 		}
-		if err := provider.Revoke(t.Context(), cc, *materialization.Lease); err != nil {
+		if err := method.Release(t.Context(), attempt); err != nil {
 			t.Fatal(err)
 		}
 		if _, ok := endpoint.Tokens.Authenticate(token); ok {
-			t.Fatalf("the %s token still works after the run's lease was revoked", vendor.Name)
+			t.Fatalf("the %s token still works after the run's pass was released", vendor.Name)
 		}
 	}
 }
@@ -304,21 +294,32 @@ func nonLoopbackHost(t *testing.T) string {
 	return ""
 }
 
-// The picker and the registry have to agree about these capabilities the
-// way they do about every other one -- cmd/grain's own
-// TestEveryRegisteredCapabilityIsGrantable covers the pair in general;
-// this is the one line of it worth naming, since a vendor's proxy
-// registered but not offered would be a proxy no task could ever be
-// granted.
+// The retired <vendor>-proxy providers are gone from the registry, and
+// what they became is served: the daemon registers the in-process
+// model-proxy method, and each bare name is an alias for its vendor's
+// grant on it -- so a vendor's proxy is never one no task can be granted.
 func TestEveryModelProxyIsBothRegisteredAndGrantable(t *testing.T) {
 	t.Parallel()
 	var registered []string
 	for _, p := range daemon.CapabilityProviders(daemon.Config{}, nil, daemon.NewModelProxies(), nil, nil) {
 		registered = append(registered, p.Spec().Name)
 	}
+	served := false
+	for _, m := range capability.Methods() {
+		if m.Ref() == model.ModelProxyRef {
+			served = true
+		}
+	}
+	if !served {
+		t.Errorf("the daemon registers no in-process %s", model.ModelProxyRef)
+	}
 	for _, vendor := range modelproxy.Vendors() {
-		if !slices.Contains(registered, modelproxycap.CapabilityName(vendor)) {
-			t.Errorf("capabilityProviders registers %v, without %q", registered, modelproxycap.CapabilityName(vendor))
+		name := modelproxycap.CapabilityName(vendor)
+		if slices.Contains(registered, name) {
+			t.Errorf("capabilityProviders still registers the retired %q: %v", name, registered)
+		}
+		if got := model.CanonicalLegacyGrant(name); got != model.ModelProxyGrant(vendor.Name) {
+			t.Errorf("%s is an alias for %q, want %q", name, got, model.ModelProxyGrant(vendor.Name))
 		}
 	}
 }
