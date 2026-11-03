@@ -196,3 +196,74 @@ func TestProbeReportsWithoutAttaching(t *testing.T) {
 		t.Errorf("HostCapabilityEntries with no hostd = %v", err)
 	}
 }
+
+// A built-in attached under one config that refuses the next is a drop
+// (Options.OnDrop) -- the 2026-11-03 role-ceiling save nobody heard of --
+// and attaching again is what clears it (Options.OnAttach).
+func TestRefusedReconfigureIsReportedAsADrop(t *testing.T) {
+	h := &configHarness{}
+	var drops []Status
+	var attaches []string
+	r := New(Options{
+		Attach:   h.attach,
+		Secrets:  func(name string) (string, bool) { return secretValue, name == "tok" },
+		OnDrop:   func(st Status) { drops = append(drops, st) },
+		OnAttach: func(id string) { attaches = append(attaches, id) },
+	})
+	ctx := context.Background()
+	good := protocol.ServerConfig{Builtin: "gcp", Command: "grain", Config: map[string]any{"project": "p1", "token": "$secret:tok"}}
+	r.Sync(ctx, map[string]protocol.ServerConfig{gcp: good})
+	if len(drops) != 0 || len(attaches) != 1 {
+		t.Fatalf("first attach: drops %v, attaches %v", drops, attaches)
+	}
+
+	h.failWith = "roles/run.admin exceeds admin ambient-host's role ceiling"
+	bad := good
+	bad.Config = map[string]any{"project": "p2", "token": "$secret:tok"}
+	r.Sync(ctx, map[string]protocol.ServerConfig{gcp: bad})
+	if len(drops) != 1 {
+		t.Fatalf("a refused reconfigure raised %d drops, want 1", len(drops))
+	}
+	d := drops[0]
+	if d.ID != gcp || d.State != NeedsConfig || !d.ConfigRefused || !strings.Contains(d.Reason, "role ceiling") {
+		t.Errorf("drop = %+v, want %s needs-config, refused, naming the ceiling", d, gcp)
+	}
+	if strings.Contains(d.Reason, secretValue) {
+		t.Errorf("drop reason carries the secret: %q", d.Reason)
+	}
+	if st := r.Statuses()[0]; !st.ConfigRefused {
+		t.Errorf("status = %+v, want ConfigRefused", st)
+	}
+
+	// Retried with the same refusal: said once, not every retry.
+	r.Sync(ctx, map[string]protocol.ServerConfig{gcp: bad})
+	if len(drops) != 1 {
+		t.Errorf("an unchanged refusal was reported again (%d drops)", len(drops))
+	}
+
+	h.failWith = ""
+	r.Sync(ctx, map[string]protocol.ServerConfig{gcp: good})
+	if len(attaches) != 2 {
+		t.Errorf("attaches = %v, want the fixed config to attach again", attaches)
+	}
+	if st := r.Statuses()[0]; st.ConfigRefused || st.State != Attached {
+		t.Errorf("status after the fix = %+v", st)
+	}
+}
+
+// A server refusing its saved config on its first attach -- after a
+// restart, with nothing attached before it -- is reported too; a
+// built-in with no config yet is only waiting, and is not.
+func TestRefusedConfigOnFirstAttachIsReported(t *testing.T) {
+	h := &configHarness{failWith: "bad config"}
+	var drops []Status
+	r := New(Options{Attach: h.attach, OnDrop: func(st Status) { drops = append(drops, st) }})
+	ctx := context.Background()
+	r.Sync(ctx, map[string]protocol.ServerConfig{
+		gcp:            {Builtin: "gcp", Command: "grain", Config: map[string]any{"project": "p1", "token": "x"}},
+		"https://e/hs": {Builtin: "host-script", Command: "grain"},
+	})
+	if len(drops) != 1 || drops[0].ID != gcp {
+		t.Fatalf("drops = %+v, want only %s", drops, gcp)
+	}
+}

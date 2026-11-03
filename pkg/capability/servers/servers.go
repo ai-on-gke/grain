@@ -121,6 +121,11 @@ type Status struct {
 	// (protocol.Server.ControlTools) -- host-script's test_script, which
 	// Settings' per-script Test button calls; empty unless it is attached.
 	Tools []string `json:"tools,omitempty"`
+	// ConfigRefused says the server refused the config it was given --
+	// its configure answered with an error -- rather than having none
+	// yet: a configuration somebody saved that the server will not run
+	// under, which is worth raising rather than waiting quietly.
+	ConfigRefused bool `json:"configRefused,omitempty"`
 	// Error is why the server is not attached (or why its last refresh
 	// failed), naming missing secrets by name and never a value.
 	Error       string     `json:"error,omitempty"`
@@ -191,6 +196,17 @@ type Options struct {
 	// entry -- the gcp server's sets overlapping the in-process gcp-key
 	// provider's accounts (intree.GCPOverlapWarnings).
 	ProbeWarnings func(id string, cfg protocol.ServerConfig) []string
+	// OnDrop, when set, is told of a server that fell out of use: one
+	// that was attached -- before a config change, a reconfigure or a
+	// refresh that failed -- and is now failed or needs-config, or one
+	// whose configure refused the config it was saved with (which is how
+	// a refusal after a restart is seen, with nothing attached before
+	// it). It is called once per state and reason, outside the
+	// registry's lock.
+	OnDrop func(st Status)
+	// OnAttach, when set, is told each time a server attaches, outside
+	// the registry's lock: what clears what OnDrop raised.
+	OnAttach func(id string)
 }
 
 type entry struct {
@@ -211,8 +227,15 @@ type entry struct {
 	// adds, or a hostd back from a restart, attaches it with no daemon
 	// restart.
 	hostRetry bool
-	attached  time.Time
-	refreshed time.Time
+	// configRefused is the server's configure having refused cfg.Config
+	// (Status.ConfigRefused).
+	configRefused bool
+	// wasAttached marks an entry that was attached under this or an
+	// earlier configuration, so its falling to failed or needs-config is
+	// a drop (Options.OnDrop) and not a server that never came up.
+	wasAttached bool
+	attached    time.Time
+	refreshed   time.Time
 }
 
 // Registry holds the attached servers, keyed by capability_id.
@@ -384,7 +407,7 @@ func (r *Registry) Statuses() []Status {
 }
 
 func (e *entry) status(id string) Status {
-	s := Status{ID: id, State: e.state, Error: e.err, Transport: "http", Builtin: e.cfg.Builtin}
+	s := Status{ID: id, State: e.state, Error: e.err, Transport: "http", Builtin: e.cfg.Builtin, ConfigRefused: e.configRefused}
 	s.Aliases = append([]string(nil), e.cfg.Aliases...)
 	if e.state == NeedsConfig && !e.hostRetry {
 		s.Error, s.Reason = "", e.err
@@ -439,6 +462,7 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 	// a configuration that no longer says it should.
 	r.mu.Lock()
 	var closing []*protocol.Server
+	wasAttached := map[string]bool{}
 	for id, e := range r.entries {
 		cfg, ok := servers[id]
 		if ok && reflect.DeepEqual(cfg, e.cfg) && e.identity == identity {
@@ -447,6 +471,9 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 		if e.server != nil {
 			closing = append(closing, e.server)
 		}
+		// An entry attached under the configuration it is leaving is
+		// one whose refusal of the new one is a drop (Options.OnDrop).
+		wasAttached[id] = e.state == Attached || e.wasAttached
 		delete(r.entries, id)
 		if !ok {
 			r.opts.Logf("capability server %s: removed from mcpServers, detached", id)
@@ -456,7 +483,7 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 	}
 	for id, cfg := range servers {
 		if _, ok := r.entries[id]; !ok {
-			r.entries[id] = &entry{cfg: cfg, identity: identity, state: Pending}
+			r.entries[id] = &entry{cfg: cfg, identity: identity, state: Pending, wasAttached: wasAttached[id]}
 		}
 	}
 	r.applied = copyServers(servers)
@@ -562,10 +589,15 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 		}
 		var prevState State
 		var prevErr string
+		var dropped bool
+		var st Status
 		r.set(id, func(e *entry) {
 			prevState, prevErr = e.state, e.err
 			e.state, e.err, e.tried, e.schema = state, msg, now, schema
 			e.hostRetry = state == NeedsConfig && !isConfigure && cfg.OnHost()
+			e.configRefused = isConfigure && len(cfg.Config) > 0
+			dropped = (e.wasAttached || e.configRefused) && (prevState != state || prevErr != msg)
+			st = e.status(id)
 		})
 		if state == NeedsConfig {
 			if prevState != NeedsConfig || prevErr != msg {
@@ -573,6 +605,9 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 			}
 		} else {
 			r.opts.Logf("capability server %s: attach refused: %s", id, msg)
+		}
+		if dropped && r.opts.OnDrop != nil {
+			r.opts.OnDrop(st)
 		}
 		return
 	}
@@ -582,12 +617,19 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 		_ = server.Close()
 		reason := "it offers no methods until it is configured: fill in its Server settings (Edit server settings, under Settings → Capabilities)"
 		var prevState State
+		var dropped bool
+		var st Status
 		r.set(id, func(e *entry) {
 			prevState = e.state
-			e.state, e.err, e.tried, e.schema, e.hostRetry = NeedsConfig, reason, now, schema, false
+			e.state, e.err, e.tried, e.schema, e.hostRetry, e.configRefused = NeedsConfig, reason, now, schema, false, false
+			dropped = e.wasAttached && prevState != NeedsConfig
+			st = e.status(id)
 		})
 		if prevState != NeedsConfig {
 			r.opts.Logf("capability server %s: not configured", id)
+		}
+		if dropped && r.opts.OnDrop != nil {
+			r.opts.OnDrop(st)
 		}
 		return
 	}
@@ -595,6 +637,7 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 	kept := r.set(id, func(e *entry) {
 		e.state, e.err, e.tried, e.server, e.methods, e.details = Attached, "", now, server, methods, details
 		e.schema, e.tools = server.ConfigSchema, tools
+		e.configRefused, e.wasAttached = false, true
 		e.attached, e.refreshed = now, now
 	})
 	if !kept {
@@ -603,6 +646,9 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 		return
 	}
 	r.opts.Logf("capability server %s: attached, %d method(s)", id, len(methods))
+	if r.opts.OnAttach != nil {
+		r.opts.OnAttach(id)
+	}
 }
 
 // refresh re-issues tools/list. A server that no longer answers is
@@ -621,8 +667,15 @@ func (r *Registry) refresh(ctx context.Context, id string, server *protocol.Serv
 	}
 	msg := err.Error()
 	r.opts.Logf("capability server %s: refresh failed, detaching: %s", id, msg)
-	r.set(id, func(e *entry) { e.state, e.err, e.tried, e.server = Failed, msg, now, nil })
+	var st Status
+	r.set(id, func(e *entry) {
+		e.state, e.err, e.tried, e.server = Failed, msg, now, nil
+		st = e.status(id)
+	})
 	_ = server.Close()
+	if r.opts.OnDrop != nil {
+		r.opts.OnDrop(st)
+	}
 }
 
 // set applies f to id's entry under the lock, reporting false when the
@@ -755,11 +808,15 @@ func normalize(in map[string]protocol.ServerConfig) map[string]protocol.ServerCo
 // schema as discovery read them, and the error that refused it, if one
 // did -- scrubbed like any attach error.
 type ProbeResult struct {
-	ID           string         `json:"id"`
-	OK           bool           `json:"ok"`
-	Methods      []MethodDetail `json:"methods"`
-	ConfigSchema map[string]any `json:"configSchema,omitempty"`
-	Error        string         `json:"error,omitempty"`
+	ID string `json:"id"`
+	OK bool   `json:"ok"`
+	// ConfigRefused says Error is the server's configure refusing the
+	// config it was given, rather than the server not being reached at
+	// all: what a save is refused for (ui.Client.SetCapabilityServer).
+	ConfigRefused bool           `json:"configRefused,omitempty"`
+	Methods       []MethodDetail `json:"methods"`
+	ConfigSchema  map[string]any `json:"configSchema,omitempty"`
+	Error         string         `json:"error,omitempty"`
 	// Warnings are things Test found that do not stop the server
 	// attaching (Options.ProbeWarnings).
 	Warnings []string `json:"warnings,omitempty"`
@@ -819,6 +876,7 @@ func (r *Registry) Probe(ctx context.Context, id string, cfg protocol.ServerConf
 		var ce *protocol.ConfigureError
 		if errors.As(err, &ce) {
 			res.ConfigSchema = protocol.OperatorSchema(ce.Schema)
+			res.ConfigRefused = true
 		}
 		return res
 	}
