@@ -331,7 +331,7 @@ runs "$c3"
 train
 expect "placeholder" "exits 0" eq "$status" 0
 expect "placeholder" "targets v2.6.0, notes from v2.4.0" has "next minor v2.6.0; notes from v2.4.0"
-expect "placeholder" "never patches the placeholder" eval '! has "next patch"'
+expect "placeholder" "never patches the placeholder" eq "$(remote_tag v2.5.1-rc.1)" ""
 expect "placeholder" "cuts v2.6.0-rc.1 after the placeholder" eq "$(remote_tag v2.6.0-rc.1)" "$c3"
 expect "placeholder" "cuts no v2.5.0 rc" eq "$(remote_tag v2.5.0-rc.1)" ""
 expect "placeholder" "leaves latest alone" eq "$(remote_tag latest)" "$c0"
