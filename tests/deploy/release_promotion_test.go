@@ -96,31 +96,18 @@ func TestEveryPromoteReleaseJobRefusesAnybodyButAPerson(t *testing.T) {
 	}
 }
 
-// human: required, in both of the trust-boundary declarations: the
-// repository's own path trigger holds a change to the workflow and the
-// scripts it runs for a person's Submit, and grain's built-in list puts
-// them in a category no clean automated review releases.
+// human: required on the approval path, in both of the trust-boundary
+// declarations: the repository's own path trigger holds a change to the
+// approval workflow and the route that starts it for a person's Submit, and
+// grain's built-in list puts them in a category no clean automated review
+// releases (design/playbook/releases.playbook.md §0.3).
 func TestPromoteReleaseIsDeclaredHumanRequired(t *testing.T) {
-	root := repoRoot(t)
-	decl, err := repodecl.Load(os.DirFS(root), model.GrainSourceRepo())
-	if err != nil {
-		t.Fatalf("this repository's declarations do not load: %v", err)
-	}
-	guarded := []string{promoteReleasePath, ".grain/workflows/promote.yml", "scripts/release-from-trunk.sh", "scripts/release-images.sh"}
-	var trigger *model.PathTrigger
-	for i, tr := range decl.Triggers {
-		if tr.Name == "release-promotion" {
-			trigger = &decl.Triggers[i]
-		}
-	}
-	if trigger == nil {
-		t.Fatalf(".grain/triggers/release-promotion.yml is not among the declared triggers: %+v", decl.Triggers)
-	}
+	trigger := declaredTrigger(t, "release-promotion")
 	if !trigger.Gate || trigger.Human != model.TriggerHumanRequired || !trigger.Sensitive {
 		t.Errorf("release-promotion trigger = gate %v, human %q, sensitive %v; want gate: true, human: required, sensitive: true",
 			trigger.Gate, trigger.Human, trigger.Sensitive)
 	}
-	for _, p := range guarded {
+	for _, p := range []string{promoteReleasePath, ".github/workflows/promote-release.yml", "pkg/ui/release_approval.go"} {
 		if !containsString(trigger.Paths, p) {
 			t.Errorf("the release-promotion trigger does not hold %s (paths %v)", p, trigger.Paths)
 		}
@@ -129,6 +116,61 @@ func TestPromoteReleaseIsDeclaredHumanRequired(t *testing.T) {
 			t.Errorf("%s is not on a human-required trust-boundary category: %+v", p, matches)
 		}
 	}
+}
+
+// The release jobs and the scripts they run cannot make a release official,
+// so grain's security review alone releases them (§0.3): a gating, sensitive
+// trigger with no human: required, a built-in category a clean review
+// releases, and no other trigger of this repository's holding them for a
+// person -- grain-declarations' .grain/** included.
+func TestReleaseMachineryClearsOnSecurityReview(t *testing.T) {
+	trigger := declaredTrigger(t, "release-machinery")
+	if !trigger.Gate || trigger.Human == model.TriggerHumanRequired || !trigger.Sensitive {
+		t.Errorf("release-machinery trigger = gate %v, human %q, sensitive %v; want gate: true, no human, sensitive: true",
+			trigger.Gate, trigger.Human, trigger.Sensitive)
+	}
+	decl := declarations(t)
+	for _, p := range []string{
+		"scripts/release-images.sh", "scripts/release-from-trunk.sh", "scripts/release-notes.sh",
+		"scripts/candidate-gate.sh", "scripts/release.conf",
+		"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
+		".grain/workflows/release.yml", ".github/workflows/release.yml",
+		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
+		".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
+	} {
+		if !containsString(trigger.Paths, p) {
+			t.Errorf("the release-machinery trigger does not hold %s (paths %v)", p, trigger.Paths)
+		}
+		if matches := trustboundary.Classify([]string{p}); matches == nil || trustboundary.RequiresHuman(matches) {
+			t.Errorf("%s: trust-boundary categories %+v; want one a clean review releases", p, matches)
+		}
+		for _, other := range decl.Triggers {
+			if other.Human == model.TriggerHumanRequired && len(other.Match([]string{p})) > 0 {
+				t.Errorf("%s is still held for a person by the %s trigger", p, other.Name)
+			}
+		}
+	}
+}
+
+func declarations(t *testing.T) model.RepoDeclarations {
+	t.Helper()
+	decl, err := repodecl.Load(os.DirFS(repoRoot(t)), model.GrainSourceRepo())
+	if err != nil {
+		t.Fatalf("this repository's declarations do not load: %v", err)
+	}
+	return decl
+}
+
+func declaredTrigger(t *testing.T, name string) model.PathTrigger {
+	t.Helper()
+	decl := declarations(t)
+	for _, tr := range decl.Triggers {
+		if tr.Name == name {
+			return tr
+		}
+	}
+	t.Fatalf(".grain/triggers/%s.yml is not among the declared triggers: %+v", name, decl.Triggers)
+	return model.PathTrigger{}
 }
 
 func containsString(list []string, s string) bool {
