@@ -100,15 +100,17 @@ func TestRunOnANonDefaultHostdIsReadoptedFromThatHostd(t *testing.T) {
 		set := &hostdRunSet{
 			defaultName: model.LocalHostd,
 			byName:      map[string]*runhost.Hostd{},
-			newHostd: func(c hostd.Client) *runhost.Hostd {
-				return &runhost.Hostd{Client: c, CursorEvery: time.Millisecond,
+			newHostd: func(exec HostExecutor) *runhost.Hostd {
+				return &runhost.Hostd{Client: exec.hostdClient(), CursorEvery: time.Millisecond,
 					OnCursor: func(ctx context.Context, run string, n int64) {
 						_ = store.SetHostdCursor(ctx, run, n, time.Now().UTC())
 					}}
 			},
-			client: func(name string) (hostd.Client, bool) { return pinnedClient, name == "box-b" },
+			executor: func(name string) (HostExecutor, bool) {
+				return HostExecutor{Kind: HostExecutorHostd, Socket: pinnedClient.Socket}, name == "box-b"
+			},
 		}
-		set.byName[model.LocalHostd] = set.newHostd(defaultClient)
+		set.byName[model.LocalHostd] = set.newHostd(HostExecutor{Kind: HostExecutorHostd, Socket: defaultClient.Socket})
 		return set
 	}
 

@@ -22,7 +22,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/runhost"
@@ -34,7 +33,8 @@ import (
 // host runs"): started detached with the run's id, task and deadline, its
 // stdout cursor persisted (model.Store.SetHostdCursor) for the next
 // daemon to re-attach from, and left running when this daemon stops
-// (orchestrator.StoppedByDaemon) or an upgrade flushes it.
+// (orchestrator.StoppedByDaemon) or an upgrade flushes it, and re-attached
+// when hostd drops and is back within -hostd-reattach-timeout.
 //
 // It holds a runhost.Hostd per grain hostd: the default hostd's, and one
 // for each hostd a pinned task's run is routed to (hostdRoute.apply), so
@@ -50,27 +50,19 @@ func newHostdRuns(cfg Config, store *model.Store) *hostdRunSet {
 	if exec.Kind != HostExecutorHostd && hub == nil {
 		return nil
 	}
-	newHostd := func(client hostd.Client) *runhost.Hostd {
-		return &runhost.Hostd{
-			Client: client,
-			Detach: orchestrator.StoppedByDaemon,
-			OnCursor: func(ctx context.Context, run string, cursor int64) {
-				if err := store.SetHostdCursor(ctx, run, cursor, time.Now().UTC()); err != nil {
-					log.Printf("grain daemon: run %s: persisting its grain hostd cursor: %v", run, err)
-				}
-			},
-		}
+	newHostd := func(exec HostExecutor) *runhost.Hostd {
+		return hostdRunsOn(cfg, store, exec, orchestrator.StoppedByDaemon)
 	}
 	set := &hostdRunSet{defaultName: cfg.DefaultHostd(), newHostd: newHostd, byName: map[string]*runhost.Hostd{}}
 	if exec.Kind == HostExecutorHostd {
-		set.byName[set.defaultName] = newHostd(exec.hostdClient())
+		set.byName[set.defaultName] = newHostd(exec)
 	}
 	if hub != nil {
-		set.client = func(name string) (hostd.Client, bool) {
+		set.executor = func(name string) (HostExecutor, bool) {
 			if name == model.LocalHostd {
-				return hostd.Client{}, false
+				return HostExecutor{}, false
 			}
-			return HostExecutor{Kind: HostExecutorHostd, Remote: hub, Hostd: name}.hostdClient(), true
+			return HostExecutor{Kind: HostExecutorHostd, Remote: hub, RemoteHostd: true, Hostd: name}, true
 		}
 		set.wait = func(ctx context.Context, name string) error {
 			if name == model.LocalHostd {
@@ -82,17 +74,46 @@ func newHostdRuns(cfg Config, store *model.Store) *hostdRunSet {
 	return set
 }
 
+// hostdRunsOn is the runhost.Hostd for exec's hostd, detaching on a
+// cancellation detach says is the daemon stopping, re-attaching within
+// cfg.HostdReattachTimeout of a drop -- the moment a hostd that dials in
+// is back (hostd.Remote.WaitHostd) -- and persisting its runs' cursors in
+// store.
+func hostdRunsOn(cfg Config, store *model.Store, exec HostExecutor, detach func(context.Context) bool) *runhost.Hostd {
+	d := &runhost.Hostd{
+		Client:          exec.hostdClient(),
+		Detach:          detach,
+		ReattachTimeout: cfg.HostdReattachTimeout,
+		Name:            exec.Hostd,
+		OnCursor: func(ctx context.Context, run string, cursor int64) {
+			if err := store.SetHostdCursor(ctx, run, cursor, time.Now().UTC()); err != nil {
+				log.Printf("grain daemon: run %s: persisting its grain hostd cursor: %v", run, err)
+			}
+		},
+	}
+	if remote := exec.Remote; remote != nil {
+		name := exec.Hostd
+		if name == "" {
+			name = remote.DefaultName()
+		}
+		d.Name = name
+		d.Reconnected = func(ctx context.Context) error { return remote.WaitHostd(ctx, name) }
+	}
+	return d
+}
+
 // hostdRunSet is a runhost.Hostd per grain hostd, by registry name
 // (newHostdRuns).
 type hostdRunSet struct {
 	// defaultName is the default hostd's name (Config.DefaultHostd): the
 	// hostd a live run with no recorded hostd (task_run_hostd) ran on.
 	defaultName string
-	// newHostd builds the runhost.Hostd for a hostd reached by client.
-	newHostd func(client hostd.Client) *runhost.Hostd
-	// client is the client reaching the hostd name, for one this set
-	// has not met yet; nil, or false, where it cannot be reached.
-	client func(name string) (hostd.Client, bool)
+	// newHostd builds the runhost.Hostd for the hostd exec reaches.
+	newHostd func(exec HostExecutor) *runhost.Hostd
+	// executor is the host executor reaching the hostd name, for one
+	// this set has not met yet; nil, or false, where it cannot be
+	// reached.
+	executor func(name string) (HostExecutor, bool)
 	// wait blocks until the hostd name is connected, or ctx ends; nil
 	// for no wait.
 	wait func(ctx context.Context, name string) error
@@ -112,9 +133,9 @@ func (s *hostdRunSet) defaultRuns() *runhost.Hostd {
 	return s.byName[s.defaultName]
 }
 
-// forHostd is the runhost.Hostd of the hostd name, built on client the
+// forHostd is the runhost.Hostd of the hostd name, built on exec the
 // first time it is asked for. nil when s is.
-func (s *hostdRunSet) forHostd(name string, client hostd.Client) *runhost.Hostd {
+func (s *hostdRunSet) forHostd(name string, exec HostExecutor) *runhost.Hostd {
 	if s == nil || name == "" {
 		return nil
 	}
@@ -123,7 +144,7 @@ func (s *hostdRunSet) forHostd(name string, client hostd.Client) *runhost.Hostd 
 	if hd := s.byName[name]; hd != nil {
 		return hd
 	}
-	hd := s.newHostd(client)
+	hd := s.newHostd(exec)
 	s.byName[name] = hd
 	return hd
 }
@@ -137,14 +158,14 @@ func (s *hostdRunSet) named(name string) (*runhost.Hostd, bool) {
 	if hd != nil {
 		return hd, true
 	}
-	if s.client == nil {
+	if s.executor == nil {
 		return nil, false
 	}
-	client, ok := s.client(name)
+	exec, ok := s.executor(name)
 	if !ok {
 		return nil, false
 	}
-	return s.forHostd(name, client), true
+	return s.forHostd(name, exec), true
 }
 
 // each is every runhost.Hostd this set holds, by name.

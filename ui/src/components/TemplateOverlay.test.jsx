@@ -135,3 +135,31 @@ describe("TemplateOverlay task priority", () => {
     },
   );
 });
+
+// Keep running sits beside Interactive (2026-11-03 walkthrough: the API
+// took keepRunning on a template, but the form had no box for it).
+describe("TemplateOverlay keep running", () => {
+  afterEach(() => api.mockReset());
+
+  it("sends Keep running on a new template", async () => {
+    api.mockResolvedValue(saved);
+    const onSaved = overlay(null);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Keep running" }));
+    fireEvent.submit(
+      screen.getByRole("textbox", { name: "Name" }).closest("form"),
+    );
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(sentBody("POST")).toMatchObject({ keepRunning: true });
+  });
+
+  it("reads a saved Keep running back and clears it on an edit", async () => {
+    api.mockResolvedValue(saved);
+    const onSaved = overlay({ ...saved, keepRunning: true });
+    const box = screen.getByRole("checkbox", { name: "Keep running" });
+    expect(box).toBeChecked();
+    fireEvent.click(box);
+    fireEvent.submit(box.closest("form"));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(sentBody("PATCH")).toMatchObject({ keepRunning: false });
+  });
+});

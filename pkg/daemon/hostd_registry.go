@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -38,7 +39,7 @@ func newHostdHub(cfg Config, store *model.Store) *hostd.Remote {
 	}
 	if store != nil {
 		hub.Resolve = registryResolver(store)
-		hub.OnChange = hostdConnectionNotifier(store)
+		hub.OnChange = hostdConnectionNotifier(store, hub)
 	}
 	return hub
 }
@@ -47,19 +48,30 @@ func newHostdHub(cfg Config, store *model.Store) *hostd.Remote {
 func hostdDisconnectedSubject(name string) string { return "hostd-disconnected:" + name }
 
 // hostdConnectionNotifier raises hostd-disconnected:<name> when a hostd
-// that dials in drops, and clears it when that hostd connects again.
-// Work pinned to it waits meanwhile (HostdWaitError); nothing moves to
-// another hostd.
-func hostdConnectionNotifier(store *model.Store) func(name string, connected bool) {
+// that dials in drops, and clears it when that hostd connects again,
+// waking dispatch so the work parked on it resumes at once. Work pinned
+// to it waits meanwhile (HostdWaitError): a queued run is parked saying
+// "waiting for hostd <name>", and a CLI running there detached is
+// re-attached if it is back within -hostd-reattach-timeout
+// (runhost.Hostd.ReattachTimeout). Nothing moves to another hostd.
+// A hostd that connects is also rid of the CLIs it still runs for
+// finished runs (releaseFinishedHostdRuns) when hub is set.
+func hostdConnectionNotifier(store *model.Store, hub *hostd.Remote) func(name string, connected bool) {
 	return func(name string, connected bool) {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			subject := hostdDisconnectedSubject(name)
 			if connected {
+				if hub != nil {
+					releaseFinishedHostdRuns(ctx, store, hostd.Client{Dial: hub.Dialer(name), Build: daemonBuild()}, name)
+				}
 				if _, err := store.ClearNotification(ctx, subject, "automation:hostd"); err != nil {
 					log.Printf("grain daemon: clearing %s: %v", subject, err)
 				}
+				// Tasks parked waiting for it are admitted on the next
+				// cycle; wake it rather than wait out -poll-interval.
+				wakeCycle()
 				return
 			}
 			if h, err := store.GetHostd(ctx, name); err == nil && h != nil && h.Revoked() {
@@ -80,6 +92,41 @@ func hostdConnectionNotifier(store *model.Store) func(name string, connected boo
 				log.Printf("grain daemon: raising %s: %v", subject, err)
 			}
 		}()
+	}
+}
+
+// releaseFinishedHostdRuns cancels each detached process hostd name
+// still holds for a run the store has finished. A pinned hostd's runs
+// start detached (newHostdRuns) and are re-adopted at startup from the
+// hostd each recorded (adoptHostd), but a hostd that was away then is
+// left out of that pass: a CLI it still runs for a run that has since
+// been recovered, or one whose run gave up waiting while its hostd was
+// away (runhost.Hostd.cancelWhenBack, which does not outlive the
+// daemon), would otherwise run on until its own deadline. A process
+// whose run is live, or that names no run the store knows, is left
+// alone.
+func releaseFinishedHostdRuns(ctx context.Context, store *model.Store, c hostd.Client, name string) {
+	procs, err := c.Processes(ctx)
+	if err != nil {
+		log.Printf("grain daemon: listing grain hostd %s's processes for finished runs: %v", name, err)
+		return
+	}
+	for _, p := range procs {
+		if !p.Detached || p.Run == "" {
+			continue
+		}
+		finished, found, err := store.RunFinished(ctx, p.Run)
+		if err != nil {
+			log.Printf("grain daemon: grain hostd %s's process %s: reading run %s: %v", name, p.ID, p.Run, err)
+			continue
+		}
+		if !found || !finished {
+			continue
+		}
+		log.Printf("grain daemon: releasing grain hostd %s's process %s: its run %s has finished", name, p.ID, p.Run)
+		if err := c.Cancel(ctx, p.ID); err != nil {
+			log.Printf("grain daemon: cancelling grain hostd %s's process %s: %v", name, p.ID, err)
+		}
 	}
 }
 
@@ -145,6 +192,11 @@ func (e *HostdWaitError) Error() string {
 	}
 	return "waiting for " + e.Selector.String()
 }
+
+// Is makes a HostdWaitError agent.ErrHostdWaiting, so a run whose
+// framework build meets one goes back to the queue rather than failing
+// setup (orchestrator's setupFailedEnding), and waits there.
+func (e *HostdWaitError) Is(target error) bool { return target == agent.ErrHostdWaiting }
 
 // DefaultHostd is the hostd host work goes to when nothing pins or
 // selects one.

@@ -237,5 +237,5 @@ func TestAdoptAllWithHostdClaimsLiveSandboxAndMarksMissingSandboxLost(t *testing
 // defaultName, and which reaches no other.
 func testHostdRunSet(defaultName string, byName map[string]*runhost.Hostd) *hostdRunSet {
 	return &hostdRunSet{defaultName: defaultName, byName: byName,
-		newHostd: func(c hostd.Client) *runhost.Hostd { return &runhost.Hostd{Client: c} }}
+		newHostd: func(exec HostExecutor) *runhost.Hostd { return &runhost.Hostd{Client: exec.hostdClient()} }}
 }

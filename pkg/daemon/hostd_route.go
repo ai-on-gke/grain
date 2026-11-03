@@ -107,8 +107,9 @@ func resolveHostdRoute(ctx context.Context, live Config, store *model.Store, tas
 
 // apply is live with r's hostd as its host executor. Its runs start
 // detached through that hostd's own runhost.Hostd (newHostdRuns), so a
-// run on any hostd outlives a daemon upgrade and is re-adopted from the
-// hostd it recorded (adoptHostd).
+// drop is re-attached within -hostd-reattach-timeout, a run on any hostd
+// outlives a daemon upgrade, and it is re-adopted from the hostd it
+// recorded (adoptHostd).
 func (r hostdRoute) apply(live Config) Config {
 	if !r.Pinned {
 		return live
@@ -116,7 +117,7 @@ func (r hostdRoute) apply(live Config) Config {
 	exec := r.Exec
 	live.HostExec = &exec
 	if r.Name != live.DefaultHostd() {
-		live.hostdRuns = live.hostdRunSet.forHostd(r.Name, exec.hostdClient())
+		live.hostdRuns = live.hostdRunSet.forHostd(r.Name, exec)
 	}
 	return live
 }

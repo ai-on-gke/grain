@@ -349,7 +349,7 @@ const mibPerGiB = 1024
 // of a quarter of the guest and 1 GiB -- capped at capMB, the host's or
 // the largest node's memory, when that is known (zero is unknown).
 //
-// It used to be the guest plus a flat 512 MiB, granule's own default,
+// It used to be the guest plus a flat 512 MiB, granule's default then,
 // and an IO-heavy guest that filled its RAM with page cache and then
 // wrote a multi-GB file had its VMM OOM-killed from the host: the VMM's
 // disk writes go through host page cache charged to the same cgroup,

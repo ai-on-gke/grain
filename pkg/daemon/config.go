@@ -334,6 +334,12 @@ type Config struct {
 	// (hostexec.go).
 	HostdSocket string
 	HostExec    *HostExecutor
+	// HostdReattachTimeout is -hostd-reattach-timeout: how long a run's
+	// CLI, running detached on a grain hostd whose connection drops, waits
+	// for that same hostd to reconnect and be re-attached from its cursor
+	// before the run fails as an infrastructure failure, with no strike
+	// (agent.ErrHostdLost). Zero fails it at once.
+	HostdReattachTimeout time.Duration
 	// HostdRemote is set by -hostd-token-file (or $GRAIN_HOSTD_TOKEN):
 	// the session of a grain hostd on another machine that dials in to
 	// /api/hostd/connect with that token (hostd -server), through which

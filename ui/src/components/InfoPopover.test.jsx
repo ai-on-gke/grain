@@ -14,6 +14,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import InfoPopover from "./InfoPopover.jsx";
 
 describe("InfoPopover", () => {
@@ -53,6 +54,22 @@ describe("InfoPopover", () => {
       "What the field means.",
     );
     fireEvent.blur(button);
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+  });
+
+  // The press that clicks it hovers and focuses it first, and both open
+  // it: a click that toggled then closed the popover it was meant to open.
+  it("stays open on a mouse click, and a second click closes it", async () => {
+    const user = userEvent.setup();
+    render(<InfoPopover title="What the server does." label="cloud" />);
+    const button = screen.getByRole("button", { name: "About cloud" });
+    await user.click(button);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "What the server does.",
+    );
+    await user.unhover(button);
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+    await user.click(button);
     await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
   });
 });

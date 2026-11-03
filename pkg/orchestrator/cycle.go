@@ -3048,11 +3048,22 @@ func noteFinishFailure(ctx context.Context, store *model.Store, runID string, er
 // task -- but it does count for retry backoff, which is what spaces the
 // requeued attempts out while the cluster stays full. A pod no node
 // could ever fit is not ErrClusterFull (admitPod, unschedulableOutcome)
-// and stays a setup failure, so it surfaces rather than looping.
+// and stays a setup failure, so it surfaces rather than looping. A
+// framework build refused because the run's hostd is not connected
+// (agent.ErrHostdWaiting) is interrupted, without a strike: admission
+// parks the task on that hostd until it reconnects.
 func setupFailedEnding(err error) (outcome, detail string) {
 	if errors.Is(err, ErrClusterFull) {
 		return model.CapacityOutcome, "this run's sandbox could not be scheduled: " + err.Error() +
 			"; the task is not counted as failed and will be retried once the cluster has room"
+	}
+	if errors.Is(err, agent.ErrHostdWaiting) {
+		// The run's hostd dropped between admission and its framework
+		// being built: nothing ran, and the task goes back to the queue,
+		// where admission holds it until that hostd reconnects
+		// (Deps.ModelAvailability). It never moves to another hostd.
+		return model.InterruptedOutcome, "this run's hostd is not connected: " + err.Error() +
+			"; the task is not counted as failed, and waits in the queue for it to reconnect"
 	}
 	return "setup-failed", "this run's sandbox could not be prepared: " + err.Error()
 }
