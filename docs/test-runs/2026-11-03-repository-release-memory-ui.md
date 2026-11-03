@@ -302,8 +302,9 @@ Across all runs:
      name box itself (`error`, helper text, `aria-invalid`). The next
      edit or a create that succeeds clears it. Other failures still go
      to the toast.
-   - **Regression coverage**: a unit test in `RepoReleases.test.jsx`.
-     It fails on `main`.
+   - **Regression coverage**: a unit test in `RepoReleases.test.jsx`,
+     which fails on `main`, and `aria-invalid` and clear-on-create
+     assertions in `ui/e2e/release_name_validation_walkthrough.spec.js`.
    - **Check in the browser (C)**: at 1280 and 390, light and dark, the
      refusal is inline with no toast, the helper sits below the box and
      inside the viewport, there is no horizontal overflow, and editing
