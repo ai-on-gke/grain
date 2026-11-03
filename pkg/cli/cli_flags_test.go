@@ -15,6 +15,8 @@
 package cli
 
 import (
+	"encoding/json"
+	"flag"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -58,5 +60,79 @@ func TestRunCLI_UsageIncludesNewFlags(t *testing.T) {
 		if !strings.Contains(usage, flag) {
 			t.Errorf("usage missing expected flag %q", flag)
 		}
+	}
+}
+
+// #XC-11: the global flags mean the same before the verb and after it,
+// with one dash or two, and after a subcommand's own arguments too.
+func TestGlobalFlagsAcceptedBeforeAndAfterVerb(t *testing.T) {
+	var gotAuth, gotUser, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotUser = r.Header.Get("X-Forwarded-User")
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/api/ci/runs/") {
+			_, _ = w.Write([]byte(`{"id":"ci-42","status":"completed","conclusion":"success"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+
+	for _, tc := range []struct {
+		name     string
+		args     []string
+		wantPath string
+	}{
+		{"before, one dash", []string{"-server", srv.URL, "-token", "tok", "-as", "alice@example.com", "-json", "list"}, "/api/tasks"},
+		{"before, two dashes", []string{"--server", srv.URL, "--token=tok", "--as=alice@example.com", "--json", "list"}, "/api/tasks"},
+		{"after, one dash", []string{"list", "-server", srv.URL, "-token", "tok", "-as", "alice@example.com", "-json"}, "/api/tasks"},
+		{"after, two dashes", []string{"list", "--server=" + srv.URL, "--token", "tok", "--as", "alice@example.com", "--json"}, "/api/tasks"},
+		{"split across the verb", []string{"--server", srv.URL, "list", "--token", "tok", "-as=alice@example.com", "--json", "--connect-timeout", "2s", "--timeout=30s"}, "/api/tasks"},
+		{"after a subcommand's argument", []string{"ci", "show", "ci-42", "--json", "--server", srv.URL, "--token", "tok", "--as", "alice@example.com"}, "/api/ci/runs/ci-42"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gotAuth, gotUser, gotPath = "", "", ""
+			var err error
+			out := captureStdout(t, func() { err = runCLI(tc.args) })
+			if err != nil {
+				t.Fatalf("grain %s: %v", strings.Join(tc.args, " "), err)
+			}
+			if gotPath != tc.wantPath {
+				t.Errorf("asked for %q, want %q -- -server not honoured", gotPath, tc.wantPath)
+			}
+			if gotAuth != "Bearer tok" {
+				t.Errorf("Authorization = %q, want Bearer tok", gotAuth)
+			}
+			if gotUser != "alice@example.com" {
+				t.Errorf("X-Forwarded-User = %q, want alice@example.com", gotUser)
+			}
+			var v any
+			if err := json.Unmarshal([]byte(out), &v); err != nil {
+				t.Errorf("printed %q, want JSON: -json not honoured", out)
+			}
+		})
+	}
+
+	// A word nobody reads is still refused, with exit 2, and a global
+	// flag's missing value is a usage error rather than a panic.
+	for _, args := range [][]string{
+		{"-server", srv.URL, "list", "--json", "junk"},
+		{"-server", srv.URL, "list", "--server"},
+		{"-server", srv.URL, "ci", "show", "ci-42", "extra", "--json"},
+	} {
+		var errOut strings.Builder
+		var code int
+		captureStdout(t, func() { code = runTaskCLI(args, &errOut) })
+		if code != exitUsage {
+			t.Errorf("grain %s = exit %d, want 2 (stderr %q)", strings.Join(args, " "), code, errOut.String())
+		}
+	}
+
+	// A comment's body is its own: a flag-shaped word in it is not lifted.
+	kept, err := liftGlobalFlags(flag.NewFlagSet("grain", flag.ContinueOnError), "comment", []string{"5", "file", "this", "-as", "a", "bug"})
+	if err != nil || strings.Join(kept, " ") != "5 file this -as a bug" {
+		t.Errorf("liftGlobalFlags(comment ...) = %v, %v; want the body left alone", kept, err)
 	}
 }
