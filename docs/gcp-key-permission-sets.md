@@ -80,13 +80,13 @@ To retire the fixed pool:
 
    and drop `gcp_service_account_count`, `-account` and `GCP_MINTER_KEY` from the entry in grain/config.
 
-## Running alongside the built-in gcp-key
+## Retirement of the in-process `gcp-key` capability (migration 97)
 
-The in-process `gcp-key` capability (the bare grant name `gcp-key`, configured by `gcp_project`, `gcp_service_account_email` and `gcp_service_account_count`) keeps working unchanged next to the gcp server. A task can hold either: `gcp-key` stays the in-process provider, and `https://grain.dev/capabilities/gcp#gcp-key` is the server. Nothing rewrites one into the other.
+Schema migration 97 retires the in-process `gcp-key` and `gcp-key:<name>` providers onto `https://grain.dev/capabilities/gcp#gcp-key` in a single release so the two never mint against the same service accounts or compete for GCP's 10-key-per-account quota:
 
-**Do not point both at the same service accounts.** On this deployment the in-process provider mints from the fixed pool `grain-sb-agent-0` … `grain-sb-agent-9@grain-sandbox-dev`. If the server is configured from the same flags or `GCP_MINTER_KEY`, its migration (`gcpsets.Migrate`) produces a `sandbox-agent` set over exactly those accounts. GCP allows ten keys per service account, and the two leasing systems cannot see each other's leases, so each would find accounts full that the other filled, on top of the IAM write-quota 429s already seen on 2026-10-23. **Test** on the gcp server warns, naming the set and the shared accounts, whenever one of its permission sets covers an account the in-process provider mints from.
-
-The recommended trial setup is a **separate permission set with its own service accounts**: a set with no `accounts`, so the server creates `<prefix>-<deployment id>-<set>-<n>` itself, under an admin of its own. Grant it to the trial tasks as `https://grain.dev/capabilities/gcp#gcp-key` with that set, and leave everything else on `gcp-key`. Once the trial is done, retire the fixed pool as described above.
+- **Permission sets seeded automatically:** if `grain_config.gcp_project` and `grain_config.gcp_service_account_email` are configured and no `sandbox-agent` set exists yet on `https://grain.dev/capabilities/gcp`, migration 97 seeds a `sandbox-agent` set over that exact account pool (`gcp_service_account_count`, minting through the deployment's `gcp-key-minter` secret, `adopt_legacy: true`, `max_lease: "24h"`). Each `gcp_key` row behind `gcp-key:<name>` seeds a set `<name>` over its account pool with `key_path: "/home/debian/.gcp-service-account-<name>.json"` and its own admin and `max_lease`.
+- **Stored grants rewritten:** bare `gcp-key` becomes `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true}` and `gcp-key:<name>` becomes `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"<name>","primary":true}` across tasks, templates, schedules, suites, repository `default_capabilities` and `ci_capabilities`, console sessions, the capability catalogue, and local policy. Older state-repository exports carrying `gcp-key` are rewritten on import.
+- **One-release alias:** `gcp-key` and `gcp-key:<name>` remain readable as aliases for one release (with a deprecation notice in Settings → Capabilities) and normalize to the corresponding `gcp#gcp-key` grants; the in-process provider itself is no longer registered.
 
 ## Running the live test
 
