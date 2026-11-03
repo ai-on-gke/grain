@@ -3,6 +3,8 @@
 **Status:** Proposed (Task 845)  
 **Builds on:** `design/design/grain-namespace.design.md` (Tasks 843 / 846), `design/design/unified-grants.design.md`, `design/design/cli-run-location.design.md`, `docs/agent-api.md`, `design/spec/capabilities/capabilities.spec.md`
 
+> **Superseded in part (2026-11, PR #511).** The model-only `api_*` tools this design keeps on `grain mcpserver`'s control roster (§1B's dangerous scopes, §4's proposed single `api_admin` tool, Stage 5's `ui.ModelOnlyAgentAPIToolNames`) are no longer served by `grain-sandbox` at all. A run holding any `api:*` grant has the `grain-controller` MCP server (`POST /api/mcp`, six fixed tools: `grain_explore_scope`, `grain_invoke`, `grain_filing_context`, `grain_submit_task`, `grain_list_tasks`, `grain_get_task`) attached beside `grain-sandbox` as a capability server, through which it reaches every route its grants allow -- the model-only channel this design asks for, at a fixed schema cost. The sandbox `grain` CLI and the per-sandbox proxy's scope ceiling are unchanged. See `docs/agent-api.md` ("The controller MCP server") and `docs/test-runs/2026-11-02-controller-mcp-token-cost.md`.
+
 ---
 
 ## Context and Problem

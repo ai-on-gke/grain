@@ -21,7 +21,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 | Kind | Commands |
 |---|---|
 | Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume` |
-| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `declarations check` |
+| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|deny`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `declarations check` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
 | Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db [upgrade-postgres]`), `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
 | Modes: build information | `version`, `schema-version`, `release-notes`, `sandbox-image`, `container-sandbox-image`, `k8s-sandbox-image`, `image` |
@@ -672,10 +672,10 @@ Calls `POST /api/repos/{owner}/{name}/…` (`DecideRelease`). `-repo` defaults t
 Errors:
 - an unknown verb: `unknown release command "<v>": approve or reject`;
 - the wrong number of arguments: `grain release <verb> takes the pending release, vX.Y.Z`;
-- `-short-soak-ok` on reject: `-short-soak-ok is for grain release approve`.
+- `-short-soak-ok` on reject: `-short-soak-ok is for grain release approve`;
 - `-allow-breaking` on reject: `-allow-breaking is for grain release approve`.
 
-`-allow-breaking` approves a release that carries breaking changes without being the major release that `RELEASE_MAJOR` asks for.
+`-allow-breaking` approves a release that carries breaking changes without being the major release `RELEASE_MAJOR` asks for; it reaches the approval as `allow_breaking: true`.
 
 With no arguments it prints the usage and returns `flag: help requested`. **Scope:** person; an agent is refused.
 
@@ -850,15 +850,11 @@ Reads a checkout's `.grain/templates`, `.grain/suites` and `.grain/schedules` an
 
 **Pinned by:** `pkg/cli/declcmd_test.go`: `TestDeclarationsCheckPrintsWhatATreeDeclares`, `TestDeclarationsCheckReportsEveryProblemAtOnce`, `TestDeclarationsCheckJSONCarriesTheVerdict`, `TestDeclarationsCheckDefaultsToTheWorkingDirectory`.
 
-### 4.14 `grain access [list|allow|deny]` {#CLI-107}
+---
 
-Manages the allowed users and groups (Settings -> Access): who may sign in when authenticated by Cloud IAP or another registered IdentityVerifier. It calls `/api/access/principals`. This list replaces `-ui-allowed-principals`, which is now imported once into an empty list and then ignored.
+### 4.14 `grain access list|allow|deny` {#CLI-107}
 
-- `list` (the default; also `ls`) prints each entry with who added it and when. It then warns about any flag entry that was dropped on import because it was not `user:` or `group:`.
-- `allow <user:<email>|group:<email>>` (also `add`) adds an entry. Adding one already on the list is a no-op that prints `already allowed: <entry>`.
-- `deny <user:<email>|group:<email>>` (also `remove`, `rm`) removes an entry.
-
-An unknown subcommand returns `unknown access subcommand "<s>"` followed by the usage. `-json` prints the API's response. The usage is hand-written.
+Manages the allowed users and groups (Settings -> Access) through `/api/access/principals`: who may sign in when authenticated by Cloud IAP or another registered IdentityVerifier. `list` (the default, also `ls`) prints each entry with who added it and when, and warns about `-ui-allowed-principals` entries that were dropped on import. `allow <user:<email>|group:<email>>` (also `add`) adds one; adding an existing entry is a no-op. `deny` (also `remove`, `rm`) removes one.
 
 <!-- BEGIN GENERATED FLAGS: grain access -->
 _No flags._
