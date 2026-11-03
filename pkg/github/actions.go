@@ -61,6 +61,10 @@ type ActionsRunsPage struct {
 	Runs             []WorkflowRun
 	TotalCount       int
 	WorkflowFiltered bool
+	// NotFound is a listing the forge answered with a 404 before any page
+	// came back: Actions off, or the path not served by that forge or to
+	// this credential. It is still no runs, but a caller can say why.
+	NotFound bool
 }
 
 // ActionsPageReader is an optional extension of ActionsReader that reports
@@ -185,7 +189,10 @@ func (c *RESTClient) ListActionsRunsPage(owner, repo string, q ActionsRunsQuery)
 			return page, nil
 		}
 	}
-	page, _, err := c.fetchActionsRunsPages(owner, repo, fmt.Sprintf("/repos/%s/%s/actions/runs?%s", owner, repo, query.Encode()), limit)
+	page, found, err := c.fetchActionsRunsPages(owner, repo, fmt.Sprintf("/repos/%s/%s/actions/runs?%s", owner, repo, query.Encode()), limit)
+	if err == nil && !found {
+		page.NotFound = true
+	}
 	return page, err
 }
 
