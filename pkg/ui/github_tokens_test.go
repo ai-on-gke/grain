@@ -166,8 +166,9 @@ func TestANamedTokenCanBeADeploymentDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("defaulting a named token: %v", err)
 	}
-	if !slices.Equal(got.DefaultCapabilities, defaults) {
-		t.Fatalf("defaultCapabilities = %v, want %v", got.DefaultCapabilities, defaults)
+	// Recorded as the grant the retired id became (schema migration 103).
+	if want := []string{model.GitCredentialServerGrant("release-bot", model.GitCredentialAnyRepo)}; !slices.Equal(got.DefaultCapabilities, want) {
+		t.Fatalf("defaultCapabilities = %v, want %v", got.DefaultCapabilities, want)
 	}
 	if status := capabilityStatus(t, got.Capabilities, "github-credential:release-bot"); !status.Default {
 		t.Errorf("Default = false on a token every new task is filed with (status: %+v)", status)
@@ -176,7 +177,7 @@ func TestANamedTokenCanBeADeploymentDefault(t *testing.T) {
 	// And a task filed afterwards really does carry it, which is what
 	// makes the git proxy use that token for its pushes.
 	task := create(t, c, ctx)
-	if !slices.Contains(task.Capabilities, "github-credential:release-bot") {
+	if !slices.Contains(task.Capabilities, model.GitCredentialServerGrant("release-bot", model.GitCredentialAnyRepo)) {
 		t.Fatalf("a task filed with the token defaulted holds %v", task.Capabilities)
 	}
 }

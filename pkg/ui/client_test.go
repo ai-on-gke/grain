@@ -2165,7 +2165,7 @@ func TestGCPKeyAndGitHubSandboxCanBeGranted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating a task granting gcp-key and github-sandbox: %v", err)
 	}
-	for _, want := range []string{model.GCPKeySandboxAgentGrant, "github-sandbox"} {
+	for _, want := range []string{model.GCPKeySandboxAgentGrant, model.GitHubSandboxRepoGrant} {
 		if !slices.Contains(task.Capabilities, want) {
 			t.Errorf("capabilities = %v, want %s among them", task.Capabilities, want)
 		}

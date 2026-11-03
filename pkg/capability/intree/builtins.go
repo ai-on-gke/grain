@@ -46,8 +46,11 @@ func CanonicalID(name string) string { return CanonicalIDPrefix + name }
 //
 // model-proxy's canonical id is grain's in-process model-proxy server
 // now (pkg/capability/modelproxy.Method), so its default entry is
-// dropped the same way.
-var retiredBuiltins = []string{"self-debug", "model-proxy"}
+// dropped the same way, and so is git's: its canonical id's git-repo is
+// answered by grain in-process now (git-repo {credential, repo},
+// pkg/capability/githubtoken.Method), routing the run's own git proxy
+// traffic through a named credential.
+var retiredBuiltins = []string{"self-debug", "model-proxy", "git"}
 
 // BuiltinCommand is the stdio command a built-in entry starts in the
 // daemon's own environment: the grain binary, found on PATH, as

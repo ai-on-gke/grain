@@ -21,7 +21,7 @@ func TestGitCredentialOverrideFindsItsOwnGrant(t *testing.T) {
 		{Capability: "gemini-key", Via: GrantByFolder},
 		GitCredentialGrant("workflow"),
 	}
-	name, ok := gitCredentialOverride(grants)
+	name, ok := gitCredentialOverride(grants, "", "")
 	if !ok || name != "workflow" {
 		t.Errorf("name=%q ok=%v, want %q true", name, ok, "workflow")
 	}
@@ -29,13 +29,13 @@ func TestGitCredentialOverrideFindsItsOwnGrant(t *testing.T) {
 
 func TestGitCredentialOverrideIgnoresUnrelatedGrants(t *testing.T) {
 	grants := []Grant{{Capability: "gemini-key", Via: GrantByFolder}}
-	if _, ok := gitCredentialOverride(grants); ok {
+	if _, ok := gitCredentialOverride(grants, "", ""); ok {
 		t.Error("an unrelated capability should not be read as an override")
 	}
 }
 
 func TestGitCredentialOverrideIsAbsentWithNoGrants(t *testing.T) {
-	if _, ok := gitCredentialOverride(nil); ok {
+	if _, ok := gitCredentialOverride(nil, "", ""); ok {
 		t.Error("no grants at all should not be read as an override")
 	}
 }
@@ -49,7 +49,7 @@ func TestGitCredentialOverridePicksOneWinnerDeterministically(t *testing.T) {
 		GitCredentialGrant("bot-two"),
 		GitCredentialGrant("release-bot"),
 	}
-	name, ok := gitCredentialOverride(grants)
+	name, ok := gitCredentialOverride(grants, "", "")
 	if !ok || name != "bot-two" {
 		t.Errorf("name=%q ok=%v, want %q true", name, ok, "bot-two")
 	}

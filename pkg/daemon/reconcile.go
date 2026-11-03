@@ -17,6 +17,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"log"
 	"sync"
 	"time"
@@ -62,7 +63,14 @@ func ReapCapabilitiesBefore(ctx context.Context, registry *model.CapabilityRegis
 	if registry == nil {
 		return
 	}
-	for _, p := range registry.Providers() {
+	// github#sandbox-repo's provider is no registry's any more (schema
+	// migration 103), but the repositories a lost pass leaked still need
+	// sweeping.
+	providers := registry.Providers()
+	if creds != nil {
+		providers = append(providers, githubsandbox.Current())
+	}
+	for _, p := range providers {
 		reaper, ok := p.(model.Reaper)
 		if !ok {
 			continue

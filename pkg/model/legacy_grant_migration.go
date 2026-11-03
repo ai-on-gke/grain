@@ -285,6 +285,19 @@ func legacyRepoAccessRenames(ctx context.Context, tx *sql.Tx) (map[string][]stri
 			renames[name] = []string{RepoWriteGrant(repo)}
 		}
 	}
+	if err := scanStoredGrantNames(ctx, tx, add); err != nil {
+		return nil, fmt.Errorf("finding retired repository access grants: %w", err)
+	}
+	return renames, nil
+}
+
+// scanStoredGrantNames calls add with every capability name stored
+// anywhere a retirement rewrites: the three grant tables, the
+// deployment's and each repository's default capabilities, each
+// repository's CI capabilities and the standing sessions'. It is how a
+// migration retiring a parameterized name (repo-read:<repo>,
+// github-credential:<name>) builds its renames off the store.
+func scanStoredGrantNames(ctx context.Context, tx *sql.Tx, add func(string)) error {
 	scan := func(query string, each func(string)) error {
 		rows, err := tx.QueryContext(ctx, query)
 		if err != nil {
@@ -328,8 +341,8 @@ func legacyRepoAccessRenames(ctx context.Context, tx *sql.Tx) (map[string][]stri
 		}},
 	} {
 		if err := scan(q.query, q.each); err != nil {
-			return nil, fmt.Errorf("finding retired repository access grants: %w", err)
+			return err
 		}
 	}
-	return renames, nil
+	return nil
 }

@@ -811,13 +811,16 @@ func (c *Client) githubTokenStatuses(cfg model.Config, reposByCapability map[str
 			continue
 		}
 		out = append(out, CapabilityStatus{
-			ID:           capability.ID,
-			Name:         GitHubTokenDisplayName(name),
-			Description:  capability.Description,
-			Ready:        true,
-			Grantable:    true,
-			Checkable:    c.Config.CapabilityChecks != nil && c.checkable(capability.ID),
-			Default:      slices.Contains(cfg.DefaultCapabilities, capability.ID),
+			ID:          capability.ID,
+			Name:        GitHubTokenDisplayName(name),
+			Description: capability.Description,
+			Ready:       true,
+			Grantable:   true,
+			Checkable:   c.Config.CapabilityChecks != nil && c.checkable(capability.ID),
+			// Defaulted under the grant the retired id became, too
+			// (schema migration 103).
+			Default: slices.Contains(cfg.DefaultCapabilities, capability.ID) ||
+				slices.Contains(cfg.DefaultCapabilities, model.CanonicalLegacyGrant(capability.ID)),
 			DefaultRepos: reposByCapability[capability.ID],
 		})
 	}

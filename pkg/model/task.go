@@ -944,27 +944,6 @@ func GCPKeyGrant(name string) Grant {
 	return Grant{Capability: GCPKeyCapability(name), Via: GrantByLabel}
 }
 
-// gitCredentialOverride returns the credential name a GitCredentialGrant
-// among grants asks for, if any.
-//
-// A task holding more than one of these gets the first in grants' own
-// order -- which, coming from Store.GitCredentialOverride, is the
-// capability id sorted ascending, so the same task resolves to the same
-// token on every request rather than to whichever row was read first.
-// Picking a winner rather than refusing is deliberate: two named tokens
-// on one task is an odd thing to ask for, not a dangerous one (both are
-// credentials this deployment already trusts a task with), and failing
-// the run over it would be a worse answer than quietly using one of
-// them.
-func gitCredentialOverride(grants []Grant) (name string, ok bool) {
-	for _, g := range grants {
-		if n, isOverride := GitCredentialName(g.Capability); isOverride {
-			return n, true
-		}
-	}
-	return "", false
-}
-
 // Lease is something minted for a task that must be given back.
 //
 // MintedBy turns revocation and rotation from control flow into data:

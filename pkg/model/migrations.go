@@ -703,6 +703,11 @@ var Migrations = []Migration{
 			"ALTER TABLE `repo_config` ADD COLUMN `default_hostd` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     103,
+		Description: "rewrite stored github-credential:<name> grants to https://grain.dev/capabilities/git#git-repo={\"credential\":\"<name>\",\"repo\":\"*\"} and github-sandbox to https://grain.dev/capabilities/github#sandbox-repo={}, repo_config.ci_capabilities and the capability policy included (the in-process providers are retired)",
+		Up:          migrateGitHubGrants,
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as
