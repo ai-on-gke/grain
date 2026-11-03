@@ -118,6 +118,20 @@ func TestCredentialTokenSourceTokenFor(t *testing.T) {
 		}
 	})
 
+	t.Run("a token that is no GitHub App's names no app", func(t *testing.T) {
+		set := writeCredentials(t, t.TempDir(), map[string]string{"acme/*": "bot"}, map[string]string{"bot": "sekret\n"})
+		src := credentialTokenSource{credentials: set,
+			teamCredential: func(_, owner, _ string) (string, bool) { return "bot", owner == "acme" }}
+		for _, repo := range [][2]string{{"acme", "widgets"}, {"other", "repo"}} {
+			if app, err := src.AppSlugFor(repo[0], repo[1]); app != "" || err != nil {
+				t.Fatalf("AppSlugFor(%s/%s) = (%q, %v), want no app", repo[0], repo[1], app, err)
+			}
+		}
+		if app, err := (credentialTokenSource{}).AppSlugFor("acme", "widgets"); app != "" || err != nil {
+			t.Fatalf("AppSlugFor with no credentials = (%q, %v), want no app", app, err)
+		}
+	})
+
 	t.Run("a named credential resolves its token file", func(t *testing.T) {
 		set := writeCredentials(t, t.TempDir(), map[string]string{"acme/*": "bot"}, map[string]string{"bot": "sekret\n"})
 		// The ladder above is not read: the deployment's git connection

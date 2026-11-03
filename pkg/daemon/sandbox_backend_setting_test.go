@@ -392,7 +392,7 @@ func TestSandboxBackendOptionsTable(t *testing.T) {
 			},
 		},
 		{
-			name: "run host image disables container and malformed node selector disables kubernetes backends",
+			name: "run host image disables container and host, and malformed node selector disables kubernetes backends",
 			cfg: Config{
 				ContainerImage:         "example/guest:latest",
 				ContainerGitProxyHost:  "172.17.0.1",
@@ -410,7 +410,7 @@ func TestSandboxBackendOptionsTable(t *testing.T) {
 				{Backend: model.SandboxBackendGranule, Available: true},
 				{Backend: model.SandboxBackendKubernetes, Available: false, Reason: "node selector entry 'x' is not key=value"},
 				{Backend: model.SandboxBackendKubernetesGranule, Available: false, Reason: "node selector entry 'x' is not key=value"},
-				{Backend: model.SandboxBackendHost, Available: true},
+				{Backend: model.SandboxBackendHost, Available: false, Reason: "not available when run hosts (-run-host-image) are enabled"},
 				{Backend: model.SandboxBackendNone, Available: true},
 			},
 		},

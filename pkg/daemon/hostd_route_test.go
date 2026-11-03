@@ -162,6 +162,13 @@ func TestRunsRouteToTheirTasksHostdWithCapacityAndPerHostdPauses(t *testing.T) {
 	if got := reqA.pauseOwner(cfg, keyed); got != "c2" {
 		t.Errorf("an API key on ws-a pauses %q, want c2", got)
 	}
+	// And a task waiting on such a pause says whose it is.
+	if got := reqA.pausedConnection(cfg, ambient); got != `connection "c1" on hostd ws-a` {
+		t.Errorf("ambient on ws-a is named %q, want the hostd named beside the connection", got)
+	}
+	if got := reqA.pausedConnection(cfg, keyed); got != `connection "c2"` {
+		t.Errorf("an API key on ws-a is named %q, want the connection alone", got)
+	}
 	routeLocal, _ := pool.routeHostd(ctx, cfg, "unpinned")
 	if routeLocal.scopesPauses(cfg) {
 		t.Error("the default hostd scopes its pauses; want the connection's bare key")
