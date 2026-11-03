@@ -130,6 +130,9 @@ var (
 	workflowRunsRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/workflows/([^/]+)/runs$`)
 	runJobsRe      = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs/(\d+)/jobs$`)
 	jobLogsRe      = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/jobs/(\d+)/logs$`)
+	// rerunFailedJobsRe is POST .../actions/runs/{id}/rerun-failed-jobs
+	// (github.RESTClient.RerunFailedJobs).
+	rerunFailedJobsRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs/(\d+)/rerun-failed-jobs$`)
 	// And the fourth read hung off that walk, for a run whose jobs served
 	// no log: the check run behind one of them, which is where GitHub
 	// writes why a job it never started did not start. Its annotations
@@ -414,6 +417,13 @@ type Sim struct {
 	// WorkflowRuns is explicit workflow runs seeded for GET .../actions/runs
 	// and GET .../actions/runs/{id}/jobs.
 	WorkflowRuns []WorkflowRun
+	// RerunFailedJobs is every run id POST .../rerun-failed-jobs was
+	// asked about, in order. The sim starts no new attempt: a test that
+	// wants one moves the seeded run's RunAttempt and Jobs on itself.
+	RerunFailedJobs []int64
+	// RerunRefused, when non-zero, is the status that endpoint answers
+	// with instead of 201 -- 403 for a credential without `actions: write`.
+	RerunRefused int
 	// StartupFailures marks the commits (keyed exactly like WorkflowJobs)
 	// whose workflow run GitHub concluded before any job of it started:
 	// the run is there, it is `startup_failure`, and its jobs endpoint
@@ -1676,6 +1686,14 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 		return s.graphql(body)
 	}
 	if method == "POST" {
+		if m := rerunFailedJobsRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			if s.RerunRefused != 0 {
+				return jsonResponse(s.RerunRefused, map[string]string{"message": "Resource not accessible by integration"}), nil
+			}
+			s.RerunFailedJobs = append(s.RerunFailedJobs, int64(mustAtoi(m[3])))
+			return jsonResponse(201, map[string]any{}), nil
+		}
 		if m := pullCommentRepliesRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
 			number, to := mustAtoi(m[3]), mustAtoi(m[4])
