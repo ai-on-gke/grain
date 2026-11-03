@@ -77,65 +77,73 @@ func (c *Client) MigrateAllowedPrincipals(ctx context.Context) error {
 	if c == nil || c.Store == nil {
 		return nil
 	}
-	var migErr error
-	c.allowedPrincipalsMigrateOnce.Do(func() {
-		raw, source := c.explicitAllowedPrincipalsRawWithSource()
-		if len(raw) == 0 {
-			return
-		}
-		var importable []string
-		var dropped []string
-		for _, r := range raw {
-			for _, item := range SplitAllowedPrincipals(r) {
-				_, _, canonical, err := model.NormalizeAllowedPrincipalEntry(item)
-				if err == nil {
-					importable = append(importable, canonical)
+	c.allowedPrincipalsMigrateMu.Lock()
+	defer c.allowedPrincipalsMigrateMu.Unlock()
+	if c.allowedPrincipalsMigrated {
+		return nil
+	}
+	raw, source := c.explicitAllowedPrincipalsRawWithSource()
+	if len(raw) == 0 {
+		c.allowedPrincipalsMigrated = true
+		return nil
+	}
+	pool := c.gcpKeyPoolSet(ctx)
+	var importable []string
+	var dropped []string
+	for _, r := range raw {
+		for _, item := range SplitAllowedPrincipals(r) {
+			prefix, email, canonical, err := model.NormalizeAllowedPrincipalEntry(item)
+			if err == nil {
+				if prefix == "user" && pool[email] {
+					dropped = append(dropped, item)
 					continue
 				}
-				dropped = append(dropped, item)
+				importable = append(importable, canonical)
+				continue
 			}
+			dropped = append(dropped, item)
 		}
+	}
 
-		imported, didImport, err := c.Store.ImportAllowedPrincipalsFromFlag(ctx, importable, dropped, source, c.now())
-		if err != nil {
-			migErr = err
-			log.Printf("grain access: ERROR importing allowed principals from %s: %v", source, err)
-			return
-		}
-		if !didImport {
-			log.Printf("grain access: WARNING: %s is deprecated and ignored because the allowed users and groups list lives in the database (manage it in Settings -> Access or with 'grain access')", source)
-			return
-		}
+	imported, didImport, err := c.Store.ImportAllowedPrincipalsFromFlag(ctx, importable, dropped, source, c.now())
+	if err != nil {
+		log.Printf("grain access: ERROR importing allowed principals from %s: %v", source, err)
+		return err
+	}
+	c.allowedPrincipalsMigrated = true
+	if !didImport {
+		log.Printf("grain access: WARNING: %s is deprecated and ignored because the allowed users and groups list lives in the database (manage it in Settings -> Access or with 'grain access')", source)
+		return nil
+	}
 
-		names := make([]string, 0, len(imported))
-		for _, p := range imported {
-			names = append(names, p.Entry)
-		}
-		if len(names) > 0 {
-			log.Printf("grain access: imported %d allowed user/group entr%s from %s into the database (%s); %s is deprecated and will not be applied on future starts (manage access in Settings -> Access or with 'grain access')",
-				len(names), pluralSuffix(len(names), "y", "ies"), source, strings.Join(names, ", "), source)
-		} else {
-			log.Printf("grain access: recorded one-time migration from %s (no user: or group: entries to import); %s is deprecated and will not be applied on future starts (manage access in Settings -> Access or with 'grain access')",
-				source, source)
-		}
-		for _, d := range dropped {
-			log.Printf("grain access: WARNING: dropped %q from %s during migration -- only user:<email> and group:<email> entries are supported in the database allowlist", d, source)
-		}
+	names := make([]string, 0, len(imported))
+	for _, p := range imported {
+		names = append(names, p.Entry)
+	}
+	if len(names) > 0 {
+		log.Printf("grain access: imported %d allowed user/group entr%s from %s into the database (%s); %s is deprecated and will not be applied on future starts (manage access in Settings -> Access or with 'grain access')",
+			len(names), pluralSuffix(len(names), "y", "ies"), source, strings.Join(names, ", "), source)
+	} else {
+		log.Printf("grain access: recorded one-time migration from %s (no user: or group: entries to import); %s is deprecated and will not be applied on future starts (manage access in Settings -> Access or with 'grain access')",
+			source, source)
+	}
+	for _, d := range dropped {
+		log.Printf("grain access: WARNING: dropped %q from %s during migration -- only user:<email> and group:<email> entries are supported in the database allowlist", d, source)
+	}
 
-		summary := fmt.Sprintf("imported %d allowed principal(s) from deprecated %s", len(names), source)
-		if len(dropped) > 0 {
-			summary += fmt.Sprintf(" (dropped unsupported: %s)", strings.Join(dropped, ", "))
-		}
-		if _, auditErr := c.Store.RecordConfigAudit(ctx, model.ConfigAuditEntry{
-			At:      c.now(),
-			By:      model.Principal{Kind: model.PrincipalAutomation, ID: "flag-migration"},
-			Surface: "access",
-			Summary: summary,
-		}); auditErr != nil {
-			log.Printf("grain access: recording flag migration in config audit: %v", auditErr)
-		}
-	})
-	return migErr
+	summary := fmt.Sprintf("imported %d allowed principal(s) from deprecated %s", len(names), source)
+	if len(dropped) > 0 {
+		summary += fmt.Sprintf(" (dropped unsupported: %s)", strings.Join(dropped, ", "))
+	}
+	if _, auditErr := c.Store.RecordConfigAudit(ctx, model.ConfigAuditEntry{
+		At:      c.now(),
+		By:      model.Principal{Kind: model.PrincipalAutomation, ID: "flag-migration"},
+		Surface: "access",
+		Summary: summary,
+	}); auditErr != nil {
+		log.Printf("grain access: recording flag migration in config audit: %v", auditErr)
+	}
+	return nil
 }
 
 func pluralSuffix(n int, singular, plural string) string {

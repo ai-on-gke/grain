@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -27,16 +28,23 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
+type groupCheckerFunc func(ctx context.Context, groupEmail, memberEmail string) (bool, error)
+
+func (f groupCheckerFunc) IsMember(ctx context.Context, groupEmail, memberEmail string) (bool, error) {
+	return f(ctx, groupEmail, memberEmail)
+}
+
 // TestUnlistedServicePrincipalCannotMintDangerousExternalAgentToken verifies
-// Finding 1 of the 2026-11-02 security audit:
-//  1. gcp-key agent service accounts (single or pooled) are not on the default
-//     IAP allowlist and get 403 on both /api/tasks and /api/external-agents/tokens.
-//  2. A PrincipalService that IS admitted without an explicit -ui-allowed-principals
-//     entry (such as grain-daemon@<project> under the default allowlist, or an
+// Finding 1 of the 2026-11-02 security audit and its DB-allowlist invariants:
+//  1. gcp-key agent service accounts (single or pooled) are refused at the gate
+//     with 403 on both /api/tasks and /api/external-agents/tokens.
+//  2. A PrincipalService admitted as a provisioned daemon service account (or an
 //     in-process PrincipalService context) cannot mint or rotate a dangerous
 //     external-agent token.
-//  3. A PrincipalService explicitly listed in AllowedPrincipals (and outside the
-//     gcp-key pool) can mint and rotate one, as can the human owner.
+//  3. Only human principals listed (directly or via group:) in allowed_principal
+//     can mint and rotate dangerous external-agent tokens; *.gserviceaccount.com
+//     identities cannot be added as user:/group: entries and cannot gain operator
+//     admission through Cloud Identity group: membership.
 func TestUnlistedServicePrincipalCannotMintDangerousExternalAgentToken(t *testing.T) {
 	ui.ResetIAPConfig()
 	t.Cleanup(ui.ResetIAPConfig)
@@ -163,5 +171,47 @@ func TestUnlistedServicePrincipalCannotMintDangerousExternalAgentToken(t *testin
 	}
 	if rec := serveIAP("admin2@example.com", http.MethodPost, "/api/external-agents/tokens/"+ownerIssued.ID+"/rotate", ""); rec.Code != http.StatusOK {
 		t.Fatalf("allowed human rotate dangerous token: got %d, want 200: %s", rec.Code, rec.Body)
+	}
+
+	// 6. *.gserviceaccount.com entries are rejected by AllowPrincipal, and a GCP
+	// service account that happens to belong to an allowed Cloud Identity group:
+	// is NOT resolved through GroupChecker and CANNOT gain single-tenant operator
+	// access (such as adding principals or minting tokens).
+	for _, badEntry := range []string{
+		"user:explicit-ci@my-proj.iam.gserviceaccount.com",
+		"group:bots@my-proj.iam.gserviceaccount.com",
+	} {
+		if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: badEntry}); err == nil {
+			t.Fatalf("AllowPrincipal(%q) succeeded, want rejection of *.gserviceaccount.com", badEntry)
+		}
+	}
+	if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: "group:admins@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	var groupChecks atomic.Int32
+	client.Config.GroupChecker = groupCheckerFunc(func(_ context.Context, groupEmail, _ string) (bool, error) {
+		groupChecks.Add(1)
+		return groupEmail == "admins@example.com", nil
+	})
+	if rec := serveIAP("explicit-ci@my-proj.iam.gserviceaccount.com", http.MethodGet, "/api/tasks", ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("group-member SA GET /api/tasks: got %d, want 403: %s", rec.Code, rec.Body)
+	}
+	if rec := serveIAP("explicit-ci@my-proj.iam.gserviceaccount.com", http.MethodPost, "/api/access/principals",
+		`{"entry":"user:attacker@example.com"}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("group-member SA POST /api/access/principals: got %d, want 403: %s", rec.Code, rec.Body)
+	}
+	if rec := serveIAP("explicit-ci@my-proj.iam.gserviceaccount.com", http.MethodPost, "/api/external-agents/tokens",
+		`{"name":"group-sa-esc","scopes":["tasks:admin"]}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("group-member SA POST dangerous token: got %d, want 403: %s", rec.Code, rec.Body)
+	}
+	if got := groupChecks.Load(); got != 0 {
+		t.Fatalf("GroupChecker called %d times for PrincipalService, want 0", got)
+	}
+	if rec := serveIAP("groupadmin@example.com", http.MethodPost, "/api/external-agents/tokens",
+		`{"name":"group-human-ok","scopes":["tasks:admin"]}`); rec.Code != http.StatusCreated {
+		t.Fatalf("group-member human POST dangerous token: got %d, want 201: %s", rec.Code, rec.Body)
+	}
+	if groupChecks.Load() == 0 {
+		t.Fatalf("expected GroupChecker to be consulted for human group member")
 	}
 }

@@ -146,8 +146,9 @@ cloud_identity_calls() { curl -s "$ISSUER/stats" | jq -c 'with_entries(select(.k
 A=X-Goog-IAP-JWT-Assertion
 browser() { (cd "$ROOT/ui" && OUT=$OUT PROXY=$PROXY DEMO=$DEMO NET=$NET CODE=$CODE node "$ROOT/tests/iap/browser.mjs") >> "$RESULTS" 2> "$OUT/browser-$MODE.log" || FAILS=$((FAILS + 1)); }
 
-echo "| | **IAP on, default allowlist (the owner)** | | | |" | tee -a "$RESULTS"
+echo "| | **IAP on, seeded allowlist (the owner)** | | | |" | tee -a "$RESULTS"
 start_demo iap "${IAP_FLAGS[@]}"
+GRAIN_SERVER=$DEMO GRAIN_TOKEN=$CODE "$GRAIN" access allow user:owner@example.com > /dev/null
 
 # 1. Allowed person: UI, API, CLI, no access code.
 check 1 "API: GET /api/auth/user through the proxy" '^200 .*"user":"owner@example.com".*"authMethod":"iap"' \

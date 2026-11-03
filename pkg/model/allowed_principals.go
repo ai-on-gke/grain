@@ -70,6 +70,9 @@ func NormalizeAllowedPrincipalEntry(raw string) (prefix, email, canonical string
 		strings.ContainsAny(val, " \t\r\n/,;'\"<>") {
 		return "", "", "", fmt.Errorf("invalid allowed principal %q: %s entry must be a valid email address", item, p)
 	}
+	if strings.HasSuffix(domain, ".gserviceaccount.com") && len(domain) > len(".gserviceaccount.com") {
+		return "", "", "", fmt.Errorf("invalid allowed principal %q: service account addresses (*.gserviceaccount.com) are not supported in the allowed users and groups list", item)
+	}
 	return p, val, p + ":" + val, nil
 }
 

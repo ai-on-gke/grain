@@ -80,8 +80,10 @@ func (s *Server) hostdConnectIdentity(r *http.Request) (hostd.ConnectIdentity, i
 			// that does not run it.
 			return hostd.ConnectIdentity{}, http.StatusUnauthorized, fmt.Errorf("its identity did not verify: %v", cv.err)
 		}
-		if err := s.checkAllowedPrincipal(r.Context(), cv.id); err != nil && !s.isRegisteredHostdServiceOwner(r.Context(), cv.id) {
-			return hostd.ConnectIdentity{}, http.StatusForbidden, err
+		if !s.isRegisteredHostdServiceOwner(r.Context(), cv.id) {
+			if err := s.checkAllowedPrincipal(r.Context(), cv.id); err != nil {
+				return hostd.ConnectIdentity{}, http.StatusForbidden, err
+			}
 		}
 		return hostd.ConnectIdentity{Remote: true, Principal: normalizeIdentityEmail(cv.id.Email), Via: string(cv.method)}, 0, nil
 	}

@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -312,5 +313,148 @@ func TestAllowedPrincipalsAgentScopeAndSandboxIsolation(t *testing.T) {
 	if code, resp := asAgent(t, srv, "1", http.MethodPost, "/api/tasks",
 		`{"title":"escalate","repo":"acme/widgets","capabilities":["api:access:write"]}`, "escalate"); code != http.StatusForbidden {
 		t.Fatalf("agent self-granting api:access:write via POST /api/tasks: got %d %s, want 403", code, resp)
+	}
+}
+
+func TestMigrateAllowedPrincipalsRetriesAfterTransientFailureAndDropsServiceAccounts(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+	t.Setenv("GRAIN_ALLOWED_PRINCIPALS", "")
+
+	store, _ := sqlitetest.Open(t)
+	ctx := context.Background()
+
+	mc := model.DefaultConfig()
+	mc.GCPProject = "my-proj"
+	mc.GCPServiceAccountEmail = "grain-agent@my-proj.iam.gserviceaccount.com"
+	mc.GCPServiceAccountCount = 2
+	if err := store.PutConfig(ctx, mc); err != nil {
+		t.Fatal(err)
+	}
+
+	client := ui.NewClient(ui.Config{
+		Actor:         ui.DefaultActor("operator@example.com"),
+		LocalAPIToken: testAccessCode,
+		AllowedPrincipals: []string{
+			"user:alice@example.com",
+			"user:grain-agent-1@my-proj.iam.gserviceaccount.com",
+			"user:ci@my-proj.iam.gserviceaccount.com",
+		},
+	}, store)
+
+	// 1. A cancelled context on first call fails without permanently latching
+	// the migration as completed.
+	cancelledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := client.MigrateAllowedPrincipals(cancelledCtx); err == nil {
+		t.Fatal("MigrateAllowedPrincipals with cancelled context succeeded, want error")
+	}
+
+	// 2. Subsequent call with a live context runs the migration and drops
+	// *.gserviceaccount.com / gcp-key pool entries rather than importing them.
+	if err := client.MigrateAllowedPrincipals(ctx); err != nil {
+		t.Fatalf("retry MigrateAllowedPrincipals: %v", err)
+	}
+	resp, err := client.ListAllowedPrincipals(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Entries) != 1 || resp.Entries[0].Entry != "user:alice@example.com" {
+		t.Fatalf("imported entries = %+v, want [user:alice@example.com]", resp.Entries)
+	}
+	if len(resp.DroppedFlagEntries) != 2 ||
+		resp.DroppedFlagEntries[0] != "user:grain-agent-1@my-proj.iam.gserviceaccount.com" ||
+		resp.DroppedFlagEntries[1] != "user:ci@my-proj.iam.gserviceaccount.com" {
+		t.Fatalf("DroppedFlagEntries = %v, want pool and SA user: entries dropped", resp.DroppedFlagEntries)
+	}
+}
+
+func TestRegisteredHostdServiceOwnerDialsCleanlyWithoutOperatorAccessOrRefusalLog(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+	t.Setenv("GRAIN_ALLOWED_PRINCIPALS", "")
+	logs := ui.LogBufferForTest(t)
+
+	priv, pemStr := generateECDSATestKey(t)
+	assertionKeys(t, priv, pemStr, false)
+	ui.SetIAPAudience(tunnelAudience)
+	mint := func(email string) string {
+		return signIAPToken(t, priv, tunnelKid, tunnelAudience, email, "sub", ui.GoogleIAPIssuer, time.Now().Add(10*time.Minute))
+	}
+
+	srv, client := testServer(t)
+	ctx := context.Background()
+
+	mc := model.DefaultConfig()
+	mc.GCPProject = "my-proj"
+	mc.GCPServiceAccountEmail = "grain-agent@my-proj.iam.gserviceaccount.com"
+	if err := client.Store.PutConfig(ctx, mc); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: "group:admins@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	var groupChecks atomic.Int32
+	client.Config.GroupChecker = groupCheckerFunc(func(_ context.Context, _, _ string) (bool, error) {
+		groupChecks.Add(1)
+		return true, nil
+	})
+	client.Config.HostdRemote = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	const hostdSA = "hostd-owner@my-proj.iam.gserviceaccount.com"
+	if _, err := client.CreateHostd(ctx, ui.CreateHostdRequest{Name: "remote-1", Owner: hostdSA}); err != nil {
+		t.Fatalf("CreateHostd: %v", err)
+	}
+
+	// 1. Registered hostd owner SA still gets 403 on operator API routes and
+	// does not trigger Cloud Identity group checks.
+	if rec := serveFrom(srv, "203.0.113.10:443", http.MethodGet, "/api/tasks", "", map[string]string{
+		ui.IAPAssertionHeader: mint(hostdSA),
+	}); rec.Code != http.StatusForbidden {
+		t.Fatalf("hostd SA GET /api/tasks = %d %s, want 403", rec.Code, rec.Body)
+	}
+	if got := groupChecks.Load(); got != 0 {
+		t.Fatalf("GroupChecker called %d times on /api/tasks for SA, want 0", got)
+	}
+
+	// 2. Dialing /api/hostd/connect as the active registered hostd owner SA
+	// reaches HostdRemote cleanly with 0 group checks and no spurious refusal log.
+	logStart := len(logs.String())
+	if rec := serveFrom(srv, "203.0.113.10:443", http.MethodGet, "/api/hostd/connect", "", map[string]string{
+		ui.IAPAssertionHeader: mint(hostdSA),
+	}); rec.Code != http.StatusNoContent {
+		t.Fatalf("hostd SA GET /api/hostd/connect = %d %s, want 204", rec.Code, rec.Body)
+	}
+	if got := groupChecks.Load(); got != 0 {
+		t.Fatalf("GroupChecker called %d times on /api/hostd/connect, want 0", got)
+	}
+	if connectLogs := logs.String()[logStart:]; strings.Contains(connectLogs, "refused verified principal") {
+		t.Fatalf("active hostd owner emitted spurious refusal log:\n%s", connectLogs)
+	}
+
+	// 3. Revoking the hostd immediately cuts off /api/hostd/connect for that SA.
+	if _, err := client.RevokeHostd(ctx, "remote-1"); err != nil {
+		t.Fatalf("RevokeHostd: %v", err)
+	}
+	if rec := serveFrom(srv, "203.0.113.10:443", http.MethodGet, "/api/hostd/connect", "", map[string]string{
+		ui.IAPAssertionHeader: mint(hostdSA),
+	}); rec.Code != http.StatusForbidden {
+		t.Fatalf("revoked hostd SA GET /api/hostd/connect = %d %s, want 403", rec.Code, rec.Body)
+	}
+
+	// 4. Even if a gcp-key pool SA is placed on a hostd row directly in the store,
+	// /api/hostd/connect refuses it with 403.
+	if _, _, err := client.Store.CreateHostd(ctx, model.Hostd{
+		Name:  "pool-owned",
+		Owner: "grain-agent@my-proj.iam.gserviceaccount.com",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := serveFrom(srv, "203.0.113.10:443", http.MethodGet, "/api/hostd/connect", "", map[string]string{
+		ui.IAPAssertionHeader: mint("grain-agent@my-proj.iam.gserviceaccount.com"),
+	}); rec.Code != http.StatusForbidden {
+		t.Fatalf("gcp-key pool SA GET /api/hostd/connect = %d %s, want 403", rec.Code, rec.Body)
 	}
 }

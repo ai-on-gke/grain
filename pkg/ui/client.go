@@ -55,9 +55,10 @@ type Client struct {
 	// localScripts is the local-script approvals of this daemon's live
 	// runs (localScriptApprovals): Config.LocalScriptApprovals, or one of
 	// its own.
-	localScripts                 *LocalScriptApprovals
-	localScriptsOnce             sync.Once
-	allowedPrincipalsMigrateOnce sync.Once
+	localScripts               *LocalScriptApprovals
+	localScriptsOnce           sync.Once
+	allowedPrincipalsMigrateMu sync.Mutex
+	allowedPrincipalsMigrated  bool
 	// Now is the clock, injectable so tests get deterministic timestamps.
 	// nil means time.Now().UTC().
 	Now func() time.Time

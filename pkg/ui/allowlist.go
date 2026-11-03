@@ -298,10 +298,11 @@ func (s *Server) effectiveAllowedPrincipals(ctx context.Context) ([]AllowedPrinc
 // daemon-provisioned non-pool service account.
 //
 // Direct entries (user:, serviceAccount:) are checked first. Cloud Identity is
-// called only if at least one group: entry is configured and no direct entry
-// matched, so deployments without group: entries never touch Cloud Identity
-// and a failed group lookup refuses only callers that depend on a group: entry
-// to be admitted.
+// called only for human principals (PrincipalHuman) when at least one group:
+// entry is configured and no direct entry matched, so service accounts can
+// never gain operator access through group membership, deployments without
+// group: entries never touch Cloud Identity, and a failed group lookup refuses
+// only callers that depend on a group: entry to be admitted.
 //
 // A refusal is logged (logRefusedPrincipal), so an operator can see who was
 // turned away -- above all a gcp-key pool account, whose key reaching the
@@ -345,7 +346,7 @@ func (s *Server) allowedPrincipalErr(ctx context.Context, id VerifiedIdentity) e
 			groups = append(groups, e.Value)
 		}
 	}
-	if len(groups) > 0 {
+	if len(groups) > 0 && id.Kind == model.PrincipalHuman {
 		checker := s.groupChecker()
 		var firstErr error
 		for _, grp := range groups {
