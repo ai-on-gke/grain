@@ -397,6 +397,7 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 	reviewed := []string{
 		"scripts/release-images.sh", "scripts/release-from-trunk.sh",
 		"scripts/release-notes.sh", "scripts/candidate-gate.sh", "scripts/release.conf",
+		"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
 		".grain/workflows/release.yml", ".github/workflows/release.yml",
 		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 		".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",

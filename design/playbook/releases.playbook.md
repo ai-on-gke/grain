@@ -108,7 +108,7 @@ A release-path change that **can't reach the approval** clears on grain's securi
 
 | Needs a person's Submit | Clears on security review alone (no findings) |
 | --- | --- |
-| `.grain/workflows/promote-release.yml`, `.github/workflows/promote-release.yml` | `scripts/release-images.sh`, `scripts/release-from-trunk.sh`, `scripts/release-notes.sh`, `scripts/candidate-gate.sh` |
+| `.grain/workflows/promote-release.yml`, `.github/workflows/promote-release.yml` | `scripts/release-images.sh`, `scripts/release-from-trunk.sh`, `scripts/release-notes.sh`, `scripts/candidate-gate.sh`, and the helpers the release jobs run (`scripts/patch-tag-guard.sh`, `scripts/build-version.sh`, `scripts/grain-ci-host.sh`) |
 | `pkg/ui/release_approval.go` | `.grain/workflows/release.yml`, `.github/workflows/release.yml` |
 | `pkg/trustboundary/trustboundary.go`, `.grain/triggers/**`, `.grain/merge-rules.yml` | `.grain/workflows/promote.yml`, `.github/workflows/promote.yml` (they follow the git `latest` tag the approval moved) |
 | Any template's `push:` list (the release train's tag grant, §0.4) | `.github/workflows/release-train.yml`, `.grain/workflows/release-train.yml` |

@@ -262,6 +262,11 @@ var Categories = []Category{
 		files: []string{
 			"scripts/release-images.sh", "scripts/release-from-trunk.sh",
 			"scripts/release-notes.sh", "scripts/candidate-gate.sh", "scripts/release.conf",
+			// What the release jobs run besides: the patch-tag guard
+			// that refuses a vX.Y.Z not cut from its release branch, the
+			// version every published image is tagged with, and the host
+			// setup the publishing job sources.
+			"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
 			".grain/workflows/release.yml", ".github/workflows/release.yml",
 			".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 			".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",

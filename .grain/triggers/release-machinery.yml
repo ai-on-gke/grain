@@ -14,6 +14,9 @@ paths:
   - scripts/release-notes.sh
   - scripts/candidate-gate.sh
   - scripts/release.conf
+  - scripts/patch-tag-guard.sh
+  - scripts/build-version.sh
+  - scripts/grain-ci-host.sh
   - .grain/workflows/release.yml
   - .github/workflows/release.yml
   - .grain/workflows/promote.yml
