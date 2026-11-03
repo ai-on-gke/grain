@@ -353,7 +353,11 @@ Agents must not be able to read the code. What holds today:
   is shared into it, and nothing the daemon sets in its own environment
   reaches it.
 - **Run hosts** (`-run-host-image`) are given their spool, staging and
-  credential directories, never the data directory.
+  credential directories, never the data directory. They are never
+  given a host sandbox either, so the daemon refuses `-run-host-image`
+  with `-host-sandboxes`: a host sandbox's commands would run in the run
+  host, beside the credential directory and every other run's spool and
+  staging, with no bubblewrap there to hide them.
 - **Transcripts and logs:** the code isn't in any of them.
   The daemon logs the file's path, never its contents. The code travels
   only as an `Authorization` header from the CLI or `grain mcpserver` to
