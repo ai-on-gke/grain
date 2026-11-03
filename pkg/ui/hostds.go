@@ -41,6 +41,10 @@ type HostdView struct {
 	// one that has not connected since the daemon started (and for
 	// local, which does not dial in).
 	Connection *hostd.RemoteStatus `json:"connection,omitempty"`
+	// Shared marks the hostd the deprecated shared -hostd-token-file
+	// names: it is not in the registry, so it is listed to be seen and
+	// has no token here to rotate or revoke.
+	Shared bool `json:"shared,omitempty"`
 }
 
 // CreateHostdRequest is POST /api/hostds.
@@ -82,6 +86,12 @@ type hostdSharedNamer interface {
 	SharedTokenName() string
 }
 
+// hostdSharedOwner is the owner -hostd-token-owner gives the shared
+// token's hostd (hostd.Remote).
+type hostdSharedOwner interface {
+	SharedTokenOwner() string
+}
+
 func hostdError(err error) error {
 	switch {
 	case errors.Is(err, model.ErrHostdNotFound):
@@ -102,10 +112,24 @@ func (c *Client) ListHostds(ctx context.Context) ([]HostdView, error) {
 	if st, ok := c.Config.HostdRemote.(hostdStatuses); ok {
 		statuses = st.Statuses()
 	}
-	out := make([]HostdView, 0, len(rows))
+	out := make([]HostdView, 0, len(rows)+1)
 	for _, h := range rows {
 		v := HostdView{Hostd: h}
 		if st, ok := statuses[h.Name]; ok {
+			v.Connection = &st
+		}
+		out = append(out, v)
+	}
+	// The deprecated shared token's hostd has no registry row, but it is
+	// a hostd this daemon takes host work through -- its default one --
+	// so it is listed beside them rather than only in the host executor's
+	// status.
+	if s, ok := c.Config.HostdRemote.(hostdSharedNamer); ok && s.SharedTokenName() != "" {
+		v := HostdView{Hostd: model.Hostd{Name: s.SharedTokenName(), CreatedBy: "-hostd-token-file"}, Shared: true}
+		if o, ok := c.Config.HostdRemote.(hostdSharedOwner); ok {
+			v.Owner = o.SharedTokenOwner()
+		}
+		if st, ok := statuses[v.Name]; ok {
 			v.Connection = &st
 		}
 		out = append(out, v)
@@ -195,7 +219,32 @@ func (c *Client) UpdateHostd(ctx context.Context, name string, req UpdateHostdRe
 		return model.Hostd{}, hostdError(err)
 	}
 	c.auditHostd(ctx, name, "set hostd "+name+"'s owner or labels")
+	if req.Owner != nil {
+		c.dropSessionNotOwnedBy(name, h.Owner)
+	}
 	return *h, nil
+}
+
+// dropSessionNotOwnedBy closes name's live session when it was admitted
+// as a verified identity that is no longer its owner: admission checks the
+// owner only when a hostd dials in, so without this a hostd whose owner
+// was changed away from it -- someone who left, a service account being
+// replaced -- would keep serving host work until it next dropped. Its
+// redial is then judged against the new owner. A session admitted by its
+// token alone (a loopback hostd, or a daemon with no verifier) was never
+// bound to an owner and is left alone.
+func (c *Client) dropSessionNotOwnedBy(name, owner string) {
+	st, ok := c.Config.HostdRemote.(hostdStatuses)
+	if !ok {
+		return
+	}
+	cur, ok := st.Statuses()[name]
+	if !ok || !cur.Connected || cur.Principal == "" || strings.EqualFold(cur.Principal, owner) {
+		return
+	}
+	if d, ok := c.Config.HostdRemote.(hostdDisconnector); ok && d.Disconnect(name) {
+		log.Printf("grain hostd: dropped hostd %s's session: it connected as %s, and its owner is now %q", name, cur.Principal, owner)
+	}
 }
 
 func (s *Server) handleListHostds(w http.ResponseWriter, r *http.Request) {

@@ -29,15 +29,9 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import AddIcon from "@mui/icons-material/Add";
-import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
-import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
-import ChevronRightIcon from "@mui/icons-material/ChevronRight";
-import TuneIcon from "@mui/icons-material/Tune";
 import PushPinIcon from "@mui/icons-material/PushPin";
 import PushPinOutlinedIcon from "@mui/icons-material/PushPinOutlined";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
-import AccountCircleOutlinedIcon from "@mui/icons-material/AccountCircleOutlined";
 import {
   DISPLAY_STATE_ORDER,
   INBOX_STATES,
@@ -63,6 +57,7 @@ import {
 import { formatDateTime } from "../time.js";
 import CustomizeSidebarOverlay from "./CustomizeSidebarOverlay.jsx";
 import { NEW_SESSION_ID } from "./NewSessionPage.jsx";
+import AppIcon, { NavGlyph } from "./AppIcon.jsx";
 import GrainMark from "./GrainMark.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
 import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
@@ -288,7 +283,7 @@ function FooterItem({ kind, label, active, onClick, children }) {
       }}
     >
       <span className="nav-icon">
-        <ItemGlyph kind={kind} />
+        <NavGlyph kind={kind} />
       </span>
       <ListItemText
         primary={label}
@@ -333,7 +328,7 @@ function SignedInRow({ email, onOpenAccess, onLogout }) {
         }}
       >
         <span className="nav-icon">
-          <AccountCircleOutlinedIcon sx={{ fontSize: 18 }} />
+          <AppIcon name="user" size={18} />
         </span>
         <ListItemText
           primary="Signed in as"
@@ -357,6 +352,7 @@ function SignedInRow({ email, onOpenAccess, onLogout }) {
         <Button
           size="small"
           color="error"
+          startIcon={<AppIcon name="signOut" size={15} />}
           onClick={onLogout}
           sx={{ alignSelf: "flex-end", minWidth: 0, px: 1, py: 0.25 }}
         >
@@ -518,7 +514,14 @@ function StagingItem({ sandbox, config, pinned, onTogglePin }) {
             aria-label="Host port not reachable through this proxy"
             sx={{ fontSize: "0.95rem", ml: 0.5 }}
           />
-        ) : null}
+        ) : (
+          <AppIcon
+            name="externalLink"
+            size={13}
+            className="rail-count"
+            sx={{ ml: 0.5, opacity: 0.65 }}
+          />
+        )}
       </ListItemButton>
       <IconButton
         className="staging-pin rail-hidden"
@@ -593,6 +596,10 @@ export default function Sidebar({
   // as much as the list is -- left to the single pane it opened below
   // the fold at 375x812.
   pinFooter = false,
+  // On desktop the header rail's top tray carries the New task split
+  // button on one horizontal baseline with the logo and global buttons;
+  // the phone drawer and standalone Sidebar tests still render it here.
+  hideCreateButton = false,
   // Folded down to an icon-only rail (sidebarCollapse.js), and the
   // toggle that folds it. Without onToggleCollapsed there is no toggle
   // at all -- the phone drawer, where the rail is never folded.
@@ -755,19 +762,21 @@ export default function Sidebar({
     >
       <IconButton
         size="small"
+        className="header-control-icon"
         aria-label={toggleLabel}
         aria-expanded={!collapsed}
         aria-controls="sidebar-rail"
         aria-keyshortcuts={SIDEBAR_TOGGLE_KEY}
         data-testid="sidebar-toggle"
         onClick={onToggleCollapsed}
-        sx={{ ml: collapsed ? 0 : "auto", flex: "none", p: 0.5 }}
+        sx={{
+          ml: collapsed ? "auto" : "auto",
+          mr: collapsed ? "auto" : 0,
+          flex: "none",
+          color: "text.secondary",
+        }}
       >
-        {collapsed ? (
-          <ChevronRightIcon fontSize="small" />
-        ) : (
-          <ChevronLeftIcon fontSize="small" />
-        )}
+        <AppIcon name={collapsed ? "chevronRight" : "chevronLeft"} size={18} />
       </IconButton>
     </Tooltip>
   ) : null;
@@ -789,8 +798,10 @@ export default function Sidebar({
         // The width animates (style.css's .sidebar); nothing inside it
         // may push it wider or show a scrollbar while it does.
         overflowX: "hidden",
-        gap: 1.4,
-        p: collapsed ? "0.9rem 0.5rem" : "0.9rem 0.7rem",
+        gap: 1.2,
+        pt: 0,
+        pb: "0.9rem",
+        px: collapsed ? "0.5rem" : "0.7rem",
         bgcolor: "background.paper",
         borderRight: 1,
         borderColor: "divider",
@@ -803,12 +814,18 @@ export default function Sidebar({
         says whether the machine is busy without reading the counts
         below it. See docs/brand.md. */}
       <Box
+        className="sidebar-header"
+        data-testid="sidebar-header"
         sx={{
           display: "flex",
-          flexDirection: collapsed ? "column" : "row",
+          flexDirection: "row",
           alignItems: "center",
-          gap: 0.9,
-          px: collapsed ? 0 : 0.5,
+          justifyContent: collapsed ? "center" : "flex-start",
+          gap: 1,
+          mx: collapsed ? "-0.5rem" : "-0.7rem",
+          px: collapsed ? 0 : 1.5,
+          borderBottom: 1,
+          borderColor: "divider",
         }}
       >
         {/* Folded, the environment's name is too wide for the rail; the
@@ -816,6 +833,7 @@ export default function Sidebar({
           hover, so the two tabs still do not look alike. */}
         <Box
           component="span"
+          className="header-logo-box"
           title={
             collapsed && config?.environmentName
               ? `Environment: ${config.environmentName}`
@@ -824,10 +842,9 @@ export default function Sidebar({
           data-testid={
             collapsed && config?.environmentName
               ? "sidebar-environment-dot"
-              : undefined
+              : "brand-logo-box"
           }
           sx={{
-            display: "inline-flex",
             position: "relative",
             "&::after":
               collapsed && config?.environmentName
@@ -854,7 +871,12 @@ export default function Sidebar({
           letterSpacing="-0.01em"
           component="h1"
           className={collapsed ? "visually-hidden" : undefined}
-          sx={{ m: 0 }}
+          sx={{
+            m: 0,
+            lineHeight: 1,
+            display: collapsed ? undefined : "inline-flex",
+            alignItems: "center",
+          }}
         >
           grain
         </Typography>
@@ -877,59 +899,69 @@ export default function Sidebar({
             title={`Environment: ${config.environmentName}`}
             sx={{
               ml: "auto",
-              maxWidth: 110,
+              maxWidth: 100,
               fontWeight: 600,
             }}
           />
         ) : null}
-        {toggle}
+        {!collapsed ? toggle : null}
       </Box>
+      {collapsed ? toggle : null}
 
-      {collapsed ? (
-        <Tooltip title="New task, session or board" placement="right">
-          <Button
-            variant="contained"
+      {!hideCreateButton &&
+        (collapsed ? (
+          <Tooltip title="New task, session or board" placement="right">
+            <Button
+              variant="contained"
+              size="small"
+              aria-label="Create"
+              aria-controls={createMenuOpen ? "create-options-menu" : undefined}
+              aria-haspopup="true"
+              aria-expanded={createMenuOpen ? "true" : undefined}
+              onClick={(e) => setCreateMenuAnchor(e.currentTarget)}
+              sx={{ minWidth: 0, px: 0, py: 0.5, my: 0.2 }}
+            >
+              <AppIcon name="add" size={18} />
+            </Button>
+          </Tooltip>
+        ) : (
+          <ButtonGroup
             size="small"
-            aria-label="Create"
-            aria-controls={createMenuOpen ? "create-options-menu" : undefined}
-            aria-haspopup="true"
-            aria-expanded={createMenuOpen ? "true" : undefined}
-            onClick={(e) => setCreateMenuAnchor(e.currentTarget)}
-            sx={{ minWidth: 0, px: 0, py: 0.5, my: 0.4 }}
+            variant="contained"
+            fullWidth
+            className="header-split-button"
+            sx={{ my: 0.2 }}
           >
-            <AddIcon fontSize="small" />
-          </Button>
-        </Tooltip>
-      ) : (
-        <ButtonGroup
-          size="small"
-          variant="contained"
-          fullWidth
-          sx={{ my: 0.4 }}
-        >
-          <Button
-            onClick={onOpenNewTask}
-            sx={{ flex: "1 1 auto", minWidth: 0, whiteSpace: "nowrap" }}
-          >
-            + New task
-          </Button>
-          <Button
-            aria-label="Create options"
-            aria-controls={createMenuOpen ? "create-options-menu" : undefined}
-            aria-haspopup="true"
-            aria-expanded={createMenuOpen ? "true" : undefined}
-            onClick={(e) => setCreateMenuAnchor(e.currentTarget)}
-            sx={{
-              px: 0.5,
-              width: "32px",
-              minWidth: "32px",
-              flex: "0 0 32px",
-            }}
-          >
-            <ArrowDropDownIcon fontSize="small" />
-          </Button>
-        </ButtonGroup>
-      )}
+            <Button
+              aria-label="+ New task"
+              onClick={onOpenNewTask}
+              startIcon={<AppIcon name="add" size={16} />}
+              sx={{
+                flex: "1 1 auto",
+                minWidth: 0,
+                whiteSpace: "nowrap",
+                "& .MuiButton-startIcon": { mr: 0.5, ml: 0 },
+              }}
+            >
+              New task
+            </Button>
+            <Button
+              aria-label="Create options"
+              aria-controls={createMenuOpen ? "create-options-menu" : undefined}
+              aria-haspopup="true"
+              aria-expanded={createMenuOpen ? "true" : undefined}
+              onClick={(e) => setCreateMenuAnchor(e.currentTarget)}
+              sx={{
+                px: 0.5,
+                width: "32px",
+                minWidth: "32px",
+                flex: "0 0 32px",
+              }}
+            >
+              <AppIcon name="dropdown" size={18} />
+            </Button>
+          </ButtonGroup>
+        ))}
 
       <Menu
         id="create-options-menu"
@@ -1031,7 +1063,7 @@ export default function Sidebar({
                 aria-label="Customize sidebar"
                 sx={{ p: 0.5 }}
               >
-                <TuneIcon sx={{ fontSize: "1rem" }} />
+                <AppIcon name="customize" size={16} />
               </IconButton>
             </Tooltip>
           ) : (
@@ -1068,7 +1100,11 @@ export default function Sidebar({
                   sx={{ borderRadius: 1.5, py: 0.6, px: 0.9 }}
                 >
                   <span className="nav-icon" style={iconStyle}>
-                    <ItemGlyph kind={glyph || "inbox"} />
+                    {glyph ? (
+                      <ItemGlyph kind={glyph} />
+                    ) : (
+                      <NavGlyph kind="inbox" />
+                    )}
                   </span>
                   <ListItemText
                     primary="Inbox"
@@ -1162,7 +1198,11 @@ export default function Sidebar({
                   sx={{ borderRadius: 1.5, py: 0.6, px: 0.9 }}
                 >
                   <span className="nav-icon" style={iconStyle}>
-                    <ItemGlyph kind={glyph || "ci"} />
+                    {glyph ? (
+                      <ItemGlyph kind={glyph} />
+                    ) : (
+                      <NavGlyph kind="ci" />
+                    )}
                   </span>
                   <ListItemText
                     primary="CI"
@@ -1238,7 +1278,11 @@ export default function Sidebar({
                   sx={{ borderRadius: 1.5, py: 0.6, px: 0.9 }}
                 >
                   <span className="nav-icon" style={iconStyle}>
-                    <ItemGlyph kind={info.glyph} />
+                    {glyph ? (
+                      <ItemGlyph kind={glyph} />
+                    ) : (
+                      <NavGlyph kind={info.glyph} />
+                    )}
                   </span>
                   <ListItemText
                     primary={info.label}
@@ -1578,7 +1622,7 @@ export default function Sidebar({
               sx={{ borderRadius: 1.5, py: 0.6, px: 0.9 }}
             >
               <span className="nav-icon">
-                <ItemGlyph kind="ci" />
+                <NavGlyph kind="ci" />
               </span>
               <ListItemText
                 primary="CI"

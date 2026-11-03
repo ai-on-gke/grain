@@ -38,7 +38,7 @@ import (
 // an operator actually sees at startup.
 func captureLog(t *testing.T, f func()) string {
 	t.Helper()
-	var logs strings.Builder
+	var logs lockedBuffer
 	prevLog := log.Writer()
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(prevLog) })

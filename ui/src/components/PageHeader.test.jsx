@@ -49,7 +49,7 @@ describe("PageHeader", () => {
       "page",
     );
     const icon = container.querySelector(
-      '.header-icon svg[data-glyph="settings"]',
+      '.header-icon svg[data-icon="settings"]',
     );
     expect(icon).toBeInTheDocument();
     expect(icon).toHaveAttribute("width", "20");

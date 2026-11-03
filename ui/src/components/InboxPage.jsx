@@ -32,7 +32,7 @@ import {
 } from "../state.js";
 import { forceMergeOffered, promptForceMerge } from "../taskWrites.js";
 import { useNotificationSetting } from "../inboxNotifications.js";
-import ItemGlyph from "./ItemGlyph.jsx";
+import { NavGlyph } from "./AppIcon.jsx";
 import ClChip from "./ClChip.jsx";
 import PresubmitBadge from "./PresubmitBadge.jsx";
 import ReviewBadge from "./ClReview.jsx";
@@ -705,10 +705,13 @@ function StateSyncGroup({ failure, onOpenConfigRepo }) {
   );
 }
 
-// ReleaseSoak is what a pending release's Approve needs said beside it:
-// how long it soaked, and when that was under the minimum, the release
-// train's SHORT SOAK warning -- approving it then accepts the short soak
-// (short_soak_ok), which the approve job otherwise refuses.
+// ReleaseSoak is what a soak-era pending release's Approve needs said
+// beside it: how long it soaked, and when that was under the minimum,
+// the SHORT SOAK warning -- approving it then accepts the short soak
+// (short_soak_ok), which the approve job otherwise refuses. Releases the
+// qualification-driven train stages (vX.Y.Z, minor or patch) write
+// "Qualification: PASS" instead, so release.soak and release.shortSoak
+// are null and nothing is rendered beside Approve.
 function ReleaseSoak({ release }) {
   if (!release.soak && !release.shortSoak) return null;
   return (
@@ -987,7 +990,7 @@ export default function InboxPage({
           notifications.length +
           (syncFailure ? 1 : 0)
         }
-        icon={<ItemGlyph kind="inbox" size={20} />}
+        icon={<NavGlyph kind="inbox" size={20} />}
         action={<NotificationSwitch />}
       />
       {/* Deliberately the same sentence it always was, and about tasks
