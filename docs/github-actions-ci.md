@@ -235,6 +235,7 @@ Configure the following in `ai-on-gke/grain` under **GitHub Repository -> Settin
 | `RELEASE_IMAGES` | Variable | Settings -> Secrets and variables -> Actions -> **Variables** | Optional | Set to `off` only if `release-from-trunk.sh` should skip invoking `scripts/release-images.sh`; leave unset for normal operation. |
 | `RELEASE_NOTES_TASK` | Variable | Settings -> Secrets and variables -> Actions -> **Variables** | Optional | Set to `off` to skip filing the `release-notes` task when staging `vX.Y.0-pending`; leave unset for normal operation. |
 | `RELEASE_NOTIFY` | Variable | Settings -> Secrets and variables -> Actions -> **Variables** | Optional | Set to `off` to skip sending the `release-pending` notification; leave unset for normal operation. |
+| `RELEASE_QUALIFICATION_APP` | Variable | Settings -> Secrets and variables -> Actions -> **Variables** | **Required** for an rc to pass Stage 2 | Slug or numeric id of the GitHub App grain's forge connection posts the `grain/release-qualification` check run as. `scripts/candidate-gate.sh` judges only that app's check run and reports a same-named one from any other app (an Actions workflow with `checks: write`, another installed app) as `IGNORED`; unset, it trusts no check run and the train stops at Stage 2 rather than guess. A numeric id also narrows the GitHub query (`app_id=`). |
 
 ### Setting Up Workload Identity Federation for `gcp-smoke.yml`
 
