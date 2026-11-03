@@ -110,9 +110,9 @@ type Allowlist struct {
 	// rather than starting them (Hello.Capacity).
 	Capacity int `yaml:"capacity"`
 	// Labels describe this hostd to the daemon in its hello, for display
-	// only. They never select it for host work:
-	// a label selector matches the registry's labels for the hostd, which
-	// an admin sets, and not what the hostd says about itself.
+	// only. They never select it for host work: a label selector matches
+	// the registry's labels for the hostd, which an admin sets, and not
+	// what the hostd says about itself.
 	Labels map[string]string `yaml:"labels"`
 }
 
