@@ -313,19 +313,6 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 	return tmpl, raw, nil
 }
 
-// parsePush is a declared template's `push:` (grain/task-2536): the
-// refs, in this repository only, that the runs of tasks filed from it may
-// update beyond their own task branch.
-//
-// Each entry is an explicit ref pattern (model.ValidateRefPushPattern),
-// never an implicit "everything", and force-moves and deletions are
-// allowed only where an entry says so. The repository is not written
-// anywhere because there is no choice to make: a declaration's push set
-// applies to the repository it is declared in and nowhere else, which is
-// what keeps it inside the authority that merging into that repository's
-// default branch already is. The filing team's own git credential is
-// still what every push goes out with, so GitHub refuses what that
-// token cannot do.
 // TemplatePush is the push set the template file at filePath declares, as
 // the declaration sync would read it: nil for a template with no `push:`
 // (or an empty file), and an error for one whose `push:` does not parse.
@@ -343,6 +330,19 @@ func TemplatePush(filePath string, text []byte) (model.RefPushSet, error) {
 	return parsePush(file{path: filePath, text: text}, raw.Push)
 }
 
+// parsePush is a declared template's `push:` (grain/task-2536): the
+// refs, in this repository only, that the runs of tasks filed from it may
+// update beyond their own task branch.
+//
+// Each entry is an explicit ref pattern (model.ValidateRefPushPattern),
+// never an implicit "everything", and force-moves and deletions are
+// allowed only where an entry says so. The repository is not written
+// anywhere because there is no choice to make: a declaration's push set
+// applies to the repository it is declared in and nowhere else, which is
+// what keeps it inside the authority that merging into that repository's
+// default branch already is. The filing team's own git credential is
+// still what every push goes out with, so GitHub refuses what that
+// token cannot do.
 func parsePush(f file, raw []rawPush) (model.RefPushSet, error) {
 	var out model.RefPushSet
 	var errs []error

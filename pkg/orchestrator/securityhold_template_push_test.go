@@ -47,6 +47,8 @@ func TestATemplatesPushListChangeIsHeldForAPerson(t *testing.T) {
 		{"a push list removed", map[string]string{path: granted}, map[string]string{path: plain}, true},
 		{"a push list that does not parse", map[string]string{path: plain},
 			map[string]string{path: plain + "push:\n  - refs/heads/*\n"}, true},
+		{"a new template with a push list and an upper-case extension", nil,
+			map[string]string{".grain/templates/release.YML": granted}, true},
 		{"a template without one reworded", map[string]string{path: plain}, map[string]string{path: reworded}, false},
 		{"a template with one reworded, its list untouched", map[string]string{path: granted},
 			map[string]string{path: grantedReworded}, false},

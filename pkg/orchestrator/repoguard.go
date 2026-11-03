@@ -205,7 +205,9 @@ func guardTemplatePush(client github.Client, repo model.RepoRef, headSHA string,
 		if strings.TrimSuffix(dir, "/") != model.TemplateDeclarationDir {
 			continue
 		}
-		if strings.HasSuffix(base, ".yml") || strings.HasSuffix(base, ".yaml") {
+		// The declaration sync reads the extension case-insensitively
+		// (repodecl.readDir), so `x.YML` is a template too.
+		if ext := strings.ToLower(path.Ext(base)); ext == ".yml" || ext == ".yaml" {
 			templates = append(templates, f)
 		}
 	}
