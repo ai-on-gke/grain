@@ -99,6 +99,15 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"turn '"$n"
 // daemon on the Docker run host, a director and a keep_running chat
 // session, for GRAIN_SOAK_DURATION. It logs a timeline to
 // GRAIN_SOAK_LOG (default: the test log) and is not part of CI.
+//
+// Its sandboxes are plain directories on this host (daemon.LocalSandboxes),
+// which no run host is given, so the stub's own sandbox tool calls --
+// items 1f's wait_for_checks and 1g's ask_question -- find no
+// -sandbox-root in the run host and fail (finding F3). That pairing is
+// refused in production (daemon.CheckRunHostBackend, and
+// TestRunHostAgentCannotReachAHostDirectorySandbox for the real call), so
+// those two items are only exercised end to end against a backend a run
+// host can reach (granule, Kubernetes), not by this soak.
 func TestSessionLifecycleSoak(t *testing.T) {
 	if os.Getenv("GRAIN_RUNHOST_DOCKER") != "1" || os.Getenv("GRAIN_SOAK_DURATION") == "" {
 		t.Skip("set GRAIN_RUNHOST_DOCKER=1 and GRAIN_SOAK_DURATION to run the session soak")

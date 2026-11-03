@@ -354,11 +354,23 @@ func syncRCHold(ctx context.Context, store *model.Store, forge ReleaseQualificat
 		return err
 	}
 	done := superseded(tags, rc)
+	clear := func() error {
+		if !done {
+			return nil
+		}
+		return clearPipelineNotification(ctx, store, model.NotificationSubject(model.FamilyRCFailed, rcTag), releaseQualificationNotifier)
+	}
+	// Only a hold grain's own App posted is grain's, as with the verdict
+	// (latestCheckRun); a connection grain cannot name posts none.
+	app, err := forge.CheckRunApp(repo.Owner, repo.Name)
+	if err != nil || app == "" {
+		return errors.Join(err, clear())
+	}
 	checks, err := forge.ListCheckRuns(repo.Owner, repo.Name, sha)
 	if err != nil {
 		return fmt.Errorf("reading checks on %s: %w", rcTag, err)
 	}
-	hold := latestCheckRun(checks, model.ReleaseHoldCheckName)
+	hold := latestCheckRun(checks, model.ReleaseHoldCheckName, app)
 	held := hold != nil && hold.Status != "completed"
 	next := rc
 	next.RC++
@@ -389,10 +401,7 @@ func syncRCHold(ctx context.Context, store *model.Store, forge ReleaseQualificat
 			return fmt.Errorf("posting %s on %s: %w", model.ReleaseHoldCheckName, rcTag, err)
 		}
 	}
-	if done {
-		return clearPipelineNotification(ctx, store, model.NotificationSubject(model.FamilyRCFailed, rcTag), releaseQualificationNotifier)
-	}
-	return nil
+	return clear()
 }
 
 // escalationLifted reports whether a person has reset or advanced the
