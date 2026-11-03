@@ -104,6 +104,7 @@ var RecognizedGrainConfigParameters = map[string]struct{}{
 	"k8s_priority_class_ci":          {},
 	"auto_upgrade_channel":           {},
 	"auto_upgrade_time":              {},
+	"auto_upgrade_on":                {},
 	"judgement_model":                {},
 	"external_agent_api":             {},
 	"password_auth_enabled":          {},

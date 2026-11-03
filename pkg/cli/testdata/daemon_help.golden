@@ -300,7 +300,7 @@ Usage of grain daemon:
   -run-host-dir string
     	where run hosts' spools and staging live, seen at the same path by the daemon and every run host (default <data-dir>/runhosts; under -k8s-run-host-rwx, on that volume)
   -run-host-image string
-    	drive each claude run in a run host of this image: a container that is a sibling of the daemon, not a child of it, writing to a spool the daemon tails (pkg/runhost, design/design/non-disruptive-upgrade.design.md). Normally the deployment image itself ("self" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes: a run host cannot reach a container sandbox
+    	drive each claude run in a run host of this image: a container that is a sibling of the daemon, not a child of it, writing to a spool the daemon tails (pkg/runhost, design/design/non-disruptive-upgrade.design.md). Normally the deployment image itself ("self" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes or -host-sandboxes: a run host cannot reach either sandbox
   -sandbox-access-addr string
     	k8s-granule only: address to run the sandbox-access acceptor on (":4244"), which every sandbox pod's wrapper then dials out to over mTLS with its own certificate and token (pkg/sandboxaccess, design/design/grain-on-gke.design.md "Sandbox access"); empty leaves it off and builds pods as before
   -sandbox-access-ca-secret string
@@ -348,7 +348,7 @@ Usage of grain daemon:
   -ui-allowed-hosts string
     	comma-separated host names the UI/API answers to besides IP literals, localhost and this machine's own hostname ("grain.example.com", "*.example.com"); a request with any other Host header is refused with 421, which is what stops a DNS-rebinding page reaching a loopback-bound API (grain#2380). Checked on every request when this is set or -ui-addr names a specific address; on an every-interface -ui-addr with this unset, on loopback requests only. "*" turns the check off
   -ui-allowed-principals string
-    	comma-separated principals admitted when authenticated by IAP or another registered IdentityVerifier (user:<email>, serviceAccount:<email>, group:<email>, domain:<domain>); defaults to $GRAIN_ALLOWED_PRINCIPALS, and when unset to the deployment owner plus the service accounts grain provisions
+    	deprecated: imported once on first start when the database allowlist is empty (user:<email> and group:<email> only; serviceAccount: and domain: entries are logged and dropped), then ignored. Manage allowed users and groups in Settings -> Access or with 'grain access'
   -ui-iap-audience string
     	the audience a signed X-Goog-IAP-JWT-Assertion must carry for the UI/API to accept the identity in it, or several separated by commas -- IAP's /projects/NUMBER/global/backendServices/ID or /projects/NUMBER/apps/PROJECT, or what a BeyondCorp tunnel's assertion names (the proxy's own docs); defaults to $GRAIN_IAP_AUDIENCE. With none, no assertion is accepted
   -ui-iap-issuer string

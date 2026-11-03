@@ -79,11 +79,20 @@ type Remote struct {
 	last     map[string]RemoteStatus
 	sessions int
 
-	// refusedAt is when a refused hostd was last logged, and refused how
-	// many have been refused since without a line of their own.
-	refusedAt time.Time
-	refused   int
+	// refusals is when each kind of refused hostd (refusalKey) was last
+	// logged, and how many of that kind have been refused since without a
+	// line of their own.
+	refusals map[string]*refusalLog
 }
+
+type refusalLog struct {
+	at   time.Time
+	more int
+}
+
+// maxRefusalKeys bounds Remote.refusals: past it, any new kind of refusal
+// shares one line a minute with every other kind past it.
+const maxRefusalKeys = 64
 
 // refusalLogEvery is how often at most a refused hostd is logged: a
 // hostd with the wrong token retries every few seconds, and one line a
@@ -184,6 +193,15 @@ func (r *Remote) SharedTokenName() string {
 		return ""
 	}
 	return r.sharedName()
+}
+
+// SharedTokenOwner is the owner of the hostd the deprecated shared token
+// names (-hostd-token-owner), "" for none or no shared token.
+func (r *Remote) SharedTokenOwner() string {
+	if r == nil || r.Token == "" {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(r.SharedOwner))
 }
 
 func (r *Remote) logf(format string, args ...any) {
@@ -370,23 +388,35 @@ func RequestToken(r *http.Request) string {
 }
 
 // logRefused logs a hostd refused for its token, at most once every
-// refusalLogEvery, so an operator watching the daemon can tell a hostd
-// with the wrong token from no hostd at all -- otherwise only the hostd's
-// own log says so.
-func (r *Remote) logRefused(req *http.Request, why string) {
+// refusalLogEvery for each kind of refusal (key), so an operator watching
+// the daemon can tell a hostd with the wrong token from no hostd at all --
+// otherwise only the hostd's own log says so. Kinds are limited apart so
+// that a hostd retrying a stale token every few seconds does not hide a
+// token presented under another hostd's name.
+func (r *Remote) logRefused(req *http.Request, key, why string) {
 	now := time.Now
 	if r.now != nil {
 		now = r.now
 	}
 	t := now()
 	r.mu.Lock()
-	if !r.refusedAt.IsZero() && t.Sub(r.refusedAt) < refusalLogEvery {
-		r.refused++
+	if r.refusals == nil {
+		r.refusals = map[string]*refusalLog{}
+	}
+	if _, ok := r.refusals[key]; !ok && len(r.refusals) >= maxRefusalKeys {
+		key = "overflow"
+	}
+	last := r.refusals[key]
+	if last != nil && t.Sub(last.at) < refusalLogEvery {
+		last.more++
 		r.mu.Unlock()
 		return
 	}
-	more := r.refused
-	r.refusedAt, r.refused = t, 0
+	more := 0
+	if last != nil {
+		more = last.more
+	}
+	r.refusals[key] = &refusalLog{at: t}
 	r.mu.Unlock()
 	host := hostOf(req)
 	since := ""
@@ -423,12 +453,12 @@ func (r *Remote) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		if tok == "" {
 			why = "it presented no hostd token"
 		}
-		r.logRefused(req, why)
+		r.logRefused(req, "token", why)
 		http.Error(w, "grain hostd: this controller does not take that hostd token", http.StatusUnauthorized)
 		return
 	}
 	if claimed := strings.TrimSpace(req.Header.Get(NameHeader)); claimed != "" && claimed != name {
-		r.logRefused(req, fmt.Sprintf("it calls itself hostd %q, but its token is hostd %q's", claimed, name))
+		r.logRefused(req, "name\x00"+name+"\x00"+claimed, fmt.Sprintf("it calls itself hostd %q, but its token is hostd %q's", claimed, name))
 		http.Error(w, fmt.Sprintf("grain hostd: this token belongs to hostd %q, not %q", name, claimed), http.StatusForbidden)
 		return
 	}

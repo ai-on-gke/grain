@@ -61,6 +61,13 @@ export const SETTINGS_INDEX = [
     keywords: ["upgrade", "pause"],
   },
   {
+    id: "autoUpgradeOn",
+    section: "general",
+    anchor: "updates",
+    label: "Automatic upgrades",
+    keywords: ["upgrade", "auto upgrade", "release", "daily", "recommended"],
+  },
+  {
     id: "autoUpgradeChannel",
     section: "general",
     anchor: "updates",
@@ -558,6 +565,22 @@ export const SETTINGS_INDEX = [
     anchor: "this-browser",
     label: "Sign out",
     keywords: ["log out", "IAP", "access code"],
+    card: true,
+  },
+  {
+    id: "card:access:allowed-principals",
+    section: "access",
+    anchor: "allowed-principals",
+    label: "Allowed users and groups",
+    keywords: [
+      "allowlist",
+      "principals",
+      "IAP",
+      "users",
+      "groups",
+      "email",
+      "sign in",
+    ],
     card: true,
   },
   {

@@ -212,3 +212,78 @@ func TestHTTPRequestsThatGetPastTheTokenAreStillBounded(t *testing.T) {
 		})
 	}
 }
+
+func TestStatelessHTTPHandlerVersionInstructionsMetaAndHost(t *testing.T) {
+	registry := NewRegistry()
+	registry.SetServerName("grain-controller")
+	registry.SetInstructions("Explore scopes first, then invoke.")
+	registry.Register(Tool{
+		Name:        "grain_explore_scope",
+		Description: "Explore scopes",
+		InputSchema: map[string]any{"type": "object"},
+		Meta:        map[string]any{"antigravity/alwaysLoad": true},
+		Handler:     func(context.Context, map[string]any) Result { return Result{Text: "ok"} },
+	})
+	handler := StatelessHTTPHandler(registry)
+
+	// Non-loopback Host is accepted (outer server owns Host/auth checks).
+	post := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "https://grain.corp.example.com/api/mcp", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// 2025-03-26 negotiation + instructions + serverInfo.name.
+	rec := post(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("initialize 2025-03-26 status %d: %s", rec.Code, rec.Body.String())
+	}
+	var init2025 struct {
+		Result struct {
+			ProtocolVersion string `json:"protocolVersion"`
+			Instructions    string `json:"instructions"`
+			ServerInfo      struct {
+				Name string `json:"name"`
+			} `json:"serverInfo"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &init2025); err != nil {
+		t.Fatal(err)
+	}
+	if init2025.Result.ProtocolVersion != "2025-03-26" || init2025.Result.Instructions != "Explore scopes first, then invoke." || init2025.Result.ServerInfo.Name != "grain-controller" {
+		t.Fatalf("unexpected initialize result: %+v", init2025.Result)
+	}
+
+	// 2024-11-05 backward-compatible negotiation.
+	rec = post(`{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}`)
+	var init2024 struct {
+		Result struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &init2024); err != nil || init2024.Result.ProtocolVersion != "2024-11-05" {
+		t.Fatalf("2024-11-05 negotiation failed: %s", rec.Body.String())
+	}
+
+	// Notifications return 202 Accepted with empty body.
+	rec = post(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+	if rec.Code != http.StatusAccepted || rec.Body.Len() != 0 {
+		t.Fatalf("notification status %d body %q, want 202 empty", rec.Code, rec.Body.String())
+	}
+
+	// tools/list emits _meta.
+	rec = post(`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`)
+	var listed struct {
+		Result struct {
+			Tools []struct {
+				Name string         `json:"name"`
+				Meta map[string]any `json:"_meta"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil || len(listed.Result.Tools) != 1 || listed.Result.Tools[0].Meta["antigravity/alwaysLoad"] != true {
+		t.Fatalf("tools/list missing _meta: %s", rec.Body.String())
+	}
+}

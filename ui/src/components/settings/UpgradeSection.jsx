@@ -36,7 +36,8 @@ export default function UpgradeSection({ config, showError, onOpenUpdates }) {
   return (
     <Box id="upgrade" data-testid="upgrade-section">
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        What grain does after an upgrade lands is set in{" "}
+        Automatic upgrades -- upgrading when a release is published is
+        recommended -- and what grain does after an upgrade lands are set in{" "}
         <Link
           component="button"
           type="button"

@@ -90,6 +90,7 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/auth/logout":               public,
 	"GET /api/auth/user":                 public,
 	"GET /api/auth/status":               public,
+	"GET /api/whoami":                    trusted,
 
 	// The long poll that tells a signed-in page the daemon is going down
 	// for a restart before it stops answering (grain/task-3543).
@@ -296,6 +297,7 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/deployment/broadcast":   trusted,
 	"GET /api/deployment/secret-audit": trusted,
 	"GET /api/deployment/audit-logs":   trusted,
+	"GET /api/deployment/config-audit": trusted,
 
 	"GET /api/agent-models": trusted,
 
@@ -308,15 +310,19 @@ var routeAuthorization = map[string]authLevel{
 	"PATCH /api/hostds/{name}":                     trusted,
 	"POST /api/hostds/{name}/rotate":               trusted,
 	"POST /api/hostds/{name}/revoke":               trusted,
+	"GET /api/access/principals":                   trusted,
+	"POST /api/access/principals":                  trusted,
+	"DELETE /api/access/principals/{entry}":        trusted,
 	"POST /api/external-agents/tokens/{id}/rotate": trusted,
 	"POST /api/external-agents/tokens/{id}/revoke": trusted,
 	"DELETE /api/external-agents/tokens/{id}":      trusted,
 	"POST /api/external-agents/tokens/revoke-all":  trusted,
-	"POST /mcp":                              trusted,
-	"GET /api/agent-keys":                    trusted,
-	"PUT /api/agent-keys/{framework}":        trusted,
-	"DELETE /api/agent-keys/{framework}":     trusted,
-	"POST /api/agent-keys/{framework}/check": trusted,
+	"POST /api/mcp":                                trusted,
+	"POST /mcp":                                    trusted,
+	"GET /api/agent-keys":                          trusted,
+	"PUT /api/agent-keys/{framework}":              trusted,
+	"DELETE /api/agent-keys/{framework}":           trusted,
+	"POST /api/agent-keys/{framework}/check":       trusted,
 	// A connection's key (grain/task-1601).
 	"PUT /api/agent-backends/{id}/credential":    trusted,
 	"DELETE /api/agent-backends/{id}/credential": trusted,

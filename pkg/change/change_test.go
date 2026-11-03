@@ -132,3 +132,33 @@ func TestPrimaryIsTheFirstChangelist(t *testing.T) {
 		t.Fatalf("Changes = %v", got)
 	}
 }
+
+// TestVerifiedRequester is operator-attribution spec §4.6: a change's
+// requester is the task's Creator only when a verified person filed it as
+// themselves.
+func TestVerifiedRequester(t *testing.T) {
+	filed := func(creator string, by model.Principal) model.Task {
+		return model.Task{Creator: creator, Origin: model.Origin{Attribution: model.Attribution{Actor: by}}}
+	}
+	alice := model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceIAP}
+	for _, tc := range []struct {
+		name string
+		task model.Task
+		want string
+	}{
+		{"a verified person", filed("alice@example.com", alice), "alice@example.com"},
+		{"by a registered verifier", filed("bob@example.com",
+			model.Principal{Kind: model.PrincipalHuman, ID: "bob@example.com", Source: "example-proxy"}), "bob@example.com"},
+		{"the operator by the access code", filed("operator",
+			model.Principal{Kind: model.PrincipalHuman, ID: "operator", Source: model.SourceAccessCode}), ""},
+		{"a legacy row", filed("operator", model.Principal{Kind: model.PrincipalHuman, ID: "operator"}), ""},
+		{"a Creator somebody else named", filed("mallory@example.com", alice), ""},
+		{"an agent's filing", filed("alice@example.com",
+			model.Principal{Kind: model.PrincipalAgent, ID: "42", Source: model.SourceSandbox}), ""},
+		{"no Creator", filed("", alice), ""},
+	} {
+		if got := VerifiedRequester(tc.task); got != tc.want {
+			t.Errorf("%s: VerifiedRequester = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

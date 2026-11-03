@@ -15,7 +15,6 @@
 package daemon
 
 import (
-	"bytes"
 	"context"
 	"log"
 	"path/filepath"
@@ -49,11 +48,14 @@ func withExecutor(cfg Config, where whererun.Detection, socketDirExists func(str
 
 // captureDaemonLog collects the daemon log for one test and forgets which
 // stored host settings have already been warned about, on both sides.
-func captureDaemonLog(t *testing.T) *bytes.Buffer {
+// captureDaemonLog points the package logger at a buffer for the test.
+// The buffer is locked: a goroutine an earlier test started (a hostd
+// notifier, say) may still log while this test reads it.
+func captureDaemonLog(t *testing.T) *lockedBuffer {
 	t.Helper()
-	var buf bytes.Buffer
+	buf := &lockedBuffer{}
 	prevOut, prevFlags := log.Writer(), log.Flags()
-	log.SetOutput(&buf)
+	log.SetOutput(buf)
 	log.SetFlags(0)
 	forget := func() { storedHostWarned.Range(func(k, _ any) bool { storedHostWarned.Delete(k); return true }) }
 	forget()
@@ -62,7 +64,7 @@ func captureDaemonLog(t *testing.T) *bytes.Buffer {
 		log.SetFlags(prevFlags)
 		forget()
 	})
-	return &buf
+	return buf
 }
 
 func TestKubernetesHasNoHostExecutorAndNeverLooksForHostd(t *testing.T) {

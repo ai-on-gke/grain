@@ -322,6 +322,19 @@ func (p *GitProxy) HandleRequest(ctx context.Context, method, path, query string
 		})
 		return Denial(500, "authorization check failed")
 	}
+	if !allowed {
+		if withholder, ok := p.Authorizer.(interface {
+			WithheldReason(sandbox, owner, repo string) (string, bool)
+		}); ok {
+			if reason, withheld := withholder.WithheldReason(sandbox, scopeOwner, req.Repo); withheld {
+				p.audit().Record(AuditEntry{
+					Time: p.now(), Sandbox: sandbox, Host: req.Host, Owner: req.Owner, Repo: req.Repo,
+					Action: req.Action, Outcome: "denied: withheld capability",
+				})
+				return Denial(403, fmt.Sprintf("%s/%s: %s", scopeOwner, req.Repo, reason))
+			}
+		}
+	}
 	if !allowed && push {
 		// Refused as a push: say so when the repository is one this
 		// sandbox may fetch, rather than calling it out of scope.

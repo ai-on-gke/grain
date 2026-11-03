@@ -15,7 +15,7 @@
 import { useRef, useState } from "react";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
-import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
+import AppIcon from "./AppIcon.jsx";
 
 // InfoPopover renders an (i) icon button whose tooltip/popover holds a
 // field, method, or server description. It opens on hover, keyboard focus,
@@ -100,7 +100,7 @@ export default function InfoPopover({ title, label, testId, sx }) {
           ...sx,
         }}
       >
-        <InfoOutlinedIcon sx={{ fontSize: 16 }} />
+        <AppIcon name="help" size={16} />
       </IconButton>
     </Tooltip>
   );

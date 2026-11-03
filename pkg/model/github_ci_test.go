@@ -147,3 +147,21 @@ func TestGitHubCIOutcomesReadsConclusionsOldestFirst(t *testing.T) {
 		t.Errorf("a row with no completion time is at %s, want its recorded time %s", got[0].At, t0)
 	}
 }
+
+func TestActionsRunIDFromURL(t *testing.T) {
+	t.Parallel()
+	for u, want := range map[string]int64{
+		"https://github.com/acme/widgets/actions/runs/42/job/701":       42,
+		"https://ghe.example.com/acme/widgets/actions/runs/77":          77,
+		"https://ghe.example.com/acme/widgets/actions/runs/77?pr=3":     77,
+		"https://ghe.example.com/acme/widgets/actions/runs/77/attempts": 77,
+		"https://semgrep.example/scan/1":                                0,
+		"https://ghe.example.com/acme/widgets/actions/runs/":            0,
+		"https://ghe.example.com/acme/widgets/actions/runs/12abc":       0,
+		"": 0,
+	} {
+		if got := model.ActionsRunIDFromURL(u); got != want {
+			t.Errorf("ActionsRunIDFromURL(%q) = %d, want %d", u, got, want)
+		}
+	}
+}

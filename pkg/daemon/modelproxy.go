@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/capability"
+	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
@@ -57,6 +59,12 @@ import (
 // out of by handing over a set of its own. Every test does
 // (startTestModelProxies); the daemon hands over this one.
 var ModelProxies = NewModelProxies()
+
+// modelProxyMethod serves https://grain.dev/capabilities/model-proxy#model-proxy
+// in-process over ModelProxies (modelproxycap.Method): the method the
+// retired claude-proxy, openai-proxy and gemini-proxy grants became,
+// forwarding with the run's own team connection as they did.
+var _ = capability.Register(modelproxycap.Method(ModelProxies))
 
 func NewModelProxies() map[string]*modelproxy.Endpoint {
 	out := make(map[string]*modelproxy.Endpoint)

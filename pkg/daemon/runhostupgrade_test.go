@@ -52,6 +52,12 @@ func (l *lockedBuffer) String() string {
 	return l.b.String()
 }
 
+func (l *lockedBuffer) Reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.b.Reset()
+}
+
 func TestRunHostUpgradeNilAndFlushResumeLifecycle(t *testing.T) {
 	t.Parallel()
 

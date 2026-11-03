@@ -169,6 +169,9 @@ func (s *Store) ComposeTriggerTask(ctx context.Context, templateID string, repo 
 			return Composition{}, nil, err
 		}
 		applyGrainCIGrant(&comp, usesGrainCI)
+		if err := applyRepoDefaultHostd(ctx, s.db, &comp); err != nil {
+			return Composition{}, nil, err
+		}
 	}
 	return comp, tmpl, nil
 }

@@ -30,6 +30,7 @@ import {
   Typography,
   useMediaQuery,
 } from "@mui/material";
+import AppIcon from "./AppIcon.jsx";
 import { DISCARD_PROMPT } from "./Overlay.jsx";
 import { keepInView } from "../keepInView.js";
 import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
@@ -117,6 +118,8 @@ const READS_SETTINGS = new Set([
 // leaving one asks first.
 export default function SettingsPage({
   config,
+  // GET /api/whoami's answer, for Settings -> Access (App.jsx).
+  whoami = null,
   section,
   anchor = "",
   item = "",
@@ -282,8 +285,13 @@ export default function SettingsPage({
       }}
       inputProps={{ "aria-label": "Filter settings" }}
       data-testid="settings-filter"
-      InputProps={
-        filter
+      InputProps={{
+        startAdornment: (
+          <InputAdornment position="start" sx={{ color: "text.secondary" }}>
+            <AppIcon name="search" size={16} />
+          </InputAdornment>
+        ),
+        ...(filter
           ? {
               endAdornment: (
                 <InputAdornment position="end">
@@ -292,13 +300,13 @@ export default function SettingsPage({
                     aria-label="Clear filter"
                     onClick={() => setFilter("")}
                   >
-                    ×
+                    <AppIcon name="close" size={16} />
                   </IconButton>
                 </InputAdornment>
               ),
             }
-          : undefined
-      }
+          : {}),
+      }}
     />
   );
 
@@ -422,7 +430,7 @@ export default function SettingsPage({
                   sx={isPhone ? { minHeight: 40 } : undefined}
                 >
                   <ListItemText primary={navLabel(sec)} />
-                  {isPhone && <span aria-hidden="true">›</span>}
+                  {isPhone && <AppIcon name="chevronRight" size={18} />}
                 </ListItemButton>
               </ListItem>
             ))}
@@ -460,7 +468,7 @@ export default function SettingsPage({
           data-testid="settings-back"
           edge="start"
         >
-          ←
+          <AppIcon name="back" size={18} />
         </IconButton>
       )}
       <Typography variant="h5" component="h1">
@@ -556,7 +564,14 @@ export default function SettingsPage({
         body = <GeneralSection s={s} config={config} />;
         break;
       case "access":
-        body = <AccessSection s={s} {...common} onLogout={onLogout} />;
+        body = (
+          <AccessSection
+            s={s}
+            {...common}
+            whoami={whoami}
+            onLogout={onLogout}
+          />
+        );
         break;
       case "hostds":
         body = <HostdsSection {...common} />;

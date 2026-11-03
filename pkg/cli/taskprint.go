@@ -50,6 +50,11 @@ func (p *printer) detail(d ui.TaskDetail) {
 		return
 	}
 	fmt.Print(taskBlock(d.Task))
+	// Who filed it, as PrincipalLabel reads them (operator-attribution
+	// spec §4.3) -- never the raw kind and id.
+	if d.AuthorLabel != "" {
+		fmt.Printf("filed by:        %s\n", d.AuthorLabel)
+	}
 	if d.FailedAttempts > 0 {
 		fmt.Printf("failed attempts: %d in a row", d.FailedAttempts)
 		if d.LastFailureAt != nil {
@@ -126,13 +131,9 @@ func (p *printer) detail(d ui.TaskDetail) {
 		}
 	}
 	for _, cm := range d.Comments {
-		who := cm.Author
-		if cm.OnBehalfOf != "" {
-			// Grain relaying somebody else's words -- the distinction
-			// model.Attribution exists to carry.
-			who = fmt.Sprintf("%s on behalf of %s", cm.Author, cm.OnBehalfOf)
-		}
-		fmt.Printf("\n--- comment #%d by %s ---\n%s\n", cm.ID, who, cm.Body)
+		// Who names grain relaying somebody else's words too -- the
+		// distinction model.Attribution exists to carry.
+		fmt.Printf("\n--- comment #%d by %s ---\n%s\n", cm.ID, cm.Who(), cm.Body)
 	}
 }
 
@@ -181,7 +182,7 @@ func taskBlock(t ui.Task) string {
 	fmt.Fprintf(&b, "%s %s\n", t.ID, t.Title)
 	fmt.Fprintf(&b, "state:      %s\n", t.State)
 	if t.Paused != nil {
-		paused := fmt.Sprintf("by %s at %s (was %s)", t.Paused.By, t.Paused.At.Format(time.RFC3339), t.Paused.FromState)
+		paused := fmt.Sprintf("by %s at %s (was %s)", pausedBy(t.Paused), t.Paused.At.Format(time.RFC3339), t.Paused.FromState)
 		switch {
 		case t.Paused.Immediate:
 			paused += ", immediate"
@@ -272,4 +273,13 @@ func taskBlock(t ui.Task) string {
 		fmt.Fprintf(&b, "\n%s\n", t.Description)
 	}
 	return b.String()
+}
+
+// pausedBy is who paused a task as PrincipalLabel reads them, or the raw
+// id from a daemon too old to send a label.
+func pausedBy(p *ui.TaskPaused) string {
+	if p.ByLabel != "" {
+		return p.ByLabel
+	}
+	return p.By
 }

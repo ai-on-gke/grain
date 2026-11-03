@@ -151,6 +151,9 @@ func reconcileBaseBranchRelease(ctx context.Context, deps Deps, now time.Time) e
 	if err := startDueBaseBranchRelease(ctx, deps, busy, now); err != nil {
 		errs = append(errs, err)
 	}
+	if err := reconcileReleaseStalls(ctx, deps, now); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }
 
@@ -268,6 +271,7 @@ func startBaseBranchRelease(ctx context.Context, deps Deps, repo model.RepoRef,
 		return false, err
 	}
 	if refusal != "" {
+		noteReleaseSkip(deps.Store, repo, branch, "grain refuses to release it: "+refusal)
 		sayOnce("release-branch-refused:"+repo.String()+":"+branch,
 			"orchestrator: not releasing %s %s, though grain has a base-branch row for it: %s", repo, branch, refusal)
 		return false, nil
@@ -339,6 +343,8 @@ func startBaseBranchRelease(ctx context.Context, deps Deps, repo model.RepoRef,
 		// just collected every other branch's run report a failure. The
 		// row is left alone, so the next cycle asks again.
 		log.Printf("orchestrator: releasing %s %s at %s: %v", repo, branch, shortSHA(tip), err)
+		noteReleaseSkip(deps.Store, repo, branch, fmt.Sprintf("starting the release run of %s failed: %v",
+			shortSHA(tip), err))
 		return false, nil
 	}
 	started := run.StartedAt
@@ -353,6 +359,7 @@ func startBaseBranchRelease(ctx context.Context, deps Deps, repo model.RepoRef,
 	}); err != nil {
 		return false, err
 	}
+	noteReleaseSkip(deps.Store, repo, branch, "")
 	log.Printf("orchestrator: %s %s is at %s: run %s is publishing it, and nothing is gated on "+
 		"that -- what judges this tree is the push run on the branch's own row",
 		repo, branch, shortSHA(tip), run.ID)
@@ -395,7 +402,7 @@ func ReleaseBranchRefusal(ctx context.Context, store *model.Store, client github
 		return "", nil
 	}
 	if client != nil {
-		def, err := client.DefaultBranch(repo.Owner, repo.Name)
+		def, err := client.DefaultBranch(repo.StoredOwner(), repo.Name)
 		if err != nil {
 			return "", fmt.Errorf("orchestrator: reading %s's default branch: %w", repo, err)
 		}
@@ -485,6 +492,9 @@ func collectBaseBranchRelease(ctx context.Context, deps Deps, row model.BaseBran
 		return err
 	}
 	row.Conclusion, row.Detail = string(run.Conclusion), ciDetail(run)
+	if why, infra := infraVerdict(run); infra {
+		row.Detail = fmt.Sprintf("infra, retried %d times (%s). %s", infraRetriesOf(run.RequestedBy), why, row.Detail)
+	}
 	noteBaseBranchReleaseOutcome(&row, run.Conclusion)
 	if err := deps.Store.PutBaseBranchRelease(ctx, row); err != nil {
 		return err
@@ -570,6 +580,65 @@ func retryInfraBaseBranchRelease(ctx context.Context, deps Deps, row *model.Base
 	// StartedAt stays the first run's: it is when grain set out to publish
 	// this commit, which is what a run of failures is measured from.
 	row.RunID, row.FinishedAt = retry.ID, nil
+	return true, deps.Store.PutBaseBranchRelease(ctx, *row)
+}
+
+// retryInfraGitHubBaseBranchRelease is retryInfraBaseBranchRelease for a
+// `ci_mode: github` repository's release workflow: a run that failed only
+// on an infrastructure signature (gitHubInfraVerdict -- a checkout's git
+// 5xx, a runner that went away, a registry rate limit) has its failed jobs
+// re-run by GitHub as the run's next attempt (POST .../rerun-failed-jobs),
+// up to maxInfraRetries times, before it is counted as a failed release or
+// files triage. The count is the run's own attempt number, so the row
+// needs no column for it; the attempt that re-run starts concludes as a
+// workflow run of its own and comes back through here.
+//
+// It reports whether it has dealt with the run: true once the re-run was
+// asked for, and for an infra verdict about a commit the branch has moved
+// past (recorded with no triage and no failure counted, as on grain CI).
+// false hands the run back to be recorded as the failure it is -- with
+// "infra, retried N times" on the row's detail, and so on the triage
+// task, when it was an infra verdict whose re-runs are spent or that
+// GitHub refused to re-run (the connection needs `actions: write`).
+func retryInfraGitHubBaseBranchRelease(ctx context.Context, deps Deps, row *model.BaseBranchRelease,
+	run ConcludedGitHubWorkflowRun, jobs []model.GitHubCIJob) (bool, error) {
+
+	why, infra := gitHubInfraVerdict(jobs, run.Attempt)
+	if !infra {
+		return false, nil
+	}
+	n := max(1, run.Attempt) - 1
+	if n >= maxInfraRetries {
+		row.Detail = fmt.Sprintf("infra, retried %d times (%s). %s", n, why, row.Detail)
+		return false, nil
+	}
+	tip, err := branchTip(ctx, deps, row.Repo, row.Branch)
+	if err != nil {
+		return false, err
+	}
+	if tip != "" && tip != row.Commit {
+		log.Printf("orchestrator: GitHub release run %d of %s %s at %s failed on the deployment (%s), and "+
+			"the branch has moved to %s since: not re-running it, and not counting it as a failed release",
+			run.RunID, row.Repo, row.Branch, shortSHA(row.Commit), why, shortSHA(tip))
+		return true, deps.Store.PutBaseBranchRelease(ctx, *row)
+	}
+	rerunner, ok := deps.Client.(github.WorkflowRunRerunner)
+	if !ok {
+		row.Detail = fmt.Sprintf("infra, retried %d times (%s; this deployment's GitHub client cannot re-run "+
+			"Actions jobs). %s", n, why, row.Detail)
+		return false, nil
+	}
+	if err := rerunner.RerunFailedJobs(row.Repo.Owner, row.Repo.Name, run.RunID); err != nil {
+		log.Printf("orchestrator: re-running the failed jobs of GitHub release run %d on %s: %v -- "+
+			"recording the release as it ended (the connection needs `actions: write`)", run.RunID, row.Repo, err)
+		row.Detail = fmt.Sprintf("infra, retried %d times (%s; GitHub refused the re-run: %v). %s",
+			n, why, err, row.Detail)
+		return false, nil
+	}
+	log.Printf("orchestrator: GitHub release run %d of %s %s at %s failed on the deployment rather than the "+
+		"tree (%s): re-running its failed jobs as attempt %d (automatic re-run %d of %d)",
+		run.RunID, row.Repo, row.Branch, shortSHA(row.Commit), why, n+2, n+1, maxInfraRetries)
+	row.Detail = fmt.Sprintf("infra (%s): re-running the failed jobs as attempt %d", why, n+2)
 	return true, deps.Store.PutBaseBranchRelease(ctx, *row)
 }
 
@@ -929,6 +998,11 @@ func recordGitHubBaseBranchRelease(ctx context.Context, deps Deps, run Concluded
 	row.FinishedAt = &finished
 	row.Conclusion = string(conclusion)
 	row.Detail = gitHubWorkflowRunDetail(run, jobs)
+	if conclusion == ci.ConclusionFailure {
+		if retried, err := retryInfraGitHubBaseBranchRelease(ctx, deps, &row, run, jobs); err != nil || retried {
+			return err
+		}
+	}
 	noteBaseBranchReleaseOutcome(&row, conclusion)
 
 	if err := deps.Store.PutBaseBranchRelease(ctx, row); err != nil {

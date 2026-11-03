@@ -42,6 +42,17 @@ const (
 	maxConversationBodyBytes = 2 << 10
 )
 
+// RenderTaskSummary renders the compact ~1 KB summary view of t at now.
+func RenderTaskSummary(t TaskRecord, now time.Time) string {
+	return renderTaskSummary(t, now)
+}
+
+// RenderTaskConversation renders one bounded page of t's conversation after
+// the given comment id (after < 0 starts from the beginning).
+func RenderTaskConversation(t TaskRecord, after int64) string {
+	return renderTaskConversation(t, after)
+}
+
 // renderTaskSummary is the summary view: what the task is and what last
 // happened to it, in about a kilobyte.
 func renderTaskSummary(t TaskRecord, now time.Time) string {
@@ -141,10 +152,10 @@ func lastTaskEvents(t TaskRecord, n int) []taskEvent {
 		events = append(events, taskEvent{at: tr.At, text: text})
 	}
 	for _, c := range t.Comments {
-		text := fmt.Sprintf("comment #%d by %s (%s): %s", c.ID, c.Author, c.AuthorKind, singleLine(c.Body))
+		text := fmt.Sprintf("comment #%d by %s (%s): %s", c.ID, c.Who(), c.AuthorKind, singleLine(c.Body))
 		if c.Handover {
 			// Its head is quoted below the events, line by line.
-			text = fmt.Sprintf("handover #%d written by %s (%s)", c.ID, c.Author, c.AuthorKind)
+			text = fmt.Sprintf("handover #%d written by %s (%s)", c.ID, c.Who(), c.AuthorKind)
 		}
 		events = append(events, taskEvent{at: c.CreatedAt, text: text})
 	}
@@ -196,7 +207,7 @@ func renderTaskConversation(t TaskRecord, after int64) string {
 		if c.Handover {
 			kind += ", handover"
 		}
-		fmt.Fprintf(&b, "  #%d [%s] %s (%s):\n", c.ID, c.CreatedAt.UTC().Format(time.RFC3339), c.Author, kind)
+		fmt.Fprintf(&b, "  #%d [%s] %s (%s):\n", c.ID, c.CreatedAt.UTC().Format(time.RFC3339), c.Who(), kind)
 		b.WriteString(indent(clipNote(c.Body, maxConversationBodyBytes)))
 	}
 	if more {

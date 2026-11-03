@@ -38,13 +38,29 @@ pool's is granted one of the deployment's named GCP keys,
 `gcp-key:<name>`, here instead. See [GCP keys](team-gcp-keys.md) for the
 setup.
 
+`image-signing`, `registry-push` and `package-publish` are methods of grain's
+in-process release server, `https://grain.dev/capabilities/release#<name>`
+(`pkg/capability/release`), since schema migration 101 rewrote the stored bare
+names to `https://grain.dev/capabilities/release#<name>={}`. The bare names
+are read as those grants for one release (a repository's `.grain`, an older
+grain/config), and the repos page's CI picker offers the methods. When each
+one may be handed out is declared by the server in code (`model.CIGrantRule`)
+and enforced by grain before the capability policy is read, so a policy rule
+can narrow them but never widen them: a rule allowing `image-signing` on
+`pull_request` is refused by `CapabilityPolicy.Permits` and the job is still
+not handed the key. `image-signing` goes to `release` jobs only;
+`registry-push` and `package-publish` to `release` and `workflow_dispatch`,
+and `package-publish` also to grain's own `on: schedule` run. A job of any
+other event is simply not handed the grant (its pass leaves it out), as the
+retired providers' event gate skipped it.
+
 The publishing credentials go the other way as well: `package-publish` and
-`registry-push` are **CI-only** (`model.CapabilitySpec.CIOnly`), so this
+`registry-push` are **CI-only** (`model.CIGrantRule`), so this
 repository setting is the only place either is granted. The task capability
 picker does not offer them, they cannot be put in a deployment-wide or
 per-repo task default set, and a task that holds one anyway -- seeded before
 this rule existed, or written straight into the store -- is refused at
-`model.ResolveGrants` before its provider resolves anything, so no credential
+`model.ResolveGrants` before its server mints anything, so no credential
 is minted and nothing is placed. The reason is the event gate below: the
 material is a token that can write to the repository's own packages, and it
 is released only to a trusted post-merge release, an operator's own
@@ -91,8 +107,7 @@ The providers on this page are the in-process ones in `pkg/capability/`, and
 CI keeps using them until runs are moved over to capability servers
 ([design/spec/capabilities/capabilities.spec.md](../design/spec/capabilities/capabilities.spec.md)). Their capability-server
 equivalents are already in the binary, served by `grain capability <name>`:
-`gcp` (`#gcp-key`, for `gcp-key` and `gcp-key:<name>`), `model-proxy`
-(`#model-proxy`, for the `<vendor>-proxy` capabilities), `git`
+`gcp` (`#gcp-key`, for `gcp-key` and `gcp-key:<name>`), `git`
 (`#git-repo`, for repository access), `self-debug` and `skill`. In a
 `.grain/workflows` job they will be granted as references such as
 `https://github.com/ai-on-gke/grain/capabilities/gcp#gcp-key` with `with:`
@@ -116,6 +131,14 @@ the job over the sandbox fabric, so they stay reachable under
 `network_access: "none"` (spec §5.3.3). The job's automatic retry gets the
 same grants in its fresh sandbox, its endpoint proxies re-pointed there,
 without minting again.
+
+
+The model proxies are retired onto grain's in-process
+`https://grain.dev/capabilities/model-proxy#model-proxy` `{vendor}`
+(schema migration 100 rewrote stored `claude-proxy`, `openai-proxy` and
+`gemini-proxy`, `repo_config.ci_capabilities` included). It forwards with
+the run's own team connection, as the in-process providers did; the bare
+names remain one-release aliases.
 
 ## Which trees are trusted with them
 

@@ -1373,6 +1373,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// Where a run's sandbox-callable capability tools are
 			// registered for the proxy's /cap/ (grain cap).
 			CapabilitySandboxServers: SandboxCapabilities,
+			ControllerMCP:            controllerMCPProxy(cfg),
 			GrantTools:               grantTools(grainSrcDir, SecretsDir(cfg.DataDir)),
 			// Where a sandbox reaches this deployment's package
 			// cache -- asked per dispatch, and answering "" while the
@@ -1516,7 +1517,10 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// And whether the daily automatic upgrade's channel has
 			// anything new on it, asked of the registry or origin before
 			// the queue is held for it.
-			UpgradeUnchanged:   upgradeUnchanged(upgrader),
+			UpgradeUnchanged: upgradeUnchanged(upgrader),
+			// And the newest release on its image channel, which the
+			// release-triggered automatic upgrade follows.
+			LatestRelease:      latestRelease(upgrader),
 			UpgradeDrainWindow: cfg.UpgradeDrainWindow,
 		},
 		MintSandboxGrant:   tokens.EnsureGrant,

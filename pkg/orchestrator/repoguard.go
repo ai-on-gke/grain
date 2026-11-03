@@ -451,12 +451,13 @@ func releaseFixedRulesHold(ctx context.Context, store *model.Store, client githu
 	reviewID := ""
 	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
 		released, waiting, reviewID = false, false, ""
-		if t.AutoMerge || linkTarget(*t, model.LinkTrustBoundaryCleared) != cleared || hasSecurityHold(*t) {
-			// Held again under the fixed rules, which said so itself, or
-			// already decided by somebody else.
+		if linkTarget(*t, model.LinkTrustBoundaryCleared) != cleared || hasSecurityHold(*t) {
+			// Held again under the fixed rules, which said so itself.
 			return nil
 		}
-		if hasPathTriggerHold(*t) || heldForHuman(*t) || len(model.PendingApprovals(*t)) > 0 {
+		// Already on: the classification above dropped the last hold,
+		// which hands auto-merge back by itself (model.restoreAfterHolds).
+		if !t.AutoMerge && (hasPathTriggerHold(*t) || heldForHuman(*t) || len(model.PendingApprovals(*t)) > 0) {
 			waiting = true
 			return nil
 		}

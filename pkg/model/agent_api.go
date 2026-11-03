@@ -19,6 +19,7 @@ import (
 	"maps"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -93,6 +94,8 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "caches:write", Description: "Flush the CI, package and actions caches"},
 	{Scope: "settings:read", Description: "Read deployment settings and configuration"},
 	{Scope: "settings:write", Description: "Change deployment settings, the database and the state repository", Dangerous: true},
+	{Scope: "access:read", Description: "Read the allowed users and groups list"},
+	{Scope: "access:write", Description: "Add and remove allowed users and groups", Dangerous: true},
 	{Scope: "connections:read", Description: "Read git connections and model backends"},
 	{Scope: "connections:write", Description: "Change git connections and model backends", Dangerous: true},
 	{Scope: "capabilities:read", Description: "Read capability servers and policy, and check grants"},
@@ -209,6 +212,12 @@ const (
 	GCPKeyDefaultPermissionSet = "sandbox-agent"
 	GCPKeySandboxAgentGrant    = GCPKeyRef + `={"permission_set":"` + GCPKeyDefaultPermissionSet + `","primary":true}`
 
+	// GCPGeminiKeyMethod mints a per-attempt Gemini API key on the gcp
+	// server, placed as the in-process gemini-key places one.
+	GCPGeminiKeyMethod = "gemini-key"
+	GCPGeminiKeyRef    = GCPCapabilityServerID + "#" + GCPGeminiKeyMethod
+	GCPGeminiKeyGrant  = GCPGeminiKeyRef + "={}"
+
 	// GrainCIMethod runs a repository's own .grain/workflows in grain's
 	// sandboxes for the branches a task pushes, and holds the merge
 	// queue until they pass (formerly grain-ci). grain grants it from a
@@ -223,7 +232,47 @@ const (
 	// repository's own .grain declaration, an older grain/config);
 	// schema migration 96 rewrote the stored rows.
 	GrainCICapability = "grain-ci"
+
+	// ModelProxyCapabilityServerID is the canonical capability_id of the
+	// in-process model-proxy server: a per-run token on grain's own proxy
+	// to one model vendor, forwarding with the run's team connection
+	// (formerly claude-proxy, openai-proxy and gemini-proxy).
+	ModelProxyCapabilityServerID = "https://grain.dev/capabilities/model-proxy"
+	ModelProxyMethod             = "model-proxy"
+	ModelProxyRef                = ModelProxyCapabilityServerID + "#" + ModelProxyMethod
 )
+
+// ModelProxyVendors are the vendors the model-proxy server proxies, in
+// pkg/modelproxy's Vendors order (which pkg/capability/modelproxy's tests
+// hold this to). Each one's retired bare grant is "<vendor>-proxy".
+var ModelProxyVendors = []string{"claude", "openai", "gemini"}
+
+// ModelProxyGrant is the recorded model-proxy grant for vendor.
+func ModelProxyGrant(vendor string) string {
+	return ModelProxyRef + `={"vendor":` + strconv.Quote(vendor) + `}`
+}
+
+// LegacyModelProxyCapability is the retired bare capability name of
+// vendor's model-proxy grant, such as claude-proxy.
+func LegacyModelProxyCapability(vendor string) string { return vendor + "-proxy" }
+
+// ModelProxyGrantVendor is the vendor a model-proxy grant names --
+// recorded or the retired bare <vendor>-proxy -- and false for any other
+// grant.
+func ModelProxyGrantVendor(grant string) (string, bool) {
+	grant = strings.TrimSpace(grant)
+	for _, v := range ModelProxyVendors {
+		if grant == LegacyModelProxyCapability(v) {
+			return v, true
+		}
+	}
+	spec, err := CapabilityGrantSpec(grant)
+	if err != nil || spec.Capability != ModelProxyRef {
+		return "", false
+	}
+	v, _ := spec.With["vendor"].(string)
+	return v, v != ""
+}
 
 // GCPKeyServerGrant returns the recorded gcp#gcp-key grant for the named
 // permission set (with primary: true, matching protocol.Normalize).
@@ -434,6 +483,16 @@ var legacyGrantReplacements = map[string]string{
 	"git-push-any-ref": GitPushAnyRefGrant,
 	"gcp-key":          GCPKeySandboxAgentGrant,
 	GrainCICapability:  GrainCIGrant,
+	// Retired by schema migration 100 onto the in-process model-proxy
+	// server, which forwards with the same team connection.
+	"claude-proxy": ModelProxyGrant("claude"),
+	"openai-proxy": ModelProxyGrant("openai"),
+	"gemini-proxy": ModelProxyGrant("gemini"),
+	// Retired by schema migration 101 onto the in-process release
+	// server, which places what the providers placed on the same events.
+	"image-signing":          ImageSigningRef + "={}",
+	"registry-push":          RegistryPushRef + "={}",
+	CapabilityPackagePublish: PackagePublishRef + "={}",
 }
 
 // legacyGrantMultiReplacements maps retired bare capabilities that split into

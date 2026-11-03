@@ -626,6 +626,11 @@ func (c Config) sandboxBackendAvailability(backend model.SandboxBackend) (bool, 
 		if !c.HostSandboxes && !c.startupHostSandboxes {
 			return false, "needs -host-sandboxes at daemon startup"
 		}
+		// Nor with run hosts, which are not given a host sandbox
+		// (CheckRunHostBackend).
+		if c.RunHostImage != "" {
+			return false, "not available when run hosts (-run-host-image) are enabled"
+		}
 		if c.SandboxDir == "" {
 			return false, "needs a sandbox directory (-sandbox-dir)"
 		}

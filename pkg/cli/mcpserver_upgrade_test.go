@@ -14,14 +14,18 @@
 
 package cli
 
-// The api:self-upgrade preset end to end: the generated agent API tools
-// (api_get_upgrade_status, api_start_upgrade, api_cancel_scheduled_upgrade) over
+// The api:self-upgrade preset end to end: the controller MCP endpoint
+// (POST /api/mcp -> grain_explore_scope / grain_invoke for
+// api_get_upgrade_status, api_start_upgrade, api_cancel_scheduled_upgrade) over
 // the daemon's own REST API, against a real store and a real reconcile
 // cycle.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
@@ -57,7 +61,7 @@ func (f *fakeDeploymentUpgrader) Running() (upgrade.Running, error) {
 	return upgrade.Running{Ref: "ghcr.io/bwsalmon/grain/grain:main"}, nil
 }
 
-func upgradeToolDeployment(t *testing.T, up ui.Upgrader, grant string) (map[string]mcp.Tool, *model.Store) {
+func upgradeToolDeployment(t *testing.T, up ui.Upgrader, grants ...string) (string, *model.Store) {
 	t.Helper()
 	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(t.TempDir(), "data")))
 	if err != nil {
@@ -70,9 +74,13 @@ func upgradeToolDeployment(t *testing.T, up ui.Upgrader, grant string) (map[stri
 	}
 	_ = store.PutConfig(context.Background(), model.Config{PollInterval: model.DefaultPollInterval})
 	human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
+	var taskGrants []model.Grant
+	for _, g := range grants {
+		taskGrants = append(taskGrants, model.Grant{Capability: g, Via: model.GrantByLabel})
+	}
 	if err := store.PutTask(context.Background(), model.Task{
 		ID: "335", Intent: model.IntentImplement, Title: "manage upgrades", Body: "please",
-		Grants:   []model.Grant{{Capability: grant, Via: model.GrantByLabel}},
+		Grants:   taskGrants,
 		Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
 		Approval: &model.Attribution{Actor: human},
 		Binding:  model.BindingDirective,
@@ -88,21 +96,114 @@ func upgradeToolDeployment(t *testing.T, up ui.Upgrader, grant string) (map[stri
 	srv := httptest.NewServer(ui.NewServer(withAccessCode(cfg), store))
 	t.Cleanup(srv.Close)
 
-	client := accessCodeClient(srv.URL)
-	byName := map[string]mcp.Tool{}
-	for _, tool := range daemon.GrantedDaemonTools(daemon.GrantNames{grant}, "", "", "", "335", client) {
-		byName[tool.Name] = tool
-	}
-	return byName, store
+	return srv.URL, store
 }
 
-func callUpgradeTool(t *testing.T, roster map[string]mcp.Tool, name string, args map[string]any) mcp.Result {
+func callControllerMCP(t *testing.T, serverURL, taskID, toolName string, args map[string]any) mcp.Result {
 	t.Helper()
-	tool, ok := roster[name]
-	if !ok {
-		t.Fatalf("no %s on the roster of a task holding self-upgrade", name)
+	if args == nil {
+		args = map[string]any{}
 	}
-	return tool.Handler(context.Background(), args)
+	payload, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      toolName,
+			"arguments": args,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshalling tools/call: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, serverURL+"/api/mcp", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("building /api/mcp request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(ui.AccessCodeHeader, testAccessCode)
+	if taskID != "" {
+		req.Header.Set(ui.ActingTaskHeader, taskID)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /api/mcp: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /api/mcp status = %d: %s", resp.StatusCode, raw)
+	}
+	var rpc struct {
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+		Result struct {
+			IsError bool `json:"isError"`
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &rpc); err != nil {
+		t.Fatalf("decoding /api/mcp response: %v (%s)", err, raw)
+	}
+	if rpc.Error != nil {
+		t.Fatalf("/api/mcp JSON-RPC error %d: %s", rpc.Error.Code, rpc.Error.Message)
+	}
+	var texts []string
+	for _, c := range rpc.Result.Content {
+		texts = append(texts, c.Text)
+	}
+	return mcp.Result{
+		Text:    strings.Join(texts, "\n"),
+		IsError: rpc.Result.IsError,
+	}
+}
+
+func exploredDeploymentTools(t *testing.T, serverURL, taskID string) []string {
+	t.Helper()
+	res := callControllerMCP(t, serverURL, taskID, ui.ToolGrainExploreScope, map[string]any{
+		"scope": "deployment",
+	})
+	if res.IsError {
+		return nil
+	}
+	var explored struct {
+		Routes []struct {
+			Tool string `json:"tool"`
+		} `json:"routes"`
+	}
+	if err := json.Unmarshal([]byte(res.Text), &explored); err != nil {
+		t.Fatalf("decoding grain_explore_scope(deployment): %v\n%s", err, res.Text)
+	}
+	names := make([]string, 0, len(explored.Routes))
+	for _, rt := range explored.Routes {
+		names = append(names, rt.Tool)
+	}
+	return names
+}
+
+func callUpgradeTool(t *testing.T, serverURL string, name string, args map[string]any) mcp.Result {
+	t.Helper()
+	invokeArgs := map[string]any{}
+	reason := ""
+	for k, v := range args {
+		if k == "reason" {
+			reason, _ = v.(string)
+			continue
+		}
+		invokeArgs[k] = v
+	}
+	params := map[string]any{
+		"tool":      name,
+		"arguments": invokeArgs,
+	}
+	if reason != "" {
+		params["reason"] = reason
+	}
+	return callControllerMCP(t, serverURL, "335", ui.ToolGrainInvoke, params)
 }
 
 func TestTheUpgradeToolsNeedTheirOwnGrant(t *testing.T) {
@@ -111,28 +212,44 @@ func TestTheUpgradeToolsNeedTheirOwnGrant(t *testing.T) {
 	client := ui.NewHTTPClient("http://127.0.0.1:1")
 
 	for _, grant := range []string{"api:self-upgrade", "self-upgrade"} {
-		granted := toolNames(daemon.GrantedDaemonTools(daemon.GrantNames{grant}, "", "", "", "335", client))
+		// grain-sandbox no longer exposes generated api_* tools directly.
+		sandboxTools := toolNames(daemon.GrantedDaemonTools(daemon.GrantNames{grant}, "", "", "", "335", client))
+		for _, name := range wanted {
+			if slices.Contains(sandboxTools, name) {
+				t.Errorf("grain-sandbox unexpectedly exposed %s for %s: %v", name, grant, sandboxTools)
+			}
+		}
+		// grain-controller (/api/mcp) exposes them under the deployment scope.
+		serverURL, _ := upgradeToolDeployment(t, &fakeDeploymentUpgrader{}, grant)
+		granted := exploredDeploymentTools(t, serverURL, "335")
 		for _, name := range wanted {
 			if !slices.Contains(granted, name) {
-				t.Errorf("a task holding %s got %v, want %s among them", grant, granted, name)
+				t.Errorf("a task holding %s got %v on /api/mcp, want %s among them", grant, granted, name)
 			}
 		}
 	}
 
-	without := toolNames(daemon.GrantedDaemonTools(
-		daemon.GrantNames{"self-debug", "grain-log", "deployment-health", "bootstrap-playbooks", "self-repair"},
-		"/src", secretsDirWithAKey(t), "/state", "335", client))
+	withoutURL, _ := upgradeToolDeployment(t, &fakeDeploymentUpgrader{},
+		"self-debug", "grain-log", "deployment-health", "bootstrap-playbooks", "self-repair")
+	without := exploredDeploymentTools(t, withoutURL, "335")
 	for _, name := range []string{"api_start_upgrade", "api_cancel_scheduled_upgrade"} {
 		if slices.Contains(without, name) {
 			t.Errorf("tools without self-upgrade = %v, unexpectedly contains %s", without, name)
 		}
+	}
+	refused := callUpgradeTool(t, withoutURL, "api_start_upgrade", map[string]any{
+		"reason": "unauthorized attempt",
+		"body":   map[string]any{"branch": "main", "afterTasksFinish": true},
+	})
+	if !refused.IsError {
+		t.Errorf("api_start_upgrade without self-upgrade grant succeeded: %s", refused.Text)
 	}
 }
 
 func TestSchedulingAnUpgradeThroughTheToolHoldsTheQueueAndWaitsForTheAgentItself(t *testing.T) {
 	t.Parallel()
 	fake := &fakeDeploymentUpgrader{}
-	roster, store := upgradeToolDeployment(t, fake, "api:self-upgrade")
+	serverURL, store := upgradeToolDeployment(t, fake, "api:self-upgrade")
 	ctx := context.Background()
 	now := time.Now().UTC()
 
@@ -143,7 +260,7 @@ func TestSchedulingAnUpgradeThroughTheToolHoldsTheQueueAndWaitsForTheAgentItself
 	}
 
 	// Dangerous scope requires a reason.
-	noReason := callUpgradeTool(t, roster, "api_start_upgrade", map[string]any{
+	noReason := callUpgradeTool(t, serverURL, "api_start_upgrade", map[string]any{
 		"body": map[string]any{"branch": "main", "afterTasksFinish": true},
 	})
 	if !noReason.IsError {
@@ -151,7 +268,7 @@ func TestSchedulingAnUpgradeThroughTheToolHoldsTheQueueAndWaitsForTheAgentItself
 	}
 
 	// Spoofing another task's principal is refused.
-	spoofed := callUpgradeTool(t, roster, "api_start_upgrade", map[string]any{
+	spoofed := callUpgradeTool(t, serverURL, "api_start_upgrade", map[string]any{
 		"reason": "upgrade to latest main",
 		"body": map[string]any{
 			"branch": "main", "afterTasksFinish": true,
@@ -162,7 +279,7 @@ func TestSchedulingAnUpgradeThroughTheToolHoldsTheQueueAndWaitsForTheAgentItself
 		t.Fatalf("api_start_upgrade with spoofed requestedBy succeeded: %s", spoofed.Text)
 	}
 
-	got := callUpgradeTool(t, roster, "api_start_upgrade", map[string]any{
+	got := callUpgradeTool(t, serverURL, "api_start_upgrade", map[string]any{
 		"reason": "upgrade to latest main",
 		"body":   map[string]any{"branch": "main", "afterTasksFinish": true},
 	})
@@ -208,11 +325,11 @@ func TestSchedulingAnUpgradeThroughTheToolHoldsTheQueueAndWaitsForTheAgentItself
 
 func TestTheStatusToolReportsTheLiveCIRunsAnUpgradeIsWaitingFor(t *testing.T) {
 	t.Parallel()
-	roster, store := upgradeToolDeployment(t, &fakeDeploymentUpgrader{}, "self-upgrade")
+	serverURL, store := upgradeToolDeployment(t, &fakeDeploymentUpgrader{}, "self-upgrade")
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	if got := callUpgradeTool(t, roster, "api_start_upgrade", map[string]any{
+	if got := callUpgradeTool(t, serverURL, "api_start_upgrade", map[string]any{
 		"reason": "schedule upgrade",
 		"body":   map[string]any{"branch": "main", "afterTasksFinish": true},
 	}); got.IsError {
@@ -225,7 +342,7 @@ func TestTheStatusToolReportsTheLiveCIRunsAnUpgradeIsWaitingFor(t *testing.T) {
 		t.Fatalf("recording a live CI run: %v", err)
 	}
 
-	got := callUpgradeTool(t, roster, "api_get_upgrade_status", nil)
+	got := callUpgradeTool(t, serverURL, "api_get_upgrade_status", nil)
 	if got.IsError {
 		t.Fatalf("api_get_upgrade_status = %+v", got)
 	}
@@ -245,11 +362,11 @@ func TestTheStatusToolReportsTheLiveCIRunsAnUpgradeIsWaitingFor(t *testing.T) {
 func TestCancellingThroughTheToolOpensTheQueueAgain(t *testing.T) {
 	t.Parallel()
 	fake := &fakeDeploymentUpgrader{}
-	roster, store := upgradeToolDeployment(t, fake, "api:self-upgrade")
+	serverURL, store := upgradeToolDeployment(t, fake, "api:self-upgrade")
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	if got := callUpgradeTool(t, roster, "api_start_upgrade", map[string]any{
+	if got := callUpgradeTool(t, serverURL, "api_start_upgrade", map[string]any{
 		"reason": "schedule upgrade",
 		"body":   map[string]any{"branch": "main", "afterTasksFinish": true},
 	}); got.IsError {
@@ -277,7 +394,7 @@ func TestCancellingThroughTheToolOpensTheQueueAgain(t *testing.T) {
 		t.Fatalf("the queue was not held for the scheduled upgrade: (%+v, %v)", pause, err)
 	}
 
-	got := callUpgradeTool(t, roster, "api_cancel_scheduled_upgrade", map[string]any{
+	got := callUpgradeTool(t, serverURL, "api_cancel_scheduled_upgrade", map[string]any{
 		"reason": "calling off the upgrade",
 	})
 	if got.IsError {
@@ -303,9 +420,9 @@ func TestCancellingThroughTheToolOpensTheQueueAgain(t *testing.T) {
 func TestAnImmediateUpgradeThroughTheToolStartsTheUpgraderAtOnce(t *testing.T) {
 	t.Parallel()
 	fake := &fakeDeploymentUpgrader{}
-	roster, store := upgradeToolDeployment(t, fake, "api:self-upgrade")
+	serverURL, store := upgradeToolDeployment(t, fake, "api:self-upgrade")
 
-	got := callUpgradeTool(t, roster, "api_start_upgrade", map[string]any{
+	got := callUpgradeTool(t, serverURL, "api_start_upgrade", map[string]any{
 		"reason": "emergency rollback",
 		"body":   map[string]any{"branch": "main", "afterTasksFinish": false},
 	})

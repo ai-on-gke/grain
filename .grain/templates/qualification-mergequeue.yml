@@ -1,75 +1,110 @@
-name: Release qualification - Merge queue & demand-driven CI
-title: Validate merge queue states, demand-driven base CI, batching and bisection
+name: Release qualification - Independent merging & conflict clusters
+title: "Qualify {{rc_tag}}: independent clean-and-green merging, gates and conflict clusters"
 base: main
-auto-merge: true
+auto-merge: false
+# Stage 2 of release-candidate qualification
+# (design/playbook/releases.playbook.md §2). Filed by grain's
+# release-qualification reconciler (pkg/orchestrator/releasequalification.go)
+# with rc_tag and rc_sha filled in, and judged by it objectively: the run
+# passes only if it opens no pull request, proposes nothing outside its own
+# scratch branch, leaves no scratch branch or fixture task behind, and ends
+# its closing note with the footer the body asks for.
+fields:
+  - name: rc_tag
+    label: Release candidate tag (vX.Y.Z-rc.N)
+  - name: rc_sha
+    label: Release candidate commit (full sha)
 # The scratch branch this template's body tells its runs to create from
-# main and delete when done (qualification/<this task id>). Create and
+# rc_sha and delete when done (qualification/<this task id>). Create and
 # delete only: no force, so an existing qualification branch can be
 # fast-forwarded but never rewritten, and main itself stays out of reach.
 push:
   - ref: refs/heads/qualification/*
     delete: true
 body: |
-  Execute deep verification of Grain's merge queue orchestration, demand-driven
-  base branch CI invocation, optimistic multi-PR batch evaluation, and bisection
-  on deliberate test failures.
+  Verify that grain merges pull requests the way
+  `design/design/merging.design.md` says: each one merges as soon as it is
+  clean, green on its own head and through its gates, independently of every
+  other pull request. There is no ordering, no queue head, no batching and no
+  bisection. Batching and bisection were retired, so do not test for them.
 
-  Grain releases from trunk (`docs/release-candidate-management.md`): `candidate`
-  is a pointer the release train force-moves, and pull requests targeting it are
-  refused. Run every batch below against a scratch branch, never against `main`
-  or `candidate`:
+  You are qualifying release candidate `{{rc_tag}}` at commit `{{rc_sha}}`.
+  Check it out (`git fetch origin tag {{rc_tag}} && git checkout --detach {{rc_sha}}`)
+  and judge that commit, not `main`'s tip.
 
-  - Create the scratch branch from `main`'s tip and push it:
-    `git push origin origin/main:refs/heads/qualification/<this task id>`.
-  - File the batch members with `propose_task`, each with
-    `branch: qualification/<this task id>` so its pull request targets the
-    scratch branch, and `depends_on` empty so they enqueue together.
-  - Never give a batch member, and never push to this task's own branch, a
-    change carrying an intentional failure: this task's own pull request merges
-    into `main`. Push to it only a real fix for something this run found.
-  - Delete the scratch branch when you are done
-    (`git push origin :refs/heads/qualification/<this task id>`).
+  ## Scratch branch
 
-  ## 1. 4-State Merge Queue Lifecycle Validation
+  Every experiment runs on a scratch branch cut from the candidate, never on
+  `main`, `candidate` or this task's own branch:
 
-  - Verify state transitions across the full merge queue lifecycle:
-    `enqueued` -> `running` -> `ready_to_merge` -> `merged` (and `failed` on error).
-  - Inspect queue position tracking, batch membership, and status transitions
-    using `list_grain_tasks`, `query_merge_queue` and `read_deployment_state`.
-  - Confirm that tasks entering the merge queue respect prerequisites, dependency
-    constraints, and branch concurrency locks.
+  - Create it: `git push origin {{rc_sha}}:refs/heads/qualification/<this task id>`.
+  - File any fixture task (a change for the merge queue to merge, a staged
+    failure, its repair) with `propose_task` and
+    `branch: qualification/<this task id>`. Fixtures on that branch are the
+    experiment. Anything you propose on any other branch is a defect report,
+    and fails qualification.
+  - Before you finish, close or finish every fixture task you filed, then
+    delete the branch: `git push origin :refs/heads/qualification/<this task id>`.
+    A scratch branch or a live fixture task left behind fails qualification.
 
-  ## 2. Demand-Driven Base CI Execution
+  ## 1. Independent clean-and-green merges
 
-  - Confirm that base branch CI runs are invoked strictly demand-driven:
-    - Base CI is scheduled only when queued commits are ready for merge validation.
-    - Idle intervals or non-merging pushes do not trigger spurious base branch CI runs.
-  - Inspect `list_ci_runs` and `read_grain_metrics` (ci_queueing section) on both
-    `main` and the scratch branch to verify proper triggering and absence of
-    redundant base CI cycles.
+  - File three non-conflicting fixture changes against the scratch branch at
+    once.
+  - Confirm each merges on its own as soon as it is clean, green on its own
+    head and reviewed, and that none waits on another's state. Use
+    `query_merge_queue` and `list_grain_tasks` to see each pull request's own
+    blocker. There should be no queue position.
+  - Make one of the three slow or red (a failing test in that fixture only).
+    Confirm the other two still merge, and that the red one gets its normal
+    repair and is then closed unmerged.
+  - Confirm `max_merges_per_repo` throttles merges without ordering them.
 
-  ## 3. Optimistic Batch Testing with 3+ Parallel PRs
+  ## 2. Gates hold only their own pull request
 
-  - Simulate an optimistic batch containing at least 3 concurrent pull requests:
-    - Enqueue 3 distinct non-conflicting changes targeting the scratch branch.
-    - Verify that the merge queue forms an optimistic speculative batch combining all 3 changes.
-    - Validate that CI runs on the combined tip of the speculative batch.
-    - Upon batch success, verify all 3 pull requests advance to `ready_to_merge` and
-      are merged atomically into the scratch branch without redundant individual runs.
+  - Confirm a fixture still awaiting its second-agent review does not merge,
+    and does not hold any other fixture.
 
-  ## 4. Bisection on Intentional Test Failures
+  ## 3. Conflict clusters
 
-  - Simulate a failing change within an optimistic batch on the scratch branch:
-    - Enqueue a batch of 3+ pull requests where one PR introduces an intentional test failure.
-    - Verify that the combined batch CI fails as expected.
-    - Verify that the merge queue triggers automated bisection to isolate the failing branch.
-    - Confirm that passing pull requests in the batch are isolated, validated, and merged.
-    - Confirm that the failing pull request transitions to `failed` state with appropriate
-      diagnostic error output and review feedback, and close its task unmerged.
+  - File three fixtures that each edit the same lines of one file on the
+    scratch branch, so that once the first lands the other two conflict with
+    it.
+  - Confirm the two conflicting pull requests form one cluster with at most
+    one repair in flight, given to the oldest member. When that repair lands,
+    the last pull request should be judged again against the new tip.
+  - Confirm the cluster costs about one repair per pull request, not N².
 
-  ## 5. Verification & Reporting
+  ## 4. Base-branch CI after the merge
 
-  - Verify queue metrics, latency distributions, and batching efficiency.
-  - Confirm the scratch branch is deleted and nothing from it reached `main`.
-  - Summarize all test results, state transitions, bisection events, and metrics
-    in the task completion comment.
+  - Confirm the scratch branch's post-merge CI runs on the tips the merges
+    left, and that a red scratch branch does not stop green fixtures merging
+    there.
+
+  ## 5. Report
+
+  - Summarize each step's observed merges, blockers, repairs and timings in
+    the closing note.
+
+  ## What makes this a pass
+
+  The verdict is read mechanically, not from your prose:
+
+  - Do not push to this task's own branch and do not open a pull request.
+    Any pull request fails qualification, including a real fix. Report a bug
+    you find in the closing note with `Qualification-Verdict: FAIL`. The
+    pipeline steward files the fix.
+  - Finish with `comment_on_issue`, never `nothing_needed` or
+    `ask_question`: `nothing_needed` closes the task, and a closed
+    qualification task fails whatever its note says.
+  - End the closing note with exactly these three lines, the commit in full:
+
+    ```text
+    Qualification-Verdict: PASS
+    Qualified-Tag: {{rc_tag}}
+    Qualified-Commit: {{rc_sha}}
+    ```
+
+    Use `FAIL` when anything above did not behave as described. Use `INFRA`
+    only when the environment stopped you (sandbox, git proxy, model quota,
+    a daemon restart), and name the error. INFRA is re-run, not judged.

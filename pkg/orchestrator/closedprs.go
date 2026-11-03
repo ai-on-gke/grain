@@ -57,8 +57,9 @@ import (
 )
 
 // closedPullRequestWindow is how long after a task closes its unsettled
-// pull request is still read.
-const closedPullRequestWindow = 30 * 24 * time.Hour
+// pull request is still read -- model's, since a wait until "merged" on
+// the task waits exactly as long (model.WaitTarget.PullRequestOpen).
+const closedPullRequestWindow = model.ClosedPullRequestWindow
 
 // closedPollAspect is the PollKey aspect for syncClosedPullRequests' read,
 // apart from SyncPullRequests' own so the two backoffs do not share a

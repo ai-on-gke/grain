@@ -562,7 +562,16 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 // whole of what a suite is, so a template that auto-merges on its own
 // does not auto-merge inside a suite that says not to.
 func ComposeSuiteTask(tmpl Template, target RepoRef, base string, requireApproval, autoMerge, autoApproveProposals bool) Composition {
-	return composeTemplate(tmpl, nil, target, base, LayerSuite,
+	return composeSuiteTask(tmpl, nil, target, base, requireApproval, autoMerge, autoApproveProposals)
+}
+
+// composeSuiteTask is ComposeSuiteTask with the template's input fields
+// filled in as values says -- what a run started with
+// SuiteRunOptions.Fields files (the release-qualification reconciler's
+// rc_tag and rc_sha). Every other run passes nil, and so files exactly
+// what an unattended firing always has: each field at its Default.
+func composeSuiteTask(tmpl Template, values map[string]string, target RepoRef, base string, requireApproval, autoMerge, autoApproveProposals bool) Composition {
+	return composeTemplate(tmpl, values, target, base, LayerSuite,
 		&autoMerge, LayerSuite, &autoApproveProposals, LayerSuite, !requireApproval, LayerSuite)
 }
 
@@ -775,6 +784,9 @@ func (s *Store) composeScheduleTask(ctx context.Context, sched Schedule, stateRe
 			return Composition{}, nil, err
 		}
 		applyGrainCIGrant(&comp, usesGrainCI)
+		if err := applyRepoDefaultHostd(ctx, s.db, &comp); err != nil {
+			return Composition{}, nil, err
+		}
 		if !usesGrainCI {
 			if from, ok := scheduleReviewsWorkflowRun(sched, tmpl); ok {
 				applyWorkflowReviewCIReadGrant(&comp, from)
@@ -789,14 +801,17 @@ func (s *Store) composeScheduleTask(ctx context.Context, sched Schedule, stateRe
 // ui.Client.SuiteComposition shows exactly these. Every pass of a run
 // composes the same way, so one pass is the whole answer for the run.
 func composeSuitePass(ctx context.Context, q querier, items []SuiteItem, templates map[string]Template,
-	target RepoRef, base string, requireApproval, autoMerge, autoApproveProposals bool) ([]Composition, error) {
+	target RepoRef, base string, requireApproval, autoMerge, autoApproveProposals bool, opts SuiteRunOptions) ([]Composition, error) {
 
 	// Read at most once for the whole pass, and not at all for a suite
 	// whose templates say nothing about any declared field.
 	declarations := customFieldDeclarations{q: q}
 	out := make([]Composition, 0, len(items))
 	for _, it := range items {
-		comp := ComposeSuiteTask(templates[it.TemplateID], target, base, requireApproval, autoMerge, autoApproveProposals)
+		comp := composeSuiteTask(templates[it.TemplateID], opts.Fields, target, base, requireApproval, autoMerge, autoApproveProposals)
+		if opts.Priority != 0 {
+			comp.Priority = opts.Priority
+		}
 		fields, err := declarations.apply(ctx, comp.CustomFields)
 		if err != nil {
 			return nil, err
@@ -808,6 +823,9 @@ func composeSuitePass(ctx context.Context, q querier, items []SuiteItem, templat
 				return nil, err
 			}
 			applyGrainCIGrant(&comp, usesGrainCI)
+			if err := applyRepoDefaultHostd(ctx, q, &comp); err != nil {
+				return nil, err
+			}
 		}
 		out = append(out, comp)
 	}
@@ -856,7 +874,7 @@ func (s *Store) SuiteComposition(ctx context.Context, suite Suite, target RepoRe
 		return nil, err
 	}
 	return composeSuitePass(ctx, s.db, suite.Items, templates, target, base,
-		suite.RequireApproval, suite.AutoMerge, suite.AutoApproveProposals)
+		suite.RequireApproval, suite.AutoMerge, suite.AutoApproveProposals, SuiteRunOptions{})
 }
 
 // TemplateComposition is the task filing tmpl with values against
@@ -879,6 +897,9 @@ func (s *Store) TemplateComposition(ctx context.Context, tmpl Template, values m
 			return Composition{}, err
 		}
 		applyGrainCIGrant(&comp, usesGrainCI)
+		if err := applyRepoDefaultHostd(ctx, s.db, &comp); err != nil {
+			return Composition{}, err
+		}
 	}
 	return comp, nil
 }

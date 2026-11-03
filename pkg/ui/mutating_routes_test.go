@@ -477,6 +477,23 @@ var attributedRoutes = map[string]attributedRoute{
 		agentGrants: []string{"api:capabilities:admin"},
 		recorded:    lastConfigAudit,
 	},
+	"POST /api/access/principals": {
+		body:        `{"entry":"user:newbie@example.com"}`,
+		agentGrants: []string{"api:access:write"},
+		recorded:    lastConfigAudit,
+	},
+	"DELETE /api/access/principals/{entry}": {
+		setup: func(t *testing.T, client *ui.Client, _ sender) string {
+			t.Helper()
+			if _, err := client.AllowPrincipal(context.Background(), ui.AllowPrincipalRequest{Entry: "user:temp@example.com"}); err != nil {
+				t.Fatalf("seeding allowed principal: %v", err)
+			}
+			return "user:temp@example.com"
+		},
+		path:        "/api/access/principals/{id}",
+		agentGrants: []string{"api:access:write"},
+		recorded:    lastConfigAudit,
+	},
 	"POST /api/pipeline-pause": {
 		body: `{"reason":"maintenance"}`,
 		recorded: func(t *testing.T, ctx context.Context, client *ui.Client, _, _ string) model.Principal {
@@ -540,9 +557,12 @@ var neverAttributedRoutes = map[string]bool{
 	"POST /api/database/test":                    true,
 	"POST /api/deployment/git-connections/check": true,
 	"POST /api/settings/plan":                    true,
-	// The MCP endpoint is a transport: each tool it serves calls one of
-	// the routes here, and is attributed there.
-	"POST /mcp": true,
+	// The MCP endpoints are transports: each tool they serve calls one of
+	// the routes here, and is attributed there. POST /api/mcp's
+	// grain_invoke dispatches the route through s.mux with the outer
+	// request's principal and acting task (dispatchSubrequest).
+	"POST /mcp":     true,
+	"POST /api/mcp": true,
 }
 
 // notYetAttributedRoutes are the rest of spec §3's write paths, exempt

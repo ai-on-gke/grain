@@ -7,9 +7,12 @@ Agents used to get a hand-picked set of MCP tools, and each new ability
 was new plumbing: a capability package that re-wrapped a few `ui.Client`
 methods as tools. The agent API replaces that with one mechanism. Every
 route of grain's own REST API has a permission **scope**. A task granted a
-scope is served **one MCP tool per route under it**. Each tool calls the
-same route the UI calls, through the same handler, so validation, side
-effects and audit are the same.
+scope reaches **every route under it** through the `grain-controller`
+MCP server (`POST /api/mcp`): `grain_explore_scope` lists the routes and
+their input schemas, `grain_invoke` calls one, and four compact tools
+cover the everyday task reads and filing. Each call runs the same route
+the UI calls, through the same handler, so validation, side effects and
+audit are the same.
 
 A new UI action is agent-callable as soon as its route has a scope. There
 is nothing else to write.
@@ -22,11 +25,13 @@ is nothing else to write.
 | Route → scope table | `pkg/ui/route_scopes.go`, beside the route table in `pkg/ui/server.go` |
 | Totality test | `pkg/ui/agent_api_internal_test.go` (`TestRouteScopesAreTotal`) |
 | Enforcement, rails, attribution | `pkg/ui/agent_api_gate.go` (`agentAPIGate`, wrapping every route) |
-| Generated tools | `pkg/ui/agent_api_tools.go` (`AgentAPITools`), served by `grain mcpserver` |
+| Route table as tools (names, descriptions, schemas) | `pkg/ui/agent_api_tools.go` (`AgentAPIRoutes`) |
+| The controller MCP server | `pkg/ui/mcp_endpoint.go` (`POST /api/mcp`), attached to a run by `orchestrator.wireControllerMCP` |
 
-A generated tool sends its request to the daemon with
+A call through `grain-controller` reaches the daemon with
 `X-Grain-Acting-Task: <task id>` (and `X-Grain-Acting-Reason` when it has
-one). The daemon's gate then:
+one); `grain_invoke` then dispatches the route in-process with those
+same headers. The daemon's gate then:
 
 1. looks up the acting task's api grants;
 2. refuses the call unless they grant the route's scope, on the route's
@@ -155,6 +160,8 @@ every `DELETE`.
 | `caches:write` | flush them | |
 | `settings:read` | read deployment settings and configuration | |
 | `settings:write` | change deployment settings, the database, the state repository | yes |
+| `access:read` | read the allowed users and groups list | |
+| `access:write` | add and remove allowed users and groups | yes |
 | `connections:read` | read git connections and model backends | |
 | `connections:write` | change them | yes |
 | `capabilities:read` | read capability servers and policy, check grants | |
@@ -200,7 +207,7 @@ their old names (`list_grain_tasks`, `read_grain_metrics`, ...).
 too, but their
 in-process capabilities are retired (design/design/unified-grants.design.md §4):
 they have no tools of their own any longer, and a run holding one is
-served its preset's `api_*` tools and `grain` CLI subcommands instead (`api_deployment_broadcast`
+served its preset's routes through `grain-controller` and `grain` CLI subcommands instead (`api_deployment_broadcast`
 for `broadcast_team_message`; the pipeline-pause, run-now and defer
 routes for `pause_pipeline`, `resume_pipeline`, `run_task_now` and
 `defer_task`; for pipeline-control, the pipeline-pause routes, which an
@@ -273,7 +280,7 @@ A set is a row:
 | `includes` | JSON list of other sets, built-in or declared. Their resolved scopes are added, each keeping the repository limits it had. A missing set or a cycle (`a -> b -> a`, or a set including itself) is an error naming the path. |
 | `repos` | JSON list of `owner/name`. Limits every scope of the set, included ones too: a scope already limited by an included set keeps only the repositories in both, and one left with none is dropped. Empty means no limit of the set's own. |
 | `deny` | JSON list in the `scopes` syntax. Removed after composition. |
-| `requires_person` | 1 means only a person may grant the set. **Forced on** when the resolved set holds any dangerous scope (`capabilities:admin`, `secrets:write`, `settings:write`, `connections:write`, `merge:force`, `tasks:admin`, `deployment:*` except `deployment:read`). A set can turn it on, never off. |
+| `requires_person` | 1 means only a person may grant the set. **Forced on** when the resolved set holds any dangerous scope (`capabilities:admin`, `secrets:write`, `settings:write`, `access:write`, `connections:write`, `merge:force`, `tasks:admin`, `deployment:*` except `deployment:read`). A set can turn it on, never off. |
 | `version` | the author's revision number, shown in the check and in Settings |
 | `deprecated` | 1 to flag the set in Settings and the pickers. It still resolves and still grants. |
 
@@ -332,7 +339,8 @@ sets after the presets, each with its resolved scopes, so the operator
 sees what a grant hands out before granting it. `grain mcpserver`, which
 can't read the deployment's sets, is started with a declared set's
 grant written out as the scope grants it resolves to
-(`model.APIScopeSetGrantNames`).
+(`model.APIScopeSetGrantNames`); `grain-controller` reads the task's
+grants from the store on every call, so it needs no such copy.
 
 **Routes.** `GET /api/api-scope-sets` (`capabilities:read`) lists every
 set in effect with its source, resolved scopes and requires-person flag.
@@ -599,8 +607,56 @@ handler's name. `TestEveryScopedRouteIsDescribed` (in
 scoped route that changes something has a sentence, and the body type
 and query parameters each route declares are the ones its handler's
 source reads, so a new UI action is fully described to agents as soon
-as its route is scoped. Every generated name is published to the
-frameworks' allowed-tool lists (`agent.RegisterPublishedToolNames`).
+as its route is scoped. The frameworks' allowed-tool lists name only
+`grain-controller`'s six fixed tools, so a new route needs no entry
+there either.
+
+## The controller MCP server (`POST /api/mcp`)
+
+`grain-controller` is one stateless Streamable HTTP MCP server on the
+daemon, serving six tools whatever the caller holds:
+
+| Tool | What it does |
+|---|---|
+| `grain_explore_scope(scope?, tool?)` | With no arguments, the scope groups the caller is authorized for; with a group or scope, the routes under it with their JSON input schemas; with `tool`, only the routes whose tool name or path matches, which is far cheaper than a whole group. |
+| `grain_invoke(tool, arguments, reason?)` | Runs one route. `arguments` carries the path parameters by name, `query`, `body` (or the body's fields directly) and, on task mutations, `expect` (`state`, `title_prefix`, `kind`), which reads the task first and refuses the call if the record disagrees. A destructive or dangerous route needs `reason`. |
+| `grain_filing_context(repo?)` | Target repositories, templates, boards, custom fields and grantable capabilities, each part served only to a caller holding the scope of the route that serves the same data. |
+| `grain_submit_task(...)` | `POST /api/tasks`; `approve` defaults to false, so the task lands proposed. |
+| `grain_list_tasks(repo?, state?, q?, limit?, summary?)` | Compact summary rows by default. |
+| `grain_get_task(id, view?)` | A ~1 KB summary by default; `conversation` pages comments, `full` is the whole record. |
+
+Six fixed schemas in the model's context instead of one per route is
+what the design is for: for a session holding many scopes the tool list
+is an order of magnitude smaller, and a task read through
+`grain_get_task` is a fraction of the full record
+(`pkg/ui/mcp_token_benchmark_test.go`;
+docs/test-runs/2026-11-02-controller-mcp-token-cost.md has the measured
+table).
+
+Who the caller is decides what `grain_explore_scope` shows and
+`grain_invoke` runs:
+
+- A run or session of a task holding any `api:*` grant has
+  `grain-controller` attached beside `grain-sandbox` (one capability
+  MCP server among the others), with the daemon's own credential and
+  `X-Grain-Acting-Task: <task id>` added on the daemon's side, so it
+  reaches exactly the routes its grants allow -- read from the store on
+  every call, so a grant added while it runs takes effect at once.
+- A sandbox process calling `/api/mcp` through the sandbox proxy
+  (`grain api`'s channel) is held to the non-dangerous subset, as every
+  other route on that channel is.
+- An external agent (below) authenticates with its `gma_` token, which
+  is the credential: an `X-Grain-Acting-Task` header on its request is
+  ignored. `/api/mcp` serves it the same six tools `POST /mcp` serves as
+  one tool per route.
+- A person, or a BYO harness on their behalf, authenticates as for any
+  other route -- the IAP identity, the access code as a bearer token, or
+  the access code in `X-Grain-Access-Code` when an upstream proxy owns
+  `Authorization` -- and reaches every route that is not internal.
+
+Every `grain_invoke` re-enters the route table through the same gate
+the REST call would, so the attribution, audit row and rails are the
+route's own; `/api/mcp` itself is a transport, like `/mcp`.
 
 ## Messaging another task's agent
 
@@ -633,10 +689,15 @@ Two other routes look like they do this, but don't:
 
 An external agent -- one not running as a grain task in a grain sandbox
 (for example, a person's own Claude, Gemini, or Codex CLI session, an
-external orchestrator, or an automation bot) -- can drive grain through
-the same generated `api_*` MCP tools over Streamable HTTP at `POST /mcp`,
-using a per-agent scoped credential (`model.ExternalAgentToken`,
-`pkg/ui/external_agents.go`).
+external orchestrator, or an automation bot) -- can drive grain over
+Streamable HTTP using a per-agent scoped credential
+(`model.ExternalAgentToken`, `pkg/ui/external_agents.go`), at either of
+two endpoints: `POST /mcp`, which serves one generated `api_*` MCP tool
+per route the credential reaches, or `POST /api/mcp`, the
+`grain-controller` server above, whose six tools reach the same routes
+through `grain_explore_scope` and `grain_invoke`. Prefer `/api/mcp` for
+a harness that loads every tool's schema into the model's context on
+every turn; `/mcp` suits a client that wants each route as its own tool.
 
 ### Enabling the endpoint
 

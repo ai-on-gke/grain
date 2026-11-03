@@ -201,3 +201,50 @@ func TestAWriteScopeDoesNotReachAForbiddenRepository(t *testing.T) {
 		t.Error("a write scope must not get a CI job into the repository no sandbox may reach")
 	}
 }
+
+func TestAWithheldWriteNoteAuthorizesNothingAndDropsWithTheSandbox(t *testing.T) {
+	forbidden := NewForbiddenSet(model.RepoRef{Owner: "acme", Name: "grain-state"})
+	writes := NewWriteScopes()
+	writes.NoteWithheld("ci-1", model.RepoRef{Owner: "Acme", Name: "Tools"}, "withheld on pull_request runs")
+	writes.NoteWithheld("ci-1", model.RepoRef{Owner: "acme", Name: "grain-state"}, "withheld on pull_request runs")
+	a := &ReadOnlyScopeAuthorizer{
+		WriteScopes: writes,
+		Next:        &ModelAuthorizer{Store: stubScopeLookup{}, Forbidden: forbidden},
+		Forbidden:   forbidden,
+	}
+
+	if writes.Len() != 0 || len(writes.Repos("ci-1")) != 0 {
+		t.Fatalf("withheld note counted as an active write grant: len=%d repos=%v", writes.Len(), writes.Repos("ci-1"))
+	}
+	for _, action := range []string{"info/refs", "git-upload-pack", "git-receive-pack"} {
+		if allows(t, a, "ci-1", "acme", "tools", action) {
+			t.Fatalf("withheld note authorized %q", action)
+		}
+	}
+	if got, ok := a.WithheldReason("ci-1", "acme", "tools.git"); !ok || got != "withheld on pull_request runs" {
+		t.Fatalf("WithheldReason = %q, %v; want withheld note", got, ok)
+	}
+	if got, ok := a.WithheldReason("ci-2", "acme", "tools"); ok {
+		t.Fatalf("other sandbox saw withheld note %q", got)
+	}
+	if got, ok := a.WithheldReason("ci-1", "acme", "grain-state"); ok {
+		t.Fatalf("forbidden repo returned withheld note %q", got)
+	}
+
+	// An active grant takes precedence over any withheld note.
+	writes.Grant("ci-1", model.RepoRef{Owner: "acme", Name: "tools"})
+	if got, ok := a.WithheldReason("ci-1", "acme", "tools"); ok {
+		t.Fatalf("granted repo still reported withheld note %q", got)
+	}
+
+	writes.Drop("ci-1")
+	if got, ok := writes.WithheldReason("ci-1", "acme", "tools"); ok {
+		t.Fatalf("dropped sandbox kept withheld note %q", got)
+	}
+
+	var nilWrites *WriteScopes
+	nilWrites.NoteWithheld("ci-1", model.RepoRef{Owner: "acme", Name: "tools"}, "withheld")
+	if _, ok := nilWrites.WithheldReason("ci-1", "acme", "tools"); ok {
+		t.Fatal("nil WriteScopes reported a withheld note")
+	}
+}

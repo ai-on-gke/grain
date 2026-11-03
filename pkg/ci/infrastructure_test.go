@@ -17,6 +17,7 @@ package ci
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -232,5 +233,33 @@ func TestDeclaringAStepInfrastructureParsesAndMissesNoCacheEntry(t *testing.T) {
 	if strings.Contains(string(body), "infrastructure") {
 		t.Errorf("a job with no infrastructure step hashes as %s, which mentions the new field and so misses "+
 			"every cache entry every deployment holds", body)
+	}
+}
+
+// A sandbox whose transport fails under an ordinary step -- the VM died,
+// the command came back with no exit status -- concludes the job errored
+// with an infra error, not as a failure of the tree: that is what lets a
+// release that lost its machine be re-run instead of triaged.
+func TestAStepWhoseSandboxDiedIsErroredNotFailed(t *testing.T) {
+	sandboxes := &fakeSandboxes{script: func(cmd Command) (CommandResult, error) {
+		return CommandResult{ExitCode: -1}, errors.New("running a step in ci-7: read: connection reset by peer")
+	}}
+	plan := infraPlan(t, "on: push\njobs:\n  images:\n    steps:\n"+
+		"      - name: Build the images\n        run: make images\n      - run: make publish\n")
+
+	run := (&Engine{Sandboxes: sandboxes}).Run(context.Background(), "r1", plan, nil)
+
+	job := jobByID(t, run, "images")
+	if job.Conclusion != ConclusionErrored {
+		t.Fatalf("job conclusion = %q (%s), want errored", job.Conclusion, job.Error)
+	}
+	if !strings.HasPrefix(job.Error, "infra: sandbox lost: ") || !strings.Contains(job.Error, "connection reset") {
+		t.Errorf("job error = %q, want the sandbox-lost fault naming the transport error", job.Error)
+	}
+	if len(job.Steps) == 0 || job.Steps[0].Conclusion != ConclusionErrored {
+		t.Errorf("steps = %+v, want the step the sandbox died under errored", job.Steps)
+	}
+	if run.Conclusion != ConclusionErrored {
+		t.Errorf("run conclusion = %q, want errored: nothing judged the tree", run.Conclusion)
 	}
 }

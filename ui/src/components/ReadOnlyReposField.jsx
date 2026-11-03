@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { Box, Chip, Stack } from "@mui/material";
+import AppIcon from "./AppIcon.jsx";
 import RepoPicker from "./RepoPicker.jsx";
 
 // ReadOnlyReposField is the read-only repos picker (grain/task-241): the
@@ -70,7 +71,14 @@ export default function ReadOnlyReposField({
               size="small"
               label={r}
               onDelete={() => remove(r)}
-              deleteIcon={<span title={`Remove ${r}`}>×</span>}
+              deleteIcon={
+                <span
+                  title={`Remove ${r}`}
+                  style={{ display: "inline-flex", alignItems: "center" }}
+                >
+                  <AppIcon name="close" size={14} />
+                </span>
+              }
             />
           ))}
         </Stack>

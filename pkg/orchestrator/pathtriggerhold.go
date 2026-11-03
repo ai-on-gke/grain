@@ -268,13 +268,15 @@ func filePullRequestTrigger(ctx context.Context, store *model.Store, task model.
 			"(human: `%s`).\n", ref, rule.Trigger.Human)
 	}
 
-	return fileCoalesced(ctx, store, tag, now, func(prev *model.Task, superseding bool) (model.Task, error) {
+	var hostd string
+	filed, err := fileCoalesced(ctx, store, tag, now, func(prev *model.Task, superseding bool) (model.Task, error) {
 		tags := []string{model.PathTriggerMarkerTag, tag, pathTriggerRuleTag(rule.Commit)}
 		if !rule.Trigger.Gate {
 			comp, _, err := store.ComposeTriggerTask(ctx, rule.Trigger.Template, *task.Target, "", rule.Trigger.AutoApprove)
 			if err != nil {
 				return model.Task{}, fmt.Errorf("orchestrator: composing trigger %s's task for %s: %w", rule.Trigger.Name, ref, err)
 			}
+			hostd = comp.Hostd
 			comp.Title = model.SubstituteFields(comp.Title, vars)
 			if strings.TrimSpace(comp.Title) == "" {
 				comp.Title = fmt.Sprintf("Trigger %s: %s", rule.Trigger.Name, ref)
@@ -324,6 +326,7 @@ func filePullRequestTrigger(ctx context.Context, store *model.Store, task model.
 		}
 		return review, nil
 	})
+	return pinFiledHostd(ctx, store, filed, hostd, err)
 }
 
 // applyPathTriggerGate records that task's head was judged, and holds or
@@ -579,7 +582,8 @@ func dropPathTriggerHoldOnFindings(ctx context.Context, store *model.Store, clie
 				return nil
 			}
 		}
-		t.AutoMerge, dropped = false, true
+		model.AwaitPersonForAutoMerge(t, "review "+review.ID+" left findings")
+		dropped = true
 		t.Links = withoutLinks(t.Links, model.LinkPathTriggerHold)
 		return nil
 	}); err != nil {
@@ -696,7 +700,9 @@ func settlePathTriggerHold(ctx context.Context, store *model.Store, client githu
 		t.Links = withoutLinks(t.Links, model.LinkPathTriggerHold)
 		releasable := human == model.TriggerHumanNo ||
 			(human == model.TriggerHumanOnFindings && len(pushed) == 0 && len(abandoned) == 0)
-		if releasable && !hasSecurityHold(*t) && !heldForHuman(*t) && len(model.PendingApprovals(*t)) == 0 {
+		if !releasable {
+			model.AwaitPersonForAutoMerge(t, "a gating trigger's tasks left it for a person")
+		} else if !hasSecurityHold(*t) && !heldForHuman(*t) && len(model.PendingApprovals(*t)) == 0 {
 			t.AutoMerge, released = true, true
 		}
 		return nil

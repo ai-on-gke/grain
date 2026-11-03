@@ -55,8 +55,10 @@ type Client struct {
 	// localScripts is the local-script approvals of this daemon's live
 	// runs (localScriptApprovals): Config.LocalScriptApprovals, or one of
 	// its own.
-	localScripts     *LocalScriptApprovals
-	localScriptsOnce sync.Once
+	localScripts               *LocalScriptApprovals
+	localScriptsOnce           sync.Once
+	allowedPrincipalsMigrateMu sync.Mutex
+	allowedPrincipalsMigrated  bool
 	// Now is the clock, injectable so tests get deterministic timestamps.
 	// nil means time.Now().UTC().
 	Now func() time.Time
@@ -477,6 +479,10 @@ func (c *Client) capabilityByID(id string) (Capability, bool) {
 	}
 	if model.IsCapabilityRef(id) {
 		if model.CheckCapabilityGrantSyntax(id) != nil {
+			return Capability{}, false
+		}
+		// A method with a CI rule (the release server's) is CI-only.
+		if _, ok := model.CIGrantRuleFor(id); ok {
 			return Capability{}, false
 		}
 		ref := model.CapabilityGrantRef(id)
@@ -2193,6 +2199,26 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			return Task{}, validationErrorf(
 				"no repo given, and this deployment has no default target repo configured")
 		}
+	}
+
+	// A filing that names no hostd, and whose template names none
+	// (fromTemplate has already put a template's pin in req.Hostd),
+	// starts pinned to its repository's own default
+	// (model.RepoConfig.DefaultHostd), and failing that to the default
+	// hostd. The repository's default is the operator's word, not the
+	// filer's, so the agent API's hostd gate (agentMayRouteHostd) is not
+	// asked about it; it is still held to the registry, so a default
+	// left naming a hostd that has since gone is refused here rather
+	// than filed onto a pin nothing answers.
+	if hostdSelector == "" && target != nil {
+		repoHostd, err := c.Store.RepoDefaultHostd(ctx, *target)
+		if err != nil {
+			return Task{}, err
+		}
+		if err := c.checkHostdSelector(ctx, repoHostd); err != nil {
+			return Task{}, fmt.Errorf("%s's default hostd (its repository settings): %w", target, err)
+		}
+		hostdSelector = repoHostd
 	}
 
 	var forkPR *forkhead.PR
