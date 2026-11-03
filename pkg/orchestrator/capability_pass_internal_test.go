@@ -598,3 +598,32 @@ func TestAKeptReleasePastItsDeadlineIsLeftToTheReaper(t *testing.T) {
 		t.Errorf("calls = %q, want a grant past its deadline never released late", calls)
 	}
 }
+
+// A live run holding a grant from a server that has since refused its
+// new configuration is told so, with the server's reason; a task with no
+// grant from it is not.
+func TestALiveRunIsToldWhenItsGrantsServerDrops(t *testing.T) {
+	deps, store, ctx, now := passHarness(t, &mintCaller{})
+	if adm, err := capabilityAdmitter(deps, admitAll)(ctx, dispatch.Candidate{TaskID: "7", RunID: "7-1", Attempt: 1}); err != nil || !adm.Admitted {
+		t.Fatalf("admit = %+v, %v", adm, err)
+	}
+	reason := `permission set "iap-test": roles/run.admin exceeds admin ambient-host's role ceiling`
+	noteCapabilityServerDropped(ctx, store, deps.CapabilityPasses, "https://example.com/other", "needs-config", reason, true, *now)
+	noteCapabilityServerDropped(ctx, store, deps.CapabilityPasses, passTestCap, "needs-config", reason, true, *now)
+	comments, err := store.Comments(ctx, "7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var notices []string
+	for _, c := range comments {
+		if c.Author.Actor == model.CapabilityChangePrincipal {
+			notices = append(notices, c.Body)
+		}
+	}
+	if len(notices) != 1 {
+		t.Fatalf("notices = %q, want one, for the server that minted the grant", notices)
+	}
+	if !strings.Contains(notices[0], passTestCap) || !strings.Contains(notices[0], "role ceiling") || !strings.Contains(notices[0], "refused the configuration") {
+		t.Errorf("notice = %q, want the server, its refusal and the reason", notices[0])
+	}
+}

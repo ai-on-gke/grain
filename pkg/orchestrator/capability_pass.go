@@ -97,6 +97,7 @@ type CapabilityPasses struct {
 }
 
 type heldPass struct {
+	taskID   string
 	pass     *protocol.Pass
 	deadline time.Time
 	// servers are what the pass was minted through, and hostd the grain
@@ -127,10 +128,69 @@ func (d Deps) capabilityPasses() *CapabilityPasses {
 	return defaultCapabilityPasses
 }
 
-func (h *CapabilityPasses) hold(runID string, p *protocol.Pass, deadline time.Time, servers CapabilityServers, hostd string) {
+func (h *CapabilityPasses) hold(taskID, runID string, p *protocol.Pass, deadline time.Time, servers CapabilityServers, hostd string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.passes[runID] = &heldPass{pass: p, deadline: deadline, servers: servers, hostd: hostd}
+	h.passes[runID] = &heldPass{taskID: taskID, pass: p, deadline: deadline, servers: servers, hostd: hostd}
+}
+
+// holding is every live run whose pass holds a grant capabilityID
+// minted: run id to its task id and those grants.
+func (h *CapabilityPasses) holding(capabilityID string) map[string]heldGrants {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := map[string]heldGrants{}
+	for runID, held := range h.passes {
+		for _, g := range held.pass.Grants {
+			if g.Ref.CapabilityID != capabilityID {
+				continue
+			}
+			hg := out[runID]
+			hg.taskID = held.taskID
+			hg.grants = append(hg.grants, g.Ref.String())
+			out[runID] = hg
+		}
+	}
+	return out
+}
+
+type heldGrants struct {
+	taskID string
+	grants []string
+}
+
+// NoteCapabilityServerDropped tells every live run holding a grant from
+// capabilityID that the server has fallen out of use -- state, for
+// reason -- since it was minted: what the 2026-11-03 run had to guess at
+// from permissions that never arrived. It reaches the run the way any
+// capability notice does (model.CapabilityChangePrincipal). The daemon
+// calls it from the registry's servers.Options.OnDrop.
+func NoteCapabilityServerDropped(ctx context.Context, store *model.Store, capabilityID, state, reason string, configRefused bool) {
+	noteCapabilityServerDropped(ctx, store, defaultCapabilityPasses, capabilityID, state, reason, configRefused, time.Now())
+}
+
+func noteCapabilityServerDropped(ctx context.Context, store *model.Store, passes *CapabilityPasses, capabilityID, state, reason string, configRefused bool, now time.Time) {
+	if store == nil {
+		return
+	}
+	for runID, hg := range passes.holding(capabilityID) {
+		if hg.taskID == "" {
+			continue
+		}
+		what := fmt.Sprintf("is now %s", state)
+		if configRefused {
+			what = "refused the configuration it was changed to"
+		}
+		body := fmt.Sprintf("grain: capability server %s, which minted this run's grant %s, %s since: %s\n\n"+
+			"The grant this run holds was minted under the server's earlier configuration and works as it did then, "+
+			"but a change made to that configuration since -- a role added to a permission set, say -- has not reached it "+
+			"and will not reach this run. If a permission you were told to expect is missing, this is why: "+
+			"say so in what you report rather than waiting for it to appear.",
+			capabilityID, strings.Join(hg.grants, ", "), what, reason)
+		if err := postCapabilityNotice(ctx, store, hg.taskID, body, now); err != nil {
+			log.Printf("orchestrator: telling run %s its capability server %s dropped: %v", runID, capabilityID, err)
+		}
+	}
 }
 
 func (h *CapabilityPasses) take(runID string) *heldPass {
@@ -514,7 +574,7 @@ func capabilityAdmitterFor(deps Deps, admit dispatch.Admitter, connectionOf func
 			return decline("capability pass", err.Error())
 		}
 		passes.clearBackoff(task.ID)
-		passes.hold(candidate.RunID, p, deadline, servers, hostd)
+		passes.hold(candidate.TaskID, candidate.RunID, p, deadline, servers, hostd)
 		release := adm.Release
 		adm.Release = func() {
 			passes.Release(context.Background(), candidate.RunID)

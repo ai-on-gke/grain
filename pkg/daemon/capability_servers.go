@@ -98,8 +98,17 @@ func startCapabilityServers(ctx context.Context, store *model.Store, secretStore
 		// A server that falls out of use says so where people look, not
 		// only in this log: the 2026-11-03 role-ceiling refusal sat in
 		// needs-config with nobody told.
-		var clearDrop func(string)
-		opts.OnDrop, clearDrop = capabilityServerAlerts(ctx, store)
+		raiseDrop, clearDrop := capabilityServerAlerts(ctx, store)
+		opts.OnDrop = func(st servers.Status) {
+			raiseDrop(st)
+			// Runs holding a grant it minted are told, rather than left
+			// to infer it from permissions that never arrive.
+			reason := st.Reason
+			if reason == "" {
+				reason = st.Error
+			}
+			orchestrator.NoteCapabilityServerDropped(ctx, store, st.ID, string(st.State), reason, st.ConfigRefused)
+		}
 		opts.OnAttach = func(id string) {
 			clearDrop(id)
 			// Grants whose release found their server out of use are
