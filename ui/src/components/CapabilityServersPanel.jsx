@@ -108,6 +108,12 @@ export const stateHelp = {
     "No status reported yet: the daemon behind this page has not tried to connect to it.",
 };
 
+// needsHostd is whether state is a placed server's wait for its hostd
+// (daemon.NeedsHostd): "needs-hostd:<selector>".
+const needsHostd = (state) => String(state).startsWith("needs-hostd:");
+const needsHostdHelp =
+  "The grain hostd this server is placed on is not connected: a grant of it waits until that hostd dials in.";
+
 function serverState(server) {
   return (
     server.status?.state || (server.config?.disabled ? "disabled" : "unknown")
@@ -1119,9 +1125,9 @@ function ServerChips({ server, holders }) {
         data-testid="capability-server-usage-count"
       />
       <HelpChip
-        help={stateHelp[state] || ""}
+        help={stateHelp[state] || (needsHostd(state) ? needsHostdHelp : "")}
         label={stateLabel[state] || state}
-        color={stateColor[state] || "default"}
+        color={stateColor[state] || (needsHostd(state) ? "warning" : "default")}
         data-testid="capability-server-state"
       />
     </Stack>
