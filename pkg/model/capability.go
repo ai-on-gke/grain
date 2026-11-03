@@ -597,6 +597,16 @@ func ResolveGrants(ctx context.Context, reg *CapabilityRegistry, cc CapabilityCo
 			}
 			continue
 		}
+		// So is a reference whose server declared a CI rule
+		// (CIGrantRule), and a retired name rewritten to one that no
+		// provider in reg still answers: its CI job's event gate is the
+		// pass's.
+		if rule, ok := CIGrantRuleFor(g.Capability); ok && (IsCapabilityRef(g.Capability) || !registered(reg, g.Capability)) {
+			if !cc.CI {
+				out = append(out, GrantResolution{Grant: g, Resolution: RefusedBecause(CIGrantRuleCIOnlyRefusal(g.Capability, rule))})
+			}
+			continue
+		}
 		// A capability reference is a capability server's to mint, at
 		// admission (protocol.MintPass), not an in-process provider's.
 		if IsCapabilityRef(g.Capability) {

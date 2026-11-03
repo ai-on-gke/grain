@@ -178,11 +178,20 @@ func TestTheReleaseQualificationSuiteRunsEveryQualificationTemplate(t *testing.T
 				model.TemplateDeclarationDir, name, stem)
 		}
 	}
-	if suite.Mode != model.SuiteCount || suite.Count != 1 {
-		t.Errorf("%s runs %q x%d; expected mode count x1", stem, suite.Mode, suite.Count)
+	// One pass that must read clean, and no auto-merge: a pull request or a
+	// proposed follow-up fails Stage 2 (design/playbook/releases.playbook.md
+	// §2), and its fixture tasks must run unattended.
+	if suite.Mode != model.SuiteUntilClean || suite.MaxPasses != 1 {
+		t.Errorf("%s runs %q with max-passes %d; expected until_clean with max-passes 1", stem, suite.Mode, suite.MaxPasses)
 	}
-	if suite.RequireApproval || !suite.AutoMerge {
-		t.Errorf("%s: require-approval %v, auto-merge %v", stem, suite.RequireApproval, suite.AutoMerge)
+	if suite.RequireApproval || suite.AutoMerge || !suite.AutoApproveProposals {
+		t.Errorf("%s: require-approval %v, auto-merge %v, auto-approve-proposals %v; want false, false, true",
+			stem, suite.RequireApproval, suite.AutoMerge, suite.AutoApproveProposals)
+	}
+	// The reconciler files the last item only after every other passes.
+	smoke := model.RepoDeclaredID(model.DeclaredTemplate, repo, "qualification-system-smoke")
+	if n := len(suite.Items); n == 0 || suite.Items[n-1].TemplateID != smoke {
+		t.Errorf("%s: qualification-system-smoke must be its last item, got %+v", stem, suite.Items)
 	}
 }
 
