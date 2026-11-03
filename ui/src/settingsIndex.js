@@ -61,6 +61,13 @@ export const SETTINGS_INDEX = [
     keywords: ["upgrade", "pause"],
   },
   {
+    id: "autoUpgradeOn",
+    section: "general",
+    anchor: "updates",
+    label: "Automatic upgrades",
+    keywords: ["upgrade", "auto upgrade", "release", "daily", "recommended"],
+  },
+  {
     id: "autoUpgradeChannel",
     section: "general",
     anchor: "updates",

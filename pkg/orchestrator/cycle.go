@@ -533,6 +533,7 @@ func Reconcilers() []Reconciler {
 		// Before "scheduled-upgrade", so that the upgrade it schedules is
 		// held for (or, on an idle deployment, started) this same tick.
 		{Name: "auto-upgrade", Reconcile: reconcileAutoUpgrade},
+		{Name: "release-upgrade", Reconcile: reconcileReleaseUpgrade},
 		{Name: "scheduled-upgrade", Reconcile: reconcileScheduledUpgrade},
 		{Name: "upgrade-check", Reconcile: reconcileUpgradeCheck},
 		{Name: "target-repos", Reconcile: reconcileTargetRepos},

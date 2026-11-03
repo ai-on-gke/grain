@@ -497,52 +497,69 @@ func imageTag(ref string) string {
 //
 // An explicit cfg.SandboxImageMirror (-sandbox-image-mirror /
 // grain_config.sandbox_image_mirror) always wins. Otherwise, on a
-// kubernetes-granule deployment whose k8s_granule_image or sandbox_image
-// names a bare Artifact Registry / GCR repository in another GCP project
+// kubernetes-granule deployment whose k8s_granule_image or -sandbox-image
+// flag names a bare Artifact Registry / GCR repository in another GCP project
 // (e.g. "us-docker.pkg.dev/<project>/grain/guest") or a "sha-" guest tag in
 // another project's ".../guest" repository, that repository is derived as the
 // mirror target so upgrades automatically advance the mirrored guest image
-// instead of staying pinned to an older commit's digest.
+// instead of staying pinned to an older commit's digest. Settings shows a
+// derived one, and a save clearing the setting it came from writes it
+// into sandbox_image_mirror (ui's keepDerivedSandboxImageMirror), since
+// the setting is then ignored as an image and load-bearing as the mirror.
 func sandboxImageMirrorRepo(cfg Config) string {
 	if mirror := strings.TrimSpace(cfg.SandboxImageMirror); mirror != "" {
 		return imageRepository(mirror)
 	}
-	if !cfg.K8sGranuleSandboxes {
-		return ""
-	}
-	stampedRepo := imageRepository(DefaultSandboxImage)
-	for _, candidate := range []string{cfg.K8sGranuleImage, cfg.SandboxImage} {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" {
-			continue
-		}
-		repo := imageRepository(candidate)
-		_, project, _ := k8s.ImageRegistryProject(repo)
-		if repo == "" || repo == stampedRepo || project == "" {
-			continue
-		}
-		tag := imageTag(candidate)
-		if candidate == repo || (strings.HasSuffix(repo, "/guest") && strings.HasPrefix(tag, "sha-")) {
-			return repo
-		}
+	if hint, ok := derivedSandboxImageMirror(cfg); ok {
+		return hint.Repository
 	}
 	return ""
+}
+
+// derivedSandboxImageMirror is the setting sandboxImageMirrorRepo
+// derives cfg's mirror repository from when no sandbox_image_mirror
+// names one -- the same rule `grain state check` and the Settings pane
+// apply (sandboximage.DerivedMirror) -- and false when cfg has an
+// explicit mirror, is not kubernetes-granule, or names nothing to derive
+// one from.
+func derivedSandboxImageMirror(cfg Config) (sandboximage.MirrorHint, bool) {
+	if strings.TrimSpace(cfg.SandboxImageMirror) != "" || !cfg.K8sGranuleSandboxes {
+		return sandboximage.MirrorHint{}, false
+	}
+	return sandboximage.DerivedMirror(cfg.K8sGranuleImage, cfg.SandboxImage, imageRepository(DefaultSandboxImage))
 }
 
 // isMirroredGuestRef reports whether ref is the bare mirror repository or a
 // mirrored guest tag ("sha-..." or matching DefaultSandboxImage's tag) inside
 // mirrorRepo.
 func isMirroredGuestRef(ref, mirrorRepo string) bool {
-	ref = strings.TrimSpace(ref)
-	mirrorRepo = imageRepository(strings.TrimSpace(mirrorRepo))
-	if ref == "" || mirrorRepo == "" {
-		return false
+	return sandboximage.IsMirroredGuestRef(ref, mirrorRepo, imageTag(DefaultSandboxImage))
+}
+
+// sandboxImageMirrorForSettings is ui.Config.SandboxImageMirrorFor: the
+// mirror repository a daemon started on mc would mirror the stamped
+// guest into, where that repository comes from, and which of mc's image
+// settings it then reads as the mirror rather than as an image.
+//
+// It is the restart's view -- mc's own backend and k8s_granule_image,
+// laid over running -- because that is what a save is about to make
+// true: k8s_granule_image is restart-only, so a cleared pin keeps its
+// derived mirror only until the next restart, which is exactly the
+// change the Settings pane has to see coming.
+func sandboxImageMirrorForSettings(running Config, mc model.Config) ui.SandboxImageMirrorInfo {
+	cfg := running.WithModelConfig(mc)
+	info := ui.SandboxImageMirrorInfo{
+		KubernetesGranule: cfg.K8sGranuleSandboxes,
+		Repository:        sandboxImageMirrorRepo(cfg),
 	}
-	if imageRepository(ref) != mirrorRepo {
-		return false
+	if hint, ok := derivedSandboxImageMirror(cfg); ok {
+		info.DerivedFrom = hint.Field
 	}
-	tag := imageTag(ref)
-	return tag == "" || strings.HasPrefix(tag, "sha-") || tag == imageTag(DefaultSandboxImage)
+	if info.Repository != "" && cfg.K8sGranuleSandboxes {
+		info.K8sGranuleImageIsMirror = isMirroredGuestRef(mc.K8sGranuleImage, info.Repository)
+		info.SandboxImageIsMirror = isMirroredGuestRef(mc.SandboxImage, info.Repository)
+	}
+	return info
 }
 
 var (

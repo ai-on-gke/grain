@@ -978,6 +978,14 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 	}); err != nil {
 		t.Fatalf("recording an automatic upgrade: %v", err)
 	}
+	// And what the release-triggered automatic upgrade last saw and
+	// scheduled (model.AutoUpgradeRelease).
+	if err := store.SetAutoUpgradeRelease(ctx, model.AutoUpgradeRelease{
+		Newest: "v3.6.0", SeenAt: sub, Release: "v3.5.0", Target: "latest", ScheduledAt: &sub,
+		Outcome: model.AutoUpgradeFailed,
+	}); err != nil {
+		t.Fatalf("recording a release-triggered upgrade: %v", err)
+	}
 	// A usage-limit pause in force (model.StoredUsageLimitPause), with
 	// labels and an escalation so every column carries something.
 	if err := store.PutUsageLimitPause(ctx, "connection|agy-1|gemini-3-pro", model.UsageLimitPause{

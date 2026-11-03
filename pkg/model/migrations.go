@@ -678,7 +678,16 @@ var Migrations = []Migration{
 		},
 	},
 	{
+		// The table itself is created by Statements, which Migrate
+		// applies after every rung; only the column needs saying here.
 		Version:     99,
+		Description: "add grain_config.auto_upgrade_on, which turns on upgrading when a release is published",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `auto_upgrade_on` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     100,
 		Description: "add the hostd selector a repository's tasks start pinned to",
 		Statements: []string{
 			"ALTER TABLE `repo_config` ADD COLUMN `default_hostd` TEXT NOT NULL DEFAULT ''",

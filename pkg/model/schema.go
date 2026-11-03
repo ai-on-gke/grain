@@ -463,10 +463,15 @@ import "strconv"
 // SettingsTables so a config-repo pull request cannot lock operators out
 // or grant sign-in access (design/design/settings.design.md §1).
 //
-// 99 adds `default_hostd` to `repo_config` (model.RepoConfig.DefaultHostd):
+// 99 adds `grain_config`.`auto_upgrade_on` (model.Config.AutoUpgradeOn:
+// off, daily, or release) and the `auto_upgrade_release` table, what the
+// release-triggered automatic upgrade has seen and scheduled
+// (model.AutoUpgradeRelease).
+//
+// 100 adds `default_hostd` to `repo_config` (model.RepoConfig.DefaultHostd):
 // the hostd pin or label selector a task filed against the repository
 // starts with when neither the filing nor its template names one.
-const SchemaVersion = 99
+const SchemaVersion = 100
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified
@@ -2360,6 +2365,7 @@ var Tables = []string{
   ` + "`session_sandbox_idle_ttl_ms`" + `  INTEGER NOT NULL DEFAULT 0,
   ` + "`settings_locked`" + `              INTEGER NOT NULL DEFAULT 0,
   ` + "`new_task_form`" + `                TEXT    NOT NULL DEFAULT '',
+  ` + "`auto_upgrade_on`" + `              TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2801,6 +2807,23 @@ var Tables = []string{
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
+	// What the release-triggered automatic upgrade has seen and done
+	// (model.AutoUpgradeRelease): at most one row, written by
+	// orchestrator's reconcileReleaseUpgrade -- the newest release tag
+	// and since when, the release it last scheduled an upgrade for, and
+	// how that upgrade ended. Off SettingsTables for auto_upgrade_run's
+	// reason.
+	`CREATE TABLE IF NOT EXISTS ` + "`auto_upgrade_release`" + ` (
+  ` + "`id`" + `           INTEGER  NOT NULL,
+  ` + "`newest`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`seen_at`" + `      DATETIME NOT NULL,
+  ` + "`release_tag`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`target`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`scheduled_at`" + ` DATETIME NULL,
+  ` + "`outcome`" + `      TEXT     NOT NULL DEFAULT '',
+  PRIMARY KEY (` + "`id`" + `)
+)`,
+
 	// The usage-limit pauses in force (model.StoredUsageLimitPause): one
 	// row per window orchestrator.Pause holds, written as it opens and
 	// deleted as it expires or is lifted, so a restarted daemon keeps
@@ -3062,7 +3085,7 @@ var Tables = []string{
 	//
 	// default_hostd is RepoConfig.DefaultHostd: the hostd pin or label
 	// selector a task filed here starts with when neither the filing nor
-	// its template names one (schema 99). DEFAULT '' is the default hostd.
+	// its template names one (schema 100). DEFAULT '' is the default hostd.
 	`CREATE TABLE IF NOT EXISTS ` + "`repo_config`" + ` (
   ` + "`owner`" + `                TEXT NOT NULL,
   ` + "`name`" + `                 TEXT NOT NULL,
