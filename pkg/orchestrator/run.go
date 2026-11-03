@@ -837,17 +837,27 @@ func readOnlyNames(task model.Task) []string {
 	return names
 }
 
+// writeTargetsSection tells a run about its write targets. grain/config
+// is left out of it for a task that is given the writable
+// grain-state checkout (wantsStateCheckout): that run changes it with
+// propose_config_change from that checkout, which the state-repo note
+// says, and telling it in the same prompt that it cannot push there and
+// must propose_task the change instead sent it two opposite ways.
 func writeTargetsSection(task model.Task) string {
-	if len(task.Writes) == 0 {
-		return ""
-	}
-	names := make([]string, len(task.Writes))
-	for i, w := range task.Writes {
-		if w.Base != "" {
-			names[i] = fmt.Sprintf("%s (on branch `%s`)", w.Repo, w.Base)
+	stateCheckout := wantsStateCheckout(task)
+	var names []string
+	for _, w := range task.Writes {
+		if stateCheckout && model.IsConfigRepo(w.Repo) {
 			continue
 		}
-		names[i] = fmt.Sprintf("%s (on its default branch)", w.Repo)
+		if w.Base != "" {
+			names = append(names, fmt.Sprintf("%s (on branch `%s`)", w.Repo, w.Base))
+			continue
+		}
+		names = append(names, fmt.Sprintf("%s (on its default branch)", w.Repo))
+	}
+	if len(names) == 0 {
+		return ""
 	}
 	s := fmt.Sprintf(
 		"\n\nThis task may land work in more than one repository or branch: besides the one you "+
