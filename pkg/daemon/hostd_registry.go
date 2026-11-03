@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -145,6 +146,11 @@ func (e *HostdWaitError) Error() string {
 	}
 	return "waiting for " + e.Selector.String()
 }
+
+// Is makes a HostdWaitError agent.ErrHostdWaiting, so a run whose
+// framework build meets one goes back to the queue rather than failing
+// setup (orchestrator's setupFailedEnding), and waits there.
+func (e *HostdWaitError) Is(target error) bool { return target == agent.ErrHostdWaiting }
 
 // DefaultHostd is the hostd host work goes to when nothing pins or
 // selects one.
