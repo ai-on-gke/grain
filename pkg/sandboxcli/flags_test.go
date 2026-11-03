@@ -166,6 +166,16 @@ func TestMissingArgumentIsAUsageError(t *testing.T) {
 		{[]string{"quarantine"}, "grain quarantine: missing <test-name>; "},
 		{[]string{"status"}, "grain status: missing <one-line-note> (or --file); "},
 		{[]string{"memory", "doc"}, "grain memory doc: the command is 'grain memory doc write' (or doc-write)\n\ngrain memory ("},
+		// docs/test-runs/2026-11-03-sandbox-cli-edges.md: these five
+		// exited 1, unnamed, for a required flag or argument left out.
+		{[]string{"notify"}, "grain notify: missing --subject <key>: "},
+		{[]string{"notify", "--subject", "s"}, "grain notify: missing --title <title>: "},
+		{[]string{"task", "propose"}, "grain task propose: missing --title <title>; run 'grain task propose --help' for usage\n"},
+		{[]string{"pr", "resolve"}, "grain pr resolve: missing --thread-id <id> or --comment-id <id>: name the thread; "},
+		{[]string{"git", "revert", "--task", "4"}, "grain git revert: missing --reason <why>: "},
+		{[]string{"db", "query"}, "grain db query: missing <sql>; run 'grain db query --help' for usage\n"},
+		{[]string{"grep", "x", "src://pkg", "--max", "0"}, "grain grep: --max \"0\" is not a match limit: it takes a positive integer\n"},
+		{[]string{"log", "-n"}, "grain log: flag -n needs a value; run 'grain log --help' for usage\n"},
 	} {
 		out, errOut, code := runIn(t, env, tc.args...)
 		if code != 2 || out != "" || !strings.HasPrefix(errOut, tc.want) {
