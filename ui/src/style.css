@@ -579,6 +579,11 @@ samp,
 :root[data-phone="true"] .sidebar-header {
   height: 56px;
 }
+/* The phone layout is a touch layout whatever the pointer reports, so
+   its toolbar controls get the same 40px floor as (pointer: coarse). */
+:root[data-phone="true"] {
+  --header-control-size: 40px;
+}
 .header-logo-box {
   display: inline-flex;
   align-items: center;

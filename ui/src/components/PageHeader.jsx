@@ -523,15 +523,11 @@ export default function PageHeader({
       setExpanded(false);
       moreRef.current?.focus();
     };
-    // Tab on past the wrapped actions and "more" closes the menu too,
-    // rather than leaving it hanging over the page while the keyboard
-    // crosses the global buttons or moves into the page below.
+    // Tab on past the rail closes it too, rather than leaving the menu
+    // over the page the keyboard has moved on to.
     const onFocusOut = (event) => {
       const next = event.relatedTarget;
-      if (!(next instanceof Element)) return;
-      if (slotRef.current?.contains(next) || moreRef.current?.contains(next)) {
-        return;
-      }
+      if (!(next instanceof Element) || header.contains(next)) return;
       if (next.closest(".MuiPopover-root, .MuiModal-root, .MuiPopper-root"))
         return;
       setExpanded(false);
