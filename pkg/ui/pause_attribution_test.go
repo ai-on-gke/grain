@@ -167,3 +167,68 @@ func TestTaskViewLabelsEachActorByHowItWasEstablished(t *testing.T) {
 		t.Fatalf("close transition = %+v, want byLabel operator (access code)", closed)
 	}
 }
+
+// F4 of the same report: the pipeline change feed said "by human
+// owner@example.com" for a change made with the access code. It names
+// the actor as the timeline does now.
+func TestPipelineChangeFeedNamesAnAccessCodeHolderAsTheOperator(t *testing.T) {
+	t.Parallel()
+	client, _, ctx := testClient(t)
+	accessCode := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "owner@example.com", Source: model.SourceAccessCode})
+	task, err := client.CreateTask(accessCode, ui.CreateTaskRequest{Title: "fed", Description: "d", Approved: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.WithdrawApproval(accessCode, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	page, err := client.PipelineChanges(ctx, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	for _, c := range page.Changes {
+		if c.ID == task.ID && c.To == string(model.TaskEventApprovalWithdrawn) {
+			got = c.Detail
+		}
+	}
+	if got != "by operator (access code)" {
+		t.Fatalf("approval-withdrawn detail = %q, want %q", got, "by operator (access code)")
+	}
+}
+
+// F5 of the same report: a person's PATCH to false on a task whose
+// auto-merge was already off (a security hold had turned it off) marked it
+// declined but recorded no event, so nothing said who had decided it
+// should wait for their Submit. It records auto-merge-off as theirs.
+func TestDecliningAnAlreadyOffAutoMergeIsRecordedAsThePersons(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := testClient(t)
+	alice := model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceIAP}
+	task, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "held", Description: "d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := len(autoMergeEvents(t, store, ctx, task.ID))
+	off := false
+	if _, err := client.UpdateTask(ui.WithPrincipal(ctx, alice), task.ID, ui.UpdateTaskRequest{AutoMerge: &off}); err != nil {
+		t.Fatal(err)
+	}
+	if !model.AutoMergeDeclined(storedTask(t, store, ctx, task.ID)) {
+		t.Fatal("a PATCH to false did not mark auto-merge declined")
+	}
+	events := autoMergeEvents(t, store, ctx, task.ID)
+	if len(events) != before+1 {
+		t.Fatalf("events = %+v, want one more", events)
+	}
+	if e := events[len(events)-1]; e.Kind != model.TaskEventAutoMergeOff || !e.By.Same(alice) || e.By.Source != model.SourceIAP {
+		t.Fatalf("event = %+v, want auto-merge-off by alice through iap", e)
+	}
+	// Saying it again is no new decision.
+	if _, err := client.UpdateTask(ui.WithPrincipal(ctx, alice), task.ID, ui.UpdateTaskRequest{AutoMerge: &off}); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(autoMergeEvents(t, store, ctx, task.ID)); n != before+1 {
+		t.Fatalf("a second PATCH to false recorded another event (%d)", n)
+	}
+}
