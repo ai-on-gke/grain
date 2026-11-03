@@ -2262,7 +2262,11 @@ export default function NewTaskOverlay({
       helperText={
         pickedTemplate
           ? pickedTemplate.repo
-            ? `fills what this form leaves blank; always files against ${pickedTemplate.repo}`
+            ? // A bound template's repo and branch win over the form's
+              // (ui.Client.fromTemplate), so say which branch too: the
+              // Base branch box can hold another one, prefilled from the
+              // repo's last task (2026-11-03 walkthrough).
+              `fills what this form leaves blank; always files against ${pickedTemplate.repo}${pickedTemplate.base ? ` on ${pickedTemplate.base}` : ""}, whatever Repos and Base branch say`
             : "fills what this form leaves blank: title, description, reads, writes, capabilities, model"
           : "file from a template to have it fill what this form leaves blank"
       }
