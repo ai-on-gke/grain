@@ -117,7 +117,7 @@ test("Settings → Access validates, adds, warns on last-entry removal, and rest
     await page.getByRole("button", { name: "Remove anyway" }).click();
     await expect(page.getByTestId("allowed-principals-empty")).toBeVisible();
     await expect(page.getByTestId("access-removed-notice")).toContainText(
-      "access code always still works",
+      "access code still works on a direct connection",
     );
   } finally {
     // Restore initial demo state for any subsequent specs sharing demoServer.

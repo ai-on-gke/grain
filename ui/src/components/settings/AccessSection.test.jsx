@@ -185,7 +185,7 @@ describe("AccessSection", () => {
       expect(screen.queryByText("user:iap@example.com")).toBeNull(),
     );
     expect(screen.getByTestId("access-removed-notice")).toHaveTextContent(
-      /access code always still works/,
+      /access code still works on a direct connection/,
     );
   });
 });

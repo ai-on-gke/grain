@@ -102,9 +102,19 @@ the database (`allowed_principal`).
 
   `grain access allow` is a no-op when the entry is already present, so
   installers can re-run it safely. Removing yourself or the last entry
-  is allowed (with a warning in the UI), because the access code always
-  still works. Every addition and removal is recorded in `config_audit`
-  (`surface = "access"`).
+  is allowed (with a warning in the UI), because the access code still
+  works on a connection that does not go through the identity-aware
+  proxy -- though behind IAP a verified identity takes precedence over
+  the code, and with `-ui-require-iap` the code is taken over loopback
+  only ([Break-glass over loopback](#break-glass-over-loopback)). Every
+  addition and removal is recorded in `config_audit` (`surface =
+  "access"`).
+- **No implicit owner entry:** the daemon's own `-as` actor is no
+  longer admitted by default. A deployment that relied on the old
+  default allowlist (no `-ui-allowed-principals`) admits no verified
+  person after upgrading until someone runs `grain access allow
+  user:<owner-email>` -- with the access code, or from the daemon's own
+  host when `-ui-require-iap` is set.
 - **Agent API scopes:** `api:access:read` allows listing entries.
   `api:access:write` is a **dangerous** scope: only a person may grant
   it, every call requires an acting reason (`X-Grain-Acting-Reason`)

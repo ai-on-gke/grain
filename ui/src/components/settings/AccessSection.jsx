@@ -113,13 +113,13 @@ function describeRemovalWarning(targetEntry, entriesCount, signedInEmail) {
     targetEntry.toLowerCase() === `user:${signedInEmail.toLowerCase()}`;
   const isLast = entriesCount === 1;
   if (isSelf && isLast) {
-    return `You are removing your own account (${targetEntry}) and the last allowed entry. Verified sign-in will be refused until an entry is added again, though signing in with the access code always still works.`;
+    return `You are removing your own account (${targetEntry}) and the last allowed entry. Verified sign-in will be refused until an entry is added again, though the access code still works on a direct connection that does not go through the identity-aware proxy (over loopback only, when IAP is required).`;
   }
   if (isSelf) {
-    return `You are removing your own account (${targetEntry}). Your verified sign-in will be refused on future requests, though signing in with the access code always still works.`;
+    return `You are removing your own account (${targetEntry}). Your verified sign-in will be refused on future requests, though the access code still works on a direct connection that does not go through the identity-aware proxy (over loopback only, when IAP is required).`;
   }
   if (isLast) {
-    return `You are removing the last allowed entry (${targetEntry}). No verified identities will be admitted until an entry is added again, though signing in with the access code always still works.`;
+    return `You are removing the last allowed entry (${targetEntry}). No verified identities will be admitted until an entry is added again, though the access code still works on a direct connection that does not go through the identity-aware proxy (over loopback only, when IAP is required).`;
   }
   return "";
 }
@@ -266,7 +266,9 @@ export default function AccessSection({ config, onLogout, showError }) {
           Users (<code>user:&lt;email&gt;</code>) and groups (
           <code>group:&lt;email&gt;</code>) admitted when signed in through IAP
           or another identity verifier. Changes take effect immediately without
-          restarting the daemon; the access code always works.
+          restarting the daemon. The access code still works on a direct
+          connection that bypasses the identity-aware proxy (over loopback only,
+          when IAP is required).
         </Typography>
 
         {droppedFlagEntries.length > 0 && (
