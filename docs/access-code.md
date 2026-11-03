@@ -170,12 +170,44 @@ same answer as any other wrong code.
 
 ### A grain hostd dialing in
 
-The daemon serves `GET /api/hostd/connect` without the access code: a
-`grain hostd -server` on another machine upgrades it, and is admitted
-only for the hostd token it presents (`-hostd-token-file`), whatever
-else the request carries (`hostd.Remote`). A bearer on that route (the
-hostd token, or an IAP token) is never counted as an access-code guess.
-The remote executor routes that were open the same way were removed with
+The daemon serves `GET /api/hostd/connect` without the access code. A
+`grain hostd -server` on another machine upgrades it and presents its
+hostd token, which says which hostd it is (the hostd registry,
+`/api/hostds`, or the deprecated shared `-hostd-token-file`). A bearer
+on that route (the hostd token, or an IAP token) is never counted as an
+access-code guess.
+
+What else the hostd needs depends on how it reaches the daemon:
+
+- **Remote**: it dials in through the IAP Gateway or another registered
+  identity verifier's proxy, so the request carries a verified identity.
+  The daemon records that identity as the connection's principal and
+  checks it against the allowlist (`-ui-allowed-principals`). The
+  identity must also equal the hostd row's owner, compared as full,
+  lowercased emails. A stolen hostd token is no use without its
+  owner's identity. Service accounts may be owners, so a hostd running
+  under Workload Identity or a key needs its service account as the
+  owner. The daemon refuses, and logs, a remote hostd that connects as
+  somebody else, a remote hostd whose row has no owner, and a request
+  that came through a proxy, or from another host to a daemon with a
+  verifier configured, with no verified identity. It never falls back to
+  the token alone.
+- **Local**: over loopback with no forwarding headers and no assertion,
+  such as through `kubectl port-forward`. The token alone names it, as
+  it always has, and it needs no owner. The same goes for every hostd
+  of a daemon that has no identity verifier configured. The co-located
+  hostd at `/run/grain-hostd/hostd.sock` does not dial in at all.
+
+Set the owner when you register the hostd (Settings → Hostds,
+`grain hostds register -owner <email> <name>`, or `POST /api/hostds`),
+or later (`grain hostds set-owner <name> <email>`, or `PATCH
+/api/hostds/{name}`). For the shared token, use `-hostd-token-owner`.
+Start the hostd with `-iap-audience <IAP client ID>` so that it sends an
+ID token from its service account or its user's login. At startup it
+logs the email that token names, which is the owner the daemon expects.
+
+The remote executor routes that were open the same way, including the
+executor bootstrap routes (`executorBootstrapRoute`), were removed with
 remote executors ([executors-removed.md](executors-removed.md)).
 
 ## The CLI and the processes grain starts

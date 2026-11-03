@@ -25,7 +25,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -61,13 +60,13 @@ func (r *rotating) PackageCredential(registry, owner, repo string) (Credential, 
 		Token: fmt.Sprintf("token-%d", len(r.calls)), Name: "default"}, nil
 }
 
-// asked is what the ladder has been asked so far. The refresh route
-// calls PackageCredential on the listener's goroutine, so the test reads
-// calls under the same lock.
+// asked is what the ladder has been asked so far. The calls come in on
+// the listener's goroutines, from a helper process the race detector
+// cannot see synchronise with the test, so they are read under the lock.
 func (r *rotating) asked() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return slices.Clone(r.calls)
+	return append([]string(nil), r.calls...)
 }
 
 // listener is grain's CI API listener with the refresh route mounted,
@@ -145,15 +144,8 @@ func runHelper(t *testing.T, helper, stdin string, args ...string) (stdout, stde
 func TestTheHelperHandsEveryPushTheLaddersCurrentToken(t *testing.T) {
 	source := &rotating{repo: "acme/widgets"}
 	refresh := NewRefresher()
-	var (
-		logMu sync.Mutex
-		lines []string
-	)
-	refresh.Log = func(format string, args ...any) {
-		logMu.Lock()
-		defer logMu.Unlock()
-		lines = append(lines, fmt.Sprintf(format, args...))
-	}
+	var lines []string
+	refresh.Log = func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }
 	srv := listener(t, refresh)
 	p := New(Config{Credentials: source, Refresh: refresh, RefreshURL: func() string { return srv.URL }})
 
@@ -209,17 +201,14 @@ func TestTheHelperHandsEveryPushTheLaddersCurrentToken(t *testing.T) {
 	if _, _, err := runHelper(t, helper, `{"ServerURL":"ghcr.io","Username":"u","Secret":"s"}`, "store"); err != nil {
 		t.Errorf("store: %v", err)
 	}
-	if asked := source.asked(); len(asked) != 4 {
-		t.Errorf("ladder asked %d times, want 4", len(asked))
+	if calls := source.asked(); len(calls) != 4 {
+		t.Errorf("ladder asked %d times, want 4", len(calls))
 	}
 
 	// The log says who asked and which credential answered, and holds
 	// no material: no token, and not the job's refresh token.
 	refreshToken, _ := placed(m, RefreshTokenPath)
-	logMu.Lock()
-	logged := slices.Clone(lines)
-	logMu.Unlock()
-	for _, line := range logged {
+	for _, line := range lines {
 		if strings.Contains(line, "token-") || strings.Contains(line, strings.TrimSpace(refreshToken.Content)) {
 			t.Errorf("log line holds material: %q", line)
 		}
