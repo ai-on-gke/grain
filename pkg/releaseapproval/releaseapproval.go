@@ -45,6 +45,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/attest"
@@ -114,12 +115,20 @@ type Signer struct {
 	key *attest.FileSigner
 }
 
+// loadMu serialises LoadSigner: the first load creates the key file, and
+// a second load racing it -- an Approve beside a `grain release
+// approval-key` -- would otherwise fail on the file the first is still
+// writing instead of reading the key it holds.
+var loadMu sync.Mutex
+
 // LoadSigner reads the deployment's key under dataDir, making one the
 // first time.
 func LoadSigner(dataDir string) (*Signer, error) {
 	if strings.TrimSpace(dataDir) == "" {
 		return nil, fmt.Errorf("release approval: this deployment has no data directory to keep its signing key in")
 	}
+	loadMu.Lock()
+	defer loadMu.Unlock()
 	key, err := attest.LoadOrCreateFileSigner(filepath.Join(dataDir, KeyFile))
 	if err != nil {
 		return nil, fmt.Errorf("release approval: signing key: %w", err)

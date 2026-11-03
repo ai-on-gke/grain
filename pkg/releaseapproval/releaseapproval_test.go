@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -170,6 +171,35 @@ func TestLoadSignerKeepsOneKey(t *testing.T) {
 	}
 	if _, err := LoadSigner(""); err == nil {
 		t.Error("no data directory gave a signer")
+	}
+}
+
+func TestLoadSignerRacingItselfMakesOneKey(t *testing.T) {
+	dir := t.TempDir()
+	const n = 8
+	keys := make([]string, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s, err := LoadSigner(dir)
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			keys[i], errs[i] = s.PublicKeyPEM()
+		}()
+	}
+	wg.Wait()
+	for i := range n {
+		if errs[i] != nil {
+			t.Fatalf("load %d: %v", i, errs[i])
+		}
+		if keys[i] != keys[0] {
+			t.Fatalf("load %d read a different key than load 0", i)
+		}
 	}
 }
 
