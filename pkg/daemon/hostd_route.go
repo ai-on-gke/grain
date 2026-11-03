@@ -100,8 +100,10 @@ func (p *AgentPool) routeHostd(ctx context.Context, live Config, taskID string) 
 
 // apply is live with r's hostd as its host executor. The default hostd's
 // runs keep starting detached (newHostdRuns), so they outlive a daemon
-// upgrade; another hostd's runs are attached to this daemon, since only
-// the default hostd's runs are re-adopted at start.
+// upgrade; another hostd's runs start detached too, so a drop is
+// re-attached within -hostd-reattach-timeout, but die with this daemon
+// (newPinnedHostdRuns), since only the default hostd's runs are
+// re-adopted at start.
 func (r hostdRoute) apply(live Config) Config {
 	if !r.Pinned {
 		return live
@@ -110,6 +112,9 @@ func (r hostdRoute) apply(live Config) Config {
 	live.HostExec = &exec
 	if r.Name != live.DefaultHostd() {
 		live.hostdRuns = nil
+		if live.pinnedHostdRuns != nil {
+			live.hostdRuns = live.pinnedHostdRuns(exec)
+		}
 	}
 	return live
 }

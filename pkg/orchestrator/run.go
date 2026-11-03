@@ -4781,6 +4781,16 @@ func classifyRunEndArms(ctx context.Context, store *model.Store, cfg Config, tas
 		outcome = model.InterruptedOutcome
 		detail = runErr.Error()
 		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
+	case runErr != nil && errors.Is(runErr, agent.ErrHostdLost):
+		// The hostd the CLI ran on dropped and was not back within
+		// -hostd-reattach-timeout (runhost.Hostd.ReattachTimeout): an
+		// infrastructure failure, the machine's and not the task's.
+		// Interrupted, as a drain's refusal is: no strike, and the task
+		// is queued again, where it waits for its hostd if it is
+		// pinned to one.
+		outcome = model.InterruptedOutcome
+		detail = runErr.Error() + partialWorkSuffix(result)
+		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
 	case hitCapacity:
 		// The provider had no capacity for this run: overloaded,
 		// unavailable, a gateway that gave up. Recorded as

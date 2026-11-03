@@ -250,7 +250,7 @@ func TestRevokedHostdDisconnectDoesNotNotifyAndUnavailableLocalIsNotWaitedFor(t 
 
 	done := make(chan struct{}, 1)
 	cfg.HostdHub.OnChange = func(name string, connected bool) {
-		hostdConnectionNotifier(store)(name, connected)
+		hostdConnectionNotifier(store, nil)(name, connected)
 		if name == "ws-rev" && !connected {
 			select {
 			case done <- struct{}{}:
