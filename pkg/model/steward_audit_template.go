@@ -40,7 +40,7 @@ func stewardAuditTemplate(stateRepo RepoRef) *Template {
 		NetworkAccess: NetworkOpen,
 		Grants: []Grant{
 			{Capability: "self-debug", Via: GrantByGrain},
-			{Capability: "grain-ci", Via: GrantByGrain},
+			{Capability: GrainCIGrant, Via: GrantByGrain},
 			{Capability: APIGrantPrefix + "ci-read", Via: GrantByGrain},
 		},
 	}

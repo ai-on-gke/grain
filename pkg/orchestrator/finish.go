@@ -1772,7 +1772,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			// here would otherwise file a proposal against a non-grain
 			// repo holding a grant its proposer was given by grain, and
 			// so unapproved (model.EscalatedCapabilities).
-			if cap == "" || cap == grainci.CapabilityName {
+			if cap == "" || grainci.IsGrant(cap) {
 				continue
 			}
 			found := false
@@ -2262,7 +2262,7 @@ func defaultTaskGrants(ctx context.Context, store *model.Store, target *model.Re
 	grants := make([]model.Grant, 0, len(ids))
 	for _, id := range ids {
 		id = strings.TrimSpace(id)
-		if id == "" || seen[id] || id == grainci.CapabilityName {
+		if id == "" || seen[id] || grainci.IsGrant(id) {
 			continue
 		}
 		seen[id] = true
@@ -2271,9 +2271,9 @@ func defaultTaskGrants(ctx context.Context, store *model.Store, target *model.Re
 	if target != nil {
 		usesGrainCI, err := store.RepoUsesGrainCI(ctx, *target)
 		if err == nil && usesGrainCI {
-			grants = append(grants, model.Grant{Capability: grainci.CapabilityName, Via: model.GrantByDefault})
+			grants = append(grants, model.Grant{Capability: grainci.Grant, Via: model.GrantByDefault})
 		} else if err != nil && grainci.RepoUsesGrainCI(repoCfg, *target) {
-			grants = append(grants, model.Grant{Capability: grainci.CapabilityName, Via: model.GrantByDefault})
+			grants = append(grants, model.Grant{Capability: grainci.Grant, Via: model.GrantByDefault})
 		}
 	}
 	return grants, nil

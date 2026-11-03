@@ -4885,8 +4885,6 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		name := strings.TrimSpace(g.Capability)
 		grantNames = append(grantNames, name)
 		switch name {
-		case "grain-ci":
-			mayReadCI = true
 		case "self-debug":
 			mayReadCI = true
 			mayReadAllCI = true
@@ -4914,6 +4912,9 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		}
 		if IsGrainSQLGrant(name) {
 			mayReadDB = true
+		}
+		if IsGrainCIGrant(name) {
+			mayReadCI = true
 		}
 		// An api grant limited to one repository is spelt
 		// api:<scope-or-preset>@owner/repo (ParseAPIGrant); a name that

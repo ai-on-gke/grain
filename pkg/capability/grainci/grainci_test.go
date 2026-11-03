@@ -15,7 +15,6 @@
 package grainci_test
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -23,49 +22,9 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
-func TestSpecIsAGrantThatMintsNothing(t *testing.T) {
-	spec := grainci.New().Spec()
-	if spec.Name != grainci.CapabilityName {
-		t.Errorf("name = %q", spec.Name)
-	}
-	if spec.Provision != model.ProvisionGrant {
-		t.Errorf("provision = %q, want a grant: there is nothing here to mint", spec.Provision)
-	}
-	if spec.MaxLease != 0 {
-		t.Errorf("MaxLease = %s, want none: nothing is minted, so nothing expires", spec.MaxLease)
-	}
-	if len(spec.Requires) != 0 {
-		t.Errorf("Requires = %v, want none: this capability resolves no credential", spec.Requires)
-	}
-	if spec.Description == "" {
-		t.Error("a capability with no description is a picker row nobody can read")
-	}
-}
-
-func TestMaterializeMovesNothingIntoASandbox(t *testing.T) {
-	p := grainci.New()
-	ctx := context.Background()
-	res, err := p.Resolve(ctx, model.CapabilityContext{})
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	if res.Refused {
-		t.Errorf("resolve refused: %s", res.Reason)
-	}
-	m, err := p.Materialize(ctx, model.CapabilityContext{})
-	if err != nil {
-		t.Fatalf("materialize: %v", err)
-	}
-	if len(m.Placements) != 0 || m.Lease != nil || m.CredentialOverride != nil {
-		t.Errorf("grain-ci must place nothing and mint nothing: %+v", m)
-	}
-}
-
-// The refusal has to send an operator to the switch that works, not
-// back to a capability picker (task 2015).
 func TestRefusalNamesTheCIMode(t *testing.T) {
 	msg := grainci.Refusal()
-	for _, want := range []string{"grain-ci", "Use Grain CI", "CI Mode"} {
+	for _, want := range []string{"grain-ci", model.GrainCIRef, "Use Grain CI", "CI Mode"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("Refusal() = %q, want it to name %q", msg, want)
 		}
@@ -119,7 +78,16 @@ func TestGrantedReadsATasksOwnGrants(t *testing.T) {
 	if grainci.Granted([]model.Grant{{Capability: "self-debug"}}) {
 		t.Error("a task holding something else does not hold this")
 	}
-	if !grainci.Granted([]model.Grant{{Capability: "self-debug"}, {Capability: grainci.CapabilityName}}) {
-		t.Error("a task holding grain-ci holds it")
+	if !grainci.Granted([]model.Grant{{Capability: "self-debug"}, {Capability: grainci.Grant}}) {
+		t.Error("a task holding grain#ci holds it")
+	}
+	if !grainci.Granted([]model.Grant{{Capability: grainci.LegacyName}}) {
+		t.Error("a task holding the retired bare grain-ci holds it")
+	}
+	if !grainci.Granted([]model.Grant{{Capability: model.GrainCIRef}}) {
+		t.Error("a task holding the bare grain#ci reference holds it")
+	}
+	if grainci.Granted([]model.Grant{{Capability: model.GrainJournalGrant}}) {
+		t.Error("another grain server method is not grain#ci")
 	}
 }
