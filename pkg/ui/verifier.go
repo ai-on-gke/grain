@@ -45,6 +45,26 @@ type AccessCodePrecedence interface {
 	AccessCodeWins() bool
 }
 
+// VerifierUnavailableError may be implemented by an error an
+// IdentityVerifier's Verify returns (anywhere in its wrapped chain) when
+// it could not check the header at all rather than found it bad: a
+// backend it consults that is not reachable yet, say just after a
+// restart. Unavailable reporting true makes the refusal a 503 with
+// Retry-After and a "starting up" page rather than the 401 a bad
+// signature gets. It is still a refusal: the request is not admitted
+// and neither the access code nor another verifier is consulted.
+type VerifierUnavailableError interface {
+	error
+	Unavailable() bool
+}
+
+// verifierUnavailable is whether err says its verifier could not check
+// the header yet (VerifierUnavailableError).
+func verifierUnavailable(err error) bool {
+	var u interface{ Unavailable() bool }
+	return errors.As(err, &u) && u.Unavailable()
+}
+
 // VerifiedIdentity is the authenticated caller an IdentityVerifier extracted
 // from a signed proxy header.
 type VerifiedIdentity struct {
