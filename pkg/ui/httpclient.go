@@ -1661,7 +1661,7 @@ func (c *HTTPClient) ResumePipeline(ctx context.Context) (
 }
 
 // DecideRelease is Client.DecideRelease over the wire -- `grain release
-// approve|reject [-short-soak-ok] vX.Y.0`: a person approving or
+// approve|reject [-short-soak-ok] vX.Y.Z`: a person approving or
 // rejecting a pending trunk release.
 func (c *HTTPClient) DecideRelease(ctx context.Context, repo, version string, approve, shortSoakOK bool) (ReleaseDecision, error) {
 	ref, err := model.ParseRepo(repo)

@@ -112,7 +112,13 @@ test.describe("phone drawer signed-in row", () => {
     );
     const logout = row.getByRole("button", { name: "Log out" });
     const logoutBox = await logout.boundingBox();
-    expect(emailBox.x + emailBox.width).toBeLessThanOrEqual(logoutBox.x + 1);
+    // Log out is under the address, so the address has the row's width.
+    expect(logoutBox.y).toBeGreaterThanOrEqual(
+      emailBox.y + emailBox.height - 1,
+    );
+    expect(logoutBox.y + logoutBox.height).toBeLessThanOrEqual(
+      rowBox.y + rowBox.height + 1,
+    );
     expect(logoutBox.x + logoutBox.width).toBeLessThanOrEqual(
       drawerBox.x + drawerBox.width + 1,
     );
@@ -130,6 +136,42 @@ test.describe("phone drawer signed-in row", () => {
     await expect.poll(() => clearedIAPCookie).toBe(true);
     expect(page.url()).toContain("/_gcp_iap/clear_login_cookie");
   });
+
+  // The 2026-11-03 IAP deployment walkthrough: with Log out beside it,
+  // the address had ~110px of the 232px drawer, and owner@example.com
+  // was drawn "owner@example...". An everyday address is shown whole, in
+  // light and dark.
+  for (const scheme of ["light", "dark"]) {
+    test(`shows an everyday address whole at 390px (${scheme})`, async ({
+      page,
+    }) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.addInitScript(
+        (t) => localStorage.setItem("grain.themeMode", t),
+        scheme,
+      );
+      await page.setViewportSize({ width: 390, height: 844 });
+      const everyday = "alice.smith@example.com";
+      await signInAs(page, everyday);
+
+      await page.goto("/");
+      await page.getByRole("button", { name: "Open navigation" }).click();
+      const drawer = page.getByRole("dialog", { name: "Navigation" });
+      await expect.poll(async () => (await drawer.boundingBox())?.x).toBe(0);
+      const row = drawer.getByTestId("phone-signed-in");
+      const email = row.getByTestId("phone-signed-in-email");
+      await expect(email).toHaveText(everyday);
+      const fit = await email.evaluate((el) => el.scrollWidth - el.clientWidth);
+      expect(fit).toBeLessThanOrEqual(0);
+      const logout = row.getByRole("button", { name: "Log out" });
+      await expect(logout).toBeVisible();
+      const drawerBox = await drawer.boundingBox();
+      const logoutBox = await logout.boundingBox();
+      expect(logoutBox.x + logoutBox.width).toBeLessThanOrEqual(
+        drawerBox.x + drawerBox.width + 1,
+      );
+    });
+  }
 
   test("opens Settings -> Access from the row", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });

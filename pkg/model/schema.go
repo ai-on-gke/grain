@@ -439,7 +439,12 @@ import "strconv"
 //
 // 94 adds `hostd` to `template` (model.Template.Hostd): the hostd pin or
 // label selector every task filed from it starts with.
-const SchemaVersion = 94
+//
+// 95 raises `grain_config`.`max_merges_per_repo`'s column default from 1
+// to 5 (model.DefaultMaxMergesPerRepo). Stored values are left alone: the
+// row is always written whole, so a 1 written because it was the default
+// cannot be told from a 1 somebody chose, and both keep it.
+const SchemaVersion = 95
 
 // configAuditTable is the `config_audit` table: one row per change to the
 // deployment's configuration somebody made (model.ConfigAuditEntry,
@@ -2207,7 +2212,7 @@ var Tables = []string{
   ` + "`poll_interval_ms`" + `           INTEGER NOT NULL,
   ` + "`max_workers`" + `                 INTEGER NOT NULL DEFAULT 1,
   ` + "`max_mergers`" + `                 INTEGER NOT NULL DEFAULT 1,
-  ` + "`max_merges_per_repo`" + `         INTEGER NOT NULL DEFAULT 1,
+  ` + "`max_merges_per_repo`" + `         INTEGER NOT NULL DEFAULT 5,
   ` + "`merge_batch_size`" + `            INTEGER NOT NULL DEFAULT 3,
   ` + "`merge_gather_window_ms`" + `      INTEGER NOT NULL DEFAULT 0,
   ` + "`max_ci_jobs`" + `                 INTEGER NOT NULL DEFAULT 1,

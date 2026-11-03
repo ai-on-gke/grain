@@ -46,6 +46,10 @@
 #            A -pending tag from before qualification (one that records a
 #            soak, not "Qualification: PASS") still needs its 24h soak less
 #            the slack, or short_soak_ok: true (RELEASE_SHORT_SOAK_OK).
+#            It refuses a release carrying breaking changes since the
+#            release its notes are written from (scripts/release-notes.sh
+#            check-breaking) unless it is the major release RELEASE_MAJOR
+#            asks for or RELEASE_ALLOW_BREAKING names it.
 #   reject   the rc the release came from is tagged -discarded and its
 #            images marked (discard-rc), the staged images are marked
 #            rejected (discard-pending), any rc of a later version cut on
@@ -137,6 +141,9 @@
 #                            era: true promotes one whose recorded soak is
 #                            under RELEASE_SOAK_HOURS (24) less
 #                            RELEASE_INTERVAL_SLACK_HOURS (2)
+#   RELEASE_ALLOW_BREAKING   approve only: vX.Y.Z promotes that release
+#                            although it carries breaking changes and is
+#                            not the major release RELEASE_MAJOR asks for
 #   RELEASE_CI_SOURCE        grain or github: where CI verdicts come from
 #   RELEASE_GITHUB_REPO      the repository whose workflow runs count
 #                            ($GITHUB_REPOSITORY, else ai-on-gke/grain)
@@ -694,6 +701,22 @@ if [ "$mode" != train ]; then
         override="; short soak (${said:-no recorded soak}, under the $((soak_hours - slack_hours))h minimum) accepted with short_soak_ok: true"
         say "approve: $version ${said:-has no recorded soak}, under the $((soak_hours - slack_hours))h minimum; $by passed short_soak_ok: true"
       fi
+    fi
+    # Breaking changes ship only in the major release RELEASE_MAJOR asks
+    # for, or with a person's RELEASE_ALLOW_BREAKING=<version> (playbook
+    # section 8): counted from the release its notes are written from.
+    notes_base="$(promoted | while read -r t; do never_promotes "$t" || retracted "$t" || printf '%s\n' "$t"; done | tail -n 1)"
+    if [ -n "$notes_base" ]; then
+      breaking_status=0
+      breaking_out="$(bash "$scripts_dir/release-notes.sh" check-breaking "$version" "$notes_base" "$pending_sha" 2>&1)" || breaking_status=$?
+      printf '%s\n' "$breaking_out" | sed 's/^/  /'
+      case "$breaking_status" in
+        0) ;;
+        3) die "$version carries breaking changes since $notes_base and is not the major release RELEASE_MAJOR asks for: reject it and raise RELEASE_MAJOR in scripts/release.conf, or approve it with RELEASE_ALLOW_BREAKING=$version; nothing was done" ;;
+        *) die "could not check $version for breaking changes since $notes_base (release-notes.sh check-breaking exited $breaking_status); nothing was done" ;;
+      esac
+      [ "${RELEASE_ALLOW_BREAKING:-}" != "$version" ] || ! printf '%s\n' "$breaking_out" | grep -q 'RELEASE_ALLOW_BREAKING=.* overrides' ||
+        override="$override; breaking changes since $notes_base accepted with RELEASE_ALLOW_BREAKING=$version"
     fi
     say "approve: $by approved $version (${from_rc:-?}, ${pending_sha:0:12}${said:+, $said}); promoting it to $version and latest"
     git tag -a "$version" "$pending_sha" -m "Release $version" -m "Promoted from ${from_rc:-$version-pending}, approved by $by$override"
