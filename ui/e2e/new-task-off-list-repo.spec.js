@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // "Other…" on the New task form takes any repo, and the server files one
 // off the deployment's target repo list parked awaiting a reply rather
@@ -31,11 +32,11 @@ test("warns before filing on an off-list repo, and the filed task waits in the I
 
   const title = `Off-list repo ${Date.now()}`;
   await page.getByLabel("Title").fill(title);
-  await page.getByLabel(/^Repos/).selectOption("acme/widgets");
+  await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
   const warning = page.getByTestId("repo-off-allowlist");
   await expect(warning).toHaveCount(0);
 
-  await page.getByLabel(/^Repos/).selectOption("Other…");
+  await chooseOption(page.getByLabel(/^Repos/), "Other…");
   await page.locator("input[name=repo]").fill("acme/gizmos");
   await expect(warning).toContainText(
     "acme/gizmos is not on this deployment's target repo list",

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { expect, test } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // Granting a capability server method with arguments from the UI
 // (docs/capabilities.md, "Granting from the UI"), against grain demo's
@@ -47,7 +48,7 @@ test("grants a method with arguments on a new task, twice, and refuses an invali
   await page.getByRole("button", { name: "+ New task" }).click();
   await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
   await page.getByLabel("Title").fill(title);
-  await page.getByLabel(/^Repos/).selectOption("none");
+  await chooseOption(page.getByLabel(/^Repos/), "none");
 
   const grants = page.getByTestId("new-task-grants");
   await grants.getByRole("button", { name: "Add grant…" }).click();

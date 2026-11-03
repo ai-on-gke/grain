@@ -36,6 +36,7 @@ import {
   setupApi,
 } from "./appTestHarness.js";
 import { runTimers } from "./testClock.js";
+import { chooseOption } from "./searchSelectTesting.js";
 
 // A pass-through: only the default fetch wrapper is faked, so
 // isUnreachable/unreachableReason -- which App.jsx's poll calls on
@@ -649,7 +650,7 @@ describe("App", () => {
 
     await user.click(screen.getByRole("button", { name: "+ New task" }));
     await user.type(screen.getByLabelText(/Title/), "Ship it");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     expect(await screen.findByText("Ship it")).toBeInTheDocument();
@@ -716,7 +717,7 @@ describe("App", () => {
 
     await user.click(screen.getByRole("button", { name: "+ New task" }));
     await user.type(screen.getByLabelText(/Title/), "Ship it");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByLabelText("Add to backlog"));
     await user.click(screen.getByRole("option", { name: /^Front/ }));
     await user.click(screen.getByRole("button", { name: "Create task" }));

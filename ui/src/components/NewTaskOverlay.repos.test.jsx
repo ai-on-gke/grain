@@ -20,12 +20,13 @@
 // Part of the NewTaskOverlay suite -- see NewTaskOverlay.test.jsx for
 // why it is four files and what a test in one costs.
 
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import NewTaskOverlay from "./NewTaskOverlay.jsx";
 import { clearBranchCache } from "./BranchField.jsx";
 import api from "../api.js";
+import { chooseOption, optionValues } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
 
@@ -59,7 +60,7 @@ describe("NewTaskOverlay", () => {
     expect(screen.getByTestId("no-git-connection")).toHaveTextContent(
       "This deployment has no git connection yet",
     );
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     expect(screen.queryByTestId("no-git-connection")).not.toBeInTheDocument();
     unmount();
 
@@ -113,7 +114,7 @@ describe("NewTaskOverlay", () => {
       />,
     );
 
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     await user.clear(screen.getByLabelText("Base branch"));
     await user.click(screen.getByLabelText("Base branch"));
 
@@ -147,7 +148,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Ship");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
 
     const readsInput = screen.getByLabelText(/Read-only repos/);
     await user.click(readsInput);
@@ -203,7 +204,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Ship");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     // The same block, one box further down: no field of its own to find
     // and no "other repos" wording to work out first.
     await user.click(screen.getByLabelText(/Another repo/));
@@ -244,7 +245,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Ship");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     await user.click(screen.getByLabelText("Create a new branch"));
     // Nothing to file onto until the branch is named.
     expect(screen.getByRole("button", { name: "Create task" })).toBeDisabled();
@@ -280,7 +281,8 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Finish the bump");
-    await user.selectOptions(
+    await chooseOption(
+      user,
       screen.getByLabelText(/^Repos/),
       "ai-on-gke/grain",
     );
@@ -320,7 +322,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Ship");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     expect(screen.queryByTestId("new-branch-name")).toBeNull();
     await user.type(screen.getByLabelText(/^Base branch/), "release/1.2");
     await user.click(screen.getByRole("button", { name: "Create task" }));
@@ -349,8 +351,8 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Ship");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     // The create request is sent after an await; read it once it has
@@ -390,9 +392,9 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Think");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     expect(screen.getByLabelText("Base branch")).toHaveValue("release-1.0");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     const post = api.mock.calls.find(([, opts]) => opts?.method === "POST");
@@ -419,7 +421,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Ship");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/other");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/other");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     // The create request is sent after an await; read it once it has
@@ -451,12 +453,10 @@ describe("NewTaskOverlay", () => {
     );
 
     const target = screen.getByLabelText(/^Repos/);
-    expect(
-      within(target).queryByRole("option", { name: "acme/other" }),
-    ).not.toBeInTheDocument();
-    expect(
-      within(target).getByRole("option", { name: "acme/widgets" }),
-    ).toBeInTheDocument();
+    await user.click(target);
+    expect(optionValues(target)).not.toContain("acme/other");
+    expect(optionValues(target)).toContain("acme/widgets");
+    await user.keyboard("{Escape}");
 
     await user.click(screen.getByLabelText(/Read-only repos/));
     expect(
@@ -482,10 +482,10 @@ describe("NewTaskOverlay", () => {
       />,
     );
 
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     expect(screen.queryByTestId("repo-off-allowlist")).not.toBeInTheDocument();
 
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "Other…");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "Other…");
     const typed = screen.getByPlaceholderText("owner/name");
     await user.clear(typed);
     await user.type(typed, "acme/gizmos");
@@ -518,7 +518,7 @@ describe("NewTaskOverlay", () => {
       />,
     );
 
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     await user.click(screen.getByLabelText(/Read-only repos/));
     expect(
       await screen.findByRole("menuitem", { name: "acme/docs" }),
@@ -529,7 +529,7 @@ describe("NewTaskOverlay", () => {
 
     // Moving the target moves what is offered with it.
     await user.keyboard("{Escape}");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/docs");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/docs");
     await user.click(screen.getByLabelText(/Read-only repos/));
     expect(
       await screen.findByRole("menuitem", { name: "acme/widgets" }),
@@ -580,7 +580,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Ship");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     // The create request is sent after an await; read it once it has
@@ -629,7 +629,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Ship");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     // The create request is sent after an await; read it once it has
@@ -674,7 +674,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Ship");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     // The create request is sent after an await; read it once it has
@@ -731,7 +731,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Ship");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     // The create request is sent after an await; read it once it has
@@ -783,9 +783,9 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Ship");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     expect(screen.getByLabelText(/Base branch/)).toHaveValue("release/2.0");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/robots");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/robots");
     expect(screen.getByLabelText(/Base branch/)).toHaveValue("release/2.0");
   });
 
@@ -816,7 +816,7 @@ describe("NewTaskOverlay", () => {
 
     await user.type(screen.getByLabelText(/Title/), "Ship");
     await user.type(screen.getByLabelText(/Base branch/), "my-branch");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/fresh");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/fresh");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     // The create request is sent after an await; read it once it has
@@ -853,7 +853,7 @@ describe("NewTaskOverlay", () => {
 
     await user.type(screen.getByLabelText(/Title/), "Ship");
     await user.type(screen.getByLabelText(/Base branch/), "my-branch");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     // The create request is sent after an await; read it once it has
@@ -903,9 +903,9 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Ship");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     expect(screen.getByLabelText(/Base branch/)).toHaveValue("release/2.0");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/other");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/other");
     expect(screen.getByLabelText(/Base branch/)).toHaveValue("");
 
     await user.click(screen.getByRole("button", { name: "Create task" }));
