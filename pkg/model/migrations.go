@@ -670,9 +670,17 @@ var Migrations = []Migration{
 		Up:          migrateGCPKeyToCapabilityServer,
 	},
 	{
+		Version:     98,
+		Description: "add allowed_principal and allowed_principal_migration for verified-identity sign-in access",
+		Statements: []string{
+			allowedPrincipalTable,
+			allowedPrincipalMigrationTable,
+		},
+	},
+	{
 		// The table itself is created by Statements, which Migrate
 		// applies after every rung; only the column needs saying here.
-		Version:     98,
+		Version:     99,
 		Description: "add grain_config.auto_upgrade_on, which turns on upgrading when a release is published",
 		Statements: []string{
 			"ALTER TABLE `grain_config` ADD COLUMN `auto_upgrade_on` TEXT NOT NULL DEFAULT ''",

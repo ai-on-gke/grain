@@ -456,11 +456,39 @@ import "strconv"
 // tasks, templates, schedules, default_capabilities, ci_capabilities,
 // console_sessions and capability_policy.
 //
-// 98 adds `grain_config`.`auto_upgrade_on` (model.Config.AutoUpgradeOn:
+// 98 adds `allowed_principal` and `allowed_principal_migration`: the
+// database-backed list of `user:<email>` and `group:<email>` entries
+// admitted when authenticated by IAP or another IdentityVerifier, plus the
+// one-time startup migration record off `-ui-allowed-principals`. Kept off
+// SettingsTables so a config-repo pull request cannot lock operators out
+// or grant sign-in access (design/design/settings.design.md §1).
+//
+// 99 adds `grain_config`.`auto_upgrade_on` (model.Config.AutoUpgradeOn:
 // off, daily, or release) and the `auto_upgrade_release` table, what the
 // release-triggered automatic upgrade has seen and scheduled
 // (model.AutoUpgradeRelease).
-const SchemaVersion = 98
+const SchemaVersion = 99
+
+// allowedPrincipalTable is the `allowed_principal` table: one row per
+// `user:<email>` or `group:<email>` entry admitted through a verified
+// identity (model.AllowedPrincipal).
+const allowedPrincipalTable = `CREATE TABLE IF NOT EXISTS ` + "`allowed_principal`" + ` (
+  ` + "`entry`" + `    TEXT     NOT NULL PRIMARY KEY,
+  ` + "`added_by`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`added_at`" + ` DATETIME NOT NULL
+)`
+
+// allowedPrincipalMigrationTable records the one-time startup migration off
+// `-ui-allowed-principals` / `$GRAIN_ALLOWED_PRINCIPALS` so the deprecated
+// flag is imported at most once even if every entry is later removed, and
+// preserves any unsupported entries (`serviceAccount:`, `domain:`) dropped
+// during import so Settings -> Access can surface them.
+const allowedPrincipalMigrationTable = `CREATE TABLE IF NOT EXISTS ` + "`allowed_principal_migration`" + ` (
+  ` + "`id`" + `          INTEGER  NOT NULL PRIMARY KEY,
+  ` + "`imported_at`" + ` DATETIME NOT NULL,
+  ` + "`source`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`dropped`" + `     TEXT     NOT NULL DEFAULT ''
+)`
 
 // configAuditTable is the `config_audit` table: one row per change to the
 // deployment's configuration somebody made (model.ConfigAuditEntry,
@@ -3992,6 +4020,11 @@ var Tables = []string{
 	configAuditTable,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_event_task`" + ` ON ` + "`task_event`" + ` (` + "`task_id`" + `)`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_event_at`" + ` ON ` + "`task_event`" + ` (` + "`at`" + `)`,
+
+	// Verified-identity sign-in allowlist (`user:<email>` and `group:<email>`)
+	// and its one-time startup migration off `-ui-allowed-principals`.
+	allowedPrincipalTable,
+	allowedPrincipalMigrationTable,
 }
 
 // Views is the derivations, each a (name, DDL) pair so Init can drop and

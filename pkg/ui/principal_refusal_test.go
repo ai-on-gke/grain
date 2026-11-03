@@ -56,9 +56,8 @@ func TestRefusedPrincipalGetsAPageNamingThemWithTheAccessCodeForm(t *testing.T) 
 	for _, want := range []string{
 		"mallory@example.com",
 		"verified by corp-proxy",
-		"-ui-allowed-principals",
-		"GRAIN_ALLOWED_PRINCIPALS",
-		"-ui-allowed-principals=&#39;user:alice@example.com,user:mallory@example.com&#39;",
+		"Settings -&gt; Access",
+		"grain access allow user:mallory@example.com",
 		`<form method="post" action="/api/auth/access-code">`,
 		`name="code"`,
 	} {
@@ -76,7 +75,7 @@ func TestRefusedPrincipalGetsAPageNamingThemWithTheAccessCodeForm(t *testing.T) 
 	} {
 		rec := serveFrom(srv, "198.51.100.8:1234", c.method, c.path, "", assertion)
 		if rec.Code != http.StatusForbidden || !strings.HasPrefix(rec.Header().Get("Content-Type"), "application/json") ||
-			!strings.Contains(rec.Body.String(), `principal \"mallory@example.com\" is not allowed`) {
+			!strings.Contains(rec.Body.String(), `principal \"mallory@example.com\" is not on the allowed users and groups list (Settings -\u003e Access)`) {
 			t.Fatalf("%s %s: got %d %q, want the 403 JSON: %s", c.method, c.path, rec.Code, rec.Header().Get("Content-Type"), rec.Body)
 		}
 	}

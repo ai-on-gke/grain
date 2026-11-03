@@ -568,6 +568,22 @@ export const SETTINGS_INDEX = [
     card: true,
   },
   {
+    id: "card:access:allowed-principals",
+    section: "access",
+    anchor: "allowed-principals",
+    label: "Allowed users and groups",
+    keywords: [
+      "allowlist",
+      "principals",
+      "IAP",
+      "users",
+      "groups",
+      "email",
+      "sign in",
+    ],
+    card: true,
+  },
+  {
     id: "card:hostds:hostds",
     section: "hostds",
     anchor: "hostds",

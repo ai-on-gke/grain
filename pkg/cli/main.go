@@ -395,6 +395,8 @@ Commands:
                                        manage this deployment's capability servers (mcpServers)
   hostds list|register|set-owner       the hostd registry: register a hostd with its owner, the identity
                                        it dials in through IAP as
+  access list|allow|deny               the allowed users and groups list (Settings -> Access): who may
+                                       sign in through IAP or another identity verifier
   broadcast [-all] <message...>        send a notice to all running task agents (or with -all, all active tasks)
   release approve|reject vX.Y.0        make a pending trunk release official, or drop it -- a person's act;
                                        an agent is refused
@@ -576,6 +578,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdCapabilityServers(ctx, c, out, cmdArgs)
 	case "hostds":
 		return cmdHostds(ctx, c, out, cmdArgs)
+	case "access":
+		return cmdAccess(ctx, c, out, cmdArgs)
 	case "git-ambient":
 		return cmdGitAmbient(ctx, c, out, cmdArgs)
 	case "git-connections":

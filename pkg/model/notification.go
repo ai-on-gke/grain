@@ -203,6 +203,10 @@ const (
 	// FamilyNotPublishing is a base branch nothing has published from
 	// (BaseBranchPublishing), "<repo>@<branch>".
 	FamilyNotPublishing = "pipeline.not-publishing"
+	// FamilyReleaseNotStarting is a repository grain releases whose
+	// trunk has moved and no release has been started for it, "<repo>"
+	// (orchestrator's releasestall.go).
+	FamilyReleaseNotStarting = "pipeline.release-not-starting"
 	// FamilyMergeStalled is a merge-queue entry handed to a person past
 	// its patience, "<task>".
 	FamilyMergeStalled = "pipeline.merge-stalled"
