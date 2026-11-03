@@ -24,7 +24,7 @@ Usage of grain daemon:
   -checkpost-url string
     	base url of this deployment's checkpost service, which CI reports verdicts to; empty asks GitHub for check runs as before
   -ci
-    	run grain's own CI: the .grain/workflows a repository declares, in this deployment's own sandboxes, for the repos whose CI mode is "Use Grain CI" (Settings -> Repos), which also grants their tasks the grain-ci capability. -ci=false turns the engine off entirely, so no repository's workflows run however its CI mode is set, and the CI API reports that this deployment has none. A job's sandbox is built the way a run's is and given no credential beyond a read-only checkout of the one repository under test (pkg/ci, "What a workflow file is trusted with"). (default true)
+    	run grain's own CI: the .grain/workflows a repository declares, in this deployment's own sandboxes, for the repos whose CI mode is "Use Grain CI" (Settings -> Repos), which also grants their tasks the https://grain.dev/capabilities/grain#ci={} grant. -ci=false turns the engine off entirely, so no repository's workflows run however its CI mode is set, and the CI API reports that this deployment has none. A job's sandbox is built the way a run's is and given no credential beyond a read-only checkout of the one repository under test (pkg/ci, "What a workflow file is trusted with"). (default true)
   -ci-artifact-max-age duration
     	how long a run's CI artifacts are kept before the sweep drops them; 0 uses grain's own default, 336h0m0s, which is about how long a red run stays worth investigating. See -ci-artifact-max-bytes for what this group holds. (default 336h0m0s)
   -ci-artifact-max-bytes bytes
@@ -145,12 +145,16 @@ Usage of grain daemon:
     	NAME or NAME=VALUE, repeatable, only with -host-sandboxes: an environment variable every host-sandbox run of this machine's own tasks (not anybody else's) gets on top of the default allowlist -- NAME alone passes this daemon's own value, NAME=VALUE sets that one. For ambient workstation credentials a run should use as you: SSH_AUTH_SOCK, HTTPS_PROXY/HTTP_PROXY/NO_PROXY, CLOUDSDK_CONFIG=$HOME/.config/gcloud. Every run then acts with that identity. HOME cannot be set (it stays pinned to the run's directory, which keeps its git credentials its own). Values reach runs through a 0600 file and are redacted from what run_command returns, but a NAME=VALUE entry sits on this daemon's own command line, so one with credentials in a URL (user:pass@) is refused: export it and pass NAME alone
   -host-sandboxes
     	dispatch each run into its own plain directory under -sandbox-dir on this host, with NO isolation: runs execute as this daemon's user, with this host's tools and network. For a single-user workstation; refused on a daemon others can reach (a non-loopback -ui-addr, IAP, -run-host-image) unless -allow-unisolated-host-sandboxes is also passed
+  -hostd-reattach-timeout duration
+    	how long a run's agent CLI, running detached on a grain hostd whose connection drops, waits for that same hostd to reconnect before the run fails as an infrastructure failure (no strike against the task); re-attached in time, it carries on from where its output stood. Runs queued for a hostd that is not connected wait for it whatever this is. 0 fails at once (default 15m0s)
   -hostd-socket string
     	grain hostd's unix socket, for a daemon in a container whose host CLIs run through hostd; empty uses /run/grain-hostd/hostd.sock when its directory is mounted into the container. Refused on Kubernetes, which has no host
   -hostd-token-file string
     	deprecated, for one release: file holding a shared token a grain hostd on another machine dials in to /api/hostd/connect with (grain hostd -server <this daemon's URL> -token-file ...), as the one hostd -hostd-token-name names: its host CLIs and run: host capability servers are then this daemon's host executor, Kubernetes included. $GRAIN_HOSTD_TOKEN when unset. Register each hostd in the hostd registry (/api/hostds) instead, which gives it a token of its own
   -hostd-token-name string
     	the hostd name a hostd dialing in with -hostd-token-file's shared token is known by (default "remote")
+  -hostd-token-owner string
+    	the owner of -hostd-token-name's hostd: the email or service account a hostd dialing in with the shared token through IAP (or another identity verifier's proxy) must be verified as. A remote hostd with no owner is refused; one over loopback is not
   -iap-backend-service string
     	GCP Compute backend service name for dynamic IAP IAM reconciliation; empty disables IAP reconciliation (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
   -iap-resource string
@@ -344,7 +348,7 @@ Usage of grain daemon:
   -ui-allowed-hosts string
     	comma-separated host names the UI/API answers to besides IP literals, localhost and this machine's own hostname ("grain.example.com", "*.example.com"); a request with any other Host header is refused with 421, which is what stops a DNS-rebinding page reaching a loopback-bound API (grain#2380). Checked on every request when this is set or -ui-addr names a specific address; on an every-interface -ui-addr with this unset, on loopback requests only. "*" turns the check off
   -ui-allowed-principals string
-    	comma-separated principals admitted when authenticated by IAP or another registered IdentityVerifier (user:<email>, serviceAccount:<email>, group:<email>, domain:<domain>); defaults to $GRAIN_ALLOWED_PRINCIPALS, and when unset to the deployment owner plus the service accounts grain provisions
+    	deprecated: imported once on first start when the database allowlist is empty (user:<email> and group:<email> only; serviceAccount: and domain: entries are logged and dropped), then ignored. Manage allowed users and groups in Settings -> Access or with 'grain access'
   -ui-iap-audience string
     	the audience a signed X-Goog-IAP-JWT-Assertion must carry for the UI/API to accept the identity in it, or several separated by commas -- IAP's /projects/NUMBER/global/backendServices/ID or /projects/NUMBER/apps/PROJECT, or what a BeyondCorp tunnel's assertion names (the proxy's own docs); defaults to $GRAIN_IAP_AUDIENCE. With none, no assertion is accepted
   -ui-iap-issuer string

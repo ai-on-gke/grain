@@ -150,10 +150,10 @@ func TestFilingGCPKeyChecksTheDeploymentsKeys(t *testing.T) {
 		}
 		found := false
 		for _, g := range stored.Grants {
-			found = found || g.Capability == "gcp-key:deploy"
+			found = found || g.Capability == model.GCPKeyServerGrant("deploy")
 		}
 		if !found {
-			t.Errorf("team %q task grants = %+v, want gcp-key:deploy", team, stored.Grants)
+			t.Errorf("team %q task grants = %+v, want %s", team, stored.Grants, model.GCPKeyServerGrant("deploy"))
 		}
 	}
 }

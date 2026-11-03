@@ -28,6 +28,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -698,7 +699,9 @@ func (s *Server) singleTenantGate(w http.ResponseWriter, r *http.Request, cfg IA
 		writeError(w, http.StatusUnauthorized, errors.New(errAccessCodeNeeded))
 		return false
 	}
-	writeAccessCodePage(w, http.StatusUnauthorized, "")
+	// No return path from here: the page's script fills it in from the
+	// address bar, so a refusal repeats nothing the request said.
+	writeAccessCodePage(w, http.StatusUnauthorized, "", "")
 	return false
 }
 
@@ -741,7 +744,7 @@ func (s *Server) handleAccessCodeLogin(w http.ResponseWriter, r *http.Request) {
 			writeError(w, status, errors.New(msg))
 			return
 		}
-		writeAccessCodePage(w, status, msg)
+		writeAccessCodePage(w, status, msg, r.PostForm.Get(accessReturnField))
 	}
 	source := accessSource(r)
 	if !accessLimitExempt(r) && s.access.sourceLimited(source, time.Now()) {
@@ -749,7 +752,7 @@ func (s *Server) handleAccessCodeLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var code string
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	r.Body = http.MaxBytesReader(w, r.Body, 4096+3*maxAccessReturnPath)
 	if isJSON {
 		var req AccessCodeRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
@@ -777,7 +780,48 @@ func (s *Server) handleAccessCodeLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"authenticated": true})
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	// Back to the page the browser was trying to open when it was shown
+	// the login page, which the form carries as a hidden field; anything
+	// but a path on this origin is "/".
+	http.Redirect(w, r, localReturnPath(r.PostForm.Get(accessReturnField)), http.StatusSeeOther)
+}
+
+const (
+	// accessReturnField is the login form's hidden field holding the
+	// path and query the page was served for.
+	accessReturnField = "next"
+	// maxAccessReturnPath is the longest return path kept; a longer one
+	// is "/".
+	maxAccessReturnPath = 2048
+)
+
+// localReturnPath is next if it is a path and query on this origin, the
+// only place a sign-in may send a browser back to, and "/" otherwise:
+// next is whatever the form post carried, so it is no more trusted than
+// a query parameter would be. A path must start with one "/", not "//"
+// or "/\" (which a browser reads as another host), and has no
+// backslash, control character, scheme, host or fragment anywhere.
+// /api/ paths are "/" too: a browser signing in wants a page.
+func localReturnPath(next string) string {
+	if next == "" || len(next) > maxAccessReturnPath || next[0] != '/' {
+		return "/"
+	}
+	if len(next) > 1 && (next[1] == '/' || next[1] == '\\') {
+		return "/"
+	}
+	for i := 0; i < len(next); i++ {
+		if c := next[i]; c < 0x20 || c == 0x7f || c == '\\' || c == '#' {
+			return "/"
+		}
+	}
+	u, err := url.Parse(next)
+	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil || u.Opaque != "" || !strings.HasPrefix(u.Path, "/") {
+		return "/"
+	}
+	if strings.HasPrefix(u.Path, "/api/") {
+		return "/"
+	}
+	return next
 }
 
 // accessCodeScript is the login page's one script, served from
@@ -787,7 +831,17 @@ func (s *Server) handleAccessCodeLogin(w http.ResponseWriter, r *http.Request) {
 // so a browser holding a live session can land on this page; asking
 // from here is a same-site request, which does carry it, and loading
 // the page again from here is a same-site navigation.
-const accessCodeScript = `fetch("/api/auth/access-code", {credentials: "same-origin"})
+//
+// It also fills in the form's return path from the address bar, which
+// is the deep link the browser was trying to open, unless the page
+// already carries one (a wrong code shown it again).
+const accessCodeScript = `(function () {
+  var next = document.querySelector('form input[name="` + accessReturnField + `"]');
+  if (next && !next.value && window.location.pathname.indexOf("/api/") !== 0) {
+    next.value = window.location.pathname + window.location.search;
+  }
+})();
+fetch("/api/auth/access-code", {credentials: "same-origin"})
   .then(function (r) { return r.ok ? r.json() : {}; })
   .then(function (s) { if (s && s.authenticated) { window.location.replace(window.location.href); } })
   .catch(function () {});
@@ -819,7 +873,8 @@ p { color: #444; font-size: .9rem; }
 <body>
 <form method="post" action="` + accessCodePath + `">
 <h1>Enter access code</h1>
-{{if .}}<p class="error" role="alert">{{.}}</p>{{end}}
+{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+<input type="hidden" name="` + accessReturnField + `" value="{{.Next}}">
 <label for="code">Access code</label>
 <input id="code" name="code" type="password" autocomplete="current-password" autofocus required>
 <button type="submit">Continue</button>
@@ -829,11 +884,19 @@ p { color: #444; font-size: .9rem; }
 </html>
 `))
 
-func writeAccessCodePage(w http.ResponseWriter, status int, msg string) {
+// writeAccessCodePage serves the login page with msg as its error, if
+// any, and next -- a return path a wrong code's form post carried -- as
+// where a sign-in sends it back to, once localReturnPath has vetted it
+// (the gate passes none; accessCodeScript fills it in).
+func writeAccessCodePage(w http.ResponseWriter, status int, msg, next string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	if err := accessCodePage.Execute(w, msg); err != nil {
+	page := struct{ Error, Next string }{msg, ""}
+	if next != "" {
+		page.Next = localReturnPath(next)
+	}
+	if err := accessCodePage.Execute(w, page); err != nil {
 		fmt.Fprintln(w, "enter access code")
 	}
 }

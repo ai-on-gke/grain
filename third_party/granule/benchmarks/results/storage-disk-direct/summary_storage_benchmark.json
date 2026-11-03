@@ -1,0 +1,449 @@
+{
+    "meta": {
+        "numjobs": 4,
+        "size_per_job": "1G",
+        "runtime_s": 15,
+        "vcpus": 4,
+        "disk_num_queues": 4,
+        "disk_bytes": 0,
+        "host": [
+            "Linux 6.1.0-54-cloud-amd64 x86_64",
+            "16",
+            "62G",
+            "/dev/sda1        99G   21G   74G  22% /",
+            ""
+        ],
+        "guest_df": {
+            "flat+direct_on": "/dev/root       5.6G  547M  4.7G  11% /",
+            "flat+direct_off": "/dev/root       5.6G  547M  4.7G  11% /",
+            "qcow_2m+direct_on": "/dev/root       5.6G  547M  4.7G  11% /",
+            "qcow_2m+direct_off": "/dev/root       5.6G  547M  4.7G  11% /"
+        }
+    },
+    "fio": {
+        "flat+direct_on": {
+            "seq_write": {
+                "read": {
+                    "bw_mbs": 0.0,
+                    "iops": 0.0,
+                    "mean_us": 0.0,
+                    "p50_us": 0.0,
+                    "p95_us": 0.0,
+                    "p99_us": 0.0
+                },
+                "write": {
+                    "bw_mbs": 289.3,
+                    "iops": 289.0,
+                    "mean_us": 13745.2,
+                    "p50_us": 13828.1,
+                    "p95_us": 15532.0,
+                    "p99_us": 19529.7
+                },
+                "usr_cpu": 0.3,
+                "sys_cpu": 0.4
+            },
+            "seq_read": {
+                "read": {
+                    "bw_mbs": 289.4,
+                    "iops": 289.0,
+                    "mean_us": 12563.1,
+                    "p50_us": 10682.4,
+                    "p95_us": 21102.6,
+                    "p99_us": 21626.9
+                },
+                "write": {
+                    "bw_mbs": 0.0,
+                    "iops": 0.0,
+                    "mean_us": 0.0,
+                    "p50_us": 0.0,
+                    "p95_us": 0.0,
+                    "p99_us": 0.0
+                },
+                "usr_cpu": 0.1,
+                "sys_cpu": 0.6
+            },
+            "rand_read": {
+                "read": {
+                    "bw_mbs": 39.2,
+                    "iops": 10044.0,
+                    "mean_us": 12740.6,
+                    "p50_us": 13828.1,
+                    "p95_us": 17170.4,
+                    "p99_us": 23461.9
+                },
+                "write": {
+                    "bw_mbs": 0.0,
+                    "iops": 0.0,
+                    "mean_us": 0.0,
+                    "p50_us": 0.0,
+                    "p95_us": 0.0,
+                    "p99_us": 0.0
+                },
+                "usr_cpu": 1.4,
+                "sys_cpu": 5.0
+            },
+            "rand_write": {
+                "read": {
+                    "bw_mbs": 0.0,
+                    "iops": 0.0,
+                    "mean_us": 0.0,
+                    "p50_us": 0.0,
+                    "p95_us": 0.0,
+                    "p99_us": 0.0
+                },
+                "write": {
+                    "bw_mbs": 37.0,
+                    "iops": 9468.0,
+                    "mean_us": 13516.9,
+                    "p50_us": 13828.1,
+                    "p95_us": 19005.4,
+                    "p99_us": 23199.7
+                },
+                "usr_cpu": 0.5,
+                "sys_cpu": 1.3
+            },
+            "mixed_rw": {
+                "read": {
+                    "bw_mbs": 25.8,
+                    "iops": 6608.0,
+                    "mean_us": 6746.8,
+                    "p50_us": 6783.0,
+                    "p95_us": 10551.3,
+                    "p99_us": 12386.3
+                },
+                "write": {
+                    "bw_mbs": 11.2,
+                    "iops": 2865.0,
+                    "mean_us": 6767.8,
+                    "p50_us": 6783.0,
+                    "p95_us": 10682.4,
+                    "p99_us": 12517.4
+                },
+                "usr_cpu": 1.2,
+                "sys_cpu": 3.4
+            }
+        },
+        "flat+direct_off": {
+            "seq_write": {
+                "read": {
+                    "bw_mbs": 0.0,
+                    "iops": 0.0,
+                    "mean_us": 0.0,
+                    "p50_us": 0.0,
+                    "p95_us": 0.0,
+                    "p99_us": 0.0
+                },
+                "write": {
+                    "bw_mbs": 1809.2,
+                    "iops": 1809.0,
+                    "mean_us": 1981.5,
+                    "p50_us": 1581.1,
+                    "p95_us": 3227.6,
+                    "p99_us": 3326.0
+                },
+                "usr_cpu": 1.7,
+                "sys_cpu": 2.2
+            },
+            "seq_read": {
+                "read": {
+                    "bw_mbs": 289.3,
+                    "iops": 289.0,
+                    "mean_us": 12899.4,
+                    "p50_us": 12648.4,
+                    "p95_us": 19267.6,
+                    "p99_us": 20316.2
+                },
+                "write": {
+                    "bw_mbs": 0.0,
+                    "iops": 0.0,
+                    "mean_us": 0.0,
+                    "p50_us": 0.0,
+                    "p95_us": 0.0,
+                    "p99_us": 0.0
+                },
+                "usr_cpu": 0.1,
+                "sys_cpu": 0.5
+            },
+            "rand_read": {
+                "read": {
+                    "bw_mbs": 39.2,
+                    "iops": 10046.0,
+                    "mean_us": 12738.4,
+                    "p50_us": 13959.2,
+                    "p95_us": 16908.3,
+                    "p99_us": 22937.6
+                },
+                "write": {
+                    "bw_mbs": 0.0,
+                    "iops": 0.0,
+                    "mean_us": 0.0,
+                    "p50_us": 0.0,
+                    "p95_us": 0.0,
+                    "p99_us": 0.0
+                },
+                "usr_cpu": 1.4,
+                "sys_cpu": 5.3
+            },
+            "rand_write": {
+                "read": {
+                    "bw_mbs": 0.0,
+                    "iops": 0.0,
+                    "mean_us": 0.0,
+                    "p50_us": 0.0,
+                    "p95_us": 0.0,
+                    "p99_us": 0.0
+                },
+                "write": {
+                    "bw_mbs": 719.9,
+                    "iops": 184284.0,
+                    "mean_us": 691.1,
+                    "p50_us": 684.0,
+                    "p95_us": 1089.5,
+                    "p99_us": 1302.5
+                },
+                "usr_cpu": 13.3,
+                "sys_cpu": 45.7
+            },
+            "mixed_rw": {
+                "read": {
+                    "bw_mbs": 38.6,
+                    "iops": 9885.0,
+                    "mean_us": 6180.8,
+                    "p50_us": 6717.4,
+                    "p95_us": 8978.4,
+                    "p99_us": 11337.7
+                },
+                "write": {
+                    "bw_mbs": 16.7,
+                    "iops": 4267.0,
+                    "mean_us": 673.9,
+                    "p50_us": 232.4,
+                    "p95_us": 2965.5,
+                    "p99_us": 5341.2
+                },
+                "usr_cpu": 1.9,
+                "sys_cpu": 6.2
+            }
+        },
+        "qcow_2m+direct_on": {
+            "seq_write": {
+                "read": {
+                    "bw_mbs": 0.0,
+                    "iops": 0.0,
+                    "mean_us": 0.0,
+                    "p50_us": 0.0,
+                    "p95_us": 0.0,
+                    "p99_us": 0.0
+                },
+                "write": {
+                    "bw_mbs": 143.7,
+                    "iops": 144.0,
+                    "mean_us": 27807.1,
+                    "p50_us": 26345.5,
+                    "p95_us": 47448.1,
+                    "p99_us": 58458.1
+                },
+                "usr_cpu": 0.1,
+                "sys_cpu": 0.2
+            },
+            "seq_read": {
+                "read": {
+                    "bw_mbs": 546.8,
+                    "iops": 547.0,
+                    "mean_us": 6024.0,
+                    "p50_us": 3358.7,
+                    "p95_us": 20840.4,
+                    "p99_us": 21364.7
+                },
+                "write": {
+                    "bw_mbs": 0.0,
+                    "iops": 0.0,
+                    "mean_us": 0.0,
+                    "p50_us": 0.0,
+                    "p95_us": 0.0,
+                    "p99_us": 0.0
+                },
+                "usr_cpu": 0.0,
+                "sys_cpu": 1.1
+            },
+            "rand_read": {
+                "read": {
+                    "bw_mbs": 76.7,
+                    "iops": 19640.0,
+                    "mean_us": 6514.9,
+                    "p50_us": 9371.6,
+                    "p95_us": 15401.0,
+                    "p99_us": 21626.9
+                },
+                "write": {
+                    "bw_mbs": 0.0,
+                    "iops": 0.0,
+                    "mean_us": 0.0,
+                    "p50_us": 0.0,
+                    "p95_us": 0.0,
+                    "p99_us": 0.0
+                },
+                "usr_cpu": 0.7,
+                "sys_cpu": 1.3
+            },
+            "rand_write": {
+                "read": {
+                    "bw_mbs": 0.0,
+                    "iops": 0.0,
+                    "mean_us": 0.0,
+                    "p50_us": 0.0,
+                    "p95_us": 0.0,
+                    "p99_us": 0.0
+                },
+                "write": {
+                    "bw_mbs": 1.8,
+                    "iops": 452.0,
+                    "mean_us": 282375.1,
+                    "p50_us": 166723.6,
+                    "p95_us": 893386.8,
+                    "p99_us": 1115684.9
+                },
+                "usr_cpu": 0.0,
+                "sys_cpu": 0.1
+            },
+            "mixed_rw": {
+                "read": {
+                    "bw_mbs": 3.8,
+                    "iops": 971.0,
+                    "mean_us": 40288.6,
+                    "p50_us": 25559.0,
+                    "p95_us": 139460.6,
+                    "p99_us": 227541.0
+                },
+                "write": {
+                    "bw_mbs": 1.7,
+                    "iops": 432.0,
+                    "mean_us": 57475.3,
+                    "p50_us": 43253.8,
+                    "p95_us": 154140.7,
+                    "p99_us": 229638.1
+                },
+                "usr_cpu": 0.1,
+                "sys_cpu": 0.3
+            }
+        },
+        "qcow_2m+direct_off": {
+            "seq_write": {
+                "read": {
+                    "bw_mbs": 0.0,
+                    "iops": 0.0,
+                    "mean_us": 0.0,
+                    "p50_us": 0.0,
+                    "p95_us": 0.0,
+                    "p99_us": 0.0
+                },
+                "write": {
+                    "bw_mbs": 145.1,
+                    "iops": 145.0,
+                    "mean_us": 27549.4,
+                    "p50_us": 15925.2,
+                    "p95_us": 29491.2,
+                    "p99_us": 39583.7
+                },
+                "usr_cpu": 0.2,
+                "sys_cpu": 0.2
+            },
+            "seq_read": {
+                "read": {
+                    "bw_mbs": 408.5,
+                    "iops": 409.0,
+                    "mean_us": 8820.6,
+                    "p50_us": 10944.5,
+                    "p95_us": 18219.0,
+                    "p99_us": 19791.9
+                },
+                "write": {
+                    "bw_mbs": 0.0,
+                    "iops": 0.0,
+                    "mean_us": 0.0,
+                    "p50_us": 0.0,
+                    "p95_us": 0.0,
+                    "p99_us": 0.0
+                },
+                "usr_cpu": 0.0,
+                "sys_cpu": 0.9
+            },
+            "rand_read": {
+                "read": {
+                    "bw_mbs": 57.7,
+                    "iops": 14760.0,
+                    "mean_us": 8669.8,
+                    "p50_us": 13697.0,
+                    "p95_us": 16056.3,
+                    "p99_us": 22151.2
+                },
+                "write": {
+                    "bw_mbs": 0.0,
+                    "iops": 0.0,
+                    "mean_us": 0.0,
+                    "p50_us": 0.0,
+                    "p95_us": 0.0,
+                    "p99_us": 0.0
+                },
+                "usr_cpu": 2.1,
+                "sys_cpu": 5.2
+            },
+            "rand_write": {
+                "read": {
+                    "bw_mbs": 0.0,
+                    "iops": 0.0,
+                    "mean_us": 0.0,
+                    "p50_us": 0.0,
+                    "p95_us": 0.0,
+                    "p99_us": 0.0
+                },
+                "write": {
+                    "bw_mbs": 1.1,
+                    "iops": 289.0,
+                    "mean_us": 442089.4,
+                    "p50_us": 295698.4,
+                    "p95_us": 1468006.4,
+                    "p99_us": 1719664.6
+                },
+                "usr_cpu": 0.0,
+                "sys_cpu": 0.0
+            },
+            "mixed_rw": {
+                "read": {
+                    "bw_mbs": 4.3,
+                    "iops": 1089.0,
+                    "mean_us": 41415.9,
+                    "p50_us": 14876.7,
+                    "p95_us": 154140.7,
+                    "p99_us": 238026.8
+                },
+                "write": {
+                    "bw_mbs": 1.9,
+                    "iops": 482.0,
+                    "mean_us": 39178.0,
+                    "p50_us": 19791.9,
+                    "p95_us": 121110.5,
+                    "p99_us": 189792.3
+                },
+                "usr_cpu": 0.1,
+                "sys_cpu": 0.4
+            }
+        }
+    },
+    "startup": {
+        "flat+direct_on": {
+            "cold_ms_2": 31891
+        },
+        "flat+direct_off": {
+            "cold_ms_2": 31794
+        },
+        "qcow_2m+direct_on": {
+            "cold_ms_2": 2083
+        },
+        "qcow_2m+direct_off": {
+            "cold_ms_2": 2075
+        }
+    },
+    "oci": {},
+    "errors": {}
+}

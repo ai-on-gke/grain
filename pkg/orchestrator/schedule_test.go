@@ -1250,7 +1250,7 @@ func TestReconcileScheduleGrantsGrainCIToGrainCIRepo(t *testing.T) {
 	got := filed[0]
 	found := false
 	for _, g := range got.Grants {
-		if g.Capability == "grain-ci" {
+		if g.Capability == model.GrainCIGrant {
 			found = true
 			break
 		}

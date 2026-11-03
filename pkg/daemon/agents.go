@@ -117,13 +117,16 @@ type AgentPool struct {
 	// grain hostd (hostdHold), so the hold is logged when it starts and
 	// when it ends rather than every cycle.
 	hostdDraining atomic.Bool
+	// hostdCapacities is each hostd's reported capacity, as last asked
+	// (hostdCapacity).
+	hostdCapacities map[string]hostdCapacityEntry
 }
 
 // pausedLocked reports whether connection b's credential is paused
 // after a usage limit (AgentPool.Pause) for a run of modelName -- the
 // model the request chose, or b's own (runModelOn) when it chose none.
-func (p *AgentPool) pausedLocked(b model.AgentBackend, modelName string, now time.Time) bool {
-	return p.Pause.ModelPaused(b.CredentialOwnerID(), runModelOn(b, modelName), model.ConnectionTeam(b), now)
+func (p *AgentPool) pausedLocked(live Config, req poolRequest, b model.AgentBackend, modelName string, now time.Time) bool {
+	return p.Pause.ModelPaused(req.pauseOwner(live, b), runModelOn(b, modelName), model.ConnectionTeam(b), now)
 }
 
 // runModelOn is the model a run that chose modelName passes the CLI on
@@ -195,8 +198,14 @@ func (p *AgentPool) busyLocked(b model.AgentBackend, now time.Time) bool {
 // runs that have started and not been released, and leases still inside
 // their start grace.
 func (p *AgentPool) inUseLocked(b model.AgentBackend, now time.Time) int {
+	return p.leasesLocked(b.ID, now)
+}
+
+// leasesLocked is how many leases under key -- a connection's ID, or a
+// hostd's (hostdLeaseKey) -- are taken right now.
+func (p *AgentPool) leasesLocked(key string, now time.Time) int {
 	n := 0
-	for _, l := range p.inflight[b.ID] {
+	for _, l := range p.inflight[key] {
 		if !l.released && (l.started || now.Sub(l.taken) < leaseStartGrace) {
 			n++
 		}
@@ -254,6 +263,10 @@ type poolRequest struct {
 	// (preferPrevious).
 	preferFramework string
 	preferModel     string
+	// pauseHostd is the hostd an ambient credential's usage-limit pause
+	// is scoped to for this run (hostdRoute.scopesPauses), "" for the
+	// connection's bare key.
+	pauseHostd string
 }
 
 // frameworkFor is the framework a run of m on req is restricted to: m's
@@ -480,9 +493,9 @@ func (p *AgentPool) candidatesLocked(live Config, req poolRequest, now time.Time
 		case req.hostdDraining[model.NormalizeAgentFrameworkName(backend.Framework)]:
 			excluded.hostdDraining++
 		case now.Before(p.unavailable[backendUnavailableKey(backend)]),
-			p.Pause.ConnectionPaused(backend.CredentialOwnerID(), bTeam, now):
+			p.Pause.ConnectionPaused(req.pauseOwner(live, backend), bTeam, now):
 			excluded.coolingOff++
-		case p.pausedLocked(backend, req.model, now):
+		case p.pausedLocked(live, req, backend, req.model, now):
 			// Only the model this run would pass the CLI is paused here;
 			// the connection's other models are still candidates for
 			// other tasks.
@@ -563,7 +576,7 @@ func (p *AgentPool) multiModelExclusionsLocked(live Config, req poolRequest, now
 		}
 		allPaused := true
 		for _, m := range supported {
-			if !p.pausedLocked(backend, m, now) {
+			if !p.pausedLocked(live, req, backend, m, now) {
 				allPaused = false
 				break
 			}
@@ -594,6 +607,28 @@ func (p *AgentPool) multiModelExclusionsLocked(live Config, req poolRequest, now
 // Build as busy, the same as a connection that filled up between ticks.
 func (p *AgentPool) Availability(ctx context.Context, choice orchestrator.AgentChoice) string {
 	live := DispatchConfig(ctx, p.Store, p.cfg)
+	// A task pinned to a hostd that is not connected, or that is at its
+	// capacity, waits for it; nothing moves it to another hostd.
+	route, err := p.routeHostd(ctx, live, choice.TaskID)
+	if err != nil {
+		return hostdWaitReason(err)
+	}
+	live = route.apply(live)
+	if route.Name != "" && !choice.Priority {
+		framework := choice.Framework
+		if framework == "" {
+			framework = live.DefaultAgentFramework()
+		}
+		if runsOnHostd(live, route, framework) {
+			capacity := p.hostdCapacity(ctx, route)
+			p.mu.Lock()
+			full := p.hostdFullLocked(route, capacity, time.Now())
+			p.mu.Unlock()
+			if full != nil {
+				return full.Error()
+			}
+		}
+	}
 	if len(live.AgentBackends) == 0 {
 		// No connections at all is the single-framework deployment the
 		// daemon's own flags configure; Build reports what it lacks.
@@ -604,6 +639,9 @@ func (p *AgentPool) Availability(ctx context.Context, choice orchestrator.AgentC
 		return p.hostdHold(ctx, live, framework)
 	}
 	req, err := p.resolve(ctx, live, choice)
+	if route.scopesPauses(live) {
+		req.pauseHostd = route.Name
+	}
 	if err != nil {
 		// A connection pinned with a model its provider has stopped
 		// listing waits for the provider (or the operator) to bring it
@@ -628,7 +666,7 @@ func (p *AgentPool) Availability(ctx context.Context, choice orchestrator.AgentC
 		// window. No other model is tried in its place -- see
 		// orchestrator.Deps.ModelAvailability on the seam a fallback
 		// would use.
-		owner, team := req.pinned.CredentialOwnerID(), model.ConnectionTeam(*req.pinned)
+		owner, team := req.pauseOwner(live, *req.pinned), model.ConnectionTeam(*req.pinned)
 		pin := fmt.Sprintf(" -- the task is pinned to %s on connection %q; it does not fall back", req.model, req.pinned.ID)
 		if p.Pause.ConnectionPaused(owner, team, time.Now()) {
 			return fmt.Sprintf("connection %q is paused after a usage limit on its credential", req.pinned.ID) + pin
@@ -780,9 +818,17 @@ func (p *AgentPool) Build(ctx context.Context, choice orchestrator.AgentChoice) 
 	// holds such a team's tasks (orchestrator.Deps.TeamHasAgentBackend), so a
 	// dispatch that finds none is a race with its admin removing the last
 	// one, and fails naming what is missing.
+	route, err := p.routeHostd(ctx, live, choice.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	live = route.apply(live)
 	req, err := p.resolve(ctx, live, choice)
 	if err != nil {
 		return nil, err
+	}
+	if route.scopesPauses(live) {
+		req.pauseHostd = route.Name
 	}
 	settings = req.settings
 	chosenModel = req.model
@@ -824,6 +870,22 @@ func (p *AgentPool) Build(ctx context.Context, choice orchestrator.AgentChoice) 
 		p.mu.Unlock()
 		selected = &backend
 	}
+	// The hostd's own capacity holds every run whose CLI starts there,
+	// priority dispatch included: it is the machine's, not a
+	// connection's.
+	var hostdLease *connectionLease
+	if runsOnHostd(live, route, selected.Framework) {
+		capacity := p.hostdCapacity(ctx, route)
+		p.mu.Lock()
+		if full := p.hostdFullLocked(route, capacity, time.Now()); full != nil {
+			p.mu.Unlock()
+			return nil, full
+		}
+		key := hostdLeaseKey(route.Name)
+		hostdLease = &connectionLease{pool: p, id: key, taken: time.Now()}
+		p.inflight[key] = append(p.inflight[key], hostdLease)
+		p.mu.Unlock()
+	}
 	if !choice.Priority {
 		p.mu.Lock()
 		lease = &connectionLease{pool: p, id: selected.ID, taken: time.Now()}
@@ -833,11 +895,21 @@ func (p *AgentPool) Build(ctx context.Context, choice orchestrator.AgentChoice) 
 	built, err := p.buildOn(ctx, live, framework, selected, chosenModel, settings, secretStore)
 	if err != nil || built == nil || selected == nil {
 		lease.Release()
+		hostdLease.Release()
 		return built, err
+	}
+	credential := selected.CredentialOwnerID()
+	if route.scopesPauses(live) && ambientCredential(live, *selected) {
+		credential = hostdPauseOwner(credential, route.Name)
+	}
+	var instance, owner string
+	if route.Name != "" {
+		instance, owner = p.hostdAudit(ctx, live, route)
 	}
 	key := backendUnavailableKey(*selected)
 	return &BackendFramework{Framework: built, Id: selected.ID, Lease: lease,
-		Credential: selected.CredentialOwnerID(), Team: model.ConnectionTeam(*selected),
+		HostdLease: hostdLease, Hostd: route.Name, HostdInstance: instance, HostdOwner: owner, store: p.Store,
+		Credential: credential, Team: model.ConnectionTeam(*selected),
 		FrameworkName: model.NormalizeAgentFrameworkName(selected.Framework),
 		Model:         runModelOn(*selected, chosenModel),
 		LimitPaused:   p.Pause != nil,
@@ -1102,6 +1174,12 @@ type BackendFramework struct {
 	// lease is this run's slot under the connection's Concurrency,
 	// given back when the run returns.
 	Lease *connectionLease
+	// HostdLease is this run's slot under its hostd's capacity, and
+	// Hostd, HostdInstance and HostdOwner the hostd it was routed to,
+	// recorded against the run when it starts (model.TaskRunHostd).
+	HostdLease                       *connectionLease
+	Hostd, HostdInstance, HostdOwner string
+	store                            *model.Store
 	// Credential is the connection whose key this run spends -- Id's
 	// own, or the one Id borrows (model.AgentBackend.CredentialOwnerID)
 	// -- and Team is Id's team. Together they are what a usage limit met
@@ -1152,11 +1230,15 @@ func (f *BackendFramework) Release() {
 		return
 	}
 	f.Lease.Release()
+	f.HostdLease.Release()
 }
 
 func (f *BackendFramework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result, error) {
 	f.Lease.start()
 	defer f.Lease.Release()
+	f.HostdLease.start()
+	defer f.HostdLease.Release()
+	f.recordRunHostd(ctx, cfg.TaskID, cfg.RunID)
 	result, err := f.Framework.Run(ctx, cfg)
 	var limit *agent.UsageLimitError
 	if errors.As(err, &limit) {

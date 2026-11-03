@@ -138,21 +138,13 @@ func (c *Client) ListExternalAgentTokens(ctx context.Context) ([]ExternalAgentTo
 	return out, nil
 }
 
-func (c *Client) canIssuePersonExternalAgentToken(ctx context.Context, actor model.Principal) bool {
-	switch actor.Kind {
-	case model.PrincipalHuman:
-		return true
-	case model.PrincipalService:
-		return c.isExplicitlyAllowedServiceAccount(ctx, actor.ID)
-	default:
-		return false
-	}
+func (c *Client) canIssuePersonExternalAgentToken(_ context.Context, actor model.Principal) bool {
+	return actor.Kind == model.PrincipalHuman
 }
 
 // CreateExternalAgentToken issues a new scoped external agent credential.
 // Issuing a credential that includes any dangerous scope or a requires_person
-// scope set requires a human principal or a service account the operator listed
-// explicitly in -ui-allowed-principals.
+// scope set requires a human principal.
 func (c *Client) CreateExternalAgentToken(ctx context.Context, req CreateExternalAgentTokenRequest) (IssuedExternalAgentToken, error) {
 	name, err := model.ValidateExternalAgentName(req.Name)
 	if err != nil {
@@ -164,12 +156,6 @@ func (c *Client) CreateExternalAgentToken(ctx context.Context, req CreateExterna
 	}
 	actor := c.requestActor(ctx).Actor
 	if needsPerson && !c.canIssuePersonExternalAgentToken(ctx, actor) {
-		if actor.Kind == model.PrincipalService {
-			return IssuedExternalAgentToken{}, forbiddenErrorf(
-				"external agent credential %q includes a dangerous scope or a requires_person scope set: a service account may issue it only when listed explicitly in -ui-allowed-principals",
-				name,
-			)
-		}
 		return IssuedExternalAgentToken{}, forbiddenErrorf(
 			"external agent credential %q includes a dangerous scope or a requires_person scope set: only a person may issue it",
 			name,
@@ -256,12 +242,6 @@ func (c *Client) RotateExternalAgentToken(ctx context.Context, id string) (Issue
 	}
 	actor := c.requestActor(ctx).Actor
 	if needsPerson && !c.canIssuePersonExternalAgentToken(ctx, actor) {
-		if actor.Kind == model.PrincipalService {
-			return IssuedExternalAgentToken{}, forbiddenErrorf(
-				"external agent credential %q includes a dangerous scope or a requires_person scope set: a service account may rotate it only when listed explicitly in -ui-allowed-principals",
-				existing.Name,
-			)
-		}
 		return IssuedExternalAgentToken{}, forbiddenErrorf(
 			"external agent credential %q includes a dangerous scope or a requires_person scope set: only a person may rotate it",
 			existing.Name,
@@ -503,6 +483,16 @@ func (s *Server) authenticateExternalAgent(w http.ResponseWriter, r *http.Reques
 	return tok, release, true
 }
 
+// tokenWriter is who an external agent token write was made by, for its
+// log line: the label and source RequestActor gives, as config writes
+// log theirs (recordConfigWrite). A credential is not configuration, so
+// it has no config_audit row; this line is its audit trail
+// (docs/test-runs/2026-11-03-operator-attribution.md F6).
+func tokenWriter(r *http.Request) string {
+	who := RequestActor(r.Context())
+	return PrincipalLabel(who.Actor, who.OnBehalfOf) + " (" + sourceName(who.Actor.Source) + ")"
+}
+
 func (s *Server) handleListExternalAgentTokens(w http.ResponseWriter, r *http.Request) {
 	tokens, err := s.tasks.ListExternalAgentTokens(r.Context())
 	if err != nil {
@@ -522,8 +512,8 @@ func (s *Server) handleCreateExternalAgentToken(w http.ResponseWriter, r *http.R
 		writeClientError(w, err)
 		return
 	}
-	log.Printf("grain external-agent: issued credential id=%s name=%q scopeSet=%q scopes=%v repos=%v",
-		issued.ID, issued.Name, issued.ScopeSet, issued.Scopes, issued.Repos)
+	log.Printf("grain external-agent: %s issued credential id=%s name=%q scopeSet=%q scopes=%v repos=%v",
+		tokenWriter(r), issued.ID, issued.Name, issued.ScopeSet, issued.Scopes, issued.Repos)
 	writeJSON(w, http.StatusCreated, issued)
 }
 
@@ -535,7 +525,7 @@ func (s *Server) handleRotateExternalAgentToken(w http.ResponseWriter, r *http.R
 		return
 	}
 	s.externalLimiter.reset(strings.TrimSpace(id))
-	log.Printf("grain external-agent: rotated credential id=%s name=%q", issued.ID, issued.Name)
+	log.Printf("grain external-agent: %s rotated credential id=%s name=%q", tokenWriter(r), issued.ID, issued.Name)
 	writeJSON(w, http.StatusOK, issued)
 }
 
@@ -546,7 +536,7 @@ func (s *Server) handleRevokeExternalAgentToken(w http.ResponseWriter, r *http.R
 		return
 	}
 	s.externalLimiter.reset(strings.TrimSpace(id))
-	log.Printf("grain external-agent: revoked credential id=%s", id)
+	log.Printf("grain external-agent: %s revoked credential id=%s", tokenWriter(r), id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -557,7 +547,7 @@ func (s *Server) handleDeleteExternalAgentToken(w http.ResponseWriter, r *http.R
 		return
 	}
 	s.externalLimiter.reset(strings.TrimSpace(id))
-	log.Printf("grain external-agent: deleted credential id=%s", id)
+	log.Printf("grain external-agent: %s deleted credential id=%s", tokenWriter(r), id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -568,7 +558,7 @@ func (s *Server) handleRevokeAllExternalAgentTokens(w http.ResponseWriter, r *ht
 		return
 	}
 	s.externalLimiter.resetAll()
-	log.Printf("grain external-agent: kill switch revoked %d active credential(s)", n)
+	log.Printf("grain external-agent: %s's kill switch revoked %d active credential(s)", tokenWriter(r), n)
 	writeJSON(w, http.StatusOK, RevokeAllExternalAgentTokensResponse{Revoked: n})
 }
 

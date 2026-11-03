@@ -95,6 +95,7 @@ var routeDocs = map[string]string{
 	"POST /api/tasks/{id}/stop":                                            "Stop a task's running attempt.",
 	"POST /api/tasks/{id}/pause":                                           "Pause a task in any open state, releasing everything it holds and keeping its place; immediate true skips a running task's grace period.",
 	"POST /api/tasks/{id}/resume":                                          "Resume a paused task, back to exactly the state and dispatch standing it had.",
+	"PUT /api/tasks/{id}/hostd":                                            "Pin a task's host work to one grain hostd by name, or to any hostd carrying label=value[,label=value]; \"\" is the default hostd.",
 	"PUT /api/tasks/{id}/goal":                                             "Set a task's goal -- {kind, spec, on_met, on_limit}, as propose_task's goal -- replacing any it had; grain closes or rests the task when it is met.",
 	"DELETE /api/tasks/{id}/goal":                                          "Remove a task's goal, making it an ordinary task again.",
 	"POST /api/tasks/{id}/reopen":                                          "Reopen a closed task.",
@@ -123,8 +124,8 @@ var routeDocs = map[string]string{
 	"PUT /api/repos/{owner}/{name}/release-secrets/{secret}":               "Set the value of one of a repository's release secrets.",
 	"DELETE /api/repos/{owner}/{name}/release-secrets/{secret}":            "Delete one of a repository's release secrets.",
 	"POST /api/repos/{owner}/{name}/release-runs":                          "Start a release run of a repository, at a branch, ref or commit, optionally only some jobs.",
-	"POST /api/repos/{owner}/{name}/pending-releases/{version}/approve":    "Approve a pending trunk release (vX.Y.0), making it official; short_soak_ok accepts a soak under the minimum, which is otherwise refused. Only a person may; an agent is refused.",
-	"POST /api/repos/{owner}/{name}/pending-releases/{version}/reject":     "Reject a pending trunk release (vX.Y.0), dropping its release candidate. Only a person may; an agent is refused.",
+	"POST /api/repos/{owner}/{name}/pending-releases/{version}/approve":    "Approve a pending trunk release (vX.Y.Z), making it official; short_soak_ok accepts a soak under the minimum, which is otherwise refused. Only a person may; an agent is refused.",
+	"POST /api/repos/{owner}/{name}/pending-releases/{version}/reject":     "Reject a pending trunk release (vX.Y.Z), dropping its release candidate. Only a person may; an agent is refused.",
 	"POST /api/repos/{owner}/{name}/base-branch-runs":                      "Start a grain CI run of one of a repository's base branches.",
 	"PUT /api/repos/{owner}/{name}/work-ownership":                         "Set who owns a repository's work: its default, or one work item's override.",
 	"PUT /api/repos/{owner}/{name}/capabilities":                           "Set the capabilities every task on a repository is granted by default.",
@@ -260,6 +261,9 @@ var routeDocs = map[string]string{
 	"POST /api/external-agents/tokens/{id}/revoke":                         "Revoke an external agent credential immediately.",
 	"DELETE /api/external-agents/tokens/{id}":                              "Delete an external agent credential record.",
 	"POST /api/external-agents/tokens/revoke-all":                          "Emergency kill switch: revoke every active external agent credential immediately.",
+	"GET /api/access/principals":                                           "List the allowed users and groups admitted through verified-identity sign-in.",
+	"POST /api/access/principals":                                          "Add a user:<email> or group:<email> entry to the allowed users and groups list (idempotent when already present).",
+	"DELETE /api/access/principals/{entry}":                                "Remove a user:<email> or group:<email> entry from the allowed users and groups list.",
 }
 
 // routeBodies is the request type a route reads its body into, which
@@ -283,6 +287,7 @@ var routeBodies = map[string]any{
 	"POST /api/sandbox-probe":                                        SandboxProbeRequest{},
 	"POST /api/tasks/{id}/pause":                                     pauseRequest{},
 	"PUT /api/tasks/{id}/goal":                                       setGoalRequest{},
+	"PUT /api/tasks/{id}/hostd":                                      setHostdRequest{},
 	"POST /api/tasks/{id}/run-now":                                   runNowRequest{},
 	"POST /api/tasks/{id}/comments":                                  addCommentRequest{},
 	"POST /api/tasks/{id}/change-mail":                               MailChangeRequest{},
@@ -386,6 +391,7 @@ var routeBodies = map[string]any{
 	"POST /api/tests/quarantine":                                     QuarantineTestRequest{},
 	"POST /api/pipeline-pause":                                       pausePipelineRequest{},
 	"POST /api/external-agents/tokens":                               CreateExternalAgentTokenRequest{},
+	"POST /api/access/principals":                                    AllowPrincipalRequest{},
 }
 
 // routeQueries is the query parameters a route's handler reads, each

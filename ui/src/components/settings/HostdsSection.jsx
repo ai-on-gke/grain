@@ -70,7 +70,7 @@ export function connectionText(h) {
   const c = h.connection;
   if (!c) return "Never connected";
   if (c.connected) {
-    return `Connected${c.host ? ` from ${c.host}` : ""}${c.build ? ` (${c.build})` : ""}`;
+    return `Connected${c.host ? ` from ${c.host}` : ""}${c.principal ? ` as ${c.principal}` : ""}${c.build ? ` (${c.build})` : ""}`;
   }
   return "Disconnected";
 }
@@ -163,8 +163,10 @@ export default function HostdsSection({ showError }) {
             grain hostd -server &lt;this daemon&apos;s URL&gt; -token-file
             &lt;file&gt;
           </code>{" "}
-          and is known by the token it presents. Adding one shows the command
-          that installs it on its machine.
+          and is known by the token it presents. A hostd that dials in through
+          IAP is also admitted only as its owner: set the owner to the email or
+          service account it connects as. Adding one shows the command that
+          installs it on its machine.
         </Typography>
         {issued ? (
           <Alert
@@ -228,8 +230,18 @@ export default function HostdsSection({ showError }) {
                           }
                           inputProps={{ "aria-label": "Owner" }}
                         />
+                      ) : h.owner ? (
+                        h.owner
+                      ) : remote ? (
+                        <Typography
+                          variant="body2"
+                          color="text.secondary"
+                          data-testid={`hostd-owner-missing-${h.name}`}
+                        >
+                          None: needed to dial in through IAP
+                        </Typography>
                       ) : (
-                        h.owner || "—"
+                        "—"
                       )}
                     </TableCell>
                     <TableCell>
@@ -334,7 +346,7 @@ export default function HostdsSection({ showError }) {
             label="Owner"
             value={owner}
             onChange={(e) => setOwner(e.target.value)}
-            helperText="Email or service account"
+            helperText="The email or service account it connects as"
           />
           <TextField
             size="small"

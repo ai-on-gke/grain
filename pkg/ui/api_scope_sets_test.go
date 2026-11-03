@@ -15,6 +15,10 @@
 package ui_test
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -184,5 +188,79 @@ func TestAPIScopeSetsIncludeCataloguePresetAndRetiredInProcessEntries(t *testing
 	}
 	if ciRead := byName["grain/ci-read"]; ciRead.Catalogue != nil {
 		t.Errorf("unrestricted grain/ci-read has Catalogue = %+v, want nil", ciRead.Catalogue)
+	}
+}
+
+// Task #2728: the daemon and grain demo build Config.Capabilities once,
+// at startup, so a set declared, edited or removed afterwards has to be
+// read again by GET /api/config and by the grant check rather than
+// taken from that snapshot -- otherwise no picker ever offered a set
+// made with New scope set, and one since removed went on being offered.
+func TestScopeSetsDeclaredAfterStartupAreOfferedAndGrantable(t *testing.T) {
+	srv, client := testServer(t)
+	t.Cleanup(func() { _ = model.InstallAPIScopeSets(nil) })
+	client.Config.Capabilities = append(ui.OfferedCapabilities(), ui.APICapabilities()...)
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	ui.SetAccessCodeForTest(srv, testAccessCode)
+
+	offered := func() *ui.Capability {
+		t.Helper()
+		var cfg struct {
+			Capabilities []ui.Capability `json:"capabilities"`
+		}
+		if code := postJSON(t, ts, http.MethodGet, "/api/config", nil, &cfg); code != http.StatusOK {
+			t.Fatalf("GET /api/config: %d", code)
+		}
+		for i := range cfg.Capabilities {
+			if cfg.Capabilities[i].ID == "api:ops/triage" {
+				return &cfg.Capabilities[i]
+			}
+		}
+		return nil
+	}
+	if row := offered(); row != nil {
+		t.Fatalf("api:ops/triage offered before it was declared: %+v", row)
+	}
+
+	put := ui.PutAPIScopeSetRequest{Set: model.APIScopeSet{Name: "ops/triage",
+		Description: "Triage the queue", Scopes: []string{"tasks:read"}}}
+	if code := postJSON(t, ts, http.MethodPut, "/api/api-scope-sets", put, nil); code != http.StatusOK {
+		t.Fatalf("PUT /api/api-scope-sets: %d", code)
+	}
+	if row := offered(); row == nil || !row.Preset || !slices.Equal(row.Scopes, []string{"tasks:read"}) {
+		t.Fatalf("api:ops/triage offered as %+v after it was declared", row)
+	}
+
+	var task map[string]any
+	if code := postJSON(t, ts, http.MethodPost, "/api/tasks", map[string]any{"title": "Triage the queue"}, &task); code != http.StatusOK && code != http.StatusCreated {
+		t.Fatalf("POST /api/tasks: %d %v", code, task)
+	}
+	grantPath := fmt.Sprintf("/api/tasks/%v/capabilities", task["id"])
+	grant := map[string]any{"id": "api:ops/triage", "attach": true}
+	if code := postJSON(t, ts, http.MethodPost, grantPath, grant, nil); code != http.StatusOK {
+		t.Fatalf("granting api:ops/triage: %d", code)
+	}
+
+	put.Set.Scopes = []string{"tasks:read", "ci:read"}
+	if code := postJSON(t, ts, http.MethodPut, "/api/api-scope-sets", put, nil); code != http.StatusOK {
+		t.Fatalf("PUT /api/api-scope-sets: %d", code)
+	}
+	if row := offered(); row == nil || !slices.Contains(row.Scopes, "ci:read") {
+		t.Fatalf("api:ops/triage offered as %+v after it was edited", row)
+	}
+
+	if code := postJSON(t, ts, http.MethodPost, "/api/api-scope-sets/delete", ui.DeleteAPIScopeSetRequest{Name: "ops/triage"}, nil); code != http.StatusOK {
+		t.Fatalf("POST /api/api-scope-sets/delete: %d", code)
+	}
+	if row := offered(); row != nil {
+		t.Fatalf("api:ops/triage still offered after it was removed: %+v", row)
+	}
+	created, err := client.CreateTask(context.Background(), ui.CreateTaskRequest{Title: "Triage again"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetCapability(context.Background(), created.ID, "api:ops/triage", true); err == nil {
+		t.Error("a removed set was granted")
 	}
 }

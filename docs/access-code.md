@@ -32,7 +32,8 @@ network listener takes depends on two settings:
   `-ui-iap-issuer` and `-ui-iap-keys-url` for a signing proxy other than
   IAP. Grain checks `X-Goog-IAP-JWT-Assertion` against IAP's keys,
   issuer, audience and expiry. A caller whose assertion verifies is
-  signed in as the email it names, if `-ui-allowed-principals` admits
+  signed in as the email it names, if the deployment's allowed users and
+  groups list ([Who is let in](#who-is-let-in)) admits
   it, with no access code. An assertion that is present but does not
   verify is refused with a `401` and never falls back to the code (a
   browser loading the UI is shown a "Sign-in could not be verified" page
@@ -69,6 +70,70 @@ a way in which does not depend on IAP, from the daemon's own host:
 ```bash
 kubectl -n grain exec deploy/grain -- env GRAIN_SERVER=http://127.0.0.1:8080 GRAIN_DATA_DIR=/data grain list
 ```
+
+## Who is let in
+
+When a request carries a verified identity (`X-Goog-IAP-JWT-Assertion`,
+or a registered `IdentityVerifier`'s signed header), grain checks that
+identity against the deployment's **Allowed users and groups** list in
+the database (`allowed_principal`).
+
+- **Entries:** `user:<email>` for an individual person and
+  `group:<email>` for a group. Group membership is resolved transitively
+  through the Cloud Identity groups API (cached briefly) only when at
+  least one `group:` entry is present and no `user:` entry already
+  matched.
+- **Equal privileges:** A verified user admitted through the list has
+  full operator access, the same as an access-code holder, including
+  viewing, adding and removing entries on the list. Anyone not on the
+  list gets a `403` naming **Settings → Access** and `grain access allow`.
+- **Live changes (no restart):** Adding or removing an entry takes
+  effect immediately. Manage the list in **Settings → Access → Allowed
+  users and groups** (`/settings/access#allowed-principals`), over the
+  REST API (`GET /api/access/principals`, `POST /api/access/principals`,
+  `DELETE /api/access/principals/{entry}`), or from the CLI:
+
+  ```bash
+  grain access list
+  grain access allow user:alice@example.com
+  grain access allow group:team@example.com
+  grain access deny user:alice@example.com
+  ```
+
+  `grain access allow` is a no-op when the entry is already present, so
+  installers can re-run it safely. Removing yourself or the last entry
+  is allowed (with a warning in the UI), because the access code still
+  works on a connection that does not go through the identity-aware
+  proxy -- though behind IAP a verified identity takes precedence over
+  the code, and with `-ui-require-iap` the code is taken over loopback
+  only ([Break-glass over loopback](#break-glass-over-loopback)). Every
+  addition and removal is recorded in `config_audit` (`surface =
+  "access"`).
+- **No implicit owner entry:** the daemon's own `-as` actor is no
+  longer admitted by default. A deployment that relied on the old
+  default allowlist (no `-ui-allowed-principals`) admits no verified
+  person after upgrading until someone runs `grain access allow
+  user:<owner-email>` -- with the access code, or from the daemon's own
+  host when `-ui-require-iap` is set.
+- **Agent API scopes:** `api:access:read` allows listing entries.
+  `api:access:write` is a **dangerous** scope: only a person may grant
+  it, every call requires an acting reason (`X-Grain-Acting-Reason`)
+  recorded in `config_audit`, and it is refused on the `sandbox-cli`
+  channel. Without `api:access:write`, sandboxes and agents cannot
+  modify the list.
+- **State repository:** `allowed_principal` lives in the database (and
+  cold backups) and is never exported to `grain/config` pull requests,
+  so a config PR can neither lock operators out nor grant sign-in
+  access.
+- **One-time migration off `-ui-allowed-principals`:** On start, if
+  `-ui-allowed-principals` or `$GRAIN_ALLOWED_PRINCIPALS` is set and the
+  database list has never been populated or migrated, grain imports its
+  `user:` and `group:` entries once and logs the import. Entries of
+  other kinds (`serviceAccount:`, `domain:`) are not imported; each
+  dropped entry is logged and shown as a warning in **Settings →
+  Access**. On subsequent starts, `-ui-allowed-principals` and
+  `$GRAIN_ALLOWED_PRINCIPALS` are deprecated: grain logs a warning when
+  either is set and ignores its value.
 
 ## Where it lives and how to see it
 
@@ -170,19 +235,55 @@ same answer as any other wrong code.
 
 ### A grain hostd dialing in
 
-The daemon serves `GET /api/hostd/connect` without the access code: a
-`grain hostd -server` on another machine upgrades it, and is admitted
-only for the hostd token it presents (`-hostd-token-file`), whatever
-else the request carries (`hostd.Remote`). A bearer on that route (the
-hostd token, or an IAP token) is never counted as an access-code guess.
+The daemon serves `GET /api/hostd/connect` without the access code. A
+`grain hostd -server` on another machine upgrades it and presents its
+hostd token, which says which hostd it is (the hostd registry,
+`/api/hostds`, or the deprecated shared `-hostd-token-file`). A bearer
+on that route (the hostd token, or an IAP token) is never counted as an
+access-code guess.
+
+What else the hostd needs depends on how it reaches the daemon:
+
+- **Remote**: it dials in through the IAP Gateway or another registered
+  identity verifier's proxy, so the request carries a verified identity.
+  The daemon records that identity as the connection's principal and
+  checks that it is admitted (either on the database allowlist in
+  **Settings → Access**, a daemon-provisioned non-pool service account,
+  or the non-pool service account registered as an active hostd's owner
+  in **Settings → Hostds**). The
+  identity must also equal the hostd row's owner, compared as full,
+  lowercased emails. A stolen hostd token is no use without its
+  owner's identity. Service accounts may be owners, so a hostd running
+  under Workload Identity or a key needs its service account as the
+  owner. The daemon refuses, and logs, a remote hostd that connects as
+  somebody else, a remote hostd whose row has no owner, and a request
+  that came through a proxy, or from another host to a daemon with a
+  verifier configured, with no verified identity. It never falls back to
+  the token alone.
+- **Local**: over loopback with no forwarding headers and no assertion,
+  such as through `kubectl port-forward`. The token alone names it, as
+  it always has, and it needs no owner. The same goes for every hostd
+  of a daemon that has no identity verifier configured. The co-located
+  hostd at `/run/grain-hostd/hostd.sock` does not dial in at all.
+
+Set the owner when you register the hostd (Settings → Hostds,
+`grain hostds register -owner <email> <name>`, or `POST /api/hostds`),
+or later (`grain hostds set-owner <name> <email>`, or `PATCH
+/api/hostds/{name}`). For the shared token, use `-hostd-token-owner`.
+Start the hostd with `-iap-audience <IAP client ID>` so that it sends an
+ID token from its service account or its user's login. At startup it
+logs the email that token names, which is the owner the daemon expects.
 
 `GET /api/hostd/install.sh`, the script that sets such a hostd up
 (Settings → Hostds shows the command when it issues a token), is served
 without the access code too: the machine fetching it holds no credential
 yet, and the script carries none. It holds the daemon's URL as the
 request reached it, its release and its image, and reads the hostd token
-on the machine itself, from stdin or `$GRAIN_HOSTD_TOKEN`.
-The remote executor routes that were open the same way were removed with
+on the machine itself, from stdin or `$GRAIN_HOSTD_TOKEN`
+(`--iap-audience` for a hostd that dials in through IAP).
+
+The remote executor routes that were open the same way, including the
+executor bootstrap routes (`executorBootstrapRoute`), were removed with
 remote executors ([executors-removed.md](executors-removed.md)).
 
 ## The CLI and the processes grain starts

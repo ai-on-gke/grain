@@ -44,7 +44,7 @@ var NewTaskFormFieldIDs = []string{
 	"title", "description", "attachments", "customFields", "repo", "newBranch", "base",
 	"writes", "reads", "autoMerge", "noPort", "fixesBaseBranch", "grants", "legacyCapabilities",
 	"model", "dependsOn", "agentBackendId", "networkAccess", "nothingNeededAction",
-	"reviewTemplateId", "promptExtension", "sandboxShape", "approved", "atFront",
+	"reviewTemplateId", "promptExtension", "hostd", "sandboxShape", "approved", "atFront",
 }
 
 // IsNewTaskFormField reports whether id names a field of the form.

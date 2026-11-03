@@ -26,13 +26,14 @@ import (
 )
 
 type recordingProposer struct {
-	got []ConfigChangeProposal
+	got      []ConfigChangeProposal
+	warnings []string
 }
 
 func (r *recordingProposer) ProposeConfigChange(_ context.Context, p ConfigChangeProposal) (*model.PendingConfigChange, error) {
 	r.got = append(r.got, p)
 	return &model.PendingConfigChange{Branch: p.Branch, HeadSHA: p.HeadSHA, Files: []string{"settings/x.yml"},
-		Validation: model.ConfigChangeValidation{OK: true}}, nil
+		Validation: model.ConfigChangeValidation{OK: true, Warnings: r.warnings}}, nil
 }
 
 func proposalGit(t *testing.T, dir string, args ...string) string {
@@ -97,6 +98,44 @@ func TestProposeConfigChangeCommitsAndPushesTheProposalBranch(t *testing.T) {
 	}
 	if msg := proposalGit(t, remote, "log", "-1", "--format=%B", got.HeadSHA); !strings.Contains(msg, "Raise a to 2") || !strings.Contains(msg, "Because.") {
 		t.Fatalf("commit message = %q", msg)
+	}
+}
+
+// A validation warning is on the person's card; the agent that proposed
+// the change is told the same rather than that it is all green
+// (docs/test-runs/2026-11-03-config-state.md, finding 2).
+func TestProposeConfigChangeRelaysValidationWarnings(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := t.TempDir()
+	remote := filepath.Join(t.TempDir(), "config.git")
+	proposalGit(t, root, "init", "--quiet", "--bare", "-b", "main", remote)
+	seed := t.TempDir()
+	proposalGit(t, seed, "init", "--quiet", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "x.yml"), []byte("a: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	proposalGit(t, seed, "add", "-A")
+	proposalGit(t, seed, "commit", "--quiet", "-m", "seed")
+	proposalGit(t, seed, "push", "--quiet", remote, "main")
+	proposalGit(t, root, "clone", "--quiet", remote, ConfigStateDir)
+	state := filepath.Join(root, ConfigStateDir)
+	proposalGit(t, state, "config", "user.name", "grain director")
+	proposalGit(t, state, "config", "user.email", "grain@localhost")
+	if err := os.WriteFile(filepath.Join(state, "x.yml"), []byte("a: 2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	warning := "settings/schedules.yml (id = 'system:infra-review'): title edits content grain owns"
+	proposer := &recordingProposer{warnings: []string{warning}}
+	tool := NewProposeConfigChangeTools(proposer, "42", NewSandboxTools(root))[0]
+	res := tool.Handler(context.Background(), map[string]any{"summary": "Rename the review"})
+	if res.IsError {
+		t.Fatalf("propose_config_change: %s", res.Text)
+	}
+	if !strings.Contains(res.Text, warning) || strings.Contains(res.Text, "It passed config validation.") {
+		t.Fatalf("result does not relay the warning: %s", res.Text)
 	}
 }
 

@@ -396,3 +396,45 @@ func errCtx(err error) context.Context {
 	cancel(err)
 	return ctx
 }
+
+// The daemon can stop in the moment between a run's agent returning and
+// its result being processed: the session soak
+// (docs/test-runs/2026-11-02-session-lifecycle-soak.md) restarted the
+// daemon as a keep_running chat's turn ended, ProcessResult's first store
+// read failed on the cancelled daemon ctx, and the run was recorded
+// "finish-failed" -- a strike, and a retry backoff after the restart, for
+// a stop that said nothing about the task. It is interrupted, as a run
+// stopped a moment earlier is.
+func TestADaemonStoppedWhileARunsResultIsProcessedIsInterrupted(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	_, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	task := filedTask(t, ctx, store, "t1", repo)
+
+	daemonCtx, stopDaemon := context.WithCancel(ctx)
+	defer stopDaemon()
+	fw := agentFunc(func(runCtx context.Context, cfg agent.RunConfig) (*agent.Result, error) {
+		// The agent's turn is over and it answered cleanly; the daemon is
+		// stopped before grain turns that answer into its effects.
+		stopDaemon()
+		return &agent.Result{FinalText: "turn answered"}, nil
+	})
+	deps := orchestrator.Deps{
+		Store:      store,
+		Client:     client,
+		Sandboxes:  orchestrator.NewHostSandboxes(t.TempDir()),
+		Framework:  orchestrator.StaticFramework(fw),
+		MaxWorkers: 1,
+	}
+	_ = orchestrator.RunCycle(daemonCtx, deps, baseTime)
+
+	runs, err := store.Runs(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 || runs[0].Outcome != model.InterruptedOutcome {
+		t.Fatalf("runs = %+v, want the one run recorded %q rather than finish-failed", runs, model.InterruptedOutcome)
+	}
+	assertInterruptedTaskRequeued(t, ctx, store, task.ID, runs[0].ID)
+}

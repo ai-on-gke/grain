@@ -49,7 +49,13 @@ func startDialingHostd(t *testing.T, url, token, allowlist string) {
 		t.Skipf("no shell: %v", err)
 	}
 	sh, _ = filepath.EvalSymlinks(sh)
-	dir := t.TempDir()
+	// Not t.TempDir: a test that leaves a detached process running on a
+	// disconnected hostd can race its exit.json write against RemoveAll.
+	dir, err := os.MkdirTemp("", "hostd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
 	allow := filepath.Join(dir, "hostd.yaml")
 	if err := os.WriteFile(allow, []byte(fmt.Sprintf(allowlist, sh, dir)), 0o644); err != nil {
 		t.Fatal(err)

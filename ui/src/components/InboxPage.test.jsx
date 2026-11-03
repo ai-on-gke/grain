@@ -319,6 +319,17 @@ describe("InboxPage", () => {
     expect(container.querySelectorAll(".inbox-item")).toHaveLength(0);
   });
 
+  // 2026-11-03 walkthrough: with GET /api/tasks failing on a cold load the
+  // list App hands over is the empty one it started with, and the page
+  // promised that nothing was waiting.
+  it("does not say nothing is waiting before the task list has been read", () => {
+    renderInbox({ tasks: [], tasksLoaded: false });
+    expect(screen.queryByText(/Nothing is waiting on you/)).toBeNull();
+    expect(
+      screen.getByText(/The task list could not be read/),
+    ).toBeInTheDocument();
+  });
+
   it("approves a proposal from its own row", async () => {
     const onAct = vi.fn((mutate) => mutate());
     const user = userEvent.setup();

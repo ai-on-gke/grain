@@ -1,0 +1,33 @@
+{"id":"sched-1","title":"Nightly CI review","recurrence":{"kind":"github_workflow_run","githubWorkflowRun":{"workflow":"nightly.yml","conclusions":["failure","timed_out","startup_failure"],"branches":["main"]}}}
+11:    title: Nightly CI review
+12-    body: Triage a red nightly.yml run on main.
+13-    template: null
+14-    suite: null
+15-    trigger:
+16-      github_workflow_run:
+17-        workflow: nightly.yml
+18-        conclusions: [failure, timed_out, startup_failure]
+19-        branches: [main]
+== grain state check (schema 93)
+schema:  93, which is what this build of grain knows
+loaded:  28 rows across 5 tables
+  grain_config                 1
+  schedule                     6
+  schedule_grant               15
+  schedule_read                5
+  schedule_sequence            1
+ok: grain can load this
+exit=0
+== grain state check -migrate
+schema:  93, which is what this build of grain knows
+loaded:  28 rows across 5 tables
+  grain_config                 1
+  schedule                     6
+  schedule_grant               15
+  schedule_read                5
+  schedule_sequence            1
+ok: grain can load this
+exit=0
+== the fresh data dir's schedule
+{"id":"sched-1","title":"Nightly CI review","repo":"acme/widgets","base":"main","recurrence":{"kind":"github_workflow_run","githubWorkflowRun":{"workflow":"nightly.yml","conclusions":["failure","timed_out","startup_failure"],"branches":["main"]}}}
+2026/11/03 05:13:49 staterepo: loading /tmp/tmp.lNfiNX602F/fresh/.grain/state-repo as the deployment's state repository; importing its settings

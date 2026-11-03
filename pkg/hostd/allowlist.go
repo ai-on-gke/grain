@@ -109,8 +109,10 @@ type Allowlist struct {
 	// work for; 0 is no limit of its own. The daemon holds runs past it
 	// rather than starting them (Hello.Capacity).
 	Capacity int `yaml:"capacity"`
-	// Labels describe this hostd to the daemon, beside the registry's own
-	// labels for it, for host work that selects a hostd by label.
+	// Labels describe this hostd to the daemon in its hello, for display
+	// only. They never select it for host work: a label selector matches
+	// the registry's labels for the hostd, which an admin sets, and not
+	// what the hostd says about itself.
 	Labels map[string]string `yaml:"labels"`
 }
 

@@ -410,7 +410,7 @@ func TestSyncQualificationsGrantsGrainCIToGrainCIRepo(t *testing.T) {
 	}
 	found := false
 	for _, g := range task.Grants {
-		if g.Capability == "grain-ci" {
+		if g.Capability == model.GrainCIGrant {
 			found = true
 			break
 		}

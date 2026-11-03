@@ -1,0 +1,111 @@
+source	action	status	error
+code	setup-ext-api	200	
+code	setup-agent-task	201	
+code	setup-grant-api:tasks:write	200	
+code	setup-grant-api:tasks:read	200	
+code	setup-grant-api:memory:write	200	
+code	setup-grant-api:release-notes:write	200	
+code	setup-grant-api:tasks:admin	200	
+code	setup-grant-api:repos:write	200	
+code	setup-grant-api:dispatch:write	200	
+code	setup-ext-token	201	
+iap	file	201	
+iap	comment	200	
+iap	approve	200	
+iap	withdraw-approval	200	
+iap	auto-merge-off	200	
+iap	defer	200	
+iap	undefer	200	
+iap	depends-on	200	
+iap	depends-off	200	
+iap	pause	200	
+iap	resume	200	
+iap	auto-merge-on	200	
+iap	memory	200	
+iap	memory-forged	200	
+iap	memory-doc-forged	200	
+iap	release-note-forged	200	
+iap	repo-settings	200	
+iap	pipeline-pause	200	
+iap	pipeline-resume	200	
+iap	close	200	
+code	file	201	
+code	comment	200	
+code	approve	200	
+code	withdraw-approval	200	
+code	auto-merge-off	200	
+code	defer	200	
+code	undefer	200	
+code	depends-on	200	
+code	depends-off	200	
+code	pause	200	
+code	resume	200	
+code	auto-merge-on	200	
+code	memory	200	
+code	memory-forged	400	a memory's author may only name an agent, got human "bob@example.com": a person is recorded as themselves only when a verifier says who they are 
+code	memory-doc-forged	400	a memory's author may only name an agent, got human "bob@example.com": a person is recorded as themselves only when a verifier says who they are 
+code	release-note-forged	400	a release note's author may only name an agent, got human "bob@example.com": a person is recorded as themselves only when a verifier says who they are 
+code	repo-settings	200	
+code	pipeline-pause	200	
+code	pipeline-resume	200	
+code	close	200	
+loop	file	401	this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's "Enter access code" page, or send it as a bearer token (`grain access-code` prints it, to the account g
+loop	comment	401	this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's "Enter access code" page, or send it as a bearer token (`grain access-code` prints it, to the account g
+loop	approve	401	this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's "Enter access code" page, or send it as a bearer token (`grain access-code` prints it, to the account g
+loop	withdraw-approval	401	this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's "Enter access code" page, or send it as a bearer token (`grain access-code` prints it, to the account g
+loop	auto-merge-off	401	this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's "Enter access code" page, or send it as a bearer token (`grain access-code` prints it, to the account g
+loop	defer	401	this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's "Enter access code" page, or send it as a bearer token (`grain access-code` prints it, to the account g
+loop	undefer	401	this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's "Enter access code" page, or send it as a bearer token (`grain access-code` prints it, to the account g
+loop	depends-on	401	this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's "Enter access code" page, or send it as a bearer token (`grain access-code` prints it, to the account g
+loop	depends-off	401	this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's "Enter access code" page, or send it as a bearer token (`grain access-code` prints it, to the account g
+loop	pause	401	this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's "Enter access code" page, or send it as a bearer token (`grain access-code` prints it, to the account g
+loop	resume	401	this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's "Enter access code" page, or send it as a bearer token (`grain access-code` prints it, to the account g
+loop	auto-merge-on	401	this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's "Enter access code" page, or send it as a bearer token (`grain access-code` prints it, to the account g
+loop	memory	401	this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's "Enter access code" page, or send it as a bearer token (`grain access-code` prints it, to the account g
+loop	memory-forged	401	this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's "Enter access code" page, or send it as a bearer token (`grain access-code` prints it, to the account g
+loop	memory-doc-forged	401	this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's "Enter access code" page, or send it as a bearer token (`grain access-code` prints it, to the account g
+loop	release-note-forged	401	this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's "Enter access code" page, or send it as a bearer token (`grain access-code` prints it, to the account g
+loop	repo-settings	401	this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's "Enter access code" page, or send it as a bearer token (`grain access-code` prints it, to the account g
+loop	pipeline-pause	401	this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's "Enter access code" page, or send it as a bearer token (`grain access-code` prints it, to the account g
+loop	pipeline-resume	401	this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's "Enter access code" page, or send it as a bearer token (`grain access-code` prints it, to the account g
+loop	close	401	this daemon is single-tenant and every caller shows its access code: sign in with it on the UI's "Enter access code" page, or send it as a bearer token (`grain access-code` prints it, to the account g
+agent	file	201	
+agent	comment	200	
+agent	approve	200	
+agent	withdraw-approval	200	
+agent	auto-merge-off	200	
+agent	defer	200	
+agent	undefer	200	
+agent	depends-on	200	
+agent	depends-off	200	
+agent	pause	200	
+agent	resume	200	
+agent	auto-merge-on	403	an agent cannot turn on auto-merge or submit work: letting a change merge unreviewed is a person's decision (docs/agent-api.md) 
+agent	memory	200	
+agent	memory-forged	403	an agent cannot name somebody else as the author of work it files 
+agent	memory-doc-forged	403	an agent cannot name somebody else as the author of work it files 
+agent	release-note-forged	403	an agent cannot name somebody else as the author of work it files 
+agent	repo-settings	200	
+agent	pipeline-pause	200	
+agent	pipeline-resume	200	
+agent	close	200	
+ext	file	201	
+ext	comment	200	
+ext	approve	200	
+ext	withdraw-approval	200	
+ext	auto-merge-off	200	
+ext	defer	200	
+ext	undefer	200	
+ext	depends-on	200	
+ext	depends-off	200	
+ext	pause	200	
+ext	resume	200	
+ext	auto-merge-on	403	an agent cannot turn on auto-merge or submit work: letting a change merge unreviewed is a person's decision (docs/agent-api.md) 
+ext	memory	200	
+ext	memory-forged	403	an agent cannot name somebody else as the author of work it files 
+ext	memory-doc-forged	403	an agent cannot name somebody else as the author of work it files 
+ext	release-note-forged	403	an agent cannot name somebody else as the author of work it files 
+ext	repo-settings	403	"external:ext1" is not a person, so it may not modify repository acme/widgets 
+ext	pipeline-pause	200	
+ext	pipeline-resume	200	
+ext	close	200	

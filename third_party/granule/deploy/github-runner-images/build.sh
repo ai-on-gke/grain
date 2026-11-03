@@ -11,13 +11,15 @@ Environment for full images:
   RUNNER_IMAGES_REF      actions/runner-images ref (default: main)
 
 Common environment:
+  ACTIONS_RUNNER_VERSION actions/runner release installed in the guest,
+                         such as 2.329.0 (default: the latest release)
   OUTPUT_IMAGE           output OCI name (default: granule:github-<label>)
   PUSH                   true to push OUTPUT_IMAGE and immutable tags
   KEEP_WORK              true to retain local and Azure intermediates
 
 The three full images require an authenticated Azure CLI session. The
 builder needs packer, az, azcopy, guestfish, Docker,
-rsync, mke2fs, and enough space for a 75 GB source VHD plus its unpacked
+rsync, mke2fs, curl, and enough space for a 75 GB source VHD plus its unpacked
 rootfs and output layers.
 EOF
   exit 2
@@ -33,7 +35,7 @@ case "$label" in
   *) usage ;;
 esac
 
-for command in git docker rsync mke2fs; do
+for command in git docker rsync mke2fs curl; do
   command -v "$command" >/dev/null || { echo "missing required command: $command" >&2; exit 1; }
 done
 if [[ $label != ubuntu-slim ]]; then
@@ -51,6 +53,18 @@ runner_ref=${RUNNER_IMAGES_REF:-main}
 # branch name looks like: nothing that git would read as an option.
 if [[ ! $runner_ref =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]]; then
   echo "RUNNER_IMAGES_REF must be a commit, tag or branch name, got: $runner_ref" >&2
+  exit 2
+fi
+actions_runner_version=${ACTIONS_RUNNER_VERSION:-}
+if [[ -z $actions_runner_version ]]; then
+  # The newest release tag, read without the rate-limited REST API. A
+  # weekly build tracks it on purpose: GitHub stops accepting runners
+  # that fall too far behind its current release.
+  actions_runner_version=$(git ls-remote --tags --refs https://github.com/actions/runner.git 'v*' |
+    sed -n 's|.*refs/tags/v\([0-9]*\.[0-9]*\.[0-9]*\)$|\1|p' | sort -V | tail -1)
+fi
+if [[ ! $actions_runner_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "ACTIONS_RUNNER_VERSION must be a release version such as 2.329.0, got: $actions_runner_version" >&2
   exit 2
 fi
 azure_location=${AZURE_LOCATION:-eastus}
@@ -79,12 +93,16 @@ trap cleanup EXIT
 git -C "$work" clone https://github.com/actions/runner-images.git runner-images
 git -C "$work/runner-images" checkout --detach "$runner_ref"
 runner_revision=$(git -C "$work/runner-images" rev-parse HEAD)
+curl -fsSL --retry 3 -o "$work/actions-runner.tar.gz" \
+  "https://github.com/actions/runner/releases/download/v$actions_runner_version/actions-runner-linux-x64-$actions_runner_version.tar.gz"
 
 # GITHUB_PROXY is the Dockerfile build arg of the same name (see its
 # fetch-chv stage); deploy/publish-images.sh sets it in a grain sandbox.
 docker build --target runtime --build-arg GITHUB_PROXY="${GITHUB_PROXY:-}" \
   -t granule-runtime:"$runner_revision" "$repo_root"
-docker build --target guest-agent-artifacts \
+# guest-parts rather than guest-agent-artifacts: it adds granule-container,
+# which runs the Actions runner as the guest's workload.
+docker build --target guest-parts \
   --output type=local,dest="$work/agents" "$repo_root"
 mkdir -p "$work/rootfs" "$work/output"
 
@@ -125,7 +143,8 @@ else
 fi
 
 sudo "$script_dir/prepare-rootfs.sh" \
-  "$work/rootfs" "$work/agents" "$work/output" "$install_kernel"
+  "$work/rootfs" "$work/agents" "$work/output" "$install_kernel" \
+  "$work/actions-runner.tar.gz"
 
 # The guest-side contract this rootfs was prepared against, read out of
 # the overlay prepare-rootfs.sh just laid into it rather than written
@@ -140,6 +159,7 @@ docker build -f "$script_dir/Dockerfile" \
   --build-arg GRANULE_RUNTIME_IMAGE=granule-runtime:"$runner_revision" \
   --build-arg GITHUB_RUNNER_LABEL="$label" \
   --build-arg RUNNER_IMAGES_REVISION="$runner_revision" \
+  --build-arg ACTIONS_RUNNER_VERSION="$actions_runner_version" \
   --build-arg GRANULE_GUEST_CONTRACT="$guest_contract" \
   -t "$output_image" "$work/output"
 
@@ -161,4 +181,4 @@ if [[ $push == true ]]; then
   [[ $label != ubuntu-24.04 ]] || docker push "$latest_image"
 fi
 
-echo "built $output_image from actions/runner-images@$runner_revision"
+echo "built $output_image from actions/runner-images@$runner_revision with actions/runner $actions_runner_version"

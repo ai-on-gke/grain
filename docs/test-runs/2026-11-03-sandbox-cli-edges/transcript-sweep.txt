@@ -1,0 +1,327 @@
+== environment
+whoami=agent home=/home/agent grain=/usr/local/bin/grain
+grain -- sandbox CLI for this grain deployment (proxy: http://127.0.0.1:32889)
+$ grain ls src://
+  exit=0 secs=0.02 stdout=315B stderr=0B
+  | .dockerignore
+  | .git-blame-ignore-revs
+  | .github/
+  | .gitignore
+$ grain ls src://pkg
+  exit=0 secs=0.03 stdout=754B stderr=0B
+  | access/
+  | actionscache/
+  | agent/
+  | apierror/
+$ grain ls src://core
+  exit=1 secs=0.03 stdout=0B stderr=29B
+  | grain: not found: src://core
+== 1. grep walk: one symbol per package, pkg/orchestrator .. pkg/ui
+root	package	symbol	exit	hits	truncated	secs	first line
+src://pkg	orchestrator	ReadoptSandbox	0	1	0	0.30	orchestrator/adopt.go:56:func ReadoptSandbox(ctx context.Context, sandboxes Sandboxes, name string) (Sandbox, error) {
+src://	orchestrator	ReadoptSandbox	0	1	0	0.54	pkg/orchestrator/adopt.go:56:func ReadoptSandbox(ctx context.Context, sandboxes Sandboxes, name string) (Sandbox, error)
+src://pkg	pkgcache	SaveCA	0	1	0	0.26	pkgcache/ca.go:208:func SaveCA(path string, ca *CA) error {
+src://	pkgcache	SaveCA	0	1	0	0.55	pkg/pkgcache/ca.go:208:func SaveCA(path string, ca *CA) error {
+src://pkg	policy	OpenAuditLog	0	1	0	0.28	policy/audit.go:84:func OpenAuditLog(path string) (*AuditLog, error) {
+src://	policy	OpenAuditLog	0	1	0	0.56	pkg/policy/audit.go:84:func OpenAuditLog(path string) (*AuditLog, error) {
+src://pkg	portpick	Pick	0	1	0	0.27	portpick/portpick.go:119:type Pick struct {
+src://	portpick	Pick	0	1	0	0.56	pkg/portpick/portpick.go:119:type Pick struct {
+src://pkg	ports	InConvention	0	1	0	0.28	ports/ports.go:79:func InConvention(port int) bool {
+src://	ports	InConvention	0	1	0	0.53	pkg/ports/ports.go:79:func InConvention(port int) bool {
+src://pkg	procgroup	KillPID	0	1	0	0.27	procgroup/procgroup.go:61:func KillPID(pid int) error {
+src://	procgroup	KillPID	0	1	0	0.54	pkg/procgroup/procgroup.go:61:func KillPID(pid int) error {
+src://pkg	redact	pattern	0	1	0	0.27	redact/redact.go:201:type pattern struct {
+src://	redact	pattern	0	1	0	0.55	pkg/redact/redact.go:201:type pattern struct {
+src://pkg	registryauth	IsGoogleRegistry	0	1	0	0.26	registryauth/registryauth.go:53:func IsGoogleRegistry(host string) bool {
+src://	registryauth	IsGoogleRegistry	0	1	0	0.55	pkg/registryauth/registryauth.go:53:func IsGoogleRegistry(host string) bool {
+src://pkg	releasenotes	Between	0	1	0	0.28	releasenotes/releasenotes.go:172:func Between(notes []Note, from, to string) []Note {
+src://	releasenotes	Between	0	1	0	0.56	pkg/releasenotes/releasenotes.go:172:func Between(notes []Note, from, to string) []Note {
+src://pkg	repodecl	LoadLifecycle	0	1	0	0.27	repodecl/lifecycle.go:55:func LoadLifecycle(tree fs.FS, repo model.RepoRef) (model.LifecycleDeclaration, string, error) 
+src://	repodecl	LoadLifecycle	0	1	0	0.53	pkg/repodecl/lifecycle.go:55:func LoadLifecycle(tree fs.FS, repo model.RepoRef) (model.LifecycleDeclaration, string, err
+src://pkg	runhost	RunFrom	0	1	0	0.26	runhost/host.go:50:func RunFrom(ctx context.Context) (Run, bool) {
+src://	runhost	RunFrom	0	1	0	0.54	pkg/runhost/host.go:50:func RunFrom(ctx context.Context) (Run, bool) {
+src://pkg	safepath	Within	0	1	0	0.27	safepath/safepath.go:52:func Within(root, p string) (string, error) {
+src://	safepath	Within	0	1	0	0.54	pkg/safepath/safepath.go:52:func Within(root, p string) (string, error) {
+src://pkg	sandboxaccess	SecretName	0	1	0	0.27	sandboxaccess/credentials.go:48:func SecretName(pod string) string { return "grain-access-" + pod }
+src://	sandboxaccess	SecretName	0	1	0	0.55	pkg/sandboxaccess/credentials.go:48:func SecretName(pod string) string { return "grain-access-" + pod }
+src://pkg	sandboxaddr	NewPool	0	1	0	0.27	sandboxaddr/sandboxaddr.go:187:func NewPool(cidr string) (*Pool, error) {
+src://	sandboxaddr	NewPool	0	1	0	0.54	pkg/sandboxaddr/sandboxaddr.go:187:func NewPool(cidr string) (*Pool, error) {
+src://pkg	sandboxcli	IsCommand	0	1	0	0.27	sandboxcli/sandboxcli.go:277:func IsCommand(args []string) bool { return isSandboxCommand(args) }
+src://	sandboxcli	IsCommand	0	1	0	0.54	pkg/sandboxcli/sandboxcli.go:277:func IsCommand(args []string) bool { return isSandboxCommand(args) }
+src://pkg	sandboximage	CheckContract	0	1	0	0.27	sandboximage/contract.go:246:func CheckContract(imageContract, granuleContract int) ContractCheck {
+src://	sandboximage	CheckContract	0	1	0	0.53	pkg/sandboximage/contract.go:246:func CheckContract(imageContract, granuleContract int) ContractCheck {
+src://pkg	schedulefilter	Attributes	0	1	0	0.27	schedulefilter/filter.go:251:func Attributes() []string {
+src://	schedulefilter	Attributes	0	1	0	0.54	pkg/schedulefilter/filter.go:251:func Attributes() []string {
+src://pkg	secrets	GenerateKey	0	1	0	0.26	secrets/crypto.go:93:func GenerateKey() (Key, error) {
+src://	secrets	GenerateKey	0	1	0	0.54	pkg/secrets/crypto.go:93:func GenerateKey() (Key, error) {
+src://pkg	secretsrepo	sanitize	0	1	0	0.27	secretsrepo/settings.go:178:func sanitize(s string) string {
+src://	secretsrepo	sanitize	0	1	0	0.53	pkg/secretsrepo/settings.go:178:func sanitize(s string) string {
+src://pkg	statemachine	WithReduceContext	0	1	0	0.26	statemachine/machine.go:213:func WithReduceContext(ctx context.Context, rc ReduceContext) context.Context {
+src://	statemachine	WithReduceContext	0	1	0	0.52	pkg/statemachine/machine.go:213:func WithReduceContext(ctx context.Context, rc ReduceContext) context.Context {
+src://pkg	staterepo	LoadExternal	0	1	0	0.27	staterepo/bind.go:744:func LoadExternal(ctx context.Context, r *Repo, db *sql.DB, version int) error {
+src://	staterepo	LoadExternal	0	1	0	0.52	pkg/staterepo/bind.go:744:func LoadExternal(ctx context.Context, r *Repo, db *sql.DB, version int) error {
+src://pkg	sysstat	NewHistory	0	1	0	0.26	sysstat/history.go:127:func NewHistory(hours int) *History {
+src://	sysstat	NewHistory	0	1	0	0.53	pkg/sysstat/history.go:127:func NewHistory(hours int) *History {
+src://pkg	systemlog	Journalctl	0	1	0	0.26	systemlog/systemlog.go:48:type Journalctl struct {
+src://	systemlog	Journalctl	0	1	0	0.53	pkg/systemlog/systemlog.go:48:type Journalctl struct {
+src://pkg	treeid	Archive	0	1	0	0.27	treeid/treeid.go:88:func Archive(ctx context.Context, dir, treeish string, w io.Writer) error {
+src://	treeid	Archive	0	1	0	0.54	pkg/treeid/treeid.go:88:func Archive(ctx context.Context, dir, treeish string, w io.Writer) error {
+src://pkg	trustboundary	OwnerApproval	0	1	0	0.31	trustboundary/trustboundary.go:318:func OwnerApproval(matches []Match) bool {
+src://	trustboundary	OwnerApproval	0	1	0	0.54	pkg/trustboundary/trustboundary.go:318:func OwnerApproval(matches []Match) bool {
+src://pkg	tunnel	TestPingFloodFromNonReadingPeerIsBounded	0	1	0	0.26	tunnel/mux/abuse_test.go:61:func TestPingFloodFromNonReadingPeerIsBounded(t *testing.T) {
+src://	tunnel	TestPingFloodFromNonReadingPeerIsBounded	0	1	0	0.49	pkg/tunnel/mux/abuse_test.go:61:func TestPingFloodFromNonReadingPeerIsBounded(t *testing.T) {
+src://pkg	ui	RotateLocalAPIToken	0	1	0	0.26	ui/accesscode.go:153:func RotateLocalAPIToken(path string) (string, error) {
+src://	ui	RotateLocalAPIToken	0	1	0	0.52	pkg/ui/accesscode.go:153:func RotateLocalAPIToken(path string) (string, error) {
+== 1b. the symbol only pkg/ui defines, whole-tree and by glob
+$ grain grep func RotateLocalAPIToken src://pkg
+  exit=0 secs=0.25 stdout=77B stderr=0B
+  | ui/accesscode.go:153:func RotateLocalAPIToken(path string) (string, error) {
+$ grain grep func RotateLocalAPIToken src://
+  exit=0 secs=0.51 stdout=81B stderr=0B
+  | pkg/ui/accesscode.go:153:func RotateLocalAPIToken(path string) (string, error) {
+$ grain grep func RotateLocalAPIToken src://pkg --glob ui/*.go
+  exit=0 secs=0.06 stdout=77B stderr=0B
+  | ui/accesscode.go:153:func RotateLocalAPIToken(path string) (string, error) {
+$ grain grep func RotateLocalAPIToken src://core/pkg
+  exit=1 secs=0.03 stdout=0B stderr=33B
+  | grain: not found: src://core/pkg
+$ grain grep NoSuchSymbolAnywhere_2716 src://
+  exit=0 secs=0.48 stdout=0B stderr=0B
+== 1c. --max
+$ grain grep func  src://pkg/ui --max 1
+  exit=0 secs=0.04 stdout=180B stderr=0B
+  | access_code_client_test.go:31:func accessCodeClient(c *ui.Client, url string) *ui.HTTPClient {
+  | [truncated at match limit (1 matches); pass --max 2 (grain grep) to raise the limit]
+$ grain grep func  src://pkg/ui --max 1 --glob accesscode.go
+  exit=0 secs=0.03 stdout=141B stderr=0B
+  | accesscode.go:80:func newAccessCode() (string, error) {
+  | [truncated at match limit (1 matches); pass --max 2 (grain grep) to raise the limit]
+$ grain grep func  src:// --max 3
+  exit=0 secs=0.16 stdout=256B stderr=0B
+  | .github/workflows/nightly.yml:161:          func main() {
+  | .github/workflows/tests.yml:282:          func main() {
+  | .github/workflows/tests.yml:1217:          func main() {
+  | [truncated at match limit (3 matches); pass --max 6 (grain grep) to raise the limit]
+$ grain grep func  src://pkg/ui --max 0
+  exit=2 secs=0.03 stdout=0B stderr=72B
+  | grain grep: --max "0" is not a match limit: it takes a positive integer
+$ grain grep func  src://pkg/ui --max -1
+  exit=2 secs=0.03 stdout=0B stderr=71B
+  | grain grep: --max "-1" is not a count: it takes a non-negative integer
+$ grain grep func  src://pkg/ui --max x
+  exit=2 secs=0.03 stdout=0B stderr=70B
+  | grain grep: --max "x" is not a count: it takes a non-negative integer
+$ grain grep func  src://pkg/ui --max 1e3
+  exit=2 secs=0.02 stdout=0B stderr=72B
+  | grain grep: --max "1e3" is not a count: it takes a non-negative integer
+$ grain grep func RotateLocalAPIToken src://pkg --max 100000
+  exit=0 secs=0.24 stdout=77B stderr=0B
+  | ui/accesscode.go:153:func RotateLocalAPIToken(path string) (string, error) {
+== 2. grain log -n
+$ grain log -n 5
+  exit=0 secs=0.04 stdout=158B stderr=0B
+  | daemon log, most recent entries.
+  | 
+  | No entries matched. This is an answer, not a failure: the read succeeded and this log held nothing matching in that window.
+$ grain log -n
+  exit=2 secs=0.02 stdout=0B stderr=67B
+  | grain log: flag -n needs a value; run 'grain log --help' for usage
+$ grain log -n 0
+  exit=2 secs=0.03 stdout=0B stderr=73B
+  | grain log: -n "0" is not a count of entries: it takes a positive integer
+$ grain log --lines
+  exit=2 secs=0.02 stdout=0B stderr=72B
+  | grain log: flag --lines needs a value; run 'grain log --help' for usage
+$ grain log -n 5 --tail 100
+  exit=0 secs=0.03 stdout=100B stderr=0B
+  |  is an answer, not a failure: the read succeeded and this log held nothing matching in that window.
+$ grain log daemon -n 2
+  exit=0 secs=0.03 stdout=158B stderr=0B
+  | daemon log, most recent entries.
+  | 
+  | No entries matched. This is an answer, not a failure: the read succeeded and this log held nothing matching in that window.
+== 2b. every command and subcommand with no argument
+$ grain ls
+  exit=2 secs=0.03 stdout=0B stderr=57B
+  | grain ls: missing <uri>; run 'grain ls --help' for usage
+$ grain read
+  exit=2 secs=0.02 stdout=0B stderr=61B
+  | grain read: missing <uri>; run 'grain read --help' for usage
+$ grain grep
+  exit=2 secs=0.03 stdout=0B stderr=65B
+  | grain grep: missing <pattern>; run 'grain grep --help' for usage
+$ grain grep x
+  exit=2 secs=0.02 stdout=0B stderr=61B
+  | grain grep: missing <uri>; run 'grain grep --help' for usage
+$ grain merge-queue
+  exit=0 secs=0.03 stdout=170B stderr=0B
+  | # Merge Queue Status
+  | 
+$ grain status
+  exit=2 secs=0.02 stdout=0B stderr=87B
+  | grain status: missing <one-line-note> (or --file); run 'grain status --help' for usage
+$ grain notify
+  exit=2 secs=0.02 stdout=0B stderr=124B
+  | grain notify: missing --subject <key>: a short key for what this notification is about; run 'grain notify --help' for usage
+$ grain api
+  exit=2 secs=0.03 stdout=0B stderr=71B
+  | grain api: missing <routes | METHOD>; run 'grain api --help' for usage
+$ grain quarantine
+  exit=2 secs=0.03 stdout=0B stderr=79B
+  | grain quarantine: missing <test-name>; run 'grain quarantine --help' for usage
+$ grain metrics
+  exit=0 secs=0.04 stdout=8368B stderr=0B
+  | window: 2026-10-27T05:29:10Z -> 2026-11-03T05:29:10Z (168h0m0s)
+  | 
+$ grain health
+  exit=0 secs=0.14 stdout=4074B stderr=0B
+  | {
+  |   "health": {
+$ grain log
+  exit=0 secs=0.03 stdout=158B stderr=0B
+  | daemon log, most recent entries.
+  | 
+$ grain playbooks
+  exit=0 secs=0.03 stdout=107B stderr=0B
+  | cloudsql-postgres
+  | gcp-capabilities
+$ grain cap
+  exit=0 secs=0.02 stdout=576B stderr=0B
+  | grain cap list [--json]
+  | grain cap <server> [--help]
+$ grain ci list
+  exit=0 secs=0.03 stdout=54B stderr=0B
+  | 0 of 0 matching run(s) in acme/widgets, newest first:
+$ grain ci show
+  exit=2 secs=0.03 stdout=0B stderr=70B
+  | grain ci show: missing <run-id>; run 'grain ci show --help' for usage
+$ grain ci log
+  exit=1 secs=0.04 stdout=0B stderr=50B
+  | grain: this task's branch has no grain CI run yet
+$ grain ci test-history
+  exit=2 secs=0.03 stdout=0B stderr=89B
+  | grain ci test-history: missing <test-name>; run 'grain ci test-history --help' for usage
+$ grain ci artifact
+  exit=2 secs=0.03 stdout=0B stderr=75B
+  | grain ci artifact: missing <job>; run 'grain ci artifact --help' for usage
+$ grain ci artifact go
+  exit=2 secs=0.03 stdout=0B stderr=76B
+  | grain ci artifact: missing <name>; run 'grain ci artifact --help' for usage
+$ grain ci wait
+  exit=1 secs=0.03 stdout=0B stderr=45B
+  | grain: this deployment has no grain CI wired
+$ grain ci run-job
+  exit=2 secs=0.03 stdout=0B stderr=73B
+  | grain ci run-job: missing <job>; run 'grain ci run-job --help' for usage
+$ grain ci retrigger
+  exit=1 secs=0.03 stdout=0B stderr=45B
+  | grain: this deployment has no grain CI wired
+$ grain pr status
+  exit=0 secs=0.03 stdout=102B stderr=0B
+  | grain/19995530/task-2-sandbox-cli-edges (this task's branch) in acme/widgets has no grain CI run yet.
+$ grain pr base-status
+  exit=0 secs=0.02 stdout=64B stderr=0B
+  | main (the base branch) in acme/widgets has no grain CI run yet.
+$ grain pr open
+  exit=1 secs=4.05 stdout=0B stderr=234B
+  | grain: orchestrator: checking 2's branch: orchestrator: cannot read acme/widgets, so "grain/19995530/task-2-sandbox-cli-edges" cannot be treated as unpushed: GitHub API error 404 from GET http://127.0.0.1:38669/repos/acme/widgets: ""
+$ grain pr reply
+  exit=2 secs=0.02 stdout=0B stderr=82B
+  | grain pr reply: missing <body> (or --file); run 'grain pr reply --help' for usage
+$ grain pr resolve
+  exit=2 secs=0.02 stdout=0B stderr=122B
+  | grain pr resolve: missing --thread-id <id> or --comment-id <id>: name the thread; run 'grain pr resolve --help' for usage
+$ grain pr review-comment
+  exit=2 secs=0.02 stdout=0B stderr=100B
+  | grain pr review-comment: missing <body> (or --file); run 'grain pr review-comment --help' for usage
+$ grain git revert
+  exit=2 secs=0.02 stdout=0B stderr=114B
+  | grain git revert: missing --reason <why>: say why this is being reverted; run 'grain git revert --help' for usage
+$ grain handover write
+  exit=2 secs=0.03 stdout=0B stderr=98B
+  | grain handover write: missing <handover> (or --file); run 'grain handover write --help' for usage
+$ grain task list
+  exit=0 secs=0.07 stdout=701B stderr=47B
+  | 1  awaiting_reply  -  Director
+  | 2  running  acme/widgets  sandbox CLI edges
+  | 12 task(s) shown of 12 matching, oldest first.
+$ grain task read
+  exit=2 secs=0.03 stdout=0B stderr=70B
+  | grain task read: missing <id>; run 'grain task read --help' for usage
+$ grain task prompt
+  exit=2 secs=0.03 stdout=0B stderr=74B
+  | grain task prompt: missing <id>; run 'grain task prompt --help' for usage
+$ grain task transcript
+  exit=2 secs=0.03 stdout=0B stderr=82B
+  | grain task transcript: missing <id>; run 'grain task transcript --help' for usage
+$ grain task wait
+  exit=2 secs=0.02 stdout=0B stderr=108B
+  | grain task wait: missing <id>...: name at least one task to wait on; run 'grain task wait --help' for usage
+$ grain task message
+  exit=2 secs=0.02 stdout=0B stderr=76B
+  | grain task message: missing <id>; run 'grain task message --help' for usage
+$ grain task propose
+  exit=2 secs=0.03 stdout=0B stderr=87B
+  | grain task propose: missing --title <title>; run 'grain task propose --help' for usage
+$ grain memory list
+  exit=0 secs=0.03 stdout=15B stderr=0B
+  | global/
+  | repos/
+$ grain memory read
+  exit=2 secs=0.02 stdout=0B stderr=75B
+  | grain memory read: missing <key>; run 'grain memory read --help' for usage
+$ grain memory write
+  exit=2 secs=0.02 stdout=0B stderr=90B
+  | grain memory write: missing <text> (or --file); run 'grain memory write --help' for usage
+$ grain memory doc-write
+  exit=2 secs=0.02 stdout=0B stderr=86B
+  | grain memory doc-write: missing <name>; run 'grain memory doc-write --help' for usage
+$ grain memory doc
+  exit=2 secs=0.02 stdout=0B stderr=180B
+  | grain memory doc: the command is 'grain memory doc write' (or doc-write)
+  | 
+$ grain release-notes stats
+  exit=1 secs=0.03 stdout=0B stderr=211B
+  | grain: {"error":"task 2 holds no api grant for scope release-notes:read, which GET /api/release-notes/stats needs: ask a person to grant api:release-notes:read or a preset that includes it (docs/agent-api.md)"}
+$ grain release-notes publish
+  exit=2 secs=0.02 stdout=0B stderr=112B
+  | grain release-notes publish: missing <markdown> (or --file); run 'grain release-notes publish --help' for usage
+$ grain issue list
+  exit=1 secs=0.03 stdout=0B stderr=255B
+  | grain: forbidden: grain issue: that tool belongs to the "read-issues" capability, and this run does not hold it (this run does not hold the "read-issues" capability). Nothing you can do from inside this run will add it -- a human attaches i
+$ grain issue read
+  exit=2 secs=0.02 stdout=0B stderr=76B
+  | grain issue read: missing <number>; run 'grain issue read --help' for usage
+$ grain db query
+  exit=2 secs=0.02 stdout=0B stderr=69B
+  | grain db query: missing <sql>; run 'grain db query --help' for usage
+$ grain ci
+  exit=0 secs=0.03 stdout=131B stderr=0B
+  | grain ci (list | show | log | test-history | artifact | wait | run-job | retrigger) ...
+  | 
+$ grain pr
+  exit=0 secs=0.02 stdout=74B stderr=0B
+  | grain pr (status | base-status | open | reply | resolve | review-comment)
+$ grain git
+  exit=0 secs=0.02 stdout=63B stderr=0B
+  | grain git revert (--task <id> | --commit <sha>) --reason <why>
+$ grain handover
+  exit=0 secs=0.03 stdout=129B stderr=0B
+  | grain handover write (<text> | --file <f>)
+  | 
+$ grain task
+  exit=0 secs=0.03 stdout=78B stderr=0B
+  | grain task (list | read | prompt | transcript | wait | message | propose) ...
+$ grain memory
+  exit=0 secs=0.03 stdout=106B stderr=0B
+  | grain memory (list | read <path> | write [--repo o/n] <text|--file f> | doc-write <name> <body|--file f>)
+$ grain release-notes
+  exit=0 secs=0.03 stdout=68B stderr=0B
+  | grain release-notes (stats | publish --version <v> <body|--file f>)
+$ grain issue
+  exit=0 secs=0.02 stdout=30B stderr=0B
+  | grain issue (list | read) ...
+$ grain db
+  exit=0 secs=0.03 stdout=21B stderr=0B
+  | grain db query <sql>
+exit=0

@@ -52,6 +52,29 @@ describe("HostdsSection", () => {
     expect(within(local).queryByText("Revoke")).toBeNull();
   });
 
+  it("shows who a hostd connected as, and a remote hostd with no owner", async () => {
+    api.mockResolvedValueOnce([
+      LOCAL,
+      {
+        ...WS,
+        connection: { ...WS.connection, principal: "alice@example.com" },
+      },
+      { ...WS, name: "ws-2", owner: "", connection: null },
+    ]);
+    render(<HostdsSection showError={vi.fn()} />);
+    const row = await screen.findByTestId("hostd-row-ws-1");
+    expect(
+      within(row).getByText(
+        "Connected from cloudtop as alice@example.com (v1)",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("hostd-owner-missing-ws-2")).toHaveTextContent(
+      "needed to dial in through IAP",
+    );
+    // The co-located hostd needs no owner.
+    expect(screen.queryByTestId("hostd-owner-missing-local")).toBeNull();
+  });
+
   it("shows a created hostd's token once", async () => {
     api.mockResolvedValueOnce([LOCAL]);
     render(<HostdsSection showError={vi.fn()} />);
