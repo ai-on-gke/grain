@@ -207,7 +207,10 @@ test("words repo#read as CI-only, not as denied by the capability policy", async
     expect(created.ok()).toBeTruthy();
     taskID = (await created.json()).id;
 
-    for (const [label, viewport] of VIEWPORTS) {
+    for (const [label, viewport, theme] of VIEWPORTS.flatMap(([l, v]) =>
+      ["light", "dark"].map((th) => [`${l}-${th}`, v, th]),
+    )) {
+      await page.emulateMedia({ colorScheme: theme });
       await page.setViewportSize(viewport);
 
       // A new template names no repo: the row points at the docs.

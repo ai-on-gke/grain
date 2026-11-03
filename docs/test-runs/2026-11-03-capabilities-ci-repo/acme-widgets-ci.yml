@@ -1,0 +1,53 @@
+name: walk
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  read-other:
+    capabilities: ['https://grain.dev/capabilities/repo#read={"repo":"other/repo"}']
+    cache: false
+    steps:
+      - run: |
+          base=$(git remote get-url origin | sed 's#acme/widgets.*##')
+          echo "proxy base: $(echo "$base" | sed 's#//[^@]*@#//***@#')"
+          git clone "${base}other/repo" /tmp/other && cat /tmp/other/README
+  write-other:
+    capabilities: ['https://grain.dev/capabilities/repo#write={"repo":"other/repo"}']
+    cache: false
+    steps:
+      - run: |
+          base=$(git remote get-url origin | sed 's#acme/widgets.*##')
+          git clone "${base}other/repo" /tmp/other && cd /tmp/other
+          git -c user.name=walk -c user.email=walk@example.invalid commit -q --allow-empty -m "from CI $GRAIN_CI_EVENT"
+          git push origin HEAD:refs/heads/candidate-$(date +%s) 2>&1
+  publish:
+    capabilities: [package-publish]
+    cache: false
+    steps:
+      - run: |
+          set -u
+          ls -la ~/.package-publish-* ~/.grain/bin ~/.docker 2>&1 || true
+          url=$(cat ~/.package-publish-refresh-url); echo "refresh url: $url"
+          cp ~/.package-publish-refresh-token /tmp/held-token
+          for i in 1 2 3; do
+            printf 'Authorization: Bearer %s\n' "$(cat ~/.package-publish-refresh-token)" | curl -sS -H @- -o /tmp/cred -w "refresh $i: HTTP %{http_code}\n" "$url/package-publish/credential"
+            echo "  secret sha256 $(sed 's/.*"Secret":"\([^"]*\)".*/\1/' /tmp/cred | sha256sum | cut -c1-12); query ignored: $(printf 'Authorization: Bearer %s\n' "$(cat ~/.package-publish-refresh-token)" | curl -sS -H @- -o /dev/null -w '%{http_code}' "$url/package-publish/credential?repo=acme/gadgets")"
+            sleep ${PUBLISH_SLEEP:-20}
+          done
+          echo "ghcr.io" | docker-credential-grain get | sed 's/"Secret":"[^"]*"/"Secret":"<redacted>"/'
+          # Leave the token where the host can read it after the job (the sandbox dir is the host's).
+          echo "held token: $(cat /tmp/held-token)"  # throwaway walk deployment: printed so the host can replay it after the lease
+  undeclared:
+    cache: false
+    steps:
+      - run: |
+          base=$(git remote get-url origin | sed 's#acme/widgets.*##')
+          git clone "${base}other/repo" /tmp/other 2>&1 && cat /tmp/other/README
+  legacy-read:
+    capabilities: ["repo-read:other/repo"]
+    cache: false
+    steps:
+      - run: |
+          base=$(git remote get-url origin | sed 's#acme/widgets.*##')
+          git clone "${base}other/repo" /tmp/other 2>&1 && cat /tmp/other/README
