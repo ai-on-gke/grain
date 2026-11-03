@@ -85,7 +85,16 @@ func TestUpgradeFromReleasedVersions(t *testing.T) {
 					}
 				}
 			}
-			upgradeFromBaseline(t, baseline.tag, ref)
+			// Run it under a name of its own: once the upgrade is done the
+			// upgrader removes the images left in the repository the
+			// deployment ran from, and the image under test is usually in
+			// that same published repository (release.yml's
+			// ghcr.io/<repo>/grain:sha-...), so the first subtest would take
+			// the second one's upgrade target with it.
+			local := "grain-e2e-baseline-" + baseline.name + ":" + randomSuffix(t, 8)
+			docker(t, "tag", ref, local)
+			t.Cleanup(func() { _, _ = tryDocker("rmi", "--force", local) })
+			upgradeFromBaseline(t, baseline.tag, local)
 		})
 	}
 }
