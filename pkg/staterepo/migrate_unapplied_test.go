@@ -114,6 +114,7 @@ func exportTriggerSchedulesYML(t *testing.T, ctx context.Context, sched model.Sc
 
 func TestMigrateRepoAppliesPendingConfigCommitsAcrossSchemaChange(t *testing.T) {
 	t.Parallel()
+	staterepo.LogToTest(t)
 	ctx := context.Background()
 	dataDir := t.TempDir()
 
@@ -331,6 +332,7 @@ func TestMigrateRepoAppliesPendingConfigCommitsAcrossSchemaChange(t *testing.T) 
 
 func TestMigrateRepoReportsDroppedCommitsWhenPendingApplyFails(t *testing.T) {
 	t.Parallel()
+	staterepo.LogToTest(t)
 	ctx := context.Background()
 	dataDir := t.TempDir()
 
@@ -445,6 +447,7 @@ func TestMigrateRepoReportsDroppedCommitsWhenPendingApplyFails(t *testing.T) {
 
 func TestApplyIncludesUnappliedCommitsInError(t *testing.T) {
 	t.Parallel()
+	staterepo.LogToTest(t)
 	ctx := context.Background()
 	dataDir := t.TempDir()
 
@@ -497,5 +500,135 @@ func TestApplyIncludesUnappliedCommitsInError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "config: broken schedule syntax") || !strings.Contains(err.Error(), commitHash[:7]) {
 		t.Errorf("expected Apply error to name unapplied commit %s, got: %v", commitHash, err)
+	}
+}
+
+func TestLoadedHeadHelpersDoNotTraverseParentGitRepoAndValidateCommit(t *testing.T) {
+	t.Parallel()
+	staterepo.LogToTest(t)
+	ctx := context.Background()
+
+	outerDir := t.TempDir()
+	runGitIn(t, outerDir, "init")
+	if err := os.WriteFile(filepath.Join(outerDir, "README.md"), []byte("outer\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitIn(t, outerDir, "add", "README.md")
+	runGitIn(t, outerDir, "commit", "-m", "outer commit")
+	outerHead := runGitIn(t, outerDir, "rev-parse", "HEAD")
+	if err := staterepo.WriteLoadedHead(ctx, outerDir, outerHead); err != nil {
+		t.Fatalf("WriteLoadedHead on outer repo: %v", err)
+	}
+
+	// A child directory that is not itself an initialised git repository must
+	// neither read nor overwrite the enclosing repository's grain-loaded-head.
+	nestedNonRepo := filepath.Join(outerDir, "nested-data", "state-repo")
+	if err := os.MkdirAll(nestedNonRepo, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := staterepo.ReadLoadedHead(ctx, nestedNonRepo); got != "" {
+		t.Errorf("ReadLoadedHead on non-repo child = %q, want empty", got)
+	}
+	otherSHA := "0123456789abcdef0123456789abcdef01234567"
+	if err := staterepo.WriteLoadedHead(ctx, nestedNonRepo, otherSHA); err == nil {
+		t.Fatal("expected WriteLoadedHead on non-repo child to fail")
+	}
+	if got := staterepo.ReadLoadedHead(ctx, outerDir); got != outerHead {
+		t.Errorf("outer repo loaded-head = %q after failed child write, want %q", got, outerHead)
+	}
+
+	for _, bad := range []string{"", "   ", "-option", "abc123\ndef456", "abc 123"} {
+		if err := staterepo.WriteLoadedHead(ctx, outerDir, bad); err == nil {
+			t.Errorf("WriteLoadedHead(%q) succeeded, want error", bad)
+		}
+	}
+}
+
+func TestMigrateRepoRefusesPendingMergeWhenBaseDumpCannotBeMigrated(t *testing.T) {
+	t.Parallel()
+	staterepo.LogToTest(t)
+	ctx := context.Background()
+	dataDir := t.TempDir()
+
+	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(dataDir, "store")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTemplate(ctx, model.Template{
+		ID:    "tpl-keep",
+		Name:  "keep-template",
+		Title: "Database Title",
+		Body:  "Database prompt",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	repoDir := filepath.Join(dataDir, "state-repo")
+	repo, err := staterepo.Open(ctx, staterepo.Config{
+		Dir:         repoDir,
+		DataDir:     dataDir,
+		AuthorName:  "grain",
+		AuthorEmail: "grain@localhost",
+		NoWorkflow:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Base commit holds a dump stamped below BaselineSchemaVersion so
+	// prepareDumpForApply(baseDir) fails even when incoming has a valid stamp.
+	if err := staterepo.ExportConfig(ctx, db, repoDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := staterepo.WriteSchemaVersion(repoDir, model.BaselineSchemaVersion-1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Commit(ctx, "Base at pre-baseline schema"); err != nil {
+		t.Fatal(err)
+	}
+	baseHead, err := repo.Head(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetLoadedHead(ctx, baseHead); err != nil {
+		t.Fatal(err)
+	}
+
+	// Incoming commit stamps a migratable schema and rewrites keep-template,
+	// which must NOT be merged blindly against an unmigratable base dump.
+	oldSchema := model.SchemaVersion - 1
+	staleTemplates := exportTemplatesYML(t, ctx, model.Template{
+		ID:    "tpl-keep",
+		Name:  "keep-template",
+		Title: "Stale Incoming Title",
+		Body:  "Stale prompt",
+	})
+	c1 := mergeBranchNoFF(t, repoDir, "pr-incoming", "config: edit over unmigratable base", func(dir string) {
+		if werr := staterepo.WriteSchemaVersion(dir, oldSchema); werr != nil {
+			t.Fatal(werr)
+		}
+		if werr := os.WriteFile(filepath.Join(dir, "settings", "templates.yml"), staleTemplates, 0o644); werr != nil {
+			t.Fatal(werr)
+		}
+	})
+
+	report, err := staterepo.MigrateRepo(ctx, repo, db, model.SchemaVersion)
+	if err != nil {
+		t.Fatalf("MigrateRepo failed: %v", err)
+	}
+	if len(report.Dropped) != 1 || report.Dropped[0].Hash != c1 || report.ApplyErr == nil {
+		t.Fatalf("expected commit %s to be refused and reported as dropped, got report=%+v", c1, report)
+	}
+	templates, err := store.ListTemplates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(templates) != 1 || templates[0].Title != "Database Title" {
+		t.Fatalf("expected database row to stay intact when base migration fails, got %+v", templates)
 	}
 }

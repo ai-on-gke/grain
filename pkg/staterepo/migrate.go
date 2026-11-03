@@ -407,13 +407,15 @@ func applyPendingOnMigrate(ctx context.Context, r *Repo, db *sql.DB, version int
 
 	incomingDir, err := prepareDumpForApply(r.Dir(), filepath.Join(scratch, "incoming"), version)
 	if err != nil {
-		return err
+		return refuseApply(err)
 	}
 	mergedBaseDir := baseDir
 	if HasDump(baseDir) {
-		if migratedBase, berr := prepareDumpForApply(baseDir, filepath.Join(scratch, "base"), version); berr == nil {
-			mergedBaseDir = migratedBase
+		migratedBase, berr := prepareDumpForApply(baseDir, filepath.Join(scratch, "base"), version)
+		if berr != nil {
+			return refuseApply(berr)
 		}
+		mergedBaseDir = migratedBase
 	}
 	return applySettingsFromDirs(ctx, r, db, head, base, mergedBaseDir, incomingDir)
 }
