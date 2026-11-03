@@ -17,7 +17,10 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -32,6 +35,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
 	"github.com/ai-on-gke/grain/pkg/ci"
+	cicli "github.com/ai-on-gke/grain/pkg/ci/cli"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
@@ -835,5 +839,358 @@ func TestDeclaredRepoWriteFailsClearlyWhenTheTeamHasNoCredential(t *testing.T) {
 	}
 	if writes := adapter.WriteScopes.Repos(fake.name); len(writes) != 0 {
 		t.Errorf("a refused job holds write scopes %v", writes)
+	}
+}
+
+func TestEventGatedCapabilitiesReportWithheldNoteOnUntrustedRunsAndWorkOnDispatch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+
+	gitRoot := t.TempDir()
+	widgetsBare := initBareRepo(t, filepath.Join(gitRoot, "acme", "widgets.git"))
+	otherBare := initBareRepo(t, filepath.Join(gitRoot, "other", "repo.git"))
+	runLive(t, gitRoot, "git", "--git-dir", otherBare, "config", "http.receivepack", "true")
+
+	seed := filepath.Join(t.TempDir(), "seed-widgets")
+	runLive(t, t.TempDir(), "git", "clone", "-q", widgetsBare, seed)
+	runLive(t, seed, "git", "config", "user.email", "seed@example.com")
+	runLive(t, seed, "git", "config", "user.name", "seed")
+	runLive(t, seed, "git", "checkout", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("widgets\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runLive(t, seed, "git", "add", "README.md")
+	runLive(t, seed, "git", "commit", "-q", "-m", "seed widgets")
+	runLive(t, seed, "git", "push", "-q", "origin", "main")
+	commit := strings.TrimSpace(string(mustOutput(t, seed, "git", "rev-parse", "HEAD")))
+
+	seedOther := filepath.Join(t.TempDir(), "seed-other")
+	runLive(t, t.TempDir(), "git", "clone", "-q", otherBare, seedOther)
+	runLive(t, seedOther, "git", "config", "user.email", "seed@example.com")
+	runLive(t, seedOther, "git", "config", "user.name", "seed")
+	runLive(t, seedOther, "git", "checkout", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seedOther, "README.md"), []byte("other\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runLive(t, seedOther, "git", "add", "README.md")
+	runLive(t, seedOther, "git", "commit", "-q", "-m", "seed other")
+	runLive(t, seedOther, "git", "push", "-q", "origin", "main")
+
+	upstream := httptest.NewServer(gitHTTPBackendLive(gitRoot))
+	defer upstream.Close()
+
+	dataDir := t.TempDir()
+	store, db, err := daemon.OpenStore("sqlite", "", dataDir)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer db.Close()
+	if err := os.MkdirAll(filepath.Join(dataDir, "secrets", "github"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seedTestConnections(t, dataDir, "git:\n  - credential: anonymous\n")
+	if err := store.UpdateConfig(context.Background(), func(c *model.Config) error {
+		c.GitConnections = append(c.GitConnections, model.TeamGitConnection{Credential: "anonymous"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	readScopes := gitproxy.NewReadScopes()
+	writeScopes := gitproxy.NewWriteScopes()
+	teams := gitproxy.NewSandboxTeams()
+	proxy, err := gitproxy.BuildProxy(gitproxy.BuildConfig{
+		DataDir:      dataDir,
+		Store:        store,
+		ForwardHost:  strings.TrimPrefix(upstream.URL, "http://"),
+		ForwardTLS:   false,
+		ReadScopes:   readScopes,
+		WriteScopes:  writeScopes,
+		SandboxTeams: teams,
+		SingleTenant: true,
+	})
+	if err != nil {
+		t.Fatalf("BuildProxy: %v", err)
+	}
+	proxySrv := httptest.NewServer(gitproxy.NewHandler(proxy))
+	defer proxySrv.Close()
+
+	tokens := gitproxy.NewSandboxTokenStore(filepath.Join(dataDir, "secrets", "sandbox-tokens.json"))
+	reg := model.NewCapabilityRegistry(
+		packagepublish.New(packagepublish.Config{Credentials: ciTestPackageCredential{}}),
+		registrypush.New(),
+	)
+	adapter := daemon.CiSandboxes{
+		Sandboxes:     orchestrator.NewHostSandboxes(t.TempDir()),
+		GitRemoteBase: proxySrv.URL,
+		MintToken:     tokens.EnsureToken,
+		RevokeToken:   tokens.Revoke,
+		Scopes:        readScopes,
+		WriteScopes:   writeScopes,
+		Teams:         teams,
+		Capabilities:  func() *model.CapabilityRegistry { return reg },
+		Credentials:   ciCredentialJSON(`{"registry":"ghcr.io","username":"bot","token":"secret"}`),
+	}
+	engine := &ci.Engine{
+		Sandboxes:              adapter,
+		ExplicitOnlyCapability: func(id string) bool { return false },
+	}
+
+	workflowYAML := fmt.Sprintf(`name: ci
+on:
+  pull_request: {}
+  push: {}
+  workflow_dispatch: {}
+jobs:
+  write-other:
+    capabilities:
+      - 'https://grain.dev/capabilities/repo#write={"repo":"other/repo"}'
+    steps:
+      - name: clone and push other/repo
+        run: |
+          set -e
+          dest=$(mktemp -d)
+          trap 'rm -rf "$dest"' EXIT
+          git clone %q "$dest/other"
+          cd "$dest/other"
+          git config user.email ci@example.com
+          git config user.name ci
+          echo "from ci" > ci.txt
+          git add ci.txt
+          git commit -q -m "ci write"
+          git push origin HEAD:refs/heads/from-ci
+      - name: follow-up step
+        run: echo "follow-up step ran"
+  publish-pkg:
+    capabilities:
+      - package-publish
+    steps:
+      - name: check package credential
+        run: |
+          if [ -s "$HOME/.package-publish-token" ] || [ -s "$HOME/home/debian/.package-publish-token" ]; then
+            echo "token=present"
+          else
+            echo "token=absent"
+          fi
+      - name: second step
+        run: echo "second step"
+  undeclared:
+    steps:
+      - name: clone other/repo without declaring
+        run: |
+          dest=$(mktemp -d)
+          trap 'rm -rf "$dest"' EXIT
+          git clone %q "$dest/undeclared"
+`, proxySrv.URL+"/other/repo.git", proxySrv.URL+"/other/repo.git")
+
+	wf, err := ci.Parse(".grain/workflows/ci.yml", []byte(workflowYAML))
+	if err != nil {
+		t.Fatalf("Parse workflow: %v", err)
+	}
+
+	jobByName := func(run ci.Run, id string) ci.JobRun {
+		t.Helper()
+		for _, j := range run.Jobs {
+			if j.Name == id || strings.HasSuffix(j.JobID, "/"+id) {
+				return j
+			}
+		}
+		t.Fatalf("job %q not found in %+v", id, run.Jobs)
+		return ci.JobRun{}
+	}
+
+	// 1. Pull request run: repo#write and package-publish are both withheld by
+	// their event gates; the declared jobs say so in their first step output,
+	// JobRun.Warning, and (for repo#write) the git proxy's 403 refusal, while
+	// the undeclared job stays silent despite package-publish being in the
+	// repository's default CI capabilities.
+	prPlan, err := ci.PlanRun(ci.Request{
+		Repo:         "acme/widgets",
+		Ref:          "feature",
+		Commit:       commit,
+		Event:        ci.EventPullRequest,
+		Capabilities: []string{"package-publish"},
+	}, []ci.Workflow{wf})
+	if err != nil {
+		t.Fatalf("PlanRun(pull_request): %v", err)
+	}
+	prRun := engine.Run(context.Background(), "r-pr", prPlan, nil)
+
+	writePR := jobByName(prRun, "write-other")
+	if writePR.Conclusion != ci.ConclusionFailure {
+		t.Fatalf("write-other on pull_request conclusion = %q, want failure\n%s", writePR.Conclusion, writePR.Steps[0].Output)
+	}
+	wantWriteNote := `capability https://grain.dev/capabilities/repo#write={"repo":"other/repo"} is withheld on pull_request runs (released only to release, workflow_dispatch, and grain's scheduled runs)`
+	if !strings.HasPrefix(writePR.Steps[0].Output, "grain ci: "+wantWriteNote+"\n") {
+		t.Errorf("write-other first step output missing withheld header:\n%s", writePR.Steps[0].Output)
+	}
+	if writePR.Warning != wantWriteNote {
+		t.Errorf("write-other Warning = %q, want %q", writePR.Warning, wantWriteNote)
+	}
+	wantProxyLine := `other/repo: this job's https://grain.dev/capabilities/repo#write={"repo":"other/repo"} grant is withheld on pull_request runs (released only to release, workflow_dispatch, and grain's scheduled runs)`
+	if !strings.Contains(writePR.Steps[0].Output, wantProxyLine) {
+		t.Errorf("write-other git refusal did not name withheld grant:\n%s", writePR.Steps[0].Output)
+	}
+	if strings.Contains(writePR.Steps[0].Output, "is not in scope for this sandbox") {
+		t.Errorf("write-other git refusal still gave generic out-of-scope message:\n%s", writePR.Steps[0].Output)
+	}
+	if refs := strings.TrimSpace(string(mustOutput(t, gitRoot, "git", "--git-dir", otherBare, "for-each-ref", "refs/heads/from-ci"))); refs != "" {
+		t.Fatalf("pull_request run pushed refs to other/repo: %s", refs)
+	}
+
+	pubPR := jobByName(prRun, "publish-pkg")
+	if pubPR.Conclusion != ci.ConclusionSuccess {
+		t.Fatalf("publish-pkg on pull_request conclusion = %q: %s", pubPR.Conclusion, pubPR.Error)
+	}
+	wantPubNote := "capability package-publish is withheld on pull_request runs (released only to release, workflow_dispatch, and grain's scheduled runs)"
+	if !strings.HasPrefix(pubPR.Steps[0].Output, "grain ci: "+wantPubNote+"\n") {
+		t.Errorf("publish-pkg first step output missing withheld header:\n%s", pubPR.Steps[0].Output)
+	}
+	if !strings.Contains(pubPR.Steps[0].Output, "token=absent") {
+		t.Errorf("publish-pkg placed token on pull_request:\n%s", pubPR.Steps[0].Output)
+	}
+	if strings.Contains(pubPR.Steps[1].Output, "grain ci:") {
+		t.Errorf("second step repeated withheld header:\n%s", pubPR.Steps[1].Output)
+	}
+	if pubPR.Warning != wantPubNote {
+		t.Errorf("publish-pkg Warning = %q, want %q", pubPR.Warning, wantPubNote)
+	}
+
+	undeclaredPR := jobByName(prRun, "undeclared")
+	if undeclaredPR.Warning != "" {
+		t.Errorf("undeclared job got unexpected Warning = %q", undeclaredPR.Warning)
+	}
+	if strings.Contains(undeclaredPR.Steps[0].Output, "grain ci: capability") {
+		t.Errorf("undeclared job got unexpected withheld capability header:\n%s", undeclaredPR.Steps[0].Output)
+	}
+	if !strings.Contains(undeclaredPR.Steps[0].Output, "other/repo is not in scope for this sandbox") {
+		t.Errorf("undeclared job did not get generic out-of-scope refusal:\n%s", undeclaredPR.Steps[0].Output)
+	}
+
+	shown := captureStdout(t, func() { (&printer{}).ciRun(prRun, cicli.OutputFailed) })
+	if !strings.Contains(shown, "warning: "+wantWriteNote) || !strings.Contains(shown, "warning: "+wantPubNote) {
+		t.Errorf("ci show output missing job warnings:\n%s", shown)
+	}
+
+	// 2. workflow_dispatch run: the event gate releases both grants, emits no
+	// withheld note or warning, places the package credential, and lets the
+	// cross-repository push land.
+	dispatchPlan, err := ci.PlanRun(ci.Request{
+		Repo:         "acme/widgets",
+		Ref:          "main",
+		Commit:       commit,
+		Event:        ci.EventManual,
+		Capabilities: []string{"package-publish"},
+	}, []ci.Workflow{wf})
+	if err != nil {
+		t.Fatalf("PlanRun(workflow_dispatch): %v", err)
+	}
+	dispatchRun := engine.Run(context.Background(), "r-dispatch", dispatchPlan, nil)
+
+	writeDispatch := jobByName(dispatchRun, "write-other")
+	if writeDispatch.Conclusion != ci.ConclusionSuccess {
+		t.Fatalf("write-other on workflow_dispatch failed (%s):\n%s", writeDispatch.Error, writeDispatch.Steps[0].Output)
+	}
+	if writeDispatch.Warning != "" || strings.Contains(writeDispatch.Steps[0].Output, "grain ci: capability") {
+		t.Errorf("write-other on workflow_dispatch reported a withheld note: warning=%q output=%q",
+			writeDispatch.Warning, writeDispatch.Steps[0].Output)
+	}
+	if refs := strings.TrimSpace(string(mustOutput(t, gitRoot, "git", "--git-dir", otherBare, "for-each-ref", "refs/heads/from-ci"))); refs == "" {
+		t.Fatal("workflow_dispatch run did not push refs/heads/from-ci to other/repo")
+	}
+
+	pubDispatch := jobByName(dispatchRun, "publish-pkg")
+	if pubDispatch.Conclusion != ci.ConclusionSuccess {
+		t.Fatalf("publish-pkg on workflow_dispatch failed (%s):\n%s", pubDispatch.Error, pubDispatch.Steps[0].Output)
+	}
+	if pubDispatch.Warning != "" || strings.Contains(pubDispatch.Steps[0].Output, "grain ci: capability") {
+		t.Errorf("publish-pkg on workflow_dispatch reported a withheld note: warning=%q output=%q",
+			pubDispatch.Warning, pubDispatch.Steps[0].Output)
+	}
+	if !strings.Contains(pubDispatch.Steps[0].Output, "token=present") {
+		t.Errorf("publish-pkg on workflow_dispatch did not receive token:\n%s", pubDispatch.Steps[0].Output)
+	}
+}
+
+type ciTestPackageCredential struct{}
+
+func (ciTestPackageCredential) PackageCredential(registry, _, _ string) (packagepublish.Credential, error) {
+	if registry == "" {
+		registry = "ghcr.io"
+	}
+	return packagepublish.Credential{Registry: registry, Username: "bot", Token: "secret", Name: "test"}, nil
+}
+
+func TestWithheldCapabilityNotesCoverLegacyRepoWriteAndPersonGate(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name               string
+		event              ci.Event
+		trustedSchedule    bool
+		withholdEventGated bool
+		capabilities       []string
+		wantWarning        string
+	}{
+		{
+			name:         "legacy repo-write on push",
+			event:        ci.EventPush,
+			capabilities: []string{"repo-write:acme/tools"},
+			wantWarning:  "capability repo-write:acme/tools is withheld on push runs (released only to release, workflow_dispatch, and grain's scheduled runs)",
+		},
+		{
+			name:         "caller schedule run",
+			event:        ci.EventSchedule,
+			capabilities: []string{"repo-write:acme/tools", registrypush.CapabilityName},
+			wantWarning: "capability repo-write:acme/tools is withheld on caller-requested schedule runs (released only to release, workflow_dispatch, and grain's scheduled runs); " +
+				"capability registry-push is withheld on caller-requested schedule runs (released only to release and workflow_dispatch runs)",
+		},
+		{
+			name:               "non-person workflow_dispatch",
+			event:              ci.EventManual,
+			withholdEventGated: true,
+			capabilities:       []string{"repo-write:acme/tools"},
+			wantWarning:        "capability repo-write:acme/tools is withheld because this workflow_dispatch run was not started by a person (released only to release, workflow_dispatch, and grain's scheduled runs)",
+		},
+		{
+			name:            "grain's trusted schedule admits repo-write but withholds registry-push",
+			event:           ci.EventSchedule,
+			trustedSchedule: true,
+			capabilities:    []string{"repo-write:acme/tools", registrypush.CapabilityName},
+			wantWarning:     "capability registry-push is withheld on schedule runs (released only to release and workflow_dispatch runs)",
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fake := &fakeSandbox{name: "ci-withheld-" + strings.ReplaceAll(tc.name, " ", "-")}
+			adapter, _, _ := newCIAdapter(fake)
+			adapter.Sandboxes = ciCapabilityBackend{&ciPlacingSandbox{fakeSandbox: fake, root: t.TempDir()}}
+			adapter.Capabilities = func() *model.CapabilityRegistry {
+				return model.NewCapabilityRegistry(registrypush.New())
+			}
+
+			job, err := adapter.Acquire(context.Background(), ci.SandboxRequest{
+				Name:               fake.name,
+				Repo:               "acme/widgets",
+				Ref:                "main",
+				Event:              tc.event,
+				TrustedSchedule:    tc.trustedSchedule,
+				WithholdEventGated: tc.withholdEventGated,
+				Capabilities:       tc.capabilities,
+			})
+			if err != nil {
+				t.Fatalf("Acquire: %v", err)
+			}
+			defer job.Release(context.Background())
+
+			ws, ok := job.(ci.WarningSandbox)
+			if !ok {
+				t.Fatalf("sandbox %T does not implement ci.WarningSandbox", job)
+			}
+			if ws.Warning() != tc.wantWarning {
+				t.Errorf("Warning() = %q, want %q", ws.Warning(), tc.wantWarning)
+			}
+		})
 	}
 }
