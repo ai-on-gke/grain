@@ -102,7 +102,13 @@ type Deps struct {
 	// and rewriting the choice it hands Framework -- and it deliberately
 	// does not do so today (docs/connections-and-models.md).
 	ModelAvailability func(ctx context.Context, choice AgentChoice) string
-	Config            Config
+	// CapabilityHostd is the grain hostd run: host capability servers
+	// are started through where CapabilityServers does not route them
+	// per task (TaskCapabilityServers), recorded on each capability
+	// audit record (model.CapabilityAuditRecord.Hostd). "" where they
+	// have none.
+	CapabilityHostd string
+	Config          Config
 	// RequireTeamGitCredential holds back every task whose team has no
 	// GitHub credential for its target (model.Store.TaskGitCredential):
 	// its sandbox could neither clone nor push, since the git proxy has
@@ -619,6 +625,9 @@ type AgentChoice struct {
 	// back to the rest of the rotation only when unavailable or paused.
 	PreferFramework string
 	PreferModel     string
+	// TaskID is the task the run is for, whose hostd pin or selector
+	// (model.Store.TaskHostd) routes its host work.
+	TaskID string
 }
 
 // ChoiceFor is the AgentChoice task's own fields make: the one runOne
@@ -631,6 +640,7 @@ func ChoiceFor(task model.Task) AgentChoice {
 		Model:     task.Model,
 		Priority:  task.HasPriorityDispatch(),
 		Durable:   task.IsDurable(),
+		TaskID:    task.ID,
 	}
 }
 
@@ -2807,7 +2817,8 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	// forwards close when this run ends, before the pass is released.
 	if pass, deadline := deps.capabilityPasses().held(d.RunID); pass != nil {
 		notes.say(ctx, capabilityGrantsNote)
-		mat, err := materializePass(ctx, cfg, sandbox, pass, deadline, deps.capabilityService)
+		passDeps := deps.capabilityPasses().heldDeps(d.RunID, deps)
+		mat, err := materializePass(ctx, cfg, sandbox, pass, deadline, passDeps.capabilityService)
 		if err == nil {
 			// Then every grant's mcp_endpoint proxied, handshaken and
 			// named, and its prompt_section rendered (§5.2, §5.4), each
@@ -2815,7 +2826,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 			if deps.Store != nil {
 				mat.narrator = mcp.NewCapabilityNarrator(taskActivityReporter{store: deps.Store, taskID: d.TaskID, now: cfg.now})
 			}
-			if err = mat.wireEndpoints(ctx, deps.capabilityDataPlane); err != nil {
+			if err = mat.wireEndpoints(ctx, passDeps.capabilityDataPlane); err != nil {
 				mat.Close()
 			}
 		}
@@ -3037,11 +3048,22 @@ func noteFinishFailure(ctx context.Context, store *model.Store, runID string, er
 // task -- but it does count for retry backoff, which is what spaces the
 // requeued attempts out while the cluster stays full. A pod no node
 // could ever fit is not ErrClusterFull (admitPod, unschedulableOutcome)
-// and stays a setup failure, so it surfaces rather than looping.
+// and stays a setup failure, so it surfaces rather than looping. A
+// framework build refused because the run's hostd is not connected
+// (agent.ErrHostdWaiting) is interrupted, without a strike: admission
+// parks the task on that hostd until it reconnects.
 func setupFailedEnding(err error) (outcome, detail string) {
 	if errors.Is(err, ErrClusterFull) {
 		return model.CapacityOutcome, "this run's sandbox could not be scheduled: " + err.Error() +
 			"; the task is not counted as failed and will be retried once the cluster has room"
+	}
+	if errors.Is(err, agent.ErrHostdWaiting) {
+		// The run's hostd dropped between admission and its framework
+		// being built: nothing ran, and the task goes back to the queue,
+		// where admission holds it until that hostd reconnects
+		// (Deps.ModelAvailability). It never moves to another hostd.
+		return model.InterruptedOutcome, "this run's hostd is not connected: " + err.Error() +
+			"; the task is not counted as failed, and waits in the queue for it to reconnect"
 	}
 	return "setup-failed", "this run's sandbox could not be prepared: " + err.Error()
 }

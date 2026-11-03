@@ -19,12 +19,15 @@ import { expect, test } from "./fixtures.js";
 // §3, docs/test-runs/2026-11-01-capability-policy-pickers.md): a grant a
 // task holds that a later policy save denies, a repo-conditional rule
 // judged for the task's own repo, the repo page's CI grants judged for
-// that repo, and removing a scope set that a task, a template, a
-// schedule and a workflow job all hold.
+// that repo, removing a scope set that a task, a template, a schedule
+// and a workflow job all hold, and repo#read worded as CI-only rather
+// than blamed on the policy (grain/task-2726).
 
 const DEMO = "https://capabilities.demo.grain.example/cloud";
 const VIEWER = `${DEMO}#cloud-viewer`;
 const KEY = `${DEMO}#cloud-key`;
+
+const REPO_READ = "https://grain.dev/capabilities/repo#read";
 
 const VIEWPORTS = [
   ["desktop", { width: 1440, height: 900 }],
@@ -168,6 +171,82 @@ test("judges a held grant, a repo-conditional rule and a repo's CI grants by the
         data: { capability: VIEWER, attach: false },
       });
     }
+  }
+});
+
+// repo#read is refused every task and process by grain's own CI-only
+// rule, before the policy's rules are looked at: the listing says
+// ci_only, not denied, and the pickers say CI only and point at the
+// repository's CI capabilities, not at a policy with no rule to change.
+test("words repo#read as CI-only, not as denied by the capability policy", async ({
+  page,
+  request,
+}, testInfo) => {
+  const listing = await (await request.get("/api/capability-methods")).json();
+  const read = listing.find((m) => m.ref === REPO_READ);
+  expect(read?.policy).toEqual({ task: "ci_only", process: "ci_only" });
+  const forTask = await (
+    await request.get("/api/capability-methods?kind=task&repo=acme/widgets")
+  ).json();
+  const refusal = forTask.find((m) => m.ref === REPO_READ)?.policyRefusal;
+  expect(refusal).toContain("is a CI capability, not a task grant");
+  expect(refusal).toContain("read access");
+  expect(refusal).not.toContain("writes to the repository");
+
+  let taskID = "";
+  try {
+    const created = await request.post("/api/tasks", {
+      data: {
+        title: `E2E repo read ${Date.now()}`,
+        description: "d",
+        repo: "acme/widgets",
+      },
+    });
+    expect(created.ok()).toBeTruthy();
+    taskID = (await created.json()).id;
+
+    for (const [label, viewport] of VIEWPORTS) {
+      await page.setViewportSize(viewport);
+
+      // A new template names no repo: the row points at the repos page.
+      await page.goto("/processes");
+      await page.getByRole("button", { name: "+ New", exact: true }).click();
+      await page
+        .getByTestId("new-process-kind")
+        .getByRole("menuitem", { name: "Template" })
+        .click();
+      let menu = await openGrantMenu(page, page.getByTestId("template-grants"));
+      let row = menu.locator(`[data-method="${REPO_READ}"]`);
+      await expect(row).toHaveAttribute("aria-disabled", "true");
+      await expect(row).toHaveAttribute("data-policy-verdict", "ci_only");
+      await expect(row).toContainText("CI only: not a grant for agent tasks");
+      await expect(row).not.toContainText("capability policy");
+      await expect(
+        row.getByRole("link", { name: "Repos → CI capabilities" }),
+      ).toHaveAttribute("href", "/repos");
+      await expectInside(menu, row);
+      await page.screenshot({
+        path: testInfo.outputPath(`template-repo-read-${label}.png`),
+      });
+      await page.keyboard.press("Escape");
+
+      // A task on acme/widgets: the row points at that repo's CI tab.
+      await page.goto(`/tasks/${taskID}`);
+      menu = await openGrantMenu(
+        page,
+        page.getByTestId(`task-${taskID}-grants`),
+      );
+      row = menu.locator(`[data-method="${REPO_READ}"]`);
+      await expect(row).toHaveAttribute("aria-disabled", "true");
+      await expect(row).not.toContainText("capability policy");
+      await expect(
+        row.getByRole("link", { name: "acme/widgets → CI capabilities" }),
+      ).toHaveAttribute("href", "/repos/acme/widgets/settings/ci");
+      await expectInside(menu, row);
+      await page.keyboard.press("Escape");
+    }
+  } finally {
+    if (taskID) await request.delete(`/api/tasks/${taskID}`);
   }
 });
 

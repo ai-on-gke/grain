@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -620,5 +621,39 @@ func TestSandboxLogAndMetricsRefuseUnknownFlags(t *testing.T) {
 		if errOut, code := run(args...); code != 0 {
 			t.Errorf("grain %s: exit %d, stderr %q; want it read", strings.Join(args, " "), code, errOut)
 		}
+	}
+}
+
+// A grep whose walk the namespace cut short before it found anything
+// exits 1, saying so, rather than 0 with nothing but the truncation line:
+// the part it never searched may hold the match.
+func TestGrepExitsNonZeroWhenATruncatedWalkFoundNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		headers map[string]string
+		code    int
+	}{
+		{name: "truncated, no match", headers: map[string]string{"X-Grain-Walk-Truncated": "true", "X-Grain-Matches": "0"}, code: 1},
+		{name: "truncated, a match", headers: map[string]string{"X-Grain-Walk-Truncated": "true", "X-Grain-Matches": "1"}, code: 0},
+		{name: "whole walk, no match", headers: map[string]string{"X-Grain-Matches": "0"}, code: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				for k, v := range tc.headers {
+					w.Header().Set(k, v)
+				}
+				fmt.Fprint(w, "[truncated: walked 2000 entries and stopped at pkg/orchestrator/]\n")
+			}))
+			defer srv.Close()
+			env := fakeSandboxEnv(map[string]string{"GRAIN_SANDBOX_PROXY": srv.URL, "GRAIN_SANDBOX_TOKEN": "tok"}, "")
+			var out, errOut bytes.Buffer
+			code, _ := maybeRunSandboxCLI([]string{"grep", "func CoreSource", "src://pkg"}, env, &out, &errOut)
+			if code != tc.code || !strings.Contains(out.String(), "stopped at pkg/orchestrator/") {
+				t.Errorf("exit %d, want %d; out %q err %q", code, tc.code, out.String(), errOut.String())
+			}
+			if (tc.code != 0) != strings.Contains(errOut.String(), "the rest was not searched") {
+				t.Errorf("stderr = %q", errOut.String())
+			}
+		})
 	}
 }

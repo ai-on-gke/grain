@@ -636,7 +636,17 @@ func MissingGCPKeyRefusal(capability string) string {
 // grant it is, and where the setting that does work actually lives --
 // because the operator this was written for had ticked the box on a
 // task and had no way to find out why the task then failed.
+//
+// A read grant (repo#read, or a repo#read grant naming a repository) is
+// worded on its own: its material writes nothing and CI hands it to every
+// event, so the sentence the publishing credentials get would misstate it.
 func CIOnlyRefusal(capability string) string {
+	if _, ok := RepoReadTarget(capability); ok || CapabilityGrantRef(capability) == RepoReadRef {
+		return fmt.Sprintf("%s is a CI capability, not a task grant: it gives a repository's CI jobs "+
+			"read access to a repository, and only a CI job is handed it -- a task run is not one. "+
+			"Take it off this task, and enable it for the repository's CI jobs instead -- the repos "+
+			"page, under CI capabilities.", capability)
+	}
 	return fmt.Sprintf("%s is a CI capability, not a task grant: its material is a credential that "+
 		"writes to the repository itself, so it is released only to a trusted post-merge release or "+
 		"to a run an operator asked for by hand, and a task run is neither. Take it off this task, and "+

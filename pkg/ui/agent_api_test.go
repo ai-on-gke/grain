@@ -478,7 +478,7 @@ func TestAgentAPIAttributesTheCall(t *testing.T) {
 	}
 	var sawComment, sawRecord bool
 	for _, c := range comments {
-		if c.Body == "from the director" && c.Author.Actor == (model.Principal{Kind: model.PrincipalAgent, ID: "1"}) {
+		if c.Body == "from the director" && c.Author.Actor == (model.Principal{Kind: model.PrincipalAgent, ID: "1", Source: model.SourceSandbox}) {
 			sawComment = true
 		}
 		if strings.Contains(c.Body, "Task 1 called") && strings.Contains(c.Body, "triage") &&

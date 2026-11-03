@@ -76,8 +76,14 @@
 // -- a whole turn of a conversation inside one tool call, rather than one
 // dispatch per thing said. The waiting is done here, by polling the same
 // daemon (daemonChat), which is what pkg/capability/selfrepair's Confirm
-// has always needed and never had: a route to the conversation from a
+// had always needed and never had: a route to the conversation from a
 // process holding no store handle.
+//
+// -interactive with -grant naming grain#host-exec (or the retired
+// self-repair) adds run_host_command over that route: every command it
+// is asked to run is posted into the task's chat first, and runs only
+// once a person there replies approve (daemonHostExecConfirm). A run
+// that is not -interactive is not given it, since nobody would answer.
 //
 // -propose-repo names a repository this deployment works in, once per
 // repository, and adds no tool at all: it narrows one that is always
@@ -136,10 +142,10 @@
 // are markdown embedded in this very binary, so this process is already
 // holding everything the tools read.
 //
-// Both are read-only, which is why both can be served from here at all.
-// pkg/capability/selfrepair cannot follow: its one tool blocks on a
-// human's reply in the task's own chat, which needs the store handle
-// this process deliberately does not have.
+// Both are read-only, which is why both can be served from here with no
+// further hop. pkg/capability/selfrepair's run_host_command is served
+// too, but only beside chat (see -interactive above), because its one
+// tool blocks on a human's reply in the task's own chat.
 //
 // -run-deadline is the moment grain will cancel the run this process
 // serves. It adds no tool: it makes every tool result carry how much

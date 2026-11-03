@@ -402,7 +402,13 @@ func (p *GitProxy) serveCIRuns(w http.ResponseWriter, r *http.Request, scope nam
 		}
 		ref = scope.TaskBranch
 	}
-	f := ci.RunFilter{Repo: repo, Ref: ref, Job: q.Get("job"), Descending: true}
+	f := ci.RunFilter{
+		Repo:       repo,
+		Ref:        ref,
+		Job:        q.Get("job"),
+		Workflow:   strings.TrimSpace(q.Get("workflow")),
+		Descending: true,
+	}
 	for _, c := range strings.Split(q.Get("conclusion"), ",") {
 		if c = strings.TrimSpace(c); c != "" {
 			f.States = append(f.States, c)
@@ -480,8 +486,10 @@ func (p *GitProxy) findCIRuns(ctx context.Context, store ci.RunStore, f ci.RunFi
 	if p.Namespace == nil || p.Namespace.ExternalCI == nil || f.Repo == "" || f.Provider == ci.ProviderGrain {
 		return ciRunsPage{RunPage: page}
 	}
-	external, note := p.Namespace.ExternalCI.FindExternalRuns(ctx, f, limit)
+	external, extMatched, note := ci.FindExternalRunsCounted(ctx, p.Namespace.ExternalCI, f, limit)
 	if len(external) == 0 {
+		page.Matched += extMatched
+		page.Stored += extMatched
 		return ciRunsPage{RunPage: page, note: note}
 	}
 	runs := append(append([]ci.Run(nil), page.Runs...), external...)
@@ -499,8 +507,8 @@ func (p *GitProxy) findCIRuns(ctx context.Context, store ci.RunStore, f ci.RunFi
 		runs = runs[:limit]
 	}
 	page.Runs = runs
-	page.Matched += len(external)
-	page.Stored += len(external)
+	page.Matched += extMatched
+	page.Stored += extMatched
 	return ciRunsPage{RunPage: page, note: note}
 }
 

@@ -134,8 +134,15 @@ func TestReleaseWorkflowPublishesThroughAnUncachedScript(t *testing.T) {
 		if len(workflow.Jobs) != 1 || workflow.Jobs[0].Cache {
 			t.Fatalf("release jobs = %+v, want one uncached job", workflow.Jobs)
 		}
-		if !strings.Contains(workflow.Jobs[0].Steps[0].Run, "scripts/release-images.sh") {
-			t.Fatalf("release step does not invoke scripts/release-images.sh: %+v", workflow.Jobs[0].Steps)
+		// The patch-tag guard goes first, so a vX.Y.Z tagged on main's
+		// head is refused before two hours of build
+		// (docs/release-candidate-management.md, section 9).
+		steps := workflow.Jobs[0].Steps
+		if len(steps) < 2 || !strings.Contains(steps[0].Run, "scripts/patch-tag-guard.sh") {
+			t.Fatalf("release's first step does not invoke scripts/patch-tag-guard.sh: %+v", steps)
+		}
+		if !strings.Contains(steps[1].Run, "scripts/release-images.sh") {
+			t.Fatalf("release step does not invoke scripts/release-images.sh: %+v", steps)
 		}
 		return
 	}

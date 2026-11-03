@@ -16,7 +16,7 @@ package granule
 
 import (
 	"context"
-	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,12 +24,13 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/bwsalmon/granule/pkg/guestforward"
 )
 
 func TestForwardArgsAndKubectlForwardArgs(t *testing.T) {
@@ -49,15 +50,13 @@ func TestForwardArgsAndKubectlForwardArgs(t *testing.T) {
 
 	gotCLI := Local.ForwardArgs(cfg)
 	wantCLI := []string{
-		"forward", "-kube",
-		"-kubectl", "/usr/local/bin/kubectl",
+		"forward", "pod/grain-granule-7-1",
 		"-kubeconfig", "/var/lib/grain/kubeconfig",
 		"-n", "grain",
 		"-c", "sandbox",
-		"-L", "127.0.0.1:18080:127.0.0.1:8080",
-		"-R", "127.0.0.1:9728:127.0.0.1:9728",
-		"-R", "127.0.0.1:9730:127.0.0.1:9730",
-		"grain-granule-7-1",
+		"-L", "127.0.0.1:18080=127.0.0.1:8080",
+		"-R", "127.0.0.1:9728=127.0.0.1:9728",
+		"-R", "127.0.0.1:9730=127.0.0.1:9730",
 	}
 	if !slices.Equal(gotCLI, wantCLI) {
 		t.Errorf("ForwardArgs() = %v, want %v", gotCLI, wantCLI)
@@ -71,10 +70,7 @@ func TestForwardArgsAndKubectlForwardArgs(t *testing.T) {
 		"-c", "sandbox",
 		"grain-granule-7-1",
 		"--",
-		"granule", "forward",
-		"-L", "127.0.0.1:18080:127.0.0.1:8080",
-		"-R", "127.0.0.1:9728:127.0.0.1:9728",
-		"-R", "127.0.0.1:9730:127.0.0.1:9730",
+		"granule", "forward-stdio",
 	}
 	if !slices.Equal(gotKubectl, wantKubectl) {
 		t.Errorf("KubectlForwardArgs() = %v, want %v", gotKubectl, wantKubectl)
@@ -102,8 +98,8 @@ func TestServeForwardRoundTrip(t *testing.T) {
 
 	// The guest port is probed free and closed before the guest binds it,
 	// so another listener can take it in between: that is retried on a
-	// fresh port, and any other guest failure is reported rather than read
-	// as a forward that never became ready.
+	// fresh port, and any other failure is reported rather than read as a
+	// forward that never became ready.
 	var (
 		guestPort int
 		f         *forwardPair
@@ -126,7 +122,7 @@ func TestServeForwardRoundTrip(t *testing.T) {
 			break
 		}
 		f.stop()
-		if !errors.Is(err, syscall.EADDRINUSE) || attempt == 4 {
+		if !strings.Contains(err.Error(), syscall.EADDRINUSE.Error()) || attempt == 4 {
 			t.Fatalf("waiting for forward ready: %v", err)
 		}
 	}
@@ -153,42 +149,35 @@ func TestServeForwardRoundTrip(t *testing.T) {
 }
 
 // TestForwardKubectlRefusesOpenOutsideRemotePorts stands a fake kubectl in
-// for the guest: it speaks the forward mux on its stdout and asks the
-// controller to open a listener that is not in RemotePorts, the metadata
-// server, and the one port that is. Only the last may be dialed.
+// for a hostile guest agent: it confirms the one listener the controller
+// asks for, then hands the controller forwarded connections that name a
+// listener it never asked for, that ask it to dial the metadata server,
+// and that name the real listener while also naming a forbidden address.
+// Only the last may be dialed, and only to the RemotePorts target.
 func TestForwardKubectlRefusesOpenOutsideRemotePorts(t *testing.T) {
 	t.Parallel()
 
-	listen := func() (net.Listener, int) {
+	listen := func() (net.Listener, int, *atomic.Int32) {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = ln.Close() })
-		return ln, ln.Addr().(*net.TCPAddr).Port
+		var hits atomic.Int32
+		go func() {
+			for {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				hits.Add(1)
+				_ = conn.Close()
+			}
+		}()
+		return ln, ln.Addr().(*net.TCPAddr).Port, &hits
 	}
-	allowedLn, allowedPort := listen()
-	go func() {
-		for {
-			conn, err := allowedLn.Accept()
-			if err != nil {
-				return
-			}
-			_ = conn.Close()
-		}
-	}()
-	forbiddenLn, forbiddenPort := listen()
-	var forbiddenHits atomic.Int32
-	go func() {
-		for {
-			conn, err := forbiddenLn.Accept()
-			if err != nil {
-				return
-			}
-			forbiddenHits.Add(1)
-			_ = conn.Close()
-		}
-	}()
+	_, allowedPort, allowedHits := listen()
+	_, forbiddenPort, forbiddenHits := listen()
 
 	exe, err := os.Executable()
 	if err != nil {
@@ -196,9 +185,9 @@ func TestForwardKubectlRefusesOpenOutsideRemotePorts(t *testing.T) {
 	}
 	dir := t.TempDir()
 	result := filepath.Join(dir, "result")
-	targets := fmt.Sprintf("127.0.0.1:%d,169.254.169.254:80,127.0.0.1:%d", forbiddenPort, allowedPort)
+	forbidden := fmt.Sprintf("127.0.0.1:%d", forbiddenPort)
 	script := fmt.Sprintf("#!/bin/sh\n%s=%q %s=%q exec %q -test.run='^TestFakeKubectlForwardGuest$'\n",
-		fakeKubectlTargetsEnv, targets, fakeKubectlResultEnv, result, exe)
+		fakeKubectlTargetsEnv, forbidden, fakeKubectlResultEnv, result, exe)
 	kubectl := filepath.Join(dir, "kubectl")
 	if err := os.WriteFile(kubectl, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -219,12 +208,14 @@ func TestForwardKubectlRefusesOpenOutsideRemotePorts(t *testing.T) {
 	if rerr != nil {
 		t.Fatalf("fake kubectl left no result (ForwardKubectl: %v): %v", err, rerr)
 	}
-	// frameOpenErr, frameOpenErr, frameOpenOK.
-	if want := "4,4,3"; string(got) != want {
+	if want := "rejected,rejected,rejected,confirmed"; string(got) != want {
 		t.Errorf("replies to the fake guest's opens = %q, want %q", got, want)
 	}
 	if n := forbiddenHits.Load(); n != 0 {
 		t.Errorf("the listener outside RemotePorts was connected to %d times", n)
+	}
+	if n := allowedHits.Load(); n != 1 {
+		t.Errorf("the RemotePorts listener was connected to %d times, want 1", n)
 	}
 }
 
@@ -235,40 +226,46 @@ const (
 
 // TestFakeKubectlForwardGuest is not a test: it is the guest end of
 // TestForwardKubectlRefusesOpenOutsideRemotePorts, run as a child process by
-// the fake kubectl that test writes. It sends Ready, then an Open for each
-// target in turn, and writes the type of the controller's reply to each to
-// the result file.
+// the fake kubectl that test writes. It serves the agent side of a
+// guestforward session on its stdio, confirms the controller's listen,
+// opens the hostile streams in turn, and writes whether the controller
+// confirmed or rejected each to the result file.
 func TestFakeKubectlForwardGuest(t *testing.T) {
-	targets := os.Getenv(fakeKubectlTargetsEnv)
-	if targets == "" {
+	forbidden := os.Getenv(fakeKubectlTargetsEnv)
+	if forbidden == "" {
 		t.Skip("only run as the fake kubectl's guest")
 	}
-	writeFrame := func(typ byte, id uint32, payload string) {
-		var hdr [9]byte
-		hdr[0] = typ
-		binary.BigEndian.PutUint32(hdr[1:5], id)
-		binary.BigEndian.PutUint32(hdr[5:9], uint32(len(payload)))
-		_, _ = os.Stdout.Write(append(hdr[:], payload...))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	sess := guestforward.NewSession(pipeConn{os.Stdin, os.Stdout}, false, guestforward.Config{})
+	listenSt, err := sess.Accept(ctx)
+	if err != nil {
+		os.Exit(1)
 	}
-	writeFrame(1, 0, "") // Ready
-	var replies []string
-	for i, target := range strings.Split(targets, ",") {
-		id := uint32(2 * (i + 1))
-		writeFrame(2, id, target) // Open
-		for {
-			var hdr [9]byte
-			if _, err := io.ReadFull(os.Stdin, hdr[:]); err != nil {
-				os.Exit(1)
-			}
-			payload := make([]byte, binary.BigEndian.Uint32(hdr[5:9]))
-			if _, err := io.ReadFull(os.Stdin, payload); err != nil {
-				os.Exit(1)
-			}
-			if binary.BigEndian.Uint32(hdr[1:5]) == id && (hdr[0] == 3 || hdr[0] == 4) {
-				replies = append(replies, strconv.Itoa(int(hdr[0])))
-				break
-			}
+	var asked struct{ Addr string }
+	_ = json.Unmarshal(listenSt.Meta(), &asked)
+	reply, _ := json.Marshal(map[string]string{"addr": asked.Addr})
+	if err := listenSt.Confirm(reply); err != nil {
+		os.Exit(1)
+	}
+	open := func(v map[string]any) string {
+		meta, _ := json.Marshal(v)
+		st, err := sess.Open(ctx, meta)
+		var rejected *guestforward.RejectedError
+		switch {
+		case errors.As(err, &rejected):
+			return "rejected"
+		case err != nil:
+			os.Exit(1)
 		}
+		_ = st.Close()
+		return "confirmed"
+	}
+	replies := []string{
+		open(map[string]any{"op": "accepted", "listener": listenSt.ID() + 100, "addr": forbidden}),
+		open(map[string]any{"op": "connect", "addr": "169.254.169.254:80"}),
+		open(map[string]any{"op": "connect", "addr": forbidden}),
+		open(map[string]any{"op": "accepted", "listener": listenSt.ID(), "addr": forbidden}),
 	}
 	if err := os.WriteFile(os.Getenv(fakeKubectlResultEnv), []byte(strings.Join(replies, ",")), 0o644); err != nil {
 		os.Exit(1)
@@ -286,6 +283,7 @@ type forwardPair struct {
 	clientDone, guestDone chan error
 	guestErr              error
 	guestExited, stopped  bool
+	clientExited          bool
 }
 
 func startForwardPair(remotes []ForwardSpec) *forwardPair {
@@ -313,6 +311,12 @@ func (f *forwardPair) awaitReady(timeout time.Duration) error {
 			err = errors.New("guest exited before the forward was ready")
 		}
 		return err
+	case err := <-f.clientDone:
+		f.clientExited = true
+		if err == nil {
+			err = errors.New("client exited before the forward was ready")
+		}
+		return err
 	case <-time.After(timeout):
 		return fmt.Errorf("no ready after %v", timeout)
 	}
@@ -328,7 +332,9 @@ func (f *forwardPair) stop() {
 	_ = f.g2cWriter.Close()
 	_ = f.c2gReader.Close()
 	_ = f.g2cReader.Close()
-	<-f.clientDone
+	if !f.clientExited {
+		<-f.clientDone
+	}
 	if !f.guestExited {
 		<-f.guestDone
 	}

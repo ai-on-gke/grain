@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"reflect"
 	"strings"
 	"time"
@@ -576,6 +577,9 @@ type CIRunQuery struct {
 	// Job keeps runs that have a job by this name or id, compared
 	// without regard to case and whatever that job did.
 	Job string
+	// Workflow keeps runs that have a job from this workflow, matched by
+	// workflow name, file name, stem, or repository path without regard to case.
+	Workflow string
 	// Since drops runs that started before it. A run that has not
 	// started is kept: it is queued, so it cannot be older than any
 	// window somebody is asking about.
@@ -714,6 +718,28 @@ func ciRunConditions(q CIRunQuery) (string, []any) {
 		conds = append(conds, "EXISTS (SELECT 1 FROM `ci_job` j WHERE j.`run_id` = r.`id` AND "+
 			"(LOWER(j.`name`) = LOWER(?) OR LOWER(j.`job_id`) = LOWER(?)))")
 		args = append(args, q.Job, q.Job)
+	}
+	if w := strings.TrimSpace(q.Workflow); w != "" {
+		clean := strings.TrimPrefix(path.Clean(w), "./")
+		clean = strings.TrimPrefix(clean, ".github/workflows/")
+		clean = strings.TrimPrefix(clean, ".grain/workflows/")
+		stem := strings.TrimSuffix(path.Base(clean), path.Ext(clean))
+		pathMatches := []string{
+			w, clean,
+			stem + ".yml", stem + ".yaml",
+			".grain/workflows/" + clean, ".grain/workflows/" + stem + ".yml", ".grain/workflows/" + stem + ".yaml",
+			".github/workflows/" + clean, ".github/workflows/" + stem + ".yml", ".github/workflows/" + stem + ".yaml",
+		}
+		ph := make([]string, len(pathMatches))
+		for i := range pathMatches {
+			ph[i] = "LOWER(?)"
+		}
+		conds = append(conds, "EXISTS (SELECT 1 FROM `ci_job` j WHERE j.`run_id` = r.`id` AND "+
+			"(LOWER(j.`workflow`) IN (LOWER(?), LOWER(?)) OR LOWER(j.`workflow_path`) IN ("+strings.Join(ph, ",")+")))")
+		args = append(args, w, stem)
+		for _, pm := range pathMatches {
+			args = append(args, pm)
+		}
 	}
 	if !q.Since.IsZero() {
 		conds = append(conds, "(`started_at` IS NULL OR `started_at` >= ?)")

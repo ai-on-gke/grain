@@ -317,8 +317,8 @@ func TestDecideOnlyAcceptsExplicitApproval(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := decide(tt.reply); got != tt.want {
-				t.Fatalf("decide(%q) = %v, want %v", tt.reply, got, tt.want)
+			if got := Decide(tt.reply); got != tt.want {
+				t.Fatalf("Decide(%q) = %v, want %v", tt.reply, got, tt.want)
 			}
 		})
 	}

@@ -752,6 +752,16 @@ func (s CiSandboxes) Readopt(ctx context.Context, req ci.SandboxRequest) (ci.San
 	if err := sandbox.readoptJob(ctx, repo, req.Event, req.TrustedSchedule, req.Capabilities, req.WithholdEventGated); err != nil {
 		return nil, err
 	}
+	cache := orchestrator.PackageCacheSource{Base: s.PackageCache, CA: s.PackageCacheCA, DNS: s.PackageCacheDNS}
+	if err := orchestrator.RefreshAdoptedSandbox(ctx, cache, backing); err != nil {
+		if s.PackageCacheDNS != nil && strings.TrimSpace(s.PackageCacheDNS(ctx)) != "" {
+			releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ciReleaseTimeout)
+			defer cancel()
+			_ = sandbox.Release(releaseCtx)
+			return nil, fmt.Errorf("sandbox %s could not refresh package-cache TLS trust across restart: %w", req.Name, err)
+		}
+		s.log("grain ci: %s: refreshing package cache on readopt: %v", sandbox.SandboxName, err)
+	}
 	return sandbox, nil
 }
 

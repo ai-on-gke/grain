@@ -7,7 +7,9 @@
 #   test/sandbox-access-vm.sh
 #
 # Needs: /dev/kvm read-write, docker (to unpack GRANULE_IMAGE, default the
-# published alpine guest), unshare/nsenter/ip, openssl and go.
+# published alpine guest; an image already in the local store, such as a
+# locally built tag, is used without pulling), unshare/nsenter/ip, openssl
+# and go.
 #
 # What it does, inside an unprivileged user + network namespace laid out
 # like a pod (eth0 with 10.88.0.2, its peer 10.88.0.1 in a namespace of its
@@ -131,7 +133,11 @@ fi
 }
 
 mirror_ref="127.0.0.1:9729/ghcr/${GRANULE_IMAGE#ghcr.io/}"
-if ! docker pull -q "$GRANULE_IMAGE" >/dev/null 2>&1; then
+# An image already in the local store (a locally built tag, say) is used as
+# is: pulling it would ask a registry that has never heard of it.
+if docker image inspect "$GRANULE_IMAGE" >/dev/null 2>&1; then
+  :
+elif ! docker pull -q "$GRANULE_IMAGE" >/dev/null 2>&1; then
   if [[ $GRANULE_IMAGE == ghcr.io/* ]] && docker pull -q "$mirror_ref" >/dev/null 2>&1; then
     docker tag "$mirror_ref" "$GRANULE_IMAGE"
   else

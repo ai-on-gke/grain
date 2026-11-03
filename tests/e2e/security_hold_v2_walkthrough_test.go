@@ -121,9 +121,11 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// config-repository paths by default with settings/config-policy.yml
 	// exceptions, grain/task-1591; v10 adds the single-tenant access gate,
 	// verified-identity seam and principal allowlist to auth-routes,
-	// grain/task-2434).
-	if trustboundary.Version != "trust-boundary/v10" {
-		w.t.Fatalf("this walkthrough is about trust-boundary/v10, the build has %s", trustboundary.Version)
+	// grain/task-2434; v11 only adds the hostd registry, host-exec
+	// confirmation and CI repository-access files to auth-routes and
+	// capabilities-secrets, grain/task-2723).
+	if trustboundary.Version != "trust-boundary/v11" {
+		w.t.Fatalf("this walkthrough is about trust-boundary/v11, the build has %s", trustboundary.Version)
 	}
 	if w.merged(branch) {
 		w.t.Fatal("merged before the pull request read mergeable")

@@ -39,6 +39,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/kubectlgate"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
@@ -562,4 +563,129 @@ func applyPackageCache(ctx context.Context, cfg Config, sandbox Sandbox, taskID 
 	if prep.Err != nil || prep.Configured {
 		log.Printf("orchestrator: task %s: its sandbox %s", taskID, prep.Summary())
 	}
+}
+
+// ensureCAScript installs stdin at $1 (mode $2) and rebuilds the system CA
+// bundle only when $1 does not already hold those exact bytes, printing
+// "updated" when it changed the trust store so the caller knows whether to
+// reload dockerd.
+const ensureCAScript = `set -eu
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+cat >"$tmp"
+if [ -f "$1" ] && cmp -s "$tmp" "$1"; then
+  exit 0
+fi
+run() { if [ "$(id -u)" = 0 ]; then "$@"; else sudo -n "$@"; fi; }
+run mkdir -p "$(dirname "$1")"
+run install -m "$2" "$tmp" "$1"
+run update-ca-certificates >/dev/null
+echo updated`
+
+// ensureInPlaceScript rewrites $1 in place from stdin only when its contents
+// differ, preserving the existing inode on bind-mounted paths like
+// /etc/resolv.conf.
+const ensureInPlaceScript = `set -eu
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+cat >"$tmp"
+if [ -f "$1" ] && cmp -s "$tmp" "$1"; then
+  exit 0
+fi
+if [ "$(id -u)" = 0 ]; then
+  cat "$tmp" > "$1"
+else
+  sudo -n tee "$1" <"$tmp" >/dev/null
+fi`
+
+// fileMatchesScript exits 0 when $1 exists and matches stdin byte-for-byte.
+const fileMatchesScript = `set -eu
+[ -f "$1" ] && cmp -s - "$1"`
+
+const adoptedCacheRefreshTimeout = 30 * time.Second
+
+// RefreshAdoptedSandbox ensures a sandbox claimed back across a daemon restart
+// still trusts this process's package-cache Root CA and points at its current
+// resolver and HTTP cache endpoint, without rewriting files or reloading
+// dockerd when nothing changed (the normal case once package-cache-ca.pem is
+// persisted across restarts).
+func RefreshAdoptedSandbox(ctx context.Context, src PackageCacheSource, sandbox Sandbox) error {
+	if src.Base == nil && src.CA == nil && src.DNS == nil {
+		return nil
+	}
+	var base string
+	if src.Base != nil {
+		base = strings.TrimSpace(src.Base(ctx))
+	}
+	var caPEM []byte
+	if src.CA != nil {
+		caPEM = src.CA(ctx)
+	}
+	var dnsIP string
+	if src.DNS != nil {
+		dnsIP = strings.TrimSpace(src.DNS(ctx))
+	}
+	if base == "" && len(caPEM) == 0 && dnsIP == "" {
+		return nil
+	}
+	commander, ok := sandbox.(SandboxCommander)
+	if !ok {
+		return nil
+	}
+	if g, ok := sandbox.(*k8sGranuleSandbox); ok && g.owner.isDialout() {
+		if cp := g.owner.cfg.Access.channelProvider(); cp != nil {
+			if _, connected := cp.Client(g.name); !connected {
+				return nil
+			}
+		}
+	}
+
+	refreshCtx, cancel := context.WithTimeout(ctx, adoptedCacheRefreshTimeout)
+	defer cancel()
+
+	noRoot := rootUnavailable(refreshCtx, sandbox)
+	if noRoot != "" {
+		if base != "" {
+			_ = configureTools(withSkipGoCacheProgBuild(refreshCtx, true), commander, sandbox.Name(), base)
+		}
+		return nil
+	}
+
+	for _, file := range pkgcache.SandboxCAFiles(caPEM) {
+		stdout, stderr, exitCode := kubectlgate.RetryIdempotent(refreshCtx, func() (string, string, int) {
+			return runAsRoot(refreshCtx, commander,
+				[]string{"sh", "-c", ensureCAScript, "sh", file.Path, file.Mode}, file.Content)
+		})
+		if exitCode != 0 {
+			return fmt.Errorf("refreshing CA cert %s in %s: %s", file.Path, sandbox.Name(), guestCommandDetail(stderr, exitCode))
+		}
+		if strings.Contains(stdout, "updated") {
+			_, _, _ = runAsRoot(refreshCtx, commander, []string{"sh", "-c", reloadDockerScript, "sh"}, "")
+		}
+	}
+
+	if dnsIP != "" {
+		resolv := pkgcache.SandboxResolvConf(dnsIP)
+		if _, stderr, exitCode := kubectlgate.RetryIdempotent(refreshCtx, func() (string, string, int) {
+			return runAsRoot(refreshCtx, commander,
+				[]string{"sh", "-c", ensureInPlaceScript, "sh", resolv.Path}, resolv.Content)
+		}); exitCode != 0 {
+			log.Printf("orchestrator: refreshing DNS %s in %s: %s", resolv.Path, sandbox.Name(), guestCommandDetail(stderr, exitCode))
+		}
+	}
+
+	if base != "" {
+		envFile, err := pkgcache.ChildContainerEnvFile(base)
+		if err != nil {
+			return err
+		}
+		_, _, matchExit := commander.RunInSandbox(refreshCtx,
+			[]string{"sh", "-c", fileMatchesScript, "sh", envFile.Path}, envFile.Content)
+		if matchExit != 0 {
+			if _, err := configurePackageCache(withSkipGoCacheProgBuild(refreshCtx, true), sandbox, base, ""); err != nil {
+				log.Printf("orchestrator: refreshing package cache at %s in %s: %v", base, sandbox.Name(), err)
+			}
+		}
+	}
+	return nil
 }

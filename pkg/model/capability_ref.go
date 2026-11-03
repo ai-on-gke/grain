@@ -417,6 +417,12 @@ const (
 	// the kind and refuses others, depending on the repository or
 	// trigger event.
 	CapabilityPolicyMayBeRefused CapabilityPolicyVerdict = "may_be_refused"
+	// CapabilityPolicyCIOnly means the reference is a CI capability
+	// (CIOnlyRefusal) that no run of the kind may hold, whatever the
+	// policy says: the refusal is grain's own rule, so a picker words it
+	// as that rather than sending the operator to a policy with no rule
+	// to change.
+	CapabilityPolicyCIOnly CapabilityPolicyVerdict = "ci_only"
 )
 
 // CapabilitySubject is the run a grant is admitted for.
@@ -498,8 +504,9 @@ func (p CapabilityPolicy) Permits(g string, s CapabilitySubject, servers ...map[
 
 // VerdictForKind reports what p does to a grant of ref for a trusted run
 // of kind when the repository and trigger event are not yet known:
-// CapabilityPolicyDenied when every run of that kind is refused,
-// CapabilityPolicyMayBeRefused when a repository- or event-dependent rule
+// CapabilityPolicyCIOnly when ref is a CI capability no run of that kind
+// may hold (before any rule is looked at), CapabilityPolicyDenied when
+// every run of that kind is refused, CapabilityPolicyMayBeRefused when a repository- or event-dependent rule
 // may refuse it, or CapabilityPolicyAllowed when every trusted run of
 // that kind is admitted.
 func (p CapabilityPolicy) VerdictForKind(ref, kind string, servers ...map[string]protocol.ServerConfig) CapabilityPolicyVerdict {
@@ -508,7 +515,7 @@ func (p CapabilityPolicy) VerdictForKind(ref, kind string, servers ...map[string
 	}
 	ref = CapabilityGrantRef(ref)
 	if kind != "" && kind != CapabilityRunCI && ref == RepoReadRef {
-		return CapabilityPolicyDenied
+		return CapabilityPolicyCIOnly
 	}
 	refs := equivalentCapabilityRefs(ref, servers)
 	allOfKind := CapabilitySubject{Kind: kind}

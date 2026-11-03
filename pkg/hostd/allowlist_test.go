@@ -529,3 +529,20 @@ func TestCheckAcceptsTheProbeVariableOnACapabilityOnly(t *testing.T) {
 	_, err = cli.Check(&Request{Kind: KindCLI, Name: "loader", Env: []string{ProbeEnv + "=1"}}, nil)
 	wantRefused(t, err, "not one this entry accepts")
 }
+
+// capacity: and labels: are read from the allowlist, and refused when the
+// daemon could not use them.
+func TestParseAllowlistReadsCapacityAndLabels(t *testing.T) {
+	a, err := ParseAllowlist([]byte("capacity: 3\nlabels:\n  os: linux\n  gpu: \"yes\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Capacity != 3 || a.Labels["os"] != "linux" || a.Labels["gpu"] != "yes" {
+		t.Errorf("allowlist = %+v, want capacity 3 and both labels", a)
+	}
+	for _, bad := range []string{"capacity: -1\n", "labels:\n  \"a b\": c\n", "labels:\n  k: \"x,y\"\n"} {
+		if _, err := ParseAllowlist([]byte(bad)); err == nil {
+			t.Errorf("ParseAllowlist(%q) succeeded, want refused", bad)
+		}
+	}
+}

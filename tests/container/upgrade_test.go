@@ -392,7 +392,16 @@ func upgradeTo(t *testing.T, d *Daemon, branch string) upgradeStatus {
 // how to ask the host to restart.
 func upgradeDaemon(t *testing.T, root, repo, refFile, restart string) *Daemon {
 	t.Helper()
+	return upgradeDaemonOn(t, "", root, repo, refFile, restart)
+}
+
+// upgradeDaemonOn is upgradeDaemon running from image rather than
+// GRAIN_TEST_IMAGE: the deployment as an older release left it, about to
+// be upgraded onto the build under test.
+func upgradeDaemonOn(t *testing.T, image, root, repo, refFile, restart string) *Daemon {
+	t.Helper()
 	return start(t, root, options{
+		image: image,
 		runArgs: append([]string{
 			"--volume", "/var/run/docker.sock:/var/run/docker.sock",
 		}, dockerGroupArgs()...),

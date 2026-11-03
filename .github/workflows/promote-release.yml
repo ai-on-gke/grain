@@ -19,6 +19,10 @@
 # human operator (`GRAIN_CI_REQUESTED_BY_KIND=human`).
 #
 # On non-main refs, `dry_run` defaults to and is enforced as `true`.
+#
+# `approve` refuses a pending release whose recorded staging soak is under
+# the minimum (scripts/release-from-trunk.sh records it on the -pending tag)
+# unless `short_soak_ok` is true; the vX.Y.0 tag message then says so.
 
 name: promote-release
 
@@ -37,6 +41,11 @@ on:
         options:
           - approve
           - reject
+      short_soak_ok:
+        description: "Approve even though the pending release's recorded staging soak is under the minimum (24h less the slack), e.g. one staged with FORCE=true; the release tag records the override"
+        required: false
+        default: false
+        type: boolean
       dry_run:
         description: "Verify promotion or rejection plan without pushing git tags or container images (always true on non-main refs)"
         required: false
@@ -198,6 +207,9 @@ jobs:
           GRAIN_API_TOKEN: ${{ secrets.GRAIN_API_TOKEN }}
           RELEASE_IMAGES: ${{ vars.RELEASE_IMAGES }}
           RELEASE_NOTIFY: ${{ vars.RELEASE_NOTIFY }}
+          # The person's explicit acceptance of a short soak; without it,
+          # approve refuses a -pending release that soaked under the minimum.
+          RELEASE_SHORT_SOAK_OK: ${{ inputs.short_soak_ok }}
         run: bash ./scripts/release-from-trunk.sh approve "$GRAIN_CI_RELEASE_VERSION"
 
   promote:

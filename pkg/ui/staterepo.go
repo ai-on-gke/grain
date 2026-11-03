@@ -123,7 +123,11 @@ type StateRepoStatus struct {
 	// stale one. Reported whether or not the cycle succeeded -- Error
 	// above says which -- because "last tried at" is the honest fact and
 	// a timestamp that stopped moving is itself the symptom.
-	SyncedAt time.Time `json:"syncedAt,omitempty"`
+	//
+	// omitzero, not omitempty: omitempty never drops a struct, so a zero
+	// time went out as 0001-01-01T00:00:00Z and the browser printed
+	// "exported 1/1/1, 12:00:00 AM" before the first cycle had run.
+	SyncedAt time.Time `json:"syncedAt,omitzero"`
 	// LastSnapshot is the path of the latest pre-import settings snapshot,
 	// if any has been taken on this host.
 	LastSnapshot string `json:"lastSnapshot,omitempty"`

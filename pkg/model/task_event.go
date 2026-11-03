@@ -49,13 +49,35 @@ const (
 	TaskEventReopened TaskEventKind = "reopened"
 )
 
+// The notes operator-attribution spec §3.1 asks of the task actions that
+// recorded nobody: who withdrew an approval, submitted, retried,
+// deferred, undeferred or parked a task, set what it waits on or
+// depends on, moved it in the queue, or set the secret it asked for.
+// They are events rather than comments because a person's comment is a
+// reply -- it answers a pending question and reaches a live run -- and
+// none of these is one. Not timeline steps: MergeTaskEvents leaves them
+// out, and the pipeline's change feed (ui.taskChanges) lists them.
+const (
+	TaskEventApprovalWithdrawn TaskEventKind = "approval-withdrawn"
+	TaskEventSubmitted         TaskEventKind = "submitted"
+	TaskEventRetried           TaskEventKind = "retried"
+	TaskEventDeferred          TaskEventKind = "deferred"
+	TaskEventUndeferred        TaskEventKind = "undeferred"
+	TaskEventParked            TaskEventKind = "parked"
+	TaskEventDependencies      TaskEventKind = "dependencies"
+	TaskEventReordered         TaskEventKind = "reordered"
+	// TaskEventSecretSet's Detail names the secret, never its value.
+	TaskEventSecretSet TaskEventKind = "secret-set"
+)
+
 // TransitionReopened is the timeline's name for a reopen. It is not one
 // of StateOf's answers -- a reopened task is in whatever state its record
 // implies -- but the moment it came back is worth a step of its own, the
 // same way the close it undid is.
 const TransitionReopened State = "reopened"
 
-// TaskEvent is one close or reopen of a task.
+// TaskEvent is one close or reopen of a task, a change to its
+// auto-merge, or a note of who took one of the actions above.
 type TaskEvent struct {
 	ID     int64
 	TaskID string
@@ -65,6 +87,9 @@ type TaskEvent struct {
 	// task's agent, an external agent token, or the deployment's own
 	// actor for a caller nothing identified.
 	By Principal
+	// OnBehalfOf is whose request By relayed, nil for its own
+	// (operator-attribution spec §2.4). Nothing sets it yet.
+	OnBehalfOf *Principal
 	// Reason is what they said, "" for nothing.
 	Reason string
 	// Detail is what grain did because of it: for a close, the live run
@@ -95,9 +120,11 @@ func (s *Store) RecordTaskEvent(ctx context.Context, e TaskEvent) (int64, error)
 
 func insertTaskEvent(ctx context.Context, tx *sql.Tx, e TaskEvent) (int64, error) {
 	res, err := tx.ExecContext(ctx,
-		"INSERT INTO `task_event` (`task_id`,`kind`,`at`,`actor_kind`,`actor_id`,`reason`,`detail`) "+
-			"VALUES (?,?,?,?,?,?,?)",
-		e.TaskID, string(e.Kind), e.At.UTC(), string(e.By.Kind), e.By.ID, e.Reason, e.Detail)
+		"INSERT INTO `task_event` (`task_id`,`kind`,`at`,`actor_kind`,`actor_id`,`reason`,`detail`,"+
+			"`actor_source`,`behalf_kind`,`behalf_id`,`behalf_source`) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+		e.TaskID, string(e.Kind), e.At.UTC(), string(e.By.Kind), e.By.ID, e.Reason, e.Detail,
+		string(e.By.Source), behalfColumn(e.OnBehalfOf, func(p Principal) string { return string(p.Kind) }),
+		behalfColumn(e.OnBehalfOf, func(p Principal) string { return p.ID }), sourceOf(e.OnBehalfOf))
 	if err != nil {
 		return 0, err
 	}
@@ -173,16 +200,19 @@ func (s *Store) TaskEventsSince(ctx context.Context, since time.Time) ([]TaskEve
 func (s *Store) taskEvents(ctx context.Context, where string, arg any) ([]TaskEvent, error) {
 	var out []TaskEvent
 	err := each(ctx, s.db,
-		"SELECT `id`,`task_id`,`kind`,`at`,`actor_kind`,`actor_id`,`reason`,`detail` "+
+		"SELECT `id`,`task_id`,`kind`,`at`,`actor_kind`,`actor_id`,`reason`,`detail`,"+
+			"`actor_source`,`behalf_kind`,`behalf_id`,`behalf_source` "+
 			"FROM `task_event` "+where+" ORDER BY `at`, `id`", arg,
 		func(rows *sql.Rows) error {
 			var e TaskEvent
-			var kind, actorKind string
+			var kind, actorKind, actorSource, behalfSource string
+			var behalfKind, behalfID sql.NullString
 			if err := rows.Scan(&e.ID, &e.TaskID, &kind, &e.At, &actorKind, &e.By.ID,
-				&e.Reason, &e.Detail); err != nil {
+				&e.Reason, &e.Detail, &actorSource, &behalfKind, &behalfID, &behalfSource); err != nil {
 				return err
 			}
-			e.Kind, e.By.Kind = TaskEventKind(kind), PrincipalKind(actorKind)
+			e.Kind, e.By.Kind, e.By.Source = TaskEventKind(kind), PrincipalKind(actorKind), AuthSource(actorSource)
+			e.OnBehalfOf = principalFrom(behalfKind, behalfID, behalfSource)
 			out = append(out, e)
 			return nil
 		})
@@ -285,8 +315,10 @@ func MergeTaskEvents(ts []Transition, events []TaskEvent) []Transition {
 		out = append(out, t)
 	}
 	for _, e := range events {
-		state := StateClosed
+		var state State
 		switch e.Kind {
+		case TaskEventClosed:
+			state = StateClosed
 		case TaskEventReopened:
 			state = TransitionReopened
 		case TaskEventAutoMergeOn:
@@ -295,10 +327,22 @@ func MergeTaskEvents(ts []Transition, events []TaskEvent) []Transition {
 			state = TransitionAutoMergeOff
 		case TaskEventAutoMergeKeptOff:
 			state = TransitionAutoMergeKeptOff
+		default:
+			// A note about an action, not a step (TaskEventSubmitted, ...).
+			continue
 		}
 		by := e.By
 		out = append(out, Transition{State: state, At: e.At, By: &by, Reason: e.Reason, Detail: e.Detail})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
 	return out
+}
+
+// behalfColumn is one of task_event's behalf_* columns, "" for none: the
+// columns are NOT NULL DEFAULT ” there, unlike task's nullable pairs.
+func behalfColumn(p *Principal, col func(Principal) string) string {
+	if p == nil {
+		return ""
+	}
+	return col(*p)
 }

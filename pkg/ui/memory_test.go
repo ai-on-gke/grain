@@ -189,8 +189,10 @@ func TestMemoryWritesRecordTheirAuthor(t *testing.T) {
 			written.UpdatedByKind, written.UpdatedBy)
 	}
 	stored, err := store.GetMemory(ctx, nil)
-	if err != nil || stored == nil || stored.UpdatedBy != c.Config.Actor {
-		t.Fatalf("the stored memory was written by %+v (%v), want %+v", stored, err, c.Config.Actor)
+	want := c.Config.Actor
+	want.Source = model.SourceInProcess
+	if err != nil || stored == nil || stored.UpdatedBy != want {
+		t.Fatalf("the stored memory was written by %+v (%v), want %+v", stored, err, want)
 	}
 
 	if _, err := c.PutMemory(ctx, "", "an agent noticed this", agent); err != nil {
@@ -285,14 +287,21 @@ func TestPutMemoryTakesItsAuthorFromTheRequest(t *testing.T) {
 		}
 	}
 	// The document route reads the same two fields, through the same
-	// helper.
+	// helper. A person a body names is nobody a verifier vouched for, so
+	// it is refused (operator-attribution spec §2.3), and the write that
+	// names nobody is the operator's.
 	rec = do(t, srv, http.MethodPut, "/api/memory/documents",
 		`{"name":"flaky-e2e","summary":"why the third retry fails","text":"a note",`+
 			`"author":"bwsalmon","authorKind":"human"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("a document claiming a person: status = %d, want 400: %s", rec.Code, rec.Body)
+	}
+	rec = do(t, srv, http.MethodPut, "/api/memory/documents",
+		`{"name":"flaky-e2e","summary":"why the third retry fails","text":"a note"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
 	}
-	if doc := decode[ui.MemoryDocument](t, rec); doc.UpdatedByKind != "human" {
-		t.Errorf("the document reports %q, want the person who claimed it", doc.UpdatedByKind)
+	if doc := decode[ui.MemoryDocument](t, rec); doc.UpdatedBy != client.Config.Actor.ID || doc.UpdatedByKind != "human" {
+		t.Errorf("the document reports %q/%q, want this deployment's own actor", doc.UpdatedByKind, doc.UpdatedBy)
 	}
 }

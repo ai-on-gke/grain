@@ -193,6 +193,9 @@ function TemplateOverlay({
       // Every task this template files is a live chat
       // (model.Template.Interactive).
       interactive: form.elements.interactive.checked,
+      // Every task this template files restarts when its run exits
+      // (model.Template.KeepRunning), as the new-task form's own box.
+      keepRunning: form.elements.keepRunning.checked,
       // How much of the internet the sandbox of every task this
       // template files may reach (grain/task-269). "" is a template
       // that fixes nothing, so each firing takes the deployment's own
@@ -203,6 +206,9 @@ function TemplateOverlay({
       // What a run ending on nothing_needed does to every task this
       // template files (model.Template.NothingNeededAction).
       nothingNeededAction: data.get("nothingNeededAction") || "close",
+      // The hostd every task this template files starts pinned to
+      // (model.Template.Hostd); "" is the default hostd.
+      hostd: String(data.get("hostd") || "").trim(),
       // Only when it changed: absent leaves the saved model alone
       // (ui.UpdateTemplateRequest.Model), and "" on a new template is
       // the same as saying nothing.
@@ -230,13 +236,10 @@ function TemplateOverlay({
     //
     // A whole number from 1 up, as on the task pane's own form
     // (EditTaskForm's priorityValid). Not parseInt, which read "1e2" as
-    // 1 and "2.5" as 2 without a word; and the box's own min and step
-    // let "1e2" through, so they are checked here as well.
+    // 1 and "2.5" as 2 without a word: taskPriority reads "1e2" as the
+    // 100 the box takes it for, and refuses "2.5".
     const priorityText = String(data.get("priority") || "").trim();
-    if (
-      priorityText !== "" &&
-      !(/^\d+$/.test(priorityText) && !Number.isNaN(taskPriority(priorityText)))
-    ) {
+    if (priorityText !== "" && Number.isNaN(taskPriority(priorityText))) {
       setPriorityInvalid(true);
       return;
     }
@@ -448,6 +451,17 @@ function TemplateOverlay({
             label="Interactive (agent can chat with you)"
             sx={{ display: "flex" }}
           />
+          <FormControlLabel
+            control={
+              <Checkbox
+                name="keepRunning"
+                defaultChecked={template?.keepRunning}
+              />
+            }
+            label="Keep running"
+            title="Immediately restart every task this template files when its run exits, instead of completing or parking it."
+            sx={{ display: "flex" }}
+          />
           <TextField
             select
             name="networkAccess"
@@ -486,6 +500,16 @@ function TemplateOverlay({
             value={chosenModel}
             onChange={setChosenModel}
             helperText="the model every task this template files asks for. A task filed from it can still choose its own."
+          />
+          <TextField
+            name="hostd"
+            label="Hostd"
+            defaultValue={template?.hostd || ""}
+            helperText="where the host work of every task this template files runs: a hostd's name, or label=value[,label=value]. Empty for the default hostd. A task filed from it can still choose its own."
+            autoComplete="off"
+            fullWidth
+            margin="normal"
+            size="small"
           />
           <FormControl fullWidth margin="normal" size="small">
             <InputLabel id="template-capabilities-label">

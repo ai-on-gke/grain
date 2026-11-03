@@ -149,7 +149,7 @@ var retiredGrants = []struct {
 	{85, "git-push-any-ref", []string{model.GitPushAnyRefGrant}},
 	{88, "repo-read:acme/tools", []string{model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
 	{88, "repo-write:acme/tools", []string{model.RepoWriteGrant(model.RepoRef{Owner: "acme", Name: "tools"})}},
-	{90, "gcp-key", []string{model.GCPKeySandboxAgentGrant}},
+	{95, "gcp-key", []string{model.GCPKeySandboxAgentGrant}},
 }
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'
@@ -407,7 +407,7 @@ func equalRows(got, want map[string][]string) bool {
 	return true
 }
 
-func TestMigration90SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
+func TestMigration95SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
@@ -485,17 +485,17 @@ func TestMigration90SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 		}
 	}
 
-	rewindSchemaTo(t, ctx, db, 89)
+	rewindSchemaTo(t, ctx, db, 94)
 	exportDir := t.TempDir()
 	if err := staterepo.Export(ctx, db, exportDir); err != nil {
-		t.Fatalf("exporting version-89 store: %v", err)
+		t.Fatalf("exporting version-94 store: %v", err)
 	}
-	if err := staterepo.WriteSchemaVersion(exportDir, 89); err != nil {
-		t.Fatalf("stamping version-89 export: %v", err)
+	if err := staterepo.WriteSchemaVersion(exportDir, 94); err != nil {
+		t.Fatalf("stamping version-94 export: %v", err)
 	}
 
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating version-89 store to 90: %v", err)
+		t.Fatalf("migrating version-94 store to 95: %v", err)
 	}
 
 	assertMigrated := func(t *testing.T, s *model.Store, sqlDB *sql.DB) {
@@ -611,16 +611,16 @@ func TestMigration90SeedsGCPPermissionSetsAndRewritesGrants(t *testing.T) {
 
 	assertMigrated(t, store, db)
 
-	rewindSchemaTo(t, ctx, db, 89)
+	rewindSchemaTo(t, ctx, db, 94)
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("re-running migration 90: %v", err)
+		t.Fatalf("re-running migration 95: %v", err)
 	}
 	assertMigrated(t, store, db)
 
 	importedStore, importedDB, importCtx := openStore(t)
 	_ = importCtx
 	if err := staterepo.Import(ctx, importedDB, exportDir); err != nil {
-		t.Fatalf("staterepo.Import of schema-89 export: %v", err)
+		t.Fatalf("staterepo.Import of schema-94 export: %v", err)
 	}
 	assertMigrated(t, importedStore, importedDB)
 }

@@ -210,7 +210,7 @@ func TestSchedulingRecordsTheTaskThatAskedForIt(t *testing.T) {
 	if err != nil || scheduled == nil {
 		t.Fatalf("the schedule did not reach the store: (%+v, %v)", scheduled, err)
 	}
-	if want := (model.Principal{Kind: model.PrincipalAgent, ID: "353"}); scheduled.By != want {
+	if want := (model.Principal{Kind: model.PrincipalAgent, ID: "353", Source: model.SourceSandbox}); scheduled.By != want {
 		t.Errorf("stored by = %+v, want %+v", scheduled.By, want)
 	}
 }
@@ -272,7 +272,7 @@ func TestHTTPClientSchedulesAnUpgradeAsTheTaskThatAskedForIt(t *testing.T) {
 		t.Fatalf("scheduled = %+v, want it asked for by task 353", status.Scheduled)
 	}
 	scheduled, err := store.GetScheduledUpgrade(ctx)
-	if err != nil || scheduled == nil || scheduled.By != task {
+	if err != nil || scheduled == nil || !scheduled.By.Same(task) || scheduled.By.Source != model.SourceSandbox {
 		t.Fatalf("stored = (%+v, %v), want the task that asked for it", scheduled, err)
 	}
 
@@ -282,7 +282,8 @@ func TestHTTPClientSchedulesAnUpgradeAsTheTaskThatAskedForIt(t *testing.T) {
 		t.Fatalf("StartUpgrade naming nobody: %v", err)
 	}
 	scheduled, err = store.GetScheduledUpgrade(ctx)
-	if err != nil || scheduled == nil || scheduled.By != ui.DefaultActor("alice") {
+	if err != nil || scheduled == nil || !scheduled.By.Same(ui.DefaultActor("alice")) ||
+		scheduled.By.Source != model.SourceAccessCode {
 		t.Fatalf("stored = (%+v, %v), want this deployment's own actor", scheduled, err)
 	}
 }
