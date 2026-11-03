@@ -462,7 +462,13 @@ import "strconv"
 // one-time startup migration record off `-ui-allowed-principals`. Kept off
 // SettingsTables so a config-repo pull request cannot lock operators out
 // or grant sign-in access (design/design/settings.design.md §1).
-const SchemaVersion = 98
+//
+// 99 retires the in-process claude-proxy, openai-proxy and gemini-proxy
+// providers onto the in-process model-proxy server: stored grants across
+// tasks, templates, schedules, default_capabilities, ci_capabilities,
+// console_sessions and capability_policy become
+// https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"<vendor>"}.
+const SchemaVersion = 99
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified

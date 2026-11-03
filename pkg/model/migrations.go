@@ -677,6 +677,11 @@ var Migrations = []Migration{
 			allowedPrincipalMigrationTable,
 		},
 	},
+	{
+		Version:     99,
+		Description: "rewrite stored claude-proxy, openai-proxy and gemini-proxy grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/model-proxy#model-proxy={\"vendor\":\"<vendor>\"} (the in-process providers are retired)",
+		Up:          migrateModelProxyGrants,
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as

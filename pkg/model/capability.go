@@ -192,6 +192,23 @@ type CapabilityContext struct {
 	Connection string
 }
 
+type runConnectionKey struct{}
+
+// WithRunConnection is ctx carrying connection, the run's own
+// CapabilityContext.Connection, to a method of an in-process capability
+// server minting for it: the orchestrator mints a capability pass with it
+// once the run's framework is chosen, so the model-proxy server spends
+// the same connection its retired in-process providers did.
+func WithRunConnection(ctx context.Context, connection string) context.Context {
+	return context.WithValue(ctx, runConnectionKey{}, connection)
+}
+
+// RunConnection is the connection WithRunConnection put in ctx, or "".
+func RunConnection(ctx context.Context) string {
+	c, _ := ctx.Value(runConnectionKey{}).(string)
+	return c
+}
+
 // CapabilitySpec is a capability's fixed identity: what a grant of it
 // means, before any particular task holds one.
 type CapabilitySpec struct {
