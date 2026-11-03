@@ -226,6 +226,11 @@ var patterns = []pattern{
 		regexp.MustCompile(`(?i)(authorization\s*[:=]\s*)((?:basic|bearer|token|digest|apikey)\s+)?\S+`),
 		"${1}${2}[redacted: authorization]",
 	},
+	{
+		"access code header",
+		regexp.MustCompile(`(?i)(x-grain-access-code\s*[:=]\s*)\S+`),
+		"${1}[redacted: access code]",
+	},
 	{"bearer token", regexp.MustCompile(`(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]{8,}`), "${1}[redacted: bearer token]"},
 	// A credential in a URL's userinfo -- the shape a git remote with a
 	// token in it takes, which is exactly what an error quoting a failed

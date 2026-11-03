@@ -42,6 +42,17 @@ const (
 	maxConversationBodyBytes = 2 << 10
 )
 
+// RenderTaskSummary renders the compact ~1 KB summary view of t at now.
+func RenderTaskSummary(t TaskRecord, now time.Time) string {
+	return renderTaskSummary(t, now)
+}
+
+// RenderTaskConversation renders one bounded page of t's conversation after
+// the given comment id (after < 0 starts from the beginning).
+func RenderTaskConversation(t TaskRecord, after int64) string {
+	return renderTaskConversation(t, after)
+}
+
 // renderTaskSummary is the summary view: what the task is and what last
 // happened to it, in about a kilobyte.
 func renderTaskSummary(t TaskRecord, now time.Time) string {

@@ -57,6 +57,9 @@ const (
 	// AccessCookieName is the cookie a single-tenant daemon's access
 	// session lives in.
 	AccessCookieName = "grain_access"
+	// AccessCodeHeader carries the access code when Authorization is
+	// already occupied by an upstream IAP or OIDC proxy's bearer token.
+	AccessCodeHeader = "X-Grain-Access-Code"
 	// DefaultAccessSessionLifetime is how long an access session lasts
 	// without being used (Config.AccessSessionLifetime).
 	DefaultAccessSessionLifetime = 90 * 24 * time.Hour
@@ -298,15 +301,21 @@ func accessLifetime(cfg IAPConfig) time.Duration {
 }
 
 // presentsAccessCode reports whether r carries the access code as a
-// bearer token. Unlike presentsLocalAPIToken it does not ask where the
-// request came from: on a single-tenant daemon the code is the
+// bearer token or in AccessCodeHeader (so an upstream IAP/OIDC proxy can
+// keep Authorization). Unlike presentsLocalAPIToken it does not ask where
+// the request came from: on a single-tenant daemon the code is the
 // credential wherever it is presented from.
 func presentsAccessCode(r *http.Request, cfg IAPConfig) bool {
 	if !accessCodeAccepted(r, cfg) {
 		return false
 	}
-	got, ok := bearerToken(r)
-	return ok && matchesAccessCode(got, cfg.LocalAPIToken)
+	if got, ok := bearerToken(r); ok && matchesAccessCode(got, cfg.LocalAPIToken) {
+		return true
+	}
+	if got, ok := accessCodeHeader(r); ok && matchesAccessCode(got, cfg.LocalAPIToken) {
+		return true
+	}
+	return false
 }
 
 // accessCodeAccepted reports whether r may authenticate with the access
@@ -335,6 +344,25 @@ func bearerToken(r *http.Request) (string, bool) {
 	}
 	tok := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
 	return tok, tok != ""
+}
+
+func accessCodeHeader(r *http.Request) (string, bool) {
+	tok := strings.TrimSpace(r.Header.Get(AccessCodeHeader))
+	return tok, tok != ""
+}
+
+// accessCodeCandidate reports whether r presents a credential to be
+// rate-limited and checked as an access code: either a Bearer token whose
+// shape could be the code (leaving OIDC JWTs and gma_ tokens alone) or an
+// explicit AccessCodeHeader.
+func accessCodeCandidate(r *http.Request, code string) bool {
+	if tok, ok := bearerToken(r); ok && couldBeAccessCode(tok, code) {
+		return true
+	}
+	if tok, ok := accessCodeHeader(r); ok && (couldBeAccessCode(tok, code) || canonicalAccessCode(code) != "") {
+		return true
+	}
+	return false
 }
 
 // accessSessionIssued is when r's access session cookie was issued, if
@@ -614,7 +642,7 @@ func (s *Server) singleTenantGate(w http.ResponseWriter, r *http.Request, cfg IA
 			if externalTokenFromContext(r.Context()) != nil {
 				return true
 			}
-			if tok, ok := bearerToken(r); ok && couldBeAccessCode(tok, cfg.LocalAPIToken) {
+			if accessCodeCandidate(r, cfg.LocalAPIToken) {
 				source := accessSource(r)
 				if !accessLimitExempt(r) && s.access.sourceLimited(source, time.Now()) {
 					writeError(w, http.StatusTooManyRequests, errors.New(errAccessCodeLimited))
@@ -658,7 +686,7 @@ func (s *Server) singleTenantGate(w http.ResponseWriter, r *http.Request, cfg IA
 		return true
 	}
 	codeAccepted := accessCodeAccepted(r, cfg)
-	if tok, ok := bearerToken(r); ok && codeAccepted && couldBeAccessCode(tok, cfg.LocalAPIToken) {
+	if codeAccepted && accessCodeCandidate(r, cfg.LocalAPIToken) {
 		// A source over its own limit is refused before its code is
 		// looked at, so the refusal is the same whether the code was
 		// right; a wrong one is counted. Loopback is never refused a
