@@ -39,7 +39,7 @@ func newHostdHub(cfg Config, store *model.Store) *hostd.Remote {
 	}
 	if store != nil {
 		hub.Resolve = registryResolver(store)
-		hub.OnChange = hostdConnectionNotifier(store)
+		hub.OnChange = hostdConnectionNotifier(store, hub)
 	}
 	return hub
 }
@@ -54,13 +54,18 @@ func hostdDisconnectedSubject(name string) string { return "hostd-disconnected:"
 // "waiting for hostd <name>", and a CLI running there detached is
 // re-attached if it is back within -hostd-reattach-timeout
 // (runhost.Hostd.ReattachTimeout). Nothing moves to another hostd.
-func hostdConnectionNotifier(store *model.Store) func(name string, connected bool) {
+// A hostd that connects is also rid of the CLIs it still runs for
+// finished runs (releaseFinishedHostdRuns) when hub is set.
+func hostdConnectionNotifier(store *model.Store, hub *hostd.Remote) func(name string, connected bool) {
 	return func(name string, connected bool) {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			subject := hostdDisconnectedSubject(name)
 			if connected {
+				if hub != nil {
+					releaseFinishedHostdRuns(ctx, store, hostd.Client{Dial: hub.Dialer(name), Build: daemonBuild()}, name)
+				}
 				if _, err := store.ClearNotification(ctx, subject, "automation:hostd"); err != nil {
 					log.Printf("grain daemon: clearing %s: %v", subject, err)
 				}
@@ -87,6 +92,40 @@ func hostdConnectionNotifier(store *model.Store) func(name string, connected boo
 				log.Printf("grain daemon: raising %s: %v", subject, err)
 			}
 		}()
+	}
+}
+
+// releaseFinishedHostdRuns cancels each detached process hostd name
+// still holds for a run the store has finished. A pinned hostd's runs
+// start detached so a drop can be re-attached (newPinnedHostdRuns), but
+// only the default hostd's are listed at startup (RecoverHostd): a CLI a
+// crashed daemon left there, or one whose run gave up waiting while its
+// hostd was away (runhost.Hostd.cancelWhenBack, which does not outlive
+// the daemon), would otherwise run on until its own deadline. A process
+// whose run is live, or that names no run the store knows, is left
+// alone.
+func releaseFinishedHostdRuns(ctx context.Context, store *model.Store, c hostd.Client, name string) {
+	procs, err := c.Processes(ctx)
+	if err != nil {
+		log.Printf("grain daemon: listing grain hostd %s's processes for finished runs: %v", name, err)
+		return
+	}
+	for _, p := range procs {
+		if !p.Detached || p.Run == "" {
+			continue
+		}
+		finished, found, err := store.RunFinished(ctx, p.Run)
+		if err != nil {
+			log.Printf("grain daemon: grain hostd %s's process %s: reading run %s: %v", name, p.ID, p.Run, err)
+			continue
+		}
+		if !found || !finished {
+			continue
+		}
+		log.Printf("grain daemon: releasing grain hostd %s's process %s: its run %s has finished", name, p.ID, p.Run)
+		if err := c.Cancel(ctx, p.ID); err != nil {
+			log.Printf("grain daemon: cancelling grain hostd %s's process %s: %v", name, p.ID, err)
+		}
 	}
 }
 

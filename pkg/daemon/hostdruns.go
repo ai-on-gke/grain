@@ -46,8 +46,10 @@ func newHostdRuns(cfg Config, store *model.Store) *runhost.Hostd {
 // apply): started detached too, so a hostd that drops is re-attached
 // within -hostd-reattach-timeout, but never left running for the next
 // daemon -- only the default hostd's runs are re-adopted at start -- so
-// a daemon stopping kills it as an attached CLI's would be. nil without
-// a store.
+// a daemon stopping kills it as an attached CLI's would be. One a daemon
+// could not kill (it crashed, or hostd was away as it stopped) is
+// cancelled when that hostd next connects, once its run has finished
+// (releaseFinishedHostdRuns). nil without a store.
 func newPinnedHostdRuns(cfg Config, store *model.Store) func(HostExecutor) *runhost.Hostd {
 	if store == nil {
 		return nil

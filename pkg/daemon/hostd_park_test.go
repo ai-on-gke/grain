@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/runhost"
@@ -246,5 +247,64 @@ func TestARunFailsAsLostWhenItsHostdIsAwayPastTheReattachTimeout(t *testing.T) {
 	choice := orchestrator.AgentChoice{TaskID: "pinned", Framework: model.AgentFrameworkAntigravity}
 	if why := pool.Availability(context.Background(), choice); why != "waiting for hostd ws-a" {
 		t.Errorf("after the lost run: availability %q, want the task parked waiting for hostd ws-a", why)
+	}
+}
+
+// A CLI a daemon left running detached on ws-a -- it crashed, or the run
+// gave up waiting -- is cancelled when ws-a next connects once its run
+// has finished; nothing else lists a pinned hostd's processes. One whose
+// run is still live is left for its stream to re-attach.
+func TestAHostdThatConnectsIsRidOfCLIsForFinishedRuns(t *testing.T) {
+	cfg, pool, ws := parkedHostdSetup(t, time.Minute)
+	ctx := context.Background()
+	store := pool.Store
+	client := hostd.Client{Dial: cfg.HostdHub.Dialer("ws-a"), Build: daemonBuild()}
+	// The daemon that started them is gone: its streams let go, and
+	// nothing re-attaches.
+	gone := &runhost.Hostd{Client: client, Detach: func(context.Context) bool { return true }}
+	for _, run := range []string{"finished", "live"} {
+		if err := store.PutTask(ctx, model.Task{ID: run, Title: run}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.StartRun(ctx, model.Run{ID: run, TaskID: run, Sandbox: run, Attempt: 1, StartedAt: time.Now().UTC()}, model.Limits{}); err != nil {
+			t.Fatal(err)
+		}
+		var tee lockedTee
+		runCtx, cancel := context.WithCancel(runhost.WithRun(ctx, runhost.Run{Task: run, Run: run, Deadline: time.Now().Add(time.Hour)}))
+		done := make(chan error, 1)
+		go func() {
+			_, err := gone.Host(agent.LocalHost{}, "agy").Run(runCtx, agent.Command{Args: []string{"-c", "echo up; sleep 60"}}, &tee)
+			done <- err
+		}()
+		waitFor(t, func() bool { return strings.Contains(tee.String(), "up\n") })
+		cancel()
+		if err := <-done; !errors.Is(err, agent.ErrDetached) {
+			t.Fatalf("run %s's CLI let go of = %v, want it left running detached", run, err)
+		}
+	}
+	if err := store.FinishRun(ctx, "finished", time.Now().UTC(), model.InterruptedOutcome, "the daemon stopped"); err != nil {
+		t.Fatal(err)
+	}
+	running := func() map[string]bool {
+		procs, err := client.Processes(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]bool{}
+		for _, p := range procs {
+			if p.Detached && !p.Exited {
+				out[p.Run] = true
+			}
+		}
+		return out
+	}
+	if got := running(); !got["finished"] || !got["live"] {
+		t.Fatalf("before ws-a reconnects, running = %v, want both CLIs", got)
+	}
+
+	ws.drop()
+	waitFor(t, func() bool { return !running()["finished"] })
+	if !running()["live"] {
+		t.Error("ws-a reconnecting cancelled the CLI of a run that is still live")
 	}
 }
