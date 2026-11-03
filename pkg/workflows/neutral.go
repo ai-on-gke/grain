@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -58,6 +59,40 @@ type CapabilitySyntax struct {
 	// capability references and api grants. JobCapabilities and
 	// UnmetRequirements read it.
 	DeclaredOnly func(id string) bool
+	// Canonical is the spelling a name is compared by: a retired name
+	// rewritten to what it became (model.CanonicalLegacyGrant), so a job
+	// declaring `image-signing` is met by a repository granting the
+	// reference it was rewritten to, and the reverse. nil compares names
+	// as written.
+	Canonical func(id string) string
+}
+
+// sameCapability reports whether a and b name the same capability
+// (CapabilitySyntax.Canonical).
+func sameCapability(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if Capabilities.Canonical == nil {
+		return false
+	}
+	return Capabilities.Canonical(a) == Capabilities.Canonical(b)
+}
+
+// containsCapability reports whether list names id (sameCapability).
+func containsCapability(list []string, id string) bool {
+	return slices.ContainsFunc(list, func(c string) bool { return sameCapability(c, id) })
+}
+
+// isPolicyRef reports whether id is a capability reference the
+// capability policy decides when it is minted: not repository access,
+// and not one a repository's CI capabilities list grants (DeclaredOnly
+// false, as the release server's methods are).
+func isPolicyRef(id string) bool {
+	if !IsCapabilityRef(id) || (Capabilities.IsRepoAccess != nil && Capabilities.IsRepoAccess(id)) {
+		return false
+	}
+	return Capabilities.DeclaredOnly == nil || Capabilities.DeclaredOnly(id)
 }
 
 // Capabilities is the CapabilitySyntax the parser applies. pkg/ci

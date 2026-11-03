@@ -46,7 +46,7 @@ func TestTaskCreationCapabilityPermissions(t *testing.T) {
 		Creator:      "alice",
 		Capabilities: &caps,
 	})
-	if err == nil || !strings.Contains(err.Error(), "package-publish is a CI capability, not a task grant") {
+	if err == nil || !strings.Contains(err.Error(), "#package-publish={} is a CI capability, not a task grant") {
 		t.Fatalf("expected CI capability rejection, got %v", err)
 	}
 
@@ -63,7 +63,7 @@ func TestTaskCreationCapabilityPermissions(t *testing.T) {
 
 	// 3. SetCapability with CI capability is rejected
 	err = c.SetCapability(ctx, task.ID, "package-publish", true)
-	if err == nil || !strings.Contains(err.Error(), "package-publish is a CI capability, not a task grant") {
+	if err == nil || !strings.Contains(err.Error(), "#package-publish={} is a CI capability, not a task grant") {
 		t.Fatalf("expected SetCapability CI rejection, got %v", err)
 	}
 }

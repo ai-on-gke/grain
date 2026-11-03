@@ -481,6 +481,10 @@ func (c *Client) capabilityByID(id string) (Capability, bool) {
 		if model.CheckCapabilityGrantSyntax(id) != nil {
 			return Capability{}, false
 		}
+		// A method with a CI rule (the release server's) is CI-only.
+		if _, ok := model.CIGrantRuleFor(id); ok {
+			return Capability{}, false
+		}
 		ref := model.CapabilityGrantRef(id)
 		// repo#read and repo#write {repo} are CI-only repository access
 		// grants; only repo#write {refs, force} (git-push-any-ref) is a
