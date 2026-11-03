@@ -247,7 +247,7 @@ type CapabilitySpec struct {
 // shell. Agent tool grants and agent Git credential selectors require an agent
 // run and are not offered for CI.
 func (s CapabilitySpec) SupportsCI() bool {
-	return s.Provision == ProvisionMint || s.Provision == ProvisionPlace || s.Name == "grain-ci"
+	return s.Provision == ProvisionMint || s.Provision == ProvisionPlace
 }
 
 // SupportsTask is SupportsCI's converse: whether a task may hold this

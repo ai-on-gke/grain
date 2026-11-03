@@ -357,7 +357,7 @@ func TestCLIActionsRefuseAndRoute(t *testing.T) {
 	h, act, _ := newActionProxy(t, actions)
 
 	if rec := send(h, http.MethodPost, "tok-plain", "/cli/ci/wait", `{}`); rec.Code != http.StatusForbidden ||
-		!strings.Contains(rec.Body.String(), `"grain-ci"`) {
+		!strings.Contains(rec.Body.String(), `"https://grain.dev/capabilities/grain#ci"`) {
 		t.Errorf("wait without grain-ci: %d %s", rec.Code, rec.Body)
 	}
 	if rec := send(h, http.MethodGet, "tok-ci", "/cli/ci/wait", ""); rec.Code != http.StatusMethodNotAllowed {

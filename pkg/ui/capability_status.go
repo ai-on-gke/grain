@@ -279,19 +279,20 @@ const defaultSecretKey = secrets.AgentCredentialKey
 // "Gemini proxy") are the vendor's own -- see modelProxyDisplayNames
 // below, which folds them in.
 var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
-	"gcp-key":             "GCP key",
-	"gemini-key":          "Gemini key",
-	"github-sandbox":      "GitHub sandbox",
-	"self-debug":          "Self debug",
-	"bootstrap-playbooks": "Bootstrap playbooks",
-	"grain-ci":            "grain CI",
-	"registry-push":       "Registry push",
-	"package-publish":     "Package publish",
-	"image-signing":       "Image signing",
-	"console":             "Interactive console",
-	"priority-dispatch":   "Priority dispatch",
-	"durable":             "Durable",
-	"read-issues":         "Read issues",
+	"gcp-key":               "GCP key",
+	"gemini-key":            "Gemini key",
+	"github-sandbox":        "GitHub sandbox",
+	"self-debug":            "Self debug",
+	"bootstrap-playbooks":   "Bootstrap playbooks",
+	model.GrainCIGrant:      "grain CI",
+	model.GrainCICapability: "grain CI",
+	"registry-push":         "Registry push",
+	"package-publish":       "Package publish",
+	"image-signing":         "Image signing",
+	"console":               "Interactive console",
+	"priority-dispatch":     "Priority dispatch",
+	"durable":               "Durable",
+	"read-issues":           "Read issues",
 })
 
 // withModelProxyDisplayNames adds one row per vendor's proxy capability
@@ -437,7 +438,7 @@ func ciOnlyCapability(name string) bool {
 // build ships, registers a provider for, and publishes releases with --
 // true of the picker and useless to the person reading it.
 func capabilityRefusal(id string) string {
-	if id == grainci.CapabilityName {
+	if grainci.IsGrant(id) {
 		return grainci.Refusal()
 	}
 	if ciOnlyCapability(id) {

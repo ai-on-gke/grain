@@ -108,12 +108,12 @@ func seedMergeRulesDemo(ctx context.Context, store *model.Store, cfg ui.Config, 
 		return fmt.Errorf("configuring %s: %w", repo, err)
 	}
 	// Existing tasks on repo were seeded before CIMode became "grain", so
-	// grant them the default grain-ci capability that new tasks on a
+	// grant them the default grain#ci grant that new tasks on a
 	// grain-gated repo receive at creation (Client.creationGrants).
 	if existing, err := store.ListTasks(ctx); err == nil {
 		hasGrainCI := func(grants []model.Grant) bool {
 			return slices.ContainsFunc(grants, func(g model.Grant) bool {
-				return g.Capability == grainci.CapabilityName
+				return grainci.IsGrant(g.Capability)
 			})
 		}
 		for _, t := range existing {
@@ -121,7 +121,7 @@ func seedMergeRulesDemo(ctx context.Context, store *model.Store, cfg ui.Config, 
 				_ = store.UpdateTask(ctx, t.ID, func(task *model.Task) error {
 					if !hasGrainCI(task.Grants) {
 						task.Grants = append(task.Grants, model.Grant{
-							Capability: grainci.CapabilityName,
+							Capability: grainci.Grant,
 							Via:        model.GrantByDefault,
 						})
 					}

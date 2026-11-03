@@ -43,7 +43,7 @@ import (
 // Every capability the job carries is judged, including one its event
 // will not hold (a `repo-write:` on a pull request): what is refused is
 // the workflow's declaration, whichever event happens to run it. The
-// grain-ci capability ResolveCICapabilities adds to every job on its own
+// grain#ci grant ResolveCICapabilities adds to every job on its own
 // is not the job's claim and is not judged, whether or not a repository's
 // list names it too.
 //
@@ -59,7 +59,7 @@ func CheckCIJobPolicy(p *policy.Policy, req ci.SandboxRequest) error {
 	}
 	task := model.Task{Target: &repo, NetworkAccess: model.NetworkOpen}
 	for _, id := range req.Capabilities {
-		if id == grainci.CapabilityName {
+		if grainci.IsGrant(id) {
 			continue
 		}
 		task.Grants = append(task.Grants, model.Grant{Capability: id, Via: model.GrantByDefault})
@@ -87,7 +87,7 @@ func ciPolicyRefusal(p *policy.Policy, req ci.SandboxRequest, logf func(string, 
 // model.CapabilityCatalogue) as a CI job of the repository under test,
 // before any of them is materialized: a capability the catalogue has
 // since revoked, or keeps off this repository, is refused rather than
-// minted. The grain-ci capability every job carries is grain's own and is
+// minted. The grain#ci grant every job carries is grain's own and is
 // not judged. A nil catalogue admits every job.
 func CheckCIJobCatalogue(cat *model.CapabilityCatalogue, req ci.SandboxRequest) error {
 	if cat == nil {
@@ -98,7 +98,7 @@ func CheckCIJobCatalogue(cat *model.CapabilityCatalogue, req ci.SandboxRequest) 
 		gc.Repo = &repo
 	}
 	for _, id := range req.Capabilities {
-		if id != grainci.CapabilityName {
+		if !grainci.IsGrant(id) {
 			gc.Grants = append(gc.Grants, id)
 		}
 	}

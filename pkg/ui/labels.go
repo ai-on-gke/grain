@@ -207,8 +207,8 @@ func OfferedCapabilities() []Capability {
 			Description: "Create a private, single-use GitHub sandbox repo for this task to work in instead of /repo"},
 		{ID: "console", Name: "Interactive console",
 			Description: "Run this task's agent CLI on a terminal in the UI, and keep it running until somebody closes it -- everything else about the task is unchanged, including the pull request its branch becomes"},
-		// Not grain-ci: nobody attaches it by hand. A repository's CI
-		// Mode is the switch, and grain grants grain-ci to that
+		// Not grain#ci: nobody attaches it by hand. A repository's CI
+		// Mode is the switch, and grain grants grain#ci to that
 		// repository's tasks itself (pkg/capability/grainci's package
 		// doc). Every place a capability is chosen refuses it with
 		// grainci.Refusal, by way of capabilityRefusal.

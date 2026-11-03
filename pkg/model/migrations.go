@@ -652,6 +652,18 @@ var Migrations = []Migration{
 		Description: "raise grain_config.max_merges_per_repo's column default from 1 to 5 (stored values are kept)",
 		Up:          raiseMaxMergesPerRepoDefault,
 	},
+	{
+		Version:     96,
+		Description: "rewrite stored grain-ci grants, repo_config.ci_capabilities included, to https://grain.dev/capabilities/grain#ci={} (the in-process capability is retired)",
+		Up: func(ctx context.Context, tx *sql.Tx) error {
+			renames := map[string]string{GrainCICapability: GrainCIGrant}
+			if err := rewriteLegacyGrants(renames)(ctx, tx); err != nil {
+				return err
+			}
+			return rewriteCapabilityListColumnMulti(ctx, tx, "repo_config", []string{"owner", "name"}, "ci_capabilities",
+				map[string][]string{GrainCICapability: {GrainCIGrant}})
+		},
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as
