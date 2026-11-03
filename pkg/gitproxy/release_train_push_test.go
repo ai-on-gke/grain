@@ -1,0 +1,116 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package gitproxy
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"testing/fstest"
+	"time"
+
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/repodecl"
+)
+
+// The release train's tag grant (design/playbook/releases.playbook.md
+// §0.4), read from this repository's own .grain/templates/release-train.yml:
+// a run of a task filed from it may push the rc, -pending and -discarded
+// tags, force-move candidate and make a release/vX.Y.Z branch -- and the
+// proxy refuses it vX.Y.Z and latest, the promotion's refs, which only
+// the person's approval run moves.
+func TestTheReleaseTrainsGrantNeverReachesAPromotion(t *testing.T) {
+	t.Parallel()
+	text, err := os.ReadFile(filepath.Join("..", "..", ".grain", "templates", "release-train.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := model.GrainSourceRepo()
+	declared, err := repodecl.Load(fstest.MapFS{
+		".grain/templates/release-train.yml": {Data: text},
+		".grain/schedules/release-train.yml": {Data: []byte("template: release-train\nevery:\n  hours: 6\n")},
+	}, repo)
+	if err != nil {
+		t.Fatalf("loading .grain/templates/release-train.yml: %v", err)
+	}
+
+	store, ctx := openStoreForTest(t)
+	now := time.Date(2026, 11, 3, 4, 15, 0, 0, time.UTC)
+	if _, err := store.SyncRepoDeclarations(ctx, repo, strings.Repeat("d", 40), declared, now, time.UTC); err != nil {
+		t.Fatalf("syncing the declarations: %v", err)
+	}
+	sched, err := store.GetSchedule(ctx, model.RepoDeclaredID(model.DeclaredSchedule, repo, "release-train"))
+	if err != nil || sched == nil {
+		t.Fatalf("reading the schedule: %v, %v", sched, err)
+	}
+	fired, err := store.FireScheduleNow(ctx, *sched, now, model.RepoRef{})
+	if err != nil || fired.TaskID == "" {
+		t.Fatalf("firing the schedule: %+v, %v", fired, err)
+	}
+	task, err := store.GetTask(ctx, fired.TaskID)
+	if err != nil || task == nil {
+		t.Fatalf("reading the filed task: %v", err)
+	}
+	if err := store.StartRun(ctx, model.Run{ID: "r1", TaskID: task.ID, Sandbox: "sandbox-train", Attempt: 1, StartedAt: now},
+		model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	authorize := func(u RefUpdate) string {
+		t.Helper()
+		reason, err := (&ModelAuthorizer{Store: store}).AuthorizeRefUpdates(ctx, "sandbox-train", repo.Owner, repo.Name, []RefUpdate{u})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return reason
+	}
+
+	for name, u := range map[string]RefUpdate{
+		"an rc tag":                 {Old: zero, New: oidB, Ref: "refs/tags/v3.2.0-rc.1"},
+		"a -pending tag":            {Old: zero, New: oidB, Ref: "refs/tags/v3.2.0-pending"},
+		"a -discarded tag":          {Old: zero, New: oidB, Ref: "refs/tags/v3.2.0-rc.1-discarded"},
+		"candidate, force-moved":    {Old: oidA, New: oidB, Ref: "refs/heads/candidate"},
+		"the convergence branch":    {Old: zero, New: oidB, Ref: "refs/heads/release/v3.2.0"},
+		"the run's own task branch": {Old: oidA, New: oidB, Ref: "refs/heads/" + task.BranchName()},
+	} {
+		if reason := authorize(u); reason != "" {
+			t.Errorf("%s (%s): refused: %s", name, u.Ref, reason)
+		}
+	}
+
+	for name, u := range map[string]RefUpdate{
+		"latest, moved":                      {Old: oidA, New: oidB, Ref: "refs/tags/latest"},
+		"latest, created":                    {Old: zero, New: oidB, Ref: "refs/tags/latest"},
+		"latest, deleted":                    {Old: oidA, New: zero, Ref: "refs/tags/latest"},
+		"a release tag":                      {Old: zero, New: oidB, Ref: "refs/tags/v3.2.0"},
+		"a release tag, moved":               {Old: oidA, New: oidB, Ref: "refs/tags/v3.1.0"},
+		"main":                               {Old: oidA, New: oidB, Ref: "refs/heads/main"},
+		"a -pending tag, deleted":            {Old: oidA, New: zero, Ref: "refs/tags/v3.2.0-pending"},
+		"an rc tag, moved":                   {Old: oidA, New: oidB, Ref: "refs/tags/v3.2.0-rc.1"},
+		"a retraction":                       {Old: zero, New: oidB, Ref: "refs/tags/v3.1.0-retracted"},
+		"the convergence branch, rewritten":  {Old: oidA, New: oidB, Ref: "refs/heads/release/v3.2.0"},
+		"the convergence branch, deleted":    {Old: oidA, New: zero, Ref: "refs/heads/release/v3.2.0"},
+		"a branch nested under the release/": {Old: zero, New: oidB, Ref: "refs/heads/release/v3/x"},
+	} {
+		reason := authorize(u)
+		if reason == "" {
+			t.Errorf("%s (%s): the release train's grant let it through", name, u.Ref)
+			continue
+		}
+		if !strings.Contains(reason, ".grain/templates/release-train.yml") {
+			t.Errorf("%s (%s): refused without naming the declaration: %q", name, u.Ref, reason)
+		}
+	}
+}

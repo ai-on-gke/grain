@@ -161,6 +161,14 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 	// (repoGuard): the effective list is both.
 	rules, guarded := repoGuard(ctx, store, client, *task.Target, files, known)
 	matches = append(matches, guarded...)
+	// A template's push set is a grant (trustboundary.TemplatePush), so a
+	// change to one waits for a person whatever else the change touches.
+	// Classified here, against the head just read, rather than in
+	// repoGuard: every other path that reads the list either comes back
+	// here or carries a clearance this gave (carryClearance).
+	if m, ok := guardTemplatePush(client, *task.Target, headSHA, files); ok {
+		matches = append(matches, m)
+	}
 	cleared := model.Link{Kind: model.LinkTrustBoundaryCleared, Target: clearedTarget(headSHA, rules)}
 	if known && len(matches) == 0 {
 		if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {

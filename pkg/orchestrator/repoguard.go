@@ -19,11 +19,13 @@ import (
 	"fmt"
 	"log"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/repodecl"
 	"github.com/ai-on-gke/grain/pkg/trustboundary"
 )
 
@@ -185,6 +187,64 @@ func guardTriggerTemplates(repo model.RepoRef, triggers []model.RepoPathTrigger,
 		},
 		Paths: matched,
 	}, true
+}
+
+// guardTemplatePush matches the changed `.grain/templates/*.yml` files
+// whose `push:` list differs between repo's default branch and headSHA
+// (trustboundary.TemplatePush): a push set is a grant the declaration
+// sync honours as soon as it merges, so it is a person's to make or
+// widen, not a review's. It fails closed: a template it cannot read on
+// either side, or whose push set does not parse, is held as if its set
+// changed -- and so is every changed template when there is no head to
+// read or no way to read files at all.
+func guardTemplatePush(client github.Client, repo model.RepoRef, headSHA string, files []string) (trustboundary.Match, bool) {
+	var templates []string
+	for _, f := range files {
+		f = strings.TrimPrefix(path.Clean("/"+f), "/")
+		dir, base := path.Split(f)
+		if strings.TrimSuffix(dir, "/") != model.TemplateDeclarationDir {
+			continue
+		}
+		if strings.HasSuffix(base, ".yml") || strings.HasSuffix(base, ".yaml") {
+			templates = append(templates, f)
+		}
+	}
+	if len(templates) == 0 {
+		return trustboundary.Match{}, false
+	}
+	reader, ok := client.(github.FileReader)
+	if !ok || headSHA == "" {
+		return trustboundary.Match{Category: trustboundary.TemplatePush, Paths: templates}, true
+	}
+	baseRef := "main"
+	if def, err := client.DefaultBranch(repo.Owner, repo.Name); err == nil && strings.TrimSpace(def) != "" {
+		baseRef = strings.TrimSpace(def)
+	}
+	pushAt := func(ref, f string) (model.RefPushSet, error) {
+		data, exists, err := reader.ReadFile(repo.Owner, repo.Name, ref, f)
+		if err != nil || !exists {
+			return nil, err
+		}
+		return repodecl.TemplatePush(f, data)
+	}
+	var changed []string
+	for _, f := range templates {
+		before, errBefore := pushAt(baseRef, f)
+		after, errAfter := pushAt(headSHA, f)
+		if errBefore != nil || errAfter != nil {
+			log.Printf("orchestrator: reading %s's push set in %s (%s and %s): %v %v -- holding it for a person "+
+				"as if it changed", f, repo, baseRef, headSHA, errBefore, errAfter)
+			changed = append(changed, f)
+			continue
+		}
+		if !slices.Equal(before, after) {
+			changed = append(changed, f)
+		}
+	}
+	if len(changed) == 0 {
+		return trustboundary.Match{}, false
+	}
+	return trustboundary.Match{Category: trustboundary.TemplatePush, Paths: changed}, true
 }
 
 func everyPath(files []string, known bool) []string {

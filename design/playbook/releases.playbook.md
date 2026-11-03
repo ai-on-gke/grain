@@ -132,9 +132,22 @@ push:
   - refs/tags/v*-discarded
   - ref: refs/heads/candidate
     force: true
+  - refs/heads/release/v*
 ```
 
-`vX.Y.Z` and `latest` are deliberately left out. They are the promotion's refs, pushed by the approval's own run. A train that can push them can release without the approval, and then the approval would no longer be the one action. That's gap 3.
+`refs/heads/release/v*` is the rc.3 convergence branch (§5). The train creates it once from rc.2's commit, with no force and no delete; the approval's run deletes it.
+
+`vX.Y.Z` and `latest` are deliberately left out. They are the promotion's refs, pushed by the approval's own run. A train that can push them can release without the approval, and then the approval would no longer be the one action. That's gap 3, and it's closed by three checks:
+
+- **The proxy.** It refuses the train's run anything outside the list, and `TestTheReleaseTrainsGrantNeverReachesAPromotion` (`pkg/gitproxy`) holds the real template to that.
+- **The script.** In train mode it never pushes `vX.Y.Z` or `latest`. With `RELEASE_PUSH_GRANT=train` (which the template sets) it pushes nothing outside the list, deletes nothing, and refuses `approve`, `reject` and `rollback`.
+- **The trust boundary.** A change to any template's `push:` list is person-only: `trustboundary.TemplatePush`, matched by `guardTemplatePush` (`pkg/orchestrator/repoguard.go`), which compares the list at the base and the head and fails closed.
+
+Whether the train should hold `vX.Y.Z` and `latest` anyway is the operator's call. It's a one-line change to this list, and it waits for a person's Submit.
+
+What the grant doesn't give the train: the `release-gate-read` API and the `package-publish` and `image-signing` credentials are CI-only, so a task holds none of them. The task train hands the script main's CI verdicts as files (`grain -json ci list`, through the `grain-ci` capability). It runs with `RELEASE_IMAGES=off`, `RELEASE_NOTES_TASK=off` and `RELEASE_NOTIFY=off`. The rc and pending images, the release-notes task and `release.pending` are each a CI job's or the deployment's to do on the tag the train pushed (gap 4 watches `-pending`).
+
+The schedule lives in grain/config, not in `.grain/schedules`. It fires after a green `release` run on `main`, and a cron wakes it as a safety net. `.github/workflows/release-train.yml` is retired to an always-dry dispatch, so the two trains can never both cut (task 2382).
 
 #### 0.5 Upgrading the deployment
 
