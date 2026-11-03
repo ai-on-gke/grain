@@ -958,6 +958,7 @@ func ReadLoadedHead(ctx context.Context, dir string) string {
 		return ""
 	}
 	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--absolute-git-dir")
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "GIT_CONFIG_NOSYSTEM=1"}
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
@@ -977,6 +978,7 @@ func ReadLoadedHead(ctx context.Context, dir string) string {
 // dir when dir is already an initialised git repository.
 func WriteLoadedHead(ctx context.Context, dir, commit string) error {
 	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--absolute-git-dir")
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "GIT_CONFIG_NOSYSTEM=1"}
 	out, err := cmd.Output()
 	if err != nil {
 		return err
