@@ -124,6 +124,9 @@ function policyVerdictText(verdict, runKind) {
   const forKind = RUN_KIND_LABELS[runKind]
     ? ` for ${RUN_KIND_LABELS[runKind]}`
     : "";
+  if (verdict === "ci_only") {
+    return `CI only: not a grant${forKind}, granted under a repository's CI capabilities`;
+  }
   if (verdict === "denied") {
     return `denied by the capability policy${forKind}`;
   }
@@ -200,6 +203,16 @@ export default function GrantsPicker({
   // job's trigger event is still unknown, so it keeps the kind's verdict.
   const kindVerdictShown =
     Boolean(runKind) && (!subjectRepo || runKind === "ci");
+  // A CI-only method (repo#read) is refused this run by grain's own rule,
+  // not by the capability policy, so it is worded as that and points at
+  // the repository's CI capabilities: the policy has no rule to change.
+  const ciOnly = (m) => Boolean(runKind) && m?.policy?.[runKind] === "ci_only";
+  const ciCapabilitiesHref = subjectRepo
+    ? `/repos/${subjectRepo}/settings/ci`
+    : "/repos";
+  const ciCapabilitiesLabel = subjectRepo
+    ? `${subjectRepo} → CI capabilities`
+    : "Repos → CI capabilities";
   const load = useCallback(
     (fresh) => {
       const subject = subjectRepo ? { kind: runKind, repo: subjectRepo } : null;
@@ -369,6 +382,23 @@ export default function GrantsPicker({
   };
 
   const policyState = (ref) => {
+    if (ciOnly(byRef[ref])) {
+      const policyNote = policyVerdictText("ci_only", runKind);
+      return {
+        severity: "warning",
+        badge: "CI only",
+        suffix: " (CI only)",
+        textNote: `This grant is ${policyNote}. Remove this grant, and enable it for the repository's CI jobs instead (${ciCapabilitiesLabel}).`,
+        note: (
+          <>
+            This grant is {policyNote}. Remove this grant, and enable it for the
+            repository&apos;s CI jobs instead (
+            <Link href={ciCapabilitiesHref}>{ciCapabilitiesLabel}</Link>
+            ).
+          </>
+        ),
+      };
+    }
     const refused = byRef[ref]?.policyRefusal;
     if (refused)
       return {
@@ -645,13 +675,20 @@ export default function GrantsPicker({
   // is known: policyRepo) is listed disabled, with the policy's own
   // reason; one it may deny some run of the kind carries the verdict.
   const methodItem = (m) => {
-    const refused = m.policyRefusal || "";
-    const verdict = refused
-      ? "denied"
-      : kindVerdictShown
-        ? m.policy?.[runKind]
-        : undefined;
-    const policyNote = refused || policyVerdictText(verdict, runKind);
+    const isCIOnly = ciOnly(m);
+    const refused = isCIOnly
+      ? m.policyRefusal || policyVerdictText("ci_only", runKind)
+      : m.policyRefusal || "";
+    const verdict = isCIOnly
+      ? "ci_only"
+      : refused
+        ? "denied"
+        : kindVerdictShown
+          ? m.policy?.[runKind]
+          : undefined;
+    const policyNote = isCIOnly
+      ? policyVerdictText("ci_only", runKind)
+      : refused || policyVerdictText(verdict, runKind);
     const refSummary = `${splitRef(m.ref).capability.replace(/^https:\/\//, "")}${m.requiresArgs ? " · needs arguments" : ""}`;
     return (
       <MenuItem
@@ -659,8 +696,11 @@ export default function GrantsPicker({
         className="method-grant-row"
         data-method={m.ref}
         data-policy-verdict={verdict || undefined}
-        data-policy-denied={refused ? "true" : undefined}
-        title={policyNote ? `${m.ref} — ${policyNote}` : m.ref}
+        data-policy-denied={refused && !isCIOnly ? "true" : undefined}
+        data-ci-only={isCIOnly ? "true" : undefined}
+        title={
+          refused || policyNote ? `${m.ref} — ${refused || policyNote}` : m.ref
+        }
         disabled={Boolean(refused)}
         onClick={refused ? undefined : () => addMethod(m)}
         sx={{
@@ -703,11 +743,15 @@ export default function GrantsPicker({
                 >
                   {policyNote} (
                   <Link
-                    href="/settings/capabilities#capability-policy"
+                    href={
+                      isCIOnly
+                        ? ciCapabilitiesHref
+                        : "/settings/capabilities#capability-policy"
+                    }
                     onClick={(e) => e.stopPropagation()}
                     onKeyDown={(e) => e.stopPropagation()}
                   >
-                    Settings → Capabilities
+                    {isCIOnly ? ciCapabilitiesLabel : "Settings → Capabilities"}
                   </Link>
                   )
                 </Typography>

@@ -17,6 +17,7 @@ package ui_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -31,9 +32,13 @@ const proposedHead = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 type changeStateRepo struct {
 	*fakeStateRepo
 	merged, discarded []model.PendingConfigChange
+	refuse            error
 }
 
 func (c *changeStateRepo) ProposeConfigChange(_ context.Context, p ui.ConfigChangeProposal) (*model.PendingConfigChange, error) {
+	if c.refuse != nil {
+		return nil, c.refuse
+	}
 	return &model.PendingConfigChange{
 		Branch: p.Branch, HeadSHA: p.HeadSHA, Summary: p.Summary,
 		Files: []string{"tables/grain_config.json"}, Diff: "diff --git a/x b/x\n",
@@ -93,6 +98,26 @@ func TestProposeConfigChangeIsAGrainConfigWritersOwnBranchOnly(t *testing.T) {
 	}
 	if detail.PendingConfigChange == nil || detail.PendingConfigChange.HeadSHA != pending.HeadSHA {
 		t.Fatalf("task detail does not offer the change: %+v", detail.PendingConfigChange)
+	}
+}
+
+// A manager's refusal of the proposal is the proposer's to fix, so it is a
+// validation error (400, with its text) rather than a 500 with only a log
+// reference; any other manager error stays a fault.
+func TestProposeConfigChangeAnswersARefusalAsInvalid(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	id, repo := proposingTask(t, c, store, ctx)
+	branch := model.ConfigProposalBranchPrefix(id) + "again"
+	repo.refuse = fmt.Errorf("%w: branch %s changes nothing against main", ui.ErrConfigChangeRefused, branch)
+	_, err := c.ProposeConfigChange(ctx, id, ui.ConfigChangeProposal{Summary: "x", Branch: branch, HeadSHA: proposedHead})
+	var invalid *ui.ValidationError
+	if !errors.As(err, &invalid) || !strings.Contains(err.Error(), "changes nothing") {
+		t.Fatalf("refused proposal = %v, want a ValidationError saying why", err)
+	}
+	repo.refuse = errors.New("disk on fire")
+	if _, err := c.ProposeConfigChange(ctx, id, ui.ConfigChangeProposal{Summary: "x", Branch: branch, HeadSHA: proposedHead}); errors.As(err, &invalid) {
+		t.Fatalf("a manager fault was answered as invalid input: %v", err)
 	}
 }
 

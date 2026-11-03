@@ -47,7 +47,7 @@ func TestRunsRouteToTheirTasksHostdWithCapacityAndPerHostdPauses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, tokB, err := store.CreateHostd(ctx, model.Hostd{Name: "ws-b"})
+	_, tokB, err := store.CreateHostd(ctx, model.Hostd{Name: "ws-b", Labels: map[string]string{"zone": "b"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestRunsRouteToTheirTasksHostdWithCapacityAndPerHostdPauses(t *testing.T) {
 	ctl := httptest.NewServer(cfg.HostdHub)
 	t.Cleanup(ctl.Close)
 	startDialingHostd(t, ctl.URL, tokA, "capacity: 1\nclis:\n  agy:\n    path: %[1]s\n    paths_under: [%[2]s]\n  only-a:\n    path: %[1]s\n    paths_under: [%[2]s]\n")
-	startDialingHostd(t, ctl.URL, tokB, "labels:\n  zone: b\nclis:\n  agy:\n    path: %[1]s\n    paths_under: [%[2]s]\n  only-b:\n    path: %[1]s\n    paths_under: [%[2]s]\n")
+	startDialingHostd(t, ctl.URL, tokB, "clis:\n  agy:\n    path: %[1]s\n    paths_under: [%[2]s]\n  only-b:\n    path: %[1]s\n    paths_under: [%[2]s]\n")
 	waitFor(t, func() bool {
 		return cfg.HostdHub.HostdStatus("ws-a").Connected && cfg.HostdHub.HostdStatus("ws-b").Connected
 	})

@@ -731,7 +731,9 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
     // A link naming a release the repo does not have opens the newest,
     // says so, and stops naming it.
     await page.goto("/repos/acme/widgets/releases/no-such-release");
-    await expect(page.getByText('no release "no-such-release"')).toBeVisible();
+    await expect(
+      page.getByText("acme/widgets has no release named “no-such-release”"),
+    ).toBeVisible();
     await expect(page).toHaveURL(/\/repos\/acme\/widgets\/releases$/);
     await expect(picker).toContainText(newer);
   });

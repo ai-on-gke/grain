@@ -168,9 +168,13 @@ func (a SandboxHealthAdapter) BudgetAndReconciliation() (*ui.SandboxBudgetReport
 					poolOrder = append(poolOrder, h.Pool)
 				}
 			}
+			// Charged per sandbox, the way Live charges it, so the pools
+			// add up to CommittedMemoryMB rather than leaving each VM's
+			// VMM headroom out of the breakdown.
+			charged := ledger.VMMHeadroom.Charge(h.Shape)
 			p.Count++
-			p.CPUs += h.Shape.CPUs
-			p.MemoryMB += h.Shape.MemoryMB
+			p.CPUs += charged.CPUs
+			p.MemoryMB += charged.MemoryMB
 		}
 		for _, pool := range poolOrder {
 			if p, ok := byPool[pool]; ok && p.Count > 0 {

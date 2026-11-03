@@ -185,3 +185,61 @@ test("surfaces retired in_process and api_scopes.presets catalogue entries in Se
     });
   }
 });
+
+// Task #2728: the capability pickers read their api rows from GET
+// /api/config, which used to answer from a list taken once at startup --
+// before grain demo even declared ops/triage, and long before anybody
+// made a set with New scope set. Each set in effect is offered as soon
+// as it is declared, granting it is accepted, and it stops being offered
+// once it is removed.
+test("offers a scope set declared after startup in the Grants picker", async ({
+  page,
+  request,
+}) => {
+  const name = "ops/e2e-late";
+  const offered = async () =>
+    ((await (await request.get("/api/config")).json()).capabilities || []).map(
+      (c) => c.id,
+    );
+  expect(await offered()).toContain("api:ops/triage");
+  expect(await offered()).not.toContain(`api:${name}`);
+
+  try {
+    const put = await request.put("/api/api-scope-sets", {
+      data: {
+        set: { name, description: "Declared by e2e", scopes: ["tasks:read"] },
+      },
+    });
+    expect(put.ok()).toBe(true);
+    expect(await offered()).toContain(`api:${name}`);
+
+    const created = await request.post("/api/tasks", {
+      data: { title: `E2E late scope set ${Date.now()}`, repo: "acme/widgets" },
+    });
+    expect(created.ok()).toBeTruthy();
+    const task = await created.json();
+
+    await page.goto(`/tasks/${task.id}`);
+    const grants = page.getByTestId(`task-${task.id}-grants`);
+    await grants.getByRole("button", { name: "Add grant…" }).click();
+    const menu = page.getByRole("menu", { name: "Grants to add" });
+    await expect(menu.locator(`[data-api-grant="api:${name}"]`)).toBeVisible();
+    await expect(
+      menu.locator('[data-api-grant="api:ops/triage"]'),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    const granted = await request.post(`/api/tasks/${task.id}/capabilities`, {
+      data: { id: `api:${name}`, attach: true },
+    });
+    expect(granted.ok()).toBe(true);
+    const detail = await (await request.get(`/api/tasks/${task.id}`)).json();
+    expect(JSON.stringify(detail)).toContain(`api:${name}`);
+    await request.post(`/api/tasks/${task.id}/capabilities`, {
+      data: { id: `api:${name}`, attach: false },
+    });
+  } finally {
+    await request.post("/api/api-scope-sets/delete", { data: { name } });
+  }
+  expect(await offered()).not.toContain(`api:${name}`);
+});
