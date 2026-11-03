@@ -714,8 +714,16 @@ export default function RepoPage({
   });
   // A CI job holds no agent API grant -- there is no agent in it -- so
   // CI's own GrantsPicker is offered capability server methods alone.
-  const ciCapsLegacy = ciCapsSelection.filter((id) => !isCapabilityRef(id));
-  const ciCapsRefs = ciCapsSelection.filter(isCapabilityRef);
+  // A reference the CI picker itself offers (the release server's
+  // methods, which retired package-publish, registry-push and
+  // image-signing) is picked there, like a bare name; any other
+  // reference is a CI grant, edited below the picker.
+  const ciPickerIDs = (caps?.availableCICapabilities || []).map((a) =>
+    typeof a === "string" ? a : a?.id,
+  );
+  const inCIPicker = (id) => !isCapabilityRef(id) || ciPickerIDs.includes(id);
+  const ciCapsLegacy = ciCapsSelection.filter(inCIPicker);
+  const ciCapsRefs = ciCapsSelection.filter((id) => !inCIPicker(id));
   const ciCapsMethods = localGrantHandlers(ciCapsRefs, (refs) => {
     const next = [...ciCapsLegacy, ...refs];
     setCICapsSelection(next);
@@ -1857,14 +1865,27 @@ export default function RepoPage({
                     }}
                     renderValue={(chosen) => (
                       <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-                        {chosen.map((id) => (
-                          <GrantChip
-                            key={id}
-                            grant={id}
-                            config={config}
-                            tabIndex={-1}
-                          />
-                        ))}
+                        {chosen.map((id) => {
+                          const row = isCapabilityRef(id)
+                            ? ciCapsRows.find((r) => r.id === id)
+                            : null;
+                          return row ? (
+                            <Chip
+                              key={id}
+                              label={row.name}
+                              size="small"
+                              title={id}
+                              tabIndex={-1}
+                            />
+                          ) : (
+                            <GrantChip
+                              key={id}
+                              grant={id}
+                              config={config}
+                              tabIndex={-1}
+                            />
+                          );
+                        })}
                       </Box>
                     )}
                   >
