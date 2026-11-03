@@ -440,13 +440,18 @@ import "strconv"
 // 94 adds `hostd` to `template` (model.Template.Hostd): the hostd pin or
 // label selector every task filed from it starts with.
 //
-// 95 adds `allowed_principal` and `allowed_principal_migration`: the
+// 95 raises `grain_config`.`max_merges_per_repo`'s column default from 1
+// to 5 (model.DefaultMaxMergesPerRepo). Stored values are left alone: the
+// row is always written whole, so a 1 written because it was the default
+// cannot be told from a 1 somebody chose, and both keep it.
+//
+// 96 adds `allowed_principal` and `allowed_principal_migration`: the
 // database-backed list of `user:<email>` and `group:<email>` entries
 // admitted when authenticated by IAP or another IdentityVerifier, plus the
 // one-time startup migration record off `-ui-allowed-principals`. Kept off
 // SettingsTables so a config-repo pull request cannot lock operators out
 // or grant sign-in access (design/design/settings.design.md §1).
-const SchemaVersion = 95
+const SchemaVersion = 96
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified
@@ -2235,7 +2240,7 @@ var Tables = []string{
   ` + "`poll_interval_ms`" + `           INTEGER NOT NULL,
   ` + "`max_workers`" + `                 INTEGER NOT NULL DEFAULT 1,
   ` + "`max_mergers`" + `                 INTEGER NOT NULL DEFAULT 1,
-  ` + "`max_merges_per_repo`" + `         INTEGER NOT NULL DEFAULT 1,
+  ` + "`max_merges_per_repo`" + `         INTEGER NOT NULL DEFAULT 5,
   ` + "`merge_batch_size`" + `            INTEGER NOT NULL DEFAULT 3,
   ` + "`merge_gather_window_ms`" + `      INTEGER NOT NULL DEFAULT 0,
   ` + "`max_ci_jobs`" + `                 INTEGER NOT NULL DEFAULT 1,

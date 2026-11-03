@@ -1017,3 +1017,70 @@ func TestGCPKeyPoolAccountsAreNotAdmittedByDefault(t *testing.T) {
 		}
 	})
 }
+
+// TestRefusedPrincipalsAreLoggedOnce pins the 2026-11-03 IAP deployment
+// walkthrough's F1: under the default allowlist a gcp-key pool account's
+// verified assertion was refused with a 403 and no log line, so the
+// daemon's log never showed that a key handed to a sandbox had reached the
+// UI through the proxy. Nor did it show anybody else the allowlist refused.
+func TestRefusedPrincipalsAreLoggedOnce(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+	t.Setenv("GRAIN_ALLOWED_PRINCIPALS", "")
+	logs := ui.LogBufferForTest(t)
+
+	priv, pemStr := generateECDSATestKey(t)
+	assertionKeys(t, priv, pemStr, false)
+	ui.SetIAPAudience(tunnelAudience)
+	mint := func(email string) string {
+		return signIAPToken(t, priv, tunnelKid, tunnelAudience, email, "sub", ui.GoogleIAPIssuer, time.Now().Add(10*time.Minute))
+	}
+
+	srv, client := testServer(t)
+	client.Config.Actor = ui.DefaultActor("owner@example.com")
+	storeSettingsRow(t, client)
+	ctx := context.Background()
+	mc, err := client.Store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mc.GCPProject = "made-up-proj"
+	mc.GCPServiceAccountEmail = "logged-agent@made-up-proj.iam.gserviceaccount.com"
+	mc.GCPServiceAccountCount = 2
+	if err := client.Store.PutConfig(ctx, *mc); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: "user:owner@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+
+	const pool = "logged-agent-1@made-up-proj.iam.gserviceaccount.com"
+	const stranger = "logged-stranger@example.com"
+	for i := 0; i < 3; i++ {
+		for _, who := range []string{pool, stranger} {
+			rec := serveFrom(srv, "203.0.113.50:443", http.MethodGet, "/api/tasks", "", map[string]string{ui.IAPAssertionHeader: mint(who)})
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("%s: got %d, want 403: %s", who, rec.Code, rec.Body)
+			}
+		}
+	}
+	if rec := serveFrom(srv, "203.0.113.50:443", http.MethodGet, "/api/tasks", "", map[string]string{ui.IAPAssertionHeader: mint("owner@example.com")}); rec.Code != http.StatusOK {
+		t.Fatalf("owner: got %d, want 200: %s", rec.Code, rec.Body)
+	}
+
+	out := logs.String()
+	poolLine := `refused verified principal "` + pool + `": it is a gcp-key agent service account`
+	if n := strings.Count(out, poolLine); n != 1 {
+		t.Errorf("pool account refusal logged %d times, want once:\n%s", n, out)
+	}
+	if !strings.Contains(out, "a sandbox's key was presented through the identity proxy") {
+		t.Errorf("pool refusal does not say a sandbox's key reached the proxy:\n%s", out)
+	}
+	strangerLine := `refused verified principal "` + stranger + `" (human): principal "` + stranger + `" is not on the allowed users and groups list`
+	if n := strings.Count(out, strangerLine); n != 1 {
+		t.Errorf("stranger refusal logged %d times, want once:\n%s", n, out)
+	}
+	if strings.Contains(out, `refused verified principal "owner@example.com"`) {
+		t.Errorf("the admitted owner was logged as refused:\n%s", out)
+	}
+}

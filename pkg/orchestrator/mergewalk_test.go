@@ -91,7 +91,7 @@ func TestACleanMemberPastTheCapMergesNextCycleAndSaysSo(t *testing.T) {
 	sim.CheckRuns[first] = greenCheck
 	sim.CheckRuns[second] = greenCheck
 
-	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err != nil {
+	if err := syncOneMergePerCycle(ctx, store, client, baseTime); err != nil {
 		t.Fatalf("SyncPullRequests: %v", err)
 	}
 	if !mergedBranch(sim, first) || mergedBranch(sim, second) {
@@ -102,7 +102,7 @@ func TestACleanMemberPastTheCapMergesNextCycleAndSaysSo(t *testing.T) {
 	if state != "waiting_queue" || note != want {
 		t.Fatalf("t2 says %q (%q), want waiting_queue (%q)", state, note, want)
 	}
-	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(time.Minute)); err != nil {
+	if err := syncOneMergePerCycle(ctx, store, client, baseTime.Add(time.Minute)); err != nil {
 		t.Fatalf("SyncPullRequests: %v", err)
 	}
 	if !mergedBranch(sim, second) {
@@ -203,7 +203,7 @@ func TestLanesStayIndependentWithoutOrder(t *testing.T) {
 	setMergeable(sim, true)
 	setBranchUnknown(sim, mainUnknown)
 
-	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime); err != nil {
+	if err := syncOneMergePerCycle(ctx, store, client, baseTime); err != nil {
 		t.Fatalf("SyncPullRequests: %v", err)
 	}
 	if mergedBranch(sim, mainUnknown) {
