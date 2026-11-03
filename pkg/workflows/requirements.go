@@ -183,7 +183,7 @@ func JobCapabilities(job Job, provided []string, explicitOnly func(string) bool)
 	// whatever narrow would do with an empty list.
 	var optional []string
 	for _, id := range job.OptionalCapabilities {
-		if slices.Contains(deployment, id) {
+		if containsCapability(deployment, id) {
 			optional = append(optional, id)
 		}
 	}
@@ -239,7 +239,7 @@ func narrow(required, provided []string) []string {
 	}
 	var out []string
 	for _, name := range required {
-		if slices.Contains(provided, name) {
+		if containsCapability(provided, name) {
 			out = append(out, name)
 		}
 	}
@@ -275,7 +275,7 @@ func UnmetRequirements(job Job, req Request) []string {
 			// (SandboxRequest.Untrusted). Repository access (repo#read,
 			// repo#write {repo}) mints no pass and is widened directly on
 			// the git proxy, so an untrusted commit never holds it.
-			if IsCapabilityRef(id) && (Capabilities.IsRepoAccess == nil || !Capabilities.IsRepoAccess(id)) {
+			if isPolicyRef(id) {
 				continue
 			}
 			out = append(out, fmt.Sprintf("this job requires the capability %q, and %s", id, req.UntrustedCommit()))
@@ -288,11 +288,10 @@ func UnmetRequirements(job Job, req Request) []string {
 	for _, id := range job.Capabilities {
 		if req.WithholdEventGated {
 			isRepoRead := (Capabilities.IsRepoRead != nil && Capabilities.IsRepoRead(id)) || strings.HasPrefix(id, "repo-read:")
-			isNonRepoRef := IsCapabilityRef(id) && (Capabilities.IsRepoAccess == nil || !Capabilities.IsRepoAccess(id))
-			if isRepoRead || isNonRepoRef {
+			if isRepoRead || isPolicyRef(id) {
 				continue
 			}
-			if !slices.Contains(req.Capabilities, id) {
+			if !containsCapability(req.Capabilities, id) {
 				reason := req.WithholdReason
 				if reason == "" {
 					reason = fmt.Sprintf("a %s run started by a caller that is not a person places no capabilities", req.Event)
@@ -308,7 +307,7 @@ func UnmetRequirements(job Job, req Request) []string {
 		if Capabilities.DeclaredOnly(id) {
 			continue
 		}
-		if !slices.Contains(req.Capabilities, id) {
+		if !containsCapability(req.Capabilities, id) {
 			out = append(out, fmt.Sprintf("this job requires the capability %q and this deployment does not provide it for %s", id, req.Repo))
 		}
 	}

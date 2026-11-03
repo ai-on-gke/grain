@@ -37,12 +37,11 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
-	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
-	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
+	"github.com/ai-on-gke/grain/pkg/capability/release"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -98,40 +97,30 @@ func CapabilityProviders(cfg Config, store *model.Store, _ map[string]*modelprox
 	providers = append(providers, admincaps.Providers()...)
 	providers = append(providers,
 		bootstrap.New(),
-		registrypush.NewWithConfig(registrypush.Config{}),
 		consolecap.New(),
 		readissues.New(),
 		prioritydispatch.New(),
 		durable.New(),
 	)
-	// package-publish registers unconditionally, on the same terms
-	// registry-push does: there is no deployment setting to gate it on,
-	// and what it needs -- a credential in this deployment's own ladder
-	// covering the repository the job is for -- is something it can see
-	// for itself at resolve time and refuse with a sentence naming the
-	// repository that has none.
+	// image-signing, registry-push and package-publish are no longer
+	// providers here: they were retired onto the in-process release
+	// server (pkg/capability/release, schema migration 101), whose
+	// methods place what they placed, on the events they answered. What
+	// package-publish resolves is this deployment's live credential
+	// ladder, so the server is handed it here, as the registry is built.
 	//
 	// The registry is left at packagepublish's default, ghcr.io, which
-	// is what a GitHub credential publishes to on github.com. A GHES
-	// deployment publishes somewhere else and has no setting to say so
-	// yet; it gets a login that fails at the registry, which is the
-	// honest outcome until there is a configuration field for it.
-	//
-	// Its refresh route is mounted on the CI API listener (CIAPI), so a
-	// job whose release outlasts the ladder's hour-long token re-mints
-	// it there rather than failing at its last push; with no listener
-	// the job gets the static login alone, as it always did.
-	providers = append(providers, packagepublish.New(packagepublish.Config{
-		Credentials: githubCredentials,
-		Refresh:     PackagePublishRefresh,
-		RefreshURL:  CIAPI.URL,
-	}))
-	// image-signing registers unconditionally too, and for the same
-	// reason: what it needs is two secrets, which its own Resolve looks
-	// for and refuses by name when they are missing. It answers the
-	// release event alone, never workflow_dispatch, so it stays strictly
-	// narrower than package-publish beside it (docs/image-signing.md).
-	providers = append(providers, imagesigning.New(imagesigning.Config{}))
+	// is what a GitHub credential publishes to on github.com. Its
+	// refresh route is mounted on the CI API listener (CIAPI), so a job
+	// whose release outlasts the ladder's hour-long token re-mints it
+	// there rather than failing at its last push.
+	if githubCredentials != nil {
+		release.Configure(packagepublish.Config{
+			Credentials: githubCredentials,
+			Refresh:     PackagePublishRefresh,
+			RefreshURL:  CIAPI.URL,
+		})
+	}
 	// release-gate-read registers unconditionally too: it is the CI alias
 	// for the api:release-gate-read preset (pkg/capability/ciapi), and
 	// what it needs is this process's CI API listener (CIAPI), which its

@@ -910,8 +910,8 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 		t.Fatalf("PUT /api/repos/acme/widgets/settings narrowing ciCapabilities: %d %s", code, resp)
 	}
 	rc, err := client.Store.GetRepoConfig(ctx, widgets)
-	if err != nil || rc == nil || !slices.Equal(rc.CICapabilities, []string{"gemini-key", "package-publish"}) {
-		t.Fatalf("stored ciCapabilities = %+v, %v, want [gemini-key package-publish]", rc, err)
+	if err != nil || rc == nil || !slices.Equal(rc.CICapabilities, []string{"gemini-key", model.PackagePublishRef + "={}"}) {
+		t.Fatalf("stored ciCapabilities = %+v, %v, want [gemini-key %s={}]", rc, err, model.PackagePublishRef)
 	}
 
 	// 2. Adding back gcp-key (which is no longer stored and not held by task 1) is refused.
@@ -950,8 +950,8 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 		t.Fatalf("PUT host-qualified /ci-capabilities narrowing: %d %s", code, resp)
 	}
 	rcGgrain, err := client.Store.GetRepoConfig(ctx, ggrain)
-	if err != nil || rcGgrain == nil || !slices.Equal(rcGgrain.CICapabilities, []string{"package-publish", "gemini-key"}) {
-		t.Fatalf("ggrain ciCapabilities = %+v, %v, want [package-publish gemini-key]", rcGgrain, err)
+	if err != nil || rcGgrain == nil || !slices.Equal(rcGgrain.CICapabilities, []string{model.PackagePublishRef + "={}", "gemini-key"}) {
+		t.Fatalf("ggrain ciCapabilities = %+v, %v, want [%s={} gemini-key]", rcGgrain, err, model.PackagePublishRef)
 	}
 
 	// 6. Deployment-wide defaultCapabilities via PUT /api/settings.

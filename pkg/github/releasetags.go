@@ -47,8 +47,8 @@ type AnnotatedTag struct {
 
 // ReleaseTagReader reads a repository's tags.
 type ReleaseTagReader interface {
-	// ListTags is every tag whose name starts with prefix.
-	ListTags(owner, repo, prefix string) ([]TagRef, error)
+	// ListMatchingTags is every tag whose name starts with prefix.
+	ListMatchingTags(owner, repo, prefix string) ([]TagRef, error)
 	// GetAnnotatedTag is the tag object sha, or nil when there is none.
 	GetAnnotatedTag(owner, repo, sha string) (*AnnotatedTag, error)
 }
@@ -65,9 +65,9 @@ var (
 	_ WorkflowDispatcher = (*RESTClient)(nil)
 )
 
-// ListTags reads refs/tags/<prefix>* with the matching-refs API, every
+// ListMatchingTags reads refs/tags/<prefix>* with the matching-refs API, every
 // page of it.
-func (c *RESTClient) ListTags(owner, repo, prefix string) ([]TagRef, error) {
+func (c *RESTClient) ListMatchingTags(owner, repo, prefix string) ([]TagRef, error) {
 	var out []TagRef
 	path := fmt.Sprintf("/repos/%s/%s/git/matching-refs/tags/%s?per_page=100", owner, repo, quoteKeepSlash(prefix))
 	for path != "" {
@@ -152,7 +152,7 @@ func (c *RESTClient) DispatchWorkflow(owner, repo, workflow, ref string, inputs 
 // TagCommit is the commit tag name points at in owner/repo, peeling an
 // annotated tag; "" when there is no such tag.
 func TagCommit(r ReleaseTagReader, owner, repo, name string) (string, error) {
-	tags, err := r.ListTags(owner, repo, name)
+	tags, err := r.ListMatchingTags(owner, repo, name)
 	if err != nil {
 		return "", err
 	}

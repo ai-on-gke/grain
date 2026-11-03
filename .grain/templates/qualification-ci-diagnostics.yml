@@ -1,9 +1,21 @@
 name: Release qualification - Quarantine & CI diagnostics MCP tools
-title: Validate quarantine and CI diagnostic MCP tool invocations
+title: "Qualify {{rc_tag}}: quarantine and CI diagnostic tools"
 base: main
-auto-merge: true
+auto-merge: false
+# Stage 2 of release-candidate qualification
+# (design/playbook/releases.playbook.md §2). Filed by grain's
+# release-qualification reconciler (pkg/orchestrator/releasequalification.go)
+# with rc_tag and rc_sha filled in, and judged by it objectively: the run
+# passes only if it opens no pull request, proposes nothing outside its own
+# scratch branch, leaves no scratch branch or fixture task behind, and ends
+# its closing note with the footer the body asks for.
+fields:
+  - name: rc_tag
+    label: Release candidate tag (vX.Y.Z-rc.N)
+  - name: rc_sha
+    label: Release candidate commit (full sha)
 # The scratch branch this template's body tells its runs to create from
-# main and delete when done (qualification/<this task id>). Create and
+# rc_sha and delete when done (qualification/<this task id>). Create and
 # delete only: no force, so an existing qualification branch can be
 # fast-forwarded but never rewritten, and main itself stays out of reach.
 push:
@@ -12,17 +24,29 @@ push:
 body: |
   Validate the live execution and interactive capabilities of CI diagnostic tools
   and quarantine mechanisms (`quarantine_test`, `get_ci_log`, `retrigger_ci`, and
-  `query_test_history`) within an active agent session against `main`.
+  `query_test_history`) within an active agent session.
 
-  Grain releases from trunk (`docs/release-candidate-management.md`): `candidate`
-  is a pointer the release train force-moves, not a branch CI runs pull requests
-  on, so read history on `main`. If you need a deliberately flaky or failing test
-  to quarantine, put it on a scratch branch
-  (`git push origin origin/main:refs/heads/qualification/<this task id>`, then
-  `propose_task` with `branch: qualification/<this task id>`), never on `main` or
-  this task's own branch, whose pull request merges into `main`. Delete the
-  scratch branch when you are done
-  (`git push origin :refs/heads/qualification/<this task id>`).
+  You are qualifying release candidate `{{rc_tag}}` at commit `{{rc_sha}}`.
+  Check it out (`git fetch origin tag {{rc_tag}} && git checkout --detach {{rc_sha}}`)
+  and judge that commit, not `main`'s tip.
+
+  Read CI history for `{rc_sha}` (its `Tests`, `release` and `nightly` runs)
+  as well as for `main`.
+
+  ## Scratch branch
+
+  Every experiment runs on a scratch branch cut from the candidate, never on
+  `main`, `candidate` or this task's own branch:
+
+  - Create it: `git push origin {{rc_sha}}:refs/heads/qualification/<this task id>`.
+  - File any fixture task (a change for the merge queue to merge, a staged
+    failure, its repair) with `propose_task` and
+    `branch: qualification/<this task id>`. Fixtures on that branch are the
+    experiment. Anything you propose on any other branch is a defect report,
+    and fails qualification.
+  - Before you finish, close or finish every fixture task you filed, then
+    delete the branch: `git push origin :refs/heads/qualification/<this task id>`.
+    A scratch branch or a live fixture task left behind fails qualification.
 
   ## 1. CI Failure Inspection with Byte Ranges
 
@@ -40,7 +64,8 @@ body: |
 
   ## 3. Test Quarantine Lifecycle
 
-  - Execute `quarantine_test` on an identified flaky test case:
+  - Execute `quarantine_test` on a test that a fixture on the scratch branch
+    makes deliberately flaky:
     - Verify that quarantine state is recorded in deployment tables.
     - Verify that subsequent CI runs execute the quarantined test in non-blocking mode
       (reporting status without failing the overall CI build gate).
@@ -55,4 +80,26 @@ body: |
   ## 5. Summary & Diagnostic Audit
 
   - Record all executed tool calls, responses, quarantine transitions, and test
-    history queries in the task completion report.
+    history queries in the closing note.
+
+  ## What makes this a pass
+
+  The verdict is read mechanically, not from your prose:
+
+  - Do not push to this task's own branch and do not open a pull request.
+    Any pull request fails qualification, including a real fix. Report a bug
+    you find in the closing note with `Qualification-Verdict: FAIL`. The
+    pipeline steward files the fix.
+  - Finish with `comment_on_issue` (or `nothing_needed`), never
+    `ask_question`.
+  - End the closing note with exactly these three lines, the commit in full:
+
+    ```text
+    Qualification-Verdict: PASS
+    Qualified-Tag: {{rc_tag}}
+    Qualified-Commit: {{rc_sha}}
+    ```
+
+    Use `FAIL` when anything above did not behave as described. Use `INFRA`
+    only when the environment stopped you (sandbox, git proxy, model quota,
+    a daemon restart), and name the error. INFRA is re-run, not judged.

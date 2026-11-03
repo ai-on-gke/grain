@@ -114,7 +114,7 @@ func reconcileReleasePending(ctx context.Context, deps Deps, now time.Time) erro
 // its tags as they stand now.
 func watchPendingReleases(ctx context.Context, store *model.Store, tags github.ReleaseTagReader,
 	files github.FileReader, repo model.RepoRef, now time.Time) error {
-	refs, err := tags.ListTags(repo.Owner, repo.Name, "v")
+	refs, err := tags.ListMatchingTags(repo.Owner, repo.Name, "v")
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading %s's release tags: %w", repo, github.Readable(err))
 	}
