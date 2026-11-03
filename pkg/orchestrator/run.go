@@ -4844,6 +4844,22 @@ func classifyRunEndArms(ctx context.Context, store *model.Store, cfg Config, tas
 		outcome = model.EnvironmentOutcome
 		detail = expired.Error() + partialWorkSuffix(result)
 		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
+	case runErr != nil && agent.HostSetupFailure(runErr):
+		// grain's own wiring to the CLI's host failed -- no grain hostd
+		// connected to carry the run's endpoints to, one too old to
+		// carry them, a file it could not stage there -- before the CLI
+		// said anything. Ahead of the arm below for the same reason as
+		// credsExpired: three of these in five minutes are fast,
+		// toolless and worded alike, and would read there as a provider
+		// refusing the framework and pause a connection the provider
+		// never refused (docs/test-runs/2026-11-03-hostd-routing.md,
+		// F4). Nor are its words a refusal grain lost a marker for, so
+		// they are kept out of the unmatched log too. A setup failure,
+		// as one before the agent started is; a task pinned to its
+		// hostd waits for it to reconnect at its next dispatch.
+		outcome = model.SetupFailedOutcome
+		detail = runErr.Error() + partialWorkSuffix(result)
+		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
 	case runErr != nil:
 		// runErr's own text, not the wrapped form below: that form
 		// repeats runID, which is already this row's own id, and
