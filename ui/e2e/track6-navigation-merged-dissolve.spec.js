@@ -42,9 +42,11 @@ test.afterEach(async ({ page }) => {
 });
 
 test.describe("Track 6: UI Navigation Redesign, Bottom User Profile & Merged Task Dissolve", () => {
-  // The user tile is gone (design/design/settings-panel.design.md §6): the foot
-  // of the rail is the build stamp, under System on a phone (§4.3).
-  test("1. The rail's foot is the build stamp, with no user tile, across Desktop and Mobile", async ({
+  // The foot of the rail is the user tile -- who GET /api/whoami says this
+  // browser is (operator-attribution spec §5.4), never a typed-in name --
+  // over the build stamp, under System on a phone
+  // (design/design/settings-panel.design.md §4.3).
+  test("1. The rail's foot is the whoami user tile and the build stamp, across Desktop and Mobile", async ({
     page,
   }) => {
     // Desktop Viewport
@@ -54,7 +56,10 @@ test.describe("Track 6: UI Navigation Redesign, Bottom User Profile & Merged Tas
 
     const aside = page.locator("aside");
     await expect(aside).toBeVisible();
-    await expect(aside.locator('[data-testid="user-tile"]')).toHaveCount(0);
+    await expect(aside.getByTestId("user-tile")).toHaveAttribute(
+      "title",
+      /^operator \((access code|local)\)$/,
+    );
 
     const stamp = aside.getByTestId("build-stamp");
     await expect(stamp).toBeVisible();
@@ -77,8 +82,9 @@ test.describe("Track 6: UI Navigation Redesign, Bottom User Profile & Merged Tas
 
     const mobileDrawer = page.locator(".MuiDrawer-paper");
     await expect(mobileDrawer).toBeVisible();
-    await expect(mobileDrawer.locator('[data-testid="user-tile"]')).toHaveCount(
-      0,
+    await expect(mobileDrawer.getByTestId("user-tile")).toHaveAttribute(
+      "title",
+      /^operator \((access code|local)\)$/,
     );
 
     const mobileStamp = mobileDrawer.getByTestId("build-stamp");

@@ -128,9 +128,24 @@ function describeRemovalWarning(targetEntry, entriesCount, signedInEmail) {
 // AccessSection is Settings → Access: how this browser is signed in, and the
 // allowed users and groups admitted through verified-identity sign-in
 // (design/design/settings-panel.design.md §3.2).
-export default function AccessSection({ config, onLogout, showError }) {
+//
+// Who that is comes from GET /api/whoami when it has answered
+// (operator-attribution spec §5.4): its label is what every change this
+// browser makes is recorded under. config's own actor is the fallback for
+// a daemon too old to have the route.
+export default function AccessSection({
+  config,
+  whoami = null,
+  onLogout,
+  showError,
+}) {
   const viaIAP = (config?.authMethod || "") === "iap";
-  const email = verifiedUserEmail(config);
+  const email = whoami
+    ? whoami.verified
+      ? whoami.actor?.label || whoami.actor?.id || ""
+      : ""
+    : verifiedUserEmail(config);
+  const recordedAs = whoami?.actor?.label || "";
 
   const [entries, setEntries] = useState([]);
   const [droppedFlagEntries, setDroppedFlagEntries] = useState([]);
@@ -215,7 +230,7 @@ export default function AccessSection({ config, onLogout, showError }) {
         {viaIAP ? (
           <Box sx={{ mt: 1 }}>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              Signed in through IAP as {actorName(config)}.
+              Signed in through IAP as {email || actorName(config)}.
             </Typography>
             <Button
               variant="outlined"
@@ -248,6 +263,14 @@ export default function AccessSection({ config, onLogout, showError }) {
           <Box sx={{ mt: 1 }}>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
               Signed in with the access code.
+              {recordedAs ? (
+                <>
+                  {" "}
+                  Changes made here are recorded as{" "}
+                  <span data-testid="access-recorded-as">{recordedAs}</span>,
+                  not as a person.
+                </>
+              ) : null}
             </Typography>
             <Button
               variant="outlined"

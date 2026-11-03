@@ -679,6 +679,8 @@ Errors:
 
 `-allow-breaking` approves a release that carries breaking changes without being the major release `RELEASE_MAJOR` asks for; it reaches the approval as `allow_breaking: true`.
 
+`-allow-breaking` is approve-only too: it accepts a release that carries breaking changes without being the major release `RELEASE_MAJOR` asks for.
+
 With no arguments it prints the usage and returns `flag: help requested`. **Scope:** person; an agent is refused.
 
 <!-- BEGIN GENERATED FLAGS: grain release -->
@@ -1659,6 +1661,22 @@ Reconciles a live deployment's settings (`GET /api/settings`, then `PUT /api/set
 **Pinned by:** `pkg/cli/sync_test.go`: `TestCmdSyncRequiresConfig`, `TestCmdSyncRejectsAConfigWithNeitherSection`, `TestCmdSyncDryRunPlansSettingsWithoutWriting`, `TestCmdSyncPresentsTheLocalAPITokenFromCLIEnvsDataDir`.
 
 ---
+
+### 6.11 `grain access <list|allow|deny> [args]` {#CLI-63}
+
+This manages the allowed users and groups list (Settings -> Access): who may sign in when authenticated by Cloud IAP or another registered IdentityVerifier. It calls `/api/access/principals`.
+
+- `list` (the default; also `ls`) prints every entry, or `No allowed users or groups.`.
+- `allow <user:<email>|group:<email>>` (also `add`) adds one. Adding an existing entry is a no-op.
+- `deny <user:<email>|group:<email>>` (also `remove`, `rm`) removes one.
+
+Errors: an unknown subcommand gives `unknown access subcommand "<s>"` followed by the usage, and a wrong argument count gives that subcommand's own usage line. This replaces the deprecated `-ui-allowed-principals` flag on `grain daemon` and `grain demo`, which is now only imported once into an empty database allowlist.
+
+<!-- BEGIN GENERATED FLAGS: grain access -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/access_test.go`: `TestGrainAccessCLI`.
 
 ## 7. Build information modes
 

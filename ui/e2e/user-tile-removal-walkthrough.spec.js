@@ -96,8 +96,13 @@ test("a browser's old per-user pins and name become deployment-wide", async ({
       expect(key).not.toMatch(/^grain\.(pinnedNav|username$|userTimeZone$)/);
     }
 
-    // No user tile; the build stamp is the foot.
-    await expect(aside.getByTestId("user-tile")).toHaveCount(0);
+    // The user tile is back, but fed by GET /api/whoami
+    // (operator-attribution spec §5.4): it names the operator, never the
+    // browser's old typed-in name.
+    await expect(aside.getByTestId("user-tile")).toHaveAttribute(
+      "title",
+      /^operator \((access code|local)\)$/,
+    );
     await expect(aside.getByText("alice", { exact: true })).toHaveCount(0);
     const buildStamp = aside.getByTestId("build-stamp");
     await expect(buildStamp).toBeVisible();
@@ -115,7 +120,10 @@ test("a browser's old per-user pins and name become deployment-wide", async ({
     expect((await phoneStamp.boundingBox()).y).toBeGreaterThan(
       (await system.boundingBox()).y,
     );
-    await expect(drawer.getByTestId("user-tile")).toHaveCount(0);
+    await expect(drawer.getByTestId("user-tile")).toHaveAttribute(
+      "title",
+      /^operator \((access code|local)\)$/,
+    );
     await shot(page, "sidebar-footer-phone");
   } finally {
     await page.request.delete(`/api/boards/${board.id}`).catch(() => {});

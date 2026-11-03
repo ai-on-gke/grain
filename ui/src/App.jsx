@@ -321,6 +321,10 @@ function AppContent({ onReload = () => window.location.reload() }) {
     );
   }, [sidebarCollapsed]);
   const [config, setConfig] = useState(null);
+  // GET /api/whoami: who this browser acts as (operator-attribution spec
+  // §5), for the sidebar's user tile and Settings -> Access. Asked again
+  // whenever /api/config says the way this browser is signed in changed.
+  const [whoami, setWhoami] = useState(null);
   // The time zone this browser chose in Settings → Preferences, or "" for
   // none. It wins over the deployment's own clock (config.timeZone) for
   // every time printed here: until the 2026-10-23 settings walkthrough it
@@ -1298,6 +1302,26 @@ function AppContent({ onReload = () => window.location.reload() }) {
     },
     [applySessions, refreshSessions, loadSessionTask, refreshList],
   );
+
+  const signedInAs = config
+    ? `${config.authenticated ? 1 : 0}|${config.authMethod || ""}|${config.actor || ""}`
+    : "";
+  useEffect(() => {
+    if (!signedInAs) return undefined;
+    let cancelled = false;
+    api("/api/whoami")
+      .then((next) => {
+        if (!cancelled) setWhoami(next?.actor ? next : null);
+      })
+      .catch(() => {
+        // A daemon too old for the route, or a gate that refused it:
+        // no tile, rather than a guess at who this is.
+        if (!cancelled) setWhoami(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [signedInAs]);
 
   // refreshConfig re-fetches /api/config -- needed after adding a target
   // repo (RepoList's own "Add") or removing one (RepoPage's own
@@ -3377,6 +3401,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       collapsed={sidebarCollapsed}
       onToggleCollapsed={isPhone ? undefined : toggleSidebarCollapsed}
       config={config}
+      whoami={whoami}
       view={view}
       systemTab={systemTab}
       settingsSection={settingsSection}
@@ -3852,6 +3877,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                           <ErrorBoundary label="settings">
                             <SettingsPage
                               config={config}
+                              whoami={whoami}
                               section={settingsSection}
                               anchor={settingsAnchor}
                               item={settingsItem}

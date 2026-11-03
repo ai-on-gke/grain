@@ -230,7 +230,8 @@ func (c *Client) openTargetChange(ctx context.Context, task model.Task, req Open
 			return PullRequestStatus{}, &change.CredentialsExpiredError{Kind: kind, Detail: "blocked since " + h.Since.UTC().Format(time.RFC3339) + "; stop and resume_later with message: true"}
 		}
 	}
-	res, err := opener.Open(ctx, task, change.OpenRequest{Summary: req.Summary, Body: req.Body, Trailers: trailers, TaskURL: taskURL})
+	res, err := opener.Open(ctx, task, change.OpenRequest{Summary: req.Summary, Body: req.Body, Trailers: trailers, TaskURL: taskURL,
+		RequestedBy: change.VerifiedRequester(task)})
 	if err != nil {
 		if p != nil {
 			change.NoteError(ctx, p, err, c.Store, c.now())

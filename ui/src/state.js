@@ -345,7 +345,7 @@ export function pausedDescription(t) {
   const from = p.fromState
     ? ` (was ${STATE_LABELS[p.fromState] || p.fromState})`
     : "";
-  return `Paused by ${p.by || "someone"}${at ? ` at ${at}` : ""}${from}`;
+  return `Paused by ${p.byLabel || p.by || "someone"}${at ? ` at ${at}` : ""}${from}`;
 }
 
 // stateLabel is STATE_LABELS for one task, plus the single thing a task's

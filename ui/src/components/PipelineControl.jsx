@@ -76,6 +76,9 @@ export default function PipelineControl({
 
   const since = pause.since ? ` since ${formatTime(pause.since, zone)}` : "";
   const reasonText = pause.reason ? ` Reason: ${pause.reason}` : "";
+  // Who paused it, as the server labels them (operator-attribution spec
+  // §4): the verified email, or "operator (access code)".
+  const byText = pause.byLabel ? ` Paused by ${pause.byLabel}.` : "";
   const waiting = pause.untilTask
     ? ` Grain will resume automatically when task ${pause.untilTask} finishes.`
     : "";
@@ -96,6 +99,9 @@ export default function PipelineControl({
             {pause.runNowPasses
               ? " Press Run now on a task, or select several and choose Run selected now, to start exactly those."
               : " Run now waits too: an upgrade is holding the queue, and its restart would discard the run."}
+            {byText ? (
+              <span data-testid="pipeline-paused-by">{byText}</span>
+            ) : null}
             {waiting}
             {reasonText}
           </Alert>

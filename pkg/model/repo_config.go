@@ -749,6 +749,16 @@ type RepoConfig struct {
 	// until schema 23 folded that table in.
 	GitCredential string
 
+	// DefaultHostd is the hostd pin or label selector a task filed
+	// against this repository starts with when neither the filing nor
+	// its template names one (NormalizeHostdSelector's form; "" for the
+	// default hostd). It is resolved where DefaultCapabilities is, in
+	// ui.(*Client).CreateTask, and by the model-level filings
+	// (RepoDefaultHostd). Settings only: which machine runs a task's
+	// host side is the deployment's to say, so a repository's own
+	// `.grain/settings.yml` cannot name one (pkg/declschema).
+	DefaultHostd string
+
 	// IssueImport is the periodic GitHub issue importer's settings for
 	// this repository: whether grain files a task for each open issue it
 	// has not imported yet, from where, and whether those tasks wait for
@@ -879,7 +889,7 @@ func (c RepoConfig) Empty() bool {
 		c.DeclaredPromptExtension == "" && c.DeclaredSetupCommand == "" &&
 		c.RepairTemplateID == "" && len(c.PortBranches) == 0 && len(c.DeclaredPortBranches) == 0 &&
 		len(c.PortTypes) == 0 && len(c.DeclaredPortTypes) == 0 &&
-		c.GitCredential == "" && c.IssueImport.Empty()
+		c.GitCredential == "" && c.DefaultHostd == "" && c.IssueImport.Empty()
 }
 
 // RepoPromptExtension is this repository's whole layer of the prompt
