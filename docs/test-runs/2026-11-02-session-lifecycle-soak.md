@@ -6,8 +6,8 @@ Plan: [`docs/test-plans/2026-11-02.md`](../test-plans/2026-11-02.md) §8. Task 2
 
 - **Tree:** `origin/main` at `8726f7f7`. `git log --oneline origin/main -- pkg/orchestrator pkg/daemon` showed no sibling §4/§8 fix newer than the PRs under test, so the work started from `main` as it stood.
 - **Two soaks:**
-  - **Soak 1** ran on `main` with only the harness added, 05:52:16 → about 06:46. It was cut off at about 54 minutes, when the grain daemon running this task was restarted and the sandbox went with it. Its findings are F1–F3.
-  - **Soak 2** ran the full 60 minutes on this branch, with the F1 and F2 fixes and the harness fix, 06:50:26 → 07:50:27.
+  - **Soak 1** ran on `main` (`8726f7f7`, 11-02) with only the harness added, 05:52:16 → about 06:46. It was cut off at about 54 minutes, when the grain daemon running this task was restarted and the sandbox went with it. Its findings are F1–F3.
+  - **Soak 2** ran the full 60 minutes on this branch (with the F1 and F2 fixes, `e6c67f2a`, and the harness fix), 06:30:52 → 07:31:00 on 11-03 (3,608 s).
   - Soak 1's numbers below come from that run's notes. Its log went with the sandbox.
 - **Daemon:** a real `daemon.Run`, the code `grain daemon` runs, started in-process by the soak harness `TestSessionLifecycleSoak` (`pkg/cli/daemon_session_soak_test.go`, added here). The setup is the same as `docs/test-runs/2026-11-01-warm-sandbox-adoption.md`:
   - one data dir (`/var/tmp/soak`), SQLite;
@@ -84,7 +84,23 @@ Each chat sandbox change follows a restart that hit F1. Each director change fol
 
 ## Soak 2 (fixed tree, full hour)
 
-_In progress at the time of this commit; see the next revision._
+Ran 06:30:52 → 07:31:00 UTC on 2026-11-03 (3,608 s, `TestSessionLifecycleSoak` PASS in 3,637.54 s; 443 stub `claude` invocations, 322 `task_run` rows, 119 `SNAP` lines):
+
+| time | event | director (task 1) | soak-chat |
+|---|---|---|---|
+| 06:30:52 | daemon start (`/var/tmp/soak2`) | `1-1` in `1-1` (`writes=[acme/docs, acme/widgets]`, `api:deployment:read` granted) | `soak-chat-1` in `soak-chat-1` |
+| 06:33:04 | person removes `api:deployment:read` | `1-1` finishes `succeeded` (06:33:34); `1-2` starts in fresh `1-2` without `api:deployment:read` | continues in `soak-chat-1` |
+| 06:39:26 | TTL 30 m → 1 m while director idle | `run 1-2: the session idle TTL changed from 30m0s to 1m0s while it waited`; `1-2` `parked`, sandbox `1-2` released by 06:39:31 | unaffected (`soak-chat-1`) |
+| 06:43:04 | TTL restored 1 m → 30 m | `1-3` starts in fresh `1-3`, logs TTL change back to `30m0s` at 06:43:18 | continues in `soak-chat-1` |
+| 06:48:58–06:49:01 | **restart** (`restart-mid-turn`) | `1-3` `interrupted` (no strike); `1-4` starts in `1-4` | `soak-chat-99` `interrupted` (**not** `finish-failed`); `soak-chat-100` dispatches at 06:49:01 with **no backoff** in `soak-chat-100` |
+| 06:55:58–06:56:08 | `ask-over-comment` | comment landed inside the stub's `asking-1` window; turns continued in `1-4` | continues in `soak-chat-100` |
+| 07:03:15–07:03:32 | **restart** (`wait-restart`) | `1-4` `interrupted`; `1-5` starts in `1-5` at 07:04:22 | `soak-chat-178` (`soak-chat-100`) left in its run host at 07:03:31, **adopted** at 07:03:32 (`1 adopted, 0 lost`), finishes `succeeded`, and keeps reusing `soak-chat-100` |
+| 07:11:22–07:11:44 | **stop, offline edit, start** | `1-5` `interrupted`; `acme/docs` dropped from `tables/grain_config.json`; `1-6` starts in fresh `1-6` with `writes=[acme/widgets]` and `api:deployment:read` **still absent** | `soak-chat-209` `interrupted` (**no strike, no backoff**); `soak-chat-210` starts in `soak-chat-210` |
+| 07:31:00 | end of 60 m soak | `1-6` (after 35 in-process turns, messages 67–101) hits `reading whether 1 is awaiting a reply: context canceled` at shutdown and finishes `interrupted` via F1 fix | `soak-chat-316` (`soak-chat-210`) left in run host at teardown; cleaned up by test harness |
+
+- **Outcomes (`task_run`, 322 rows):** director `succeeded=1, parked=1, interrupted=4`; `soak-chat` `succeeded=313, interrupted=2` (plus `soak-chat-316` in flight at teardown); **`finish-failed=0`**.
+- **Sandbox reuse:** director `1-1`..`1-6` (1 run each, changing only on capability edit, idle TTL release, daemon stop, or offline writes edit); `soak-chat` `soak-chat-1` (runs 1–99), `soak-chat-100` (runs 100–209, 110 runs across the 07:03:31 adoption restart), `soak-chat-210` (runs 210–316, 107 runs).
+- **Orphan / sweep checks:** **0** `sweeping orphaned run hosts` errors across the entire hour, **0** `reaped leaked agent sandbox` lines, at most 2 `runhost-run-*` containers at any `SNAP` (`MaxWorkers=2`), and `GET /api/sandboxes` matched the live sandboxes throughout.
 
 ## "What is NOT proved", item by item
 
@@ -166,8 +182,9 @@ Every start, the first included, logged `reaped 1 sandbox(es) left behind by a p
 | Commit | Test (fails before, passes after) |
 |---|---|
 | `fix(orchestrator)`: interrupted, not finish-failed, when the daemon stops mid-finish | `TestADaemonStoppedWhileARunsResultIsProcessedIsInterrupted` |
-| `fix(runhost)`: list the remaining run hosts when one vanishes before `docker inspect` | `TestDockerListSkipsARunHostRemovedBeforeItsInspect` |
+| `fix(runhost)`: list the remaining run hosts when one vanishes before `docker inspect` (tightened in `e6c67f2a` to require every stderr line to be `no such object` and account for all `docker ps` IDs) | `TestDockerListSkipsARunHostRemovedBeforeItsInspect` |
 | `test(cli)`: the soak harness, and its MCP-config parsing | `TestSessionLifecycleSoak` (manual, env-gated) |
+| `test(daemon)`: wait for hostd reconnect before polling detached processes (inherited `go unit` flake from #550) | `TestAHostdThatConnectsIsRidOfCLIsForFinishedRuns` (50/50 `-race`) |
 
 ## Follow-ups
 
