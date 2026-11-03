@@ -33,6 +33,9 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
+	// The release server's methods and the CI rules they declare
+	// (model.CIGrantRule), which the pickers' CI-only refusals read.
+	_ "github.com/ai-on-gke/grain/pkg/capability/release"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -301,6 +304,7 @@ var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 func withModelProxyDisplayNames(names map[string]string) map[string]string {
 	for _, vendor := range modelproxy.Vendors() {
 		names[modelproxycap.CapabilityName(vendor)] = vendor.Display + " proxy"
+		names[model.ModelProxyGrant(vendor.Name)] = vendor.Display + " proxy"
 	}
 	return names
 }
@@ -372,12 +376,6 @@ func capabilityProviderCatalog() []model.CapabilityProvider {
 		prioritydispatch.New(),
 		durable.New(),
 	)
-	// One per vendor grain proxies to, built with no endpoint at all --
-	// this catalog exists to read Spec() back out, and a spec is the
-	// same whether or not this process is serving that proxy.
-	for _, p := range modelproxycap.Providers(nil) {
-		providers = append(providers, p)
-	}
 	return providers
 }
 
@@ -412,6 +410,9 @@ func ciOnlyCapability(name string) bool {
 		return true
 	}
 	if _, ok := model.RepoWriteTarget(name); ok {
+		return true
+	}
+	if _, ok := model.CIGrantRuleFor(name); ok {
 		return true
 	}
 	for _, spec := range capabilityCatalog() {
@@ -663,6 +664,11 @@ func (c *Client) ciCapabilitiesWithReadiness(cfg *model.Config, repoConfigs []mo
 	byID := make(map[string]CapabilityStatus, len(statuses))
 	for _, s := range statuses {
 		byID[s.ID] = s
+		// A retired provider's status answers for the release server's
+		// method it became, which is what the CI picker offers.
+		if _, ok := model.CIGrantRuleFor(s.ID); ok {
+			byID[model.CanonicalLegacyGrant(s.ID)] = s
+		}
 	}
 
 	ciIDs := c.ciCapabilityIDs()
@@ -671,7 +677,7 @@ func (c *Client) ciCapabilitiesWithReadiness(cfg *model.Config, repoConfigs []mo
 		if status, ok := byID[id]; ok {
 			ready := status.Ready
 			row := Capability{
-				ID:          status.ID,
+				ID:          id,
 				Name:        status.Name,
 				Description: status.Description,
 				Ready:       &ready,

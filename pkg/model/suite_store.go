@@ -515,9 +515,9 @@ func resolveSuiteTemplates(ctx context.Context, s *Store, items []SuiteItem) (ma
 // auto-merge from the run, for every task in every pass of it.
 func fireSuitePass(ctx context.Context, tx *sql.Tx, runID int64, items []SuiteItem,
 	templates map[string]Template, target RepoRef, base string,
-	requireApproval, autoMerge, autoApproveProposals bool, passNumber int, orderKey float64, now time.Time) error {
+	requireApproval, autoMerge, autoApproveProposals bool, opts SuiteRunOptions, passNumber int, orderKey float64, now time.Time) error {
 
-	composed, err := composeSuitePass(ctx, tx, items, templates, target, base, requireApproval, autoMerge, autoApproveProposals)
+	composed, err := composeSuitePass(ctx, tx, items, templates, target, base, requireApproval, autoMerge, autoApproveProposals, opts)
 	if err != nil {
 		return err
 	}
@@ -551,7 +551,58 @@ func fireSuitePass(ctx context.Context, tx *sql.Tx, runID int64, items []SuiteIt
 // (model.SuiteRun's own doc comment on why), so editing suite after
 // this call changes nothing about the run it just started.
 func (s *Store) CreateSuiteRun(ctx context.Context, suite Suite, target RepoRef, base string, now time.Time) (SuiteRun, error) {
-	return s.createSuiteRun(ctx, suite, target, base, "", now)
+	return s.createSuiteRun(ctx, suite, target, base, SuiteRunOptions{}, now)
+}
+
+// SuiteRunOptions is what a run started by a reconciler rather than a
+// person may say about the tasks it files, beyond what its suite says.
+//
+// Tag is recorded where a schedule's own id would be
+// (SuiteRun.ScheduleID), so the starter can find every run it started
+// for one subject again with SuiteRunsTagged; a tag is never the id of a
+// real schedule, since every caller prefixes it with what it is about
+// (ReleaseQualificationTag). Fields fills each item template's input
+// fields, the way a filing from the template form does. Priority, when
+// not zero, replaces each task's priority.
+//
+// None of it is kept on the run: they shape the tasks the first pass
+// files, and a run started with them is meant to have only that one
+// pass (the release-qualification reconciler always runs
+// until_clean with max-passes 1), so FireNextPass composes any later
+// pass without them.
+type SuiteRunOptions struct {
+	Tag      string
+	Fields   map[string]string
+	Priority int
+}
+
+// CreateSuiteRunWith is CreateSuiteRun with opts applied to the first
+// pass (SuiteRunOptions' own doc comment).
+func (s *Store) CreateSuiteRunWith(ctx context.Context, suite Suite, target RepoRef, base string, opts SuiteRunOptions, now time.Time) (SuiteRun, error) {
+	return s.createSuiteRun(ctx, suite, target, base, opts, now)
+}
+
+// SuiteRunsTagged returns every run started with SuiteRunOptions.Tag (or
+// by the schedule) tag, oldest first -- whatever state each is in, since
+// the release-qualification reconciler judges finished runs as well as
+// live ones.
+func (s *Store) SuiteRunsTagged(ctx context.Context, tag string) ([]SuiteRun, error) {
+	ids, err := listSuiteRunIDs(ctx, s.db,
+		"SELECT `id` FROM `suite_run` WHERE `schedule_id` = ? ORDER BY `id`", tag)
+	if err != nil {
+		return nil, fmt.Errorf("listing suite runs tagged %s: %w", tag, err)
+	}
+	out := make([]SuiteRun, 0, len(ids))
+	for _, id := range ids {
+		run, err := getSuiteRun(ctx, s.db, id)
+		if err != nil {
+			return nil, err
+		}
+		if run != nil {
+			out = append(out, *run)
+		}
+	}
+	return out, nil
 }
 
 // CreateScheduledSuiteRun is CreateSuiteRun for a run a schedule fired
@@ -561,10 +612,11 @@ func (s *Store) CreateSuiteRun(ctx context.Context, suite Suite, target RepoRef,
 // a fifth positional argument on CreateSuiteRun, since every existing
 // caller starts a run by hand and has no schedule to name.
 func (s *Store) CreateScheduledSuiteRun(ctx context.Context, suite Suite, target RepoRef, base, scheduleID string, now time.Time) (SuiteRun, error) {
-	return s.createSuiteRun(ctx, suite, target, base, scheduleID, now)
+	return s.createSuiteRun(ctx, suite, target, base, SuiteRunOptions{Tag: scheduleID}, now)
 }
 
-func (s *Store) createSuiteRun(ctx context.Context, suite Suite, target RepoRef, base, scheduleID string, now time.Time) (SuiteRun, error) {
+func (s *Store) createSuiteRun(ctx context.Context, suite Suite, target RepoRef, base string, opts SuiteRunOptions, now time.Time) (SuiteRun, error) {
+	scheduleID := opts.Tag
 	templates, err := resolveSuiteTemplates(ctx, s, suite.Items)
 	if err != nil {
 		return SuiteRun{}, err
@@ -598,7 +650,7 @@ func (s *Store) createSuiteRun(ctx context.Context, suite Suite, target RepoRef,
 			}
 		}
 		return fireSuitePass(ctx, tx, runID, suite.Items, templates, target, base,
-			suite.RequireApproval, suite.AutoMerge, suite.AutoApproveProposals, 1, orderKey, now)
+			suite.RequireApproval, suite.AutoMerge, suite.AutoApproveProposals, opts, 1, orderKey, now)
 	})
 	if err != nil {
 		return SuiteRun{}, err
@@ -627,7 +679,7 @@ func (s *Store) FireNextPass(ctx context.Context, run SuiteRun, now time.Time) (
 	next := run.CurrentPass() + 1
 	err = s.write(ctx, fmt.Sprintf("fire pass %d of suite run %d", next, run.ID), func(tx *sql.Tx) error {
 		return fireSuitePass(ctx, tx, run.ID, run.Items, templates, run.Target, run.Base,
-			run.RequireApproval, run.AutoMerge, run.AutoApproveProposals, next, orderKey, now)
+			run.RequireApproval, run.AutoMerge, run.AutoApproveProposals, SuiteRunOptions{}, next, orderKey, now)
 	})
 	if err != nil {
 		return SuiteRun{}, err

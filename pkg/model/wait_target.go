@@ -100,9 +100,9 @@ type ResumeOn struct {
 	UntilMerged bool     `json:"until_merged,omitempty"`
 	// At is a wake time: the task is deferred until it.
 	At *time.Time `json:"at,omitempty"`
-	// CI is a grain CI run id, or ResumeOnMyBranch for the latest run on
-	// the task's own branch: the task is queued again once it has a
-	// verdict.
+	// CI is a CI run id (grain CI or gha:<owner>:<name>:<run-id> for GitHub
+	// Actions), or ResumeOnMyBranch for the latest verdict on the task's
+	// own branch: the task is queued again once it has a verdict.
 	CI string `json:"ci,omitempty"`
 	// Message is "or when anybody posts to this task".
 	Message bool `json:"message,omitempty"`
@@ -160,7 +160,7 @@ func (r ResumeOn) Describe() string {
 		parts = append(parts, r.At.UTC().Format(time.RFC3339)+" has passed")
 	}
 	if r.CI != "" {
-		parts = append(parts, "grain CI ("+r.CI+") has a verdict")
+		parts = append(parts, "CI ("+r.CI+") has a verdict")
 	}
 	if r.Message {
 		parts = append(parts, "anybody posts to this task")
@@ -202,6 +202,13 @@ type WaitTarget struct {
 	// Merged is a closed task whose pull request merged -- until
 	// "merged".
 	Merged bool `json:"merged"`
+	// PullRequestOpen is a closed task whose pull request grain has no
+	// settled word on yet, and is still reading for one: closed within
+	// ClosedPullRequestWindow, with neither a merge nor a close recorded
+	// (Store.ClosedUnsettledPullRequestLinks). A person can still merge it
+	// by hand, and orchestrator.syncClosedPullRequests would record that,
+	// so a wait until "merged" goes on waiting through it.
+	PullRequestOpen bool `json:"pullRequestOpen,omitempty"`
 	// Outcome is one word for how a task ended (WaitOutcome*), or "" for
 	// one that has not.
 	Outcome string `json:"outcome,omitempty"`
@@ -229,6 +236,12 @@ const (
 	WaitOutcomeFailed = "failed"
 )
 
+// ClosedPullRequestWindow is how long after a task closes grain goes on
+// reading a pull request of its that had not merged or closed by then
+// (orchestrator.syncClosedPullRequests). Past it nothing will record a
+// merge, so a wait until "merged" on such a task stops waiting too.
+const ClosedPullRequestWindow = 30 * 24 * time.Hour
+
 // maxClosingNote bounds WaitTarget.ClosingNote, so a task that closed on
 // a long report cannot crowd out the tool result or prompt quoting it.
 const maxClosingNote = 4000
@@ -240,13 +253,18 @@ const maxClosingNote = 4000
 // failed task too: it has stopped, nothing retries it without a human,
 // and the waiting run is better off deciding what to do about that now
 // than waiting on somebody to notice. "merged" is met only by a merge,
-// and a task closed without one has settled the question the other way.
+// and a task closed without one has settled the question the other way
+// -- unless its pull request is still open and grain is still reading it
+// (PullRequestOpen): a task closed while the merge queue had given up on
+// its pull request can still land by a person's hand, and grain records
+// that merge when it does, so the wait goes on until the pull request
+// merges or closes, or grain stops reading it.
 func (t WaitTarget) Settled(untilMerged bool) (settled, met bool) {
 	if untilMerged {
 		if t.Merged {
 			return true, true
 		}
-		return t.Closed, false
+		return t.Closed && !t.PullRequestOpen, false
 	}
 	if t.Closed || t.State == StateFailed {
 		return true, true
@@ -255,8 +273,14 @@ func (t WaitTarget) Settled(untilMerged bool) (settled, met bool) {
 }
 
 // WaitTargetOf describes task id for a run waiting on it, or nil for an
-// id that names no task.
+// id that names no task. It is WaitTargetAt as of now.
 func (s *Store) WaitTargetOf(ctx context.Context, id string) (*WaitTarget, error) {
+	return s.WaitTargetAt(ctx, id, time.Now())
+}
+
+// WaitTargetAt is WaitTargetOf as of now, which decides whether a closed
+// task's unsettled pull request is still inside ClosedPullRequestWindow.
+func (s *Store) WaitTargetAt(ctx context.Context, id string, now time.Time) (*WaitTarget, error) {
 	task, err := s.GetTask(ctx, id)
 	if err != nil || task == nil {
 		return nil, err
@@ -278,8 +302,10 @@ func (s *Store) WaitTargetOf(ctx context.Context, id string) (*WaitTarget, error
 		target.Outcome = WaitOutcomeUnmerged
 	case target.Closed && obs != nil && obs.CompletedAt != nil:
 		target.Outcome = WaitOutcomeCompleted
+		target.PullRequestOpen = pullRequestStillRead(*task, obs, now)
 	case target.Closed:
 		target.Outcome = WaitOutcomeCancelled
+		target.PullRequestOpen = pullRequestStillRead(*task, obs, now)
 	case state == StateFailed:
 		target.Outcome = WaitOutcomeFailed
 	}
@@ -292,6 +318,83 @@ func (s *Store) WaitTargetOf(ctx context.Context, id string) (*WaitTarget, error
 		target.ClosingNote = closingNote(comments, task.ID)
 	}
 	return target, nil
+}
+
+// UntilMergedParkWaitsOn is the task an until "merged" park of taskID's
+// is still waiting on as of now, or "" when it waits on none.
+//
+// A park on tasks holds its task through depends-on links, and task_ready
+// lets a link go the moment its target closes, which for until "closed"
+// is the whole wait. For until "merged" it is not, when the target closed
+// with its pull request still open (WaitTarget.PullRequestOpen): that
+// pull request can still be merged by hand, and the park is not over
+// until it merges or closes, or grain stops reading it. This names such
+// a target, for orchestrator's dispatch hold to keep the task back on.
+//
+// Only a park still standing counts -- the latest suspension of the task,
+// not yet resumed, a SuspendRequested one waiting on nothing but tasks
+// until "merged" -- and only a target the task still depends on, so that
+// removing the dependency lets the task go, as it does any other park.
+func (s *Store) UntilMergedParkWaitsOn(ctx context.Context, taskID string, now time.Time) (string, error) {
+	susps, err := s.Suspensions(ctx, taskID)
+	if err != nil || len(susps) == 0 {
+		return "", err
+	}
+	last := susps[len(susps)-1]
+	if last.Kind != SuspendRequested || last.ResumedAt != nil {
+		return "", nil
+	}
+	on, err := ParseResumeOn(last.ResumeOn)
+	if err != nil || !on.UntilMerged || len(on.Tasks) == 0 ||
+		on.At != nil || on.CI != "" || on.Message || on.Goal {
+		return "", nil
+	}
+	task, err := s.GetTask(ctx, taskID)
+	if err != nil || task == nil {
+		return "", err
+	}
+	for _, id := range on.Tasks {
+		if !dependsOn(*task, id) {
+			continue
+		}
+		target, err := s.WaitTargetAt(ctx, id, now)
+		if err != nil {
+			return "", err
+		}
+		if target != nil && target.Closed && !target.Merged && target.PullRequestOpen {
+			return id, nil
+		}
+	}
+	return "", nil
+}
+
+// dependsOn reports whether task carries a depends-on link to id.
+func dependsOn(task Task, id string) bool {
+	for _, l := range task.Links {
+		if l.Kind == LinkDependsOn && l.Target == id {
+			return true
+		}
+	}
+	return false
+}
+
+// pullRequestStillRead reports whether task, closed with neither a merge
+// nor a close of its pull request recorded, is one
+// ClosedUnsettledPullRequestLinks still lists as of now: it has a
+// fixes-link, and closed inside ClosedPullRequestWindow.
+func pullRequestStillRead(task Task, obs *Observation, now time.Time) bool {
+	if obs == nil || obs.ClosedAt == nil || obs.PrMergedAt != nil || obs.PrClosedAt != nil {
+		return false
+	}
+	if obs.ClosedAt.Before(now.Add(-ClosedPullRequestWindow)) {
+		return false
+	}
+	for _, l := range task.Links {
+		if l.Kind == LinkFixes {
+			return true
+		}
+	}
+	return false
 }
 
 // closingNote is the most recent comment taskID's own runs posted, bounded
@@ -328,6 +431,9 @@ func (t WaitTarget) Describe() string {
 	if t.Closed {
 		if t.Merged {
 			b.WriteString(" (closed, its change merged)")
+		} else if t.PullRequestOpen {
+			b.WriteString(" (closed, but its pull request is still open: grain records a merge " +
+				"if a person merges it by hand)")
 		} else {
 			b.WriteString(" (closed, nothing of it merged)")
 		}

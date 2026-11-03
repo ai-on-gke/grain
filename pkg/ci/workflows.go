@@ -69,6 +69,7 @@ const (
 	RecurrenceEveryNMinutes = workflows.RecurrenceEveryNMinutes
 	RecurrenceMonthly       = workflows.RecurrenceMonthly
 	RecurrenceWeekly        = workflows.RecurrenceWeekly
+	ReleaseAllowBreakingEnv = workflows.ReleaseAllowBreakingEnv
 	ReleaseShortSoakOKEnv   = workflows.ReleaseShortSoakOKEnv
 	ReleaseVersionEnv       = workflows.ReleaseVersionEnv
 	RequestedByEnv          = workflows.RequestedByEnv
@@ -115,6 +116,7 @@ func init() {
 		IsRepoAccess: IsRepoAccessCapability,
 		IsRepoRead:   IsRepoReadCapability,
 		DeclaredOnly: declaredOnly,
+		Canonical:    model.CanonicalLegacyGrant,
 	}
 }
 

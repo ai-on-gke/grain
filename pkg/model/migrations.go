@@ -688,6 +688,16 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     100,
+		Description: "rewrite stored claude-proxy, openai-proxy and gemini-proxy grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/model-proxy#model-proxy={\"vendor\":\"<vendor>\"} (the in-process providers are retired)",
+		Up:          migrateModelProxyGrants,
+	},
+	{
+		Version:     101,
+		Description: "rewrite stored image-signing, registry-push and package-publish grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/release#<method>={} (the in-process providers are retired)",
+		Up:          migrateReleaseGrants,
+	},
+	{
+		Version:     102,
 		Description: "add the hostd selector a repository's tasks start pinned to",
 		Statements: []string{
 			"ALTER TABLE `repo_config` ADD COLUMN `default_hostd` TEXT NOT NULL DEFAULT ''",

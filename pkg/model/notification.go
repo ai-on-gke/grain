@@ -216,6 +216,9 @@ const (
 	// FamilyRepairFailing is a base-branch repair that is not getting
 	// the branch green, "<task>".
 	FamilyRepairFailing = "pipeline.repair-failing"
+	// FamilyCIWakeStalled is a task deferred on a resume_later CI wake past
+	// its stall bound with no CI activity on its branch, "<task>".
+	FamilyCIWakeStalled = "pipeline.ci-wake-stalled"
 	// FamilyStateRepoUnapplied is a configuration-repository commit the
 	// daemon could not apply across a schema migration and had to rewrite
 	// over, "<prior-head>".

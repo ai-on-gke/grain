@@ -122,6 +122,15 @@ describe("light theme accent and success contrast", () => {
     }
   });
 
+  it("holds 4.5:1 for an outlined warning chip's label on every ground", () => {
+    for (const bg of grounds) {
+      expect(
+        contrast(lightTheme.palette.warning.main, lightTokens[bg]),
+        `warning on ${bg}`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   it("holds 4.5:1 for a filled success chip's label", () => {
     const { main, contrastText } = lightTheme.palette.success;
     // MUI writes white as "#fff".

@@ -295,14 +295,10 @@ test("lists the built-in capability servers first, full width, badged and disabl
   const rows = list.locator("[data-capability-server-row]");
   await expect(rows.first()).toHaveAttribute("data-builtin-row", /.+/);
 
-  for (const name of [
-    "config-map",
-    "gchat",
-    "gcp",
-    "git",
-    "host-script",
-    "model-proxy",
-  ]) {
+  // model-proxy is grain's own in-process server now, not a built-in
+  // `grain capability` entry.
+  await expect(list.locator('[data-builtin-row="model-proxy"]')).toHaveCount(0);
+  for (const name of ["config-map", "gchat", "gcp", "git", "host-script"]) {
     const row = list.locator(`[data-builtin-row="${name}"]`);
     await expect(row).toHaveAttribute(
       "data-capability-server-row",

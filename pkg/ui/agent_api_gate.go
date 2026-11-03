@@ -920,6 +920,12 @@ func grantAlreadyStored(existing []string, name string, normalize func(string) (
 	if slices.Contains(existing, name) {
 		return true
 	}
+	// A retired name is held by a row storing what it became (the
+	// release server's methods, schema migration 101), and the reverse.
+	if _, ok := model.CIGrantRuleFor(name); ok {
+		canonical := model.CanonicalLegacyGrant(name)
+		return slices.ContainsFunc(existing, func(e string) bool { return model.CanonicalLegacyGrant(e) == canonical })
+	}
 	if model.IsCapabilityRef(name) && normalize != nil {
 		if recorded, err := normalize(name); err == nil && slices.Contains(existing, recorded) {
 			return true

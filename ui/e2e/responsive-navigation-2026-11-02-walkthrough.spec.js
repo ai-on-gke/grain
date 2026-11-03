@@ -46,7 +46,13 @@ test("Tab through a wrapped header rail opens More and leaves the first line in 
   // On past the rail's last button and into the page: the menu closes,
   // and the slot shows its first line again -- before the fix it stayed
   // scrolled to "+ Run", the search box gone from the rail.
-  await page.getByRole("button", { name: "Settings" }).focus();
+  // The rail's last button is New task's split button, at the end of
+  // the global buttons after Settings.
+  await page
+    .getByTestId("page-header-globals")
+    .getByRole("button")
+    .last()
+    .focus();
   await page.keyboard.press("Tab");
   await expect(more).toHaveAttribute("aria-expanded", "false");
   expect(await slot.evaluate((n) => n.scrollTop)).toBe(0);

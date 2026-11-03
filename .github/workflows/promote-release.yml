@@ -23,6 +23,15 @@
 # `approve` refuses a pending release whose recorded staging soak is under
 # the minimum (scripts/release-from-trunk.sh records it on the -pending tag)
 # unless `short_soak_ok` is true; the vX.Y.0 tag message then says so.
+#
+# `approve` also refuses a release that carries breaking changes unless it
+# is the major release RELEASE_MAJOR asks for (scripts/release-notes.sh
+# check-breaking) or `allow_breaking` is true, which passes
+# RELEASE_ALLOW_BREAKING=<version>; the vX.Y.0 tag message then says so.
+#
+# `version` must be vX.Y.Z: the approve and reject jobs refuse anything
+# else before writing it to $GITHUB_ENV, where a newline in it could set
+# any variable for the steps after.
 
 name: promote-release
 
@@ -43,6 +52,11 @@ on:
           - reject
       short_soak_ok:
         description: "Approve even though the pending release's recorded staging soak is under the minimum (24h less the slack), e.g. one staged with FORCE=true; the release tag records the override"
+        required: false
+        default: false
+        type: boolean
+      allow_breaking:
+        description: "Approve even though the pending release carries breaking changes and is not the major release RELEASE_MAJOR asks for; passes RELEASE_ALLOW_BREAKING=<version> and the release tag records the override"
         required: false
         default: false
         type: boolean
@@ -93,6 +107,10 @@ jobs:
           GH_REF_NAME: ${{ github.head_ref || github.ref_name }}
         run: |
           set -euo pipefail
+          if ! [[ "${INPUT_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "promote-release: version must be vX.Y.Z, not ${INPUT_VERSION@Q}" >&2
+            exit 1
+          fi
           if [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
             echo "promote-release: only workflow_dispatch by a person may approve a release" >&2
             exit 1
@@ -210,6 +228,11 @@ jobs:
           # The person's explicit acceptance of a short soak; without it,
           # approve refuses a -pending release that soaked under the minimum.
           RELEASE_SHORT_SOAK_OK: ${{ inputs.short_soak_ok }}
+          # The person's explicit acceptance of breaking changes in a release
+          # that is not the major one RELEASE_MAJOR asks for; check-breaking
+          # honours it only when it names this release. inputs.version was
+          # checked against vX.Y.Z in this job's first step.
+          RELEASE_ALLOW_BREAKING: ${{ inputs.allow_breaking && inputs.version || '' }}
         run: bash ./scripts/release-from-trunk.sh approve "$GRAIN_CI_RELEASE_VERSION"
 
   promote:
@@ -387,6 +410,10 @@ jobs:
           GH_REF_NAME: ${{ github.head_ref || github.ref_name }}
         run: |
           set -euo pipefail
+          if ! [[ "${INPUT_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "promote-release: version must be vX.Y.Z, not ${INPUT_VERSION@Q}" >&2
+            exit 1
+          fi
           if [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
             echo "promote-release: only workflow_dispatch by a person may reject a release" >&2
             exit 1

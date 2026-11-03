@@ -582,7 +582,8 @@ func dropPathTriggerHoldOnFindings(ctx context.Context, store *model.Store, clie
 				return nil
 			}
 		}
-		t.AutoMerge, dropped = false, true
+		model.AwaitPersonForAutoMerge(t, "review "+review.ID+" left findings")
+		dropped = true
 		t.Links = withoutLinks(t.Links, model.LinkPathTriggerHold)
 		return nil
 	}); err != nil {
@@ -699,7 +700,9 @@ func settlePathTriggerHold(ctx context.Context, store *model.Store, client githu
 		t.Links = withoutLinks(t.Links, model.LinkPathTriggerHold)
 		releasable := human == model.TriggerHumanNo ||
 			(human == model.TriggerHumanOnFindings && len(pushed) == 0 && len(abandoned) == 0)
-		if releasable && !hasSecurityHold(*t) && !heldForHuman(*t) && len(model.PendingApprovals(*t)) == 0 {
+		if !releasable {
+			model.AwaitPersonForAutoMerge(t, "a gating trigger's tasks left it for a person")
+		} else if !hasSecurityHold(*t) && !heldForHuman(*t) && len(model.PendingApprovals(*t)) == 0 {
 			t.AutoMerge, released = true, true
 		}
 		return nil

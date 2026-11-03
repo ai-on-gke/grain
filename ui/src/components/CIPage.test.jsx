@@ -433,7 +433,7 @@ describe("CIPage", () => {
     expect(
       screen.getByText("acme/widgets").closest(".standalone-page"),
     ).toBeInTheDocument();
-    expect(container.querySelector('svg[data-glyph="ci"]')).toBeInTheDocument();
+    expect(container.querySelector('svg[data-icon="ci"]')).toBeInTheDocument();
     expect(container.querySelector('svg[data-glyph="branches"]')).toBeNull();
 
     await userEvent.click(

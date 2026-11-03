@@ -468,10 +468,21 @@ import "strconv"
 // release-triggered automatic upgrade has seen and scheduled
 // (model.AutoUpgradeRelease).
 //
-// 100 adds `default_hostd` to `repo_config` (model.RepoConfig.DefaultHostd):
+// 100 retires the in-process claude-proxy, openai-proxy and gemini-proxy
+// providers onto the in-process model-proxy server: stored grants across
+// tasks, templates, schedules, default_capabilities, ci_capabilities,
+// console_sessions and capability_policy become
+// https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"<vendor>"}.
+//
+// 101 retires the in-process image-signing, registry-push and
+// package-publish providers onto the in-process release server: stored
+// grants, repo_config.ci_capabilities among them, become
+// https://grain.dev/capabilities/release#<method>={}.
+//
+// 102 adds `default_hostd` to `repo_config` (model.RepoConfig.DefaultHostd):
 // the hostd pin or label selector a task filed against the repository
 // starts with when neither the filing nor its template names one.
-const SchemaVersion = 100
+const SchemaVersion = 102
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified
@@ -3085,7 +3096,7 @@ var Tables = []string{
 	//
 	// default_hostd is RepoConfig.DefaultHostd: the hostd pin or label
 	// selector a task filed here starts with when neither the filing nor
-	// its template names one (schema 100). DEFAULT '' is the default hostd.
+	// its template names one (schema 102). DEFAULT '' is the default hostd.
 	`CREATE TABLE IF NOT EXISTS ` + "`repo_config`" + ` (
   ` + "`owner`" + `                TEXT NOT NULL,
   ` + "`name`" + `                 TEXT NOT NULL,

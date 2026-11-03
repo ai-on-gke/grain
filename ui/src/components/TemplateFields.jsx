@@ -23,6 +23,7 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
+import AppIcon from "./AppIcon.jsx";
 
 // The inputs a template asks for (model.TemplateField, grain/task-58),
 // in the two shapes a frontend ever needs them: the rows that *declare*
@@ -253,7 +254,7 @@ export function TemplateFieldsEditor({ fields, onChange }) {
               onClick={() => remove(i)}
               sx={{ mt: 0.5 }}
             >
-              ×
+              <AppIcon name="close" size={16} />
             </IconButton>
           </Stack>
         ))}
