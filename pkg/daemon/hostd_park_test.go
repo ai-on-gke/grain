@@ -259,6 +259,14 @@ func TestAHostdThatConnectsIsRidOfCLIsForFinishedRuns(t *testing.T) {
 	ctx := context.Background()
 	store := pool.Store
 	client := hostd.Client{Dial: cfg.HostdHub.Dialer("ws-a"), Build: daemonBuild()}
+	t.Cleanup(func() {
+		procs, _ := client.Processes(ctx)
+		for _, p := range procs {
+			if p.Detached && !p.Exited {
+				_ = client.Cancel(ctx, p.ID)
+			}
+		}
+	})
 	// The daemon that started them is gone: its streams let go, and
 	// nothing re-attaches.
 	gone := &runhost.Hostd{Client: client, Detach: func(context.Context) bool { return true }}
@@ -285,10 +293,10 @@ func TestAHostdThatConnectsIsRidOfCLIsForFinishedRuns(t *testing.T) {
 	if err := store.FinishRun(ctx, "finished", time.Now().UTC(), model.InterruptedOutcome, "the daemon stopped"); err != nil {
 		t.Fatal(err)
 	}
-	running := func() map[string]bool {
+	running := func() (map[string]bool, error) {
 		procs, err := client.Processes(ctx)
 		if err != nil {
-			t.Fatal(err)
+			return nil, err
 		}
 		out := map[string]bool{}
 		for _, p := range procs {
@@ -296,15 +304,27 @@ func TestAHostdThatConnectsIsRidOfCLIsForFinishedRuns(t *testing.T) {
 				out[p.Run] = true
 			}
 		}
-		return out
+		return out, nil
 	}
-	if got := running(); !got["finished"] || !got["live"] {
-		t.Fatalf("before ws-a reconnects, running = %v, want both CLIs", got)
+	if got, err := running(); err != nil || !got["finished"] || !got["live"] {
+		t.Fatalf("before ws-a reconnects, running = %v (%v), want both CLIs", got, err)
 	}
 
+	prev := cfg.HostdHub.HostdStatus("ws-a").Sessions
 	ws.drop()
-	waitFor(t, func() bool { return !running()["finished"] })
-	if !running()["live"] {
+	waitFor(t, func() bool {
+		st := cfg.HostdHub.HostdStatus("ws-a")
+		if !st.Connected || st.Sessions <= prev {
+			return false
+		}
+		got, err := running()
+		return err == nil && !got["finished"]
+	})
+	got, err := running()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got["live"] {
 		t.Error("ws-a reconnecting cancelled the CLI of a run that is still live")
 	}
 }
