@@ -73,6 +73,17 @@ func TestRegisteredHealthCountersShowInSandboxHealthUntilUnregistered(t *testing
 		t.Errorf("after one more admission: %q = %v, want admitted 4", name, section.Counters)
 	}
 
+	// The section System → Health polls is the same counters, without
+	// the sandbox sweep the rest of the response costs.
+	sectionOnly := decode[map[string]any](t, do(t, srv, http.MethodGet, "/api/sandboxes?section=counters", ""))
+	if _, ok := sectionOnly["enabled"]; ok {
+		t.Errorf("?section=counters = %v, want only the counters", sectionOnly)
+	}
+	got = decode[ui.SandboxHealthResponse](t, do(t, srv, http.MethodGet, "/api/sandboxes?section=counters", ""))
+	if section, _ := healthCounterSection(t, got.Counters, name); section.Counters["verifier:admitted"] != 4 {
+		t.Errorf("?section=counters: %q = %v, want admitted 4", name, section.Counters)
+	}
+
 	unregister()
 	unregister() // twice is harmless
 	got = decode[ui.SandboxHealthResponse](t, do(t, srv, http.MethodGet, "/api/sandboxes", ""))

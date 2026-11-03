@@ -997,6 +997,15 @@ func (c *Client) readSandboxHealth(entry *sandboxHealthEntry, stale bool) ([]San
 }
 
 func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) {
+	// ?section=counters is only the layers' counters, which System →
+	// Health re-reads while it is open: an in-memory read that must not
+	// cost a sandbox sweep each time, as the rest of this response does.
+	if r.URL.Query().Get("section") == "counters" {
+		writeJSON(w, http.StatusOK, struct {
+			Counters []HealthCounters `json:"counters"`
+		}{Counters: healthCounterSections()})
+		return
+	}
 	// Config.Daemon counts here too: a deployment whose sandbox pool and
 	// host readings are both unavailable can still be one that has
 	// restarted forty times this hour, and that is the pane's most
