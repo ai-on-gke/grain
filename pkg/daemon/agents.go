@@ -668,11 +668,12 @@ func (p *AgentPool) Availability(ctx context.Context, choice orchestrator.AgentC
 		// would use.
 		owner, team := req.pauseOwner(live, *req.pinned), model.ConnectionTeam(*req.pinned)
 		pin := fmt.Sprintf(" -- the task is pinned to %s on connection %q; it does not fall back", req.model, req.pinned.ID)
+		conn := req.pausedConnection(live, *req.pinned)
 		if p.Pause.ConnectionPaused(owner, team, time.Now()) {
-			return fmt.Sprintf("connection %q is paused after a usage limit on its credential", req.pinned.ID) + pin
+			return conn + " is paused after a usage limit on its credential" + pin
 		}
 		if p.Pause.ModelPaused(owner, req.model, team, time.Now()) {
-			return fmt.Sprintf("model %s on connection %q is paused after a usage limit", req.model, req.pinned.ID) + pin
+			return fmt.Sprintf("model %s on %s is paused after a usage limit", req.model, conn) + pin
 		}
 		return p.hostdHold(ctx, live, req.pinned.Framework)
 	}
