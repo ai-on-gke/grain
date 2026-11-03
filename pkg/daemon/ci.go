@@ -458,7 +458,7 @@ func (g *CiGrantReservations) Acquire(ctx context.Context, req ci.SandboxRequest
 	if err != nil {
 		return nil, err
 	}
-	refs := ciCapabilityRefs(req.Capabilities, req.Event, req.TrustedSchedule)
+	refs := ciCapabilityRefs(req.Capabilities, req.Event, req.TrustedSchedule, req.WithholdEventGated)
 	var streak ciPassStreak
 	reported := ""
 	report := func(reason string, err error) {

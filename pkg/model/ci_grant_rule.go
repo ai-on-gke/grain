@@ -169,6 +169,12 @@ type CIMint struct {
 	Repo        RepoRef
 	RunID       string
 	Credentials CredentialResolver
+	// Event, TrustedSchedule and WithholdEventGated are the job's run's
+	// (ci.Request), so a method can hold its own CIGrantRule rather than
+	// trust that grain did.
+	Event              string
+	TrustedSchedule    bool
+	WithholdEventGated bool
 }
 
 // WithCIMint is ctx carrying job to a method minting for it.

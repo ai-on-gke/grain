@@ -131,6 +131,17 @@ func method(name, display, description string, rule model.CIGrantRule, current f
 					// this is the method refusing to be the only check.
 					return &protocol.MintResponse{Status: protocol.StatusRefused, Reason: model.CIGrantRuleCIOnlyRefusal(ServerID+"#"+name, rule)}, nil
 				}
+				if job.WithholdEventGated || !rule.Admits(job.Event, job.TrustedSchedule) {
+					// The same for the job's event: grain leaves the grant
+					// out of such a job's pass (ciCapabilityRefs) and
+					// Permits refuses it, and so does the method.
+					reason := model.CIGrantRuleRefusal(ServerID+"#"+name, model.CapabilitySubject{
+						Kind: model.CapabilityRunCI, Event: job.Event, TrustedSchedule: job.TrustedSchedule})
+					if reason == "" {
+						reason = ServerID + "#" + name + " is withheld from this run: it places no event-gated capability"
+					}
+					return &protocol.MintResponse{Status: protocol.StatusRefused, Reason: reason}, nil
+				}
 				mu.Lock()
 				h, renewing := leases[attemptID]
 				mu.Unlock()

@@ -171,9 +171,8 @@ func TestEventGatedCapabilitiesAreWithheldFromNonHumanDispatches(t *testing.T) {
 				if _, ok := model.CIGrantRuleFor(tc.id); ok {
 					// The release server's method: its declared rule
 					// decides whether the job's pass carries it, and a
-					// withheld run is handed no capability list at all
-					// (ci.Service.Start).
-					granted = !c.withhold && len(ciCapabilityRefs([]string{tc.id}, c.event, c.trusted)) == 1
+					// withheld run is handed none of it.
+					granted = len(ciCapabilityRefs([]string{tc.id}, c.event, c.trusted, c.withhold)) == 1
 				} else if model.IsRepoAccessGrant(tc.id) {
 					// No provider: the grant's own gate decides the
 					// proxy scope grantRepoAccess widens.
