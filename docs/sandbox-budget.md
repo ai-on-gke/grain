@@ -20,11 +20,17 @@ waits for whom.
 
 A granule VM's container is allowed more memory than its guest has. The
 VMM process itself takes some. Its disk writes also go through host page
-cache charged to the same cgroup, and there is no balloon to hand guest
-memory back. Granule's own default limit is guest + 512 MiB with no swap.
-At that limit, a guest that had filled its RAM with page cache and then
+cache charged to the same cgroup, unless the disk is opened `direct=on`.
+Granule's own default limit used to be guest + 512 MiB with no swap. At
+that limit, a guest that had filled its RAM with page cache and then
 wrote a multi-GB file (`pack-guest`'s `mke2fs`) got its VMM OOM-killed. The
-guest only saw "the guest closed the connection".
+guest only saw "the guest closed the connection". Since
+gke-labs/granule#238, granule's default is guest + max(512 MiB, guest/16)
+(`vmspec.VMSpec.ContainerMemoryLimitMB`), its writable disks are opened
+`direct=on` where the filesystem allows it, and it attaches a
+virtio-balloon with free page reporting so the guest hands freed pages
+back. Grain's own headroom is still the larger on every shape, which
+`TestGranuleMemoryLimitIsNeverBelowGranulesOwn` checks.
 
 Grain therefore always sets the limit itself
 (`orchestrator.GranuleMemoryLimitMB`):
