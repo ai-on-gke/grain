@@ -218,7 +218,7 @@ func (r *Refresher) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, fmt.Sprintf("re-minting %s's publishing login for %s: %v", g.repo, g.registry, err), http.StatusBadGateway)
 		return
 	}
-	r.logf("package-publish refresh: run %s (%s) re-minted its %s login from %s", g.runID, g.repo, g.registry, c.Name)
+	r.logf("package-publish refresh: run %s (%s) re-minted its %s login from %s", g.runID, g.repo, c.Registry, c.Name)
 	if req.URL.Path == TokenRoute {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = fmt.Fprintln(w, c.Token)

@@ -42,8 +42,9 @@ var (
 // read without verifying anything, and only to say what the operator
 // would have to configure if the proxy that sent it is theirs: it is
 // how a deployment behind a BeyondCorp tunnel or a new IAP backend
-// finds the audience to set (an identity-aware proxy's docs).
-func logRefusedAssertion(tokenStr string, err error) {
+// finds the audience to set (an identity-aware proxy's docs). configured
+// is the audience the verifier checked against, empty when there is none.
+func logRefusedAssertion(tokenStr, configured string, err error) {
 	claims := &IAPClaims{}
 	_, _, perr := jwt.NewParser().ParseUnverified(tokenStr, claims)
 	iss, aud := "", ""
@@ -67,9 +68,29 @@ func logRefusedAssertion(tokenStr string, err error) {
 		log.Printf("ui: refused an %s that is not a JWT: %v", IAPAssertionHeader, err)
 		return
 	}
+	if aud != "" && audienceConfigured(aud, configured) && refusalKind(err) != "issuer" {
+		// Nothing to configure: the audience already matches, so the
+		// hint below would send an operator after a setting that is right.
+		log.Printf("ui: refused an %s (issuer %q, audience %q, this deployment's own): %v -- "+
+			"not a configuration mismatch: an expired one is clock skew or a replayed header, "+
+			"and a bad signature or unknown key ID is one the configured issuer did not sign",
+			IAPAssertionHeader, iss, aud, err)
+		return
+	}
 	log.Printf("ui: refused an %s (issuer %q, audience %q): %v -- if the proxy that sent it is this deployment's own, "+
 		"set -ui-iap-audience (GRAIN_IAP_AUDIENCE) and, for a proxy other than IAP, -ui-iap-issuer and -ui-iap-keys-url to match",
 		IAPAssertionHeader, iss, aud, err)
+}
+
+// audienceConfigured reports whether aud is one of configured's
+// comma-separated audiences.
+func audienceConfigured(aud, configured string) bool {
+	for _, c := range strings.Split(configured, ",") {
+		if strings.TrimSpace(c) == aud {
+			return true
+		}
+	}
+	return false
 }
 
 // refusalKind sorts a validator's error into one of a fixed handful of

@@ -1,0 +1,40 @@
+== actionlint v1.7.12 (shellcheck 0.9.0)
+== exit 0
+== nightly.yml push tags: include v*-rc.*; exclude v*-rc.*-*
+   ok     v3.2.0-rc.1                      fires=yes (want yes)
+   ok     v3.2.0-rc.12                     fires=yes (want yes)
+   ok     v10.0.0-rc.3                     fires=yes (want yes)
+   ok     v3.2.0-rc.1-discarded            fires=no (want no)
+   ok     v3.2.0-rc.1-retracted            fires=no (want no)
+   ok     v3.2.0-pending                   fires=no (want no)
+   ok     v3.2.0                           fires=no (want no)
+   ok     v3.2.1                           fires=no (want no)
+   ok     v3.2.0-retracted                 fires=no (want no)
+   ok     latest                           fires=no (want no)
+== tag filter: as intended
+== stage-1 needs (14): cmd-grain-stress go-long installer-variants loadtest long-sim long-term-test merge-stress postgres-stress scalability staterepo-soak tunnel-stress ui-e2e-long upgrade-test vulns
+== playbook Stage 1 'Required now' row (14): cmd-grain-stress go-long installer-variants loadtest long-sim long-term-test merge-stress postgres-stress scalability staterepo-soak tunnel-stress ui-e2e-long upgrade-test vulns
+== candidate-gate.sh Stage 1 list (14): cmd-grain-stress go-long installer-variants loadtest long-sim long-term-test merge-stress postgres-stress scalability staterepo-soak tunnel-stress ui-e2e-long upgrade-test vulns
+   needs == playbook
+   needs == candidate-gate.sh
+== every job stage-1 needs is a job of nightly.yml:
+   ok cmd-grain-stress
+   ok go-long
+   ok installer-variants
+   ok loadtest
+   ok long-sim
+   ok long-term-test
+   ok merge-stress
+   ok postgres-stress
+   ok scalability
+   ok staterepo-soak
+   ok tunnel-stress
+   ok ui-e2e-long
+   ok upgrade-test
+   ok vulns
+== nightly.yml jobs not in stage-1:
+   kvm-sandboxes
+   kvm-route-stress
+   real-kubernetes
+== concurrency:
+   17 job concurrency groups, keyed on github.ref; 17 never cancel on main or a v* tag
