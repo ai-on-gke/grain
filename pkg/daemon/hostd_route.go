@@ -19,8 +19,11 @@ package daemon
 // A task's hostd pin or label selector (model.SetTaskHostd) is resolved
 // for each run by SelectHostd. The run's framework is then built on a
 // copy of the config whose host executor is that hostd's, so the agent
-// CLI, host scripts and run: host capability streams all reach it
-// through its own client (HostExecutor.Hostd, hostd.Remote.Dialer). A
+// CLI reaches it through its own client (HostExecutor.Hostd,
+// hostd.Remote.Dialer). run: host capability servers -- host scripts
+// among them -- are not routed: they are started once, through the
+// default hostd (Config.capabilityHostd), whichever hostd a run's CLI
+// went to, and their audit records say so (Deps.CapabilityHostd). A
 // task with no pin goes to the default hostd exactly as before.
 //
 // The pool also holds each hostd to its allowlist's capacity: (Hello.
