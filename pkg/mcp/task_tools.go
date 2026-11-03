@@ -224,8 +224,12 @@ type TaskComment struct {
 	ID         int64
 	Author     string
 	AuthorKind string
-	Body       string
-	CreatedAt  time.Time
+	// AuthorLabel is how the author reads to a person (ui.Comment.Who,
+	// operator-attribution spec §4.3); "" from a caller that sets none,
+	// which Who falls back to Author for.
+	AuthorLabel string
+	Body        string
+	CreatedAt   time.Time
 	// Handover marks the comment a run wrote as the task's standing
 	// summary of its own older conversation (model.Comment.Handover). A
 	// run reading another task's record to work out why it is behaving
@@ -233,6 +237,14 @@ type TaskComment struct {
 	// prompt, and which comment grain carries into every later prompt of
 	// it is part of that answer.
 	Handover bool
+}
+
+// Who is AuthorLabel, or Author for a comment that carries no label.
+func (c TaskComment) Who() string {
+	if c.AuthorLabel != "" {
+		return c.AuthorLabel
+	}
+	return c.Author
 }
 
 // TaskTransition is one step in a task's timeline (ui.Transition): when
@@ -252,9 +264,11 @@ type TaskTransition struct {
 // for, what happened on every attempt, and everything said about it.
 type TaskRecord struct {
 	TaskSummary
-	Description  string
-	Author       string
-	AuthorKind   string
+	Description string
+	Author      string
+	AuthorKind  string
+	// AuthorLabel is ui.Task.AuthorLabel: how whoever filed it reads.
+	AuthorLabel  string
 	Base         string
 	Capabilities []string
 	PullRequest  string
@@ -822,7 +836,13 @@ func renderTaskRecord(t TaskRecord, now time.Time) string {
 	}
 	fmt.Fprintf(&b, "Priority: %d\n", priority)
 	if t.Author != "" {
-		fmt.Fprintf(&b, "Filed by: %s (%s)\n", t.Author, t.AuthorKind)
+		if t.AuthorLabel != "" {
+			// How the server labels whoever filed it (operator-attribution
+			// spec §4.3), never the raw kind and id.
+			fmt.Fprintf(&b, "Filed by: %s\n", t.AuthorLabel)
+		} else {
+			fmt.Fprintf(&b, "Filed by: %s (%s)\n", t.Author, t.AuthorKind)
+		}
 	}
 	if t.CreatedAt != nil {
 		fmt.Fprintf(&b, "Filed at: %s\n", t.CreatedAt.UTC().Format(time.RFC3339))

@@ -677,6 +677,7 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 		SetupCommand:                 "make test",
 		CIMode:                       model.CIModeGrain,
 		GitCredential:                "billing-token",
+		DefaultHostd:                 "pool=gpu",
 		RepairTemplateID:             "repair-tpl",
 		RequireBranchUpToDate:        true,
 		WatchDefaultBranch:           true,

@@ -120,7 +120,7 @@ func TestExplicitAutoMergeFalseStaysOffUntilAPersonSaysOtherwise(t *testing.T) {
 
 	// A person turning it on is the one thing that does, and is recorded
 	// as theirs.
-	bob := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "bob@example.com"})
+	bob := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "bob@example.com", Source: model.SourceIAP})
 	on, off := true, false
 	if _, err := client.UpdateTask(bob, child.ID, ui.UpdateTaskRequest{AutoMerge: &on}); err != nil {
 		t.Fatal(err)
@@ -131,7 +131,7 @@ func TestExplicitAutoMergeFalseStaysOffUntilAPersonSaysOtherwise(t *testing.T) {
 	}
 	events = autoMergeEvents(t, store, ctx, child.ID)
 	if last := events[len(events)-1]; last.Kind != model.TaskEventAutoMergeOn ||
-		last.By != (model.Principal{Kind: model.PrincipalHuman, ID: "bob@example.com"}) || last.Reason != "edited" {
+		last.By != (model.Principal{Kind: model.PrincipalHuman, ID: "bob@example.com", Source: model.SourceIAP}) || last.Reason != "edited" {
 		t.Fatalf("last event = %+v, want bob turning it on", last)
 	}
 
@@ -157,8 +157,8 @@ func TestExplicitAutoMergeFalseStaysOffUntilAPersonSaysOtherwise(t *testing.T) {
 			steps = append(steps, string(tr.State)+" by "+tr.By)
 		}
 	}
-	want := "auto_merge_kept_off by automation grain, auto_merge_on by human bob@example.com, " +
-		"auto_merge_off by human bob@example.com, auto_merge_kept_off by automation grain"
+	want := "auto_merge_kept_off by grain, auto_merge_on by bob@example.com, " +
+		"auto_merge_off by bob@example.com, auto_merge_kept_off by grain"
 	if got := strings.Join(steps, ", "); got != want {
 		t.Errorf("timeline auto-merge steps = %q, want %q", got, want)
 	}

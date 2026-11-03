@@ -48,12 +48,16 @@ import (
 // -- empty for an operator's own pause, which applies to everything and
 // which only a person lifts.
 type PipelinePauseStatus struct {
-	Paused    bool      `json:"paused"`
-	Since     time.Time `json:"since,omitempty"`
-	Reason    string    `json:"reason,omitempty"`
-	ByKind    string    `json:"byKind,omitempty"`
-	ByID      string    `json:"byId,omitempty"`
-	UntilTask string    `json:"untilTask,omitempty"`
+	Paused bool      `json:"paused"`
+	Since  time.Time `json:"since,omitempty"`
+	Reason string    `json:"reason,omitempty"`
+	ByKind string    `json:"byKind,omitempty"`
+	ByID   string    `json:"byId,omitempty"`
+	// BySource and ByLabel are the rest of who paused it, ByLabel as
+	// PrincipalLabel reads it (operator-attribution spec §1.2).
+	BySource  string `json:"bySource,omitempty"`
+	ByLabel   string `json:"byLabel,omitempty"`
+	UntilTask string `json:"untilTask,omitempty"`
 	// RunNowPasses is whether a task somebody asks to run now is started
 	// in spite of this pause -- true for every pause but an upgrade's
 	// hold (model.PipelinePause.AdmitsRunNow). It is what lets a banner
@@ -220,6 +224,8 @@ func pipelinePauseStatus(pause *model.PipelinePause) PipelinePauseStatus {
 		Reason:    pause.Reason,
 		ByKind:    string(pause.By.Kind),
 		ByID:      pause.By.ID,
+		BySource:  string(pause.By.Source),
+		ByLabel:   PrincipalLabel(pause.By, nil),
 		UntilTask: pause.UntilTaskID,
 
 		RunNowPasses: pause.AdmitsRunNow(),
