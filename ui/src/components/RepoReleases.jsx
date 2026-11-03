@@ -281,6 +281,13 @@ export default function RepoReleases({
     };
   }, [refresh]);
 
+  // createRefusal is why the server refused the last name typed, shown
+  // on the name box itself and cleared by the next edit or a create that
+  // succeeds. As the app's toast it outlived the fix: a valid name
+  // created the release with "invalid release name" still on screen for
+  // a few seconds more (docs/test-runs/2026-11-03-repository-release-memory-ui.md).
+  const [createRefusal, setCreateRefusal] = useState("");
+
   const createRelease = async (evt) => {
     evt.preventDefault();
     const form = evt.target;
@@ -291,13 +298,17 @@ export default function RepoReleases({
         method: "POST",
         body: JSON.stringify({ name: releaseName }),
       });
+      setCreateRefusal("");
       form.reset();
       selectedRef.current = created.name;
       setSelected(created.name);
       onSelectRelease(created.name);
       await refresh();
     } catch (err) {
-      showError(err);
+      // A refusal (400) is about the name, and belongs beside it; any
+      // other failure is the app's to report.
+      if (err?.status === 400) setCreateRefusal(String(err.message || err));
+      else showError(err);
     }
   };
 
@@ -537,7 +548,11 @@ export default function RepoReleases({
                 name="releaseName"
                 label="New release name"
                 placeholder="myfeat, or 2.1"
-                helperText="Gives myfeat.latest, myfeat.rc.N and myfeat"
+                helperText={
+                  createRefusal || "Gives myfeat.latest, myfeat.rc.N and myfeat"
+                }
+                error={Boolean(createRefusal)}
+                onChange={() => setCreateRefusal("")}
                 autoComplete="off"
                 inputProps={identifierField}
                 required

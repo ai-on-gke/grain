@@ -42,9 +42,23 @@ test.describe("Release names git cannot use as a branch", () => {
     for (const value of refused) {
       expect(await submit(value)).toBe(400);
       await expect(page.getByText(rule)).toBeVisible();
+      // On the box itself, not a toast (docs/test-runs/2026-11-03-repository-release-memory-ui.md).
+      await expect(name).toHaveAttribute("aria-invalid", "true");
     }
-    expect(await submit("v3.0-lock")).toBe(201);
+    // The last refusal is still showing when the good name is set
+    // without an edit the box hears: the create itself must clear it,
+    // rather than leave "invalid release name" over the new release.
+    await name.evaluate((el) => {
+      el.value = "v3.0-lock";
+    });
+    const created = page.waitForResponse(
+      (r) => r.url().endsWith(releases) && r.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: "Create release" }).click();
+    expect((await created).status()).toBe(201);
     await expect(page.getByText("v3.0-lock.latest").first()).toBeVisible();
+    await expect(page.getByText(rule)).toHaveCount(0);
+    await expect(name).not.toHaveAttribute("aria-invalid", "true");
   });
 
   test("a direct POST gets the same answers", async ({ request }) => {
