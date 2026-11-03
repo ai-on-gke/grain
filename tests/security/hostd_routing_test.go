@@ -55,7 +55,11 @@ func TestAgentCannotRouteWorkToAnotherHostd(t *testing.T) {
 	}
 
 	// The acting task's own selector, in any label order, and the
-	// default hostd are what it already has.
+	// default hostd are what it already has. A hostd in the registry
+	// carries its labels, or no pin to them is taken at all.
+	if _, _, err := store.CreateHostd(ctx, model.Hostd{Name: "gpu-box", Labels: map[string]string{"gpu": "a100", "zone": "b"}}); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.SetTaskHostd(ctx, "901", "gpu=a100,zone=b"); err != nil {
 		t.Fatal(err)
 	}

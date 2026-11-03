@@ -17,6 +17,7 @@ package ui_test
 import (
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -27,6 +28,7 @@ import (
 func TestTemplateHostdPinsTheTasksItFiles(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
+	registerHostds(t, store, model.Hostd{Name: "gpu-box", Labels: map[string]string{"gpu": "yes", "zone": "b"}}, model.Hostd{Name: "laptop"})
 
 	if _, err := c.CreateTemplate(ctx, ui.CreateTemplateRequest{
 		Name: "bad", Title: "bad", Description: "bad", Hostd: "Not A Hostd",

@@ -21,6 +21,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -316,6 +317,11 @@ func TestMuxDeadlineReadTimeoutNoCorruption(t *testing.T) {
 	n, err := sClient.Read(expiredBuf)
 	if !errors.Is(err, ErrTimeout) {
 		t.Fatalf("expected ErrTimeout, got n=%d err=%v", n, err)
+	}
+	// It is a net.Conn's deadline error, which net/http's server relies
+	// on to tell an aborted read from a client that went away.
+	if ne, ok := err.(net.Error); !ok || !ne.Timeout() || !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("a passed deadline's error %v is not a timeout net.Error and os.ErrDeadlineExceeded", err)
 	}
 
 	// Clear deadline
