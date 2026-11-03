@@ -72,10 +72,13 @@ type Task struct {
 	// which. The frontend needs the distinction to keep a task nobody
 	// filed by hand from steering a human's own defaults -- see
 	// state.js's lastBaseForRepo.
-	AuthorKind string      `json:"authorKind,omitempty"`
-	State      model.State `json:"state"`
-	Repo       string      `json:"repo,omitempty"`
-	Branch     string      `json:"branch,omitempty"`
+	AuthorKind string `json:"authorKind,omitempty"`
+	// AuthorLabel is how the filer reads to a person (shownLabel), empty
+	// for a task filed before sources were recorded.
+	AuthorLabel string      `json:"authorLabel,omitempty"`
+	State       model.State `json:"state"`
+	Repo        string      `json:"repo,omitempty"`
+	Branch      string      `json:"branch,omitempty"`
 	// Reads is every repo this task's run may read but never push to --
 	// model.Task.Reads, rendered as owner/name strings the same way Repo
 	// renders its single Target.
@@ -621,12 +624,16 @@ func grantWaitActivity(wait model.GrantWait) *model.RunActivity {
 // else's words, so a question from a dispatched run renders as grain
 // speaking for an agent rather than as grain's own.
 type Comment struct {
-	ID         int64     `json:"id"`
-	Author     string    `json:"author"`
-	AuthorKind string    `json:"authorKind"`
-	OnBehalfOf string    `json:"onBehalfOf,omitempty"`
-	Body       string    `json:"body"`
-	CreatedAt  time.Time `json:"createdAt"`
+	ID         int64  `json:"id"`
+	Author     string `json:"author"`
+	AuthorKind string `json:"authorKind"`
+	OnBehalfOf string `json:"onBehalfOf,omitempty"`
+	// AuthorLabel is how the author reads to a person (shownLabel), empty
+	// for grain's own notes and for a comment written before sources were
+	// recorded. OnBehalfOf stays separate, as the timeline shows it.
+	AuthorLabel string    `json:"authorLabel,omitempty"`
+	Body        string    `json:"body"`
+	CreatedAt   time.Time `json:"createdAt"`
 	// Handover marks this comment as the task's handover: a run's standing
 	// summary of the older part of the conversation, written for the next
 	// run on the task rather than for a person (model.Comment.Handover).
@@ -876,16 +883,33 @@ type Transition struct {
 	At       time.Time   `json:"at"`
 	Inferred bool        `json:"inferred,omitempty"`
 	By       string      `json:"by,omitempty"`
-	Reason   string      `json:"reason,omitempty"`
-	Detail   string      `json:"detail,omitempty"`
+	// ByLabel is how By reads to a person (shownLabel): "operator
+	// (access code)" rather than the deployment's own address for a
+	// change made with the access code. Empty for a row written before
+	// sources were recorded, which reads as By always has.
+	ByLabel string `json:"byLabel,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Detail  string `json:"detail,omitempty"`
 }
 
 func transitionFrom(t model.Transition) Transition {
 	out := Transition{State: t.State, At: t.At, Inferred: t.Inferred, Reason: t.Reason, Detail: t.Detail}
 	if t.By != nil {
 		out.By = principalLabel(*t.By)
+		out.ByLabel = shownLabel(*t.By, nil)
 	}
 	return out
+}
+
+// shownLabel is PrincipalLabel for a principal whose source is recorded,
+// and "" for one written before sources existed (schema 91): such a row
+// cannot be told apart from a verified one, so it keeps reading as its
+// bare id rather than as "(unverified)" noise.
+func shownLabel(p model.Principal, behalf *model.Principal) string {
+	if p.Source == "" {
+		return ""
+	}
+	return PrincipalLabel(p, behalf)
 }
 
 // Attempt is one of a task's runs, projected from model.Run.
@@ -1009,6 +1033,7 @@ func taskFrom(t model.Task, state model.State, closed map[string]bool, mergeQueu
 		Description:          t.Body,
 		Author:               t.Origin.Attribution.Actor.ID,
 		AuthorKind:           string(t.Origin.Attribution.Actor.Kind),
+		AuthorLabel:          shownLabel(t.Origin.Attribution.Actor, t.Origin.Attribution.OnBehalfOf),
 		State:                state,
 		Base:                 t.Base,
 		Priority:             priority,
@@ -1189,6 +1214,9 @@ func commentFrom(c model.Comment, attachments []Attachment) Comment {
 	}
 	if b := c.Author.OnBehalfOf; b != nil {
 		out.OnBehalfOf = b.ID
+	}
+	if c.Author.Actor.Kind != model.PrincipalAutomation {
+		out.AuthorLabel = shownLabel(c.Author.Actor, nil)
 	}
 	return out
 }
