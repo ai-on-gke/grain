@@ -265,6 +265,10 @@ func ConfigGCPKeyServiceAccounts(mc *model.Config, keys []model.GCPKey) []string
 					}
 				}
 			}
+			if sa, _ := m["service_account"].(string); strings.TrimSpace(sa) != "" {
+				// A set over an existing service account acts as it alone.
+				explicit = append(explicit, strings.TrimSpace(sa))
+			}
 			if len(explicit) > 0 {
 				for _, sa := range explicit {
 					add(sa)

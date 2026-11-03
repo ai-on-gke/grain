@@ -30,6 +30,7 @@ import (
 	"google.golang.org/api/cloudresourcemanager/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iam/v1"
+	"google.golang.org/api/iamcredentials/v1"
 	"google.golang.org/api/option"
 	"google.golang.org/api/storage/v1"
 
@@ -172,11 +173,15 @@ func (g GoogleConnector) Connect(ctx context.Context, a Admin) (Cloud, error) {
 	if err != nil {
 		return nil, fmt.Errorf("admin %s: building a Storage client: %w", a.Name, err)
 	}
+	credsSvc, err := iamcredentials.NewService(ctx, opt...)
+	if err != nil {
+		return nil, fmt.Errorf("admin %s: building an IAM Credentials client: %w", a.Name, err)
+	}
 	minter, err := gcpkey.NewIAMMinterFromService(iamSvc)
 	if err != nil {
 		return nil, err
 	}
-	return &googleCloud{Minter: minter, iam: iamSvc, crm: crm, st: st, tokens: creds.TokenSource}, nil
+	return &googleCloud{Minter: minter, iam: iamSvc, iamcreds: credsSvc, crm: crm, st: st, tokens: creds.TokenSource}, nil
 }
 
 var impersonationEmail = regexp.MustCompile(`serviceAccounts/([^/:]+@[^/:]+):generateAccessToken`)
@@ -258,8 +263,11 @@ func identityFromJSON(raw []byte) (email, kind string, ok bool) {
 type googleCloud struct {
 	gcpkey.Minter
 	iam *iam.Service
-	crm *cloudresourcemanager.Service
-	st  *storage.Service
+	// iamcreds mints impersonated tokens for a set over an existing
+	// service account (Impersonator).
+	iamcreds *iamcredentials.Service
+	crm      *cloudresourcemanager.Service
+	st       *storage.Service
 	// tokens is the token source the clients authenticate with.
 	tokens oauth2.TokenSource
 }
@@ -404,3 +412,41 @@ func (c *googleCloud) TestPermissions(ctx context.Context, project string, perms
 
 // identityTimeout bounds one identity lookup in a report.
 const identityTimeout = 20 * time.Second
+
+// accountResource is the IAM Credentials and IAM name of a service
+// account by email alone: "-" lets the API find its project.
+func accountResource(email string) string { return "projects/-/serviceAccounts/" + email }
+
+func (c *googleCloud) GenerateAccessToken(ctx context.Context, email string, scopes []string, lifetime time.Duration) (string, time.Time, error) {
+	r, err := c.iamcreds.Projects.ServiceAccounts.GenerateAccessToken(accountResource(email), &iamcredentials.GenerateAccessTokenRequest{
+		Scope:    scopes,
+		Lifetime: fmt.Sprintf("%ds", int(lifetime.Seconds())),
+	}).Context(ctx).Do()
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("minting an access token for %s: %w", email, err)
+	}
+	exp, err := time.Parse(time.RFC3339, r.ExpireTime)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("minting an access token for %s: expireTime %q is not a time", email, r.ExpireTime)
+	}
+	return r.AccessToken, exp, nil
+}
+
+func (c *googleCloud) GenerateIDToken(ctx context.Context, email, audience string) (string, error) {
+	r, err := c.iamcreds.Projects.ServiceAccounts.GenerateIdToken(accountResource(email), &iamcredentials.GenerateIdTokenRequest{
+		Audience:     audience,
+		IncludeEmail: true,
+	}).Context(ctx).Do()
+	if err != nil {
+		return "", fmt.Errorf("minting an ID token for %s: %w", email, err)
+	}
+	return r.Token, nil
+}
+
+func (c *googleCloud) TestAccountPermissions(ctx context.Context, email string, perms []string) ([]string, error) {
+	r, err := c.iam.Projects.ServiceAccounts.TestIamPermissions(accountResource(email), &iam.TestIamPermissionsRequest{Permissions: perms}).Context(ctx).Do()
+	if err != nil {
+		return nil, fmt.Errorf("testing permissions on %s: %w", email, err)
+	}
+	return r.Permissions, nil
+}
