@@ -63,6 +63,9 @@ func TestUnlistedServicePrincipalCannotMintDangerousExternalAgentToken(t *testin
 	sharedIdentityProxy().configure(&uiCfg)
 
 	client := ui.NewClient(uiCfg, store)
+	if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: "user:owner@example.com"}); err != nil {
+		t.Fatal(err)
+	}
 	srv := ui.NewServerWithClient(client)
 
 	serveIAP := func(email, method, path, body string) *httptest.ResponseRecorder {
@@ -128,13 +131,8 @@ func TestUnlistedServicePrincipalCannotMintDangerousExternalAgentToken(t *testin
 		t.Fatalf("default-admitted SA rotate dangerous token: got %d, want 403: %s", rec.Code, rec.Body)
 	}
 
-	// 4. An in-process PrincipalService not named in an explicit allowlist is also
-	// refused when minting or rotating a dangerous external-agent token, even when an
-	// explicit allowlist exists for other principals.
-	client.Config.AllowedPrincipals = []string{
-		"user:owner@example.com",
-		"serviceAccount:explicit-ci@my-proj.iam.gserviceaccount.com",
-	}
+	// 4. An in-process PrincipalService is also refused when minting or rotating a
+	// dangerous external-agent token.
 	unlistedSvcCtx := ui.WithPrincipal(context.Background(), model.Principal{
 		Kind: model.PrincipalService,
 		ID:   "unlisted-svc@my-proj.iam.gserviceaccount.com",
@@ -149,13 +147,21 @@ func TestUnlistedServicePrincipalCannotMintDangerousExternalAgentToken(t *testin
 		t.Fatalf("unlisted in-process PrincipalService POST dangerous token: got %d, want 403: %s", inProcRec.Code, inProcRec.Body)
 	}
 
-	// 5. The explicitly listed serviceAccount CAN mint and rotate a dangerous token.
-	recExplicit := serveIAP("explicit-ci@my-proj.iam.gserviceaccount.com", http.MethodPost, "/api/external-agents/tokens",
+	// 5. A human principal added live to the DB allowlist CAN mint and rotate a dangerous token,
+	// while an unlisted service account cannot.
+	if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: "user:admin2@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if rec := serveIAP("explicit-ci@my-proj.iam.gserviceaccount.com", http.MethodPost, "/api/external-agents/tokens",
+		`{"name":"sa-esc","scopes":["tasks:admin"]}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("unlisted SA POST dangerous token: got %d, want 403: %s", rec.Code, rec.Body)
+	}
+	recExplicit := serveIAP("admin2@example.com", http.MethodPost, "/api/external-agents/tokens",
 		`{"name":"explicit-esc","scopes":["tasks:admin"]}`)
 	if recExplicit.Code != http.StatusCreated {
-		t.Fatalf("explicitly allowed SA POST dangerous token: got %d, want 201: %s", recExplicit.Code, recExplicit.Body)
+		t.Fatalf("allowed human POST dangerous token: got %d, want 201: %s", recExplicit.Code, recExplicit.Body)
 	}
-	if rec := serveIAP("explicit-ci@my-proj.iam.gserviceaccount.com", http.MethodPost, "/api/external-agents/tokens/"+ownerIssued.ID+"/rotate", ""); rec.Code != http.StatusOK {
-		t.Fatalf("explicitly allowed SA rotate dangerous token: got %d, want 200: %s", rec.Code, rec.Body)
+	if rec := serveIAP("admin2@example.com", http.MethodPost, "/api/external-agents/tokens/"+ownerIssued.ID+"/rotate", ""); rec.Code != http.StatusOK {
+		t.Fatalf("allowed human rotate dangerous token: got %d, want 200: %s", rec.Code, rec.Body)
 	}
 }

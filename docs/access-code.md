@@ -32,7 +32,8 @@ network listener takes depends on two settings:
   `-ui-iap-issuer` and `-ui-iap-keys-url` for a signing proxy other than
   IAP. Grain checks `X-Goog-IAP-JWT-Assertion` against IAP's keys,
   issuer, audience and expiry. A caller whose assertion verifies is
-  signed in as the email it names, if `-ui-allowed-principals` admits
+  signed in as the email it names, if the deployment's allowed users and
+  groups list ([Who is let in](#who-is-let-in)) admits
   it, with no access code. An assertion that is present but does not
   verify is refused with a `401` and never falls back to the code (a
   browser loading the UI is shown a "Sign-in could not be verified" page
@@ -69,6 +70,60 @@ a way in which does not depend on IAP, from the daemon's own host:
 ```bash
 kubectl -n grain exec deploy/grain -- env GRAIN_SERVER=http://127.0.0.1:8080 GRAIN_DATA_DIR=/data grain list
 ```
+
+## Who is let in
+
+When a request carries a verified identity (`X-Goog-IAP-JWT-Assertion`,
+or a registered `IdentityVerifier`'s signed header), grain checks that
+identity against the deployment's **Allowed users and groups** list in
+the database (`allowed_principal`).
+
+- **Entries:** `user:<email>` for an individual person and
+  `group:<email>` for a group. Group membership is resolved transitively
+  through the Cloud Identity groups API (cached briefly) only when at
+  least one `group:` entry is present and no `user:` entry already
+  matched.
+- **Equal privileges:** A verified user admitted through the list has
+  full operator access, the same as an access-code holder, including
+  viewing, adding and removing entries on the list. Anyone not on the
+  list gets a `403` naming **Settings → Access** and `grain access allow`.
+- **Live changes (no restart):** Adding or removing an entry takes
+  effect immediately. Manage the list in **Settings → Access → Allowed
+  users and groups** (`/settings/access#allowed-principals`), over the
+  REST API (`GET /api/access/principals`, `POST /api/access/principals`,
+  `DELETE /api/access/principals/{entry}`), or from the CLI:
+
+  ```bash
+  grain access list
+  grain access allow user:alice@example.com
+  grain access allow group:team@example.com
+  grain access deny user:alice@example.com
+  ```
+
+  `grain access allow` is a no-op when the entry is already present, so
+  installers can re-run it safely. Removing yourself or the last entry
+  is allowed (with a warning in the UI), because the access code always
+  still works. Every addition and removal is recorded in `config_audit`
+  (`surface = "access"`).
+- **Agent API scopes:** `api:access:read` allows listing entries.
+  `api:access:write` is a **dangerous** scope: only a person may grant
+  it, every call requires an acting reason (`X-Grain-Acting-Reason`)
+  recorded in `config_audit`, and it is refused on the `sandbox-cli`
+  channel. Without `api:access:write`, sandboxes and agents cannot
+  modify the list.
+- **State repository:** `allowed_principal` lives in the database (and
+  cold backups) and is never exported to `grain/config` pull requests,
+  so a config PR can neither lock operators out nor grant sign-in
+  access.
+- **One-time migration off `-ui-allowed-principals`:** On start, if
+  `-ui-allowed-principals` or `$GRAIN_ALLOWED_PRINCIPALS` is set and the
+  database list has never been populated or migrated, grain imports its
+  `user:` and `group:` entries once and logs the import. Entries of
+  other kinds (`serviceAccount:`, `domain:`) are not imported; each
+  dropped entry is logged and shown as a warning in **Settings →
+  Access**. On subsequent starts, `-ui-allowed-principals` and
+  `$GRAIN_ALLOWED_PRINCIPALS` are deprecated: grain logs a warning when
+  either is set and ignores its value.
 
 ## Where it lives and how to see it
 
@@ -182,7 +237,10 @@ What else the hostd needs depends on how it reaches the daemon:
 - **Remote**: it dials in through the IAP Gateway or another registered
   identity verifier's proxy, so the request carries a verified identity.
   The daemon records that identity as the connection's principal and
-  checks it against the allowlist (`-ui-allowed-principals`). The
+  checks that it is admitted (either on the database allowlist in
+  **Settings → Access**, a daemon-provisioned non-pool service account,
+  or the non-pool service account registered as an active hostd's owner
+  in **Settings → Hostds**). The
   identity must also equal the hostd row's owner, compared as full,
   lowercased emails. A stolen hostd token is no use without its
   owner's identity. Service accounts may be owners, so a hostd running

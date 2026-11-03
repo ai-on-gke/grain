@@ -646,6 +646,14 @@ var Migrations = []Migration{
 			"ALTER TABLE `template` ADD COLUMN `hostd` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     95,
+		Description: "add allowed_principal and allowed_principal_migration for verified-identity sign-in access",
+		Statements: []string{
+			allowedPrincipalTable,
+			allowedPrincipalMigrationTable,
+		},
+	},
 }
 
 // principalSourceColumns are migration 91's ALTERs: `<p>_source` beside

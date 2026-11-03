@@ -15,12 +15,14 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 
 	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/hostd"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // hostdConnectRoute reports whether r is a grain hostd dialing in to
@@ -78,7 +80,7 @@ func (s *Server) hostdConnectIdentity(r *http.Request) (hostd.ConnectIdentity, i
 			// that does not run it.
 			return hostd.ConnectIdentity{}, http.StatusUnauthorized, fmt.Errorf("its identity did not verify: %v", cv.err)
 		}
-		if err := s.checkAllowedPrincipal(r.Context(), cv.id); err != nil {
+		if err := s.checkAllowedPrincipal(r.Context(), cv.id); err != nil && !s.isRegisteredHostdServiceOwner(r.Context(), cv.id) {
 			return hostd.ConnectIdentity{}, http.StatusForbidden, err
 		}
 		return hostd.ConnectIdentity{Remote: true, Principal: normalizeIdentityEmail(cv.id.Email), Via: string(cv.method)}, 0, nil
@@ -88,6 +90,34 @@ func (s *Server) hostdConnectIdentity(r *http.Request) (hostd.ConnectIdentity, i
 		return hostd.ConnectIdentity{}, 0, nil
 	}
 	return hostd.ConnectIdentity{Remote: true}, 0, nil
+}
+
+// isRegisteredHostdServiceOwner reports whether id is a non-pool GCP service
+// account explicitly set as the owner of an active hostd row (Settings ->
+// Hostds). Admitting it here lets a remote hostd dial /api/hostd/connect
+// (where hostd.Remote still requires its per-hostd token and matches its
+// owner) without granting UI/API access.
+func (s *Server) isRegisteredHostdServiceOwner(ctx context.Context, id VerifiedIdentity) bool {
+	if id.Kind != model.PrincipalService || s.tasks == nil || s.tasks.Store == nil {
+		return false
+	}
+	email := normalizeIdentityEmail(id.Email)
+	if email == "" || s.tasks.gcpKeyPoolSet(ctx)[email] {
+		return false
+	}
+	rows, err := s.tasks.Store.ListHostds(ctx)
+	if err != nil {
+		return false
+	}
+	for _, h := range rows {
+		if h.RevokedAt != nil {
+			continue
+		}
+		if normalizeIdentityEmail(h.Owner) == email {
+			return true
+		}
+	}
+	return false
 }
 
 // hostdHostOf is the machine a connecting hostd says it runs on.

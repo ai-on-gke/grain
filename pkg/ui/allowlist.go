@@ -22,7 +22,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -65,10 +64,10 @@ type AllowedPrincipalEntry struct {
 	Value  string // lowercased email or domain
 }
 
-// AllowedPrincipalsUsage describes the -ui-allowed-principals flag.
-const AllowedPrincipalsUsage = "comma-separated principals admitted when authenticated by IAP or another registered IdentityVerifier " +
-	"(user:<email>, serviceAccount:<email>, group:<email>, domain:<domain>); defaults to $GRAIN_ALLOWED_PRINCIPALS, " +
-	"and when unset to the deployment owner plus the service accounts grain provisions"
+// AllowedPrincipalsUsage describes the deprecated -ui-allowed-principals flag.
+const AllowedPrincipalsUsage = "deprecated: imported once on first start when the database allowlist is empty " +
+	"(user:<email> and group:<email> only; serviceAccount: and domain: entries are logged and dropped), then ignored. " +
+	"Manage allowed users and groups in Settings -> Access or with 'grain access'"
 
 // SplitAllowedPrincipals splits a comma-separated -ui-allowed-principals list,
 // trimming whitespace and dropping empty items.
@@ -233,101 +232,37 @@ func (c *Client) gcpKeyPoolSet(ctx context.Context) map[string]bool {
 	return set
 }
 
-// explicitAllowedPrincipalsRaw returns the raw explicit allowlist configured on
-// c or in $GRAIN_ALLOWED_PRINCIPALS, or nil when the default allowlist is in use.
-func (c *Client) explicitAllowedPrincipalsRaw() []string {
-	if c != nil && len(c.Config.AllowedPrincipals) > 0 {
-		return c.Config.AllowedPrincipals
+// provisionedServiceAccountEntries returns daemon-owned GCP service accounts
+// grain itself provisioned (excluding the gcp-key agent pool whose keys enter
+// task sandboxes).
+func (s *Server) provisionedServiceAccountEntries(ctx context.Context) []AllowedPrincipalEntry {
+	if s.tasks == nil {
+		return nil
 	}
-	if env := strings.TrimSpace(os.Getenv("GRAIN_ALLOWED_PRINCIPALS")); env != "" {
-		return SplitAllowedPrincipals(env)
-	}
-	return nil
-}
-
-// isExplicitlyAllowedServiceAccount reports whether email is listed explicitly
-// as a serviceAccount: entry in -ui-allowed-principals (or
-// $GRAIN_ALLOWED_PRINCIPALS) and is not a gcp-key agent pool account.
-// Service accounts admitted only by the default allowlist return false.
-func (c *Client) isExplicitlyAllowedServiceAccount(ctx context.Context, email string) bool {
-	raw := c.explicitAllowedPrincipalsRaw()
-	if len(raw) == 0 {
-		return false
-	}
-	norm := normalizeIdentityEmail(email)
-	norm = strings.TrimPrefix(norm, "serviceaccount:")
-	norm = strings.TrimSpace(norm)
-	if norm == "" {
-		return false
-	}
-	entries, err := ValidateAllowedPrincipals(raw, c.gcpKeyPoolEmailList(ctx))
-	if err != nil {
-		return false
-	}
-	for _, e := range entries {
-		if e.Prefix == "serviceAccount" && e.Value == norm {
-			return true
-		}
-	}
-	return false
-}
-
-// defaultAllowedPrincipalEntries builds the default allowlist when neither
-// Config.AllowedPrincipals nor $GRAIN_ALLOWED_PRINCIPALS is set: the
-// deployment owner (Config.Actor) plus daemon-owned service accounts whose
-// credentials never enter a sandbox (never the gcp-key agent pool).
-func (s *Server) defaultAllowedPrincipalEntries(ctx context.Context) []AllowedPrincipalEntry {
 	var out []AllowedPrincipalEntry
 	seen := map[string]bool{}
-	var pool map[string]bool
-	if s.tasks != nil {
-		pool = s.tasks.gcpKeyPoolSet(ctx)
-	}
-	add := func(prefix, val string) {
+	pool := s.tasks.gcpKeyPoolSet(ctx)
+	add := func(val string) {
 		val = normalizeIdentityEmail(val)
-		val = strings.TrimPrefix(val, "user:")
 		val = strings.TrimPrefix(val, "serviceaccount:")
 		val = strings.TrimSpace(val)
-		if val == "" {
+		if val == "" || pool[val] {
 			return
 		}
-		if prefix == "serviceAccount" && pool[val] {
-			return
-		}
-		key := prefix + ":" + val
+		key := "serviceAccount:" + val
 		if seen[key] {
 			return
 		}
 		seen[key] = true
-		out = append(out, AllowedPrincipalEntry{Prefix: prefix, Value: val})
+		out = append(out, AllowedPrincipalEntry{Prefix: "serviceAccount", Value: val})
 	}
-	addPrincipal := func(raw string) {
-		clean := normalizeIdentityEmail(raw)
-		clean = strings.TrimPrefix(clean, "user:")
-		clean = strings.TrimPrefix(clean, "serviceaccount:")
-		clean = strings.TrimSpace(clean)
-		if clean == "" {
-			return
-		}
-		if principalKindForEmail(clean) == model.PrincipalService {
-			add("serviceAccount", clean)
-		} else {
-			add("user", clean)
-		}
+	for _, sa := range s.tasks.Config.ProvisionedServiceAccounts {
+		add(sa)
 	}
-
-	if s.tasks != nil {
-		if actorID := s.tasks.operatorID(); actorID != "" {
-			addPrincipal(actorID)
-		}
-		for _, sa := range s.tasks.Config.ProvisionedServiceAccounts {
-			add("serviceAccount", sa)
-		}
-		if s.tasks.Store != nil {
-			if mc, err := s.tasks.Store.GetConfig(ctx); err == nil && mc != nil {
-				if proj := strings.TrimSpace(mc.GCPProject); proj != "" {
-					add("serviceAccount", "grain-daemon@"+proj+".iam.gserviceaccount.com")
-				}
+	if s.tasks.Store != nil {
+		if mc, err := s.tasks.Store.GetConfig(ctx); err == nil && mc != nil {
+			if proj := strings.TrimSpace(mc.GCPProject); proj != "" {
+				add("grain-daemon@" + proj + ".iam.gserviceaccount.com")
 			}
 		}
 	}
@@ -335,33 +270,42 @@ func (s *Server) defaultAllowedPrincipalEntries(ctx context.Context) []AllowedPr
 }
 
 func (s *Server) effectiveAllowedPrincipals(ctx context.Context) ([]AllowedPrincipalEntry, error) {
-	var raw []string
-	var poolEmails []string
-	if s.tasks != nil {
-		raw = s.tasks.explicitAllowedPrincipalsRaw()
-		poolEmails = s.tasks.gcpKeyPoolEmailList(ctx)
-	} else if env := strings.TrimSpace(os.Getenv("GRAIN_ALLOWED_PRINCIPALS")); env != "" {
-		raw = SplitAllowedPrincipals(env)
+	if s.tasks == nil || s.tasks.Store == nil {
+		return nil, nil
 	}
-	if len(raw) > 0 {
-		return ValidateAllowedPrincipals(raw, poolEmails)
+	if err := s.tasks.MigrateAllowedPrincipals(ctx); err != nil {
+		return nil, err
 	}
-	return s.defaultAllowedPrincipalEntries(ctx), nil
+	rows, err := s.tasks.Store.ListAllowedPrincipals(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AllowedPrincipalEntry, 0, len(rows)+2)
+	for _, r := range rows {
+		prefix, val, _, nErr := model.NormalizeAllowedPrincipalEntry(r.Entry)
+		if nErr != nil {
+			continue
+		}
+		out = append(out, AllowedPrincipalEntry{Prefix: prefix, Value: val})
+	}
+	out = append(out, s.provisionedServiceAccountEntries(ctx)...)
+	return out, nil
 }
 
-// checkAllowedPrincipal verifies that id is admitted by -ui-allowed-principals
-// (or the default owner + daemon SA allowlist).
+// checkAllowedPrincipal verifies that id is admitted by the database-backed
+// allowed users and groups list (Settings -> Access / `grain access`), or is a
+// daemon-provisioned non-pool service account.
 //
-// Direct entries (user:, serviceAccount:, domain:) are checked first. Cloud
-// Identity is called only if at least one group: entry is configured and no
-// direct entry matched, so deployments without group: entries never touch
-// Cloud Identity and a failed group lookup refuses only callers that depend on
-// a group: entry to be admitted.
+// Direct entries (user:, serviceAccount:) are checked first. Cloud Identity is
+// called only if at least one group: entry is configured and no direct entry
+// matched, so deployments without group: entries never touch Cloud Identity
+// and a failed group lookup refuses only callers that depend on a group: entry
+// to be admitted.
 func (s *Server) checkAllowedPrincipal(ctx context.Context, id VerifiedIdentity) error {
 	email := normalizeIdentityEmail(id.Email)
 	if id.Kind == model.PrincipalService && s.tasks != nil && s.tasks.gcpKeyPoolSet(ctx)[email] {
 		return fmt.Errorf(
-			"principal %q is a gcp-key agent service account whose key is materialized into task sandboxes and cannot be admitted by -ui-allowed-principals",
+			"principal %q is a gcp-key agent service account whose key is materialized into task sandboxes and cannot be admitted",
 			id.Email,
 		)
 	}
@@ -379,12 +323,6 @@ func (s *Server) checkAllowedPrincipal(ctx context.Context, id VerifiedIdentity)
 		case "serviceAccount":
 			if id.Kind == model.PrincipalService && email == e.Value {
 				return nil
-			}
-		case "domain":
-			if id.Kind == model.PrincipalHuman {
-				if _, domain, ok := strings.Cut(email, "@"); ok && domain == e.Value {
-					return nil
-				}
 			}
 		case "group":
 			groups = append(groups, e.Value)
@@ -409,7 +347,7 @@ func (s *Server) checkAllowedPrincipal(ctx context.Context, id VerifiedIdentity)
 			return fmt.Errorf("principal %q could not be authorized against group allowlist: %w", id.Email, firstErr)
 		}
 	}
-	return fmt.Errorf("principal %q is not allowed by -ui-allowed-principals", id.Email)
+	return fmt.Errorf("principal %q is not on the allowed users and groups list (Settings -> Access)", id.Email)
 }
 
 func (s *Server) groupChecker() GroupMemberChecker {

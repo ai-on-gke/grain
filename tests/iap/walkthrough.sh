@@ -248,11 +248,8 @@ check 2 "user:alice admitted" '^200 .*"user":"alice@example.com"' "$(who alice@e
 check 2 "user: entry is case-insensitive (ALICE@Example.com)" '^200 .*"user":"alice@example.com"' "$(who ALICE@Example.com)"
 check 2 "bob (no entry) refused, API" '^403 .*bob@example.com' "$(who bob@example.com)"
 check 2 "the owner is not in a replaced list" '^403' "$(who owner@example.com)"
-check 2 "domain:corp.example admits dev@corp.example" '^200 .*"user":"dev@corp.example"' "$(who dev@corp.example)"
-check 2 "domain: is exact (dev@sub.corp.example)" '^403' "$(who dev@sub.corp.example)"
-check 2 "serviceAccount: admits bot" '^200 .*"user":"bot@proj.iam.gserviceaccount.com"' "$(who bot@proj.iam.gserviceaccount.com)"
-tb=$(curl -s -H "$(as bot@proj.iam.gserviceaccount.com)" -H 'Content-Type: application/json' -d '{"title":"filed by the bot"}' "$PROXY/api/tasks")
-check 2 "serviceAccount: principal kind" '^bot@proj.iam.gserviceaccount.com service$' "$(jq -r '"\(.author) \(.authorKind)"' <<<"$tb")"
+check 2 "domain:corp.example is dropped and refused" '^403' "$(who dev@corp.example)"
+check 2 "serviceAccount:bot is dropped and refused" '^403' "$(who bot@proj.iam.gserviceaccount.com)"
 check 2 "a service account never matches a user: entry (alice's domain SA)" '^403' "$(who other@proj.iam.gserviceaccount.com)"
 curl -s -X POST "$ISSUER/stats/reset"
 check 2 "group: member carol admitted (fake lookup)" '^200 .*"user":"carol@example.com"' "$(who carol@example.com)"
@@ -318,6 +315,7 @@ MODE=noiap browser
 
 echo "| | **-ui-require-iap** | | | |" | tee -a "$RESULTS"
 start_demo requireiap "${IAP_FLAGS[@]}" -ui-require-iap
+GRAIN_SERVER=$DEMO GRAIN_TOKEN=$CODE "$GRAIN" access allow user:owner@example.com > /dev/null
 jar=$OUT/require.jar
 check 7 "loopback, no forwarding headers: bearer works" '^200 .*"authMethod":"trusted"' \
 	"$(st_body -H "Authorization: Bearer $CODE" "$DEMO/api/auth/user")"

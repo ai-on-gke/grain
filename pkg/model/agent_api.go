@@ -93,6 +93,8 @@ var apiScopes = []APIScopeInfo{
 	{Scope: "caches:write", Description: "Flush the CI, package and actions caches"},
 	{Scope: "settings:read", Description: "Read deployment settings and configuration"},
 	{Scope: "settings:write", Description: "Change deployment settings, the database and the state repository", Dangerous: true},
+	{Scope: "access:read", Description: "Read the allowed users and groups list"},
+	{Scope: "access:write", Description: "Add and remove allowed users and groups", Dangerous: true},
 	{Scope: "connections:read", Description: "Read git connections and model backends"},
 	{Scope: "connections:write", Description: "Change git connections and model backends", Dangerous: true},
 	{Scope: "capabilities:read", Description: "Read capability servers and policy, and check grants"},

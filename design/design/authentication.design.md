@@ -23,19 +23,21 @@ The rules:
 - **Plaintext identity headers never authenticate.** This includes `X-Goog-Authenticated-User-Email`. They stay logged and ignored, as today.
 - **Precedence over the access code is per verifier.** For IAP, the assertion wins over the access code: if a request carries both, the caller is the IAP principal, and the access code does not make a named person anonymous again. A wrapper's `IdentityVerifier` whose proxy attaches a signed header to every proxied request may instead declare that the access code beats it (`AccessCodeWins() bool`, see *IdentityVerifier* below), so an operator can break glass with the access code when the allowlist or group lookup is broken. Even then, a present assertion that fails to verify still fails closed with a 401 and no fallback.
 
-### 2. Who is admitted: an allowlist on top of IAP
+### 2. Who is admitted: a database allowlist on top of IAP
 
-IAP's IAM binding (managed by `pkg/iapreconciler`) is the perimeter. Grain adds an optional check of its own, so a mistake in the project's IAM does not hand the deployment to everyone in the organisation:
+IAP's IAM binding (managed by `pkg/iapreconciler`) is the perimeter. Grain keeps its own **Allowed users and groups** list in the database (`allowed_principal` table: `entry`, `added_by`, `added_at`), so a mistake in the project's IAM does not hand the deployment to everyone in the organisation and changes take effect immediately without restarting the daemon:
 
 ```
--ui-allowed-principals=user:alice@example.com,group:grain-admins@example.com,serviceAccount:hostd@proj.iam.gserviceaccount.com,domain:example.com
+user:alice@example.com
+group:grain-admins@example.com
 ```
 
-- **Default.** The deployment owner (the email `grain init` records for the operator) plus the service accounts grain itself provisions. A new deployment admits only its owner until somebody widens the list.
-- **`group:`.** IAP assertions carry no group claims. `group:` entries in `-ui-allowed-principals` are resolved by grain through the Cloud Identity groups API, with results cached for a few minutes. The lookup is **optional**: grain calls Cloud Identity only when at least one `group:` entry is configured, so a deployment with no `group:` entries never makes the call and never needs Cloud Identity read access for `grain-daemon@…`. Direct entries (`user:`, `serviceAccount:`, `domain:`) are checked first, so a failed lookup refuses only requests that depend on a `group:` entry to be admitted.
-- **No roles in v1 (same powers for everyone).** Grain is single-tenant (`docs/access-code.md`): every admitted principal is an operator with the access the access code gives today, including minting `gma_` external-agent tokens and hostd tokens. Roles (such as read-only viewers, or restricting who may mint tokens) come later in a separate authorization (RBAC) design.
+- **Entries and seeding.** The list holds `user:<email>` and `group:<email>` entries (plus grain-provisioned non-pool service accounts in memory, and active non-pool hostd owner service accounts on `/api/hostd/connect`). Installers seed the installing operator with `grain access allow user:<email>` (idempotent). Keeping the list in `allowed_principal` rather than `staterepo.SettingsTables` means cold backups preserve it while `grain/config` pull requests can neither lock operators out nor grant sign-in access.
+- **Migration off `-ui-allowed-principals`.** If `-ui-allowed-principals` / `$GRAIN_ALLOWED_PRINCIPALS` is set on start when `allowed_principal` is empty and has not yet migrated (`allowed_principal_migration`), grain imports its `user:` and `group:` entries once and logs the import. Unsupported prefixes (`serviceAccount:`, `domain:`) are dropped, logged individually, and surfaced in `Settings → Access`. Thereafter the flag and environment variable are deprecated: grain logs a warning when set and ignores them.
+- **`group:`.** IAP assertions carry no group claims. `group:` entries in `allowed_principal` are resolved transitively by grain through the Cloud Identity groups API, with results cached for a few minutes. The lookup is **optional**: grain calls Cloud Identity only when at least one `group:` entry is present, so a deployment with no `group:` entries never makes the call and never needs Cloud Identity read access for `grain-daemon@…`. Direct `user:` entries are checked first, so a failed lookup refuses only requests that depend on a `group:` entry to be admitted.
+- **No roles (equal powers for listed users and access-code holders).** Grain is single-tenant (`docs/access-code.md`): every admitted principal is an operator with the same full access the access code gives, including viewing, adding and removing entries on the allowlist (`Settings → Access`, `GET`/`POST`/`DELETE /api/access/principals`, and `grain access list|allow|deny`), minting `gma_` external-agent tokens, and registering hostd tokens. Every allowlist change is recorded in `config_audit` (`surface = "access"`). For external or task agents, `api:access:read` reads the list and dangerous `api:access:write` (person-grantable only, requiring `X-Grain-Acting-Reason` and refused on `sandbox-cli`) writes it.
 
-A verified caller that is not on the list gets a 403. The response names the email, so the operator knows what to add.
+A verified caller that is not on the list gets a 403 naming the email, `Settings → Access`, and `grain access allow`.
 
 ### 3. The verified email is the principal
 
@@ -123,6 +125,7 @@ Agent calls from inside a sandbox never pass IAP and never carry a person's iden
 2. Verified IAP callers pass `singleTenantGate` and become principals: `PrincipalService`, the allowlist, the CSRF check, and the UI header and logout.
 3. IAP mode for the CLI, and recording hostd's IAP principal (including matching a remote hostd's verified identity to its row's `owner`). The hostd part is **done** (task 2316): `hostd.ConnectIdentity`, `-hostd-token-owner`, `grain hostds`.
 4. `-ui-require-iap`, and `docs/access-code.md` rewritten for the three modes. **Done** (task 2318).
+5. Replace `-ui-allowed-principals` with the database-backed `allowed_principal` list (`user:` and `group:`), one-time startup migration, `Settings → Access` UI, and `grain access list|allow|deny`. **Done** (task 2741).
 
 ## Open questions
 
