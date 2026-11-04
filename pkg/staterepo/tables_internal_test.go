@@ -179,10 +179,9 @@ var notSettings = []string{
 	// record of what happened, written after the run finished.
 	"task_run_capability_audit",
 	"task_run_startup",
-	// Which hostd each run went to (model.TaskRunHostd), and a task's own
-	// hostd pin, written with the task like task_tag.
+	// Which hostd each run went to (model.TaskRunHostd), written with the
+	// task like task_tag.
 	"task_run_hostd",
-	"task_hostd",
 	"task_run_sandbox_key",
 	// A run's suspension (model.Suspension): grain's record of how a run
 	// stopped, written in the transaction that finished it.

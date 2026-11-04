@@ -24,7 +24,9 @@ test("a repo setting's refusal goes once that setting saves, and only that one",
 }) => {
   await page.goto("/repos/acme/widgets/settings/agents");
   const upstream = page.getByLabel("Upstream repository for acme/widgets");
-  const hostd = page.getByLabel("Default hostd for acme/widgets");
+  const issueImport = page.getByTestId("repo-issue-import");
+  const importRepo = issueImport.getByLabel("Source repository");
+  const importSave = issueImport.getByRole("button", { name: "Save" });
   const refusal = page.getByRole("alert").filter({ hasText: "upstreamRepo:" });
   try {
     await upstream.fill("not a repo");
@@ -48,12 +50,12 @@ test("a repo setting's refusal goes once that setting saves, and only that one",
     );
 
     // Another box's refusal is not this box's to take down.
-    await hostd.fill("nowhere-e2e");
-    await hostd.blur();
-    const hostdRefusal = page
+    await importRepo.fill("not a repo");
+    await importSave.click();
+    const importRefusal = page
       .getByRole("alert")
-      .filter({ hasText: "nowhere-e2e" });
-    await expect(hostdRefusal).toBeVisible();
+      .filter({ hasText: "issueImportRepo:" });
+    await expect(importRefusal).toBeVisible();
     await upstream.fill("");
     const cleared = page.waitForResponse(
       (r) =>
@@ -63,7 +65,7 @@ test("a repo setting's refusal goes once that setting saves, and only that one",
     );
     await upstream.blur();
     await cleared;
-    await expect(hostdRefusal).toBeVisible();
+    await expect(importRefusal).toBeVisible();
   } finally {
     // The demo server is shared by the worker's other specs.
     await page.request.put("/api/repos/acme/widgets/settings", {
