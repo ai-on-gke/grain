@@ -72,7 +72,7 @@ import { identifierField } from "../identifierField.js";
 //
 // renderInput draws the box; the default is a small MUI TextField with
 // label, helperText (styled by FormHelperTextProps) and margin, plus any
-// inputProps (a data-testid, say) and InputLabelProps (shrink, over a ""
+// inputProps (a data-testid, say) and InputLabelProps (shrink, or shrinkLabel for short, over a ""
 // option with a label of its own). A caller with its own look
 // (RepoField's plain input) passes one, and must spread
 // params.inputProps onto its input and attach params.InputProps.ref to
@@ -92,6 +92,8 @@ export default function SearchSelect({
   onChange,
   typedOption,
   label,
+  shrinkLabel = false,
+  inputAriaLabel,
   helperText,
   placeholder,
   disabled,
@@ -103,6 +105,7 @@ export default function SearchSelect({
   fullWidth = true,
   inputProps: callerInputProps,
   renderInput,
+  renderRow,
   className,
   noOptionsText = "No matches",
   InputLabelProps,
@@ -134,7 +137,13 @@ export default function SearchSelect({
       byValue.set(v, own);
     }
   }
-  const optionOf = (v) => byValue.get(v) ?? null;
+  const optionOf = (v) => {
+    const found = byValue.get(v) ?? null;
+    // A disabled "" row is an unpicked placeholder ("Choose a template"),
+    // not a chosen value: leaving the box empty lets the user type at once.
+    if (found?.disabled && v === "") return null;
+    return found;
+  };
   const matchText = (o) => o.match ?? o.label;
 
   const choose = (next) => {
@@ -193,9 +202,26 @@ export default function SearchSelect({
         const hits = searching
           ? searchFilter(searchable, query, matchText).map(
               ({ item, ranges }) =>
-                matchText(item) === item.label ? { ...item, ranges } : item,
+                matchText(item) === item.label
+                  ? { ...item, ranges }
+                  : {
+                      ...item,
+                      ranges: searchFilter([item.label], query)[0]?.ranges,
+                    },
             )
           : searchable;
+        if (rest.groupBy && searching) {
+          const groupOrder = [];
+          for (const o of searchable) {
+            const g = rest.groupBy(o);
+            if (!groupOrder.includes(g)) groupOrder.push(g);
+          }
+          hits.sort(
+            (a, b) =>
+              groupOrder.indexOf(rest.groupBy(a)) -
+              groupOrder.indexOf(rest.groupBy(b)),
+          );
+        }
         const extra =
           typed && !hits.some((o) => o.value === typed.value) ? [typed] : [];
         return [...hits, ...extra, ...pinned];
@@ -243,9 +269,11 @@ export default function SearchSelect({
                 sx={{ p: 0.5, mr: 0.5 }}
               />
             )}
-            {option.renderRow
-              ? option.renderRow(text, state)
-              : (option.row ?? plain)}
+            {renderRow
+              ? renderRow(option)
+              : option.renderRow
+                ? option.renderRow(text, state)
+                : (option.row ?? plain)}
           </li>
         );
       }}
@@ -257,6 +285,7 @@ export default function SearchSelect({
           ...base,
           inputProps: {
             ...base.inputProps,
+            ...(inputAriaLabel ? { "aria-label": inputAriaLabel } : {}),
             onBlur: (e) => {
               const typed = typedOption?.(e.target.value.trim());
               if (typed) {
@@ -303,7 +332,11 @@ export default function SearchSelect({
               ...identifierField,
               ...callerInputProps,
             }}
-            InputLabelProps={{ ...params.InputLabelProps, ...InputLabelProps }}
+            InputLabelProps={{
+              ...params.InputLabelProps,
+              ...(shrinkLabel ? { shrink: true } : {}),
+              ...InputLabelProps,
+            }}
             FormHelperTextProps={FormHelperTextProps}
             label={label}
             helperText={helperText}

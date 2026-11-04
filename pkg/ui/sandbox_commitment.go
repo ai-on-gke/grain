@@ -208,6 +208,7 @@ type SandboxCommitment struct {
 	// can ever ask for.
 	CPUsPerSandbox     int `json:"cpusPerSandbox"`
 	MemoryMBPerSandbox int `json:"memoryMbPerSandbox"`
+	DiskGBPerSandbox   int `json:"diskGbPerSandbox,omitempty"`
 	// CPUsCommitted and MemoryMBCommitted are Runs times each of those.
 	//
 	// The CI slots in that product are a floor rather than a bound: a CI
@@ -441,14 +442,17 @@ func NewSandboxCommitment(cfg model.Config, host HostCapacity) *SandboxCommitmen
 	if c == nil {
 		return nil
 	}
-	cpus, memoryMB := cfg.SandboxCPUs, cfg.SandboxMemoryMB
+	cpus, memoryMB, diskGB := cfg.SandboxCPUs, cfg.SandboxMemoryMB, cfg.SandboxDiskGB
 	if cpus <= 0 {
 		cpus = granule.DefaultCPUs
 	}
 	if memoryMB <= 0 {
 		memoryMB = granule.DefaultMemoryMB
 	}
-	c.CPUsPerSandbox, c.MemoryMBPerSandbox = cpus, memoryMB
+	if diskGB <= 0 {
+		diskGB = granule.DefaultDiskGB
+	}
+	c.CPUsPerSandbox, c.MemoryMBPerSandbox, c.DiskGBPerSandbox = cpus, memoryMB, diskGB
 	shape := model.Commitment{CPUs: cpus, MemoryMB: memoryMB}
 	c.Budget = newSandboxBudget(cfg, host, c, shape)
 	// Every slot the teams allow, at this deployment's own shape. It used

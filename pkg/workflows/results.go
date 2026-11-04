@@ -268,6 +268,9 @@ type ActionsRun struct {
 	// WorkflowName the name it gives itself ("Tests").
 	Workflow     string `json:"workflow,omitempty"`
 	WorkflowName string `json:"workflowName,omitempty"`
+	// HeadRepo is the repository ("owner/name") the run's head commit
+	// came from, when the forge said: another one's is a fork's.
+	HeadRepo string `json:"headRepo,omitempty"`
 	// Status is GitHub's: queued, in_progress, completed, ... and
 	// Conclusion GitHub's own word for a completed run, kept beside the
 	// Run.Conclusion grain's vocabulary maps it to.

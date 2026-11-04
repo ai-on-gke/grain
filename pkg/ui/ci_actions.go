@@ -82,6 +82,13 @@ func IsActionsRunID(id string) bool {
 // calls charged to ciActionsCaller, or nil when this deployment has none
 // that can.
 func (c *Client) actionsReader() github.ActionsReader {
+	reader, _ := forgeReader[github.ActionsReader](c)
+	return reader
+}
+
+// forgeReader is the first of this client's forge connections that is a
+// T, labelled as ci:read's caller.
+func forgeReader[T any](c *Client) (T, bool) {
 	var candidates []any
 	if c.Config.Actions != nil {
 		candidates = append(candidates, c.Config.Actions)
@@ -98,11 +105,12 @@ func (c *Client) actionsReader() github.ActionsReader {
 		if l, ok := cand.(github.CallerLabeler); ok {
 			cand = l.WithCaller(ciActionsCaller)
 		}
-		if reader, ok := cand.(github.ActionsReader); ok {
-			return reader
+		if reader, ok := cand.(T); ok {
+			return reader, true
 		}
 	}
-	return nil
+	var none T
+	return none, false
 }
 
 // actionsListedFor reports whether repo's Actions runs are listed: a
@@ -433,7 +441,7 @@ func actionsRunRow(repo model.RepoRef, r github.WorkflowRun) ci.Run {
 		Conclusion: actionsConclusion(r.Status, r.Conclusion),
 		Jobs:       []ci.JobRun{},
 		Actions: &ci.ActionsRun{
-			RunID: r.ID, RunAttempt: r.RunAttempt, Workflow: r.Path, WorkflowName: r.Name,
+			RunID: r.ID, RunAttempt: r.RunAttempt, Workflow: r.Path, WorkflowName: r.Name, HeadRepo: r.HeadRepo,
 			Status: r.Status, Conclusion: r.Conclusion, URL: r.HTMLURL,
 		},
 	}
@@ -820,6 +828,76 @@ func (a actionsExternalRuns) ExternalRun(ctx context.Context, id string) (ci.Run
 		return ci.Run{}, false, err
 	}
 	return run, true, nil
+}
+
+var _ ci.ExternalAttempts = actionsExternalRuns{}
+
+func (a actionsExternalRuns) ExternalJobAttempts(ctx context.Context, id string) ([]ci.GitHubJob, error) {
+	repoText, runID, ok := ParseActionsRunID(id)
+	if !ok {
+		return nil, fmt.Errorf("%q is not a GitHub Actions run", id)
+	}
+	repo, err := a.c.parseRepo(repoText)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.c.actionsRepoServed(ctx, repo); err != nil {
+		return nil, err
+	}
+	reader, ok := forgeReader[github.ActionsJobAttemptsReader](a.c)
+	if !ok {
+		return nil, errNoActionsReader
+	}
+	jobs, err := reader.ListActionsJobAttempts(repo.StoredOwner(), repo.Name, runID)
+	if err != nil {
+		return nil, fmt.Errorf("reading every attempt of the jobs of %s from the forge: %w", id, err)
+	}
+	out := make([]ci.GitHubJob, 0, len(jobs))
+	for _, j := range jobs {
+		out = append(out, ci.GitHubJob{
+			ID: j.ID, RunID: j.RunID, RunAttempt: j.RunAttempt, WorkflowName: j.WorkflowName, HeadSHA: j.HeadSHA,
+			Name: j.Name, Status: j.Status, Conclusion: ci.GitHubConclusion(j.Conclusion),
+			CreatedAt: j.CreatedAt, StartedAt: j.StartedAt, CompletedAt: j.CompletedAt, HTMLURL: j.HTMLURL,
+		})
+	}
+	return out, nil
+}
+
+func (a actionsExternalRuns) ExternalCheckRuns(ctx context.Context, repoText, sha, name string) ([]ci.GitHubCheckRun, string, error) {
+	repo, err := a.c.parseRepo(repoText)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := a.c.actionsRepoServed(ctx, repo); err != nil {
+		return nil, "", err
+	}
+	reader, ok := forgeReader[github.CheckRunAttemptsReader](a.c)
+	if !ok {
+		return nil, "", errors.New("this deployment's forge connection cannot list a commit's check runs")
+	}
+	runs, err := reader.ListCheckRunAttempts(repo.StoredOwner(), repo.Name, sha, name)
+	if err != nil {
+		return nil, "", fmt.Errorf("reading the check runs on %s of %s from the forge: %w", sha, repo, err)
+	}
+	app, err := reader.CheckRunApp(repo.StoredOwner(), repo.Name)
+	if err != nil {
+		app = ""
+	}
+	out := make([]ci.GitHubCheckRun, 0, len(runs))
+	for _, r := range runs {
+		run := ci.GitHubCheckRun{
+			ID: r.ID, Name: r.Name, HeadSHA: r.HeadSHA, ExternalID: r.ExternalID, Status: r.Status,
+			StartedAt: r.StartedAt, CompletedAt: r.CompletedAt, HTMLURL: r.HTMLURL,
+		}
+		if r.Conclusion != nil {
+			run.Conclusion = ci.GitHubConclusion(*r.Conclusion)
+		}
+		if r.App != "" {
+			run.App = &ci.GitHubApp{Slug: r.App}
+		}
+		out = append(out, run)
+	}
+	return out, app, nil
 }
 
 func (a actionsExternalRuns) ExternalJobLog(ctx context.Context, id, job string) (string, error) {
