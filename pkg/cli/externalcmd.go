@@ -77,7 +77,7 @@ func readBodyFile(path string) (string, error) {
 // input on the task's page and never in its conversation.
 func cmdReply(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain reply", flag.ContinueOnError)
-	bodyFile := fs.String("body-file", "", "read the reply from this `path` (- for stdin) instead of the words after the id")
+	bodyFile := fs.String("body-file", "", "read the reply from this path (- for stdin) instead of the words after the id")
 	var attach stringList
 	fs.Var(&attach, "attach", "path to a local file to attach to the reply (repeatable)")
 	if err := fs.Parse(args); err != nil {

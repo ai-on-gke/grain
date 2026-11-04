@@ -48,7 +48,7 @@ func respond(ctx context.Context, c *ui.HTTPClient, out *printer, id string) err
 
 func cmdGet(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain get", flag.ContinueOnError)
-	commentsSince := fs.String("comments-since", "", "only the conversation items created strictly after this RFC 3339 `time` -- a polling loop's cursor")
+	commentsSince := fs.String("comments-since", "", "only the conversation items created strictly after this RFC 3339 time -- a polling loop's cursor")
 	rest, err := parseArgs(fs, args)
 	if err != nil {
 		return err
@@ -112,9 +112,9 @@ func cmdCreate(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 	fs := flag.NewFlagSet("grain create", flag.ContinueOnError)
 	title := fs.String("title", "", "task title (required)")
 	body := fs.String("body", "", "task description")
-	bodyFile := fs.String("body-file", "", "read the task description from this `path` (- for stdin) instead of -body")
+	bodyFile := fs.String("body-file", "", "read the task description from this path (- for stdin) instead of -body")
 	var designs stringList
-	fs.Var(&designs, "design", "a design or spec `path` (design/...) this task implements, recorded on its provenance (repeatable)")
+	fs.Var(&designs, "design", "a design or spec path (design/...) this task implements, recorded on its provenance (repeatable)")
 	repo := fs.String("repo", "", "owner/name of the repo this task's work targets")
 	// The requester (Task.Creator) of a task filed from this
 	// workstation's own CLI (ui.CreateTaskRequest.Author). Metadata
