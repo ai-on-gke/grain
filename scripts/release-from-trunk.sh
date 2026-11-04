@@ -80,8 +80,10 @@
 #            retry; INFRA  a job was cancelled, timed out or starved of
 #            capacity and is to be re-run, never counted as red. Either way
 #            the run stops here, and says which jobs to re-run
-#            (qualification_rerun=<stage>:<job>:<flake|infra>,... in
-#            RELEASE_TRAIN_OUTPUT) -- re-running them is the workflow's;
+#            (qualifying_rc=<rc> and
+#            qualification_rerun=<stage>:<job>:<flake|infra>,... in
+#            RELEASE_TRAIN_OUTPUT) -- re-running them is the workflow's
+#            (scripts/release-train-actions.sh);
 #   PASS     it is staged for a person to approve: vM.Y.Z-pending is
 #            tagged on its commit and pushed ("Qualification: PASS"), its
 #            images published as :vM.Y.Z-pending (release-images.sh
@@ -885,6 +887,7 @@ if [ -n "$rc" ]; then
         verdict=pending
         [ "$q_status" = 2 ] || verdict=infra
         emit qualification "$verdict"
+        emit qualifying_rc "$rc"
         [ -z "$reruns" ] || emit qualification_rerun "$reruns"
         if printf '%s\n' "$q_out" | grep -q 'stalled after'; then
           emit qualification_stalled "$rc"

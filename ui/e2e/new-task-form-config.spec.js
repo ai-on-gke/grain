@@ -238,7 +238,7 @@ test("New task from a template takes its layer, switches layers, and files its t
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("heading", { name: "New task" })).toBeVisible();
   const picker = dialog.getByRole("combobox", { name: "Template" });
-  await expect(picker).toContainText("E2E release");
+  await expect(picker).toHaveValue(/E2E release/);
   // The picker sits at the top of the form, above the title it fills.
   expect(await top(picker)).toBeLessThan(
     await top(dialog.getByLabel(/^Title/)),
@@ -443,7 +443,7 @@ test("Task priority follows the picked template and files what it shows", async 
     .click();
   const dialog = page.getByRole("dialog");
   const picker = dialog.getByRole("combobox", { name: "Template" });
-  await expect(picker).toContainText("E2E urgent");
+  await expect(picker).toHaveValue(/E2E urgent/);
   const pane = await dialog.boundingBox();
   const box = await picker.boundingBox();
   expect(box.x).toBeGreaterThanOrEqual(pane.x);
