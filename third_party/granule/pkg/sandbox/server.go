@@ -25,9 +25,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/execwire"
-	"github.com/bwsalmon/granule/pkg/guestexec"
-	"github.com/bwsalmon/granule/pkg/guestforward"
+	"github.com/gke-labs/granule/pkg/execwire"
+	"github.com/gke-labs/granule/pkg/guestexec"
+	"github.com/gke-labs/granule/pkg/guestforward"
 )
 
 // ServerConfig configures a wrapper-side sandbox access Server.

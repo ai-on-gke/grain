@@ -1,7 +1,7 @@
 # Customizing and running granule guest images
 
 A sketch, and a request rather than a plan: everything here is a change to
-[bwsalmon/granule](https://github.com/bwsalmon/granule), not to this
+[bwsalmon/granule](https://github.com/gke-labs/granule), not to this
 repository. `third_party/granule/VENDORED.md` is explicit about the
 direction -- "grain is granule's primary consumer, so a change grain needs
 belongs on granule's `main` and reaches here by a resync, not by being

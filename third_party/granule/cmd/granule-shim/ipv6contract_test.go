@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/granule/pkg/guestimage"
-	"github.com/bwsalmon/granule/pkg/netshim"
+	"github.com/gke-labs/granule/pkg/guestimage"
+	"github.com/gke-labs/granule/pkg/netshim"
 )
 
 // TestIPv6ContractWarning: a guest image older than ContractIPv6 ignores

@@ -16,8 +16,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/execwire"
-	"github.com/bwsalmon/granule/pkg/guestforward"
+	"github.com/gke-labs/granule/pkg/execwire"
+	"github.com/gke-labs/granule/pkg/guestforward"
 )
 
 // DialOptions configures Dial when connecting to a listen-mode wrapper, and

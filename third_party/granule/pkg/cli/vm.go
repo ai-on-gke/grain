@@ -11,9 +11,9 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/dockercli"
-	"github.com/bwsalmon/granule/pkg/dockervm"
-	"github.com/bwsalmon/granule/pkg/vmspec"
+	"github.com/gke-labs/granule/pkg/dockercli"
+	"github.com/gke-labs/granule/pkg/dockervm"
+	"github.com/gke-labs/granule/pkg/vmspec"
 )
 
 // stringList collects a flag that may be repeated, in order. Used for

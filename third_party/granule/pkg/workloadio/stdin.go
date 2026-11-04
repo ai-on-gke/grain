@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/bwsalmon/granule/pkg/execwire"
+	"github.com/gke-labs/granule/pkg/execwire"
 )
 
 // # Stdin

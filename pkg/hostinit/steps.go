@@ -327,12 +327,12 @@ func ensureGranuleCLI(ctx context.Context, sys System, opts Options, r *Result, 
 		return true
 	}
 	why := "built from third_party/granule via go.mod's own replace directive -- never cloned from gke-labs/granule, which this checkout has no access to and does not need"
-	cmd := fmt.Sprintf("go build -o %s github.com/bwsalmon/granule/cmd/granule", opts.GranuleBinaryPath)
+	cmd := fmt.Sprintf("go build -o %s github.com/gke-labs/granule/cmd/granule", opts.GranuleBinaryPath)
 	if opts.DryRun {
 		r.add(Step{Name: name, Status: StepWould, Detail: why, Command: cmd})
 		return false
 	}
-	if _, err := sys.Run(ctx, opts.RepoRoot, goEnv, "go", "build", "-o", opts.GranuleBinaryPath, "github.com/bwsalmon/granule/cmd/granule"); err != nil {
+	if _, err := sys.Run(ctx, opts.RepoRoot, goEnv, "go", "build", "-o", opts.GranuleBinaryPath, "github.com/gke-labs/granule/cmd/granule"); err != nil {
 		r.add(Step{Name: name, Status: StepManual, Detail: fmt.Sprintf("build failed: %v", err), Command: cmd})
 		return false
 	}

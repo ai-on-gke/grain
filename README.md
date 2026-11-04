@@ -22,7 +22,7 @@ release upgrades a 2.0 deployment in place.
 - **Run a backlog, not a prompt.** Queue tasks and let Grain dispatch them as
   capacity becomes available.
 - **Keep agents contained.** By default, every run gets its own
-  [Granule](https://github.com/bwsalmon/granule)-managed VM and scoped access to
+  [Granule](https://github.com/gke-labs/granule)-managed VM and scoped access to
   source repositories and credentials.
 - **Close the delivery loop.** Agents can push branches, open pull requests,
   wait for CI, fix failures, and hand clean changes to the merge queue.

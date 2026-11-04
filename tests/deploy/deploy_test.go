@@ -3473,7 +3473,7 @@ func TestTheGuestBuildScriptsAreSyntacticallyValid(t *testing.T) {
 	for _, file := range []string{"Granulefile", "Granulefile.guest-base"} {
 		out, err := exec.Command("granule", "granulefile", "check", "-f", filepath.Join(repoRoot(t), file)).CombinedOutput()
 		if err != nil {
-			out, err = exec.Command("go", "run", "github.com/bwsalmon/granule/cmd/granule", "granulefile", "check", "-f", filepath.Join(repoRoot(t), file)).CombinedOutput()
+			out, err = exec.Command("go", "run", "github.com/gke-labs/granule/cmd/granule", "granulefile", "check", "-f", filepath.Join(repoRoot(t), file)).CombinedOutput()
 			if err != nil {
 				t.Errorf("checking %s: %v\n%s", file, err, out)
 			}

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/guestexec"
+	"github.com/gke-labs/granule/pkg/guestexec"
 )
 
 // execCall returns the single "docker exec" invocation recorded, failing
