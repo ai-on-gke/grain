@@ -48,7 +48,7 @@ Grain's `openStore` implementation automatically performs startup connection rea
 
 ## 3. Host Provisioning via `scripts/setup.sh`
 
-`scripts/setup.sh` supports database backend configuration via CLI flags or environment variables when generating systemd units (`grain-daemon.service`):
+With no database settings, a fresh `scripts/setup.sh` install provisions a local PostgreSQL server (`grain-postgres.service`). An existing install keeps the store it has. See [database.md](database.md). To point grain at Cloud SQL or another server of your own instead, give its DSN. No local server is provisioned when a DSN is given:
 
 ### Using CLI Flags
 ```bash
