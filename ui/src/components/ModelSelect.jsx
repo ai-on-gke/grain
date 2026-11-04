@@ -12,19 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Autocomplete, TextField } from "@mui/material";
-import { fuzzyFilter } from "../fuzzy.js";
+import SearchSelect from "./SearchSelect.jsx";
 
 // ModelSelect is the one control every Model picker is drawn with: a
-// dropdown over options ({value, label}), searchable by typing any part
-// of a model's name in order (fuzzyFilter) -- a team whose connections
-// advertise every model their providers list has dozens of them, too
-// many to scroll for. It chooses only among options: a model name typed
-// that no option carries is not a choice, because dispatch would refuse
-// it (docs/connections-and-models.md). value "" is a real option (the
-// team's default, or none), never an empty field, so the label stays
-// shrunk over it. settingId is the data-setting-id the Settings filter
-// finds a picker of a Settings section by (settingsIndex.js).
+// SearchSelect over options ({value, label}), searchable by typing words
+// anywhere in a model's name or its letters in order (searchFilter,
+// fuzzy.js) -- a team whose connections advertise every model their
+// providers list has dozens of them, too many to scroll for. It chooses
+// only among options: a model name typed that no option carries is not a
+// choice, because dispatch would refuse it (docs/connections-and-models.md).
+// value "" is a real option (the team's default, or none), never an empty
+// field, so the label stays shrunk over it. settingId is the
+// data-setting-id the Settings filter finds a picker of a Settings section
+// by (settingsIndex.js).
 export default function ModelSelect({
   label,
   name,
@@ -38,58 +38,22 @@ export default function ModelSelect({
   size = "small",
   fullWidth = true,
 }) {
-  const current = value ?? "";
-  const labels = new Map(options.map((o) => [o.value, o.label]));
-  const values = options.map((o) => o.value);
-  if (!labels.has(current)) {
-    values.push(current);
-    labels.set(current, current);
-  }
-  const labelOf = (v) => labels.get(v) ?? String(v ?? "");
   return (
-    <Autocomplete
+    <SearchSelect
       data-setting-id={settingId}
-      options={values}
-      value={current}
+      label={label}
+      name={name}
+      alwaysHiddenInput
+      shrinkLabel
+      placeholder="Type to search models"
+      value={value ?? ""}
+      options={options}
+      onChange={(next) => onChange(next ?? "")}
+      helperText={helperText}
       disabled={disabled}
-      disableClearable
-      autoHighlight
-      fullWidth={fullWidth}
+      margin={margin}
       size={size}
-      getOptionLabel={labelOf}
-      filterOptions={(opts, state) =>
-        fuzzyFilter(opts, state.inputValue, labelOf)
-      }
-      onChange={(_event, next) => onChange(next ?? "")}
-      renderOption={(props, option) => {
-        const { key, ...rest } = props;
-        return (
-          <li key={key} {...rest} data-value={option}>
-            {labelOf(option)}
-          </li>
-        );
-      }}
-      renderInput={(params) => (
-        <TextField
-          {...params}
-          label={label}
-          helperText={helperText}
-          margin={margin}
-          placeholder="Type to search models"
-          InputLabelProps={{ ...params.InputLabelProps, shrink: true }}
-          InputProps={{
-            ...params.InputProps,
-            // The value itself, as a select's hidden input carries it:
-            // the visible input holds the option's label, not the model.
-            endAdornment: (
-              <>
-                <input type="hidden" name={name} value={current} />
-                {params.InputProps.endAdornment}
-              </>
-            ),
-          }}
-        />
-      )}
+      fullWidth={fullWidth}
     />
   );
 }

@@ -18,6 +18,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import api from "../api.js";
 import ModelBackendPage from "./ModelBackendPage.jsx";
+import { optionValues } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 
@@ -126,6 +127,12 @@ describe("ModelBackendPage", () => {
       "Reuse authentication from backend-aaa",
       "Reuse authentication from backend-bbb",
     ]);
+
+    const auth = screen.getByRole("combobox", {
+      name: /Authentication method/,
+    });
+    await user.type(auth, "claude team");
+    expect(optionValues(auth)).toEqual(["reuse:backend-named"]);
   });
 
   it("does not offer the removed custom command type", async () => {

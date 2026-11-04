@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // Regressions from the 2026-10-23 user and system settings walkthrough
 // (docs/test-runs/2026-10-23-user-system-settings.md), driven through the
@@ -55,7 +56,22 @@ test.describe("user and system settings walkthrough regressions", () => {
     await page.goto("/settings/preferences");
     const zone = page.getByRole("combobox", { name: "Time zone" });
     try {
-      await zone.selectOption("Asia/Tokyo");
+      // Open and verify SearchSelect layout geometry and mid-word filtering.
+      await zone.click();
+      await zone.fill("tokyo");
+      const listbox = page.getByRole("listbox");
+      await expect(listbox).toBeVisible();
+      const fieldBox = await zone
+        .locator(
+          "xpath=ancestor::div[contains(@class,'MuiOutlinedInput-root')]",
+        )
+        .boundingBox();
+      const listBox = await listbox.boundingBox();
+      expect(listBox.y).toBeGreaterThanOrEqual(
+        fieldBox.y + fieldBox.height - 2,
+      );
+      expect(listBox.width).toBeGreaterThanOrEqual(fieldBox.width - 2);
+      await chooseOption(zone, "Asia/Tokyo");
       await page.goto("/inbox");
       const row = page.locator("section.inbox-group", {
         hasText: "grain/config",
@@ -63,12 +79,12 @@ test.describe("user and system settings walkthrough regressions", () => {
       await expect(row.locator(".inbox-note")).toContainText(inTokyo);
 
       await page.goto("/settings/preferences");
-      await zone.selectOption("UTC");
+      await chooseOption(zone, "UTC");
       await page.goto("/inbox");
       await expect(row.locator(".inbox-note")).toContainText(inUTC);
     } finally {
       await page.goto("/settings/preferences");
-      await zone.selectOption("");
+      await chooseOption(zone, "");
     }
   });
 

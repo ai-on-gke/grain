@@ -54,12 +54,16 @@ import { identifierField } from "../identifierField.js";
 // and attach params.InputProps.ref to the element the list hangs under.
 export default function SearchSelect({
   name,
+  alwaysHiddenInput = false,
   options,
   value,
   defaultValue = "",
   onChange,
   typedOption,
   label,
+  shrinkLabel = false,
+  inputAriaLabel,
+  margin,
   helperText,
   placeholder,
   disabled,
@@ -68,6 +72,7 @@ export default function SearchSelect({
   size = "small",
   fullWidth = true,
   renderInput,
+  renderRow,
   className,
   noOptionsText = "No matches",
   ...rest
@@ -85,7 +90,13 @@ export default function SearchSelect({
     all.push(own);
     byValue.set(current, own);
   }
-  const optionOf = (v) => byValue.get(v) ?? null;
+  const optionOf = (v) => {
+    const found = byValue.get(v) ?? null;
+    // A disabled "" row is an unpicked placeholder ("Choose a template"),
+    // not a chosen value: leaving the box empty lets the user type at once.
+    if (found?.disabled && v === "") return null;
+    return found;
+  };
   const matchText = (o) => o.match ?? o.label;
 
   const choose = (next) => {
@@ -105,6 +116,7 @@ export default function SearchSelect({
       size={size}
       noOptionsText={noOptionsText}
       isOptionEqualToValue={(o, v) => o.value === v.value}
+      getOptionDisabled={(o) => Boolean(o.disabled)}
       getOptionLabel={(o) => o?.label ?? ""}
       // Ranges ride on the filtered rows so renderOption can highlight
       // them without matching a second time.
@@ -120,9 +132,26 @@ export default function SearchSelect({
         const hits = searching
           ? searchFilter(searchable, query, matchText).map(
               ({ item, ranges }) =>
-                matchText(item) === item.label ? { ...item, ranges } : item,
+                matchText(item) === item.label
+                  ? { ...item, ranges }
+                  : {
+                      ...item,
+                      ranges: searchFilter([item.label], query)[0]?.ranges,
+                    },
             )
           : searchable;
+        if (rest.groupBy && searching) {
+          const groupOrder = [];
+          for (const o of searchable) {
+            const g = rest.groupBy(o);
+            if (!groupOrder.includes(g)) groupOrder.push(g);
+          }
+          hits.sort(
+            (a, b) =>
+              groupOrder.indexOf(rest.groupBy(a)) -
+              groupOrder.indexOf(rest.groupBy(b)),
+          );
+        }
         const extra =
           typed && !hits.some((o) => o.value === typed.value) ? [typed] : [];
         return [...hits, ...extra, ...pinned];
@@ -143,9 +172,11 @@ export default function SearchSelect({
             data-value={option.value}
             data-label={option.label}
           >
-            {option.row ?? (
-              <HighlightedText text={option.label} ranges={option.ranges} />
-            )}
+            {renderRow
+              ? renderRow(option)
+              : (option.row ?? (
+                  <HighlightedText text={option.label} ranges={option.ranges} />
+                ))}
           </li>
         );
       }}
@@ -157,6 +188,7 @@ export default function SearchSelect({
           ...base,
           inputProps: {
             ...base.inputProps,
+            ...(inputAriaLabel ? { "aria-label": inputAriaLabel } : {}),
             onBlur: (e) => {
               const typed = typedOption?.(e.target.value.trim());
               if (typed && typed.value !== current) choose(typed.value);
@@ -164,9 +196,10 @@ export default function SearchSelect({
             },
           },
         };
-        const hidden = name ? (
-          <input type="hidden" name={name} value={current ?? ""} />
-        ) : null;
+        const hidden =
+          name || alwaysHiddenInput ? (
+            <input type="hidden" name={name} value={current ?? ""} />
+          ) : null;
         if (renderInput) {
           return (
             <>
@@ -182,9 +215,15 @@ export default function SearchSelect({
             // not capitalize or "correct" what is typed into it.
             inputProps={{ ...params.inputProps, ...identifierField }}
             label={label}
+            margin={margin}
             helperText={helperText}
             placeholder={placeholder}
             required={required}
+            InputLabelProps={
+              shrinkLabel
+                ? { ...params.InputLabelProps, shrink: true }
+                : params.InputLabelProps
+            }
             InputProps={{
               ...params.InputProps,
               endAdornment: (

@@ -35,7 +35,7 @@ test.describe("A release URL naming no release of the repo", () => {
       // The address stops naming it, and the page is the release list.
       await expect(page).toHaveURL(/\/repos\/acme\/widgets\/releases$/);
       const picker = page.getByRole("combobox", { name: "Release" });
-      await expect(picker).toContainText("1.0");
+      await expect(picker).toHaveValue(/^1\.0 -- /);
 
       // Above the picker, and inside the page rather than overflowing a
       // phone's width.
