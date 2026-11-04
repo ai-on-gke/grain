@@ -264,3 +264,147 @@ func TestLocalScriptApprovalRefusedWithoutTheCapability(t *testing.T) {
 		t.Fatalf("err %v: want 403 for a task holding no local-scripts capability", err)
 	}
 }
+
+func TestHostScriptGrantAndScopedCallbackToken(t *testing.T) {
+	t.Parallel()
+	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := model.New(db)
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	approvals := &ui.LocalScriptApprovals{}
+	client := ui.NewClient(ui.Config{
+		Actor:                ui.DefaultActor("alice"),
+		DefaultTarget:        &repo,
+		Capabilities:         ui.OfferedCapabilities(),
+		LocalAPIToken:        "daemon-secret-token",
+		LocalScriptApprovals: approvals,
+	}, store)
+	task := create(t, client, ctx)
+	other := create(t, client, ctx)
+	for _, id := range []string{task.ID, other.ID} {
+		if err := store.UpdateTask(ctx, id, func(tk *model.Task) error {
+			tk.Grants = append(tk.Grants, model.Grant{
+				Capability: `https://grain.dev/capabilities/host-script#host-script={"script":"ops-deploy"}`,
+				Via:        model.GrantByDefault,
+			})
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	handler := ui.NewServerWithClient(client)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	cbTok, err := approvals.MintToken(task.ID, time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(cbTok, "ghsa_") {
+		t.Fatalf("callback token = %q, want ghsa_ prefix", cbTok)
+	}
+
+	// End-to-end HTTPApprover using only the scoped ghsa_ token (while LocalAPIToken is set).
+	person := serverAccessClient(handler, srv.URL)
+	approver := localexec.HTTPApprover{BaseURL: srv.URL, TaskID: task.ID, Token: cbTok}
+	done := make(chan error, 1)
+	go func() {
+		req := localexec.Request{
+			ID: "hs-1", Tool: "grain host-script ops-deploy", Script: "ops-deploy",
+			Args: []string{"prod"}, Deadline: time.Now().Add(time.Minute),
+		}
+		req.SetStdin([]byte("manifest: ok\n"))
+		ok, err := approver.Approve(ctx, req)
+		if err != nil {
+			done <- err
+			return
+		}
+		if !ok {
+			done <- localexec.ErrDenied
+			return
+		}
+		done <- nil
+	}()
+
+	// Wait for the approval to appear on the task, verify the callback token cannot answer it or access other routes/tasks.
+	var approvalID string
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		detail, err := client.GetTask(ctx, task.ID)
+		if err == nil && len(detail.LocalScriptApprovals) == 1 {
+			approvalID = detail.LocalScriptApprovals[0].ID
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if approvalID == "" {
+		t.Fatal("host-script approval never appeared on task")
+	}
+
+	cbHdr := map[string]string{"Authorization": "Bearer " + cbTok, "Content-Type": "application/json"}
+	// Answering with the callback token must be 403/401 (never allowed).
+	if rec := doWithHeaders(t, handler, http.MethodPost, "/api/tasks/"+task.ID+"/local-script-approvals/"+approvalID+"/answer", `{"approve":true}`, cbHdr); rec.Code != http.StatusUnauthorized && rec.Code != http.StatusForbidden {
+		t.Errorf("callback token answering own approval got %d %s, want 401/403", rec.Code, rec.Body.String())
+	}
+	// Posting an approval for another task with task.ID's token must be rejected.
+	if rec := doWithHeaders(t, handler, http.MethodPost, "/api/tasks/"+other.ID+"/local-script-approvals", `{"id":"x","tool":"t","script":"s"}`, cbHdr); rec.Code != http.StatusUnauthorized && rec.Code != http.StatusForbidden {
+		t.Errorf("callback token posting to another task got %d %s, want 401/403", rec.Code, rec.Body.String())
+	}
+	// General API routes remain closed to the callback token.
+	if rec := doWithHeaders(t, handler, http.MethodGet, "/api/config", "", cbHdr); rec.Code != http.StatusUnauthorized && rec.Code != http.StatusForbidden {
+		t.Errorf("callback token reading /api/config got %d %s, want 401/403", rec.Code, rec.Body.String())
+	}
+
+	// Person approves -> HTTPApprover returns ok.
+	if _, err := person.AnswerLocalScriptApproval(ctx, task.ID, approvalID, true); err != nil {
+		t.Fatalf("person answering: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("HTTPApprover = %v, want nil", err)
+	}
+
+	// Revoked token is immediately rejected, and cancelled Approve expires the pending call.
+	cbTok2, err := approvals.MintToken(task.ID, time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelCtx, cancel := context.WithCancel(ctx)
+	approver2 := localexec.HTTPApprover{BaseURL: srv.URL, TaskID: task.ID, Token: cbTok2}
+	done2 := make(chan error, 1)
+	go func() {
+		_, err := approver2.Approve(cancelCtx, localexec.Request{
+			ID: "hs-2", Tool: "grain host-script ops-deploy", Script: "ops-deploy",
+			Deadline: time.Now().Add(time.Minute),
+		})
+		done2 <- err
+	}()
+	for time.Now().Before(time.Now().Add(5 * time.Second)) {
+		detail, _ := client.GetTask(ctx, task.ID)
+		if len(detail.LocalScriptApprovals) == 2 && detail.LocalScriptApprovals[1].Status == ui.LocalScriptPending {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done2
+	detail, err := client.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.LocalScriptApprovals) != 2 || detail.LocalScriptApprovals[1].Status != ui.LocalScriptExpired {
+		t.Errorf("cancelled HTTPApprover left approval %+v, want expired", detail.LocalScriptApprovals)
+	}
+
+	approvals.RevokeToken(cbTok2)
+	if _, err := approver2.Approve(ctx, localexec.Request{ID: "hs-3", Tool: "t", Script: "s", Deadline: time.Now().Add(time.Minute)}); err == nil {
+		t.Errorf("revoked callback token was accepted")
+	}
+}

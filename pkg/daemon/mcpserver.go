@@ -1960,13 +1960,6 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 			"to carry the pipeline-changes cursor (agent.RunConfig.ToolBudgetPipelineCursor)")
 	recordedTools := fs.String("recorded-tools", "",
 		"path to append full tool call records (JSON lines) as tools run")
-	var localScriptsList LocalScriptsFlags
-	fs.Var(&localScriptsList, "local-scripts",
-		"NAME=PATH, repeatable: a local-scripts declaration this run is served as local_<script> tools, "+
-			"snapshotted when this process starts (agent.RunConfig.LocalScripts, docs/local-scripts.md)")
-	localScriptsEnvFile := fs.String("local-scripts-env-file", "",
-		"path of a 0600 JSON file of the secrets -local-scripts' scripts are delivered, by secret name "+
-			"(localscripts.WriteCredentialsFile); never the values themselves in argv")
 	surface := fs.String("mcp-surface", "",
 		"which tools to serve: \"control\" (the sandbox tools, the run-ending and escalation tools and the "+
 			"model-only grants' tools; everything else is a `grain` CLI command inside the sandbox) or \"full\" "+
@@ -2375,12 +2368,6 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 	}
 
 	registry.Register(GrantedDaemonTools(grants, *grainSrcDir, *grainSecretsDir, *grainStateDir, *taskID, client)...)
-	// Local scripts: snapshotted now, at the start of the run, and closed
-	// -- anything still running killed -- when this process's Serve
-	// returns, which is when the run ends.
-	localTools, closeLocal := localScriptTools(localScriptsList, *localScriptsEnvFile, grants, client != nil, client, *taskID)
-	defer closeLocal()
-	registry.Register(localTools...)
 	if grants.Has(readissues.CapabilityName) {
 		registry.Register(issueTools(*dataDir, *githubHost, *githubInsecureHTTP, *prRepo, *prCredential)...)
 	}
@@ -2413,7 +2400,7 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 	control := ResolveMCPSurface(*surface, *granuleVM != "" || *root != "" || *container != "" || *k8sPod != "") == MCPSurfaceControl
 	registry.WordToolBudget(mcp.ToolBudgetWording{CLI: control, PipelineCursor: *toolBudgetPipelineCursor})
 	if control {
-		keep := controlRoster(tools, localTools, grants,
+		keep := controlRoster(tools, grants,
 			taskDetail.Task.ChangeTargetKind != "" || len(taskDetail.Task.Changelists) > 0)
 		registry.Retain(func(name string) bool { return keep[name] })
 	}

@@ -415,6 +415,15 @@ func wakeCycle() {
 // dispatched nothing.
 var sandboxRecreations = orchestrator.NewSandboxRecreations()
 
+// localScriptApprovals is the shared approval queue for host-script
+// (approve: true), handed to startUIServer and minted callback tokens
+// from in runDaemon. localScriptApprovalURL holds the loopback HTTP base
+// URL startUIServer serves callbacks on.
+var (
+	localScriptApprovals   = &ui.LocalScriptApprovals{}
+	localScriptApprovalURL atomic.Value
+)
+
 // standingSandboxes supervises this deployment's standing sandboxes (the
 // grain/config standing_sandbox tables): the reconcile loop's
 // "standing-sandboxes" step launches and restarts them through it, and the
