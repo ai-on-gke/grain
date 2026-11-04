@@ -34,14 +34,27 @@ for (const [name, viewport] of [
     await expect(config).toBeVisible();
     // A table on a wide screen, one block per entry on a phone.
     const rows = config.locator('[data-testid^="config-audit-row-"]');
-    await expect(rows).toHaveCount(4);
-    // Newest first: alice's settings change 40 minutes ago, then the
-    // operator's a day ago last.
-    await expect(rows.first()).toContainText("alice@example.com");
-    await expect(rows.first()).toContainText("max concurrent runs");
-    await expect(rows.last()).toContainText("operator (access code)");
-    await expect(rows.last()).toContainText("default model set to");
+    // The demo server is shared by the suite's workers, so other specs'
+    // settings saves add rows of their own: find the seeded ones by what
+    // they say rather than counting.
+    const alice = rows.filter({ hasText: "max concurrent runs 4 → 6" });
+    const operator = rows.filter({ hasText: "default model set to" });
+    await expect(alice).toContainText("alice@example.com");
+    await expect(operator).toContainText("operator (access code)");
     await expect(config).toContainText("schedule:nightly-triage");
+    // Newest first: ids only grow, so they fall down the list, and alice's
+    // change 40 minutes ago sits above the operator's a day ago.
+    const ids = await rows.evaluateAll((els) =>
+      els.map((el) => Number(el.dataset.testid.split("-").pop())),
+    );
+    expect(ids).toEqual([...ids].sort((a, b) => b - a));
+    const aliceId = Number(
+      (await alice.getAttribute("data-testid")).split("-").pop(),
+    );
+    const operatorId = Number(
+      (await operator.getAttribute("data-testid")).split("-").pop(),
+    );
+    expect(ids.indexOf(aliceId)).toBeLessThan(ids.indexOf(operatorId));
 
     const team = page.getByTestId("team-audit-table");
     await expect(team).toContainText("push demo/gadgets");
@@ -75,12 +88,9 @@ for (const [name, viewport] of [
     if (name === "phone") {
       await expect(config).toHaveAttribute("data-layout", "stacked");
       // The label column lines up down an entry, with its value beside it.
-      const who = rows.first().getByText("Who", { exact: true });
+      const who = alice.getByText("Who", { exact: true });
       const whoBox = await who.boundingBox();
-      const value = await rows
-        .first()
-        .getByText("alice@example.com")
-        .boundingBox();
+      const value = await alice.getByText("alice@example.com").boundingBox();
       expect(value.x).toBeGreaterThan(whoBox.x + whoBox.width - 1);
       expect(Math.abs(value.y - whoBox.y)).toBeLessThan(4);
     }
@@ -90,8 +100,8 @@ for (const [name, viewport] of [
       const box = await config.boundingBox();
       const card = await page.locator("#config-audit").boundingBox();
       expect(box.width).toBeLessThanOrEqual(card.width + 1);
-      const who = await rows.first().locator("td").nth(1).boundingBox();
-      const change = await rows.first().locator("td").nth(3).boundingBox();
+      const who = await alice.locator("td").nth(1).boundingBox();
+      const change = await alice.locator("td").nth(3).boundingBox();
       expect(change.x).toBeGreaterThan(who.x + who.width - 1);
       expect(Math.abs(change.y - who.y)).toBeLessThan(2);
     }
