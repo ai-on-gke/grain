@@ -56,7 +56,10 @@ registry the cluster can pull from (the deployment's own
 cluster's project) and push them; the Deployment's `image:` and
 `-k8s-sandbox-image` then name those pushed refs.
 Releases from before release assets are still at
-`ghcr.io/bwsalmon/grain/{grain,k8s-sandbox}`.
+`ghcr.io/bwsalmon/grain/{grain,k8s-sandbox}`, which is what the manifests in
+this directory name until you replace those refs with your pushed ones;
+`scripts/migrate-local-to-gke.sh --mirror <registry/path>` does the push
+for a host that was installed from release assets.
 
 **A sandbox image.** The release's `k8s-sandbox` image comes
 with all three supported agent CLIs (`claude`, `agy`, and `codex`), `git`,
