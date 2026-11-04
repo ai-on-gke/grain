@@ -114,18 +114,26 @@ func reviewCommentsSection(client PullRequestReader, commenter PullRequestCommen
 		return ""
 	}
 	var threads []github.ReviewThread
+	unread := ""
 	if commenter != nil {
 		// Best effort: the thread view is GraphQL, which a credential or
 		// a host may not offer, and the comments are worth showing
-		// without it.
+		// without it. Its refusal is still said, though: without it a
+		// run reads "no resolution state" as "nothing left open", and
+		// the refusal's own note (a GitHub Enterprise Server's
+		// /api/graphql answering 401 while REST works, say) is what an
+		// operator needs to see.
 		read, err := commenter.ListReviewThreads(prOwner, prRepo, number)
 		if err == nil {
 			threads = read
+		} else {
+			unread = fmt.Sprintf("Whether each thread is resolved could not be read: %v\n", err)
 		}
 	}
-	return "\n" + renderReviewComments(comments, threads) +
-		"Answer one with reply_to_pull_request_comment (comment_id and body), and mark its " +
-		"conversation resolved with resolve_review_thread once it is dealt with -- a " +
+	return "\n" + renderReviewComments(comments, threads) + unread +
+		"Answer one with `grain pr reply <body> --comment-id <id>` (reply_to_pull_request_comment, " +
+		"comment_id and body, where this server lists it), and mark its conversation resolved " +
+		"with `grain pr resolve --comment-id <id>` (resolve_review_thread) once it is dealt with -- a " +
 		"repository that requires conversation resolution will not merge this pull " +
 		"request while any thread is open.\n"
 }

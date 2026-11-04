@@ -122,7 +122,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !checkCrossOrigin(w, r) {
 		return
 	}
-	serveRecovered(w, r, http.HandlerFunc(s.serveHTTP))
+	withCompression(w, r, func(w http.ResponseWriter, r *http.Request) {
+		serveRecovered(w, r, http.HandlerFunc(s.serveHTTP))
+	})
 }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
@@ -245,6 +247,7 @@ func (s *Server) routes() {
 	s.route("GET /api/auth/logout", s.handleAuthLogout)
 	s.route("GET /api/auth/user", s.handleAuthUser)
 	s.route("GET /api/auth/status", s.handleAuthUser)
+	s.route("GET /api/auth/whoami", s.handleAuthWhoami)
 	s.route("GET /api/whoami", s.handleWhoami)
 	s.route("GET /api/settings", s.handleGetSettings)
 	s.route("PUT /api/settings", s.handleUpdateSettings)
@@ -298,6 +301,11 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/force-merge", s.handleForceMerge)
 	s.route("POST /api/tasks/{id}/run-now", s.handleRunNow)
 	s.route("POST /api/tasks/{id}/pull-request", s.handleOpenPullRequest)
+	// A pull request grain did not open (pull_requests_api.go, #XC-28,
+	// #XC-29): adopt it, review it, or report where it stands.
+	s.route("POST /api/pull-requests/adopt", s.handleAdoptPullRequest)
+	s.route("POST /api/pull-requests/review", s.handleReviewPullRequest)
+	s.route("GET /api/pull-requests/status", s.handlePullRequestStatus)
 	s.route("POST /api/tasks/{id}/sandbox/recreate", s.handleRecreateSandbox)
 	s.route("POST /api/sandbox-probe", s.handleSandboxProbe)
 	s.route("POST /api/tasks/{id}/activity", s.handleSetTaskActivity)

@@ -47,15 +47,15 @@ func gcpServerWithSets(names ...string) map[string]protocol.ServerConfig {
 	}
 }
 
-func migrateFrom106(t *testing.T, ctx context.Context, db *sql.DB) {
+func migrateFrom108(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
-	rewindSchemaTo(t, ctx, db, 106)
+	rewindSchemaTo(t, ctx, db, 108)
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-106 store: %v", err)
+		t.Fatalf("migrating a version-108 store: %v", err)
 	}
 }
 
-func TestMigration107PostgresRewritesAndNotesMissingSets(t *testing.T) {
+func TestMigration109PostgresRewritesAndNotesMissingSets(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 
@@ -84,7 +84,7 @@ func TestMigration107PostgresRewritesAndNotesMissingSets(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	migrateFrom106(t, ctx, db)
+	migrateFrom108(t, ctx, db)
 
 	wantIAP := `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"iap-test","primary":true}`
 	wantDefault := `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true}`

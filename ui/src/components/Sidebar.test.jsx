@@ -1129,6 +1129,34 @@ describe("Sidebar", () => {
     expect(onSetFilter).toHaveBeenCalledWith("merged");
   });
 
+  // 2026-11-04 walkthrough: closed work is paged in 200 at a time, and
+  // the rail counted only what had been read -- "Closed 200" on a
+  // deployment with 205.
+  it("counts closed and merged work not yet paged in", () => {
+    const tasks = [
+      { id: "1", state: "closed", prMergedAt: "2026-09-26T00:00:00Z" },
+      { id: "2", state: "closed", endedAt: null },
+      { id: "3", state: "running" },
+    ];
+    render(
+      <Sidebar
+        {...baseProps}
+        config={null}
+        tasks={tasks}
+        unseenClosed={{ closed: 4, merged: 2 }}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: /Merged 3/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Closed 5/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^Tasks 9/ }),
+    ).toBeInTheDocument();
+  });
+
   it("shows the environment name beside the wordmark when one is configured", () => {
     render(
       <Sidebar

@@ -112,7 +112,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/execwire"
+	"github.com/gke-labs/granule/pkg/execwire"
 )
 
 // terminateGrace is how long a command has between the SIGTERM that asks

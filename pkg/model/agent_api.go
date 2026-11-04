@@ -163,6 +163,15 @@ var apiPresets = []APIPreset{
 		"and tasks, the persistent sandboxes' status, and its release-notes task",
 		Scopes:    []APIScope{"ci:read", "tasks:read", "sandboxes:read", "tasks:from-template"},
 		Templates: []string{"release-notes"}},
+	// The two sets an external agent credential is issued with
+	// (design/spec/external-cli/external-cli.spec.md#XC-16): neither
+	// holds a dangerous scope, so neither needs a person to issue.
+	{Name: "external-dev", Description: "What a workstation coding agent needs: file and follow tasks, " +
+		"drive their CI and merges, and read repositories, templates and deployment status",
+		Scopes: []APIScope{"tasks:read", "tasks:write", "ci:read", "ci:write", "merge:write",
+			"repos:read", "templates:read", "deployment:read"}},
+	{Name: "external-read", Description: "Read-only observer: read tasks, CI, repositories, templates and deployment status",
+		Scopes: []APIScope{"tasks:read", "ci:read", "repos:read", "templates:read", "deployment:read"}},
 }
 
 // apiAliasCapabilities are the older capabilities that are now aliases
@@ -585,6 +594,9 @@ func CanonicalLegacyGrants(name string) []string {
 	if many, ok := legacyGrantMultiReplacements[trimmed]; ok {
 		return slices.Clone(many)
 	}
+	if many, ok := runtimeExpansion(trimmed); ok {
+		return many
+	}
 	return []string{CanonicalLegacyGrant(name)}
 }
 
@@ -598,7 +610,7 @@ func RetiredGrantNames() []string {
 	for name := range legacyGrantMultiReplacements {
 		names = append(names, name)
 	}
-	return names
+	return append(names, runtimeExpansionNames()...)
 }
 
 // APIAliasPreset returns the preset name that a bare capability name aliases,

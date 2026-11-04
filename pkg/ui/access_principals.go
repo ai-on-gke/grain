@@ -27,16 +27,19 @@ import (
 )
 
 // AccessPrincipalsResponse is GET /api/access/principals: the database-backed
-// allowed users and groups list plus any non-user/group entries dropped during
+// allowed users, groups and service accounts plus any entries dropped during
 // one-time migration off `-ui-allowed-principals` / `$GRAIN_ALLOWED_PRINCIPALS`.
 type AccessPrincipalsResponse struct {
 	Entries            []model.AllowedPrincipal `json:"entries"`
 	DroppedFlagEntries []string                 `json:"droppedFlagEntries,omitempty"`
 }
 
-// AllowPrincipalRequest is POST /api/access/principals.
+// AllowPrincipalRequest is POST /api/access/principals. Reason is why the
+// entry is added; it is required for a serviceAccount: entry and may come
+// from the X-Grain-Acting-Reason header instead.
 type AllowPrincipalRequest struct {
-	Entry string `json:"entry"`
+	Entry  string `json:"entry"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // AllowPrincipalResponse is the response to POST /api/access/principals.
@@ -70,9 +73,10 @@ func actingReasonFromContext(ctx context.Context) string {
 // deprecated `-ui-allowed-principals` flag (or `$GRAIN_ALLOWED_PRINCIPALS`)
 // into the database at most once when the database list is empty. On every
 // subsequent startup where the flag or environment variable is still set, it
-// logs a deprecation warning and ignores the flag. Unsupported prefixes
-// (`serviceAccount:`, `domain:`) are never imported; each dropped entry is
-// logged and recorded so Settings -> Access can surface it.
+// logs a deprecation warning and ignores the flag. `serviceAccount:` entries
+// are never imported -- an operator adds each one deliberately, with a
+// reason -- and neither are unsupported `domain:` entries; each dropped
+// entry is logged and recorded so Settings -> Access can surface it.
 func (c *Client) MigrateAllowedPrincipals(ctx context.Context) error {
 	if c == nil || c.Store == nil {
 		return nil
@@ -93,8 +97,8 @@ func (c *Client) MigrateAllowedPrincipals(ctx context.Context) error {
 	for _, r := range raw {
 		for _, item := range SplitAllowedPrincipals(r) {
 			prefix, email, canonical, err := model.NormalizeAllowedPrincipalEntry(item)
-			if err == nil {
-				if prefix == "user" && pool[email] {
+			if err == nil && prefix != "serviceAccount" {
+				if pool[email] {
 					dropped = append(dropped, item)
 					continue
 				}
@@ -128,7 +132,7 @@ func (c *Client) MigrateAllowedPrincipals(ctx context.Context) error {
 			source, source)
 	}
 	for _, d := range dropped {
-		log.Printf("grain access: WARNING: dropped %q from %s during migration -- only user:<email> and group:<email> entries are supported in the database allowlist", d, source)
+		log.Printf("grain access: WARNING: dropped %q from %s during migration -- only user:<email> and group:<email> entries are imported; add a service account deliberately with 'grain access allow serviceAccount:<email> --reason <why>'", d, source)
 	}
 
 	summary := fmt.Sprintf("imported %d allowed principal(s) from deprecated %s", len(names), source)
@@ -188,8 +192,11 @@ func (c *Client) ListAllowedPrincipals(ctx context.Context) (AccessPrincipalsRes
 	}, nil
 }
 
-// AllowPrincipal adds a `user:<email>` or `group:<email>` entry to the
-// database allowlist. Adding an existing entry is an idempotent no-op.
+// AllowPrincipal adds a `user:<email>`, `group:<email>` or
+// `serviceAccount:<email>` entry to the database allowlist. A
+// serviceAccount: entry needs a reason, and an account whose key grain hands
+// to tasks (the gcp-key / gcp permission-set pools) is always refused.
+// Adding an existing entry is an idempotent no-op.
 func (c *Client) AllowPrincipal(ctx context.Context, req AllowPrincipalRequest) (AllowPrincipalResponse, error) {
 	if err := c.MigrateAllowedPrincipals(ctx); err != nil {
 		return AllowPrincipalResponse{}, err
@@ -198,16 +205,23 @@ func (c *Client) AllowPrincipal(ctx context.Context, req AllowPrincipalRequest) 
 	if err != nil {
 		return AllowPrincipalResponse{}, validationErrorf("%v", err)
 	}
-	if prefix == "user" && c.gcpKeyPoolSet(ctx)[email] {
-		return AllowPrincipalResponse{}, validationErrorf("allowed principal %q names a gcp-key agent service account and cannot be admitted", canonical)
+	if prefix != "group" && c.gcpKeyPoolSet(ctx)[email] {
+		return AllowPrincipalResponse{}, validationErrorf("allowed principal %q names a grain-managed service account whose key is handed to task sandboxes and cannot be admitted", canonical)
 	}
-	p, created, err := c.Store.AddAllowedPrincipal(ctx, canonical, writerName(ctx), c.now())
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		reason = actingReasonFromContext(ctx)
+	}
+	if prefix == "serviceAccount" && reason == "" {
+		return AllowPrincipalResponse{}, validationErrorf("allowed principal %q: give a reason to admit a service account (it gets full operator access)", canonical)
+	}
+	p, created, err := c.Store.AddAllowedPrincipal(ctx, canonical, writerName(ctx), reason, c.now())
 	if err != nil {
 		return AllowPrincipalResponse{}, err
 	}
 	if created {
 		summary := "allowed " + p.Entry
-		if reason := actingReasonFromContext(ctx); reason != "" {
+		if reason != "" {
 			summary += " (" + reason + ")"
 		}
 		c.auditAccessChange(ctx, summary)
@@ -215,8 +229,7 @@ func (c *Client) AllowPrincipal(ctx context.Context, req AllowPrincipalRequest) 
 	return AllowPrincipalResponse{Principal: p, Created: created}, nil
 }
 
-// DenyPrincipal removes a `user:<email>` or `group:<email>` entry from the
-// database allowlist.
+// DenyPrincipal removes an entry from the database allowlist.
 func (c *Client) DenyPrincipal(ctx context.Context, rawEntry string) (DenyPrincipalResponse, error) {
 	if err := c.MigrateAllowedPrincipals(ctx); err != nil {
 		return DenyPrincipalResponse{}, err

@@ -663,7 +663,7 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 			return fmt.Errorf("staterepo: %w", err)
 		}
 	} else {
-		// One-release compatibility (schema 107): accept old-form gcp#gcp-key
+		// One-release compatibility (schema 109): accept old-form gcp#gcp-key
 		// grants carrying "account" or "activate" in grain/config files at the
 		// current schema so applying them does not fail, and rewrite them in
 		// the database so the next export writes canonical permission_set

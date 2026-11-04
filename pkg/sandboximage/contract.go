@@ -23,7 +23,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bwsalmon/granule/pkg/guestimage"
+	"github.com/gke-labs/granule/pkg/guestimage"
 )
 
 // Contract is the version of the Grain-to-sandbox boundary this build of Grain

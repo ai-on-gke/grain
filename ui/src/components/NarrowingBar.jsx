@@ -15,7 +15,6 @@
 import { useState } from "react";
 import {
   Button,
-  Checkbox,
   Chip,
   IconButton,
   ListItemText,
@@ -468,13 +467,8 @@ function ConditionValue({ row, attr, cond, tasks, config, onChange }) {
         options={fullOptions.map((o) => ({
           value: o.value,
           label: o.label,
-          renderRow: (text, { selected }) => (
+          renderRow: (text) => (
             <>
-              <Checkbox
-                size="small"
-                checked={selected}
-                sx={{ p: 0.5, mr: 0.5 }}
-              />
               {/* The figure of the kind this value names, where it names
                   one -- a repo, a schedule, a suite (ItemGlyph.jsx,
                   grain/task-38). One glyphed option glyphs the whole menu,

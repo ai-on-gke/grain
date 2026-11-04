@@ -379,7 +379,7 @@ func RewriteGCPKeyCatalogue(cat *CapabilityCatalogue, configuredSets []string, g
 	return changed
 }
 
-// MigrateGCPKeyGrantArgs is migration 107: rewrites stored gcp#gcp-key grants
+// MigrateGCPKeyGrantArgs is migration 109: rewrites stored gcp#gcp-key grants
 // carrying deprecated "account" or "activate" arguments across task_grant,
 // task_grant_wait, template_grant, schedule_grant, repo_config, grain_config
 // (default_capabilities, console_sessions, capability_policy) and

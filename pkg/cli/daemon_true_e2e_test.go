@@ -292,7 +292,7 @@ func TestRunLiveWithARealIsolatedSandboxAndRESTAPIOpensAPullRequest(t *testing.T
 				t.Fatalf("GRAIN_LIVE_SANDBOX_TEST=granule requires /dev/kvm: %v", err)
 			}
 			granuleBin := filepath.Join(t.TempDir(), "granule")
-			cmd := exec.Command("go", "build", "-o", granuleBin, "github.com/bwsalmon/granule/cmd/granule")
+			cmd := exec.Command("go", "build", "-o", granuleBin, "github.com/gke-labs/granule/cmd/granule")
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("building granule for the live sandbox test: %v\n%s", err, out)
 			}

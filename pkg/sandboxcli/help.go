@@ -25,9 +25,11 @@ NAMESPACE & FILES (no size cap; pipe to grep, jq, head, or redirect to files):
                                          Search a file or subtree with an RE2 regex
 
 CI & PULL REQUEST (scoped to this task's repository and branch):
-  grain ci list [--task <id> | --ref <b>] [--repo <r>] [--provider grain|github-actions] [--conclusion <c>] [--job <j>] [--since <d>] [--limit N]
+  grain ci list [--task <id> | --ref <b>] [--repo <r>] [--provider grain|github-actions] [--conclusion <c>] [--job <j>] [--since <d>] [--limit N] [--format github|github-jobs]
                                          List recent CI runs: grain CI's, and a GitHub Actions repo's workflow runs
   grain ci show <run-id>                 A run's jobs and steps with their conclusions (grain CI or gha:... Actions runs)
+  grain ci checks <sha> [--repo <r>] [--name <check>] [--format github]
+                                         A commit's check runs on the forge, every attempt of each
   grain ci log [<run-id> | --task <id>] [--repo <r>] [--job <j>] [--step <s>] [--attempt K] [--tail N | --lines N]
                                          List a run's jobs and steps, or print one step's log
   grain ci test-history <test-name> [--limit N]
@@ -203,9 +205,10 @@ var sandboxCommandHelp = map[string]string{
 		"A subtree walk stops after 2000 entries (20000 under src://, which skips node_modules/);\n" +
 		"the last line then names where it stopped, and with no match the exit status is 1.\n\n" +
 		"  grain grep -- '--- FAIL' ci://<owner>/<repo>/<run>/go/gotest.log\n  grain grep -i -C 2 TODO src://cmd --glob '**/*.go'\n",
-	"ci list": "grain ci list [--task <id> | --ref <branch>] [--conclusion failure,errored] [--job <j>] [--workflow <file>] [--since 24h] [--limit N] [--repo owner/name] [--provider grain|github-actions]\n\nList recent CI runs, newest first: grain CI's, and for a repository whose CI is GitHub Actions\n(ci_mode github) its workflow runs too, read through grain's own forge connection. The second\ncolumn is the provider, and for an Actions run its workflow file; an Actions run's id is\ngha:<owner>:<name>:<run id>. --workflow keeps one workflow's runs (e.g. nightly.yml). --provider\nkeeps one provider's runs. --ref @branch is this task's own branch; --task <id> is that task's\nbranch, in any repository this task may read CI for.\n",
-	"ci show": "grain ci show <run-id>\n\nOne run: its line from grain ci list, then every job and its steps with their conclusions.\nWorks for grain CI runs and GitHub Actions runs (gha:<owner>:<name>:<run id>) alike.\n",
-	"ci log": "grain ci log [<run-id> | --task <id>] [--repo owner/name] [--job <j>] [--step <s>] [--attempt K] [--tail N | --lines N]\n\nWith no run, the latest run on this task's branch (or --task's). A run is found in whichever\nrepository it belongs to that this task may read CI for; --repo names it outright. With no job, list the run's jobs;\nwith a job and no step, list its step logs; with both, print that step's log. A GitHub Actions run\n(gha:...) keeps one log per job: --job prints it (--tail and --lines work on it as on any log).\n\n" +
+	"ci list":   "grain ci list [--task <id> | --ref <branch>] [--conclusion failure,errored] [--job <j>] [--workflow <file>] [--since 24h] [--limit N] [--repo owner/name] [--provider grain|github-actions] [--format github|github-jobs]\n\nList recent CI runs, newest first: grain CI's, and for a repository whose CI is GitHub Actions\n(ci_mode github) its workflow runs too, read through grain's own forge connection. The second\ncolumn is the provider, and for an Actions run its workflow file; an Actions run's id is\ngha:<owner>:<name>:<run id>. --workflow keeps one workflow's runs (e.g. nightly.yml). --provider\nkeeps one provider's runs. --ref @branch is this task's own branch; --task <id> is that task's\nbranch, in any repository this task may read CI for.\n\n--format github writes the GitHub Actions runs as JSON in GitHub's own shape, GET\n/repos/{owner}/{repo}/actions/runs' answer ({\"workflow_runs\": [...]}, up to --limit 500), and\n--format github-jobs every attempt of every job of each of them (at most 50 runs), GET\n.../actions/runs/{id}/jobs?filter=all's answer ({\"jobs\": [...]}): what scripts/candidate-gate.sh\nreads without a GitHub token. Runs grain knows only from its record of their jobs are left out,\nand grain_note says how many.\n",
+	"ci checks": "grain ci checks <sha> [--repo owner/name] [--name <check>] [--format github]\n\nEvery check run on a commit (every attempt of each, GitHub's filter=all), or of one --name, read\nthrough grain's own forge connection, with the App that posted each; \"(grain)\" marks grain's own.\n--format github writes GitHub's GET /repos/{owner}/{repo}/commits/{sha}/check-runs answer\n({\"check_runs\": [...]}) plus grain_app, the slug of the App grain posts its check runs as: what\nscripts/candidate-gate.sh check-qualification reads as --checks-json, and its\nCHECK_QUALIFICATION_APP.\n",
+	"ci show":   "grain ci show <run-id>\n\nOne run: its line from grain ci list, then every job and its steps with their conclusions.\nWorks for grain CI runs and GitHub Actions runs (gha:<owner>:<name>:<run id>) alike.\n",
+	"ci log": "grain ci log [<run-id> | --task <id>] [--repo owner/name] [--job <j>] [--step <s>] [--attempt K] [--tail N | --lines N]\n\nWith no run, the latest run on this task's branch (or --task's). A run is found in whichever\nrepository it belongs to that this task may read CI for; --repo names it outright. With no job, list the run's jobs;\nwith a job and no step, list its step logs; with both, print that step's log. A GitHub Actions run\n(gha:..., or its bare GitHub run id) keeps one log per job: --job prints it, and --step the lines that step\nwrote, found by the step's start and end times (--tail and --lines work on either as on any log).\n\n" +
 		byteRangeHelp + "\n" +
 		"  grain ci log --job go\n  grain ci log --job go --step Test --tail 8000\n  grain ci log --job go --step Test -n 50\n",
 	"ci test-history": "grain ci test-history <test-name> [--limit N] [--repo owner/name]\n\nPass, fail and flake history of one test across recent CI runs.\n",
@@ -295,7 +298,7 @@ var sandboxCommandHelp = map[string]string{
 	"issue list": "grain issue list [--repo owner/name] [--label <l>] [--limit N]\n\nGitHub issues. Needs read-issues.\n",
 	"issue read": "grain issue read <number> [--repo owner/name] [--comments]\n\nOne GitHub issue. Needs read-issues.\n",
 	"db query":   "grain db query <sql>\n\nA read-only SQL query on grain's database. Needs db-read.\n",
-	"ci":         "grain ci (list | show | log | test-history | artifact | wait | run-job | retrigger) ...\n\nRun 'grain ci <command> --help' for each.\n",
+	"ci":         "grain ci (list | show | checks | log | test-history | artifact | wait | run-job | retrigger) ...\n\nRun 'grain ci <command> --help' for each.\n",
 	"pr":         "grain pr (status | base-status | open | reply | resolve | review-comment)\n",
 	"task":       "grain task (list | read | prompt | transcript | wait | message | propose) ...\n",
 	"issue":      "grain issue (list | read) ...\n",

@@ -2084,8 +2084,8 @@ func seedDemoAudit(ctx context.Context, store *model.Store, ago func(time.Durati
 	return nil
 }
 
-// seedDemoAllowedPrincipals populates Settings -> Access with a user and a
-// group when no explicit -ui-allowed-principals flag or environment variable
+// seedDemoAllowedPrincipals populates Settings -> Access with a user, a
+// group and a service account when no explicit -ui-allowed-principals flag or environment variable
 // was given (so tests passing the deprecated flag still exercise its one-time
 // migration into an empty allowlist).
 func seedDemoAllowedPrincipals(ctx context.Context, store *model.Store, cfg ui.Config, ago func(time.Duration) time.Time) error {
@@ -2095,12 +2095,14 @@ func seedDemoAllowedPrincipals(ctx context.Context, store *model.Store, cfg ui.C
 	for _, item := range []struct {
 		entry   string
 		addedBy string
+		reason  string
 		at      time.Time
 	}{
-		{"user:alice@example.com", "the access code", ago(48 * time.Hour)},
-		{"group:eng-oncall@example.com", "alice@example.com", ago(12 * time.Hour)},
+		{"user:alice@example.com", "the access code", "", ago(48 * time.Hour)},
+		{"group:eng-oncall@example.com", "alice@example.com", "", ago(12 * time.Hour)},
+		{"serviceAccount:release-bot@demo-project.iam.gserviceaccount.com", "alice@example.com", "release pipeline files tasks through IAP", ago(6 * time.Hour)},
 	} {
-		if _, _, err := store.AddAllowedPrincipal(ctx, item.entry, item.addedBy, item.at); err != nil {
+		if _, _, err := store.AddAllowedPrincipal(ctx, item.entry, item.addedBy, item.reason, item.at); err != nil {
 			return fmt.Errorf("seeding allowed principal %s: %w", item.entry, err)
 		}
 	}

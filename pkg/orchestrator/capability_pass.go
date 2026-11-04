@@ -28,6 +28,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
+	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/change"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
@@ -648,6 +649,14 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 	if external && isUnisolated(deps.Sandboxes) {
 		return nil, &grainRefusalError{Reason: "this deployment's sandboxes are directories on grain's own host, which cannot keep a capability server's control plane out of a sandbox's reach, so it runs no attempt holding a capability grant"}
 	}
+	// So can a container left unfenced on this host's own bridge
+	// (ContainerConfig.Fence): refused the same way, saying why it is
+	// unfenced.
+	if external {
+		if why := openNetworkUnfenced(ctx, deps.Sandboxes); why != "" {
+			return nil, &grainRefusalError{Reason: why + ", so it runs no attempt holding a capability grant"}
+		}
+	}
 	var baseLookup protocol.Lookup
 	if deps.CapabilityServers != nil {
 		baseLookup = deps.CapabilityServers.Lookup
@@ -689,6 +698,20 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 		if err := policy.Permits(model.RecordedCapabilityGrant(g), subject, configured); err != nil {
 			return nil, &grainRefusalError{Grant: g.Ref.String(), Reason: err.Error()}
 		}
+	}
+	// What a local-scripts declaration became on host-script is served
+	// to no run local-scripts would not serve (localscripts.Untrusted),
+	// as localScriptsFor serves such a run none of its declarations.
+	if why := localscripts.Untrusted(task); why != "" {
+		kept := grants[:0]
+		for _, g := range grants {
+			if from, ok := localscripts.MigratedFrom(model.RecordedCapabilityGrant(g)); ok {
+				log.Printf("orchestrator: task %s: not granting %s (from %s): %s", task.ID, model.RecordedCapabilityGrant(g), from, why)
+				continue
+			}
+			kept = append(kept, g)
+		}
+		grants = kept
 	}
 	if len(task.Reviewers) > 0 {
 		for i := range grants {

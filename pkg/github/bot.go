@@ -133,6 +133,7 @@ func isOwnPullRequestReviewError(err error) bool {
 }
 
 func (c *RESTClient) postReview(owner, repo string, number int, event, body string, comments []NewReviewComment) (int, error) {
+	body = c.signCommentBody(owner, repo, body)
 	payloadComments := make([]map[string]any, len(comments))
 	for i, cm := range comments {
 		payloadComments[i] = map[string]any{"path": cm.Path, "line": cm.Line, "body": cm.Body}

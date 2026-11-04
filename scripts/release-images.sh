@@ -946,7 +946,7 @@ granulefile_build() {
   if command -v granule >/dev/null 2>&1; then
     granule granulefile build -kontur-image "$granule_image" "$@"
   else
-    go run github.com/bwsalmon/granule/cmd/granule granulefile build -kontur-image "$granule_image" "$@"
+    go run github.com/gke-labs/granule/cmd/granule granulefile build -kontur-image "$granule_image" "$@"
   fi
 }
 

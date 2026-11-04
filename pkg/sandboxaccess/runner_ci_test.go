@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/sandbox"
+	"github.com/gke-labs/granule/pkg/sandbox"
 )
 
 // A CI job's shape -- files placed in one batch, then a run of steps that

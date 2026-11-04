@@ -2192,11 +2192,15 @@ func baseDescription(task model.Task) string {
 // description says the rest; this is the sentence that gets a run to
 // read it.
 func proposalSection(task model.Task) string {
+	hasRepo := task.Target != nil || len(task.Writes) > 0
 	waitOn := fmt.Sprintf("task %s itself, when the follow-up only makes sense once "+
 		"this task's own change has landed, and the id you gave an earlier proposal "+
 		"in this same run that it builds on", task.ID)
 	if model.NeverCompletes(task) {
 		waitOn = "the id you gave an earlier proposal in this same run that it builds on"
+	} else if !hasRepo {
+		waitOn = "the id you gave an earlier proposal in this same run that it builds on, " +
+			"or another existing task whose change must land first"
 	}
 	s := fmt.Sprintf(
 		"\n\nYou are running as task %s. Anything you split out with propose_task "+
@@ -2213,6 +2217,10 @@ func proposalSection(task model.Task) string {
 			"target closing -- so a proposal waiting on this one would wait forever. grain "+
 			"refuses such a link and says so in the proposal's body, but a proposal that asks "+
 			"for it is one whose ordering nobody recorded.", task.ID)
+	} else if !hasRepo {
+		s += fmt.Sprintf(" Do not put task %s itself in depends_on: this task has no repository "+
+			"change to land and rests in awaiting_reply until a human closes the report, so a "+
+			"proposal that depends on it stays blocked until then.", task.ID)
 	}
 	if task.Target != nil {
 		s += fmt.Sprintf(" A proposal is filed against %s, the repository you are "+
@@ -2588,6 +2596,9 @@ func attemptDetail(r model.Run) string {
 // a team broadcast (ui.Client.BroadcastTeamMessage) -- is that task's,
 // not "you".
 func attributionLabel(a model.Attribution, taskID string) string {
+	if ext := externalAgentLabel(a); ext != "" {
+		return ext
+	}
 	if a.OnBehalfOf != nil {
 		switch a.OnBehalfOf.Kind {
 		case model.PrincipalAgent:
@@ -2634,6 +2645,21 @@ func otherTaskRun(a model.Attribution, taskID string) string {
 	return fmt.Sprintf("the run of another task (task %s), not a human", run.ID)
 }
 
+// externalAgentLabel labels a comment an external agent credential posted
+// (an "external:<name>" agent principal), or is empty for any other
+// comment. Such a comment carries its credential's owner as OnBehalfOf
+// (design/spec/external-cli/external-cli.spec.md#XC-14), but its words
+// are the agent's, not that person's, so it is never labelled a human's.
+func externalAgentLabel(a model.Attribution) string {
+	if a.Actor.Kind != model.PrincipalAgent || !strings.HasPrefix(a.Actor.ID, model.ExternalAgentPrincipalPrefix) {
+		return ""
+	}
+	if b := a.OnBehalfOf; b != nil && b.Kind == model.PrincipalHuman && b.ID != "" {
+		return fmt.Sprintf("an external agent (%s) acting for %s, not a human", a.Actor.ID, b.ID)
+	}
+	return fmt.Sprintf("an external agent (%s), not a human", a.Actor.ID)
+}
+
 // addendumText renders one just-arrived comment for a Framework to fold
 // into its conversation mid-run -- present tense, unlike
 // attributionLabel's own labels ("an earlier attempt at this task"),
@@ -2642,7 +2668,9 @@ func otherTaskRun(a model.Attribution, taskID string) string {
 // currently reading it.
 func addendumText(c model.Comment) string {
 	who := "a human"
-	if other := otherTaskRun(c.Author, c.TaskID); other != "" {
+	if ext := externalAgentLabel(c.Author); ext != "" {
+		who = ext
+	} else if other := otherTaskRun(c.Author, c.TaskID); other != "" {
 		who = other
 	} else if c.Author.OnBehalfOf != nil && c.Author.OnBehalfOf.Kind == model.PrincipalHuman {
 		if c.Author.OnBehalfOf.ID != "" {

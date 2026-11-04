@@ -26,7 +26,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/extents"
+	"github.com/gke-labs/granule/pkg/extents"
 )
 
 func main() {

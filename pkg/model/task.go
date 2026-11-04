@@ -1731,6 +1731,12 @@ type Task struct {
 	// instead of completing, closing on nothing_needed, or resting on a
 	// goal.
 	KeepRunning bool
+	// FiledVia is the sanitized X-Grain-Client label of the tool that
+	// filed this task ("jetski/1.4 session=abc"), "" when none was sent
+	// (SanitizeGrainClient). A label for provenance only: it is the
+	// caller's own word about itself and grants nothing
+	// (design/spec/external-cli/external-cli.spec.md#XC-15).
+	FiledVia string
 	// SandboxCPUs, SandboxMemoryMB and SandboxDiskGB
 	// (bwsalmon/agents#534, grain/task-41) override
 	// Config.SandboxCPUs/SandboxMemoryMB/SandboxDiskGB for this task's
@@ -2710,6 +2716,9 @@ type Comment struct {
 	// column existed, which a reader derives one for instead
 	// (DeriveQuestionSummary).
 	Summary string
+	// FiledVia is the sanitized X-Grain-Client label of the tool the
+	// comment was posted from, as Task.FiledVia is the task's.
+	FiledVia string
 }
 
 // Attachment is one file carried alongside a task -- bwsalmon/agents#522's

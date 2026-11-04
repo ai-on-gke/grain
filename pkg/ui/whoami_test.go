@@ -17,7 +17,10 @@ package ui_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -171,5 +174,140 @@ func TestConfigAuditReadsBackLabelled(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].ActorLabel != "alice@example.com" || got[0].ActorSource != "iap" || got[0].Surface != "settings" {
 		t.Errorf("config audit = %+v, want alice's settings change", got)
+	}
+}
+
+// TestAuthWhoamiUnauthenticatedAuthenticatedAndExpiredToken is
+// external-cli.spec.md#XC-8: GET /api/auth/whoami tells a caller with no
+// credential how it could sign in and nothing about anybody, tells an
+// external agent credential its own grants, and answers an expired one
+// with 401 token_expired and when.
+func TestAuthWhoamiUnauthenticatedAuthenticatedAndExpiredToken(t *testing.T) {
+	srv, client := testServer(t)
+	ui.SetAccessCodeForTest(srv, testAccessCode)
+	enableExternalAgentAPI(t, client.Store)
+	humanCtx := ui.WithPrincipal(context.Background(), model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	client.Now = func() time.Time { return now }
+	expires := now.Add(48 * time.Hour)
+	issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name: "laptop", ScopeSet: "grain/external-dev", Owner: "jane@example.com", ExpiresAt: &expires,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ask := func(bearer string) (int, map[string]any) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/auth/whoami", nil)
+		req.RemoteAddr = "198.51.100.7:4242" // a caller elsewhere, not this machine
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("GET /api/auth/whoami answered %d with no JSON: %s", rec.Code, rec.Body.String())
+		}
+		return rec.Code, body
+	}
+
+	code, anon := ask("")
+	if code != http.StatusOK || anon["authenticated"] != false || anon["externalAgentApi"] != true {
+		t.Fatalf("unauthenticated: %d %v", code, anon)
+	}
+	accepted, _ := anon["acceptedAuth"].([]any)
+	if !slices.Contains(accepted, any("access-code")) || !slices.Contains(accepted, any("external-token")) {
+		t.Errorf("acceptedAuth = %v, want access-code and external-token", accepted)
+	}
+	for _, leaked := range []string{"principal", "tokenId", "owner", "resolvedScopes"} {
+		if _, ok := anon[leaked]; ok {
+			t.Errorf("unauthenticated answer carries %q: %v", leaked, anon)
+		}
+	}
+
+	code, op := ask(testAccessCode)
+	if code != http.StatusOK || op["authenticated"] != true || op["principal"] != "operator" {
+		t.Errorf("access code: %d %v, want the operator", code, op)
+	}
+
+	code, agent := ask(issued.Token)
+	if code != http.StatusOK || agent["authenticated"] != true || agent["principal"] != "agent:external:laptop" ||
+		agent["tokenId"] != issued.ID || agent["owner"] != "jane@example.com" || agent["scopeSet"] != "grain/external-dev" ||
+		agent["expiresAt"] == nil {
+		t.Errorf("gma_ token: %d %v", code, agent)
+	}
+	if scopes, _ := agent["resolvedScopes"].([]any); !slices.Contains(scopes, any("tasks:read")) {
+		t.Errorf("resolvedScopes = %v, want tasks:read among them", scopes)
+	}
+
+	now = expires.Add(time.Hour)
+	code, expired := ask(issued.Token)
+	if code != http.StatusUnauthorized || expired["code"] != ui.TokenExpiredCode {
+		t.Fatalf("expired token: %d %v, want 401 %s", code, expired, ui.TokenExpiredCode)
+	}
+	if at, _ := time.Parse(time.RFC3339, expired["expiredAt"].(string)); !at.Equal(expires) {
+		t.Errorf("expiredAt = %v, want %v", expired["expiredAt"], expires)
+	}
+
+	// Over HTTPClient the expiry is a TokenExpiredError.
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+	hc := ui.NewHTTPClient(ts.URL)
+	hc.Token = issued.Token
+	hc.RetryPolicy = &ui.RetryPolicy{}
+	_, err = hc.AuthWhoami(context.Background())
+	var te *ui.TokenExpiredError
+	if !errors.As(err, &te) || !te.ExpiredAt.Equal(expires) {
+		t.Fatalf("HTTPClient.AuthWhoami = %v, want a TokenExpiredError at %v", err, expires)
+	}
+}
+
+// TestExternalTokenRevokesItselfOnly holds agentAPIGate's ownCredentialRoute
+// to its word (external-cli.spec.md#XC-9): a gma_ token with no
+// capabilities:admin may revoke itself (`grain logout`), and no other
+// credential -- naming another token's id is refused like any call
+// outside its scopes, and leaves that token working.
+func TestExternalTokenRevokesItselfOnly(t *testing.T) {
+	srv, client := testServer(t)
+	enableExternalAgentAPI(t, client.Store)
+	humanCtx := ui.WithPrincipal(context.Background(), model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"})
+	mint := func(name string) ui.IssuedExternalAgentToken {
+		t.Helper()
+		issued, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+			Name: name, ScopeSet: "grain/external-read", Owner: "jane@example.com",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return issued
+	}
+	mine, other := mint("laptop"), mint("desktop")
+
+	call := func(method, path, bearer string) int {
+		t.Helper()
+		req := httptest.NewRequest(method, path, nil)
+		req.RemoteAddr = "198.51.100.7:4242"
+		req.Header.Set("Authorization", "Bearer "+bearer)
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := call(http.MethodPost, "/api/external-agents/tokens/"+other.ID+"/revoke", mine.Token); code != http.StatusForbidden {
+		t.Fatalf("revoking another token answered %d, want 403", code)
+	}
+	if code := call(http.MethodGet, "/api/auth/whoami", other.Token); code != http.StatusOK {
+		t.Fatalf("the other token after a refused revoke: GET /api/auth/whoami answered %d, want 200", code)
+	}
+	if code := call(http.MethodPost, "/api/external-agents/tokens/"+mine.ID+"/rotate", mine.Token); code != http.StatusForbidden {
+		t.Fatalf("rotating itself answered %d, want 403: only revoke is a token's own to call", code)
+	}
+	if code := call(http.MethodPost, "/api/external-agents/tokens/"+mine.ID+"/revoke", mine.Token); code != http.StatusNoContent {
+		t.Fatalf("revoking itself answered %d, want 204", code)
+	}
+	if code := call(http.MethodGet, "/api/auth/whoami", mine.Token); code != http.StatusUnauthorized {
+		t.Fatalf("a revoked token: GET /api/auth/whoami answered %d, want 401", code)
 	}
 }

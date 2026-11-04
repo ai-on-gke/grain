@@ -730,6 +730,23 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     107,
+		Description: "add external_agent_token.owner, task.filed_via, task_comment.filed_via and grain_config.owner_trust (external agent owner attribution and owner-trust approval)",
+		Statements: []string{
+			"ALTER TABLE `external_agent_token` ADD COLUMN `owner` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task` ADD COLUMN `filed_via` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `task_comment` ADD COLUMN `filed_via` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `grain_config` ADD COLUMN `owner_trust` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     108,
+		Description: "add allowed_principal.reason, why an allowlist entry was added (required for serviceAccount: entries)",
+		Statements: []string{
+			"ALTER TABLE `allowed_principal` ADD COLUMN `reason` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     109,
 		Description: "rewrite stored gcp#gcp-key grants from deprecated account and activate arguments to permission_set",
 		Up:          MigrateGCPKeyGrantArgs,
 	},

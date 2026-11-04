@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/granule/pkg/granulefile"
+	"github.com/gke-labs/granule/pkg/granulefile"
 )
 
 // All registered host subcommands in the granule CLI.

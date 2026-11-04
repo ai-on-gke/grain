@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/dockercli"
-	"github.com/bwsalmon/granule/pkg/forward"
-	"github.com/bwsalmon/granule/pkg/guestforward"
-	"github.com/bwsalmon/granule/pkg/vmspec"
+	"github.com/gke-labs/granule/pkg/dockercli"
+	"github.com/gke-labs/granule/pkg/forward"
+	"github.com/gke-labs/granule/pkg/guestforward"
+	"github.com/gke-labs/granule/pkg/vmspec"
 )
 
 const forwardUsage = `usage: granule forward <target> [flags]

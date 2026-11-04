@@ -61,7 +61,7 @@ const hostSpecPath = "../../design/spec/cli/host.spec.md"
 var hostSpecSubcommands = map[string][]string{
 	"access-code":        {"show", "rotate"},
 	"capability-servers": {"list", "add", "remove", "enable", "disable", "bind-secret"},
-	"ci":                 {"run", "list", "show", "watch", "cancel", "cache", "faults", "artifact"},
+	"ci":                 {"run", "list", "show", "watch", "wait", "retrigger", "test-history", "cancel", "cache", "faults", "artifact"},
 	"connections":        {"import"},
 	"controller":         {"bootstrap-github-app"},
 	"declarations":       {"check"},
@@ -69,6 +69,7 @@ var hostSpecSubcommands = map[string][]string{
 	"gcp-key":            {"list", "get", "set", "delete"},
 	"hostds":             {"list", "register", "set-owner"},
 	"init":               {"workstation"},
+	"pr":                 {"adopt", "review", "status"},
 	"release":            {"approve", "reject", "rollback"},
 	"repo": {"list", "add", "remove", "capabilities", "ci-capabilities", "prompt-extension",
 		"setup-command", "unfixable-checks", "work-ownership", "workflows"},

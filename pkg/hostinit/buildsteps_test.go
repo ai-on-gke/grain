@@ -266,7 +266,7 @@ func TestEnsureGranuleCLIBuildsWhenSourceIsNewer(t *testing.T) {
 
 	sys := newFakeSystem()
 	sys.root = true
-	sys.on("", nil, "go", "build", "-o", opts.GranuleBinaryPath, "github.com/bwsalmon/granule/cmd/granule")
+	sys.on("", nil, "go", "build", "-o", opts.GranuleBinaryPath, "github.com/gke-labs/granule/cmd/granule")
 	var r Result
 	ok := ensureGranuleCLI(context.Background(), sys, opts, &r, nil)
 	if !ok {
