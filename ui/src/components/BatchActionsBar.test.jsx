@@ -17,6 +17,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import BatchActionsBar from "./BatchActionsBar.jsx";
 import api from "../api.js";
+import { chooseOption, optionValues } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 
@@ -269,7 +270,8 @@ describe("BatchActionsBar", () => {
 
     // Named in its own right: the "Capability…" placeholder option was
     // its only label, and stops being one once a capability is picked.
-    await user.selectOptions(
+    await chooseOption(
+      user,
       screen.getByRole("combobox", { name: "Capability to attach or detach" }),
       "web-search",
     );
@@ -277,7 +279,36 @@ describe("BatchActionsBar", () => {
     expect(screen.getByRole("button", { name: "Attach" })).toBeEnabled();
     expect(
       screen.getByRole("combobox", { name: "Capability to attach or detach" }),
-    ).toHaveValue("web-search");
+    ).toHaveValue("Web search");
+  });
+
+  // grain/task-2910: the capability picker is searched, so a word from
+  // anywhere in a capability's name finds it.
+  it("finds a capability by any word of its name", async () => {
+    const config = {
+      capabilities: [
+        { id: "web-search", name: "Web search" },
+        { id: "gcs", name: "Cloud storage read" },
+        { id: "gh", name: "GitHub read" },
+      ],
+    };
+    const user = userEvent.setup();
+    render(
+      <BatchActionsBar
+        selection={[{ id: "1" }]}
+        config={config}
+        onRun={() => {}}
+        onClear={() => {}}
+      />,
+    );
+    const box = screen.getByRole("combobox", {
+      name: "Capability to attach or detach",
+    });
+    await user.type(box, "read storage");
+    expect(optionValues(box)).toEqual(["gcs"]);
+    await user.keyboard("{Enter}");
+    expect(box).toHaveValue("Cloud storage read");
+    expect(screen.getByRole("button", { name: "Attach" })).toBeEnabled();
   });
 
   it("opens the bulk edit form over the selection", async () => {
