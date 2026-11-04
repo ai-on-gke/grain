@@ -346,8 +346,11 @@ Global flags (before or after the command; -flag and --flag are the same):
   -audience string target audience for Google ID token authentication ($GRAIN_AUDIENCE, $GRAIN_TUNNEL_AUDIENCE)
   -as string      identity for request attribution / proxy headers ($GRAIN_USER)
   -json           print machine-readable JSON instead of a human-readable table
+  -context string the named context to use ($GRAIN_CONTEXT, else config.json's current)
 
 Commands:
+  login <url> [flags] / logout [<ctx>] / whoami   sign in to a deployment as a named context, and say as whom
+  context list|use|show|delete         the named contexts ($XDG_CONFIG_HOME/grain/config.json)
   list [flags]                         list the tasks in play -- closed and deferred ones are left
                                        out unless -closed/-deferred or a filter naming that state
                                        asks for them (-filter attribute:comparison:value narrows the
@@ -436,6 +439,9 @@ Commands:
                                        that breaks a declaration (see declcmd.go, docs/declarations.md)
   git-connections                      list the git connections this deployment clones and pushes
                                        with, one "host credential" per line (see deployment.go)
+  git-login [-web|-from-gh|-with-token] [-host h] [-scope s] [-author name]
+                                       delegate your GitHub HTTPS token to this deployment and sign new
+                                       pull requests and comments in your name ("Signed by <Name> (via Grain)")
   git-ambient [-host h] [-kind github|git] [-base-url u] [-proxy u] [-source gh|git|auto] [-if-none]
                                        give this deployment an ambient git connection: this host's own
                                        gh / git login, asked for a token at the moment one is needed
@@ -547,6 +553,7 @@ func runCLI(args []string) error {
 	connectTimeout := fs.Duration("connect-timeout", defaultConnectTimeout,
 		"how long to wait to connect to the daemon, and to wait out one that refuses connections (a restart)")
 	callTimeout := fs.Duration("timeout", defaultCallTimeout, "how long one call waits for the daemon to start answering")
+	contextName := fs.String("context", "", "the named context to use ($"+contextEnvVar+"; see `grain context list`)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -560,12 +567,10 @@ func runCLI(args []string) error {
 		return err
 	}
 	rest = append(rest[:1:1], cmdArgs...)
-	_, source := serverSource()
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "server" {
-			source = "-server"
-		}
-	})
+	sel, source, err := resolveTarget(fs, server, *contextName)
+	if err != nil {
+		return err
+	}
 	useCLIEnvDataDir()
 
 	c := ui.NewHTTPClient(*server)
@@ -591,17 +596,19 @@ func runCLI(args []string) error {
 	target := cliTarget{
 		server:      *server,
 		source:      source,
-		tokenSource: tokenSource(*token),
+		tokenSource: useContextCredential(c, sel, tokenSource(*token)),
 		connect:     *connectTimeout,
 		call:        *callTimeout,
 	}
-	return explainDaemonError(dispatchCLI(ctx, c, out, fs, rest), target)
+	return explainDaemonError(dispatchCLI(ctx, c, out, fs, sel, rest), target)
 }
 
 // dispatchCLI runs one task-CLI command against c.
-func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.FlagSet, rest []string) error {
+func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.FlagSet, sel selectedContext, rest []string) error {
 	cmd, cmdArgs := rest[0], rest[1:]
 	switch cmd {
+	case "context", "whoami", "login", "logout":
+		return dispatchSignIn(ctx, c, out, sel, cmd, cmdArgs)
 	case "list":
 		return cmdList(ctx, c, out, cmdArgs)
 	case "get":
@@ -674,6 +681,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdAccess(ctx, c, out, cmdArgs)
 	case "git-ambient":
 		return cmdGitAmbient(ctx, c, out, cmdArgs)
+	case "git-login", "login":
+		return cmdGitLogin(ctx, c, out, cmdArgs)
 	case "git-connections":
 		return cmdGitConnections(ctx, c, out, cmdArgs)
 	case "default-model":
@@ -713,81 +722,6 @@ func (s *stringList) String() string { return strings.Join(*s, ",") }
 func (s *stringList) Set(v string) error {
 	*s = append(*s, v)
 	return nil
-}
-
-// parseArgs is flag.FlagSet.Parse for a command that takes positional
-// arguments as well as flags, and it exists because Go's own Parse stops
-// at the first word that is not a flag. Every usage line here is written
-// the way people type these commands -- `grain update <id> [flags]`,
-// `grain repo capabilities [-set a,b] <owner/name>` -- and with a plain
-// Parse the first of those forms silently did nothing at all: the id
-// ended parsing, -title was left among the leftover arguments, fs.Visit
-// saw no flag set, and the command sent an empty request and printed the
-// unchanged task as though it had worked. `grain repo capabilities
-// acme/widgets -set self-debug` was the same shape of quiet failure --
-// it printed the repo's capabilities instead of replacing them.
-//
-// So flags are parsed wherever they appear: Parse is called again on
-// what is left after each positional word, which is what a GNU-style
-// getopt does with permutation, and the positional words are returned in
-// the order they were written. A bare "--" still ends the flags, and
-// everything after it is positional verbatim -- which is how a value
-// that starts with a dash is passed to a command that takes one.
-//
-// `grain comment <id> <body...>` deliberately does not use this: its
-// body is free text, and a body word that happens to name a flag has to
-// stay a body word. misplacedFlag below is what that command says
-// instead of guessing.
-func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
-	var terminated []string
-	for i, arg := range args {
-		if arg == "--" {
-			terminated = args[i+1:]
-			args = args[:i]
-			break
-		}
-	}
-	var positional []string
-	for {
-		if err := fs.Parse(args); err != nil {
-			return nil, err
-		}
-		rest := fs.Args()
-		if len(rest) == 0 {
-			break
-		}
-		positional = append(positional, rest[0])
-		args = rest[1:]
-	}
-	return append(positional, terminated...), nil
-}
-
-// first is args[0] or "", so a command missing its one positional
-// argument reports that through taskID's own error rather than panicking
-// on an empty slice -- flag.FlagSet.Arg's behaviour, which parseArgs'
-// callers no longer go through.
-func first(args []string) string {
-	if len(args) == 0 {
-		return ""
-	}
-	return args[0]
-}
-
-// misplacedFlag reports the first word in args that names a flag defined
-// on fs -- a flag written after the positional arguments, where
-// flag.Parse has already stopped looking at them.
-func misplacedFlag(fs *flag.FlagSet, args []string) (string, bool) {
-	for _, arg := range args {
-		name := strings.TrimLeft(arg, "-")
-		if name == arg || name == "" {
-			continue // not a flag-shaped word, or a bare "--"
-		}
-		name, _, _ = strings.Cut(name, "=")
-		if fs.Lookup(name) != nil {
-			return name, true
-		}
-	}
-	return "", false
 }
 
 // printer renders CLI output either as a human-readable table (the

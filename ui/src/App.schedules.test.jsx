@@ -143,6 +143,57 @@ describe("App", () => {
     expect(JSON.parse(opts.body)).toMatchObject({ keepRunning: false });
   });
 
+  it("previews a saved schedule with the model it asks for", async () => {
+    // The draft endpoint has no saved row to fall back on, so the model
+    // the save leaves out when unchanged has to be in the preview's body
+    // (docs/test-runs/2026-11-04-recurring-composed-ui.md, bug 1).
+    const schedule = {
+      id: "sched-1",
+      title: "Nightly dependency bump",
+      description: "",
+      repo: "acme/widgets",
+      base: "",
+      autoMerge: false,
+      model: "gemini-2.5-flash",
+      recurrence: { kind: "everyNHours", everyNHours: 24 },
+      enabled: true,
+      nextRunAt: "2026-08-29T00:00:00Z",
+    };
+    setupApi(initialTasks, [schedule]);
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("Fix bug");
+
+    await user.click(screen.getByRole("button", { name: /^Processes/ }));
+    await user.click(await screen.findByText("Nightly dependency bump"));
+    await screen.findByRole("heading", { name: "Edit schedule" });
+
+    const previews = () =>
+      api.mock.calls
+        .filter(
+          ([path, o]) =>
+            path === "/api/schedules/composition" && o?.method === "POST",
+        )
+        .map(([, o]) => JSON.parse(o.body));
+    await waitFor(() => expect(previews().length).toBeGreaterThan(0));
+    expect(previews().at(-1)).toMatchObject({ model: "gemini-2.5-flash" });
+
+    // The save itself still leaves an unchanged model out.
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(
+        api.mock.calls.find(
+          ([path, o]) =>
+            path === "/api/schedules/sched-1" && o?.method === "PATCH",
+        ),
+      ).toBeTruthy(),
+    );
+    const [, opts] = api.mock.calls.find(
+      ([path, o]) => path === "/api/schedules/sched-1" && o?.method === "PATCH",
+    );
+    expect(JSON.parse(opts.body)).not.toHaveProperty("model");
+  });
+
   it("switches a schedule to every N minutes", async () => {
     const schedule = {
       id: "sched-1",
