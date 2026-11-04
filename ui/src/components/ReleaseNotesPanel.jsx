@@ -39,7 +39,7 @@ import ReleaseVersions from "./ReleaseVersions.jsx";
 // An operator looking for "the v1.8.0 release notes" found only the
 // first kind here (grain/task-3092), which is why the description says
 // which is which.
-export default function ReleaseNotesPanel({ showError }) {
+export default function ReleaseNotesPanel({ showError, onOpenTask }) {
   return (
     <Box data-testid="release-notes">
       <Typography variant="h6" component="h3" sx={{ mt: 0 }}>
@@ -51,7 +51,7 @@ export default function ReleaseNotesPanel({ showError }) {
         each release of grain itself brought, from the notes this build of grain
         carries.
       </Typography>
-      <WeeklyReleaseNotes showError={showError} />
+      <WeeklyReleaseNotes showError={showError} onOpenTask={onOpenTask} />
       <Divider sx={{ my: 2 }} />
       <ReleaseVersions showError={showError} />
     </Box>
@@ -80,7 +80,7 @@ export default function ReleaseNotesPanel({ showError }) {
 // the week that just ended even when it has none: that is the week a
 // reader opening this on a Monday came to see, and leaving it out of the
 // list would make its absence look like a UI that had not loaded.
-function WeeklyReleaseNotes({ showError }) {
+function WeeklyReleaseNotes({ showError, onOpenTask }) {
   const [weeks, setWeeks] = useState(null);
   const [period, setPeriod] = useState("");
   const [note, setNote] = useState(null);
@@ -240,7 +240,22 @@ function WeeklyReleaseNotes({ showError }) {
           <Stack spacing={0.5}>
             {stats.directions.map((dir) => (
               <Typography key={dir.taskId} variant="body2">
-                <a href={`/tasks/${encodeURIComponent(dir.taskId)}`}>
+                <a
+                  href={`/tasks/${encodeURIComponent(dir.taskId)}`}
+                  onClick={(e) => {
+                    if (
+                      onOpenTask &&
+                      e.button === 0 &&
+                      !e.metaKey &&
+                      !e.ctrlKey &&
+                      !e.shiftKey &&
+                      !e.altKey
+                    ) {
+                      e.preventDefault();
+                      onOpenTask(dir.taskId);
+                    }
+                  }}
+                >
                   <strong>#{dir.taskId}</strong>
                 </a>
                 {dir.title ? ` ${dir.title}` : ""}
