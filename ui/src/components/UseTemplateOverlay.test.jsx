@@ -17,6 +17,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import UseTemplateOverlay from "./UseTemplateOverlay.jsx";
 import api from "../api.js";
+import { chooseOption, optionValues } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 
@@ -66,5 +67,37 @@ describe("UseTemplateOverlay", () => {
       templateId: "template-1",
       approved: true,
     });
+  });
+
+  // grain/task-2910: the template picker is searched rather than
+  // scrolled, so a word from anywhere in a name finds it.
+  it("switches template from a search of its name", async () => {
+    api.mockResolvedValue({});
+    const user = userEvent.setup();
+    render(
+      <UseTemplateOverlay
+        templates={[
+          template,
+          { ...template, id: "template-2", name: "Docs refresh" },
+        ]}
+        templateId={template.id}
+        config={{ actor: "mem" }}
+        onClose={() => {}}
+        onCreated={async () => {}}
+        showError={(err) => {
+          throw err;
+        }}
+      />,
+    );
+    const picker = screen.getByRole("combobox", { name: /^Template/ });
+    expect(picker).toHaveValue("Dependency bump");
+    await user.click(picker);
+    await user.clear(picker);
+    await user.type(picker, "refr");
+    expect(optionValues(picker)).toEqual(["template-2"]);
+    await chooseOption(user, picker, "template-2");
+    expect(picker).toHaveValue("Docs refresh");
+    await user.click(screen.getByRole("button", { name: "Create task" }));
+    expect(filedBody()).toMatchObject({ templateId: "template-2" });
   });
 });

@@ -172,6 +172,9 @@ func startGitProxy(dataDir string, store *model.Store, githubHost string, insecu
 		// is redacted over /fs/ without waiting for a restart.
 		NewRedactor: func() *redact.Redactor { return buildNamespaceRedactor(dataDir) },
 	}
+	// The same namespace answers GET /api/fs/ on grain's own API
+	// (ui.Server.SetNamespace), for grain fs and external agents.
+	liveNamespace.Store(nsServer)
 	// task://, memory://, deploy:// and config://, and the /cli/ issue
 	// and database reads, answered by the backends of the MCP tools they
 	// stand in for (sandbox_namespace.go).

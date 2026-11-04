@@ -33,6 +33,7 @@ import {
   teamDefaultLabel,
 } from "../../state.js";
 import ModelSelect from "../ModelSelect.jsx";
+import SearchSelect from "../SearchSelect.jsx";
 
 // EditTaskForm is the title/description editor DetailOverlay swaps its
 // header for (bwsalmon/agents#523) -- those two fields are the only ones
@@ -229,18 +230,13 @@ export default function EditTaskForm({
         fullWidth
         size="small"
       />
-      <TextField
-        select
+      <SearchSelect
         label="Review"
         value={reviewTemplateId}
-        onChange={(e) => setReviewTemplateId(e.target.value)}
-        // displayEmpty: "" is a real choice (no review), not a blank --
-        // and the label has to shrink for it, since MUI only floats one
-        // out of a field it counts as filled and "" is not: left to
-        // itself the label sits on top of the "No review" displayEmpty
-        // draws inside the box.
+        onChange={setReviewTemplateId}
+        // Shrunk: "" is a real choice (no review), not a blank, and the
+        // label has to be out of the way of the "No review" it shows.
         InputLabelProps={{ shrink: true }}
-        SelectProps={{ displayEmpty: true }}
         disabled={reviewFiled || (templates || []).length === 0}
         helperText={
           reviewFiled
@@ -249,16 +245,14 @@ export default function EditTaskForm({
               ? "no templates yet -- write one in Templates to be able to attach a review here"
               : "run a second agent over this task's own code before it merges, with instructions from a template"
         }
-        fullWidth
-        size="small"
-      >
-        <MenuItem value="">No review</MenuItem>
-        {(templates || []).map((tmpl) => (
-          <MenuItem key={tmpl.id} value={tmpl.id}>
-            {tmpl.name}
-          </MenuItem>
-        ))}
-      </TextField>
+        options={[
+          { value: "", label: "No review" },
+          ...(templates || []).map((tmpl) => ({
+            value: tmpl.id,
+            label: tmpl.name,
+          })),
+        ]}
+      />
       {/* The model, then optionally one connection to run it on: the
           same two pickers NewTaskOverlay has. A model only disabled
           connections serve is still offered, and says so, because
@@ -294,39 +288,38 @@ export default function EditTaskForm({
         />
       )}
       {connections.length > 0 && (
-        <TextField
-          select
+        <SearchSelect
           label="Specific connection"
           value={
             pinChoices.some((c) => c.id === agentBackendId) || savedPin
               ? agentBackendId
               : ""
           }
-          onChange={(e) => setAgentBackendId(e.target.value)}
+          onChange={setAgentBackendId}
           InputLabelProps={{ shrink: true }}
-          SelectProps={{ displayEmpty: true }}
           helperText={
             effectiveModel
               ? `connections that serve ${effectiveModel} -- pin one only if this task needs that account`
               : "pin this task to one connection -- leave it on any connection unless it needs that account"
           }
-          fullWidth
-          size="small"
-        >
-          <MenuItem value="">Any enabled connection serving the model</MenuItem>
-          {pinChoices.map((backend) => (
-            <MenuItem key={backend.id} value={backend.id}>
-              {connectionLabel(backend)}
-            </MenuItem>
-          ))}
-          {savedPin && (
-            <MenuItem value={savedPin.id}>
-              {savedPin.missing
-                ? `${savedPin.id} (not one of the deployment's connections)`
-                : `${connectionLabel(savedPin)} (does not serve ${effectiveModel})`}
-            </MenuItem>
-          )}
-        </TextField>
+          options={[
+            { value: "", label: "Any enabled connection serving the model" },
+            ...pinChoices.map((backend) => ({
+              value: backend.id,
+              label: connectionLabel(backend),
+            })),
+            ...(savedPin
+              ? [
+                  {
+                    value: savedPin.id,
+                    label: savedPin.missing
+                      ? `${savedPin.id} (not one of the deployment's connections)`
+                      : `${connectionLabel(savedPin)} (does not serve ${effectiveModel})`,
+                  },
+                ]
+              : []),
+          ]}
+        />
       )}
       <TextField
         select
