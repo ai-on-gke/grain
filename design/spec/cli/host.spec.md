@@ -666,17 +666,17 @@ _No flags._
 
 **Pinned by:** *untested*.
 
-### 4.10 `grain release approve|reject vX.Y.Z` {#CLI-39}
+### 4.10 `grain release approve|reject|rollback vX.Y.Z` {#CLI-39}
 
-Calls `POST /api/repos/{owner}/{name}/pending-releases/{version}/approve` or `…/reject` (`DecideRelease`). `-repo` defaults to grain's own source repository (`ai-on-gke/grain`). On a repository that publishes from GitHub Actions (`ci_mode: github`) the answer is a signed dispatch of `.github/workflows/promote-release.yml`, and the command prints the dispatch instead of a grain CI run.
+`approve` and `reject` call `POST /api/repos/{owner}/{name}/pending-releases/{version}/approve` or `…/reject` (`DecideRelease`). `rollback` calls `POST /api/releases/{version}/rollback` (`RollbackRelease`), passing `-to` (`vA.B.C`) and `-reason` when given; `-bad` is an alias for the positional `vX.Y.Z`. `-repo` defaults to grain's own source repository (`ai-on-gke/grain`). On a repository that publishes from GitHub Actions (`ci_mode: github`) the answer is a signed dispatch of `.github/workflows/promote-release.yml`, and the command prints the dispatch instead of a grain CI run.
 
 `grain release approval-key` prints the deployment's release-approval public key (`GET /api/release-approval-key`): the value for the GitHub repository variable `GRAIN_RELEASE_APPROVAL_KEY`, which that workflow verifies an Inbox approval against.
 
 Errors, each printed after the usage:
-- an unknown verb: `unknown release command "<v>": approve or reject`;
-- the wrong number of arguments: `grain release <verb> takes the pending release, vX.Y.Z`;
-- `-short-soak-ok` on reject: `-short-soak-ok is for grain release approve`;
-- `-allow-breaking` on reject: `-allow-breaking is for grain release approve`.
+- an unknown verb: `unknown release command "<v>": approve, reject or rollback`;
+- the wrong number of arguments: `grain release <verb> takes the pending release, vX.Y.Z` (or `grain release rollback takes the release to retract, vX.Y.Z`, or passing both `-bad` and a positional version);
+- `-short-soak-ok` or `-allow-breaking` outside approve: `-short-soak-ok is for grain release approve` / `-allow-breaking is for grain release approve`;
+- `-bad`, `-to` or `-reason` outside rollback: `-bad is for grain release rollback` / `-to is for grain release rollback` / `-reason is for grain release rollback`.
 
 `-allow-breaking` approves a release that carries breaking changes without being the major release `RELEASE_MAJOR` asks for; it reaches the approval as `allow_breaking: true`.
 
@@ -686,27 +686,47 @@ With no arguments it prints the usage and returns `flag: help requested`. **Scop
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-allow-breaking` | bool |  |  | approve only: accept a release that carries breaking changes without being the major release RELEASE_MAJOR asks for |
-| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose pending release this is |
+| `-bad` | string |  |  | rollback only: the promoted release to retract (vX.Y.Z), when not passed positionally |
+| `-reason` | string |  |  | rollback only: why the release is retracted, recorded on its vX.Y.Z-retracted tag |
+| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose release this is |
 | `-short-soak-ok` | bool |  |  | approve only: accept a release whose staging soak was under the minimum (its notification says SHORT SOAK) |
+| `-to` | string |  |  | rollback only: the earlier release (vA.B.C) latest goes back to |
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain release approve -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-allow-breaking` | bool |  |  | approve only: accept a release that carries breaking changes without being the major release RELEASE_MAJOR asks for |
-| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose pending release this is |
+| `-bad` | string |  |  | rollback only: the promoted release to retract (vX.Y.Z), when not passed positionally |
+| `-reason` | string |  |  | rollback only: why the release is retracted, recorded on its vX.Y.Z-retracted tag |
+| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose release this is |
 | `-short-soak-ok` | bool |  |  | approve only: accept a release whose staging soak was under the minimum (its notification says SHORT SOAK) |
+| `-to` | string |  |  | rollback only: the earlier release (vA.B.C) latest goes back to |
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain release reject -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-allow-breaking` | bool |  |  | approve only: accept a release that carries breaking changes without being the major release RELEASE_MAJOR asks for |
-| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose pending release this is |
+| `-bad` | string |  |  | rollback only: the promoted release to retract (vX.Y.Z), when not passed positionally |
+| `-reason` | string |  |  | rollback only: why the release is retracted, recorded on its vX.Y.Z-retracted tag |
+| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose release this is |
 | `-short-soak-ok` | bool |  |  | approve only: accept a release whose staging soak was under the minimum (its notification says SHORT SOAK) |
+| `-to` | string |  |  | rollback only: the earlier release (vA.B.C) latest goes back to |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** *untested* in `pkg/cli`.
+<!-- BEGIN GENERATED FLAGS: grain release rollback -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-allow-breaking` | bool |  |  | approve only: accept a release that carries breaking changes without being the major release RELEASE_MAJOR asks for |
+| `-bad` | string |  |  | rollback only: the promoted release to retract (vX.Y.Z), when not passed positionally |
+| `-reason` | string |  |  | rollback only: why the release is retracted, recorded on its vX.Y.Z-retracted tag |
+| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose release this is |
+| `-short-soak-ok` | bool |  |  | approve only: accept a release whose staging soak was under the minimum (its notification says SHORT SOAK) |
+| `-to` | string |  |  | rollback only: the earlier release (vA.B.C) latest goes back to |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `TestGrainReleaseRollbackCLI` in `pkg/cli/release_test.go`.
 
 ### 4.11 `grain metrics`, `grain failures` and `grain health` {#CLI-40}
 

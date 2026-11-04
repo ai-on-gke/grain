@@ -168,6 +168,67 @@ func (c *Client) dispatchGitHubRelease(ctx context.Context, repo model.RepoRef, 
 	return d, nil
 }
 
+// dispatchGitHubRollback signs actor's rollback of version and dispatches
+// promote-release.yml with decision=rollback. The caller has already
+// established that actor is a person.
+func (c *Client) dispatchGitHubRollback(ctx context.Context, repo model.RepoRef, version, actor string,
+	opts ReleaseRollback) (ReleaseDispatch, error) {
+	if err := c.actionsRepoServed(ctx, repo); err != nil {
+		return ReleaseDispatch{}, err
+	}
+	tags, dispatcher := c.releaseForge()
+	if tags == nil {
+		return ReleaseDispatch{}, fmt.Errorf("this deployment has no forge connection that can dispatch %s's %s", repo, GitHubPromoteReleaseWorkflow)
+	}
+	key := repo.String() + "\x00rollback\x00" + version
+	now := time.Now().UTC()
+	releaseDispatchMu.Lock()
+	defer releaseDispatchMu.Unlock()
+	if d, ok := releaseDispatches[key]; ok {
+		if now.Before(d.Expires) {
+			return ReleaseDispatch{}, validationErrorf("%s rollback was already started: %s dispatched %s for it at %s; "+
+				"watch that run rather than starting another", version, d.By, d.Workflow, d.At.Format(time.RFC3339))
+		}
+	}
+	commit, err := github.TagCommit(tags, repo.Owner, repo.Name, version)
+	if err != nil {
+		return ReleaseDispatch{}, fmt.Errorf("reading %s's %s tag: %w", repo, version, github.Readable(err))
+	}
+	if commit == "" {
+		return ReleaseDispatch{}, &NotFoundError{ID: version, message: fmt.Sprintf("%s is not a release: %s has no %s tag", version, repo, version)}
+	}
+	signer, err := releaseapproval.LoadSigner(c.Config.DataDir)
+	if err != nil {
+		return ReleaseDispatch{}, err
+	}
+	signed, err := signer.Sign(ctx, releaseapproval.Record{
+		Repo: repo.String(), Version: version, Decision: "rollback", Commit: commit, Approver: actor,
+		RollbackTo: opts.To, Reason: opts.Reason, Issued: now, Expires: now.Add(releaseapproval.Lifetime),
+	})
+	if err != nil {
+		return ReleaseDispatch{}, err
+	}
+	d := ReleaseDispatch{Repo: repo.String(), Workflow: GitHubPromoteReleaseWorkflow, Ref: releaseTrunk, Commit: commit,
+		By: actor, At: now, Expires: now.Add(releaseapproval.Lifetime)}
+	inputs := map[string]string{
+		"version":            version,
+		"decision":           "rollback",
+		"approval":           signed.Record,
+		"approval_signature": signed.Signature,
+	}
+	if opts.To != "" {
+		inputs["rollback_to"] = opts.To
+	}
+	if opts.Reason != "" {
+		inputs["reason"] = opts.Reason
+	}
+	if err := dispatcher.DispatchWorkflow(repo.Owner, repo.Name, GitHubPromoteReleaseWorkflow, releaseTrunk, inputs); err != nil {
+		return ReleaseDispatch{}, fmt.Errorf("dispatching %s's %s: %w", repo, GitHubPromoteReleaseWorkflow, github.Readable(err))
+	}
+	releaseDispatches[key] = d
+	return d, nil
+}
+
 // ReleaseApprovalKey is the public key promote-release.yml verifies an
 // Inbox approval with: the value for the repository variable
 // GRAIN_RELEASE_APPROVAL_KEY.
