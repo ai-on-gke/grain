@@ -315,12 +315,14 @@ job_names_json() {
   printf '%s\n' "$1" | jq -Rn '[inputs | select(test("\\S")) | capture("^\\s*(?<id>[^=]+?)\\s*=\\s*(?<name>.*?)\\s*$")]'
 }
 
-# from_app: a check run posted by the app $app names (its slug or id);
-# sha_ok: a sha that is $rc's.
+# from_app: a check run posted by the app $app names -- its id when $app
+# is all digits, so an app whose slug is that number cannot pass for it,
+# and its slug otherwise; sha_ok: a sha that is $rc's.
 # shellcheck disable=SC2016 # jq, not shell
 JQ_CHECK_RUN='
   def from_app: $app != "" and (.app | type == "object")
-    and ((.app.slug // "") == $app or ((.app.id // "") | tostring) == $app);
+    and (if ($app | test("^[0-9]+$")) then ((.app.id // "") | tostring) == $app
+         else (.app.slug // "") == $app end);
   def sha_ok: (. // "" | ascii_downcase) as $h | $h == "" or ($rc | startswith($h)) or ($h | startswith($rc));
 '
 # The attempts of every job in a listing, one line per job: stage, job
