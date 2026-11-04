@@ -48,6 +48,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -428,7 +429,7 @@ func (c Config) upgradeInterruptNotes(ctx context.Context, store *model.Store) m
 		c.CLIRun = mc.CLIRun
 	}
 	out := map[string]string{}
-	for _, r := range c.ResolveCLIRuns(ctx) {
+	for _, r := range c.ResolveCLIRuns(hostd.ForDisplay(ctx)) {
 		if r.UpgradeInterrupts != "" {
 			out[r.Framework] = r.UpgradeInterrupts
 		}
