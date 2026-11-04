@@ -1,9 +1,21 @@
 # Design: Release from Trunk
 
-**Status:** Proposed  
+**Status:** Partly superseded by [`releases.playbook.md`](../playbook/releases.playbook.md) (continuous releases). See the note below.  
 **Author:** Grain Agent ([Task #683](/tasks/683), from [Task #652](/tasks/652))  
 **Created:** 2026-10-24  
 **Supersedes:** Stabilization-branch workflow in `docs/release-candidate-management.md`
+
+> **Superseded in part.** [`releases.playbook.md`](../playbook/releases.playbook.md) ("Relationship to `release-from-trunk`") replaces this design's staging soak, its daily cadence and its per-release release-notes agent task. What it keeps from here: releasing from `main` with no stabilization branch (§1), LKG selection (§2, narrowed to `tests.yml` and `release.yml`; `nightly.yml` is now Stage 1 of qualification on the rc), the tag and channel conventions (`vX.Y.0-rc.N`, `-discarded`, `vX.Y.0`, `latest`, `candidate`/`rc`; §4's failed-rc handling and the version numbering section), the operator controls in `scripts/release.conf`, `infra` verdicts and their re-runs, mechanical `scripts/release-notes.sh`, and the `vX.Y.0-pending` stage with a person's Approve (§4, RFT-8), now the release's one person action.
+>
+> | Section here | Disposition | Replaced by |
+> | --- | --- | --- |
+> | Goal 5, §3 (24-hour soak on `grain-candidate`, `check-soak`, `RELEASE_STAGING_URL`, `staging-ui-exploration`) | **Superseded** | Two-stage qualification of the rc: Stage 1 `nightly.yml`, Stage 2 `grain/release-qualification` (playbook §2) |
+> | §4 "When the Soak Fails" step 2 (soak triage) | **Superseded** | `pipeline.rc-failed:<rc_tag>` and the pipeline steward (playbook §12) |
+> | §5 (at most daily, `15 4 * * *` cron) | **Superseded** | An event-driven train, at most one rc qualifying at a time, `RELEASE_MIN_INTERVAL_MINUTES` between releases (playbook §6, §7) |
+> | §6 "Writing release-note highlights before approval", RFT-6's `.grain/templates/release-notes.yml` | **Superseded** | Notes generated mechanically during promotion (playbook §8) |
+> | RFT-4's `check-soak`, RFT-7's soak documentation | **Superseded** | `check-qualification` (`scripts/candidate-gate.sh`), `docs/release-candidate-management.md` |
+>
+> The rest of this document is kept as the record of how the trunk release was designed.
 
 ---
 
@@ -161,6 +173,8 @@ To prevent ordinary task load from starving release qualification:
 
 ### 3. Canary = Staging Environment (`grain-candidate` ~24h Soak)
 
+> **Superseded** by [`releases.playbook.md`](../playbook/releases.playbook.md) §2: there is no staging soak. An rc is qualified by Stage 1 (`nightly.yml`) and Stage 2 (`grain/release-qualification`) against its commit.
+
 When `release-train.yml` selects a new `LKG` commit $S$ on `main`, it tags $S$ as `vX.Y.0-rc.N` and deploys $S$ to the staging environment for a ~24-hour soak. A soak that passes does not make the release: it stages it as `vX.Y.0-pending` for a person to approve (§4).
 
 #### Staging Configuration (`grain-candidate`)
@@ -263,6 +277,8 @@ Once `vX.Y.0-rc.N` has soaked for at least `24h - RELEASE_INTERVAL_SLACK_HOURS` 
 
 #### When the Soak Fails (`RED`)
 
+> **Superseded in part** by [`releases.playbook.md`](../playbook/releases.playbook.md): an rc now fails on its qualification, not a soak, and step 2's soak triage is the pipeline steward's `pipeline.rc-failed` triage (playbook §12). Steps 1 and 3 (the `-discarded` marker and the strictly newer next rc) survive.
+
 If the soak gate is **RED**:
 
 1. **Drop `vX.Y.0-rc.N` and mark its image discarded:** `vX.Y.0-rc.N` is never promoted. `latest` remains untouched at the previously promoted release. The release workflow invokes `scripts/release-images.sh discard-rc vX.Y.0-rc.N` to push a registry marker tag `:vX.Y.0-rc.N-discarded` (on `grain` and `google-grain`) without moving `:candidate` / `:rc` backwards, so deployments on the RC channel can detect that their running RC was discarded.
@@ -272,6 +288,8 @@ If the soak gate is **RED**:
 ---
 
 ### 5. Cadence: At Most Daily
+
+> **Superseded** by [`releases.playbook.md`](../playbook/releases.playbook.md) §6 and §7: the train runs as soon as an rc has a verdict and `main` has a newer known-good commit, with `RELEASE_MIN_INTERVAL_MINUTES` between releases and a periodic run kept only as a safety wake.
 
 The release workflow runs on a daily cron (`15 4 * * *` UTC, ~2 hours after `02:11 UTC` `nightly.yml` starts on `main`) and supports manual `workflow_dispatch`.
 
@@ -317,7 +335,7 @@ Agents are invoked only where human-like judgment or prose synthesis is needed:
    - Red `tests.yml` on `main`: confirmed and filed as a `fixes_base_branch: true` task by `pkg/orchestrator/basebranchci.go`, supervised by `system:release-manager`.
    - Red `release.yml` on `main`: filed as a release-triage task by `pkg/orchestrator/basebranchrelease.go`.
    - Red `nightly.yml` or failed soak in `release-train.yml`: filed as a scheduled-workflow review task by `pkg/orchestrator/scheduledworkflow.go` (`fileScheduledWorkflowReview`).
-2. **Writing release-note highlights before approval:**
+2. **Writing release-note highlights before approval** (*superseded* by [`releases.playbook.md`](../playbook/releases.playbook.md) §8: notes are generated mechanically during promotion, and prose digests move to the weekly `release-process-review`):
    - When `release-train.yml` stages `vX.Y.0-pending`, it files a lightweight agent task from `.grain/templates/release-notes.yml` (`base: main`, `auto-merge: true`), so the notes are merged by the time a person is asked to approve.
    - The agent runs `scripts/release-notes.sh vX.Y.0 <prev-tag> vX.Y.0` to generate `docs/releases/vX.Y.0.md`, writes 2–5 human-friendly bullets in `## Highlights` summarizing the user-visible changes, and opens a normal PR to `main`.
 
@@ -720,6 +738,8 @@ When this design document is merged, the following stages can be filed as implem
 - Update `pkg/ui/upgrade.go` and `ui/src/components/UpgradePanel.jsx` (with tests in `pkg/ui/upgrade_test.go` and `ui/src/components/UpgradePanel.test.jsx`) to surface the discarded-RC warning alert in the Upgrade pane and offer a one-click action to switch to `latest` (or a replacement RC).
 
 ### Stage 6: Scheduled Release Workflow (`.grain/workflows/release-train.yml`) and Release-Notes Template (`.grain/templates/release-notes.yml`) {#RFT-6}
+
+> **Superseded** by [`releases.playbook.md`](../playbook/releases.playbook.md): the train is the task filed from `.grain/templates/release-train.yml` (playbook §0.4), and the per-release release-notes task is replaced by mechanical notes (playbook §8).
 
 - Add `.grain/workflows/release-train.yml` (`on: schedule: [{cron: "15 4 * * *"}]` and `workflow_dispatch`, `capabilities: ["repo-write:bwsalmon/grain", "release-gate-read", "package-publish"]`, `optional-capabilities: ["image-signing"]`) running `scripts/release-from-trunk.sh` and publishing RC and pending images. It never pushes `vX.Y.0` or moves `latest` itself -- a person's approval does, through `.grain/workflows/promote-release.yml` (RFT-8).
 - Add `.grain/templates/release-notes.yml` (`base: main`, `auto-merge: true`) to run `scripts/release-notes.sh`, draft `## Highlights`, and open a PR for `docs/releases/vX.Y.0.md` when a release is staged as `vX.Y.0-pending`, before a person approves it.
