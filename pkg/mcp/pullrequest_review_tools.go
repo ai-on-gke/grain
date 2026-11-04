@@ -131,8 +131,9 @@ func reviewCommentsSection(client PullRequestReader, commenter PullRequestCommen
 		}
 	}
 	return "\n" + renderReviewComments(comments, threads) + unread +
-		"Answer one with reply_to_pull_request_comment (comment_id and body), and mark its " +
-		"conversation resolved with resolve_review_thread once it is dealt with -- a " +
+		"Answer one with `grain pr reply <body> --comment-id <id>` (reply_to_pull_request_comment, " +
+		"comment_id and body, where this server lists it), and mark its conversation resolved " +
+		"with `grain pr resolve --comment-id <id>` (resolve_review_thread) once it is dealt with -- a " +
 		"repository that requires conversation resolution will not merge this pull " +
 		"request while any thread is open.\n"
 }

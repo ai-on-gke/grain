@@ -497,6 +497,38 @@ describe("sortTasks", () => {
     ).toEqual(["proposed", "running", "closed"]);
   });
 
+  it("keeps the two asked states together, ahead of failed", () => {
+    // The sidebar and the Kanban board show both asked states as one
+    // Asked, before Failed; model.StateOf's precedence (STATE_ORDER)
+    // puts failed between them, and a list ordered by state used to
+    // follow it and split the asked tasks in two.
+    const tasks = [
+      named("a", { state: "awaiting_submit" }),
+      named("b", { state: "failed" }),
+      named("c", { state: "completed" }),
+      named("d", { state: "awaiting_reply" }),
+      named("e", { state: "running" }),
+    ];
+    const by = (dir) =>
+      sortTasks(tasks, [{ attr: "state", dir }], attrs, config).map(
+        (t) => t.state,
+      );
+    expect(by("asc")).toEqual([
+      "running",
+      "awaiting_reply",
+      "awaiting_submit",
+      "failed",
+      "completed",
+    ]);
+    expect(by("desc")).toEqual([
+      "completed",
+      "failed",
+      "awaiting_submit",
+      "awaiting_reply",
+      "running",
+    ]);
+  });
+
   it("orders tasks by started and completed times", () => {
     const t1 = named("first", {
       startedAt: "2026-02-10T10:00:00Z",
