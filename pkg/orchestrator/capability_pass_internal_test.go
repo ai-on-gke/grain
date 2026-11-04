@@ -773,6 +773,63 @@ func (b *blockingReleaseCaller) CallTool(ctx context.Context, name string, args 
 	return b.mintCaller.CallTool(ctx, name, args)
 }
 
+type placedDownableServer struct {
+	*downableServer
+	placedHostd string
+}
+
+func (p placedDownableServer) HostdOf(id string) (string, bool) {
+	if id == passTestCap {
+		return p.placedHostd, true
+	}
+	return "", false
+}
+
+// A grant minted from a placed capability server (CapabilityHostdOf) is
+// notified only when that placed server's hostd drops -- not the
+// deployment's default registry or another hostd -- and a release retried
+// after that hostd reconnects still stamps the placed hostd on its audit.
+func TestPlacedServerDropAndRetriedReleaseFollowGrantHostd(t *testing.T) {
+	caller := &mintCaller{releaseReply: `{"status":"ok","audit":[` +
+		`{"time":"2026-10-22T12:05:00Z","attempt_id":"grain-7-1-0","script":"deploy"}]}`}
+	deps, store, ctx, now := passHarness(t, caller)
+	down := &downableServer{oneServer: deps.CapabilityServers.(oneServer)}
+	deps.CapabilityServers = placedDownableServer{downableServer: down, placedHostd: "ws-a"}
+	deps.CapabilityHostd = "local"
+	deps.CapabilityPasses.now = func() time.Time { return *now }
+
+	if adm, err := capabilityAdmitter(deps, admitAll)(ctx, dispatch.Candidate{TaskID: "7", RunID: "7-1", Attempt: 1}); err != nil || !adm.Admitted {
+		t.Fatalf("admit = %+v, %v", adm, err)
+	}
+	// Neither a drop on the deployment's own registry nor a drop on ws-b
+	// touches a grant minted on ws-a; a drop on ws-a tells the run.
+	noteCapabilityServerDropped(ctx, store, deps.CapabilityPasses, passTestCap, "", "failed", "local down", false, *now)
+	noteCapabilityServerDropped(ctx, store, deps.CapabilityPasses, passTestCap, "ws-b", "failed", "ws-b down", false, *now)
+	if comments, _ := store.Comments(ctx, "7"); len(comments) != 0 {
+		t.Fatalf("unrelated hostd drops notified placed grant: %+v", comments)
+	}
+	noteCapabilityServerDropped(ctx, store, deps.CapabilityPasses, passTestCap, "ws-a", "failed", "ws-a down", false, *now)
+	if comments, _ := store.Comments(ctx, "7"); len(comments) != 1 || !strings.Contains(comments[0].Body, "ws-a down") {
+		t.Fatalf("placed hostd drop notice = %+v, want ws-a down", comments)
+	}
+
+	// Held while ws-a is down, then released when ws-a attaches again:
+	// the retried audit record carries ws-a, not local.
+	down.down = true
+	releaseRunCapabilities(ctx, deps, "7", "7-1")
+	down.down = false
+	retried := deps.CapabilityPasses.RetryReleases(ctx)
+	r, ok := retried["7-1"]
+	if !ok || len(r.Audits) != 1 {
+		t.Fatalf("retried = %+v, want 7-1's audit", retried)
+	}
+	records := capabilityAuditRecords(r.Audits, *now)
+	setAuditRecordHostds(records, r.Hostd, r.Servers)
+	if len(records) != 1 || records[0].Hostd != "ws-a" {
+		t.Fatalf("retried audit records = %+v, want Hostd=ws-a", records)
+	}
+}
+
 // What a local-scripts declaration became on host-script
 // (model.SetRuntimeGrantExpansions) is withheld from a scheduled run,
 // while the task's other grants still are minted and a task a person

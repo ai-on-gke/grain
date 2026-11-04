@@ -204,6 +204,7 @@ func (l *LiveConfig) withHostdCapabilityServers(h *hostdCapabilityServers) *Live
 	if h != nil {
 		// Each run routed by the configuration as it stands.
 		h.live = l.Current
+		go h.attachConnected()
 	}
 	l.hostdCapabilityServers = h
 	return l
@@ -452,7 +453,7 @@ func (l *LiveConfig) Refresh(ctx context.Context, deps *orchestrator.Deps) (poll
 	// goroutine (pkg/capability/servers).
 	if l.capabilityServers != nil {
 		configured := registerBuiltinCapabilityServers(ctx, l.store, now.DataDir, stored.MCPServers)
-		l.capabilityServers.Update(configured)
+		l.capabilityServers.Update(deploymentCapabilityServers(configured))
 		l.hostdCapabilityServers.update(configured)
 	}
 

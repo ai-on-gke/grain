@@ -2397,6 +2397,9 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 						"a turn agy is retrying should not be allowed longer than a slow one", i, retryCutoff, turnTimeout)
 				}
 			}
+			if err := c.normalizeConnectionHostd(ctx, cfg.AgentBackends, &backend); err != nil {
+				return model.Config{}, validationErrorf("agentBackends[%d]: %v", i, err)
+			}
 			seen[backend.ID] = true
 			(*req.AgentBackends)[i] = backend
 		}

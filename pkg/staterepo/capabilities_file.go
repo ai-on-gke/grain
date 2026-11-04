@@ -87,18 +87,19 @@ type capabilitiesRepoDefault struct {
 // is grain_config.mcp_servers' (protocol.ServerConfig), and its methods
 // and restrictions, which are the catalogue's.
 type capabilityServerEntry struct {
-	ID      string            `yaml:"id"`
-	Name    string            `yaml:"name,omitempty"`
-	URL     string            `yaml:"url,omitempty"`
-	Command string            `yaml:"command,omitempty"`
-	Args    []string          `yaml:"args,omitempty"`
-	Env     map[string]string `yaml:"env,omitempty"`
-	Headers map[string]string `yaml:"headers,omitempty"`
-	Run     string            `yaml:"run,omitempty"`
-	Enabled *bool             `yaml:"enabled,omitempty"`
-	Builtin string            `yaml:"builtin,omitempty"`
-	Aliases []string          `yaml:"aliases,omitempty"`
-	Notice  string            `yaml:"notice,omitempty"`
+	ID      string               `yaml:"id"`
+	Name    string               `yaml:"name,omitempty"`
+	URL     string               `yaml:"url,omitempty"`
+	Command string               `yaml:"command,omitempty"`
+	Args    []string             `yaml:"args,omitempty"`
+	Env     map[string]string    `yaml:"env,omitempty"`
+	Headers map[string]string    `yaml:"headers,omitempty"`
+	Run     string               `yaml:"run,omitempty"`
+	Hostd   protocol.HostdTarget `yaml:"hostd,omitempty"`
+	Enabled *bool                `yaml:"enabled,omitempty"`
+	Builtin string               `yaml:"builtin,omitempty"`
+	Aliases []string             `yaml:"aliases,omitempty"`
+	Notice  string               `yaml:"notice,omitempty"`
 	// Secrets are configuration values held by reference
 	// ($secret:<name>), merged into Config: never a secret's value.
 	Secrets      map[string]string             `yaml:"secrets,omitempty"`
@@ -338,7 +339,7 @@ func (d *capabilitiesDoc) mcpServers() (map[string]protocol.ServerConfig, error)
 		}
 		cfg := protocol.ServerConfig{
 			Command: s.Command, Args: s.Args, Env: s.Env, ServerURL: s.URL, Headers: s.Headers,
-			Disabled: s.Enabled != nil && !*s.Enabled, Run: s.Run, Builtin: s.Builtin,
+			Disabled: s.Enabled != nil && !*s.Enabled, Run: s.Run, Hostd: s.Hostd, Builtin: s.Builtin,
 			Aliases: s.Aliases, Notice: s.Notice,
 		}
 		if len(s.Config) > 0 || len(s.Secrets) > 0 {
@@ -674,7 +675,7 @@ func capabilitiesDocumentFor(ctx context.Context, db querier) ([]byte, error) {
 		enabled := !cfg.Disabled
 		e := capabilityServerEntry{
 			ID: id, Name: meta.Name, URL: cfg.ServerURL, Command: cfg.Command, Args: cfg.Args, Env: cfg.Env,
-			Headers: cfg.Headers, Run: cfg.Run, Enabled: &enabled, Builtin: cfg.Builtin, Aliases: cfg.Aliases,
+			Headers: cfg.Headers, Run: cfg.Run, Hostd: cfg.Hostd, Enabled: &enabled, Builtin: cfg.Builtin, Aliases: cfg.Aliases,
 			Notice: cfg.Notice, Methods: meta.Methods, Restrictions: meta.Restrictions,
 		}
 		for k, v := range cfg.Config {
