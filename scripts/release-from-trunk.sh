@@ -600,7 +600,7 @@ qualification_json() {
       die "could not read the check runs on $1 from $github_api"
     qual_checks="$work/qual-checks.json"
   else
-    say "no GitHub token, so no grain/release-qualification check run to read for $1"
+    say "no GitHub token and no RELEASE_QUALIFICATION_CHECKS_JSON (a task writes it with \`grain ci checks $2 --name grain/release-qualification --format github\`), so no grain/release-qualification check run to read for $1"
   fi
 }
 

@@ -2,7 +2,10 @@ name: Release train
 title: Run the release train (cut, check, stage)
 base: main
 # Reads main's tests.yml / release.yml / nightly.yml verdicts (GitHub
-# Actions runs, through grain's own forge connection: `grain -json ci list`).
+# Actions runs) and the rc's grain/release-qualification check run through
+# grain's own forge connection: `grain ci list --format github|github-jobs`
+# and `grain ci checks --format github`, which answer in GitHub's own REST
+# shapes, the ones scripts/candidate-gate.sh reads.
 # The api:release-gate-read preset and package-publish are CI-only
 # (model.CapabilitySpec.CIOnly), so a task holds neither: this train pushes
 # git refs and nothing else, and its images are a CI job's to publish.
@@ -61,34 +64,51 @@ body: |
      git clone -q "$(git -C ~/work remote get-url origin)" ~/train
      cd ~/train && git fetch -q --tags --force origin
      ```
-  2. Hand the train main's CI verdicts as files. It cannot read them
-     itself from a task (no GitHub token, no CI-only release-gate-read).
-     `grain -json ci list` lists this repository's GitHub Actions runs;
-     write what it gives, unedited:
+  2. Hand the train its CI verdicts as files. It cannot read them itself
+     from a task (no GitHub token, no CI-only release-gate-read), but
+     grain reads them through its own forge connection and writes them in
+     GitHub's own shapes, the ones `scripts/candidate-gate.sh` reads.
+     Write what each command gives, unedited. Main's GitHub Actions runs:
      ```
-     grain -json ci list --repo ai-on-gke/grain --ref main --provider github-actions --limit 500 > ~/runs.json
+     grain ci list --repo ai-on-gke/grain --ref main --provider github-actions \
+       --format github --limit 500 > ~/runs.json
      ```
-     and, when a `vX.Y.Z-rc.N` is in qualification (the newest rc tag past
-     the newest release with no `-discarded` beside it), its nightly.yml
-     runs: `grain -json ci list --repo ai-on-gke/grain --ref <rc tag>
-     --workflow nightly.yml > ~/qual-runs.json`. Never write, edit or
-     filter a verdict by hand: the train trusts these files, and a
-     verdict you made up is a release nobody qualified. If a listing is
-     not in a shape `candidate-gate.sh` reads (it says so and exits),
-     stop and report it rather than reshaping it.
+     And when a `vX.Y.Z-rc.N` is in qualification (the newest rc tag past
+     the newest release with no `-discarded` beside it), every attempt of
+     the jobs of its nightly.yml runs (Stage 1), and every attempt of the
+     `grain/release-qualification` check run on its commit (Stage 2):
+     ```
+     rc=vX.Y.Z-rc.N; rc_sha="$(git rev-parse "$rc^{commit}")"
+     grain ci list --repo ai-on-gke/grain --ref "$rc" --workflow nightly.yml \
+       --format github-jobs > ~/qual-runs.json
+     grain ci checks "$rc_sha" --repo ai-on-gke/grain \
+       --name grain/release-qualification --format github > ~/qual-checks.json
+     ```
+     Never write, edit or filter a verdict by hand: the train trusts these
+     files, and a verdict you made up is a release nobody qualified. If a
+     command fails, or a listing is not in a shape `candidate-gate.sh`
+     reads (it says so and exits), stop and report it rather than reshaping
+     it. A `grain_note` in a listing says what grain left out of it (runs
+     it holds only from its record of their jobs); report it, never fill
+     it in.
   3. Run the train:
      ```
      RELEASE_PUSH_GRANT=train RELEASE_CI_SOURCE=grain \
        RELEASE_RUNS_JSON=~/runs.json \
        RELEASE_QUALIFICATION_RUNS_JSON=~/qual-runs.json \
+       RELEASE_QUALIFICATION_CHECKS_JSON=~/qual-checks.json \
+       RELEASE_QUALIFICATION_APP="$(jq -r '.grain_app // empty' ~/qual-checks.json)" \
        RELEASE_IMAGES=off RELEASE_NOTES_TASK=off RELEASE_NOTIFY=off \
        bash scripts/release-from-trunk.sh
      ```
-     Leave out `RELEASE_QUALIFICATION_RUNS_JSON` when no rc is in
-     qualification. With no GitHub token the train cannot read the
-     `grain/release-qualification` check run (Stage 2), so an rc whose
-     Stage 1 passed reads as still pending: report that rather than
-     supplying a check run yourself. `RELEASE_PUSH_GRANT=train` makes the script refuse,
+     Leave out the three `RELEASE_QUALIFICATION_*` settings when no rc is
+     in qualification. `RELEASE_QUALIFICATION_APP` is the GitHub App
+     grain's forge connection posts `grain/release-qualification` as, which
+     `grain ci checks` names in `grain_app`: only that App's check run
+     qualifies an rc, and a same-named one from anything else is reported
+     as `IGNORED`. Take it from the file, never from anywhere else; if it is
+     empty the train stops at Stage 2, and that is to be reported, not
+     worked around. `RELEASE_PUSH_GRANT=train` makes the script refuse,
      before it pushes, any ref outside this template's grant, and any
      `vX.Y.Z` or `latest` at all.
   4. Report what it did in your closing note: the rc it cut (and the

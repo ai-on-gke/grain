@@ -301,6 +301,7 @@ type sandboxExternalCI struct{}
 var (
 	_ ci.ExternalRuns        = sandboxExternalCI{}
 	_ ci.ExternalRunsCounter = sandboxExternalCI{}
+	_ ci.ExternalAttempts    = sandboxExternalCI{}
 )
 
 func (sandboxExternalCI) FindExternalRuns(ctx context.Context, f ci.RunFilter, limit int) ([]ci.Run, string) {
@@ -325,6 +326,35 @@ func (sandboxExternalCI) ExternalRun(ctx context.Context, id string) (ci.Run, bo
 		return ci.Run{}, false, nil
 	}
 	return client.ExternalCIRuns().ExternalRun(ctx, id)
+}
+
+func (sandboxExternalCI) ExternalJobAttempts(ctx context.Context, id string) ([]ci.GitHubJob, error) {
+	attempts, err := sandboxExternalAttempts()
+	if err != nil {
+		return nil, err
+	}
+	return attempts.ExternalJobAttempts(ctx, id)
+}
+
+func (sandboxExternalCI) ExternalCheckRuns(ctx context.Context, repo, sha, name string) ([]ci.GitHubCheckRun, string, error) {
+	attempts, err := sandboxExternalAttempts()
+	if err != nil {
+		return nil, "", err
+	}
+	return attempts.ExternalCheckRuns(ctx, repo, sha, name)
+}
+
+// sandboxExternalAttempts is liveSandboxCLI's ci.ExternalAttempts.
+func sandboxExternalAttempts() (ci.ExternalAttempts, error) {
+	client := liveSandboxCLI.Load()
+	if client == nil {
+		return nil, errSandboxCLIUnwired
+	}
+	attempts, ok := client.ExternalCIRuns().(ci.ExternalAttempts)
+	if !ok {
+		return nil, errSandboxCLIUnwired
+	}
+	return attempts, nil
 }
 
 func (sandboxExternalCI) ExternalJobLog(ctx context.Context, id, job string) (string, error) {

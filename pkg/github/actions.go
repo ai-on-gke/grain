@@ -76,16 +76,21 @@ type ActionsPageReader interface {
 // ActionsRunJob is one job of a workflow run with its steps, as
 // GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs gives it.
 type ActionsRunJob struct {
-	ID          int64            `json:"id"`
-	RunID       int64            `json:"runId"`
-	RunAttempt  int              `json:"runAttempt,omitempty"`
-	Name        string           `json:"name"`
-	Status      string           `json:"status"`
-	Conclusion  string           `json:"conclusion,omitempty"`
-	StartedAt   *time.Time       `json:"startedAt,omitempty"`
-	CompletedAt *time.Time       `json:"completedAt,omitempty"`
-	HTMLURL     string           `json:"htmlUrl,omitempty"`
-	Steps       []ActionsRunStep `json:"steps,omitempty"`
+	ID         int64  `json:"id"`
+	RunID      int64  `json:"runId"`
+	RunAttempt int    `json:"runAttempt,omitempty"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion,omitempty"`
+	// WorkflowName, HeadSHA and CreatedAt are the run's, as GitHub repeats
+	// them on each of its jobs.
+	WorkflowName string           `json:"workflowName,omitempty"`
+	HeadSHA      string           `json:"headSha,omitempty"`
+	CreatedAt    *time.Time       `json:"createdAt,omitempty"`
+	StartedAt    *time.Time       `json:"startedAt,omitempty"`
+	CompletedAt  *time.Time       `json:"completedAt,omitempty"`
+	HTMLURL      string           `json:"htmlUrl,omitempty"`
+	Steps        []ActionsRunStep `json:"steps,omitempty"`
 }
 
 // ActionsRunStep is one step of an ActionsRunJob.
@@ -304,11 +309,32 @@ func (c *RESTClient) GetActionsRun(owner, repo string, runID int64) (*WorkflowRu
 // ListActionsJobs is every job of the run's latest attempt, steps and
 // all, following GitHub's pagination.
 func (c *RESTClient) ListActionsJobs(owner, repo string, runID int64) ([]ActionsRunJob, error) {
+	return c.listActionsJobs(owner, repo, runID, "")
+}
+
+// ActionsJobAttemptsReader is the optional Client capability for every
+// attempt of every job of a run (GitHub's filter=all), where
+// ListActionsJobs is each job's latest attempt alone. It is what the
+// release train's qualification gate reads: a job that failed and
+// passed on its retry is a flake only when both attempts are in hand.
+type ActionsJobAttemptsReader interface {
+	ListActionsJobAttempts(owner, repo string, runID int64) ([]ActionsRunJob, error)
+}
+
+var _ ActionsJobAttemptsReader = (*RESTClient)(nil)
+
+// ListActionsJobAttempts is GET
+// /repos/{owner}/{repo}/actions/runs/{run_id}/jobs?filter=all.
+func (c *RESTClient) ListActionsJobAttempts(owner, repo string, runID int64) ([]ActionsRunJob, error) {
+	return c.listActionsJobs(owner, repo, runID, "&filter=all")
+}
+
+func (c *RESTClient) listActionsJobs(owner, repo string, runID int64, query string) ([]ActionsRunJob, error) {
 	if runID <= 0 {
 		return nil, nil
 	}
 	var out []ActionsRunJob
-	path := fmt.Sprintf("/repos/%s/%s/actions/runs/%d/jobs?per_page=100", owner, repo, runID)
+	path := fmt.Sprintf("/repos/%s/%s/actions/runs/%d/jobs?per_page=100%s", owner, repo, runID, query)
 	for path != "" {
 		resp, err := c.get(owner, repo, path)
 		if err != nil {
@@ -322,16 +348,19 @@ func (c *RESTClient) ListActionsJobs(owner, repo string, runID int64) ([]Actions
 		}
 		var data struct {
 			Jobs []struct {
-				ID          int64      `json:"id"`
-				RunID       int64      `json:"run_id"`
-				RunAttempt  int        `json:"run_attempt"`
-				Name        string     `json:"name"`
-				Status      string     `json:"status"`
-				Conclusion  string     `json:"conclusion"`
-				StartedAt   *time.Time `json:"started_at"`
-				CompletedAt *time.Time `json:"completed_at"`
-				HTMLURL     string     `json:"html_url"`
-				Steps       []struct {
+				ID           int64      `json:"id"`
+				RunID        int64      `json:"run_id"`
+				RunAttempt   int        `json:"run_attempt"`
+				WorkflowName string     `json:"workflow_name"`
+				HeadSHA      string     `json:"head_sha"`
+				Name         string     `json:"name"`
+				Status       string     `json:"status"`
+				Conclusion   string     `json:"conclusion"`
+				CreatedAt    *time.Time `json:"created_at"`
+				StartedAt    *time.Time `json:"started_at"`
+				CompletedAt  *time.Time `json:"completed_at"`
+				HTMLURL      string     `json:"html_url"`
+				Steps        []struct {
 					Number      int        `json:"number"`
 					Name        string     `json:"name"`
 					Status      string     `json:"status"`
@@ -347,7 +376,8 @@ func (c *RESTClient) ListActionsJobs(owner, repo string, runID int64) ([]Actions
 		for _, job := range data.Jobs {
 			j := ActionsRunJob{
 				ID: job.ID, RunID: job.RunID, RunAttempt: job.RunAttempt, Name: job.Name,
-				Status: job.Status, Conclusion: job.Conclusion,
+				WorkflowName: job.WorkflowName, HeadSHA: job.HeadSHA,
+				Status: job.Status, Conclusion: job.Conclusion, CreatedAt: job.CreatedAt,
 				StartedAt: job.StartedAt, CompletedAt: job.CompletedAt, HTMLURL: job.HTMLURL,
 			}
 			if j.RunID == 0 {

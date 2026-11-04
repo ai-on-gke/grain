@@ -120,7 +120,7 @@ func TestUnknownSubcommandGetsTheSandboxHelp(t *testing.T) {
 		want string
 	}{
 		{[]string{"task", "lsit"}, "grain task: unknown command \"lsit\"\n\ngrain task (list | read | prompt | transcript | wait | message | propose)"},
-		{[]string{"ci", "foo"}, "grain ci: unknown command \"foo\"\n\ngrain ci (list | show | log | test-history | artifact | wait | run-job | retrigger)"},
+		{[]string{"ci", "foo"}, "grain ci: unknown command \"foo\"\n\ngrain ci (list | show | checks | log | test-history | artifact | wait | run-job | retrigger)"},
 		{[]string{"db", "upgrade-postgres"}, "grain db: unknown command \"upgrade-postgres\""},
 	} {
 		out, errOut, code := runIn(t, env, tc.args...)

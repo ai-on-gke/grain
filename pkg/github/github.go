@@ -2902,8 +2902,35 @@ func (c *RESTClient) CheckRunApp(owner, repo string) (string, error) {
 // is shaped differently -- {"total_count": N, "check_runs": [...]}, not a
 // bare array, which is GitHub's own shape for this one endpoint.
 func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) {
+	return c.listCheckRuns(owner, repo, ref, "")
+}
+
+// CheckRunAttemptsReader is the optional Client capability for every check
+// run named name against ref (GitHub's filter=all), where ListCheckRuns is
+// the latest of each alone, and for the App this client's own check
+// runs are posted as. It is what the release train's qualification gate
+// reads grain/release-qualification's attempts from.
+type CheckRunAttemptsReader interface {
+	ListCheckRunAttempts(owner, repo, ref, name string) ([]CheckRun, error)
+	CheckRunApp(owner, repo string) (string, error)
+}
+
+var _ CheckRunAttemptsReader = (*RESTClient)(nil)
+
+// ListCheckRunAttempts is GET
+// /repos/{owner}/{repo}/commits/{ref}/check-runs?check_name={name}&filter=all,
+// every check run of every name for "".
+func (c *RESTClient) ListCheckRunAttempts(owner, repo, ref, name string) ([]CheckRun, error) {
+	query := "&filter=all"
+	if name != "" {
+		query += "&check_name=" + url.QueryEscape(name)
+	}
+	return c.listCheckRuns(owner, repo, ref, query)
+}
+
+func (c *RESTClient) listCheckRuns(owner, repo, ref, query string) ([]CheckRun, error) {
 	var runs []CheckRun
-	path := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs?per_page=100", owner, repo, url.PathEscape(ref))
+	path := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs?per_page=100%s", owner, repo, url.PathEscape(ref), query)
 	for path != "" {
 		resp, err := c.get(owner, repo, path)
 		if err != nil {
