@@ -92,28 +92,18 @@ func TestTaskBranchNamesPushAndOpenPullRequests(t *testing.T) {
 	}
 
 	// The fake agent: one commit on the task's branch with a 300-character
-	// summary line, pushed through the proxy. Each invocation keeps its
-	// request in a file of its own: two tasks' runs go at once, and a
-	// shared file let one run read the other's working directory.
+	// summary line, pushed through the proxy. Two tasks' runs go at once,
+	// each in its own sandbox: agy's working directory.
 	longSummary := strings.Repeat("x", 300)
 	agentScript := filepath.Join(home, "fake-agent")
-	mustWriteFile(t, agentScript, fmt.Sprintf(`#!/bin/sh
-set -e
-req="%[1]s.$$"
-cat > "$req"
-dir="$(sed -n 's/.*"working_directory":"\([^"]*\)".*/\1/p' "$req")"
-HOME="$dir"
+	writeFakeAgy(t, agentScript, `set -e
+HOME="$PWD"
 export HOME
-cd "$dir/work"
+cd work
 echo "agent was here $$" >> NOTES.md
 git add NOTES.md
-git -c user.name=agent -c user.email=agent@example.com commit -q -m "%[2]s" >&2
-git push -q origin HEAD >&2
-printf '%%s\n' '{"protocol_version":2,"result":{"final_text":"Pushed.","tool_calls":[{"name":"run_command","arguments":{"command":"git push origin HEAD"},"text":"exit=0"}],"transcript":"pushed"}}'
-`, filepath.Join(home, "fake-agent-request"), longSummary))
-	if err := os.Chmod(agentScript, 0o755); err != nil {
-		t.Fatal(err)
-	}
+git -c user.name=agent -c user.email=agent@example.com commit -q -m "`+longSummary+`" >&2
+git push -q origin HEAD >&2`, "Pushed.", fakeAgyTool{Name: "run_command", Args: map[string]any{"command": "git push origin HEAD"}, Output: "exit=0"})
 
 	var logs bytes.Buffer
 	daemonCmd := exec.Command(filepath.Join(dataDir, "daemon.sh"), "-github-host", githubHost, "-github-insecure-http", "-sandbox-port-base=0")
@@ -160,10 +150,7 @@ printf '%%s\n' '{"protocol_version":2,"result":{"final_text":"Pushed.","tool_cal
 	// The longest deployment id a system admin may set, so {deployment}
 	// takes as much of the name as it ever can.
 	deployment := strings.Repeat("d", model.MaxDeploymentIDLen)
-	backends := []model.AgentBackend{{
-		ID: "fake", Name: "fake agent", Framework: model.AgentFrameworkCustom, Command: agentScript,
-		Models: []string{"fake-model"},
-	}}
+	backends := []model.AgentBackend{fakeAgyConnection(agentScript)}
 	if _, err := client.UpdateSettings(ctx, ui.UpdateSettingsRequest{AgentBackends: &backends, DeploymentID: &deployment}); err != nil {
 		t.Fatalf("configuring the fake agent and deployment id: %v", err)
 	}
@@ -174,7 +161,7 @@ printf '%%s\n' '{"protocol_version":2,"result":{"final_text":"Pushed.","tool_cal
 		t.Helper()
 		task, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 			Title: title, Description: "Touch NOTES.md.", Repo: owner + "/" + repoName,
-			AgentFramework: model.AgentFrameworkCustom,
+			AgentFramework: model.AgentFrameworkAntigravity,
 		})
 		if err != nil {
 			t.Fatalf("filing %.40q: %v", title, err)

@@ -80,7 +80,6 @@ func TestConnectionCLIPathMustBeABinaryTheDaemonCanRun(t *testing.T) {
 		{"not executable", `{"framework":"claude","cliPath":"` + notExecutable + `"}`, "not an executable"},
 		{"directory", `{"framework":"claude","cliPath":"` + dir + `"}`, "not an executable"},
 		{"bare name off PATH", `{"framework":"claude","cliPath":"claude-gamma"}`, "PATH"},
-		{"custom backend", `{"framework":"custom","command":"run.sh","cliPath":"` + notExecutable + `"}`, "command"},
 	} {
 		code, out := putConnection(t, srv, "bob", tc.body)
 		if code != http.StatusBadRequest || !strings.Contains(out, "cliPath") || !strings.Contains(out, tc.want) {

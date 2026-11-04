@@ -710,6 +710,11 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     104,
+		Description: "disable (and keep) every stored custom command connection: the connection type is removed",
+		Up:          disableCustomConnections,
+	},
+	{
+		Version:     105,
 		Description: "add allowed_principal.reason, why an allowlist entry was added (required for serviceAccount: entries)",
 		Statements: []string{
 			"ALTER TABLE `allowed_principal` ADD COLUMN `reason` TEXT NOT NULL DEFAULT ''",

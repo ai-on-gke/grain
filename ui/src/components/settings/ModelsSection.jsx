@@ -27,7 +27,11 @@ import { useTimeZone } from "../../TimeZoneContext.jsx";
 import { liftAgentPause, pausedUntil } from "../../alerts.js";
 import { deploymentPath, useDeployment } from "../../useDeployment.js";
 import { randomUUID } from "../../randomUUID.js";
-import ModelBackendPage, { frameworkLabels } from "../ModelBackendPage.jsx";
+import ModelBackendPage, {
+  frameworkLabels,
+  isRemovedFramework,
+  removedFrameworkLabels,
+} from "../ModelBackendPage.jsx";
 import CLIRunLocations from "./CLIRunLocations.jsx";
 import ModelDefaults from "./ModelDefaults.jsx";
 import SettingsCard, { SettingsReadOnlyContext } from "./SettingsCard.jsx";
@@ -289,6 +293,9 @@ export default function ModelsSection({ config, onSaved, showError }) {
             const pausedModels = backend.disabled
               ? []
               : modelPauses(config?.agentPause, backend);
+            // A connection of a type grain no longer runs (the custom
+            // command type): kept, disabled, until somebody deletes it.
+            const removed = isRemovedFramework(backend.framework);
             return (
               <Box
                 key={backend.id}
@@ -319,6 +326,7 @@ export default function ModelsSection({ config, onSaved, showError }) {
                       <Chip
                         label={
                           frameworkLabels[backend.framework] ||
+                          removedFrameworkLabels[backend.framework] ||
                           backend.framework ||
                           "Unknown framework"
                         }
@@ -327,19 +335,23 @@ export default function ModelsSection({ config, onSaved, showError }) {
                       />
                       <Chip
                         label={
-                          backend.disabled
-                            ? "Disabled"
-                            : paused
-                              ? "Paused"
-                              : "Active"
+                          removed
+                            ? "Removed"
+                            : backend.disabled
+                              ? "Disabled"
+                              : paused
+                                ? "Paused"
+                                : "Active"
                         }
                         size="small"
                         color={
-                          backend.disabled
-                            ? "default"
-                            : paused
-                              ? "warning"
-                              : "success"
+                          removed
+                            ? "error"
+                            : backend.disabled
+                              ? "default"
+                              : paused
+                                ? "warning"
+                                : "success"
                         }
                         variant="filled"
                       />
@@ -381,93 +393,113 @@ export default function ModelsSection({ config, onSaved, showError }) {
                         )}
                       </Stack>
                     )}
-                    <Typography variant="body2" color="text.secondary">
-                      Up to {backend.concurrency > 0 ? backend.concurrency : 4}{" "}
-                      at a time
-                    </Typography>
+                    {removed ? (
+                      <Typography
+                        variant="body2"
+                        color="error"
+                        className="connection-removed"
+                      >
+                        {backend.disabledReason ||
+                          "This connection type was removed; replace it with an Antigravity, Claude or Codex connection."}
+                      </Typography>
+                    ) : (
+                      <Typography variant="body2" color="text.secondary">
+                        Up to{" "}
+                        {backend.concurrency > 0 ? backend.concurrency : 4} at a
+                        time
+                      </Typography>
+                    )}
                   </Box>
                   <Stack direction="row" spacing={1}>
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      disabled={isTesting}
-                      onClick={async () => {
-                        setTestingConnId(backend.id);
-                        try {
-                          const params = new URLSearchParams();
-                          if (
-                            backend.framework &&
-                            backend.framework !== "antigravity"
-                          ) {
-                            params.set("framework", backend.framework);
+                    {!removed && (
+                      <>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          disabled={isTesting}
+                          onClick={async () => {
+                            setTestingConnId(backend.id);
+                            try {
+                              const params = new URLSearchParams();
+                              if (
+                                backend.framework &&
+                                backend.framework !== "antigravity"
+                              ) {
+                                params.set("framework", backend.framework);
+                              }
+                              if (backend.id) {
+                                params.set("backend", backend.id);
+                              }
+                              const query = params.size ? `?${params}` : "";
+                              const res = await api(
+                                `/api/agent-models${query}`,
+                              );
+                              if (res?.error) {
+                                setTestConnResults((prev) => ({
+                                  ...prev,
+                                  [backend.id]: {
+                                    ok: false,
+                                    error: res.error,
+                                  },
+                                }));
+                              } else {
+                                const listed = res?.models || [];
+                                const discovered = listed
+                                  .map((m) =>
+                                    typeof m === "string" ? m : m?.id,
+                                  )
+                                  .filter(Boolean);
+                                setTestConnResults((prev) => ({
+                                  ...prev,
+                                  [backend.id]: {
+                                    ok: true,
+                                    message:
+                                      listed.length > 0
+                                        ? `Connection valid (${listed.length} models available)`
+                                        : "Connection valid",
+                                    discovered,
+                                  },
+                                }));
+                              }
+                            } catch (err) {
+                              setTestConnResults((prev) => ({
+                                ...prev,
+                                [backend.id]: {
+                                  ok: false,
+                                  error: err.message,
+                                },
+                              }));
+                            } finally {
+                              setTestingConnId(null);
+                            }
+                          }}
+                        >
+                          {isTesting ? "Testing..." : "Test Connection"}
+                        </Button>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() =>
+                            setEditingBackend({ backend, isNew: false })
                           }
-                          if (backend.id) {
-                            params.set("backend", backend.id);
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          disabled={readOnly}
+                          onClick={() =>
+                            saveBackend({
+                              ...backend,
+                              disabled: !backend.disabled,
+                            })
                           }
-                          const query = params.size ? `?${params}` : "";
-                          const res = await api(`/api/agent-models${query}`);
-                          if (res?.error) {
-                            setTestConnResults((prev) => ({
-                              ...prev,
-                              [backend.id]: {
-                                ok: false,
-                                error: res.error,
-                              },
-                            }));
-                          } else {
-                            const listed = res?.models || [];
-                            const discovered = listed
-                              .map((m) => (typeof m === "string" ? m : m?.id))
-                              .filter(Boolean);
-                            setTestConnResults((prev) => ({
-                              ...prev,
-                              [backend.id]: {
-                                ok: true,
-                                message:
-                                  listed.length > 0
-                                    ? `Connection valid (${listed.length} models available)`
-                                    : "Connection valid",
-                                discovered,
-                              },
-                            }));
-                          }
-                        } catch (err) {
-                          setTestConnResults((prev) => ({
-                            ...prev,
-                            [backend.id]: {
-                              ok: false,
-                              error: err.message,
-                            },
-                          }));
-                        } finally {
-                          setTestingConnId(null);
-                        }
-                      }}
-                    >
-                      {isTesting ? "Testing..." : "Test Connection"}
-                    </Button>
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      onClick={() =>
-                        setEditingBackend({ backend, isNew: false })
-                      }
-                    >
-                      Edit
-                    </Button>
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      disabled={readOnly}
-                      onClick={() =>
-                        saveBackend({
-                          ...backend,
-                          disabled: !backend.disabled,
-                        })
-                      }
-                    >
-                      {backend.disabled ? "Enable" : "Disable"}
-                    </Button>
+                        >
+                          {backend.disabled ? "Enable" : "Disable"}
+                        </Button>
+                      </>
+                    )}
                     <Button
                       size="small"
                       color="error"
@@ -494,7 +526,9 @@ export default function ModelsSection({ config, onSaved, showError }) {
                           candidate.credentialBackendId === backend.id,
                       )
                         ? "Used for authentication"
-                        : "Remove"}
+                        : removed
+                          ? "Delete"
+                          : "Remove"}
                     </Button>
                   </Stack>
                 </Box>

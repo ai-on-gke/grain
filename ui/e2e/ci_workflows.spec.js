@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // Comprehensive UI workflows for Grain CI:
 // Triggering CI runs from UI form with workflow discovery & cache bypass,
@@ -33,9 +34,11 @@ test.describe("CI Execution, Inspection, and Control Workflows", () => {
     await page.getByRole("button", { name: "Start a run" }).click();
 
     // 3. Fill repo and branch
-    const repoSelect = page.locator('select[name="repo"]');
+    const repoSelect = page.locator(
+      '.repo-field:has(input[name="repo"]) [role="combobox"]',
+    );
     await expect(repoSelect).toBeVisible();
-    await repoSelect.selectOption("acme/widgets");
+    await chooseOption(repoSelect, "acme/widgets");
     await page.getByLabel("Branch").fill("main");
 
     // 4. Click "Load workflows" button

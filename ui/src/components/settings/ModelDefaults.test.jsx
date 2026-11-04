@@ -32,7 +32,7 @@ describe("ModelDefaults", () => {
       {
         id: "house",
         name: "House agent",
-        framework: "custom",
+        framework: "codex",
       },
     ];
     render(

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // The inbox (InboxPage.jsx, grain/task-20) against a real server and a
 // real browser -- see tasks.spec.js's own doc comment for what this
@@ -74,7 +75,7 @@ test("approves a proposal from its inbox row", async ({ page }) => {
 
   await page.getByRole("button", { name: "+ New task" }).click();
   await page.getByLabel("Title").fill(title);
-  await page.getByLabel(/^Repos/).selectOption("none");
+  await chooseOption(page.getByLabel(/^Repos/), "none");
   // Unchecked so this files as a proposal -- which is what puts it in
   // the inbox in the first place.
   await page.getByLabel(/Queue immediately/).uncheck();

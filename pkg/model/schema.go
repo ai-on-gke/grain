@@ -489,10 +489,14 @@ import "strconv"
 // gemini_key: {project}, minting with the gcp-key-minter secret, and
 // rewrites stored gemini-key grants as 100 did the model proxies.
 //
-// 104 adds `reason` to `allowed_principal` (model.AllowedPrincipal.Reason):
+// 104 retires the custom command connection type: every stored
+// connection whose framework is "custom" is disabled and kept, with
+// model.RemovedCustomConnectionReason (custom_connection_migration.go).
+//
+// 105 adds `reason` to `allowed_principal` (model.AllowedPrincipal.Reason):
 // why an entry was added, required for the `serviceAccount:<email>` entries
 // the allowlist accepts again.
-const SchemaVersion = 104
+const SchemaVersion = 105
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted

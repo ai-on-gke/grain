@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { expect, test } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // The gchat capability end to end (docs/gchat.md), against grain demo's
 // gchat server: grain's own built-in, under its canonical capability_id,
@@ -117,7 +118,7 @@ test("configures a webhook space, sends a test message, and grants gchat#post fo
   const title = `E2E gchat post ${Date.now()}`;
   await page.getByRole("button", { name: "+ New task" }).click();
   await page.getByLabel("Title").fill(title);
-  await page.getByLabel(/^Repos/).selectOption("none");
+  await chooseOption(page.getByLabel(/^Repos/), "none");
   const grants = page.getByTestId("new-task-grants");
   await grants.getByRole("button", { name: "Add grant…" }).click();
   await page

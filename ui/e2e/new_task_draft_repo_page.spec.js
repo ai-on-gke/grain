@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // grain/task-1585: a New task draft started on one repo's page and
 // reopened from another's. Found by the 2026-10-02 repository walkthrough
@@ -75,7 +76,7 @@ test.describe("New task draft across repo pages", () => {
       await expect(notice).toHaveCount(0);
 
       // A picked repo: kept, and said so, until the draft is discarded.
-      await page.getByLabel(/^Repos/).selectOption("acme/gadgets");
+      await chooseOption(page.getByLabel(/^Repos/), "acme/gadgets");
       await page.keyboard.press("Escape");
       await expect(
         page.getByRole("heading", { name: "New task" }),

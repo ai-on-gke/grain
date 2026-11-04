@@ -247,14 +247,10 @@ func (c Config) CheckCLIRunSettings(m map[string]model.CLIRunSetting) error {
 }
 
 // runsOnHost reports whether framework can be run at "host" under e, and
-// says why not. A custom command is each connection's own, so it has no
-// hostd allowlist entry to name.
+// says why not.
 func (e HostExecutor) runsOnHost(framework string) (bool, string) {
-	switch {
-	case !e.HostAvailable():
+	if !e.HostAvailable() {
 		return false, e.Reason
-	case e.Kind == HostExecutorHostd && framework == model.AgentFrameworkCustom:
-		return false, "custom commands have no grain hostd allowlist entry, so they run in the daemon's own container"
 	}
 	return true, ""
 }

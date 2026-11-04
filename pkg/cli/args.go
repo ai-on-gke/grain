@@ -43,6 +43,7 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"strings"
 )
 
 // noArgs refuses every leftover word on a command that reads none of
@@ -74,7 +75,7 @@ func atMostArgsFor(name string, rest []string, want int) error {
 	if len(rest) <= want {
 		return nil
 	}
-	return fmt.Errorf("%s takes %s, so %q would be ignored -- a value goes with the flag it belongs to",
+	return usageErrorf("%s takes %s, so %q would be ignored -- a value goes with the flag it belongs to",
 		name, argumentCount(want), rest[want])
 }
 
@@ -95,4 +96,72 @@ func argumentCount(n int) string {
 	default:
 		return fmt.Sprintf("%d arguments", n)
 	}
+}
+
+// globalFlagNames are runCLI's own flags, the ones #XC-11 lets a person
+// write after the command as readily as before it: `grain list -json`
+// and `grain ci show ci-42 --json` as well as `grain -json list`.
+var globalFlagNames = map[string]bool{
+	"json": true, "server": true, "token": true, "audience": true, "as": true,
+	"connect-timeout": true, "timeout": true,
+}
+
+// freeTextCommands take a body of free text after their id, where a word
+// like "-as" is the sentence's and not a flag (`grain comment 5 file
+// this -as a bug`). A global flag is lifted from them only before the
+// first word that is not a flag.
+var freeTextCommands = map[string]bool{"comment": true, "broadcast": true, "notify": true}
+
+// splitFlag reads one argument as a flag: its name without the dashes
+// (one or two, the same either way), and the value written after an "="
+// if there was one. name is "" for a word that is not flag-shaped.
+func splitFlag(arg string) (name, value string, hasValue bool) {
+	if len(arg) < 2 || arg[0] != '-' || arg == "--" {
+		return "", "", false
+	}
+	name = strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-")
+	if name == "" || name[0] == '-' || name[0] == '=' {
+		return "", "", false
+	}
+	name, value, hasValue = strings.Cut(name, "=")
+	return name, value, hasValue
+}
+
+// liftGlobalFlags sets fs's global flags from wherever they were written
+// among a command's own arguments, and returns those arguments without
+// them -- so no subcommand has to define -json, -server and the rest a
+// second time to accept them after its name. Everything after a bare
+// "--" is left alone, as it is everywhere else.
+func liftGlobalFlags(fs *flag.FlagSet, cmd string, args []string) ([]string, error) {
+	kept := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			kept = append(kept, args[i:]...)
+			break
+		}
+		name, value, hasValue := splitFlag(arg)
+		if name == "" && freeTextCommands[cmd] {
+			kept = append(kept, args[i:]...)
+			break
+		}
+		if !globalFlagNames[name] {
+			kept = append(kept, arg)
+			continue
+		}
+		if !hasValue {
+			if bf, ok := fs.Lookup(name).Value.(interface{ IsBoolFlag() bool }); ok && bf.IsBoolFlag() {
+				value = "true"
+			} else if i+1 < len(args) {
+				i++
+				value = args[i]
+			} else {
+				return nil, usageErrorf("flag needs an argument: -%s", name)
+			}
+		}
+		if err := fs.Set(name, value); err != nil {
+			return nil, usageErrorf("invalid value %q for flag -%s: %v", value, name, err)
+		}
+	}
+	return kept, nil
 }
