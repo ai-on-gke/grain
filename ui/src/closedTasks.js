@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import api from "./api.js";
 
 // Closed tasks, paged in beside the live list (grain task 2983).
@@ -44,11 +44,51 @@ export function closedPagePath(cursor = "") {
 // list) holds what tasks it can and no next page.
 export function readPage(body) {
   if (Array.isArray(body)) {
-    return { tasks: body.filter((t) => t?.state === "closed"), nextCursor: "" };
+    return {
+      tasks: body.filter((t) => t?.state === "closed"),
+      nextCursor: "",
+      totals: null,
+    };
   }
+  const n = (v) => (typeof v === "number" ? v : 0);
   return {
     tasks: Array.isArray(body?.tasks) ? body.tasks : [],
     nextCursor: typeof body?.nextCursor === "string" ? body.nextCursor : "",
+    // pkg/ui taskListPage's counts over every page; null from a server
+    // that does not send them, which leaves the rail counting what it holds.
+    totals:
+      typeof body?.total === "number"
+        ? {
+            total: body.total,
+            merged: n(body.merged),
+            sessions: n(body.sessions),
+          }
+        : null,
+  };
+}
+
+// unseenClosed is the closed work the server counts that no page read so
+// far holds, split the way the rail counts it: closed and merged tasks,
+// a session's own being counted under Sessions and so in neither. The
+// rail adds them to its Closed, Merged and Tasks counts so they say how
+// much there is rather than how much was paged in (2026-11-04
+// walkthrough: 205 closed tasks read "Closed 200"). All zero until a page
+// has said its totals.
+export function unseenClosed(totals, held) {
+  const none = { closed: 0, merged: 0 };
+  if (!totals) return none;
+  let sessions = 0;
+  let merged = 0;
+  for (const t of held) {
+    if (t.consoleSession || t.interactive) sessions += 1;
+    else if (t.prMergedAt) merged += 1;
+  }
+  const unseenSessions = Math.max(0, totals.sessions - sessions);
+  const unseenMerged = Math.max(0, totals.merged - merged);
+  const unseen = Math.max(0, totals.total - held.length);
+  return {
+    closed: Math.max(0, unseen - unseenSessions - unseenMerged),
+    merged: Math.min(unseen, unseenMerged),
   };
 }
 
@@ -108,6 +148,9 @@ export function useClosedTasks(enabled = true) {
   const [closed, setClosed] = useState([]);
   const [nextCursor, setNextCursor] = useState("");
   const [loading, setLoading] = useState(false);
+  // totals is the newest page's counts of every closed task (readPage),
+  // null until a page has answered with them.
+  const [totals, setTotals] = useState(null);
   // deep is whether a page past the first has been read, whose cursor a
   // refresh of the first must not overwrite.
   const deep = useRef(false);
@@ -119,6 +162,7 @@ export function useClosedTasks(enabled = true) {
     try {
       const page = readPage(await api(closedPagePath("")));
       setClosed((prev) => mergeClosedPage(prev, page.tasks));
+      setTotals(page.totals);
       if (!deep.current) setNextCursor(page.nextCursor);
     } catch (err) {
       console.warn("grain: reading closed tasks failed", err);
@@ -135,6 +179,7 @@ export function useClosedTasks(enabled = true) {
       const page = readPage(await api(closedPagePath(nextCursor)));
       deep.current = true;
       setClosed((prev) => mergeClosedPage(prev, page.tasks));
+      setTotals(page.totals);
       setNextCursor(page.nextCursor);
     } catch (err) {
       console.warn("grain: reading more closed tasks failed", err);
@@ -165,5 +210,13 @@ export function useClosedTasks(enabled = true) {
     };
   }, [enabled, refresh]);
 
-  return { closed, hasMore: nextCursor !== "", loading, refresh, loadMore };
+  const unseen = useMemo(() => unseenClosed(totals, closed), [totals, closed]);
+  return {
+    closed,
+    hasMore: nextCursor !== "",
+    loading,
+    refresh,
+    loadMore,
+    unseen,
+  };
 }
