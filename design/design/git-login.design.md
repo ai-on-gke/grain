@@ -43,7 +43,7 @@ Engineer workstation                              Grain daemon
 
 ### Interactive and non-interactive token delegation (`grain git-login`) {#GL-1}
 
-The CLI provides `grain git-login` (not `grain login`, which is the CLI's own sign-in to a deployment) supporting three mutually exclusive token-capture modes:
+The CLI provides `grain git-login` (not `grain login`, which signs the CLI in to a deployment -- see `host.spec.md` CLI-108) supporting three mutually exclusive token-capture modes:
 
 - **Interactive browser OAuth Device Flow (`--web`, default when stdin is a terminal):**
   - Initiates an RFC 8628 OAuth 2.0 Device Authorization Grant against the target GitHub host (`POST https://<host>/login/device/code`) with scopes `repo`, `read:org`, and `workflow` (`github.DefaultOAuthScopes`).
