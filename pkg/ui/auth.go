@@ -72,6 +72,8 @@ type AuthUserResponse struct {
 	// "iap", "header", or "trusted" for nobody signed in from a source
 	// this daemon trusts as itself. Empty for anybody else.
 	AuthMethod AuthMethod `json:"authMethod,omitempty"`
+	// Access is configResponse.Access.
+	Access *AccessRoleInfo `json:"access,omitempty"`
 }
 
 // identityNotAccepted is, for a request that is not authenticated, the
@@ -117,6 +119,7 @@ func (s *Server) handleAuthUser(w http.ResponseWriter, r *http.Request) {
 	resp.IdentityNotAccepted = identityNotAccepted(r, resp.Authenticated)
 
 	resp.Tenancy = "single"
+	resp.Access = accessRoleInfo(r.Context())
 
 	writeJSON(w, http.StatusOK, resp)
 }

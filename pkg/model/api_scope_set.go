@@ -132,7 +132,31 @@ func BuiltinAPIScopeSets() []APIScopeSet {
 		out[i] = APIScopeSet{Name: APIScopeSetBuiltinPrefix + p.Name, Description: p.Description,
 			Scopes: scopes, Version: 1}
 	}
-	return out
+	return append(out, builtinAccessRoles()...)
+}
+
+// builtinAccessRoles are the sets grain ships to be given as allowlist
+// roles (docs/design/access-rbac.md §10). They are scope sets like any
+// other, so an agent can be granted one too -- grain/operator only by a
+// person, since it holds every dangerous scope.
+func builtinAccessRoles() []APIScopeSet {
+	var areas, reads []string
+	for _, s := range apiScopes {
+		if area := apiScopeArea(s.Scope) + ":*"; !slices.Contains(areas, area) {
+			areas = append(areas, area)
+		}
+		if strings.HasSuffix(string(s.Scope), ":read") && !s.Dangerous {
+			reads = append(reads, string(s.Scope))
+		}
+	}
+	return []APIScopeSet{
+		{Name: DefaultAccessRole, Description: "Everything: every scope of the vocabulary, as every allowed user had before roles",
+			Scopes: areas, Version: 1},
+		{Name: APIScopeSetBuiltinPrefix + "viewer", Description: "Read everything grain shows, change nothing",
+			Scopes: reads, Version: 1},
+		{Name: APIScopeSetBuiltinPrefix + "contributor", Description: "Read everything, file and edit tasks, and start and re-run CI",
+			Scopes: []string{"tasks:write", "ci:write"}, Includes: []string{APIScopeSetBuiltinPrefix + "viewer"}, Version: 1},
+	}
 }
 
 // ValidateAPIScopeSetName says whether name may be a deployment's set.
