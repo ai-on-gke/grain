@@ -57,11 +57,11 @@ The binary **MUST** register exactly the commands below. The guard compares this
 
 ## 3. Task commands
 
-Each command parses its own flags, with flags allowed after the task id ([#CLI-11](cli.spec.md#CLI-11)). A missing id is `a task id is required`. A command that changes a task **MUST** then print the task as `respond` does: `GET /api/tasks/{id}`, printed as a task block, or with `-json` as the `ui.Task` object.
+Each command parses its own flags, with flags allowed after the task id ([#CLI-11](cli.spec.md#CLI-11)). A missing id is `a task id is required`. A command that changes a task **MUST** then print the task as `respond` does: `GET /api/tasks/{id}`, printed as a task block, or with `-json` as the `ui.Task` object. The exception is `update` without `-depends-on`/`-no-depends-on`, which prints the task its `PATCH` answers with and does not read it again.
 
 ### 3.1 `grain list` {#CLI-22}
 
-`grain list [flags]` calls `GET /api/config` (the list's configuration and declared custom fields), then `GET /api/tasks`. It prints one aligned line per task. Closed and deferred tasks are left out unless `-closed`, `-deferred` or a filter naming that state asks for them, and the CLI says what it left out.
+`grain list [flags]` calls `GET /api/config` (the list's configuration and declared custom fields), then `GET /api/tasks`. When no `-filter`/shorthand is given and the deployment has no configured list default, it also reads `GET /api/settings` for the hidden-state settings (`deploymentSettings`), and treats a failed read as empty settings. It prints one aligned line per task. Closed and deferred tasks are left out unless `-closed`, `-deferred` or a filter naming that state asks for them, and the CLI says what it left out.
 - `-filter attribute:comparison:value` is repeatable, in the UI's link spelling. Shorthands such as `-state`, `-repo` and `-capability` are conditions too.
 - `-sort attribute[:asc|desc]` is repeatable, and the sort is stable.
 - `grain list -h` prints the attribute and comparison vocabulary, including declared custom fields.
@@ -139,7 +139,7 @@ Calls `POST /api/tasks` (`HTTPClient.CreateTask`) and prints the new task.
 
 ### 3.4 `grain update <id> [flags]` {#CLI-25}
 
-Calls `PATCH /api/tasks/{id}` (`UpdateTask`), plus `SetDependency` for `-depends-on`/`-no-depends-on`, then prints the task. Only the flags given are sent.
+Calls `PATCH /api/tasks/{id}` (`UpdateTask`) and prints the task the `PATCH` returns. Only the flags given are sent. `-depends-on`/`-no-depends-on` instead call `POST /api/tasks/{id}/depends-on` (`SetDependency`, `{"id", "attach"}`) and then read the task with `GET /api/tasks/{id}`.
 
 <!-- BEGIN GENERATED FLAGS: grain update -->
 | Flag | Type | Default | Env | Description |
@@ -426,11 +426,11 @@ Bare `grain repo` prints its usage and fails with `a repo subcommand is required
 
 | Subcommand | Request |
 |---|---|
-| `list` | `GET /api/config`: one line per repo |
+| `list` | `GET /api/config`, then `GET /api/tasks` (`ListRepos` counts each repo's tasks): one line per repo |
 | `add <owner/name>` | `POST /api/repos` (`-clone-url` optional) |
 | `remove <owner/name>` | `DELETE /api/repos/{owner}/{name}` |
 | `capabilities [-set a,b] <repo>` | read, or `PUT`, `/api/repos/{owner}/{name}/capabilities` |
-| `ci-capabilities [-set a,b] <repo>` | the capabilities granted to CI jobs |
+| `ci-capabilities [-set a,b] <repo>` | the capabilities granted to CI jobs. Without `-set` this and the next three read `GET /api/repos/{owner}/{name}/capabilities` |
 | `prompt-extension [-set text] <repo>` | the repo's standing instructions |
 | `setup-command [-set cmd] <repo>` | the shell run in a fresh checkout |
 | `unfixable-checks [-set a,b] <repo>` | checks no commit can turn green |
@@ -619,7 +619,7 @@ _No flags._
 
 - `git-connections` reads `GET /api/deployment` and prints one `host credential` line per git connection.
 - `git-ambient [-host h] [-kind github|git] [-base-url u] [-proxy u] [-source gh|git|auto] [-if-none]` calls `POST /api/deployment/git-connections`. It adds an ambient connection that asks this host's own `gh`/`git` login for a token on demand. It is for a daemon on the bare machine only.
-- `default-model [-if-none|-if-unserved] <model>` reads `GET /api/deployment` and `GET /api/settings`, then `PUT /api/deployment`.
+- `default-model [-if-none|-if-unserved] <model>` sends `PUT /api/deployment {"defaultModel"}`. Without either flag that is its only call. With `-if-none` or `-if-unserved` it first reads `GET /api/deployment` and leaves a set default alone (`This deployment already runs on <m> by default: leaving it as it is.`). `-if-unserved` also reads `GET /api/settings` when a default is set, and replaces it when no enabled connection serves it.
 
 **Scope:** admin.
 
@@ -667,17 +667,15 @@ _No flags._
 
 ### 4.10 `grain release approve|reject vX.Y.Z` {#CLI-39}
 
-Calls `POST /api/repos/{owner}/{name}/…` (`DecideRelease`). `-repo` defaults to grain's own source repository.
+Calls `POST /api/repos/{owner}/{name}/pending-releases/{version}/approve` or `…/reject` (`DecideRelease`). `-repo` defaults to grain's own source repository (`ai-on-gke/grain`).
 
-Errors:
+Errors, each printed after the usage:
 - an unknown verb: `unknown release command "<v>": approve or reject`;
 - the wrong number of arguments: `grain release <verb> takes the pending release, vX.Y.Z`;
 - `-short-soak-ok` on reject: `-short-soak-ok is for grain release approve`;
 - `-allow-breaking` on reject: `-allow-breaking is for grain release approve`.
 
 `-allow-breaking` approves a release that carries breaking changes without being the major release `RELEASE_MAJOR` asks for; it reaches the approval as `allow_breaking: true`.
-
-`-allow-breaking` is approve-only too: it accepts a release that carries breaking changes without being the major release `RELEASE_MAJOR` asks for.
 
 With no arguments it prints the usage and returns `flag: help requested`. **Scope:** person; an agent is refused.
 
@@ -707,10 +705,11 @@ With no arguments it prints the usage and returns `flag: help requested`. **Scop
 
 **Pinned by:** *untested* in `pkg/cli`.
 
-### 4.11 `grain metrics` and `grain failures` {#CLI-40}
+### 4.11 `grain metrics`, `grain failures` and `grain health` {#CLI-40}
 
 - `metrics [-window 7d | -since t -until t] [-repo R]… [-author A]…` calls `GET /api/metrics`. It prints throughput, latency, prompt sizes and sandbox cost, and says what it was scoped to. An impossible span is refused before the daemon is asked.
 - `failures [-window 7d] [-suspect]` calls `GET /api/unmatched-failures` and prints what runs said when they failed for a reason grain could not name.
+- `health` calls `GET /api/sandboxes` and prints its `counters`: each section a layer built on grain registered with `ui.RegisterHealthCounters`, sorted by key. They are in-process counts since the daemon started. `-json` prints the whole response.
 
 <!-- BEGIN GENERATED FLAGS: grain metrics -->
 | Flag | Type | Default | Env | Description |
@@ -730,7 +729,11 @@ With no arguments it prints the usage and returns `flag: help requested`. **Scop
 | `-window` | string |  |  | how far back to read: a duration like 36h, or a count of days or weeks like 7d (default 7d) |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/metrics_test.go`: `TestPrintMetricsSaysWhatItWasScopedTo`, `TestRunCLIMetricsScopesTheReport`, `TestRunCLIMetricsTakesAnAbsoluteSpan`, `TestCmdMetricsRejectsAnImpossibleSpanBeforeAsking`; `pkg/cli/failures_test.go`: `TestPrintFailures`, `TestPrintFailuresJSON`.
+<!-- BEGIN GENERATED FLAGS: grain health -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/metrics_test.go`: `TestPrintMetricsSaysWhatItWasScopedTo`, `TestRunCLIMetricsScopesTheReport`, `TestRunCLIMetricsTakesAnAbsoluteSpan`, `TestCmdMetricsRejectsAnImpossibleSpanBeforeAsking`; `pkg/cli/failures_test.go`: `TestPrintFailures`, `TestPrintFailuresJSON`; `pkg/cli/health_test.go`: `TestGrainHealthShowsRegisteredCountersUntilUnregistered`.
 
 ### 4.12 `grain ci …` {#CLI-62}
 
@@ -851,18 +854,6 @@ Reads a checkout's `.grain/templates`, `.grain/suites` and `.grain/schedules` an
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/declcmd_test.go`: `TestDeclarationsCheckPrintsWhatATreeDeclares`, `TestDeclarationsCheckReportsEveryProblemAtOnce`, `TestDeclarationsCheckJSONCarriesTheVerdict`, `TestDeclarationsCheckDefaultsToTheWorkingDirectory`.
-
----
-
-### 4.14 `grain access list|allow|deny` {#CLI-107}
-
-Manages the allowed users and groups (Settings -> Access) through `/api/access/principals`: who may sign in when authenticated by Cloud IAP or another registered IdentityVerifier. `list` (the default, also `ls`) prints each entry with who added it and when, and warns about `-ui-allowed-principals` entries that were dropped on import. `allow <user:<email>|group:<email>>` (also `add`) adds one; adding an existing entry is a no-op. `deny` (also `remove`, `rm`) removes one.
-
-<!-- BEGIN GENERATED FLAGS: grain access -->
-_No flags._
-<!-- END GENERATED FLAGS -->
-
-**Pinned by:** `pkg/cli/access_test.go`: `TestGrainAccessCLI`.
 
 ---
 
@@ -1235,10 +1226,9 @@ _No flags._
 ### 5.7 `grain capability <server> [flags]` {#CLI-49}
 
 When `<server>` names an in-tree capability server (`intree.Lookup`), this drops Linux capabilities and serves it over stdin/stdout.
-- With no server: `usage: grain capability <a|b|…> [flags]`.
-- An unknown server: `no in-tree capability "<x>"; there are: …`.
+`servesCapability` takes the mode only when the first argument already names an in-tree server. So from the command line, `grain capability` with no arguments, or with an unknown first argument, is the task command of [#CLI-26](#CLI-26) and fails with `grain: usage: grain capability <id> <capability-id> attach|detach`. `serveCapability`'s own `usage: grain capability <a|b|…> [flags]` and `no in-tree capability "<x>"; there are: …` errors cannot be reached through `cmd/grain`.
 
-The server's flags are its own package's, outside this spec ([#CLI-14](cli.spec.md#CLI-14)). Any other shape is the task command of [#CLI-26](#CLI-26).
+The server's flags are its own package's, outside this spec ([#CLI-14](cli.spec.md#CLI-14)).
 
 **Pinned by:** `pkg/cli/capability_serve_test.go`.
 
@@ -1481,7 +1471,7 @@ _No flags._
 
 ### 6.7 `grain upgrade-postgres` (`upgrade-sqlite-to-postgres`, `db`) {#CLI-56}
 
-Copies an existing SQLite store into PostgreSQL and optionally writes `db-config.json`, so later daemon starts use PostgreSQL. `grain db`, `grain db upgrade-postgres` and `grain db upgrade-sqlite-to-postgres` are the same command. The usage is hand-written. Flags:
+Copies an existing SQLite store into PostgreSQL and optionally writes `db-config.json`, so later daemon starts use PostgreSQL. `grain db`, `grain db upgrade-postgres` and `grain db upgrade-sqlite-to-postgres` are the same command. Any other word after `db` (for example the sandbox CLI's `query`) is passed on to it as a positional argument, which it ignores. Every spelling reports errors as `grain upgrade-postgres: …`. The usage is hand-written. Flags:
 - `-data-dir` (default `$GRAIN_DATA_DIR`);
 - `-sqlite-path` (string): the source SQLite file;
 - `-dsn` (string): the target PostgreSQL DSN;
@@ -1504,7 +1494,7 @@ _No flags._
 
 ### 6.8 `grain controller bootstrap-github-app` and `grain setup gcp` {#CLI-57}
 
-- `controller bootstrap-github-app` is one-time interactive setup for the github-sandbox capability. It writes the App's credentials into `<data-dir>/secrets`. A bare `grain controller` or `grain controller -h` prints `grain controller: unknown command "<x>"`.
+- `controller bootstrap-github-app` is one-time interactive setup for the github-sandbox capability. It writes the App's credentials into `<data-dir>/secrets`. A bare `grain controller` prints `usage: grain controller bootstrap-github-app [flags]`. Any other first word, `-h` included, prints `grain controller: unknown command "<x>"`. Both exit 1.
 - `setup gcp` bootstraps the GCP service accounts, IAM roles and keys the gcp-key and gemini-key capabilities need.
 
 <!-- BEGIN GENERATED FLAGS: grain controller -->
@@ -1662,13 +1652,15 @@ Reconciles a live deployment's settings (`GET /api/settings`, then `PUT /api/set
 
 ### 6.11 `grain access <list|allow|deny> [args]` {#CLI-63}
 
-This manages the allowed users and groups list (Settings -> Access): who may sign in when authenticated by Cloud IAP or another registered IdentityVerifier. It calls `/api/access/principals`.
+<a id="CLI-107"></a>This manages the allowed users and groups list (Settings -> Access): who may sign in when authenticated by Cloud IAP or another registered IdentityVerifier. Unlike the rest of this section it calls the daemon's API. The agent API scopes are `access:read` for `list`, `access:write` for `allow` and `deny` (`pkg/ui/route_scopes.go`).
 
-- `list` (the default; also `ls`) prints every entry, or `No allowed users or groups.`.
-- `allow <user:<email>|group:<email>>` (also `add`) adds one. Adding an existing entry is a no-op.
-- `deny <user:<email>|group:<email>>` (also `remove`, `rm`) removes one.
+| Subcommand | Request |
+|---|---|
+| `list` (the default; also `ls`) | `GET /api/access/principals`. Prints each entry with who added it and when, or `No allowed users or groups.`, and warns about `-ui-allowed-principals` entries that were dropped on import |
+| `allow <user:<email>\|group:<email>>` (also `add`) | `POST /api/access/principals {"entry"}`. Adding an existing entry is a no-op |
+| `deny <user:<email>\|group:<email>>` (also `remove`, `rm`) | `DELETE /api/access/principals/{entry}` |
 
-Errors: an unknown subcommand gives `unknown access subcommand "<s>"` followed by the usage, and a wrong argument count gives that subcommand's own usage line. This replaces the deprecated `-ui-allowed-principals` flag on `grain daemon` and `grain demo`, which is now only imported once into an empty database allowlist.
+Errors: an unknown subcommand gives `unknown access subcommand "<s>"` followed by the usage, and a wrong argument count gives that subcommand's own usage line (`usage: grain access allow <user:<email>|group:<email>>`). This replaces the deprecated `-ui-allowed-principals` flag on `grain daemon` and `grain demo`, which is now only imported once into an empty database allowlist.
 
 <!-- BEGIN GENERATED FLAGS: grain access -->
 _No flags._
@@ -1711,7 +1703,7 @@ _No flags._
 
 - `sandbox-image [-base]` prints the Granule sandbox image this build expects.
 - `sandbox-image check` probes it, and `sandbox-image contract` prints its contract (`-json`).
-- `container-sandbox-image` and `k8s-sandbox-image` print the Docker and Kubernetes sandbox images.
+- `container-sandbox-image` and `k8s-sandbox-image` print the Docker and Kubernetes sandbox images. Today both print the same `k8s-sandbox` image (the local Docker sandbox runs it too). Both take `-base`, or a leading `base` word, to print the `k8s-sandbox-base` image instead.
 - `image` prints the image this build is published as.
 
 <!-- BEGIN GENERATED FLAGS: grain sandbox-image -->

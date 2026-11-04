@@ -362,6 +362,9 @@ Commands:
   failures [-window 7d] [-suspect]     what runs said when they failed for a reason grain could not
                                        name -- the instrument over its own provider-refusal markers
                                        (see failures.go)
+  health                               the counters a layer built on grain keeps in the daemon, by
+                                       section, since it started (-json: all of GET /api/sandboxes;
+                                       see health.go)
   pause [-lift|-set|-resume]           why nothing is dispatching, and stop or resume this deployment (see pause.go)
   pause [-now] <id>                    pause one task in any open state: release what it holds, keep its place
                                        (a running task is given 2m to push and write its handover; -now skips it)
@@ -467,12 +470,21 @@ func dataDirDefault() string {
 	return readCLIEnv().dataDir
 }
 
+func audienceDefault() string {
+	for _, env := range []string{"GRAIN_AUDIENCE", "GRAIN_TUNNEL_AUDIENCE"} {
+		if v := strings.TrimSpace(os.Getenv(env)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func runCLI(args []string) error {
 	fs := flag.NewFlagSet("grain", flag.ContinueOnError)
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	server := fs.String("server", serverDefault(), "base URL of a running \"grain daemon\"'s UI/API ($"+serverEnvVar+" overrides the default)")
 	token := fs.String("token", "", "auth token for a proxy in front of the daemon ($GRAIN_TOKEN, $GRAIN_AUTH_TOKEN, $GRAIN_ID_TOKEN, $GRAIN_TUNNEL_TOKEN)")
-	audience := fs.String("audience", "", "Google ID token audience for Cloud Run ($GRAIN_AUDIENCE, $GRAIN_TUNNEL_AUDIENCE)")
+	audience := fs.String("audience", audienceDefault(), "Google ID token audience for Cloud Run ($GRAIN_AUDIENCE, $GRAIN_TUNNEL_AUDIENCE)")
 	asUser := fs.String("as", "", "identity for request attribution / proxy headers ($GRAIN_USER)")
 	jsonOutput := fs.Bool("json", false, "print machine-readable JSON instead of a human-readable table")
 	connectTimeout := fs.Duration("connect-timeout", defaultConnectTimeout,
@@ -556,6 +568,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdMetrics(ctx, c, out, cmdArgs)
 	case "failures":
 		return cmdFailures(ctx, c, out, cmdArgs)
+	case "health":
+		return cmdHealth(ctx, c, out, cmdArgs)
 	case "pause":
 		return cmdPause(ctx, c, out, cmdArgs)
 	case "resume":

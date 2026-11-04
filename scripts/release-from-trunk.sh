@@ -130,7 +130,8 @@
 # /repos/{RELEASE_GITHUB_REPO}/actions/workflows/<suite>.yml/runs (and, for
 # an rc, the jobs of each nightly.yml run on it), read with GITHUB_TOKEN
 # (actions: read). The grain/release-qualification check run is read from
-# GitHub (checks: read) whenever there is a token. The default is "github"
+# GitHub (checks: read) whenever there is a token, and counts only when
+# RELEASE_QUALIFICATION_APP, grain's own GitHub App, created it. The default is "github"
 # inside GitHub Actions and "grain" anywhere else.
 #
 # Settings (environment):
@@ -153,6 +154,13 @@
 #   RELEASE_QUALIFICATION_RUNS_JSON, RELEASE_QUALIFICATION_CHECKS_JSON
 #                            files to read the rc's nightly.yml jobs and
 #                            check runs from instead
+#   RELEASE_QUALIFICATION_APP
+#                            the GitHub App (slug or numeric id) grain posts
+#                            grain/release-qualification as: only its check
+#                            run qualifies an rc, never a same-named one
+#                            from an Actions workflow or another app; unset,
+#                            Stage 2 trusts no check run and the train stops
+#                            (candidate-gate.sh's CHECK_QUALIFICATION_APP)
 #   RELEASE_IMAGES           the image publisher (bash scripts/release-images.sh);
 #                            "off" publishes nothing
 #   RELEASE_NOTES_TASK       "off" files no release-notes task
@@ -562,7 +570,8 @@ github_runs() { # github_runs <out> <branch>
 # read them; qual_checks names it then).
 qual_checks=""
 qualification_json() {
-  local id
+  local id app_id=""
+  [[ ! "${RELEASE_QUALIFICATION_APP:-}" =~ ^[0-9]+$ ]] || app_id="&app_id=$RELEASE_QUALIFICATION_APP"
   if [ -n "${RELEASE_QUALIFICATION_RUNS_JSON:-}" ]; then
     gate_json RELEASE_QUALIFICATION_RUNS_JSON "" "$work/qual-runs.json"
   elif [ "$ci_source" = github ]; then
@@ -583,7 +592,9 @@ qualification_json() {
     gate_json RELEASE_QUALIFICATION_CHECKS_JSON "" "$work/qual-checks.json"
     qual_checks="$work/qual-checks.json"
   elif [ -n "$github_token" ]; then
-    github_get "commits/$2/check-runs?check_name=grain%2Frelease-qualification&filter=all&per_page=100" "$work/qual-checks.json" ||
+    # GitHub filters by app only by id; candidate-gate.sh checks the app
+    # of every check run it judges either way.
+    github_get "commits/$2/check-runs?check_name=grain%2Frelease-qualification&filter=all&per_page=100$app_id" "$work/qual-checks.json" ||
       die "could not read the check runs on $1 from $github_api"
     qual_checks="$work/qual-checks.json"
   else
@@ -845,7 +856,7 @@ if [ -n "$rc" ]; then
     say "phase 1: $rc (${rc_sha:0:12}) is in qualification; asking the qualification gate"
     qualification_json "$rc" "$rc_sha"
     q_status=0
-    q_out="$(bash "$scripts_dir/candidate-gate.sh" check-qualification --rc-tag "$rc" --rc-sha "$rc_sha" \
+    q_out="$(CHECK_QUALIFICATION_APP="${RELEASE_QUALIFICATION_APP:-}" bash "$scripts_dir/candidate-gate.sh" check-qualification --rc-tag "$rc" --rc-sha "$rc_sha" \
       --runs-json "$work/qual-runs.json" ${qual_checks:+--checks-json "$qual_checks"} 2>&1)" || q_status=$?
     printf '%s\n' "$q_out" | sed 's/^/  /'
     case "$q_status" in

@@ -257,6 +257,9 @@ jobs:
           RELEASE_IMAGES: ${{ vars.RELEASE_IMAGES }}
           RELEASE_NOTES_TASK: ${{ vars.RELEASE_NOTES_TASK }}
           RELEASE_NOTIFY: ${{ vars.RELEASE_NOTIFY }}
+          # The GitHub App (slug or id) grain posts grain/release-qualification
+          # as; a same-named check run from anything else never qualifies an rc.
+          RELEASE_QUALIFICATION_APP: ${{ vars.RELEASE_QUALIFICATION_APP }}
           FORCE: ${{ inputs.force || false }}
         run: |
           set -euo pipefail

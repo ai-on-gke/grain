@@ -87,6 +87,16 @@ var recurrenceCases = map[model.RecurrenceKind][]recurrenceCase{
 			},
 		}, "trigger"},
 	},
+	model.RecurrenceGitRef: {
+		{"another repository's tag", model.Recurrence{
+			Kind:   model.RecurrenceGitRef,
+			GitRef: &model.GitRefTrigger{Repo: "upstream/core", Ref: "refs/tags/latest"},
+		}, "trigger"},
+		{"a host-qualified repository's branch", model.Recurrence{
+			Kind:   model.RecurrenceGitRef,
+			GitRef: &model.GitRefTrigger{Repo: "git.example.com/team/lib", Ref: "refs/heads/main"},
+		}, "trigger"},
+	},
 }
 
 func TestEveryRecurrenceKindRoundTrips(t *testing.T) {
