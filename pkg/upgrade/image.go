@@ -219,6 +219,9 @@ type ImageConfig struct {
 	// environment variable rather than editable configuration, so the UI
 	// displays it read-only.
 	SourceLocked bool
+	// SourceOverrideFile optionally persists UI-configured image source
+	// overrides across restarts when SourceLocked is false.
+	SourceOverrideFile string
 	// Fallback optionally names a secondary image source (ImageSourceRegistry
 	// or ImageSourceReleaseAssets) tried when Source fails to fetch the
 	// candidate daemon image.

@@ -460,7 +460,9 @@ type Upgrader struct {
 // anything wrong the first time it is actually asked to do something,
 // the same as most of this package's callers.
 func New(cfg Config) *Upgrader {
-	return &Upgrader{cfg: cfg}
+	u := &Upgrader{cfg: cfg}
+	u.loadImageSourceOverride()
+	return u
 }
 
 // ErrUpgradeInProgress is what Start returns when an upgrade this same

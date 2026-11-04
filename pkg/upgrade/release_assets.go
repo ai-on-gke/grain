@@ -88,7 +88,145 @@ var (
 	// SHA-256 mismatch, or Docker image ID mismatch that must never silently
 	// fall back to another source.
 	errReleaseIntegrity = errors.New("release asset integrity check failed")
+
+	// ErrImageSourceLocked is returned when SetImageSource is called on an
+	// Upgrader whose image source was locked by a daemon flag or environment variable.
+	ErrImageSourceLocked = errors.New("upgrade image source is set by a daemon flag or environment variable and cannot be modified")
 )
+
+// ImageSourceOverride is the operator-editable subset of ImageConfig's image
+// source settings persisted in ImageConfig.SourceOverrideFile when SourceLocked is false.
+type ImageSourceOverride struct {
+	// Mode is "" (default: release-assets with missing-manifest fallback to
+	// registry), "release-assets" (explicit release-assets), or "registry"
+	// (explicit registry pull).
+	Mode              string `json:"mode,omitempty"`
+	Fallback          string `json:"fallback,omitempty"`
+	FallbackExplicit  bool   `json:"fallbackExplicit,omitempty"`
+	ReleaseRepository string `json:"releaseRepository,omitempty"`
+	ReleaseAsset      string `json:"releaseAsset,omitempty"`
+	Checksum          string `json:"checksum,omitempty"`
+}
+
+// SetImageSource updates and persists the live image source configuration when
+// ModeImage is active and SourceLocked is false.
+func (u *Upgrader) SetImageSource(ov ImageSourceOverride) error {
+	if u.Mode() != ModeImage || u.cfg.Image == nil {
+		return errors.New("upgrade image source only applies to container-image deployments (-upgrade-image)")
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.cfg.Image.SourceLocked {
+		return ErrImageSourceLocked
+	}
+	mode := strings.TrimSpace(ov.Mode)
+	if mode != "" && !strings.EqualFold(mode, "default") {
+		norm, err := NormalizeImageSource(mode)
+		if err != nil {
+			return err
+		}
+		mode = string(norm)
+	} else {
+		mode = ""
+	}
+	var fb ImageSource
+	fbRaw := strings.TrimSpace(ov.Fallback)
+	if ov.FallbackExplicit || fbRaw != "" {
+		parsed, err := ParseImageFallback(fbRaw)
+		if err != nil {
+			return err
+		}
+		fb = parsed
+	}
+	relRepo := strings.TrimSpace(ov.ReleaseRepository)
+	if relRepo != "" {
+		if _, _, _, err := ParseReleaseRepository(relRepo); err != nil {
+			return err
+		}
+	}
+	clean := ImageSourceOverride{
+		Mode:              mode,
+		Fallback:          string(fb),
+		FallbackExplicit:  ov.FallbackExplicit,
+		ReleaseRepository: relRepo,
+		ReleaseAsset:      strings.TrimSpace(ov.ReleaseAsset),
+		Checksum:          strings.TrimSpace(ov.Checksum),
+	}
+	if p := strings.TrimSpace(u.cfg.Image.SourceOverrideFile); p != "" {
+		raw, err := json.MarshalIndent(clean, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err
+		}
+		tmp := p + ".tmp"
+		if err := os.WriteFile(tmp, append(raw, '\n'), 0o644); err != nil {
+			return err
+		}
+		if err := os.Rename(tmp, p); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+	}
+	u.applyImageSourceOverrideLocked(clean)
+	u.tags.mu.Lock()
+	u.tags.repo = ""
+	u.tags.tags = nil
+	u.tags.fetched = time.Time{}
+	u.tags.mu.Unlock()
+	return nil
+}
+
+func (u *Upgrader) loadImageSourceOverride() {
+	if u.cfg.Image == nil || u.cfg.Image.SourceLocked {
+		return
+	}
+	p := strings.TrimSpace(u.cfg.Image.SourceOverrideFile)
+	if p == "" {
+		return
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		return
+	}
+	var ov ImageSourceOverride
+	if json.Unmarshal(raw, &ov) != nil {
+		return
+	}
+	u.applyImageSourceOverrideLocked(ov)
+}
+
+func (u *Upgrader) applyImageSourceOverrideLocked(ov ImageSourceOverride) {
+	if ov.Mode == "" || strings.EqualFold(ov.Mode, "default") {
+		u.cfg.Image.Source = ""
+	} else if norm, err := NormalizeImageSource(ov.Mode); err == nil {
+		u.cfg.Image.Source = norm
+	}
+	if ov.FallbackExplicit || ov.Fallback != "" {
+		fb, err := ParseImageFallback(ov.Fallback)
+		if err == nil {
+			u.cfg.Image.Fallback = fb
+			u.cfg.Image.FallbackExplicit = ov.FallbackExplicit
+		}
+	} else {
+		u.cfg.Image.Fallback = ""
+		u.cfg.Image.FallbackExplicit = false
+	}
+	u.cfg.Image.ReleaseAssets.Repository = strings.TrimSpace(ov.ReleaseRepository)
+	u.cfg.Image.ReleaseAssets.Asset = strings.TrimSpace(ov.ReleaseAsset)
+	chk := strings.TrimSpace(ov.Checksum)
+	if strings.HasPrefix(chk, ".") {
+		u.cfg.Image.ReleaseAssets.ChecksumSuffix = chk
+		u.cfg.Image.ReleaseAssets.ChecksumAsset = ""
+	} else if chk != "" {
+		u.cfg.Image.ReleaseAssets.ChecksumAsset = chk
+		u.cfg.Image.ReleaseAssets.ChecksumSuffix = ""
+	} else {
+		u.cfg.Image.ReleaseAssets.ChecksumAsset = ""
+		u.cfg.Image.ReleaseAssets.ChecksumSuffix = ""
+	}
+}
 
 // NormalizeImageSource normalizes a configured image source, defaulting empty
 // to ImageSourceReleaseAssets.
