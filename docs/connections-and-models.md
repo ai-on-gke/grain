@@ -3,7 +3,7 @@
 Grain keeps two things apart that used to be one record:
 
 - A **connection** is a way to reach a provider. It has a framework
-  (Antigravity, Claude, Codex, or a custom command), authentication, the team
+  (Antigravity, Claude or Codex), authentication, the team
   it belongs to, a concurrency limit, and an enabled flag. It *advertises* the
   models it can serve. That list is a capability, not a choice: a connection
   does not decide which model a run on it uses. Connections are stored as
@@ -113,8 +113,7 @@ does not guess one. Such a connection shows "no models — set one" (see
 [No models](#no-models)). A connection
 whose provider stops answering keeps advertising the last list it gave.
 `discovered.error` says why it couldn't be refreshed, and the connection's
-page shows that error next to the list's time. A custom command can't be
-asked, so its `models` is the whole of what it serves, as before.
+page shows that error next to the list's time.
 
 **Migration.** Before discovery was live, it wrote the provider's list into
 `models` once, and nothing recorded that it had. So the first time a
@@ -160,8 +159,7 @@ every run on it stopped -- when:
   billing exhausted (`insufficient_quota`, "credit balance"), an organisation or
   project quota, "all models", or Claude Code's plan limits (its session and
   weekly limits; an "Opus limit" is that model family's). Each framework's
-  parser reads these hints into `agent.UsageLimitError.Scope` and `.Model`, and
-  a [custom command](custom-agent-backends.md) can say `"scope": "account"`;
+  parser reads these hints into `agent.UsageLimitError.Scope` and `.Model`;
 - or a second, different model on the same connection meets a limit while the
   first model's pause is still open.
 
@@ -254,11 +252,31 @@ There is no deployment-wide model behind any of this: a run's model is
 the one chosen for it, the default model, or its connection's provider
 default, and nothing else.
 
+### Removed: custom command connections
+
+Grain used to have a fourth connection type, **Custom command**
+(`framework: "custom"`), which ran a deployment-owned executable as the
+agent. It was removed in v3.2.0; grain runs the Antigravity, Claude and Codex
+frameworks only.
+
+- Schema migration 104, and the state-repo importer for a `grain/config`
+  dump written before it, keep every stored custom command connection but
+  disable it, with `disabledReason` "custom command connections were removed
+  in v3.2.0; replace it with an Antigravity, Claude or Codex connection".
+  The daemon logs each one at every start until it is deleted.
+- Settings -> Models shows such a connection as **Removed**, with that reason
+  and **Delete**, and nothing to edit or enable it with. A save of the page
+  keeps it exactly as stored.
+- A task pinned to one -- by `agentFramework: custom`, by its connection, or
+  by a model only it served -- takes the default model selection instead.
+- Creating one is refused, by `PUT /api/deployment/agent-backends/{id}`,
+  `PUT /api/settings`, `grain connections import` and a task's
+  `agentFramework` alike, saying custom command connections were removed.
+
 ### No models
 
 A connection that advertises nothing has **no models**. Either its provider
-has never answered and grain has no cached list, or it is a custom command
-with an empty list. Its card says "Advertises: no models — set one". A task
+has never answered and grain has no cached list. Its card says "Advertises: no models — set one". A task
 that would run on it, because it chose no model and its team has no default,
 is not dispatched onto a guessed name. It waits with "connection C has no
 models -- set one". The wait clears once the provider answers, someone lists
@@ -371,10 +389,6 @@ connection can use a CLI installed somewhere the deployment default is not.
 The path is set in Team settings (Models & connections, then the connection,
 then **CLI path (optional)**). The field's hint names the deployment default it
 falls back to.
-
-`cliPath` is separate from `command`. `command` names a custom backend's
-executable, read relative to the state repository. A custom connection has no
-`cliPath`, and saving one is refused.
 
 Everything that runs the connection's CLI uses its path: its runs
 (`daemon.BuildClaudeFramework`, `buildCodexFramework`,
@@ -515,8 +529,7 @@ open a connection's own page, which has no model or effort picker. It shows:
   **Pin to a fixed list instead** turns what is advertised now into a pin.
   On a pinned connection the field is the editable `models` list, which also
   takes names typed by hand (an alias the listing never shows), and
-  **Advertise all models** clears the pin. A custom command only has the
-  typed list.
+  **Advertise all models** clears the pin.
 
 The page never writes a connection's `model` or `effort`. Opening one stored
 in the old shape folds its `model` into the front of `models`, the same way
@@ -533,8 +546,7 @@ Below the connections is the team's choice of model. It writes only
   has no models, a warning names it.
 - Each model lists every connection that serves it, enabled or disabled, with
   its **Reasoning effort**. Antigravity and Codex models offer their
-  framework's efforts, a custom command's model takes free text, and a Claude
-  model has none. Going back to "Model default" removes the setting.
+  framework's efforts, and a Claude model has none. Going back to "Model default" removes the setting.
 - A model the team still names (as its default or in a setting) that no
   connection advertises any more is listed with no connections, so the gap
   is visible.

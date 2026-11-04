@@ -2306,7 +2306,6 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 				}
 			}
 			backend.ExcludedModels = excluded
-			backend.Command = strings.TrimSpace(backend.Command)
 			backend.CredentialBackendID = strings.TrimSpace(backend.CredentialBackendID)
 			backend.Team = strings.TrimSpace(backend.Team)
 			if backend.AuthMode != "" {
@@ -2326,17 +2325,31 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			if seen[backend.ID] {
 				return model.Config{}, validationErrorf("agent backend id %q is duplicated", backend.ID)
 			}
+			if backend.IsRemovedCustomConnection() {
+				// A custom command connection the store already has is
+				// kept, disabled, exactly as stored until it is deleted:
+				// the Models page sends every connection back on a save.
+				// A new one is refused.
+				stored := findStoredBackend(cfg.AgentBackends, backend.ID)
+				if stored == nil || !stored.IsRemovedCustomConnection() {
+					return model.Config{}, validationErrorf("agentBackends[%d].framework: %s; "+
+						"use one of %s", i, removedCustomConnectionError, model.AgentFrameworkNames())
+				}
+				kept := *stored
+				kept.Disabled, kept.DisabledReason = true, model.RemovedCustomConnectionReason
+				seen[backend.ID] = true
+				(*req.AgentBackends)[i] = kept
+				continue
+			}
 			if !model.ValidAgentFramework(backend.Framework) {
 				return model.Config{}, validationErrorf("agentBackends[%d].framework must be %s", i, model.AgentFrameworkNames())
 			}
-			if backend.Framework == model.AgentFrameworkCustom && backend.Command == "" {
-				return model.Config{}, validationErrorf("agentBackends[%d].command is required for a custom backend", i)
-			}
+			backend.Command = ""
+			backend.DisabledReason = ""
 			backend.CLIPath = strings.TrimSpace(backend.CLIPath)
 			if backend.CLIPath != "" {
 				if model.AgentCLIBinary(backend.Framework) == "" {
-					return model.Config{}, validationErrorf("agentBackends[%d].cliPath is only for claude, codex and antigravity connections; "+
-						"a custom backend names its executable in command", i)
+					return model.Config{}, validationErrorf("agentBackends[%d].cliPath is only for claude, codex and antigravity connections", i)
 				}
 				// Checked only when it changes, so a binary removed after
 				// it was saved fails that connection's runs (naming it)

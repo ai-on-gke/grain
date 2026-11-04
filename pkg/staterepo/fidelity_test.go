@@ -740,6 +740,12 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 		"0f1e2d3c4b5a69788796a5b4c3d2e1f001234567", sub); err != nil {
 		t.Fatalf("recording a path trigger cursor: %v", err)
 	}
+	if err := store.PutScheduleRefCursor(ctx, model.ScheduleRefCursor{
+		ScheduleID: "sched-ref", Repo: "upstream/core", Ref: "refs/tags/latest",
+		Commit: "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d", UpdatedAt: sub,
+	}); err != nil {
+		t.Fatalf("recording a git_ref schedule's cursor: %v", err)
+	}
 	// The grain CI workflows this deployment declares for a repo it does
 	// not control (model.RepoWorkflow). Two of them, since the table's
 	// key is (repo, path) and a repository with one workflow would not

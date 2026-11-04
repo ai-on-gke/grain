@@ -20,7 +20,7 @@ package model
 // list of label=value pairs any hostd carrying every one of them
 // matches. It is what a model connection (AgentBackend.Hostd) and a
 // run: hostd capability server (protocol.ServerConfig.Hostd) name to
-// place their work; no task carries one (schema 104 dropped the task,
+// place their work; no task carries one (schema 105 dropped the task,
 // template and repository selectors). Each run that resolved a hostd
 // for its agent CLI records it in task_run_hostd beside the frozen
 // task_run row: the hostd's name, the machine it ran on (its instance)

@@ -489,12 +489,16 @@ import "strconv"
 // gemini_key: {project}, minting with the gcp-key-minter secret, and
 // rewrites stored gemini-key grants as 100 did the model proxies.
 //
-// 104 drops `task_hostd`, `template`.`hostd` and
+// 104 retires the custom command connection type: every stored
+// connection whose framework is "custom" is disabled and kept, with
+// model.RemovedCustomConnectionReason (custom_connection_migration.go).
+//
+// 105 drops `task_hostd`, `template`.`hostd` and
 // `repo_config`.`default_hostd`: which grain hostd host work runs on is
 // the model connection's (model.AgentBackend.Hostd) or the capability
 // server's (protocol.ServerConfig.Hostd), never a task's. `task_run_hostd`
 // stays, the read-only record of where each run's agent CLI ran.
-const SchemaVersion = 104
+const SchemaVersion = 105
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified
@@ -596,7 +600,7 @@ const hostdTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd`" + ` (
 )`
 
 // taskHostdTable and taskRunHostdTable are a task's hostd selector (only
-// migrations 93 to 103 had one; 104 drops it) and the hostd each run
+// migrations 93 to 104 had one; 105 drops it) and the hostd each run
 // resolved (model.TaskRunHostd),
 // named once for Tables and for migration 93.
 const taskHostdTable = `CREATE TABLE IF NOT EXISTS ` + "`task_hostd`" + ` (
@@ -3292,6 +3296,20 @@ var Tables = []string{
   ` + "`commit`" + `     TEXT NOT NULL DEFAULT '',
   ` + "`updated_at`" + ` DATETIME NOT NULL,
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `, ` + "`branch`" + `)
+)`,
+
+	// Where each git_ref schedule last saw the ref it watches
+	// (model.ScheduleRefCursor): the commit it peeled to, so a restart
+	// neither re-fires on a ref that has not moved nor misses one that
+	// moved while the daemon was down. Grain's own record, like
+	// path_trigger_cursor.
+	`CREATE TABLE IF NOT EXISTS ` + "`git_ref_cursor`" + ` (
+  ` + "`schedule_id`" + ` TEXT NOT NULL,
+  ` + "`repo`" + `        TEXT NOT NULL DEFAULT '',
+  ` + "`ref`" + `         TEXT NOT NULL DEFAULT '',
+  ` + "`commit`" + `      TEXT NOT NULL DEFAULT '',
+  ` + "`updated_at`" + `  DATETIME NOT NULL,
+  PRIMARY KEY (` + "`schedule_id`" + `)
 )`,
 
 	// What grain has learned about working here (model.Memory,

@@ -516,7 +516,6 @@ export default function BulkEditOverlay({
             <MenuItem value="antigravity">Antigravity</MenuItem>
             <MenuItem value="claude">Claude</MenuItem>
             <MenuItem value="codex">Codex</MenuItem>
-            <MenuItem value="custom">Custom command</MenuItem>
           </TextField>
         </Row>
 

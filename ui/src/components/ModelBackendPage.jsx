@@ -35,13 +35,24 @@ export const frameworkLabels = {
   antigravity: "Antigravity",
   claude: "Claude",
   codex: "Codex",
+};
+
+// removedFrameworkLabels name the connection types grain no longer runs.
+// A stored connection of one is kept, disabled with a disabledReason, until
+// somebody deletes it, and is never offered for a new connection.
+export const removedFrameworkLabels = {
   custom: "Custom command",
 };
+
+export function isRemovedFramework(framework) {
+  return Object.hasOwn(removedFrameworkLabels, framework || "");
+}
 
 export function modelBackendLabel(backend) {
   return (
     backend.name ||
     frameworkLabels[backend.framework] ||
+    removedFrameworkLabels[backend.framework] ||
     backend.id ||
     "Connection"
   );
@@ -73,7 +84,7 @@ function authenticationValue(backend) {
 }
 
 // cliBinaryFor is the CLI a connection of framework runs, the one its
-// CLI path overrides -- "" for a custom command, which names its own.
+// CLI path overrides.
 export function cliBinaryFor(framework) {
   return (
     { claude: "claude", codex: "codex", antigravity: "agy" }[framework] || ""
@@ -283,7 +294,6 @@ export default function ModelBackendPage({
           change({
             framework: event.target.value,
             models: [],
-            command: "",
             cliPath: undefined,
             modelTurnTimeout: undefined,
             modelRetryCutoff: undefined,
@@ -304,16 +314,6 @@ export default function ModelBackendPage({
           </MenuItem>
         ))}
       </TextField>
-      {draft.framework === "custom" && (
-        <TextField
-          label="Command"
-          helperText="Relative to the config repository"
-          value={draft.command || ""}
-          onChange={(event) => change({ command: event.target.value })}
-          required
-          fullWidth
-        />
-      )}
     </>
   );
 
@@ -443,11 +443,6 @@ export default function ModelBackendPage({
                         Google Cloud Vertex AI
                       </MenuItem>,
                     ]}
-                    {draft.framework === "custom" && (
-                      <MenuItem value="own">
-                        Use a credential for this connection
-                      </MenuItem>
-                    )}
                     {/* Named as the connection list names it, by id when it
                       has no name: every source shares this one's framework,
                       so modelBackendLabel's framework fallback gave several

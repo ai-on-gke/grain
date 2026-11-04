@@ -14,7 +14,7 @@ Capabilities are how Grain equips an isolated sandbox VM or CI container with ex
 
 A capability is a standard **MCP server** (written in any language with any MCP SDK) configured in the deployment's `grain/config` state repository (and through the Settings UI / CLI) under `mcpServers` following Antigravity (`agy`)'s `mcp_config.json` specification shape ([docs/agy-surface.md](agy-surface.md) lines 145–174 and 1542–1663; spec §3.1):
 
-1. **Stdio (`command`, `args`, `env`)** — for **in-tree capabilities** built into the `grain` binary (`"command": "grain", "args": ["capability", "<name>"]`) and **in-config (`grain/config`) capability plugins** committed to `grain/config` (where a relative `command` such as `"plugins/custom-plugin/server"` is resolved from the root of the checked-out `grain/config` state repository, matching [docs/custom-agent-backends.md](custom-agent-backends.md)). Grain spawns the executable with an isolated environment and communicates over stdin/stdout.
+1. **Stdio (`command`, `args`, `env`)** — for **in-tree capabilities** built into the `grain` binary (`"command": "grain", "args": ["capability", "<name>"]`) and **in-config (`grain/config`) capability plugins** committed to `grain/config` (where a relative `command` such as `"plugins/custom-plugin/server"` is resolved from the root of the checked-out `grain/config` state repository). Grain spawns the executable with an isolated environment and communicates over stdin/stdout.
 2. **Streamable HTTP (`serverUrl`, `headers`)** — for **external capability servers** running outside `grain` and `grain/config` (standalone binary, `systemd` unit, container, or remote HTTP endpoint at `POST <serverUrl>`).
 
 Sensitive `env` and `headers` values (root minter keys, API keys, bearer tokens) are stored in **Grain's encrypted secrets store** and referenced via `$secret:<name>` in `grain/config`, never committed in cleartext. Grain calls two control-plane tools per capability method (`mint_<method>` and `release_<method>`) and materializes what they return into the run's sandbox. Your server is **fully trusted inside every sandbox it serves** — its files, prompt text, and tools act with the run's authority — so treat it like production infrastructure.
@@ -354,7 +354,7 @@ Tasks, templates, schedules, Grainfiles, and `.grain/workflows` CI jobs can then
 - **Antigravity (`agy`):** `$HOME/.gemini/config/mcp_config.json` (`mcpServers.<name>` with `timeoutSeconds` and `tools: {"<tool>": {"eager": true}}`), `$HOME/.gemini/antigravity-cli/settings.json` (`permissions.allow` `"mcp(<name>/<tool>)"`), and `HookDecision` admission.
 - **Claude (`claude`):** per-run `--mcp-config` (`mcpServers.<name>`) plus `mcp__<name>__<tool>` in `--allowedTools`.
 - **Codex (`codex`):** per-run `$CODEX_HOME/config.toml` under `[mcp_servers.<name>]` (`url`, `http_headers`, `required = true`, `tool_timeout_sec`).
-- **Custom agent backends & CI containers:** `mcp_servers` in the custom backend JSON launch request ([docs/custom-agent-backends.md](custom-agent-backends.md)), and `/home/debian/.grain/mcp.json` in `.grain/workflows` CI containers.
+- **CI containers:** `/home/debian/.grain/mcp.json` in `.grain/workflows` CI containers.
 
 ### Sandbox-first delivery (`grain cap`) and `modelOnly` tools
 

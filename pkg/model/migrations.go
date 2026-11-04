@@ -709,7 +709,12 @@ var Migrations = []Migration{
 		Up:          migrateGeminiKeyToCapabilityServer,
 	},
 	{
-		Version: 104,
+		Version:     104,
+		Description: "disable (and keep) every stored custom command connection: the connection type is removed",
+		Up:          disableCustomConnections,
+	},
+	{
+		Version: 105,
 		Description: "drop the task, template and repository hostd selectors: a model connection or capability server " +
 			"chooses its hostd; task_run_hostd keeps where each run ran",
 		Statements: []string{
