@@ -13,10 +13,11 @@
 // limitations under the License.
 
 import { useEffect, useRef, useState } from "react";
-import { Box, Button, Paper, Select, Stack, Typography } from "@mui/material";
+import { Box, Button, Paper, Stack, Typography } from "@mui/material";
 import api from "../api.js";
 import { configuredCapabilities } from "../state.js";
 import BulkEditOverlay from "./BulkEditOverlay.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 
 // BatchActionsBar is DetailOverlay's Actions and CapabilityToggles, but
 // aimed at every selected task at once instead of the one the overlay
@@ -202,30 +203,24 @@ export default function BatchActionsBar({
             Bulk edit…
           </Button>
 
-          <Select
-            native
-            size="small"
+          <SearchSelect
             value={capabilityId}
-            onChange={(e) => setCapabilityId(e.target.value)}
-            displayEmpty
-            // Its only visible label is the "Capability…" placeholder
-            // option, which stops naming it once one is picked.
+            onChange={setCapabilityId}
+            placeholder="Capability…"
+            // Its only visible label is the "Capability…" placeholder,
+            // which stops naming it once one is picked.
             inputProps={{ "aria-label": "Capability to attach or detach" }}
-          >
-            <option value="">Capability…</option>
-            {/* Only capabilities this deployment has configured -- plus any
-              the selection already holds, since this is the only bulk
-              way to detach one and hiding it would leave every selected
-              task stuck with it (configuredCapabilities, state.js). */}
-            {configuredCapabilities(
+            fullWidth={false}
+            sx={{ minWidth: 200 }}
+            // Only capabilities this deployment has configured -- plus any
+            // the selection already holds, since this is the only bulk
+            // way to detach one and hiding it would leave every selected
+            // task stuck with it (configuredCapabilities, state.js).
+            options={configuredCapabilities(
               config?.capabilities,
               selection.flatMap((t) => t.capabilities || []),
-            ).map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </Select>
+            ).map((c) => ({ value: c.id, label: c.name }))}
+          />
           <Button
             variant="outlined"
             size="small"
