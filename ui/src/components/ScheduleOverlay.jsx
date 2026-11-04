@@ -54,7 +54,7 @@ import RepoField from "./RepoField.jsx";
 import SearchSelect from "./SearchSelect.jsx";
 import WriteReposField from "./WriteReposField.jsx";
 import LastWorkflowRun from "./LastWorkflowRun.jsx";
-import { useUnsavedEdits } from "../unsavedEdits.js";
+import { settleEdits, useUnsavedEdits } from "../unsavedEdits.js";
 import { templateLabeler } from "../templateLabels.js";
 import {
   configuredCapabilities,
@@ -703,9 +703,16 @@ function ScheduleOverlay({
                   ) {
                     return;
                   }
-                  if (isDirty() && !window.confirm(DISCARD_PROMPT)) {
-                    e.preventDefault();
-                    return;
+                  if (isDirty()) {
+                    if (!window.confirm(DISCARD_PROMPT)) {
+                      e.preventDefault();
+                      return;
+                    }
+                    // Discarding is decided: settle the form so no
+                    // later guard on the way out (App's popstate and
+                    // navigation checks) asks the same question again
+                    // while this pane is still mounted.
+                    settleEdits();
                   }
                   if (onOpenTask) {
                     e.preventDefault();
