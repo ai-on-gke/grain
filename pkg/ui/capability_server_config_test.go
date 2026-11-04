@@ -282,8 +282,8 @@ func TestPlacedCapabilityServerChecksRegistryAndTargetHostdAllowlist(t *testing.
 		model.Hostd{Name: "gpu-box", Labels: map[string]string{"gpu": "yes", "zone": "us"}},
 	)
 
-	// Unknown and revoked hostds are refused before saving or probing.
-	for _, bad := range []protocol.HostdTarget{"no-such-hostd", "gone", "gpu=nope"} {
+	// Unknown, malformed, empty-valued and revoked hostds are refused before saving or probing.
+	for _, bad := range []protocol.HostdTarget{"no-such-hostd", "gone", "gpu=nope", "gpu="} {
 		cfg := protocol.ServerConfig{Command: "placed-cap", Run: protocol.RunHostd, Hostd: bad}
 		if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: cfg}); err == nil {
 			t.Errorf("SetCapabilityServer(hostd=%q) succeeded; want registry refusal", bad)
@@ -325,6 +325,39 @@ func TestPlacedCapabilityServerChecksRegistryAndTargetHostdAllowlist(t *testing.
 	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: offline}); err != nil {
 		t.Errorf("editing disabled on server whose hostd was later revoked: %v", err)
 	}
+
+	// If CapabilityServers does not implement CapabilityServerPlacedProber,
+	// saving or testing a placed server refuses immediately rather than
+	// falling back to probing on the default hostd with typed-in secrets.
+	inner := &fakeProber{hostEntries: []string{"placed-cap"}}
+	client.Config.CapabilityServers = unplacedOnlyProber{inner}
+	placedWithSecret := protocol.ServerConfig{
+		Command: "placed-cap", Run: protocol.RunHostd, Hostd: "ws-a",
+		Config: map[string]any{"project": "p1"},
+	}
+	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{
+		ID: configCap, Config: placedWithSecret, ConfigSecrets: map[string]string{"token": "must-not-probe-default"},
+	}); err == nil {
+		t.Error("SetCapabilityServer succeeded without CapabilityServerPlacedProber")
+	}
+	if _, err := hc.TestCapabilityServer(ctx, ui.TestCapabilityServerRequest{
+		ID: configCap, Config: &placedWithSecret, ConfigSecrets: map[string]string{"token": "must-not-probe-default"},
+	}); err == nil {
+		t.Error("TestCapabilityServer succeeded without CapabilityServerPlacedProber")
+	}
+	if len(inner.probed) > 0 || len(inner.resolved) > 0 {
+		t.Errorf("placed server touched default hostd prober without PlacedProber: probed=%+v resolved=%+v", inner.probed, inner.resolved)
+	}
+}
+
+type unplacedOnlyProber struct{ p *fakeProber }
+
+func (u unplacedOnlyProber) Statuses() []servers.Status { return u.p.Statuses() }
+func (u unplacedOnlyProber) Probe(ctx context.Context, id string, cfg protocol.ServerConfig, extra protocol.SecretLookup) servers.ProbeResult {
+	return u.p.Probe(ctx, id, cfg, extra)
+}
+func (u unplacedOnlyProber) HostCapabilityEntries(ctx context.Context) ([]string, error) {
+	return u.p.HostCapabilityEntries(ctx)
 }
 
 // Only config-map's secret_values is merged into what is stored: another

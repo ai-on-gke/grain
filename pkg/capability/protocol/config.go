@@ -117,7 +117,7 @@ func NormalizeHostdTarget(s string) (HostdTarget, error) {
 			continue
 		}
 		k, v, ok := strings.Cut(part, "=")
-		if !ok || k == "" || strings.ContainsAny(k+v, ",= \t\n\r") {
+		if !ok || k == "" || v == "" || strings.ContainsAny(k+v, ",= \t\n\r") {
 			return "", fmt.Errorf("hostd selector %q: %q is not label=value", s, part)
 		}
 		labels[k] = v
@@ -148,7 +148,7 @@ func encodeHostdTargetObject(name string, labels map[string]string) (HostdTarget
 func encodeHostdTargetLabels(labels map[string]string) (HostdTarget, error) {
 	keys := make([]string, 0, len(labels))
 	for k, v := range labels {
-		if k == "" || strings.ContainsAny(k+v, ",= \t\n\r") {
+		if k == "" || v == "" || strings.ContainsAny(k+v, ",= \t\n\r") {
 			return "", fmt.Errorf("hostd label %q=%q: keys and values may not be empty or hold ',', '=' or spaces", k, v)
 		}
 		keys = append(keys, k)

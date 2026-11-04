@@ -273,7 +273,7 @@ func (h *hostdCapabilityServers) Lookup(capabilityID string) (*protocol.Server, 
 	h.mu.Lock()
 	placed := h.configured
 	h.mu.Unlock()
-	entry, ok := placedEntry(placed, capabilityID)
+	_, entry, ok := placedEntry(placed, capabilityID)
 	if !ok {
 		return h.base.Lookup(capabilityID)
 	}
@@ -304,20 +304,44 @@ type hostdRoutedServers struct {
 }
 
 func (s *hostdRoutedServers) Lookup(capabilityID string) (*protocol.Server, error) {
-	entry, ok := placedEntry(s.placed, capabilityID)
+	canonicalID, entry, ok := placedEntry(s.placed, capabilityID)
 	if !ok {
 		return s.h.base.Lookup(capabilityID)
 	}
-	route, err := resolveHostdSelector(s.ctx, s.cfg, s.h.store, string(entry.Hostd))
+	s.mu.Lock()
+	chosen, pinned := s.hostdOf[canonicalID]
+	s.mu.Unlock()
+	lookupCtx := s.ctx
+	if lookupCtx == nil || lookupCtx.Err() != nil {
+		lookupCtx = s.h.ctx
+	}
+	if pinned {
+		s.h.mu.Lock()
+		r := s.h.regs[chosen]
+		s.h.mu.Unlock()
+		if r != nil {
+			select {
+			case <-r.ready:
+				return r.reg.Lookup(capabilityID)
+			case <-lookupCtx.Done():
+				return nil, lookupCtx.Err()
+			}
+		}
+	}
+	route, err := resolveHostdSelector(lookupCtx, s.cfg, s.h.store, string(entry.Hostd))
 	if err != nil {
 		return nil, fmt.Errorf("needs-hostd:%s: capability %s runs on hostd %s: %w", entry.Hostd, capabilityID, entry.Hostd, err)
 	}
-	reg, err := s.h.registry(s.ctx, route.Name, route.Exec.hostdClient())
+	reg, err := s.h.registry(lookupCtx, route.Name, route.Exec.hostdClient())
 	if err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
+	s.hostdOf[canonicalID] = route.Name
 	s.hostdOf[capabilityID] = route.Name
+	for _, a := range entry.Aliases {
+		s.hostdOf[a] = route.Name
+	}
 	s.mu.Unlock()
 	return reg.Lookup(capabilityID)
 }
@@ -333,18 +357,18 @@ func (s *hostdRoutedServers) HostdOf(capabilityID string) (string, bool) {
 
 // placedEntry is the entry of placed capabilityID names, by its id or by
 // an alias it adopted.
-func placedEntry(placed map[string]protocol.ServerConfig, capabilityID string) (protocol.ServerConfig, bool) {
+func placedEntry(placed map[string]protocol.ServerConfig, capabilityID string) (string, protocol.ServerConfig, bool) {
 	if cfg, ok := placed[capabilityID]; ok {
-		return cfg, true
+		return capabilityID, cfg, true
 	}
-	for _, cfg := range placed {
+	for id, cfg := range placed {
 		for _, a := range cfg.Aliases {
 			if a == capabilityID {
-				return cfg, true
+				return id, cfg, true
 			}
 		}
 	}
-	return protocol.ServerConfig{}, false
+	return "", protocol.ServerConfig{}, false
 }
 
 // NeedsHostd is the state Settings shows a placed server in while the
@@ -442,7 +466,7 @@ func (h *hostdCapabilityServers) rotateManaged(capabilityID string) ([]string, e
 	h.mu.Lock()
 	placed := h.configured
 	h.mu.Unlock()
-	entry, ok := placedEntry(placed, capabilityID)
+	canonicalID, entry, ok := placedEntry(placed, capabilityID)
 	if !ok {
 		return h.base.RotateManaged(capabilityID)
 	}
@@ -456,7 +480,7 @@ func (h *hostdCapabilityServers) rotateManaged(capabilityID string) ([]string, e
 	if err != nil {
 		return nil, err
 	}
-	return reg.RotateManaged(capabilityID)
+	return reg.RotateManaged(canonicalID)
 }
 
 // placedStatusRegistry is the deployment's registry as Settings and

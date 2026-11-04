@@ -95,14 +95,15 @@ func TestAPlacedCapabilityServerRunsOnItsOwnHostd(t *testing.T) {
 		return protocol.NewServer(ctx, id, hostScriptCaller{hostd: where})
 	}
 	const (
-		hostScripts  = "https://example.com/caps/host-scripts"
-		hostScriptsA = "https://example.com/caps/host-scripts-ws-a"
-		offScripts   = "https://example.com/caps/host-scripts-ws-off"
-		inContainer  = "https://example.com/caps/in-container"
+		hostScripts       = "https://example.com/caps/host-scripts"
+		hostScriptsA      = "https://example.com/caps/host-scripts-ws-a"
+		hostScriptsAAlias = "https://example.com/caps/legacy-ws-a"
+		offScripts        = "https://example.com/caps/host-scripts-ws-off"
+		inContainer       = "https://example.com/caps/in-container"
 	)
 	configured := map[string]protocol.ServerConfig{
 		hostScripts:  {Command: "grain-host-scripts", Run: protocol.RunHost},
-		hostScriptsA: {Command: "grain-host-scripts", Run: protocol.RunHostd, Hostd: "ws-a"},
+		hostScriptsA: {Command: "grain-host-scripts", Run: protocol.RunHostd, Hostd: "ws-a", Aliases: []string{hostScriptsAAlias}},
 		offScripts:   {Command: "grain-host-scripts", Run: protocol.RunHostd, Hostd: "ws-off"},
 		inContainer:  {Command: "in-container"},
 	}
@@ -197,6 +198,27 @@ func TestAPlacedCapabilityServerRunsOnItsOwnHostd(t *testing.T) {
 	}
 	if _, err := srvs.Lookup(offScripts); err == nil || !strings.Contains(err.Error(), "needs-hostd:ws-off") {
 		t.Errorf("a server on a disconnected hostd: Lookup = %v, want needs-hostd:ws-off", err)
+	}
+
+	// Minting via an alias records the canonical capability_id's hostd too
+	// (for audit records and OnDrop notices), and post-admission Lookups
+	// during RunDispatch keep reaching that pinned hostd after ForTask's
+	// admission context ends.
+	admitCtx, admitCancel := context.WithCancel(ctx)
+	aliasSrvs, _, err := routed.ForTask(admitCtx, "alias-task")
+	if err != nil {
+		t.Fatalf("ForTask(alias-task) = %v", err)
+	}
+	if got := call(aliasSrvs, hostScriptsAAlias); got != "ran on only-a" {
+		t.Errorf("placed server via alias %s, want ws-a", got)
+	}
+	admitCancel()
+	aliasOf := aliasSrvs.(orchestrator.CapabilityHostdOf)
+	if name, ok := aliasOf.HostdOf(hostScriptsA); !ok || name != "ws-a" {
+		t.Errorf("HostdOf(canonical after alias Lookup) = %q, %v; want ws-a, true", name, ok)
+	}
+	if got := call(aliasSrvs, hostScriptsA); got != "ran on only-a" {
+		t.Errorf("Lookup(canonical) after admission ctx ended = %s, want ws-a", got)
 	}
 
 	// A server dropped from mcp_servers goes from the hostd's registry too.

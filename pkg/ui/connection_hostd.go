@@ -146,7 +146,8 @@ func (c *Client) checkHostdSelector(ctx context.Context, selector string) error 
 // of want's.
 func hostdLabelled(have, want map[string]string) bool {
 	for k, v := range want {
-		if have[k] != v {
+		hv, ok := have[k]
+		if !ok || hv != v {
 			return false
 		}
 	}

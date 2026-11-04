@@ -595,7 +595,7 @@ func templateSchema() Schema {
 			// work may touch.
 			{Model: "Interactive", Keys: carried("interactive"), Columns: []string{"interactive"}},
 			{Model: "KeepRunning", Keys: carried("keep-running"), Columns: []string{"keep_running"}},
-			// `hostd`, which a template once carried (schema 94 to 104):
+			// `hostd`, which a template once carried (schema 94 to 109):
 			// which grain hostd host work runs on is a model connection's
 			// or a capability server's, never what a template files, so
 			// the key is answered and kept nowhere.
@@ -1149,7 +1149,7 @@ func RepoSettingsSchema() Schema {
 			},
 
 			// `default-hostd`, a repository's tasks' hostd until schema
-			// 105: answered and kept nowhere, for the template `hostd`
+			// 110: answered and kept nowhere, for the template `hostd`
 			// key's reason.
 			{Keys: []Key{nowhere("default-hostd", Authority)}},
 

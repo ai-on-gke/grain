@@ -692,6 +692,11 @@ func (p *AgentPool) Availability(ctx context.Context, choice orchestrator.AgentC
 		if p.Pause.ModelPaused(owner, req.model, team, time.Now()) {
 			return fmt.Sprintf("model %s on %s is paused after a usage limit", req.model, conn) + pin
 		}
+		route := req.routes[req.pinned.ID]
+		if route.Pinned {
+			why, _ := hostdDrainHold(ctx, route.apply(live, req.pinned.Framework), req.pinned.Framework)
+			return why
+		}
 		return p.hostdHold(ctx, live, req.pinned.Framework)
 	}
 	// While hostd drains, the connections that would start their CLI
@@ -740,7 +745,7 @@ func (p *AgentPool) fallbackReasonLocked(live Config, req poolRequest, picked st
 			if b.Disabled || !b.SupportsModel(m) || (want != "" && model.NormalizeAgentFrameworkName(b.Framework) != want) {
 				continue
 			}
-			if req.hostdDraining[model.NormalizeAgentFrameworkName(b.Framework)] {
+			if req.hostdDraining[model.NormalizeAgentFrameworkName(b.Framework)] && !req.routes[b.ID].Pinned {
 				onHost = true
 			}
 			// The model is back as soon as any connection serving it is.

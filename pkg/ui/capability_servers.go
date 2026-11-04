@@ -897,19 +897,21 @@ func (c *Client) checkRunLocation(ctx context.Context, cfg protocol.ServerConfig
 		return nil
 	}
 	if cfg.Hostd != "" {
-		if pp, ok := c.Config.CapabilityServers.(CapabilityServerPlacedProber); ok {
-			entries, connected, err := pp.HostCapabilityEntriesFor(ctx, string(cfg.Hostd))
-			if err != nil {
-				if !connected && !forTest {
-					// The hostd is in the registry and unrevoked, just not
-					// connected right now: saving parks the server in
-					// needs-hostd until that hostd dials in.
-					return nil
-				}
-				return validationErrorf("run: host on hostd %s: %s", cfg.Hostd, err)
-			}
-			return checkHostdOffersEntry(entries, cfg, "on hostd "+string(cfg.Hostd))
+		pp, ok := c.Config.CapabilityServers.(CapabilityServerPlacedProber)
+		if !ok {
+			return validationErrorf("run: host on hostd %s: this process does not route placed capability servers to their hostd", cfg.Hostd)
 		}
+		entries, connected, err := pp.HostCapabilityEntriesFor(ctx, string(cfg.Hostd))
+		if err != nil {
+			if !connected && !forTest {
+				// The hostd is in the registry and unrevoked, just not
+				// connected right now: saving parks the server in
+				// needs-hostd until that hostd dials in.
+				return nil
+			}
+			return validationErrorf("run: host on hostd %s: %s", cfg.Hostd, err)
+		}
+		return checkHostdOffersEntry(entries, cfg, "on hostd "+string(cfg.Hostd))
 	}
 	hosts := c.HostCapabilityEntries(ctx)
 	if !hosts.Available {

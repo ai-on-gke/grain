@@ -229,8 +229,11 @@ func TestHostdTargetJSONAndYAMLValidation(t *testing.T) {
 		`{"labels":{"a,b":"1"}}`,
 		`{"labels":{"a":"1=2"}}`,
 		`{"labels":{"":"1"}}`,
+		`{"labels":{"a":""}}`,
 		`{"other":"ws-a"}`,
 		`"=gpu"`,
+		`"gpu="`,
+		`"pool=gpu,zone="`,
 		`"pool=gpu,bare"`,
 	} {
 		var jt HostdTarget
@@ -244,8 +247,10 @@ func TestHostdTargetJSONAndYAMLValidation(t *testing.T) {
 		`{name: ws-a, labels: {pool: gpu}}`,
 		`{name: UPPER}`,
 		`{labels: {"a,b": "1"}}`,
+		`{labels: {a: ""}}`,
 		`{unknown: ws-a}`,
 		`"=gpu"`,
+		`"gpu="`,
 	} {
 		var yt HostdTarget
 		if err := yaml.Unmarshal([]byte(badYAML), &yt); err == nil {

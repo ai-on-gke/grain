@@ -221,4 +221,39 @@ func TestRunsRouteToTheirConnectionsHostdWithCapacityAndPerHostdPauses(t *testin
 	if instance != "cloudtop" || owner != "alice@example.com" {
 		t.Errorf("ws-a's audit = %q, %q; want its instance and registry owner", instance, owner)
 	}
+
+	// Empty label values are rejected rather than matching unlabelled hostds.
+	for _, bad := range []string{"gpu=", "pool=gpu,zone=", "gpu=a=b"} {
+		if _, _, err := model.ParseHostdSelector(bad); err == nil {
+			t.Errorf("ParseHostdSelector(%q) succeeded; want error", bad)
+		}
+	}
+	if err := model.ValidateHostdLabels(map[string]string{"gpu": ""}); err == nil {
+		t.Error("ValidateHostdLabels accepted an empty label value")
+	}
+	if labelsMatch(nil, map[string]string{"gpu": ""}) {
+		t.Error("labelsMatch matched an empty label value against an unlabelled hostd")
+	}
+
+	// Fallback resilience: a revoked fallback does not turn a disconnected
+	// primary's wait into a setup failure, and a revoked primary falls back
+	// to a connected fallback in its explicit HostdFallback list.
+	if _, _, err := store.CreateHostd(ctx, model.Hostd{Name: "ws-revoked"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RevokeHostd(ctx, "ws-revoked"); err != nil {
+		t.Fatal(err)
+	}
+	offThenRevoked := conn("off-then-revoked", "ws-off", "ws-revoked")
+	if _, err := connectionHostdRoute(ctx, cfg, store, offThenRevoked); !errors.Is(err, agent.ErrHostdWaiting) {
+		t.Errorf("disconnected primary + revoked fallback = %v, want wait on ws-off", err)
+	}
+	revokedThenB := conn("revoked-then-b", "ws-revoked", "ws-b")
+	if r, err := connectionHostdRoute(ctx, cfg, store, revokedThenB); err != nil || r.Name != "ws-b" {
+		t.Errorf("revoked primary + connected fallback = %+v, %v; want ws-b", r, err)
+	}
+	revokedOnly := conn("revoked-only", "ws-revoked")
+	if _, err := connectionHostdRoute(ctx, cfg, store, revokedOnly); err == nil || errors.Is(err, agent.ErrHostdWaiting) {
+		t.Errorf("revoked primary with no fallback = %v, want fatal refusal", err)
+	}
 }

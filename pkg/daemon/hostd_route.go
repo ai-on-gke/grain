@@ -127,14 +127,20 @@ func resolveConnectionTargets(ctx context.Context, live Config, store *model.Sto
 			return r, "", nil, nil
 		}
 		var w *HostdWaitError
-		if !errors.As(err, &w) {
-			return hostdRoute{}, sel, nil, err
+		if errors.As(err, &w) {
+			if wait == nil {
+				wait = err
+			}
+			continue
 		}
-		if wait == nil {
-			wait = err
+		if fatal == nil {
+			badSel, fatal = sel, err
 		}
 	}
-	return hostdRoute{}, "", wait, nil
+	if wait != nil {
+		return hostdRoute{}, "", wait, nil
+	}
+	return hostdRoute{}, badSel, nil, fatal
 }
 
 func wrapConnectionTargetErr(id string, targets []string, badSel string, wait, fatal error) error {
