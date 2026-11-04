@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v14"
+const Version = "trust-boundary/v15"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -82,11 +82,14 @@ type Category struct {
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
 //
-// v14 added connection_hostd.go to auth-routes and capability server
+// v15 added connection_hostd.go to auth-routes and capability server
 // hostd placement (capability_servers.go, capability_servers_hostd.go,
 // pkg/ui/capability_servers.go) to capabilities-secrets (grain/task-2165):
 // where run: hostd capability servers start and receive their resolved
 // secrets.
+//
+// v14 added the rc qualification housekeeping workflow and its Actions
+// helper to release-machinery (grain/task-2584).
 //
 // v13 added the GitHub Actions Inbox approval (grain/task-2666,
 // design/playbook/releases.playbook.md §0.2) to release-promotion: the
@@ -288,6 +291,9 @@ var Categories = []Category{
 			// version every published image is tagged with, and the host
 			// setup the publishing job sources.
 			"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
+			// The rc's Actions housekeeping: re-running qualification jobs
+			// and cancelling a dropped rc's runs.
+			"scripts/release-train-actions.sh", ".github/workflows/rc-qualification.yml",
 			".grain/workflows/release.yml", ".github/workflows/release.yml",
 			".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 			".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",

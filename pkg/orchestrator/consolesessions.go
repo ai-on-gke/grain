@@ -149,6 +149,7 @@ func reconcileConsoleSessions(ctx context.Context, deps Deps, now time.Time) err
 			o.ClosedAt = &now
 			o.PendingQuestionCommentID = nil
 			o.PendingSecret = ""
+			o.PendingAccess = nil
 		}); err != nil {
 			errs = append(errs, fmt.Errorf("orchestrator: closing removed %s console session task %s: %w", sessionID, taskID, err))
 			continue

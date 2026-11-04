@@ -493,12 +493,17 @@ import "strconv"
 // connection whose framework is "custom" is disabled and kept, with
 // model.RemovedCustomConnectionReason (custom_connection_migration.go).
 //
-// 105 drops `task_hostd`, `template`.`hostd` and
+// 105 adds `pending_access_request` and `access_decisions` to
+// `task_observation`: the request_access call a task is parked on
+// (model.PendingAccessRequest) and the answers people gave its earlier
+// ones (model.AccessDecision), both JSON.
+//
+// 106 drops `task_hostd`, `template`.`hostd` and
 // `repo_config`.`default_hostd`: which grain hostd host work runs on is
 // the model connection's (model.AgentBackend.Hostd) or the capability
 // server's (protocol.ServerConfig.Hostd), never a task's. `task_run_hostd`
 // stays, the read-only record of where each run's agent CLI ran.
-const SchemaVersion = 105
+const SchemaVersion = 106
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified
@@ -600,7 +605,7 @@ const hostdTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd`" + ` (
 )`
 
 // taskHostdTable and taskRunHostdTable are a task's hostd selector (only
-// migrations 93 to 104 had one; 105 drops it) and the hostd each run
+// migrations 93 to 105 had one; 106 drops it) and the hostd each run
 // resolved (model.TaskRunHostd),
 // named once for Tables and for migration 93.
 const taskHostdTable = `CREATE TABLE IF NOT EXISTS ` + "`task_hostd`" + ` (
@@ -997,6 +1002,8 @@ var Tables = []string{
   ` + "`baseline_comment_id`" + `         INTEGER  NULL,
   ` + "`pending_secret`" + `              TEXT     NULL,
   ` + "`pending_config_change`" + `       TEXT     NULL,
+  ` + "`pending_access_request`" + `      TEXT     NULL,
+  ` + "`access_decisions`" + `            TEXT     NULL,
   ` + "`merge_queue_blocked_at`" + `      DATETIME NULL,
   ` + "`merge_queue_refreshed_at`" + `    DATETIME NULL,
   ` + "`merge_queue_repair_at`" + `       DATETIME NULL,

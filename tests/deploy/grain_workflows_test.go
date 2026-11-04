@@ -1883,9 +1883,10 @@ func TestEverythingTheGateDoesNotRunTheNightlyDoes(t *testing.T) {
 	}
 }
 
-// releaseTrainPath is the daily release train (design/design/release-from-trunk.design.md,
-// RFT-6): it cuts, soaks and stages releases from main, and a person's
-// approval through promote-release.yml is what makes one official.
+// releaseTrainPath is the continuous release train
+// (design/playbook/releases.playbook.md): it cuts, qualifies and stages
+// releases from main, and a person's approval through promote-release.yml
+// is what makes one official.
 const releaseTrainPath = ".grain/workflows/release-train.yml"
 
 func releaseTrainWorkflow(t *testing.T) ci.Workflow {
@@ -2030,16 +2031,55 @@ func TestTheReleaseTrainsCapabilitiesAreGrantedOnGrainsOwnRepository(t *testing.
 	}
 }
 
-// The train stops at vX.Y.0-pending (task 1236): nothing it runs may push
-// vX.Y.0, move `latest`, or call the approve or promote modes that do. Only
-// .grain/workflows/promote-release.yml, which a person starts, makes a
-// release official.
+// rc-qualification.yml asks GitHub Actions for what the grain-task train
+// cannot (playbook §3, §4, §6): the flake retry and infra re-runs of
+// nightly.yml jobs on the rc, and cancelling a superseded rc's runs. It is
+// woken by nightly.yml and an hourly safety cron, and it can never be a
+// second train: it runs release-from-trunk.sh only as a dry run with every
+// publisher off, and holds contents: read, so it cannot push a ref.
+func TestRCQualificationReRunsAndCancelsButNeverCuts(t *testing.T) {
+	text := stripComments(read(t, ".github", "workflows", "rc-qualification.yml"))
+	on := upTo(t, text, "jobs:")
+	contains(t, on, "workflow_run:")
+	contains(t, on, "workflows: [nightly]")
+	contains(t, on, `cron: "17 * * * *"`)
+	contains(t, on, "actions: write")
+	contains(t, on, "contents: read")
+	if strings.Contains(text, "contents: write") || strings.Contains(text, "packages: write") || strings.Contains(text, "REPO_WRITE_TOKEN") {
+		t.Error("rc-qualification.yml can write the repository or its packages; it re-runs and cancels Actions runs and nothing else")
+	}
+	contains(t, text, "DRY_RUN=true RELEASE_CI_SOURCE=github")
+	contains(t, text, "RELEASE_IMAGES=off RELEASE_NOTES_TASK=off RELEASE_NOTIFY=off")
+	if n := strings.Count(text, "scripts/release-from-trunk.sh"); n != 1 {
+		t.Errorf("rc-qualification.yml runs release-from-trunk.sh %d times, want once, as a dry run", n)
+	}
+	contains(t, text, `bash ./scripts/release-train-actions.sh "$RELEASE_TRAIN_OUTPUT"`)
+	contains(t, text, `RELEASE_TAGS_FIRE: "true"`)
+}
+
+// The train stops at vX.Y.0-pending (task 1236; the one person action of
+// design/playbook/releases.playbook.md §0): nothing it runs -- grain's copy,
+// the GitHub Actions copy, or rc-qualification.yml and the Actions helper
+// that re-runs and cancels qualification -- may push vX.Y.0, move
+// `latest`, or call the approve, rollback or promote modes that do. Only promote-release.yml, which a
+// person starts, makes a release official or moves `latest` back.
 func TestTheReleaseTrainNeverPromotesARelease(t *testing.T) {
 	w := releaseTrainWorkflow(t)
 	forbidden := []string{
-		"release-from-trunk.sh approve", "release-from-trunk.sh reject",
+		"release-from-trunk.sh approve", "release-from-trunk.sh reject", "release-from-trunk.sh rollback",
 		"release-images.sh promote", "promote-release.yml", "promote.yml",
 		"refs/tags/latest", "git tag", "git push",
+	}
+	for _, f := range []struct{ path, text string }{
+		{".github/workflows/release-train.yml", stripComments(read(t, ".github", "workflows", "release-train.yml"))},
+		{".github/workflows/rc-qualification.yml", stripComments(read(t, ".github", "workflows", "rc-qualification.yml"))},
+		{"scripts/release-train-actions.sh", stripComments(read(t, "scripts", "release-train-actions.sh"))},
+	} {
+		for _, bad := range append(forbidden, "release-images.sh", "/git/refs", "/git/tags") {
+			if strings.Contains(f.text, bad) {
+				t.Errorf("%s runs %q: the train never promotes a release; a person approves it through promote-release.yml", f.path, bad)
+			}
+		}
 	}
 	for _, job := range w.Jobs {
 		for _, step := range job.Steps {

@@ -477,6 +477,10 @@ type Task struct {
 	// sentence for one asked without a summary; "" when the task is not
 	// parked on a question, or is parked on a stopped turn.
 	QuestionSummary string `json:"questionSummary,omitempty"`
+	// AwaitingAccess is an awaiting_reply task parked on an access
+	// request (request_access) rather than a question: what it wants is
+	// a grant, which its card offers, not a reply.
+	AwaitingAccess bool `json:"awaitingAccess,omitempty"`
 	// MergeQueueBlockedAt mirrors model.Observation's own field: non-nil
 	// once the merge queue has stopped driving this task's pull request
 	// -- an automatic fix that did not take, or checks that never
@@ -752,6 +756,10 @@ type TaskDetail struct {
 	// proposed (propose_config_change, task_config_change.go): what the
 	// task pane renders as an inline diff with Approve and Reject.
 	PendingConfigChange *model.PendingConfigChange `json:"pendingConfigChange,omitempty"`
+	// PendingAccess is the access request a parked run made with
+	// request_access (task_access_request.go), each item judged against
+	// what the task holds now; nil for a task parked on none.
+	PendingAccess *AccessRequestView `json:"pendingAccess,omitempty"`
 	// CI is what grain's own CI last said about the branch this task
 	// pushed (model.Observation.CI), nil for the overwhelming majority of
 	// tasks -- one that does not hold the grain-ci capability, or whose

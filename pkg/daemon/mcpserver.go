@@ -552,6 +552,18 @@ func (d daemonConfigChanges) ProposeConfigChange(ctx context.Context, p mcp.Conf
 	})
 }
 
+// daemonAccessRequests is request_access's mcp.AccessRequestChecker: the
+// daemon judges what the call names against this run's own task, as the
+// task's grants editor would.
+type daemonAccessRequests struct {
+	client *ui.HTTPClient
+	taskID string
+}
+
+func (d daemonAccessRequests) CheckAccessRequest(ctx context.Context, items []model.AccessRequestItem) error {
+	return d.client.CheckAccessRequest(ctx, d.taskID, items)
+}
+
 // writesConfigRepo reports whether t may push grain/config from the
 // grain-state checkout propose_config_change's script starts in. That
 // checkout is made only for a task with no repo of its own
@@ -2100,6 +2112,7 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 			Read:  mcp.SandboxFileReaderOf(tools),
 			Stage: daemonStagedAttachments{client: client, taskID: *taskID}.Stage,
 		})
+		escapeSink.SetAccessChecker(daemonAccessRequests{client: client, taskID: *taskID})
 	}
 
 	// Unlike the escape hatches, this one acts within the run rather than

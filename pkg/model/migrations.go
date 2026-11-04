@@ -714,7 +714,15 @@ var Migrations = []Migration{
 		Up:          disableCustomConnections,
 	},
 	{
-		Version: 105,
+		Version:     105,
+		Description: "add pending_access_request and access_decisions to task_observation for request_access",
+		Statements: []string{
+			"ALTER TABLE `task_observation` ADD COLUMN `pending_access_request` TEXT NULL",
+			"ALTER TABLE `task_observation` ADD COLUMN `access_decisions` TEXT NULL",
+		},
+	},
+	{
+		Version: 106,
 		Description: "drop the task, template and repository hostd selectors: a model connection or capability server " +
 			"chooses its hostd; task_run_hostd keeps where each run ran",
 		Statements: []string{

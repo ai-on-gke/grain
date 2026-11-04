@@ -227,7 +227,7 @@ Places where a design says something the code does not do. The designs were not 
    - The turn-ending controls stay MCP-only. `task wait --park`/`--resume-at` are refused, and `task propose` refuses `--supersedes`, `--auto-merge` and `--hold-for-approval=false` ([`sandbox.spec.md` #CLI-93](sandbox.spec.md#CLI-93)).
 3. **`cli-run-location.design.md`** is about where agent CLIs (claude, codex, agy) run, not about `grain`'s own CLI. Its command-line surface is the daemon's `-claude-run`, `-codex-run` and `-agy-run` flags and `grain hostd`, and both exist as it describes ([`host.spec.md`](host.spec.md), `grain daemon` and `grain hostd`). No divergence was found in the CLI surface.
 4. **Commands the task brief names that do not exist:**
-   - There is no `grain upgrade` command: schema upgrades are `grain state prepare-upgrade`, and the store move is `grain upgrade-postgres`/`grain db`.
+   - There is no `grain upgrade` command: schema upgrades are `grain state prepare-upgrade`, and the store move is `grain upgrade-postgres`/`grain db upgrade-postgres`.
    - There is no `grain executor` command.
    - `grain create` and `grain ci` are task-CLI commands, not modes.
 

@@ -229,6 +229,7 @@ qualification flake "$c3"
 train RELEASE_TRAIN_OUTPUT="$work/train.out"
 expect "flake" "exits 0" eq "$status" 0
 expect "flake" "asks for the one retry" grep -qxF "qualification_rerun=nightly:upgrade-test:flake" "$work/train.out"
+expect "flake" "names the rc to re-run it on" grep -qxF "qualifying_rc=v2.3.0-rc.1" "$work/train.out"
 expect "flake" "drops nothing" eq "$(remote_tag v2.3.0-rc.1-discarded)" ""
 
 # --- infra: re-run, never red ---

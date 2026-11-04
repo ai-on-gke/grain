@@ -45,6 +45,33 @@ Flags:
   -no-save-config   do not persist the database configuration in <data-dir>/db-config.json
 `
 
+const dbUsage = "usage: grain db upgrade-postgres [flags]\n"
+
+func dbCmd(args []string) {
+	if len(args) > 0 && (args[0] == "upgrade-postgres" || args[0] == "upgrade-sqlite-to-postgres") {
+		upgradePostgresCmd(args[1:])
+		return
+	}
+	if err := runDB(args, os.Stderr); err != nil {
+		fmt.Fprintln(os.Stderr, "grain db: "+err.Error())
+		os.Exit(1)
+	}
+}
+
+func runDB(args []string, errOut io.Writer) error {
+	if len(args) == 0 {
+		fmt.Fprint(errOut, dbUsage)
+		return errors.New("a command is required (grain db upgrade-postgres [flags]; db query is the in-sandbox CLI's)")
+	}
+	switch args[0] {
+	case "-h", "-help", "--help":
+		fmt.Fprint(errOut, dbUsage)
+		return flag.ErrHelp
+	default:
+		return fmt.Errorf("unknown command %q (grain db upgrade-postgres [flags]; db query is the in-sandbox CLI's)", args[0])
+	}
+}
+
 func upgradePostgresCmd(args []string) {
 	if err := runUpgradePostgres(context.Background(), args, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "grain upgrade-postgres: "+err.Error())
@@ -65,6 +92,10 @@ func runUpgradePostgres(ctx context.Context, args []string, out io.Writer) error
 
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if fs.NArg() > 0 {
+		fs.Usage()
+		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}
 
 	targetDSN := strings.TrimSpace(*dsn)
