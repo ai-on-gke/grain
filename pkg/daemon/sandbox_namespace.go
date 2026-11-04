@@ -67,6 +67,10 @@ import (
 // daemon that never builds one -- every request fails, saying so.
 var LiveAPI = &InProcessAPI{}
 
+// liveNamespace is the namespace the sandbox proxy serves at /fs/, which
+// grain's API serves at /api/fs/ too once the proxy has built it.
+var liveNamespace atomic.Pointer[namespace.Server]
+
 // InProcessAPI is an http.RoundTripper and http.Handler backed by an
 // atomically published http.Handler.
 type InProcessAPI = inProcessAPI
@@ -228,6 +232,7 @@ type sandboxDeploy struct {
 var (
 	_ namespace.DeployProvider       = sandboxDeploy{}
 	_ namespace.MetricsSectionLister = sandboxDeploy{}
+	_ namespace.MergeQueueRepoReader = sandboxDeploy{}
 )
 
 // toolText is a tool's answer as a file's content, or its refusal as an
@@ -247,6 +252,15 @@ func (d sandboxDeploy) ReadMergeQueue(ctx context.Context) (string, error) {
 	// GitHub with, so a queued change whose task names no base is shown
 	// with the branch the daemon knows (its batch's) or none.
 	tool := mcp.NewMergeQueueTools(daemonMergeQueue{client: d.client})[0]
+	return toolText(tool.Handler(ctx, map[string]any{"view": "full"}))
+}
+
+// ReadMergeQueueFor is ReadMergeQueue for a caller reaching it under
+// ci:read alone (GET /api/fs/deploy/merge-queue): only the repositories
+// permits allows.
+func (d sandboxDeploy) ReadMergeQueueFor(ctx context.Context, permits func(repo string) bool) (string, error) {
+	reader := mcp.RepoFilteredMergeQueue{Reader: daemonMergeQueue{client: d.client}, Permits: permits}
+	tool := mcp.NewMergeQueueTools(reader)[0]
 	return toolText(tool.Handler(ctx, map[string]any{"view": "full"}))
 }
 

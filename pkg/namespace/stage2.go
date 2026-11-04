@@ -144,6 +144,14 @@ type DeployProvider interface {
 	ListGrainLogSources(ctx context.Context) ([]string, error)
 }
 
+// MergeQueueRepoReader is what a DeployProvider also implements to
+// answer deploy://merge-queue for a scope with MergeQueueByCI: the queue
+// with every gate, batch and change of a repository permits refuses left
+// out. A provider without it answers such a scope nothing.
+type MergeQueueRepoReader interface {
+	ReadMergeQueueFor(ctx context.Context, permits func(repo string) bool) (string, error)
+}
+
 // MetricsSectionLister is what a DeployProvider also implements to name
 // the sections deploy://metrics/ lists, where they are not the default
 // set.
@@ -929,7 +937,17 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 		if len(parts) > 1 {
 			return nil, fmt.Errorf("%w: deploy://%s", ErrNotFound, relPath)
 		}
-		text, err := s.Deploy.ReadMergeQueue(ctx)
+		var text string
+		var err error
+		if scope.MergeQueueByCI {
+			limited, ok := s.Deploy.(MergeQueueRepoReader)
+			if !ok {
+				return nil, fmt.Errorf("%w: deploy://%s: this daemon cannot narrow the merge queue to the repositories this caller may read", ErrForbidden, relPath)
+			}
+			text, err = limited.ReadMergeQueueFor(ctx, scope.PermitsCI)
+		} else {
+			text, err = s.Deploy.ReadMergeQueue(ctx)
+		}
 		if err != nil {
 			return nil, err
 		}

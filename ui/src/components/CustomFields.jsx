@@ -23,6 +23,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useState } from "react";
+import SearchSelect, { SHORT_LIST } from "./SearchSelect.jsx";
 import {
   CUSTOM_PREFIX,
   declaredFields,
@@ -287,6 +288,26 @@ export function CustomFieldInput({ field, value, onChange }) {
     fullWidth: true,
     size: "small",
   };
+  // A declaration with more than a handful of choices is searched rather
+  // than scrolled; a short one stays a plain select, quicker to open.
+  if (field.type === "enum" && (field.options || []).length > SHORT_LIST) {
+    return (
+      <SearchSelect
+        label={label}
+        value={picked}
+        onChange={onChange}
+        helperText={helperText}
+        FormHelperTextProps={helperProps.FormHelperTextProps}
+        InputLabelProps={{ shrink: true }}
+        options={[
+          // "none" for the reason the plain select's own row gives.
+          { value: "", label: "none", row: <em>none</em> },
+          ...(field.options || []).map((o) => ({ value: o, label: o })),
+          ...(legacy ? [{ value: legacy, label: legacyLabel(legacy) }] : []),
+        ]}
+      />
+    );
+  }
   if (field.type === "enum") {
     return (
       <TextField {...common} value={picked} select>
