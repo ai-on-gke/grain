@@ -38,9 +38,25 @@ export function readPage(body) {
   };
 }
 
+// closedAtOf is when t closed, as the server orders a page by it
+// (pkg/ui/client.go's closedTime): its closing time, else its ending or
+// filing time.
+function closedAtOf(t) {
+  const at = Date.parse(t.closedAt || t.endedAt || t.createdAt || "");
+  return Number.isNaN(at) ? 0 : at;
+}
+
+// newestClosedFirst is the order the server pages in and the views draw
+// closed tasks in when nothing else sorts them.
+function newestClosedFirst(a, b) {
+  return closedAtOf(b) - closedAtOf(a) || Number(b.id) - Number(a.id);
+}
+
 // mergeClosedPage is held with page's tasks put in: each replaces the row
-// it names, and the rest are added. Held is returned as it is when the
-// page changes nothing, so a quiet refresh re-renders nothing.
+// it names, and the rest are added, newest-closed first -- a task that
+// has just closed goes at the top, as the old whole list put it. Held is
+// returned as it is when the page changes nothing, so a quiet refresh
+// re-renders nothing.
 export function mergeClosedPage(held, page) {
   if (page.length === 0) return held;
   const byId = new Map(held.map((t, i) => [String(t.id), i]));
@@ -56,7 +72,7 @@ export function mergeClosedPage(held, page) {
     }
   }
   if (added.length === 0) return next || held;
-  return [...(next || held), ...added];
+  return [...(next || held), ...added].sort(newestClosedFirst);
 }
 
 // mergeTaskLists is the list every view draws: the live tasks, then every

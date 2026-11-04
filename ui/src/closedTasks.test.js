@@ -34,21 +34,17 @@ describe("closedTasks", () => {
     expect(mergeClosedPage(held, [])).toBe(held);
   });
 
-  it("replaces changed rows and adds new ones", () => {
+  it("replaces changed rows and adds new ones, newest-closed first", () => {
     const held = [
-      { id: "1", title: "a" },
-      { id: "2", title: "b" },
+      { id: "2", title: "b", closedAt: "2026-11-02T00:00:00Z" },
+      { id: "1", title: "a", closedAt: "2026-11-01T00:00:00Z" },
     ];
     expect(
       mergeClosedPage(held, [
-        { id: "2", title: "b2" },
-        { id: "3", title: "c" },
-      ]),
-    ).toEqual([
-      { id: "1", title: "a" },
-      { id: "2", title: "b2" },
-      { id: "3", title: "c" },
-    ]);
+        { id: "3", title: "c", closedAt: "2026-11-03T00:00:00Z" },
+        { id: "2", title: "b2", closedAt: "2026-11-02T00:00:00Z" },
+      ]).map((t) => t.title),
+    ).toEqual(["c", "b2", "a"]);
   });
 
   it("draws live rows over closed ones, and keeps live as it is with nothing to add", () => {
