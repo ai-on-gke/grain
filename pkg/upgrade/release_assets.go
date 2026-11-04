@@ -57,6 +57,10 @@ const (
 	DefaultChecksumSuffix = ".sha256"
 	// ReleaseManifestSchemaV1 is the schema version required on images.json.
 	ReleaseManifestSchemaV1 = 1
+	// ReleaseManifestSchemaV2 adds a per-image "release": the immutable
+	// release (sha-<short> or vX.Y.Z) holding that image's asset, so a
+	// moving channel release can carry images.json alone.
+	ReleaseManifestSchemaV2 = 2
 )
 
 // Roles named in images.json (schema 1).
@@ -392,6 +396,9 @@ type ReleaseManifestRole struct {
 	SHA256  string `json:"sha256"`
 	ImageID string `json:"imageId"`
 	Ref     string `json:"ref"`
+	// Release is the tag of the release holding Asset and its sidecar
+	// (schema 2); empty means the release images.json came from.
+	Release string `json:"release,omitempty"`
 }
 
 type githubRelease struct {
@@ -419,6 +426,8 @@ type resolvedRelease struct {
 	tag        string
 	release    githubRelease
 	manifest   *ReleaseManifest
+	// holders caches the releases a schema-2 manifest's images point at.
+	holders map[string]*githubRelease
 }
 
 type stagedReleaseDaemon struct {
@@ -715,8 +724,8 @@ func ParseReleaseManifest(raw []byte) (*ReleaseManifest, error) {
 	if probe.Schema == nil {
 		return nil, errors.New("invalid images.json: missing required \"schema\" field")
 	}
-	if *probe.Schema != ReleaseManifestSchemaV1 {
-		return nil, fmt.Errorf("unsupported images.json schema %d (supported: %d)", *probe.Schema, ReleaseManifestSchemaV1)
+	if *probe.Schema != ReleaseManifestSchemaV1 && *probe.Schema != ReleaseManifestSchemaV2 {
+		return nil, fmt.Errorf("unsupported images.json schema %d (supported: %d, %d)", *probe.Schema, ReleaseManifestSchemaV1, ReleaseManifestSchemaV2)
 	}
 	var m ReleaseManifest
 	if err := json.Unmarshal(raw, &m); err != nil {
@@ -753,6 +762,12 @@ func ParseReleaseManifest(raw []byte) (*ReleaseManifest, error) {
 		}
 		if err := validateManifestRole(role, &entry); err != nil {
 			return nil, err
+		}
+		if m.Schema == ReleaseManifestSchemaV1 {
+			entry.Release = ""
+		} else if entry.Release = strings.TrimSpace(entry.Release); entry.Release == "" || isMovingReleaseTag(entry.Release) ||
+			validateBranch(entry.Release) != nil {
+			return nil, fmt.Errorf("invalid images.json role %q: \"release\" %q must name an immutable sha-<short> or vX.Y.Z release", role, entry.Release)
 		}
 		normalized[role] = entry
 	}
@@ -956,6 +971,11 @@ func (u *Upgrader) resolveRelease(ctx context.Context, branch string) (*resolved
 	for _, tag := range candidates {
 		endpoint := fmt.Sprintf("%s/repos/%s/%s/releases/tags/%s",
 			apiBase, url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(tag))
+		if tag == "latest" {
+			// GitHub's own latest-release marker, never a release (or git
+			// tag) named latest (contract v2).
+			endpoint = fmt.Sprintf("%s/repos/%s/%s/releases/latest", apiBase, url.PathEscape(owner), url.PathEscape(repo))
+		}
 		body, status, reqErr := res.doAPI(ctx, endpoint, "application/vnd.github+json")
 		if reqErr != nil {
 			return nil, reqErr
@@ -979,6 +999,9 @@ func (u *Upgrader) resolveRelease(ctx context.Context, branch string) (*resolved
 			return nil, fmt.Errorf("parsing release %q on %s/%s/%s: %w", tag, host, owner, repo, err)
 		}
 		res.tag = tag
+		if tag == "latest" && strings.TrimSpace(rel.TagName) != "" {
+			res.tag = rel.TagName
+		}
 		res.release = rel
 		found = true
 		break
@@ -994,6 +1017,10 @@ func (u *Upgrader) resolveRelease(ctx context.Context, branch string) (*resolved
 
 	// Load images.json when present on the release unless an explicit single
 	// Asset override bypasses it.
+	if n := countAssets(res.release, cfg.ManifestAsset); n > 1 && isMovingReleaseTag(res.tag) {
+		return nil, fmt.Errorf("%w: release %s on %s/%s/%s carries %d %s assets (its publisher is swapping them); try again later",
+			errReleaseMidUpdate, res.tag, host, owner, repo, n, cfg.ManifestAsset)
+	}
 	if asset, ok := res.findAsset(cfg.ManifestAsset); ok {
 		raw, err := res.fetchSmallAsset(ctx, asset)
 		if err != nil {
@@ -1033,6 +1060,54 @@ func usesCommandForge(c *http.Client) bool {
 	}
 	_, ok := c.Transport.(*gitproxy.CommandForgeTransport)
 	return ok
+}
+
+func countAssets(rel githubRelease, name string) int {
+	n := 0
+	for _, a := range rel.Assets {
+		if a.Name == name {
+			n++
+		}
+	}
+	return n
+}
+
+// holder returns the release a manifest image's asset lives on: tag
+// itself, or (schema 2) the immutable release it names, looked up by
+// tag through the releases API and cached.
+func (r *resolvedRelease) holder(ctx context.Context, tag string) (*resolvedRelease, error) {
+	if tag == "" || tag == r.tag {
+		return r, nil
+	}
+	if rel, ok := r.holders[tag]; ok {
+		cp := *r
+		cp.tag, cp.release = tag, *rel
+		return &cp, nil
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/releases/tags/%s",
+		r.apiBase, url.PathEscape(r.owner), url.PathEscape(r.repo), url.PathEscape(tag))
+	body, status, err := r.doAPI(ctx, endpoint, "application/vnd.github+json")
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return nil, formatReleaseAuthError(r.host, r.owner, r.repo, status, nil, r.hostClient)
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("release %s on %s/%s/%s names release %s for its images, which answered HTTP %d",
+			r.tag, r.host, r.owner, r.repo, tag, status)
+	}
+	var rel githubRelease
+	if err := json.Unmarshal(body, &rel); err != nil {
+		return nil, fmt.Errorf("parsing release %q on %s/%s/%s: %w", tag, r.host, r.owner, r.repo, err)
+	}
+	if r.holders == nil {
+		r.holders = map[string]*githubRelease{}
+	}
+	r.holders[tag] = &rel
+	cp := *r
+	cp.tag, cp.release = tag, rel
+	return &cp, nil
 }
 
 func (r *resolvedRelease) findAsset(name string) (githubReleaseAsset, bool) {
@@ -1093,6 +1168,13 @@ func (r *resolvedRelease) expectedAssetSpec(cfg ReleaseAssetsConfig, role, expli
 	if assetName == "" {
 		return githubReleaseAsset{}, "", "", "", fmt.Errorf("release %s on %s/%s/%s does not list role %q in %s and has no configured asset name",
 			r.tag, r.host, r.owner, r.repo, role, cfg.ManifestAsset)
+	}
+	if useManifestRole != nil {
+		h, err := r.holder(context.Background(), useManifestRole.Release)
+		if err != nil {
+			return githubReleaseAsset{}, "", "", "", err
+		}
+		r = h
 	}
 
 	tarball, ok := r.findAsset(assetName)

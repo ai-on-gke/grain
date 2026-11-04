@@ -24,6 +24,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -63,6 +64,8 @@ type fakeForgeServer struct {
 	blobAuthSeen  atomic.Bool
 	lastAskedTags []string
 	releases      map[string]*fakeReleaseSpec
+	// latestTag is the release GET .../releases/latest answers with.
+	latestTag string
 }
 
 func newFakeForgeServer(t *testing.T, owner, repo string) *fakeForgeServer {
@@ -116,6 +119,16 @@ func newFakeForgeServer(t *testing.T, owner, repo string) *fakeForgeServer {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(list)
+			return
+		}
+		if path == prefix+"/latest" {
+			spec, exists := f.releases[f.latestTag]
+			if !exists {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(f.toGitHubRelease(spec, r.URL.Path != path))
 			return
 		}
 		if rest, ok := strings.CutPrefix(path, prefix+"/tags/"); ok {
@@ -792,8 +805,8 @@ func TestReleaseLookupChannelTagPrecedenceAndLegacyFallback(t *testing.T) {
 func TestReleaseManifestAndIntegrityChecksRefuseTamperedOrMissingAssets(t *testing.T) {
 	shortRestartGrace(t)
 
-	if _, err := ParseReleaseManifest([]byte(`{"schema":2}`)); err == nil || !strings.Contains(err.Error(), "unsupported images.json schema 2") {
-		t.Fatalf("schema 2 err = %v", err)
+	if _, err := ParseReleaseManifest([]byte(`{"schema":3}`)); err == nil || !strings.Contains(err.Error(), "unsupported images.json schema 3") {
+		t.Fatalf("schema 3 err = %v", err)
 	}
 	if _, err := ParseReleaseManifest([]byte(`{"schema":1,"repository":"github.com/x/y","commit":"bad","version":"v1","createdAt":"2026-11-04T00:00:00Z","images":{}}`)); err == nil {
 		t.Fatal("expected malformed commit in images.json to fail")
@@ -1374,4 +1387,100 @@ func runUpgradeToCompletion(t *testing.T, u *Upgrader, branch string) Status {
 		t.Fatalf("Status(): %v", err)
 	}
 	return st
+}
+
+// addV2Channel publishes channel as a contract-v2 pointer: a release
+// holding only a schema-2 images.json whose images name immutable, the
+// release that holds their assets.
+func addV2Channel(t *testing.T, f *fakeForgeServer, channel, immutable string) {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(f.releases[immutable].assets["images.json"], &m); err != nil {
+		t.Fatal(err)
+	}
+	m["schema"] = 2
+	for role, v := range m["images"].(map[string]any) {
+		if role == "future-role" {
+			continue
+		}
+		v.(map[string]any)["release"] = immutable
+	}
+	raw, _ := json.Marshal(m)
+	f.releases[channel] = &fakeReleaseSpec{
+		tag:             channel,
+		targetCommitish: f.releases[immutable].targetCommitish,
+		assets:          map[string][]byte{"images.json": raw},
+	}
+}
+
+func TestReleaseContractV2ChannelPointersAndLatestMarker(t *testing.T) {
+	shortRestartGrace(t)
+	const daemonRef = "edition-local/grain:sha-111111111111"
+	run := func(t *testing.T, forge *fakeForgeServer, branch string) (Status, *fakeDockerEnv) {
+		t.Helper()
+		dk := newFakeDockerEnv(t)
+		dir := t.TempDir()
+		u := newUpgrader(t, Config{
+			Image: &ImageConfig{
+				Repository:   "edition-local/grain",
+				Source:       ImageSourceReleaseAssets,
+				RefFile:      filepath.Join(dir, "image.env"),
+				PullCmd:      []string{"false"},
+				LoadCmd:      dk.loadCmd(map[string][2]string{testCommit1: {daemonRef, testDaemonID1}}),
+				InspectIDCmd: dk.inspectIDCmd(),
+				TagCmd:       dk.tagCmd(),
+				RunCmd:       dk.runCmd(),
+				RemoveCmd:    []string{"true"},
+				ListCmd:      []string{"true"},
+				ReleaseAssets: ReleaseAssetsConfig{
+					Repository:    "github.com/team/edition",
+					ClientForHost: forge.clientFunc("", "", ""),
+				},
+			},
+			HealthCheckArgs: []string{"schema-version"},
+			StatusFile:      filepath.Join(dir, "status.json"),
+		})
+		return runUpgradeToCompletion(t, u, branch), dk
+	}
+
+	t.Run("schema 2 channel loads each asset from the release it names", func(t *testing.T) {
+		forge := newFakeForgeServer(t, "team", "edition")
+		addV1Release(forge, "sha-111111111111", "github.com/team/edition", testCommit1, "sha-111111111111", daemonRef, testDaemonID1, false)
+		addV2Channel(t, forge, "channel-main", "sha-111111111111")
+		status, _ := run(t, forge, "main")
+		if status.Phase != PhaseOK {
+			t.Fatalf("status = %+v", status)
+		}
+		if forge.tarDownloads.Load() != 1 {
+			t.Errorf("tarball downloads = %d, want 1 (from sha-111111111111)", forge.tarDownloads.Load())
+		}
+		if !slices.Contains(forge.lastAskedTags, "sha-111111111111") {
+			t.Errorf("asked tags %v, want the immutable release looked up by tag", forge.lastAskedTags)
+		}
+	})
+
+	t.Run("schema 2 image naming a moving release is refused", func(t *testing.T) {
+		forge := newFakeForgeServer(t, "team", "edition")
+		addV1Release(forge, "sha-111111111111", "github.com/team/edition", testCommit1, "sha-111111111111", daemonRef, testDaemonID1, false)
+		addV2Channel(t, forge, "channel-main", "sha-111111111111")
+		raw := strings.Replace(string(forge.releases["channel-main"].assets["images.json"]), `"release":"sha-111111111111"`, `"release":"channel-other"`, 1)
+		forge.releases["channel-main"].assets["images.json"] = []byte(raw)
+		status, _ := run(t, forge, "main")
+		if status.Phase != PhaseFailed || !strings.Contains(status.Detail, "immutable") {
+			t.Fatalf("status = %+v, want a refusal naming an immutable release", status)
+		}
+	})
+
+	t.Run("latest resolves through the releases/latest marker", func(t *testing.T) {
+		forge := newFakeForgeServer(t, "team", "edition")
+		addV1Release(forge, "v3.2.0", "github.com/team/edition", testCommit1, "v3.2.0", daemonRef, testDaemonID1, false)
+		forge.latestTag = "v3.2.0"
+		status, _ := run(t, forge, "latest")
+		if status.Phase != PhaseOK {
+			t.Fatalf("status = %+v", status)
+		}
+		if slices.Contains(forge.lastAskedTags, "latest") {
+			t.Errorf("asked for a release tagged latest (%v); want GET .../releases/latest", forge.lastAskedTags)
+		}
+	})
 }

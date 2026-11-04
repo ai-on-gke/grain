@@ -38,6 +38,13 @@ Publishing a release whose git tag has the same bare name as a branch (such as `
 
 - `pkg/upgrade` never resolves release tags via `git` refs; it queries the REST endpoint `/repos/<owner>/<name>/releases/tags/<tag>` directly.
 - For branch channels, `ReleaseTagsForBranch` looks up `channel-<tag>` first and only falls back to `<tag>` on HTTP `404` for compatibility with older releases.
+- The `latest` channel is GitHub's own latest-release marker: the loader asks `/repos/<owner>/<name>/releases/latest` and never reads a release or git tag named `latest`.
+
+## `images.json` schema 2 (contract v2)
+
+Contract v2 keeps tarballs only on immutable releases (`sha-<short>`, `vX.Y.Z`). A moving `channel-<branch>` release is a pointer that holds only a schema-2 `images.json`, in which every image entry adds `"release": "<immutable tag>"`, the release holding that image's asset and `.sha256` sidecar. The loader looks that release up by tag through the same releases API and downloads the asset from it by name; a `release` naming a moving release is refused. Schema 1 (assets on the release itself) is still accepted, and immutable releases may write either schema.
+
+A channel release with no `images.json`, or two of them while its publisher swaps them, is mid-update: an upgrade onto it fails before cutover with "try again later", and the unchanged probe reports nothing to install so the next poll retries.
 
 ## `images.json` v1 contract
 

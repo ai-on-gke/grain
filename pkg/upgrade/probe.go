@@ -102,6 +102,11 @@ func (u *Upgrader) AlreadyRunning(ctx context.Context, branch string) (bool, err
 			if relErr == nil {
 				return same, nil
 			}
+			if errors.Is(relErr, errReleaseMidUpdate) {
+				// A channel caught between its publisher's images.json
+				// swap is nothing to install yet: the next poll retries.
+				return true, nil
+			}
 			if ok, _ := u.shouldFallbackToRegistry(relErr); ok {
 				return checkRegistry()
 			}
