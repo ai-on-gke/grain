@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -30,6 +31,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/cifault"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -1165,7 +1167,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	// After the proxy above, necessarily: every job's checkout is a
 	// clone from it, and it is where the read-only scope a CI sandbox
 	// holds is enforced (pkg/cli/ci.go).
-	registry := newCapabilityRegistryWithStore(store, cfg.LocalScriptsConfig(), CapabilityProviders(cfg, store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
+	registry := newCapabilityRegistryWithStore(store, CapabilityProviders(cfg, store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
 
 	// Recovering any run a previous process left running (bwsalmon/agents#425)
 	// has to happen here, once, before reconcile's first tick -- see
@@ -1210,7 +1212,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			log.Printf("grain daemon: grain CI is wired to remote grit server at %s (EXPERIMENTAL, -grit-experimental: it runs no repository's workflows yet)", cfg.GritURL)
 		} else {
 			ciProviders := func() *model.CapabilityRegistry {
-				return newCapabilityRegistryWithStore(store, live.Current().LocalScriptsConfig(), CapabilityProviders(live.Current(), store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
+				return newCapabilityRegistryWithStore(store, CapabilityProviders(live.Current(), store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
 			}
 			ciService := BuildCIService(ctx, cfg, LimitsWithDisk(live.limits, disks), live.ciRetention, live.ciStorageBounds, store, sandboxes, credentials, proxyURL, tokens, stateHooks.CheckImage, forbidden, ciProviders, secretStore, pkgCache.sandboxURL(live), pkgCache.sandboxCA(live), pkgCache.SandboxDNS(live), actionsCache.grantFor(live))
 			ciService.SandboxImage = live.CurrentSandboxImage
@@ -1340,8 +1342,23 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 		// references are minted through at admission.
 		CapabilityServers: capabilityServerLookup(live),
 		CapabilityHostd:   capabilityHostdName(cfg),
-		Policy:            localPolicy,
-		Store:             store, Client: githubClient, Sandboxes: sandboxes,
+		ApprovalCallback: func(taskID string, deadline time.Time) (protocol.ApprovalCallback, func(), error) {
+			baseURL, _ := localScriptApprovalURL.Load().(string)
+			if baseURL == "" {
+				return protocol.ApprovalCallback{}, nil, nil
+			}
+			tok, err := localScriptApprovals.MintToken(taskID, deadline)
+			if err != nil {
+				return protocol.ApprovalCallback{}, nil, err
+			}
+			cb := protocol.ApprovalCallback{
+				URL:   baseURL + "/api/tasks/" + url.PathEscape(taskID) + "/local-script-approvals",
+				Token: tok,
+			}
+			return cb, func() { localScriptApprovals.RevokeToken(tok) }, nil
+		},
+		Policy: localPolicy,
+		Store:  store, Client: githubClient, Sandboxes: sandboxes,
 		// Sandbox reconciliation sweeps the run hosts no live run
 		// claims through it every tick.
 		RunHost:   cfg.RunHost,
@@ -1423,9 +1440,6 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// pkg/capability/grainlog).
 			GrainSecretsDir: SecretsDir(cfg.DataDir),
 			GrainStateDir:   filepath.Join(cfg.DataDir, "state-repo"),
-			// Where a run granted local-scripts:<name> finds that
-			// declaration (pkg/capability/localscripts).
-			LocalScripts: cfg.LocalScriptsConfig(),
 			// The image this deployment's sandboxes are really built
 			// from, asked of chooseSandboxImage exactly as the sandbox
 			// health pane asks (uiSandboxImage), so that the one

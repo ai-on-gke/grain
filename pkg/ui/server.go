@@ -151,6 +151,21 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		writeAssertionRefused(w, r, cv.err)
 		return
 	}
+	if presentsApprovalCallbackToken(r) {
+		taskID, ok := s.authenticateApprovalCallback(w, r)
+		if !ok {
+			return
+		}
+		r.Header.Del(ActingTaskHeader)
+		ctx := r.Context()
+		if s.tasks != nil {
+			ctx = s.tasks.withOperatorActor(ctx)
+		}
+		agent := model.Principal{Kind: model.PrincipalAgent, ID: taskID, Source: model.SourceInternal}
+		r = r.WithContext(withAuthMethod(WithPrincipal(ctx, agent), AuthMethodTrusted))
+		s.mux.ServeHTTP(w, r)
+		return
+	}
 	if externalTokenFromContext(r.Context()) == nil && presentsExternalAgentToken(r) {
 		tok, release, ok := s.authenticateExternalAgent(w, r)
 		if !ok {

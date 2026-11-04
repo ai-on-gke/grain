@@ -113,6 +113,9 @@ type MethodInfo struct {
 	// delivery of every tool its endpoint serves that does not say for
 	// itself (§5.2.6). Empty is model-only.
 	MCPDelivery string
+	// AcceptsApproval says the mint tool's inputSchema declares an
+	// optional "approval" callback object for per-call person approval.
+	AcceptsApproval bool
 }
 
 // Discover reads a server's methods out of its tools/list (§4.1.2). Tools
@@ -142,7 +145,9 @@ func Discover(tools []Tool) (map[string]*MethodInfo, error) {
 			if delivery != "" && delivery != DeliverySandbox && delivery != DeliveryModelOnly {
 				return nil, fmt.Errorf("tool %q: annotations.mcpDelivery %q is neither %q nor %q", t.Name, truncate(delivery, 40), DeliverySandbox, DeliveryModelOnly)
 			}
-			methods[name] = &MethodInfo{Name: name, Description: t.Description, ArgsSchema: args, MCPDelivery: delivery}
+			props, _ := t.InputSchema["properties"].(map[string]any)
+			_, acceptsApproval := props["approval"]
+			methods[name] = &MethodInfo{Name: name, Description: t.Description, ArgsSchema: args, MCPDelivery: delivery, AcceptsApproval: acceptsApproval}
 		case strings.HasPrefix(t.Name, releasePrefix):
 			name := strings.TrimPrefix(t.Name, releasePrefix)
 			if seenRelease[name] {

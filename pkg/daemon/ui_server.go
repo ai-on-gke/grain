@@ -189,8 +189,9 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// scope set declared after startup is offered too.
 		Capabilities: append(append(ui.OfferedCapabilities(), ui.GitHubTokenCapabilities(live.GitHubTokens())...),
 			ui.APICapabilities()...),
-		Consoles: consoleSessions,
-		Secrets:  uiSecrets,
+		Consoles:             consoleSessions,
+		Secrets:              uiSecrets,
+		LocalScriptApprovals: localScriptApprovals,
 		// The registry run() attaches capability servers into, for the
 		// status column of Settings' Capability servers pane.
 		CapabilityServers: capabilityServerStatuses(live),
@@ -660,10 +661,25 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 	// (startGitProxy), which comes up after this server does.
 	srv.SetNamespace(liveNamespace.Load)
 
+	// Loopback listener without HostGuard for capability servers (host-script
+	// approve: true) to request, wait on, and expire per-call approvals under
+	// their minted task-scoped ghsa_ bearer tokens.
+	callbackLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, fmt.Errorf("listening for local-script approval callbacks: %w", err)
+	}
+	callbackSrv := &http.Server{Handler: srv, ReadHeaderTimeout: 30 * time.Second}
+	localScriptApprovalURL.Store("http://" + callbackLn.Addr().String())
+	go func() {
+		_ = callbackSrv.Serve(callbackLn)
+	}()
+
 	var httpSrv *http.Server
 	if cfg.UiAddr != "" {
 		ln, err := net.Listen("tcp", cfg.UiAddr)
 		if err != nil {
+			localScriptApprovalURL.Store("")
+			_ = callbackSrv.Close()
 			return nil, fmt.Errorf("listening on %s: %w", cfg.UiAddr, err)
 		}
 		url := "http://" + ln.Addr().String()
@@ -697,6 +713,8 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 
 	return func(ctx context.Context) error {
 		cancelDiscovery()
+		localScriptApprovalURL.Store("")
+		_ = callbackSrv.Shutdown(ctx)
 		if httpSrv != nil {
 			return httpSrv.Shutdown(ctx)
 		}

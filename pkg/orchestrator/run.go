@@ -38,14 +38,12 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
-	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/selfdebug"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/runhost"
-	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
@@ -3332,18 +3330,6 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		if grainserver.HasHealth(grants) {
 			grainStateDir = cfg.GrainStateDir
 		}
-		// The local-scripts declarations this task's capabilities grant,
-		// and the credentials their scripts are delivered. The grants
-		// were resolved before the sandbox was built, which is where an
-		// untrusted run was refused; this says it again rather than
-		// trusting that it was (localScriptsFor).
-		localScripts, localScriptsEnvFile, err := localScriptsFor(ctx, cfg, task, d.RunID)
-		if err != nil {
-			return unprepared(fmt.Errorf("serving local scripts: %w", err))
-		}
-		if localScriptsEnvFile != "" {
-			defer os.Remove(localScriptsEnvFile)
-		}
 		capabilityMCPServers, controllerEP, err := wireControllerMCP(ctx, cfg, store, task)
 		if err != nil {
 			return unprepared(fmt.Errorf("serving grain-controller MCP: %w", err))
@@ -3535,7 +3521,6 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			ToolBudget:               model.UsesToolBudget(task),
 			ToolBudgetPipelineCursor: model.IsPipelineStewardFiring(task),
 			Grants:                   grants, GrainSourceDir: grainSourceDir, GrainSecretsDir: grainSecretsDir, GrainStateDir: grainStateDir,
-			LocalScripts: localScripts, LocalScriptsEnvFile: localScriptsEnvFile,
 			// Which repositories a proposal this run makes may be filed
 			// against -- the half of propose_task's `repo` argument only
 			// the store can answer (proposalRepos).
@@ -4279,45 +4264,6 @@ var toolGrants = []string{
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
-}
-
-// localScriptsFor is the local-scripts declarations task's
-// local-scripts:<name> capabilities grant this run (cfg.LocalScripts),
-// and a 0600 file of the secrets their scripts name, resolved as the
-// task's team -- "" when they name none. An untrusted task
-// (localscripts.Untrusted) is served none, whatever it holds.
-func localScriptsFor(ctx context.Context, cfg Config, task model.Task, runID string) ([]agent.LocalScripts, string, error) {
-	names := localscripts.Granted(task)
-	if len(names) == 0 {
-		return nil, "", nil
-	}
-	if why := localscripts.Untrusted(task); why != "" {
-		log.Printf("orchestrator: task %s: not serving local scripts: %s", task.ID, why)
-		return nil, "", nil
-	}
-	var out []agent.LocalScripts
-	var paths []string
-	for _, name := range names {
-		path, err := cfg.LocalScripts.Path(name)
-		if err != nil {
-			return nil, "", err
-		}
-		out = append(out, agent.LocalScripts{Name: name, Path: path})
-		paths = append(paths, path)
-	}
-	ctx = secrets.WithRun(secrets.WithTask(ctx, task.ID), runID)
-	creds, err := localscripts.ResolveCredentials(ctx, cfg.Credentials, paths)
-	if err != nil {
-		return nil, "", err
-	}
-	if len(creds) == 0 {
-		return out, "", nil
-	}
-	file, err := localscripts.WriteCredentialsFile("", creds)
-	if err != nil {
-		return nil, "", fmt.Errorf("writing the local-scripts credentials file: %w", err)
-	}
-	return out, file, nil
 }
 
 // runGrants is the subset of toolGrants task holds, which is what a

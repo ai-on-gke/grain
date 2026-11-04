@@ -41,12 +41,27 @@ func fakeEndpoint(t *testing.T, token string) (port int, seen *http.Header) {
 			return
 		}
 		body, _ := io.ReadAll(r.Body)
-		for _, line := range strings.Split(strings.TrimSuffix(string(body), "\n"), "\n") {
-			if line == "" && len(body) == 0 {
+		argvPart := string(body)
+		var stdinPart []byte
+		hasStdin := false
+		if idx := bytes.Index(body, []byte("\n"+StdinSeparator+"\n")); idx >= 0 {
+			argvPart = string(body[:idx+1])
+			stdinPart = body[idx+1+len(StdinSeparator)+1:]
+			hasStdin = true
+		} else if bytes.HasPrefix(body, []byte(StdinSeparator+"\n")) {
+			argvPart = ""
+			stdinPart = body[len(StdinSeparator)+1:]
+			hasStdin = true
+		}
+		for _, line := range strings.Split(strings.TrimSuffix(argvPart, "\n"), "\n") {
+			if line == "" && len(argvPart) == 0 {
 				break
 			}
 			b, _ := hex.DecodeString(line)
 			io.WriteString(w, "o ["+strings.ReplaceAll(string(b), "\n", "\\012")+"]\\012\n")
+		}
+		if hasStdin {
+			io.WriteString(w, "o stdin="+hex.EncodeToString(stdinPart)+"\\012\n")
 		}
 		io.WriteString(w, "e done\\012\nx 3\n")
 	}))
@@ -92,6 +107,7 @@ func TestRun(t *testing.T) {
 	for _, args := range [][]string{{"deploy", "--grain-help"}, {"--help", "deploy"}} {
 		code, out, _ := run(dir, args...)
 		if code != 0 || !strings.Contains(out, "grain host-script deploy [arguments...]") ||
+			!strings.Contains(out, "grain host-script --stdin deploy [arguments...]") ||
 			!strings.Contains(out, "deploys <things> & more") || !strings.Contains(out, "ENV is \"prod\" or staging.") {
 			t.Errorf("%v = %d %q", args, code, out)
 		}
@@ -120,5 +136,32 @@ func TestMarshalIsOneFieldToALine(t *testing.T) {
 	want := "{\n  \"name\": \"x\",\n  \"description\": \"a <b>\\nc\",\n  \"port\": 1,\n  \"attempt_id\": \"e1\",\n  \"token\": \"t\"\n}\n"
 	if string(b) != want {
 		t.Errorf("Marshal = %q, want %q", b, want)
+	}
+}
+
+func TestRunWithStdinAndApprovalHelp(t *testing.T) {
+	port, _ := fakeEndpoint(t, "tok")
+	dir := t.TempDir()
+	place(t, dir, Descriptor{Name: "apply", Description: "applies manifest", Approve: true, Port: port, AttemptID: "e1-1-1-0", Token: "tok"})
+
+	payload := []byte("line1\n---\n\x00\xfftail")
+	var out, errb bytes.Buffer
+	code := RunWithStdin(dir, []string{"--stdin", "apply", "--env", "prod"}, bytes.NewReader(payload), &out, &errb)
+	wantOut := "[--env]\n[prod]\nstdin=" + hex.EncodeToString(payload) + "\n"
+	if code != 3 || out.String() != wantOut || errb.String() != "done\n" {
+		t.Errorf("--stdin apply = %d %q %q, want %q", code, out.String(), errb.String(), wantOut)
+	}
+
+	// Without --stdin before <name>, stdin is not sent and --stdin after <name> is a literal argument.
+	out.Reset()
+	errb.Reset()
+	code = RunWithStdin(dir, []string{"apply", "--stdin"}, bytes.NewReader(payload), &out, &errb)
+	if code != 3 || out.String() != "[--stdin]\n" {
+		t.Errorf("apply --stdin = %d %q, want literal [--stdin] with no stdin frame", code, out.String())
+	}
+
+	_, helpOut, _ := run(dir, "apply", "--grain-help")
+	if !strings.Contains(helpOut, "Each call waits for a person's approval before it runs.") {
+		t.Errorf("approve: true help = %q, want approval note", helpOut)
 	}
 }

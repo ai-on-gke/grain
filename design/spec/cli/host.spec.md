@@ -1327,7 +1327,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-upgrade-image` | string |  |  | image repository, with no tag, that CI publishes a tag per branch to (e.g. ghcr.io/bwsalmon/grain/grain); set, the UI's Upgrade button pulls a branch's image instead of building one, and -upgrade-image-ref-file is required |
 | `-upgrade-image-fallback` | string |  |  | fallback image source when the primary source cannot fetch a candidate daemon image: "none", "registry", or "release-assets" (or GRAIN_UPGRADE_IMAGE_FALLBACK) |
 | `-upgrade-image-ref-file` | string |  |  | file a successful -upgrade-image upgrade rewrites with the image the service should run, as one GRAIN_IMAGE=<ref> line for grain-daemon.service to read as an EnvironmentFile (required with -upgrade-image) |
-| `-upgrade-image-source` | value |  |  | where -upgrade-image loads candidate container images from: "release-assets" (gzip tarballs on the repository's releases) or "registry" (docker pull); empty defaults to release-assets with registry fallback when a release has no image assets (or GRAIN_UPGRADE_IMAGE_SOURCE) |
+| `-upgrade-image-source` | string |  |  | where -upgrade-image loads candidate container images from: "release-assets" (gzip tarballs on the repository's releases) or "registry" (docker pull); empty defaults to release-assets with registry fallback when a release has no image assets (or GRAIN_UPGRADE_IMAGE_SOURCE) |
 | `-upgrade-install-path` | string |  |  | where a successful upgrade's binary is installed to (required with -upgrade-src-dir) |
 | `-upgrade-release-asset` | string |  |  | daemon tarball asset name on releases when images.json is not used (e.g. grain-image.tar.gz, or GRAIN_UPGRADE_RELEASE_ASSET) |
 | `-upgrade-release-checksum` | string |  |  | checksum asset name or suffix (starting with '.') for release-asset tarballs; defaults to .sha256 (or GRAIN_UPGRADE_RELEASE_CHECKSUM) |
@@ -1419,8 +1419,6 @@ Speaks MCP over stdin/stdout against the sandbox tools. A running daemon forks i
 | `-k8s-kubeconfig` | string |  |  | kubeconfig path passed to kubectl when reaching -k8s-pod |
 | `-k8s-namespace` | string |  |  | namespace of -k8s-pod; empty is kubectl's own default |
 | `-k8s-pod` | value |  |  | name of a Kubernetes sandbox pod to run tools in, over kubectl exec (with -k8s-namespace and -workspace) |
-| `-local-scripts` | value |  |  | NAME=PATH, repeatable: a local-scripts declaration this run is served as local_<script> tools, snapshotted when this process starts (agent.RunConfig.LocalScripts, docs/local-scripts.md) |
-| `-local-scripts-env-file` | string |  |  | path of a 0600 JSON file of the secrets -local-scripts' scripts are delivered, by secret name (localscripts.WriteCredentialsFile); never the values themselves in argv |
 | `-mcp-surface` | value |  |  | which tools to serve: "control" (the sandbox tools, the run-ending and escalation tools and the model-only grants' tools; everything else is a grain CLI command inside the sandbox) or "full" (every tool, for a client that cannot shell out and for tests). Empty is control when a sandbox flag is set, full otherwise (design/design/sandbox-first-agent-surface.design.md §6) |
 | `-pr-base` | string |  |  | branch -pr-branch merges into, which base_branch_status reads CI for so a run can tell a failure its own change caused from one it inherited (model.Task's own Base). Unset -- what an ordinary task has -- that tool reads -pr-repo's default branch instead, which is the base such a task really has. |
 | `-pr-base-incident` | string |  |  | notice of an active incident on the base branch, if any |
@@ -1496,7 +1494,8 @@ On the bare machine, `hostd` runs the allowlisted host CLIs and capability serve
 ### 5.6 `grain host-script` {#CLI-48}
 
 In a sandbox, `host-script` runs a granted host script on grain's side (`pkg/hostscriptcli`):
-- `grain host-script <name> [args…]` runs it;
+- `grain host-script <name> [args…]` runs it without forwarding standard input;
+- `grain host-script --stdin <name> [args…]` runs it and forwards standard input;
 - `<name> --grain-help` or `--help <name>` prints the script's description and usage;
 - `--list` (also `-list`, `--grain-list`) lists the scripts granted to the sandbox.
 

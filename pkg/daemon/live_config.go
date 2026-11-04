@@ -494,7 +494,7 @@ func (l *LiveConfig) Refresh(ctx context.Context, deps *orchestrator.Deps) (poll
 		// resolving against it (deps is copied per cycle and per
 		// dispatch) rather than seeing one change underneath it.
 		deps.Config.Capabilities = newCapabilityRegistryWithStore(
-			l.store, now.LocalScriptsConfig(),
+			l.store,
 			CapabilityProviders(now, l.store, ModelProxies, l.githubTokens, l.gitHubCredentialSource())...)
 	}
 	if now.GcpProject != was.GcpProject || now.GcpServiceAccountEmail != was.GcpServiceAccountEmail || now.IapBackendService != was.IapBackendService ||
