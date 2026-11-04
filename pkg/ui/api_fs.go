@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -87,7 +88,7 @@ func (s *Server) serveFS(w http.ResponseWriter, r *http.Request, scheme string) 
 		writeError(w, http.StatusServiceUnavailable, errors.New("this server has no namespace to serve /api/fs/ from"))
 		return
 	}
-	scope, err := s.fsScope(r.Context(), scheme)
+	scope, err := s.fsScope(r, scheme)
 	if err != nil {
 		writeError(w, http.StatusForbidden, err)
 		return
@@ -98,14 +99,21 @@ func (s *Server) serveFS(w http.ResponseWriter, r *http.Request, scheme string) 
 	ns.ServeHTTP(w, in, scope)
 }
 
-// fsScope is what the caller may read under scheme. A person -- every
-// person is the deployment's owner (checkRepoPerson) -- and an
-// in-process request read everything; an agent reads what the grants
-// agentAPIGate authorized it under reach, for every repository they
-// name and no other.
-func (s *Server) fsScope(ctx context.Context, scheme string) (namespace.Scope, error) {
-	call, ok := agentCallFromContext(ctx)
-	if !ok {
+// fsScope is what the caller may read under scheme. A person with the
+// access code -- every such person is the deployment's owner
+// (checkRepoPerson) -- and an in-process request read everything; an
+// agent reads what the grants agentAPIGate authorized it under reach, for
+// every repository they name and no other; and a verified person held to
+// a limited role (access_roles.go) reads only what that role reaches,
+// within the acting task's grants too when they send one.
+func (s *Server) fsScope(r *http.Request, scheme string) (namespace.Scope, error) {
+	ctx := r.Context()
+	call, isAgent := agentCallFromContext(ctx)
+	role := accessRoleFromContext(ctx)
+	if role != nil && role.Full {
+		role = nil
+	}
+	if !isAgent && role == nil {
 		if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
 			return namespace.Scope{}, fmt.Errorf("%s may read the namespace only under an api grant (docs/agent-api.md)", p.ID)
 		}
@@ -115,21 +123,21 @@ func (s *Server) fsScope(ctx context.Context, scheme string) (namespace.Scope, e
 			MayReadHealth: true, MayReadGrainLog: true, MayReadPlaybooks: true, MayReadIssues: true, MayReadDB: true,
 		}, nil
 	}
-	set := call.grants
+	set := fsReach{call: call, isAgent: isAgent, role: role}
 	scope := namespace.Scope{TaskIDStr: call.taskID}
 	ci := func() {
-		scope.MayReadCI = set.Has("ci:read")
-		scope.MayReadAllCI = set.Allows("ci:read", "")
-		scope.AllowedRepos = repoSet(set.Repos("ci:read"))
+		scope.MayReadCI = set.has("ci:read")
+		scope.MayReadAllCI = set.allowsAll("ci:read")
+		scope.AllowedRepos = repoSet(set.repos("ci:read"))
 	}
 	switch scheme {
 	case "ci":
 		ci()
 	case "task":
-		scope.MayReadAllTasks = set.Allows("tasks:read", "")
-		scope.TaskReadRepos = repoSet(set.Repos("tasks:read"))
+		scope.MayReadAllTasks = set.allowsAll("tasks:read")
+		scope.TaskReadRepos = repoSet(set.repos("tasks:read"))
 	case "deploy":
-		if set.Allows("deployment:read", "") {
+		if set.allowsAll("deployment:read") {
 			scope.MayReadMetrics, scope.MayReadPipeline, scope.MayReadHealth = true, true, true
 		} else {
 			// In under ci:read, which reaches deploy://merge-queue
@@ -138,15 +146,71 @@ func (s *Server) fsScope(ctx context.Context, scheme string) (namespace.Scope, e
 			scope.MergeQueueByCI = true
 		}
 	case "config":
-		scope.MayReadFullConfig = set.Allows("settings:read", "")
+		scope.MayReadFullConfig = set.allowsAll("settings:read")
 	case "memory":
-		scope.MayReadAllMemory = set.Allows("memory:read", "")
+		scope.MayReadAllMemory = set.allowsAll("memory:read")
 		// The repository the gate held a repository-limited grant to.
 		scope.TaskRepo = call.repo
+		if !isAgent && !scope.MayReadAllMemory {
+			// roleGate held a limited role to the repository the
+			// path names, read the way it read it.
+			repo, _, err := s.fsCallRepo(ctx, r, "GET /api/fs/memory/{path...}")
+			if err != nil {
+				return namespace.Scope{}, err
+			}
+			scope.TaskRepo = repo
+		}
 	case "src":
 		scope.MayReadSrc, scope.MayReadPlaybooks = true, true
 	}
 	return scope, nil
+}
+
+// fsReach is what fsScope reads a caller's reach through: an agent's
+// grants, a limited role's, or -- for a person sending an acting task --
+// only what both reach.
+type fsReach struct {
+	call    agentCall
+	isAgent bool
+	role    *accessRole
+}
+
+func (f fsReach) has(sc APIScope) bool {
+	return (!f.isAgent || f.call.grants.Has(sc)) && (f.role == nil || f.role.has(sc))
+}
+
+func (f fsReach) allowsAll(sc APIScope) bool {
+	return (!f.isAgent || f.call.grants.Allows(sc, "")) && (f.role == nil || f.role.allows(sc, ""))
+}
+
+// repos is the repositories sc reaches when it does not reach them all;
+// none at all when allowsAll is false and repos is empty.
+func (f fsReach) repos(sc APIScope) []string {
+	if !f.has(sc) || f.allowsAll(sc) {
+		return nil
+	}
+	var agent, role []string
+	agentAll := !f.isAgent || f.call.grants.Allows(sc, "")
+	if !agentAll {
+		agent = f.call.grants.Repos(sc)
+	}
+	roleAll := f.role == nil || f.role.allows(sc, "")
+	if !roleAll {
+		role = f.role.set.Repos(sc)
+	}
+	switch {
+	case agentAll:
+		return role
+	case roleAll:
+		return agent
+	}
+	var out []string
+	for _, a := range agent {
+		if slices.ContainsFunc(role, func(b string) bool { return model.SameRepoText(a, b) }) {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 func repoSet(repos []string) map[string]bool {

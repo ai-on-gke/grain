@@ -267,7 +267,8 @@ func (c Config) SelectHostd(ctx context.Context, store *model.Store, sel HostdSe
 
 func labelsMatch(have, want map[string]string) bool {
 	for k, v := range want {
-		if have[k] != v {
+		hv, ok := have[k]
+		if !ok || hv != v {
 			return false
 		}
 	}

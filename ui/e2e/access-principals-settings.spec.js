@@ -40,11 +40,19 @@ for (const [name, viewport] of [
     const sa =
       "serviceAccount:release-bot@demo-project.iam.gserviceaccount.com";
     const saGroup = page.getByTestId("allowed-service-accounts");
-    await expect(saGroup).toContainText("full operator access");
+    await expect(saGroup).toContainText("held to its role");
     await expect(page.getByTestId(`principal-row-${sa}`)).toContainText(
       "release pipeline files tasks through IAP",
     );
     await expect(table).not.toContainText(sa);
+
+    // Every entry shows its role.
+    await expect(
+      page.getByTestId("principal-row-group:eng-oncall@example.com"),
+    ).toContainText("grain/contributor");
+    await expect(page.getByTestId(`principal-row-${sa}`)).toContainText(
+      "grain/release-manager",
+    );
 
     // No horizontal page overflow at either desktop or phone width.
     const overflow = await page.evaluate(
@@ -85,6 +93,15 @@ for (const [name, viewport] of [
       expect(Math.abs(reasonBox.y - inputBox.y)).toBeLessThan(4);
       expect(reasonBox.x).toBeGreaterThan(inputBox.x + inputBox.width - 1);
       expect(addBtn.x).toBeGreaterThan(reasonBox.x + reasonBox.width - 1);
+      // The role picker sits on the same row, between the entry and the
+      // reason.
+      const roleBox = await page
+        .locator("#add-allowed-principal")
+        .getByRole("combobox")
+        .boundingBox();
+      expect(Math.abs(roleBox.y - inputBox.y)).toBeLessThan(4);
+      expect(roleBox.x).toBeGreaterThan(inputBox.x + inputBox.width - 1);
+      expect(reasonBox.x).toBeGreaterThan(roleBox.x + roleBox.width - 1);
     }
   });
 }
@@ -122,11 +139,18 @@ test("Settings → Access validates, adds, warns on last-entry removal, and rest
       ),
     ).toContainText("ci pipeline");
 
+    // The default role, grain/operator, holds dangerous scopes, so it is
+    // assigned only with a reason.
     await input.fill("user:new-member@example.com");
     await page.getByRole("button", { name: "Add allowed principal" }).click();
     await expect(
-      page.getByTestId("principal-row-user:new-member@example.com"),
+      page.getByText(/Give a reason: grain\/operator/),
     ).toBeVisible();
+    await page.getByTestId("access-reason-input").fill("new teammate");
+    await page.getByRole("button", { name: "Add allowed principal" }).click();
+    await expect(
+      page.getByTestId("principal-row-user:new-member@example.com"),
+    ).toContainText("grain/operator");
 
     // Remove until one entry remains, then verify removing the last entry warns first.
     for (const sa of [
@@ -171,9 +195,9 @@ test("Settings → Access validates, adds, warns on last-entry removal, and rest
         `/api/access/principals/${encodeURIComponent(e.entry)}`,
       );
     }
-    for (const { entry, reason } of initialEntries) {
+    for (const { entry, reason, role } of initialEntries) {
       await request.post("/api/access/principals", {
-        data: reason ? { entry, reason } : { entry },
+        data: { entry, role, reason: reason || "restoring the demo" },
       });
     }
   }

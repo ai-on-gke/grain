@@ -1281,9 +1281,6 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 		log.Printf("ui: task %s: reading its attempts' hostds: %v", id, err)
 		runHostds = nil
 	}
-	if detail.Hostd, err = c.Store.TaskHostd(ctx, id); err != nil {
-		log.Printf("ui: task %s: reading its hostd pin: %v", id, err)
-	}
 	detail.Attempts = make([]Attempt, 0, len(runs))
 	for _, r := range runs {
 		a := attemptFrom(r, promptBytes, auditCounts)
@@ -1937,9 +1934,9 @@ type CreateTaskRequest struct {
 	// because provenance is what a proposal's authority is read off,
 	// decides how far AutoMerge and Approved above reach (CreateTask).
 	ProposalKey string `json:"proposalKey,omitempty"`
-	// Hostd pins the task's host work to one grain hostd by name, or to
-	// any hostd carrying label=value[,label=value] (model.SetTaskHostd);
-	// "" is the default hostd.
+	// Hostd is read only to be refused (TaskHostdRefusal): which grain
+	// hostd host work runs on is the model connection's or the capability
+	// server's, not the task's.
 	Hostd      string `json:"hostd,omitempty"`
 	ProposedBy string `json:"proposedBy,omitempty"`
 	// HoldForApproval is propose_task's own `hold_for_approval`: file
@@ -2173,11 +2170,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if strings.TrimSpace(req.Title) == "" {
 		return Task{}, validationErrorf("title is required")
 	}
-	hostdSelector, err := model.NormalizeHostdSelector(req.Hostd)
-	if err != nil {
-		return Task{}, validationErrorf("%v", err)
-	}
-	if err := c.checkHostdSelector(ctx, hostdSelector); err != nil {
+	if err := refuseTaskHostd("hostd", req.Hostd); err != nil {
 		return Task{}, err
 	}
 	priority := model.DefaultTaskPriority
@@ -2258,26 +2251,6 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			return Task{}, validationErrorf(
 				"no repo given, and this deployment has no default target repo configured")
 		}
-	}
-
-	// A filing that names no hostd, and whose template names none
-	// (fromTemplate has already put a template's pin in req.Hostd),
-	// starts pinned to its repository's own default
-	// (model.RepoConfig.DefaultHostd), and failing that to the default
-	// hostd. The repository's default is the operator's word, not the
-	// filer's, so the agent API's hostd gate (agentMayRouteHostd) is not
-	// asked about it; it is still held to the registry, so a default
-	// left naming a hostd that has since gone is refused here rather
-	// than filed onto a pin nothing answers.
-	if hostdSelector == "" && target != nil {
-		repoHostd, err := c.Store.RepoDefaultHostd(ctx, *target)
-		if err != nil {
-			return Task{}, err
-		}
-		if err := c.checkHostdSelector(ctx, repoHostd); err != nil {
-			return Task{}, fmt.Errorf("%s's default hostd (its repository settings): %w", target, err)
-		}
-		hostdSelector = repoHostd
 	}
 
 	var forkPR *forkhead.PR
@@ -2667,6 +2640,18 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		child.Reads = reads
 		escalated = model.EscalatedCapabilities(child, *proposedBy)
 		autoSubmit = model.AutoSubmits(child, *proposedBy)
+		// A fixture on the proposer's own qualification scratch branch,
+		// queued and merged there on the proposer's own permission to
+		// push that branch (model.ScratchFixture) -- the end-of-run
+		// relay's rule for the identical call.
+		pushesScratch, err := c.Store.PushesOwnScratchBranch(ctx, *proposedBy)
+		if err != nil {
+			return Task{}, err
+		}
+		if changeTarget == nil && model.ScratchFixture(child, *proposedBy, pushesScratch) {
+			autoSubmit = true
+			autoMerge = !req.DeclineAutoMerge
+		}
 		ungrantedWrites := model.UngrantedWrites(child, *proposedBy)
 		ungrantedReads := model.UngrantedReads(child, *proposedBy)
 		if len(ungrantedWrites) > 0 {
@@ -2681,7 +2666,9 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		if len(escalated) > 0 || len(ungrantedWrites) > 0 || len(ungrantedReads) > 0 {
 			sessionQueued = false
 		}
-		refusal = model.AutoApprovalRefusal(child, *proposedBy, sessionQueued)
+		if !autoSubmit {
+			refusal = model.AutoApprovalRefusal(child, *proposedBy, sessionQueued)
+		}
 		// A target only a person may approve: grain's own hold, not the
 		// run's, so it is neither tagged nor told to the run as one it
 		// asked for (heldNote) -- and asked before hold_for_approval, so a
@@ -2944,11 +2931,6 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	for i := range attachments {
 		attachments[i].TaskID = id
 		if _, err := c.Store.AddAttachment(ctx, attachments[i]); err != nil {
-			return Task{}, err
-		}
-	}
-	if hostdSelector != "" {
-		if err := c.Store.SetTaskHostd(ctx, id, hostdSelector); err != nil {
 			return Task{}, err
 		}
 	}

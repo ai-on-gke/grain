@@ -16,6 +16,7 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"errors"
 	"fmt"
@@ -158,8 +159,13 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		agent := model.Principal{Kind: model.PrincipalAgent, ID: "external:" + tok.Name, Source: model.SourceExternalToken}
 		r = r.WithContext(withExternalToken(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), tok))
 	}
+	roleSlot := &accessRoleSlot{}
+	r = r.WithContext(context.WithValue(r.Context(), accessRoleSlotKey{}, roleSlot))
 	if !s.singleTenantGate(w, r, cfg) {
 		return
+	}
+	if roleSlot.role != nil {
+		r = r.WithContext(withAccessRole(r.Context(), roleSlot.role))
 	}
 	if s.tasks != nil {
 		r = r.WithContext(s.tasks.withOperatorActor(r.Context()))
@@ -231,7 +237,7 @@ func requiresAccess(r *http.Request) bool {
 
 func (s *Server) routes() {
 	s.route("GET /api/config", s.handleConfig)
-	s.mux.HandleFunc("PUT /api/config", s.agentAPIGate("PUT /api/settings", s.handleUpdateSettings))
+	s.mux.HandleFunc("PUT /api/config", s.roleGate("PUT /api/settings", s.agentAPIGate("PUT /api/settings", s.handleUpdateSettings)))
 	s.route("GET /api/restart-watch", s.handleRestartWatch)
 	s.route("GET /api/fs/ci/{path...}", s.handleReadCINamespace)
 	s.route("GET /api/fs/task/{path...}", s.handleReadTaskNamespace)
@@ -680,6 +686,7 @@ func (s *Server) routes() {
 	// Verified-identity sign-in allowlist (Settings -> Access).
 	s.route("GET /api/access/principals", s.handleListAccessPrincipals)
 	s.route("POST /api/access/principals", s.handleAllowPrincipal)
+	s.route("PATCH /api/access/principals/{entry}", s.handleSetPrincipalRole)
 	s.route("DELETE /api/access/principals/{entry}", s.handleDenyPrincipal)
 
 	// Controller MCP server (mcp_endpoint.go) shared by external BYO
@@ -734,6 +741,9 @@ func (s *Server) route(pattern string, handler http.HandlerFunc) {
 	// Every route answers an acting agent only within its scope
 	// (route_scopes.go, agent_api_gate.go).
 	handler = s.agentAPIGate(pattern, handler)
+	// And a verified person only within their role (access_roles.go),
+	// ahead of the agent gate so an acting-task header never widens one.
+	handler = s.roleGate(pattern, handler)
 	if timedRoutes[pattern] {
 		next := handler
 		handler = func(w http.ResponseWriter, r *http.Request) {

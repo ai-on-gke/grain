@@ -32,14 +32,48 @@ import (
 type AccessPrincipalsResponse struct {
 	Entries            []model.AllowedPrincipal `json:"entries"`
 	DroppedFlagEntries []string                 `json:"droppedFlagEntries,omitempty"`
+	// Roles are the scope sets in effect that an entry can be given, for
+	// the role picker: built-ins first, then by name.
+	Roles []AccessRoleChoice `json:"roles"`
+}
+
+// AccessRoleChoice is one scope set offered as a role.
+type AccessRoleChoice struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Builtin     bool   `json:"builtin"`
+	// Person is true for a role only an access-code admin may assign.
+	Person   bool       `json:"person"`
+	Resolved []APIScope `json:"resolved"`
 }
 
 // AllowPrincipalRequest is POST /api/access/principals. Reason is why the
 // entry is added; it is required for a serviceAccount: entry and may come
 // from the X-Grain-Acting-Reason header instead.
+//
+// Role is the scope set the entry's sessions are held to, grain/operator
+// when empty (docs/design/access-rbac.md). A role holding a dangerous
+// scope -- grain/operator among them -- is assigned only by an access-code
+// admin, and only with a reason.
 type AllowPrincipalRequest struct {
 	Entry  string `json:"entry"`
 	Reason string `json:"reason,omitempty"`
+	Role   string `json:"role,omitempty"`
+}
+
+// SetPrincipalRoleRequest is PATCH /api/access/principals/{entry}: the role
+// to give an entry already on the list, and why.
+type SetPrincipalRoleRequest struct {
+	Role   string `json:"role"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// SetPrincipalRoleResponse is the response to PATCH
+// /api/access/principals/{entry}.
+type SetPrincipalRoleResponse struct {
+	Entry    string `json:"entry"`
+	Role     string `json:"role"`
+	Previous string `json:"previous"`
 }
 
 // AllowPrincipalResponse is the response to POST /api/access/principals.
@@ -186,9 +220,18 @@ func (c *Client) ListAllowedPrincipals(ctx context.Context) (AccessPrincipalsRes
 	} else if mig != nil && len(mig.Dropped) > 0 {
 		dropped = mig.Dropped
 	}
+	roles := []AccessRoleChoice{}
+	for _, set := range model.APIScopeSetsInEffect() {
+		if set.Deprecated {
+			continue
+		}
+		roles = append(roles, AccessRoleChoice{Name: set.Name, Description: set.Description,
+			Builtin: set.Builtin, Person: set.Person, Resolved: set.Resolved})
+	}
 	return AccessPrincipalsResponse{
 		Entries:            entries,
 		DroppedFlagEntries: dropped,
+		Roles:              roles,
 	}, nil
 }
 
@@ -212,15 +255,29 @@ func (c *Client) AllowPrincipal(ctx context.Context, req AllowPrincipalRequest) 
 	if reason == "" {
 		reason = actingReasonFromContext(ctx)
 	}
-	if prefix == "serviceAccount" && reason == "" {
-		return AllowPrincipalResponse{}, validationErrorf("allowed principal %q: give a reason to admit a service account (it gets full operator access)", canonical)
+	role := strings.TrimSpace(req.Role)
+	if role == "" {
+		role = model.DefaultAccessRole
 	}
-	p, created, err := c.Store.AddAllowedPrincipal(ctx, canonical, writerName(ctx), reason, c.now())
+	if prefix == "serviceAccount" && reason == "" {
+		return AllowPrincipalResponse{}, validationErrorf("allowed principal %q: give a reason to admit a service account (with role %s)", canonical, role)
+	}
+	if existing, ok, err := c.allowedPrincipalNamed(ctx, canonical); err != nil {
+		return AllowPrincipalResponse{}, err
+	} else if ok {
+		// Already on the list: an idempotent no-op that keeps its role
+		// (PATCH changes one), so nothing is assigned.
+		return AllowPrincipalResponse{Principal: existing, Created: false}, nil
+	}
+	if err := checkAccessRoleAssignment(ctx, canonical, role, "", reason); err != nil {
+		return AllowPrincipalResponse{}, err
+	}
+	p, created, err := c.Store.AddAllowedPrincipalWithRole(ctx, canonical, writerName(ctx), reason, role, c.now())
 	if err != nil {
 		return AllowPrincipalResponse{}, err
 	}
 	if created {
-		summary := "allowed " + p.Entry
+		summary := "allowed " + p.Entry + " as " + p.Role
 		if reason != "" {
 			summary += " (" + reason + ")"
 		}
@@ -238,6 +295,15 @@ func (c *Client) DenyPrincipal(ctx context.Context, rawEntry string) (DenyPrinci
 	if err != nil {
 		return DenyPrincipalResponse{}, validationErrorf("%v", err)
 	}
+	if existing, ok, err := c.allowedPrincipalNamed(ctx, canonical); err != nil {
+		return DenyPrincipalResponse{}, err
+	} else if ok {
+		if err := checkAccessEntryChange(ctx, canonical, existing.Role); err != nil {
+			return DenyPrincipalResponse{}, err
+		}
+	} else if err := checkAccessEntryChange(ctx, canonical, ""); err != nil {
+		return DenyPrincipalResponse{}, err
+	}
 	removedEntry, removed, err := c.Store.RemoveAllowedPrincipal(ctx, canonical)
 	if err != nil {
 		return DenyPrincipalResponse{}, err
@@ -251,6 +317,127 @@ func (c *Client) DenyPrincipal(ctx context.Context, rawEntry string) (DenyPrinci
 	}
 	c.auditAccessChange(ctx, summary)
 	return DenyPrincipalResponse{Entry: removedEntry, Removed: true}, nil
+}
+
+// SetPrincipalRole gives an entry already on the allowlist another role.
+func (c *Client) SetPrincipalRole(ctx context.Context, rawEntry string, req SetPrincipalRoleRequest) (SetPrincipalRoleResponse, error) {
+	if err := c.MigrateAllowedPrincipals(ctx); err != nil {
+		return SetPrincipalRoleResponse{}, err
+	}
+	_, _, canonical, err := model.NormalizeAllowedPrincipalEntry(rawEntry)
+	if err != nil {
+		return SetPrincipalRoleResponse{}, validationErrorf("%v", err)
+	}
+	role := strings.TrimSpace(req.Role)
+	if role == "" {
+		return SetPrincipalRoleResponse{}, validationErrorf("allowed principal %q: name the role (a scope set) to give it", canonical)
+	}
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		reason = actingReasonFromContext(ctx)
+	}
+	existing, ok, err := c.allowedPrincipalNamed(ctx, canonical)
+	if err != nil {
+		return SetPrincipalRoleResponse{}, err
+	}
+	if !ok {
+		return SetPrincipalRoleResponse{}, &NotFoundError{message: fmt.Sprintf("allowed principal %q is not on the allowlist", canonical)}
+	}
+	if err := checkAccessRoleAssignment(ctx, canonical, role, existing.Role, reason); err != nil {
+		return SetPrincipalRoleResponse{}, err
+	}
+	if existing.Role == role {
+		return SetPrincipalRoleResponse{Entry: canonical, Role: role, Previous: role}, nil
+	}
+	_, previous, found, err := c.Store.SetAllowedPrincipalRole(ctx, canonical, role)
+	if err != nil {
+		return SetPrincipalRoleResponse{}, err
+	}
+	if !found {
+		return SetPrincipalRoleResponse{}, &NotFoundError{message: fmt.Sprintf("allowed principal %q is not on the allowlist", canonical)}
+	}
+	summary := "role " + canonical + " " + previous + " -> " + role
+	if reason != "" {
+		summary += " (" + reason + ")"
+	}
+	c.auditAccessChange(ctx, summary)
+	return SetPrincipalRoleResponse{Entry: canonical, Role: role, Previous: previous}, nil
+}
+
+// allowedPrincipalNamed is the allowlist entry canonical, if it is on it.
+func (c *Client) allowedPrincipalNamed(ctx context.Context, canonical string) (model.AllowedPrincipal, bool, error) {
+	entries, err := c.Store.ListAllowedPrincipals(ctx)
+	if err != nil {
+		return model.AllowedPrincipal{}, false, err
+	}
+	for _, e := range entries {
+		if e.Entry == canonical {
+			return e, true, nil
+		}
+	}
+	return model.AllowedPrincipal{}, false, nil
+}
+
+// checkAccessEntryChange refuses a change to entry (whose role is current,
+// "" for none) by a caller who may not make it: any agent, and a verified
+// session whose own role is narrower than current, or for which current is
+// a role only an access-code admin assigns or one that denies scopes
+// (docs/design/access-rbac.md §3).
+func checkAccessEntryChange(ctx context.Context, entry, current string) error {
+	if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
+		return &ForbiddenError{err: fmt.Errorf("agent %s may not change who signs in to this deployment: only a person changes the allowed users and groups list", p.ID)}
+	}
+	caller := accessRoleFromContext(ctx)
+	if caller == nil || current == "" {
+		return nil
+	}
+	set, ok := model.APIScopeSetNamed(current)
+	if !ok {
+		return nil
+	}
+	if set.Person {
+		return &ForbiddenError{err: fmt.Errorf("%s has role %s, which holds a dangerous scope: only an access-code admin changes it or removes it", entry, current)}
+	}
+	if len(roleDenies(current)) > 0 {
+		// A deny is a veto over every other entry the same people match
+		// (docs/design/access-rbac.md §2): removing or re-roling it
+		// widens them -- the caller among them, perhaps -- past anything
+		// noWiderThan sees, since a deny grants nothing to compare.
+		return &ForbiddenError{err: fmt.Errorf("%s has role %s, which denies scopes: only an access-code admin lifts a deny by changing it or removing it", entry, current)}
+	}
+	if err := caller.noWiderThan(resolveAccessRoles(entry, []string{current})); err != nil {
+		return &ForbiddenError{err: fmt.Errorf("%s has role %s, which is wider than %s's own (%v): only an access-code admin changes it", entry, current, caller.Who, err)}
+	}
+	return nil
+}
+
+// checkAccessRoleAssignment refuses giving entry role (from current, ""
+// for a new entry) to a caller who may not, or without a reason a
+// dangerous role needs.
+func checkAccessRoleAssignment(ctx context.Context, entry, role, current, reason string) error {
+	set, ok := model.APIScopeSetNamed(role)
+	if !ok {
+		return validationErrorf("role %q is no scope set in effect (Settings -> Scope sets, or a built-in such as %s or grain/viewer)", role, model.DefaultAccessRole)
+	}
+	if err := checkAccessEntryChange(ctx, entry, current); err != nil {
+		return err
+	}
+	caller := accessRoleFromContext(ctx)
+	if set.Person {
+		if caller != nil {
+			return &ForbiddenError{err: fmt.Errorf("role %s holds a dangerous scope (or only a person may grant it): only an access-code admin assigns it, not %s", role, caller.label())}
+		}
+		if strings.TrimSpace(reason) == "" {
+			return validationErrorf("role %s holds a dangerous scope: give a reason to assign it to %s (--reason, or the reason field)", role, entry)
+		}
+		return nil
+	}
+	if caller != nil {
+		if err := caller.noWiderThan(resolveAccessRoles(entry, []string{role})); err != nil {
+			return &ForbiddenError{err: fmt.Errorf("role %s is wider than %s's own: %v", role, caller.Who, err)}
+		}
+	}
+	return nil
 }
 
 func (c *Client) auditAccessChange(ctx context.Context, summary string) {
@@ -295,6 +482,26 @@ func (s *Server) handleAllowPrincipal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, out)
 }
 
+func (s *Server) handleSetPrincipalRole(w http.ResponseWriter, r *http.Request) {
+	rawEntry := r.PathValue("entry")
+	if strings.Contains(rawEntry, "%") {
+		if unescaped, err := url.PathUnescape(rawEntry); err == nil {
+			rawEntry = unescaped
+		}
+	}
+	var req SetPrincipalRoleRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	ctx := withActingReason(r.Context(), r.Header.Get(ActingReasonHeader))
+	out, err := s.tasks.SetPrincipalRole(ctx, rawEntry, req)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (s *Server) handleDenyPrincipal(w http.ResponseWriter, r *http.Request) {
 	rawEntry := r.PathValue("entry")
 	if strings.Contains(rawEntry, "%") {
@@ -322,6 +529,13 @@ func (c *HTTPClient) ListAllowedPrincipals(ctx context.Context) (AccessPrincipal
 func (c *HTTPClient) AllowPrincipal(ctx context.Context, req AllowPrincipalRequest) (AllowPrincipalResponse, error) {
 	var out AllowPrincipalResponse
 	err := c.do(ctx, http.MethodPost, "/api/access/principals", req, &out)
+	return out, err
+}
+
+// SetPrincipalRole is PATCH /api/access/principals/{entry}.
+func (c *HTTPClient) SetPrincipalRole(ctx context.Context, entry string, req SetPrincipalRoleRequest) (SetPrincipalRoleResponse, error) {
+	var out SetPrincipalRoleResponse
+	err := c.do(ctx, http.MethodPatch, "/api/access/principals/"+url.PathEscape(strings.TrimSpace(entry)), req, &out)
 	return out, err
 }
 

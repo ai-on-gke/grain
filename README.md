@@ -358,7 +358,7 @@ On the local PostgreSQL server (the default for a new install), the cluster in
 `data/postgres` is part of that directory. Copy it with both
 `grain-daemon.service` and `grain-postgres.service` stopped, or take an online
 dump with
-`sudo docker exec grain-postgres pg_dump -U grain -d grain -Fc > grain.dump`.
+`sudo docker exec grain-postgres sh -c 'PGPASSWORD=$(cat /run/grain/postgres-password) exec pg_dump -U grain -d grain -Fc' > grain.dump`.
 `grain backup` covers SQLite only. [docs/database.md](docs/database.md#backups)
 has the restore steps, and covers upgrading the PostgreSQL image, which is a
 separate, explicit step.

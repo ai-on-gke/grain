@@ -18,6 +18,7 @@ import {
   Box,
   Button,
   Chip,
+  MenuItem,
   Stack,
   Table,
   TableBody,
@@ -28,6 +29,7 @@ import {
   Typography,
 } from "@mui/material";
 import api from "../../api.js";
+import { accessRoleLabel, canAccess } from "../../access.js";
 import AppIcon from "../AppIcon.jsx";
 import SettingsCard from "./SettingsCard.jsx";
 
@@ -170,7 +172,16 @@ export default function AccessSection({
     : verifiedUserEmail(config);
   const recordedAs = whoami?.actor?.label || "";
 
+  const ownRole = accessRoleLabel(config);
+  // A verified session without access:write sees the list but none of the
+  // controls that change it; one with it may still be refused a role
+  // wider than its own, which the server explains.
+  const canWrite = canAccess(config, "access:write");
   const [entries, setEntries] = useState([]);
+  const [roles, setRoles] = useState([]);
+  const [newRole, setNewRole] = useState(
+    config?.access ? "grain/viewer" : "grain/operator",
+  );
   const [droppedFlagEntries, setDroppedFlagEntries] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [newEntry, setNewEntry] = useState("");
@@ -184,6 +195,7 @@ export default function AccessSection({
     try {
       const data = await api("/api/access/principals");
       setEntries(Array.isArray(data?.entries) ? data.entries : []);
+      setRoles(Array.isArray(data?.roles) ? data.roles : []);
       setDroppedFlagEntries(
         Array.isArray(data?.droppedFlagEntries) ? data.droppedFlagEntries : [],
       );
@@ -209,19 +221,23 @@ export default function AccessSection({
     }
     const reason = newReason.trim();
     if (isServiceAccountEntry(canonical) && !reason) {
+      setValidationError("Give a reason to admit a service account.");
+      return;
+    }
+    if (rolePerson(roles, newRole) && !reason) {
       setValidationError(
-        "Give a reason: a service account gets full operator access.",
+        `Give a reason: ${newRole} holds dangerous scopes, so assigning it is recorded with why.`,
       );
       return;
     }
     setValidationError("");
     setBusy(true);
     try {
+      const body = { entry: canonical, role: newRole };
+      if (reason) body.reason = reason;
       await api("/api/access/principals", {
         method: "POST",
-        body: JSON.stringify(
-          reason ? { entry: canonical, reason } : { entry: canonical },
-        ),
+        body: JSON.stringify(body),
       });
       setNewEntry("");
       setNewReason("");
@@ -252,6 +268,30 @@ export default function AccessSection({
     }
   };
 
+  const changeRole = async (entry, role) => {
+    let reason = "";
+    if (rolePerson(roles, role)) {
+      reason = (
+        window.prompt(
+          `${role} holds dangerous scopes. Why is ${entry} given it?`,
+        ) || ""
+      ).trim();
+      if (!reason) return;
+    }
+    setBusy(true);
+    try {
+      await api(`/api/access/principals/${encodeURIComponent(entry)}`, {
+        method: "PATCH",
+        body: JSON.stringify(reason ? { role, reason } : { role }),
+      });
+      await loadPrincipals();
+    } catch (err) {
+      showError?.(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleRequestRemove = (entry) => {
     const warn = describeRemovalWarning(entry, entries.length, email);
     if (warn) {
@@ -264,6 +304,19 @@ export default function AccessSection({
   return (
     <>
       <SettingsCard title="This browser" anchor="this-browser">
+        {ownRole ? (
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            sx={{ mt: 1 }}
+            data-testid="access-own-role"
+          >
+            Your role: <RoleChip role={ownRole} />
+            {config?.access?.full ? null : (
+              <> — actions outside it are hidden or refused.</>
+            )}
+          </Typography>
+        ) : null}
         {viaIAP ? (
           <Box sx={{ mt: 1 }}>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
@@ -326,6 +379,14 @@ export default function AccessSection({
         title="Allowed users and groups"
         anchor="allowed-principals"
       >
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+          Each entry has a role, an API scope set: <code>grain/operator</code>{" "}
+          (everything), <code>grain/contributor</code>,{" "}
+          <code>grain/viewer</code> or one this deployment declares. Someone
+          matching several entries holds all their roles together. Roles with
+          dangerous scopes are assigned only with the access code, with a
+          reason.
+        </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
           Users (<code>user:&lt;email&gt;</code>), groups (
           <code>group:&lt;email&gt;</code>) and service accounts (
@@ -408,7 +469,10 @@ export default function AccessSection({
             <PrincipalTable
               rows={people}
               busy={busy}
+              canWrite={canWrite}
+              roles={roles}
               onRemove={handleRequestRemove}
+              onRole={changeRole}
               testid="allowed-principals-table"
             />
           ) : null}
@@ -418,15 +482,18 @@ export default function AccessSection({
           <Box sx={{ mt: 2 }} data-testid="allowed-service-accounts">
             <Typography variant="subtitle2">Service accounts</Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-              Non-human callers with full operator access, each added
-              deliberately with a reason. Accounts whose keys grain hands to
-              tasks are always refused.
+              Non-human callers, each added deliberately with a reason and held
+              to its role. Accounts whose keys grain hands to tasks are always
+              refused, whatever their role.
             </Typography>
             <Box sx={{ overflowX: "auto", mt: 1 }}>
               <PrincipalTable
                 rows={serviceAccounts}
                 busy={busy}
+                canWrite={canWrite}
+                roles={roles}
                 onRemove={handleRequestRemove}
+                onRole={changeRole}
                 showReason
                 testid="allowed-service-accounts-table"
               />
@@ -434,67 +501,137 @@ export default function AccessSection({
           </Box>
         )}
 
-        <Box
-          component="form"
-          id="add-allowed-principal"
-          onSubmit={handleAdd}
-          noValidate
-          sx={{ mt: 2 }}
-        >
-          <Stack
-            direction={{ xs: "column", sm: "row" }}
-            spacing={1.5}
-            alignItems={{ xs: "stretch", sm: "flex-start" }}
+        {canWrite ? (
+          <Box
+            component="form"
+            id="add-allowed-principal"
+            onSubmit={handleAdd}
+            noValidate
+            sx={{ mt: 2 }}
           >
-            <TextField
-              size="small"
-              label="User, group or service account"
-              placeholder="user:alice@example.com or group:team@example.com"
-              value={newEntry}
-              onChange={(e) => {
-                setNewEntry(e.target.value);
-                if (validationError) setValidationError("");
-              }}
-              error={Boolean(validationError)}
-              helperText={
-                validationError ||
-                "Prefix with user: for an individual email, group: for a Google Group or serviceAccount: for a service account."
-              }
-              disabled={busy}
-              sx={{ flex: 1 }}
-            />
-            <TextField
-              size="small"
-              label="Reason"
-              placeholder="Why this entry is added"
-              value={newReason}
-              onChange={(e) => {
-                setNewReason(e.target.value);
-                if (validationError) setValidationError("");
-              }}
-              helperText="Required for service accounts."
-              disabled={busy}
-              inputProps={{ "data-testid": "access-reason-input" }}
-              sx={{ flex: 1 }}
-            />
-            <Button
-              type="submit"
-              variant="contained"
-              disabled={busy}
-              sx={{ height: 40, flexShrink: 0 }}
+            <Stack
+              direction={{ xs: "column", sm: "row" }}
+              spacing={1.5}
+              alignItems={{ xs: "stretch", sm: "flex-start" }}
             >
-              Add allowed principal
-            </Button>
-          </Stack>
-        </Box>
+              <TextField
+                size="small"
+                label="User, group or service account"
+                placeholder="user:alice@example.com or group:team@example.com"
+                value={newEntry}
+                onChange={(e) => {
+                  setNewEntry(e.target.value);
+                  if (validationError) setValidationError("");
+                }}
+                error={Boolean(validationError)}
+                helperText={
+                  validationError ||
+                  "Prefix with user: for an individual email, group: for a Google Group or serviceAccount: for a service account."
+                }
+                disabled={busy}
+                sx={{ flex: 1 }}
+              />
+              <TextField
+                select
+                size="small"
+                label="Role"
+                value={newRole}
+                onChange={(e) => setNewRole(e.target.value)}
+                disabled={busy}
+                helperText={
+                  rolePerson(roles, newRole)
+                    ? "Dangerous scopes: access code and reason needed."
+                    : " "
+                }
+                inputProps={{ "data-testid": "access-role-input" }}
+                sx={{ minWidth: 200 }}
+              >
+                {roleOptions(roles, newRole).map((r) => (
+                  <MenuItem key={r.name} value={r.name}>
+                    {r.name}
+                  </MenuItem>
+                ))}
+              </TextField>
+              <TextField
+                size="small"
+                label="Reason"
+                placeholder="Why this entry is added"
+                value={newReason}
+                onChange={(e) => {
+                  setNewReason(e.target.value);
+                  if (validationError) setValidationError("");
+                }}
+                helperText="Required for service accounts and dangerous roles."
+                disabled={busy}
+                inputProps={{ "data-testid": "access-reason-input" }}
+                sx={{ flex: 1 }}
+              />
+              <Button
+                type="submit"
+                variant="contained"
+                disabled={busy}
+                sx={{ height: 40, flexShrink: 0 }}
+              >
+                Add allowed principal
+              </Button>
+            </Stack>
+          </Box>
+        ) : (
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            sx={{ mt: 2 }}
+            data-testid="access-read-only"
+          >
+            Your role does not include <code>access:write</code>, so you can see
+            this list but not change it.
+          </Typography>
+        )}
       </SettingsCard>
     </>
   );
 }
 
-// PrincipalTable lists allowlist rows with who added them and when, and the
-// reason they were added when showReason is set.
-function PrincipalTable({ rows, busy, onRemove, showReason = false, testid }) {
+// rolePerson reports whether the role named name is one only an access-code
+// admin assigns (it holds a dangerous scope).
+function rolePerson(roles, name) {
+  return Boolean(roles.find((r) => r.name === name)?.person);
+}
+
+// roleOptions are the roles a picker offers, with current kept even when
+// it names no set in effect, so the picker still shows it.
+function roleOptions(roles, current) {
+  const out = roles.length ? [...roles] : [{ name: "grain/operator" }];
+  if (current && !out.some((r) => r.name === current)) {
+    out.push({ name: current });
+  }
+  return out;
+}
+
+function RoleChip({ role }) {
+  return (
+    <Chip
+      size="small"
+      label={role}
+      variant="outlined"
+      sx={{ fontFamily: "monospace" }}
+    />
+  );
+}
+
+// PrincipalTable lists allowlist rows with their role, who added them and
+// when, and the reason they were added when showReason is set. Without
+// canWrite it has no controls.
+function PrincipalTable({
+  rows,
+  busy,
+  canWrite,
+  roles,
+  onRemove,
+  onRole,
+  showReason = false,
+  testid,
+}) {
   return (
     <Table size="small" data-testid={testid}>
       <TableHead>
@@ -505,9 +642,10 @@ function PrincipalTable({ rows, busy, onRemove, showReason = false, testid }) {
           ) : (
             <TableCell>Kind</TableCell>
           )}
+          <TableCell>Role</TableCell>
           <TableCell>Added by</TableCell>
           <TableCell>Added</TableCell>
-          <TableCell align="right">Actions</TableCell>
+          {canWrite ? <TableCell align="right">Actions</TableCell> : null}
         </TableRow>
       </TableHead>
       <TableBody>
@@ -530,22 +668,48 @@ function PrincipalTable({ rows, busy, onRemove, showReason = false, testid }) {
                 />
               </TableCell>
             )}
+            <TableCell>
+              {canWrite ? (
+                <TextField
+                  select
+                  size="small"
+                  variant="standard"
+                  value={item.role || "grain/operator"}
+                  disabled={busy}
+                  onChange={(e) => onRole(item.entry, e.target.value)}
+                  inputProps={{ "aria-label": `Role of ${item.entry}` }}
+                  sx={{ minWidth: 160, fontFamily: "monospace" }}
+                >
+                  {roleOptions(roles, item.role || "grain/operator").map(
+                    (r) => (
+                      <MenuItem key={r.name} value={r.name}>
+                        {r.name}
+                      </MenuItem>
+                    ),
+                  )}
+                </TextField>
+              ) : (
+                <RoleChip role={item.role || "grain/operator"} />
+              )}
+            </TableCell>
             <TableCell>{item.addedBy || "—"}</TableCell>
             <TableCell sx={{ whiteSpace: "nowrap" }}>
               {formatAddedAt(item.addedAt)}
             </TableCell>
-            <TableCell align="right">
-              <Button
-                size="small"
-                color="error"
-                variant="outlined"
-                disabled={busy}
-                aria-label={`Remove ${item.entry}`}
-                onClick={() => onRemove(item.entry)}
-              >
-                Remove
-              </Button>
-            </TableCell>
+            {canWrite ? (
+              <TableCell align="right">
+                <Button
+                  size="small"
+                  color="error"
+                  variant="outlined"
+                  disabled={busy}
+                  aria-label={`Remove ${item.entry}`}
+                  onClick={() => onRemove(item.entry)}
+                >
+                  Remove
+                </Button>
+              </TableCell>
+            ) : null}
           </TableRow>
         ))}
       </TableBody>

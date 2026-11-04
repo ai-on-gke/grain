@@ -356,9 +356,6 @@ func (s *Store) CreateQualificationRun(ctx context.Context, candidate Candidate,
 					return err
 				}
 				applyGrainCIGrant(&comp, usesGrainCI)
-				if err := applyRepoDefaultHostd(ctx, tx, &comp); err != nil {
-					return err
-				}
 			}
 
 			var links []Link
@@ -387,9 +384,6 @@ func (s *Store) CreateQualificationRun(ctx context.Context, candidate Candidate,
 				task.OrderKey = orderKey
 				orderKey += orderKeySpacing
 				if err := putTask(ctx, tx, task); err != nil {
-					return err
-				}
-				if err := putTaskHostd(ctx, tx, id, comp.Hostd); err != nil {
 					return err
 				}
 				if _, err := tx.ExecContext(ctx,

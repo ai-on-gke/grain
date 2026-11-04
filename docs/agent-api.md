@@ -311,6 +311,26 @@ working. The `grain/` prefix is reserved: a deployment can't declare a
 set under it, or under a preset's bare name, so a built-in can't be
 shadowed or edited. It can be composed.
 
+grain also ships three sets that are meant to be **roles** for allowed
+users, groups and service accounts
+([`docs/access-code.md`](access-code.md#who-is-let-in),
+[`docs/design/access-rbac.md`](design/access-rbac.md)):
+
+- `grain/operator`: every scope. It is the default role, and only a
+  person may grant it.
+- `grain/viewer`: every `*:read` scope.
+- `grain/contributor`: `grain/viewer` plus `tasks:write` and `ci:write`.
+
+Any set can be an allowlist entry's role. A verified session is then
+checked against its role's scopes, through the same route table and
+repository limits as an agent's grants. A set's `repos` limits the role
+to those repositories. When a person holds several roles, a `deny` in
+any one of them withholds that scope from the person, whichever other
+role grants it. So build a narrower role by listing its scopes, and use
+`deny` only as a veto. Editing a set here also widens or narrows every
+person who holds it as a role, starting with their next request. The
+state check's diff of the set is the report of that change.
+
 A deployment declares its own sets in its config repository, in
 `tables/api_scope_set.json` (the `api_scope_set` settings table,
 `model.APIScopeSet`). It's a settings table like `custom_field`, chosen

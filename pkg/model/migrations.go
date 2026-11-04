@@ -750,6 +750,23 @@ var Migrations = []Migration{
 		Description: "rewrite stored gcp#gcp-key grants from deprecated account and activate arguments to permission_set",
 		Up:          MigrateGCPKeyGrantArgs,
 	},
+	{
+		Version:     110,
+		Description: "add allowed_principal.role, the scope set an allowlist entry's sessions are held to (existing entries become grain/operator)",
+		Statements: []string{
+			"ALTER TABLE `allowed_principal` ADD COLUMN `role` TEXT NOT NULL DEFAULT 'grain/operator'",
+		},
+	},
+	{
+		Version: 111,
+		Description: "drop the task, template and repository hostd selectors: a model connection or capability server " +
+			"chooses its hostd; task_run_hostd keeps where each run ran",
+		Statements: []string{
+			"DROP TABLE IF EXISTS `task_hostd`",
+			"ALTER TABLE `template` DROP COLUMN `hostd`",
+			"ALTER TABLE `repo_config` DROP COLUMN `default_hostd`",
+		},
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as
@@ -984,13 +1001,16 @@ func (s *Store) migrateInPlace(ctx context.Context, from int) error {
 }
 
 // execMigrationStatement runs one of a migration's Statements, passing over
-// an ADD COLUMN whose column the store already has. That statement runs
+// an ADD COLUMN whose column the store already has, and a DROP COLUMN
+// whose column it does not. That statement runs
 // under a savepoint: Postgres aborts the whole transaction on any failed
 // statement (SQLSTATE 25P02 on everything after it), so without rolling
 // back to the savepoint the error it passes over would fail the next
 // statement instead, under that statement's name.
 func execMigrationStatement(ctx context.Context, tx *sql.Tx, stmt string) error {
-	if !strings.Contains(strings.ToUpper(stmt), " ADD COLUMN ") {
+	upper := strings.ToUpper(stmt)
+	adding, dropping := strings.Contains(upper, " ADD COLUMN "), strings.Contains(upper, " DROP COLUMN ")
+	if !adding && !dropping {
 		_, err := tx.ExecContext(ctx, stmt)
 		return err
 	}
@@ -998,8 +1018,12 @@ func execMigrationStatement(ctx context.Context, tx *sql.Tx, stmt string) error 
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, stmt); err != nil {
-		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column name:") &&
-			!strings.Contains(strings.ToLower(err.Error()), "already exists") {
+		msg := strings.ToLower(err.Error())
+		// The same for a DROP COLUMN whose column the store never had: a
+		// store built at a schema before the column was added.
+		passOver := adding && (strings.Contains(msg, "duplicate column name:") || strings.Contains(msg, "already exists"))
+		passOver = passOver || dropping && (strings.Contains(msg, "no such column") || strings.Contains(msg, "does not exist"))
+		if !passOver {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT grain_add_column")

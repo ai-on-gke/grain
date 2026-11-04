@@ -379,21 +379,23 @@ function timelineEvents(t, zone, now = Date.now()) {
               same overlay the entry opens (CapabilityAudit). A line of its
               own: on the meta line it pushed a phone's "finished" time
               onto two lines. */}
-          {/* Which grain hostd its host work went to, the machine that
-              hostd ran on and its owner (ui.Attempt.Hostd), on a line of
-              its own for the same reason. */}
+          {/* Which grain hostd its agent CLI ran on -- its model
+              connection's -- the machine that hostd ran on and its owner
+              (ui.Attempt.Hostd, read-only), on a line of its own for the
+              same reason. A capability server placed on a hostd of its
+              own says which on each of its audit records. */}
           {a.hostd?.hostd && (
             <div
               className="timeline-meta timeline-attempt-hostd"
               title={[
-                `Host work on grain hostd ${a.hostd.hostd}`,
+                `The agent CLI ran on grain hostd ${a.hostd.hostd}`,
                 a.hostd.instance && `on ${a.hostd.instance}`,
                 a.hostd.owner && `owned by ${a.hostd.owner}`,
               ]
                 .filter(Boolean)
                 .join(", ")}
             >
-              hostd {a.hostd.hostd}
+              ran on hostd {a.hostd.hostd}
               {a.hostd.instance && <> on {a.hostd.instance}</>}
               {a.hostd.owner && <> · {a.hostd.owner}</>}
             </div>

@@ -119,7 +119,7 @@ func TestRunOnANonDefaultHostdIsReadoptedFromThatHostd(t *testing.T) {
 	previous := newSet()
 	route := hostdRoute{Name: "box-b", Pinned: true,
 		Exec: HostExecutor{Kind: HostExecutorHostd, Socket: pinnedClient.Socket}}
-	live := route.apply(Config{hostdRunSet: previous, hostdRuns: previous.defaultRuns()})
+	live := route.apply(Config{hostdRunSet: previous, hostdRuns: previous.defaultRuns()}, "")
 	if live.hostdRuns == nil || live.hostdRuns == previous.defaultRuns() || live.hostdRuns.Client.Socket != pinnedClient.Socket {
 		t.Fatalf("a run routed to box-b drives its CLI through %+v, want box-b's own runhost.Hostd", live.hostdRuns)
 	}

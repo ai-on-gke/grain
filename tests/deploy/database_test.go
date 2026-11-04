@@ -182,6 +182,7 @@ func TestAFreshInstallProvisionsALocalPostgres(t *testing.T) {
 		"--volume " + h.data + "/postgres:/var/lib/postgresql/data",
 		"--volume " + h.data + "/secrets/postgres-password:/run/grain/postgres-password:ro",
 		"POSTGRES_PASSWORD_FILE=/run/grain/postgres-password",
+		"--env POSTGRES_INITDB_ARGS=--auth=scram-sha-256",
 		"postgres -c listen_addresses=127.0.0.1 -c port=5432",
 		"pg_isready -q -h 127.0.0.1 -p 5432",
 		"$$(seq 1 120)",
@@ -261,6 +262,104 @@ func TestARerunKeepsTheProvisionedServerAndDoesNotRestartIt(t *testing.T) {
 	contains(t, out, "changing from mirror.gcr.io/library/postgres:16.1-bookworm to registry.example.com/postgres:16.5")
 	contains(t, readAbs(t, h.postgresUnit), "Environment=GRAIN_POSTGRES_IMAGE=registry.example.com/postgres:16.5")
 	contains(t, h.callLog(t), "systemctl restart grain-postgres.service")
+}
+
+func TestARerunRewritesTrustInAnExistingClusterPgHBA(t *testing.T) {
+	h := newDBHost(t)
+	if out, ok := h.install(t); !ok {
+		t.Fatalf("first install: %s", out)
+	}
+	hba := filepath.Join(h.data, "postgres", "pg_hba.conf")
+	const trustHBA = `# CAUTION: local "trust" authentication
+# local   all             all                                     trust
+local   all             all                                     trust
+host    all             all             127.0.0.1/32            trust
+host    all             all             ::1/128                 trust
+local   replication     all                                     trust
+host    replication     all             127.0.0.1/32            trust
+host    replication     all             ::1/128                 trust
+
+host all all all scram-sha-256
+`
+	const wantHBA = `# CAUTION: local "trust" authentication
+# local   all             all                                     trust
+local   all             all                                     scram-sha-256
+host    all             all             127.0.0.1/32            scram-sha-256
+host    all             all             ::1/128                 scram-sha-256
+local   replication     all                                     scram-sha-256
+host    replication     all             127.0.0.1/32            scram-sha-256
+host    replication     all             ::1/128                 scram-sha-256
+
+host all all all scram-sha-256
+`
+	// Upgrade from an older unit that lacked POSTGRES_INITDB_ARGS: rewrites
+	// pg_hba.conf and restarts grain-postgres.service because the unit changed.
+	oldUnit := strings.ReplaceAll(readAbs(t, h.postgresUnit), " --env POSTGRES_INITDB_ARGS=--auth=scram-sha-256", "")
+	if err := os.WriteFile(h.postgresUnit, []byte(oldUnit), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hba, []byte(trustHBA), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(h.calls)
+
+	out, ok := h.install(t, "STUB_ACTIVE=1")
+	if !ok {
+		t.Fatalf("upgrade run failed:\n%s", out)
+	}
+	contains(t, out, "replaced trust with scram-sha-256")
+	if got := readAbs(t, hba); got != wantHBA {
+		t.Errorf("pg_hba.conf after upgrade:\n%s\nwant:\n%s", got, wantHBA)
+	}
+	if m := mode(t, hba); m != 0o600 {
+		t.Errorf("pg_hba.conf mode %o, want 600", m)
+	}
+	calls := h.callLog(t)
+	contains(t, calls, "systemctl restart grain-postgres.service")
+	absent(t, calls, "pg_ctl reload")
+
+	// When the unit already matches (e.g. cold backup restored onto a host
+	// with the current unit), rewriting pg_hba.conf reloads the running server
+	// in place rather than restarting it.
+	if err := os.WriteFile(hba, []byte(trustHBA), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(h.calls)
+	out, ok = h.install(t, "STUB_ACTIVE=1")
+	if !ok {
+		t.Fatalf("reload run failed:\n%s", out)
+	}
+	if got := readAbs(t, hba); got != wantHBA {
+		t.Errorf("pg_hba.conf after reload:\n%s\nwant:\n%s", got, wantHBA)
+	}
+	calls = h.callLog(t)
+	absent(t, calls, "systemctl restart")
+	contains(t, calls, "docker exec grain-postgres pg_ctl reload -D /var/lib/postgresql/data")
+
+	// Once rewritten, later re-runs touch neither pg_hba.conf nor pg_ctl.
+	os.Remove(h.calls)
+	out, ok = h.install(t, "STUB_ACTIVE=1")
+	if !ok {
+		t.Fatalf("idempotent run failed:\n%s", out)
+	}
+	absent(t, out, "replaced trust")
+	absent(t, h.callLog(t), "pg_ctl reload")
+
+	// A symlink at pg_hba.conf is not followed (#2405).
+	victim := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(victim, []byte(trustHBA), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(hba)
+	if err := os.Symlink(victim, hba); err != nil {
+		t.Fatal(err)
+	}
+	if out, ok := h.install(t, "STUB_ACTIVE=1"); !ok {
+		t.Fatalf("symlink run failed:\n%s", out)
+	}
+	if got := readAbs(t, victim); got != trustHBA {
+		t.Errorf("symlink target was modified:\n%s", got)
+	}
 }
 
 func TestAnImageOfAnotherMajorVersionIsRefused(t *testing.T) {

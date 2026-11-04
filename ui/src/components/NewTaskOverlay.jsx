@@ -581,12 +581,6 @@ export default function NewTaskOverlay({
   const [promptExtension, setPromptExtension] = useState(
     () => draft?.promptExtension ?? String(openingDefault("promptExtension")),
   );
-  // hostd pins the task's host work to one grain hostd by name, or to
-  // any hostd carrying label=value[,label=value] (ui.CreateTaskRequest.
-  // Hostd); "" is the default hostd.
-  const [hostd, setHostd] = useState(
-    () => draft?.hostd ?? String(openingDefault("hostd")),
-  );
   const openingShape = sandboxShapeDefault(openingForm.fields.sandboxShape);
   const [sandboxCpus, setSandboxCpus] = useState(
     () => draft?.sandboxCpus ?? openingShape.cpus,
@@ -738,7 +732,6 @@ export default function NewTaskOverlay({
       String(openingDefault("promptExtension")).trim()
     )
       return true;
-    if (hostd.trim() !== String(openingDefault("hostd")).trim()) return true;
     const shapeDiffers = (v, d) => String(v || 0) !== String(d || 0);
     if (shapeDiffers(sandboxCpus, openingShape.cpus)) return true;
     if (shapeDiffers(sandboxMemoryMb, openingShape.memoryMb)) return true;
@@ -804,7 +797,6 @@ export default function NewTaskOverlay({
         reviewTemplateId,
         reviewers,
         promptExtension,
-        hostd,
         sandboxCpus,
         sandboxMemoryMb,
         sandboxDiskGb,
@@ -840,7 +832,6 @@ export default function NewTaskOverlay({
     reviewTemplateId,
     reviewers,
     promptExtension,
-    hostd,
     sandboxCpus,
     sandboxMemoryMb,
     sandboxDiskGb,
@@ -883,7 +874,6 @@ export default function NewTaskOverlay({
       nothingNeededAction: (v) => setNothingNeededAction(String(v ?? "")),
       reviewTemplateId: (v) => setReviewTemplateId(String(v ?? "")),
       promptExtension: (v) => setPromptExtension(String(v ?? "")),
-      hostd: (v) => setHostd(String(v ?? "")),
       approved: (v) => setApproved(!!v),
       atFront: (v) => setAtFront(!!v),
     };
@@ -928,7 +918,6 @@ export default function NewTaskOverlay({
       "nothingNeededAction",
       "reviewTemplateId",
       "promptExtension",
-      "hostd",
     ])
       if (hidden(id)) out[id] = String(d(id) ?? "");
     if (hidden("reads")) out.reads = asList(d("reads"));
@@ -974,7 +963,6 @@ export default function NewTaskOverlay({
     setReviewTemplateId(String(openingDefault("reviewTemplateId")));
     setReviewers("");
     setPromptExtension(String(openingDefault("promptExtension")));
-    setHostd(String(openingDefault("hostd")));
     setSandboxCpus(openingShape.cpus);
     setSandboxMemoryMb(openingShape.memoryMb);
     setSandboxDiskGb(openingShape.diskGb);
@@ -1108,9 +1096,6 @@ export default function NewTaskOverlay({
       // it empty the run gets whatever the deployment and the repo say
       // (model.Task.PromptExtension).
       promptExtension: promptExtension || "",
-      // Sent only when set: "" is the default hostd
-      // (ui.CreateTaskRequest.Hostd).
-      ...(hostd.trim() ? { hostd: hostd.trim() } : {}),
       // "" is no review at all, which is what most tasks want and what
       // the picker below starts on (model.Task.ReviewTemplateID).
       reviewTemplateId: (templates || []).length === 0 ? "" : reviewTemplateId,
@@ -1210,7 +1195,6 @@ export default function NewTaskOverlay({
       setReviewTemplateId(String(openingDefault("reviewTemplateId")));
       setReviewers("");
       setPromptExtension(String(openingDefault("promptExtension")));
-      setHostd(String(openingDefault("hostd")));
       setSandboxCpus(openingShape.cpus);
       setSandboxMemoryMb(openingShape.memoryMb);
       setSandboxDiskGb(openingShape.diskGb);
@@ -2032,26 +2016,6 @@ export default function NewTaskOverlay({
       )}
     </>
   );
-  const hostdNode = (
-    <TextField
-      name="hostd"
-      label={F.hostd.label || "Hostd"}
-      helperText={
-        F.hostd.helpText ||
-        "Where this task's host work runs: a hostd's name, or label=value[,label=value] for any hostd carrying them. It waits for that hostd rather than running anywhere else. Leave empty for the default hostd."
-      }
-      autoComplete="off"
-      fullWidth
-      margin="normal"
-      size="small"
-      value={hostd}
-      // Left empty, a task filed from a template takes the template's
-      // hostd (ui.Client.fromTemplate), so the box says which.
-      placeholder={pickedTemplate?.hostd || undefined}
-      InputLabelProps={pickedTemplate?.hostd ? { shrink: true } : undefined}
-      onChange={(e) => edit("hostd", setHostd)(e.target.value)}
-    />
-  );
   const sandboxShapeNode = (
     <>
       {/* grain/task-26: on a deployment whose sandboxes have no
@@ -2310,7 +2274,6 @@ export default function NewTaskOverlay({
     nothingNeededAction: nothingNeededActionNode,
     reviewTemplateId: reviewTemplateIdNode,
     promptExtension: promptExtensionNode,
-    hostd: hostdNode,
     sandboxShape: sandboxShapeNode,
     approved: approvedNode,
     atFront: atFrontNode,
