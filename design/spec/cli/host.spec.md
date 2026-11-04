@@ -21,7 +21,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 | Kind | Commands |
 |---|---|
 | Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume` |
-| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|deny`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `declarations check` |
+| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|deny`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `declarations check` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
 | Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db upgrade-postgres`), `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
 | Modes: build information | `version`, `schema-version`, `release-notes`, `sandbox-image`, `container-sandbox-image`, `k8s-sandbox-image`, `image` |
@@ -857,6 +857,60 @@ Reads a checkout's `.grain/templates`, `.grain/suites` and `.grain/schedules` an
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/declcmd_test.go`: `TestDeclarationsCheckPrintsWhatATreeDeclares`, `TestDeclarationsCheckReportsEveryProblemAtOnce`, `TestDeclarationsCheckJSONCarriesTheVerdict`, `TestDeclarationsCheckDefaultsToTheWorkingDirectory`.
+
+### 4.14 `grain fs ls|cat|read|grep <uri>` {#CLI-64}
+
+Reads grain's namespace (`ci://`, `task://`, `deploy://`, `config://`, `memory://`, `src://`) over the daemon's `GET /api/fs/<scheme>/<path>`, the way a sandbox's `grain ls`, `grain read` and `grain grep` read it over the sandbox proxy's `/fs/` ([external-cli #XC-24/#XC-25](../external-cli/external-cli.spec.md#XC-25)). Both share `pkg/nsclient`: the URI parsing (an inline query such as `ci://o/r/<run>?grep=FAIL` included), the query each verb sends, and how the answer is printed.
+- `ls <uri>` lists a directory (`?list`); `-glob` narrows it and `-json` asks for the listing as JSON.
+- `cat <uri>` prints a file; `read` is the same command. `-tail`, `-offset` and `-limit` count bytes, `-lines N` keeps the last N lines, and `-follow` keeps reading a file that is still growing.
+- `grep <regex> <uri>` searches a file or subtree with line numbers; `-i`, `-C`, `-glob` and `-max` are the sandbox's own. A walk the namespace cut short before it found anything exits 1. `-json` prints the answer as one object.
+- A refusal is the daemon's own (a missing scope, a repository the credential does not reach, `src://` to a `gma_` token without `deployment:src`), with the task CLI's exit codes.
+
+<!-- BEGIN GENERATED FLAGS: grain fs -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain fs ls -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-glob` | string |  |  | list only the entries matching this pattern |
+| `-json` | bool |  |  | print JSON |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain fs cat -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-follow` | bool |  |  | keep reading a file that is still growing |
+| `-json` | bool |  |  | print JSON |
+| `-limit` | string |  |  | at most N bytes |
+| `-lines` | int |  |  | only the last N lines |
+| `-offset` | string |  |  | start N bytes in |
+| `-tail` | string |  |  | only the last N bytes |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain fs read -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-follow` | bool |  |  | keep reading a file that is still growing |
+| `-json` | bool |  |  | print JSON |
+| `-limit` | string |  |  | at most N bytes |
+| `-lines` | int |  |  | only the last N lines |
+| `-offset` | string |  |  | start N bytes in |
+| `-tail` | string |  |  | only the last N bytes |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain fs grep -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-C` | string |  |  | lines of context around each match |
+| `-glob` | string |  |  | search only the files matching this pattern |
+| `-i` | bool |  |  | match case-insensitively |
+| `-json` | bool |  |  | print JSON |
+| `-max` | string |  |  | stop after N matches |
+| `-n` | bool | `true` |  | print line numbers (always on) |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/fscmd_test.go`: `TestGrainFsLsCatReadGrepSharesClientWithSandboxCLI`; `pkg/ui/api_fs_test.go`: `TestAPIFsPerSchemeScopesRepoLimitsAndExternalSrcRefusal`, `TestAPIFsSecretRedactionRangeAndQueryParityWithSandboxProxy`.
 
 ---
 
