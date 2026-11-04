@@ -103,7 +103,7 @@ func argumentCount(n int) string {
 // and `grain ci show ci-42 --json` as well as `grain -json list`.
 var globalFlagNames = map[string]bool{
 	"json": true, "server": true, "token": true, "audience": true, "as": true,
-	"connect-timeout": true, "timeout": true,
+	"connect-timeout": true, "timeout": true, "context": true,
 }
 
 // freeTextCommands take a body of free text after their id, where a word

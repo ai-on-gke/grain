@@ -245,6 +245,7 @@ func (s *Server) routes() {
 	s.route("GET /api/auth/logout", s.handleAuthLogout)
 	s.route("GET /api/auth/user", s.handleAuthUser)
 	s.route("GET /api/auth/status", s.handleAuthUser)
+	s.route("GET /api/auth/whoami", s.handleAuthWhoami)
 	s.route("GET /api/whoami", s.handleWhoami)
 	s.route("GET /api/settings", s.handleGetSettings)
 	s.route("PUT /api/settings", s.handleUpdateSettings)

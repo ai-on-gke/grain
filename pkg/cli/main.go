@@ -346,8 +346,12 @@ Global flags (before or after the command; -flag and --flag are the same):
   -audience string target audience for Google ID token authentication ($GRAIN_AUDIENCE, $GRAIN_TUNNEL_AUDIENCE)
   -as string      identity for request attribution / proxy headers ($GRAIN_USER)
   -json           print machine-readable JSON instead of a human-readable table
+  -context string the named context to use ($GRAIN_CONTEXT, else config.json's current)
 
 Commands:
+  login <url> [flags] / logout [<ctx>] sign this workstation in to a deployment as a named context
+  context list|use|show|delete         the named contexts ($XDG_CONFIG_HOME/grain/config.json)
+  whoami                               who the CLI is signed in as, and with what grants
   list [flags]                         list the tasks in play -- closed and deferred ones are left
                                        out unless -closed/-deferred or a filter naming that state
                                        asks for them (-filter attribute:comparison:value narrows the
@@ -537,6 +541,7 @@ func runCLI(args []string) error {
 	connectTimeout := fs.Duration("connect-timeout", defaultConnectTimeout,
 		"how long to wait to connect to the daemon, and to wait out one that refuses connections (a restart)")
 	callTimeout := fs.Duration("timeout", defaultCallTimeout, "how long one call waits for the daemon to start answering")
+	contextName := fs.String("context", "", "the named context to use ($"+contextEnvVar+"; see `grain context list`)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -550,12 +555,10 @@ func runCLI(args []string) error {
 		return err
 	}
 	rest = append(rest[:1:1], cmdArgs...)
-	_, source := serverSource()
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "server" {
-			source = "-server"
-		}
-	})
+	sel, source, err := resolveTarget(fs, server, *contextName)
+	if err != nil {
+		return err
+	}
 	useCLIEnvDataDir()
 
 	c := ui.NewHTTPClient(*server)
@@ -570,6 +573,7 @@ func runCLI(args []string) error {
 	if *asUser != "" {
 		c.User = *asUser
 	}
+	useContextCredential(c, sel)
 	out := &printer{json: *jsonOutput}
 	ctx := context.Background()
 	fs.Visit(func(f *flag.Flag) {
@@ -581,17 +585,25 @@ func runCLI(args []string) error {
 	target := cliTarget{
 		server:      *server,
 		source:      source,
-		tokenSource: tokenSource(*token),
+		tokenSource: contextTokenSource(tokenSource(*token), c, sel),
 		connect:     *connectTimeout,
 		call:        *callTimeout,
 	}
-	return explainDaemonError(dispatchCLI(ctx, c, out, fs, rest), target)
+	return explainDaemonError(dispatchCLI(ctx, c, out, fs, sel, rest), target)
 }
 
 // dispatchCLI runs one task-CLI command against c.
-func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.FlagSet, rest []string) error {
+func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.FlagSet, sel selectedContext, rest []string) error {
 	cmd, cmdArgs := rest[0], rest[1:]
 	switch cmd {
+	case "context":
+		return cmdContext(out, sel, cmdArgs)
+	case "whoami":
+		return cmdWhoami(ctx, c, out, sel, cmdArgs)
+	case "login":
+		return cmdLogin(ctx, c, out, sel, cmdArgs)
+	case "logout":
+		return cmdLogout(ctx, c, out, sel, cmdArgs)
 	case "list":
 		return cmdList(ctx, c, out, cmdArgs)
 	case "get":
