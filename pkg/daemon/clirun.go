@@ -127,8 +127,6 @@ func cliBinaryName(framework string) string {
 	switch framework {
 	case model.AgentFrameworkAntigravity:
 		return "agy"
-	case model.AgentFrameworkCustom:
-		return "custom"
 	}
 	return framework
 }
@@ -266,8 +264,7 @@ func (c Config) cliHostPath(framework string) string {
 	case model.AgentFrameworkAntigravity:
 		path = c.AgyPath
 	}
-	if path != "" || framework == model.AgentFrameworkCustom {
-		// A custom command is each connection's own, never one binary.
+	if path != "" {
 		return path
 	}
 	if resolved, err := exec.LookPath(cliBinaryName(framework)); err == nil {

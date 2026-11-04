@@ -710,6 +710,11 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     104,
+		Description: "disable (and keep) every stored custom command connection: the connection type is removed",
+		Up:          disableCustomConnections,
+	},
+	{
+		Version:     105,
 		Description: "add pending_access_request and access_decisions to task_observation for request_access",
 		Statements: []string{
 			"ALTER TABLE `task_observation` ADD COLUMN `pending_access_request` TEXT NULL",

@@ -195,10 +195,23 @@ func syncRepoReleaseQualification(ctx context.Context, store *model.Store, forge
 	if err != nil {
 		return fmt.Errorf("listing tags: %w", err)
 	}
+	commits := tagCommits(tags)
 	rc, sha, ok := newestCandidate(tags)
-	if !ok {
-		return nil
+	current := ""
+	if ok {
+		current = rc.String()
 	}
+	holds := syncRedRCHolds(ctx, store, forge, repo, commits, current, now)
+	if !ok {
+		return holds
+	}
+	return errors.Join(holds, qualifyCandidate(ctx, store, forge, repo, suite, commits, rc, sha, now))
+}
+
+// qualifyCandidate advances Stage 2 of rc, the candidate now qualifying.
+func qualifyCandidate(ctx context.Context, store *model.Store, forge ReleaseQualificationForge,
+	repo model.RepoRef, suite model.Suite, commits map[string]string, rc model.RCTag, sha string, now time.Time) error {
+
 	rcTag := rc.String()
 	app, err := forge.CheckRunApp(repo.Owner, repo.Name)
 	if err != nil {
@@ -257,6 +270,32 @@ func syncRepoReleaseQualification(ctx context.Context, store *model.Store, forge
 	}
 	d := model.DecideReleaseQualification(items, attempts, model.DefaultQualificationPolicy)
 	summary := strings.Join(d.Lines, "\n")
+	// The notifications go up before the verdict is posted: a candidate
+	// with a completed check run is never looked at again, so a raise
+	// that failed after it would never be retried.
+	switch d.Conclusion {
+	case model.ConclusionFailure:
+		if err := q.raiseRCFailed(ctx, commits, rc, d.Lines); err != nil {
+			return err
+		}
+	case model.ConclusionNeutral:
+		if err := q.raiseInfraStalled(ctx, d.Lines[len(d.Lines)-1]); err != nil {
+			return err
+		}
+	case "":
+		if err := q.trackInfra(ctx, items, attempts); err != nil {
+			return err
+		}
+		if err := q.noteFlakeRetries(ctx, d.Rerun, attempts); err != nil {
+			return err
+		}
+	}
+	if d.Conclusion != "" && d.Conclusion != model.ConclusionNeutral {
+		if err := clearPipelineNotification(ctx, store,
+			model.NotificationSubject(model.FamilyReleaseInfraStalled, rcTag), releaseQualificationNotifier); err != nil {
+			return err
+		}
+	}
 	if d.Conclusion != "" {
 		return q.post("completed", d.Conclusion,
 			fmt.Sprintf("Release qualification of %s: %s", rcTag, d.Conclusion), summary)

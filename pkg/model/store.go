@@ -5877,6 +5877,7 @@ func scanSchedule(scan func(...any) error) (Schedule, error) {
 		DayOfMonth:        int(dayOfMonth.Int64),
 		TimeZone:          timeZone,
 		GitHubWorkflowRun: ghTrigger,
+		GitRef:            ParseStoredGitRefTrigger(kind),
 	}
 	t.LastRunAt = timePtr(lastRun)
 	return t, nil
@@ -6157,7 +6158,7 @@ func (s *Store) ListSchedules(ctx context.Context) ([]Schedule, error) {
 func (s *Store) DueSchedules(ctx context.Context, now time.Time) ([]Schedule, error) {
 	rows, err := s.db.QueryContext(ctx,
 		"SELECT "+scheduleColumns+" FROM `schedule` "+
-			"WHERE `enabled` = 1 AND `next_run_at` <= ? AND `recurrence_kind` NOT LIKE 'github_workflow_run%' ORDER BY `id`", now.UTC())
+			"WHERE `enabled` = 1 AND `next_run_at` <= ? AND `recurrence_kind` NOT LIKE 'github_workflow_run%' AND `recurrence_kind` NOT LIKE 'git_ref%' ORDER BY `id`", now.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("listing due schedules: %w", err)
 	}

@@ -128,17 +128,17 @@ describe("ModelBackendPage", () => {
     ]);
   });
 
-  it("offers no CLI path for a custom command", async () => {
-    render(
-      <ModelBackendPage
-        backend={{ id: "backend-custom", framework: "custom", command: "x" }}
-        backends={[]}
-        isNew={false}
-        onSave={vi.fn()}
-        onBack={() => {}}
-      />,
-    );
-    expect(screen.queryByLabelText("CLI path (optional)")).toBeNull();
+  it("does not offer the removed custom command type", async () => {
+    const user = userEvent.setup();
+    render(<StatefulModelBackendPage onSaveMock={vi.fn()} />);
+    await user.click(screen.getByLabelText(/Agent type/));
+    expect(
+      screen
+        .getAllByRole("option")
+        .filter((option) => !option.getAttribute("aria-disabled"))
+        .map((option) => option.textContent),
+    ).toEqual(["Antigravity", "Claude", "Codex"]);
+    expect(screen.queryByRole("option", { name: /Custom/ })).toBeNull();
   });
 
   it("saves an antigravity connection's model-turn limits", async () => {
@@ -255,9 +255,12 @@ describe("ModelBackendPage", () => {
     );
 
     await user.click(screen.getByLabelText(/Agent type/));
-    await user.click(screen.getByRole("option", { name: "Custom command" }));
-    await user.type(screen.getByLabelText(/Command/), "./bin/my-agent");
+    await user.click(screen.getByRole("option", { name: "Antigravity" }));
     await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(await screen.findByLabelText(/Authentication method/));
+    await user.click(
+      screen.getByRole("option", { name: "Ambient Antigravity login" }),
+    );
 
     expect(onSave).toHaveBeenLastCalledWith(
       expect.objectContaining({ id: "backend-test-1", disabled: true }),
@@ -271,8 +274,9 @@ describe("ModelBackendPage", () => {
     expect(saveBtn).toBeEnabled();
     await user.click(saveBtn);
 
-    expect(onSave).toHaveBeenCalledTimes(2);
-    expect(onSave.mock.calls[1][0]).not.toHaveProperty("disabled");
+    // Continue, the authentication chosen, and Save connection.
+    expect(onSave).toHaveBeenCalledTimes(3);
+    expect(onSave.mock.calls[2][0]).not.toHaveProperty("disabled");
     expect(onDiscard).not.toHaveBeenCalled();
   });
 
@@ -345,44 +349,18 @@ describe("ModelBackendPage", () => {
       <StatefulModelBackendPage onSaveMock={onSave} onDiscard={onDiscard} />,
     );
     await user.click(screen.getByLabelText(/Agent type/));
-    await user.click(screen.getByRole("option", { name: "Custom command" }));
-    await user.type(screen.getByLabelText(/Command/), "./bin/my-agent");
+    await user.click(screen.getByRole("option", { name: "Antigravity" }));
     await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(await screen.findByLabelText(/Authentication method/));
+    await user.click(
+      screen.getByRole("option", { name: "Ambient Antigravity login" }),
+    );
     await user.click(
       await screen.findByRole("button", { name: "Save connection" }),
     );
 
     window.dispatchEvent(new Event("pagehide"));
     expect(onDiscard).not.toHaveBeenCalled();
-  });
-
-  it("supports creating a custom framework connection with command", async () => {
-    const user = userEvent.setup();
-    const onSave = vi.fn().mockResolvedValue(true);
-
-    render(<StatefulModelBackendPage onSaveMock={onSave} />);
-
-    await user.click(screen.getByLabelText(/Agent type/));
-    await user.click(screen.getByRole("option", { name: "Custom command" }));
-
-    const commandInput = screen.getByLabelText(/Command/);
-    expect(commandInput).toBeInTheDocument();
-    await user.type(commandInput, "./bin/my-agent");
-
-    const continueBtn = screen.getByRole("button", { name: "Continue" });
-    expect(continueBtn).toBeEnabled();
-
-    await user.click(continueBtn);
-
-    expect(onSave).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "backend-test-1",
-        framework: "custom",
-        command: "./bin/my-agent",
-      }),
-    );
-
-    expect(await screen.findByText("Authentication")).toBeInTheDocument();
   });
 });
 
