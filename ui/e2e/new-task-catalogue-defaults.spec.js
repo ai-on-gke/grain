@@ -43,7 +43,7 @@ async function openStandalone(page, title) {
   await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
   await page.getByLabel("Title").fill(title);
   await chooseOption(page.getByLabel(/^Repos/), "none");
-  const picker = page.getByLabel("Legacy capabilities");
+  const picker = page.getByRole("combobox", { name: "Legacy capabilities" });
   const note = page.getByTestId("new-task-catalogue-refused");
   await expect(note).toHaveText(
     "settings/capabilities.yml refuses read-issues on a task with no repo, so that default is left off this task.",

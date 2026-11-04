@@ -319,7 +319,7 @@ test.describe("Suite Management and Suite Execution Workflows", () => {
 
     // 5. Select template
     await chooseOption(
-      page.getByLabel("Templates", { exact: true }),
+      page.getByRole("combobox", { name: "Templates", exact: true }),
       templateName,
     );
     await page.keyboard.press("Escape");
