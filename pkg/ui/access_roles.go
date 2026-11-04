@@ -54,6 +54,7 @@ var humanRouteScopes = map[string]APIScope{
 	"GET /api/auth/user":                                            scopeSignedIn,
 	"GET /api/auth/status":                                          scopeSignedIn,
 	"GET /api/whoami":                                               scopeSignedIn,
+	"GET /api/auth/whoami":                                          scopeSignedIn,
 	"GET /api/hostd/connect":                                        scopeSignedIn,
 	"GET /api/hostd/install.sh":                                     scopeSignedIn,
 	"POST /api/tasks/{id}/config-change/approve":                    "settings:write",
