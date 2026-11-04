@@ -148,6 +148,34 @@ sandbox; grain no longer clones bwsalmon/grain for it, and the git proxy
 does not let it fetch that repository. So a policy that does not list
 bwsalmon/grain admits a self-debug task (`model.CapabilityRepos`).
 
+### The Director and grain/config
+
+The Director chat a deployment files for itself is a task like any
+other, so it answers to this policy too. A policy that does not allow
+all of these holds it, and the Director never runs:
+
+- `grain/config` in `repos`. It is the deployment's own state repository,
+  which the Director reads, and which any chat proposing a config change
+  writes.
+- Every grant the Director is given in `capabilities.allow`: `durable`,
+  `self-debug`, `https://grain.dev/capabilities/grain#journal`,
+  `api:deployment:read`, `https://grain.dev/capabilities/grain#health`,
+  `bootstrap-playbooks` and `api:ci-read`, plus any your build adds.
+  A held task's log line names the one that refused it.
+- `open` in `network`, unless the Director's own network has been closed.
+
+`grain init workstation` writes `grain/config` and the Director's grants
+into the starter policy. It names each grant exactly, so you can see
+what it allows and remove any of them. Any task may be granted those
+grants, not only the Director. With `-network none`, init says the
+Director is held for its network.
+
+A re-run keeps an existing policy file. A workstation set up by an older
+`grain init workstation` therefore still has a policy without
+`grain/config` in `repos` and without the Director's grants. Add them by
+hand and restart the daemon, or re-run init with `-force` to rewrite the
+file. `-force` loses your edits.
+
 ## Derived tasks
 
 A task filed from another one is judged as its root requester's, never

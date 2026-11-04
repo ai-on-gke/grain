@@ -230,9 +230,10 @@ type sandboxDeploy struct {
 }
 
 var (
-	_ namespace.DeployProvider       = sandboxDeploy{}
-	_ namespace.MetricsSectionLister = sandboxDeploy{}
-	_ namespace.MergeQueueRepoReader = sandboxDeploy{}
+	_ namespace.DeployProvider        = sandboxDeploy{}
+	_ namespace.MetricsSectionLister  = sandboxDeploy{}
+	_ namespace.MergeQueueRepoReader  = sandboxDeploy{}
+	_ namespace.MergeQueueQueryReader = sandboxDeploy{}
 )
 
 // toolText is a tool's answer as a file's content, or its refusal as an
@@ -262,6 +263,34 @@ func (d sandboxDeploy) ReadMergeQueueFor(ctx context.Context, permits func(repo 
 	reader := mcp.RepoFilteredMergeQueue{Reader: daemonMergeQueue{client: d.client}, Permits: permits}
 	tool := mcp.NewMergeQueueTools(reader)[0]
 	return toolText(tool.Handler(ctx, map[string]any{"view": "full"}))
+}
+
+// ReadMergeQueueQuery is the merge queue narrowed to q.Repo, limited to
+// the repositories q.Permits allows when it is set, and as JSON (the
+// mcp.MergeQueueReport the text is rendered from) under q.JSON -- what
+// the external `grain merge-queue [--repo] [--json]` reads over GET
+// /api/fs/deploy/merge-queue.
+func (d sandboxDeploy) ReadMergeQueueQuery(ctx context.Context, q namespace.MergeQueueQuery) (string, error) {
+	var reader mcp.MergeQueueReader = daemonMergeQueue{client: d.client}
+	if q.Permits != nil {
+		reader = mcp.RepoFilteredMergeQueue{Reader: reader, Permits: q.Permits}
+	}
+	if !q.JSON {
+		args := map[string]any{"view": "full"}
+		if q.Repo != "" {
+			args["repo"] = q.Repo
+		}
+		return toolText(mcp.NewMergeQueueTools(reader)[0].Handler(ctx, args))
+	}
+	report, err := reader.QueryMergeQueue(ctx, q.Repo, "")
+	if err != nil {
+		return "", fmt.Errorf("reading the merge queue: %w", err)
+	}
+	raw, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(raw) + "\n", nil
 }
 
 func (d sandboxDeploy) ReadMetrics(ctx context.Context, section string, q namespace.MetricsQuery) (string, error) {

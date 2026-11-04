@@ -270,7 +270,14 @@ func (t *RealTransport) sendOnce(method, path string, headers map[string]string,
 	case t.PathPrefix != "" && (path == t.PathPrefix || strings.HasPrefix(path, t.PathPrefix+"/")):
 		fullPath = path
 	}
-	req, err := http.NewRequest(method, scheme+"://"+t.Host+fullPath, bodyReader)
+	target := scheme + "://" + t.Host + fullPath
+	if strings.HasPrefix(path, "https://") || strings.HasPrefix(path, "http://") {
+		// A whole URL -- a redirect a caller follows itself, such as a
+		// job log's blob URL -- goes where it says, with only the
+		// headers the caller gave it.
+		target = path
+	}
+	req, err := http.NewRequest(method, target, bodyReader)
 	if err != nil {
 		return ApiResponse{}, err
 	}
@@ -338,6 +345,12 @@ func (t *RealTransport) sendOnce(method, path string, headers map[string]string,
 	respHeaders := headerMap(resp.Header)
 	out := ApiResponse{Status: resp.StatusCode, Headers: respHeaders, Body: data,
 		URL: method + " " + req.URL.String()}
+	if final := resp.Request; final != nil && final.URL != nil && final.URL.Host != req.URL.Host {
+		// Answered by wherever a redirect sent the request -- a job
+		// log's blob store, say -- so a refusal names that host too.
+		// Its path and query stay out: they are a signed URL.
+		out.URL += " -> " + final.URL.Scheme + "://" + final.URL.Host
+	}
 	// A caller that sent its own validator (CompletedWorkflowRuns keeps
 	// one per repository) and got a 304 back was revalidated all the
 	// same: GitHub does not charge it, so neither does Health's budget.

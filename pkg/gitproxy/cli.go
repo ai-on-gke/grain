@@ -748,8 +748,22 @@ func (p *GitProxy) serveCIRunRepo(w http.ResponseWriter, q url.Values, scope nam
 		cliError(w, noCIRunError(id, extErr))
 		return
 	}
+	runID := run.ID
+	if p.Namespace.ExternalCI != nil && run.Source == ci.FaultSourceGitHub {
+		// grain's polled record of an Actions run, named by its bare
+		// GitHub id: the CLI reads it, and its job logs, by the gha: id
+		// the forge serves them under (namespace.resolveCI does the same
+		// for a path that names the bare id).
+		// A forge that will not serve the run leaves the record's id.
+		if n, err := strconv.ParseInt(strings.TrimSpace(id), 10, 64); err == nil && n > 0 {
+			ghaID := ci.ActionsRunID(run.Repo, n)
+			if _, ok, err := p.Namespace.ExternalCI.ExternalRun(context.Background(), ghaID); err == nil && ok {
+				runID = ghaID
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_ = json.NewEncoder(w).Encode(map[string]string{"id": run.ID, "repo": run.Repo, "ref": run.Ref})
+	_ = json.NewEncoder(w).Encode(map[string]string{"id": runID, "repo": run.Repo, "ref": run.Ref})
 }
 
 // serveCIShow answers /cli/ci/show?id=<run> with the run's line, then
