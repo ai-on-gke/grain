@@ -136,7 +136,7 @@ func PullRequestOffTarget(task Task, ref PullRequestRef) bool {
 	if task.Target == nil || task.Target.Owner == "" {
 		return false
 	}
-	if ref.Repo.Same(*task.Target) {
+	if ref.Repo.Same(*task.Target) || IsUpstreamRepoFor(*task.Target, ref.Repo) {
 		return false
 	}
 	for _, w := range task.Writes {

@@ -723,6 +723,13 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     106,
+		Description: "add repo_config.upstream_repo for fork-to-upstream pull request workflows",
+		Statements: []string{
+			"ALTER TABLE `repo_config` ADD COLUMN `upstream_repo` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     107,
 		Description: "add external_agent_token.owner, task.filed_via, task_comment.filed_via and grain_config.owner_trust (external agent owner attribution and owner-trust approval)",
 		Statements: []string{
 			"ALTER TABLE `external_agent_token` ADD COLUMN `owner` TEXT NOT NULL DEFAULT ''",

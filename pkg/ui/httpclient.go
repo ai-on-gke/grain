@@ -577,6 +577,17 @@ func (c *HTTPClient) send(ctx context.Context, method string, newRequest func() 
 	}
 }
 
+// RoundTrip sends req the way every call of this client is sent:
+// authenticated, and waited out under its RetryPolicy while the daemon is
+// not answering. It makes HTTPClient a transport for a caller that builds
+// its requests itself (grain fs, over pkg/nsclient); the response is the
+// daemon's own, whatever its status. req must have no body.
+func (c *HTTPClient) RoundTrip(req *http.Request) (*http.Response, error) {
+	return c.send(req.Context(), req.Method, func() (*http.Request, error) {
+		return req.Clone(req.Context()), nil
+	})
+}
+
 // do sends a request with an optional JSON body and decodes a JSON
 // response into out (nil to discard it), translating a non-2xx response
 // into a NotFoundError, a ValidationError, a ForbiddenError, or a plain
@@ -633,12 +644,27 @@ func (c *HTTPClient) do(ctx context.Context, method, path string, body, out any)
 // ForbiddenError, anything else to a plain error carrying the message and
 // status.
 func (c *HTTPClient) httpError(resp *http.Response) error {
+	return c.statusError(resp, false)
+}
+
+// ResponseError is the error a non-2xx resp from the daemon stands for,
+// the way every call of this client reports one -- for a caller sending
+// requests of its own through RoundTrip. A plain-text body, which the
+// namespace's own refusals under GET /api/fs/ are, is its message.
+func (c *HTTPClient) ResponseError(resp *http.Response) error {
+	return c.statusError(resp, true)
+}
+
+func (c *HTTPClient) statusError(resp *http.Response, plainText bool) error {
 	var payload struct {
 		Error string `json:"error"`
 	}
 	message := resp.Status
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err == nil && payload.Error != "" {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err := json.Unmarshal(body, &payload); err == nil && payload.Error != "" {
 		message = payload.Error
+	} else if text := strings.TrimSpace(string(body)); plainText && text != "" {
+		message = text
 	}
 	if resp.StatusCode == http.StatusUnauthorized && IsLoopbackURL(c.BaseURL) {
 		message += loopbackUnauthorizedHint()
@@ -1803,6 +1829,27 @@ func (c *HTTPClient) DecideRelease(ctx context.Context, repo, version string, ap
 	var resp ReleaseDecision
 	err = c.do(ctx, http.MethodPost, "/api/repos/"+url.PathEscape(ref.StoredOwner())+"/"+url.PathEscape(ref.Name)+
 		"/pending-releases/"+url.PathEscape(version)+"/"+verb, body, &resp)
+	return resp, err
+}
+
+// RollbackRelease starts a person's rollback of version, a promoted
+// release -- POST /api/releases/{version}/rollback.
+func (c *HTTPClient) RollbackRelease(ctx context.Context, repo, version string, opts ReleaseRollback) (ReleaseDecision, error) {
+	if repo != "" {
+		ref, err := model.ParseRepo(repo)
+		if err != nil {
+			return ReleaseDecision{}, err
+		}
+		if ref != model.GrainSourceRepo() {
+			opts.Repo = ref.String()
+		}
+	}
+	var body any
+	if opts != (ReleaseRollback{}) {
+		body = opts
+	}
+	var resp ReleaseDecision
+	err := c.do(ctx, http.MethodPost, "/api/releases/"+url.PathEscape(version)+"/rollback", body, &resp)
 	return resp, err
 }
 

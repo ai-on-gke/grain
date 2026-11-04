@@ -39,6 +39,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"path/filepath"
@@ -62,24 +63,34 @@ const Lifetime = 15 * time.Minute
 // KeyFile is the deployment's signing key, under its data directory.
 const KeyFile = "release-approval-key.pem"
 
-// Record is one person's decision about one pending release.
+// Record is one person's decision about one release.
 type Record struct {
 	Repo        string
 	Version     string
-	Decision    string // "approve" or "reject"
-	Commit      string // the commit vX.Y.Z-pending tags
+	Decision    string // "approve", "reject", or "rollback"
+	Commit      string // the commit vX.Y.Z-pending (or vX.Y.Z, for rollback) tags
 	Approver    string // the person's principal id
 	ShortSoakOK bool
 	// AllowBreaking is the person's acceptance of breaking changes
 	// outside a RELEASE_MAJOR release (the allow_breaking input).
 	AllowBreaking bool
-	Issued        time.Time
-	Expires       time.Time
+	// RollbackTo is the earlier release (vA.B.C) a rollback re-points
+	// latest to, or "" for automatic selection.
+	RollbackTo string
+	// Reason is why a rollback retracts Version, bound into the signed
+	// record as its SHA-256 hex digest so free text never breaks the
+	// line format.
+	Reason  string
+	Issued  time.Time
+	Expires time.Time
 }
 
 // safeValue is what a field may hold: one line, nothing a shell reading
 // `key: value` lines could mistake for more.
 var safeValue = regexp.MustCompile(`^[A-Za-z0-9@._+/:-]+$`)
+
+// releaseTagPattern is a vX.Y.Z release tag.
+var releaseTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
 // Text is the record as signed: one `key: value` line per field, in a
 // fixed order, so scripts/verify-release-approval.sh reads exactly what
@@ -93,9 +104,30 @@ func (r Record) Text() (string, error) {
 		{"approver", r.Approver},
 		{"short_soak_ok", strconv.FormatBool(r.ShortSoakOK)},
 		{"allow_breaking", strconv.FormatBool(r.AllowBreaking)},
-		{"issued", strconv.FormatInt(r.Issued.Unix(), 10)},
-		{"expires", strconv.FormatInt(r.Expires.Unix(), 10)},
 	}
+	if r.Decision == "rollback" {
+		if r.ShortSoakOK || r.AllowBreaking {
+			return "", fmt.Errorf("release approval: rollback carries neither short_soak_ok nor allow_breaking")
+		}
+		rollbackTo := "-"
+		if r.RollbackTo != "" {
+			if !releaseTagPattern.MatchString(r.RollbackTo) {
+				return "", fmt.Errorf("release approval: rollback_to %q is not vX.Y.Z", r.RollbackTo)
+			}
+			rollbackTo = r.RollbackTo
+		}
+		reasonSum := sha256.Sum256([]byte(r.Reason))
+		fields = append(fields,
+			[2]string{"rollback_to", rollbackTo},
+			[2]string{"reason_sha256", hex.EncodeToString(reasonSum[:])},
+		)
+	} else if r.RollbackTo != "" || r.Reason != "" {
+		return "", fmt.Errorf("release approval: %s carries neither rollback_to nor reason", r.Decision)
+	}
+	fields = append(fields,
+		[2]string{"issued", strconv.FormatInt(r.Issued.Unix(), 10)},
+		[2]string{"expires", strconv.FormatInt(r.Expires.Unix(), 10)},
+	)
 	var b strings.Builder
 	b.WriteString(Header + "\n")
 	for _, f := range fields {
@@ -104,8 +136,8 @@ func (r Record) Text() (string, error) {
 		}
 		b.WriteString(f[0] + ": " + f[1] + "\n")
 	}
-	if r.Decision != "approve" && r.Decision != "reject" {
-		return "", fmt.Errorf("release approval: decision %q is neither approve nor reject", r.Decision)
+	if r.Decision != "approve" && r.Decision != "reject" && r.Decision != "rollback" {
+		return "", fmt.Errorf("release approval: decision %q is not approve, reject or rollback", r.Decision)
 	}
 	return b.String(), nil
 }

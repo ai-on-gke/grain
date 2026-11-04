@@ -356,6 +356,11 @@ type Sim struct {
 	Repo          string
 	BareRepo      string
 	DefaultBranch string
+	// Forks maps a fork owner ("sackheads") or "owner/repo" ("sackheads/kube-agents")
+	// to the Sim standing in for that fork repository, so a client backed by
+	// the upstream Sim can resolve cross-repository pull request heads and
+	// route fork repository requests to the fork Sim.
+	Forks map[string]*Sim
 
 	// PullRequestBase is the number the first pull request opened on this
 	// sim gets, the next one base+1 and so on. Zero means 9000. A test
@@ -625,9 +630,63 @@ func (s *Sim) now() time.Time {
 	return time.Now()
 }
 
+func (s *Sim) forkByOwner(owner string) *Sim {
+	if s.Forks == nil || owner == "" {
+		return nil
+	}
+	for k, f := range s.Forks {
+		if f == nil {
+			continue
+		}
+		if strings.EqualFold(k, owner) || strings.EqualFold(k, owner+"/"+s.Repo) || strings.EqualFold(f.Owner, owner) {
+			return f
+		}
+	}
+	return nil
+}
+
+func (s *Sim) forkSim(owner, repo string) *Sim {
+	if s.Forks == nil {
+		return nil
+	}
+	if f, ok := s.Forks[owner+"/"+repo]; ok && f != nil {
+		return f
+	}
+	for k, f := range s.Forks {
+		if f == nil {
+			continue
+		}
+		if strings.EqualFold(k, owner+"/"+repo) || (strings.EqualFold(f.Owner, owner) && strings.EqualFold(f.Repo, repo)) {
+			return f
+		}
+		if strings.EqualFold(k, owner) && (f.Repo == "" || strings.EqualFold(f.Repo, repo)) {
+			return f
+		}
+	}
+	return nil
+}
+
 // compareRev is what the compare endpoint accepts on either side of its
-// "...": a branch name, or -- as on GitHub -- a commit SHA.
+// "...": a branch name, a "<fork-owner>:<branch>" label, or -- as on
+// GitHub -- a commit SHA.
 func (s *Sim) compareRev(ref string) (string, bool) {
+	if headOwner, branch, ok := strings.Cut(ref, ":"); ok && branch != "" {
+		if !strings.EqualFold(headOwner, s.Owner) {
+			if fork := s.forkByOwner(headOwner); fork != nil && fork.BareRepo != "" && fork.BareRepo != s.BareRepo {
+				if fork.branchExists(branch) {
+					remoteRef := "refs/remotes/fork/" + headOwner + "/" + branch
+					cmd := exec.Command("git", "--git-dir", s.BareRepo, "fetch", "--quiet",
+						"--end-of-options", fork.BareRepo, "+refs/heads/"+branch+":"+remoteRef)
+					cmd.Env = os.Environ()
+					if cmd.Run() == nil {
+						return remoteRef, true
+					}
+				}
+				return "", false
+			}
+		}
+		ref = branch
+	}
 	if s.branchExists(ref) {
 		return "refs/heads/" + ref, true
 	}
@@ -641,6 +700,22 @@ func (s *Sim) compareRev(ref string) (string, bool) {
 		return "", false
 	}
 	return ref, true
+}
+
+func (s *Sim) prHeadRef(pr PullRequest) string {
+	if pr.HeadRepo != "" {
+		if forkOwner, _, ok := strings.Cut(pr.HeadRepo, "/"); ok && forkOwner != "" && !strings.EqualFold(forkOwner, s.Owner) {
+			return forkOwner + ":" + pr.Head
+		}
+	}
+	return pr.Head
+}
+
+func (s *Sim) prHeadSHA(pr PullRequest) string {
+	if rev, ok := s.compareRev(s.prHeadRef(pr)); ok {
+		return s.revSHA(rev)
+	}
+	return s.branchSHA(pr.Head)
 }
 
 // revSHA is the commit a compareRev answer names, or "" where it names
@@ -922,11 +997,13 @@ func (s *Sim) readFileAt(ref, filePath string) ([]byte, bool) {
 // ok is false when either branch is missing, which is real GitHub's own
 // 404 here.
 func (s *Sim) filesChangedIn(pr PullRequest) ([]map[string]any, bool) {
-	if !s.branchExists(pr.Base) || !s.branchExists(pr.Head) {
+	baseRev, okBase := s.compareRev(pr.Base)
+	headRev, okHead := s.compareRev(s.prHeadRef(pr))
+	if !okBase || !okHead {
 		return nil, false
 	}
 	out, err := exec.Command("git", "--git-dir", s.BareRepo, "diff", "--name-status", "-M", "-z",
-		"refs/heads/"+pr.Base+"...refs/heads/"+pr.Head).Output()
+		"--end-of-options", baseRev+"..."+headRev).Output()
 	if err != nil {
 		return nil, false
 	}
@@ -974,12 +1051,28 @@ func fileStatus(status string) string {
 // own answers both questions in one, and a load test reading a pull
 // request in a loop pays that difference.
 func (s *Sim) branchSHA(branch string) string {
+	if headOwner, b, ok := strings.Cut(branch, ":"); ok && b != "" {
+		if fork := s.forkByOwner(headOwner); fork != nil && fork != s {
+			if sha := fork.branchSHA(b); sha != "" {
+				return sha
+			}
+		}
+		branch = b
+	}
 	out, err := exec.Command("git", "--git-dir", s.BareRepo,
 		"rev-parse", "-q", "--verify", "refs/heads/"+branch).Output()
-	if err != nil {
-		return ""
+	if err == nil {
+		return strings.TrimSpace(string(out))
 	}
-	return strings.TrimSpace(string(out))
+	for _, fork := range s.Forks {
+		if fork == nil || fork == s || fork.BareRepo == "" {
+			continue
+		}
+		if sha := fork.refSHA("refs/heads/" + branch); sha != "" {
+			return sha
+		}
+	}
+	return ""
 }
 
 // refSHA is what ref -- a full ref name, inside refs/heads or not --
@@ -1093,6 +1186,10 @@ func (s *Sim) deleteBranch(branch string) error {
 // auto-merge path, where nothing else performs the git side of the merge
 // on grain's behalf.
 func (s *Sim) mergeIntoBase(pr PullRequest, message string) error {
+	headRev, ok := s.compareRev(s.prHeadRef(pr))
+	if !ok {
+		headRev = pr.Head
+	}
 	dir, err := os.MkdirTemp("", "githubsim-merge-*")
 	if err != nil {
 		return err
@@ -1105,9 +1202,9 @@ func (s *Sim) mergeIntoBase(pr PullRequest, message string) error {
 	for _, args := range [][]string{
 		{"git", "config", "user.email", "github@example.com"},
 		{"git", "config", "user.name", "github (simulated merge)"},
-		{"git", "fetch", "-q", "origin", pr.Head},
+		{"git", "fetch", "-q", "origin", "+" + headRev + ":refs/remotes/origin/pr-head"},
 		{"git", "checkout", "-q", pr.Base},
-		{"git", "merge", "--no-ff", "origin/" + pr.Head, "-m", message},
+		{"git", "merge", "--no-ff", "refs/remotes/origin/pr-head", "-m", message},
 		{"git", "push", "-q", "origin", pr.Base},
 	} {
 		if err := runGit(wd, args[0], args[1:]...); err != nil {
@@ -1137,8 +1234,13 @@ func (s *Sim) closeLinkedIssues(pr PullRequest) {
 // actually behind" is precisely what a caller of that endpoint is
 // relying on it for.
 func (s *Sim) containsBranch(base, head string) bool {
+	baseRev, okBase := s.compareRev(base)
+	headRev, okHead := s.compareRev(head)
+	if !okBase || !okHead {
+		return false
+	}
 	return exec.Command("git", "--git-dir", s.BareRepo, "merge-base", "--is-ancestor",
-		"refs/heads/"+head, "refs/heads/"+base).Run() == nil
+		"--end-of-options", headRev, baseRev).Run() == nil
 }
 
 // mergeBranches merges head into base for real, against BareRepo, the
@@ -1298,10 +1400,18 @@ func jsonResponse(status int, v any) github.ApiResponse {
 // answer for should fail loudly, not silently get back a default "[]".
 func (s *Sim) Request(method, path string, headers map[string]string, body []byte) (github.ApiResponse, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	s.Calls = append(s.Calls, Call{Method: method, Path: path})
 	p, qs := splitPathQuery(path)
+	if strings.HasPrefix(p, "/repos/") {
+		parts := strings.SplitN(strings.TrimPrefix(p, "/repos/"), "/", 3)
+		if len(parts) >= 2 && (parts[0] != s.Owner || parts[1] != s.Repo) {
+			if fork := s.forkSim(parts[0], parts[1]); fork != nil {
+				s.mu.Unlock()
+				return fork.Request(method, path, headers, body)
+			}
+		}
+	}
+	defer s.mu.Unlock()
 
 	if method == "GET" && s.FailReads != nil {
 		// Counted as a call, above, because it is one: what a test
@@ -1389,14 +1499,14 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			if headers["Accept"] == diffMediaType {
 				diff, ok := pr.mergedDiff, pr.merged
 				if !ok {
-					diff, ok = s.diffBetween(pr.Base, pr.Head)
+					diff, ok = s.diffBetween(pr.Base, s.prHeadRef(pr))
 				}
 				if !ok {
 					return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
 				}
 				return github.ApiResponse{Status: 200, Body: []byte(diff)}, nil
 			}
-			return jsonResponse(200, pullRequestDetailJSON(pr, s.branchSHA(pr.Head))), nil
+			return jsonResponse(200, pullRequestDetailJSON(pr, s.prHeadSHA(pr))), nil
 		}
 		if m := pullCommentsRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
@@ -1424,7 +1534,7 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			if pr.mergedCommits != nil {
 				return jsonResponse(200, pr.mergedCommits), nil
 			}
-			commits, ok := s.commitsBetween(pr.Base, pr.Head)
+			commits, ok := s.commitsBetween(pr.Base, s.prHeadRef(pr))
 			if !ok {
 				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
 			}
@@ -1836,9 +1946,20 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 				base = 9000
 			}
 			number := base + len(s.PullRequests)
+			headBranch := payload.Head
+			headRepo := ""
+			if headOwner, branch, ok := strings.Cut(payload.Head, ":"); ok && branch != "" {
+				headBranch = branch
+				if !strings.EqualFold(headOwner, s.Owner) {
+					headRepo = headOwner + "/" + s.Repo
+					if fork := s.forkByOwner(headOwner); fork != nil && fork.Repo != "" {
+						headRepo = fork.Owner + "/" + fork.Repo
+					}
+				}
+			}
 			pr := PullRequest{
 				Number: number, Title: payload.Title, Body: payload.Body,
-				Head: payload.Head, Base: payload.Base, State: "open",
+				Head: headBranch, HeadRepo: headRepo, Base: payload.Base, State: "open",
 				HTMLURL:   fmt.Sprintf("https://github.example/%s/%s/pull/%d", s.Owner, s.Repo, number),
 				CreatedAt: s.now(),
 			}
@@ -2155,7 +2276,7 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 						s.PullRequests[i].State = *payload.State
 					}
 					return jsonResponse(200, pullRequestDetailJSON(
-						s.PullRequests[i], s.branchSHA(s.PullRequests[i].Head))), nil
+						s.PullRequests[i], s.prHeadSHA(s.PullRequests[i]))), nil
 				}
 				return github.ApiResponse{Status: 404, Body: []byte("{}")}, nil
 			}
@@ -2255,7 +2376,7 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 					// (orchestrator.syncEntry), and a branch that moved
 					// since then has to be refused here rather than
 					// merged, or a test can never tell the two apart.
-					if payload.SHA != "" && payload.SHA != s.branchSHA(s.PullRequests[i].Head) {
+					if payload.SHA != "" && payload.SHA != s.prHeadSHA(s.PullRequests[i]) {
 						return github.ApiResponse{Status: 409, Body: []byte(
 							`{"message":"Head branch was modified. Review and try the merge again."}`)}, nil
 					}
@@ -2375,8 +2496,9 @@ func (s *Sim) checkRunsFor(ref string) []github.CheckRun {
 // land merges s.PullRequests[i] into its base with message, as GitHub
 // does on a merge it has agreed to.
 func (s *Sim) land(i int, message string) error {
-	own, _ := s.commitsBetween(s.PullRequests[i].Base, s.PullRequests[i].Head)
-	diff, _ := s.diffBetween(s.PullRequests[i].Base, s.PullRequests[i].Head)
+	headRef := s.prHeadRef(s.PullRequests[i])
+	own, _ := s.commitsBetween(s.PullRequests[i].Base, headRef)
+	diff, _ := s.diffBetween(s.PullRequests[i].Base, headRef)
 	if err := s.mergeIntoBase(s.PullRequests[i], message); err != nil {
 		return err
 	}
@@ -2595,7 +2717,7 @@ func (s *Sim) graphql(body []byte) (github.ApiResponse, error) {
 		}
 		return jsonResponse(200, map[string]any{"data": map[string]any{
 			"repository": map[string]any{"pullRequest": map[string]any{
-				"id": fmt.Sprintf("PR_%d", pr.Number), "headRefOid": s.branchSHA(pr.Head), "merged": pr.Merged,
+				"id": fmt.Sprintf("PR_%d", pr.Number), "headRefOid": s.prHeadSHA(pr), "merged": pr.Merged,
 				"isInMergeQueue": position > 0, "mergeQueueEntry": entry,
 			}}}}), nil
 	case strings.Contains(req.Query, "resolveReviewThread"):

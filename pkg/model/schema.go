@@ -498,14 +498,18 @@ import "strconv"
 // (model.PendingAccessRequest) and the answers people gave its earlier
 // ones (model.AccessDecision), both JSON.
 //
-// 106 adds `external_agent_token`.`owner` (model.ExternalAgentToken.Owner,
+// 106 adds `upstream_repo` to `repo_config` (model.RepoConfig.UpstreamRepo):
+// the upstream repository (`<owner>/<name>`) pull requests are opened
+// against when tasks target this fork repository.
+//
+// 107 adds `external_agent_token`.`owner` (model.ExternalAgentToken.Owner,
 // the person a credential acts on behalf of), `filed_via` to `task` and
 // `task_comment` (the X-Grain-Client label of the tool that filed them,
 // model.Task.FiledVia and model.Comment.FiledVia) and
 // `grain_config`.`owner_trust` (model.Config.OwnerTrust, the owners whose
 // external agents' filings queue without a person's approval;
 // design/spec/external-cli/external-cli.spec.md#XC-14..#XC-17).
-const SchemaVersion = 106
+const SchemaVersion = 107
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified
@@ -3163,6 +3167,7 @@ var Tables = []string{
   ` + "`issue_import_approved`" + `    INTEGER NOT NULL DEFAULT 0,
   ` + "`issue_import_interval_seconds`" + ` INTEGER NOT NULL DEFAULT 0,
   ` + "`default_hostd`" + `            TEXT NOT NULL DEFAULT '',
+  ` + "`upstream_repo`" + `            TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 

@@ -220,6 +220,7 @@ every `DELETE`.
 | `secrets:write` | set and delete secrets, keys and tokens | yes |
 | `deployment:read` | read host, sandbox, log, metric and upgrade status | |
 | `sandboxes:read` | read the persistent sandboxes' status (`GET /api/persistent-sandboxes`); `deployment:read` implies it | |
+| `deployment:src` | read grain's own source under `src://` (`GET /api/fs/src/...`): an external agent (`gma_`) token is refused `src://` without it, even holding `deployment:read`, which the route also needs | |
 | `deployment:upgrade` | upgrade grain and its database, or cancel a scheduled upgrade | yes |
 | `deployment:restart` | restart grain, act on persistent sandboxes, run sandbox probes | yes |
 | `deployment:reboot` | reboot or shut down the host | yes |

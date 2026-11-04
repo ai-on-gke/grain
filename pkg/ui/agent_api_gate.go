@@ -302,6 +302,9 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	capAllowed := agentCapabilityAllowsRoute(held, set, pattern, scope)
 	ciCap := grainCIReadsRoute(held, pattern)
 	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
+	if fsMergeQueueByCI(set, pattern, r) {
+		capAllowed = true
+	}
 	if !set.Has(scope) && !capAllowed && !ciCap && !adminPatch {
 		return call, fmt.Errorf("task %s holds no api grant for scope %s, which %s needs: "+
 			"ask a person to grant api:%s or a preset that includes it (docs/agent-api.md)", taskID, scope, pattern, scope)
@@ -318,6 +321,11 @@ func (s *Server) authorizeAgentCall(r *http.Request, pattern string, scope APISc
 	call.repo, err = s.agentCallRepo(ctx, r, pattern, call.targetTask, body, acting, set, scope, ciCap)
 	if err != nil {
 		return call, err
+	}
+	if _, fs := fsRoutes[pattern]; fs && call.repo == "" && set.Has(scope) {
+		// A namespace read naming no repository is narrowed to the
+		// ones the grant reaches by fsScope, not refused for naming none.
+		capAllowed = true
 	}
 	if ciCap && !capAllowed && !set.Allows(scope, call.repo) && call.repo != "" && agentMayRead(acting, call.repo) {
 		// grain-ci reads CI of the repositories the task's runs may
@@ -1289,6 +1297,9 @@ func agentMayRead(acting *model.Task, repo string) bool {
 // grant for every repository reaches it.
 func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, target string, body []byte,
 	acting *model.Task, set APIGrantSet, scope APIScope, ciCap bool) (string, error) {
+	if repo, ok, err := s.fsCallRepo(ctx, r, pattern); ok {
+		return repo, err
+	}
 	if owner, name := r.PathValue("owner"), r.PathValue("name"); owner != "" && name != "" {
 		// {owner} is host/owner, escaped into one segment, for a
 		// repository off the default host (RepoFromStored), and an
@@ -1635,8 +1646,12 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 	}
 	call.grants = set
 	adminPatch := tasksAdminAllowsTaskPatch(set, pattern)
-	if !set.Has(scope) && !adminPatch {
+	fsAllowed := fsMergeQueueByCI(set, pattern, r)
+	if !set.Has(scope) && !adminPatch && !fsAllowed {
 		return call, fmt.Errorf("%s holds no api grant for scope %s, which %s needs", principal, scope, pattern)
+	}
+	if fsRoutes[pattern] == "src" && !set.Has("deployment:src") {
+		return call, errExternalSrc(principal)
 	}
 	body, err := peekBody(r)
 	if err != nil {
@@ -1658,13 +1673,17 @@ func (s *Server) authorizeExternalAgentCall(r *http.Request, pattern string, sco
 		call.targetTask = extraTargets[0]
 	}
 	adminPatchAllowed := false
+	if _, fs := fsRoutes[pattern]; fs && call.repo == "" && set.Has(scope) {
+		// As for a task's call: fsScope narrows it.
+		fsAllowed = true
+	}
 	if adminPatch && !set.Allows(scope, call.repo) && set.Allows("tasks:admin", call.repo) {
 		if err := tasksAdminTaskPatchBodyAllowed(body); err != nil {
 			return call, err
 		}
 		adminPatchAllowed = true
 	}
-	if !set.Allows(scope, call.repo) && !adminPatchAllowed {
+	if !set.Allows(scope, call.repo) && !adminPatchAllowed && !fsAllowed {
 		missingScope := scope
 		if !set.Has(scope) && adminPatch {
 			missingScope = "tasks:admin"
@@ -1738,6 +1757,9 @@ func (s *Server) checkExternalTokenRotationEscalation(ctx context.Context, held 
 }
 
 func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pattern string, scope APIScope, set APIGrantSet, target string, body []byte, tok *model.ExternalAgentToken) (string, []string, error) {
+	if repo, ok, err := s.fsCallRepo(ctx, r, pattern); ok {
+		return repo, nil, err
+	}
 	if owner, name := r.PathValue("owner"), r.PathValue("name"); owner != "" && name != "" {
 		repo, err := s.agentCanonicalRepo(owner + "/" + name)
 		return repo, nil, err

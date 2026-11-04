@@ -414,7 +414,7 @@ test.describe("Inputs in Templates, Schedules, and Suites Automation Walkthrough
     ).toBeVisible();
 
     // Verify Suite selector shows our suite
-    await expect(page.getByRole("combobox", { name: "Suite" })).toContainText(
+    await expect(page.getByRole("combobox", { name: "Suite" })).toHaveValue(
       suiteName,
     );
 
