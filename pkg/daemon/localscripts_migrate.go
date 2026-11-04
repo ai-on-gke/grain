@@ -16,6 +16,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"log"
 
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
@@ -40,17 +41,30 @@ func migrateLocalScripts(ctx context.Context, store *model.Store, local localscr
 	}
 	var renames map[string][]string
 	err = store.UpdateConfig(ctx, func(c *model.Config) error {
+		before, err := model.EncodeMCPServers(c.MCPServers)
+		if err != nil {
+			return err
+		}
 		if c.MCPServers == nil {
 			c.MCPServers = map[string]protocol.ServerConfig{}
 		}
 		var skipped []error
-		var err error
 		renames, skipped, err = localscripts.MigrateToHostScript(local, c.MCPServers)
 		for _, why := range skipped {
 			log.Printf("daemon: local-scripts: not moved to host-script: %v", why)
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		if after, err := model.EncodeMCPServers(c.MCPServers); err == nil && after == before {
+			// Every start after the first: leave the row as it is.
+			return errMCPServersUnchanged
+		}
+		return nil
 	})
+	if errors.Is(err, errMCPServersUnchanged) {
+		err = nil
+	}
 	if err != nil {
 		return func() {}, err
 	}
@@ -62,3 +76,7 @@ func migrateLocalScripts(ctx context.Context, store *model.Store, local localscr
 	}
 	return model.SetRuntimeGrantExpansions(renames), nil
 }
+
+// errMCPServersUnchanged aborts migrateLocalScripts' config write when it
+// would write back what is already stored.
+var errMCPServersUnchanged = errors.New("mcp_servers unchanged")
