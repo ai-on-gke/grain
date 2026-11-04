@@ -585,10 +585,19 @@ func settleTakeover(ctx context.Context, deps Deps, id string, trustCache map[st
 
 	passed, findings, err := takeoverReviewsPassed(ctx, deps.Store, *task, current)
 	if err != nil || !passed {
-		if err == nil && findings > 0 {
+		// A review-only shepherd never pushes, so there is nothing to
+		// wake it for: the author's next push moves the head instead.
+		if err == nil && findings > 0 && takeoverModeOf(*task) == model.TakeoverFinish {
 			err = wakeShepherdForFindings(ctx, deps.Store, *task, current, now)
 		}
 		return err
+	}
+	if takeoverModeOf(*task) == model.TakeoverReviewOnly {
+		// review-only promises to hold the gate until CI is green at the
+		// head too, not only the reviews (#XC-28).
+		if green, err := takeoverCIGreen(ctx, deps.Store, own.Repo, detail.HeadRef, head); err != nil || !green {
+			return err
+		}
 	}
 	if err := deps.Store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
 		t.Links = append(withoutLinks(t.Links, model.LinkTakeoverCleared),
@@ -649,6 +658,8 @@ func fileTakeoverReviews(ctx context.Context, deps Deps, task model.Task, own mo
 		headRef: detail.HeadRef, headSHA: detail.HeadSHA, baseRef: detail.BaseRef,
 		sender: originSender(task), trusted: true, shepherdID: task.ID,
 		eventKey: "takeover-review:" + task.ID + "@" + detail.HeadSHA,
+		spec:     linkTarget(task, model.LinkImplementsSpec),
+		design:   linkTarget(task, model.LinkDesignDoc),
 	}
 	if !first {
 		r.extraNote = "This is a re-review: the pull request's head moved since grain last reviewed it. " +
@@ -763,6 +774,11 @@ func takeoverReviewsPassed(ctx context.Context, store *model.Store, shepherd mod
 	}
 	if findings == 0 {
 		return true, 0, nil
+	}
+	if takeoverModeOf(shepherd) == model.TakeoverReviewOnly {
+		// Nobody answers findings on a review-only shepherd's behalf:
+		// they hold until a push files a fresh set that finds nothing.
+		return false, findings, nil
 	}
 	obs, err := store.GetObservation(ctx, shepherd.ID)
 	if err != nil {
