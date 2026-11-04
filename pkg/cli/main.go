@@ -420,6 +420,9 @@ Commands:
                                        "clear" to empty it (safe: a cached job simply runs again)
   ci faults [-repo r] [-source s]      shared CI faults across branches right now (grain CI and GitHub CI,
                                        labelled by source)
+  fs ls|cat|read|grep <uri>            read grain's namespace (ci://, task://, deploy://, config://,
+                                       memory://, src://) over GET /api/fs/, as a sandbox's grain ls,
+                                       read and grep do; read is cat (see fscmd.go)
   declarations check [dir]             read a checkout's own .grain/templates, .grain/suites and
                                        .grain/schedules and print what they declare, or refuse them
                                        and exit non-zero -- no daemon involved, so a repository can
@@ -626,6 +629,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdResume(ctx, c, out, cmdArgs)
 	case "ci":
 		return cmdCI(ctx, c, out, cmdArgs)
+	case "fs":
+		return cmdFS(ctx, c, out, cmdArgs)
 	case "declarations":
 		return cmdDeclarations(ctx, c, out, cmdArgs)
 	case "settings":

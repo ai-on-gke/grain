@@ -164,6 +164,9 @@ type Client struct {
 	Name string
 	// Out and Err are where answers and refusals are printed.
 	Out, Err io.Writer
+	// Refused, when set, is the error a refused request is returned as,
+	// instead of its message being printed on Err.
+	Refused func(*http.Response) error
 }
 
 // Do sends GET uri with q over the URI's own inline query, and hands
@@ -201,16 +204,20 @@ func (c *Client) Do(uri string, q url.Values, header http.Header) (*http.Respons
 	return resp, nil
 }
 
-// refused prints resp's refusal, if it is one, and reports whether it
-// was. A JSON {"error": ...} body (grain's API) is printed as its
-// message, a plain one (the namespace's own) as it came.
-func (c *Client) refused(resp *http.Response) bool {
+// refused is resp's refusal, if it is one: Refused's error, or
+// ErrReported once its message is printed on Err. A JSON {"error": ...}
+// body (grain's API) is printed as its message, a plain one (the
+// namespace's own) as it came.
+func (c *Client) refused(resp *http.Response) error {
 	if resp.StatusCode < 400 {
-		return false
+		return nil
+	}
+	if c.Refused != nil {
+		return c.Refused(resp)
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	fmt.Fprintln(c.Err, "grain: "+Refusal(body))
-	return true
+	return ErrReported
 }
 
 // Refusal is the message a refused request's body carries.
@@ -231,8 +238,8 @@ func (c *Client) Get(uri string, q url.Values) error {
 		return err
 	}
 	defer resp.Body.Close()
-	if c.refused(resp) {
-		return ErrReported
+	if err := c.refused(resp); err != nil {
+		return err
 	}
 	_, err = io.Copy(c.Out, resp.Body)
 	return err
@@ -261,8 +268,8 @@ func (c *Client) Read(uri string, q url.Values, o ReadOptions) error {
 		return err
 	}
 	defer resp.Body.Close()
-	if c.refused(resp) {
-		return ErrReported
+	if err := c.refused(resp); err != nil {
+		return err
 	}
 	if size := resp.Header.Get("X-Grain-Total-Size"); o.SaySize && size != "" {
 		fmt.Fprintf(c.Err, "grain: %s is %s bytes; --tail, --offset and --limit take bytes, --lines N the last N lines\n", uri, size)
@@ -309,8 +316,8 @@ func (c *Client) grep(uri string, q url.Values, emit func(GrepResult) error) err
 		return err
 	}
 	defer resp.Body.Close()
-	if c.refused(resp) {
-		return ErrReported
+	if err := c.refused(resp); err != nil {
+		return err
 	}
 	truncated := resp.Header.Get("X-Grain-Walk-Truncated") == "true"
 	matches := resp.Header.Get("X-Grain-Matches")
@@ -326,10 +333,22 @@ func (c *Client) grep(uri string, q url.Values, emit func(GrepResult) error) err
 		return err
 	}
 	if truncated && matches == "0" {
-		fmt.Fprintf(c.Err, "grain grep: no match in the part of %s searched before the walk cap, and the rest was not searched: narrow the path or pass --glob\n", uri)
+		err := &NotSearchedError{URI: uri}
+		if c.Refused != nil {
+			return err
+		}
+		fmt.Fprintf(c.Err, "grain grep: %v\n", err)
 		return ErrReported
 	}
 	return nil
+}
+
+// NotSearchedError is a grep that found nothing in the part of URI it
+// searched before the namespace's walk cap stopped it.
+type NotSearchedError struct{ URI string }
+
+func (e *NotSearchedError) Error() string {
+	return fmt.Sprintf("no match in the part of %s searched before the walk cap, and the rest was not searched: narrow the path or pass --glob", e.URI)
 }
 
 // TailWriter keeps the last N lines written to it.
