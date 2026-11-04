@@ -521,12 +521,17 @@ import "strconv"
 // permission set that does not exist are kept, logged, and noted on their
 // task, template or schedule (gcp_key_args_migration.go).
 //
-// 110 drops `task_hostd`, `template`.`hostd` and
+// 110 adds `role` to `allowed_principal` (model.AllowedPrincipal.Role): the
+// API scope set an entry's sessions are held to, defaulting to
+// grain/operator so every entry that existed before keeps full access
+// (docs/design/access-rbac.md).
+//
+// 111 drops `task_hostd`, `template`.`hostd` and
 // `repo_config`.`default_hostd`: which grain hostd host work runs on is
 // the model connection's (model.AgentBackend.Hostd) or the capability
 // server's (protocol.ServerConfig.Hostd), never a task's. `task_run_hostd`
 // stays, the read-only record of where each run's agent CLI ran.
-const SchemaVersion = 110
+const SchemaVersion = 111
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
@@ -535,7 +540,8 @@ const allowedPrincipalTable = `CREATE TABLE IF NOT EXISTS ` + "`allowed_principa
   ` + "`entry`" + `    TEXT     NOT NULL PRIMARY KEY,
   ` + "`added_by`" + ` TEXT     NOT NULL DEFAULT '',
   ` + "`added_at`" + ` DATETIME NOT NULL,
-  ` + "`reason`" + `   TEXT     NOT NULL DEFAULT ''
+  ` + "`reason`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`role`" + `     TEXT     NOT NULL DEFAULT 'grain/operator'
 )`
 
 // allowedPrincipalMigrationTable records the one-time startup migration off
@@ -629,7 +635,7 @@ const hostdTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd`" + ` (
 )`
 
 // taskHostdTable and taskRunHostdTable are a task's hostd selector (only
-// migrations 93 to 109 had one; 110 drops it) and the hostd each run
+// migrations 93 to 110 had one; 111 drops it) and the hostd each run
 // resolved (model.TaskRunHostd),
 // named once for Tables and for migration 93.
 const taskHostdTable = `CREATE TABLE IF NOT EXISTS ` + "`task_hostd`" + ` (
@@ -1628,7 +1634,7 @@ var Tables = []string{
 
 	// task_run_hostd: which grain hostd each run's agent CLI went to
 	// (model.TaskRunHostd), beside the frozen task_run DDL. Its
-	// task_hostd companion, a task's own selector, is dropped by 110.
+	// task_hostd companion, a task's own selector, is dropped by 111.
 	taskRunHostdTable,
 
 	// task_run_startup records the per-phase startup timestamps of a run

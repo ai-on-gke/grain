@@ -93,6 +93,57 @@ describe("AccessSection", () => {
     }
   });
 
+  it("shows a limited caller its role and no controls its role does not cover", async () => {
+    api.mockImplementation(async (path) => {
+      if (path === "/api/access/principals") {
+        return {
+          entries: [
+            {
+              entry: "user:viv@example.com",
+              role: "grain/viewer",
+              addedBy: "the access code",
+              addedAt: "2026-11-03T05:00:00Z",
+            },
+          ],
+          roles: [
+            { name: "grain/operator", builtin: true, person: true },
+            { name: "grain/viewer", builtin: true, person: false },
+          ],
+        };
+      }
+      return {};
+    });
+    render(
+      section({
+        config: {
+          authenticated: true,
+          actor: "user:viv@example.com",
+          authMethod: "iap",
+          access: {
+            role: "grain/viewer",
+            roles: ["grain/viewer"],
+            full: false,
+            scopes: ["access:read", "tasks:read"],
+          },
+        },
+      }),
+    );
+    await screen.findByText("user:viv@example.com");
+    expect(screen.getByTestId("access-own-role")).toHaveTextContent(
+      "grain/viewer",
+    );
+    expect(screen.getByTestId("access-read-only")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Add allowed principal" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Remove user:viv@example.com" }),
+    ).toBeNull();
+    expect(screen.getByTestId("allowed-principals-table")).toHaveTextContent(
+      "grain/viewer",
+    );
+  });
+
   it("validates, adds, and removes allowed users and groups for both access-code and IAP sessions", async () => {
     const user = userEvent.setup();
     let currentEntries = [
@@ -189,7 +240,7 @@ describe("AccessSection", () => {
     );
     await screen.findByText(sa);
     const group = screen.getByTestId("allowed-service-accounts");
-    expect(group).toHaveTextContent(/full operator access/);
+    expect(group).toHaveTextContent(/held to its role/);
     expect(group).toHaveTextContent("ci pipeline");
     expect(
       screen.getByTestId("allowed-principals-table"),

@@ -751,7 +751,14 @@ var Migrations = []Migration{
 		Up:          MigrateGCPKeyGrantArgs,
 	},
 	{
-		Version: 110,
+		Version:     110,
+		Description: "add allowed_principal.role, the scope set an allowlist entry's sessions are held to (existing entries become grain/operator)",
+		Statements: []string{
+			"ALTER TABLE `allowed_principal` ADD COLUMN `role` TEXT NOT NULL DEFAULT 'grain/operator'",
+		},
+	},
+	{
+		Version: 111,
 		Description: "drop the task, template and repository hostd selectors: a model connection or capability server " +
 			"chooses its hostd; task_run_hostd keeps where each run ran",
 		Statements: []string{

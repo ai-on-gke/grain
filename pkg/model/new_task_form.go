@@ -280,7 +280,7 @@ func (f *NewTaskForm) Validate() error {
 			fc := l.Fields[id]
 			at := where + ".fields." + id
 			if id == "hostd" {
-				// The form's hostd box until schema 110: a task has no
+				// The form's hostd box until schema 111: a task has no
 				// hostd, so a default for one is refused, not dropped.
 				errs = append(errs, at+": a task has no hostd field any more -- hostd is set on the model connection or capability server, not the task")
 				continue
