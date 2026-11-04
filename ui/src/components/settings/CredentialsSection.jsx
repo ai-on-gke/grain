@@ -16,14 +16,18 @@ import {
   Box,
   Checkbox,
   FormControlLabel,
+  Link,
   TextField,
   Typography,
 } from "@mui/material";
 import CapabilitiesPanel from "../CapabilitiesPanel.jsx";
+import { serverPath } from "../CapabilityServersPanel.jsx";
 import SecretsPanel from "../SecretsPanel.jsx";
 import SettingsCard, { settingHints } from "./SettingsCard.jsx";
 import { identifierField } from "../../identifierField.js";
 import { ConfigManagedNotice } from "../ConfigRepoLink.jsx";
+
+const GCP_SERVER_PATH = serverPath("https://grain.dev/capabilities/gcp");
 
 // CredentialsSection is Settings → Legacy capabilities (design/design/settings-panel.design.md
 // §3.2). `s` is the page's useSettingsSection().
@@ -119,7 +123,7 @@ export default function CredentialsSection({ s, claimedSecrets }) {
                 sx={{ display: "flex", mt: 1 }}
               />
 
-              <Typography variant="subtitle2" sx={{ mt: 3 }}>
+              <Typography id="gcp-settings" variant="subtitle2" sx={{ mt: 3 }}>
                 GCP
               </Typography>
               <TextField
@@ -127,7 +131,16 @@ export default function CredentialsSection({ s, claimedSecrets }) {
                 name="gcpProject"
                 data-setting-id="gcpProject"
                 label="GCP project"
-                helperText="Optional. The Google Cloud project gcp-key and gemini-key mint short-lived keys in, such as my-project-123. Either capability is not ready until it is set."
+                helperText={
+                  <>
+                    Optional. The deployment&apos;s Google Cloud project, such
+                    as my-project-123, used for IAP reconciliation and to seed
+                    migrated <code>gcp-key</code> and <code>gemini-key</code>{" "}
+                    settings. Live <code>gcp-key</code> permission sets and{" "}
+                    <code>gemini-key</code> projects are configured on the{" "}
+                    <Link href={GCP_SERVER_PATH}>gcp capability server</Link>.
+                  </>
+                }
                 defaultValue={settings.gcpProject || ""}
                 onBlur={onTextBlur("gcpProject")}
                 onKeyDown={onEnterKey}
@@ -141,7 +154,20 @@ export default function CredentialsSection({ s, claimedSecrets }) {
                 name="gcpServiceAccountEmail"
                 data-setting-id="gcpServiceAccountEmail"
                 label="GCP service account email"
-                helperText="Optional. The service account those keys are minted for, such as grain-minter@my-project-123.iam.gserviceaccount.com. The minter's own key is set on the GCP key capability's page, in the list above."
+                helperText={
+                  <>
+                    Optional. The legacy agent service account migrated{" "}
+                    <code>gcp-key</code> pools mint keys for, such as
+                    grain-agent@my-project-123.iam.gserviceaccount.com. Set the
+                    minter credential on the{" "}
+                    <Link href={GCP_SERVER_PATH}>gcp capability server</Link>{" "}
+                    (Admin credential or Bind a secret), or store{" "}
+                    <code>gcp-key-minter</code> /{" "}
+                    <code>gcp-key-minter-&lt;name&gt;</code> (key{" "}
+                    <code>value</code>) under{" "}
+                    <Link href="#other-secrets">Other secrets</Link> below.
+                  </>
+                }
                 defaultValue={settings.gcpServiceAccountEmail || ""}
                 onBlur={onTextBlur("gcpServiceAccountEmail")}
                 onKeyDown={onEnterKey}
