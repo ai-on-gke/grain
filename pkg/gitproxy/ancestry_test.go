@@ -96,6 +96,7 @@ func TestADeclaredFastForwardTheRemoteMustShow(t *testing.T) {
 				asked = append(asked, wants...)
 				return remote, remoteErr
 			},
+			refs: onMain(oidA),
 		}
 		reason, err := a.AuthorizeRefUpdates(withPushCheck(context.Background(), check), "sandbox-0", "acme", "widgets",
 			[]RefUpdate{{Old: oidA, New: oidB, Ref: "refs/heads/main"}})

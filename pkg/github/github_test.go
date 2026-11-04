@@ -3182,3 +3182,21 @@ func TestCheckRunAppAsksTheTokenSource(t *testing.T) {
 		}
 	}
 }
+
+func TestListCheckRunsDecodesAppAndExternalID(t *testing.T) {
+	t.Parallel()
+	transport := NewFakeTransport(ApiResponse{
+		Status: 200,
+		Body: []byte(`{"total_count":1,"check_runs":[{` +
+			`"id":42,"head_sha":"abc123","external_id":"release-qualification:acme/widgets:v1.4.0-rc.2",` +
+			`"name":"grain/release-qualification","status":"completed","conclusion":"success",` +
+			`"app":{"slug":"grain-bot"}}]}`),
+	})
+	runs, err := NewClient(transport, nil).ListCheckRuns("acme", "widgets", "abc123")
+	if err != nil {
+		t.Fatalf("ListCheckRuns: %v", err)
+	}
+	if len(runs) != 1 || runs[0].App != "grain-bot" || runs[0].ExternalID != "release-qualification:acme/widgets:v1.4.0-rc.2" {
+		t.Fatalf("ListCheckRuns = %+v, want App=grain-bot and ExternalID decoded", runs)
+	}
+}

@@ -406,6 +406,11 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 	if grainserver.IsInProcessID(id) {
 		return validationErrorf("capability server %s runs inside grain itself and has nothing to configure", id)
 	}
+	cfg := req.Config
+	// Builtin, Aliases and Notice belong to grain, not the request: resolve
+	// them from what is stored now so neither secretMapField,
+	// CheckBuiltinConfig nor Probe acts on a caller-supplied Builtin.
+	c.applyStoredBuiltin(ctx, id, &cfg)
 	from := strings.TrimSpace(req.RenameFrom)
 	if from == id {
 		from = ""
@@ -414,7 +419,6 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 	if from != "" {
 		schemaID = from
 	}
-	cfg := req.Config
 	if err := c.normalizeServerHostd(ctx, schemaID, &cfg); err != nil {
 		return err
 	}
@@ -466,6 +470,9 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 			}
 		}
 	}
+	if err := cfg.Validate(id); err != nil {
+		return validationErrorf("%s", err)
+	}
 	// An entry saved without any config -- a transport edit, or a
 	// server still configured by env -- is left to the attach to judge,
 	// whose status says what is missing.
@@ -483,14 +490,37 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 		}
 	}
 	if len(writes) > 0 {
-		// Unrehearsed: the secrets below are set before the store write
-		// a rehearsal would stop at, and would outlive its refusal.
+		// Unrehearsed: a save carrying secret values cannot be rehearsed, so
+		// external-config mode refuses it before Probe starts the server or
+		// hands it typed-in secrets, while the store writes themselves wait
+		// until Probe accepts the config.
 		if err := c.checkSettingsWritableUnrehearsed(ctx, "grain_config"); err != nil {
 			return err
 		}
 		if c.Config.Secrets == nil {
 			return errSecretsUnavailable
 		}
+	}
+	// The server's own configure is run against what would be saved, the
+	// way Test runs it, so a config it refuses -- a gcp permission set over
+	// its admin's role ceiling, 2026-11-03 -- is refused here rather than
+	// stored to leave the server needs-config with nobody told. A server
+	// that cannot be reached at all says nothing about the config: that
+	// save goes ahead, with a warning, so an entry for a host that is down
+	// can still be edited.
+	if p := c.prober(); p != nil && len(cfg.Config) > 0 && !cfg.Disabled {
+		res := p.Probe(hostd.ForDisplay(ctx), id, cfg, func(name string) (string, bool) {
+			v, ok := writes[name]
+			return v, ok
+		})
+		switch {
+		case res.ConfigRefused:
+			return configRefusal(id, cfg.Config, res.Error)
+		case !res.OK:
+			log.Printf("ui: capability server %s: saving a configuration it could not be asked to check: %s", id, res.Error)
+		}
+	}
+	if len(writes) > 0 {
 		for name, value := range writes {
 			secret, key, explicit := strings.Cut(name, "/")
 			if !explicit {
@@ -727,6 +757,47 @@ func configValidationError(err error) error {
 	return ve
 }
 
+// configRefusal is the save refused because the server's own configure
+// refused the config (msg, ProbeResult.Error): shown at the top of the
+// config form, and on the field it is about where the message says.
+func configRefusal(id string, config map[string]any, msg string) error {
+	msg = strings.TrimPrefix(msg, "capability server "+id+": configure: ")
+	ve := &ValidationError{
+		err:    fmt.Errorf("capability server %s refused this configuration, so it was not saved: %s", id, msg),
+		fields: map[string]string{"": msg},
+	}
+	if field := refusedConfigField(config, msg); field != "" {
+		ve.fields[field] = msg
+	}
+	return ve
+}
+
+// refusedPermissionSet is how the gcp server names the permission set a
+// refusal is about (gcpsets.Config.Validate).
+var refusedPermissionSet = regexp.MustCompile(`permission set "([^"]+)"`)
+
+// refusedConfigField is the config form's path for what a configure
+// refusal is about, "" when it cannot tell: a gcp permission set's roles,
+// for one over its admin's role ceiling, or the set itself.
+func refusedConfigField(config map[string]any, msg string) string {
+	m := refusedPermissionSet.FindStringSubmatch(msg)
+	if m == nil {
+		return ""
+	}
+	sets, _ := config["permission_sets"].([]any)
+	for i, item := range sets {
+		set, _ := item.(map[string]any)
+		if name, _ := set["name"].(string); name != m[1] {
+			continue
+		}
+		if strings.Contains(msg, "role ceiling") {
+			return fmt.Sprintf("permission_sets[%d].roles", i)
+		}
+		return fmt.Sprintf("permission_sets[%d]", i)
+	}
+	return ""
+}
+
 // capabilityConfigSchema is the configure schema the registry last
 // discovered for id, nil when it knows of none.
 func (c *Client) capabilityConfigSchema(id string) map[string]any {
@@ -798,6 +869,22 @@ func (c *Client) normalizeServerHostd(ctx context.Context, schemaID string, cfg 
 	}
 	cfg.Hostd = protocol.HostdTarget(norm)
 	return nil
+}
+
+// applyStoredBuiltin clears caller-supplied Builtin, Aliases and Notice on
+// cfg and restores them only when id is a stored (or ensured) built-in.
+func (c *Client) applyStoredBuiltin(ctx context.Context, id string, cfg *protocol.ServerConfig) {
+	cfg.Builtin, cfg.Aliases, cfg.Notice = "", nil, ""
+	var configured map[string]protocol.ServerConfig
+	if c.Store != nil {
+		if stored, err := c.Store.GetConfig(ctx); err == nil && stored != nil {
+			configured = stored.MCPServers
+		}
+	}
+	configured, _ = intree.EnsureBuiltins(configured)
+	if stored, ok := configured[id]; ok && stored.Builtin != "" {
+		cfg.Builtin, cfg.Aliases, cfg.Notice = stored.Builtin, stored.Aliases, stored.Notice
+	}
 }
 
 // checkRunLocation refuses run: host unless the target grain hostd -- the

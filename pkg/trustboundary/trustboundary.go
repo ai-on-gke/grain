@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v13"
+const Version = "trust-boundary/v14"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -82,11 +82,16 @@ type Category struct {
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
 //
-// v13 added connection_hostd.go to auth-routes and capability server
+// v14 added connection_hostd.go to auth-routes and capability server
 // hostd placement (capability_servers.go, capability_servers_hostd.go,
 // pkg/ui/capability_servers.go) to capabilities-secrets (grain/task-2165):
 // where run: hostd capability servers start and receive their resolved
 // secrets.
+//
+// v13 added the GitHub Actions Inbox approval (grain/task-2666,
+// design/playbook/releases.playbook.md §0.2) to release-promotion: the
+// route that signs a person's answer and dispatches promote-release.yml,
+// the signed record, and the script the workflow verifies it with.
 //
 // v12 narrowed release-promotion to the approval path (grain/task-2664,
 // design/playbook/releases.playbook.md §0.3): the approval workflow, in
@@ -255,6 +260,11 @@ var Categories = []Category{
 		files: []string{
 			".grain/workflows/promote-release.yml", ".github/workflows/promote-release.yml",
 			"pkg/ui/release_approval.go", ".grain/templates/release-train.yml",
+			// The Inbox approval of a release on GitHub Actions (gap 4):
+			// the signed record, the route that signs and dispatches it,
+			// and the check the workflow verifies it with.
+			"pkg/ui/release_approval_github.go", "pkg/releaseapproval/releaseapproval.go",
+			"scripts/verify-release-approval.sh",
 		},
 	},
 	{
@@ -448,6 +458,24 @@ var StatePrivilege = Category{
 	ID: "state-privilege",
 	Description: "this deployment's own settings that grant capabilities, repositories or secrets, " +
 		"or set what a sandbox runs and how it is isolated -- applied to the running daemon once merged",
+	RequiresHuman: true,
+}
+
+// TemplatePush is the category orchestrator's security hold reports for
+// a change to any repository-declared template's `push:` list
+// (design/playbook/releases.playbook.md §0.3, §0.4). A push set is a
+// grant: it lets every task filed from that template update refs beyond
+// its own branch -- the release train's is how it tags release
+// candidates -- so it is made by a person, once, when it merges, and
+// widened only by a person. Which files carry one is the repository's to
+// say, so it cannot be a path on Categories: the hold compares each
+// changed template's push set at the base with the head's
+// (repodecl.TemplatePush), and holds every changed template as if its
+// set changed when it cannot read both.
+var TemplatePush = Category{
+	ID: "template-push",
+	Description: "a template's `push:` list: the refs beyond their own branch that the tasks filed from it " +
+		"may push, which only a person grants or widens",
 	RequiresHuman: true,
 }
 

@@ -131,6 +131,7 @@ var routeDocs = map[string]string{
 	"DELETE /api/repos/{owner}/{name}/release-secrets/{secret}":            "Delete one of a repository's release secrets.",
 	"POST /api/repos/{owner}/{name}/release-runs":                          "Start a release run of a repository, at a branch, ref or commit, optionally only some jobs.",
 	"POST /api/repos/{owner}/{name}/pending-releases/{version}/approve":    "Approve a pending trunk release (vX.Y.Z), making it official; short_soak_ok accepts a soak under the minimum and allow_breaking breaking changes outside a RELEASE_MAJOR release, each otherwise refused. Only a person may; an agent is refused.",
+	"GET /api/release-approval-key":                                        "The public key a GitHub Actions promote-release.yml verifies an Inbox approval with: the value for the repository variable GRAIN_RELEASE_APPROVAL_KEY.",
 	"POST /api/repos/{owner}/{name}/pending-releases/{version}/reject":     "Reject a pending trunk release (vX.Y.Z), dropping its release candidate. Only a person may; an agent is refused.",
 	"POST /api/repos/{owner}/{name}/base-branch-runs":                      "Start a grain CI run of one of a repository's base branches.",
 	"PUT /api/repos/{owner}/{name}/work-ownership":                         "Set who owns a repository's work: its default, or one work item's override.",

@@ -125,10 +125,11 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// confirmation and CI repository-access files to auth-routes and
 	// capabilities-secrets, grain/task-2723; v12 only splits the release
 	// jobs out of release-promotion into release-machinery, grain/task-2664;
-	// v13 adds connection_hostd and capability server hostd placement,
-	// grain/task-2165).
-	if trustboundary.Version != "trust-boundary/v13" {
-		w.t.Fatalf("this walkthrough is about trust-boundary/v13, the build has %s", trustboundary.Version)
+	// v13 only adds the GitHub Actions Inbox approval's files to
+	// release-promotion, grain/task-2666; v14 only adds connection_hostd
+	// and capability server hostd placement, grain/task-2165).
+	if trustboundary.Version != "trust-boundary/v14" {
+		w.t.Fatalf("this walkthrough is about trust-boundary/v14, the build has %s", trustboundary.Version)
 	}
 	if w.merged(branch) {
 		w.t.Fatal("merged before the pull request read mergeable")
