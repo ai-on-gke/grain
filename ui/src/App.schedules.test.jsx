@@ -640,13 +640,22 @@ describe("App", () => {
     window.history.replaceState(null, "", "/processes?kind=schedule");
     window.dispatchEvent(new PopStateEvent("popstate"));
 
-    expect(confirm).toHaveBeenCalledWith(DISCARD_PROMPT);
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("heading", { name: "New schedule" }),
-      ).not.toBeInTheDocument(),
-    );
-    confirm.mockRestore();
+    try {
+      expect(confirm).toHaveBeenCalledWith(DISCARD_PROMPT);
+      // The dialog leaves through MUI's exit transition, which on a
+      // loaded CI runner outlasts waitFor's one-second default.
+      await waitFor(
+        () =>
+          expect(
+            screen.queryByRole("heading", { name: "New schedule" }),
+          ).not.toBeInTheDocument(),
+        { timeout: 5000 },
+      );
+    } finally {
+      // Restored even when the wait fails, so the next test's own spy
+      // does not wrap this one and count its calls as well.
+      confirm.mockRestore();
+    }
   });
 
   it("guards unsaved schedule edits before following the suppressed task link", async () => {
@@ -672,20 +681,25 @@ describe("App", () => {
     const title = screen.getByLabelText("Title");
     await user.type(title, " edited");
 
-    await user.click(screen.getByRole("link", { name: "task 1" }));
-    expect(confirm).toHaveBeenCalledWith(DISCARD_PROMPT);
-    expect(
-      screen.getByRole("heading", { name: "Edit schedule" }),
-    ).toBeInTheDocument();
-
-    confirm.mockReturnValue(true);
-    await user.click(screen.getByRole("link", { name: "task 1" }));
-    expect(confirm).toHaveBeenCalledTimes(2);
-    await waitFor(() =>
+    try {
+      await user.click(screen.getByRole("link", { name: "task 1" }));
+      expect(confirm).toHaveBeenCalledWith(DISCARD_PROMPT);
       expect(
-        screen.queryByRole("heading", { name: "Edit schedule" }),
-      ).not.toBeInTheDocument(),
-    );
-    confirm.mockRestore();
+        screen.getByRole("heading", { name: "Edit schedule" }),
+      ).toBeInTheDocument();
+
+      confirm.mockReturnValue(true);
+      await user.click(screen.getByRole("link", { name: "task 1" }));
+      expect(confirm).toHaveBeenCalledTimes(2);
+      await waitFor(
+        () =>
+          expect(
+            screen.queryByRole("heading", { name: "Edit schedule" }),
+          ).not.toBeInTheDocument(),
+        { timeout: 5000 },
+      );
+    } finally {
+      confirm.mockRestore();
+    }
   });
 });
