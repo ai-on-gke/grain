@@ -269,6 +269,39 @@ func TestEntriesFromBeforeRolesKeepFullAccess(t *testing.T) {
 	}
 }
 
+func TestOnlyTheAccessCodeLiftsADeny(t *testing.T) {
+	installScopeSets(t,
+		model.APIScopeSet{Name: "contractors", Includes: []string{"grain/viewer"}, Deny: []string{"tasks:write"}, Version: 1},
+		model.APIScopeSet{Name: "access-admins", Includes: []string{"grain/contributor"}, Scopes: []string{"access:write"}, Version: 1})
+	h := newRoleHarness(t)
+	h.client.Config.GroupChecker = groupCheckerFunc(func(_ context.Context, group, member string) (bool, error) {
+		return group == "contractors@example.com" && member == "lead@example.com", nil
+	})
+	h.allow(t, "user:lead@example.com", "access-admins")
+	h.allow(t, "user:ops@example.com", model.DefaultAccessRole)
+	h.allow(t, "group:contractors@example.com", "contractors")
+
+	if got := h.access(t, "lead@example.com"); got == nil || slices.Contains(got.Scopes, "tasks:write") {
+		t.Fatalf("lead's access = %+v, want tasks:write withheld by the contractors group", got)
+	}
+	// The deny grants nothing, so it is "no wider" than anybody's role;
+	// re-roling or removing it would still give lead -- and everybody
+	// else in the group -- what it withholds.
+	group := "/api/access/principals/" + url.PathEscape("group:contractors@example.com")
+	for _, as := range []string{"lead@example.com", "ops@example.com"} {
+		if code, body := h.call(as, http.MethodPatch, group, `{"role":"grain/viewer"}`); code != http.StatusForbidden || !strings.Contains(body, "denies") {
+			t.Fatalf("%s PATCH a denying entry: %d %s, want 403", as, code, body)
+		}
+		if code, body := h.call(as, http.MethodDelete, group, ""); code != http.StatusForbidden || !strings.Contains(body, "denies") {
+			t.Fatalf("%s DELETE a denying entry: %d %s, want 403", as, code, body)
+		}
+	}
+	bearer := map[string]string{"Authorization": "Bearer " + testAccessCode, "Content-Type": "application/json"}
+	if rec := serveFrom(h.srv, "127.0.0.1:4242", http.MethodDelete, group, "", bearer); rec.Code != http.StatusOK {
+		t.Fatalf("access code DELETE a denying entry: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestRoleAssignmentRules(t *testing.T) {
 	h := newRoleHarness(t)
 	h.allow(t, "user:ops@example.com", model.DefaultAccessRole)

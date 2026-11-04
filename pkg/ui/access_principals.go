@@ -380,8 +380,9 @@ func (c *Client) allowedPrincipalNamed(ctx context.Context, canonical string) (m
 
 // checkAccessEntryChange refuses a change to entry (whose role is current,
 // "" for none) by a caller who may not make it: any agent, and a verified
-// session whose own role is narrower than current or for which current is
-// a role only an access-code admin assigns (docs/design/access-rbac.md §3).
+// session whose own role is narrower than current, or for which current is
+// a role only an access-code admin assigns or one that denies scopes
+// (docs/design/access-rbac.md §3).
 func checkAccessEntryChange(ctx context.Context, entry, current string) error {
 	if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
 		return &ForbiddenError{err: fmt.Errorf("agent %s may not change who signs in to this deployment: only a person changes the allowed users and groups list", p.ID)}
@@ -396,6 +397,13 @@ func checkAccessEntryChange(ctx context.Context, entry, current string) error {
 	}
 	if set.Person {
 		return &ForbiddenError{err: fmt.Errorf("%s has role %s, which holds a dangerous scope: only an access-code admin changes it or removes it", entry, current)}
+	}
+	if len(roleDenies(current)) > 0 {
+		// A deny is a veto over every other entry the same people match
+		// (docs/design/access-rbac.md §2): removing or re-roling it
+		// widens them -- the caller among them, perhaps -- past anything
+		// noWiderThan sees, since a deny grants nothing to compare.
+		return &ForbiddenError{err: fmt.Errorf("%s has role %s, which denies scopes: only an access-code admin lifts a deny by changing it or removing it", entry, current)}
 	}
 	if err := caller.noWiderThan(resolveAccessRoles(entry, []string{current})); err != nil {
 		return &ForbiddenError{err: fmt.Errorf("%s has role %s, which is wider than %s's own (%v): only an access-code admin changes it", entry, current, caller.Who, err)}

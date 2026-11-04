@@ -80,8 +80,10 @@ a service account (unchanged).
   scopes on every repository that scope reaches. The caller cannot
   assign a role that is marked "only a person may grant" (§4), and it
   cannot change or remove an entry whose current role is wider than its
-  own or is marked that way. Only an unlimited admin can do those
-  things.
+  own, is marked that way, or denies scopes (lifting a deny widens
+  everybody the entry matches, perhaps the caller too, and a deny grants
+  nothing for "no wider" to compare). Only an unlimited admin can do
+  those things.
 - **Agents and sandboxes may not change the list by any route.**
   `POST`, `PATCH` and `DELETE /api/access/principals` refuse an acting
   task, a console session and an external agent token, whatever api
