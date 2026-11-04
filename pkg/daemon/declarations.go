@@ -88,6 +88,55 @@ func (s RepoDeclarationSource) Head(ctx context.Context, repo model.RepoRef) (st
 	return "", nil
 }
 
+// Ref implements orchestrator.RefSource: the commit ref of repo peels to,
+// read with `git ls-remote` and the same credential Head uses, or "" when
+// the remote has no such ref. An annotated tag is advertised twice -- the
+// tag object, and its target as "<ref>^{}" -- and the target is the
+// answer, so moving a tag's message without moving its commit is not a
+// move. Patterns given to ls-remote match from the end of a ref's name,
+// so only the line naming ref exactly is read.
+func (s RepoDeclarationSource) Ref(ctx context.Context, repo model.RepoRef, ref string) (string, error) {
+	if err := s.allowed(repo); err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(ref, "refs/") || strings.HasPrefix(ref, "-") {
+		return "", fmt.Errorf("%q is not a full ref name", ref)
+	}
+	ctx, cancel := context.WithTimeout(ctx, declarationTimeout)
+	defer cancel()
+
+	dir, err := ciMkdirTemp(s.Clone.TempDir, "grain-ref-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(dir)
+
+	out, err := s.Clone.clone(ctx, dir, repo, "ls-remote", "--", s.Clone.cloneURL(repo), ref, ref+"^{}")
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(out))
+	}
+	return peeledRef(out, ref), nil
+}
+
+// peeledRef reads ref's commit out of `git ls-remote` output: its peeled
+// "<ref>^{}" line when the remote sent one, and its own line otherwise.
+func peeledRef(out, ref string) string {
+	direct := ""
+	for _, line := range strings.Split(out, "\n") {
+		sha, name, ok := strings.Cut(strings.TrimSpace(line), "\t")
+		if !ok || !ciCommitName.MatchString(sha) {
+			continue
+		}
+		switch strings.TrimSpace(name) {
+		case ref + "^{}":
+			return sha
+		case ref:
+			direct = sha
+		}
+	}
+	return direct
+}
+
 // Read implements orchestrator.DeclarationSource.
 func (s RepoDeclarationSource) Read(ctx context.Context, repo model.RepoRef) (model.RepoDeclarations, string, error) {
 	if err := s.allowed(repo); err != nil {
