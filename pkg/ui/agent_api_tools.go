@@ -110,6 +110,9 @@ var routeDocs = map[string]string{
 	"POST /api/tasks/{id}/force-merge":                                     "Merge a task's pull request even though the merge queue will not, recording reason; head pins the commit to merge.",
 	"POST /api/tasks/{id}/run-now":                                         "Dispatch a queued task now, ahead of the queue.",
 	"POST /api/tasks/{id}/pull-request":                                    "Open the pull request for a task's pushed branch now, rather than when its run ends.",
+	"POST /api/pull-requests/adopt":                                        "Adopt a pull request grain did not open (owner/name#n or its URL) as a shepherd task: review-only (the default) reviews and gates it without pushing; finish also pushes fixes, and upgrades a review-only shepherd in place. Needs merge:write and tasks:write on its repository.",
+	"POST /api/pull-requests/review":                                       "File a grain review of a pull request (owner/name#n or its URL); design: true checks design-folder conventions and overlapping designs. Needs tasks:write and repos:read on its repository.",
+	"GET /api/pull-requests/status":                                        "Where a pull request stands: its head, shepherd task and mode, latest grain CI run and failing jobs, grain reviews and findings, and its merge-queue gate. Needs ci:read and tasks:read on its repository.",
 	"POST /api/tasks/{id}/sandbox/recreate":                                "Destroy a task's sandbox and build a fresh one in its place; uncommitted work in it is lost.",
 	"POST /api/sandbox-probe":                                              "Build a throwaway sandbox named probe-<id>, run argv in it over the deployment's guest-access channel (access: dialout or kubectl), return its output and exit code, and delete it.",
 	"POST /api/tasks/{id}/messages":                                        "Say something to the human watching your own task and park it on their reply (the chat tool's write half); only your own task's id is accepted. Give summary too: one line of at most 100 characters naming the decision you need, which is all the inbox and task list show of it. To message another task's agent, use POST /api/tasks/{id}/agent-messages.",
@@ -382,6 +385,8 @@ var routeBodies = map[string]any{
 	"PUT /api/github-tokens/{name}":                                     setGitHubTokenRequest{},
 	"PUT /api/secrets/{secret}/{key}":                                   setSecretRequest{},
 	"POST /api/state-repo/pull-requests":                                ConfigPullRequestRequest{},
+	"POST /api/pull-requests/adopt":                                     AdoptPullRequestRequest{},
+	"POST /api/pull-requests/review":                                    ReviewPullRequestRequest{},
 	"POST /api/state-repo/remote":                                       stateRepoRemoteRequest{},
 	"POST /api/state-repo/secrets-key":                                  secretsKeyRequest{},
 	"POST /api/state-repo/import-key":                                   secretsKeyRequest{},
@@ -411,6 +416,10 @@ var routeBodies = map[string]any{
 // still carries any parameter a caller adds (such as a template
 // composition's field.<name>).
 var routeQueries = map[string]map[string]string{
+	"GET /api/pull-requests/status": {
+		"pr":      "The pull request: owner/name#n or its URL.",
+		"threads": "1 to include every inline review thread's file, line and body.",
+	},
 	"GET /api/restart-watch": {
 		"quick": "1 to answer at once with whether grain is restarting, rather than holding the request until it is or 25 s pass.",
 	},

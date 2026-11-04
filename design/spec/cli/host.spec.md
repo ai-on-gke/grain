@@ -21,7 +21,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 | Kind | Commands |
 |---|---|
 | Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume` |
-| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|role|deny`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `declarations check` |
+| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|role|deny`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status`, `declarations check` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
 | Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db upgrade-postgres`), `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
 | Modes: build information | `version`, `schema-version`, `release-notes`, `sandbox-image`, `container-sandbox-image`, `k8s-sandbox-image`, `image` |
@@ -975,6 +975,54 @@ _No flags._
 
 ---
 
+### 4.15 `grain pr adopt|review|status <pr>` {#CLI-65}
+
+The external half of pull-request coordination ([`external-cli.spec.md`](../external-cli/external-cli.spec.md) #XC-28, #XC-29). `<pr>` is `owner/name#n` or the pull request's GitHub URL; anything else **MUST** fail with a usage error before any request is sent. Every verb takes `-json` and the global `-json`. The in-sandbox `grain pr` ([`sandbox.spec.md`](sandbox.spec.md)) is a different command about the task's own branch.
+
+1. `grain pr adopt <pr> [-mode review-only|finish] [-spec <path>] [-design <path>]` calls `POST /api/pull-requests/adopt` (scope `merge:write`, and `tasks:write` on the pull request's repository) and prints the shepherd task's ID, state and mode. `-mode` defaults to `review-only`; `finish` on a pull request a review-only shepherd already holds upgrades that task in place. A filing that lands `proposed` says it waits for a person.
+2. `grain pr review <pr> [-design] [-spec <path>]` calls `POST /api/pull-requests/review` (scope `tasks:write`, and `repos:read` on the repository) and prints the review task. `-design` asks for a design review: `design/spec/contributions/contributions.spec.md` conventions and overlapping designs under `design/`.
+3. `grain pr status <pr> [-threads]` calls `GET /api/pull-requests/status` (scope `ci:read`, and `tasks:read` on the repository) and prints the head SHA, the shepherd task and mode, the latest grain CI run and its failing jobs, each grain review with its state and finding count, the merge-queue gate, and with `-threads` every inline review thread's file, line and body.
+
+#### `grain pr`
+
+<!-- BEGIN GENERATED FLAGS: grain pr -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+#### `grain pr adopt`
+
+<!-- BEGIN GENERATED FLAGS: grain pr adopt -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-design` | string |  |  | the design the change implements, as a repository path under design/design/ |
+| `-json` | bool |  |  | print the shepherd task as JSON |
+| `-mode` | string | `"review-only"` |  | review-only (grain reviews and gates the pull request without pushing) or finish (it also pushes fixes) |
+| `-spec` | string |  |  | the specification the change implements, as a repository path under design/spec/ |
+<!-- END GENERATED FLAGS -->
+
+#### `grain pr review`
+
+<!-- BEGIN GENERATED FLAGS: grain pr review -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-design` | bool |  |  | review the design: design-folder conventions (contributions.spec.md) and overlapping designs under design/ |
+| `-json` | bool |  |  | print the review task as JSON |
+| `-spec` | string |  |  | a specification to check the change's conformance against, as a repository path under design/ |
+<!-- END GENERATED FLAGS -->
+
+#### `grain pr status`
+
+<!-- BEGIN GENERATED FLAGS: grain pr status -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-json` | bool |  |  | print the status as JSON |
+| `-threads` | bool |  |  | list every inline review thread's file, line and body |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/prcmd_test.go`, `pkg/ui/pull_requests_api_test.go`: `TestGrainPRReviewDesignAndPRStatusThreadsJSON`; `pkg/orchestrator/takeover_adopt_test.go`: `TestAdoptPullRequestReviewOnlyVsFinishUpgradeInPlace`, `TestAdoptPullRequestLinksSpecAndDesignIntoConformanceReviewAndProposalGate`, `TestPullRequestReviewDesignAndStatusThreads`.
+
+---
+
 ## 5. Service modes
 
 ### 5.1 `grain daemon [flags]` {#CLI-43}
@@ -1020,6 +1068,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-codex-run` | string |  |  | where the codex CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through grain hostd, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release. codex also takes "detached": the image's codex, through grain hostd's codex-detached entry, so a daemon upgrade does not interrupt it |
 | `-container-git-proxy-host` | string |  |  | host address grain services are reachable at from local sandbox containers |
 | `-container-sandbox-cap-add` | string |  |  | comma-separated Linux capabilities handed back to local sandbox containers, which otherwise run with every capability dropped and no-new-privileges set; the stock sandbox image needs none |
+| `-container-sandbox-fence` | string | `"auto"` |  | auto, require or off: whether local sandbox containers are fenced off from this host, its networks and link-local (the metadata server) by a per-container nftables chain. auto fences when nft can be run and otherwise runs containers unfenced and refuses external capability grants; require refuses a container that cannot be fenced; off never fences and refuses external capability grants |
 | `-container-sandbox-image` | string | `"ghcr.io/bwsalmon/grain/k8s-sandbox:latest"` |  | image used by local container sandboxes |
 | `-container-sandbox-network` | string |  |  | Docker network local sandbox containers join. Empty uses grain-sandboxes, a bridge grain creates with inter-container traffic disabled; any other name must already exist ("bridge" is Docker's shared default network) |
 | `-container-sandboxes` | bool |  |  | dispatch each run into its own local Docker container |

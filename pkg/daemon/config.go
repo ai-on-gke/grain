@@ -565,6 +565,10 @@ type Config struct {
 	ContainerGitProxyHost string
 	ContainerNetwork      string
 	ContainerCapAdd       []string
+	// ContainerFence is -container-sandbox-fence: whether container
+	// sandboxes are fenced off from this host by nftables
+	// (orchestrator.ContainerConfig.Fence).
+	ContainerFence orchestrator.ContainerFenceMode
 	// sandboxCIDR and sandboxNetwork are the address pool every granule
 	// sandbox VM is given an address out of and the docker network those
 	// addresses are on -- see -granule-sandbox-cidr. An empty CIDR is every
