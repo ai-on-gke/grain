@@ -1305,6 +1305,7 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	detail.PendingSecret = c.pendingSecretFor(obs)
 	if obs != nil {
 		detail.PendingConfigChange = obs.PendingConfigChange
+		detail.PendingAccess = c.pendingAccessFor(ctx, *t, obs)
 	}
 	detail.LocalScriptApprovals = c.localScriptApprovals().ForTask(id, c.now())
 	detail.CI = ciStatusFrom(obs)
@@ -3421,6 +3422,7 @@ func (c *Client) park(ctx context.Context, taskID, reason string, now time.Time)
 	return c.Store.ObserveField(ctx, taskID, now, func(o *model.Observation) {
 		o.PendingQuestionCommentID = &commentID
 		o.PendingSecret = ""
+		o.PendingAccess = nil
 	})
 }
 
@@ -5821,6 +5823,7 @@ func (c *Client) addAttributedComment(ctx context.Context, id, body string, atta
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
 		o.PendingQuestionCommentID = nil
 		o.PendingSecret = ""
+		o.PendingAccess = nil
 	}); err != nil {
 		return err
 	}
@@ -5884,6 +5887,7 @@ func (c *Client) reopenAcknowledgeable(ctx context.Context, id string, now time.
 		o.RetryRequestedAt = &now
 		o.PendingQuestionCommentID = nil
 		o.PendingSecret = ""
+		o.PendingAccess = nil
 	}); err != nil {
 		return false, err
 	}
@@ -5924,6 +5928,7 @@ func (c *Client) Stop(ctx context.Context, id string) error {
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
 		o.PendingQuestionCommentID = &commentID
 		o.PendingSecret = ""
+		o.PendingAccess = nil
 	}); err != nil {
 		return err
 	}
@@ -6118,6 +6123,7 @@ func (c *Client) retry(ctx context.Context, id string) error {
 		if stopped {
 			o.PendingQuestionCommentID = nil
 			o.PendingSecret = ""
+			o.PendingAccess = nil
 		}
 	}); err != nil {
 		return err
@@ -6665,6 +6671,7 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 		o.RetryRequestedAt = &now
 		o.PendingQuestionCommentID = nil
 		o.PendingSecret = ""
+		o.PendingAccess = nil
 	}); err != nil {
 		return err
 	}

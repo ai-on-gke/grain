@@ -755,6 +755,10 @@ type TaskDetail struct {
 	// proposed (propose_config_change, task_config_change.go): what the
 	// task pane renders as an inline diff with Approve and Reject.
 	PendingConfigChange *model.PendingConfigChange `json:"pendingConfigChange,omitempty"`
+	// PendingAccess is the access request a parked run made with
+	// request_access (task_access_request.go), each item judged against
+	// what the task holds now; nil for a task parked on none.
+	PendingAccess *AccessRequestView `json:"pendingAccess,omitempty"`
 	// CI is what grain's own CI last said about the branch this task
 	// pushed (model.Observation.CI), nil for the overwhelming majority of
 	// tasks -- one that does not hold the grain-ci capability, or whose

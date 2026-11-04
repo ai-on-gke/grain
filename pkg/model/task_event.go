@@ -68,6 +68,11 @@ const (
 	TaskEventReordered         TaskEventKind = "reordered"
 	// TaskEventSecretSet's Detail names the secret, never its value.
 	TaskEventSecretSet TaskEventKind = "secret-set"
+	// TaskEventAccessGranted's Detail lists what a person granted of an
+	// access request (ui.Client.GrantAccessRequest); TaskEventAccessDenied's
+	// is their reason for denying one.
+	TaskEventAccessGranted TaskEventKind = "access-granted"
+	TaskEventAccessDenied  TaskEventKind = "access-denied"
 )
 
 // TransitionReopened is the timeline's name for a reopen. It is not one

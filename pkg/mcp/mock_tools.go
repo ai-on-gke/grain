@@ -315,6 +315,8 @@ type MockSink struct {
 	comment        string
 	nothingNeeded  string
 	secretRequest  *SecretRequest
+	accessRequest  *AccessRequest
+	accessChecker  AccessRequestChecker
 	proposedTasks  []ProposedTask
 	reviewComments []ReviewComment
 	// files is how ask_question and comment_on_issue read and hold an
@@ -372,6 +374,28 @@ func (s *MockSink) SecretRequest() *SecretRequest {
 	return &req
 }
 
+// AccessRequest is the access this run asked a person for, or nil if it
+// asked for none.
+func (s *MockSink) AccessRequest() *AccessRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.accessRequest == nil {
+		return nil
+	}
+	req := *s.accessRequest
+	return &req
+}
+
+// SetAccessChecker gives request_access the daemon's check of what a
+// request names (AccessRequestChecker), set after the tools are
+// registered for SetAttachmentFiles' reason. Without one only the
+// request's shape is checked.
+func (s *MockSink) SetAccessChecker(checker AccessRequestChecker) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.accessChecker = checker
+}
+
 func (s *MockSink) ProposedTasks() []ProposedTask {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -394,8 +418,8 @@ func (s *MockSink) ReviewComments() []ReviewComment {
 	return out
 }
 
-// NewMockTools returns the seven escape-hatch tools -- ask_question,
-// request_secret, comment_on_issue, nothing_needed, write_handover, propose_task,
+// NewMockTools returns the eight escape-hatch tools -- ask_question,
+// request_secret, request_access, comment_on_issue, nothing_needed, write_handover, propose_task,
 // add_review_comment -- four of them under the names v1 gave them, which
 // is also the vocabulary orchestrator.ProcessResult matches against (see
 // toolnames.go).
@@ -438,6 +462,7 @@ func NewMockTools(sink *MockSink, proposeRepos []string) []Tool {
 	return []Tool{
 		askQuestionTool(sink),
 		requestSecretTool(sink),
+		requestAccessTool(sink),
 		commentOnIssueTool(sink),
 		nothingNeededTool(sink),
 		writeHandoverTool(),
