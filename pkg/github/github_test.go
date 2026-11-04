@@ -3161,3 +3161,24 @@ func TestResolveReviewThreadRaisesGraphQLErrors(t *testing.T) {
 		t.Fatalf("err = %v, want a permission refusal", err)
 	}
 }
+
+type appSlugTokens struct {
+	StaticToken
+	slug string
+}
+
+func (a appSlugTokens) AppSlugFor(owner, repo string) (string, error) { return a.slug, nil }
+
+// CheckRunApp names the App a check run grain posts carries only when the
+// token source can say; a bare token cannot.
+func TestCheckRunAppAsksTheTokenSource(t *testing.T) {
+	t.Parallel()
+	if app, err := NewClient(nil, appSlugTokens{slug: "grain-bot"}).CheckRunApp("acme", "widgets"); app != "grain-bot" || err != nil {
+		t.Fatalf("CheckRunApp = (%q, %v), want grain-bot", app, err)
+	}
+	for _, tokens := range []TokenSource{StaticToken{strPtr("t")}, nil} {
+		if app, err := NewClient(nil, tokens).CheckRunApp("acme", "widgets"); app != "" || err != nil {
+			t.Fatalf("CheckRunApp over %T = (%q, %v), want no app", tokens, app, err)
+		}
+	}
+}

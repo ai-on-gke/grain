@@ -852,26 +852,6 @@ Reads a checkout's `.grain/templates`, `.grain/suites` and `.grain/schedules` an
 
 ---
 
-### 4.14 `grain access list|allow|deny` {#CLI-107}
-
-<a id="CLI-63"></a>This manages the allowed users and groups (Settings -> Access): who may sign in when authenticated by Cloud IAP or another registered IdentityVerifier. The agent API scopes are `access:read` for `list`, `access:write` for `allow` and `deny` (`pkg/ui/route_scopes.go`).
-
-| Subcommand | Request |
-|---|---|
-| `list` (the default; also `ls`) | `GET /api/access/principals`. Prints each entry with who added it and when, or `No allowed users or groups.`, and warns about `-ui-allowed-principals` entries that were dropped on import |
-| `allow <user:<email>\|group:<email>>` (also `add`) | `POST /api/access/principals {"entry"}`. Adding an existing entry is a no-op |
-| `deny <user:<email>\|group:<email>>` (also `remove`, `rm`) | `DELETE /api/access/principals/{entry}` |
-
-Errors: an unknown subcommand gives `unknown access subcommand "<s>"` followed by the usage, and a wrong argument count gives that subcommand's own usage line (`usage: grain access allow <user:<email>|group:<email>>`). This replaces the deprecated `-ui-allowed-principals` flag on `grain daemon` and `grain demo`, which is now only imported once into an empty database allowlist. (This section used to appear twice; the second copy, `#CLI-63`, is folded in here.)
-
-<!-- BEGIN GENERATED FLAGS: grain access -->
-_No flags._
-<!-- END GENERATED FLAGS -->
-
-**Pinned by:** `pkg/cli/access_test.go`: `TestGrainAccessCLI`.
-
----
-
 ## 5. Service modes
 
 ### 5.1 `grain daemon [flags]` {#CLI-43}
@@ -1031,7 +1011,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-run-host-credential-dir` | string |  |  | the shared credential directory every run host mounts read-write, as a directory and at the same path (only used with -run-host-image) |
 | `-run-host-daemon-url` | string |  |  | the API address a run host's mcpserver is given, when not this process's own: a run pod needs one that outlives the daemon pod, e.g. http://grain.grain.svc |
 | `-run-host-dir` | string |  |  | where run hosts' spools and staging live, seen at the same path by the daemon and every run host (default <data-dir>/runhosts; under -k8s-run-host-rwx, on that volume) |
-| `-run-host-image` | string |  |  | drive each claude run in a run host of this image: a container that is a sibling of the daemon, not a child of it, writing to a spool the daemon tails (pkg/runhost, design/design/non-disruptive-upgrade.design.md). Normally the deployment image itself ("self" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes: a run host cannot reach a container sandbox |
+| `-run-host-image` | string |  |  | drive each claude run in a run host of this image: a container that is a sibling of the daemon, not a child of it, writing to a spool the daemon tails (pkg/runhost, design/design/non-disruptive-upgrade.design.md). Normally the deployment image itself ("self" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes or -host-sandboxes: a run host cannot reach either sandbox |
 | `-sandbox-access-addr` | string |  |  | k8s-granule only: address to run the sandbox-access acceptor on (":4244"), which every sandbox pod's wrapper then dials out to over mTLS with its own certificate and token (pkg/sandboxaccess, design/design/grain-on-gke.design.md "Sandbox access"); empty leaves it off and builds pods as before |
 | `-sandbox-access-ca-secret` | string |  |  | Secret Manager secret (projects/<p>/secrets/<s>) holding the sandbox-access CA, read through Workload Identity and generated into it on first start; empty keeps the CA in <data-dir>/sandbox-access-ca.pem |
 | `-sandbox-access-dial` | string |  |  | the address sandbox wrappers dial the acceptor at; empty is grain-access.<-k8s-namespace>.svc:4244, the Service deploy/kubernetes/grain-granule.yaml creates |
@@ -1664,6 +1644,24 @@ Reconciles a live deployment's settings (`GET /api/settings`, then `PUT /api/set
 **Pinned by:** `pkg/cli/sync_test.go`: `TestCmdSyncRequiresConfig`, `TestCmdSyncRejectsAConfigWithNeitherSection`, `TestCmdSyncDryRunPlansSettingsWithoutWriting`, `TestCmdSyncPresentsTheLocalAPITokenFromCLIEnvsDataDir`.
 
 ---
+
+### 6.11 `grain access <list|allow|deny> [args]` {#CLI-63}
+
+<a id="CLI-107"></a>This manages the allowed users and groups list (Settings -> Access): who may sign in when authenticated by Cloud IAP or another registered IdentityVerifier. Unlike the rest of this section it calls the daemon's API. The agent API scopes are `access:read` for `list`, `access:write` for `allow` and `deny` (`pkg/ui/route_scopes.go`).
+
+| Subcommand | Request |
+|---|---|
+| `list` (the default; also `ls`) | `GET /api/access/principals`. Prints each entry with who added it and when, or `No allowed users or groups.`, and warns about `-ui-allowed-principals` entries that were dropped on import |
+| `allow <user:<email>\|group:<email>>` (also `add`) | `POST /api/access/principals {"entry"}`. Adding an existing entry is a no-op |
+| `deny <user:<email>\|group:<email>>` (also `remove`, `rm`) | `DELETE /api/access/principals/{entry}` |
+
+Errors: an unknown subcommand gives `unknown access subcommand "<s>"` followed by the usage, and a wrong argument count gives that subcommand's own usage line (`usage: grain access allow <user:<email>|group:<email>>`). This replaces the deprecated `-ui-allowed-principals` flag on `grain daemon` and `grain demo`, which is now only imported once into an empty database allowlist.
+
+<!-- BEGIN GENERATED FLAGS: grain access -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/access_test.go`: `TestGrainAccessCLI`.
 
 ## 7. Build information modes
 

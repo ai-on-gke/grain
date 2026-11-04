@@ -277,6 +277,21 @@ func TestCheckConfigRefusesRunHostsWithContainerSandboxes(t *testing.T) {
 	}
 }
 
+func TestCheckConfigRefusesRunHostsWithHostSandboxes(t *testing.T) {
+	t.Parallel()
+	cfg, _, unknown, err := parseDaemonArgs([]string{
+		"-data-dir", "/var/lib/grain/data", "-sandbox-dir", "/var/lib/grain/data/scratches",
+		"-host-sandboxes", "-allow-unisolated-host-sandboxes", "-run-host-image", "example/grain",
+	})
+	if err != nil || len(unknown) > 0 {
+		t.Fatalf("parseDaemonArgs = %v, unknown %v", err, unknown)
+	}
+	err = checkConfig(cfg)
+	if err == nil || !strings.Contains(err.Error(), "-run-host-image") || !strings.Contains(err.Error(), "-host-sandboxes") {
+		t.Fatalf("checkConfig(-run-host-image with -host-sandboxes) = %v, want a refusal naming both flags", err)
+	}
+}
+
 // -host-sandboxes is a backend of its own again, for a single-user
 // workstation: the flag parses, selects it, and starts on a loopback UI,
 // and the guard refuses the default (every-interface) UI without the

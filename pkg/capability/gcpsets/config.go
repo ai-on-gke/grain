@@ -125,7 +125,44 @@ type PermissionSet struct {
 	// says so, since nothing tells which deployment those were made by;
 	// on for every set Migrate makes.
 	AdoptLegacy bool
+	// ServiceAccount, when set, is an existing service account every
+	// grant of the set acts as (docs/gcp-key-permission-sets.md, "Using
+	// an existing service account"). The server never creates, changes or
+	// deletes it and never binds a role for it: Roles become what Test
+	// checks the account holds, not what anything grants, and the admin's
+	// role ceiling does not apply. What the task gets is whatever the
+	// account may already do.
+	ServiceAccount string
+	// Credential is how a ServiceAccount set's grants get their
+	// credentials: CredentialToken (the default) mints short-lived access
+	// tokens by impersonation and no key exists; CredentialKey mints a
+	// key, as created sets do.
+	Credential string
+	// PersonGranted makes the set one only a person may grant
+	// (protocol.PersonGrantedArgKey): an agent holding it cannot pass it
+	// on to a task it files. On by default for a set over an existing
+	// service account, whose existing permissions may be broad.
+	PersonGranted bool
 }
+
+// Credential modes of a set over an existing service account.
+const (
+	CredentialToken = "token"
+	CredentialKey   = "key"
+)
+
+// Existing reports whether the set acts as an existing service account
+// it was given (ServiceAccount) rather than accounts it creates.
+func (s *PermissionSet) Existing() bool { return s.ServiceAccount != "" }
+
+// TokenMode reports whether the set's grants get impersonated access
+// tokens rather than keys.
+func (s *PermissionSet) TokenMode() bool { return s.Existing() && s.Credential != CredentialKey }
+
+// fixed reports whether the set's accounts are given rather than
+// created: the migrated pool's Accounts or an existing ServiceAccount.
+// Nothing the server does ever creates, binds or deletes one of them.
+func (s *PermissionSet) fixed() bool { return len(s.Accounts) > 0 || s.Existing() }
 
 // Config is the server's whole configuration.
 type Config struct {
@@ -215,6 +252,18 @@ func (c *Config) Set(name string) *PermissionSet {
 	return nil
 }
 
+// PersonGrantedSets lists the sets only a person may grant, in
+// configured order.
+func (c *Config) PersonGrantedSets() []string {
+	var out []string
+	for _, s := range c.Sets {
+		if s.PersonGranted {
+			out = append(out, s.Name)
+		}
+	}
+	return out
+}
+
 // SetNames lists the permission sets in configured order: the grant
 // argument's enum, whose first entry is the default.
 func (c *Config) SetNames() []string {
@@ -283,11 +332,16 @@ func Schema() map[string]any {
 				"items": map[string]any{
 					"type":                 "object",
 					"additionalProperties": false,
-					"required":             []any{"name", "project"},
+					"required":             []any{"name"},
 					"properties": map[string]any{
-						"name":           map[string]any{"type": "string", "pattern": migratedNamePattern.String()},
+						"name": map[string]any{"type": "string", "pattern": migratedNamePattern.String()},
+						"service_account": map[string]any{"type": "string", "pattern": serviceAccountEmailPattern.String(),
+							"description": "Optional: an existing service account every grant acts as, instead of accounts grain creates. Grain never creates, changes or deletes it and binds no roles for it, so the task gets whatever the account may already do; roles then only list what Test checks it holds. Not with pool_max or adopt_legacy."},
+						"credential": map[string]any{"type": "string", "enum": []any{CredentialToken, CredentialKey},
+							"description": "With service_account: token (the default, recommended) gives the task short-lived access tokens by impersonation -- no key exists, the admin needs roles/iam.serviceAccountTokenCreator on the account; key mints a key deleted at release (GCP's 10 keys per account cap concurrent attempts at 10)."},
 						"admin":          map[string]any{"type": "string", "description": "The admin account that manages this set.", "deprecated": true},
-						"project":        str("The one project the set's service accounts live and are bound in."),
+						"person_granted": map[string]any{"type": "boolean", "description": "Only a person may grant this set; an agent holding it cannot pass it on to a task it files. Default: on with service_account, off otherwise."},
+						"project":        str("The one project the set's service accounts live and are bound in (with service_account: the project gcloud selects, default the account's own)."),
 						"roles":          strs("Roles bound to the set's service accounts within the project (e.g. roles/storage.objectViewer)."),
 						"resource_scope": str("Optional: bind on one resource instead of the project, e.g. buckets/<name>."),
 						"max_lease":      map[string]any{"type": "string", "pattern": `^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$`, "description": "Longest a key may live, as a Go duration (default 24h)."},
@@ -388,15 +442,22 @@ func ParseWithEnv(config map[string]any, env func(string) string) (*Config, erro
 	}
 	for _, item := range list(config["permission_sets"]) {
 		s := PermissionSet{
-			Name:          str(item["name"]),
-			Admin:         str(item["admin"]),
-			Project:       str(item["project"]),
-			Roles:         strList(item["roles"]),
-			ResourceScope: str(item["resource_scope"]),
-			Accounts:      strList(item["accounts"]),
-			KeyPath:       str(item["key_path"]),
+			Name:           str(item["name"]),
+			Admin:          str(item["admin"]),
+			Project:        str(item["project"]),
+			Roles:          strList(item["roles"]),
+			ResourceScope:  str(item["resource_scope"]),
+			Accounts:       strList(item["accounts"]),
+			KeyPath:        str(item["key_path"]),
+			ServiceAccount: str(item["service_account"]),
+			Credential:     str(item["credential"]),
 		}
 		s.AdoptLegacy, _ = item["adopt_legacy"].(bool)
+		if v, ok := item["person_granted"].(bool); ok {
+			s.PersonGranted = v
+		} else {
+			s.PersonGranted = s.ServiceAccount != ""
+		}
 		if v := str(item["max_lease"]); v != "" {
 			d, err := time.ParseDuration(v)
 			if err != nil || d <= 0 {
@@ -521,6 +582,15 @@ func (c *Config) Validate() error {
 		if a == nil {
 			return fmt.Errorf("permission set %q: no admin is called %q", s.Name, s.Admin)
 		}
+		if s.Existing() {
+			if err := validateExisting(s, a, explicitProjects[a.Name]); err != nil {
+				return err
+			}
+			continue
+		}
+		if s.Credential != "" {
+			return fmt.Errorf("permission set %q: credential applies only to a set with service_account", s.Name)
+		}
 		if len(s.Accounts) == 0 {
 			if !projectPattern.MatchString(s.Project) {
 				return fmt.Errorf("permission set %q: %q is not a project id", s.Name, s.Project)
@@ -615,6 +685,78 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// validateExisting checks a set over an existing service account: it
+// creates nothing, so nothing that sizes, adopts or binds a pool applies,
+// and its roles are checked by Test, never granted, so the admin's role
+// ceiling does not bound them. The account must be in one of the admin's
+// projects: the admin's right to act as it is what the set relies on.
+func validateExisting(s *PermissionSet, a *Admin, explicitProjects bool) error {
+	switch {
+	case s.AdoptLegacy:
+		return fmt.Errorf("permission set %q: service_account and adopt_legacy are exclusive: a set over an existing account adopts nothing", s.Name)
+	case len(s.Accounts) > 0:
+		return fmt.Errorf("permission set %q: service_account and accounts are exclusive", s.Name)
+	case s.PoolMax > 0:
+		return fmt.Errorf("permission set %q: service_account and pool_max are exclusive: a set over an existing account creates no pool", s.Name)
+	case s.ResourceScope != "":
+		return fmt.Errorf("permission set %q: resource_scope binds roles, which a set over an existing service account never does", s.Name)
+	}
+	if !serviceAccountEmailPattern.MatchString(s.ServiceAccount) || strings.Contains(s.ServiceAccount, "..") {
+		return fmt.Errorf("permission set %q: service_account %q is not a service account email", s.Name, s.ServiceAccount)
+	}
+	switch s.Credential {
+	case "":
+		s.Credential = CredentialToken
+	case CredentialToken, CredentialKey:
+	default:
+		return fmt.Errorf("permission set %q: credential must be %s or %s", s.Name, CredentialToken, CredentialKey)
+	}
+	home, ok := AccountProject(s.ServiceAccount)
+	if !ok {
+		return fmt.Errorf("permission set %q: cannot tell which project service account %s is in; use one named <id>@<project>.iam.gserviceaccount.com", s.Name, s.ServiceAccount)
+	}
+	if explicitProjects {
+		if !contains(a.Projects, home) {
+			return fmt.Errorf("permission set %q: service account %s is in project %q, which is not one of admin %q's projects", s.Name, s.ServiceAccount, home, a.Name)
+		}
+	} else if !contains(a.Projects, home) {
+		a.Projects = append(a.Projects, home)
+	}
+	if s.Project == "" {
+		s.Project = home
+	}
+	if !projectPattern.MatchString(s.Project) {
+		return fmt.Errorf("permission set %q: %q is not a project id", s.Name, s.Project)
+	}
+	for _, r := range s.Roles {
+		if !rolePattern.MatchString(r) {
+			return fmt.Errorf("permission set %q: %q is not a role", s.Name, r)
+		}
+	}
+	if s.MaxLease <= 0 {
+		s.MaxLease = DefaultMaxLease
+	}
+	s.PoolMax = 1
+	return nil
+}
+
+// AccountProject is the project a service account email names:
+// <id>@<project>.iam.gserviceaccount.com, or App Engine's
+// <project>@appspot.gserviceaccount.com.
+func AccountProject(email string) (string, bool) {
+	id, domain, ok := strings.Cut(email, "@")
+	if !ok {
+		return "", false
+	}
+	if p, ok := strings.CutSuffix(domain, ".iam.gserviceaccount.com"); ok && projectPattern.MatchString(p) {
+		return p, true
+	}
+	if domain == "appspot.gserviceaccount.com" && projectPattern.MatchString(id) {
+		return id, true
+	}
+	return "", false
 }
 
 // credentialKind says which kind of configured credential raw is,

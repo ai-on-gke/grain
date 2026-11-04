@@ -245,20 +245,31 @@ jobs_file() { # jobs_file <name> <job-json>...: the jobs of every nightly.yml ru
   printf '{"total_count":%s,"jobs":[%s]}' "$(($# - 1))" "${*:2}" > "$f"
   echo "$f"
 }
-# checks_file <name> [<conclusion|in_progress>...]: the grain/release-qualification
-# check runs on the RC, oldest first, as GET .../commits/{sha}/check-runs lists them.
+# checks_file <name> [[<app>:]<conclusion|in_progress>...]: the
+# grain/release-qualification check runs on the RC, oldest first, as GET
+# .../commits/{sha}/check-runs lists them. Each is grain's own (app
+# grain-test, id 42) unless <app> names another: a slug ("actions" is
+# github-actions, id 15368), "noapp" for one with no app at all.
 checks_file() {
-  local f="$work/$1.json" i=0 c
+  local f="$work/$1.json" i=0 c a app
   shift
   {
     printf '{"check_runs":['
-    printf '{"id":1,"name":"other","head_sha":"%s","status":"completed","conclusion":"failure","started_at":"%s"}' "$rc" "$(iso "$recent")"
+    printf '{"id":1,"name":"other","head_sha":"%s","status":"completed","conclusion":"failure","started_at":"%s","app":{"id":42,"slug":"grain-test"}}' "$rc" "$(iso "$recent")"
     for c in "$@"; do
       i=$((i + 1))
+      a=grain-test
+      [[ "$c" != *:* ]] || { a="${c%%:*}"; c="${c#*:}"; }
+      case "$a" in
+        grain-test) app=',"app":{"id":42,"slug":"grain-test"}' ;;
+        actions) app=',"app":{"id":15368,"slug":"github-actions"}' ;;
+        noapp) app='' ;;
+        *) app=",\"app\":{\"id\":7,\"slug\":\"$a\"}" ;;
+      esac
       if [ "$c" = in_progress ]; then
-        printf ',{"id":%s,"name":"grain/release-qualification","head_sha":"%s","status":"in_progress","conclusion":null,"started_at":"%s"}' "$((i + 1))" "$rc" "$(iso $((recent + i * 60)))"
+        printf ',{"id":%s,"name":"grain/release-qualification","head_sha":"%s","status":"in_progress","conclusion":null,"started_at":"%s"%s}' "$((i + 1))" "$rc" "$(iso $((recent + i * 60)))" "$app"
       else
-        printf ',{"id":%s,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"%s","started_at":"%s"}' "$((i + 1))" "$rc" "$c" "$(iso $((recent + i * 60)))"
+        printf ',{"id":%s,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"%s","started_at":"%s"%s}' "$((i + 1))" "$rc" "$c" "$(iso $((recent + i * 60)))" "$app"
       fi
     done
     printf ']}'
@@ -271,6 +282,7 @@ qualify() { # qualify <runs-file> [<checks-file>] [<more args>...]
   run check-qualification --rc-tag "$tag" --rc-sha "$rc" --runs-json "$runs" ${checks:+--checks-json "$checks"} "$@"
 }
 export RELEASE_NEVER_PROMOTE=""
+export CHECK_QUALIFICATION_APP=grain-test
 
 mapfile -t j < <(stage1_run)
 green1="$(jobs_file q-green "${j[@]}" "$(gh_job "govulncheck" failure 90 1 "$recent" "$c2")")"
@@ -376,6 +388,28 @@ check "check-qualification: Stage 2 failing its retry is red" 1 "FAIL grain/rele
 qualify "$green1" "$(checks_file q-c-infra neutral)"
 check "check-qualification: a neutral (INFRA) Stage 2 verdict is re-run" 3 \
   "RERUN qualification grain/release-qualification infra" "Qualification: INFRA"
+
+# Only grain's own app's check run qualifies: a same-named one from an
+# Actions workflow (checks: write), another app, or no app at all is
+# ignored, whatever it concludes.
+qualify "$green1" "$(checks_file q-c-foreign actions:success)"
+check "check-qualification: a same-named check run from GitHub Actions does not qualify" 2 \
+  "IGNORED grain/release-qualification: 1 from github-actions, not grain-test" \
+  "no grain/release-qualification check run on ${rc:0:12} yet" "Qualification: PENDING"
+lacks "check-qualification: the foreign check run is not judged" "PASS grain/release-qualification"
+qualify "$green1" "$(checks_file q-c-foreign2 in_progress actions:success intruder:success noapp:success)"
+check "check-qualification: foreign successes do not override grain's own pending run" 2 \
+  "IGNORED grain/release-qualification: 3 from github-actions, intruder, no app" \
+  "PENDING grain/release-qualification: still running"
+qualify "$green1" "$(checks_file q-c-foreign3 failure actions:success failure)"
+check "check-qualification: a foreign success between grain's failures is no retry pass" 1 \
+  "FAIL grain/release-qualification: failed again on its retry"
+CHECK_QUALIFICATION_APP=42 qualify "$green1" "$(checks_file q-c-appid actions:failure success)"
+check "check-qualification: CHECK_QUALIFICATION_APP may name the app by id" 0 \
+  "PASS grain/release-qualification: passed" "Qualification: PASS"
+CHECK_QUALIFICATION_APP='' qualify "$green1" "$(checks_file q-c-noapp success)"
+check "check-qualification: with no app configured no check run is trusted" 64 "CHECK_QUALIFICATION_APP is unset"
+lacks "check-qualification: an unconfigured gate never passes" "Qualification: PASS"
 
 RELEASE_NEVER_PROMOTE="v1.14.0 v3.1.0" qualify "$green1" "$(checks_file q-never success)"
 check "check-qualification: RELEASE_NEVER_PROMOTE fails an otherwise green RC" 1 "FAIL never: RELEASE_NEVER_PROMOTE (v1.14.0 v3.1.0) names v3.1.0"
