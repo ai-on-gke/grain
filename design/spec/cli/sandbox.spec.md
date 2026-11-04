@@ -551,7 +551,7 @@ Usage: `grain task propose --title <t> (--body <b> | --file <f>) [flags]`
 ### 5.1 `grain api` {#CLI-99}
 
 - `grain api routes [--scope s] [--json]` sends `GET /cli/api-routes` and prints one `METHOD PATH (scope)[ [--reason required]]` line per granted route, or `No agent API routes are granted to this attempt.`
-- `grain api <METHOD> <path>` sends that method to the proxy at `<path>`, which **MUST** start with `/api/` (`agent API path must start with /api/ (got "<p>")`). The body comes from the first of `--body`, `--file` (`-` for stdin), or repeated `--field key=value` (values parsed as JSON when they parse, else strings; `--field "<kv>" must be key=value`).
+- `grain api <METHOD> <path>` sends that method to the proxy at `<path>`, which **MUST** start with `/api/` (`agent API path must start with /api/ (got "<p>")`). The body comes from the first of `--body`, `--file` (`-` for stdin), or repeated `--field key=value` (a value that starts with `{` or `[`, or is `true`, `false` or `null`, is parsed as JSON; every other value, numbers included, is sent as a string; `--field "<kv>" must be key=value`).
 - `--reason` is sent as `X-Grain-Acting-Reason` and `X-Grain-Reason`.
 
 **Needs** an `api:<scope>` grant covering the route.

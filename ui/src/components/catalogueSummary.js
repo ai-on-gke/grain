@@ -104,6 +104,10 @@ export const RETIRED_IN_PROCESS = {
       'https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"gemini"}',
     moveTo: "servers (https://grain.dev/capabilities/model-proxy#model-proxy)",
   },
+  "gemini-key": {
+    grant: "https://grain.dev/capabilities/gcp#gemini-key={}",
+    moveTo: "servers (https://grain.dev/capabilities/gcp#gemini-key)",
+  },
 };
 
 export function describeRestrictions(r) {
