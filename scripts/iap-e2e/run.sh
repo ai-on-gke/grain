@@ -913,6 +913,11 @@ wait_for_iap_ready() {
     fi
     if [[ "$HTTP_STATUS" == "403" ]] && ! header_present "x-goog-iap-generated-response"; then
       body_preview="$(head -c 300 "$HTTP_BODY_FILE" | tr '\n' ' ')"
+      if grep -q "is not on the allowed users and groups list" "$HTTP_BODY_FILE"; then
+        echo "BLOCKER: IAP admitted SA-A and grain verified it, but grain refused it: ${body_preview}" >&2
+        echo "Cause: this image keeps the allowlist in the database (Settings -> Access) and drops serviceAccount: entries from -ui-allowed-principals, so SA-A cannot be allowlisted. Run against an image that accepts serviceAccount: entries (v3.1.x) -- see scripts/iap-e2e/README.md." >&2
+        exit 1
+      fi
       if grep -qi "Error: Forbidden" "$HTTP_BODY_FILE" && ! jq -e . "$HTTP_BODY_FILE" >/dev/null 2>&1; then
         echo "BLOCKER: IAP admitted SA-A, but Cloud Run ingress returned 403 Forbidden before reaching grain." >&2
         echo "Cause: service-${PROJECT_NUMBER}@gcp-sa-iap.iam.gserviceaccount.com lacks roles/run.invoker (run.routes.invoke) on ${SERVICE}, and the active credential lacks run.services.setIamPolicy (roles/run.admin)." >&2
@@ -1401,10 +1406,25 @@ run_direct_leg() {
     http_call -H "Authorization: Bearer ${SEEDED_ACCESS_CODE}" "${base_url}/api/tasks"
     if [[ "$HTTP_STATUS" == "401" ]] && grep -q -- "-ui-require-iap" "$HTTP_BODY_FILE"; then
       c6_notes+=("direct network Bearer <access-code> -> 401 (-ui-require-iap)")
+    elif [[ "$LOCAL_SIM" -eq 0 && "$HTTP_STATUS" == "401" ]] && ! jq -e . "$HTTP_BODY_FILE" >/dev/null 2>&1; then
+      # Cloud Run's ingress validates every Authorization: Bearer as a Google
+      # ID token, even with allUsers as invoker, so a bearer access code is
+      # refused before it can reach grain on *.run.app.
+      c6_notes+=("direct network Bearer <access-code> -> 401 at Cloud Run ingress (never reaches grain)")
     else
       c6_ok=0
       c6_notes+=("direct network Bearer <access-code> -> unexpected ${HTTP_STATUS}")
     fi
+  fi
+
+  # X-Grain-Access-Code passes Cloud Run's ingress, so grain itself must
+  # refuse it. Images that predate the header ignore it and still answer 401.
+  http_call "${auth_args[@]}" -H "X-Grain-Access-Code: ${SEEDED_ACCESS_CODE}" "${base_url}/api/tasks"
+  if [[ "$HTTP_STATUS" == "401" ]] && grep -q -- "-ui-require-iap" "$HTTP_BODY_FILE"; then
+    c6_notes+=("direct network X-Grain-Access-Code -> 401 (-ui-require-iap)")
+  else
+    c6_ok=0
+    c6_notes+=("direct network X-Grain-Access-Code -> unexpected ${HTTP_STATUS}")
   fi
 
   local auth_args=()

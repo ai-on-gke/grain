@@ -46,7 +46,7 @@ Cloud Run's native `--iap` integration uses Google's managed OAuth client rather
 | 3 | `no-token-refused-by-iap` | Requests with no token are rejected at Google's IAP edge (`401` on `/api/tasks`, `302` redirect to `accounts.google.com` on `GET /` HTML, with `X-Goog-IAP-Generated-Response: true`) and never reach `grain`. |
 | 4 | `bad-token-refused` | Expired (`exp < now`), wrong-audience (`https://wrong-audience.example.com/*`), and missing-wildcard (`https://<host>`) JWTs are rejected at the IAP edge with `401`. |
 | 5 | `forged-iap-assertion-rejected` | Caller-injected `X-Goog-IAP-JWT-Assertion` (plus spoofed `X-Goog-Authenticated-User-Email`, `X-Forwarded-User`, `X-Grain-User`) is rejected when unauthenticated, stripped/overwritten by IAP when sent by `SA-B` (preventing escalation to `SA-A`), and rejected with `401` by `grain`'s real Google JWK/PEM verifier when sent directly without IAP. |
-| 6 | `require-iap-refuses-access-code` | Redeploying with `-ui-require-iap` flips `/api/auth/access-code` to `requireIAP: true, accessCodeAccepted: false`, refuses a valid seeded access code on `POST /api/auth/access-code` (`403`), ignores a valid `grain_access` cookie, and refuses direct network bearer/cookie/HTML access (`401`). Loopback break-glass is recorded as covered by the simulated suite ([Task #2510](/tasks/2510)). |
+| 6 | `require-iap-refuses-access-code` | Redeploying with `-ui-require-iap` flips `/api/auth/access-code` to `requireIAP: true, accessCodeAccepted: false`, refuses a valid seeded access code on `POST /api/auth/access-code` (`403`), ignores a valid `grain_access` cookie, and refuses direct network access-code (`X-Grain-Access-Code`), cookie and HTML access (`401` from grain). A direct `Authorization: Bearer <access-code>` is refused by Cloud Run's ingress before it reaches grain: Cloud Run checks every bearer as a Google ID token, even with `allUsers` as invoker. Loopback break-glass is recorded as covered by the simulated suite ([Task #2510](/tasks/2510)). |
 | 7 | `csrf-cross-origin-refused` | State-changing `POST /api/tasks` requests authenticated via IAP are refused (`403`) when `Origin: https://evil.example`, `Sec-Fetch-Site: cross-site`, `Origin: null`, or cookie-bearing without `Origin`/`Sec-Fetch-Site`, while same-origin (`Origin: <service-url>`) succeeds (`201`). |
 | 8 | `attribution-sa-a` | Even with `-as=operator@example.com` set on `grain daemon`, a task created, commented on, and closed by `SA-A` records `author: "<SA-A>"`, `authorKind: "service"`, and transition `by: "service <SA-A>"` — never `operator`. |
 
@@ -71,6 +71,10 @@ Outputs written to `--out`:
 - `report.md` — human-readable Markdown report ready to archive under `docs/test-runs/`.
 
 Exit code is `0` if and only if all 8 cases pass; any case or setup failure exits non-zero after running full teardown (`Cloud Run` service, IAP bindings, temporary service accounts, and local key files). Typical wall-clock runtime is **3–6 minutes** at **<$0.01 USD** per run (`1 vCPU` / `1 GiB` Cloud Run instance during the test window).
+
+### Images that keep the allowlist in the database
+
+Since `992714cd` (`feat(access): keep allowed users and groups in the database`, on `main` from 2026-11-03), grain holds its allowlist in the database (Settings -> Access). It drops `serviceAccount:` entries from `-ui-allowed-principals` and refuses `*.gserviceaccount.com` addresses in `grain access allow`. On those images SA-A cannot be allowlisted, so `run.sh` stops at setup with a `BLOCKER` explaining this, before any case runs. `v3.1.x` accepts `serviceAccount:` entries, and the recorded run (`docs/test-runs/2026-11-04-iap-e2e-cloud-run.md`) used `v3.1.0`. Until grain decides how a service account is admitted under the database allowlist, run the script against a `v3.1.x` image; `--local-sim` with a binary built from such a tree fails the same way.
 
 ### Local Self-Test (No GCP Credentials Required)
 
