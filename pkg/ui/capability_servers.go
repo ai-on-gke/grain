@@ -979,6 +979,7 @@ func (c *Client) TestCapabilityServer(ctx context.Context, req TestCapabilitySer
 	var cfg protocol.ServerConfig
 	if req.Config != nil {
 		cfg = *req.Config
+		c.applyStoredBuiltin(ctx, id, &cfg)
 	} else {
 		stored, err := c.Store.GetConfig(ctx)
 		if err != nil {

@@ -408,6 +408,7 @@ func (h *hostdCapabilityServers) probe(ctx context.Context, id string, cfg proto
 	client := route.Exec.hostdClient()
 	opts := h.opts
 	opts.Hostd = &client
+	opts.OnDrop, opts.OnAttach, opts.OnClear = nil, nil, nil
 	return servers.New(opts).Probe(ctx, id, cfg, extra)
 }
 
@@ -426,6 +427,7 @@ func (h *hostdCapabilityServers) hostCapabilityEntries(ctx context.Context, sele
 	client := route.Exec.hostdClient()
 	opts := h.opts
 	opts.Hostd = &client
+	opts.OnDrop, opts.OnAttach, opts.OnClear = nil, nil, nil
 	entries, err := servers.New(opts).HostCapabilityEntries(ctx)
 	if err != nil {
 		return nil, true, err

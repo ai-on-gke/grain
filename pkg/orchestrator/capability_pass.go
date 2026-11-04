@@ -144,15 +144,43 @@ func (h *CapabilityPasses) hold(taskID, runID string, p *protocol.Pass, deadline
 	h.passes[runID] = &heldPass{taskID: taskID, pass: p, deadline: deadline, servers: servers, hostd: hostd}
 }
 
+// grantHostd returns the grain hostd capabilityID ran on for this pass,
+// and whether it was a server placed on a hostd of its own
+// (CapabilityHostdOf) rather than the deployment's registry.
+func grantHostd(servers CapabilityServers, defaultHostd, capabilityID string) (string, bool) {
+	if placed, ok := servers.(CapabilityHostdOf); ok {
+		if name, ok := placed.HostdOf(capabilityID); ok {
+			return name, true
+		}
+	}
+	return defaultHostd, false
+}
+
+// setAuditRecordHostds stamps each audit record with the hostd its
+// grant's server ran on: its own placement's (CapabilityHostdOf), or
+// defaultHostd.
+func setAuditRecordHostds(records []model.CapabilityAuditRecord, defaultHostd string, servers CapabilityServers) {
+	for i := range records {
+		id, _, _ := strings.Cut(records[i].Grant, "#")
+		records[i].Hostd, _ = grantHostd(servers, defaultHostd, id)
+	}
+}
+
 // holding is every live run whose pass holds a grant capabilityID
-// minted (on hostd, when hostd is non-empty): run id to its task id and
-// those grants.
+// minted (on hostd, when hostd is non-empty; on the deployment's own
+// registry rather than a placed server's hostd, when hostd is empty):
+// run id to its task id and those grants.
 func (h *CapabilityPasses) holding(capabilityID, hostd string) map[string]heldGrants {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	out := map[string]heldGrants{}
 	for runID, held := range h.passes {
-		if hostd != "" && held.hostd != hostd {
+		gh, placed := grantHostd(held.servers, held.hostd, capabilityID)
+		if hostd != "" {
+			if gh != hostd {
+				continue
+			}
+		} else if placed {
 			continue
 		}
 		for _, g := range held.pass.Grants {
@@ -305,7 +333,7 @@ func (h *CapabilityPasses) RetryReleases(ctx context.Context) map[string]Retried
 		}
 		h.keepUnreleased(runID, held, rest, h.clock())
 		if len(audits) > 0 {
-			out[runID] = RetriedRelease{TaskID: held.taskID, Audits: audits, Hostd: held.hostd}
+			out[runID] = RetriedRelease{TaskID: held.taskID, Audits: audits, Hostd: held.hostd, Servers: held.servers}
 		}
 	}
 	return out
@@ -314,9 +342,10 @@ func (h *CapabilityPasses) RetryReleases(ctx context.Context) map[string]Retried
 // RetriedRelease is what one run's kept grants returned when
 // RetryReleases released them.
 type RetriedRelease struct {
-	TaskID string
-	Audits []protocol.GrantAudit
-	Hostd  string
+	TaskID  string
+	Audits  []protocol.GrantAudit
+	Hostd   string
+	Servers CapabilityServers
 }
 
 // RetryCapabilityReleases is RetryReleases on the passes of a daemon
@@ -329,9 +358,7 @@ func RetryCapabilityReleases(ctx context.Context, store *model.Store) {
 		if len(records) == 0 || store == nil {
 			continue
 		}
-		for i := range records {
-			records[i].Hostd = r.Hostd
-		}
+		setAuditRecordHostds(records, r.Hostd, r.Servers)
 		if err := store.AppendRunCapabilityAudit(ctx, runID, records); err != nil {
 			log.Printf("orchestrator: run %s: recording its capability audit: %v", runID, err)
 		}
@@ -355,18 +382,7 @@ func releaseRunCapabilities(ctx context.Context, deps Deps, taskID, runID string
 	if len(records) == 0 || deps.Store == nil {
 		return
 	}
-	// The hostd each grant's server ran on: its own placement's
-	// (CapabilityHostdOf), or the hostd this run's pass was minted on.
-	placed, _ := servers.(CapabilityHostdOf)
-	for i := range records {
-		records[i].Hostd = hostd
-		if placed != nil {
-			id, _, _ := strings.Cut(records[i].Grant, "#")
-			if name, ok := placed.HostdOf(id); ok {
-				records[i].Hostd = name
-			}
-		}
-	}
+	setAuditRecordHostds(records, hostd, servers)
 	if err := deps.Store.AppendRunCapabilityAudit(ctx, runID, records); err != nil {
 		log.Printf("orchestrator: run %s: recording its capability audit: %v", runID, err)
 	}
