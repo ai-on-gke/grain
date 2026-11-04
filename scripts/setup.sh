@@ -60,8 +60,10 @@
 #      drop-ins this used to install, and grants strictly less: the
 #      daemon can restart its own service and reboot this machine, and
 #      has no sudo at all
-#   5. lays out the rest of $GRAIN_DATA_DIR (secrets, the embedded SQLite
-#      store) and seeds secrets from environment variables -- only if
+#   5. lays out the rest of $GRAIN_DATA_DIR (secrets, and the store: on a
+#      fresh install a local PostgreSQL server, grain-postgres.service,
+#      with its data in $GRAIN_DATA_DIR/postgres; an existing install
+#      keeps the SQLite store it has -- see the database block) and seeds secrets from environment variables -- only if
 #      they are not already there, so a second run never overwrites a
 #      credential placed by the first one or by hand. Also lays out
 #      $GRAIN_SANDBOX_DIR, HostSandboxes' own per-slot working
@@ -259,7 +261,10 @@ GRAIN_ALLOW_STORE_RESET="${GRAIN_ALLOW_STORE_RESET:-0}"
 GRAIN_SCHEMA_CHANGE_REPORT=""
 GRAIN_SCHEMA_CHANGE_FROM=""
 GRAIN_SCHEMA_CHANGE_STAMP=""
-GRAIN_DB_DRIVER="${GRAIN_DB_DRIVER:-sqlite}"
+# Empty unless given: resolve_database (the database block, below) settles
+# it -- PostgreSQL on a local server for a fresh install, whatever an
+# existing install already has otherwise.
+GRAIN_DB_DRIVER="${GRAIN_DB_DRIVER:-}"
 GRAIN_DB_DSN="${GRAIN_DB_DSN:-}"
 # Root for this deployment's disposable sandbox-side data: host-sandbox
 # run directories and the package and Actions caches (bwsalmon/agents#587,
@@ -852,7 +857,12 @@ Usage: sudo ./setup.sh [options]
 
 Options:
   -h, --help                 display this help and exit
-  --db-driver DRIVER         database backend driver ("sqlite" or "postgres", default: sqlite, or set GRAIN_DB_DRIVER)
+  --db-driver DRIVER         database backend driver, "postgres" or "sqlite" (or set GRAIN_DB_DRIVER).
+                             Default: postgres for a fresh install, on a local server
+                             this script provisions (grain-postgres.service) unless
+                             --db-dsn names one; an existing install keeps the store
+                             it has. "postgres" on a SQLite install migrates it
+                             (grain upgrade-postgres); "sqlite" keeps embedded SQLite
   --db-dsn DSN               database connection string / DSN (or set GRAIN_DB_DSN)
   --channel CHANNEL          which release channel to run: latest (default for a
                              new deployment), candidate or main (or set
@@ -873,8 +883,9 @@ Options:
 
 Installs or updates a v2 grain deployment on this machine: pulls the
 deployment image CI publishes on every commit, lays out /var/lib/grain
--- data/ for the state to back up (its embedded SQLite task store and
-the secrets) and scratch/ for disposable run space and caches, each of
+-- data/ for the state to back up (its task store -- PostgreSQL's data
+in data/postgres for a fresh install, embedded SQLite in data/store for
+one that already had it -- and the secrets) and scratch/ for disposable run space and caches, each of
 which may be a mount of its own -- and installs
 grain-daemon.service, which runs that image -- the dispatch loop, the
 UI/API it serves, and every binary either shells out to. Every setting
@@ -928,8 +939,18 @@ Recognized variables:
   GRAIN_DATA_DIR            secrets/store root -- state that must survive a redeploy,
                              and the one directory to back up
                              (default: /var/lib/grain/data)
-  GRAIN_DB_DRIVER           database backend driver ("sqlite" or "postgres", default: sqlite)
-  GRAIN_DB_DSN              database connection string / DSN (e.g. postgres://user:pass@127.0.0.1:5432/graindb or postgres://user:pass@/graindb?host=/cloudsql/INSTANCE)
+  GRAIN_DB_DRIVER           database backend driver, "postgres" or "sqlite" (default: postgres
+                             on a local server for a fresh install; an existing install
+                             keeps the store it has -- see --db-driver)
+  GRAIN_DB_DSN              an external server's DSN (e.g. postgres://user:pass@127.0.0.1:5432/graindb
+                             or postgres://user:pass@/graindb?host=/cloudsql/INSTANCE); no local
+                             server is provisioned when one is given
+  GRAIN_POSTGRES_IMAGE      the local server's image (default: mirror.gcr.io/library/postgres:16-bookworm,
+                             Docker Hub's official image through a mirror that answers where
+                             Docker Hub does not). A re-run keeps the image installed; setting
+                             this is how it is upgraded, and a major version is refused
+                             (docs/database.md)
+  GRAIN_POSTGRES_PORT       the local server's port on 127.0.0.1 (default: 5432)
   GRAIN_SANDBOX_DIR         root for disposable run space and caches -- state
                              that a redeploy is free to discard and a backup
                              leaves out; best on a disk of its own
@@ -1716,6 +1737,7 @@ fi
 # bwsalmon/agents#363), which an old host may still carry.
 UNINSTALL_UNITS=(
   grain-daemon.service
+  grain-postgres.service
   grain-hostd.service
   grain-hostd-upgrade.path grain-hostd-upgrade.service
   grain-hostd-allowlist.service
@@ -1886,6 +1908,10 @@ uninstall_grain() {
        docker rm -f grain-daemon >/dev/null 2>&1; then
       log "  removed the grain-daemon container"
     fi
+    if docker container inspect grain-postgres >/dev/null 2>&1 &&
+       docker rm -f grain-postgres >/dev/null 2>&1; then
+      log "  removed the grain-postgres container"
+    fi
   fi
 
   # disable_host_suspend's two halves, undone the way
@@ -1911,7 +1937,7 @@ uninstall_grain() {
     /usr/local/bin/grain /usr/local/bin/granule \
     /usr/local/lib/grain /usr/local/share/grain \
     /usr/local/sbin/grain-block-metadata \
-    /etc/grain/image.env /etc/grain/cli.env /etc/grain/cosign.pub \
+    /etc/grain/image.env /etc/grain/cli.env /etc/grain/cosign.pub /etc/grain/postgres.env \
     /etc/grain/hostd.yaml /etc/grain/hostd.yaml.default /etc/grain/hostd.env /var/lib/grain-hostd \
     /etc/profile.d/grain.sh \
     /etc/sudoers.d/zzz-grain-nft /etc/sudoers.d/90-grain-nft \
@@ -1920,7 +1946,7 @@ uninstall_grain() {
   # /etc/grain by name, file by file, and then only if it is empty: a
   # host can keep files of its own there (a grain sandbox image keeps
   # package-cache.env in it), and those are not this script's to delete.
-  rm -f /etc/grain/image.env.* /etc/grain/cli.env.*
+  rm -f /etc/grain/image.env.* /etc/grain/cli.env.* /etc/grain/postgres.env.*
   if rmdir /etc/grain 2>/dev/null; then
     log "  removed /etc/grain"
   elif [ -d /etc/grain ]; then
@@ -2703,6 +2729,386 @@ resolve_iap_audience() {
 # --- end of the IAP audience ---------------------------------------------------
 
 if ! resolve_iap_audience /etc/systemd/system/grain-daemon.service; then
+  exit 2
+fi
+
+# --- the database (GRAIN_DB_DRIVER, GRAIN_DB_DSN, GRAIN_POSTGRES_*) -----------
+#
+# A fresh install keeps its store in PostgreSQL, on a server this script
+# provisions beside the daemon: grain-postgres.service, a `docker run` of a
+# pinned Postgres image in the same unit style as grain-daemon.service.
+# Everything about that server is in this block, so another copy of this
+# script can take it whole:
+#
+#   resolve_database          decides, before anything on the host is
+#                             touched, which store this run sets up.
+#   ensure_local_postgres     (main, before write_systemd_units) writes and
+#                             starts grain-postgres.service and waits for
+#                             it to take connections; and, only when asked
+#                             with --db-driver postgres on a host that has
+#                             a SQLite store, migrates that store into it.
+#   postgres_daemon_unit      what grain-daemon.service gains for it
+#                             (write_systemd_units, docker_run_args).
+#
+# Which store, first match wins:
+#
+#   --db-driver sqlite              SQLite in $GRAIN_DATA_DIR/store. Refused
+#                                   on a host whose store is the local
+#                                   server: nothing here moves one back.
+#   GRAIN_DB_DSN, a postgres URL    that server. Nothing is provisioned.
+#     or key=value DSN              (A DSN that is neither, with no
+#                                   --db-driver, is a SQLite path, as it
+#                                   always was.)
+#   a host provisioned before       the same server, image and password.
+#   any other existing install --   left as it is: SQLite, or whichever
+#     a daemon unit, store/grain.db, PostgreSQL db-config.json records --
+#     db-config.json, or a cluster   with a one-line hint about moving.
+#     the daemon ran itself
+#   --db-driver postgres on a       provision, then `grain upgrade-postgres`
+#     SQLite install                the store into it, the daemon stopped.
+#   nothing at all                  a fresh install: provision.
+#
+# The server:
+#
+#   image     GRAIN_POSTGRES_IMAGE, default below: Docker Hub's official
+#             image through mirror.gcr.io, which answers on networks that
+#             cannot reach Docker Hub. It is recorded in the unit and a
+#             re-run keeps the one recorded, so a newer default in a newer
+#             setup.sh never upgrades a running server. Moving image is
+#             explicit (GRAIN_POSTGRES_IMAGE=...), and refused across a
+#             major version, which takes a dump and restore
+#             (docs/database.md).
+#   data      $GRAIN_DATA_DIR/postgres, 0700 and $GRAIN_USER's. The
+#             container runs as that uid (--user), so the cluster belongs
+#             to the same account as the rest of the data directory, and
+#             is backed up with it.
+#   network   --network host, listen_addresses=127.0.0.1 and nothing else,
+#             on GRAIN_POSTGRES_PORT (default 5432).
+#   password  generated once into $GRAIN_DATA_DIR/secrets/postgres-password,
+#             never replaced; the server reads it at initdb only
+#             (POSTGRES_PASSWORD_FILE).
+#   DSN       $POSTGRES_ENV_FILE, root's and 0600. grain-daemon.service reads
+#             it as an EnvironmentFile and passes GRAIN_DB_DRIVER and
+#             GRAIN_DB_DSN into the container by name, so the password is
+#             in neither the unit nor any argv; the host's `grain` wrapper
+#             reads it the same way (--env-file) when it can. Not under
+#             $GRAIN_DATA_DIR: systemd reads an EnvironmentFile as root, and
+#             one the daemon's account could write could set LD_PRELOAD
+#             for the docker CLI it starts.
+#
+# grain-daemon.service Requires= and is After= grain-postgres.service, whose
+# ExecStartPost waits until the server answers pg_isready. The dependency
+# runs one way: restarting or upgrading the daemon never restarts Postgres,
+# and a re-run of this script restarts it only when its unit changed.
+
+POSTGRES_UNIT="${POSTGRES_UNIT:-/etc/systemd/system/grain-postgres.service}"
+POSTGRES_ENV_FILE="${POSTGRES_ENV_FILE:-/etc/grain/postgres.env}"
+POSTGRES_CONTAINER=grain-postgres
+GRAIN_POSTGRES_DEFAULT_IMAGE="mirror.gcr.io/library/postgres:16-bookworm"
+GRAIN_POSTGRES_IMAGE="${GRAIN_POSTGRES_IMAGE:-}"
+GRAIN_POSTGRES_PORT="${GRAIN_POSTGRES_PORT:-}"
+# Set by resolve_database: 1 when this run provisions (or keeps) the local
+# server, and 1 when it also migrates a SQLite store into it.
+GRAIN_POSTGRES_PROVISION=0
+GRAIN_POSTGRES_MIGRATE=0
+
+# dsn_is_postgres: whether a DSN names a PostgreSQL server -- a postgres://
+# or postgresql:// URL, or a key=value DSN naming a host or a dbname.
+dsn_is_postgres() {
+  case "$1" in
+    postgres://*|postgresql://*|*host=*|*dbname=*) return 0 ;;
+  esac
+  return 1
+}
+
+# postgres_unit_value NAME: the Environment=NAME=... the installed
+# grain-postgres.service records, or nothing.
+postgres_unit_value() {
+  [ -r "$POSTGRES_UNIT" ] || return 0
+  sed -n "s/^Environment=$1=//p" "$POSTGRES_UNIT" | tail -n 1
+}
+
+# existing_store_kind DAEMON_UNIT: what this host already keeps its store
+# in -- "local-postgres" (provisioned here before: its unit, or the
+# password that lives with its data), "postgres" (a server db-config.json
+# or the installed unit names, or a cluster the daemon ran itself in
+# $GRAIN_DATA_DIR/postgres), "sqlite" (store/grain.db, or any installed
+# daemon unit at all, which before Postgres was the default meant SQLite),
+# or nothing for a fresh install.
+existing_store_kind() {
+  local unit="$1"
+  if [ -e "$POSTGRES_UNIT" ] || [ -e "$GRAIN_DATA_DIR/secrets/postgres-password" ]; then
+    echo local-postgres
+  elif [ -e "$GRAIN_DATA_DIR/db-config.json" ] || [ -e "$GRAIN_DATA_DIR/postgres/PG_VERSION" ] ||
+       [ "$(installed_unit_flag "$unit" db-driver)" = postgres ]; then
+    echo postgres
+  elif [ -e "$GRAIN_DATA_DIR/store/grain.db" ] || [ -e "$unit" ]; then
+    echo sqlite
+  fi
+}
+
+# resolve_database DAEMON_UNIT settles GRAIN_DB_DRIVER and whether this run
+# provisions the local server (the table at the top of this block). It
+# returns 1, having said why, for a combination it refuses.
+resolve_database() {
+  local unit="$1" kind
+  kind="$(existing_store_kind "$unit")"
+  case "$GRAIN_DB_DRIVER" in
+    sqlite)
+      if [ "$kind" = local-postgres ]; then
+        echo "setup.sh: --db-driver sqlite, but this deployment's store is the local PostgreSQL server" >&2
+        echo "          ($POSTGRES_UNIT, data in $GRAIN_DATA_DIR/postgres). setup.sh does not move a" >&2
+        echo "          store back to SQLite; re-run without --db-driver to keep it." >&2
+        return 1
+      fi
+      log "Database: SQLite (--db-driver sqlite), in $GRAIN_DATA_DIR/store"
+      return 0
+      ;;
+    ""|postgres) ;;
+    *)
+      echo "setup.sh: --db-driver must be \"sqlite\" or \"postgres\", not \"$GRAIN_DB_DRIVER\"" >&2
+      return 1
+      ;;
+  esac
+
+  if [ -n "$GRAIN_DB_DSN" ]; then
+    if [ -z "$GRAIN_DB_DRIVER" ] && ! dsn_is_postgres "$GRAIN_DB_DSN"; then
+      log "Database: SQLite, at the GRAIN_DB_DSN path given"
+      return 0
+    fi
+    GRAIN_DB_DRIVER=postgres
+    log "Database: PostgreSQL at the GRAIN_DB_DSN given (no local server provisioned)"
+    return 0
+  fi
+
+  case "$kind" in
+    local-postgres)
+      log "Database: keeping the local PostgreSQL server (grain-postgres.service)"
+      # A migration a previous run started and did not finish: the
+      # SQLite store is there and the marker saying it was carried over
+      # is not. Going on without it would start the daemon on an empty
+      # database.
+      if [ -e "$GRAIN_DATA_DIR/store/grain.db" ] && [ ! -e "$GRAIN_DATA_DIR/.postgres-migrated" ]; then
+        GRAIN_POSTGRES_MIGRATE=1
+      fi
+      ;;
+    postgres)
+      log "Database: keeping the PostgreSQL store this deployment records ($GRAIN_DATA_DIR/db-config.json)"
+      return 0
+      ;;
+    sqlite)
+      if [ -z "$GRAIN_DB_DRIVER" ]; then
+        log "Database: keeping this host's SQLite store (to move it to PostgreSQL: re-run with --db-driver postgres, which runs grain upgrade-postgres; docs/database.md)"
+        return 0
+      fi
+      log "Database: --db-driver postgres on a SQLite install -- provisioning a local PostgreSQL server and migrating $GRAIN_DATA_DIR/store into it"
+      GRAIN_POSTGRES_MIGRATE=1
+      ;;
+    *)
+      log "Database: PostgreSQL, on a local server this install provisions (--db-driver sqlite keeps embedded SQLite instead)"
+      ;;
+  esac
+  GRAIN_DB_DRIVER=postgres
+  GRAIN_POSTGRES_PROVISION=1
+
+  local installed_image installed_port
+  installed_image="$(postgres_unit_value GRAIN_POSTGRES_IMAGE)"
+  installed_port="$(postgres_unit_value GRAIN_POSTGRES_PORT)"
+  if [ -z "$GRAIN_POSTGRES_IMAGE" ]; then
+    GRAIN_POSTGRES_IMAGE="${installed_image:-$GRAIN_POSTGRES_DEFAULT_IMAGE}"
+  elif [ -n "$installed_image" ] && [ "$installed_image" != "$GRAIN_POSTGRES_IMAGE" ]; then
+    log "  PostgreSQL image: changing from $installed_image to $GRAIN_POSTGRES_IMAGE (GRAIN_POSTGRES_IMAGE)"
+  fi
+  GRAIN_POSTGRES_PORT="${GRAIN_POSTGRES_PORT:-${installed_port:-5432}}"
+  # Both are written into a unit: nothing systemd or a shell would read
+  # as more than a word.
+  case "$GRAIN_POSTGRES_IMAGE" in
+    ""|*[!A-Za-z0-9._:/@-]*)
+      echo "setup.sh: GRAIN_POSTGRES_IMAGE=\"$GRAIN_POSTGRES_IMAGE\" is not an image reference" >&2
+      return 1
+      ;;
+  esac
+  case "$GRAIN_POSTGRES_PORT" in
+    ""|*[!0-9]*)
+      echo "setup.sh: GRAIN_POSTGRES_PORT=\"$GRAIN_POSTGRES_PORT\" is not a port number" >&2
+      return 1
+      ;;
+  esac
+  if [ "$GRAIN_POSTGRES_PORT" -lt 1 ] || [ "$GRAIN_POSTGRES_PORT" -gt 65535 ]; then
+    echo "setup.sh: GRAIN_POSTGRES_PORT=$GRAIN_POSTGRES_PORT is not a port number" >&2
+    return 1
+  fi
+  log "  PostgreSQL: $GRAIN_POSTGRES_IMAGE on 127.0.0.1:$GRAIN_POSTGRES_PORT, data in $GRAIN_DATA_DIR/postgres"
+}
+
+# postgres_password prints the local server's password, generating it the
+# first time: URL-safe characters only, since it goes into a DSN as is.
+# Read and written as $GRAIN_USER, whose file it is.
+postgres_password() {
+  local file="$GRAIN_DATA_DIR/secrets/postgres-password" password
+  if ! as_grain test -s "$file"; then
+    od -An -tx1 -N24 /dev/urandom | tr -d ' \n' | grain_write 0600 "$file"
+  fi
+  password="$(as_grain cat "$file")"
+  case "$password" in
+    ""|*[!A-Za-z0-9._~-]*)
+      echo "setup.sh: $file is not a password this script generated (want letters, digits and ._~- only)" >&2
+      return 1
+      ;;
+  esac
+  printf '%s' "$password"
+}
+
+# postgres_image_major IMAGE: the major version of the server IMAGE runs.
+postgres_image_major() {
+  docker run --rm --network none --entrypoint postgres "$1" -V 2>/dev/null |
+    sed -n 's/^postgres (PostgreSQL) \([0-9][0-9]*\).*/\1/p' | head -n 1 || true
+}
+
+# postgres_check_major refuses an image whose major version is not the one
+# the cluster in $GRAIN_DATA_DIR/postgres was made by: the server would
+# refuse the directory anyway, and say so only in its own journal.
+postgres_check_major() {
+  local data="$GRAIN_DATA_DIR/postgres" have want
+  as_grain test -s "$data/PG_VERSION" || return 0
+  have="$(as_grain cat "$data/PG_VERSION")"
+  want="$(postgres_image_major "$GRAIN_POSTGRES_IMAGE")"
+  if [ -n "$want" ] && [ "$want" != "$have" ]; then
+    echo "setup.sh: $GRAIN_POSTGRES_IMAGE runs PostgreSQL $want, but $data holds a PostgreSQL $have cluster." >&2
+    echo "          A major version upgrade is a dump and restore (docs/database.md, \"Upgrading the" >&2
+    echo "          PostgreSQL image\"); until then, re-run with GRAIN_POSTGRES_IMAGE naming a $have image." >&2
+    return 1
+  fi
+}
+
+# write_postgres_env writes $POSTGRES_ENV_FILE, root's and 0600.
+write_postgres_env() {
+  local password="$1" tmp
+  install -d -m0755 "$(dirname "$POSTGRES_ENV_FILE")"
+  tmp="$(mktemp "$POSTGRES_ENV_FILE.XXXXXX")"
+  chmod 0600 "$tmp"
+  printf 'GRAIN_DB_DRIVER=postgres\nGRAIN_DB_DSN=postgres://grain:%s@127.0.0.1:%s/grain?sslmode=disable\n' \
+    "$password" "$GRAIN_POSTGRES_PORT" > "$tmp"
+  mv -fT "$tmp" "$POSTGRES_ENV_FILE"
+}
+
+# write_postgres_unit writes grain-postgres.service, and says (status 0)
+# whether that changed what was installed.
+write_postgres_unit() {
+  local uid gid tmp data="$GRAIN_DATA_DIR/postgres"
+  uid="$(id -u "$GRAIN_USER")"
+  gid="$(id -g "$GRAIN_USER")"
+  tmp="$(mktemp "$POSTGRES_UNIT.XXXXXX")"
+  cat > "$tmp" <<UNIT
+[Unit]
+Description=grain's PostgreSQL store, from ${GRAIN_POSTGRES_IMAGE}
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+Environment=GRAIN_POSTGRES_IMAGE=${GRAIN_POSTGRES_IMAGE}
+Environment=GRAIN_POSTGRES_PORT=${GRAIN_POSTGRES_PORT}
+ExecStartPre=-${DOCKER_BIN:-docker} rm -f ${POSTGRES_CONTAINER}
+ExecStart=${DOCKER_BIN:-docker} run --name ${POSTGRES_CONTAINER} --rm --network host --user ${uid}:${gid} --shm-size 256m --env PGDATA=/var/lib/postgresql/data --env POSTGRES_USER=grain --env POSTGRES_DB=grain --env POSTGRES_PASSWORD_FILE=/run/grain/postgres-password --volume ${data}:/var/lib/postgresql/data --volume ${GRAIN_DATA_DIR}/secrets/postgres-password:/run/grain/postgres-password:ro ${GRAIN_POSTGRES_IMAGE} postgres -c listen_addresses=127.0.0.1 -c port=${GRAIN_POSTGRES_PORT}
+ExecStartPost=/bin/sh -c 'for i in \$\$(seq 1 120); do ${DOCKER_BIN:-docker} exec ${POSTGRES_CONTAINER} pg_isready -q -h 127.0.0.1 -p ${GRAIN_POSTGRES_PORT} -U grain -d grain && exit 0; sleep 1; done; echo "${POSTGRES_CONTAINER} did not accept connections within 120s" >&2; exit 1'
+ExecStop=-${DOCKER_BIN:-docker} stop --time 120 ${POSTGRES_CONTAINER}
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=300
+TimeoutStopSec=150
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  chmod 0644 "$tmp"
+  if [ -f "$POSTGRES_UNIT" ] && cmp -s "$tmp" "$POSTGRES_UNIT"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv -fT "$tmp" "$POSTGRES_UNIT"
+  return 0
+}
+
+# ensure_local_postgres provisions the server resolve_database chose, if
+# it chose one, and leaves it running and taking connections.
+ensure_local_postgres() {
+  [ "$GRAIN_POSTGRES_PROVISION" = 1 ] || return 0
+  step_start "Provisioning PostgreSQL (grain-postgres.service, $GRAIN_POSTGRES_IMAGE)"
+  grain_dir 0700 "$GRAIN_DATA_DIR/postgres"
+  local password changed=0
+  password="$(postgres_password)"
+  if ! docker image inspect "$GRAIN_POSTGRES_IMAGE" >/dev/null 2>&1 &&
+     ! docker pull "$GRAIN_POSTGRES_IMAGE" >/dev/null; then
+    echo "setup.sh: could not pull $GRAIN_POSTGRES_IMAGE; set GRAIN_POSTGRES_IMAGE to a copy this host can reach" >&2
+    return 1
+  fi
+  postgres_check_major
+  write_postgres_env "$password"
+  if write_postgres_unit; then
+    changed=1
+  fi
+  systemctl daemon-reload
+  systemctl enable "$(basename "$POSTGRES_UNIT")" >/dev/null 2>&1
+  if [ "$changed" = 1 ] && systemctl is-active --quiet "$(basename "$POSTGRES_UNIT")"; then
+    # Its unit changed (a new image, a new port): the one time a re-run
+    # restarts it. grain-daemon.service, which Requires= it, goes with
+    # it, and enable_services starts that again.
+    systemctl restart "$(basename "$POSTGRES_UNIT")"
+  else
+    systemctl start "$(basename "$POSTGRES_UNIT")"
+  fi
+  step_done "listening on 127.0.0.1:$GRAIN_POSTGRES_PORT"
+  if [ "$GRAIN_POSTGRES_MIGRATE" = 1 ]; then
+    migrate_sqlite_to_local_postgres
+  fi
+}
+
+# migrate_sqlite_to_local_postgres carries $GRAIN_DATA_DIR/store into the
+# local server with `grain upgrade-postgres`, which also writes
+# db-config.json. The daemon is stopped first, so nothing writes to SQLite
+# after the copy; the SQLite store itself is left where it is.
+migrate_sqlite_to_local_postgres() {
+  if systemctl is-active --quiet grain-daemon.service 2>/dev/null; then
+    log "  stopping grain-daemon.service to migrate its store"
+    systemctl stop grain-daemon.service
+  fi
+  step_start "Migrating $GRAIN_DATA_DIR/store into PostgreSQL (grain upgrade-postgres)"
+  # Through the wrapper, which hands the container $POSTGRES_ENV_FILE: the
+  # DSN, password and all, is read in there rather than put on a command
+  # line out here.
+  # shellcheck disable=SC2016 # expanded by the container's sh, not here
+  if ! /usr/local/lib/grain/run-image.sh --entrypoint sh -- -c \
+       'exec /usr/local/bin/grain upgrade-postgres -data-dir "$GRAIN_DATA_DIR" -dsn "$GRAIN_DB_DSN"'; then
+    echo "setup.sh: migrating $GRAIN_DATA_DIR/store into PostgreSQL failed. The SQLite store is untouched;" >&2
+    echo "          fix what the migration reported and re-run setup.sh, which tries again." >&2
+    return 1
+  fi
+  : | grain_write 0600 "$GRAIN_DATA_DIR/.postgres-migrated"
+  step_done "migrated"
+}
+
+# postgres_daemon_unit sets what grain-daemon.service gains when its store
+# is the local server: POSTGRES_DAEMON_AFTER and POSTGRES_DAEMON_REQUIRES
+# (" grain-postgres.service"), POSTGRES_DAEMON_ENV (its EnvironmentFile=
+# line) and POSTGRES_DOCKER_ARGS (the variables it passes the container
+# by name). All empty otherwise.
+postgres_daemon_unit() {
+  POSTGRES_DAEMON_AFTER=""
+  POSTGRES_DAEMON_REQUIRES=""
+  POSTGRES_DAEMON_ENV=""
+  POSTGRES_DOCKER_ARGS=()
+  [ "$GRAIN_POSTGRES_PROVISION" = 1 ] || return 0
+  POSTGRES_DAEMON_AFTER=" $(basename "$POSTGRES_UNIT")"
+  POSTGRES_DAEMON_REQUIRES=" $(basename "$POSTGRES_UNIT")"
+  POSTGRES_DAEMON_ENV="EnvironmentFile=${POSTGRES_ENV_FILE}"
+  POSTGRES_DOCKER_ARGS=(--env GRAIN_DB_DRIVER --env GRAIN_DB_DSN)
+}
+
+# --- end of the database -------------------------------------------------------
+
+if ! resolve_database "$GRAIN_DAEMON_UNIT"; then
   exit 2
 fi
 
@@ -3851,6 +4257,10 @@ if [ -S /var/run/docker.sock ]; then
   [ -n "\$docker_gid" ] && args+=(--group-add "\$docker_gid")
 fi
 [ -d /var/lib/granule ] && args+=(--volume /var/lib/granule:/var/lib/granule)
+# The local PostgreSQL server's DSN (setup.sh's database block), for a
+# caller that may read it -- root. Anyone else's CLI finds the store the
+# way the daemon recorded it, in db-config.json.
+[ -r ${POSTGRES_ENV_FILE} ] && args+=(--env-file ${POSTGRES_ENV_FILE})
 
 exec docker run "\${args[@]}" "\${extra[@]}" "\$image" "\$@"
 WRAPPER
@@ -6379,7 +6789,10 @@ write_systemd_units() {
     daemon_args+=(-ui-iap-audience "$GRAIN_IAP_AUDIENCE")
   fi
 
-  if [ -n "$GRAIN_DB_DRIVER" ] && [ "$GRAIN_DB_DRIVER" != "sqlite" ]; then
+  # The local server's driver and DSN come from its environment file
+  # (postgres_daemon_unit) rather than from flags: the DSN carries its
+  # password.
+  if [ -n "$GRAIN_DB_DRIVER" ] && [ "$GRAIN_DB_DRIVER" != "sqlite" ] && [ "$GRAIN_POSTGRES_PROVISION" != 1 ]; then
     daemon_args+=(-db-driver "$GRAIN_DB_DRIVER")
   fi
   if [ -n "$GRAIN_DB_DSN" ]; then
@@ -6683,6 +7096,7 @@ write_systemd_units() {
   # lifecycle -- restarting the daemon leaves a running hostd alone.
   write_image_ref_promoter
   write_hostd_units
+  postgres_daemon_unit
   local hostd_after="" hostd_wants="" hostd_extract=""
   if [ "${GRAIN_HOSTD:-0}" = "1" ]; then
     hostd_after=" grain-hostd.service"
@@ -6692,13 +7106,14 @@ write_systemd_units() {
   cat > /etc/systemd/system/grain-daemon.service <<UNIT
 [Unit]
 Description=grain daemon (task orchestrator, UI and API), from ${GRAIN_IMAGE}
-After=network-online.target docker.service${hostd_after}
+After=network-online.target docker.service${hostd_after}${POSTGRES_DAEMON_AFTER}
 Wants=network-online.target${hostd_wants}
-Requires=docker.service
+Requires=docker.service${POSTGRES_DAEMON_REQUIRES}
 
 [Service]
 Type=simple
 EnvironmentFile=${UNIT_IMAGE_REF_FILE}
+${POSTGRES_DAEMON_ENV}
 EnvironmentFile=-/etc/default/grain-daemon
 ExecStartPre=${IMAGE_REF_PROMOTER}
 ${hostd_extract}
@@ -6883,6 +7298,13 @@ docker_run_args() {
   fi
 
   [ -d /cloudsql ] && DOCKER_ARGS+=(--volume /cloudsql:/cloudsql)
+
+  # GRAIN_DB_DRIVER and GRAIN_DB_DSN, by name, out of the local server's
+  # environment file (postgres_daemon_unit): never their values here.
+  if [ "${GRAIN_POSTGRES_PROVISION:-0}" = 1 ]; then
+    postgres_daemon_unit
+    DOCKER_ARGS+=("${POSTGRES_DOCKER_ARGS[@]}")
+  fi
 
   # grain hostd's socket directory, at the path it has out here
   # (write_hostd_units): the directory rather than the socket, so a hostd
@@ -8473,7 +8895,13 @@ print_summary() {
   if [ "$GRAIN_TAILSCALE_ENABLE" = "1" ]; then
     echo "             ${TAILSCALE_URL:-<the tailnet address of this node>} -- the same UI on the tailnet, no tunnel needed (tailscale serve status)"
   fi
-  echo "    Store:   embedded SQLite under ${GRAIN_DATA_DIR}/store, owned by grain-daemon.service alone"
+  if [ "$GRAIN_POSTGRES_PROVISION" = 1 ]; then
+    echo "    Store:   PostgreSQL, grain-postgres.service on 127.0.0.1:${GRAIN_POSTGRES_PORT}, data in ${GRAIN_DATA_DIR}/postgres"
+  elif [ "$GRAIN_DB_DRIVER" = postgres ]; then
+    echo "    Store:   PostgreSQL, at the DSN this deployment was given"
+  else
+    echo "    Store:   embedded SQLite under ${GRAIN_DATA_DIR}/store, owned by grain-daemon.service alone"
+  fi
   echo "    Secrets: ${GRAIN_DATA_DIR}/secrets"
   echo "    State:   ${GRAIN_DATA_DIR}/state-repo -- the same rows as text, in git (grain state status)"
   echo "    CLI:     grain list  (it finds this daemon at http://127.0.0.1:${GRAIN_UI_ADDR##*:} through ${CLI_ENV_FILE},"
@@ -8541,6 +8969,10 @@ main() {
   ensure_granule_git_proxy_host
   reformat_store_if_schema_changed
   format_target_repo_if_empty
+  # After both (neither opens the store on a fresh install, and on a
+  # re-run they work on the store as it was), and before
+  # write_systemd_units, whose unit Requires= the server this starts.
+  ensure_local_postgres
   # After setup_data_dir: this writes into $GRAIN_DATA_DIR, and it has to
   # be in place before write_systemd_units' unit reads it.
   write_image_ref
