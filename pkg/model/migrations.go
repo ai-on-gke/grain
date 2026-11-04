@@ -713,6 +713,14 @@ var Migrations = []Migration{
 		Description: "disable (and keep) every stored custom command connection: the connection type is removed",
 		Up:          disableCustomConnections,
 	},
+	{
+		Version:     105,
+		Description: "add pending_access_request and access_decisions to task_observation for request_access",
+		Statements: []string{
+			"ALTER TABLE `task_observation` ADD COLUMN `pending_access_request` TEXT NULL",
+			"ALTER TABLE `task_observation` ADD COLUMN `access_decisions` TEXT NULL",
+		},
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as

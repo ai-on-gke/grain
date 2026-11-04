@@ -65,6 +65,9 @@ type Server struct {
 	taskList    taskListCache
 	taskDetails taskDetailCache
 	dbConfirm   databaseConfirmations
+	// hostdImage is the image /api/hostd/install.sh suggests
+	// (hostdInstallImage), hostd_install.go's.
+	hostdImage hostdImageCache
 	// access is the single-tenant access gate's rate limiter, and
 	// accessCode the token file it checks codes against
 	// (localAPITokenNow) -- both accesscode.go's.
@@ -206,7 +209,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 // sign-in page reads) and /api/auth/* (signing in itself) are the only
 // things served to a caller nobody has vouched for. A grain hostd dialing
 // in to /api/hostd/connect authenticates in its own protocol
-// (hostdConnectRoute).
+// (hostdConnectRoute), and the script that installs one
+// (hostdInstallRoute) is grain's own, with nothing in it to keep.
 //
 // A persistent sandbox's staging environment under /staging/ is held to
 // the same gate as the API: it is somebody's running service, not a page
@@ -218,7 +222,7 @@ func requiresAccess(r *http.Request) bool {
 	return strings.HasPrefix(r.URL.Path, "/api/") &&
 		!(r.URL.Path == "/api/config" && (r.Method == http.MethodGet || r.Method == http.MethodHead)) &&
 		!strings.HasPrefix(r.URL.Path, "/api/auth/") &&
-		!hostdConnectRoute(r)
+		!hostdConnectRoute(r) && !hostdInstallRoute(r)
 }
 
 func (s *Server) routes() {
@@ -264,6 +268,9 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/config-change", s.handleProposeConfigChange)
 	s.route("POST /api/tasks/{id}/config-change/approve", s.handleApproveConfigChange)
 	s.route("POST /api/tasks/{id}/config-change/reject", s.handleRejectConfigChange)
+	s.route("POST /api/tasks/{id}/access-request/check", s.handleCheckAccessRequest)
+	s.route("POST /api/tasks/{id}/access-request/grant", s.handleGrantAccessRequest)
+	s.route("POST /api/tasks/{id}/access-request/deny", s.handleDenyAccessRequest)
 	s.route("GET /api/tasks/{id}/attachments/{attachmentId}", s.handleGetAttachment)
 	s.route("POST /api/tasks/{id}/close", s.handleClose)
 	s.route("POST /api/tasks/{id}/stop", s.handleStop)
@@ -644,6 +651,8 @@ func (s *Server) routes() {
 
 	// A grain hostd on another machine dialing in (hostd -server).
 	s.route("GET /api/hostd/connect", s.handleHostdConnect)
+	// The script that installs one there (Settings -> Hostds).
+	s.route("GET "+hostdInstallPath, s.handleHostdInstallScript)
 	// The hostd registry (Settings -> Hostds).
 	s.route("GET /api/hostds", s.handleListHostds)
 	s.route("POST /api/hostds", s.handleCreateHostd)

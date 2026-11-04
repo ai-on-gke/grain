@@ -138,6 +138,10 @@ func (c *HTTPClient) prepareRequest(ctx context.Context, req *http.Request) erro
 	return nil
 }
 
+// TokenEnvVars are the environment variables HTTPClient reads for a bearer
+// token, in precedence order.
+var TokenEnvVars = []string{"GRAIN_TOKEN", "GRAIN_AUTH_TOKEN", "GRAIN_ID_TOKEN", "GRAIN_TUNNEL_TOKEN"}
+
 func (c *HTTPClient) resolveToken(ctx context.Context) (string, error) {
 	if c.Token != "" {
 		return c.Token, nil
@@ -145,7 +149,7 @@ func (c *HTTPClient) resolveToken(ctx context.Context) (string, error) {
 	if c.TokenProvider != nil {
 		return c.TokenProvider(ctx)
 	}
-	for _, env := range []string{"GRAIN_TOKEN", "GRAIN_AUTH_TOKEN", "GRAIN_ID_TOKEN", "GRAIN_TUNNEL_TOKEN"} {
+	for _, env := range TokenEnvVars {
 		if val := strings.TrimSpace(os.Getenv(env)); val != "" {
 			return val, nil
 		}
@@ -155,7 +159,7 @@ func (c *HTTPClient) resolveToken(ctx context.Context) (string, error) {
 	// token, when this process can read it: what keeps the CLI working
 	// against a daemon that wants the access code from every caller
 	// (localtoken.go, grain/task-2078). A server elsewhere never is.
-	if isLoopbackURL(c.BaseURL) {
+	if IsLoopbackURL(c.BaseURL) {
 		if tok := localAPIToken(); tok != "" {
 			return tok, nil
 		}
@@ -623,7 +627,7 @@ func (c *HTTPClient) httpError(resp *http.Response) error {
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err == nil && payload.Error != "" {
 		message = payload.Error
 	}
-	if resp.StatusCode == http.StatusUnauthorized && isLoopbackURL(c.BaseURL) {
+	if resp.StatusCode == http.StatusUnauthorized && IsLoopbackURL(c.BaseURL) {
 		message += loopbackUnauthorizedHint()
 	}
 	switch resp.StatusCode {
@@ -966,6 +970,12 @@ func (c *HTTPClient) ProposeConfigChange(ctx context.Context, id string, proposa
 		return nil, err
 	}
 	return &pending, nil
+}
+
+// CheckAccessRequest is Client.CheckAccessRequest over the wire: the
+// mcpserver's request_access, checking its items for its own task.
+func (c *HTTPClient) CheckAccessRequest(ctx context.Context, id string, items []model.AccessRequestItem) error {
+	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/access-request/check", AccessRequestCheck{Items: items}, nil)
 }
 
 // CreditWait is Client.CreditWait over the wire: credit id's live run for

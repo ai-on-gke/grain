@@ -153,11 +153,7 @@ func Main() {
 			upgradePostgresCmd(args[1:])
 			return
 		case "db":
-			if len(args) > 1 && (args[1] == "upgrade-postgres" || args[1] == "upgrade-sqlite-to-postgres") {
-				upgradePostgresCmd(args[2:])
-				return
-			}
-			upgradePostgresCmd(args[1:])
+			dbCmd(args[1:])
 			return
 		case "demo":
 			cmdDemo(args[1:])
@@ -578,7 +574,13 @@ func runCLI(args []string) error {
 		}
 	})
 
-	target := cliTarget{server: *server, source: source, connect: *connectTimeout, call: *callTimeout}
+	target := cliTarget{
+		server:      *server,
+		source:      source,
+		tokenSource: tokenSource(*token),
+		connect:     *connectTimeout,
+		call:        *callTimeout,
+	}
 	return explainDaemonError(dispatchCLI(ctx, c, out, fs, rest), target)
 }
 
