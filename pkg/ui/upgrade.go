@@ -480,12 +480,12 @@ func (s *Server) upgradeInterrupts(r *http.Request) []CLIUpgradeNote {
 	if s.tasks.Config.CLIRuns == nil {
 		return nil
 	}
-	settings, err := s.tasks.cliRunSettings(r.Context())
+	resolved, err := s.tasks.resolvedCLIRuns(r.Context())
 	if err != nil {
 		log.Printf("ui: reading which agent CLIs an upgrade interrupts: %v", err)
 		return nil
 	}
-	return cliUpgradeNotes(settings.Resolved)
+	return cliUpgradeNotes(resolved)
 }
 
 // cliUpgradeNotes is the CLIs in resolved (daemon.ResolveCLIRuns'
