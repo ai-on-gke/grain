@@ -73,9 +73,17 @@ func operatorActor(ctx context.Context) model.Principal {
 //     admitted the request by (access-code, loopback), or in-process for
 //     a caller that never went through serveHTTP at all.
 //
-// OnBehalfOf is always nil until spec §2.4 lands.
+// OnBehalfOf is the owner of the external agent credential the request
+// presented (model.ExternalAgentToken.Owner,
+// design/spec/external-cli/external-cli.spec.md#XC-14), and nil
+// otherwise until spec §2.4 lands.
 func RequestActor(ctx context.Context) model.Attribution {
 	if p, ok := PrincipalFromContext(ctx); ok {
+		if p.Kind == model.PrincipalAgent && p.Source == model.SourceExternalToken {
+			if tok := externalTokenFromContext(ctx); tok != nil {
+				return model.Attribution{Actor: p, OnBehalfOf: tok.OwnerPrincipal()}
+			}
+		}
 		return model.Attribution{Actor: p}
 	}
 	op := operatorActor(ctx)

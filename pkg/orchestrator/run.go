@@ -2588,6 +2588,9 @@ func attemptDetail(r model.Run) string {
 // a team broadcast (ui.Client.BroadcastTeamMessage) -- is that task's,
 // not "you".
 func attributionLabel(a model.Attribution, taskID string) string {
+	if ext := externalAgentLabel(a); ext != "" {
+		return ext
+	}
 	if a.OnBehalfOf != nil {
 		switch a.OnBehalfOf.Kind {
 		case model.PrincipalAgent:
@@ -2634,6 +2637,21 @@ func otherTaskRun(a model.Attribution, taskID string) string {
 	return fmt.Sprintf("the run of another task (task %s), not a human", run.ID)
 }
 
+// externalAgentLabel labels a comment an external agent credential posted
+// (an "external:<name>" agent principal), or is empty for any other
+// comment. Such a comment carries its credential's owner as OnBehalfOf
+// (design/spec/external-cli/external-cli.spec.md#XC-14), but its words
+// are the agent's, not that person's, so it is never labelled a human's.
+func externalAgentLabel(a model.Attribution) string {
+	if a.Actor.Kind != model.PrincipalAgent || !strings.HasPrefix(a.Actor.ID, model.ExternalAgentPrincipalPrefix) {
+		return ""
+	}
+	if b := a.OnBehalfOf; b != nil && b.Kind == model.PrincipalHuman && b.ID != "" {
+		return fmt.Sprintf("an external agent (%s) acting for %s, not a human", a.Actor.ID, b.ID)
+	}
+	return fmt.Sprintf("an external agent (%s), not a human", a.Actor.ID)
+}
+
 // addendumText renders one just-arrived comment for a Framework to fold
 // into its conversation mid-run -- present tense, unlike
 // attributionLabel's own labels ("an earlier attempt at this task"),
@@ -2642,7 +2660,9 @@ func otherTaskRun(a model.Attribution, taskID string) string {
 // currently reading it.
 func addendumText(c model.Comment) string {
 	who := "a human"
-	if other := otherTaskRun(c.Author, c.TaskID); other != "" {
+	if ext := externalAgentLabel(c.Author); ext != "" {
+		who = ext
+	} else if other := otherTaskRun(c.Author, c.TaskID); other != "" {
 		who = other
 	} else if c.Author.OnBehalfOf != nil && c.Author.OnBehalfOf.Kind == model.PrincipalHuman {
 		if c.Author.OnBehalfOf.ID != "" {

@@ -689,8 +689,9 @@ var repoKeyColumns = [][2]string{
 }
 
 // notRepoKeyed is the tables whose columns look like a repository key and
-// are not one: `hostd`'s (`owner`, `name`) are a person and a hostd.
-var notRepoKeyed = map[string]bool{"hostd": true}
+// are not one: `hostd`'s (`owner`, `name`) are a person and a hostd, and
+// `external_agent_token`'s a person and the credential's name.
+var notRepoKeyed = map[string]bool{"hostd": true, "external_agent_token": true}
 
 // The claim repoCaseTables' own doc comment makes -- "every repo-keyed
 // table in schema.go is here" -- checked against the schema rather than

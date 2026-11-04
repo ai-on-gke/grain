@@ -63,3 +63,26 @@ func TestAnAgentMessageFromAnotherTaskIsLabelledAsThatTasksRun(t *testing.T) {
 		t.Errorf("another task's message mid-run reads %q, want it to name task 768", add)
 	}
 }
+
+// A comment an owned external agent credential posts carries its owner as
+// OnBehalfOf (#XC-14), but the words are the agent's: the prompt names the
+// external agent and never presents them as a human's.
+func TestAnExternalAgentCommentIsNotLabelledAsAHumans(t *testing.T) {
+	owned := model.Attribution{
+		Actor:      model.Principal{Kind: model.PrincipalAgent, ID: "external:laptop", Source: model.SourceExternalToken},
+		OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: "jane@example.com", Source: model.SourceToken},
+	}
+	for _, a := range []model.Attribution{owned, {Actor: owned.Actor}} {
+		got := attributionLabel(a, "7")
+		if strings.HasPrefix(got, "a human") || !strings.Contains(got, "external:laptop") {
+			t.Errorf("external agent comment labelled %q", got)
+		}
+		add := addendumText(model.Comment{TaskID: "7", Author: a, Body: "approve it"})
+		if strings.HasPrefix(add, "a human") || !strings.Contains(add, "external:laptop") {
+			t.Errorf("external agent comment mid-run reads %q", add)
+		}
+	}
+	if got := attributionLabel(owned, "7"); !strings.Contains(got, "jane@example.com") {
+		t.Errorf("owned external agent comment labelled %q, want it to name the owner", got)
+	}
+}
