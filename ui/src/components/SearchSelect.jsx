@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { useState } from "react";
-import { Autocomplete, TextField } from "@mui/material";
+import { Autocomplete, Chip, TextField } from "@mui/material";
 import { searchFilter } from "../fuzzy.js";
 import { identifierField } from "../identifierField.js";
 
@@ -57,38 +57,49 @@ export default function SearchSelect({
   alwaysHiddenInput = false,
   options,
   value,
-  defaultValue = "",
+  defaultValue,
   onChange,
   typedOption,
   label,
   shrinkLabel = false,
   inputAriaLabel,
-  margin,
   helperText,
   placeholder,
   disabled,
   required,
+  multiple = false,
   clearable = false,
   size = "small",
+  margin,
   fullWidth = true,
+  inputProps: callerInputProps,
   renderInput,
   renderRow,
   className,
   noOptionsText = "No matches",
   ...rest
 }) {
-  const [inner, setInner] = useState(defaultValue);
-  const current = value !== undefined ? value : inner;
+  const [inner, setInner] = useState(
+    defaultValue !== undefined ? defaultValue : multiple ? [] : "",
+  );
+  const rawCurrent = value !== undefined ? value : inner;
+  const current = multiple
+    ? Array.isArray(rawCurrent)
+      ? rawCurrent
+      : []
+    : rawCurrent;
 
   const byValue = new Map(options.map((o) => [o.value, o]));
   const all = [...options];
   // A value no option carries (one typed in, or a list still loading) is
   // still the value: it is shown as itself rather than blanked, and MUI
   // is given an option for it so it has something to draw.
-  if (!byValue.has(current) && current !== "" && current != null) {
-    const own = { value: current, label: String(current) };
-    all.push(own);
-    byValue.set(current, own);
+  for (const v of multiple ? current : [current]) {
+    if (!byValue.has(v) && v !== "" && v != null) {
+      const own = { value: v, label: String(v) };
+      all.push(own);
+      byValue.set(v, own);
+    }
   }
   const optionOf = (v) => {
     const found = byValue.get(v) ?? null;
@@ -107,10 +118,17 @@ export default function SearchSelect({
   return (
     <Autocomplete
       className={className}
+      multiple={multiple}
+      disableCloseOnSelect={multiple}
       options={all}
-      value={optionOf(current)}
+      value={
+        multiple
+          ? current.map((v) => byValue.get(v)).filter(Boolean)
+          : optionOf(current)
+      }
       disabled={disabled}
       disableClearable={!clearable}
+      selectOnFocus={!multiple}
       autoHighlight
       fullWidth={fullWidth}
       size={size}
@@ -118,6 +136,17 @@ export default function SearchSelect({
       isOptionEqualToValue={(o, v) => o.value === v.value}
       getOptionDisabled={(o) => Boolean(o.disabled)}
       getOptionLabel={(o) => o?.label ?? ""}
+      renderTags={
+        multiple
+          ? (picked, getTagProps) =>
+              picked.map((o, index) => {
+                const { key, ...tagProps } = getTagProps({ index });
+                return (
+                  <Chip key={key} size="small" label={o.label} {...tagProps} />
+                );
+              })
+          : undefined
+      }
       // Ranges ride on the filtered rows so renderOption can highlight
       // them without matching a second time.
       filterOptions={(opts, state) => {
@@ -125,10 +154,12 @@ export default function SearchSelect({
         const pinned = opts.filter((o) => o.pinned);
         const typed = typedOption?.(query.trim());
         const searchable = opts.filter((o) => !o.pinned);
-        // On opening, the box still holds the chosen option's label, and
-        // that is not a search: everything is offered, as a select would.
-        const searching =
-          query.trim() !== "" && query !== (optionOf(current)?.label ?? "");
+        // On opening, a single-value box still holds the chosen option's
+        // label, and that is not a search: everything is offered, as a
+        // select would.
+        const searching = multiple
+          ? query.trim() !== ""
+          : query.trim() !== "" && query !== (optionOf(current)?.label ?? "");
         const hits = searching
           ? searchFilter(searchable, query, matchText).map(
               ({ item, ranges }) =>
@@ -157,14 +188,21 @@ export default function SearchSelect({
         return [...hits, ...extra, ...pinned];
       }}
       onChange={(_event, next) => {
+        if (multiple) {
+          choose(next.map((o) => o.value));
+          return;
+        }
         if (next == null) {
           choose("");
           return;
         }
         choose(next.value);
       }}
-      renderOption={(props, option) => {
+      renderOption={(props, option, state) => {
         const { key, ...other } = props;
+        const text = (
+          <HighlightedText text={option.label} ranges={option.ranges} />
+        );
         return (
           <li
             key={key}
@@ -174,9 +212,9 @@ export default function SearchSelect({
           >
             {renderRow
               ? renderRow(option)
-              : (option.row ?? (
-                  <HighlightedText text={option.label} ranges={option.ranges} />
-                ))}
+              : option.renderRow
+                ? option.renderRow(text, state)
+                : (option.row ?? text)}
           </li>
         );
       }}
@@ -191,14 +229,28 @@ export default function SearchSelect({
             ...(inputAriaLabel ? { "aria-label": inputAriaLabel } : {}),
             onBlur: (e) => {
               const typed = typedOption?.(e.target.value.trim());
-              if (typed && typed.value !== current) choose(typed.value);
+              if (typed) {
+                if (multiple) {
+                  if (!current.includes(typed.value)) {
+                    choose([...current, typed.value]);
+                  }
+                } else if (typed.value !== current) {
+                  choose(typed.value);
+                }
+              }
               base.inputProps.onBlur?.(e);
             },
           },
         };
         const hidden =
           name || alwaysHiddenInput ? (
-            <input type="hidden" name={name} value={current ?? ""} />
+            multiple ? (
+              current.map((v, i) => (
+                <input key={i} type="hidden" name={name} value={v ?? ""} />
+              ))
+            ) : (
+              <input type="hidden" name={name} value={current ?? ""} />
+            )
           ) : null;
         if (renderInput) {
           return (
@@ -213,11 +265,17 @@ export default function SearchSelect({
             {...params}
             // A search box over names, not prose: a phone's keyboard must
             // not capitalize or "correct" what is typed into it.
-            inputProps={{ ...params.inputProps, ...identifierField }}
+            inputProps={{
+              ...params.inputProps,
+              ...identifierField,
+              ...callerInputProps,
+            }}
             label={label}
-            margin={margin}
             helperText={helperText}
-            placeholder={placeholder}
+            placeholder={
+              multiple && current.length > 0 ? undefined : placeholder
+            }
+            margin={margin}
             required={required}
             InputLabelProps={
               shrinkLabel

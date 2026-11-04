@@ -65,7 +65,7 @@ func (s *Store) WakeRestingTask(ctx context.Context, id, reason string, now time
 		}
 		obs = &Observation{}
 	}
-	if obs.PendingSecret != "" || obs.PendingConfigChange != nil {
+	if obs.PendingSecret != "" || obs.PendingConfigChange != nil || obs.PendingAccess != nil {
 		return false, nil
 	}
 	if obs.PendingQuestionCommentID != nil {

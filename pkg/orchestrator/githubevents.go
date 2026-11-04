@@ -860,6 +860,7 @@ func deliverReplyAndWakeTask(ctx context.Context, store *model.Store, task model
 		o.RetryRequestedAt = &now
 		o.PendingQuestionCommentID = nil
 		o.PendingSecret = ""
+		o.PendingAccess = nil
 	})
 }
 

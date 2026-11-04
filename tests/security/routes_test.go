@@ -126,6 +126,9 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/tasks/{id}/config-change":                            trusted,
 	"POST /api/tasks/{id}/config-change/approve":                    trusted,
 	"POST /api/tasks/{id}/config-change/reject":                     trusted,
+	"POST /api/tasks/{id}/access-request/check":                     trusted,
+	"POST /api/tasks/{id}/access-request/grant":                     trusted,
+	"POST /api/tasks/{id}/access-request/deny":                      trusted,
 	"GET /api/tasks/{id}/attachments/{attachmentId}":                trusted,
 	"POST /api/tasks/{id}/close":                                    trusted,
 	"POST /api/tasks/{id}/stop":                                     trusted,
@@ -449,6 +452,9 @@ var routeAuthorization = map[string]authLevel{
 	// A grain hostd dialing in authenticates with the hostd token in
 	// its upgrade (hostd.Remote.ServeHTTP), not with a principal.
 	"GET /api/hostd/connect": public,
+	// The script that installs one: grain's own, with no token in it
+	// (TestHostdInstallScriptIsPublicAndHoldsNoSecret).
+	"GET /api/hostd/install.sh": public,
 }
 
 // The people the fixtures name. On the single-tenant daemon
