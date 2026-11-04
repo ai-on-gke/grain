@@ -321,7 +321,6 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
       name: "CI capabilities",
     });
     await expect(ciCapsSelect).toBeVisible();
-    await ciCapsSelect.click();
     // Each pick saves on its own PUT; wait for it, or the reload below
     // can land before the save does and find nothing persisted.
     const ciCapsSaved = page.waitForResponse(
@@ -329,7 +328,7 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
         res.request().method() === "PUT" &&
         /\/api\/repos\/acme\/widgets\/ci-capabilities(\?|$)/.test(res.url()),
     );
-    await page.getByRole("option", { name: /GitHub sandbox/i }).click();
+    await chooseOption(ciCapsSelect, { label: "GitHub sandbox" });
     expect((await ciCapsSaved).ok()).toBeTruthy();
     await page.keyboard.press("Escape");
     await expect(page.locator(".MuiAlert-filledError")).not.toBeVisible();
@@ -340,13 +339,12 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
       name: "Default capabilities",
     });
     await expect(defCapsSelect).toBeVisible();
-    await defCapsSelect.click();
     const defCapsSaved = page.waitForResponse(
       (res) =>
         res.request().method() === "PUT" &&
         /\/api\/repos\/acme\/widgets\/capabilities(\?|$)/.test(res.url()),
     );
-    await page.getByRole("option", { name: /Self debug/i }).click();
+    await chooseOption(defCapsSelect, "self-debug");
     expect((await defCapsSaved).ok()).toBeTruthy();
     await page.keyboard.press("Escape");
     await expect(page.locator(".MuiAlert-filledError")).not.toBeVisible();

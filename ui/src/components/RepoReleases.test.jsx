@@ -21,7 +21,11 @@ import RepoReleases, {
   withoutDanglingDependencies,
 } from "./RepoReleases.jsx";
 import api from "../api.js";
-import { chooseOption, optionValues } from "../searchSelectTesting.js";
+import {
+  chooseOption,
+  chosenValues,
+  optionValues,
+} from "../searchSelectTesting.js";
 import { runTimers } from "../testClock.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
@@ -1004,6 +1008,64 @@ describe("RepoReleases", () => {
           requireApproval: false,
           autoPromote: false,
           items: [{ templateId: "template-2", repeat: 1, dependsOn: [] }],
+        }),
+      },
+    );
+  });
+
+  // A plan's items can grow, so "Depends on" is searchable like the
+  // Template picker above it, and ticks its rows as chips.
+  it("searches and ticks another item's template under Depends on", async () => {
+    setupApi({
+      releases: [activeRelease],
+      candidates: [activeCandidate],
+      qualificationPlan: {
+        configured: true,
+        repo: "acme/widgets",
+        requireApproval: false,
+        autoPromote: false,
+        items: [
+          { templateId: "template-1", repeat: 1, dependsOn: [] },
+          { templateId: "template-2", repeat: 1, dependsOn: [] },
+        ],
+      },
+    });
+    const user = userEvent.setup();
+    render(
+      <RepoReleases
+        repo="acme/widgets"
+        templates={[smokeTemplate, unrelatedTemplate]}
+        onBack={() => {}}
+        showError={() => {}}
+      />,
+    );
+    await screen.findByRole("button", { name: "Save qualification plan" });
+
+    const dependsOn = screen.getAllByRole("combobox", { name: "Depends on" });
+    await user.click(dependsOn[1]);
+    expect(optionValues(dependsOn[1])).toEqual(["template-1"]);
+    await chooseOption(user, dependsOn[1], "template-1");
+    await user.keyboard("{Escape}");
+    expect(chosenValues(dependsOn[1])).toEqual(["template-1"]);
+    await user.click(
+      screen.getByRole("button", { name: "Save qualification plan" }),
+    );
+
+    expect(api).toHaveBeenCalledWith(
+      "/api/repos/acme/widgets/qualification-plan",
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          requireApproval: false,
+          autoPromote: false,
+          items: [
+            { templateId: "template-1", repeat: 1, dependsOn: [] },
+            {
+              templateId: "template-2",
+              repeat: 1,
+              dependsOn: ["template-1"],
+            },
+          ],
         }),
       },
     );

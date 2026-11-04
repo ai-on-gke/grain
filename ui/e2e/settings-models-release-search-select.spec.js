@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
-import { chooseOption, optionValues } from "./searchSelect.js";
+import { chips, chooseOption, optionValues } from "./searchSelect.js";
 
 // Follow-up 2 of 3 to grain/task-2879 (grain/task-2911): Settings, models,
 // connections and release pickers over growable lists use SearchSelect /
@@ -147,6 +147,83 @@ test.describe("SearchSelect across Settings, connections, metrics and releases",
             width + 1,
           );
         }
+      }
+    });
+  }
+  // The legacy-capability checklists on Settings → Tasks and a repo's CI
+  // and Agents tabs: searchable, a checkbox on every row, the chosen
+  // capabilities as chips inside the box, and the list hung under it.
+  for (const width of [1440, 390]) {
+    test(`capability checklists search and fit at ${width}px`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 900 });
+      // Each search names a capability by its words in any order.
+      for (const [path, tab, name, query, found] of [
+        [
+          "/settings/tasks",
+          null,
+          "Default legacy capabilities",
+          "debug self",
+          "self-debug",
+        ],
+        [
+          "/repos/acme/widgets",
+          "CI",
+          "CI capabilities",
+          "publish package",
+          "https://grain.dev/capabilities/release#package-publish={}",
+        ],
+        [
+          "/repos/acme/widgets",
+          "Agents",
+          "Default capabilities",
+          "debug self",
+          "self-debug",
+        ],
+      ]) {
+        await page.goto(path);
+        if (tab) await page.getByRole("tab", { name: tab }).click();
+        const box = page.getByRole("combobox", { name, exact: true });
+        await expect(box).toBeVisible();
+        const field = box.locator(
+          "xpath=ancestor::div[contains(@class,'MuiOutlinedInput-root')]",
+        );
+        const fieldBox = await field.boundingBox();
+        expect(fieldBox.x, `${name} at ${width}px`).toBeGreaterThanOrEqual(0);
+        expect(fieldBox.x + fieldBox.width).toBeLessThanOrEqual(width + 1);
+        for (const chip of await chips(box).all()) {
+          const c = await chip.boundingBox();
+          expect(c.x).toBeGreaterThanOrEqual(fieldBox.x - 1);
+          expect(c.x + c.width).toBeLessThanOrEqual(
+            fieldBox.x + fieldBox.width + 1,
+          );
+        }
+
+        await box.click();
+        const listbox = page.getByRole("listbox");
+        await expect(listbox).toBeVisible();
+        await expect(
+          listbox.getByRole("option").first().locator(".MuiCheckbox-root"),
+        ).toBeVisible();
+        // Measured again: opening the list can scroll the page.
+        const open = await field.boundingBox();
+        const lb = await listbox.boundingBox();
+        expect(Math.abs(lb.x - open.x)).toBeLessThanOrEqual(2);
+        expect(
+          lb.y >= open.y + open.height - 2 || lb.y + lb.height <= open.y + 2,
+          "the list hangs under (or, short of room, over) its box",
+        ).toBe(true);
+        expect(lb.x + lb.width).toBeLessThanOrEqual(width + 1);
+
+        await box.fill(query);
+        expect(await optionValues(box)).toContain(found);
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= window.innerWidth,
+          ),
+          `horizontal overflow on ${path} at ${width}px`,
+        ).toBe(true);
       }
     });
   }

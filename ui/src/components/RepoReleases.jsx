@@ -21,11 +21,8 @@ import {
   Chip,
   FormControl,
   FormControlLabel,
-  InputLabel,
   Link,
   ListItemText,
-  MenuItem,
-  Select,
   Stack,
   TextField,
   Typography,
@@ -1085,51 +1082,37 @@ function QualificationPlanEditor({ plan, templates, onSave }) {
               />
             </Stack>
             <FormControl fullWidth size="small" margin="dense">
-              <InputLabel id={`qualification-dependson-label-${i}`}>
-                Depends on
-              </InputLabel>
-              <Select
-                labelId={`qualification-dependson-label-${i}`}
-                label="Depends on"
+              {/* Every row here is another template in this plan, so
+                  each carries the figure the picker above it does --
+                  after the checkbox, which is a control rather than a
+                  label -- and so does each chip. */}
+              <SearchSelect
                 multiple
+                label="Depends on"
                 value={it.dependsOn}
-                onChange={(e) => updateItem(i, { dependsOn: e.target.value })}
-                renderValue={(selected) => (
-                  <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-                    {selected.map((id) => (
-                      <Chip
-                        key={id}
-                        size="small"
-                        icon={<ItemGlyph kind="templates" />}
-                        label={templateName(id)}
-                      />
-                    ))}
-                  </Box>
+                onChange={(next) => updateItem(i, { dependsOn: next })}
+                noOptionsText={
+                  otherItems.length === 0 ? "No other items yet" : "No matches"
+                }
+                renderChip={(o, props) => (
+                  <Chip
+                    size="small"
+                    icon={<ItemGlyph kind="templates" />}
+                    label={o.label}
+                    {...props}
+                  />
                 )}
-              >
-                {otherItems.length === 0 && (
-                  <MenuItem disabled value="">
-                    No other items yet
-                  </MenuItem>
-                )}
-                {/* Every row here is another template in this plan, so
-                    each carries the figure the picker above it does --
-                    after the checkbox, which is a control rather than a
-                    label. */}
-                {otherItems.map((other) => (
-                  <MenuItem key={other.templateId} value={other.templateId}>
-                    <Checkbox
-                      checked={it.dependsOn.includes(other.templateId)}
-                      size="small"
-                    />
-                    <ItemGlyph kind="templates" />
-                    <ListItemText
-                      primary={templateName(other.templateId)}
-                      sx={{ ml: 0.9 }}
-                    />
-                  </MenuItem>
-                ))}
-              </Select>
+                options={otherItems.map((other) => ({
+                  value: other.templateId,
+                  label: templateName(other.templateId),
+                  renderRow: (text) => (
+                    <>
+                      <ItemGlyph kind="templates" />
+                      <ListItemText primary={text} sx={{ ml: 0.9, my: 0 }} />
+                    </>
+                  ),
+                }))}
+              />
             </FormControl>
             <Stack direction="row" justifyContent="flex-end" sx={{ mt: 0.5 }}>
               <Button size="small" color="error" onClick={() => removeItem(i)}>
