@@ -424,6 +424,21 @@ export function stateTitle(t, byId) {
   return label;
 }
 
+// blockerState returns the short state label shown in parentheses for an
+// open blocking task (e.g. "running", "asked", "cancelled", "merged").
+export function blockerState(dep) {
+  if (!dep) return "";
+  let state = dep.state;
+  if (isTaskMerged(dep)) {
+    state = "merged";
+  } else if (state === "closed" && !dep.endedAt) {
+    state = "cancelled";
+  } else if (STATE_LABELS[state]) {
+    state = STATE_LABELS[state].toLowerCase();
+  }
+  return state || "";
+}
+
 // blockedDescription describes the open blocking dependencies for a task,
 // including each blocker's current state (e.g. "Blocked on: #105 (cancelled)").
 export function blockedDescription(t, byId) {
@@ -438,15 +453,7 @@ export function blockedDescription(t, byId) {
           ? byId.find((x) => x.id === id)
           : byId?.[id];
     if (!dep) return `#${id}`;
-    let state = dep.state;
-    if (isTaskMerged(dep)) {
-      state = "merged";
-    } else if (state === "closed" && !dep.endedAt) {
-      state = "cancelled";
-    } else if (STATE_LABELS[state]) {
-      state = STATE_LABELS[state].toLowerCase();
-    }
-    return `#${id} (${state})`;
+    return `#${id} (${blockerState(dep)})`;
   });
   // A task its own run parked (wait_for_task) is waiting by choice.
   return `${t.parked ? "Waiting on" : "Blocked on"}: ${parts.join(", ")}`;

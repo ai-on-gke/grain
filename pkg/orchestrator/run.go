@@ -2181,11 +2181,15 @@ func baseDescription(task model.Task) string {
 // description says the rest; this is the sentence that gets a run to
 // read it.
 func proposalSection(task model.Task) string {
+	hasRepo := task.Target != nil || len(task.Writes) > 0
 	waitOn := fmt.Sprintf("task %s itself, when the follow-up only makes sense once "+
 		"this task's own change has landed, and the id you gave an earlier proposal "+
 		"in this same run that it builds on", task.ID)
 	if model.NeverCompletes(task) {
 		waitOn = "the id you gave an earlier proposal in this same run that it builds on"
+	} else if !hasRepo {
+		waitOn = "the id you gave an earlier proposal in this same run that it builds on, " +
+			"or another existing task whose change must land first"
 	}
 	s := fmt.Sprintf(
 		"\n\nYou are running as task %s. Anything you split out with propose_task "+
@@ -2202,6 +2206,10 @@ func proposalSection(task model.Task) string {
 			"target closing -- so a proposal waiting on this one would wait forever. grain "+
 			"refuses such a link and says so in the proposal's body, but a proposal that asks "+
 			"for it is one whose ordering nobody recorded.", task.ID)
+	} else if !hasRepo {
+		s += fmt.Sprintf(" Do not put task %s itself in depends_on: this task has no repository "+
+			"change to land and rests in awaiting_reply until a human closes the report, so a "+
+			"proposal that depends on it stays blocked until then.", task.ID)
 	}
 	if task.Target != nil {
 		s += fmt.Sprintf(" A proposal is filed against %s, the repository you are "+
