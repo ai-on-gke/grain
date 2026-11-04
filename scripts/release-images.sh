@@ -938,7 +938,7 @@ push_pinned() {
   pinned=""
   # Release assets carry the image itself, so its pin is its local ref:
   # what `docker load` of the asset leaves behind (docs/release-assets.md).
-  if [ "$release_target" = assets ]; then
+  if [ "${release_target:-registry}" = assets ]; then
     pinned="$image"
     return 0
   fi

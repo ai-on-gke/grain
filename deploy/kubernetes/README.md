@@ -45,7 +45,20 @@ cluster's rather than a number an operator sized by hand.
 
 Three things have to exist first.
 
-**A sandbox image.** CI publishes `ghcr.io/bwsalmon/grain/k8s-sandbox`
+**A registry the cluster pulls from, holding the release's images.** Grain
+publishes its images as GitHub release assets
+([docs/release-assets.md](../../docs/release-assets.md)), which a cluster
+cannot `docker load`. Load a release's `grain` and `k8s-sandbox` assets on a
+machine with Docker (`scripts/release-assets.sh fetch <release> DIR &&
+scripts/release-assets.sh load DIR`), tag the two manifest refs into a
+registry the cluster can pull from (the deployment's own
+`sandbox_image_mirror`, for example an Artifact Registry repository in the
+cluster's project) and push them; the Deployment's `image:` and
+`-k8s-sandbox-image` then name those pushed refs.
+Releases from before release assets are still at
+`ghcr.io/bwsalmon/grain/{grain,k8s-sandbox}`.
+
+**A sandbox image.** The release's `k8s-sandbox` image comes
 with all three supported agent CLIs (`claude`, `agy`, and `codex`), `git`,
 `bash`, `curl`, and a non-root user with a writable home. Each grain build
 has its same-commit image stamped in as the `-k8s-sandbox-image` default;

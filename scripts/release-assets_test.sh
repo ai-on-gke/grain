@@ -172,6 +172,29 @@ check "retag plans a pending release" '[ "$status" = 0 ] && grep -q "published v
 run bash "$assets" --dry-run retag "sha-$short" v3.5.0-rc.1 v3.5.0-rc.1-discarded
 check "retag plans a discarded rc marker" '[ "$status" = 0 ] && grep -q "published v3.5.0-rc.1-discarded" <<< "$out"'
 
+git tag -a v3.5.0-rc.1 -m rc1 "$first"
+git tag -a v3.5.0-rc.2 -m rc2 "$commit"
+git tag -a v3.5.0-pending -m pending "$commit"
+git push -q origin v3.5.0-rc.1 v3.5.0-rc.2 v3.5.0-pending
+bash "$assets" package > /dev/null
+run bash "$assets" --dry-run rc v3.5.0-rc.2
+check "the train's newest rc is published as itself and moves channel-candidate" \
+  '[ "$status" = 0 ] && grep -q "published v3.5.0-rc.2" <<< "$out" && grep -q "published channel-candidate" <<< "$out"'
+run bash "$assets" --dry-run train-tag v3.5.0-pending
+check "a pushed -pending tag publishes vX.Y.Z-pending with version vX.Y.Z" \
+  '[ "$status" = 0 ] && grep -q "published v3.5.0-pending" <<< "$out" && [ "$(jq -r .version "$m")" = v3.5.0 ]'
+run bash "$assets" --dry-run train-tag v3.5.0-rc.2-discarded
+check "a pushed -discarded tag publishes the discarded marker" '[ "$status" = 0 ] && grep -q "published v3.5.0-rc.2-discarded" <<< "$out"'
+run bash "$assets" --dry-run discard-pending v3.5.0
+check "a rejected pending release gets its -rejected marker" '[ "$status" = 0 ] && grep -q "published v3.5.0-rejected" <<< "$out"'
+run bash "$assets" --dry-run retract v3.4.0
+check "a retracted release gets its -retracted marker" '[ "$status" = 0 ] && grep -q "published v3.4.0-retracted" <<< "$out"'
+run bash "$assets" --dry-run rc v3.5.0-rc.1
+check "an older rc never moves channel-candidate (and its commit's assets must be fetched)" \
+  '[ "$status" != 0 ] || ! grep -q "published channel-candidate" <<< "$out"'
+check "the train phases pushed nothing to a registry" '! grep -qE "docker (push|login|tag)" "$DOCKER_LOG"'
+
+bash "$assets" package > /dev/null
 run bash "$assets" load
 check "load checks every image ID the manifest names" '[ "$status" = 0 ] && [ "$(grep -c "^release-assets.sh: loaded" <<< "$out")" = 3 ]'
 

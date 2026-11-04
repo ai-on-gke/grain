@@ -23,24 +23,25 @@ sandboxes.
 
 ## 1. Install the binary
 
-Releases are published as the signed container image
-`ghcr.io/bwsalmon/grain/grain:<version>`, the core build (`./cmd/grain`). The
-wrapper distribution build (a wrapper distribution's `cmd/grain`) is `ghcr.io/bwsalmon/grain/google-grain`,
-with the same tags. Its `/usr/local/bin/grain` is a static Linux binary
-(`CGO_ENABLED=0`). Use a release tag (`vX.Y.Z`, listed
-in [docs/releases](releases)) rather than `latest`, and pin the digest you
-verified:
+Releases are published as assets on the repository's GitHub releases
+([docs/release-assets.md](release-assets.md)): an `images.json` manifest and
+a `docker save` tarball of the core build's image (`./cmd/grain`),
+`grain-image.tar.gz`, with a `sha256sum` sidecar. Its `/usr/local/bin/grain`
+is a static Linux binary (`CGO_ENABLED=0`). Use a release tag (`vX.Y.Z`,
+listed in [docs/releases](releases)) rather than `latest`, and check the
+tarball against the manifest before loading it --
+`scripts/install-grain.sh -version vX.Y.Z` does all of this in one command:
 
 ```sh
 VERSION=v1.9.0                       # the release you want
-IMAGE=ghcr.io/bwsalmon/grain/grain:$VERSION
-docker pull "$IMAGE"
-PINNED=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE")
-echo "$PINNED"                       # ghcr.io/bwsalmon/grain/grain@sha256:...
-
-# Verify the release signature (docs/image-signing.md). cosign.pub is the
-# release public key your Grain operator publishes.
-cosign verify --key cosign.pub --insecure-ignore-tlog=true "$PINNED"
+BASE=https://github.com/ai-on-gke/grain/releases/download/$VERSION
+curl -fsSLO "$BASE/images.json"
+ASSET=$(jq -r .images.grain.asset images.json)
+curl -fsSLO "$BASE/$ASSET" -O "$BASE/$ASSET.sha256"
+grep -q "$(jq -r .images.grain.sha256 images.json)  $ASSET" "$ASSET.sha256"
+sha256sum -c "$ASSET.sha256"         # the tarball is the one the manifest names
+docker load -i "$ASSET"
+PINNED=$(jq -r .images.grain.ref images.json)   # grain/grain:sha-<12 hex>
 
 mkdir -p ~/.local/bin
 id=$(docker create "$PINNED")

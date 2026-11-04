@@ -346,6 +346,22 @@ GRAIN_INSTALL_TRACK="${GRAIN_INSTALL_TRACK:-}"
 GRAIN_IMAGE_EXPLICIT="${GRAIN_IMAGE:-}"
 GRAIN_IMAGE="${GRAIN_IMAGE:-ghcr.io/bwsalmon/grain/grain}"
 GRAIN_IMAGE_TAG="${GRAIN_IMAGE_TAG:-}"
+# Release assets (docs/release-assets.md): unless GRAIN_IMAGE names a
+# registry repository, the deployment image and both sandbox images come
+# from GRAIN_RELEASE_REPO's GitHub release for GRAIN_IMAGE_TAG --
+# images.json and one gzip `docker save` tarball per image, each checked
+# against its sha256 and `docker load`ed -- so a host needs no registry and
+# no registry credential at all. GRAIN_RELEASE_ASSETS=0 goes back to
+# pulling ghcr.io/bwsalmon/grain/grain, where releases before release
+# assets still are; GRAIN_IMAGE set to any repository does the same.
+GRAIN_RELEASE_REPO="${GRAIN_RELEASE_REPO:-ai-on-gke/grain}"
+if [ -z "${GRAIN_RELEASE_ASSETS:-}" ]; then
+  if [ -n "$GRAIN_IMAGE_EXPLICIT" ]; then
+    GRAIN_RELEASE_ASSETS=0
+  else
+    GRAIN_RELEASE_ASSETS=1
+  fi
+fi
 # Credentials for `docker login` against the image's registry, needed
 # only if the package is private -- bwsalmon/grain and its packages are
 # public, so an ordinary deployment sets neither and pulls anonymously.
@@ -1049,9 +1065,19 @@ Recognized variables:
                              codex login. Shared read-write with Codex
                              runs so token refreshes persist; used only
                              when no OpenAI API key is configured
-  GRAIN_IMAGE               image repository the deployment runs, with no tag
-                             (default ghcr.io/bwsalmon/grain/grain -- what CI
-                             publishes on every commit)
+  GRAIN_IMAGE               image repository the deployment runs, with no tag.
+                             Unset, the images are installed from release
+                             assets instead (GRAIN_RELEASE_ASSETS); set, they
+                             are pulled from it (ghcr.io/bwsalmon/grain/grain
+                             holds the releases published before assets)
+  GRAIN_RELEASE_ASSETS      1 (the default unless GRAIN_IMAGE is set) to
+                             install from GRAIN_RELEASE_REPO's GitHub release
+                             for GRAIN_IMAGE_TAG -- sha-<12 hex>, vX.Y.Z,
+                             latest, or a channel (main is channel-main,
+                             candidate channel-candidate) -- with no
+                             registry; 0 to pull GRAIN_IMAGE
+  GRAIN_RELEASE_REPO        the GitHub repository whose releases carry the
+                             assets (default ai-on-gke/grain)
   GRAIN_IMAGE_TAG           which tag of it to run; always wins when set.
                              Default: GRAIN_CHANNEL's tag, else the tag
                              published for GRAIN_REF (that branch with "/"
@@ -3491,10 +3517,143 @@ gcp_access_token() {
 # to some *other* image: an unknown tag with nothing local still stops
 # here, loudly, instead of leaving grain-daemon.service pointed at
 # something that does not exist.
+# release_for_tag prints the release-asset release image tag $1 lives in:
+# a moving tag's channel-<branch> release ('..' or '/' as '-'), and every
+# immutable name as itself.
+release_for_tag() {
+  local tag="$1"
+  case "$tag" in
+    latest | sha-* | v[0-9]*) printf '%s\n' "$tag" ;;
+    channel-*) printf '%s\n' "$tag" ;;
+    rc | candidate) printf 'channel-candidate\n' ;;
+    *)
+      tag="${tag//../-}"
+      printf 'channel-%s\n' "${tag//\//-}"
+      ;;
+  esac
+}
+
+# manifest_field prints images.json $1's field $3 of image $2 (or the
+# top-level field $2 with no $3). jq where the host has it; otherwise the
+# one-key-per-line layout scripts/release-assets.sh writes.
+manifest_field() {
+  local file="$1" key="$2" field="${3:-}"
+  if command -v jq >/dev/null 2>&1; then
+    if [ -n "$field" ]; then
+      jq -er --arg k "$key" --arg f "$field" '.images[$k][$f]' "$file"
+    else
+      jq -er --arg k "$key" '.[$k]' "$file"
+    fi
+    return
+  fi
+  awk -v key="$key" -v field="$field" '
+    function val(line) { sub(/^[^:]*: */, "", line); sub(/,? *$/, "", line); gsub(/^"|"$/, "", line); return line }
+    field == "" && $0 ~ "^  \"" key "\": " { print val($0); found = 1; exit }
+    field != "" && $0 ~ "^    \"" key "\": \\{" { in_key = 1; next }
+    in_key && $0 ~ "^    }" { exit }
+    in_key && $0 ~ "^      \"" field "\": " { print val($0); found = 1; exit }
+    END { exit found ? 0 : 1 }
+  ' "$file"
+}
+
+# install_release_assets downloads GRAIN_IMAGE_TAG's release assets,
+# checks every tarball against images.json and its sha256 sidecar, loads
+# them, checks the loaded image IDs, and points GRAIN_IMAGE_REF at the
+# manifest's grain ref. A moving release with no images.json is mid-update
+# (scripts/release-assets.sh replaces its assets non-atomically): it is
+# tried again, never taken for a release with nothing in it.
+install_release_assets() {
+  local release base dir key asset sum side ref id got attempt
+  release="$(release_for_tag "$GRAIN_IMAGE_TAG")"
+  base="https://github.com/$GRAIN_RELEASE_REPO/releases/download/$release"
+  if ! command -v curl >/dev/null 2>&1; then
+    log "No curl on this host to download release $release with; pulling $GRAIN_IMAGE_REF from the registry instead"
+    return 2
+  fi
+  step_start "Installing release assets from $GRAIN_RELEASE_REPO release $release"
+  dir="$(mktemp -d)"
+  for attempt in 1 2 3 4 5 6; do
+    if curl -fsSL -o "$dir/images.json" "$base/images.json"; then
+      break
+    fi
+    case "$release" in
+      channel-* | latest)
+        if [ "$attempt" -lt 6 ]; then
+          log "  $release has no images.json yet (mid-update, or not published); retrying"
+          sleep $((10 * attempt))
+          continue
+        fi
+        ;;
+    esac
+    rm -rf "$dir"
+    if [ -z "$GRAIN_IMAGE_EXPLICIT" ] && ! curl -fsSLI -o /dev/null "https://github.com/$GRAIN_RELEASE_REPO/releases/tag/$release"; then
+      # No such release at all -- a name published only before release
+      # assets -- is the registry fallback; a release that exists without
+      # images.json is not.
+      log "  $GRAIN_RELEASE_REPO has no release $release; pulling $GRAIN_IMAGE_REF from the registry instead"
+      step_done "falling back to the registry"
+      return 2
+    fi
+    echo "setup.sh: $GRAIN_RELEASE_REPO has no release $release with an images.json ($base/images.json)." >&2
+    echo "  Set GRAIN_IMAGE_TAG to a release that has one (sha-<12 hex>, vX.Y.Z, latest, main), or" >&2
+    echo "  GRAIN_IMAGE=ghcr.io/bwsalmon/grain/grain to pull a release published before release assets." >&2
+    exit 1
+  done
+  if [ "$(manifest_field "$dir/images.json" schema 2>/dev/null)" != 1 ]; then
+    rm -rf "$dir"
+    echo "setup.sh: $release's images.json is not schema 1" >&2
+    exit 1
+  fi
+  for key in guest k8s-sandbox grain; do
+    asset="$(manifest_field "$dir/images.json" "$key" asset)" || { echo "setup.sh: $release's images.json names no $key asset" >&2; exit 1; }
+    sum="$(manifest_field "$dir/images.json" "$key" sha256)"
+    ref="$(manifest_field "$dir/images.json" "$key" ref)"
+    id="$(manifest_field "$dir/images.json" "$key" imageId)"
+    case "$asset" in */* | .* | "") echo "setup.sh: $release names an unsafe asset '$asset'" >&2; exit 1 ;; esac
+    log "  downloading $asset"
+    curl -fsSL -o "$dir/$asset" "$base/$asset" || { echo "setup.sh: could not download $base/$asset" >&2; exit 1; }
+    curl -fsSL -o "$dir/$asset.sha256" "$base/$asset.sha256" || { echo "setup.sh: could not download $base/$asset.sha256" >&2; exit 1; }
+    side="$(cat "$dir/$asset.sha256")"
+    if [ "$side" != "$sum  $asset" ] || ! (cd "$dir" && sha256sum --quiet -c "$asset.sha256"); then
+      rm -rf "$dir"
+      echo "setup.sh: $asset from $release does not match the sha256 its images.json names ($sum); refusing to load it" >&2
+      exit 1
+    fi
+    docker load -i "$dir/$asset" >/dev/null
+    rm -f "$dir/$asset"
+    got="$(docker image inspect --format '{{.Id}}' "$ref" 2>/dev/null || true)"
+    if [ "$got" != "$id" ]; then
+      rm -rf "$dir"
+      echo "setup.sh: loading $asset left ${got:-no image} at $ref, not the $id images.json names" >&2
+      exit 1
+    fi
+    log "  loaded $ref"
+    [ "$key" = grain ] && GRAIN_IMAGE_REF="$ref"
+  done
+  rm -rf "$dir"
+  GRAIN_IMAGE="${GRAIN_IMAGE_REF%:*}"
+  step_done "ready"
+}
+
 pull_image() {
   if [ "$GRAIN_DOCKER_AVAILABLE" != "1" ]; then
     log "No container engine on this host: nothing to pull"
     return 0
+  fi
+  if [ "$GRAIN_RELEASE_ASSETS" = "1" ]; then
+    if [ -n "$GRAIN_IMAGE_VERIFY_KEY" ]; then
+      echo "setup.sh: GRAIN_IMAGE_VERIFY_KEY verifies registry signatures; release assets are checked against their sha256 instead." >&2
+      echo "  Set GRAIN_IMAGE to the signed registry repository to verify signatures." >&2
+      exit 1
+    fi
+    local assets_status=0
+    install_release_assets || assets_status=$?
+    if [ "$assets_status" = 0 ]; then
+      report_image_revision "$GRAIN_IMAGE_REF" "$GRAIN_IMAGE_TAG" || true
+      return 0
+    fi
+    [ "$assets_status" = 2 ] || exit "$assets_status"
+    GRAIN_RELEASE_ASSETS=0
   fi
   registry_login
   step_start "Pulling $GRAIN_IMAGE_REF"

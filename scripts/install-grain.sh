@@ -13,29 +13,38 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Install the grain binary from a release image, for one account, with no
+# Install the grain binary from a release, for one account, with no
 # build: docs/quickstart.md step 1 in one command.
 #
 # Usage:
-#   scripts/install-grain.sh -version vX.Y.Z [-key cosign.pub] [-dest DIR] [-image REPO]
+#   scripts/install-grain.sh -version vX.Y.Z [-dest DIR] [-repo OWNER/NAME]
+#   scripts/install-grain.sh -version vX.Y.Z -image REPO [-key cosign.pub] [-dest DIR]
 #
-#   -version  the release tag to install (required): a vX.Y.Z tag, never a
+#   -version  the release to install (required): a vX.Y.Z tag, never a
 #             moving one, so what is installed is what was asked for
-#   -key      the release's cosign public key: the image's signature must
-#             verify against it (docs/image-signing.md) before anything is
-#             installed. Without it, nothing is verified -- say so loudly
+#   -repo     the GitHub repository whose release assets carry the image
+#             (default ai-on-gke/grain; docs/release-assets.md)
+#   -image    pull the grain image from this registry repository instead
+#             of release assets -- ghcr.io/bwsalmon/grain/grain holds the
+#             releases published before release assets
+#   -key      with -image, the release's cosign public key: the image's
+#             signature must verify against it (docs/image-signing.md)
+#             before anything is installed
 #   -dest     where the binary goes (default ~/.local/bin)
-#   -image    the image repository (default ghcr.io/bwsalmon/grain/grain)
 #
-# It pulls the image, pins it to the digest the registry served, verifies
-# that digest, copies /usr/local/bin/grain out of it, and prints the
-# digest and the binary's sha256 to record beside the install.
+# From release assets it downloads the release's images.json and its
+# grain image tarball, checks the tarball against the sha256 images.json
+# and its sidecar name, `docker load`s it and checks the loaded image ID.
+# From a registry it pulls the image and pins it to the digest served.
+# Either way it copies /usr/local/bin/grain out of the image and prints
+# the image and the binary's sha256 to record beside the install.
 set -euo pipefail
 
 version=""
 key=""
 dest="${HOME}/.local/bin"
-image="ghcr.io/bwsalmon/grain/grain"
+image=""
+repo="ai-on-gke/grain"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -43,7 +52,8 @@ while [ $# -gt 0 ]; do
     -key) key="${2:?-key needs a value}"; shift 2 ;;
     -dest) dest="${2:?-dest needs a value}"; shift 2 ;;
     -image) image="${2:?-image needs a value}"; shift 2 ;;
-    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
+    -repo) repo="${2:?-repo needs a value}"; shift 2 ;;
+    -h|--help) sed -n '15,40p' "$0"; exit 0 ;;
     *) echo "install-grain.sh: unknown argument $1" >&2; exit 2 ;;
   esac
 done
@@ -52,22 +62,50 @@ if ! [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "install-grain.sh: -version must be a release tag (vX.Y.Z), not '${version}'" >&2
   exit 2
 fi
-command -v docker >/dev/null || { echo "install-grain.sh: needs docker to pull the release image" >&2; exit 1; }
+command -v docker >/dev/null || { echo "install-grain.sh: needs docker to load the release image" >&2; exit 1; }
 
-docker pull -q "${image}:${version}" >/dev/null
-pinned="$(docker inspect --format '{{index .RepoDigests 0}}' "${image}:${version}")"
-echo "image: ${pinned}"
-
-if [ -n "$key" ]; then
-  command -v cosign >/dev/null || { echo "install-grain.sh: -key needs cosign on PATH" >&2; exit 1; }
-  cosign verify --key "$key" --insecure-ignore-tlog=true "$pinned" >/dev/null
-  echo "signature: verified against ${key}"
+if [ -z "$image" ]; then
+  [ -z "$key" ] || { echo "install-grain.sh: -key verifies a registry signature; release assets are checked by sha256 (use -image to verify a signed registry image)" >&2; exit 2; }
+  command -v curl >/dev/null || { echo "install-grain.sh: needs curl to download release assets" >&2; exit 1; }
+  command -v jq >/dev/null || { echo "install-grain.sh: needs jq to read the release's images.json" >&2; exit 1; }
+  base="https://github.com/${repo}/releases/download/${version}"
+  work="$(mktemp -d)"
+  trap 'rm -rf "$work"' EXIT
+  curl -fsSL -o "${work}/images.json" "${base}/images.json" ||
+    { echo "install-grain.sh: ${repo} release ${version} has no images.json; a release from before release assets needs -image ghcr.io/bwsalmon/grain/grain" >&2; exit 1; }
+  [ "$(jq -r .schema "${work}/images.json")" = 1 ] || { echo "install-grain.sh: ${version}'s images.json is not schema 1" >&2; exit 1; }
+  asset="$(jq -er .images.grain.asset "${work}/images.json")"
+  sum="$(jq -er .images.grain.sha256 "${work}/images.json")"
+  ref="$(jq -er .images.grain.ref "${work}/images.json")"
+  id="$(jq -er .images.grain.imageId "${work}/images.json")"
+  case "$asset" in */* | .* | "") echo "install-grain.sh: unsafe asset name '${asset}'" >&2; exit 1 ;; esac
+  curl -fsSL -o "${work}/${asset}" "${base}/${asset}"
+  curl -fsSL -o "${work}/${asset}.sha256" "${base}/${asset}.sha256"
+  if [ "$(cat "${work}/${asset}.sha256")" != "${sum}  ${asset}" ] || ! (cd "$work" && sha256sum --quiet -c "${asset}.sha256"); then
+    echo "install-grain.sh: ${asset} does not match the sha256 ${version}'s images.json names (${sum})" >&2
+    exit 1
+  fi
+  docker load -q -i "${work}/${asset}" >/dev/null
+  loaded="$(docker image inspect --format '{{.Id}}' "$ref")"
+  [ "$loaded" = "$id" ] || { echo "install-grain.sh: ${ref} is ${loaded} after loading, not ${id}" >&2; exit 1; }
+  pinned="$ref"
+  echo "image: ${ref} (${id}, ${asset} sha256 ${sum})"
 else
-  echo "signature: NOT verified (no -key given)" >&2
+  docker pull -q "${image}:${version}" >/dev/null
+  pinned="$(docker inspect --format '{{index .RepoDigests 0}}' "${image}:${version}")"
+  echo "image: ${pinned}"
+
+  if [ -n "$key" ]; then
+    command -v cosign >/dev/null || { echo "install-grain.sh: -key needs cosign on PATH" >&2; exit 1; }
+    cosign verify --key "$key" --insecure-ignore-tlog=true "$pinned" >/dev/null
+    echo "signature: verified against ${key}"
+  else
+    echo "signature: NOT verified (no -key given)" >&2
+  fi
 fi
 
 container="$(docker create "$pinned")"
-trap 'docker rm "$container" >/dev/null 2>&1 || true' EXIT
+trap 'docker rm "$container" >/dev/null 2>&1 || true; rm -rf "${work:-}"' EXIT
 mkdir -p "$dest"
 tmp="$(mktemp "${dest}/.grain.XXXXXX")"
 docker cp "${container}:/usr/local/bin/grain" "$tmp"

@@ -41,6 +41,17 @@
 #           the same for any other name: the release train's
 #           vX.Y.0-rc.N / channel-candidate, vX.Y.0-pending, and the
 #           -discarded / -rejected / -retracted markers.
+#   rc [vX.Y.Z-rc.N] | pending <vX.Y.Z> | discard-rc <vX.Y.Z-rc.N> |
+#   discard-pending <vX.Y.Z> | retract <vX.Y.Z>
+#           release-images.sh's release-train phases, so that
+#           RELEASE_IMAGES="bash scripts/release-assets.sh" publishes the
+#           train's names as release assets: an rc as vX.Y.Z-rc.N and, when
+#           it is the newest rc, channel-candidate; a pending release as
+#           vX.Y.Z-pending (version vX.Y.Z); and the vX.Y.Z-rc.N-discarded,
+#           vX.Y.Z-rejected and vX.Y.Z-retracted markers. Each is the
+#           sha-<short> release of the commit the train's git tag names.
+#   train-tag <tag>
+#           the phase a pushed train tag asks for (release-train-assets.yml)
 #   fetch <release> [DIR]
 #           download a release's images.json and assets into DIR and
 #           validate them. A moving release with no images.json is
@@ -311,6 +322,10 @@ may_move() {
     say "$release: holds no manifest yet; publishing ${commit:0:12}"
     return 0
   fi
+  if [ "${force_move:-false}" = true ]; then
+    say "$release: moving onto ${commit:0:12}, the newest rc, from ${held:0:12}"
+    return 0
+  fi
   if [ "$held" = "$commit" ]; then
     say "$release: already holds ${commit:0:12}; republishing it"
     return 0
@@ -366,9 +381,14 @@ point_tag() {
   ok "$status" || die "pointing tag $1 at $2 answered $status: $(head -c 300 "$scratch/body")"
 }
 
+held_version() {
+  jq -r '.version // empty' "$scratch/held.json" 2>/dev/null || true
+}
+
 publish_one() {
   local release="$1" kind commit version id held="" status name prerelease=true make_latest=false listed missing
   upload_base=""
+  rm -f "$scratch/held.json"
   kind="$(release_kind "$release")"
   commit="$(jq -r .commit "$dir/images.json")"
   version="$(jq -r .version "$dir/images.json")"
@@ -381,9 +401,9 @@ publish_one() {
     upload_base="$(jq -r '.upload_url | sub("\\{.*$"; "")' "$scratch/release")"
     asset_list "$id" > "$scratch/existing"
     if grep -q ' images.json$' "$scratch/existing"; then
-      held="$(curl -sSL ${token:+-H "Authorization: Bearer $token"} -H 'Accept: application/octet-stream' \
-        "$api_url/repos/$repo/releases/assets/$(awk '$2 == "images.json" {print $1}' "$scratch/existing")" |
-        jq -r '.commit // empty' 2>/dev/null || true)"
+      curl -sSL ${token:+-H "Authorization: Bearer $token"} -H 'Accept: application/octet-stream' -o "$scratch/held.json" \
+        "$api_url/repos/$repo/releases/assets/$(awk '$2 == "images.json" {print $1}' "$scratch/existing")" || true
+      held="$(jq -r '.commit // empty' "$scratch/held.json" 2>/dev/null || true)"
     fi
   else
     id=""
@@ -398,6 +418,16 @@ publish_one() {
       ;;
     *)
       may_move "$release" "$commit" "$held" || return 0
+      if [ "$held" = "$commit" ] && [ "$(jq -r .version "$dir/images.json")" = "$(held_version)" ]; then
+        missing=""
+        while read -r name; do
+          grep -q " $name\$" "$scratch/existing" || missing="$missing $name"
+        done < <(release_files)
+        if [ -z "$missing" ]; then
+          say "$release already carries every asset of ${commit:0:12} ($version); nothing to move"
+          return 0
+        fi
+      fi
       ;;
   esac
 
@@ -407,7 +437,13 @@ publish_one() {
     status="$(write POST "/repos/$repo/releases" --data "$(jq -nc --arg t "$release" --arg c "$commit" --arg v "$version" \
       --argjson p "$prerelease" --arg l "$make_latest" \
       '{tag_name: $t, target_commitish: $c, name: $t, body: "Grain \($v) (\($c[0:12])) as release assets: docs/release-assets.md.", prerelease: $p, make_latest: $l}')")"
-    ok "$status" || die "creating release $release answered $status: $(head -c 300 "$scratch/body")"
+    if [ "$status" = 422 ] && release_json "$release"; then
+      # Created by a concurrent publisher since it was looked up.
+      cp "$scratch/release" "$scratch/body"
+      asset_list "$(jq -r .id "$scratch/release")" > "$scratch/existing"
+    else
+      ok "$status" || die "creating release $release answered $status: $(head -c 300 "$scratch/body")"
+    fi
     id="$(jq -r '.id // "dry-run"' "$scratch/body")"
     upload_base="$(jq -r '(.upload_url // "") | sub("\\{.*$"; "")' "$scratch/body")"
     say "created release $release"
@@ -540,6 +576,14 @@ promote() {
   [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || die "$remote has no tag $version"
   sha_release="sha-${commit:0:12}"
   say "promoting $sha_release as $version"
+  # A release promoted before its commit was published as release assets
+  # has no sha- release to promote. Asked for by name, that fails; on the
+  # automatic run every push makes, it is said and skipped.
+  if [ -z "${1:-}" ] && ! { [ -f "$dir/images.json" ] && [ "$(jq -r .commit "$dir/images.json")" = "$commit" ]; } &&
+      ! download "$sha_release" images.json "$scratch/probe.json"; then
+    echo "::warning::release-assets.sh: $version (${commit:0:12}) has no $sha_release release: it predates release assets, so there is nothing to promote as $version and latest"
+    return 0
+  fi
   source_into "$sha_release" "$commit"
   rewrite_manifest "$dir" "$dir" "$version"
   validate_manifest "$dir"
@@ -568,8 +612,87 @@ retag() {
   publish "$@"
 }
 
+# commit_of TAG: the commit TAG names on $remote, or fail.
+commit_of() {
+  local c
+  c="$(remote_commit_of_tag "$1")"
+  [[ "$c" =~ ^[0-9a-f]{40}$ ]] || die "$remote has no tag $1"
+  printf '%s' "$c"
+}
+
+# from_commit COMMIT VERSION RELEASE...: retag COMMIT's sha- release.
+from_commit() {
+  local commit="$1" version="$2"
+  shift 2
+  retag "sha-${commit:0:12}" "$version" "$@"
+}
+
+train_rc() {
+  need git jq
+  local rc="${1:-}" candidate newest commit
+  if [ -z "$rc" ]; then
+    candidate="$(git ls-remote "$remote" refs/heads/candidate | awk 'NR == 1 {print $1}')"
+    [ -n "$candidate" ] || die "$remote has no candidate branch, and no rc was given"
+    rc="$(git ls-remote --tags "$remote" 'refs/tags/v*-rc.*' |
+      awk -v c="$candidate" '$1 == c { t = $2; sub(/^refs\/tags\//, "", t); sub(/\^\{\}$/, "", t); print t }' |
+      grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$' | sort -V | tail -n 1 || true)"
+    [ -n "$rc" ] || die "no rc tag names ${candidate:0:12}, the commit candidate is on"
+  fi
+  [[ "$rc" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]] || die "$rc is not a vX.Y.Z-rc.N release candidate"
+  commit="$(commit_of "$rc")"
+  newest="$(git ls-remote --tags "$remote" 'refs/tags/v*-rc.*' | awk '{ t = $2; sub(/^refs\/tags\//, "", t); sub(/\^\{\}$/, "", t); print t }' |
+    grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$' | sort -uV | tail -n 1 || true)"
+  if [ "$newest" = "$rc" ]; then
+    force_move=true from_commit "$commit" "$rc" "$rc" channel-candidate
+  else
+    say "$rc is not the newest rc ($newest): publishing it alone, leaving channel-candidate where it is"
+    from_commit "$commit" "$rc" "$rc"
+  fi
+}
+
+train_phase() {
+  local phase="$1" v="${2:-}"
+  case "$phase" in
+    rc) train_rc "$v" ;;
+    pending)
+      [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "pending needs a vX.Y.Z, not '$v'"
+      from_commit "$(commit_of "$v-pending")" "$v" "$v-pending"
+      ;;
+    discard-rc)
+      [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]] || die "discard-rc needs a vX.Y.Z-rc.N, not '$v'"
+      from_commit "$(commit_of "$v")" "$v" "$v-discarded"
+      ;;
+    discard-pending)
+      [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "discard-pending needs a vX.Y.Z, not '$v'"
+      local c
+      c="$(remote_commit_of_tag "$v-pending")"
+      [ -n "$c" ] || c="$(commit_of "$v")"
+      from_commit "$c" "$v" "$v-rejected"
+      ;;
+    retract)
+      [[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "retract needs a vX.Y.Z, not '$v'"
+      from_commit "$(commit_of "$v")" "$v" "$v-retracted"
+      ;;
+  esac
+}
+
+# train_tag TAG: publish what a pushed release-train tag names.
+train_tag() {
+  local tag="${1:?train-tag needs a tag}"
+  case "$tag" in
+    v*-rc.*-discarded) train_phase discard-rc "${tag%-discarded}" ;;
+    v*-rc.*) train_phase rc "$tag" ;;
+    v*-pending) train_phase pending "${tag%-pending}" ;;
+    v*-retracted) train_phase retract "${tag%-retracted}" ;;
+    v[0-9]*.[0-9]*.[0-9]* | latest) promote "${tag#latest}" ;;
+    *) die "$tag is not a tag the release train publishes" ;;
+  esac
+}
+
 case "$cmd" in
   package) package ;;
+  rc | pending | discard-rc | discard-pending | retract) train_phase "$cmd" "$@" ;;
+  train-tag) train_tag "$@" ;;
   validate) validate_manifest "${1:-$dir}" && say "${1:-$dir}/images.json meets release-asset contract v1" ;;
   publish) publish "$@" ;;
   promote) promote "$@" ;;
