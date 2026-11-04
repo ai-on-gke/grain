@@ -158,14 +158,17 @@ func newestCandidate(tags []github.Tag) (model.RCTag, string, bool) {
 	return best, sha, found
 }
 
-// latestCheckRun is the newest check run named name that app posted, or
-// nil. One of the same name from anything else -- an Actions workflow
-// with checks: write, another installed app -- is not grain's verdict,
-// and neither ends qualification nor is updated as if it were.
-func latestCheckRun(runs []github.CheckRun, name, app string) *github.CheckRun {
+// latestCheckRun is the newest check run named name that app posted for
+// externalID, or nil. One of the same name from anything else -- an
+// Actions workflow with checks: write, another installed app, or an
+// earlier discarded candidate on the same commit -- is not this
+// candidate's verdict, and neither ends qualification nor is updated as
+// if it were.
+func latestCheckRun(runs []github.CheckRun, name, app, externalID string) *github.CheckRun {
 	var out *github.CheckRun
 	for i := range runs {
-		if runs[i].Name == name && runs[i].App == app && (out == nil || runs[i].ID > out.ID) {
+		if runs[i].Name == name && runs[i].App == app && runs[i].ExternalID == externalID &&
+			(out == nil || runs[i].ID > out.ID) {
 			out = &runs[i]
 		}
 	}
@@ -225,7 +228,8 @@ func qualifyCandidate(ctx context.Context, store *model.Store, forge ReleaseQual
 	if err != nil {
 		return fmt.Errorf("reading checks on %s: %w", rcTag, err)
 	}
-	check := latestCheckRun(checks, model.ReleaseQualificationCheckName, app)
+	tag := model.ReleaseQualificationTag(repo, rcTag)
+	check := latestCheckRun(checks, model.ReleaseQualificationCheckName, app, tag)
 	if check != nil && check.Status == "completed" {
 		return nil
 	}
@@ -234,7 +238,6 @@ func qualifyCandidate(ctx context.Context, store *model.Store, forge ReleaseQual
 	for _, it := range suite.Items {
 		items = append(items, it.TemplateID)
 	}
-	tag := model.ReleaseQualificationTag(repo, rcTag)
 	runs, err := store.SuiteRunsTagged(ctx, tag)
 	if err != nil {
 		return err
