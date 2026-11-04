@@ -1652,7 +1652,7 @@ Reconciles a live deployment's settings (`GET /api/settings`, then `PUT /api/set
 
 This manages the allowed users and groups list (Settings -> Access): who may sign in when authenticated by Cloud IAP or another registered IdentityVerifier. It calls `/api/access/principals`.
 
-- `list` (the default; also `ls`) prints every entry, or `No allowed users or groups.`.
+- `list` (the default; also `ls`) prints every entry with who added it and when, or `No allowed users or groups.`, and warns about `-ui-allowed-principals` entries that were dropped on import.
 - `allow <user:<email>|group:<email>>` (also `add`) adds one. Adding an existing entry is a no-op.
 - `deny <user:<email>|group:<email>>` (also `remove`, `rm`) removes one.
 
