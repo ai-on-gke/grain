@@ -84,6 +84,65 @@ description, unless `description` is set) and one `# grain-args:` usage
 line, within its first 20 lines. Silo's `# silo:` and `# silo-args:`
 lines are read too, so a script written for Silo carries over unchanged.
 
+## Moving to host-script
+
+`local-scripts:<name>` is retiring onto the `host-script` capability
+server ([capabilities.md](capabilities.md#host-scripts-grain-capability-host-script),
+[host-scripts.md](host-scripts.md)). Each script of a declaration becomes
+one host-script script, and a grant of the declaration becomes one
+`…/host-script#host-script` `{script}` grant per script. Scheduled runs
+are not refused it there: host-script has no such rule.
+
+At every start, before the capability servers start, the daemon
+(`daemon.migrateLocalScripts`) does the following:
+
+- **Reads the declarations.** It reads every declaration it can find,
+  in the state repository's `local-scripts/` and from each
+  `-local-scripts` flag, the way a run's snapshot reads them.
+- **Adds the scripts to host-script.** Each script is added to the
+  host-script server that runs in the daemon's own environment, which
+  is also where local scripts run. A `run: host` server is passed over.
+  If there is no such server, it is created as
+  `https://grain.dev/capabilities/host-script`. Each script is named
+  `<declaration>-<tool name without local_>`, so `ops`'s
+  `tools/deploy.sh` becomes `ops-deploy_sh`. Its body is
+  `exec '<the script's real path>' "$@"`, so the file in the state
+  repository is still what runs, under its own `#!`. Its `cwd` is the
+  declaration's `workdir`, its `timeout` the script's timeout rounded
+  up to whole seconds, and its `max_output` the declaration's
+  `output_cap`. `max_calls` is unlimited. Each `env` secret becomes
+  `$env:GRAIN_LOCAL_SCRIPTS_<SECRET>`, and the server's own `env` binds
+  that variable to `$secret:<name>`.
+- **Leaves existing configuration alone.** A script name the server
+  already configures is kept as it is, so a later start changes
+  nothing. A declaration's new scripts are added at the next start.
+  Granting them is a separate step: a grant names one script.
+- **Rewrites stored grants.** Every stored `local-scripts:<name>` is
+  rewritten to its declaration's host-script grants (`Store.RewriteRetiredGrants`).
+  This covers task, template and schedule grants, default and CI
+  capabilities, and console sessions.
+- **Keeps the old name working.** `local-scripts:<name>` stays an alias
+  for the same grants wherever it is still written
+  (`model.SetRuntimeGrantExpansions`).
+
+The `pkg/capability/intree` fidelity test runs one declaration both
+ways. Both give the same stdout, stderr, exit status, working directory
+and secret.
+
+What host-script does differently:
+
+- It does not forward stdin.
+- A secret is resolved when the server starts, not per run as the
+  task's team.
+- A script is reached as `grain host-script <name>`, not as an MCP tool.
+- A changed script file is picked up on its next call, not refused
+  until the next run.
+
+**What does not move yet.** A declaration with an `approve: true` script
+is left on local-scripts, and served as before, because host-script has
+no per-call approval. The daemon logs why. The provider and the run's
+local-scripts tools stay until host-script can approve calls.
+
 ## Wiring
 
 **Where scripts are declared.** Never in the repository the agent works

@@ -16,7 +16,10 @@ package localscripts
 
 import (
 	"fmt"
+	"maps"
 	"math"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -306,4 +309,60 @@ func HostScriptGrants(id string, h HostScripts) ([]string, error) {
 		out = append(out, g)
 	}
 	return out, nil
+}
+
+// Declarations is every declaration name cfg can find: each folder of
+// the state repository's local-scripts directory that holds a
+// declaration file, and each host-managed one, sorted.
+func Declarations(cfg Config) []string {
+	seen := map[string]bool{}
+	for name := range cfg.Host {
+		seen[name] = true
+	}
+	if cfg.StateDir != "" {
+		entries, _ := os.ReadDir(filepath.Join(cfg.StateDir, StateRepoDir))
+		for _, e := range entries {
+			if !e.IsDir() || !namePattern.MatchString(e.Name()) {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(cfg.StateDir, StateRepoDir, e.Name(), DeclarationFile)); err == nil {
+				seen[e.Name()] = true
+			}
+		}
+	}
+	out := slices.Collect(maps.Keys(seen))
+	sort.Strings(out)
+	return out
+}
+
+// MigrateToHostScript adds every declaration cfg finds to the host-script
+// server in servers (AddToHostScriptServer) and returns what each
+// local-scripts:<name> grant becomes there. A declaration that cannot be
+// converted is left a local-scripts declaration, and why is in skipped.
+func MigrateToHostScript(cfg Config, servers map[string]protocol.ServerConfig) (renames map[string][]string, skipped []error, err error) {
+	var converted []HostScripts
+	for _, name := range Declarations(cfg) {
+		h, err := ConvertToHostScripts(cfg, name)
+		if err != nil {
+			skipped = append(skipped, err)
+			continue
+		}
+		converted = append(converted, h)
+	}
+	if len(converted) == 0 {
+		return nil, skipped, nil
+	}
+	id, err := AddToHostScriptServer(servers, converted)
+	if err != nil {
+		return nil, skipped, err
+	}
+	renames = map[string][]string{}
+	for _, h := range converted {
+		grants, err := HostScriptGrants(id, h)
+		if err != nil {
+			return nil, skipped, err
+		}
+		renames[CapabilityName(h.Declaration)] = grants
+	}
+	return renames, skipped, nil
 }
