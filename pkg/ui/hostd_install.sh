@@ -93,7 +93,7 @@ Options:
   -h, --help           show this help
 
 Environment: GRAIN_HOSTD_TOKEN, GRAIN_HOSTD_NAME, GRAIN_HOSTD_USER, GRAIN_SERVER,
-GRAIN_BIN, GRAIN_IMAGE, GRAIN_BINARY_URL, GRAIN_BINARY_SHA256.
+GRAIN_BIN, GRAIN_IMAGE, GRAIN_BINARY_URL, GRAIN_BINARY_SHA256, GRAIN_RELEASE.
 EOF
 }
 
@@ -187,8 +187,31 @@ check_request() {
   if [ "$ANY_VERSION" != 1 ]; then
     [ -n "$RELEASE" ] || die "this copy of the script does not know the daemon's version (the daemon tells only a signed-in caller): run the command Settings -> Hostds shows, which passes --release, or pass --release VERSION (or --any-version)"
     case "$RELEASE" in
-      *[!A-Za-z0-9.+-]*) die "--release $RELEASE is not a grain version" ;;
+      *[!A-Za-z0-9.+-]*|-*) die "--release $RELEASE is not a grain version" ;;
     esac
+  fi
+
+  if [ -n "$IMAGE" ]; then
+    case "$IMAGE" in
+      *[!A-Za-z0-9._/:@-]*|-*) die "--image $IMAGE is not an image reference" ;;
+    esac
+  fi
+
+  if [ -n "$BINARY_URL" ]; then
+    case "$BINARY_URL" in
+      http://*|https://*) ;;
+      *) die "--binary-url $BINARY_URL is not an http:// or https:// URL" ;;
+    esac
+    case "$BINARY_URL" in
+      *[[:space:]\"\'\\]*) die "--binary-url $BINARY_URL holds whitespace or quotes" ;;
+    esac
+    [ -n "$BINARY_SHA256" ] || die "--binary-url needs --sha256: a downloaded grain is installed only once its checksum matches"
+  fi
+  if [ -n "$BINARY_SHA256" ]; then
+    case "$BINARY_SHA256" in
+      *[!0-9A-Fa-f]*) die "--sha256 $BINARY_SHA256 is not a 64-digit hex SHA-256" ;;
+    esac
+    [ "${#BINARY_SHA256}" -eq 64 ] || die "--sha256 $BINARY_SHA256 is not a 64-digit hex SHA-256"
   fi
 
   case "$CAPACITY" in
@@ -209,6 +232,7 @@ check_request() {
 
   for value in "$IAP_AUDIENCE" "$CA_FILE"; do
     case "$value" in
+      -*) die "$value holds a leading '-': give a plain value" ;;
       *[!A-Za-z0-9._/:@+-]*) die "$value holds a character grain-hostd.service cannot carry" ;;
     esac
   done
@@ -216,7 +240,7 @@ check_request() {
     [ -r "$CA_FILE" ] || die "--ca-file $CA_FILE cannot be read"
   fi
 
-  if [ -e "$UNIT" ] && [ "$(head -n1 "$UNIT")" != "$UNIT_MARKER" ]; then
+  if [ -L "$UNIT" ] || { [ -e "$UNIT" ] && [ "$(head -n1 "$UNIT")" != "$UNIT_MARKER" ]; }; then
     die "$UNIT is not one this script wrote (scripts/setup.sh's co-located hostd?); remove it first if this machine should dial in instead"
   fi
 }
@@ -269,8 +293,10 @@ sha256_of() {
     sha256sum "$1" | awk '{print $1}'
   elif command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$1" | awk '{print $1}'
-  else
+  elif command -v openssl >/dev/null 2>&1; then
     openssl dgst -sha256 -r "$1" | awk '{print $1}'
+  else
+    die "none of sha256sum, shasum or openssl is installed to check $1"
   fi
 }
 
@@ -278,7 +304,7 @@ sha256_of() {
 from_image() {
   [ -n "$IMAGE" ] || return 1
   case "$IMAGE" in
-    *[!A-Za-z0-9._/:@-]*) die "--image $IMAGE is not an image reference" ;;
+    *[!A-Za-z0-9._/:@-]*|-*) die "--image $IMAGE is not an image reference" ;;
   esac
   runtime=""
   for r in docker podman; do
@@ -292,7 +318,7 @@ from_image() {
     return 1
   fi
   log "taking grain out of $IMAGE with $runtime"
-  cid="$("$runtime" create "$IMAGE")" || return 1
+  cid="$("$runtime" create -- "$IMAGE")" || return 1
   if ! "$runtime" cp "$cid:/usr/local/bin/grain" "$WORK/grain" >/dev/null; then
     "$runtime" rm "$cid" >/dev/null 2>&1 || true
     return 1
@@ -308,15 +334,17 @@ from_url() {
   [ -n "$BINARY_SHA256" ] || die "--binary-url needs --sha256: a downloaded grain is installed only once its checksum matches"
   log "downloading grain from $BINARY_URL"
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --retry 2 -o "$WORK/grain" "$BINARY_URL" || return 1
+    curl -fsSL --retry 2 -o "$WORK/grain" -- "$BINARY_URL" || return 1
   elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "$WORK/grain" "$BINARY_URL" || return 1
+    wget -q -O "$WORK/grain" -- "$BINARY_URL" || return 1
   else
     die "neither curl nor wget is installed to download $BINARY_URL"
   fi
   got="$(sha256_of "$WORK/grain")"
   want="$(printf '%s' "$BINARY_SHA256" | tr 'A-F' 'a-f')"
-  [ "$got" = "$want" ] || die "$BINARY_URL has SHA-256 $got, not $want: not installing it"
+  if [ "${#got}" -ne 64 ] || [ "$got" != "$want" ]; then
+    die "$BINARY_URL has SHA-256 ${got:-<empty>}, not $want: not installing it"
+  fi
   chmod 0755 "$WORK/grain"
   usable "$WORK/grain"
 }
@@ -345,7 +373,7 @@ install_grain() {
   find_grain
   BUILD="$(build_of "$FOUND")"
   case "$BUILD" in
-    ""|*[!A-Za-z0-9._+-]*) BUILD=unstamped ;;
+    ""|.|..|current|-*|*[!A-Za-z0-9._+-]*) BUILD=unstamped ;;
   esac
 
   # A root-owned copy in its own version directory, and current pointed at
@@ -355,7 +383,7 @@ install_grain() {
     install -m0755 -o root -g root "$FOUND" "$VERSIONS_DIR/$BUILD/.grain.new"
     mv -f "$VERSIONS_DIR/$BUILD/.grain.new" "$VERSIONS_DIR/$BUILD/grain"
   fi
-  ln -sfn "$BUILD" "$VERSIONS_DIR/.current.new"
+  ln -sfn -- "$BUILD" "$VERSIONS_DIR/.current.new"
   mv -fT "$VERSIONS_DIR/.current.new" "$VERSIONS_DIR/current"
   GRAIN="$VERSIONS_DIR/current/grain"
   log "grain $BUILD is at $VERSIONS_DIR/$BUILD/grain"
@@ -488,7 +516,12 @@ main() {
   check_request
   TOKEN=""
   read_token
-  WORK="$(mktemp -d)"
+  # Stage under root-owned $VERSIONS_DIR rather than $TMPDIR: an
+  # unprivileged caller's TMPDIR survives sudo -E, and /tmp is often
+  # mounted noexec where usable runs `grain hostd -build`.
+  [ ! -L "$VERSIONS_DIR" ] || die "$VERSIONS_DIR is a symlink"
+  install -d -m0755 -o root -g root "$VERSIONS_DIR"
+  WORK="$(umask 077; mktemp -d "$VERSIONS_DIR/.work.XXXXXX")"
   trap 'rm -rf "$WORK"' EXIT
   FOUND=""
   install_grain

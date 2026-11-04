@@ -46,8 +46,8 @@ const (
 // the script asks for it instead (--server, --image).
 var (
 	hostdInstallHostRE    = regexp.MustCompile(`^[A-Za-z0-9.\-]+(:[0-9]{1,5})?$|^\[[0-9A-Fa-f:.]+\](:[0-9]{1,5})?$`)
-	hostdInstallReleaseRE = regexp.MustCompile(`^[A-Za-z0-9.+\-]{1,128}$`)
-	hostdInstallImageRE   = regexp.MustCompile(`^[A-Za-z0-9._/:@\-]{1,255}$`)
+	hostdInstallReleaseRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+\-]{0,127}$`)
+	hostdInstallImageRE   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@\-]{0,254}$`)
 )
 
 // hostdInstallRoute reports whether r asks for the install script. It
@@ -85,7 +85,26 @@ func (s *Server) handleHostdInstallScript(w http.ResponseWriter, r *http.Request
 // or a verified identity the daemon admits. A stranger is not told the
 // daemon's release or the image it runs, which can name a private
 // registry, by a route that answers anybody.
+//
+// Because singleTenantOpenRoute lets this route past singleTenantGate
+// before bearer guesses are checked, a bearer token shaped like an access
+// code is held to s.access here too, so wrong codes count and a limited
+// source cannot tell the right code from a wrong one by whether the script
+// carries the release and image.
 func (s *Server) hostdInstallCallerHasAccess(r *http.Request) bool {
+	cfg, _ := IAPConfigFromContext(r.Context())
+	if tok, ok := bearerToken(r); ok && accessCodeAccepted(r, cfg) && couldBeAccessCode(tok, cfg.LocalAPIToken) {
+		now := time.Now()
+		source := accessSource(r)
+		if !accessLimitExempt(r) && s.access.sourceLimited(source, now) {
+			return false
+		}
+		if !presentsAccessCode(r, cfg) {
+			s.access.failed(source, now)
+			return false
+		}
+		return true
+	}
 	if singleTenantTrusted(r) {
 		return true
 	}
@@ -153,8 +172,7 @@ func hostdInstallDaemonURL(r *http.Request) string {
 }
 
 // hostdInstallImageTTL is how long the image the script suggests is
-// remembered: asking the upgrader can mean asking the cluster's API, which
-// an unauthenticated route should not do once per request.
+// remembered: asking the upgrader can mean asking the cluster's API.
 const hostdInstallImageTTL = time.Minute
 
 // hostdImageCache is hostdInstallImage's last answer and when it was

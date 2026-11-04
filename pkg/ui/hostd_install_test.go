@@ -120,10 +120,17 @@ func TestHostdInstallScriptNamesTheRequestingDaemon(t *testing.T) {
 }
 
 func TestRenderHostdInstallScriptDropsWhatItCannotCarry(t *testing.T) {
-	script := renderHostdInstallScript("https://grain.example.com", "v1'; rm -rf /", "img:$(id)")
-	for _, want := range []string{"GRAIN_DAEMON_URL='https://grain.example.com'", "GRAIN_DAEMON_RELEASE=''", "GRAIN_DAEMON_IMAGE=''"} {
-		if !strings.Contains(script, want) {
-			t.Errorf("script does not hold %s", want)
+	for _, tc := range []struct {
+		release, image string
+	}{
+		{release: "v1'; rm -rf /", image: "img:$(id)"},
+		{release: "-v1.2.3", image: "--help"},
+	} {
+		script := renderHostdInstallScript("https://grain.example.com", tc.release, tc.image)
+		for _, want := range []string{"GRAIN_DAEMON_URL='https://grain.example.com'", "GRAIN_DAEMON_RELEASE=''", "GRAIN_DAEMON_IMAGE=''"} {
+			if !strings.Contains(script, want) {
+				t.Errorf("release=%q image=%q: script does not hold %s", tc.release, tc.image, want)
+			}
 		}
 	}
 }
@@ -215,5 +222,124 @@ func TestHostdInstallScriptRefusesAnUnknownVersion(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "--release VERSION") {
 		t.Errorf("--help does not offer --release:\n%s", out)
+	}
+}
+
+// TestHostdInstallScriptRateLimitsBearerAccessCodeGuesses: wrong bearer
+// access codes sent to /api/hostd/install.sh count towards s.access, and a
+// remote source over its limit is told neither the release nor the image
+// even when it sends the right code, while an unauthenticated fetch from
+// the same source still gets the public script.
+func TestHostdInstallScriptRateLimitsBearerAccessCodeGuesses(t *testing.T) {
+	const (
+		code      = "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567"
+		wrong     = "WRNG-WRNG-WRNG-WRNG-WRNG-WRNG-WRNG-WRNG"
+		image     = "registry.example.com/private/grain:v1.2.3"
+		guesser   = "203.0.113.9:4242"
+		bystander = "198.51.100.200:4242"
+	)
+	srv := NewServer(Config{LocalAPIToken: code, Upgrader: runningImageUpgrader{ref: image}}, nil)
+	fetch := func(from, bearer string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, "http://grain.example.com"+hostdInstallPath, nil)
+		r.RemoteAddr = from
+		if bearer != "" {
+			r.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, r)
+		return w
+	}
+
+	for i := 0; i < accessSourceBurst+2; i++ {
+		w := fetch(guesser, wrong)
+		if w.Code != http.StatusOK {
+			t.Fatalf("guess %d: status %d, want 200", i+1, w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "GRAIN_DAEMON_IMAGE=''") {
+			t.Fatalf("guess %d: wrong code revealed image", i+1)
+		}
+	}
+
+	// Guesses on /api/hostd/install.sh spent the source's access-code
+	// bucket, so login and API routes now answer 429 from that source.
+	loginReq := httptest.NewRequest(http.MethodPost, "http://grain.example.com/api/auth/access-code", strings.NewReader(`{"code":"`+code+`"}`))
+	loginReq.RemoteAddr = guesser
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRec := httptest.NewRecorder()
+	srv.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusTooManyRequests {
+		t.Errorf("POST /api/auth/access-code from exhausted source: %d, want 429", loginRec.Code)
+	}
+
+	// Nor is /api/hostd/install.sh an oracle once limited: the right code
+	// from that source gets the same blank image as a wrong one.
+	if w := fetch(guesser, code); !strings.Contains(w.Body.String(), "GRAIN_DAEMON_IMAGE=''") {
+		t.Error("the right bearer code from a rate-limited source revealed the image")
+	}
+	// A plain curl with no bearer from the same source still gets 200.
+	if w := fetch(guesser, ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "GRAIN_DAEMON_IMAGE=''") {
+		t.Errorf("unauthenticated fetch from rate-limited source: %d", w.Code)
+	}
+	// Another source (and loopback) with the right bearer code still gets
+	// the image.
+	for _, from := range []string{bystander, "127.0.0.1:4242"} {
+		if w := fetch(from, code); !strings.Contains(w.Body.String(), "GRAIN_DAEMON_IMAGE='"+image+"'") {
+			t.Errorf("the right bearer code from %s did not include the image", from)
+		}
+	}
+}
+
+// TestHostdInstallScriptRefusesUnsafeInputs exercises check_request against
+// leading-hyphen option values, non-HTTP binary URLs, and malformed SHA-256
+// digests (including a newline value that command substitution strips).
+func TestHostdInstallScriptRefusesUnsafeInputs(t *testing.T) {
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "install.sh")
+	if err := os.WriteFile(scriptPath, []byte(renderHostdInstallScript("https://grain.example.com", "v2.3.0", "")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeStub := func(name, body string) {
+		p := filepath.Join(binDir, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Pretend to be root on a systemd Linux box with non-root user "hostd".
+	writeStub("id", `if [ "$1" = "-u" ] && [ $# -eq 1 ]; then echo 0; elif [ "$1" = "-u" ]; then echo 1000; elif [ "$1" = "-gn" ]; then echo hostd; fi`)
+	writeStub("uname", `echo Linux`)
+	writeStub("systemctl", `exit 0`)
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		env  []string
+		want string
+	}{
+		{name: "leading hyphen release", args: []string{"--name", "box", "--user", "hostd", "--release", "-v"}, want: "not a grain version"},
+		{name: "leading hyphen image", args: []string{"--name", "box", "--user", "hostd", "--image", "--help"}, want: "not an image reference"},
+		{name: "file scheme binary-url", args: []string{"--name", "box", "--user", "hostd", "--binary-url", "file:///etc/passwd", "--sha256", strings.Repeat("a", 64)}, want: "not an http:// or https:// URL"},
+		{name: "leading hyphen binary-url", args: []string{"--name", "box", "--user", "hostd", "--binary-url", "-K/tmp/curlrc", "--sha256", strings.Repeat("a", 64)}, want: "not an http:// or https:// URL"},
+		{name: "short sha256", args: []string{"--name", "box", "--user", "hostd", "--binary-url", "https://grain.example.com/grain", "--sha256", "deadbeef"}, want: "64-digit hex SHA-256"},
+		{name: "newline sha256 env", args: []string{"--name", "box", "--user", "hostd", "--binary-url", "https://grain.example.com/grain"}, env: []string{"GRAIN_BINARY_SHA256=\n"}, want: "64-digit hex SHA-256"},
+		{name: "non-hex sha256", args: []string{"--name", "box", "--user", "hostd", "--sha256", strings.Repeat("z", 64)}, want: "64-digit hex SHA-256"},
+		{name: "leading hyphen iap-audience", args: []string{"--name", "box", "--user", "hostd", "--iap-audience", "-bad"}, want: "leading '-'"},
+		{name: "leading hyphen ca-file", args: []string{"--name", "box", "--user", "hostd", "--ca-file", "-bad"}, want: "leading '-'"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command("sh", append([]string{scriptPath}, tc.args...)...)
+			cmd.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"), "GRAIN_HOSTD_TOKEN=ghd_testtoken")
+			cmd.Env = append(cmd.Env, tc.env...)
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("expected failure containing %q, got exit 0:\n%s", tc.want, out)
+			}
+			if !strings.Contains(string(out), tc.want) {
+				t.Errorf("output = %q, want substring %q", out, tc.want)
+			}
+		})
 	}
 }
