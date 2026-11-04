@@ -5,8 +5,15 @@
 # the breaking-change gate for a major release -- in both its grain and
 # GitHub Actions copies, and the route that starts it. A change to either
 # could let a release become official, or `latest` move, without a person,
-# so it waits for one. The release jobs and scripts that cannot reach the
-# approval are release-machinery.yml's.
+# so it waits for one. So does the release train's own promotion
+# (playbook section 1): scripts/release-from-trunk.sh, which tags vX.Y.0
+# and moves `latest` onto an rc that qualified with no person's approval,
+# scripts/release.conf, whose RELEASE_AUTO_PROMOTE, RELEASE_NEVER_PROMOTE
+# and RELEASE_MAJOR are the operator's controls over it, the train's
+# schedule, and publish-release.yml, which publishes what it promotes.
+# (.grain/templates/release-train.yml, whose push: grant lets it, is
+# grain's built-in template-push category.) The release jobs and scripts
+# that cannot reach a promotion are release-machinery.yml's.
 on: pull_request
 paths:
   - .grain/workflows/promote-release.yml
@@ -15,6 +22,10 @@ paths:
   - pkg/ui/release_approval_github.go
   - pkg/releaseapproval/releaseapproval.go
   - scripts/verify-release-approval.sh
+  - scripts/release-from-trunk.sh
+  - scripts/release.conf
+  - .grain/schedules/release-train.yml
+  - .github/workflows/publish-release.yml
 gate: true
 human: required
 sensitive: true

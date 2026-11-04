@@ -1096,6 +1096,37 @@ out="$(git -C "$work/remote.git" for-each-ref --format='%(contents)' refs/tags/v
 expect "auto-promote" "the release tag names its rc" has "Promoted-From: v2.3.0-rc.1"
 expect "auto-promote" "and records the qualification" has "Qualification: PASS"
 
+# publish-release.yml's check of the tag before it publishes anything.
+verify() { # verify <version> [VAR=value...]
+  local v="$1"
+  shift
+  status=0
+  out="$(cd "$work/clone" && env RELEASE_QUALIFICATION_RUNS_JSON="$work/qual-runs.json" \
+    RELEASE_QUALIFICATION_CHECKS_JSON="$work/qual-checks.json" RELEASE_QUALIFICATION_APP=grain-test \
+    RELEASE_IMAGES="$work/images.sh" "$@" bash "$train" verify "$v" 2>&1)" || status=$?
+}
+verify v2.3.0
+expect "verify, the train's release" "exits 0" eq "$status" 0
+expect "verify, the train's release" "names the rc" has "v2.3.0 is the train's release of v2.3.0-rc.1"
+verify v2.1.0
+expect "verify, not the train's" "exits 4" eq "$status" 4
+qualification fail "$c2"
+verify v2.3.0
+expect "verify, no longer qualified" "exits 1" eq "$status" 1
+expect "verify, no longer qualified" "says so" has "does not pass qualification now"
+qualification pass "$c2"
+(
+  cd "$work/seed"
+  git tag -a v2.7.0 "$c3" -m "Release v2.7.0" -m "Qualification: PASS" -m "Promoted-From: v2.7.0-rc.1"
+  git tag -a v2.7.0-rc.1 "$c2" -m rc
+  git push -q origin refs/tags/v2.7.0 refs/tags/v2.7.0-rc.1
+)
+verify v2.7.0
+expect "verify, forged" "exits 1" eq "$status" 1
+expect "verify, forged" "says the commits differ" has "is not on v2.7.0-rc.1's commit"
+git -C "$work/seed" push -q origin :refs/tags/v2.7.0 :refs/tags/v2.7.0-rc.1
+git -C "$work/clone" tag -d v2.7.0 v2.7.0-rc.1 >/dev/null
+
 # The next run, the interval over: the next minor's rc.1 after the release.
 : > "$work/images.log"
 train RELEASE_PUSH_GRANT=train RELEASE_MIN_INTERVAL_MINUTES=0
@@ -1205,6 +1236,7 @@ wrong() { # wrong <sed expression> [VAR=value...]: run a train with its promotio
     RELEASE_HOLD_CHECKS_JSON="$work/hold-checks.json" RELEASE_QUALIFICATION_APP=grain-test \
     RELEASE_IMAGES="$work/images.sh" RELEASE_NOTES_TASK=off RELEASE_NOW="$now" "$@" bash "$work/wrong/release-from-trunk.sh" 2>&1)" || status=$?
 }
+# shellcheck disable=SC2016 # sed expressions, not shell
 for grant in "" train; do
   for expr in \
     's|git tag -a "$1" "$3" -m "Release $1"|git tag -a "$1" "$main_ref" -m "Release $1"|' \

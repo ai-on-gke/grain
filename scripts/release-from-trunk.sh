@@ -227,6 +227,10 @@ case "${1:-}" in
     mode="$1"
     version="${2:-${GRAIN_CI_RELEASE_VERSION:-}}"
     ;;
+  verify)
+    mode=verify
+    version="${2:-}"
+    ;;
   rollback)
     mode=rollback
     shift
@@ -242,7 +246,7 @@ case "${1:-}" in
     version="${version:-${GRAIN_CI_RELEASE_VERSION:-}}"
     ;;
   *)
-    echo "release-from-trunk: usage: release-from-trunk.sh [approve|reject vX.Y.Z | rollback --bad vX.Y.Z [--to vA.B.C] [--reason TEXT]]" >&2
+    echo "release-from-trunk: usage: release-from-trunk.sh [approve|reject|verify vX.Y.Z | rollback --bad vX.Y.Z [--to vA.B.C] [--reason TEXT]]" >&2
     exit 2
     ;;
 esac
@@ -516,8 +520,9 @@ check_push() {
       [ "$del" = false ] || die "the train never deletes $dst"
       src="${arg#+}"
       src="${src%:*}"
-      promotion_allowed "$dst" && [ "$(git rev-parse -q --verify "$src^{commit}" || true)" = "$promoting_sha" ] ||
+      if ! promotion_allowed "$dst" || [ "$(git rev-parse -q --verify "$src^{commit}" || true)" != "$promoting_sha" ]; then
         die "the train never pushes $dst except to release an rc that qualified, on that rc's own commit; not pushing it"
+      fi
     fi
     [ "$push_grant" = train ] || continue
     train_ref "$dst" || die "$dst is outside the release train's tag grant (.grain/templates/release-train.yml push:); not pushing it"
@@ -849,6 +854,46 @@ promote_rc() {
   file_release_notes "$1" "$notes_from"
   say "phase 1: $1 is released (after ${released:-nothing}); publish-release.yml publishes its images and GitHub Release from the tag"
 }
+
+# --- verify: is vX.Y.Z a release the train made from a qualified rc? ---
+
+# .github/workflows/publish-release.yml runs this on every vX.Y.0 tag push
+# before it publishes anything: exit 0 when the tag says the train released
+# it (Promoted-From: <rc>, Qualification: PASS), the rc is on the same
+# commit and not dropped, the commit is on main or release/vX.Y.Z, and
+# check-qualification still passes the rc; 4 when the tag is not the
+# train's (a person's approval, which promote-release.yml publishes); 1
+# when it claims to be the train's and any of that does not hold.
+if [ "$mode" = verify ]; then
+  [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "verify needs a release, vX.Y.Z (got \"$version\")"
+  sha="$(commit_of "$version" || true)"
+  [ -n "$sha" ] || die "$remote has no $version tag"
+  contents="$(git for-each-ref --format='%(contents)' "refs/tags/$version")"
+  from_rc="$(printf '%s\n' "$contents" | sed -n 's/^Promoted-From: //p' | tail -n 1)"
+  if [ -z "$from_rc" ]; then
+    say "verify: $version names no Promoted-From rc: it was not released by the train"
+    exit 4
+  fi
+  [[ "$from_rc" =~ ^${version//./\\.}-rc\.[0-9]+$ ]] || die "verify: $version names $from_rc, which is not one of its rcs"
+  printf '%s\n' "$contents" | grep -qx 'Qualification: PASS' || die "verify: $version records no qualification pass"
+  [ "$(commit_of "$from_rc" || true)" = "$sha" ] || die "verify: $version (${sha:0:12}) is not on $from_rc's commit"
+  ! commit_of "$from_rc-discarded" >/dev/null || die "verify: $from_rc was dropped ($from_rc-discarded)"
+  if ! git merge-base --is-ancestor "$sha" "$main_ref" &&
+    ! { remote_branch "release/$version" &&
+      git fetch -q --force "$remote" "+refs/heads/release/$version:refs/remotes/$remote/release/$version" &&
+      git merge-base --is-ancestor "$sha" "refs/remotes/$remote/release/$version"; }; then
+    die "verify: ${sha:0:12} is on neither main nor release/$version"
+  fi
+  qualification_json "$from_rc" "$sha"
+  q_status=0
+  q_out="$(CHECK_QUALIFICATION_APP="${RELEASE_QUALIFICATION_APP:-}" bash "$scripts_dir/candidate-gate.sh" check-qualification --rc-tag "$from_rc" --rc-sha "$sha" \
+    --runs-json "$work/qual-runs.json" ${qual_checks:+--checks-json "$qual_checks"} 2>&1)" || q_status=$?
+  printf '%s\n' "$q_out" | sed 's/^/  /'
+  [ "$q_status" = 0 ] || die "verify: $from_rc does not pass qualification now (check-qualification exited $q_status); $version is not published"
+  say "verify: $version is the train's release of $from_rc (${sha:0:12}), which qualified"
+  emit verified_release "$version"
+  exit 0
+fi
 
 # --- approve / reject / rollback: a person's answer ---
 
