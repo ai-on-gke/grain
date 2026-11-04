@@ -17,8 +17,7 @@
 // of this shape, Claude, hardcoded throughout grain/automation/dispatch.py
 // -- there is no equivalent interface there to reuse. This is that
 // interface's first appearance. The built-in implementations drive real
-// CLIs as subprocesses; pkg/agent/custom also adapts an executable from a
-// deployment's state repository through a versioned JSON protocol.
+// CLIs as subprocesses.
 // pkg/cli/daemon.go's agentFrameworks chooses between them per run.
 package agent
 

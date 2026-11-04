@@ -16,6 +16,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import RepoField, { NO_REPO } from "./RepoField.jsx";
+import { chooseOption, optionValues } from "../searchSelectTesting.js";
 
 describe("RepoField", () => {
   it("renders a plain text input when there are no known repos", () => {
@@ -24,10 +25,12 @@ describe("RepoField", () => {
     expect(field.tagName).toBe("INPUT");
   });
 
-  it("renders a dropdown of the known repos, plus a blank option when not required", () => {
+  it("renders a dropdown of the known repos, plus a blank option when not required", async () => {
+    const user = userEvent.setup();
     render(<RepoField name="repo" options={["acme/widgets", "acme/other"]} />);
     const field = screen.getByRole("combobox");
-    expect(field.tagName).toBe("SELECT");
+    expect(field.tagName).toBe("INPUT");
+    await user.click(field);
     expect(
       screen.getByRole("option", { name: "acme/widgets" }),
     ).toBeInTheDocument();
@@ -38,8 +41,7 @@ describe("RepoField", () => {
   });
 
   // grain/task-320: the repos figure goes in front of the field rather
-  // than on each option, because an <option> can hold no markup and this
-  // stays a native <select> -- but it is the same ring the Repos page,
+  // than on each option -- it is the same ring the Repos page,
   // the nav rail and the read-only repos picker carry (ItemGlyph.jsx,
   // docs/brand.md), in both of this field's two states.
   it("marks the field with the repos glyph, as a dropdown and as free text", async () => {
@@ -52,14 +54,17 @@ describe("RepoField", () => {
       container.querySelector('.repo-field svg[data-glyph="repos"]'),
     ).toBeInTheDocument();
 
-    await user.selectOptions(screen.getByRole("combobox"), "Other…");
+    await chooseOption(user, screen.getByRole("combobox"), "Other…");
     expect(
       container.querySelector('.repo-field svg[data-glyph="repos"]'),
     ).toBeInTheDocument();
   });
 
-  it("omits the blank option when required", () => {
+  it("omits the blank option when required", async () => {
+    const user = userEvent.setup();
     render(<RepoField name="repo" options={["acme/widgets"]} required />);
+    await user.click(screen.getByRole("combobox"));
+    expect(screen.getByRole("option", { name: "acme/widgets" })).toBeVisible();
     expect(screen.queryByRole("option", { name: "—" })).not.toBeInTheDocument();
   });
 
@@ -89,7 +94,7 @@ describe("RepoField", () => {
     const user = userEvent.setup();
     render(<RepoField name="repo" options={["acme/widgets"]} />);
 
-    await user.selectOptions(screen.getByRole("combobox"), "Other…");
+    await chooseOption(user, screen.getByRole("combobox"), "Other…");
     const field = screen.getByRole("textbox");
     await user.type(field, "acme/new-repo");
     expect(field).toHaveValue("acme/new-repo");
@@ -109,7 +114,7 @@ describe("RepoField", () => {
       />,
     );
 
-    await user.selectOptions(screen.getByRole("combobox"), "acme/other");
+    await chooseOption(user, screen.getByRole("combobox"), "acme/other");
     expect(onChange).toHaveBeenCalledWith("acme/other");
   });
 
@@ -137,7 +142,7 @@ describe("RepoField", () => {
       />,
     );
 
-    await user.selectOptions(screen.getByRole("combobox"), "acme/other");
+    await chooseOption(user, screen.getByRole("combobox"), "acme/other");
     expect(onCommit).toHaveBeenCalledWith("acme/other");
   });
 
@@ -194,7 +199,7 @@ describe("RepoField", () => {
       />,
     );
 
-    await user.selectOptions(screen.getByRole("combobox"), NO_REPO);
+    await chooseOption(user, screen.getByRole("combobox"), NO_REPO);
     expect(onChange).toHaveBeenCalledWith(NO_REPO);
   });
 
@@ -202,9 +207,10 @@ describe("RepoField", () => {
   // "No repo" is one of the choices -- a deployment filing its very
   // first task should not have to type a repo name to find out it can
   // say there isn't one.
-  it("still offers the dropdown with no known repos when No repo is allowed", () => {
+  it("still offers the dropdown with no known repos when No repo is allowed", async () => {
+    const user = userEvent.setup();
     render(<RepoField name="repo" options={[]} allowNoRepo />);
-    expect(screen.getByRole("combobox")).toBeInTheDocument();
+    await user.click(screen.getByRole("combobox"));
     expect(screen.getByRole("option", { name: /No repo/ })).toBeInTheDocument();
   });
 
@@ -223,8 +229,8 @@ describe("RepoField", () => {
       />,
     );
 
-    await user.selectOptions(screen.getByRole("combobox"), NO_REPO);
-    await user.selectOptions(screen.getByRole("combobox"), "Other…");
+    await chooseOption(user, screen.getByRole("combobox"), NO_REPO);
+    await chooseOption(user, screen.getByRole("combobox"), "Other…");
     expect(onChange).toHaveBeenLastCalledWith("");
   });
 
@@ -244,7 +250,7 @@ describe("RepoField", () => {
     );
 
     rerender(<RepoField name="repo" options={["acme/widgets"]} />);
-    expect(screen.getByRole("combobox").tagName).toBe("SELECT");
+    expect(screen.getByRole("combobox").tagName).toBe("INPUT");
     expect(screen.queryByRole("button", { name: "Choose from list" })).toBe(
       null,
     );
@@ -270,7 +276,7 @@ describe("RepoField", () => {
         defaultValue="acme/widgets"
       />,
     );
-    expect(screen.getByRole("combobox").tagName).toBe("SELECT");
+    expect(screen.getByRole("combobox").tagName).toBe("INPUT");
   });
 
   // A choice somebody made still wins over any of that: "Other…" is a
@@ -281,7 +287,7 @@ describe("RepoField", () => {
       <RepoField name="repo" options={["acme/widgets"]} />,
     );
 
-    await user.selectOptions(screen.getByRole("combobox"), "Other…");
+    await chooseOption(user, screen.getByRole("combobox"), "Other…");
     expect(screen.getByRole("textbox").tagName).toBe("INPUT");
 
     rerender(
@@ -297,7 +303,7 @@ describe("RepoField", () => {
     const user = userEvent.setup();
     render(<RepoField name="repo" options={["acme/widgets"]} />);
 
-    await user.selectOptions(screen.getByRole("combobox"), "Other…");
+    await chooseOption(user, screen.getByRole("combobox"), "Other…");
     expect(screen.getByRole("textbox")).toHaveAttribute(
       "autocapitalize",
       "off",
@@ -313,7 +319,7 @@ describe("RepoField", () => {
     render(
       <RepoField name="repo" options={["acme/widgets"]} onChange={onChange} />,
     );
-    await user.selectOptions(screen.getByRole("combobox"), "Other…");
+    await chooseOption(user, screen.getByRole("combobox"), "Other…");
     await user.type(screen.getByRole("textbox"), "unlisted/custom-repo");
     expect(onChange).toHaveBeenLastCalledWith("unlisted/custom-repo");
 
@@ -333,10 +339,156 @@ describe("RepoField", () => {
         onChange={onChange}
       />,
     );
-    await user.selectOptions(screen.getByRole("combobox"), "Other…");
+    await chooseOption(user, screen.getByRole("combobox"), "Other…");
     await user.type(screen.getByRole("textbox"), "x/y");
     await user.click(screen.getByRole("button", { name: "Choose from list" }));
     expect(screen.getByRole("combobox")).toHaveValue("acme/gadgets");
     expect(onChange).toHaveBeenLastCalledWith("acme/gadgets");
+  });
+
+  // grain/task-2879: a native <select> only jumps to an option by the
+  // start of its text, so "grain" never found ai-on-gke/grain in one.
+  // The box is searched anywhere in the name now.
+  describe("searching the list", () => {
+    const repos = [
+      "acme/widgets",
+      "ai-on-gke/grain",
+      "depot.example.dev/experimental/grain",
+      "gke-labs/granule",
+    ];
+
+    it("lists every repo with grain anywhere in its name", async () => {
+      const user = userEvent.setup();
+      render(<RepoField name="repo" options={repos} />);
+      const box = screen.getByRole("combobox");
+      await user.click(box);
+      await user.type(box, "grain");
+      expect(optionValues(box)).toEqual([
+        "ai-on-gke/grain",
+        "depot.example.dev/experimental/grain",
+        "custom",
+      ]);
+      // The hit is marked in the row, so it is clear why it is there.
+      expect(
+        document.querySelector('[data-value="ai-on-gke/grain"]'),
+      ).toContainHTML('<strong class="search-select-hit">grain</strong>');
+    });
+
+    it("matches every word, in any order, and falls back to fuzzy", async () => {
+      const user = userEvent.setup();
+      render(<RepoField name="repo" options={repos} />);
+      const box = screen.getByRole("combobox");
+      await user.click(box);
+      await user.type(box, "grain exp");
+      expect(optionValues(box)).toEqual([
+        "depot.example.dev/experimental/grain",
+        "custom",
+      ]);
+      await user.clear(box);
+      await user.type(box, "gkgrnl");
+      expect(optionValues(box)).toContain("gke-labs/granule");
+    });
+
+    it("picks the highlighted match with Enter, without submitting the form", async () => {
+      const submit = vi.fn((e) => e.preventDefault());
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <form onSubmit={submit}>
+          <RepoField name="repo" options={repos} onChange={onChange} />
+        </form>,
+      );
+      const box = screen.getByRole("combobox");
+      await user.click(box);
+      await user.type(box, "granule{ArrowDown}{ArrowUp}{Enter}");
+      expect(onChange).toHaveBeenLastCalledWith("gke-labs/granule");
+      expect(submit).not.toHaveBeenCalled();
+      expect(box).toHaveValue("gke-labs/granule");
+    });
+
+    it("submits the chosen repo with the form", async () => {
+      const submitted = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            submitted(new FormData(e.currentTarget).get("repo"));
+          }}
+        >
+          <RepoField name="repo" options={repos} defaultValue="acme/widgets" />
+          <button type="submit">Create</button>
+        </form>,
+      );
+      const box = screen.getByRole("combobox");
+      await user.click(box);
+      await user.clear(box);
+      await user.type(box, "exp grain{Enter}");
+      await user.click(screen.getByRole("button", { name: "Create" }));
+      expect(submitted).toHaveBeenCalledWith(
+        "depot.example.dev/experimental/grain",
+      );
+    });
+
+    it("closes an open list on Escape without letting it reach the drawer", async () => {
+      const outer = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <div onKeyDown={(e) => e.key === "Escape" && outer()}>
+          <RepoField name="repo" options={repos} />
+        </div>,
+      );
+      const box = screen.getByRole("combobox");
+      await user.click(box);
+      expect(box).toHaveAttribute("aria-expanded", "true");
+      await user.keyboard("{Escape}");
+      expect(box).toHaveAttribute("aria-expanded", "false");
+      expect(outer).not.toHaveBeenCalled();
+      // With the list closed, Escape is the drawer's to have.
+      await user.keyboard("{Escape}");
+      expect(outer).toHaveBeenCalled();
+    });
+
+    it("keeps Other… on offer when nothing matches", async () => {
+      const user = userEvent.setup();
+      render(<RepoField name="repo" options={repos} />);
+      const box = screen.getByRole("combobox");
+      await user.click(box);
+      await user.type(box, "zzzz");
+      expect(optionValues(box)).toEqual(["custom"]);
+      await chooseOption(user, box, "Other…");
+      expect(screen.getByRole("textbox")).toHaveAttribute("name", "repo");
+    });
+
+    it("offers a typed owner/name the list does not hold, and takes it", async () => {
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(<RepoField name="repo" options={repos} onChange={onChange} />);
+      const box = screen.getByRole("combobox");
+      await user.click(box);
+      await user.type(box, "acme/brand-new");
+      expect(
+        screen.getByRole("option", { name: "Use acme/brand-new" }),
+      ).toBeVisible();
+      await user.keyboard("{Enter}");
+      expect(onChange).toHaveBeenLastCalledWith("acme/brand-new");
+      expect(box).toHaveValue("acme/brand-new");
+    });
+
+    it("takes a typed owner/name when the box is left", async () => {
+      const onCommit = vi.fn();
+      const user = userEvent.setup();
+      const { container } = render(
+        <RepoField name="repo" options={repos} onCommit={onCommit} />,
+      );
+      const box = screen.getByRole("combobox");
+      await user.click(box);
+      await user.type(box, "acme/brand-new");
+      await user.tab();
+      expect(onCommit).toHaveBeenLastCalledWith("acme/brand-new");
+      expect(container.querySelector('input[name="repo"]')).toHaveValue(
+        "acme/brand-new",
+      );
+    });
   });
 });

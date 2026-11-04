@@ -14,6 +14,7 @@
 
 import { execFileSync } from "node:child_process";
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // docs/test-plans/2026-10-04.md §2 step 2: the New task form's "Don't
 // port" checkbox files a task with noPort, and the task pane shows both
@@ -33,7 +34,7 @@ test.describe("Paired-branch ports in the browser", () => {
     await page.getByRole("button", { name: "+ New task" }).click();
     await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
     await page.getByLabel("Title").fill(title);
-    await page.getByLabel(/^Repos/).selectOption("acme/widgets");
+    await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
     const noPort = page.getByRole("checkbox", {
       name: "Don't port to the repo's paired branches",
     });

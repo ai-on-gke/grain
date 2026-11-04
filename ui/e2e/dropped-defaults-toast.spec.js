@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { expect, test } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // A deployment default the capability policy denies, on a task filed
 // from + New task (task 2283, from docs/test-runs/
@@ -54,7 +55,7 @@ test("filing without a default the policy denies says so in a toast", async ({
         page.getByRole("heading", { name: "New task" }),
       ).toBeVisible();
       await page.getByLabel("Title").fill(`E2E dropped default ${width}`);
-      await page.getByLabel(/^Repos/).selectOption("none");
+      await chooseOption(page.getByLabel(/^Repos/), "none");
       const filing = page.waitForResponse(
         (r) =>
           r.url().endsWith("/api/tasks") && r.request().method() === "POST",

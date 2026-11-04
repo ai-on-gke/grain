@@ -66,7 +66,7 @@ type CLIRunSetting struct {
 
 // CLIRunFrameworks are the frameworks a run location can be set for, in
 // the order Settings shows them.
-var CLIRunFrameworks = []string{AgentFrameworkClaude, AgentFrameworkCodex, AgentFrameworkAntigravity, AgentFrameworkCustom}
+var CLIRunFrameworks = []string{AgentFrameworkClaude, AgentFrameworkCodex, AgentFrameworkAntigravity}
 
 // ValidateCLIRun refuses a setting for a framework that has none, or a
 // location that is not one, whatever the deployment. Which of the two
@@ -109,7 +109,9 @@ func EncodeCLIRun(m map[string]CLIRunSetting) (string, error) {
 // v2.3.0 also stored is dropped as it is read, so the next save writes
 // it out: an "auto" location, which leaves that CLI to the daemon's
 // default, and an image, which only the per-run docker launcher those
-// releases had ever used.
+// releases had ever used. So is a location for the retired custom
+// command framework (RemovedAgentFrameworkCustom), which has nothing
+// left to run.
 func DecodeCLIRun(s string) (map[string]CLIRunSetting, error) {
 	if strings.TrimSpace(s) == "" {
 		return nil, nil
@@ -119,6 +121,10 @@ func DecodeCLIRun(s string) (map[string]CLIRunSetting, error) {
 		return nil, fmt.Errorf("decoding cli_run: %w", err)
 	}
 	for name, setting := range m {
+		if name == RemovedAgentFrameworkCustom {
+			delete(m, name)
+			continue
+		}
 		if strings.TrimSpace(setting.Location) == cliRunAuto {
 			setting.Location = ""
 		}

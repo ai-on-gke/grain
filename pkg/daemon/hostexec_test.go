@@ -231,8 +231,8 @@ func TestHostdConfiguredButDownStillOffersHostAndFailsTheRunClearly(t *testing.T
 	if err := cfg.CheckCLIRunSettings(map[string]model.CLIRunSetting{model.AgentFrameworkClaude: {Location: model.CLIRunHost}}); err != nil {
 		t.Errorf("saving host for claude with hostd configured: %v", err)
 	}
-	if err := cfg.CheckCLIRunSettings(map[string]model.CLIRunSetting{model.AgentFrameworkCustom: {Location: model.CLIRunHost}}); err == nil {
-		t.Error("saving host for custom commands under hostd was accepted; they have no allowlist entry to run as")
+	if err := cfg.CheckCLIRunSettings(map[string]model.CLIRunSetting{model.RemovedAgentFrameworkCustom: {Location: model.CLIRunHost}}); err == nil {
+		t.Error("saving host for the removed custom command framework was accepted")
 	}
 	if err := CheckCLIRunFlags(cfg); err != nil {
 		t.Errorf("-agy-run=host with hostd configured refused at start: %v", err)

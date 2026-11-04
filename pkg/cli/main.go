@@ -103,6 +103,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -251,21 +252,61 @@ func Main() {
 			os.Exit(code)
 		}
 	}
-	if err := runCLI(args); err != nil {
-		var unknown unknownCommandError
-		if errors.As(err, &unknown) {
-			// Inside a sandbox, a command neither CLI has is answered with
-			// the sandbox CLI's help, not this CLI's daemon-facing usage;
-			// the task-CLI commands above (grain declarations check) still
-			// run there.
-			if code, handled := sandboxcli.Unknown(args, os.Stderr); handled {
-				os.Exit(code)
-			}
-			fmt.Fprint(os.Stderr, usage)
-		}
-		fmt.Fprintln(os.Stderr, "grain: "+err.Error())
-		os.Exit(1)
+	if code := runTaskCLI(args, os.Stderr); code != exitOK {
+		os.Exit(code)
 	}
+}
+
+// runTaskCLI runs the task CLI and says how it ended (errors.go): the
+// exit code, and on stderr either a sentence or, under -json, the one
+// {"error": ...} object -- with whatever the flag package or a command
+// would have said there held back, so the object is all a script reads.
+func runTaskCLI(args []string, stderr io.Writer) int {
+	asJSON := jsonRequested(args)
+	var err error
+	if asJSON {
+		var said string
+		said, err = holdStderr(func() error { return runCLI(args) })
+		if err == nil || errors.Is(err, flag.ErrHelp) {
+			_, _ = io.WriteString(stderr, said)
+		}
+	} else {
+		err = runCLI(args)
+	}
+	var unknown unknownCommandError
+	if !asJSON && errors.As(err, &unknown) {
+		// Inside a sandbox, a command neither CLI has is answered with
+		// the sandbox CLI's help, not this CLI's daemon-facing usage;
+		// the task-CLI commands above (grain declarations check) still
+		// run there.
+		if code, handled := sandboxcli.Unknown(args, stderr); handled {
+			return code
+		}
+		fmt.Fprint(stderr, usage)
+	}
+	return reportError(stderr, err, asJSON)
+}
+
+// holdStderr runs fn with os.Stderr captured, and returns what it wrote
+// there instead of letting it through.
+func holdStderr(fn func() error) (string, error) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return "", fn()
+	}
+	old := os.Stderr
+	os.Stderr = w
+	done := make(chan string, 1)
+	go func() {
+		said, _ := io.ReadAll(r)
+		done <- string(said)
+	}()
+	err = fn()
+	os.Stderr = old
+	_ = w.Close()
+	said := <-done
+	_ = r.Close()
+	return said, err
 }
 
 const usage = `usage: grain [global flags] <command> [args]
@@ -296,7 +337,7 @@ const usage = `usage: grain [global flags] <command> [args]
        grain agy-tool-hook     answer one of agy's PreToolUse hooks on stdin/stdout (see agyhook.go)
        grain claude-stop-hook  answer one of Claude Code's Stop hooks on stdin/stdout (see pkg/agent/claude/stophook.go)
 
-Global flags (must come before the command):
+Global flags (before or after the command; -flag and --flag are the same):
   -server string  base URL of a running "grain daemon"'s UI/API. Defaults to
                   $GRAIN_SERVER when that is set, else GRAIN_SERVER in
                   /etc/grain/cli.env ($GRAIN_CLI_ENV names another file), else
@@ -493,6 +534,16 @@ func runCLI(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	rest := fs.Args()
+	if len(rest) == 0 {
+		fs.Usage()
+		return usageErrorf("a command is required")
+	}
+	cmdArgs, err := liftGlobalFlags(fs, rest[0], rest[1:])
+	if err != nil {
+		return err
+	}
+	rest = append(rest[:1:1], cmdArgs...)
 	_, source := serverSource()
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "server" {
@@ -500,12 +551,6 @@ func runCLI(args []string) error {
 		}
 	})
 	useCLIEnvDataDir()
-
-	rest := fs.Args()
-	if len(rest) == 0 {
-		fs.Usage()
-		return errors.New("a command is required")
-	}
 
 	c := ui.NewHTTPClient(*server)
 	c.HTTP = cliHTTPClient(*connectTimeout, *callTimeout)
@@ -521,6 +566,11 @@ func runCLI(args []string) error {
 	}
 	out := &printer{json: *jsonOutput}
 	ctx := context.Background()
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "timeout" {
+			ctx = withWaitLimit(ctx, *callTimeout)
+		}
+	})
 
 	target := cliTarget{
 		server:      *server,
@@ -627,7 +677,7 @@ func (e unknownCommandError) Error() string { return fmt.Sprintf("unknown comman
 // to assume otherwise.
 func taskID(s string) (string, error) {
 	if s == "" {
-		return "", errors.New("a task id is required")
+		return "", usageErrorf("a task id is required")
 	}
 	return s, nil
 }

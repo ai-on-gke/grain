@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // The first test triages the inbox rows `grain demo` seeds -- one in
 // each of its four groups -- and approves and answers two of them, so it
@@ -161,7 +162,7 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     await page.getByLabel("Description").fill(queuedDesc);
 
     // Repos and base branch
-    await page.getByLabel(/^Repos/).selectOption("acme/widgets");
+    await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
     await page.getByLabel("Base branch").fill("main");
 
     // Auto-merge checkbox
@@ -237,9 +238,9 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     // repo: the branch used to be filed anyway and shown as the no-repo
     // task's target (docs/test-runs/
     // 2026-10-13-task-intake-inbox-lifecycle.md).
-    await page.getByLabel(/^Repos/).selectOption("acme/widgets");
+    await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
     await page.getByLabel("Base branch").fill("release-9");
-    await page.getByLabel(/^Repos/).selectOption("none");
+    await chooseOption(page.getByLabel(/^Repos/), "none");
 
     // Uncheck Queue immediately to file as proposal
     await page.getByRole("checkbox", { name: "Queue immediately" }).uncheck();
@@ -684,9 +685,9 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     await page.goto("/new");
     const form = page.getByRole("dialog", { name: "New task" });
     await form.getByLabel("Title").fill("Malformed repo probe");
-    await form
-      .getByRole("combobox", { name: /^Repos/ })
-      .selectOption({ label: "Other…" });
+    await chooseOption(form.getByRole("combobox", { name: /^Repos/ }), {
+      label: "Other…",
+    });
     await form
       .getByPlaceholder("owner/name", { exact: true })
       .fill("not a repo");
@@ -755,7 +756,7 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     const form = page.getByRole("dialog", { name: "New task" });
     const title = `Hidden refusal ${Date.now()}`;
     await form.getByLabel("Title").fill(title);
-    await form.getByRole("combobox", { name: /^Repos/ }).selectOption({
+    await chooseOption(form.getByRole("combobox", { name: /^Repos/ }), {
       label: "No repo (standalone task -- nothing to check out)",
     });
     const advanced = form.getByRole("button", { name: "Advanced options" });
@@ -827,7 +828,7 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     if (await discard.isVisible()) await discard.click();
     const title = `Re-ticked capability ${Date.now()}`;
     await form.getByLabel("Title").fill(title);
-    await form.getByRole("combobox", { name: /^Repos/ }).selectOption({
+    await chooseOption(form.getByRole("combobox", { name: /^Repos/ }), {
       label: "No repo (standalone task -- nothing to check out)",
     });
 
@@ -995,7 +996,7 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     const title = `Abandoned input ${Date.now()}`;
     await form.getByLabel("Title").fill(title);
     const repos = form.getByRole("combobox", { name: /^Repos/ });
-    await repos.selectOption({ label: "Other…" });
+    await chooseOption(repos, { label: "Other…" });
     await form
       .getByPlaceholder("owner/name", { exact: true })
       .fill("unlisted/custom-repo");
@@ -1006,7 +1007,7 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     await expect(
       form.getByRole("button", { name: "Create task" }),
     ).toBeDisabled();
-    await repos.selectOption("acme/widgets");
+    await chooseOption(repos, "acme/widgets");
     await form.getByRole("button", { name: "Create task" }).click();
     await expect(form).toBeHidden();
     expect(filed).toHaveLength(1);

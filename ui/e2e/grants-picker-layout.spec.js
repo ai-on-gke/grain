@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { expect, test } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // Layout of the Grants section (GrantsPicker.jsx,
 // design/design/unified-grants.design.md) on the task pane, at desktop and phone
@@ -122,7 +123,7 @@ test("one search on the new task overlay reaches both an API scope and a server 
 }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "+ New task" }).click();
-  await page.getByLabel(/^Repos/).selectOption("none");
+  await chooseOption(page.getByLabel(/^Repos/), "none");
   const section = page.getByTestId("new-task-grants");
   await section.getByRole("button", { name: "Add grant…" }).click();
   await page.getByLabel("Search grants").fill("ci:read");
