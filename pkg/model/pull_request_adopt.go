@@ -108,7 +108,13 @@ func ParsePullRequestArg(s string) (PullRequestRef, error) {
 		if err != nil || n <= 0 {
 			return PullRequestRef{}, fmt.Errorf("pull request URL %q: bad number %q", s, parts[3])
 		}
-		return PullRequestRef{Repo: RepoRef{Owner: parts[0], Name: parts[1]}, Number: n}, nil
+		// The same repository check as owner/name#n, so a URL cannot name
+		// what that form would refuse.
+		repo, err := ParseRepo(parts[0] + "/" + parts[1])
+		if err != nil {
+			return PullRequestRef{}, fmt.Errorf("pull request URL %q: %w", s, err)
+		}
+		return PullRequestRef{Repo: repo, Number: n}, nil
 	}
 	ref, err := ParsePullRequestRef(s)
 	if err != nil {
@@ -130,11 +136,30 @@ func CleanDesignPath(p string) (string, error) {
 	if strings.HasPrefix(p, "/") || strings.Contains(p, "\\") {
 		return "", fmt.Errorf("%q must be a path relative to the repository root", p)
 	}
+	// The path is written into review and shepherd prompts outside any
+	// external-content quoting, and a pull request's description can name
+	// it, so it may hold nothing but a path: no spaces, backticks or
+	// other text an author could steer an agent with.
+	if len(p) > maxDesignPathLen {
+		return "", fmt.Errorf("%q is longer than %d bytes", p, maxDesignPathLen)
+	}
+	for i := 0; i < len(p); i++ {
+		if !designPathByte(p[i]) {
+			return "", fmt.Errorf("%q may hold only letters, digits, '.', '_', '-' and '/'", p)
+		}
+	}
 	clean := path.Clean(p)
 	if clean != p || strings.HasPrefix(clean, "../") || clean == ".." || !strings.HasPrefix(clean, "design/") {
 		return "", fmt.Errorf("%q must be a clean path under design/", p)
 	}
 	return clean, nil
+}
+
+const maxDesignPathLen = 256
+
+func designPathByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+		c == '.' || c == '_' || c == '-' || c == '/'
 }
 
 // AdoptPullRequestInput is what the adopt route hands the orchestrator:

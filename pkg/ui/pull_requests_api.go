@@ -142,11 +142,16 @@ func (c *Client) pullRequestFiling(ctx context.Context, repo model.RepoRef) (mod
 	return actor, trusted, nil
 }
 
-func pullRequestRef(raw string) (model.PullRequestRef, error) {
+// pullRequestRef parses raw with its repository as this deployment
+// spells it -- the spelling the agent gate checked the route's scope on
+// (agentCanonicalRepo) -- so the scopes, grants and owner trust the
+// handler checks after it are read for that same repository.
+func (c *Client) pullRequestRef(raw string) (model.PullRequestRef, error) {
 	ref, err := model.ParsePullRequestArg(raw)
 	if err != nil {
 		return model.PullRequestRef{}, validationErrorf("pr: %v", err)
 	}
+	ref.Repo = c.canonicalRepo(ref.Repo)
 	return ref, nil
 }
 
@@ -156,7 +161,7 @@ func (c *Client) AdoptPullRequest(ctx context.Context, req AdoptPullRequestReque
 	if err != nil {
 		return model.PullRequestAdoption{}, err
 	}
-	ref, err := pullRequestRef(req.PR)
+	ref, err := c.pullRequestRef(req.PR)
 	if err != nil {
 		return model.PullRequestAdoption{}, err
 	}
@@ -183,7 +188,7 @@ func (c *Client) ReviewPullRequest(ctx context.Context, req ReviewPullRequestReq
 	if err != nil {
 		return model.PullRequestReviewFiling{}, err
 	}
-	ref, err := pullRequestRef(req.PR)
+	ref, err := c.pullRequestRef(req.PR)
 	if err != nil {
 		return model.PullRequestReviewFiling{}, err
 	}
@@ -205,7 +210,7 @@ func (c *Client) PullRequestStatus(ctx context.Context, pr string, threads bool)
 	if err != nil {
 		return model.PullRequestReport{}, err
 	}
-	ref, err := pullRequestRef(pr)
+	ref, err := c.pullRequestRef(pr)
 	if err != nil {
 		return model.PullRequestReport{}, err
 	}
