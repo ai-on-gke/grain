@@ -321,3 +321,31 @@ func TestActionsJobLogRefusedByTheBlobHostNamesStatusAndHost(t *testing.T) {
 		t.Errorf("error %q leaks the signed URL's query", err)
 	}
 }
+
+func TestActionsJobLogUnreachableBlobHostKeepsTheSignedQueryOut(t *testing.T) {
+	for _, stop := range []bool{false, true} {
+		t.Run(fmt.Sprintf("transportFollows=%v", !stop), func(t *testing.T) {
+			api, _ := ghesLogForge(t, func(w http.ResponseWriter, r *http.Request) {
+				// Drop the connection: the transport fails rather than answers.
+				conn, _, _ := w.(http.Hijacker).Hijack()
+				conn.Close()
+			})
+			hc := &http.Client{}
+			if stop {
+				hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			}
+			transport := &RealTransport{Host: strings.TrimPrefix(api.URL, "http://"), PathPrefix: "/api/v3", Client: hc,
+				ledger: &callerLedger{logf: func(string, ...any) {}}}
+			_, err := NewClient(transport, StaticToken{strPtr("t")}).ActionsJobLog("acme", "widgets", 19190336)
+			if err == nil {
+				t.Fatal("ActionsJobLog succeeded against a blob host that hung up")
+			}
+			if strings.Contains(err.Error(), "sig=secret") || strings.Contains(err.Error(), "/logs/19190336.txt") {
+				t.Errorf("error %q leaks the signed blob URL", err)
+			}
+			if !strings.Contains(err.Error(), "localhost") {
+				t.Errorf("error %q should still name the blob host", err)
+			}
+		})
+	}
+}

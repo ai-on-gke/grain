@@ -25,6 +25,7 @@ package github
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -411,12 +412,12 @@ func (c *RESTClient) listActionsJobs(owner, repo string, runID int64, query stri
 func (c *RESTClient) ActionsJobLog(owner, repo string, jobID int64) (string, error) {
 	resp, err := c.get(owner, repo, fmt.Sprintf("/repos/%s/%s/actions/jobs/%d/logs", owner, repo, jobID))
 	if err != nil {
-		return "", err
+		return "", redactURLError(err)
 	}
 	if loc := headerValue(resp.Headers, "Location"); resp.Status >= 300 && resp.Status < 400 && loc != "" {
 		blob, err := c.Transport.Request(http.MethodGet, loc, map[string]string{"User-Agent": "grain-automation"}, nil)
 		if err != nil {
-			return "", fmt.Errorf("following the job log's redirect to %s: %w", hostOf(loc), err)
+			return "", fmt.Errorf("following the job log's redirect to %s: %w", hostOf(loc), redactURLError(err))
 		}
 		if blob.URL == "" {
 			blob.URL = "GET " + hostOf(loc)
@@ -427,6 +428,19 @@ func (c *RESTClient) ActionsJobLog(owner, repo string, jobID int64) (string, err
 		return "", &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
 	}
 	return strings.ToValidUTF8(string(resp.Body), ""), nil
+}
+
+// redactURLError cuts a *url.Error's URL down to its scheme and host. A
+// transport failure on the way to a job log -- net/http following the
+// forge's redirect, or this package following it itself -- names the
+// signed blob URL it was fetching, and that error reaches the agent
+// asking for the log.
+func redactURLError(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		ue.URL = hostOf(ue.URL)
+	}
+	return err
 }
 
 // hostOf is the scheme and host of a URL, leaving out a signed URL's
