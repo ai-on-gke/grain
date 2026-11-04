@@ -83,6 +83,21 @@ the database (`allowed_principal`).
   through the Cloud Identity groups API (cached briefly) only when at
   least one `group:` entry is present and no `user:` entry already
   matched.
+- **Service accounts:** `serviceAccount:<email>` admits a non-human
+  caller (a `*.gserviceaccount.com` address) with full operator access.
+  Each one is added explicitly, with a reason: `grain access allow
+  serviceAccount:<email> --reason "<why>"`, or **Settings → Access**
+  with the Reason field filled in (`POST /api/access/principals` takes
+  it as `reason`, or as `X-Grain-Acting-Reason`). The reason is kept
+  with the entry and recorded in `config_audit`, and Settings → Access
+  lists service accounts in their own group with who added each, when
+  and why. A service account is admitted only by its own
+  `serviceAccount:` entry, never through a `group:`, and what it does is
+  attributed to it as kind `service`, not `operator`. Accounts whose
+  keys grain hands to tasks -- the `gcp-key` pool and the gcp
+  capability's permission-set accounts -- are always refused, both when
+  added and at sign-in, even if an entry for one is already in the
+  table. `domain:` entries are not supported.
 - **Equal privileges:** A verified user admitted through the list has
   full operator access, the same as an access-code holder, including
   viewing, adding and removing entries on the list. Anyone not on the
@@ -97,6 +112,7 @@ the database (`allowed_principal`).
   grain access list
   grain access allow user:alice@example.com
   grain access allow group:team@example.com
+  grain access allow serviceAccount:ci@my-project.iam.gserviceaccount.com --reason "release pipeline"
   grain access deny user:alice@example.com
   ```
 
@@ -128,10 +144,11 @@ the database (`allowed_principal`).
 - **One-time migration off `-ui-allowed-principals`:** On start, if
   `-ui-allowed-principals` or `$GRAIN_ALLOWED_PRINCIPALS` is set and the
   database list has never been populated or migrated, grain imports its
-  `user:` and `group:` entries once and logs the import. Entries of
-  other kinds (`serviceAccount:`, `domain:`) are not imported; each
-  dropped entry is logged and shown as a warning in **Settings →
-  Access**. On subsequent starts, `-ui-allowed-principals` and
+  `user:` and `group:` entries once and logs the import.
+  `serviceAccount:` entries are not imported -- an operator adds each
+  one back deliberately, with a reason -- and neither are `domain:`
+  entries; each dropped entry is logged and shown as a warning in
+  **Settings → Access**. On subsequent starts, `-ui-allowed-principals` and
   `$GRAIN_ALLOWED_PRINCIPALS` are deprecated: grain logs a warning when
   either is set and ignores its value.
 

@@ -463,7 +463,9 @@ describe("TaskList", () => {
       screen.getAllByTitle("Asked you to submit acme/widgets#1").length,
     ).toBeGreaterThan(0);
     expect(screen.getAllByTitle("Merging").length).toBe(1);
-    expect(screen.getAllByTitle("Asked a question").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByTitle("Answered in a comment").length,
+    ).toBeGreaterThan(0);
   });
 
   // The one correction still worth a chip: on the queue in name only.

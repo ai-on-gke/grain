@@ -49,6 +49,8 @@ on:
 
 permissions:
   actions: read
+  # grain/release-qualification and grain/rc-hold check runs.
+  checks: read
   contents: write
   packages: write
   id-token: write
@@ -237,7 +239,8 @@ jobs:
           RELEASE_NOTES_TASK: ${{ vars.RELEASE_NOTES_TASK }}
           RELEASE_NOTIFY: ${{ vars.RELEASE_NOTIFY }}
           # The GitHub App (slug or id) grain posts grain/release-qualification
-          # as; a same-named check run from anything else never qualifies an rc.
+          # and grain/rc-hold as; a same-named check run from anything else
+          # never qualifies an rc or lifts a hold.
           RELEASE_QUALIFICATION_APP: ${{ vars.RELEASE_QUALIFICATION_APP }}
           FORCE: ${{ inputs.force || false }}
         run: |

@@ -121,6 +121,7 @@ describe("AccessSection", () => {
           ...currentEntries,
           {
             entry: parsed.entry,
+            reason: parsed.reason,
             addedBy: "iap@example.com",
             addedAt: "2026-11-03T06:00:00Z",
           },
@@ -156,7 +157,7 @@ describe("AccessSection", () => {
     ).toHaveTextContent("domain:legacy.example.com");
 
     // Reject invalid entries client-side.
-    const input = screen.getByLabelText("User or group");
+    const input = screen.getByLabelText("User, group or service account");
     await user.type(input, "domain:example.com");
     await user.click(
       screen.getByRole("button", { name: "Add allowed principal" }),
@@ -172,6 +173,27 @@ describe("AccessSection", () => {
       screen.getByRole("button", { name: "Add allowed principal" }),
     );
     await screen.findByText("user:bob@example.com");
+    expect(screen.queryByTestId("allowed-service-accounts")).toBeNull();
+
+    // A service account needs a reason, then is listed in its own group
+    // with that reason.
+    const sa = "serviceAccount:ci-bot@proj.iam.gserviceaccount.com";
+    await user.type(input, sa);
+    await user.click(
+      screen.getByRole("button", { name: "Add allowed principal" }),
+    );
+    expect(screen.getByText(/Give a reason/)).toBeInTheDocument();
+    await user.type(screen.getByTestId("access-reason-input"), "ci pipeline");
+    await user.click(
+      screen.getByRole("button", { name: "Add allowed principal" }),
+    );
+    await screen.findByText(sa);
+    const group = screen.getByTestId("allowed-service-accounts");
+    expect(group).toHaveTextContent(/full operator access/);
+    expect(group).toHaveTextContent("ci pipeline");
+    expect(
+      screen.getByTestId("allowed-principals-table"),
+    ).not.toHaveTextContent(sa);
 
     // Removing oneself prompts a warning before removing, and succeeds when confirmed.
     await user.click(
@@ -191,7 +213,7 @@ describe("AccessSection", () => {
 });
 
 describe("validatePrincipalEntry", () => {
-  it("accepts user: and group: emails and rejects other prefixes or malformed emails", () => {
+  it("accepts user:, group: and serviceAccount: entries and rejects other prefixes or malformed emails", () => {
     expect(validatePrincipalEntry(" user:Alice@Example.com ")).toEqual({
       canonical: "user:alice@example.com",
       error: "",
@@ -201,12 +223,23 @@ describe("validatePrincipalEntry", () => {
       error: "",
     });
     expect(validatePrincipalEntry("alice@example.com").error).toMatch(
-      /must start with user: or group:/,
+      /must start with user:, group: or serviceAccount:/,
     );
     expect(
-      validatePrincipalEntry("serviceAccount:sa@proj.iam.gserviceaccount.com")
-        .error,
-    ).toMatch(/not supported/);
+      validatePrincipalEntry("serviceAccount:SA@proj.iam.gserviceaccount.com"),
+    ).toEqual({
+      canonical: "serviceAccount:sa@proj.iam.gserviceaccount.com",
+      error: "",
+    });
+    expect(
+      validatePrincipalEntry("serviceAccount:bot@example.com").error,
+    ).toMatch(/\*\.gserviceaccount\.com/);
+    expect(
+      validatePrincipalEntry("user:sa@proj.iam.gserviceaccount.com").error,
+    ).toMatch(/must be added as serviceAccount:/);
+    expect(validatePrincipalEntry("domain:example.com").error).toMatch(
+      /not supported/,
+    );
     expect(validatePrincipalEntry("user:not-an-email").error).toMatch(
       /valid email/,
     );

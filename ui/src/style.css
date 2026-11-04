@@ -3977,7 +3977,8 @@ fieldset legend {
    not an alert: it is a diagnosis off the record's own timestamps
    rather than a failure grain has recorded, and the chip beside the
    badge is what catches the eye. */
-.detail-stall {
+.detail-stall,
+.detail-blocked {
   margin: -0.6rem 0 1rem;
   color: var(--text-secondary);
   font-size: 0.82rem;

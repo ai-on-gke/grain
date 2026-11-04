@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -106,7 +107,7 @@ func TestAllowedPrincipalsFlagMigrationHappensExactlyOnce(t *testing.T) {
 	// 3. Also verify that if a fresh DB already has an entry before the flag is
 	// ever seen, setting the flag later does NOT import it.
 	storePreseeded, _ := sqlitetest.Open(t)
-	if _, _, err := storePreseeded.AddAllowedPrincipal(ctx, "user:seeded@example.com", "installer", time.Now()); err != nil {
+	if _, _, err := storePreseeded.AddAllowedPrincipal(ctx, "user:seeded@example.com", "installer", "", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	client3 := ui.NewClient(ui.Config{
@@ -456,5 +457,114 @@ func TestRegisteredHostdServiceOwnerDialsCleanlyWithoutOperatorAccessOrRefusalLo
 		ui.IAPAssertionHeader: mint("grain-agent@my-proj.iam.gserviceaccount.com"),
 	}); rec.Code != http.StatusForbidden {
 		t.Fatalf("gcp-key pool SA GET /api/hostd/connect = %d %s, want 403", rec.Code, rec.Body)
+	}
+}
+
+// A service account is admitted only through an explicit serviceAccount:
+// entry added with a reason, is attributed as a service, and an account whose
+// key grain hands to tasks is refused at add time and at sign-in even when an
+// entry for it is already in the table.
+func TestServiceAccountAllowlistEntriesNeedAReasonAndNeverAdmitPoolAccounts(t *testing.T) {
+	ui.ResetIAPConfig()
+	t.Cleanup(ui.ResetIAPConfig)
+	t.Setenv("GRAIN_ALLOWED_PRINCIPALS", "")
+
+	priv, pemStr := generateECDSATestKey(t)
+	assertionKeys(t, priv, pemStr, false)
+	ui.SetIAPAudience(tunnelAudience)
+	as := func(email string) map[string]string {
+		return map[string]string{
+			ui.IAPAssertionHeader: signIAPToken(t, priv, tunnelKid, tunnelAudience, email, "sub", ui.GoogleIAPIssuer, time.Now().Add(10*time.Minute)),
+		}
+	}
+
+	srv, client := testServer(t)
+	ui.SetAccessCodeForTest(srv, testAccessCode)
+	ctx := context.Background()
+	const (
+		poolSA = "grain-agent@my-proj.iam.gserviceaccount.com"
+		setSA  = "iap-test-1@acme-pool.iam.gserviceaccount.com"
+		botSA  = "release-bot@my-proj.iam.gserviceaccount.com"
+	)
+	mc := model.DefaultConfig()
+	mc.GCPProject = "my-proj"
+	mc.GCPServiceAccountEmail = poolSA
+	mc.GCPServiceAccountCount = 2
+	mc.MCPServers = map[string]protocol.ServerConfig{
+		model.GCPCapabilityServerID: {
+			Command: "grain",
+			Args:    []string{"capability", "gcp"},
+			Builtin: "gcp",
+			Config: map[string]any{
+				"permission_sets": []any{
+					map[string]any{"name": "iap-test", "project": "acme-pool", "accounts": []any{setSA}},
+				},
+			},
+		},
+	}
+	if err := client.Store.PutConfig(ctx, mc); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Entries that are refused outright.
+	for _, req := range []ui.AllowPrincipalRequest{
+		{Entry: "serviceAccount:" + botSA},                     // no reason
+		{Entry: "user:" + botSA, Reason: "x"},                  // an SA address as a user
+		{Entry: "serviceAccount:bot@example.com", Reason: "x"}, // not an SA address
+		{Entry: "domain:example.com", Reason: "x"},             // domain: stays unsupported
+		{Entry: "serviceAccount:" + poolSA, Reason: "x"},       // gcp-key pool
+		{Entry: "serviceAccount:GRAIN-AGENT-1@my-proj.iam.gserviceaccount.com", Reason: "x"},
+		{Entry: "serviceAccount:" + setSA, Reason: "x"}, // gcp permission set
+	} {
+		if _, err := client.AllowPrincipal(ctx, req); err == nil {
+			t.Errorf("AllowPrincipal(%+v) succeeded, want refused", req)
+		}
+	}
+
+	// 2. Not on the list yet: refused.
+	if rec := serveFrom(srv, "203.0.113.10:443", http.MethodGet, "/api/tasks", "", as(botSA)); rec.Code != http.StatusForbidden {
+		t.Fatalf("unlisted SA GET /api/tasks = %d, want 403", rec.Code)
+	}
+
+	// 3. Added with a reason, it is listed with who, when and why, recorded in
+	// config_audit, and admitted at once.
+	bearer := map[string]string{"Authorization": "Bearer " + testAccessCode}
+	rec := serveFrom(srv, "127.0.0.1:4242", http.MethodPost, "/api/access/principals",
+		`{"entry":"serviceAccount:Release-Bot@my-proj.iam.gserviceaccount.com","reason":"release pipeline"}`, bearer)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST serviceAccount: = %d %s, want 201", rec.Code, rec.Body)
+	}
+	list, err := client.ListAllowedPrincipals(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Entries) != 1 || list.Entries[0].Entry != "serviceAccount:"+botSA || list.Entries[0].Reason != "release pipeline" || list.Entries[0].AddedBy == "" {
+		t.Fatalf("entries = %+v, want serviceAccount:%s with its adder and reason", list.Entries, botSA)
+	}
+	audit, err := client.Store.ConfigAudit(ctx, 1)
+	if err != nil || len(audit) != 1 || audit[0].Summary != "allowed serviceAccount:"+botSA+" (release pipeline)" {
+		t.Fatalf("config audit = %+v, %v", audit, err)
+	}
+	if rec := serveFrom(srv, "203.0.113.10:443", http.MethodGet, "/api/tasks", "", as(botSA)); rec.Code != http.StatusOK {
+		t.Fatalf("listed SA GET /api/tasks = %d %s, want 200", rec.Code, rec.Body)
+	}
+
+	// 4. What the service account changes is attributed to it as a service.
+	if rec := serveFrom(srv, "203.0.113.10:443", http.MethodPost, "/api/access/principals", `{"entry":"user:carol@example.com"}`, as(botSA)); rec.Code != http.StatusCreated {
+		t.Fatalf("SA POST user: = %d %s, want 201", rec.Code, rec.Body)
+	}
+	audit, err = client.Store.ConfigAudit(ctx, 1)
+	if err != nil || len(audit) != 1 || audit[0].By.Kind != model.PrincipalService || audit[0].By.ID != botSA {
+		t.Fatalf("config audit = %+v, %v; want the change attributed to service %s", audit, err, botSA)
+	}
+
+	// 5. Pool accounts are refused at sign-in even with an entry in the table.
+	for _, sa := range []string{poolSA, setSA} {
+		if _, _, err := client.Store.AddAllowedPrincipal(ctx, "serviceAccount:"+sa, "test", "planted", time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if rec := serveFrom(srv, "203.0.113.10:443", http.MethodGet, "/api/tasks", "", as(sa)); rec.Code != http.StatusForbidden {
+			t.Fatalf("pool SA %s with a table entry GET /api/tasks = %d, want 403", sa, rec.Code)
+		}
 	}
 }
