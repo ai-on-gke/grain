@@ -543,7 +543,11 @@ func (u *Upgrader) IsImageSourceExplicit() bool {
 }
 
 // EffectiveImageSource returns the active image source for ModeImage (explicit
-// ImageConfig.Source, else registered TrackImageDefaults, else release-assets).
+// ImageConfig.Source, else registered TrackImageDefaults, else release-assets
+// -- or registry on a deployment with a VerifyCmd, whose signatures are over
+// registry manifests and pass a loaded tarball only when its image ID is a
+// signed digest (verifyLoaded), so that it is not moved onto a source its
+// verifier may refuse every upgrade from).
 func (u *Upgrader) EffectiveImageSource() ImageSource {
 	if u.cfg.Image == nil {
 		return ImageSourceRegistry
@@ -556,6 +560,9 @@ func (u *Upgrader) EffectiveImageSource() ImageSource {
 	}
 	if d, ok := TrackDefaultsFor(u.cfg.Image.Track); ok && d.Source != "" {
 		return d.Source
+	}
+	if len(u.cfg.Image.VerifyCmd) > 0 {
+		return ImageSourceRegistry
 	}
 	return ImageSourceReleaseAssets
 }

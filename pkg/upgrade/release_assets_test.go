@@ -965,8 +965,17 @@ func TestReleaseAssetsSandboxImageLoadVerifyAndUnreachableRegistryError(t *testi
 				Source:           ImageSourceReleaseAssets,
 				RefFile:          refFile,
 				SandboxImageArgs: []string{"sandbox-image"},
+				// cosign's answer, over the image IDs the release's
+				// tarballs load as: verifyLoaded passes a loaded image
+				// only on a signature over its own ID.
 				VerifyCmd: []string{"sh", "-c",
-					`printf '%s\n' "$1" >> ` + verifyLog, "sh"},
+					`printf '%s\n' "$1" >> ` + verifyLog + `
+					case "$1" in
+					` + daemonRef + `) id=` + testDaemonID1 + ` ;;
+					` + guestRef + `) id=` + testGuestID1 + ` ;;
+					*) exit 1 ;;
+					esac
+					printf '[{"critical":{"image":{"docker-manifest-digest":"%s"}}}]\n' "$id"`, "sh"},
 				LoadCmd: dk.loadCmd(map[string][2]string{
 					"daemon-" + testCommit1: {daemonRef, testDaemonID1},
 					"guest-" + testCommit1:  {guestRef, testGuestID1},
