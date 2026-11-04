@@ -270,14 +270,30 @@ func TestGCPKeyMintFailuresSayWhichFailureItIs(t *testing.T) {
 	}
 }
 
-func TestGCPKeyOldAccountArgumentStillWorks(t *testing.T) {
+func TestGCPKeySchemaRefusesRemovedAccountAndActivateArguments(t *testing.T) {
 	cloud := gcpfake.New()
 	ps := attach(t, newTestGCP(t, cloud, nil))
-	resp := mint(t, ps, "gcp-key", "e1-1-0", map[string]any{"account": "default", "activate": true})
-	if resp.Status != protocol.StatusOK || !strings.Contains(resp.PromptSection, "permission set reader") {
-		t.Fatalf("mint = %+v", resp)
+	schema := ps.Methods["gcp-key"].ArgsSchema
+	props := schema["properties"].(map[string]any)
+	if len(props) != 2 || props["permission_set"] == nil || props["primary"] == nil {
+		t.Fatalf("gcp-key properties = %v, want only permission_set and primary", props)
 	}
-	ps.Release(context.Background(), "gcp-key", "e1-1-0")
+	if _, has := props["account"]; has {
+		t.Error("gcp-key schema still exposes deprecated account argument")
+	}
+	if _, has := props["activate"]; has {
+		t.Error("gcp-key schema still exposes deprecated activate argument")
+	}
+	for _, bad := range []map[string]any{
+		{"account": "reader"},
+		{"account": "default"},
+		{"activate": true},
+		{"permission_set": "reader", "activate": false},
+	} {
+		if _, err := protocol.ValidateArgs(schema, bad); err == nil {
+			t.Errorf("ValidateArgs(%v) succeeded, want refusal", bad)
+		}
+	}
 }
 
 func TestGCPKeyAtTheLimitIsResourceExhausted(t *testing.T) {

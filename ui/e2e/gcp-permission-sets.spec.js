@@ -100,6 +100,8 @@ test("adds a permission set, tests it, and grants the set on a task", async ({
   // set saves the grant (there is no dialog to confirm).
   const section = grants.locator(`[data-method="${KEY}"] .grant-section`);
   await expect(section).toHaveCount(1);
+  await expect(section.locator('[data-arg="account"]')).toHaveCount(0);
+  await expect(section.locator('[data-arg="activate"]')).toHaveCount(0);
   await pick(page, section, "permission_set", "e2e-reader");
   await expect(grants.locator(`[data-grant^="${KEY}="]`)).toHaveAttribute(
     "data-grant",

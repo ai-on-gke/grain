@@ -721,6 +721,11 @@ var Migrations = []Migration{
 			"ALTER TABLE `task_observation` ADD COLUMN `access_decisions` TEXT NULL",
 		},
 	},
+	{
+		Version:     106,
+		Description: "rewrite stored gcp#gcp-key grants from deprecated account and activate arguments to permission_set",
+		Up:          MigrateGCPKeyGrantArgs,
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as

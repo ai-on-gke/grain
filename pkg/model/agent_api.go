@@ -315,21 +315,20 @@ func ParseGCPKeyServerGrant(grant string) (permissionSet string, ok bool) {
 	if err != nil || spec.Capability != GCPKeyRef {
 		return "", false
 	}
-	set, _ := spec.With["permission_set"].(string)
-	if old, hasOld := spec.With["account"].(string); hasOld && old != "" {
-		set = old
+	if err := CheckGCPKeyGrantArgs(spec, ""); err != nil {
+		return "", false
 	}
-	if set == "" || set == "default" {
+	set, _ := spec.With["permission_set"].(string)
+	if set == "" {
 		set = GCPKeyDefaultPermissionSet
 	}
 	return set, true
 }
 
 // GCPKeySetUnnamed reports whether grant is a gcp#gcp-key capability-server
-// grant that leaves its permission set to the server's first configured set:
-// no permission_set, or "default" in permission_set or the deprecated account
-// field. (Bare "gcp-key" is false: CanonicalLegacyGrant rewrites it to
-// GCPKeySandboxAgentGrant.)
+// grant that leaves its permission set to the server's first configured set
+// (no permission_set). (Bare "gcp-key" is false: CanonicalLegacyGrant rewrites
+// it to GCPKeySandboxAgentGrant.)
 func GCPKeySetUnnamed(grant string) bool {
 	s := strings.TrimSpace(grant)
 	if !IsCapabilityRef(s) {
@@ -339,11 +338,11 @@ func GCPKeySetUnnamed(grant string) bool {
 	if err != nil || spec.Capability != GCPKeyRef {
 		return false
 	}
-	set, _ := spec.With["permission_set"].(string)
-	if old, _ := spec.With["account"].(string); old != "" {
-		set = old
+	if err := CheckGCPKeyGrantArgs(spec, ""); err != nil {
+		return false
 	}
-	return set == "" || set == "default"
+	set, _ := spec.With["permission_set"].(string)
+	return set == ""
 }
 
 func init() {

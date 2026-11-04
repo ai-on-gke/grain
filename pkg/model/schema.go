@@ -497,7 +497,14 @@ import "strconv"
 // `task_observation`: the request_access call a task is parked on
 // (model.PendingAccessRequest) and the answers people gave its earlier
 // ones (model.AccessDecision), both JSON.
-const SchemaVersion = 105
+//
+// 106 removes the deprecated account and activate arguments from
+// https://grain.dev/capabilities/gcp#gcp-key: stored grants carrying
+// account: X become permission_set: X ("default" resolves to the first
+// configured permission set) and activate is dropped; grants naming a
+// permission set that does not exist are kept, logged, and noted on their
+// task, template or schedule (gcp_key_args_migration.go).
+const SchemaVersion = 106
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified

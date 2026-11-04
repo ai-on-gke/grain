@@ -662,6 +662,15 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 		if err := model.ApplyDataMigrations(ctx, tx, found); err != nil {
 			return fmt.Errorf("staterepo: %w", err)
 		}
+	} else {
+		// One-release compatibility (schema 106): accept old-form gcp#gcp-key
+		// grants carrying "account" or "activate" in grain/config files at the
+		// current schema so applying them does not fail, and rewrite them in
+		// the database so the next export writes canonical permission_set
+		// grants. Remove in the next release's schema so old forms are refused.
+		if err := model.MigrateGCPKeyGrantArgs(ctx, tx); err != nil {
+			return fmt.Errorf("staterepo: %w", err)
+		}
 	}
 	return tx.Commit()
 }
