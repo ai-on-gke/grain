@@ -958,7 +958,10 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		jobName = pj.ID
 	}
 	jobLabel := gateJobLabel(plan.Request.Repo, runID, jobName)
-	if perRun != nil {
+	// A builtin job (Job.Builtin) runs in-process in the daemon with no
+	// image and no sandbox, so it takes neither a per-run sandbox slot nor
+	// a machine from the deployment's sandbox gate/ledger.
+	if perRun != nil && pj.Job.Builtin == "" {
 		release, err := perRun.Acquire(queueCtx, GateRequest{Job: jobLabel, Wait: waiting})
 		if err != nil {
 			if e.stopping(ctx) {
@@ -972,7 +975,7 @@ func (e *Engine) runJob(ctx context.Context, runID string, plan workflows.Plan, 
 		defer release()
 	}
 
-	if e.Jobs != nil {
+	if e.Jobs != nil && pj.Job.Builtin == "" {
 		// The job's own shape goes with the request: this gate is the
 		// deployment's, and what it rations is the machine as well as
 		// the count (grain/task-173).

@@ -356,7 +356,9 @@ describe("TaskBoard", () => {
     it("names a multi-state column card's state badge with role=img for screen readers", () => {
       renderBoard();
       const card = cardFor("Answer me");
-      const badge = within(card).getByRole("img", { name: /^Asked/ });
+      const badge = within(card).getByRole("img", {
+        name: "Answered in a comment",
+      });
       expect(badge).toHaveClass("badge-awaiting_reply");
     });
 

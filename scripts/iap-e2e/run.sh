@@ -19,8 +19,11 @@
 # Deploys grain to Cloud Run with IAP enabled directly on the service
 # (--iap, default *.run.app URL; no load balancer, certificate, or DNS),
 # creates two temporary GCP service accounts:
-#   - SA-A: granted roles/iap.httpsResourceAccessor AND on -ui-allowed-principals
-#   - SA-B: granted roles/iap.httpsResourceAccessor, NOT on -ui-allowed-principals
+#   - SA-A: granted roles/iap.httpsResourceAccessor AND on grain's allowlist
+#     (`grain access allow serviceAccount:... --reason "iap e2e"` over
+#     loopback on images that keep the allowlist in the database, and
+#     -ui-allowed-principals on older v3.1.x images)
+#   - SA-B: granted roles/iap.httpsResourceAccessor, NOT on the allowlist
 # exercises Cases 1..8 against real Google-signed tokens and real IAP
 # X-Goog-IAP-JWT-Assertion headers, writes machine-readable JSON + Markdown
 # reports, and always tears down all GCP and local resources on exit.
@@ -507,6 +510,17 @@ create_service_account_with_key() {
   chmod 0600 "$key_out"
 }
 
+# allow_sa_a_cmd prints a POSIX sh snippet that puts SA-A on the daemon's
+# database allowlist with `grain access allow` once the daemon at $2 answers,
+# using the access code in $3/local-api-token. It does nothing on an image
+# whose grain ($1) has no `grain access` (v3.1.x keeps the allowlist in
+# -ui-allowed-principals). It holds no comma or single quote, so it can sit
+# in gcloud's --args and inside sh -c '...'.
+allow_sa_a_cmd() {
+  local bin="$1" server="$2" data_dir="$3"
+  printf '%s' "if ${bin} access --help >/dev/null 2>&1; then i=0; until GRAIN_SERVER=${server} GRAIN_DATA_DIR=${data_dir} ${bin} access allow --reason \"iap e2e\" serviceAccount:${SA_A_EMAIL}; do i=\$((i+1)); [ \$i -ge 120 ] && break; sleep 1; done; fi"
+}
+
 deploy_cloud_run_grain() {
   local require_iap="$1"
   local enable_iap="$2"
@@ -521,8 +535,15 @@ deploy_cloud_run_grain() {
     iap_flag="--no-iap"
   fi
 
-  local boot_cmd
-  boot_cmd="mkdir -p /tmp/grain-data && printf '%s\n' \"\$GRAIN_E2E_BOOTSTRAP_CODE\" > /tmp/grain-data/local-api-token && chmod 0600 /tmp/grain-data/local-api-token && unset GRAIN_E2E_BOOTSTRAP_CODE && exec /usr/bin/tini -- /usr/local/bin/grain daemon -data-dir=/tmp/grain-data -disable-native-sandboxes -sandbox-port-base=0 -as=operator@example.com -ui-addr=0.0.0.0:4242 -ui-iap-audience=${IAP_AUDIENCE} -ui-allowed-principals=serviceAccount:${SA_A_EMAIL} ${req_flag}"
+  # The daemon runs in the background so the container can put SA-A on
+  # the allowlist over loopback with the access code once it answers
+  # (allow_sa_a_cmd). Images older than the database allowlist have no
+  # `grain access` and take SA-A from -ui-allowed-principals instead.
+  # gcloud splits --args on commas, so neither command may contain one.
+  local daemon_cmd allow_cmd boot_cmd
+  daemon_cmd="/usr/local/bin/grain daemon -data-dir=/tmp/grain-data -disable-native-sandboxes -sandbox-port-base=0 -as=operator@example.com -ui-addr=0.0.0.0:4242 -ui-iap-audience=${IAP_AUDIENCE} -ui-allowed-principals=serviceAccount:${SA_A_EMAIL} ${req_flag}"
+  allow_cmd="$(allow_sa_a_cmd /usr/local/bin/grain http://127.0.0.1:4242 /tmp/grain-data)"
+  boot_cmd="mkdir -p /tmp/grain-data && printf '%s\n' \"\$GRAIN_E2E_BOOTSTRAP_CODE\" > /tmp/grain-data/local-api-token && chmod 0600 /tmp/grain-data/local-api-token && unset GRAIN_E2E_BOOTSTRAP_CODE && exec /usr/bin/tini -s -- /bin/sh -c '${daemon_cmd} & d=\$!; ${allow_cmd}; wait \$d'"
 
   local deploy_log="${WORK_TMP}/gcloud_deploy.log"
   log "Deploying ${SERVICE} (${iap_flag}, require_iap=${require_iap}) from ${IMAGE}..."
@@ -886,6 +907,8 @@ deploy_local_sim_grain() {
     >"${WORK_TMP}/sim-daemon-${require_iap}.log" 2>&1 &
   SIM_DAEMON_PID="$!"
   SIM_PIDS+=("$SIM_DAEMON_PID")
+  sh -c "$(allow_sa_a_cmd "$GRAIN_BIN" "http://127.0.0.1:${SIM_UPSTREAM_PORT}" "$data_dir")" \
+    >>"${WORK_TMP}/sim-daemon-${require_iap}.log" 2>&1
 
   local attempt tok
   tok="$(mint_sa_jwt "$SA_A_KEY" "${SERVICE_URL}/*")"
@@ -915,7 +938,7 @@ wait_for_iap_ready() {
       body_preview="$(head -c 300 "$HTTP_BODY_FILE" | tr '\n' ' ')"
       if grep -q "is not on the allowed users and groups list" "$HTTP_BODY_FILE"; then
         echo "BLOCKER: IAP admitted SA-A and grain verified it, but grain refused it: ${body_preview}" >&2
-        echo "Cause: this image keeps the allowlist in the database (Settings -> Access) and drops serviceAccount: entries from -ui-allowed-principals, so SA-A cannot be allowlisted. Run against an image that accepts serviceAccount: entries (v3.1.x) -- see scripts/iap-e2e/README.md." >&2
+        echo "Cause: SA-A is not on grain's allowlist. On images that keep it in the database the container adds it with 'grain access allow serviceAccount:${SA_A_EMAIL} --reason \"iap e2e\"' once the daemon answers; check the Cloud Run logs for that command's error. Images from 992714cd until service accounts were allowed back refuse serviceAccount: entries outright -- see scripts/iap-e2e/README.md." >&2
         exit 1
       fi
       if grep -qi "Error: Forbidden" "$HTTP_BODY_FILE" && ! jq -e . "$HTTP_BODY_FILE" >/dev/null 2>&1; then
@@ -1012,9 +1035,11 @@ fi
 
 http_call -H "Authorization: Bearer ${SA_A_TOKEN}" "${SERVICE_URL}/api/whoami"
 if [[ "$HTTP_STATUS" == "200" ]]; then
-  w_user="$(jq -r '.principal // .email // .user // empty' "$HTTP_BODY_FILE")"
-  w_kind="$(jq -r '.kind // empty' "$HTTP_BODY_FILE")"
-  w_src="$(jq -r '.source // .authMethod // empty' "$HTTP_BODY_FILE")"
+  # Newer daemons nest the principal under .actor (operator-attribution
+  # spec §5.2); older ones put it at the top level.
+  w_user="$(jq -r '.actor.id // .principal // .email // .user // empty' "$HTTP_BODY_FILE")"
+  w_kind="$(jq -r '.actor.kind // .kind // empty' "$HTTP_BODY_FILE")"
+  w_src="$(jq -r '.source // .actor.source // .authMethod // empty' "$HTTP_BODY_FILE")"
   c1_notes+=("GET /api/whoami -> 200 (principal=${w_user}, kind=${w_kind}, source=${w_src})")
   if [[ "$w_user" != *"$SA_A_EMAIL"* || "$w_kind" != "service" || "$w_src" != "iap" ]]; then
     c1_ok=0
@@ -1307,6 +1332,12 @@ if GOOGLE_APPLICATION_CREDENTIALS="$SA_A_KEY" \
       c_author="$(jq -r '.comments[0].author // empty' "$HTTP_BODY_FILE")"
       c_kind="$(jq -r '.comments[0].authorKind // empty' "$HTTP_BODY_FILE")"
       tr_by="$(jq -r '.transitions[-1].by // empty' "$HTTP_BODY_FILE")"
+      # Newer daemons say who closed the task in actor/actorKind and leave
+      # by as the bare ID; older ones wrote by as "<kind> <id>".
+      tr_actor="$(jq -r '.transitions[-1] | if .actorKind then "\(.actorKind) \(.actor)" else empty end' "$HTTP_BODY_FILE")"
+      if [[ -n "$tr_actor" ]]; then
+        tr_by="$tr_actor"
+      fi
       if [[ "$t_author" == "$SA_A_EMAIL" && "$t_kind" == "service" && "$c_author" == "$SA_A_EMAIL" && "$c_kind" == "service" && "$tr_by" == "service ${SA_A_EMAIL}" ]]; then
         c8_notes+=("task #${created_id}: author=${t_author} (authorKind=${t_kind}), comment.author=${c_author} (${c_kind}), close transition.by='${tr_by}' (daemon -as=operator@example.com not used)")
       else
