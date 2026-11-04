@@ -63,7 +63,10 @@ This sync carries PRs #228–#241 on top of `a4b4e4b`, including:
   (gke-labs/granule#228) and its tests restore the log writer they found
   (gke-labs/granule#236).
 - The Go module rename to `github.com/gke-labs/granule`
-  (gke-labs/granule#237, `42b30d9`) -- undone here, see "Patches in flight".
+  (gke-labs/granule#237, `42b30d9`). Grain imports, requires, replaces
+  and `go build`s the vendored tree under that path since grain task
+  2973; the sync's `sed` rewriting it back to `github.com/bwsalmon/granule`
+  is gone.
 - GitHub Actions CI for granule itself (`.github/`, `docs/github-actions-ci.md`,
   gke-labs/granule#240) and the `CHV_DISK_DIRECT` benchmark
   (gke-labs/granule#241). Neither runs in this repository: GitHub only
@@ -86,18 +89,6 @@ need no change.
 
 ## Patches in flight
 
-- **Module path kept at `github.com/bwsalmon/granule`.** Upstream renamed
-  its module to `github.com/gke-labs/granule` (gke-labs/granule#237).
-  Grain imports and `go install`s the vendored tree as
-  `github.com/bwsalmon/granule` from about sixty files, scripts and
-  Dockerfiles, and `go.mod` replaces that path with `./third_party/granule`.
-  So this copy's `go.mod` `module` line and every `.go` import are
-  rewritten back with
-  `sed -i 's#github.com/gke-labs/granule#github.com/bwsalmon/granule#g'`
-  over `go.mod` and `*.go` (image references such as
-  `ghcr.io/gke-labs/granule...` and URLs are left alone). A resync repeats
-  the `sed`. This patch goes away with the switch to the
-  `github.com/gke-labs/granule` module (grain task 2594).
 - **Legacy `pkg/forward` compatibility -- no longer needed by grain.**
   `pkg/forward`, `pkg/execwire`'s `ForwardSpecs`, `pkg/agent/forward.go`'s
   `serveLegacyForward`, `pkg/guestexec/forward.go`, `cmd/granule-shim`'s
@@ -115,9 +106,9 @@ need no change.
   been in the vendored tree since the `a4b4e4b` resync (`b0b39e23`, #1456),
   and a `kubernetes-granule` pod's shim and guest agent are built from that
   same tree, so every pod started since then speaks the new protocol. The
-  legacy files stay in `third_party/granule` only until the switch to the
-  `github.com/gke-labs/granule` module (grain task 2594) drops them; that
-  change should also repoint `tests/deploy`'s and `pkg/trustboundary`'s
+  legacy files stay in `third_party/granule` only until a byte-identical
+  re-vendor of upstream drops them (the module switch, grain task 2973,
+  changed only the module path); that re-vendor should also repoint `tests/deploy`'s and `pkg/trustboundary`'s
   references to `third_party/granule/pkg/forward`.
 - **Sanitized GCP project placeholder in IPv6 e2e docs and scripts.**
   `.grain/workflows/e2e-ipv6-gke.yml`, `.github/workflows/e2e-ipv6-gke.yml`,

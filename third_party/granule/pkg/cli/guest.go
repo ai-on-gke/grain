@@ -11,14 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/extent"
-	"github.com/bwsalmon/granule/pkg/extents"
-	"github.com/bwsalmon/granule/pkg/guestbuild"
-	"github.com/bwsalmon/granule/pkg/guestdockerfile"
-	"github.com/bwsalmon/granule/pkg/guestpack"
-	"github.com/bwsalmon/granule/pkg/guestrebase"
-	"github.com/bwsalmon/granule/pkg/qcow2"
-	"github.com/bwsalmon/granule/pkg/vmspec"
+	"github.com/gke-labs/granule/pkg/extent"
+	"github.com/gke-labs/granule/pkg/extents"
+	"github.com/gke-labs/granule/pkg/guestbuild"
+	"github.com/gke-labs/granule/pkg/guestdockerfile"
+	"github.com/gke-labs/granule/pkg/guestpack"
+	"github.com/gke-labs/granule/pkg/guestrebase"
+	"github.com/gke-labs/granule/pkg/qcow2"
+	"github.com/gke-labs/granule/pkg/vmspec"
 )
 
 // repeatedFlag collects a flag given more than once, in order.

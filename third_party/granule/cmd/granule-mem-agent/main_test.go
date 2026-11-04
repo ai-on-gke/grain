@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/memagent"
+	"github.com/gke-labs/granule/pkg/memagent"
 )
 
 func writeFixture(t *testing.T, content string) string {

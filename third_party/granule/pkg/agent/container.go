@@ -10,8 +10,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/bwsalmon/granule/pkg/containerspec"
-	"github.com/bwsalmon/granule/pkg/execwire"
+	"github.com/gke-labs/granule/pkg/containerspec"
+	"github.com/gke-labs/granule/pkg/execwire"
 )
 
 // containerConfig is the spec a container exec enters: the one `granule

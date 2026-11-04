@@ -36,9 +36,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/config"
-	"github.com/bwsalmon/granule/pkg/guestboot"
-	"github.com/bwsalmon/granule/pkg/guestimage"
+	"github.com/gke-labs/granule/pkg/config"
+	"github.com/gke-labs/granule/pkg/guestboot"
+	"github.com/gke-labs/granule/pkg/guestimage"
 )
 
 // setupPath is where the caller's script is staged inside the guest.

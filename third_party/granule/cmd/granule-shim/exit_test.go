@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/bwsalmon/granule/pkg/config"
-	"github.com/bwsalmon/granule/pkg/workloadio"
+	"github.com/gke-labs/granule/pkg/config"
+	"github.com/gke-labs/granule/pkg/workloadio"
 )
 
 // chvExit is a cloud-hypervisor that exited with status code.
