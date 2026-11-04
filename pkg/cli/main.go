@@ -620,14 +620,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdCapability(ctx, c, out, cmdArgs)
 	case "comment":
 		return cmdComment(ctx, c, out, cmdArgs)
-	case "reply":
-		return cmdReply(ctx, c, out, cmdArgs)
-	case "inbox":
-		return cmdInbox(ctx, c, out, cmdArgs)
-	case "wait":
-		return cmdWait(ctx, c, out, cmdArgs)
-	case "logs":
-		return cmdLogs(ctx, c, out, cmdArgs)
+	case "reply", "inbox", "wait", "logs":
+		return externalCommands[cmd](ctx, c, out, cmdArgs)
 	case "close", "delete":
 		return cmdClose(ctx, c, out, cmdArgs)
 	case "reopen":

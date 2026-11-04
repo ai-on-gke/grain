@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package cli
 
 import (
@@ -31,6 +32,11 @@ import (
 // verbs (design/spec/external-cli/external-cli.spec.md): grain reply
 // (#XC-20), grain inbox (#XC-21), grain wait (#XC-22) and grain logs
 // (#XC-23), plus the --body-file reading grain create shares (#XC-19).
+
+// externalCommands are this file's verbs, as dispatchCLI runs them.
+var externalCommands = map[string]func(context.Context, *ui.HTTPClient, *printer, []string) error{
+	"reply": cmdReply, "inbox": cmdInbox, "wait": cmdWait, "logs": cmdLogs,
+}
 
 // cliStdin is what --body-file - reads; a test swaps it.
 var cliStdin io.Reader = os.Stdin
@@ -505,4 +511,3 @@ func attemptErrored(outcome string) bool {
 	}
 	return false
 }
-
