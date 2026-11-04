@@ -175,7 +175,7 @@ func TestAFreshInstallProvisionsALocalPostgres(t *testing.T) {
 
 	unit := readAbs(t, h.postgresUnit)
 	for _, want := range []string{
-		"Environment=GRAIN_POSTGRES_IMAGE=mirror.gcr.io/library/postgres:16-bookworm",
+		"Environment=GRAIN_POSTGRES_IMAGE=mirror.gcr.io/library/postgres:16-bookworm@sha256:",
 		"Environment=GRAIN_POSTGRES_PORT=5432",
 		"Requires=docker.service",
 		"--network host",
@@ -245,7 +245,7 @@ func TestARerunKeepsTheProvisionedServerAndDoesNotRestartIt(t *testing.T) {
 
 	// A newer default image in a newer setup.sh is not an upgrade.
 	unit := readAbs(t, h.postgresUnit)
-	stale := strings.ReplaceAll(unit, "postgres:16-bookworm", "postgres:16.1-bookworm")
+	stale := regexp.MustCompile(`postgres:16-bookworm@sha256:[0-9a-f]{64}`).ReplaceAllString(unit, "postgres:16.1-bookworm")
 	if err := os.WriteFile(h.postgresUnit, []byte(stale), 0o644); err != nil {
 		t.Fatal(err)
 	}

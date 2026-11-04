@@ -945,8 +945,8 @@ Recognized variables:
   GRAIN_DB_DSN              an external server's DSN (e.g. postgres://user:pass@127.0.0.1:5432/graindb
                              or postgres://user:pass@/graindb?host=/cloudsql/INSTANCE); no local
                              server is provisioned when one is given
-  GRAIN_POSTGRES_IMAGE      the local server's image (default: mirror.gcr.io/library/postgres:16-bookworm,
-                             Docker Hub's official image through a mirror that answers where
+  GRAIN_POSTGRES_IMAGE      the local server's image (default: mirror.gcr.io/library/postgres:16-bookworm
+                             pinned by digest, Docker Hub's official image through a mirror that answers where
                              Docker Hub does not). A re-run keeps the image installed; setting
                              this is how it is upgraded, and a major version is refused
                              (docs/database.md)
@@ -2771,7 +2771,7 @@ fi
 # The server:
 #
 #   image     GRAIN_POSTGRES_IMAGE, default below: Docker Hub's official
-#             image through mirror.gcr.io, which answers on networks that
+#             image, pinned by digest, through mirror.gcr.io, which answers on networks that
 #             cannot reach Docker Hub. It is recorded in the unit and a
 #             re-run keeps the one recorded, so a newer default in a newer
 #             setup.sh never upgrades a running server. Moving image is
@@ -2804,7 +2804,10 @@ fi
 POSTGRES_UNIT="${POSTGRES_UNIT:-/etc/systemd/system/grain-postgres.service}"
 POSTGRES_ENV_FILE="${POSTGRES_ENV_FILE:-/etc/grain/postgres.env}"
 POSTGRES_CONTAINER=grain-postgres
-GRAIN_POSTGRES_DEFAULT_IMAGE="mirror.gcr.io/library/postgres:16-bookworm"
+# Pinned by digest (Docker Hub's own for this tag, checked 2026-11-04):
+# the server runs as $GRAIN_USER on the host network beside the store, so
+# what it runs is not left to whatever the tag points at on the day.
+GRAIN_POSTGRES_DEFAULT_IMAGE="mirror.gcr.io/library/postgres:16-bookworm@sha256:e8a07d2c7579b038938cdba6c539e580e5001caf9ea203d397b5cc83e76bd938"
 GRAIN_POSTGRES_IMAGE="${GRAIN_POSTGRES_IMAGE:-}"
 GRAIN_POSTGRES_PORT="${GRAIN_POSTGRES_PORT:-}"
 # Set by resolve_database: 1 when this run provisions (or keeps) the local

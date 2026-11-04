@@ -50,7 +50,9 @@ unit style: a `docker run` under systemd.
 
 - **Image:** `GRAIN_POSTGRES_IMAGE`. The default is
   `mirror.gcr.io/library/postgres:16-bookworm`, Docker Hub's official image
-  served through Google's public mirror. The mirror answers on networks
+  served through Google's public mirror, pinned by digest
+  (`GRAIN_POSTGRES_DEFAULT_IMAGE` in `setup.sh`), so the tag moving
+  upstream never changes what a new install runs. The mirror answers on networks
   that can't reach Docker Hub. If neither is reachable, set
   `GRAIN_POSTGRES_IMAGE` to a copy in a registry you can reach.
 - **Data:** `$GRAIN_DATA_DIR/postgres`, mode 0700. The container runs as
@@ -93,7 +95,8 @@ keeps the image that the installed unit records, even when a newer
 sudo GRAIN_POSTGRES_IMAGE=mirror.gcr.io/library/postgres:16.6-bookworm ./scripts/setup.sh
 ```
 
-A minor version within the same major works this way. The server restarts
+A minor version within the same major works this way. Name the new image
+by digest (`…:16.6-bookworm@sha256:…`) to pin it the way the default is. The server restarts
 onto the new image, and the daemon restarts with it.
 
 `setup.sh` refuses a new **major** version: PostgreSQL can't open a data
@@ -113,7 +116,8 @@ sudo mv /var/lib/grain/data/postgres /var/lib/grain/data/postgres.pg16
 #    stopped. Starting grain-postgres.service by itself never starts the
 #    daemon. The server initializes the cluster with the same password.
 sudo install -d -m0700 -o grain -g grain /var/lib/grain/data/postgres
-sudo sed -i 's|postgres:16-bookworm|postgres:17-bookworm|g' /etc/systemd/system/grain-postgres.service
+old="$(sed -n 's/^Environment=GRAIN_POSTGRES_IMAGE=//p' /etc/systemd/system/grain-postgres.service)"
+sudo sed -i "s|$old|mirror.gcr.io/library/postgres:17-bookworm|g" /etc/systemd/system/grain-postgres.service
 sudo systemctl daemon-reload && sudo systemctl start grain-postgres.service
 
 # 4. Restore into it.
