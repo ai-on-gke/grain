@@ -10,9 +10,10 @@ replaced the schedule, template and suite forms' selects (`af3016a6`,
 `32924959`), and the live-only task poll (`05729d6c`, `3417e3da`).
 
 This run was interrupted three times by provider usage limits, and each
-resume got a fresh sandbox. The browser walkthrough below is the one the
-first run completed. Later runs went into the merge queue's `frontend`
-repair (bug 2).
+resume got a fresh sandbox. §1–§4 ran on the first sandbox, against `main`
+at `a3bcafa9`. §5–§6 ran on the fourth, on a fresh store with both fixes
+built in (`711d29ff`) and no declarations pushed. Between them came the
+merge queue's `frontend` repair (bug 2).
 
 Two bugs were found and fixed on this branch.
 
@@ -182,6 +183,65 @@ Schedules, Templates or Suites the button reads **+ New schedule / template
     within a couple of minutes." All 26 of its inputs are disabled, and so
     are Delete and Save. New task from this template stays available.
 
+### 5. On the fixed binary: bug 1 live, suites
+
+1. **Bug 1, live:** a new raw schedule saved with gemini-2.5-flash reopens
+   with its preview reading "Model · gemini-2.5-flash · from the schedule".
+   Deleting it confirmed with "Delete the schedule "WT2962 model check"?
+   Tasks it already filed are not affected." Dismissing kept the pane open,
+   and accepting removed the schedule.
+2. **New suite** `WT2962 suite`:
+   - The Templates `SearchSelect` names each template's title and bound
+     repo ("security-audit  Security: Dependency vulnerability scan --
+     acme/widgets").
+   - Escape inside the open picker closes the picker, not the pane.
+   - **+ New template** opened a nested New template. Saving
+     `wt2962-inline` (priority 9, Keep running) added it to the suite.
+   - Run mode offers "run until no repo changes or new tasks" and "run a
+     fixed number of times". Max passes 101 is refused ("Value must be less
+     than or equal to 100."), and 99 saved.
+   - The API had `mode: until_clean`, `maxPasses: 99`, both items and
+     `autoMerge: true`. The row read `run until clean (max 99) · 2
+     templates`, "on demand".
+3. **Throwaway suite**, fixed number of times:
+   - 0 is refused ("Value must be greater than or equal to 1.").
+   - Count 2, Require approval on and auto-merge off saved as
+     `mode: count, count: 2, requireApproval: true, autoMerge: false`. The
+     row read `run 2× · 1 template · requires approval`.
+   - Renamed "(edited)" and saved. Delete's confirm named the new name:
+     "Delete the suite "WT2962 throwaway suite (edited)"? Runs already
+     started from it are unaffected." Dismiss kept it. Accept removed it,
+     and it stayed gone after a reload.
+
+### 6. Suite runs
+
+1. **From the suite row** (`WT2962 suite` → run…, branch main): the dialog's
+   "what each pass files" reads "repeated until a pass files no pull request
+   and proposes nothing, up to 99 passes", with each template's rows and
+   their sources. security-audit keeps its own branch (main, "from the
+   template"), and the unbound wt2962-inline takes "the branch this run
+   targets · from the suite". This step ran twice (runs 1 and 2).
+2. **From the generic + Run**: the Suite picker offers Release
+   Qualification Suite and WT2962 suite. Release Qualification on
+   `release/1.0` became run 3, tasks 24 and 25.
+3. The **Suite runs** list read
+   `Release Qualification Suite · active · acme/widgets · release/1.0 · pass
+   1 · run 2×` and the two WT2962 runs `· main · pass 1 · run until clean
+   (max 99)`.
+4. **Follow-up**: task 26 proposed by 24 (stub, `POST /api/tasks` with
+   `proposedBy: "24"`).
+5. **Passes** (stub, `releasehelper complete-suite-pass` + `sync-suites`):
+   one pass moved run 3 to pass 2 (tasks 27, 28), and a second left it
+   **succeeded**. `/processes/suites/runs/3` groups pass 1 (24, its
+   follow-up 26 marked unapproved, 25) and pass 2 (27, 28). Run 1's pane
+   shows task 21 with "p9 · keeps running".
+6. **Navigation**: a task link in run 1's pane opened `/tasks/20`, and Back
+   returned to `/processes/suites/runs/1`. `/processes/suites/runs/99` fell
+   back to `/processes` with `no suite run "99"`.
+7. **Old links**: `/schedules`, `/templates` and `/suites` land on
+   `/processes?kind=schedule|template|suite`. `/suites/suite-2` opens that
+   suite's Edit pane at `/processes/suites/suite-2`.
+
 ## Bugs found and fixed
 
 ### 1. A saved schedule's preview ignored its own model
@@ -238,20 +298,20 @@ exactly two asks, is the regression coverage.
 - A template reached only through a scheduled suite still reads "on demand"
   (as on 11-03).
 - Pause and Resume still do not confirm. Both are reversible.
+- Tasks the release helper completes read "question" in a suite run's
+  pane: the helper ends them the way an agent's closing comment would.
 - Processes rows are `.process-row` list items, not table rows. A script
   looking for `tr` finds nothing.
 
 ## Not reached in this run
 
-The usage-limit interruptions ended the browser walkthrough after §4. These
-parts of the brief were covered on 2026-11-03, against `main` at `0fdeff3b`,
-and were not repeated here:
+The usage-limit interruptions cost most of this run's time. These parts of
+the brief were covered on 2026-11-03, against `main` at `0fdeff3b`, and were
+not repeated here:
 - Search, sort and custom-order reorder, and `?kind=`/`?q=` through reload
   and Back/Forward.
-- Old `/schedules`, `/templates` and `/suites` links.
-- Suite create/edit, inline template, modes, and suite delete.
-- Suite schedules, suite runs (from the row and from + Run), pass grouping,
-  follow-ups, failure, and the base-less "default branch" chip.
+- Suite schedules, a failed suite run, and the base-less "default branch"
+  chip, which no supported path can make any more (11-03 §6.7).
 - A declared workflow schedule's Run now, and the trigger row's link to the
   Advanced tab.
 - Dependency-aware template delete, and cleanup.
