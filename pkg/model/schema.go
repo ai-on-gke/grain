@@ -514,12 +514,19 @@ import "strconv"
 // why an entry was added, required for the `serviceAccount:<email>` entries
 // the allowlist accepts again.
 //
-// 109 drops `task_hostd`, `template`.`hostd` and
+// 109 removes the deprecated account and activate arguments from
+// https://grain.dev/capabilities/gcp#gcp-key: stored grants carrying
+// account: X become permission_set: X ("default" resolves to the first
+// configured permission set) and activate is dropped; grants naming a
+// permission set that does not exist are kept, logged, and noted on their
+// task, template or schedule (gcp_key_args_migration.go).
+//
+// 110 drops `task_hostd`, `template`.`hostd` and
 // `repo_config`.`default_hostd`: which grain hostd host work runs on is
 // the model connection's (model.AgentBackend.Hostd) or the capability
 // server's (protocol.ServerConfig.Hostd), never a task's. `task_run_hostd`
 // stays, the read-only record of where each run's agent CLI ran.
-const SchemaVersion = 109
+const SchemaVersion = 110
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
@@ -622,7 +629,7 @@ const hostdTable = `CREATE TABLE IF NOT EXISTS ` + "`hostd`" + ` (
 )`
 
 // taskHostdTable and taskRunHostdTable are a task's hostd selector (only
-// migrations 93 to 108 had one; 109 drops it) and the hostd each run
+// migrations 93 to 109 had one; 110 drops it) and the hostd each run
 // resolved (model.TaskRunHostd),
 // named once for Tables and for migration 93.
 const taskHostdTable = `CREATE TABLE IF NOT EXISTS ` + "`task_hostd`" + ` (

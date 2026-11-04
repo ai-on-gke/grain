@@ -1831,6 +1831,13 @@ type CreateTaskRequest struct {
 	// Capabilities is. SetDependency is the picker's attach/detach
 	// counterpart for a task that already exists.
 	DependsOn []string `json:"dependsOn"`
+	// Designs are design or spec files (design/... paths) the task
+	// implements, and DerivedFrom the pull requests ("owner/repo#number")
+	// its work derives from: provenance links only (model.LinkDesign,
+	// model.LinkDerivedFrom; `grain create --design`, external-cli spec
+	// #XC-19), granting and blocking nothing.
+	Designs     []string `json:"designs,omitempty"`
+	DerivedFrom []string `json:"derivedFrom,omitempty"`
 	// Reads is a set of owner/name repos this task's run may read but
 	// never push to -- model.Task.Reads, docs/data-model.md's "one write
 	// target, many read targets". Unlike Repo, a Reads entry grants
@@ -2325,6 +2332,11 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err != nil {
 		return Task{}, err
 	}
+	provenance, err := provenanceLinks(req.Designs, req.DerivedFrom)
+	if err != nil {
+		return Task{}, err
+	}
+	links = append(links, provenance...)
 	forkNote := ""
 	if forkPR != nil {
 		links = append(links, forkPR.Link())

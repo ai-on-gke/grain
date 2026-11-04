@@ -746,7 +746,12 @@ var Migrations = []Migration{
 		},
 	},
 	{
-		Version: 109,
+		Version:     109,
+		Description: "rewrite stored gcp#gcp-key grants from deprecated account and activate arguments to permission_set",
+		Up:          MigrateGCPKeyGrantArgs,
+	},
+	{
+		Version: 110,
 		Description: "drop the task, template and repository hostd selectors: a model connection or capability server " +
 			"chooses its hostd; task_run_hostd keeps where each run ran",
 		Statements: []string{
