@@ -461,6 +461,10 @@ type Upgrader struct {
 	// override that leaves a field empty goes back to, and a release
 	// repository an override may always name.
 	operatorReleaseAssets ReleaseAssetsConfig
+	// operatorFallback is the fallback image source the daemon's own
+	// flags set, which the upgrade pane may keep on a verifying
+	// deployment but not introduce (errReleaseAssetsNeedOperator).
+	operatorFallback ImageSource
 }
 
 // New builds an Upgrader. It does not validate cfg -- Start reports
@@ -475,6 +479,7 @@ func New(cfg Config) *Upgrader {
 			ChecksumAsset:  cfg.Image.ReleaseAssets.ChecksumAsset,
 			ChecksumSuffix: cfg.Image.ReleaseAssets.ChecksumSuffix,
 		}
+		u.operatorFallback, _ = ParseImageFallback(string(cfg.Image.Fallback))
 	}
 	u.loadImageSourceOverride()
 	return u

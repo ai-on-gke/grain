@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1539,6 +1540,56 @@ func TestSetImageSourceHoldsTheReleaseRepositoryToTheAllowedOnes(t *testing.T) {
 	}})
 	if got := u.EffectiveReleaseAssets().Repository; got != "github.com/ai-on-gke/grain" {
 		t.Fatalf("release repository loaded from the override file = %q, want github.com/ai-on-gke/grain", got)
+	}
+}
+
+// A deployment with -upgrade-verify-cmd defaults to the registry, and
+// the upgrade pane may not move it onto release-asset tarballs, as its
+// source or its fallback: that is the host operator's flag to set. A
+// fallback the flags already set may be kept.
+func TestSetImageSourceKeepsAVerifyingDeploymentOffReleaseAssets(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "source.json")
+	newUpgrader := func(fallback ImageSource) *Upgrader {
+		return New(Config{Image: &ImageConfig{
+			Repository:         "ghcr.io/ai-on-gke/grain",
+			SourceOverrideFile: file,
+			VerifyCmd:          []string{"cosign", "verify"},
+			Fallback:           fallback,
+			FallbackExplicit:   fallback != "",
+		}})
+	}
+	u := newUpgrader("")
+	for _, ov := range []ImageSourceOverride{
+		{Mode: "release-assets"},
+		{Mode: "registry", Fallback: "release-assets"},
+	} {
+		if err := u.SetImageSource(ov); !errors.Is(err, errReleaseAssetsNeedOperator) {
+			t.Errorf("SetImageSource(%+v) = %v, want errReleaseAssetsNeedOperator", ov, err)
+		}
+	}
+	if got, fb := u.EffectiveImageSource(), u.EffectiveImageFallback(); got != ImageSourceRegistry || fb != "" {
+		t.Fatalf("after refused overrides: source %q, fallback %q; want registry and none", got, fb)
+	}
+	if _, err := os.Stat(file); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a refused override was written to %s (%v)", file, err)
+	}
+	if err := u.SetImageSource(ImageSourceOverride{Mode: "registry"}); err != nil {
+		t.Fatalf("SetImageSource(registry): %v", err)
+	}
+
+	if err := newUpgrader(ImageSourceReleaseAssets).SetImageSource(ImageSourceOverride{Mode: "registry", Fallback: "release-assets"}); err != nil {
+		t.Errorf("keeping the flags' own release-assets fallback: %v", err)
+	}
+
+	// Nor does a file written before the verifier was configured.
+	raw, _ := json.Marshal(ImageSourceOverride{Mode: "release-assets", Fallback: "release-assets", FallbackExplicit: true})
+	if err := os.WriteFile(file, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	u = newUpgrader("")
+	if got, fb := u.EffectiveImageSource(), u.EffectiveImageFallback(); got != ImageSourceRegistry || fb != "" {
+		t.Fatalf("override file loaded as source %q, fallback %q; want registry and none", got, fb)
 	}
 }
 

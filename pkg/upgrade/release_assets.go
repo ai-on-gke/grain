@@ -104,6 +104,17 @@ var (
 	// ErrImageSourceLocked is returned when SetImageSource is called on an
 	// Upgrader whose image source was locked by a daemon flag or environment variable.
 	ErrImageSourceLocked = errors.New("upgrade image source is set by a daemon flag or environment variable and cannot be modified")
+
+	// errReleaseAssetsNeedOperator refuses an override from the upgrade
+	// pane that would move a deployment with -upgrade-verify-cmd onto
+	// release assets. Its signatures are over registry manifests and pass
+	// a loaded tarball only when its image ID is a signed digest
+	// (verifyLoaded), and `docker load` re-tags whatever the tarball names
+	// before any verifier has run: whether a release's tarballs meet that
+	// is the host operator's to say, with -upgrade-image-source, not
+	// something a principal holding deployment:upgrade may decide for the
+	// verifier that operator configured.
+	errReleaseAssetsNeedOperator = errors.New("this deployment verifies image signatures (-upgrade-verify-cmd), so loading release-asset tarballs takes the daemon's -upgrade-image-source=release-assets or -upgrade-image-fallback=release-assets flag rather than the upgrade pane")
 )
 
 // ImageSourceOverride is the operator-editable subset of ImageConfig's image
@@ -149,6 +160,10 @@ func (u *Upgrader) SetImageSource(ov ImageSourceOverride) error {
 			return err
 		}
 		fb = parsed
+	}
+	if len(u.cfg.Image.VerifyCmd) > 0 && (mode == string(ImageSourceReleaseAssets) ||
+		fb == ImageSourceReleaseAssets && u.operatorFallback != ImageSourceReleaseAssets) {
+		return errReleaseAssetsNeedOperator
 	}
 	relRepo := strings.TrimSpace(ov.ReleaseRepository)
 	if relRepo != "" {
@@ -205,6 +220,18 @@ func (u *Upgrader) loadImageSourceOverride() {
 	var ov ImageSourceOverride
 	if json.Unmarshal(raw, &ov) != nil {
 		return
+	}
+	// Written before this deployment was given -upgrade-verify-cmd, or by
+	// hand: the same line SetImageSource draws.
+	if len(u.cfg.Image.VerifyCmd) > 0 {
+		if norm, err := NormalizeImageSource(ov.Mode); err == nil && ov.Mode != "" && norm == ImageSourceReleaseAssets {
+			log.Printf("grain upgrade: ignoring image source %q in %s: %v", ov.Mode, p, errReleaseAssetsNeedOperator)
+			ov.Mode = ""
+		}
+		if fb, err := ParseImageFallback(ov.Fallback); err == nil && fb == ImageSourceReleaseAssets && u.operatorFallback != ImageSourceReleaseAssets {
+			log.Printf("grain upgrade: ignoring fallback %q in %s: %v", ov.Fallback, p, errReleaseAssetsNeedOperator)
+			ov.Fallback, ov.FallbackExplicit = "", false
+		}
 	}
 	if repo := strings.TrimSpace(ov.ReleaseRepository); repo != "" {
 		if err := u.validateReleaseRepositoryLocked(repo); err != nil {
