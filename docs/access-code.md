@@ -84,7 +84,8 @@ the database (`allowed_principal`).
   least one `group:` entry is present and no `user:` entry already
   matched.
 - **Service accounts:** `serviceAccount:<email>` admits a non-human
-  caller (a `*.gserviceaccount.com` address) with full operator access.
+  caller (a `*.gserviceaccount.com` address), at full operator access
+  unless its entry is given a narrower role (see **Roles** below).
   Each one is added explicitly, with a reason: `grain access allow
   serviceAccount:<email> --reason "<why>"`, or **Settings → Access**
   with the Reason field filled in (`POST /api/access/principals` takes
@@ -98,21 +99,57 @@ the database (`allowed_principal`).
   capability's permission-set accounts -- are always refused, both when
   added and at sign-in, even if an entry for one is already in the
   table. `domain:` entries are not supported.
-- **Equal privileges:** A verified user admitted through the list has
-  full operator access, the same as an access-code holder, including
-  viewing, adding and removing entries on the list. Anyone not on the
-  list gets a `403` naming **Settings → Access** and `grain access allow`.
+- **Roles:** every entry has a role, which is an API scope set
+  ([`docs/agent-api.md`, "Scope sets"](agent-api.md#scope-sets)). A
+  verified session can call only the routes its role's scopes cover, on
+  the repositories they reach. It is checked against the same route
+  table as an agent ([`docs/design/access-rbac.md`](design/access-rbac.md)).
+  grain ships three roles:
+  - `grain/operator`: every scope. This is the default, and every entry
+    that existed before roles has it.
+  - `grain/contributor`: `grain/viewer` plus `tasks:write` and `ci:write`.
+  - `grain/viewer`: every `*:read` scope.
+
+  A deployment can also declare its own sets, for example one with
+  `repos: [acme/widgets]` to limit a role to one repository. A person
+  who matches several entries (a `user:` entry plus `group:` entries)
+  holds the union of their roles. A scope that any of those roles'
+  sets `deny` is withheld from that person, even when another role
+  grants it. A refusal is a `403` that names the missing scope and the
+  caller's role. `GET /api/auth/user` and `GET /api/config` report the
+  caller's role and scopes as `access`, and Settings → Access shows
+  your role and hides controls your role does not cover. Anyone not on
+  the list gets a `403` naming **Settings → Access** and
+  `grain access allow`.
+- **Who assigns roles:** the access code (and loopback break-glass) can
+  assign any role. A role that holds a dangerous scope, including
+  `grain/operator` itself, can be assigned only with the access code,
+  and the assignment needs a reason (`--reason`). The reason is
+  recorded in `config_audit` along with the old and new role. A
+  verified session whose role holds `access:write` can add, re-role and
+  remove entries, but only at roles no wider than its own and holding
+  no dangerous scope. It cannot change or remove an entry at a wider or
+  dangerous role. Agents and sandboxes cannot change the list by any
+  route, whatever they hold.
+- **Routes outside the scope table:** the SPA's static pages are served
+  to every admitted caller, and so are sign-in, `GET /api/config` and
+  `whoami`. Event streams, console terminals and file downloads are
+  ordinary scoped routes. `/api/mcp`, `/mcp`, persistent sandboxes'
+  `/staging/` services and a run's own plumbing routes are refused to
+  every role that does not hold every scope.
 - **Live changes (no restart):** Adding or removing an entry takes
   effect immediately. Manage the list in **Settings → Access → Allowed
   users and groups** (`/settings/access#allowed-principals`), over the
   REST API (`GET /api/access/principals`, `POST /api/access/principals`,
+  `PATCH /api/access/principals/{entry}` with `{"role": ...}`,
   `DELETE /api/access/principals/{entry}`), or from the CLI:
 
   ```bash
   grain access list
-  grain access allow user:alice@example.com
-  grain access allow group:team@example.com
-  grain access allow serviceAccount:ci@my-project.iam.gserviceaccount.com --reason "release pipeline"
+  grain access allow user:alice@example.com --reason "on-call lead"
+  grain access allow group:team@example.com --role grain/viewer
+  grain access role group:team@example.com grain/contributor
+  grain access allow serviceAccount:ci@my-project.iam.gserviceaccount.com --role acme/ci-bot --reason "release pipeline"
   grain access deny user:alice@example.com
   ```
 
@@ -124,23 +161,25 @@ the database (`allowed_principal`).
   the code, and with `-ui-require-iap` the code is taken over loopback
   only ([Break-glass over loopback](#break-glass-over-loopback)). Every
   addition and removal is recorded in `config_audit` (`surface =
-  "access"`).
+  "access"`), and so is every role change.
 - **No implicit owner entry:** the daemon's own `-as` actor is no
   longer admitted by default. A deployment that relied on the old
   default allowlist (no `-ui-allowed-principals`) admits no verified
   person after upgrading until someone runs `grain access allow
   user:<owner-email>` -- with the access code, or from the daemon's own
   host when `-ui-require-iap` is set.
-- **Agent API scopes:** `api:access:read` allows listing entries.
-  `api:access:write` is a **dangerous** scope: only a person may grant
-  it, every call requires an acting reason (`X-Grain-Acting-Reason`)
-  recorded in `config_audit`, and it is refused on the `sandbox-cli`
-  channel. Without `api:access:write`, sandboxes and agents cannot
-  modify the list.
+- **Agent API scopes:** `api:access:read` allows listing entries. Agents
+  and sandboxes cannot add, re-role or remove entries by any route, even
+  with a person-granted `api:access:write`. Only people decide who signs
+  in. In a person's role, `access:write` is what lets a verified session
+  manage the list, as described above.
 - **State repository:** `allowed_principal` lives in the database (and
-  cold backups) and is never exported to `grain/config` pull requests,
-  so a config PR can neither lock operators out nor grant sign-in
-  access.
+  cold backups), and so do its roles. It is never exported to
+  `grain/config` pull requests, so a config PR can neither lock
+  operators out nor grant sign-in access. What a role grants is its
+  scope set, which is exported in `tables/api_scope_set.json`. The state
+  check's scope-set diff therefore also reports how each role built on
+  a set widens or narrows.
 - **One-time migration off `-ui-allowed-principals`:** On start, if
   `-ui-allowed-principals` or `$GRAIN_ALLOWED_PRINCIPALS` is set and the
   database list has never been populated or migrated, grain imports its
