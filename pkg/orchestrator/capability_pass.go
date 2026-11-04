@@ -648,6 +648,14 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 	if external && isUnisolated(deps.Sandboxes) {
 		return nil, &grainRefusalError{Reason: "this deployment's sandboxes are directories on grain's own host, which cannot keep a capability server's control plane out of a sandbox's reach, so it runs no attempt holding a capability grant"}
 	}
+	// So can a container left unfenced on this host's own bridge
+	// (ContainerConfig.Fence): refused the same way, saying why it is
+	// unfenced.
+	if external {
+		if why := openNetworkUnfenced(ctx, deps.Sandboxes); why != "" {
+			return nil, &grainRefusalError{Reason: why + ", so it runs no attempt holding a capability grant"}
+		}
+	}
 	var baseLookup protocol.Lookup
 	if deps.CapabilityServers != nil {
 		baseLookup = deps.CapabilityServers.Lookup
