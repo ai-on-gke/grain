@@ -469,6 +469,17 @@ function ScheduleOverlay({
     return req;
   };
 
+  // previewRequest is scheduleRequest as the draft endpoint must see it.
+  // That endpoint composes a CreateScheduleRequest and has no saved row to
+  // fall back on, so a model left out because it did not change would be
+  // previewed as no model at all -- an edit pane on a schedule that asks
+  // for gemini-2.5-flash said "the deployment's default model". The model
+  // in force is always sent here; the save still sends it only on a change.
+  const previewRequest = () =>
+    firesSuite
+      ? scheduleRequest()
+      : { ...scheduleRequest(), model: chosenModel };
+
   // Whether leaving now would lose an edit: the form's own fields (the
   // cadence's number and time boxes are read off it, not state) plus
   // everything submit takes from state instead.
@@ -1146,7 +1157,7 @@ function ScheduleOverlay({
       ) : (
         <CompositionPanel
           path="/api/schedules/composition"
-          body={scheduleRequest()}
+          body={previewRequest()}
           heading="What this schedule files"
           note={isNew ? "as filled in above" : "as edited above, not as saved"}
         />
