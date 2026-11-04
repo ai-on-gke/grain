@@ -24,10 +24,10 @@ import (
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
 
-// customConnectionsBefore103 is grain_config.agent_backends as a release
+// customConnectionsBefore104 is grain_config.agent_backends as a release
 // before 104 stored it: an enabled custom command connection beside a
 // claude one.
-const customConnectionsBefore103 = `[{"id":"house","name":"House agent","framework":"custom","models":["house-model"],"command":"agents/run.sh"},` +
+const customConnectionsBefore104 = `[{"id":"house","name":"House agent","framework":"custom","models":["house-model"],"command":"agents/run.sh"},` +
 	`{"id":"claude","framework":"claude"}]`
 
 // storedConnections reads grain_config.agent_backends as it is stored, not
@@ -67,7 +67,7 @@ func TestMigration104DisablesCustomCommandConnections(t *testing.T) {
 	if err := store.PutConfig(ctx, testConfig()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_config` SET `agent_backends` = ? WHERE `id` = 1", customConnectionsBefore103); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_config` SET `agent_backends` = ? WHERE `id` = 1", customConnectionsBefore104); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 103 WHERE `id` = 1"); err != nil {
@@ -112,7 +112,7 @@ func TestStateRepoImportDisablesCustomCommandConnections(t *testing.T) {
 	if err := src.PutConfig(ctx, testConfig()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := srcDB.ExecContext(ctx, "UPDATE `grain_config` SET `agent_backends` = ? WHERE `id` = 1", customConnectionsBefore103); err != nil {
+	if _, err := srcDB.ExecContext(ctx, "UPDATE `grain_config` SET `agent_backends` = ? WHERE `id` = 1", customConnectionsBefore104); err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
