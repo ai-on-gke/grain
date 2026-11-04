@@ -23,7 +23,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 | Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume` |
 | Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|deny`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `declarations check` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
-| Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db [upgrade-postgres]`), `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
+| Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db upgrade-postgres`), `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
 | Modes: build information | `version`, `schema-version`, `release-notes`, `sandbox-image`, `container-sandbox-image`, `k8s-sandbox-image`, `image` |
 | Modes: hooks forked by a run | `agy-tool-hook`, `claude-stop-hook`, `codex-detached` |
 
@@ -1469,9 +1469,9 @@ _No flags._
 
 **Pinned by:** `pkg/cli/repocase_test.go`, `pkg/cli/repocase_state_repo_test.go`.
 
-### 6.7 `grain upgrade-postgres` (`upgrade-sqlite-to-postgres`, `db`) {#CLI-56}
+### 6.7 `grain upgrade-postgres` (`upgrade-sqlite-to-postgres`, `db upgrade-postgres`) {#CLI-56}
 
-Copies an existing SQLite store into PostgreSQL and optionally writes `db-config.json`, so later daemon starts use PostgreSQL. `grain db`, `grain db upgrade-postgres` and `grain db upgrade-sqlite-to-postgres` are the same command. Any other word after `db` (for example the sandbox CLI's `query`) is passed on to it as a positional argument, which it ignores. Every spelling reports errors as `grain upgrade-postgres: …`. The usage is hand-written. Flags:
+Copies an existing SQLite store into PostgreSQL and optionally writes `db-config.json`, so later daemon starts use PostgreSQL. `grain db upgrade-postgres` and `grain db upgrade-sqlite-to-postgres` are the same command, and report errors as `grain upgrade-postgres: …`. Positional arguments are refused (`unexpected argument "<x>"`). A bare `grain db` prints `usage: grain db upgrade-postgres [flags]` and `grain db: a command is required …`; `grain db -h` prints that usage and `grain db: flag: help requested`; any other first word after `db` (for example the sandbox CLI's `query`) is refused with `grain db: unknown command "<x>" (grain db upgrade-postgres [flags]; db query is the in-sandbox CLI's)`. All exit 1. The usage is hand-written. Flags:
 - `-data-dir` (default `$GRAIN_DATA_DIR`);
 - `-sqlite-path` (string): the source SQLite file;
 - `-dsn` (string): the target PostgreSQL DSN;
@@ -1490,7 +1490,7 @@ _No flags._
 _No flags._
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/upgrade_postgres_test.go`: `TestUpgradePostgresCLIValidation`, `TestUpgradePostgresCLIHelp`.
+**Pinned by:** `pkg/cli/upgrade_postgres_test.go`: `TestDBCmdRefusesUnknownSubcommand`, `TestUpgradePostgresRefusesStrayArguments`, `TestUpgradePostgresCLIValidation`, `TestUpgradePostgresCLIHelp`.
 
 ### 6.8 `grain controller bootstrap-github-app` and `grain setup gcp` {#CLI-57}
 
