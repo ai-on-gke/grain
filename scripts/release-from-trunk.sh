@@ -105,6 +105,10 @@
 # release.yml green) strictly after the floor (the dropped rc's commit, or
 # the newest release's) is tagged vM.Y.Z-rc.K, refs/heads/candidate is
 # force-moved onto it and its images are published (release-images.sh rc).
+# Before an rc.(N+1) (next_n > 1), the grain/rc-hold check run on the
+# dropped rc's commit (the floor) must be completed or absent: while open
+# `[rc-blocker vM.Y.Z-rc.N]` tasks keep it in progress, the train cuts
+# nothing (rc_held= in RELEASE_TRAIN_OUTPUT).
 # No new known-good commit cuts nothing: main red for a week ships
 # nothing and `latest` stands. Before an rc.1:
 #   - at least RELEASE_MIN_INTERVAL_MINUTES must have passed since the
@@ -129,10 +133,10 @@
 # unset). With "github" they are GitHub's workflow runs, GET
 # /repos/{RELEASE_GITHUB_REPO}/actions/workflows/<suite>.yml/runs (and, for
 # an rc, the jobs of each nightly.yml run on it), read with GITHUB_TOKEN
-# (actions: read). The grain/release-qualification check run is read from
-# GitHub (checks: read) whenever there is a token, and counts only when
-# RELEASE_QUALIFICATION_APP, grain's own GitHub App, created it. The default is "github"
-# inside GitHub Actions and "grain" anywhere else.
+# (actions: read). The grain/release-qualification and grain/rc-hold check
+# runs are read from GitHub (checks: read) whenever there is a token, and
+# count only when RELEASE_QUALIFICATION_APP, grain's own GitHub App, created
+# them. The default is "github" inside GitHub Actions and "grain" anywhere else.
 #
 # Settings (environment):
 #   RELEASE_REMOTE           the remote (origin)
@@ -153,6 +157,8 @@
 #   RELEASE_RUNS_JSON        a file to read the cut's CI runs from instead
 #   RELEASE_QUALIFICATION_RUNS_JSON, RELEASE_QUALIFICATION_CHECKS_JSON
 #                            files to read the rc's nightly.yml jobs and
+#                            check runs from instead
+#   RELEASE_HOLD_CHECKS_JSON a file to read a dropped rc's grain/rc-hold
 #                            check runs from instead
 #   RELEASE_QUALIFICATION_APP
 #                            the GitHub App (slug or numeric id) grain posts
@@ -549,6 +555,49 @@ qualification_json() {
   fi
 }
 
+# rc_hold_summary <floor_sha>: if the newest grain/rc-hold check run on
+# floor_sha (from RELEASE_QUALIFICATION_APP when set) is not completed,
+# prints its summary; otherwise prints nothing. No check at all means no
+# hold.
+rc_hold_summary() {
+  local app_id="" hold_checks=""
+  [[ ! "${RELEASE_QUALIFICATION_APP:-}" =~ ^[0-9]+$ ]] || app_id="&app_id=$RELEASE_QUALIFICATION_APP"
+  if [ -n "${RELEASE_HOLD_CHECKS_JSON:-}" ]; then
+    gate_json RELEASE_HOLD_CHECKS_JSON "" "$work/hold-checks.json"
+    hold_checks="$work/hold-checks.json"
+  elif [ -n "$github_token" ]; then
+    github_get "commits/$1/check-runs?check_name=grain%2Frc-hold&filter=all&per_page=100$app_id" "$work/hold-checks.json" ||
+      die "could not read the grain/rc-hold check runs on ${1:0:12} from $github_api"
+    hold_checks="$work/hold-checks.json"
+  else
+    return 0
+  fi
+  # shellcheck disable=SC2016 # jq, not shell
+  jq -r --arg sha "${1,,}" --arg app "${RELEASE_QUALIFICATION_APP:-}" '
+    def epoch:
+      if . == null or . == "" then 0
+      else sub("\\.[0-9]+"; "")
+        | if test("Z$") then fromdateiso8601
+          else (capture("^(?<d>.*)(?<s>[+-])(?<h>[0-9]{2}):?(?<m>[0-9]{2})$") as $c
+            | ($c.d + "Z" | fromdateiso8601) - (($c.s + "1" | tonumber) * (($c.h | tonumber) * 3600 + ($c.m | tonumber) * 60)))
+          end
+      end;
+    def from_app: $app == "" or ((.app | type == "object")
+      and ((.app.slug // "") == $app or ((.app.id // "") | tostring) == $app));
+    def sha_ok: (. // "" | ascii_downcase) as $h | $h == "" or ($sha | startswith($h)) or ($h | startswith($sha));
+    [ (if type == "array" then . else (.check_runs // []) end)[]
+      | select(.name == "grain/rc-hold")
+      | select(.head_sha | sha_ok)
+      | select(from_app) ]
+    | sort_by([(.id // 0), ((.started_at // .startedAt) | epoch)])
+    | last // empty
+    | select((.status // "completed") != "completed")
+    | ([.output.summary, .output.title, .status] | map(select(type == "string" and length > 0)) | first // "in_progress")
+    | gsub("[\\r\\n]+"; " ")
+    | sub("^\\s+"; "") | sub("\\s+$"; "")
+  ' "$hold_checks" || die "could not parse grain/rc-hold check runs on ${1:0:12}"
+}
+
 # File the release-notes task for a promotion, through the gate's one
 # POST; a deployment without the template, or without the gate, only
 # loses the task, which an operator can file by hand.
@@ -886,6 +935,24 @@ elif [ -n "$floor" ] && [ "$next_n" = 1 ] && ! git merge-base --is-ancestor "$fl
   say "phase 2: the newest release is off main's history; the next rc must be after where it left main (${floor:0:12})"
 fi
 
+new_rc="$target-rc.$next_n"
+while commit_of "$new_rc" >/dev/null; do
+  # Never re-tag: an rc of this number already exists (one cut by hand).
+  next_n=$((next_n + 1))
+  new_rc="$target-rc.$next_n"
+done
+
+# Gate next RC (playbook section 12): while any `[rc-blocker vX.Y.Z-rc.N]`
+# task is open, grain/rc-hold on the dropped rc's commit stays in progress.
+if [ -n "$floor" ] && [ "$next_n" -gt 1 ]; then
+  hold_summary="$(rc_hold_summary "$floor")"
+  if [ -n "$hold_summary" ]; then
+    say "phase 2: $new_rc is held by grain/rc-hold on ${floor:0:12}: $hold_summary"
+    emit rc_held "$new_rc"
+    exit 0
+  fi
+fi
+
 # A minimum interval between releases (playbook section 7).
 if [ "$next_n" = 1 ] && [ "$FORCE" != true ] && [ "$min_interval" -gt 0 ]; then
   last="${pending:+$pending-pending}"
@@ -929,12 +996,6 @@ if [ "$next_n" = 1 ]; then
   say "phase 2: the commits since ${base:-the start} make a minor release: $target"
 fi
 
-new_rc="$target-rc.$next_n"
-while commit_of "$new_rc" >/dev/null; do
-  # Never re-tag: an rc of this number already exists (one cut by hand).
-  next_n=$((next_n + 1))
-  new_rc="$target-rc.$next_n"
-done
 say "phase 2: cutting $new_rc on ${lkg:0:12}"
 git tag -a "$new_rc" "$lkg" -m "Release candidate $new_rc" ${cut_branch:+-m "Cut from $cut_branch."}
 push "refs/tags/$new_rc" || die "could not push $new_rc; candidate was not moved"

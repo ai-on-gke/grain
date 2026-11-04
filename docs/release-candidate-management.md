@@ -1,45 +1,53 @@
 # Releasing grain from trunk
 
-This document describes how this repository (`ai-on-gke/grain`) is released: from `main`, by a
-daily release train, after a staging soak, with a person's approval as the
+This document describes how this repository (`ai-on-gke/grain`) is released: from `main`, by the
+release train (`scripts/release-from-trunk.sh`), after two-stage qualification, with a person's approval as the
 last step. The design and the reasons for it are in
-`design/design/release-from-trunk.design.md`. This document is the operating manual.
+`design/playbook/releases.playbook.md` (which supersedes the staging soak of
+`design/design/release-from-trunk.design.md`). This document is the operating manual.
 
-There is no stabilization branch. Nothing is merged into `candidate`, nothing
-is back-merged from it, and no fix is ported between branches. Every release
-tag names a commit on `main`'s first-parent history.
+There is no long-lived stabilization branch. Nothing is merged into `candidate`, nothing
+is back-merged from it, and no fix is ported between branches (except onto a
+short-lived `release/vX.Y.0` convergence branch when `rc.3` is needed). Every trunk release
+tag names a commit on `main`'s first-parent history, or on that short-lived convergence branch.
 `refs/heads/candidate` is only a pointer: the train force-moves it onto the
-release candidate that staging runs. Pull requests that target `candidate`
+newest release candidate. Pull requests that target `candidate`
 are refused.
 
 ## 1. The pipeline at a glance
 
 ```
-main ──merge queue──▶ tests.yml / release.yml on every merge, nightly.yml daily
+main ──merge queue──▶ tests.yml / release.yml on every merge
   │
-  │  04:15 UTC daily: .grain/workflows/release-train.yml
+  │  .github/workflows/release-train.yml (.grain/workflows/release-train.yml)
   │  (scripts/release-from-trunk.sh)
   ▼
-Phase 2  newest known-good main commit (LKG) ──▶ tag vX.Y.0-rc.N
+Phase 2  if next_n > 1: check grain/rc-hold on the dropped rc's commit (floor)
+           not completed ──▶ held (rc_held=vX.Y.0-rc.(N+1)), cut nothing
+         newest known-good commit (LKG) ──▶ tag vX.Y.0-rc.N
          force-move refs/heads/candidate onto it, publish :vX.Y.0-rc.N, :candidate, :rc
   │
-  ▼  grain-candidate (staging, :4280) refreshes onto it and soaks for 24h
-Phase 1  soak verdict:
-           PENDING ──▶ ask again tomorrow
-           FAIL    ──▶ tag vX.Y.0-rc.N-discarded, mark images; next run cuts vX.Y.0-rc.(N+1)
+  ▼  Stage 1 (nightly.yml on the rc) ──▶ Stage 2 (grain/release-qualification)
+Phase 1  qualification verdict:
+           PENDING / INFRA ──▶ wait (and emit qualification_rerun when needed)
+           FAIL    ──▶ tag vX.Y.0-rc.N-discarded, mark images; reconciler raises
+                       pipeline.rc-failed:vX.Y.0-rc.N and keeps grain/rc-hold on
+                       the commit while [rc-blocker vX.Y.0-rc.N] tasks are open;
+                       once completed, Phase 2 cuts vX.Y.0-rc.(N+1)
            PASS    ──▶ tag vX.Y.0-pending, publish :vX.Y.0-pending, file the release-notes
                        task, raise "vX.Y.0 is ready to promote" (Approve / Reject)
   │
   ▼  a person
 Approve ──▶ .grain/workflows/promote-release.yml: tag vX.Y.0, move latest, retag images
-Reject  ──▶ the failed-soak path; the next run cuts vX.Y.0-rc.(N+1)
+Reject  ──▶ the failed-rc path; the next run cuts vX.Y.0-rc.(N+1)
 ```
 
 | Piece | What it does |
 | --- | --- |
-| `.grain/workflows/release-train.yml` | Runs the train daily at 04:15 UTC (and on `workflow_dispatch`). Holds `repo-write:ai-on-gke/grain`, `release-gate-read` and `package-publish`, and optionally `image-signing`. Never pushes `vX.Y.0` and never moves `latest`. |
-| `scripts/release-from-trunk.sh` | The train: Phase 1 (judge the soaking rc) and Phase 2 (cut the next rc). Also has `approve` and `reject` modes, which only `promote-release.yml` runs, for a person. |
-| `scripts/candidate-gate.sh` | `select-lkg` (which `main` commit is known-good) and `check-soak` (is the rc on staging healthy). |
+| `.github/workflows/release-train.yml` / `.grain/workflows/release-train.yml` | Runs `scripts/release-from-trunk.sh` on schedule and on `workflow_dispatch`. Never pushes `vX.Y.0` and never moves `latest`. |
+| `scripts/release-from-trunk.sh` | The train: Phase 1 (judge the qualifying rc) and Phase 2 (wait on `grain/rc-hold` if held, then cut the next rc). Also has `approve`, `reject` and `rollback` modes, which only `promote-release.yml` / `promote.yml` run, for a person. |
+| `scripts/candidate-gate.sh` | `select-lkg` (which commit is known-good) and `check-qualification` (Stage 1 `nightly.yml` and Stage 2 `grain/release-qualification` on the rc). |
+| `pkg/orchestrator/releasequalification.go`, `releaseredrc.go` | Runs the `release-qualification` suite once Stage 1 passes, posts `grain/release-qualification`, raises `pipeline.rc-failed:<rc_tag>` (or `pipeline.release-escalated:<version>`), and keeps check run `grain/rc-hold` on a red rc's commit while `[rc-blocker <rc_tag>]` tasks are open (`docs/pipeline-steward.md`). |
 | `scripts/release-images.sh` | `rc`, `discard-rc`, `pending`, `discard-pending` and `promote`: what each step publishes to GHCR. |
 | `.grain/templates/release-notes.yml` | The task the train files when a release is staged: draft `## Highlights`, run `scripts/release-notes.sh`, open a pull request for `docs/releases/vX.Y.0.md`. |
 | `.grain/workflows/promote-release.yml` | A person's Approve or Reject. `workflow_dispatch` only, and `human: required` (`.grain/triggers/release-promotion.yml`). |
@@ -67,21 +75,25 @@ setting (`RELEASE_*`, `FORCE`, `DRY_RUN`).
 
 ## 2. Choosing the release candidate: the LKG commit
 
-With nothing soaking, Phase 2 asks `scripts/candidate-gate.sh select-lkg` for
+With nothing in qualification, Phase 2 asks `scripts/candidate-gate.sh select-lkg` for
 the **last known-good (LKG)** commit: the newest commit on `main`'s
 first-parent history, strictly after the floor, whose required suites are
 green. The floor is the commit of the rc that was just dropped, or of the
 release just staged or promoted, so a new rc is always newer than the last.
 
-- **Required** (`CANDIDATE_GATE_REQUIRED`): `.grain/workflows/tests.yml`,
-  `release.yml` and `nightly.yml`. A suite's verdict at a commit combines
-  the latest result of each of its jobs across every run at that commit,
-  which is the same combination the merge gate reads. So a recheck that
-  turns one job green turns the suite green.
-- **Nightly runs once a day.** A commit merged after the nightly also
-  qualifies when its own `tests.yml` and `release.yml` are green, the newest
-  `nightly.yml` verdict on its first-parent ancestry passed within the last
-  24 hours, and no `fixes_base_branch` repair task is open on `main`.
+- **Required** (`CANDIDATE_GATE_REQUIRED`): `tests.yml` and `release.yml` on
+  `main` (and `release.yml` on a `release/vX.Y.0` convergence branch,
+  `RELEASE_BRANCH_REQUIRED`). A suite's verdict at a commit combines the
+  latest result of each of its jobs across every run at that commit, which is
+  the same combination the merge gate reads. So a recheck that turns one job
+  green turns the suite green. `nightly.yml` runs on the rc after it is cut,
+  as Stage 1 of qualification (section 4).
+- **Minimum interval and commit types before `rc.1`.** At least
+  `RELEASE_MIN_INTERVAL_MINUTES` (default 120; `FORCE=true` skips it) must
+  have passed since the newest promoted or pending release was tagged, and
+  `<floor>..<lkg>` must contain at least one `feat:` or `fix:` commit:
+  `docs:`, `chore:`, `test:`, `ci:`, `style:` and `build:` alone wait
+  (`release_waits=<lkg>`).
 - **Advisory** (`CANDIDATE_GATE_ADVISORY`): `gcp-smoke`, `live-*` and
   `post-reset-e2e`. They talk to live providers, and most of their failures
   are credentials, quotas and outages, so they are reported and never block.
@@ -95,11 +107,12 @@ release just staged or promoted, so a new rc is always newer than the last.
 If no commit after the floor qualifies, the run cuts nothing. A `main` that
 stays red for a week ships nothing, and `latest` stays where it is.
 
-The train reads `main`'s CI runs, staging's state and the exploration tasks
-through the `release-gate-read` capability: the `api:release-gate-read`
-preset over `ci:read`, `tasks:read`, `sandboxes:read` and
-`tasks:from-template` (limited to `release-notes`). It is held through a
-per-job token (`docs/ci-capabilities.md`, `docs/agent-api.md` "CI jobs").
+With `RELEASE_CI_SOURCE=github` (the default in GitHub Actions), the train
+reads workflow runs and jobs from GitHub Actions with `GITHUB_TOKEN`, and
+reads the `grain/release-qualification` and `grain/rc-hold` check runs on the
+rc's commit. With `RELEASE_CI_SOURCE=grain`, it reads CI runs through the
+`release-gate-read` capability (`api:release-gate-read`,
+`docs/ci-capabilities.md`).
 
 ## 3. Cutting the rc and numbering retries
 
@@ -119,80 +132,98 @@ is the same rule `scripts/build-version.sh` uses to version `main`'s builds,
 so `main` builds `vX.Y.0-dev.<n>` for the release the train is working
 towards.
 
-**Retries never skip a minor.** An rc that fails its soak, or that a person
-rejects, is dropped and the next run cuts `vX.Y.0-rc.(N+1)` of the same minor
-from a newer LKG commit. A minor number is consumed only by a promoted
+**Retries never skip a minor, and wait on `grain/rc-hold`.** An rc that fails
+qualification, or that a person rejects, is dropped and a later run cuts
+`vX.Y.0-rc.(N+1)` of the same minor from a newer LKG commit:
+
+- **Holding `rc.(N+1)` until blockers land (`grain/rc-hold`).** When
+  `vX.Y.0-rc.N` is confirmed red, the release reconciler raises
+  `pipeline.rc-failed:vX.Y.0-rc.N` to wake the pipeline steward
+  (`docs/pipeline-steward.md`), which titles its fix and revert tasks
+  `[rc-blocker vX.Y.0-rc.N] ...`. While any open task carries that marker,
+  the reconciler keeps check run `grain/rc-hold` (`in_progress`) on the red
+  rc's commit — the floor Phase 2 cuts `rc.(N+1)` after — and completes it
+  (`success`) once every blocker has landed (`neutral` if superseded). Before
+  cutting `rc.(N+1)` (`next_n > 1`), Phase 2 reads
+  `commits/<floor>/check-runs?check_name=grain%2Frc-hold&filter=all` (or
+  `RELEASE_HOLD_CHECKS_JSON` in tests): if the newest check run from
+  `RELEASE_QUALIFICATION_APP` is not `completed`, Phase 2 cuts nothing, logs
+  `phase 2: vX.Y.0-rc.(N+1) is held by grain/rc-hold on <floor>: <summary>`,
+  emits `rc_held=vX.Y.0-rc.(N+1)` and exits 0. No check run at all means no
+  hold.
+- **Converging `rc.3` on `release/vX.Y.0`.** After `rc.2` is dropped, Phase 2
+  creates the short-lived `release/vX.Y.0` branch from `rc.2`'s commit and
+  cuts `rc.3` from cherry-picked `fix:` commits (`Backported-from: <sha>`) on
+  that branch once `release.yml` is green and `grain/rc-hold` is completed.
+  Approving `vX.Y.0` deletes `release/vX.Y.0`.
+- **Bounded attempts.** After `RELEASE_MAX_RC_ATTEMPTS` (3) dropped candidates
+  of one version, the reconciler raises `pipeline.release-escalated:vX.Y.0`
+  and the train cuts no more of that version (`escalated_version=vX.Y.0`,
+  exiting 1) until a person resets or advances it.
+
+A minor number is consumed only by a promoted
 release. While a release is pending, the train counts it as the newest
 release when choosing the next target. So the next rc is
 `vX.(Y+1).0-rc.1`, cut strictly after the pending commit.
 
 | Tag | Made by | Means |
 | --- | --- | --- |
-| `vX.Y.0-rc.N` | the train | a release candidate, soaking or soaked |
-| `vX.Y.0-rc.N-discarded` | the train (failed soak), or a person's Reject | that rc will never ship |
-| `vX.Y.0-pending` | the train (passed soak) | staged for a person's approval; deleted on Approve or Reject |
+| `vX.Y.0-rc.N` | the train | a release candidate, in qualification or qualified |
+| `vX.Y.0-rc.N-discarded` | the train (failed qualification), or a person's Reject | that rc will never ship |
+| `vX.Y.0-pending` | the train (passed qualification) | staged for a person's approval; deleted on Approve or Reject |
 | `vX.Y.0` | `promote-release.yml`, on a person's Approve | the release |
-| `latest` | `promote-release.yml`, on a person's Approve | the newest promoted release |
+| `vX.Y.0-retracted` | `promote.yml` / `rollback`, on a person's Rollback | that release was retracted; `latest` moved back |
+| `latest` | `promote-release.yml` / `promote.yml`, on a person's Approve or Rollback | the newest promoted (non-retracted) release |
 
-## 4. The 24h staging soak on `grain-candidate`
+## 4. Two-stage qualification and red release candidates
 
-Staging is the `grain-candidate` persistent sandbox, which runs `grain demo`
-on port `4280`. It follows `refs/heads/candidate` and refreshes onto each new
-rc by itself. Once the rc is 24 hours old (less
-`RELEASE_INTERVAL_SLACK_HOURS`, 2 by default, so a daily 04:15 run never
-misses the boundary by a minute of jitter; `FORCE=true` skips the wait),
-Phase 1 runs `scripts/candidate-gate.sh check-soak`, which reads four
-signals and the operator's veto:
+Phase 1 runs `scripts/candidate-gate.sh check-qualification` against the
+current candidate `vX.Y.0-rc.N` (unless `RELEASE_NEVER_PROMOTE` names it, in
+which case it is dropped without qualifying):
 
-1. **Supervisor.** `grain-candidate` is running the rc's commit, with no
-   refresh crash, rollback or exit since it was deployed (read from
-   `GET /api/persistent-sandboxes` and its events).
-2. **HTTP and version.** `RELEASE_STAGING_URL` (default
-   `http://127.0.0.1:4280`) serves the HTML shell at `/`, `/api/config`
-   reports the rc as its version, and each core API endpoint answers 200
-   with JSON.
-3. **Exploration.** The newest `staging-ui-exploration` task that started
-   after the rc was deployed has finished and did not fail. If none has
-   finished yet, the verdict is `PENDING`.
-4. **Defects.** No task is open that was filed from one of those
-   exploration runs, or that names the rc tag or `rc-blocker` in its title.
-5. **Never.** Neither the rc nor the release it would become is in
-   `RELEASE_NEVER_PROMOTE`.
+1. **Stage 1 (`nightly.yml`).** Every required job of `nightly.yml` must
+   succeed on the rc's commit.
+2. **Stage 2 (`grain/release-qualification`).** Once Stage 1 is green, the
+   deployment's release-qualification reconciler
+   (`pkg/orchestrator/releasequalification.go`) runs
+   `.grain/suites/release-qualification.yml` against the rc and posts check
+   run `grain/release-qualification` on its commit. Only a check run created
+   by `RELEASE_QUALIFICATION_APP` (grain's own GitHub App) counts; same-named
+   check runs from any other app are ignored.
 
-The verdict is `PASS`, `FAIL` or `PENDING`. Any `FAIL` beats a `PENDING`.
+A first product failure of any Stage 1 job or Stage 2 item gets one retry on
+the same rc (`flake`); cancelled, timed-out or capacity-starved runs are
+re-run without counting as failures (`infra`). `check-qualification` returns:
 
-- **`PENDING`**: the run stops, and the next run asks again.
-- **`FAIL`**: the rc is dropped. `vX.Y.0-rc.N-discarded` is tagged and
-  pushed, `scripts/release-images.sh discard-rc` marks its images, and
-  Phase 2 cuts `rc.(N+1)`. A failure that no filed defect accounts for
-  (supervisor, HTTP probe, a failed exploration run) also makes the run
-  exit 1, so the scheduled workflow's review task files soak triage.
-- **`PASS`**: the release is staged for a person (section 5).
-
-`nightly.yml` and `release.yml` on `main` cover what `grain demo` does not,
-including VMs, databases, containers and installers. They are already green
-for the commit before it is cut (section 2).
+- **`PENDING` / `INFRA`**: the run stops here (`qualification=pending|infra`,
+  `qualification_rerun=...`), because only one rc qualifies at a time.
+- **`FAIL`**: confirmed red after retry. The rc is tagged
+  `vX.Y.0-rc.N-discarded` and pushed, `scripts/release-images.sh discard-rc`
+  marks its images, and Phase 2 checks `grain/rc-hold` on its commit before
+  cutting `rc.(N+1)` (section 3, `docs/pipeline-steward.md`).
+- **`PASS`**: Stage 1 and Stage 2 both passed; the release is staged for a
+  person (section 5).
 
 ## 5. The `vX.Y.0-pending` stage and a person's approval
 
 **The pipeline does everything up to the final tag, and a person makes the
-release official** (task 1236, `design/design/release-from-trunk.design.md` RFT-8).
+release official** (task 1236, `design/playbook/releases.playbook.md` §0; `design/design/release-from-trunk.design.md` RFT-8).
 
-1. **The soak passes, so the release is staged, not promoted.** When
-   `vX.Y.0-rc.N` passes its soak, the train:
-   - tags its commit `vX.Y.0-pending` (annotated, naming the rc and the
-     soak verdict);
+1. **Qualification passes, so the release is staged, not promoted.** When
+   `vX.Y.0-rc.N` passes qualification, the train:
+   - tags its commit `vX.Y.0-pending` (annotated, naming the rc and
+     `Qualification: PASS`);
    - builds and publishes the `vX.Y.0`-stamped images of all four packages
      as `:vX.Y.0-pending` (`scripts/release-images.sh pending vX.Y.0`), so
      approving builds and tests nothing;
    - files the release-notes task (`.grain/templates/release-notes.yml`),
      so `docs/releases/vX.Y.0.md` is merged before anybody approves. The
-     notes run from the newest `vX.Y.0` that `RELEASE_NEVER_PROMOTE` does
-     not name, never from a placeholder;
+     notes run from the newest `vX.Y.Z` that `RELEASE_NEVER_PROMOTE` does
+     not name and that is not retracted, never from a placeholder;
    - raises the operator notification **"vX.Y.0 is ready to promote"**
      (`release.pending:vX.Y.0`) in the Inbox and the Alerts bell, with the
-     soak summary, the notes task, and **Approve** and **Reject** buttons.
-     Each daily run raises it again while the release waits.
+     qualification summary, the notes task, and **Approve** and **Reject** buttons.
+     Each train run raises it again while the release waits.
 
    `vX.Y.0` and `latest` are not touched. `release-train.yml` has no step
    that could touch them (`TestTheReleaseTrainNeverPromotesARelease`,
@@ -201,7 +232,8 @@ release official** (task 1236, `design/design/release-from-trunk.design.md` RFT-
    `grain release approve vX.Y.0`. This runs
    `.grain/workflows/promote-release.yml`, which tags `vX.Y.0`, force-moves
    `latest`, retags `:vX.Y.0-pending` as `:vX.Y.0` and `:latest`
-   (`scripts/release-images.sh promote vX.Y.0`), deletes `vX.Y.0-pending`,
+   (`scripts/release-images.sh promote vX.Y.0`), deletes `vX.Y.0-pending`
+   (and `release/vX.Y.0` if `rc.3` used a convergence branch),
    and runs `promote.yml`'s publish step. Only a person may approve. The
    route (`POST /api/repos/{owner}/{name}/pending-releases/vX.Y.0/approve`,
    under the release-manager scope `releases:write`) refuses an agent
@@ -214,13 +246,14 @@ release official** (task 1236, `design/design/release-from-trunk.design.md` RFT-
    `latest` without the approval (`.grain/triggers/release-machinery.yml`,
    and the `release-machinery` category).
 3. **Reject**: the Reject button, or `grain release reject vX.Y.0`. This
-   takes the failed-soak path: `vX.Y.0-rc.N-discarded` and the
+   takes the failed-rc path: `vX.Y.0-rc.N-discarded` and the
    `discard-rc` image marker, the staged images marked `:vX.Y.0-rejected`
    (`discard-pending`), any next-minor rc cut on top of it dropped too, and
-   `vX.Y.0-pending` deleted. The next run cuts `vX.Y.0-rc.(N+1)`.
-4. **While a release is pending**, the train keeps cutting and soaking the
-   next minor's rc on staging, but never promotes or supersedes the pending
-   release. A next-minor rc whose soak passes waits until a person answers.
+   `vX.Y.0-pending` deleted. The next run cuts `vX.Y.0-rc.(N+1)` (waiting on
+   `grain/rc-hold` if blockers are open).
+4. **While a release is pending**, the train keeps cutting and qualifying the
+   next minor's rc, but never promotes or supersedes the pending
+   release. A next-minor rc whose qualification passes waits until a person answers.
    Only one release is ever pending.
 5. **Pending is not a release.** `scripts/build-version.sh` ignores
    `-pending` tags, so `main` keeps versioning from the last promoted
@@ -335,6 +368,7 @@ deleted. These are the refs the release workflows push:
 | `refs/tags/vX.Y.0` | `promote-release.yml` only |
 | `refs/tags/latest` (force-moved) | `promote-release.yml` only |
 | `refs/heads/candidate` (force-moved) | the train |
+| `refs/heads/release/vX.Y.0` (created for `rc.3`, deleted on Approve) | the train creates it; `promote-release.yml` deletes it |
 | `refs/heads/main` | nothing in the release pipeline |
 
 The proxy does not stop the train from pushing `vX.Y.0` or `latest`. The
