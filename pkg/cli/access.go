@@ -27,12 +27,16 @@ import (
 const accessUsage = `usage: grain access <list|allow|deny> [args]
 
   list
-  allow <user:<email>|group:<email>>
-  deny  <user:<email>|group:<email>>
+  allow [--reason <why>] <user:<email>|group:<email>|serviceAccount:<email>>
+  deny  <user:<email>|group:<email>|serviceAccount:<email>>
 
 Manage the allowed users and groups list (Settings -> Access): who may
 sign in when authenticated by Cloud IAP or another registered
-IdentityVerifier. Adding an existing entry is a no-op.`
+IdentityVerifier. Adding an existing entry is a no-op.
+
+A serviceAccount: entry admits a non-human caller with full operator
+access, so it needs --reason; accounts whose keys grain hands to tasks
+(the gcp-key pools) are always refused.`
 
 // cmdAccess is `grain access`: manage the verified-identity allowlist
 // through /api/access/principals.
@@ -70,23 +74,28 @@ func cmdAccess(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 				if by == "" {
 					by = "-"
 				}
-				fmt.Printf("%s\tadded by %s\t%s\n", p.Entry, by, p.AddedAt.UTC().Format(time.RFC3339))
+				line := fmt.Sprintf("%s\tadded by %s\t%s", p.Entry, by, p.AddedAt.UTC().Format(time.RFC3339))
+				if p.Reason != "" {
+					line += "\t" + p.Reason
+				}
+				fmt.Println(line)
 			}
 		}
 		for _, dropped := range resp.DroppedFlagEntries {
-			fmt.Printf("warning: dropped unsupported flag entry %s (only user: and group: are supported)\n", dropped)
+			fmt.Printf("warning: dropped flag entry %s (only user: and group: are imported; add a service account with 'grain access allow serviceAccount:<email> --reason <why>')\n", dropped)
 		}
 		return nil
 	case "allow", "add":
 		fs := flag.NewFlagSet("grain access allow", flag.ContinueOnError)
+		reason := fs.String("reason", "", "why the entry is added (required for serviceAccount:)")
 		rest, err := parseArgs(fs, subArgs)
 		if err != nil {
 			return err
 		}
 		if len(rest) != 1 {
-			return errors.New("usage: grain access allow <user:<email>|group:<email>>")
+			return errors.New("usage: grain access allow [--reason <why>] <user:<email>|group:<email>|serviceAccount:<email>>")
 		}
-		resp, err := c.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: rest[0]})
+		resp, err := c.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: rest[0], Reason: *reason})
 		if err != nil {
 			return err
 		}
@@ -107,7 +116,7 @@ func cmdAccess(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 			return err
 		}
 		if len(rest) != 1 {
-			return errors.New("usage: grain access deny <user:<email>|group:<email>>")
+			return errors.New("usage: grain access deny <user:<email>|group:<email>|serviceAccount:<email>>")
 		}
 		resp, err := c.DenyPrincipal(ctx, rest[0])
 		if err != nil {

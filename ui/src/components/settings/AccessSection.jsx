@@ -57,14 +57,22 @@ export function verifiedUserEmail(config) {
   return actorName(config);
 }
 
-// validatePrincipalEntry checks that raw is a valid `user:<email>` or
-// `group:<email>` entry, returning { canonical, error }.
+const SERVICE_ACCOUNT_DOMAIN = /\.gserviceaccount\.com$/;
+
+// isServiceAccountEntry reports whether entry is a `serviceAccount:` entry.
+export function isServiceAccountEntry(entry) {
+  return (entry || "").startsWith("serviceAccount:");
+}
+
+// validatePrincipalEntry checks that raw is a valid `user:<email>`,
+// `group:<email>` or `serviceAccount:<email>` entry (a *.gserviceaccount.com
+// address), returning { canonical, error }.
 export function validatePrincipalEntry(raw) {
   const trimmed = (raw || "").trim();
   if (!trimmed) {
     return {
       canonical: "",
-      error: "Enter user:<email> or group:<email>.",
+      error: "Enter user:<email>, group:<email> or serviceAccount:<email>.",
     };
   }
   const colonIdx = trimmed.indexOf(":");
@@ -72,7 +80,7 @@ export function validatePrincipalEntry(raw) {
     return {
       canonical: "",
       error:
-        "Entry must start with user: or group: (for example, user:alice@example.com).",
+        "Entry must start with user:, group: or serviceAccount: (for example, user:alice@example.com).",
     };
   }
   const prefix = trimmed.slice(0, colonIdx).trim();
@@ -80,22 +88,37 @@ export function validatePrincipalEntry(raw) {
     .slice(colonIdx + 1)
     .trim()
     .toLowerCase();
-  if (prefix === "serviceAccount" || prefix === "domain") {
+  if (prefix === "domain") {
     return {
       canonical: "",
-      error: `${prefix}: entries are not supported — use user:<email> or group:<email>.`,
+      error:
+        "domain: entries are not supported — use user:<email>, group:<email> or serviceAccount:<email>.",
     };
   }
-  if (prefix !== "user" && prefix !== "group") {
+  if (prefix !== "user" && prefix !== "group" && prefix !== "serviceAccount") {
     return {
       canonical: "",
-      error: `Unknown prefix "${prefix}:" — expected user: or group:.`,
+      error: `Unknown prefix "${prefix}:" — expected user:, group: or serviceAccount:.`,
     };
   }
   if (!value || !/^[^\s@/,;'"<>]+@[^\s@/,;'"<>]+$/.test(value)) {
     return {
       canonical: "",
       error: `${prefix}: entry must be a valid email address.`,
+    };
+  }
+  const isSA = SERVICE_ACCOUNT_DOMAIN.test(value);
+  if (prefix === "serviceAccount" && !isSA) {
+    return {
+      canonical: "",
+      error:
+        "serviceAccount: entries must name a service account address (*.gserviceaccount.com).",
+    };
+  }
+  if (prefix !== "serviceAccount" && isSA) {
+    return {
+      canonical: "",
+      error: `Service account addresses must be added as serviceAccount:${value}.`,
     };
   }
   return { canonical: `${prefix}:${value}`, error: "" };
@@ -151,6 +174,7 @@ export default function AccessSection({
   const [droppedFlagEntries, setDroppedFlagEntries] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [newEntry, setNewEntry] = useState("");
+  const [newReason, setNewReason] = useState("");
   const [validationError, setValidationError] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(null);
@@ -173,6 +197,9 @@ export default function AccessSection({
     loadPrincipals();
   }, [loadPrincipals]);
 
+  const people = entries.filter((e) => !isServiceAccountEntry(e.entry));
+  const serviceAccounts = entries.filter((e) => isServiceAccountEntry(e.entry));
+
   const handleAdd = async (e) => {
     e?.preventDefault();
     const { canonical, error } = validatePrincipalEntry(newEntry);
@@ -180,14 +207,24 @@ export default function AccessSection({
       setValidationError(error);
       return;
     }
+    const reason = newReason.trim();
+    if (isServiceAccountEntry(canonical) && !reason) {
+      setValidationError(
+        "Give a reason: a service account gets full operator access.",
+      );
+      return;
+    }
     setValidationError("");
     setBusy(true);
     try {
       await api("/api/access/principals", {
         method: "POST",
-        body: JSON.stringify({ entry: canonical }),
+        body: JSON.stringify(
+          reason ? { entry: canonical, reason } : { entry: canonical },
+        ),
       });
       setNewEntry("");
+      setNewReason("");
       setPostRemoveWarning("");
       await loadPrincipals();
     } catch (err) {
@@ -290,12 +327,13 @@ export default function AccessSection({
         anchor="allowed-principals"
       >
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          Users (<code>user:&lt;email&gt;</code>) and groups (
-          <code>group:&lt;email&gt;</code>) admitted when signed in through IAP
-          or another identity verifier. Changes take effect immediately without
-          restarting the daemon. The access code still works on a direct
-          connection that bypasses the identity-aware proxy (over loopback only,
-          when IAP is required).
+          Users (<code>user:&lt;email&gt;</code>), groups (
+          <code>group:&lt;email&gt;</code>) and service accounts (
+          <code>serviceAccount:&lt;email&gt;</code>, with a reason) admitted
+          when signed in through IAP or another identity verifier. Changes take
+          effect immediately without restarting the daemon. The access code
+          still works on a direct connection that bypasses the identity-aware
+          proxy (over loopback only, when IAP is required).
         </Typography>
 
         {droppedFlagEntries.length > 0 && (
@@ -304,11 +342,12 @@ export default function AccessSection({
             sx={{ mt: 1.5 }}
             data-testid="dropped-flag-entries-warning"
           >
-            Ignored unsupported startup flag entries during one-time migration:{" "}
+            Ignored startup flag entries during one-time migration:{" "}
             <strong>{droppedFlagEntries.join(", ")}</strong>. Only{" "}
             <code>user:&lt;email&gt;</code> and <code>group:&lt;email&gt;</code>{" "}
-            entries live in this list; replace any <code>serviceAccount:</code>{" "}
-            or <code>domain:</code> entries with explicit users or groups.
+            entries are imported. Add a service account deliberately below as{" "}
+            <code>serviceAccount:&lt;email&gt;</code> with a reason, and replace
+            any <code>domain:</code> entries with explicit users or groups.
           </Alert>
         )}
 
@@ -365,58 +404,35 @@ export default function AccessSection({
               No allowed users or groups yet. Only the access code can sign in
               until an entry is added.
             </Typography>
-          ) : entries.length > 0 ? (
-            <Table size="small" data-testid="allowed-principals-table">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Principal</TableCell>
-                  <TableCell>Kind</TableCell>
-                  <TableCell>Added by</TableCell>
-                  <TableCell>Added</TableCell>
-                  <TableCell align="right">Actions</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {entries.map((item) => {
-                  const isGroup = item.entry.startsWith("group:");
-                  return (
-                    <TableRow
-                      key={item.entry}
-                      data-testid={`principal-row-${item.entry}`}
-                    >
-                      <TableCell sx={{ fontFamily: "monospace" }}>
-                        {item.entry}
-                      </TableCell>
-                      <TableCell>
-                        <Chip
-                          size="small"
-                          label={isGroup ? "Group" : "User"}
-                          variant="outlined"
-                        />
-                      </TableCell>
-                      <TableCell>{item.addedBy || "—"}</TableCell>
-                      <TableCell sx={{ whiteSpace: "nowrap" }}>
-                        {formatAddedAt(item.addedAt)}
-                      </TableCell>
-                      <TableCell align="right">
-                        <Button
-                          size="small"
-                          color="error"
-                          variant="outlined"
-                          disabled={busy}
-                          aria-label={`Remove ${item.entry}`}
-                          onClick={() => handleRequestRemove(item.entry)}
-                        >
-                          Remove
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+          ) : people.length > 0 ? (
+            <PrincipalTable
+              rows={people}
+              busy={busy}
+              onRemove={handleRequestRemove}
+              testid="allowed-principals-table"
+            />
           ) : null}
         </Box>
+
+        {serviceAccounts.length > 0 && (
+          <Box sx={{ mt: 2 }} data-testid="allowed-service-accounts">
+            <Typography variant="subtitle2">Service accounts</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+              Non-human callers with full operator access, each added
+              deliberately with a reason. Accounts whose keys grain hands to
+              tasks are always refused.
+            </Typography>
+            <Box sx={{ overflowX: "auto", mt: 1 }}>
+              <PrincipalTable
+                rows={serviceAccounts}
+                busy={busy}
+                onRemove={handleRequestRemove}
+                showReason
+                testid="allowed-service-accounts-table"
+              />
+            </Box>
+          </Box>
+        )}
 
         <Box
           component="form"
@@ -432,7 +448,7 @@ export default function AccessSection({
           >
             <TextField
               size="small"
-              label="User or group"
+              label="User, group or service account"
               placeholder="user:alice@example.com or group:team@example.com"
               value={newEntry}
               onChange={(e) => {
@@ -442,9 +458,23 @@ export default function AccessSection({
               error={Boolean(validationError)}
               helperText={
                 validationError ||
-                "Prefix with user: for an individual email or group: for a Google Group."
+                "Prefix with user: for an individual email, group: for a Google Group or serviceAccount: for a service account."
               }
               disabled={busy}
+              sx={{ flex: 1 }}
+            />
+            <TextField
+              size="small"
+              label="Reason"
+              placeholder="Why this entry is added"
+              value={newReason}
+              onChange={(e) => {
+                setNewReason(e.target.value);
+                if (validationError) setValidationError("");
+              }}
+              helperText="Required for service accounts."
+              disabled={busy}
+              inputProps={{ "data-testid": "access-reason-input" }}
               sx={{ flex: 1 }}
             />
             <Button
@@ -459,5 +489,66 @@ export default function AccessSection({
         </Box>
       </SettingsCard>
     </>
+  );
+}
+
+// PrincipalTable lists allowlist rows with who added them and when, and the
+// reason they were added when showReason is set.
+function PrincipalTable({ rows, busy, onRemove, showReason = false, testid }) {
+  return (
+    <Table size="small" data-testid={testid}>
+      <TableHead>
+        <TableRow>
+          <TableCell>Principal</TableCell>
+          {showReason ? (
+            <TableCell>Reason</TableCell>
+          ) : (
+            <TableCell>Kind</TableCell>
+          )}
+          <TableCell>Added by</TableCell>
+          <TableCell>Added</TableCell>
+          <TableCell align="right">Actions</TableCell>
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {rows.map((item) => (
+          <TableRow
+            key={item.entry}
+            data-testid={`principal-row-${item.entry}`}
+          >
+            <TableCell sx={{ fontFamily: "monospace", wordBreak: "break-all" }}>
+              {item.entry}
+            </TableCell>
+            {showReason ? (
+              <TableCell>{item.reason || "—"}</TableCell>
+            ) : (
+              <TableCell>
+                <Chip
+                  size="small"
+                  label={item.entry.startsWith("group:") ? "Group" : "User"}
+                  variant="outlined"
+                />
+              </TableCell>
+            )}
+            <TableCell>{item.addedBy || "—"}</TableCell>
+            <TableCell sx={{ whiteSpace: "nowrap" }}>
+              {formatAddedAt(item.addedAt)}
+            </TableCell>
+            <TableCell align="right">
+              <Button
+                size="small"
+                color="error"
+                variant="outlined"
+                disabled={busy}
+                aria-label={`Remove ${item.entry}`}
+                onClick={() => onRemove(item.entry)}
+              >
+                Remove
+              </Button>
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   );
 }

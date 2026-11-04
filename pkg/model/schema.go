@@ -488,15 +488,20 @@ import "strconv"
 // set, seeds the gcp entry in `grain_config`.`mcp_servers` with
 // gemini_key: {project}, minting with the gcp-key-minter secret, and
 // rewrites stored gemini-key grants as 100 did the model proxies.
-const SchemaVersion = 103
+//
+// 104 adds `reason` to `allowed_principal` (model.AllowedPrincipal.Reason):
+// why an entry was added, required for the `serviceAccount:<email>` entries
+// the allowlist accepts again.
+const SchemaVersion = 104
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
-// `user:<email>` or `group:<email>` entry admitted through a verified
-// identity (model.AllowedPrincipal).
+// `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
+// through a verified identity (model.AllowedPrincipal).
 const allowedPrincipalTable = `CREATE TABLE IF NOT EXISTS ` + "`allowed_principal`" + ` (
   ` + "`entry`" + `    TEXT     NOT NULL PRIMARY KEY,
   ` + "`added_by`" + ` TEXT     NOT NULL DEFAULT '',
-  ` + "`added_at`" + ` DATETIME NOT NULL
+  ` + "`added_at`" + ` DATETIME NOT NULL,
+  ` + "`reason`" + `   TEXT     NOT NULL DEFAULT ''
 )`
 
 // allowedPrincipalMigrationTable records the one-time startup migration off
