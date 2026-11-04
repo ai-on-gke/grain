@@ -381,7 +381,7 @@ func TestNewAuthorizationFilesAreClassified(t *testing.T) {
 		},
 		"pkg/ui": {
 			"resolveMCPCallerAccess", "allowsRoute", "dispatchSubrequest", "filingContextTool",
-			"hostdInstallCallerHasAccess", "renderHostdInstallScript",
+			"hostdInstallRoute", "hostdInstallCallerHasAccess", "renderHostdInstallScript",
 			"pendingAccessToDecide", "refuseAgentAccessDecision",
 		},
 	}
