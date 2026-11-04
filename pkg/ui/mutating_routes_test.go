@@ -727,6 +727,7 @@ var notYetAttributedRoutes = map[string]bool{
 	"PUT /api/tasks/{id}/goal":                                             true,
 	"PUT /api/tasks/{id}/hostd":                                            true,
 	"PUT /api/tasks/{id}/session-title":                                    true,
+	"PUT /api/upgrade/source":                                              true,
 }
 
 // matrixAgent is the task the agent API gate's row acts as.
