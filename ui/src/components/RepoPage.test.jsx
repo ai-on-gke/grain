@@ -1503,6 +1503,52 @@ describe("RepoPage", () => {
     );
   });
 
+  // The banner a refusal goes to stays up for five seconds whatever
+  // happens next, so a box fixed and saved a second later still read as
+  // refused (the 2026-11-04 repository walkthrough). The good save takes
+  // down its own box's refusal -- and only that one.
+  it("takes a box's refusal down once that box saves, and leaves another box's alone", async () => {
+    routeApi();
+    const showError = vi.fn();
+    const dismissError = vi.fn();
+    const user = userEvent.setup();
+    renderPage({ showError, dismissError });
+    const setup = await screen.findByLabelText(
+      /Setup command for acme\/widgets/,
+    );
+    const prompt = await screen.findByLabelText(
+      /Prompt extension for acme\/widgets/,
+    );
+
+    answerOnce(savingSetupCommand, () =>
+      Promise.reject(new Error("setupCommand: too long")),
+    );
+    await user.type(setup, "make deps");
+    await user.tab();
+    await waitFor(() => expect(showError).toHaveBeenCalled());
+
+    // Another box saving does not take the setup command's refusal down.
+    await user.type(prompt, "Be brief.");
+    await user.tab();
+    await waitFor(() =>
+      expect(
+        api.mock.calls.some(
+          ([path, opts]) =>
+            /\/prompt-extension$/.test(path) && opts?.method === "PUT",
+        ),
+      ).toBe(true),
+    );
+    expect(dismissError).not.toHaveBeenCalled();
+
+    await user.clear(setup);
+    await user.type(setup, "make d");
+    await user.tab();
+    await waitFor(() =>
+      expect(dismissError).toHaveBeenCalledWith("setupCommand: too long"),
+    );
+    expect(dismissError).toHaveBeenCalledTimes(1);
+  });
+
   // The CI workflows grain declares for this repo (grain/task-245).
   // This form is the only place they can be written for a repository
   // grain does not control, which is most of them.

@@ -33,7 +33,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/granule/pkg/qcow2"
+	"github.com/gke-labs/granule/pkg/qcow2"
 )
 
 // Digests that are the right shape and belong to nothing.

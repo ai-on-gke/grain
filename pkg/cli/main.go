@@ -684,7 +684,7 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdAccess(ctx, c, out, cmdArgs)
 	case "git-ambient":
 		return cmdGitAmbient(ctx, c, out, cmdArgs)
-	case "git-login", "login":
+	case "git-login":
 		return cmdGitLogin(ctx, c, out, cmdArgs)
 	case "git-connections":
 		return cmdGitConnections(ctx, c, out, cmdArgs)

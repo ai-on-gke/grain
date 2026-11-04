@@ -340,6 +340,61 @@ func TestHostdAndCIRepoAccessGatesAreClassified(t *testing.T) {
 	}
 }
 
+// One path per file v15 added (2026-11-04 security review finding 2): each
+// decides who may do what -- the controller MCP endpoint's caller access,
+// the hostd install script run as root, the CI grant rule, the auto-merge
+// guard, the sign-in allowlist's refusals and the person-only access
+// decision -- and v14 classified none of them, so a change to any merged
+// itself.
+func TestNewAuthorizationFilesAreClassified(t *testing.T) {
+	cases := map[string]string{
+		"pkg/ui/mcp_endpoint.go":          "auth-routes",
+		"pkg/model/allowed_principals.go": "auth-routes",
+		"pkg/ui/access_principals.go":     "auth-routes",
+		"pkg/ui/task_access_request.go":   "auth-routes",
+		"pkg/model/ci_grant_rule.go":      "capabilities-secrets",
+		"pkg/model/task_auto_merge.go":    "hold-policy",
+		"pkg/ui/hostd_install.sh":         "setup-scripts",
+		"pkg/ui/hostd_install.go":         "setup-scripts",
+	}
+	for p, want := range cases {
+		got := categoryIDs(Classify([]string{p}))
+		if !reflect.DeepEqual(got, []string{want}) {
+			t.Errorf("Classify(%q) = %v, want [%s]", p, got, want)
+		}
+	}
+	// Control: an ordinary pkg/ui file is still nothing.
+	if got := Classify([]string{"pkg/ui/actionscache.go"}); got != nil {
+		t.Errorf("Classify(pkg/ui/actionscache.go) = %v, want nothing", categoryIDs(got))
+	}
+
+	// The gates by name, as in TestHostdAndCIRepoAccessGatesAreClassified.
+	gates := map[string][]string{
+		"pkg/model": {
+			"NormalizeAllowedPrincipalEntry", "RegisterCIGrantRule", "CIGrantRuleFor",
+			"guardAutoMerge", "restoreAfterHolds",
+		},
+		"pkg/ui": {
+			"resolveMCPCallerAccess", "allowsRoute", "dispatchSubrequest", "filingContextTool",
+			"hostdInstallCallerHasAccess", "renderHostdInstallScript",
+			"pendingAccessToDecide", "refuseAgentAccessDecision",
+		},
+	}
+	for dir, names := range gates {
+		defined := funcFiles(t, dir)
+		for _, name := range names {
+			file, ok := defined[name]
+			if !ok {
+				t.Errorf("%s: no func or method %s -- update this test to where it went", dir, name)
+				continue
+			}
+			if Classify([]string{file}) == nil {
+				t.Errorf("%s is defined in %s, which Classify leaves unclassified", name, file)
+			}
+		}
+	}
+}
+
 // funcFiles maps each func and method name declared in dir's non-test Go
 // files (dir relative to the repository root) to the repository path of
 // the file declaring it.
@@ -379,6 +434,11 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 		".github/workflows/promote-release.yml": "release-promotion",
 		"pkg/ui/release_approval.go":            "release-promotion",
 		".grain/templates/release-train.yml":    "release-promotion",
+		"scripts/release-from-trunk.sh":         "release-promotion",
+		"scripts/release.conf":                  "release-promotion",
+		"scripts/release-train-task.sh":         "release-promotion",
+		".grain/schedules/release-train.yml":    "release-promotion",
+		".github/workflows/publish-release.yml": "release-promotion",
 		"pkg/trustboundary/trustboundary.go":    "hold-policy",
 		".grain/triggers/release-promotion.yml": "path-triggers",
 		".grain/triggers/release-machinery.yml": "path-triggers",
@@ -395,8 +455,8 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 	}
 
 	reviewed := []string{
-		"scripts/release-images.sh", "scripts/release-from-trunk.sh",
-		"scripts/release-notes.sh", "scripts/candidate-gate.sh", "scripts/release.conf",
+		"scripts/release-images.sh",
+		"scripts/release-notes.sh", "scripts/candidate-gate.sh",
 		"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
 		".grain/workflows/release.yml", ".github/workflows/release.yml",
 		".grain/workflows/promote.yml", ".github/workflows/promote.yml",

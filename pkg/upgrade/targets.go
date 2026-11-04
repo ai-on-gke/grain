@@ -256,8 +256,9 @@ func (u *Upgrader) CachedDiscardedRC(ctx context.Context) *DiscardedRC {
 		return nil
 	}
 	repository := u.registryRepository()
+	key := u.tagCacheKey(repository)
 	u.tags.mu.Lock()
-	cached := u.tags.repo == repository && !u.tags.fetched.IsZero() && time.Since(u.tags.fetched) < tagListTTL
+	cached := u.tags.repo == key && !u.tags.fetched.IsZero() && time.Since(u.tags.fetched) < tagListTTL
 	tags := u.tags.tags
 	u.tags.mu.Unlock()
 	if cached {
@@ -281,8 +282,9 @@ func (u *Upgrader) CachedRetractedRelease(ctx context.Context) *RetractedRelease
 		return nil
 	}
 	repository := u.registryRepository()
+	key := u.tagCacheKey(repository)
 	u.tags.mu.Lock()
-	cached := u.tags.repo == repository && !u.tags.fetched.IsZero() && time.Since(u.tags.fetched) < tagListTTL
+	cached := u.tags.repo == key && !u.tags.fetched.IsZero() && time.Since(u.tags.fetched) < tagListTTL
 	tags := u.tags.tags
 	u.tags.mu.Unlock()
 	if !cached {
@@ -484,23 +486,49 @@ func (u *Upgrader) registryRepository() string {
 	return ""
 }
 
+func (u *Upgrader) tagCacheKey(repository string) string {
+	if u.Mode() == ModeImage && u.cfg.ListTags == nil && u.EffectiveImageSource() == ImageSourceReleaseAssets {
+		return "release-assets:" + strings.TrimSpace(u.EffectiveReleaseAssets().Repository)
+	}
+	return repository
+}
+
 func (u *Upgrader) registryTags(ctx context.Context, repository string) ([]string, error) {
+	key := u.tagCacheKey(repository)
 	u.tags.mu.Lock()
 	defer u.tags.mu.Unlock()
-	if u.tags.repo == repository && time.Since(u.tags.fetched) < tagListTTL {
+	if u.tags.repo == key && time.Since(u.tags.fetched) < tagListTTL {
 		return u.tags.tags, nil
-	}
-	list := u.cfg.ListTags
-	if list == nil {
-		list = ListRegistryTags
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	tags, err := list(ctx, repository)
+	var (
+		tags []string
+		err  error
+	)
+	if u.Mode() == ModeImage && u.cfg.ListTags == nil && u.EffectiveImageSource() == ImageSourceReleaseAssets && !u.shouldBypassDefaultReleaseAssets() {
+		tags, err = u.listReleaseTags(ctx)
+		if u.EffectiveImageFallback() == ImageSourceRegistry && repository != "" && (err != nil || (!u.IsImageSourceExplicit() && len(tags) == 0)) {
+			if regTags, regErr := ListRegistryTags(ctx, repository); regErr == nil || err != nil {
+				tags, err = regTags, regErr
+			}
+		}
+	} else {
+		list := u.cfg.ListTags
+		if list == nil {
+			list = ListRegistryTags
+		}
+		tags, err = list(ctx, repository)
+		if err != nil && u.Mode() == ModeImage && u.cfg.ListTags == nil && u.EffectiveImageFallback() == ImageSourceReleaseAssets {
+			if relTags, relErr := u.listReleaseTags(ctx); relErr == nil {
+				tags, err = relTags, nil
+			}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
-	u.tags.repo, u.tags.tags, u.tags.fetched = repository, tags, time.Now()
+	u.tags.repo, u.tags.tags, u.tags.fetched = key, tags, time.Now()
 	return tags, nil
 }
 

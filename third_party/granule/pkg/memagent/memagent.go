@@ -71,8 +71,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/hypervisor"
-	"github.com/bwsalmon/granule/pkg/telemetry"
+	"github.com/gke-labs/granule/pkg/hypervisor"
+	"github.com/gke-labs/granule/pkg/telemetry"
 )
 
 // Resizer is the subset of hypervisor.APIClient's methods Server depends

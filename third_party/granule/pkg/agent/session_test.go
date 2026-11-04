@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/execwire"
-	"github.com/bwsalmon/granule/pkg/forward"
+	"github.com/gke-labs/granule/pkg/execwire"
+	"github.com/gke-labs/granule/pkg/forward"
 )
 
 // result is what a client sees for one session.

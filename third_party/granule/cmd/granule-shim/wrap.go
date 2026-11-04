@@ -7,10 +7,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bwsalmon/granule/pkg/guestimage"
-	"github.com/bwsalmon/granule/pkg/guestpack"
-	"github.com/bwsalmon/granule/pkg/guestwrap"
-	"github.com/bwsalmon/granule/pkg/vmspec"
+	"github.com/gke-labs/granule/pkg/guestimage"
+	"github.com/gke-labs/granule/pkg/guestpack"
+	"github.com/gke-labs/granule/pkg/guestwrap"
+	"github.com/gke-labs/granule/pkg/vmspec"
 )
 
 // repeatedFlag collects a flag given more than once, in order.

@@ -21,7 +21,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 | Kind | Commands |
 |---|---|
 | Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `reply`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume`, `inbox`, `wait`, `logs` |
-| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|deny`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status`, `declarations check` |
+| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|deny`, `git-ambient`, `git-connections`, `git-login`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status`, `declarations check` |
 | Task CLI: sign-in | `login`, `logout`, `whoami`, `context list\|use\|show\|delete` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
 | Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db upgrade-postgres`), `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
@@ -663,10 +663,11 @@ _No flags._
 
 **Pinned by:** `pkg/cli/hostds_test.go`: `TestHostdsRegisterAndSetOwner`.
 
-### 4.8 `grain git-connections`, `grain git-ambient`, `grain default-model` {#CLI-37}
+### 4.8 `grain git-connections`, `grain git-ambient`, `grain git-login`, `grain default-model` {#CLI-37}
 
 - `git-connections` reads `GET /api/deployment` and prints one `host credential` line per git connection.
 - `git-ambient [-host h] [-kind github|git] [-base-url u] [-proxy u] [-source gh|git|auto] [-if-none]` calls `POST /api/deployment/git-connections`. It adds an ambient connection that asks this host's own `gh`/`git` login for a token on demand. It is for a daemon on the bare machine only.
+- `git-login [-web|-from-gh|-with-token] [-host h] [-base-url u] [-proxy u] [-scope s] [-author name] [-client-id id] [-scopes list]` delegates the caller's own GitHub HTTPS token to the deployment and registers it with `POST /api/deployment/git-connections`, with signing on, so pull requests and comments made with it are signed `Signed by <Name> (via Grain)`. `-web` runs the GitHub OAuth Device Flow, `-from-gh` takes `gh auth token`, and `-with-token` reads the token from standard input; at most one may be given, and with none it uses an active `gh` login and falls back to the Device Flow. It has no `login` alias: `grain login` is the sign-in command ([#CLI-108](#CLI-108)). See `design/design/git-login.design.md`.
 - `default-model [-if-none|-if-unserved] <model>` sends `PUT /api/deployment {"defaultModel"}`. Without either flag that is its only call. With `-if-none` or `-if-unserved` it first reads `GET /api/deployment` and leaves a set default alone (`This deployment already runs on <m> by default: leaving it as it is.`). `-if-unserved` also reads `GET /api/settings` when a default is set, and replaces it when no enabled connection serves it.
 
 **Scope:** admin.
@@ -684,6 +685,21 @@ _No flags._
 | `-kind` | string | `"github"` |  | the host's kind: github (a forge API) or git (clone, fetch and push only) |
 | `-proxy` | string |  |  | the http(s)://host:port proxy the host is reached through, if any (read from the source's own tool when empty, for a registered source that has one) |
 | `-source` | string | `"auto"` |  | which of this host's tools to ask: gh, git, auto (auto: a registered source on its own hosts; gh, then git, elsewhere) |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain git-login -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-author` | string |  |  | explicit name to sign pull requests and comments with (defaults to your GitHub profile name or login) |
+| `-base-url` | string |  |  | the host's scheme://host[:port], when that is not https on the default port |
+| `-client-id` | string | `"178c6fc778ccc68e1d6a"` | $GRAIN_GITHUB_CLIENT_ID | GitHub OAuth Client ID for -web device flow ($GRAIN_GITHUB_CLIENT_ID) |
+| `-from-gh` | value |  |  | delegate the token from this machine's gh auth token login |
+| `-host` | string | `"github.com"` |  | git host to authenticate against |
+| `-proxy` | string |  |  | the http(s)://host:port proxy the host is reached through, if any |
+| `-scope` | string |  |  | optional owner or owner/repo scope (empty sets the deployment-wide default on -host) |
+| `-scopes` | string | `"repo,read:org,workflow"` |  | comma-separated OAuth scopes requested by -web |
+| `-web` | bool |  |  | authenticate in a web browser using GitHub OAuth Device Flow |
+| `-with-token` | bool |  |  | read the HTTPS token from standard input |
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain default-model -->
@@ -1309,9 +1325,15 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-upgrade-allowed-branches` | string | `"main,candidate,rc,latest,v[0-9]*.[0-9]*.[0-9]*"` |  | comma-separated branches the UI's Upgrade button, a scheduled upgrade or an agent may upgrade this deployment to, each a path.Match pattern ('*' never crosses a '/'; e.g. main,release/*), or ** for any branch at all; any other branch is refused. The default is grain's own release names -- main, candidate, latest and vX.Y.Z release tags -- which only grain's merge queue and release cut move; a task or feature branch needs listing here |
 | `-upgrade-drain-window` | duration |  |  | maximum time a scheduled upgrade waits for active tasks and CI runs to drain before proceeding with the upgrade (0 waits indefinitely for runs to complete normally) |
 | `-upgrade-image` | string |  |  | image repository, with no tag, that CI publishes a tag per branch to (e.g. ghcr.io/bwsalmon/grain/grain); set, the UI's Upgrade button pulls a branch's image instead of building one, and -upgrade-image-ref-file is required |
+| `-upgrade-image-fallback` | string |  |  | fallback image source when the primary source cannot fetch a candidate daemon image: "none", "registry", or "release-assets" (or GRAIN_UPGRADE_IMAGE_FALLBACK) |
 | `-upgrade-image-ref-file` | string |  |  | file a successful -upgrade-image upgrade rewrites with the image the service should run, as one GRAIN_IMAGE=<ref> line for grain-daemon.service to read as an EnvironmentFile (required with -upgrade-image) |
+| `-upgrade-image-source` | value |  |  | where -upgrade-image loads candidate container images from: "release-assets" (gzip tarballs on the repository's releases) or "registry" (docker pull); empty defaults to release-assets with registry fallback when a release has no image assets (or GRAIN_UPGRADE_IMAGE_SOURCE) |
 | `-upgrade-install-path` | string |  |  | where a successful upgrade's binary is installed to (required with -upgrade-src-dir) |
+| `-upgrade-release-asset` | string |  |  | daemon tarball asset name on releases when images.json is not used (e.g. grain-image.tar.gz, or GRAIN_UPGRADE_RELEASE_ASSET) |
+| `-upgrade-release-checksum` | string |  |  | checksum asset name or suffix (starting with '.') for release-asset tarballs; defaults to .sha256 (or GRAIN_UPGRADE_RELEASE_CHECKSUM) |
+| `-upgrade-release-repo` | string |  |  | host-qualified repository (<host>/<owner>/<name>) whose releases carry upgrade image assets; defaults to the repository mapped from -upgrade-image or registered by the edition (or GRAIN_UPGRADE_RELEASE_REPO) |
 | `-upgrade-restart-cmd` | value |  |  | one argument of the command run at the end of a successful upgrade to bring the new build up -- repeat for every argument, e.g. -upgrade-restart-cmd=sudo -upgrade-restart-cmd=systemctl -upgrade-restart-cmd=restart -upgrade-restart-cmd=grain-daemon.service. Omitted entirely, the upgrade still happens but nothing brings the new build up on its own. Used by both upgrade paths below. |
+| `-upgrade-sandbox-release-asset` | value |  |  | per-sandbox-image release asset mapping as <role-or-repo>=<asset> -- repeat for each image, e.g. -upgrade-sandbox-release-asset=guest=grain-guest.tar.gz (or comma-separated in GRAIN_UPGRADE_SANDBOX_RELEASE_ASSETS) |
 | `-upgrade-src-dir` | string |  |  | git checkout of bwsalmon/grain to fetch/build from when the UI's Upgrade button is used; empty disables the feature |
 | `-upgrade-verify-cmd` | value |  |  | one argument of the command that verifies an -upgrade-image image's signature before anything runs it -- repeat for every argument, e.g. -upgrade-verify-cmd=cosign -upgrade-verify-cmd=verify -upgrade-verify-cmd=--key=/etc/grain/cosign.pub -upgrade-verify-cmd=--insecure-ignore-tlog=true (docs/image-signing.md). The image is appended (by digest on a host, by tag in a cluster, where the command must print cosign's JSON); a non-zero exit refuses the upgrade. Omitted, upgrades go ahead unverified and say so. |
 <!-- END GENERATED FLAGS -->
@@ -1874,7 +1896,7 @@ _No flags._
 <!-- BEGIN GENERATED FLAGS: grain init workstation -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-capability` | value |  |  | a capability pattern tasks may be granted (capabilities.allow); repeatable. None denies every capability |
+| `-capability` | value |  |  | a capability pattern tasks may be granted (capabilities.allow); repeatable. The Director's own and grain CI's are allowed without being named |
 | `-container-git-proxy-host` | string |  |  | with container sandboxes, the address a sandbox container reaches this host at (default: the gateway of docker network grain-sandboxes, which this creates if it is missing) |
 | `-data-dir` | string | `"$GRAIN_DATA_DIR"` | $GRAIN_DATA_DIR | the daemon's data directory ($GRAIN_DATA_DIR, else ~/.grain) |
 | `-force` | bool |  |  | rewrite grain_policy.yml even if one exists |

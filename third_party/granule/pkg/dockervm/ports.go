@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bwsalmon/granule/pkg/guestimage"
+	"github.com/gke-labs/granule/pkg/guestimage"
 )
 
 // The reporting half of EXPOSE: what a VM's container actually
