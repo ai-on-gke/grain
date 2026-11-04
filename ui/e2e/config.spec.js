@@ -26,6 +26,7 @@ import {
   taskByTitle,
   taskDetail,
 } from "./realdaemon.js";
+import { chooseOption } from "./searchSelect.js";
 
 // This file drives its own daemon rather than the per-worker `grain demo`
 // e2e/fixtures.js starts, so it takes Playwright's own `test` -- with the
@@ -155,7 +156,7 @@ test("takes grain/config through its native pull request and restart", async ({
     await page.getByRole("button", { name: "+ New task" }).click();
     const title = `Native config lifecycle ${Date.now()}`;
     await page.getByLabel("Title").fill(title);
-    await page.getByLabel(/^Repos/).selectOption("grain/config");
+    await chooseOption(page.getByLabel(/^Repos/), "grain/config");
     await page.getByLabel("Auto-merge once checks pass").uncheck();
     await page.getByRole("button", { name: "Create task" }).click();
 
@@ -366,7 +367,7 @@ test("takes grain/config through its native pull request and restart", async ({
     await page.getByRole("button", { name: "+ New task" }).click();
     const aliasTitle = `Alias after backup replacement ${Date.now()}`;
     await page.getByLabel("Title").fill(aliasTitle);
-    await page.getByLabel(/^Repos/).selectOption("grain/config");
+    await chooseOption(page.getByLabel(/^Repos/), "grain/config");
     await page.getByRole("button", { name: "Create task" }).click();
     await eventually(
       () => taskByTitle(page.request, daemon.url, aliasTitle),

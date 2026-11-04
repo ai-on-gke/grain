@@ -171,6 +171,16 @@
 #                            rollback's --to and --reason
 #   RELEASE_TRAIN_OUTPUT     a file to append key=value outputs to, for the
 #                            jobs after this one
+#   RELEASE_PUSH_GRANT       "train": the run holds only the release train's
+#                            own tag grant (.grain/templates/release-train.yml
+#                            `push:`, playbook section 0.4), so the script
+#                            pushes nothing outside it -- the v*-rc.*,
+#                            v*-pending and v*-discarded tags, candidate and
+#                            release/v* -- deletes nothing, and refuses the
+#                            approve, reject and rollback modes outright.
+#                            In train mode, set or not, it never pushes
+#                            vX.Y.Z or `latest`: those are the approval's
+#                            own refs
 #   DRY_RUN                  true pushes, publishes and files nothing, and
 #                            leaves no tag it made behind in the checkout
 #   GIT_USER_NAME, GIT_USER_EMAIL
@@ -221,6 +231,15 @@ DRY_RUN="${DRY_RUN:-false}"
 soak_hours="${RELEASE_SOAK_HOURS:-24}"
 slack_hours="${RELEASE_INTERVAL_SLACK_HOURS:-2}"
 images_cmd="${RELEASE_IMAGES:-bash $scripts_dir/release-images.sh}"
+push_grant="${RELEASE_PUSH_GRANT:-}"
+case "$push_grant" in
+  "" | train) ;;
+  *) echo "release-from-trunk: RELEASE_PUSH_GRANT is $push_grant, not train" >&2; exit 2 ;;
+esac
+if [ "$push_grant" = train ] && [ "$mode" != train ]; then
+  echo "release-from-trunk: $mode needs the approval's own run: RELEASE_PUSH_GRANT=train holds the release train's tag grant, which never reaches vX.Y.Z, latest or a deletion" >&2
+  exit 2
+fi
 output="${RELEASE_TRAIN_OUTPUT:-}"
 
 # Who makes the tags: through the environment, never the checkout's
@@ -413,7 +432,41 @@ recorded_soak() {
 # pass rather than a soak.
 qualified() { git for-each-ref --format='%(contents)' "refs/tags/$1-pending" | grep -qx 'Qualification: PASS'; }
 
+# promotion_ref <ref>: vX.Y.Z or latest, the refs only the approval moves.
+promotion_ref() { [ "$1" = refs/tags/latest ] || [[ "$1" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
+# train_ref <ref>: one the release train's tag grant names (the
+# `push:` list of .grain/templates/release-train.yml). The git proxy is
+# what enforces it; this is the script refusing first, and saying why.
+train_ref() {
+  [[ "$1" != refs/tags/*/* ]] || return 1
+  case "$1" in
+    refs/tags/v*-rc.* | refs/tags/v*-pending | refs/tags/v*-discarded | refs/heads/candidate) return 0 ;;
+    refs/heads/release/v*) [[ "$1" != refs/heads/release/*/* ]] ;;
+    *) return 1 ;;
+  esac
+}
+# check_push <git push args...>: refuse, in train mode, a push of vX.Y.Z or
+# latest, and under RELEASE_PUSH_GRANT=train anything outside the grant.
+check_push() {
+  [ "$mode" = train ] || return 0
+  local arg dst del=false
+  for arg; do
+    case "$arg" in --delete | -d) del=true ;; esac
+  done
+  for arg; do
+    case "$arg" in -*) continue ;; esac
+    dst="${arg#+}"
+    dst="${dst##*:}"
+    promotion_ref "$dst" && die "the train never pushes $dst: vX.Y.Z and latest move only on a person's approval (promote-release.yml)"
+    [ "$push_grant" = train ] || continue
+    train_ref "$dst" || die "$dst is outside the release train's tag grant (.grain/templates/release-train.yml push:); not pushing it"
+    [ "$del" = false ] || die "the release train's tag grant deletes nothing; not deleting $dst"
+  done
+  return 0
+}
+
 push() { # push <git push args...>
+  check_push "$@"
   if [ "$DRY_RUN" = true ]; then
     say "[dry-run] would git push $remote $*"
     return 0
@@ -678,6 +731,21 @@ if [ "$mode" != train ]; then
   fi
   from_rc="$(git tag --points-at "$pending_sha" -l "$version-rc.*" | grep -E "^${version//./\\.}-rc\\.[0-9]+$" | sort -t. -k4,4n | tail -n 1 || true)"
   if [ "$mode" = approve ]; then
+    # A person approves a version name, not a commit, so what it releases
+    # has to be a commit the train could have staged: one on main, or on
+    # the release's own convergence branch -- never a -pending tag pushed
+    # onto anything else.
+    on_branch=""
+    if git merge-base --is-ancestor "$pending_sha" "$main_ref"; then
+      on_branch=main
+    elif remote_branch "release/$version"; then
+      git fetch -q --force "$remote" "+refs/heads/release/$version:refs/remotes/$remote/release/$version" ||
+        die "could not fetch release/$version from $remote; nothing was done"
+      if git merge-base --is-ancestor "$pending_sha" "refs/remotes/$remote/release/$version"; then
+        on_branch="release/$version"
+      fi
+    fi
+    [ -n "$on_branch" ] || die "$version-pending is on ${pending_sha:0:12}, which is on neither main nor release/$version: it is no commit the train stages, so it is not promoted; reject it; nothing was done"
     prev="$(promoted | tail -n 1)"
     override=""
     said=""

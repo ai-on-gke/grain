@@ -1922,6 +1922,7 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			var payload struct {
 				Name       string `json:"name"`
 				HeadSHA    string `json:"head_sha"`
+				ExternalID string `json:"external_id"`
 				Status     string `json:"status"`
 				Conclusion string `json:"conclusion"`
 				DetailsURL string `json:"details_url"`
@@ -1935,9 +1936,11 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 				s.CheckRuns = map[string][]github.CheckRun{}
 			}
 			cr := github.CheckRun{
-				Name:    payload.Name,
-				Status:  payload.Status,
-				HTMLURL: payload.DetailsURL,
+				ID:         id,
+				Name:       payload.Name,
+				ExternalID: payload.ExternalID,
+				Status:     payload.Status,
+				HTMLURL:    payload.DetailsURL,
 			}
 			if cr.Status == "" {
 				cr.Status = "queued"
@@ -2064,6 +2067,7 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			s.mustOwn(m[1], m[2])
 			var payload struct {
 				Name       string `json:"name"`
+				ExternalID string `json:"external_id"`
 				Status     string `json:"status"`
 				Conclusion string `json:"conclusion"`
 				DetailsURL string `json:"details_url"`
@@ -2074,6 +2078,9 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			for sha, runs := range s.CheckRuns {
 				for i := range runs {
 					if payload.Name == "" || runs[i].Name == payload.Name {
+						if payload.ExternalID != "" {
+							s.CheckRuns[sha][i].ExternalID = payload.ExternalID
+						}
 						if payload.Status != "" {
 							s.CheckRuns[sha][i].Status = payload.Status
 						}
@@ -3123,6 +3130,9 @@ func checkRunsJSON(runs []github.CheckRun) map[string]any {
 		}
 		if r.HeadSHA != "" {
 			item["head_sha"] = r.HeadSHA
+		}
+		if r.ExternalID != "" {
+			item["external_id"] = r.ExternalID
 		}
 		if r.App != "" {
 			item["app"] = map[string]any{"slug": r.App}

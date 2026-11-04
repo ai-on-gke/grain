@@ -241,6 +241,7 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/repos/{owner}/{name}/releases/{release}/candidates/promote": trusted,
 	"POST /api/repos/{owner}/{name}/pending-releases/{version}/approve":    trusted,
 	"POST /api/repos/{owner}/{name}/pending-releases/{version}/reject":     trusted,
+	"GET /api/release-approval-key":                                        trusted,
 	"GET /api/repos/{owner}/{name}/branches":                               trusted,
 	"POST /api/repos/{owner}/{name}/branches":                              trusted,
 	"GET /api/repos/{owner}/{name}/github-branches":                        trusted,

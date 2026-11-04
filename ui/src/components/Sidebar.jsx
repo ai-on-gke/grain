@@ -390,7 +390,7 @@ function UserTile({ whoami, collapsed, onOpenAccess }) {
       }}
     >
       <span className="nav-icon">
-        <AccountCircleOutlinedIcon sx={{ fontSize: 18 }} />
+        <AppIcon name="user" size={18} />
       </span>
       {collapsed ? null : (
         <Typography

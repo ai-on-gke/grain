@@ -87,8 +87,8 @@ Getting v3.1.0 out on 2026-11-01/02 took a long series of manual steps: re-submi
 | 4 | The release train selects LKG, cuts `vX.Y.Z-rc.N`, and pushes the RC, `-pending` and `-discarded` tags with its own narrow grant (§0.4) | grain | `.grain/templates/release-train.yml` `push:` list (`pkg/model/ref_push.go`), `scripts/release-from-trunk.sh`, `scripts/candidate-gate.sh` |
 | 5 | Qualification: Stage 1 `nightly.yml`, Stage 2 `release-qualification` (§2) | grain | `.github/workflows/nightly.yml`, `.grain/suites/release-qualification.yml` |
 | 6 | Release notes generated mechanically (§8) | grain | `scripts/release-notes.sh` |
-| 7 | The deployment notices `vX.Y.0-pending` and raises `release.pending:vX.Y.0` in the Inbox with the notes | grain | `pkg/model/notification.go` (`FamilyReleasePending`), the deployment's outbound watcher (gap 4) |
-| **8** | **Approve the release** | **the person** | `pkg/ui/release_approval.go` (person-only route), `ui/src/notifications.js` (Approve button), `promote-release.yml` "Refuse anybody but a person" |
+| 7 | The deployment notices `vX.Y.0-pending` and raises `release.pending:vX.Y.0` in the Inbox with the notes | grain | `pkg/model/notification.go` (`FamilyReleasePending`), `pkg/orchestrator/releasepending.go` (the outbound watcher, gap 4) |
+| **8** | **Approve the release** | **the person** | `pkg/ui/release_approval.go` (person-only route), `pkg/ui/release_approval_github.go` and `pkg/releaseapproval` (the signed dispatch on GitHub Actions repos), `ui/src/notifications.js` (Approve button), `promote-release.yml` "Refuse anybody but a person" and `scripts/verify-release-approval.sh` |
 | 9 | Promotion tags `vX.Y.0` and moves `latest` | grain (the approval's own run) | `promote-release.yml` → `scripts/release-from-trunk.sh approve` |
 | 10 | `:vX.Y.0` and `:latest` images retagged from the verified `:sha-<short>` images | grain | `.github/workflows/promote.yml`, `scripts/release-images.sh promote` |
 | 11 | The Google edition's sync pins exactly the release commit (`go get …@vX.Y.0`), files with `auto_merge: true` and merges on green with no Submit (§9) | grain | the edition's `sync-tags` and its "Sync OSS release" schedule (grain/config), the edition's merge rules |
@@ -102,6 +102,15 @@ A red RC adds no person action: the steward triages and files fixes (§5, §12).
 
 `promote-release.yml`'s person check stays as it is: the approval is the one action, and an agent, executor, steward or schedule is refused. The person must be able to make the approval from grain's Inbox with one press, without opening GitHub. On a repository that publishes from GitHub Actions, that means the deployment raises `release.pending` itself, by watching for `-pending` tags outbound (a hosted runner can't reach it). It also means the Approve button dispatches the workflow that actually holds the publishing credentials, and carries proof that a person pressed it. Both are gap 4.
 
+How gap 4 does it:
+
+- **Raising.** The orchestrator's `release-pending` reconciler (`pkg/orchestrator/releasepending.go`) reads, every 10 minutes, the tags of each repository whose effective `ci_mode` is `github` and whose release work is on. For each `vX.Y.Z-pending` with no `vX.Y.Z` it raises `release.pending:vX.Y.Z` with Approve/Reject, the `-pending` tag's message and `docs/releases/vX.Y.Z.md` from `main` in the body. It clears an open one once `vX.Y.Z` is tagged or the `-pending` tag is gone. A release a person answered in the last 24 hours isn't raised again while its promotion run still has the `-pending` tag. After that it is, as the daily train run would raise it on grain CI.
+- **Approving.** On a `ci_mode: github` repository, `DecideRelease` (`pkg/ui/release_approval_github.go`) refuses every caller but a person, as before. It then reads the commit `vX.Y.Z-pending` stages and signs a record (`pkg/releaseapproval`): repository, version, decision, that commit, the person, `short_soak_ok`, `allow_breaking`, and a 15-minute expiry. The key is an ECDSA P-256 key kept in the deployment's data directory, which no sandbox can reach. Then it dispatches `.github/workflows/promote-release.yml` on `main` with the record and its signature as the `approval` and `approval_signature` inputs. A second press while that record is good is refused, so one Approve dispatches once.
+- **Verifying.** The workflow's "Refuse anybody but a person" step keeps its rule: it runs only on `workflow_dispatch`, and a dispatch with no record still refuses a `*[bot]` or `grain-ci*` actor. A dispatch carrying a record must pass `scripts/verify-release-approval.sh`, which checks the signature against the repository variable `GRAIN_RELEASE_APPROVAL_KEY` and that the record is for this repository, version, decision, short-soak and allow-breaking answers and the commit `vX.Y.Z-pending` tags here, and hasn't expired. The person it names becomes `GRAIN_CI_REQUESTED_BY` and the promotion tag's "approved by".
+- **Setup, once per repository:** set the repository variable `GRAIN_RELEASE_APPROVAL_KEY` to the output of `grain release approval-key` (`GET /api/release-approval-key`). The deployment's forge credential needs `actions: write` to dispatch and `contents: read` to read tags.
+
+What still can't approve: an agent's token, an executor, a steward or a schedule is refused by `DecideRelease` before anything is signed. Without the private key nobody can forge a record. A record replayed within its 15 minutes by somebody with dispatch rights only repeats the same person's answer about the same commit. A record from before the train re-staged the release names a different commit and is refused.
+
 #### 0.3 Which release-path changes need a person's Submit
 
 A release-path change that **can't reach the approval** clears on grain's security review alone, with no findings. One that **is** the approval, or decides who may act without it, waits for a person.
@@ -109,7 +118,7 @@ A release-path change that **can't reach the approval** clears on grain's securi
 | Needs a person's Submit | Clears on security review alone (no findings) |
 | --- | --- |
 | `.grain/workflows/promote-release.yml`, `.github/workflows/promote-release.yml` | `scripts/release-images.sh`, `scripts/release-from-trunk.sh`, `scripts/release-notes.sh`, `scripts/candidate-gate.sh`, and the helpers the release jobs run (`scripts/patch-tag-guard.sh`, `scripts/build-version.sh`, `scripts/grain-ci-host.sh`) |
-| `pkg/ui/release_approval.go` | `.grain/workflows/release.yml`, `.github/workflows/release.yml` |
+| `pkg/ui/release_approval.go`, `pkg/ui/release_approval_github.go`, `pkg/releaseapproval/`, `scripts/verify-release-approval.sh` | `.grain/workflows/release.yml`, `.github/workflows/release.yml` |
 | `pkg/trustboundary/trustboundary.go`, `.grain/triggers/**`, `.grain/merge-rules.yml` | `.grain/workflows/promote.yml`, `.github/workflows/promote.yml` (they follow the git `latest` tag the approval moved) |
 | Any template's `push:` list (the release train's tag grant, §0.4) | `.github/workflows/release-train.yml`, `.grain/workflows/release-train.yml` |
 | A `RELEASE_MAJOR` bump in `scripts/release.conf` | Other `scripts/release.conf` changes (`RELEASE_NEVER_PROMOTE`, `RELEASE_HOLD`, intervals) |
@@ -132,9 +141,23 @@ push:
   - refs/tags/v*-discarded
   - ref: refs/heads/candidate
     force: true
+  - refs/heads/release/v*
 ```
 
-`vX.Y.Z` and `latest` are deliberately left out. They are the promotion's refs, pushed by the approval's own run. A train that can push them can release without the approval, and then the approval would no longer be the one action. That's gap 3.
+`refs/heads/release/v*` is the rc.3 convergence branch (§5). The train creates it once from rc.2's commit, with no force and no delete; the approval's run deletes it.
+
+`vX.Y.Z` and `latest` are deliberately left out. They are the promotion's refs, pushed by the approval's own run. A train that can push them can release without the approval, and then the approval would no longer be the one action. That's gap 3, and it's closed by four checks:
+
+- **The proxy, on names.** It refuses the train's run anything outside the list, and `TestTheReleaseTrainsGrantNeverReachesAPromotion` (`pkg/gitproxy`) holds the real template to that.
+- **The proxy, on commits.** A declared push moves refs onto commits the repository already has; it doesn't publish new code. So outside the default branch itself, the new tip has to be on the default branch already, or on a branch the same list declares (`candidate`, `release/v*`). An annotated tag is peeled to the commit it names. A commit the push itself carries, or one only on the run's own task branch, is refused (`pushCheck.onHistory`). The workflows these refs start (`release.yml`, `promote.yml`, `nightly.yml`) run from the pushed commit, so without this a run could have them run code nobody merged.
+- **The script.** In train mode it never pushes `vX.Y.Z` or `latest`. With `RELEASE_PUSH_GRANT=train` (which the template sets) it pushes nothing outside the list, deletes nothing, and refuses `approve`, `reject` and `rollback`. And `approve` promotes only a `-pending` commit on `main` or on `release/vX.Y.Z`: the person presses Approve on a version name, not a commit, so a `-pending` tag on anything else is refused.
+- **The trust boundary.** A change to any template's `push:` list is person-only: `trustboundary.TemplatePush`, matched by `guardTemplatePush` (`pkg/orchestrator/repoguard.go`), which compares the list at the base and the head and fails closed.
+
+Whether the train should hold `vX.Y.Z` and `latest` anyway is the operator's call. It's a one-line change to this list, and it waits for a person's Submit.
+
+What the grant doesn't give the train: the `release-gate-read` API and the `package-publish` and `image-signing` credentials are CI-only, so a task holds none of them. The task train hands the script main's CI verdicts as files (`grain -json ci list`, through the `grain-ci` capability). It runs with `RELEASE_IMAGES=off`, `RELEASE_NOTES_TASK=off` and `RELEASE_NOTIFY=off`. The rc and pending images, the release-notes task and `release.pending` are each a CI job's or the deployment's to do on the tag the train pushed (gap 4 watches `-pending`).
+
+The schedule lives in grain/config, not in `.grain/schedules`. It fires after a green `release` run on `main`, and a cron wakes it as a safety net. `.github/workflows/release-train.yml` is retired to an always-dry dispatch, so the two trains can never both cut (task 2382).
 
 #### 0.5 Upgrading the deployment
 

@@ -172,7 +172,7 @@ func TestAnEditionsHostdDefaultAppliesOnlyBehindHostd(t *testing.T) {
 	if r := got["antigravity"]; r.Location != model.CLIRunHost || r.Via != ViaHostd || r.Source != "default" || r.Err != "" {
 		t.Fatalf("agy = %+v, want host through hostd by default", r)
 	}
-	for _, fw := range []string{"claude", "codex", "custom"} {
+	for _, fw := range []string{"claude", "codex"} {
 		if got[fw].Location != model.CLIRunContainer {
 			t.Fatalf("%s = %+v, want container", fw, got[fw])
 		}

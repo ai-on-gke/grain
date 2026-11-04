@@ -260,17 +260,28 @@ test("pending releases: approved from Inbox and Alerts, rejected, and refused to
   ).toBeLessThanOrEqual(2);
 
   await page.setViewportSize(PHONE);
-  const phoneRowBox = await v241Row.boundingBox();
-  const phoneApproveBox = await approvePatch.boundingBox();
-  const phoneRejectBox = await rejectPatch.boundingBox();
-  expect(phoneRowBox.width).toBeLessThanOrEqual(PHONE.width);
-  expect(phoneApproveBox.x).toBeGreaterThanOrEqual(phoneRowBox.x);
-  expect(phoneApproveBox.x + phoneApproveBox.width).toBeLessThanOrEqual(
-    phoneRejectBox.x,
-  );
-  expect(phoneRejectBox.x + phoneRejectBox.width).toBeLessThanOrEqual(
-    phoneRowBox.x + phoneRowBox.width,
-  );
+  await expect
+    .poll(async () => {
+      const phoneRowBox = await v241Row.boundingBox();
+      const phoneApproveBox = await approvePatch.boundingBox();
+      const phoneRejectBox = await rejectPatch.boundingBox();
+      if (!phoneRowBox || !phoneApproveBox || !phoneRejectBox) return null;
+      return {
+        rowFitsViewport: phoneRowBox.width <= PHONE.width,
+        approveInsideRow: phoneApproveBox.x >= phoneRowBox.x,
+        approveBeforeReject:
+          phoneApproveBox.x + phoneApproveBox.width <= phoneRejectBox.x,
+        rejectInsideRow:
+          phoneRejectBox.x + phoneRejectBox.width <=
+          phoneRowBox.x + phoneRowBox.width,
+      };
+    })
+    .toEqual({
+      rowFitsViewport: true,
+      approveInsideRow: true,
+      approveBeforeReject: true,
+      rejectInsideRow: true,
+    });
   await page.setViewportSize(DESKTOP);
 
   dialogMessage = "";

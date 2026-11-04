@@ -46,6 +46,8 @@ var (
 	_ github.FileReader         = (*StateRepoPullRequestClient)(nil)
 	_ github.ReviewSubmitter    = (*StateRepoPullRequestClient)(nil)
 	_ github.TagLister          = (*StateRepoPullRequestClient)(nil)
+	_ github.ReleaseTagReader   = (*StateRepoPullRequestClient)(nil)
+	_ github.WorkflowDispatcher = (*StateRepoPullRequestClient)(nil)
 	_ github.CollaboratorReader = (*StateRepoPullRequestClient)(nil)
 	_ github.ReactionPoster     = (*StateRepoPullRequestClient)(nil)
 	_ github.CheckRunWriter     = (*StateRepoPullRequestClient)(nil)
@@ -1457,6 +1459,46 @@ func (c *StateRepoPullRequestClient) ListTags(owner, name string) ([]github.Tag,
 		return nil, nil
 	}
 	return lister.ListTags(owner, name)
+}
+
+// ListMatchingTags is the wrapped client's own, as ListTags is: what the
+// release-pending watcher reads a -pending tag through.
+func (c *StateRepoPullRequestClient) ListMatchingTags(owner, name, prefix string) ([]github.TagRef, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	reader, ok := c.Client.(github.ReleaseTagReader)
+	if !ok {
+		return nil, nil
+	}
+	return reader.ListMatchingTags(owner, name, prefix)
+}
+
+// GetAnnotatedTag is the wrapped client's own; the native config
+// repository has no tags here.
+func (c *StateRepoPullRequestClient) GetAnnotatedTag(owner, name, sha string) (*github.AnnotatedTag, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	reader, ok := c.Client.(github.ReleaseTagReader)
+	if !ok {
+		return nil, nil
+	}
+	return reader.GetAnnotatedTag(owner, name, sha)
+}
+
+// DispatchWorkflow is the wrapped client's own: a person's Inbox answer
+// to a release on GitHub Actions (ui/release_approval_github.go). The
+// native config repository has no Actions to dispatch.
+func (c *StateRepoPullRequestClient) DispatchWorkflow(owner, name, workflow, ref string, inputs map[string]string) error {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return fmt.Errorf("%s/%s has no GitHub Actions to dispatch", owner, name)
+	}
+	dispatcher, ok := c.Client.(github.WorkflowDispatcher)
+	if !ok {
+		return fmt.Errorf("%s/%s's forge connection cannot dispatch a workflow", owner, name)
+	}
+	return dispatcher.DispatchWorkflow(owner, name, workflow, ref, inputs)
 }
 
 // actionsReader is the wrapped client's GitHub Actions reads, or nil for

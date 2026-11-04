@@ -17,11 +17,20 @@ package ui
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -336,5 +345,116 @@ func TestHTTPClient_DefaultClientHasResponseHeaderTimeout(t *testing.T) {
 	tr, ok := NewHTTPClient("http://127.0.0.1:1").httpClient().Transport.(*http.Transport)
 	if !ok || tr.ResponseHeaderTimeout <= 0 {
 		t.Fatalf("default client transport %#v has no ResponseHeaderTimeout", tr)
+	}
+}
+
+func TestHTTPClient_ServiceAccountIAPSelfSignedJWT(t *testing.T) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generating RSA key: %v", err)
+	}
+	pkcs8, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatalf("marshaling PKCS8 key: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8})
+
+	saEmail := "iap-caller@example-project.iam.gserviceaccount.com"
+	saJSON, err := json.Marshal(map[string]string{
+		"type":           "service_account",
+		"client_email":   saEmail,
+		"private_key":    string(pemBytes),
+		"private_key_id": "key-id-42",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credFile := filepath.Join(t.TempDir(), "sa.json")
+	if err := os.WriteFile(credFile, saJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", credFile)
+
+	// 1. With Cloud Run Direct IAP wildcard audience ("https://<host>/*"),
+	// HTTPClient signs an RS256 service-account JWT without calling ADC/gcloud.
+	c := NewHTTPClient("https://grain-iap-1234.us-central1.run.app")
+	c.Audience = "https://grain-iap-1234.us-central1.run.app/*"
+	c.adcIDToken = noADC
+	var gcloudCalls []string
+	c.gcloud = gcloudStub("", "", &gcloudCalls)
+
+	tok, err := c.getGoogleIDToken(context.Background())
+	if err != nil {
+		t.Fatalf("getGoogleIDToken failed: %v", err)
+	}
+	if len(gcloudCalls) != 0 {
+		t.Fatalf("expected 0 gcloud calls, got %v", gcloudCalls)
+	}
+
+	parts := strings.Split(tok, ".")
+	if len(parts) != 3 {
+		t.Fatalf("expected 3 JWT segments, got %d", len(parts))
+	}
+	hdrBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		t.Fatalf("decoding header: %v", err)
+	}
+	var hdr map[string]string
+	if err := json.Unmarshal(hdrBytes, &hdr); err != nil {
+		t.Fatalf("unmarshaling header: %v", err)
+	}
+	if hdr["alg"] != "RS256" || hdr["kid"] != "key-id-42" {
+		t.Errorf("unexpected JWT header: %#v", hdr)
+	}
+
+	claimBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("decoding claims: %v", err)
+	}
+	var claims struct {
+		Iss string `json:"iss"`
+		Sub string `json:"sub"`
+		Aud string `json:"aud"`
+		Iat int64  `json:"iat"`
+		Exp int64  `json:"exp"`
+	}
+	if err := json.Unmarshal(claimBytes, &claims); err != nil {
+		t.Fatalf("unmarshaling claims: %v", err)
+	}
+	if claims.Iss != saEmail || claims.Sub != saEmail {
+		t.Errorf("got iss=%q sub=%q, want %q", claims.Iss, claims.Sub, saEmail)
+	}
+	if claims.Aud != c.Audience {
+		t.Errorf("got aud=%q, want %q", claims.Aud, c.Audience)
+	}
+	if claims.Exp <= claims.Iat {
+		t.Errorf("invalid iat=%d exp=%d", claims.Iat, claims.Exp)
+	}
+
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		t.Fatalf("decoding signature: %v", err)
+	}
+	sum := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
+	if err := rsa.VerifyPKCS1v15(&priv.PublicKey, crypto.SHA256, sum[:], sig); err != nil {
+		t.Fatalf("RS256 signature verification failed: %v", err)
+	}
+
+	// Cached on repeat call.
+	tok2, err := c.getGoogleIDToken(context.Background())
+	if err != nil || tok2 != tok {
+		t.Fatalf("second call got (%q, %v), want cached token", tok2, err)
+	}
+
+	// 2. Without trailing "/*", standard Cloud Run IAM path (adcIDToken) still wins.
+	var adcCalled bool
+	c2 := NewHTTPClient("https://grain-iam-1234.us-central1.run.app")
+	c2.adcIDToken = func(_ context.Context, aud string) (*oauth2.Token, error) {
+		adcCalled = true
+		return &oauth2.Token{AccessToken: "oidc-id-token", Expiry: time.Now().Add(time.Hour)}, nil
+	}
+	got2, err := c2.getGoogleIDToken(context.Background())
+	if err != nil || got2 != "oidc-id-token" || !adcCalled {
+		t.Fatalf("non-wildcard audience got (%q, %v), adcCalled=%v; want oidc-id-token", got2, err, adcCalled)
 	}
 }

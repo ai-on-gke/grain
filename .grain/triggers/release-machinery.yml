@@ -18,6 +18,7 @@ paths:
   - scripts/build-version.sh
   - scripts/grain-ci-host.sh
   - scripts/release-train-actions.sh
+  - .github/workflows/rc-qualification.yml
   - .grain/workflows/release.yml
   - .github/workflows/release.yml
   - .grain/workflows/promote.yml

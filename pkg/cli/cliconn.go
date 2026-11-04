@@ -213,6 +213,10 @@ func explainDaemonError(err error, t cliTarget) error {
 	if err == nil {
 		return nil
 	}
+	var classified *cliError
+	if errors.As(err, &classified) {
+		return err // a command's own verdict, already said
+	}
 	where := t.server
 	switch t.source {
 	case "-server":
@@ -226,16 +230,19 @@ func explainDaemonError(err error, t cliTarget) error {
 
 	switch {
 	case daemonRefused(err):
-		return fmt.Errorf("no grain daemon answered at %s%s. %s (%v)", where, hint, fix, rootCause(err))
+		return &cliError{exit: exitUnreachable, code: "daemon_unreachable",
+			err: fmt.Errorf("no grain daemon answered at %s%s. %s (%v)", where, hint, fix, rootCause(err))}
 	case daemonTimedOut(err):
 		// The hint follows the sentence it qualifies: put between the
 		// address and "did not answer", it read as this host's daemon
 		// being the one that timed out.
-		return fmt.Errorf("the grain daemon at %s did not answer in time (-connect-timeout %s, -timeout %s)%s. "+
-			"%s, or pass a longer -timeout for a slow call (%v)", where, t.connect, t.call, hint, fix, rootCause(err))
+		return &cliError{exit: exitUnreachable, code: "daemon_unreachable",
+			err: fmt.Errorf("the grain daemon at %s did not answer in time (-connect-timeout %s, -timeout %s)%s. "+
+				"%s, or pass a longer -timeout for a slow call (%v)", where, t.connect, t.call, hint, fix, rootCause(err))}
 	}
 	if unauthorized(err) {
-		return fmt.Errorf("the grain daemon at %s refused this CLI's credentials (%s): %s", where, serverMessage(err), credentialHint())
+		return &cliError{exit: exitAuth, code: "unauthenticated",
+			err: fmt.Errorf("the grain daemon at %s refused this CLI's credentials (%s): %s", where, serverMessage(err), credentialHint())}
 	}
 	return err
 }

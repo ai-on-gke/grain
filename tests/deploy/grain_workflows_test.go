@@ -1904,37 +1904,28 @@ func releaseTrainWorkflow(t *testing.T) ci.Workflow {
 	return ci.Workflow{}
 }
 
-// The train is event-driven on GitHub Actions (playbook "Daily cron
-// bottleneck", §14): a finished release or nightly run and a finished
-// grain/release-qualification check run wake it, an hourly cron is only a
-// safety wake, and it holds actions: write to dispatch, re-run and cancel
-// nightly.yml. No staging endpoint or grain API is required of a hosted
-// runner any more. grain's own copy answers an operator's dispatch with
-// what scripts/release-from-trunk.sh needs and nothing else: repo-write
-// for the rc, -discarded and -pending tags and refs/heads/candidate,
-// release-gate-read for the CI runs and the release-notes task, and
-// package-publish for the rc and pending images. Signing is optional, as
-// in release.yml.
-func TestTheReleaseTrainRunsOnEventsWithTheCapabilitiesItUses(t *testing.T) {
+// Neither workflow train cuts on a schedule any more: the release train
+// is the grain task filed from .grain/templates/release-train.yml
+// (releases playbook §0.4), and .github/workflows/release-train.yml is
+// retired to an always-dry dispatch so the two can never both cut (task
+// 2382). This one still answers an operator's dispatch, with what
+// scripts/release-from-trunk.sh needs and
+// nothing else: repo-write for the rc, -discarded and -pending tags and
+// refs/heads/candidate, release-gate-read for main's runs, staging and the
+// release-notes task, and package-publish for the rc and pending images.
+// Signing is optional, as in release.yml.
+func TestTheReleaseTrainRunsDailyWithTheCapabilitiesItUses(t *testing.T) {
 	w := releaseTrainWorkflow(t)
 	if len(w.On.Schedule) != 0 {
-		t.Errorf("%s still declares `on: schedule` (%v); automatic scheduling moved to .github/workflows/release-train.yml", releaseTrainPath, w.On.Schedule)
+		t.Errorf("%s still declares `on: schedule` (%v); the release train is .grain/templates/release-train.yml", releaseTrainPath, w.On.Schedule)
 	}
-	ghText := stripComments(read(t, ".github", "workflows", "release-train.yml"))
-	ghTrain := upTo(t, ghText, "jobs:")
-	contains(t, ghTrain, "schedule:")
-	contains(t, ghTrain, `cron: "17 * * * *"`)
-	contains(t, ghTrain, "workflow_run:")
-	contains(t, ghTrain, "workflows: [release, nightly]")
-	contains(t, ghTrain, "check_run:")
-	contains(t, ghTrain, "actions: write")
-	contains(t, ghText, "github.event.check_run.name == 'grain/release-qualification'")
-	contains(t, ghText, "bash ./scripts/release-train-actions.sh")
-	contains(t, ghText, "secrets.REPO_WRITE_TOKEN")
-	for _, gone := range []string{"RELEASE_STAGING_URL", "Require the grain API", "RELEASE_TASKS_JSON", `cron: "15 4 * * *"`} {
-		if strings.Contains(ghText, gone) {
-			t.Errorf(".github/workflows/release-train.yml still has %q: the staging soak and its endpoints are retired", gone)
-		}
+	ghTrainFile := stripComments(read(t, ".github", "workflows", "release-train.yml"))
+	if ghTrain := upTo(t, ghTrainFile, "jobs:"); strings.Contains(ghTrain, "schedule:") || strings.Contains(ghTrain, "cron:") {
+		t.Errorf(".github/workflows/release-train.yml still runs on a schedule; the release train is .grain/templates/release-train.yml, and two trains would both cut")
+	}
+	contains(t, ghTrainFile, `dry_run="true"`)
+	if strings.Contains(ghTrainFile, `dry_run="false"`) {
+		t.Errorf(".github/workflows/release-train.yml can still resolve a live run; it is retired to dry runs")
 	}
 	if !w.On.Matches(ci.EventManual, "main") {
 		t.Errorf("%s does not answer workflow_dispatch on main (%s)", releaseTrainPath, w.On.Describe())
@@ -2040,11 +2031,37 @@ func TestTheReleaseTrainsCapabilitiesAreGrantedOnGrainsOwnRepository(t *testing.
 	}
 }
 
+// rc-qualification.yml asks GitHub Actions for what the grain-task train
+// cannot (playbook §3, §4, §6): the flake retry and infra re-runs of
+// nightly.yml jobs on the rc, and cancelling a superseded rc's runs. It is
+// woken by nightly.yml and an hourly safety cron, and it can never be a
+// second train: it runs release-from-trunk.sh only as a dry run with every
+// publisher off, and holds contents: read, so it cannot push a ref.
+func TestRCQualificationReRunsAndCancelsButNeverCuts(t *testing.T) {
+	text := stripComments(read(t, ".github", "workflows", "rc-qualification.yml"))
+	on := upTo(t, text, "jobs:")
+	contains(t, on, "workflow_run:")
+	contains(t, on, "workflows: [nightly]")
+	contains(t, on, `cron: "17 * * * *"`)
+	contains(t, on, "actions: write")
+	contains(t, on, "contents: read")
+	if strings.Contains(text, "contents: write") || strings.Contains(text, "packages: write") || strings.Contains(text, "REPO_WRITE_TOKEN") {
+		t.Error("rc-qualification.yml can write the repository or its packages; it re-runs and cancels Actions runs and nothing else")
+	}
+	contains(t, text, "DRY_RUN=true RELEASE_CI_SOURCE=github")
+	contains(t, text, "RELEASE_IMAGES=off RELEASE_NOTES_TASK=off RELEASE_NOTIFY=off")
+	if n := strings.Count(text, "scripts/release-from-trunk.sh"); n != 1 {
+		t.Errorf("rc-qualification.yml runs release-from-trunk.sh %d times, want once, as a dry run", n)
+	}
+	contains(t, text, `bash ./scripts/release-train-actions.sh "$RELEASE_TRAIN_OUTPUT"`)
+	contains(t, text, `RELEASE_TAGS_FIRE: "true"`)
+}
+
 // The train stops at vX.Y.0-pending (task 1236; the one person action of
 // design/playbook/releases.playbook.md §0): nothing it runs -- grain's copy,
-// the GitHub Actions copy, or the Actions helper that re-runs and cancels
-// qualification -- may push vX.Y.0, move `latest`, or call the approve,
-// rollback or promote modes that do. Only promote-release.yml, which a
+// the GitHub Actions copy, or rc-qualification.yml and the Actions helper
+// that re-runs and cancels qualification -- may push vX.Y.0, move
+// `latest`, or call the approve, rollback or promote modes that do. Only promote-release.yml, which a
 // person starts, makes a release official or moves `latest` back.
 func TestTheReleaseTrainNeverPromotesARelease(t *testing.T) {
 	w := releaseTrainWorkflow(t)
@@ -2055,6 +2072,7 @@ func TestTheReleaseTrainNeverPromotesARelease(t *testing.T) {
 	}
 	for _, f := range []struct{ path, text string }{
 		{".github/workflows/release-train.yml", stripComments(read(t, ".github", "workflows", "release-train.yml"))},
+		{".github/workflows/rc-qualification.yml", stripComments(read(t, ".github", "workflows", "rc-qualification.yml"))},
 		{"scripts/release-train-actions.sh", stripComments(read(t, "scripts", "release-train-actions.sh"))},
 	} {
 		for _, bad := range append(forbidden, "release-images.sh", "/git/refs", "/git/tags") {

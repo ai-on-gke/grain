@@ -133,7 +133,11 @@ func TestPromoteReleaseIsDeclaredHumanRequired(t *testing.T) {
 		t.Errorf("release-promotion trigger = gate %v, human %q, sensitive %v; want gate: true, human: required, sensitive: true",
 			trigger.Gate, trigger.Human, trigger.Sensitive)
 	}
-	for _, p := range []string{promoteReleasePath, ".github/workflows/promote-release.yml", "pkg/ui/release_approval.go"} {
+	for _, p := range []string{promoteReleasePath, ".github/workflows/promote-release.yml", "pkg/ui/release_approval.go",
+		// The Inbox approval on GitHub Actions repos (gap 4): the route that
+		// signs and dispatches it, the record it signs, and the script the
+		// workflow verifies it with.
+		"pkg/ui/release_approval_github.go", "pkg/releaseapproval/releaseapproval.go", "scripts/verify-release-approval.sh"} {
 		if !containsString(trigger.Paths, p) {
 			t.Errorf("the release-promotion trigger does not hold %s (paths %v)", p, trigger.Paths)
 		}
@@ -160,7 +164,7 @@ func TestReleaseMachineryClearsOnSecurityReview(t *testing.T) {
 		"scripts/release-images.sh", "scripts/release-from-trunk.sh", "scripts/release-notes.sh",
 		"scripts/candidate-gate.sh", "scripts/release.conf",
 		"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
-		"scripts/release-train-actions.sh",
+		"scripts/release-train-actions.sh", ".github/workflows/rc-qualification.yml",
 		".grain/workflows/release.yml", ".github/workflows/release.yml",
 		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 		".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",

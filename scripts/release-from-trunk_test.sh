@@ -772,6 +772,81 @@ expect "dry run" "writes no user.email into .git/config" eq "$(git -C "$work/clo
 train
 expect "a real run" "writes no identity into .git/config either" eq "$(git -C "$work/clone" config --local --get user.name || true)" ""
 
+# --- approve promotes only a commit on main or release/vX.Y.Z ---
+setup ""
+(
+  cd "$work/seed"
+  git checkout -q -b side "$c1"
+  git commit -q --allow-empty -m "not on main"
+  git push -q origin side
+  git checkout -q main
+)
+side="$(git -C "$work/seed" rev-parse side)"
+tag_remote v2.3.0-rc.1 "$side"
+(
+  cd "$work/seed"
+  git tag -a v2.3.0-pending "$side" -m "Release v2.3.0 pending approval" -m "Qualification: PASS"
+  git push -q origin refs/tags/v2.3.0-pending
+)
+: > "$work/images.log"
+approve approve v2.3.0 GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=alice@example.com
+expect "pending off main" "is refused" eq "$status" 1
+expect "pending off main" "says why" has "which is on neither main nor release/v2.3.0"
+expect "pending off main" "tags no v2.3.0" eq "$(remote_tag v2.3.0)" ""
+expect "pending off main" "leaves latest on v2.1.0" eq "$(remote_tag latest)" "$c0"
+expect "pending off main" "publishes nothing" images_were ""
+
+# --- the release train's tag grant (RELEASE_PUSH_GRANT=train, playbook 0.4) ---
+setup ""
+runs "$c3"
+train RELEASE_PUSH_GRANT=train
+expect "tag grant" "exits 0" eq "$status" 0
+expect "tag grant" "cuts v2.3.0-rc.1" eq "$(remote_tag v2.3.0-rc.1)" "$c3"
+expect "tag grant" "force-moves candidate" eq "$(remote_candidate)" "$c3"
+
+approve approve v2.3.0 RELEASE_PUSH_GRANT=train GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=alice@example.com
+expect "tag grant, approve" "is refused" eq "$status" 2
+expect "tag grant, approve" "says it is the approval's run" has "approve needs the approval's own run"
+approve reject v2.3.0 RELEASE_PUSH_GRANT=train GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=alice@example.com
+expect "tag grant, reject" "is refused" eq "$status" 2
+
+train RELEASE_PUSH_GRANT=everything
+expect "tag grant, unknown" "is refused" has "RELEASE_PUSH_GRANT is everything, not train"
+
+# A train that tried to push a promotion's ref is refused before the push,
+# with or without the grant: a copy of the script whose cut pushes latest,
+# v2.3.0 or main instead of the rc tag.
+mutant() { # mutant <ref> [VAR=value...]: run a train whose rc push is the LKG to <ref>
+  local ref="$1"
+  shift
+  mkdir -p "$work/mutant"
+  cp "$(dirname "$train")/candidate-gate.sh" "$work/mutant/"
+  sed "s|push \"refs/tags/\$new_rc\"|push --force \"\$lkg:$ref\"|" "$train" > "$work/mutant/release-from-trunk.sh"
+  grep -qF "push --force \"\$lkg:$ref\"" "$work/mutant/release-from-trunk.sh" || { echo "mutant: the rc push was not found"; exit 1; }
+  status=0
+  out="$(cd "$work/clone" && env RELEASE_RUNS_JSON="$work/runs.json" \
+    RELEASE_QUALIFICATION_RUNS_JSON="$work/qual-runs.json" RELEASE_QUALIFICATION_CHECKS_JSON="$work/qual-checks.json" \
+    RELEASE_IMAGES="$work/images.sh" RELEASE_NOTES_TASK=off RELEASE_NOW="$now" "$@" bash "$work/mutant/release-from-trunk.sh" 2>&1)" || status=$?
+}
+for grant in "" train; do
+  for ref in refs/tags/latest refs/tags/v2.3.0; do
+    setup ""
+    runs "$c3"
+    mutant "$ref" RELEASE_PUSH_GRANT="$grant"
+    expect "train pushing $ref${grant:+ (grant)}" "exits 1" eq "$status" 1
+    expect "train pushing $ref${grant:+ (grant)}" "says why" has "the train never pushes $ref"
+    expect "train pushing $ref${grant:+ (grant)}" "leaves latest on v2.1.0" eq "$(remote_tag latest)" "$c0"
+    expect "train pushing $ref${grant:+ (grant)}" "pushes no v2.3.0" eq "$(remote_tag v2.3.0)" ""
+    expect "train pushing $ref${grant:+ (grant)}" "moves no candidate" eq "$(remote_candidate)" ""
+  done
+done
+setup ""
+runs "$c3"
+mutant refs/heads/main RELEASE_PUSH_GRANT=train
+expect "grant pushing main" "exits 1" eq "$status" 1
+expect "grant pushing main" "says it is outside the grant" has "refs/heads/main is outside the release train's tag grant"
+expect "grant pushing main" "leaves main where it was" eq "$(git -C "$work/remote.git" rev-parse refs/heads/main)" "$c4"
+
 echo
 echo "$((cases - failures))/$cases passed"
 [ "$failures" -eq 0 ]

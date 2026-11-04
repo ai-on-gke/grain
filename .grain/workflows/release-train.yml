@@ -12,26 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The release train: release grain continuously from main
-# (design/playbook/releases.playbook.md; scripts/release-from-trunk.sh).
+# The release train: release grain from main after a staging soak
+# (design/design/release-from-trunk.design.md, RFT-6; docs/release-candidate-management.md).
 #
-# Each run does two idempotent things and stops:
+# Once a day it runs scripts/release-from-trunk.sh, which does two
+# idempotent things and stops:
 #
-#   1. judges the release candidate in qualification, if there is one,
-#      with candidate-gate.sh check-qualification: Stage 1 is nightly on
-#      vX.Y.0-rc.N, Stage 2 the grain/release-qualification check run. A
-#      pass stages the release: vX.Y.0-pending is tagged on the rc's
-#      commit, its vX.Y.0-stamped images are published as :vX.Y.0-pending
+#   1. judges the release candidate soaking on staging (grain-candidate,
+#      :4280), if there is one and it is 24h old. A soak that passes
+#      stages the release: vX.Y.0-pending is tagged on the rc's commit,
+#      its vX.Y.0-stamped images are published as :vX.Y.0-pending
 #      (release-images.sh pending), the release-notes task is filed
 #      (.grain/templates/release-notes.yml) and an operator notification
-#      offers Approve and Reject. A red rc is dropped
-#      (vX.Y.0-rc.N-discarded, release-images.sh discard-rc), and after
-#      RELEASE_MAX_RC_ATTEMPTS of them the train cuts no more of that
-#      version;
-#   2. with nothing qualifying, and RELEASE_MIN_INTERVAL_MINUTES past the
-#      last release, tags the newest known-good main commit vX.Y.0-rc.N,
-#      force-moves refs/heads/candidate onto it and publishes its images
-#      as :vX.Y.0-rc.N, :candidate and :rc (release-images.sh rc).
+#      offers Approve and Reject. A soak that fails drops the rc
+#      (vX.Y.0-rc.N-discarded, release-images.sh discard-rc);
+#   2. with nothing soaking, tags the newest known-good main commit
+#      vX.Y.0-rc.N, force-moves refs/heads/candidate onto it and publishes
+#      its images as :vX.Y.0-rc.N, :candidate and :rc (release-images.sh rc).
 #
 # It never pushes vX.Y.0 and never moves `latest`, as a git tag or as an
 # image tag: a release becomes official only when a person approves it,
@@ -40,31 +37,39 @@
 # `release-from-trunk.sh approve` or `release-images.sh promote`
 # (TestTheReleaseTrainNeverPromotesARelease, tests/deploy).
 #
-# ai-on-gke/grain drives the train from GitHub Actions
-# (.github/workflows/release-train.yml), woken by release, nightly and
-# grain/release-qualification completions; this copy runs only by hand
-# (a repository admin, from the CLI):
+# The `cron:` is grain's: it fires the run as a trusted schedule of main
+# (pkg/repodecl's workflows.go) at release-gate priority
+# (ci.PriorityReleaseGate), re-runs an infra verdict before reviewing it
+# (pkg/orchestrator/infraverdict.go), and files a review of a run that
+# fails -- which is how a soak failure no defect accounts for, the run
+# exiting 1, reaches soak triage. 04:15 UTC, after nightly (02:11) has
+# had two hours to report on the commits select-lkg reads; the script
+# allows RELEASE_INTERVAL_SLACK_HOURS of jitter around the 24h soak.
+#
+# By hand (a repository admin, from the CLI):
 #
 #     grain ci run -repo ai-on-gke/grain -branch main -event workflow_dispatch \
 #       -job .grain/workflows/release-train.yml:train -watch
 name: release-train
 
 on:
-  # Retired from automatic triggering: ai-on-gke/grain runs the release
-  # train on GitHub Actions (.github/workflows/release-train.yml).
+  # Retired from automatic schedule triggering: ai-on-gke/grain's release
+  # train is the grain task filed from .grain/templates/release-train.yml
+  # (releases playbook §0.4); .github/workflows/release-train.yml is an
+  # always-dry dispatch.
   workflow_dispatch:
 
 jobs:
   train:
-    name: cut, qualify and stage a release from trunk
-    # Every run reads the remote's tags and the CI runs on main and on the
-    # rc, none of which is in the tree: a replayed green is not a run.
+    name: cut, soak and stage a release from trunk
+    # Every run reads the remote's tags, the CI runs on main and staging's
+    # state, none of which is in the tree: a replayed green is not a run.
     cache: false
     # repo-write pushes the rc, -discarded and -pending tags and moves
     # refs/heads/candidate (pkg/gitproxy/ciref.go); release-gate-read is
-    # the api:release-gate-read token the script reads main's and the
-    # rc's runs through, and files the release-notes task and the
-    # release.pending notification with;
+    # the api:release-gate-read token the script reads main's runs,
+    # grain-candidate and the exploration tasks through, and files the
+    # release-notes task and the release.pending notification with;
     # package-publish publishes the rc and pending images. Signing is
     # optional, as in release.yml: a deployment without a signing key
     # still releases.

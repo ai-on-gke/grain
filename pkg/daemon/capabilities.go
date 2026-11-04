@@ -31,8 +31,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/ciapi"
 	consolecap "github.com/ai-on-gke/grain/pkg/capability/console"
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
-	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
-	"github.com/ai-on-gke/grain/pkg/capability/geminikey"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
@@ -64,12 +62,10 @@ func newCapabilityRegistryWithStore(_ *model.Store, local localscripts.Config, p
 // grants a capability against a registry that never registered one is
 // refused, cleanly, by model.ResolveGrants -- not a crash at startup.
 //
-// gcp-key and gemini-key both need a GCP project to mint into, so both
-// stay gated on cfg.gcpProject exactly as before. github-sandbox needs
-// no equivalent deployment-level config -- its two secrets are all it
+// github-sandbox needs no deployment-level config -- its two secrets are all it
 // resolves, and FindInstallation asks GitHub itself which account to
 // act on (pkg/capability/githubsandbox's own doc comment) -- so it
-// registers unconditionally rather than sharing that gate; an operator
+// registers unconditionally; an operator
 // who never runs `grain controller bootstrap-github-app` simply leaves
 // its two secrets unresolvable, and Materialize fails closed the same
 // way any other missing secret does.
@@ -88,9 +84,9 @@ func newCapabilityRegistryWithStore(_ *model.Store, local localscripts.Config, p
 // (modelProxyMethod); the parameter stays for the callers that pass it.
 func CapabilityProviders(cfg Config, store *model.Store, _ map[string]*modelproxy.Endpoint, githubTokens []string, githubCredentials githubCredentialLadder) []model.CapabilityProvider {
 	var providers []model.CapabilityProvider
-	if len(missingCapabilityProviderConfig(cfg, "gemini-key")) == 0 {
-		providers = append(providers, geminikey.New(cfg.GcpProject, model.CredentialRef{Name: gcpkey.DefaultMinterCredential}))
-	}
+	// gemini-key is no longer a provider here: it was retired onto the
+	// gcp server's gemini-key (schema migration 103), which mints with
+	// the same gcp-key-minter secret and reaps keys older than 24h.
 	providers = append(providers, githubsandbox.NewProvider(githubsandbox.Config{
 		Host: cfg.GithubHost, InsecureHTTP: cfg.GithubInsecureHTTP,
 	}))
@@ -184,15 +180,12 @@ func teamRepos(store *model.Store) func(context.Context) ([]string, error) {
 }
 
 // missingCapabilityProviderConfig is the deployment configuration that
-// gates the two GCP providers above. Keep the diagnosis for an absent
-// provider on this same predicate: if registration gains or loses a
-// prerequisite, a credential check must name the same prerequisite.
-func missingCapabilityProviderConfig(cfg Config, id string) []string {
-	var missing []string
-	if id == "gemini-key" && cfg.GcpProject == "" {
-		missing = append(missing, "GCP project ID")
-	}
-	return missing
+// gates a provider above. Keep the diagnosis for an absent provider on
+// this same predicate: if registration gains a prerequisite, a credential
+// check must name the same prerequisite. No provider has one since
+// gemini-key was retired onto the gcp server (schema migration 103).
+func missingCapabilityProviderConfig(Config, string) []string {
+	return nil
 }
 
 // gitHubCredentialLadder loads dataDir's GitHub credential ladder -- the

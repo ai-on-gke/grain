@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // New task's number boxes accept exponent notation, as every
 // type="number" input does: "1e3" is a valid Task priority of 1000 and
@@ -26,7 +27,7 @@ test("New task files a number box's exponent entry as the number it is", async (
   await page.goto("/new");
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel(/^Title/).fill("Number boxes read whole");
-  await dialog.getByLabel(/^Repos/).selectOption("none");
+  await chooseOption(dialog.getByLabel(/^Repos/), "none");
   await dialog.getByLabel("Task priority").fill("1e3");
   await dialog.getByRole("button", { name: /advanced options/i }).click();
   await dialog.getByLabel(/^memory \(mib\)/i).fill("8e3");

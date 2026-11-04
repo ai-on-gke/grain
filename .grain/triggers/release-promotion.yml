@@ -12,6 +12,9 @@ paths:
   - .grain/workflows/promote-release.yml
   - .github/workflows/promote-release.yml
   - pkg/ui/release_approval.go
+  - pkg/ui/release_approval_github.go
+  - pkg/releaseapproval/releaseapproval.go
+  - scripts/verify-release-approval.sh
 gate: true
 human: required
 sensitive: true

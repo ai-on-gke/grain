@@ -17,7 +17,9 @@
 # What the release train asks of GitHub Actions after a run of
 # scripts/release-from-trunk.sh (design/playbook/releases.playbook.md,
 # sections 3, 4, 6 and 14). The train script decides; this does what it
-# decided, from the key=value lines it wrote to RELEASE_TRAIN_OUTPUT:
+# decided, from the key=value lines it wrote to RELEASE_TRAIN_OUTPUT.
+# .github/workflows/rc-qualification.yml runs it after a dry run of the
+# train, since the train itself is a grain task with no GitHub token:
 #
 #   scripts/release-train-actions.sh <train-output-file>
 #

@@ -46,7 +46,7 @@ func TestRepoCICapabilitiesAPIKeepsTaskDefaultsIndependent(t *testing.T) {
 	// package-publish is here beside gcp-key because it is the grant a
 	// release workflow is turned on with, and a capability the picker
 	// does not offer is one SetRepoCICapabilities refuses to save.
-	for _, id := range []string{"gemini-key", model.PackagePublishRef + "={}"} {
+	for _, id := range []string{"github-sandbox", model.PackagePublishRef + "={}"} {
 		if !slices.Contains(got.AvailableCICapabilities, id) {
 			t.Fatalf("CI picker does not offer %q: %v", id, got.AvailableCICapabilities)
 		}
