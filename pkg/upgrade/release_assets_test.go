@@ -35,12 +35,12 @@ import (
 )
 
 const (
-	testCommit1     = "1111111111111111111111111111111111111111"
-	testCommit2     = "2222222222222222222222222222222222222222"
-	testDaemonID1   = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	testDaemonID2   = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	testGuestID1    = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-	testK8sID1      = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	testCommit1   = "1111111111111111111111111111111111111111"
+	testCommit2   = "2222222222222222222222222222222222222222"
+	testDaemonID1 = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testDaemonID2 = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	testGuestID1  = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	testK8sID1    = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 )
 
 type fakeReleaseSpec struct {
@@ -453,12 +453,12 @@ func TestReleaseTagsForBranch(t *testing.T) {
 func TestReleaseRepositoryForImage(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
-		"ghcr.io/bwsalmon/grain/grain":        "github.com/ai-on-gke/grain",
-		"ghcr.io/bwsalmon/grain/grain:main":   "github.com/ai-on-gke/grain",
-		"ghcr.io/ai-on-gke/grain/grain":       "github.com/ai-on-gke/grain",
-		"ghcr.io/acme-org/grain-fork/grain":   "github.com/acme-org/grain-fork",
-		"ghcr.io/acme-org/grain-fork":         "github.com/acme-org/grain-fork",
-		"registry.example.com/team/grain":     "",
+		"ghcr.io/bwsalmon/grain/grain":      "github.com/ai-on-gke/grain",
+		"ghcr.io/bwsalmon/grain/grain:main": "github.com/ai-on-gke/grain",
+		"ghcr.io/ai-on-gke/grain/grain":     "github.com/ai-on-gke/grain",
+		"ghcr.io/acme-org/grain-fork/grain": "github.com/acme-org/grain-fork",
+		"ghcr.io/acme-org/grain-fork":       "github.com/acme-org/grain-fork",
+		"registry.example.com/team/grain":   "",
 	}
 	for in, want := range cases {
 		if got := ReleaseRepositoryForImage(in); got != want {
@@ -483,15 +483,15 @@ func TestDefaultImageSourceLoadsWhenManifestPresentAndFallsBackWhenAbsent(t *tes
 		// Source is intentionally left empty ("") to exercise the default path.
 		u := newUpgrader(t, Config{
 			Image: &ImageConfig{
-				Repository: "ghcr.io/bwsalmon/grain/grain",
-				RefFile:    refFile,
-				PullCmd:    []string{"sh", "-c", `echo "$1" >> ` + pulledFile + `; exit 1`, "sh"},
-				LoadCmd:    dk.loadCmd(map[string][2]string{testCommit1: {daemonRef, testDaemonID1}}),
+				Repository:   "ghcr.io/bwsalmon/grain/grain",
+				RefFile:      refFile,
+				PullCmd:      []string{"sh", "-c", `echo "$1" >> ` + pulledFile + `; exit 1`, "sh"},
+				LoadCmd:      dk.loadCmd(map[string][2]string{testCommit1: {daemonRef, testDaemonID1}}),
 				InspectIDCmd: dk.inspectIDCmd(),
-				TagCmd:     dk.tagCmd(),
-				RunCmd:     dk.runCmd(),
-				RemoveCmd: []string{"true"},
-				ListCmd:   []string{"true"},
+				TagCmd:       dk.tagCmd(),
+				RunCmd:       dk.runCmd(),
+				RemoveCmd:    []string{"true"},
+				ListCmd:      []string{"true"},
 				ReleaseAssets: ReleaseAssetsConfig{
 					ClientForHost: forge.clientFunc("", "oss-gh", ""),
 				},
@@ -539,13 +539,13 @@ func TestDefaultImageSourceLoadsWhenManifestPresentAndFallsBackWhenAbsent(t *tes
 
 		u := newUpgrader(t, Config{
 			Image: &ImageConfig{
-				Repository:       "ghcr.io/bwsalmon/grain/grain",
-				RefFile:          refFile,
-				PullCmd:          []string{"sh", "-c", `printf '%s\n' "$1" >> ` + pulledFile, "sh"},
-				DigestCmd: []string{"echo", "ghcr.io/bwsalmon/grain/grain@" + testDigest},
-				RunCmd:           []string{"echo", "7"},
-				RemoveCmd: []string{"true"},
-				ListCmd:   []string{"true"},
+				Repository: "ghcr.io/bwsalmon/grain/grain",
+				RefFile:    refFile,
+				PullCmd:    []string{"sh", "-c", `printf '%s\n' "$1" >> ` + pulledFile, "sh"},
+				DigestCmd:  []string{"echo", "ghcr.io/bwsalmon/grain/grain@" + testDigest},
+				RunCmd:     []string{"echo", "7"},
+				RemoveCmd:  []string{"true"},
+				ListCmd:    []string{"true"},
 				ReleaseAssets: ReleaseAssetsConfig{
 					ClientForHost: forge.clientFunc("", "", ""),
 				},
@@ -580,13 +580,13 @@ func TestDefaultImageSourceLoadsWhenManifestPresentAndFallsBackWhenAbsent(t *tes
 
 		u := newUpgrader(t, Config{
 			Image: &ImageConfig{
-				Repository:       "ghcr.io/bwsalmon/grain/grain",
-				RefFile:          refFile,
-				PullCmd:          []string{"true"},
-				DigestCmd: []string{"echo", "ghcr.io/bwsalmon/grain/grain@" + testDigest},
-				RunCmd:           []string{"echo", "7"},
-				RemoveCmd: []string{"true"},
-				ListCmd:   []string{"true"},
+				Repository: "ghcr.io/bwsalmon/grain/grain",
+				RefFile:    refFile,
+				PullCmd:    []string{"true"},
+				DigestCmd:  []string{"echo", "ghcr.io/bwsalmon/grain/grain@" + testDigest},
+				RunCmd:     []string{"echo", "7"},
+				RemoveCmd:  []string{"true"},
+				ListCmd:    []string{"true"},
 				ReleaseAssets: ReleaseAssetsConfig{
 					ClientForHost: forge.clientFunc("", "", ""),
 				},
@@ -634,14 +634,14 @@ func TestDefaultImageSourceLoadsWhenManifestPresentAndFallsBackWhenAbsent(t *tes
 		dir := t.TempDir()
 		u := newUpgrader(t, Config{
 			Image: &ImageConfig{
-				Repository:       "ghcr.io/bwsalmon/grain/grain",
-				Source:           ImageSourceRegistry,
-				RefFile:          filepath.Join(dir, "image.env"),
-				PullCmd:          []string{"true"},
-				DigestCmd: []string{"echo", "ghcr.io/bwsalmon/grain/grain@" + testDigest},
-				RunCmd:           []string{"echo", "7"},
-				RemoveCmd: []string{"true"},
-				ListCmd:   []string{"true"},
+				Repository: "ghcr.io/bwsalmon/grain/grain",
+				Source:     ImageSourceRegistry,
+				RefFile:    filepath.Join(dir, "image.env"),
+				PullCmd:    []string{"true"},
+				DigestCmd:  []string{"echo", "ghcr.io/bwsalmon/grain/grain@" + testDigest},
+				RunCmd:     []string{"echo", "7"},
+				RemoveCmd:  []string{"true"},
+				ListCmd:    []string{"true"},
 				ReleaseAssets: ReleaseAssetsConfig{
 					ClientForHost: forge.clientFunc("", "", ""),
 				},
@@ -682,8 +682,8 @@ func TestReleaseLookupChannelTagPrecedenceAndLegacyFallback(t *testing.T) {
 				InspectIDCmd: dk.inspectIDCmd(),
 				TagCmd:       dk.tagCmd(),
 				RunCmd:       dk.runCmd(),
-				RemoveCmd: []string{"true"},
-				ListCmd:   []string{"true"},
+				RemoveCmd:    []string{"true"},
+				ListCmd:      []string{"true"},
 				ReleaseAssets: ReleaseAssetsConfig{
 					Repository:    "depot.code.forge.test/team/edition",
 					ClientForHost: forge.clientFunc("tok-ok", "forge-conn", ""),
@@ -721,8 +721,8 @@ func TestReleaseLookupChannelTagPrecedenceAndLegacyFallback(t *testing.T) {
 				InspectIDCmd: dk.inspectIDCmd(),
 				TagCmd:       dk.tagCmd(),
 				RunCmd:       dk.runCmd(),
-				RemoveCmd: []string{"true"},
-				ListCmd:   []string{"true"},
+				RemoveCmd:    []string{"true"},
+				ListCmd:      []string{"true"},
 				ReleaseAssets: ReleaseAssetsConfig{
 					Repository:    "depot.code.forge.test/team/edition",
 					ClientForHost: forge.clientFunc("", "", ""),
@@ -974,8 +974,8 @@ func TestReleaseAssetsSandboxImageLoadVerifyAndUnreachableRegistryError(t *testi
 				InspectIDCmd: dk.inspectIDCmd(),
 				TagCmd:       dk.tagCmd(),
 				RunCmd:       dk.runCmd(),
-				RemoveCmd: []string{"true"},
-				ListCmd:   []string{"true"},
+				RemoveCmd:    []string{"true"},
+				ListCmd:      []string{"true"},
 				ReleaseAssets: ReleaseAssetsConfig{
 					Repository:    "depot.code.forge.test/team/edition",
 					ClientForHost: forge.clientFunc("", "", ""),
@@ -1086,8 +1086,8 @@ func TestReleaseAssetsCredentialsRedirectGuardAndAmbientHostCLI(t *testing.T) {
 				InspectIDCmd: dk.inspectIDCmd(),
 				TagCmd:       dk.tagCmd(),
 				RunCmd:       dk.runCmd(),
-				RemoveCmd: []string{"true"},
-				ListCmd:   []string{"true"},
+				RemoveCmd:    []string{"true"},
+				ListCmd:      []string{"true"},
 				ReleaseAssets: ReleaseAssetsConfig{
 					Repository:    "github.com/org/private-grain",
 					ClientForHost: forge.clientFunc("secret-pat-123", "corp-github-conn", ""),
@@ -1211,8 +1211,8 @@ func TestBidirectionalFallbackAndTrackDefaults(t *testing.T) {
 				InspectIDCmd:     dk.inspectIDCmd(),
 				TagCmd:           dk.tagCmd(),
 				RunCmd:           dk.runCmd(),
-				RemoveCmd: []string{"true"},
-				ListCmd:   []string{"true"},
+				RemoveCmd:        []string{"true"},
+				ListCmd:          []string{"true"},
 				ReleaseAssets: ReleaseAssetsConfig{
 					Repository:    "depot.code.forge.test/team/edition",
 					ClientForHost: forge.clientFunc("", "", ""),

@@ -61,9 +61,9 @@ const (
 
 // Roles named in images.json (schema 1).
 const (
-	 ReleaseRoleGrain      = "grain"
-	 ReleaseRoleGuest      = "guest"
-	 ReleaseRoleK8sSandbox = "k8s-sandbox"
+	ReleaseRoleGrain      = "grain"
+	ReleaseRoleGuest      = "guest"
+	ReleaseRoleK8sSandbox = "k8s-sandbox"
 )
 
 const (
@@ -415,14 +415,14 @@ type resolvedRelease struct {
 }
 
 type stagedReleaseDaemon struct {
-	resolved   *resolvedRelease
-	stagedRef  string
-	targetTag  string
-	loadedRef  string
-	imageID    string
-	assetName  string
-	assetSHA   string
-	commit     string
+	resolved  *resolvedRelease
+	stagedRef string
+	targetTag string
+	loadedRef string
+	imageID   string
+	assetName string
+	assetSHA  string
+	commit    string
 }
 
 type recordedReleaseImage struct {
