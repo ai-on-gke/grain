@@ -63,7 +63,10 @@ a service account (unchanged).
   stops asking as soon as a direct entry has already resolved to
   `grain/operator`, because nothing can widen that. A group lookup that
   fails leaves out that group's role but does not refuse a person who is
-  admitted another way. Leaving a role out can only narrow access.
+  admitted another way. Leaving out a role that only grants can only
+  narrow access. A role that denies scopes is different: leaving out its
+  veto would widen the person, so a failed lookup of a group whose role
+  denies anything refuses the request instead.
 
 ## 3. Who administers
 

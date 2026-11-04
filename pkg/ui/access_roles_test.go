@@ -17,6 +17,7 @@ package ui_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"slices"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/namespace"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -191,6 +193,60 @@ func TestADenyInAnyMatchingRoleWithholdsTheScope(t *testing.T) {
 	}
 	if code, body := h.call("dee@example.com", http.MethodGet, "/api/tasks", ""); code != http.StatusOK {
 		t.Fatalf("GET /api/tasks: %d %s", code, body)
+	}
+}
+
+func TestAFailedLookupOfAGroupWhoseRoleDeniesRefuses(t *testing.T) {
+	installScopeSets(t, model.APIScopeSet{Name: "contractors", Includes: []string{"grain/viewer"},
+		Deny: []string{"secrets:read"}, Version: 1})
+	h := newRoleHarness(t)
+	h.client.Config.GroupChecker = groupCheckerFunc(func(_ context.Context, group, member string) (bool, error) {
+		return false, errors.New("cloud identity unavailable")
+	})
+	h.allow(t, "user:dee@example.com", model.DefaultAccessRole)
+	h.allow(t, "group:builders@example.com", "grain/contributor")
+	h.allow(t, "user:eve@example.com", model.DefaultAccessRole)
+
+	// A group whose role only grants is left out when its lookup fails:
+	// that can only narrow eve, who is admitted directly.
+	if code, body := h.call("eve@example.com", http.MethodGet, "/api/tasks", ""); code != http.StatusOK {
+		t.Fatalf("GET /api/tasks with a granting group's lookup failing: %d %s", code, body)
+	}
+	// A group whose role denies is not: leaving its veto out would give
+	// dee the secrets:read it withholds, so dee is refused instead.
+	h.allow(t, "group:contractors@example.com", "contractors")
+	if code, body := h.call("dee@example.com", http.MethodGet, "/api/deployment/secret-audit", ""); code != http.StatusForbidden || !strings.Contains(body, "contractors@example.com") {
+		t.Fatalf("GET secret-audit with a denying group's lookup failing: %d %s, want 403 naming the group", code, body)
+	}
+}
+
+func TestRepoLimitedRoleReadsOnlyItsRepositoriesInTheNamespace(t *testing.T) {
+	installScopeSets(t, model.APIScopeSet{Name: "acme/widgets-read", Scopes: []string{"ci:read", "tasks:read", "memory:read"},
+		Repos: []string{"acme/widgets"}, Version: 1})
+	h := newRoleHarness(t)
+	seedAPITask(t, h.client, "7", "acme/widgets")
+	seedAPITask(t, h.client, "8", "acme/secret")
+	ns := fsTestNamespace(t)
+	h.srv.SetNamespace(func() *namespace.Server { return ns })
+	h.allow(t, "user:fay@example.com", "acme/widgets-read")
+
+	for _, p := range []struct {
+		path, contains, absent string
+		want                   int
+	}{
+		{path: "/api/fs/ci/acme/widgets/run-w/go/Test.log", want: http.StatusOK, contains: "FAIL: TestThing"},
+		{path: "/api/fs/ci/acme/secret/run-s/go/Test.log", want: http.StatusForbidden},
+		// A listing naming no repository is narrowed to the role's.
+		{path: "/api/fs/ci/?list", want: http.StatusOK, contains: "widgets", absent: "secret"},
+		{path: "/api/fs/task/7/record.md", want: http.StatusOK, contains: "task 7 in widgets"},
+		{path: "/api/fs/task/8/record.md", want: http.StatusForbidden},
+		{path: "/api/fs/memory/repos/acme/widgets.md", want: http.StatusOK, contains: "widgets memory"},
+		{path: "/api/fs/memory/repos/acme/secret.md", want: http.StatusForbidden},
+	} {
+		code, body := h.call("fay@example.com", http.MethodGet, p.path, "")
+		if code != p.want || (p.contains != "" && !strings.Contains(body, p.contains)) || (p.absent != "" && strings.Contains(body, p.absent)) {
+			t.Errorf("GET %s as acme/widgets-read: %d %q, want %d containing %q and not %q", p.path, code, body, p.want, p.contains, p.absent)
+		}
 	}
 }
 

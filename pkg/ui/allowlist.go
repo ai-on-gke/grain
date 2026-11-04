@@ -465,7 +465,8 @@ func (s *Server) allowedPrincipalErr(ctx context.Context, id VerifiedIdentity) e
 // With all, a group whose role could change nothing -- no deny, when what
 // already matched holds every scope -- is not looked up, and a failed group
 // lookup leaves that group's role out rather than refusing a caller admitted
-// some other way.
+// some other way, unless that role denies scopes: leaving a veto out would
+// widen the caller, so that refuses them instead.
 func (s *Server) allowedPrincipalRoles(ctx context.Context, id VerifiedIdentity, all bool) ([]string, error) {
 	email := normalizeIdentityEmail(id.Email)
 	if id.Kind == model.PrincipalService && s.tasks != nil && s.tasks.gcpKeyPoolSet(ctx)[email] {
@@ -515,6 +516,13 @@ func (s *Server) allowedPrincipalRoles(ctx context.Context, id VerifiedIdentity,
 			}
 			ok, err := checker.IsMember(ctx, grp.Value, email)
 			if err != nil {
+				if all && len(roleDenies(role)) > 0 {
+					// The group's role may veto scopes another entry
+					// grants (access-rbac.md §2): leaving it out would
+					// widen the caller, so refuse rather than guess.
+					return nil, fmt.Errorf("principal %q could not be checked against group %s, whose role %s denies scopes: %w",
+						id.Email, grp.Value, role, err)
+				}
 				if firstErr == nil {
 					firstErr = err
 				}
