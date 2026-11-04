@@ -68,34 +68,44 @@ var systemKeyring = func() keyring {
 type secretToolKeyring struct{}
 
 func (secretToolKeyring) get(account string) (string, error) {
-	out, err := exec.Command("secret-tool", "lookup", "service", keyringService, "account", account).Output()
+	out, err := keyringCommand("secret-tool", "lookup", "service", keyringService, "account", account).Output()
 	return strings.TrimRight(string(out), "\n"), err
 }
 
 func (secretToolKeyring) set(account, secret string) error {
-	cmd := exec.Command("secret-tool", "store", "--label="+keyringService+"/"+account,
+	cmd := keyringCommand("secret-tool", "store", "--label="+keyringService+"/"+account,
 		"service", keyringService, "account", account)
 	cmd.Stdin = strings.NewReader(secret)
 	return cmd.Run()
 }
 
 func (secretToolKeyring) delete(account string) error {
-	return exec.Command("secret-tool", "clear", "service", keyringService, "account", account).Run()
+	return keyringCommand("secret-tool", "clear", "service", keyringService, "account", account).Run()
 }
 
 type macKeychain struct{}
 
 func (macKeychain) get(account string) (string, error) {
-	out, err := exec.Command("security", "find-generic-password", "-s", keyringService, "-a", account, "-w").Output()
+	out, err := keyringCommand("security", "find-generic-password", "-s", keyringService, "-a", account, "-w").Output()
 	return strings.TrimRight(string(out), "\n"), err
 }
 
 func (macKeychain) set(account, secret string) error {
-	return exec.Command("security", "add-generic-password", "-U", "-s", keyringService, "-a", account, "-w", secret).Run()
+	return keyringCommand("security", "add-generic-password", "-U", "-s", keyringService, "-a", account, "-w", secret).Run()
 }
 
 func (macKeychain) delete(account string) error {
-	return exec.Command("security", "delete-generic-password", "-s", keyringService, "-a", account).Run()
+	return keyringCommand("security", "delete-generic-password", "-s", keyringService, "-a", account).Run()
+}
+
+// keyringCommand is the keyring tool's command. It needs the session's
+// own environment -- $DBUS_SESSION_BUS_ADDRESS finds the Secret Service,
+// $HOME the login keychain -- and the CLI is that session's, not a
+// daemon's.
+func keyringCommand(name string, args ...string) *exec.Cmd {
+	cmd := exec.Command(name, args...)
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	return cmd
 }
 
 // credentialStore keeps contexts' secrets.

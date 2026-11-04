@@ -90,6 +90,7 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/auth/logout":               public,
 	"GET /api/auth/user":                 public,
 	"GET /api/auth/status":               public,
+	"GET /api/auth/whoami":               public,
 	"GET /api/whoami":                    trusted,
 
 	// The long poll that tells a signed-in page the daemon is going down
