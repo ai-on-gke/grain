@@ -53,6 +53,7 @@ import { DeclaredFields, DeclaredNotice } from "./Declared.jsx";
 import ReadOnlyReposField from "./ReadOnlyReposField.jsx";
 import BranchField from "./BranchField.jsx";
 import RepoField from "./RepoField.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import WriteReposField from "./WriteReposField.jsx";
 import LastWorkflowRun from "./LastWorkflowRun.jsx";
 import { useUnsavedEdits } from "../unsavedEdits.js";
@@ -197,31 +198,22 @@ function RecurrenceFields({
         />
       )}
       {setTimeZone && (
-        <FormControl fullWidth margin="dense" size="small">
-          <InputLabel id="schedule-timezone-label" shrink>
-            Time zone
-          </InputLabel>
-          <Select
-            labelId="schedule-timezone-label"
-            label="Time zone"
-            name="timeZone"
-            value={timeZone || ""}
-            onChange={(e) => setTimeZone(e.target.value)}
-            displayEmpty
-            notched
-          >
-            <MenuItem value="">UTC (default)</MenuItem>
-            {timeZoneOptions(timeZone).map((z) => (
-              <MenuItem key={z} value={z}>
-                {z}
-                {z === browserZone ? " (this browser)" : ""}
-              </MenuItem>
-            ))}
-          </Select>
-          <FormHelperText>
-            The timezone this schedule fires in. Defaults to UTC if left unset.
-          </FormHelperText>
-        </FormControl>
+        <SearchSelect
+          label="Time zone"
+          name="timeZone"
+          value={timeZone || ""}
+          onChange={setTimeZone}
+          InputLabelProps={{ shrink: true }}
+          margin="dense"
+          helperText="The timezone this schedule fires in. Defaults to UTC if left unset."
+          options={[
+            { value: "", label: "UTC (default)" },
+            ...timeZoneOptions(timeZone).map((z) => ({
+              value: z,
+              label: z === browserZone ? `${z} (this browser)` : z,
+            })),
+          ]}
+        />
       )}
       {/* What to do when the cadence comes round again and the last
           firing is still going (model.OverlapPolicy). It sits with the
@@ -817,46 +809,47 @@ function ScheduleOverlay({
                 : "You can change how often it runs, what it does when a firing overlaps the last one, and whether it runs at all."}
             </Typography>
           ) : firesSuite ? (
-            <FormControl fullWidth margin="normal" size="small">
-              <InputLabel id="schedule-suite-label">Suite</InputLabel>
-              <Select
-                labelId="schedule-suite-label"
-                label="Suite"
-                value={suiteId}
-                onChange={(e) => setSuiteId(e.target.value)}
-              >
-                {suites.map((s) => (
-                  <MenuItem key={s.id} value={s.id}>
-                    <GlyphLabel kind="suites">{s.name}</GlyphLabel>
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+            <SearchSelect
+              label="Suite"
+              value={suiteId}
+              onChange={setSuiteId}
+              margin="normal"
+              options={suites.map((s) => ({
+                value: s.id,
+                label: s.name,
+                row: <GlyphLabel kind="suites">{s.name}</GlyphLabel>,
+              }))}
+            />
           ) : (
-            <FormControl fullWidth margin="normal" size="small">
-              <InputLabel id="schedule-template-label">Template</InputLabel>
-              <Select
-                labelId="schedule-template-label"
-                label="Template"
-                value={templateId}
-                onChange={(e) => setTemplateId(e.target.value)}
-              >
-                {/* "None" holds the glyph slot open rather than carrying
-                  one: it is the absence of a template, and starting its
-                  label a figure's width left of every other row's would
-                  read as a fifth kind. */}
-                <MenuItem value="">
-                  <GlyphLabel kind={null}>
-                    None -- fill in the fields below
-                  </GlyphLabel>
-                </MenuItem>
-                {templates.map((t) => (
-                  <MenuItem key={t.id} value={t.id}>
+            <SearchSelect
+              label="Template"
+              value={templateId}
+              onChange={setTemplateId}
+              InputLabelProps={{ shrink: true }}
+              margin="normal"
+              options={[
+                // "None" holds the glyph slot open rather than carrying
+                // one: it is the absence of a template, and starting its
+                // row a figure's width left of every other row's would
+                // read as a fifth kind.
+                {
+                  value: "",
+                  label: "None -- fill in the fields below",
+                  row: (
+                    <GlyphLabel kind={null}>
+                      None -- fill in the fields below
+                    </GlyphLabel>
+                  ),
+                },
+                ...templates.map((t) => ({
+                  value: t.id,
+                  label: templateLabel(t),
+                  row: (
                     <GlyphLabel kind="templates">{templateLabel(t)}</GlyphLabel>
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+                  ),
+                })),
+              ]}
+            />
           )}
           {isSystem ? null : boundTemplate ? (
             <Typography

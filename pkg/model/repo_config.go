@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -754,6 +755,13 @@ type RepoConfig struct {
 	// has not imported yet, from where, and whether those tasks wait for
 	// a person (orchestrator.reconcileIssueImports, schema 65).
 	IssueImport IssueImport
+
+	// UpstreamRepo is the upstream `<owner>/<name>` repository that pull
+	// requests are opened and tracked against when tasks target this fork
+	// repository (for example, pushing branches to `sackheads/kube-agents`
+	// while opening pull requests on `gke-labs/kube-agents`). Empty opens
+	// pull requests against Repo itself.
+	UpstreamRepo string
 }
 
 // IssueImport is RepoConfig.IssueImport. Its zero value imports nothing.
@@ -879,7 +887,87 @@ func (c RepoConfig) Empty() bool {
 		c.DeclaredPromptExtension == "" && c.DeclaredSetupCommand == "" &&
 		c.RepairTemplateID == "" && len(c.PortBranches) == 0 && len(c.DeclaredPortBranches) == 0 &&
 		len(c.PortTypes) == 0 && len(c.DeclaredPortTypes) == 0 &&
-		c.GitCredential == "" && c.IssueImport.Empty()
+		c.GitCredential == "" && c.IssueImport.Empty() &&
+		c.UpstreamRepo == ""
+}
+
+// PullRequestRepo returns the repository where pull requests for a task
+// targeting repo are opened and tracked, and whether that repository is a
+// cross-repository upstream distinct from repo. When UpstreamRepo is empty
+// or names repo itself, it returns (repo, false, nil).
+func (c RepoConfig) PullRequestRepo(repo RepoRef) (RepoRef, bool, error) {
+	raw := strings.TrimSpace(c.UpstreamRepo)
+	if raw == "" {
+		return repo, false, nil
+	}
+	up, err := ParseRepo(raw)
+	if err != nil {
+		return RepoRef{}, false, err
+	}
+	if up.Host == "" && repo.Host != "" {
+		up.Host = repo.Host
+	}
+	if up.Same(repo) {
+		return repo, false, nil
+	}
+	return up, true, nil
+}
+
+// PullRequestHead returns the pull-request target repository, the head
+// selector to pass to GitHub (`<fork-owner>:<branch>` when opening a
+// cross-repository pull request from repo into UpstreamRepo, or `branch`
+// when opening within repo itself), and whether the pull request is
+// cross-repository.
+func (c RepoConfig) PullRequestHead(repo RepoRef, branch string) (RepoRef, string, bool, error) {
+	prRepo, cross, err := c.PullRequestRepo(repo)
+	if err != nil {
+		return RepoRef{}, "", false, err
+	}
+	if !cross {
+		return repo, branch, false, nil
+	}
+	head := branch
+	if !strings.Contains(branch, ":") && repo.Owner != "" {
+		head = repo.Owner + ":" + branch
+	}
+	return prRepo, head, true, nil
+}
+
+// upstreamRepos remembers the most recently read or written UpstreamRepo for
+// each repository so pure helpers (PullRequestOffTarget, TaskPullRequest)
+// can recognise a task's cross-repository upstream pull request as on-target.
+var upstreamRepos sync.Map
+
+func recordUpstreamRepo(repo RepoRef, upstream string) {
+	key := strings.ToLower(repo.String())
+	raw := strings.TrimSpace(upstream)
+	if raw == "" {
+		upstreamRepos.Delete(key)
+		return
+	}
+	up, err := ParseRepo(raw)
+	if err != nil || up.Same(repo) {
+		upstreamRepos.Delete(key)
+		return
+	}
+	if up.Host == "" && repo.Host != "" {
+		up.Host = repo.Host
+	}
+	upstreamRepos.Store(key, up)
+}
+
+// IsUpstreamRepoFor reports whether candidate is the configured UpstreamRepo
+// for target.
+func IsUpstreamRepoFor(target, candidate RepoRef) bool {
+	if target.Owner == "" || candidate.Owner == "" {
+		return false
+	}
+	v, ok := upstreamRepos.Load(strings.ToLower(target.String()))
+	if !ok {
+		return false
+	}
+	up, ok := v.(RepoRef)
+	return ok && up.Same(candidate)
 }
 
 // RepoPromptExtension is this repository's whole layer of the prompt

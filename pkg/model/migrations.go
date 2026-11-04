@@ -722,7 +722,14 @@ var Migrations = []Migration{
 		},
 	},
 	{
-		Version: 106,
+		Version:     106,
+		Description: "add repo_config.upstream_repo for fork-to-upstream pull request workflows",
+		Statements: []string{
+			"ALTER TABLE `repo_config` ADD COLUMN `upstream_repo` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version: 107,
 		Description: "drop the task, template and repository hostd selectors: a model connection or capability server " +
 			"chooses its hostd; task_run_hostd keeps where each run ran",
 		Statements: []string{

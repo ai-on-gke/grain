@@ -219,7 +219,15 @@ func (o *PullRequestOpener) reviewTool(ctx context.Context, taskID, name string,
 		return "", false, fmt.Errorf("task %s has no repository of its own", taskID)
 	}
 	scope := mcp.PullRequestScope{Owner: task.Target.Owner, Repo: task.Target.Name, Branch: task.BranchName()}
-	if pr := model.TaskPullRequest(*task); pr != nil && pr.Repo == *task.Target {
+	if o.Store != nil {
+		if rc, err := o.Store.GetRepoConfig(ctx, *task.Target); err == nil && rc != nil {
+			if prRepo, cross, err := rc.PullRequestRepo(*task.Target); err == nil && cross {
+				scope.UpstreamOwner = prRepo.Owner
+				scope.UpstreamRepo = prRepo.Name
+			}
+		}
+	}
+	if pr := model.TaskPullRequest(*task); pr != nil && (pr.Repo.Same(*task.Target) || model.IsUpstreamRepoFor(*task.Target, pr.Repo)) {
 		scope.PullRequestNumber = pr.Number
 	}
 	for _, tool := range mcp.NewPullRequestTools(o.Client, nil, scope) {

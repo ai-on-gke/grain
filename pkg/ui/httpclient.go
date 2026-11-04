@@ -1819,6 +1819,27 @@ func (c *HTTPClient) DecideRelease(ctx context.Context, repo, version string, ap
 	return resp, err
 }
 
+// RollbackRelease starts a person's rollback of version, a promoted
+// release -- POST /api/releases/{version}/rollback.
+func (c *HTTPClient) RollbackRelease(ctx context.Context, repo, version string, opts ReleaseRollback) (ReleaseDecision, error) {
+	if repo != "" {
+		ref, err := model.ParseRepo(repo)
+		if err != nil {
+			return ReleaseDecision{}, err
+		}
+		if ref != model.GrainSourceRepo() {
+			opts.Repo = ref.String()
+		}
+	}
+	var body any
+	if opts != (ReleaseRollback{}) {
+		body = opts
+	}
+	var resp ReleaseDecision
+	err := c.do(ctx, http.MethodPost, "/api/releases/"+url.PathEscape(version)+"/rollback", body, &resp)
+	return resp, err
+}
+
 // ReleaseApprovalKey is the deployment's release-approval public key,
 // PEM -- GET /api/release-approval-key.
 func (c *HTTPClient) ReleaseApprovalKey(ctx context.Context) (string, error) {

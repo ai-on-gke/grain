@@ -13,22 +13,14 @@
 // limitations under the License.
 
 import { useState } from "react";
-import {
-  Box,
-  Button,
-  FormControl,
-  InputLabel,
-  MenuItem,
-  Select,
-  Stack,
-  Typography,
-} from "@mui/material";
+import { Box, Button, Stack, Typography } from "@mui/material";
 import api from "../api.js";
 import CompositionPanel from "./CompositionPanel.jsx";
 import ItemGlyph, { GlyphLabel } from "./ItemGlyph.jsx";
 import Overlay from "./Overlay.jsx";
 import BranchField from "./BranchField.jsx";
 import RepoField from "./RepoField.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import { defaultRepoChoice } from "../state.js";
 
 // SuiteRunOverlay starts a suite running against a repo and branch
@@ -100,22 +92,21 @@ export default function SuiteRunOverlay({
         </Typography>
       </Stack>
       <form onSubmit={submit}>
-        <FormControl fullWidth margin="normal" size="small">
-          <InputLabel id="suite-run-suite-label">Suite</InputLabel>
-          <Select
-            labelId="suite-run-suite-label"
-            label="Suite"
-            value={selectedSuiteId}
-            onChange={(e) => setSelectedSuiteId(e.target.value)}
-            required
-          >
-            {suites.map((s) => (
-              <MenuItem key={s.id} value={s.id}>
-                <GlyphLabel kind="suites">{s.name}</GlyphLabel>
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+        <SearchSelect
+          label="Suite"
+          value={selectedSuiteId}
+          onChange={setSelectedSuiteId}
+          required
+          // No asterisk, as the select it replaces had none: there is
+          // always one picked.
+          InputLabelProps={{ required: false }}
+          margin="normal"
+          options={suites.map((s) => ({
+            value: s.id,
+            label: s.name,
+            row: <GlyphLabel kind="suites">{s.name}</GlyphLabel>,
+          }))}
+        />
         <Box component="label" sx={{ display: "block", mt: 2, mb: 1 }}>
           <Typography
             variant="caption"

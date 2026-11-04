@@ -63,6 +63,13 @@ func (o *PullRequestOpener) OpenForTask(ctx context.Context, taskID string) (ui.
 	}
 	if task.Target != nil {
 		out.Repo = task.Target.String()
+		if o.Store != nil {
+			if rc, err := o.Store.GetRepoConfig(ctx, *task.Target); err == nil && rc != nil {
+				if prRepo, cross, err := rc.PullRequestRepo(*task.Target); err == nil && cross {
+					out.Repo = prRepo.String()
+				}
+			}
+		}
 	}
 	for _, c := range status.Checks {
 		check := ui.CheckStatus{Name: c.Name, Status: c.Status}

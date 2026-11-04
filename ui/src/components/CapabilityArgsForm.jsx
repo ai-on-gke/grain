@@ -31,6 +31,7 @@ import {
 } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
 import InfoPopover from "./InfoPopover.jsx";
+import SearchSelect, { SHORT_LIST } from "./SearchSelect.jsx";
 import {
   deref,
   fieldKind,
@@ -423,6 +424,41 @@ function Field({
       const index = options.findIndex(
         (o) => JSON.stringify(o) === JSON.stringify(effective),
       );
+      const optionText = (o) => (typeof o === "string" ? o : JSON.stringify(o));
+      const pick = (v) => onChange(v === "" ? undefined : options[Number(v)]);
+      // A schema's enum can be long (every region, every role): past
+      // SHORT_LIST it is searched rather than scrolled. A short one stays
+      // a plain select, quicker to open.
+      if (options.length > SHORT_LIST) {
+        return (
+          <Box sx={{ display: "flex", alignItems: "flex-start", gap: 0.5 }}>
+            <SearchSelect
+              id={id}
+              label={label(name, schema, false)}
+              required={required}
+              error={Boolean(error)}
+              value={index < 0 ? "" : String(index)}
+              onChange={pick}
+              helperText={help || undefined}
+              inputProps={{ "data-arg": path }}
+              options={[
+                ...(required
+                  ? []
+                  : [{ value: "", label: "Not set", row: <em>Not set</em> }]),
+                ...options.map((o, i) => ({
+                  value: String(i),
+                  label: optionText(o),
+                })),
+              ]}
+            />
+            <InfoPopover
+              title={schema?.description}
+              label={infoTitle}
+              sx={{ mt: 1 }}
+            />
+          </Box>
+        );
+      }
       return (
         <Box sx={{ display: "flex", alignItems: "flex-start", gap: 0.5 }}>
           <FormControl
@@ -439,13 +475,7 @@ function Field({
               id={id}
               label={label(name, schema, false)}
               value={index < 0 ? "" : String(index)}
-              onChange={(e) =>
-                onChange(
-                  e.target.value === ""
-                    ? undefined
-                    : options[Number(e.target.value)],
-                )
-              }
+              onChange={(e) => pick(e.target.value)}
               inputProps={{ "data-arg": path }}
             >
               {!required && (
@@ -455,7 +485,7 @@ function Field({
               )}
               {options.map((o, i) => (
                 <MenuItem key={i} value={String(i)}>
-                  {typeof o === "string" ? o : JSON.stringify(o)}
+                  {optionText(o)}
                 </MenuItem>
               ))}
             </Select>

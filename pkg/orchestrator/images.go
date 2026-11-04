@@ -235,7 +235,7 @@ func publishImages(ctx context.Context, store *model.Store, client github.Client
 	if note == nil {
 		return
 	}
-	repo := *task.Target
+	repo, _, crossRepo := taskPullRequestTarget(ctx, store, task)
 	detail, err := client.GetPullRequest(repo.Owner, repo.Name, number)
 	if err != nil {
 		log.Printf("orchestrator: reading %s/%s#%d to add images to it: %v", repo.Owner, repo.Name, number, err)
@@ -244,16 +244,21 @@ func publishImages(ctx context.Context, store *model.Store, client github.Client
 	if !grainAuthored(detail.Body, task.ID) || strings.Contains(detail.Body, imagesStart(note.CommentID)) {
 		return
 	}
-	sha, err := publisher.PublishFiles(repo.Owner, repo.Name, imagesRef(task, note.CommentID),
+	publishRepo := *task.Target
+	webURL := repoWebURL(detail.HTMLURL, repo)
+	if crossRepo {
+		webURL = publishRepo.WebURL()
+	}
+	sha, err := publisher.PublishFiles(publishRepo.Owner, publishRepo.Name, imagesRef(task, note.CommentID),
 		fmt.Sprintf("Images attached to grain task %s\n\nPublished for %s/%s#%d's description. "+
 			"This commit is on no branch and is never merged.", task.ID, repo.Owner, repo.Name, number),
 		note.At, note.Images)
 	if err != nil {
 		log.Printf("orchestrator: publishing %s's images to %s/%s: %v -- "+
-			"they are in grain's conversation only", task.ID, repo.Owner, repo.Name, err)
+			"they are in grain's conversation only", task.ID, publishRepo.Owner, publishRepo.Name, err)
 		return
 	}
-	body := withImages(detail.Body, renderImages(task, repoWebURL(detail.HTMLURL, repo), sha, *note))
+	body := withImages(detail.Body, renderImages(task, webURL, sha, *note))
 	if err := client.UpdatePullRequestBody(repo.Owner, repo.Name, number, body); err != nil {
 		log.Printf("orchestrator: adding %s's images to %s/%s#%d: %v", task.ID, repo.Owner, repo.Name, number, err)
 	}

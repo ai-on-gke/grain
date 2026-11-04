@@ -25,7 +25,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import NewTaskOverlay from "./NewTaskOverlay.jsx";
 import api from "../api.js";
 import { TASK_DRAFT_STORAGE_KEY } from "../taskDraft.js";
-import { chooseOption } from "../searchSelectTesting.js";
+import { chooseOption, optionValues } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
 
@@ -586,6 +586,42 @@ describe("NewTaskOverlay", () => {
     expect(JSON.parse(createCall()[1].body).reviewTemplateId).toBe("7");
   });
 
+  // grain/task-2910: the review picker is a SearchSelect, so a word from
+  // the middle of a template's name finds it, which a native select's
+  // typeahead (first letters only) never did.
+  it("finds a review template by any word of its name", async () => {
+    api.mockResolvedValueOnce({ id: "42" });
+    const templates = [
+      { id: "3", name: "Bug hunt" },
+      { id: "7", name: "Security pass" },
+      { id: "9", name: "Release notes pass" },
+    ];
+    const user = userEvent.setup();
+    render(
+      <NewTaskOverlay
+        config={null}
+        templates={templates}
+        onClose={() => {}}
+        onCreated={() => Promise.resolve()}
+        showError={() => {}}
+      />,
+    );
+
+    await user.type(screen.getByLabelText(/Title/), "Add");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
+    await user.click(screen.getByRole("button", { name: "Advanced options" }));
+    const review = screen.getByRole("combobox", { name: /^Review/ });
+    await user.click(review);
+    await user.clear(review);
+    await user.type(review, "pass notes");
+    expect(optionValues(review)).toEqual(["9"]);
+    await user.keyboard("{Enter}");
+    expect(review).toHaveValue("Release notes pass");
+    await user.click(screen.getByRole("button", { name: "Create task" }));
+
+    expect(JSON.parse(createCall()[1].body).reviewTemplateId).toBe("9");
+  });
+
   // grain/task-47: the same figure the Templates page, the schedule
   // editor's own picker and the task pane's Review row carry
   // (ItemGlyph.jsx, docs/brand.md), so what is picked here is
@@ -638,7 +674,9 @@ describe("NewTaskOverlay", () => {
     await user.type(screen.getByLabelText(/Title/), "Fix");
     await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Advanced options" }));
-    expect(screen.getByText("No review")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /^Review/ })).toHaveValue(
+      "No review",
+    );
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     expect(JSON.parse(createCall()[1].body).reviewTemplateId).toBe("");

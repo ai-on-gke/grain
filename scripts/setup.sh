@@ -8053,26 +8053,33 @@ sandbox_budget_summary() {
   local first="${1%%$'\n'*}"
   case "$first" in
     fits:* | unchecked:*) printf '%s\n' "${first#*: }" ;;
+    under-resourced:*) printf '%s\n' "CONSTRAINED -- ${first#*: } (see !! below)" ;;
     admits-nothing:*) printf '%s\n' "NONE -- one sandbox of this deployment's shape does not fit (see !! below)" ;;
     *) printf '%s\n' "not read (the daemon did not answer grain sandbox-budget; it logs the budget at start)" ;;
   esac
 }
 
 # report_sandbox_budget_problem is the readiness report's !! block for a
-# budget that admits nothing -- the same finding grain init reports as a
-# manual step (pkg/hostinit checkSandboxBudget), with the `grain
-# settings` command that would fit when there is one. Without it the
-# deploy reports success on a host where every approved task stays
-# queued forever (the 10-28 walkthrough's 2 vCPU / 7.8 GiB e2-standard-2).
+# budget that admits nothing or restricts concurrency far below max_workers --
+# the same finding grain init and grain sandbox-budget report
+# (pkg/hostinit CheckSandboxBudget), with the `grain settings` command when
+# there is one. Without it the deploy reports success on a host where every
+# approved task stays queued forever (the 10-28 walkthrough's 2 vCPU / 7.8 GiB
+# e2-standard-2) or where a small boot partition silently restricts a beefy
+# machine to one task at a time.
 report_sandbox_budget_problem() {
   local first="${1%%$'\n'*}" fix=""
   if [[ "$1" == *$'\n'fix:\ * ]]; then
     fix="${1##*$'\n'fix: }"
     fix="${fix%%$'\n'*}"
   fi
-  printf '%s\n' "${first#admits-nothing: }" | fold -s -w 72 | sed 's/ *$//; 1s/^/    !! /; 2,$s/^/       /'
+  printf '%s\n' "${first#*: }" | fold -s -w 72 | sed 's/ *$//; 1s/^/    !! /; 2,$s/^/       /'
   if [ -n "$fix" ]; then
-    echo "       To fit one, run: $fix"
+    if [[ "$first" == admits-nothing:* ]]; then
+      echo "       To fit one, run: $fix"
+    else
+      echo "       To match the settings to this host, run: $fix"
+    fi
     echo "       (or set the same in Settings -> Sandbox) -- the daemon applies it without a restart."
   fi
 }
@@ -8269,6 +8276,9 @@ report_readiness() {
   fi
   if [[ "$budget" == admits-nothing:* ]]; then
     ready=0
+    report_sandbox_budget_problem "$budget"
+  fi
+  if [[ "$budget" == under-resourced:* ]]; then
     report_sandbox_budget_problem "$budget"
   fi
   if [ "$gemini" = "MISSING" ] && [ "$claude" = "MISSING" ] && [ "$openai" = "MISSING" ]; then

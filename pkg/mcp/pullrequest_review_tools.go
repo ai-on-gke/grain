@@ -105,7 +105,8 @@ func commenterOf(client PullRequestReader) PullRequestCommenter {
 // listed by its first line only, since there is nothing left to do
 // about it.
 func reviewCommentsSection(client PullRequestReader, commenter PullRequestCommenter, scope PullRequestScope, number int) string {
-	comments, err := client.ListReviewComments(scope.Owner, scope.Repo, number)
+	prOwner, prRepo := scope.prOwner(), scope.prRepo()
+	comments, err := client.ListReviewComments(prOwner, prRepo, number)
 	if err != nil {
 		return fmt.Sprintf("\nInline review comments could not be read: %v\n", err)
 	}
@@ -117,7 +118,7 @@ func reviewCommentsSection(client PullRequestReader, commenter PullRequestCommen
 		// Best effort: the thread view is GraphQL, which a credential or
 		// a host may not offer, and the comments are worth showing
 		// without it.
-		read, err := commenter.ListReviewThreads(scope.Owner, scope.Repo, number)
+		read, err := commenter.ListReviewThreads(prOwner, prRepo, number)
 		if err == nil {
 			threads = read
 		}
@@ -233,8 +234,9 @@ const noPullRequestCommenter = "There is no pull request to write to: this run h
 // open pull request on its own branch), or a sentence for the agent saying
 // why there is none.
 func ownOpenPullRequest(client PullRequestReader, scope PullRequestScope) (*github.PullRequest, *Result) {
+	prOwner, prRepo := scope.prOwner(), scope.prRepo()
 	if scope.Branch != "" {
-		pr, err := client.FindOpenPullRequestForBranch(scope.Owner, scope.Repo, scope.Branch)
+		pr, err := client.FindOpenPullRequestForBranch(prOwner, prRepo, scope.prHead())
 		if err != nil {
 			return nil, &Result{Text: fmt.Sprintf("looking for an open pull request for %s: %v", scope.Branch, err), IsError: true}
 		}
@@ -243,7 +245,7 @@ func ownOpenPullRequest(client PullRequestReader, scope PullRequestScope) (*gith
 		}
 	}
 	if scope.PullRequestNumber > 0 {
-		detail, err := client.GetPullRequest(scope.Owner, scope.Repo, scope.PullRequestNumber)
+		detail, err := client.GetPullRequest(prOwner, prRepo, scope.PullRequestNumber)
 		if err != nil {
 			return nil, &Result{Text: fmt.Sprintf("reading pull request #%d: %v", scope.PullRequestNumber, err), IsError: true}
 		}
@@ -303,14 +305,15 @@ func replyToPullRequestCommentTool(client PullRequestReader, commenter PullReque
 			if refusal != nil {
 				return *refusal
 			}
+			prOwner, prRepo := scope.prOwner(), scope.prRepo()
 			if !hasCommentArg {
-				id, err := commenter.CreateComment(scope.Owner, scope.Repo, pr.Number, body)
+				id, err := commenter.CreateComment(prOwner, prRepo, pr.Number, body)
 				if err != nil {
 					return Result{Text: fmt.Sprintf("commenting on pull request #%d: %v", pr.Number, err), IsError: true}
 				}
 				return Result{Text: fmt.Sprintf("Posted comment %d on pull request #%d.", id, pr.Number)}
 			}
-			comments, err := client.ListReviewComments(scope.Owner, scope.Repo, pr.Number)
+			comments, err := client.ListReviewComments(prOwner, prRepo, pr.Number)
 			if err != nil {
 				return Result{Text: fmt.Sprintf("reading pull request #%d's review comments: %v", pr.Number, err), IsError: true}
 			}
@@ -320,7 +323,7 @@ func replyToPullRequestCommentTool(client PullRequestReader, commenter PullReque
 						"for %s -- nothing was posted. pull_request_status lists the ones there are.",
 					commentID, pr.Number, scope.Branch), IsError: true}
 			}
-			id, err := commenter.ReplyToReviewComment(scope.Owner, scope.Repo, pr.Number, commentID, body)
+			id, err := commenter.ReplyToReviewComment(prOwner, prRepo, pr.Number, commentID, body)
 			if err != nil {
 				return Result{Text: fmt.Sprintf("replying to comment %d on pull request #%d: %v", commentID, pr.Number, err), IsError: true}
 			}
@@ -375,7 +378,8 @@ func resolveReviewThreadTool(client PullRequestReader, commenter PullRequestComm
 			if refusal != nil {
 				return *refusal
 			}
-			threads, err := commenter.ListReviewThreads(scope.Owner, scope.Repo, pr.Number)
+			prOwner, prRepo := scope.prOwner(), scope.prRepo()
+			threads, err := commenter.ListReviewThreads(prOwner, prRepo, pr.Number)
 			if err != nil {
 				return Result{Text: fmt.Sprintf("reading pull request #%d's review threads: %v", pr.Number, err), IsError: true}
 			}
@@ -392,7 +396,7 @@ func resolveReviewThreadTool(client PullRequestReader, commenter PullRequestComm
 			if thread.Resolved {
 				return Result{Text: fmt.Sprintf("Thread %s on pull request #%d is already resolved.", thread.ID, pr.Number)}
 			}
-			if err := commenter.ResolveReviewThread(scope.Owner, scope.Repo, thread.ID); err != nil {
+			if err := commenter.ResolveReviewThread(prOwner, prRepo, thread.ID); err != nil {
 				return Result{Text: fmt.Sprintf("resolving thread %s on pull request #%d: %v", thread.ID, pr.Number, err), IsError: true}
 			}
 			return Result{Text: fmt.Sprintf("Resolved thread %s on pull request #%d.", thread.ID, pr.Number)}
