@@ -104,6 +104,15 @@ The tag only moves forward, so a release that finishes late never moves it
 back. To get one exact build, re-run setup once it has published, or pin
 `GRAIN_IMAGE_TAG=sha-<short sha>`.
 
+A new install keeps its task store in PostgreSQL. The installer provisions a
+local server for it, `grain-postgres.service`. It runs a pinned image from
+`mirror.gcr.io` (`GRAIN_POSTGRES_IMAGE` to override), listens on 127.0.0.1
+only, and keeps its data in `/var/lib/grain/data/postgres`. Pass
+`--db-driver sqlite` for embedded SQLite instead, or `--db-dsn` to use a
+server of your own. An existing install keeps the store it has. See
+[docs/database.md](docs/database.md), which also says when SQLite is the
+better choice.
+
 The GitHub token is the quickest bootstrap path. For ongoing use, configure a
 GitHub App so Grain can use installation tokens and read GitHub Checks. Run
 `./scripts/setup.sh --help` for GitHub App settings, other agent providers,
@@ -265,7 +274,8 @@ Everything lives under one root, split in two:
 
 ```
 /var/lib/grain/           root:root 0755 -- nothing else lives here
-/var/lib/grain/data/      grain:grain 0750 -- GRAIN_DATA_DIR (-data-dir): the store, secrets,
+/var/lib/grain/data/      grain:grain 0750 -- GRAIN_DATA_DIR (-data-dir): the store (postgres/,
+                          the local PostgreSQL server's data; or store/, SQLite), secrets,
                           secrets.key, local-api-token, bin/ -- everything to back up
 /var/lib/grain/scratch/   grain:grain 0755 -- GRAIN_SANDBOX_DIR (-sandbox-dir): host-sandbox
                           run directories and the package, Actions and CI caches -- disposable
@@ -299,7 +309,8 @@ sudo ./scripts/setup.sh --purge       # or GRAIN_UNINSTALL_PURGE=1
 |---|---|---|
 | `grain-daemon.service`, the `grain-reboot`/`-shutdown`/`-restart` `.path`/`.service` watchers, `grain-block-metadata.service` and its iptables rule, and the `grain-daemon` container | stopped, disabled and removed | stopped, disabled and removed |
 | `/usr/local/bin/grain`, `/usr/local/bin/granule`, `/usr/local/lib/grain`, `/usr/local/share/grain` (left by host mode), `/etc/profile.d/grain.sh` | removed | removed |
-| `/etc/grain/{image.env,cli.env,cosign.pub}` (the directory too, once it is empty) | removed | removed |
+| `grain-postgres.service` and the `grain-postgres` container (the local PostgreSQL server; its data is in `GRAIN_DATA_DIR`) | stopped, disabled and removed | stopped, disabled and removed |
+| `/etc/grain/{image.env,cli.env,cosign.pub,postgres.env}` (the directory too, once it is empty) | removed | removed |
 | grain's sudoers drop-in (`/etc/sudoers.d/90-grain-nft`, left by host mode) and `/etc/modprobe.d/kvm-nested-grain.conf` | removed | removed |
 | the grain images (`ghcr.io/bwsalmon/grain/grain`, every tag) and every sandbox image those tags name | removed (`--keep-images` keeps them) | removed (`--keep-images` keeps them) |
 | `sleep`/`suspend`/`hibernate`/`hybrid-sleep.target` masks and `/etc/systemd/logind.conf.d/10-grain-no-suspend.conf` | unmasked, drop-in removed | unmasked, drop-in removed |
@@ -323,7 +334,16 @@ up by `grain init` instead is removed by hand: see
 Back up `/var/lib/grain/data` (`GRAIN_DATA_DIR`), and never
 `/var/lib/grain/scratch` (`GRAIN_SANDBOX_DIR`): everything in it is a run's
 working space or a cache that grain rebuilds. Stop the daemon, or use
-`grain backup` below, for a consistent copy of the store.
+`grain backup` below, for a consistent copy of a SQLite store.
+
+On the local PostgreSQL server (the default for a new install), the cluster in
+`data/postgres` is part of that directory. Copy it with both
+`grain-daemon.service` and `grain-postgres.service` stopped, or take an online
+dump with
+`sudo docker exec grain-postgres pg_dump -U grain -d grain -Fc > grain.dump`.
+`grain backup` covers SQLite only. [docs/database.md](docs/database.md#backups)
+has the restore steps, and covers upgrading the PostgreSQL image, which is a
+separate, explicit step.
 
 Grain can also upload a credential-free backup of its SQLite database and
 controller-local `grain/config` repository to either Google Drive or a Google
@@ -416,6 +436,9 @@ and walkthroughs; see
   half: bringing up a GCE instance with nested virtualization to run it on
   -- sizing, verifying acceleration actually works, suspend/resume, and
   reaching its loopback-bound UI.
+- [The task store](docs/database.md): PostgreSQL (the default, on a local
+  server the installer provisions) or SQLite, when to keep SQLite, backups,
+  upgrading the PostgreSQL image, and moving a SQLite install.
 - [Data model](docs/data-model.md) describes tasks, runs, capabilities, leases,
   and their lifecycle.
 - [Composition](docs/composition.md) explains how Grain's components fit

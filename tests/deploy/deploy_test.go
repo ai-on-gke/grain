@@ -416,12 +416,13 @@ func TestTheDeploymentIsOwnedByTheAccountsRealGroup(t *testing.T) {
 	// exists to support -- while reading correctly for the one whose
 	// group is its own name, so nothing but a mismatched account finds
 	// it. The numbers it resolves are the pair `docker run --user` is
-	// given, in both the daemon's unit and the CLI wrapper.
+	// given, in the daemon's unit, the CLI wrapper and the local
+	// PostgreSQL server's unit.
 	if strings.Contains(code, `id -g "$GRAIN_GROUP"`) || strings.Contains(code, `id -u "$GRAIN_GROUP"`) {
 		t.Error(`id is being asked about "$GRAIN_GROUP", which is a group name: it takes an account`)
 	}
-	if n := strings.Count(code, `gid="$(id -g "$GRAIN_USER")"`); n != 2 {
-		t.Errorf(`%d places resolve the numeric gid from the account, want 2 (the daemon's own --user, and the CLI wrapper's)`, n)
+	if n := strings.Count(code, `gid="$(id -g "$GRAIN_USER")"`); n != 3 {
+		t.Errorf(`%d places resolve the numeric gid from the account, want 3 (the daemon's own --user, the CLI wrapper's, and grain-postgres.service's)`, n)
 	}
 	// Line by line, and skipping `id -g`, which takes an account and so
 	// says "$GRAIN_USER" correctly: what must not come back is an
