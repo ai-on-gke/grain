@@ -80,7 +80,13 @@ func (f *fakeQualificationForge) DefaultBranch(owner, repo string) (string, erro
 
 func (f *fakeQualificationForge) CreateCheckRun(owner, repo string, run github.CheckRunWrite) (int64, error) {
 	f.nextID++
-	f.checks = append(f.checks, github.CheckRun{ID: f.nextID, Name: run.Name, Status: run.Status, App: f.app})
+	f.checks = append(f.checks, github.CheckRun{
+		ID:         f.nextID,
+		Name:       run.Name,
+		Status:     run.Status,
+		App:        f.app,
+		ExternalID: run.ExternalID,
+	})
 	return f.nextID, nil
 }
 
@@ -88,6 +94,9 @@ func (f *fakeQualificationForge) UpdateCheckRun(owner, repo string, id int64, ru
 	for i := range f.checks {
 		if f.checks[i].ID == id {
 			f.checks[i].Status = run.Status
+			if run.ExternalID != "" {
+				f.checks[i].ExternalID = run.ExternalID
+			}
 			if run.Conclusion != "" {
 				c := run.Conclusion
 				f.checks[i].Conclusion = &c
@@ -308,8 +317,51 @@ func TestReleaseQualificationIgnoresACheckRunFromAnotherApp(t *testing.T) {
 			t.Fatalf("foreign check run %d is %+v, want it untouched", c.ID, c)
 		}
 	}
-	if own := forge.checks[3]; own.ID != 101 || own.App != "grain-test" || own.Status != "in_progress" {
-		t.Fatalf("grain's check run is %+v, want a new in_progress one from grain-test", own)
+	if own := forge.checks[3]; own.ID != 101 || own.App != "grain-test" || own.Status != "in_progress" ||
+		own.ExternalID != model.ReleaseQualificationTag(repo, rqTag) {
+		t.Fatalf("grain's check run is %+v, want a new in_progress one from grain-test for %s", own, rqTag)
+	}
+}
+
+// Even a check run from grain's own App only counts when its ExternalID
+// matches this candidate's ReleaseQualificationTag: a discarded rc on the
+// same commit, or a same-app run with no ExternalID, neither blocks
+// qualification nor is overwritten.
+func TestReleaseQualificationIgnoresSameAppCheckRunWithDifferentExternalID(t *testing.T) {
+	t.Parallel()
+	store, ctx, repo, forge := newQualificationRepo(t)
+	forge.nightly = "success"
+	failure := model.ConclusionFailure
+	success := model.ConclusionSuccess
+	forge.checks = []github.CheckRun{
+		{
+			ID:         80,
+			Name:       model.ReleaseQualificationCheckName,
+			Status:     "completed",
+			Conclusion: &failure,
+			App:        "grain-test",
+			ExternalID: model.ReleaseQualificationTag(repo, "v1.4.0-rc.1"),
+		},
+		{
+			ID:         81,
+			Name:       model.ReleaseQualificationCheckName,
+			Status:     "completed",
+			Conclusion: &success,
+			App:        "grain-test",
+		},
+	}
+	forge.nextID = 100
+	syncQualification(t, ctx, store, forge, baseTime)
+
+	if tasks := qualificationTasks(t, ctx, store, repo); len(tasks) != 3 {
+		t.Fatalf("got %v, want Stage 2 started despite earlier/untagged check runs on the same SHA", tasks)
+	}
+	if len(forge.checks) != 3 {
+		t.Fatalf("got check runs %+v, want a new check run posted beside the two ignored ones", forge.checks)
+	}
+	if own := forge.checks[2]; own.ID != 101 || own.Status != "in_progress" ||
+		own.ExternalID != model.ReleaseQualificationTag(repo, rqTag) {
+		t.Fatalf("grain's check run is %+v, want a new in_progress one tagged for %s", own, rqTag)
 	}
 }
 

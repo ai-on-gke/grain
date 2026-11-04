@@ -1207,12 +1207,14 @@ type CheckRun struct {
 	// The rest is what recording this check as GitHub CI needs
 	// (orchestrator.recordPolledChecks, model.GitHubCIJob), and comes in
 	// the same response: ID is the check run's id (an Actions job's id),
-	// App the slug of the App that posted it, Output its whole output --
-	// title, summary and text -- bounded.
+	// App the slug of the App that posted it, ExternalID the caller-supplied
+	// identifier on CheckRunWrite, Output its whole output -- title, summary
+	// and text -- bounded.
 	ID           int64
 	CheckSuiteID int64
 	HeadSHA      string
 	App          string
+	ExternalID   string
 	StartedAt    *time.Time
 	CompletedAt  *time.Time
 	Output       string
@@ -2914,6 +2916,7 @@ func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) 
 			CheckRuns []struct {
 				ID          int64      `json:"id"`
 				HeadSHA     string     `json:"head_sha"`
+				ExternalID  string     `json:"external_id"`
 				Name        string     `json:"name"`
 				Status      string     `json:"status"`
 				Conclusion  *string    `json:"conclusion"`
@@ -2959,6 +2962,7 @@ func (c *RESTClient) ListCheckRuns(owner, repo, ref string) ([]CheckRun, error) 
 				CheckSuiteID:  item.CheckSuite.ID,
 				HeadSHA:       item.HeadSHA,
 				App:           item.App.Slug,
+				ExternalID:    item.ExternalID,
 				StartedAt:     item.StartedAt,
 				CompletedAt:   item.CompletedAt,
 				Output:        checkOutput(item.Output.Title, item.Output.Summary, item.Output.Text),
