@@ -914,7 +914,7 @@ function ImageChooser({
             <>
               Will load release assets from{" "}
               <code>{status.imageSource.releaseRepository}</code> as{" "}
-              <code>{will}</code>
+              <code className="upgrade-will-ref">{will}</code>
               {status.imageSource.sourceDefault &&
               status.imageSource.fallback === "registry"
                 ? " (or pull from the container registry if the release has no image assets)"
@@ -922,7 +922,7 @@ function ImageChooser({
             </>
           ) : (
             <>
-              Will pull <code>{will}</code>
+              Will pull <code className="upgrade-will-ref">{will}</code>
             </>
           )}
         </Typography>

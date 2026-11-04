@@ -563,7 +563,7 @@ func DownloadToFile(client *http.Client, req *http.Request, dest string, timeout
 		return "", 0, 0, "", err
 	}
 	if client == nil {
-		client = http.DefaultClient
+		return "", 0, 0, "", errors.New("download needs an HTTP client")
 	}
 	if t, ok := client.Transport.(*CommandForgeTransport); ok {
 		if c := activeHostGit(); c != nil {
