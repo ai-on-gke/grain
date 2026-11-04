@@ -183,13 +183,24 @@ const one = (pick) => (t) => {
   return v === undefined || v === null || v === "" ? [] : [v];
 };
 
-// stateRank puts a task where STATE_ORDER -- the sidebar's own order,
-// proposed through closed -- says it goes. A state this build has never
-// heard of sorts after all of them instead of before, so a newer
-// daemon's unknown state doesn't quietly take over the top of the list.
+// SORT_STATE_ORDER is DISPLAY_STATE_ORDER -- the sidebar's and the
+// Kanban board's own order, proposed through closed -- with its one
+// "Asked" opened back out into the two states it stands for, side by
+// side. Not STATE_ORDER: that is model.StateOf's precedence, which puts
+// failed between the two asked states, so a list ordered by state split
+// the asked tasks the rest of the UI shows as one group with the failed
+// ones (gantt.js's lane order made the same mistake).
+const SORT_STATE_ORDER = DISPLAY_STATE_ORDER.flatMap((s) =>
+  s === "asked" ? ASKED_STATES : [s],
+);
+
+// stateRank puts a task where SORT_STATE_ORDER says it goes. A state
+// this build has never heard of sorts after all of them instead of
+// before, so a newer daemon's unknown state doesn't quietly take over
+// the top of the list.
 export function stateRank(t) {
-  const i = STATE_ORDER.indexOf(t.state);
-  return i === -1 ? STATE_ORDER.length : i;
+  const i = SORT_STATE_ORDER.indexOf(t.state);
+  return i === -1 ? SORT_STATE_ORDER.length : i;
 }
 
 // idKey sorts task ids as the numbers they are ("9" before "10"), while

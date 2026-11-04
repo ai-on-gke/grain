@@ -385,8 +385,30 @@ export default function RepoPage({
   repoTab = null,
   onShowTab,
   showError,
+  // dismissError takes the shell's error banner down if it still says the
+  // message given (App's dismissError), so a refusal can go the moment the
+  // save that answers it succeeds.
+  dismissError = () => {},
 }) {
   const root = repoApiRoot(repo);
+  // refuseSave and settleSave pair each box's refusal with its next good
+  // save. A refused value is put back or kept in the box, and the reason
+  // goes to the shell's banner, which stays up for five seconds whatever
+  // happens next -- so a workflow fixed and saved a second later still
+  // read, under the file that had just saved, as refused. Keyed by the
+  // box, so a save that succeeds takes down only its own refusal and never
+  // an unrelated one shown since.
+  const refusals = useRef(new Map());
+  const refuseSave = (key, err) => {
+    refusals.current.set(key, String(err?.message || err));
+    showError(err);
+  };
+  const settleSave = (key) => {
+    const message = refusals.current.get(key);
+    if (message === undefined) return;
+    refusals.current.delete(key);
+    dismissError(message);
+  };
   // gateCheck counts the saves here that can change whether this repo's
   // base branch is judged; the release pane re-reads its own copy of
   // the gate when it moves.
@@ -825,6 +847,7 @@ export default function RepoPage({
         method: "POST",
         body: JSON.stringify({ name: branchName }),
       });
+      settleSave("branch");
       setBranchNote(
         added && added.alreadyRequested
           ? `${branchName} is already on this repo's list (${added.status}); nothing new was added.`
@@ -833,7 +856,7 @@ export default function RepoPage({
       form.reset();
       await loadBranches();
     } catch (err) {
-      showError(err);
+      refuseSave("branch", err);
     }
   };
 
@@ -852,11 +875,12 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ ciCapabilities: toSave }),
       });
+      settleSave("ciCapabilities");
       setCaps(updated);
       setCICapsSelection(updated.ciCapabilities || []);
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
+      refuseSave("ciCapabilities", err);
     }
   };
 
@@ -870,11 +894,12 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ defaultCapabilities: toSave }),
       });
+      settleSave("capabilities");
       setCaps(updated);
       setCapsSelection(updated.defaultCapabilities || []);
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
+      refuseSave("capabilities", err);
     }
   };
 
@@ -890,11 +915,12 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ defaultHostd: selector }),
       });
+      settleSave("hostd");
       setCaps(updated);
       setHostdText(updated.defaultHostd || "");
     } catch (err) {
       setHostdText(storedHostd);
-      showError(err);
+      refuseSave("hostd", err);
     }
   };
 
@@ -904,12 +930,13 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ upstreamRepo: upstream }),
       });
+      settleSave("upstream");
       setCaps(updated);
       setUpstreamRepoText(updated.upstreamRepo || "");
       await onRefreshConfig();
     } catch (err) {
       setUpstreamRepoText(storedUpstreamRepo);
-      showError(err);
+      refuseSave("upstream", err);
     }
   };
 
@@ -933,11 +960,12 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ promptExtension: val }),
       });
+      settleSave("prompt");
       setPrompt(updated);
       setPromptText(updated.promptExtension || "");
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
+      refuseSave("prompt", err);
     }
   };
 
@@ -955,11 +983,12 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ setupCommand: val }),
       });
+      settleSave("setup");
       setSetup(updated);
       setSetupText(updated.setupCommand || "");
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
+      refuseSave("setup", err);
     }
   };
 
@@ -1030,10 +1059,11 @@ export default function RepoPage({
           body: JSON.stringify(fields),
         }),
       );
+      settleSave("issueImport");
       setImportDraft(null);
       await onRefreshConfig();
     } catch (err) {
-      showError(err);
+      refuseSave("issueImport", err);
     }
   };
 
@@ -1132,12 +1162,13 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ unfixableChecks: checks }),
       });
+      settleSave("unfixable");
       setUnfixable(updated);
       setUnfixableError("");
       await onRefreshConfig();
       return true;
     } catch (err) {
-      showError(err);
+      refuseSave("unfixable", err);
       return false;
     }
   };
@@ -1227,6 +1258,7 @@ export default function RepoPage({
         method: "PUT",
         body: JSON.stringify({ workflows: body }),
       });
+      settleSave("workflows");
       setWorkflows(updated);
       setWorkflowEdits((current) =>
         settleWorkflowEdits(current, sent, updated.workflows || []),
@@ -1234,7 +1266,7 @@ export default function RepoPage({
       await onRefreshConfig();
       return true;
     } catch (err) {
-      showError(err);
+      refuseSave("workflows", err);
       return false;
     }
   };

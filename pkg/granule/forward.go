@@ -28,7 +28,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/bwsalmon/granule/pkg/guestforward"
+	"github.com/gke-labs/granule/pkg/guestforward"
 )
 
 // ForwardSpec describes a single TCP port forward between the host/controller

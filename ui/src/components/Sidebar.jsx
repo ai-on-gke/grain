@@ -607,6 +607,11 @@ export default function Sidebar({
   // daemon too old to have the route, and then there is no tile.
   whoami = null,
   tasks,
+  // The closed and merged tasks the server counts that tasks does not
+  // hold yet (closedTasks.js's unseenClosed): closed work is paged in, so
+  // without them the Closed, Merged and Tasks counts would stop at the
+  // pages read.
+  unseenClosed = null,
   notificationCount = 0,
   schedules = [],
   templates = [],
@@ -743,6 +748,11 @@ export default function Sidebar({
     }
     if (t.blocked) blocked += 1;
   }
+  if (unseenClosed?.closed > 0) {
+    counts.closed = (counts.closed || 0) + unseenClosed.closed;
+  }
+  merged += unseenClosed?.merged || 0;
+  taskCount += (unseenClosed?.closed || 0) + (unseenClosed?.merged || 0);
   const repoCount = repoRows(config, tasks).length;
   // time.Time's zero value is still a non-empty string on the wire, so
   // FinishedAt cannot distinguish a live run here. Conclusion is CI's

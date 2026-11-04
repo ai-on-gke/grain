@@ -52,6 +52,27 @@ describe("UpgradePanel", () => {
     ).toBeInTheDocument();
   });
 
+  // 2026-11-04 deployment-operations walkthrough: behind an unreachable
+  // hostd the first read takes seconds, and the tab stayed blank for all
+  // of them.
+  it("shows that the upgrade status is being read until the first read answers", async () => {
+    let answer;
+    api.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    render(<UpgradePanel showError={() => {}} />);
+
+    expect(
+      screen.getByRole("progressbar", { name: "Reading the upgrade status" }),
+    ).toBeInTheDocument();
+    answer({ enabled: false });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("progressbar", {
+          name: "Reading the upgrade status",
+        }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
   // grain/task-3689: the box starts on the channel the deployment
   // follows, so a deployment installed on latest is offered the next
   // release rather than main's head -- even when its last upgrade

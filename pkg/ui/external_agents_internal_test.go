@@ -77,6 +77,9 @@ func TestExternalAgentTokenReachesNoInternalRoute(t *testing.T) {
 		if pattern == "POST /mcp" || pattern == "POST /api/mcp" {
 			continue // the MCP endpoints themselves, which the credential is for
 		}
+		if pattern == "GET /api/auth/whoami" {
+			continue // a credential asking what it is (ownCredentialRoute, external-cli.spec.md#XC-8)
+		}
 		req := httptest.NewRequest(method, param.ReplaceAllString(path, "x"), strings.NewReader("{}"))
 		req.Header.Set("Authorization", "Bearer "+issued.Token)
 		req.Header.Set(ActingReasonHeader, "probing the internal routes")

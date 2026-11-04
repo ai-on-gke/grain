@@ -447,6 +447,10 @@ func Run(ctx context.Context, cfg Config) error {
 			// The same copy orchestrator.Config.GrainSourceDir is given
 			// below, mounted into self-debug runs' containers.
 			GrainSourceDir: sourceDir(cfg.UpgradeSrcDir),
+			// The fence's accepts: the address containers reach grain's
+			// services at, and only the ports those services listen on.
+			Fence: cfg.ContainerFence, GitProxyHost: cfg.ContainerGitProxyHost,
+			SandboxServicePorts: servicePorts.Ports,
 		})
 		log.Printf("grain daemon: container sandboxing -- one local Docker container per run from image %q", startImage)
 	} else if cfg.K8sSandboxes {
@@ -635,6 +639,12 @@ func Run(ctx context.Context, cfg Config) error {
 	// pressure says nothing about them.
 	if localHostSandboxes(sandboxes) {
 		cfg.Overcommit = model.NewOvercommitController(cfg.SandboxOvercommit, cfg.CpuOvercommit, cfg.MemoryOvercommit)
+	}
+	// Before the capability servers start, so the host-script server
+	// starts with the scripts of every local-scripts declaration that
+	// moved onto it.
+	if _, err := migrateLocalScripts(ctx, store, cfg.LocalScriptsConfig()); err != nil {
+		log.Printf("daemon: local-scripts: moving declarations to host-script: %v", err)
 	}
 	capabilityServers, hostdCapabilityServers := startCapabilityServers(ctx, store, secretStore, cfg.DataDir, cfg.capabilityHostd(), gcpKeyPool(cfg))
 	live := NewLiveConfig(store, sandboxes, cfg, githubCredentials).

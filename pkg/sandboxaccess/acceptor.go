@@ -59,8 +59,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/guestforward"
-	"github.com/bwsalmon/granule/pkg/sandbox"
+	"github.com/gke-labs/granule/pkg/guestforward"
+	"github.com/gke-labs/granule/pkg/sandbox"
 )
 
 // DefaultPort is the acceptor's port: its own, on its own Service

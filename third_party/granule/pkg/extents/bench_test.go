@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/bwsalmon/granule/pkg/qcow2"
+	"github.com/gke-labs/granule/pkg/qcow2"
 )
 
 func BenchmarkPrepareOverlay_Extents(b *testing.B) {

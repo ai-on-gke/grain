@@ -14,7 +14,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/bwsalmon/granule/pkg/cli"
+	"github.com/gke-labs/granule/pkg/cli"
 )
 
 func main() {

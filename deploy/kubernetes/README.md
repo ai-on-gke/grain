@@ -68,6 +68,30 @@ silently given a networked pod.
 **A storage class that gives ReadWriteOnce volumes.** grain's state is an
 embedded SQLite database on a filesystem, with one writer.
 
+**The store stays SQLite here, unless you name a PostgreSQL server.** A
+`scripts/setup.sh` host now defaults to a local PostgreSQL server
+([docs/database.md](../../docs/database.md)). This manifest does not, and
+ships no Postgres StatefulSet, for two reasons. Re-applying the manifest
+is how a deployment is upgraded, so changing its default would move every
+existing deployment onto an empty database. And a cluster usually has a
+managed PostgreSQL (Cloud SQL, AlloyDB) that is a better home than a pod
+beside the controller. To use one, put its DSN in a Secret and hand it to
+the `grain` container as `GRAIN_DB_DSN`, which the daemon reads when no
+`-db-dsn` flag is passed:
+
+```yaml
+        env:
+        - name: GRAIN_DB_DRIVER
+          value: postgres
+        - name: GRAIN_DB_DSN
+          valueFrom:
+            secretKeyRef: {name: grain-db, key: dsn}
+```
+
+On a deployment that already has a SQLite store on its volume, migrate it
+first with `grain upgrade-postgres -data-dir /data -dsn …` in the pod,
+with replicas at 0 or the daemon paused.
+
 ## The daemon does not run as root
 
 `grain.yaml` runs the pod as uid/gid **1000**, with `fsGroup: 1000` on the

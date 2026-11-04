@@ -20,6 +20,7 @@ import {
   Button,
   Checkbox,
   Chip,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -1347,13 +1348,22 @@ export default function UpgradePanel({
     }
   };
 
+  // Until the first read answers there is nothing to draw but that it is
+  // being read: GET /api/upgrade resolves every CLI's run location, which
+  // asks grain hostd what it offers, so behind an unreachable hostd it
+  // takes seconds, and a blank pane in the meantime reads as an empty one
+  // (2026-11-04 deployment-operations walkthrough).
   if (status === null) {
     return loadError ? (
       <Alert severity="error">
         This deployment&apos;s upgrade status could not be read ({loadError}).
         Reopen this tab to try again.
       </Alert>
-    ) : null;
+    ) : (
+      <Box sx={{ display: "flex", justifyContent: "center", py: 3 }}>
+        <CircularProgress size={28} aria-label="Reading the upgrade status" />
+      </Box>
+    );
   }
 
   const running = status.phase === "running";

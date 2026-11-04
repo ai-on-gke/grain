@@ -122,16 +122,11 @@ func readCLIEnv() cliEnv {
 }
 
 // serverSource is where the server the CLI would use by default comes
-// from, and the URL itself: $GRAIN_SERVER, then cliEnvFile, then
-// defaultServerURL.
+// from, and the URL itself: $GRAIN_SERVER, then the server of the
+// context $GRAIN_CONTEXT or config.json selects (context.go), then
+// cliEnvFile, then defaultServerURL (external-cli.spec.md#XC-3).
 func serverSource() (url, source string) {
-	if v := strings.TrimSpace(os.Getenv(serverEnvVar)); v != "" {
-		return v, "$" + serverEnvVar
-	}
-	if env := readCLIEnv(); env.server != "" {
-		return env.server, env.path
-	}
-	return defaultServerURL, "the built-in default"
+	return serverSourceFor(envContext())
 }
 
 // useCLIEnvDataDir sets GRAIN_DATA_DIR from cliEnvFile when the
@@ -244,6 +239,9 @@ func explainDaemonError(err error, t cliTarget) error {
 	}
 	hint := hostDaemonHint(t.server)
 	fix := "Set " + serverEnvVar + " or pass -server"
+	if strings.HasPrefix(t.source, "context ") {
+		fix = "Check the server of " + t.source + " (`grain context show`), or pass -server"
+	}
 
 	switch {
 	case daemonRefused(err):
@@ -286,6 +284,8 @@ func credentialHint(server, tokenSource string) string {
 		return "the token passed with -token was refused"
 	case strings.HasPrefix(tokenSource, "$"):
 		return "the token from " + tokenSource + " was refused"
+	case strings.HasPrefix(tokenSource, "context "):
+		return "the credential of " + tokenSource + " was refused; run grain login --refresh"
 	case !ui.IsLoopbackURL(server):
 		return "no -token was given; pass a token with -token or set GRAIN_TOKEN"
 	}

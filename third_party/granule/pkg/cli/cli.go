@@ -13,7 +13,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bwsalmon/granule/pkg/dockercli"
+	"github.com/gke-labs/granule/pkg/dockercli"
 )
 
 const usage = `granule manages granule VMs as containers on a local docker daemon. On

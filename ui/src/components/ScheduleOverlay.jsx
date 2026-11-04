@@ -16,7 +16,7 @@ import { isApiGrant, withoutApiRows } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   Box,
   Button,
@@ -54,7 +54,7 @@ import RepoField from "./RepoField.jsx";
 import SearchSelect from "./SearchSelect.jsx";
 import WriteReposField from "./WriteReposField.jsx";
 import LastWorkflowRun from "./LastWorkflowRun.jsx";
-import { settleEdits, useUnsavedEdits } from "../unsavedEdits.js";
+import { useUnsavedEdits } from "../unsavedEdits.js";
 import { templateLabeler } from "../templateLabels.js";
 import {
   configuredCapabilities,
@@ -469,10 +469,21 @@ function ScheduleOverlay({
     return req;
   };
 
+  // previewRequest is scheduleRequest as the draft endpoint must see it.
+  // That endpoint composes a CreateScheduleRequest and has no saved row to
+  // fall back on, so a model left out because it did not change would be
+  // previewed as no model at all -- an edit pane on a schedule that asks
+  // for gemini-2.5-flash said "the deployment's default model". The model
+  // in force is always sent here; the save still sends it only on a change.
+  const previewRequest = () =>
+    firesSuite
+      ? scheduleRequest()
+      : { ...scheduleRequest(), model: chosenModel };
+
   // Whether leaving now would lose an edit: the form's own fields (the
   // cadence's number and time boxes are read off it, not state) plus
   // everything submit takes from state instead.
-  const { formRef, isDirty } = useUnsavedEdits({
+  const { formRef, isDirty: formIsDirty } = useUnsavedEdits({
     request: scheduleRequest(),
     kind,
     weekday,
@@ -480,6 +491,13 @@ function ScheduleOverlay({
     timeZone,
     fires,
   });
+  // Once somebody has said "discard" on the way out through a link drawn
+  // here (the suppressing task's), the pane is still mounted for a moment
+  // while it closes and the task opens -- and every guard asked in that
+  // moment (the pane's own, App's) reads this one. Without this the
+  // question already answered could be put a second time.
+  const discarded = useRef(false);
+  const isDirty = () => !discarded.current && formIsDirty();
 
   const submit = async (evt) => {
     evt.preventDefault();
@@ -708,11 +726,7 @@ function ScheduleOverlay({
                       e.preventDefault();
                       return;
                     }
-                    // Discarding was just agreed to: settle the edit so
-                    // the way out that follows (App's own leave checks,
-                    // or the browser following the link) does not ask
-                    // the same question a second time.
-                    settleEdits();
+                    discarded.current = true;
                   }
                   if (onOpenTask) {
                     e.preventDefault();
@@ -1153,7 +1167,7 @@ function ScheduleOverlay({
       ) : (
         <CompositionPanel
           path="/api/schedules/composition"
-          body={scheduleRequest()}
+          body={previewRequest()}
           heading="What this schedule files"
           note={isNew ? "as filled in above" : "as edited above, not as saved"}
         />

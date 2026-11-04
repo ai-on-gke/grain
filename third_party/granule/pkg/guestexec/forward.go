@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/bwsalmon/granule/pkg/execwire"
-	"github.com/bwsalmon/granule/pkg/forward"
+	"github.com/gke-labs/granule/pkg/execwire"
+	"github.com/gke-labs/granule/pkg/forward"
 )
 
 // ForwardUsage is the synopsis for "granule forward" inside the VM container.

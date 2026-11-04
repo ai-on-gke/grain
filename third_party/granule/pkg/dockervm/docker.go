@@ -13,9 +13,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bwsalmon/granule/pkg/dockercli"
-	"github.com/bwsalmon/granule/pkg/guestimage"
-	"github.com/bwsalmon/granule/pkg/vmspec"
+	"github.com/gke-labs/granule/pkg/dockercli"
+	"github.com/gke-labs/granule/pkg/guestimage"
+	"github.com/gke-labs/granule/pkg/vmspec"
 )
 
 // netshimEnvArgs describes the network the VM container sets up itself.

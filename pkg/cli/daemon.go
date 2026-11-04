@@ -756,6 +756,11 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	containerCapAdd := fs.String("container-sandbox-cap-add", "",
 		"comma-separated Linux capabilities handed back to local sandbox containers, which otherwise run with "+
 			"every capability dropped and no-new-privileges set; the stock sandbox image needs none")
+	containerFence := fs.String("container-sandbox-fence", string(orchestrator.ContainerFenceAuto),
+		"auto, require or off: whether local sandbox containers are fenced off from this host, its networks and "+
+			"link-local (the metadata server) by a per-container nftables chain. auto fences when nft can be run and "+
+			"otherwise runs containers unfenced and refuses external capability grants; require refuses a container "+
+			"that cannot be fenced; off never fences and refuses external capability grants")
 	granuleSandboxes := fs.Bool("granule-sandboxes", false,
 		"dispatch onto real bwsalmon/granule-managed VMs (one per run, named orchestrator.VMNamePrefix+<run id>) "+
 			"over SSH, instead of local host directories. This was -granule-vm-name-prefix, whose value both opted "+
@@ -1180,6 +1185,10 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	if err := removedRelaySettings(passed, unknownFlags); err != nil {
 		return daemon.Config{}, fs, unknownFlags, err
 	}
+	containerFenceMode, err := orchestrator.ParseContainerFenceMode(*containerFence)
+	if err != nil {
+		return daemon.Config{}, fs, unknownFlags, fmt.Errorf("-container-sandbox-fence: %w", err)
+	}
 
 	cfg := daemon.Config{
 		UnitFlags: unitFlags, UnknownFlags: unknownFlags,
@@ -1266,6 +1275,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		HostSandboxes: *hostSandboxes, AllowUnisolatedHostSandboxes: *allowUnisolatedHostSandboxes,
 		HostSandboxEnv:   hostSandboxEnv,
 		ContainerNetwork: *containerNetwork, ContainerCapAdd: splitRepoList(*containerCapAdd),
+		ContainerFence:       containerFenceMode,
 		GranuleSandboxes:     *granuleSandboxes,
 		GranuleStateDir:      *granuleStateDir,
 		LocalScripts:         localScripts,
