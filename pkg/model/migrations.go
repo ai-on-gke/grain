@@ -704,7 +704,12 @@ var Migrations = []Migration{
 		},
 	},
 	{
-		Version: 103,
+		Version:     103,
+		Description: "seed gcp#gemini-key on the gcp server where grain_config.gcp_project is set, minting with the gcp-key-minter secret, and rewrite stored gemini-key grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/gcp#gemini-key={} (the in-process gemini-key is retired)",
+		Up:          migrateGeminiKeyToCapabilityServer,
+	},
+	{
+		Version: 104,
 		Description: "drop the task, template and repository hostd selectors: a model connection or capability server " +
 			"chooses its hostd; task_run_hostd keeps where each run ran",
 		Statements: []string{

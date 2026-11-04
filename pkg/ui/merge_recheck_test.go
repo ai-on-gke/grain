@@ -32,7 +32,7 @@ func TestSetRepoSettingsAppliesCapabilitiesAndUnfixableChecks(t *testing.T) {
 	c, _, ctx := testClient(t)
 
 	defaultCaps := []string{"gcp-key", "gcp-key"}
-	ciCaps := []string{"gemini-key", "package-publish", "package-publish", "repo-read:acme/tools"}
+	ciCaps := []string{"github-sandbox", "package-publish", "package-publish", "repo-read:acme/tools"}
 	unfixable := []string{" cla/google ", "CLA/Google", "license/check"}
 
 	got, err := c.SetRepoSettings(ctx, "acme/widgets", ui.SetRepoSettingsRequest{
@@ -46,7 +46,7 @@ func TestSetRepoSettingsAppliesCapabilitiesAndUnfixableChecks(t *testing.T) {
 	if !reflect.DeepEqual(got.DefaultCapabilities, []string{model.GCPKeySandboxAgentGrant}) {
 		t.Errorf("defaultCapabilities = %v, want [%s]", got.DefaultCapabilities, model.GCPKeySandboxAgentGrant)
 	}
-	if want := []string{"gemini-key", model.PackagePublishRef + "={}", model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"})}; !reflect.DeepEqual(got.CICapabilities, want) {
+	if want := []string{"github-sandbox", model.PackagePublishRef + "={}", model.RepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"})}; !reflect.DeepEqual(got.CICapabilities, want) {
 		t.Errorf("ciCapabilities = %v, want %v", got.CICapabilities, want)
 	}
 	if !reflect.DeepEqual(got.UnfixableChecks, []string{"cla/google", "license/check"}) {
@@ -54,14 +54,14 @@ func TestSetRepoSettingsAppliesCapabilitiesAndUnfixableChecks(t *testing.T) {
 	}
 
 	// Narrowing ciCapabilities via SetRepoSettings keeps other fields intact.
-	narrowCI := []string{"gemini-key", "package-publish"}
+	narrowCI := []string{"github-sandbox", "package-publish"}
 	got, err = c.SetRepoSettings(ctx, "acme/widgets", ui.SetRepoSettingsRequest{
 		CICapabilities: &narrowCI,
 	})
 	if err != nil {
 		t.Fatalf("SetRepoSettings narrowing ciCapabilities: %v", err)
 	}
-	if !reflect.DeepEqual(got.CICapabilities, []string{"gemini-key", model.PackagePublishRef + "={}"}) {
+	if !reflect.DeepEqual(got.CICapabilities, []string{"github-sandbox", model.PackagePublishRef + "={}"}) {
 		t.Errorf("ciCapabilities after narrowing = %v, want [gemini-key package-publish]", got.CICapabilities)
 	}
 	if !reflect.DeepEqual(got.DefaultCapabilities, []string{model.GCPKeySandboxAgentGrant}) {
