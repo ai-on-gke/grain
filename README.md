@@ -371,7 +371,10 @@ For GCS, grant that identity permission to create objects in the destination
 bucket (for example, `roles/storage.objectCreator`). Application Default
 Credentials are used unless a credential JSON file is named explicitly.
 
-Run a backup immediately on the controller:
+Run a backup by hand on the controller, with the daemon stopped. `grain
+backup` refuses while a daemon holds the data directory, and says so with
+the `sudo systemctl stop grain-daemon.service` to run first. A running
+daemon makes its own backups on the schedule below:
 
 ```bash
 # Google Drive
