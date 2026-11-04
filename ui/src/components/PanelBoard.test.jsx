@@ -246,6 +246,22 @@ describe("PanelBoard", () => {
     expect(within(waiting).getByText("1")).toBeInTheDocument();
   });
 
+  // 2026-11-04 boards walkthrough: the running column's grain mark is
+  // labelled "Running" for its tooltip, and read out beside the
+  // column's own title it named the count "2 Running Running".
+  it("names a running count by its column title alone", () => {
+    localStorage.setItem(
+      BOARD_STORAGE_KEY,
+      JSON.stringify([
+        { id: "c1", title: "Working", states: ["running"] },
+        { id: "c2", title: "Waiting", states: ["awaiting_reply"] },
+      ]),
+    );
+    draw({ board: board([{ kind: "states" }]) });
+    expect(screen.getByRole("link", { name: "2 Working" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "1 Waiting" })).toBeVisible();
+  });
+
   // Every panel is one click from the full view of the same kind asking
   // the same question -- as a real URL, so it can be copied and sent.
   // The full view of the tasks the panel is about, asking the panel's
