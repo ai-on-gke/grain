@@ -905,6 +905,40 @@ if [ -n "$api" ]; then
   expect "github actions, rc-hold flooded" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
 fi
 
+# --- the task train (.grain/templates/release-train.yml): no GitHub token,
+# its files written by `grain ci list --format github-jobs` and `grain ci
+# checks --format github` in GitHub's shapes, the trusted App taken from
+# the checks answer's grain_app ---
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+git -C "$work/seed" push -q --force origin "$c2:refs/heads/candidate"
+runs "$c2" "$c4"
+{
+  printf '{"total_count":15,"jobs":['
+  first=1
+  for name in "go, shuffled and repeated (1)" "state repository soak" "sustained load" "metadata and model scalability" \
+    "merge liveness stress" "end-to-end long term tests" "long randomized cluster simulation" "postgres concurrency and stress" \
+    "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "installer trixie and hostmode" "govulncheck" \
+    "pkg/cli stress under load" "upgrade from previous versions"; do
+    [ $first = 1 ] || printf ','
+    first=0
+    printf '{"id":%s,"run_id":7,"run_attempt":1,"workflow_name":"nightly","head_sha":"%s","name":"%s","status":"completed","conclusion":"%s","created_at":"%s","started_at":null,"completed_at":null}' \
+      "${#name}" "$c2" "$name" "$([ "$name" = govulncheck ] && echo failure || echo success)" "$(iso $((now - 3600)))"
+  done
+  printf ',{"id":99,"run_id":7,"run_attempt":2,"workflow_name":"nightly","head_sha":"%s","name":"govulncheck","status":"completed","conclusion":"success","created_at":"%s","started_at":null,"completed_at":null}' "$c2" "$(iso $((now - 1800)))"
+  printf ']}'
+} > "$work/qual-runs.json"
+printf '{"total_count":2,"check_runs":[{"id":9,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"success","started_at":"%s","completed_at":null,"app":{"slug":"grain-forge"}},{"id":10,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"failure","started_at":"%s","completed_at":null,"app":{"slug":"github-actions"}}],"grain_app":"grain-forge"}\n' \
+  "$c2" "$(iso $((now - 600)))" "$c2" "$(iso $((now - 300)))" > "$work/qual-checks.json"
+: > "$work/images.log"
+train RELEASE_CI_SOURCE=grain RELEASE_PUSH_GRANT=train GITHUB_TOKEN= GH_TOKEN= \
+  RELEASE_QUALIFICATION_APP="$(jq -r '.grain_app // empty' "$work/qual-checks.json")"
+expect "task train, qualified" "exits 0" eq "$status" 0
+expect "task train, qualified" "reads the retried job as a flake" has "PASS vulns: passed on its one retry (failure,success): a flake"
+expect "task train, qualified" "trusts grain's App alone" has "IGNORED grain/release-qualification: 1 from github-actions, not grain-forge"
+expect "task train, qualified" "stages the release" eq "$(remote_tag v2.3.0-pending)" "$c2"
+expect "task train, qualified" "pushes no v2.3.0" eq "$(remote_tag v2.3.0)" ""
+
 setup ""
 train RELEASE_RUNS_JSON= RELEASE_CI_SOURCE=github
 expect "github actions, no token" "exits 1" eq "$status" 1
