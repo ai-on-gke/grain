@@ -259,7 +259,7 @@ Grain used to have a fourth connection type, **Custom command**
 agent. It was removed in v3.2.0; grain runs the Antigravity, Claude and Codex
 frameworks only.
 
-- Schema migration 103, and the state-repo importer for a `grain/config`
+- Schema migration 104, and the state-repo importer for a `grain/config`
   dump written before it, keep every stored custom command connection but
   disable it, with `disabledReason` "custom command connections were removed
   in v3.2.0; replace it with an Antigravity, Claude or Codex connection".

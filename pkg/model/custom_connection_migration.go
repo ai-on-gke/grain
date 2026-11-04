@@ -64,7 +64,7 @@ func LogRemovedCustomConnections(backends []AgentBackend) {
 	}
 }
 
-// disableCustomConnections is migration 103: every stored custom command
+// disableCustomConnections is migration 104: every stored custom command
 // connection is disabled and kept, with RemovedCustomConnectionReason, so
 // a deployment that had one still starts and can see and delete it. It is
 // idempotent, as ApplyDataMigrations needs.

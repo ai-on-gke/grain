@@ -20,18 +20,16 @@ package ui_test
 // the ones OfferedCapabilities offers a human to attach to a task. These
 // tests cover GetSettings' new Capabilities field end to end: ready
 // without any secrets store colocated (self-debug/self-repair/
-// bootstrap-playbooks, which need none), gated on GCP config
-// (gcp-key/gemini-key), and gated on secrets once one is (github-sandbox).
+// bootstrap-playbooks, which need none), and gated on secrets once one is
+// (github-sandbox).
 
 import (
 	"context"
 	"net/http"
 	"reflect"
 	"sort"
-	"strings"
 	"testing"
 
-	"github.com/ai-on-gke/grain/pkg/capability/gcpkey"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -51,13 +49,14 @@ func capabilityStatus(t *testing.T, statuses []ui.CapabilityStatus, id string) u
 
 // The per-task picker (GET /api/config) and Settings' Capabilities tab
 // used to be entirely independent listings, so a deployment could report
-// gemini-key as "Not ready -- Needs: GCP project" on one pane while the
+// a capability as "Not ready -- Needs: ..." on one pane while the
 // other offered it as an ordinary tickable row. Ticking it filed a
 // perfectly valid grant whose only symptom was the task failing to
-// dispatch later on. These two cover the join between them.
+// dispatch later on. This covers the join between them.
 func TestConfigPickerReportsACapabilityThisDeploymentCannotHonour(t *testing.T) {
 	t.Parallel()
-	srv, _ := testServer(t)
+	srv, client := testServer(t)
+	client.Config.Secrets = secrets.New(t.TempDir())
 
 	rec := do(t, srv, http.MethodGet, "/api/config", "")
 	if rec.Code != http.StatusOK {
@@ -67,15 +66,15 @@ func TestConfigPickerReportsACapabilityThisDeploymentCannotHonour(t *testing.T) 
 		Capabilities []ui.Capability `json:"capabilities"`
 	}](t, rec)
 
-	gemini := pickerRow(t, cfg.Capabilities, "gemini-key")
-	if gemini.Ready == nil {
-		t.Fatal("gemini-key: Ready is nil -- the picker was told nothing about readiness")
+	sandbox := pickerRow(t, cfg.Capabilities, "github-sandbox")
+	if sandbox.Ready == nil {
+		t.Fatal("github-sandbox: Ready is nil -- the picker was told nothing about readiness")
 	}
-	if *gemini.Ready {
-		t.Error("gemini-key: Ready = true with no GCP project set on this deployment")
+	if *sandbox.Ready {
+		t.Error("github-sandbox: Ready = true with no App secrets stored on this deployment")
 	}
-	if !reflect.DeepEqual(gemini.Needs, []string{"GCP project"}) {
-		t.Errorf("gemini-key: Needs = %v, want [GCP project]", gemini.Needs)
+	if want := []string{githubsandbox.DefaultAppIDCredential, githubsandbox.DefaultPrivateKeyCredential}; !reflect.DeepEqual(sandbox.Needs, want) {
+		t.Errorf("github-sandbox: Needs = %v, want %v", sandbox.Needs, want)
 	}
 
 	// A capability that needs no deployment configuration at all is
@@ -87,33 +86,6 @@ func TestConfigPickerReportsACapabilityThisDeploymentCannotHonour(t *testing.T) 
 	}
 	if len(selfDebug.Needs) != 0 {
 		t.Errorf("self-debug: Needs = %v, want none", selfDebug.Needs)
-	}
-}
-
-func TestConfigPickerReportsGeminiKeyReadyOnceItsProjectAndSecretAreSet(t *testing.T) {
-	t.Parallel()
-	srv, client := testServer(t)
-	client.Config.Secrets = secrets.New(t.TempDir())
-	if err := client.Config.Secrets.Set(gcpkey.DefaultMinterCredential, "value", []byte("shh")); err != nil {
-		t.Fatal(err)
-	}
-	cfg := model.DefaultConfig()
-	cfg.GCPProject = "acme-project"
-	if err := client.Store.PutConfig(context.Background(), cfg); err != nil {
-		t.Fatal(err)
-	}
-
-	rec := do(t, srv, http.MethodGet, "/api/config", "")
-	got := decode[struct {
-		Capabilities []ui.Capability `json:"capabilities"`
-	}](t, rec)
-
-	gemini := pickerRow(t, got.Capabilities, "gemini-key")
-	if gemini.Ready == nil || !*gemini.Ready {
-		t.Fatalf("gemini-key: Ready = %v, want true (row: %+v)", gemini.Ready, gemini)
-	}
-	if len(gemini.Needs) != 0 {
-		t.Errorf("gemini-key: Needs = %v, want none once the project and its minter secret are set", gemini.Needs)
 	}
 }
 
@@ -140,7 +112,7 @@ func TestCapabilitiesListsEveryKnownCapabilityOnAFreshStore(t *testing.T) {
 		ids = append(ids, s.ID)
 	}
 	sort.Strings(ids)
-	want := []string{"bootstrap-playbooks", "console", "durable", "gemini-key", "github-sandbox", "image-signing", "package-publish", "priority-dispatch", "read-issues", "registry-push", "self-debug"}
+	want := []string{"bootstrap-playbooks", "console", "durable", "github-sandbox", "image-signing", "package-publish", "priority-dispatch", "read-issues", "registry-push", "self-debug"}
 	if !reflect.DeepEqual(ids, want) {
 		t.Fatalf("capability ids = %v, want %v", ids, want)
 	}
@@ -161,134 +133,6 @@ func TestCapabilitiesSelfDebugAndSelfRepairAreAlwaysReady(t *testing.T) {
 		if len(status.MissingConfig) != 0 || len(status.MissingSecrets) != 0 {
 			t.Fatalf("%s: expected nothing missing, got %+v", id, status)
 		}
-	}
-}
-
-func TestCapabilitiesGcpKeyAndGeminiKeyAreNotReadyWithoutAGcpProject(t *testing.T) {
-	t.Parallel()
-	c, _, ctx := testClient(t)
-	got, err := c.GetSettings(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	geminiKey := capabilityStatus(t, got.Capabilities, "gemini-key")
-	if geminiKey.Ready {
-		t.Fatalf("gemini-key: Ready = true with no GCP project configured, want false")
-	}
-	if !reflect.DeepEqual(geminiKey.MissingConfig, []string{"GCP project"}) {
-		t.Fatalf("gemini-key: MissingConfig = %v, want [GCP project]", geminiKey.MissingConfig)
-	}
-}
-
-func TestCapabilitiesGeminiKeyIsReadyOnceAGcpProjectAndItsMinterSecretAreSet(t *testing.T) {
-	t.Parallel()
-	c, _, ctx := testClient(t)
-	c.Config.Secrets = secrets.New(t.TempDir())
-	if err := c.Config.Secrets.Set(gcpkey.DefaultMinterCredential, "value", []byte("shh")); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
-		t.Fatal(err)
-	}
-	project := "acme-project"
-	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{GCPProject: &project}); err != nil {
-		t.Fatal(err)
-	}
-	got, err := c.GetSettings(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	geminiKey := capabilityStatus(t, got.Capabilities, "gemini-key")
-	if !geminiKey.Ready {
-		t.Fatalf("gemini-key: Ready = false, want true (status: %+v)", geminiKey)
-	}
-}
-
-// grain/task-2xx: a project saved that the daemon behind this pane has
-// not adopted. Both halves of the pane used to read a different
-// configuration for this one question -- the badge the stored row, the
-// "Test credential" button beside it the registry the running process
-// actually holds -- so a deployment whose reconcile loop was down showed
-// a green **Ready** on a capability whose own check answered that no
-// provider is registered for it, two lines apart on one card. Ready is
-// the half that was overclaiming: a task granted this now would fail to
-// resolve exactly as the check said.
-func TestCapabilitiesAreNotReadyWhileAStoredSettingIsUnapplied(t *testing.T) {
-	t.Parallel()
-	srv, client := testServer(t)
-	client.Config.Secrets = secrets.New(t.TempDir())
-	if err := client.Config.Secrets.Set(gcpkey.DefaultMinterCredential, "value", []byte("shh")); err != nil {
-		t.Fatal(err)
-	}
-	// A daemon still running what it started with: no project, whatever
-	// the row now says.
-	client.Config.RunningConfig = func() model.Config { return model.Config{} }
-	stored := model.DefaultConfig()
-	stored.GCPProject = "acme-project"
-	if err := client.Store.PutConfig(context.Background(), stored); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := client.GetSettings(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	geminiKey := capabilityStatus(t, got.Capabilities, "gemini-key")
-	if geminiKey.Ready {
-		t.Errorf("gemini-key: Ready = true on a project this deployment is not running with (status: %+v)", geminiKey)
-	}
-	if len(geminiKey.MissingConfig) != 0 {
-		t.Errorf("gemini-key: MissingConfig = %v, want nothing -- the project is set, and "+
-			"telling an operator to set it again is the wrong remedy", geminiKey.MissingConfig)
-	}
-	if !reflect.DeepEqual(geminiKey.PendingConfig, []string{"GCP project"}) {
-		t.Errorf("gemini-key: PendingConfig = %v, want [GCP project]", geminiKey.PendingConfig)
-	}
-
-	// The picker two panes away is told the same thing, in the same
-	// words, rather than being left with a bare "not ready".
-	rec := do(t, srv, http.MethodGet, "/api/config", "")
-	cfg := decode[struct {
-		Capabilities []ui.Capability `json:"capabilities"`
-	}](t, rec)
-	row := pickerRow(t, cfg.Capabilities, "gemini-key")
-	if row.Ready == nil || *row.Ready {
-		t.Fatalf("gemini-key: picker Ready = %v, want false", row.Ready)
-	}
-	if len(row.Needs) != 1 || !strings.Contains(row.Needs[0], "GCP project") ||
-		!strings.Contains(row.Needs[0], "not yet in effect") {
-		t.Errorf("gemini-key: picker Needs = %v, want the project named as saved but unapplied", row.Needs)
-	}
-}
-
-// Once the daemon is running the same configuration the row holds --
-// the ordinary case, one reconcile tick after any change -- there is
-// nothing pending and the badge means what it always did.
-func TestCapabilitiesHaveNothingPendingOnceTheRunningConfigMatches(t *testing.T) {
-	t.Parallel()
-	_, client := testServer(t)
-	client.Config.Secrets = secrets.New(t.TempDir())
-	if err := client.Config.Secrets.Set(gcpkey.DefaultMinterCredential, "value", []byte("shh")); err != nil {
-		t.Fatal(err)
-	}
-	stored := model.DefaultConfig()
-	stored.GCPProject = "acme-project"
-	if err := client.Store.PutConfig(context.Background(), stored); err != nil {
-		t.Fatal(err)
-	}
-	client.Config.RunningConfig = func() model.Config { return stored }
-
-	got, err := client.GetSettings(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	geminiKey := capabilityStatus(t, got.Capabilities, "gemini-key")
-	if !geminiKey.Ready || len(geminiKey.PendingConfig) != 0 {
-		t.Errorf("gemini-key: Ready = %v, PendingConfig = %v, want ready with nothing pending",
-			geminiKey.Ready, geminiKey.PendingConfig)
 	}
 }
 
@@ -403,41 +247,6 @@ func TestCapabilitiesReportWhereEachRequiredSecretIsWritten(t *testing.T) {
 		t.Fatalf("github-sandbox: Secrets = %+v, want %+v", status.Secrets, want)
 	}
 
-	// The bare "<secret>" form, with nothing stored under it yet: it
-	// gets the default key name, which is one Resolve's sole-key form
-	// finds.
-	minter := capabilityStatus(t, got.Capabilities, "gemini-key").Secrets
-	wantMinter := []ui.CapabilitySecret{
-		{Name: gcpkey.DefaultMinterCredential, Secret: gcpkey.DefaultMinterCredential, Key: "value", Set: false},
-	}
-	if !reflect.DeepEqual(minter, wantMinter) {
-		t.Fatalf("gemini-key: Secrets = %+v, want %+v", minter, wantMinter)
-	}
-}
-
-// A bare "<secret>" credential someone seeded under a key of their own
-// (scripts/setup.sh writes the minter key as gcp-key-minter/key.json) is
-// replaced in place rather than joined by a second key -- two keys is
-// exactly the state secrets.Store.Resolve refuses to read the bare name
-// out of.
-func TestCapabilitiesWriteABareSecretBackToTheKeyItAlreadyHas(t *testing.T) {
-	t.Parallel()
-	c, _, ctx := testClient(t)
-	c.Config.Secrets = secrets.New(t.TempDir())
-	if err := c.Config.Secrets.Set(gcpkey.DefaultMinterCredential, "key.json", []byte("{}")); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := c.GetSettings(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []ui.CapabilitySecret{
-		{Name: gcpkey.DefaultMinterCredential, Secret: gcpkey.DefaultMinterCredential, Key: "key.json", Set: true},
-	}
-	if status := capabilityStatus(t, got.Capabilities, "gemini-key"); !reflect.DeepEqual(status.Secrets, want) {
-		t.Fatalf("gemini-key: Secrets = %+v, want %+v", status.Secrets, want)
-	}
 }
 
 // Grantable is the half of "is this capability usable" that Ready says
@@ -456,7 +265,7 @@ func TestCapabilityStatusReportsWhetherATaskCanBeGrantedIt(t *testing.T) {
 	t.Parallel()
 	c, _, ctx := testClient(t)
 	c.Config.Capabilities = []ui.Capability{
-		{ID: "gemini-key", Name: "Gemini key"},
+		{ID: "read-issues", Name: "Read issues"},
 		{ID: "self-debug", Name: "Self debug"},
 	}
 
@@ -465,7 +274,7 @@ func TestCapabilityStatusReportsWhetherATaskCanBeGrantedIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	for id, want := range map[string]bool{
-		"gemini-key":     true,
+		"read-issues":    true,
 		"self-debug":     true,
 		"github-sandbox": false,
 	} {

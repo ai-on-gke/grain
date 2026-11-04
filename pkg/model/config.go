@@ -1325,7 +1325,7 @@ const (
 	// RemovedAgentFrameworkCustom is the framework of the retired
 	// "Custom command" connection type, which ran a deployment-owned
 	// executable as the agent. It is not a framework anyone can select
-	// or dispatch onto any more: migration 103 disables every stored
+	// or dispatch onto any more: migration 104 disables every stored
 	// connection that names it (RemovedCustomConnectionReason), and the
 	// name survives only so that row can be recognized, shown as removed
 	// and deleted.
@@ -1721,7 +1721,7 @@ func DecodeAgentBackends(v string) ([]AgentBackend, error) {
 	if err := json.Unmarshal([]byte(v), &out); err != nil {
 		return nil, fmt.Errorf("decode agent backends: %w", err)
 	}
-	// Migration 103 disabled every stored custom command connection; one
+	// Migration 104 disabled every stored custom command connection; one
 	// that arrives some other way (a grain/config edited by hand) is
 	// read disabled too, so nothing ever dispatches onto it.
 	DisableRemovedCustomConnections(out)

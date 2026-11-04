@@ -153,7 +153,7 @@ func TestNoModelsIsAWaitNotAGuess(t *testing.T) {
 
 // A task pinned to a custom command connection -- the framework, the
 // connection, or a model only it served -- takes the default model
-// selection once migration 103 has disabled that connection, rather than
+// selection once migration 104 has disabled that connection, rather than
 // failing or waiting on something grain can no longer run.
 func TestTaskPinnedToARemovedCustomConnectionFallsBackToTheRotation(t *testing.T) {
 	t.Parallel()

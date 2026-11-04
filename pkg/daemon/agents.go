@@ -310,7 +310,7 @@ func (p *AgentPool) resolve(ctx context.Context, live Config, choice orchestrato
 	}
 	backendID := strings.TrimSpace(choice.BackendID)
 	// A task pinned to the retired custom command framework, to one of
-	// its connections (which migration 103 disabled and kept), or to a
+	// its connections (which migration 104 disabled and kept), or to a
 	// model only such a connection served, falls back to the default
 	// model selection: there is nothing left that can run the pin.
 	// Not logged here, which every dispatch tick reaches: the daemon

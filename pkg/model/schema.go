@@ -483,10 +483,16 @@ import "strconv"
 // the hostd pin or label selector a task filed against the repository
 // starts with when neither the filing nor its template names one.
 //
-// 103 retires the custom command connection type: every stored
+// 103 retires the in-process gemini-key onto the gcp server's
+// https://grain.dev/capabilities/gcp#gemini-key: where `gcp_project` is
+// set, seeds the gcp entry in `grain_config`.`mcp_servers` with
+// gemini_key: {project}, minting with the gcp-key-minter secret, and
+// rewrites stored gemini-key grants as 100 did the model proxies.
+//
+// 104 retires the custom command connection type: every stored
 // connection whose framework is "custom" is disabled and kept, with
 // model.RemovedCustomConnectionReason (custom_connection_migration.go).
-const SchemaVersion = 103
+const SchemaVersion = 104
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified

@@ -52,7 +52,7 @@ func TestCreatingACustomCommandConnectionIsRefused(t *testing.T) {
 	}
 }
 
-// A custom command connection a deployment already had (migration 103
+// A custom command connection a deployment already had (migration 104
 // disabled it) survives the Models page's saves, which send every
 // connection back, still disabled and saying why, until it is deleted.
 func TestAStoredCustomCommandConnectionIsKeptDisabledUntilDeleted(t *testing.T) {

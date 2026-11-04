@@ -25,7 +25,7 @@ import (
 )
 
 // customConnectionsBefore103 is grain_config.agent_backends as a release
-// before 103 stored it: an enabled custom command connection beside a
+// before 104 stored it: an enabled custom command connection beside a
 // claude one.
 const customConnectionsBefore103 = `[{"id":"house","name":"House agent","framework":"custom","models":["house-model"],"command":"agents/run.sh"},` +
 	`{"id":"claude","framework":"claude"}]`
@@ -61,7 +61,7 @@ func checkCustomConnectionDisabled(t *testing.T, got []model.AgentBackend) {
 	}
 }
 
-func TestMigration103DisablesCustomCommandConnections(t *testing.T) {
+func TestMigration104DisablesCustomCommandConnections(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 	if err := store.PutConfig(ctx, testConfig()); err != nil {
@@ -70,11 +70,11 @@ func TestMigration103DisablesCustomCommandConnections(t *testing.T) {
 	if _, err := db.ExecContext(ctx, "UPDATE `grain_config` SET `agent_backends` = ? WHERE `id` = 1", customConnectionsBefore103); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 102 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 103 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-102 store with a custom connection: %v", err)
+		t.Fatalf("migrating a version-103 store with a custom connection: %v", err)
 	}
 	checkCustomConnectionDisabled(t, storedConnections(t, ctx, db))
 	cfg, err := store.GetConfig(ctx)
@@ -90,7 +90,7 @@ func TestMigration103DisablesCustomCommandConnections(t *testing.T) {
 	if err := db.QueryRowContext(ctx, "SELECT `agent_backends` FROM `grain_config` WHERE `id` = 1").Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 102 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 103 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
@@ -104,7 +104,7 @@ func TestMigration103DisablesCustomCommandConnections(t *testing.T) {
 	}
 }
 
-// A grain/config dump written before 103, holding a custom command
+// A grain/config dump written before 104, holding a custom command
 // connection, still imports: the connection arrives disabled and kept.
 func TestStateRepoImportDisablesCustomCommandConnections(t *testing.T) {
 	t.Parallel()
@@ -119,13 +119,13 @@ func TestStateRepoImportDisablesCustomCommandConnections(t *testing.T) {
 	if err := staterepo.Export(ctx, srcDB, dir); err != nil {
 		t.Fatal(err)
 	}
-	if err := staterepo.WriteSchemaVersion(dir, 102); err != nil {
+	if err := staterepo.WriteSchemaVersion(dir, 103); err != nil {
 		t.Fatal(err)
 	}
 
 	_, dstDB, _ := openStore(t)
 	if err := staterepo.Import(ctx, dstDB, dir); err != nil {
-		t.Fatalf("importing a schema-102 export with a custom connection: %v", err)
+		t.Fatalf("importing a schema-103 export with a custom connection: %v", err)
 	}
 	checkCustomConnectionDisabled(t, storedConnections(t, ctx, dstDB))
 }

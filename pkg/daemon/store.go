@@ -213,7 +213,7 @@ func openStore(driver, dsn, dataDir string) (*model.Store, *sql.DB, int, error) 
 }
 
 // logRemovedCustomConnections names, once per store open, every custom
-// command connection the store still holds: migration 103 disabled them,
+// command connection the store still holds: migration 104 disabled them,
 // and the operator is owed a line saying so until each is deleted.
 func logRemovedCustomConnections(ctx context.Context, store *model.Store) {
 	if cfg, err := store.GetConfig(ctx); err == nil && cfg != nil {
