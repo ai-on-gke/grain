@@ -32,10 +32,13 @@ test.describe("UI Navigation, Sidebar Split-Button Intake & In-App Upgrade Dialo
     await expect(aside).toBeVisible();
 
     // 1. Verify '+ New task' primary button and dropdown chevron trigger
-    // in the header tray alongside the brand mark.
+    // in the left sidebar just below .sidebar-header (and not in globals).
     const globals = page.getByTestId("page-header-globals");
-    const newTaskMainBtn = globals.getByRole("button", { name: "+ New task" });
-    const createOptionsBtn = globals.getByRole("button", {
+    await expect(
+      globals.getByRole("button", { name: "+ New task" }),
+    ).toHaveCount(0);
+    const newTaskMainBtn = aside.getByRole("button", { name: "+ New task" });
+    const createOptionsBtn = aside.getByRole("button", {
       name: "Create options",
     });
 

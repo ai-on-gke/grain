@@ -29,7 +29,6 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import AccountCircleOutlinedIcon from "@mui/icons-material/AccountCircleOutlined";
 import PushPinIcon from "@mui/icons-material/PushPin";
 import PushPinOutlinedIcon from "@mui/icons-material/PushPinOutlined";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
@@ -381,7 +380,7 @@ function UserTile({ whoami, collapsed, onOpenAccess }) {
       title={full}
       aria-label={`Acting as ${full}`}
       sx={{
-        flex: "none",
+        flex: collapsed ? "none" : "1 1 auto",
         minWidth: 0,
         borderRadius: 1.5,
         py: 0.5,
@@ -825,33 +824,32 @@ export default function Sidebar({
     onSetFilter(id);
   };
 
-  const toggleLabel = collapsed ? "Expand sidebar" : "Collapse sidebar";
-  const toggle = onToggleCollapsed ? (
-    <Tooltip
-      title={`${toggleLabel} (${SIDEBAR_TOGGLE_KEY})`}
-      placement="right"
-      describeChild
-    >
-      <IconButton
-        size="small"
-        className="header-control-icon"
-        aria-label={toggleLabel}
-        aria-expanded={!collapsed}
-        aria-controls="sidebar-rail"
-        aria-keyshortcuts={SIDEBAR_TOGGLE_KEY}
-        data-testid="sidebar-toggle"
-        onClick={onToggleCollapsed}
-        sx={{
-          ml: collapsed ? "auto" : "auto",
-          mr: collapsed ? "auto" : 0,
-          flex: "none",
-          color: "text.secondary",
-        }}
+  const toggle =
+    !collapsed && onToggleCollapsed ? (
+      <Tooltip
+        title={`Collapse sidebar (${SIDEBAR_TOGGLE_KEY})`}
+        placement="right"
+        describeChild
       >
-        <AppIcon name={collapsed ? "chevronRight" : "chevronLeft"} size={18} />
-      </IconButton>
-    </Tooltip>
-  ) : null;
+        <IconButton
+          size="small"
+          className="header-control-icon"
+          aria-label="Collapse sidebar"
+          aria-expanded={true}
+          aria-controls="sidebar-rail"
+          aria-keyshortcuts={SIDEBAR_TOGGLE_KEY}
+          data-testid="sidebar-toggle"
+          onClick={onToggleCollapsed}
+          sx={{
+            ml: config?.environmentName ? 0 : "auto",
+            flex: "none",
+            color: "text.secondary",
+          }}
+        >
+          <AppIcon name="sidebar" size={18} />
+        </IconButton>
+      </Tooltip>
+    ) : null;
 
   const aside = (
     <Box
@@ -896,8 +894,6 @@ export default function Sidebar({
           gap: 1,
           mx: collapsed ? "-0.5rem" : "-0.7rem",
           px: collapsed ? 0 : 1.5,
-          borderBottom: 1,
-          borderColor: "divider",
         }}
       >
         {/* Folded, the environment's name is too wide for the rail; the
@@ -978,7 +974,6 @@ export default function Sidebar({
         ) : null}
         {!collapsed ? toggle : null}
       </Box>
-      {collapsed ? toggle : null}
 
       {!hideCreateButton &&
         (collapsed ? (
@@ -991,7 +986,13 @@ export default function Sidebar({
               aria-haspopup="true"
               aria-expanded={createMenuOpen ? "true" : undefined}
               onClick={(e) => setCreateMenuAnchor(e.currentTarget)}
-              sx={{ minWidth: 0, px: 0, py: 0.5, my: 0.2 }}
+              sx={{
+                minWidth: 0,
+                height: "var(--header-control-size)",
+                px: 0,
+                py: 0,
+                my: 0.2,
+              }}
             >
               <AppIcon name="add" size={18} />
             </Button>
@@ -1794,16 +1795,58 @@ export default function Sidebar({
       )}
       {/* On a phone the tile sits in the pinned list above, beside Log
           out when somebody is signed in; beside the page it is the foot
-          of the rail, over the build stamp. */}
-      {!pinFooter && whoami ? (
-        <Box sx={{ mt: "auto", pt: 0.6, flex: "none" }}>
-          <UserTile
-            whoami={whoami}
-            collapsed={collapsed}
-            onOpenAccess={onOpenAccess}
-          />
-        </Box>
-      ) : null}
+          of the rail, over the build stamp, with a compact Log out button
+          beside it when signed in through a verified identity. */}
+      {(() => {
+        if (pinFooter) return null;
+        const verifiedEmail = verifiedUserEmail(config);
+        const desktopWhoami =
+          verifiedEmail && !whoami?.verified
+            ? { actor: { label: verifiedEmail }, verified: true }
+            : whoami;
+        const canLogoutInFooter = Boolean(
+          onLogout && (verifiedEmail || whoami?.verified),
+        );
+        if (!desktopWhoami) return null;
+        return (
+          <Box
+            sx={{
+              mt: "auto",
+              pt: 0.6,
+              flex: "none",
+              display: "flex",
+              flexDirection: collapsed ? "column" : "row",
+              alignItems: collapsed ? "stretch" : "center",
+              gap: 0.25,
+              minWidth: 0,
+            }}
+          >
+            <UserTile
+              whoami={desktopWhoami}
+              collapsed={collapsed}
+              onOpenAccess={onOpenAccess}
+            />
+            {canLogoutInFooter ? (
+              <Tooltip title="Log out" placement={collapsed ? "right" : "top"}>
+                <IconButton
+                  size="small"
+                  aria-label="Log out"
+                  data-testid="sidebar-logout"
+                  onClick={onLogout}
+                  sx={{
+                    flex: "none",
+                    alignSelf: "center",
+                    color: "text.secondary",
+                    "&:hover": { color: "error.main" },
+                  }}
+                >
+                  <AppIcon name="signOut" size={16} />
+                </IconButton>
+              </Tooltip>
+            ) : null}
+          </Box>
+        );
+      })()}
 
       {/* Which build of grain is answering: the commit it was built from
           and when that commit was made, out of the binary's own VCS
@@ -1834,7 +1877,7 @@ export default function Sidebar({
             m: 0,
             // The foot of the rail on desktop, under the System row on a
             // phone (§4.3).
-            mt: pinFooter || whoami ? 0 : "auto",
+            mt: pinFooter || whoami || verifiedUserEmail(config) ? 0 : "auto",
             pt: 0.6,
             fontSize: "0.68rem",
             // Muted by the tertiary token rather than by opacity over

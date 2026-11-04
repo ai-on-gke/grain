@@ -41,7 +41,20 @@ import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
 import StorageOutlinedIcon from "@mui/icons-material/StorageOutlined";
 import SwapVertIcon from "@mui/icons-material/SwapVert";
 import TuneIcon from "@mui/icons-material/Tune";
+import ViewSidebarOutlinedIcon from "@mui/icons-material/ViewSidebarOutlined";
 import ItemGlyph from "./ItemGlyph.jsx";
+
+// Material's ViewSidebarOutlined draws the narrow rail on the right; mirror
+// it horizontally so the sidebar column sits on the left to match grain's
+// left navigation rail.
+function LeftSidebarIcon({ sx, ...rest }) {
+  return (
+    <ViewSidebarOutlinedIcon
+      {...rest}
+      sx={{ transform: "scaleX(-1)", ...sx }}
+    />
+  );
+}
 
 // STANDARD_ICONS maps each chrome destination and UI control meaning to a
 // single Material icon (@mui/icons-material, MIT License) imported by
@@ -78,6 +91,7 @@ export const STANDARD_ICONS = {
   collapse: ChevronRightIcon,
   chevronLeft: ChevronLeftIcon,
   chevronRight: ChevronRightIcon,
+  sidebar: LeftSidebarIcon,
   back: ArrowBackIcon,
   menu: MenuIcon,
   customize: TuneIcon,

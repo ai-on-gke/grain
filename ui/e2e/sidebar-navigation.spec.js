@@ -49,21 +49,27 @@ test.describe("Sidebar Navigation Restructuring & Foldable Controls", () => {
     const wordmark = aside.getByRole("heading", { name: "grain" });
     await expect(wordmark).toBeVisible();
 
-    // 2. Primary "+ New task" split button in the shared header rail tray,
-    // aligned on the same horizontal baseline as the brand mark.
+    // 2. Primary "+ New task" split button in the left sidebar just below
+    // the borderless 77px .sidebar-header.
     const globals = page.getByTestId("page-header-globals");
-    const newTaskBtn = globals.getByRole("button", { name: "+ New task" });
+    await expect(
+      globals.getByRole("button", { name: "+ New task" }),
+    ).toHaveCount(0);
+    const sidebarHeader = aside.getByTestId("sidebar-header");
+    const newTaskBtn = aside.getByRole("button", { name: "+ New task" });
     await expect(newTaskBtn).toBeVisible();
 
-    const createOptionsBtn = globals.getByRole("button", {
+    const createOptionsBtn = aside.getByRole("button", {
       name: "Create options",
     });
-    const [newTaskBox, createOptionsBox] = await Promise.all([
+    const [headerBox, newTaskBox, createOptionsBox] = await Promise.all([
+      sidebarHeader.boundingBox(),
       newTaskBtn.boundingBox(),
       createOptionsBtn.boundingBox(),
     ]);
     expect(newTaskBox).not.toBeNull();
     expect(createOptionsBox).not.toBeNull();
+    expect(newTaskBox.y).toBeGreaterThan(headerBox.y + headerBox.height);
     expect(createOptionsBox.width).toBeLessThanOrEqual(40);
     expect(newTaskBox.width).toBeGreaterThan(createOptionsBox.width * 2);
     const newTaskLabelLines = await newTaskBtn.evaluate((button) => {
@@ -84,9 +90,11 @@ test.describe("Sidebar Navigation Restructuring & Foldable Controls", () => {
     await expect(customizePinnedBtn).toBeVisible();
 
     // 4. The destinations, flat: the bordered team-scoped box went with
-    // the teams (design/design/settings-panel.design.md §4.2).
+    // the teams (design/design/settings-panel.design.md §4.2), and CI is
+    // hidden by default.
     await expect(aside.getByTestId("team-section")).toHaveCount(0);
     await expect(page.getByTestId("team-selector")).toHaveCount(0);
+    await expect(aside.getByRole("button", { name: /^CI/ })).toHaveCount(0);
 
     const order = [];
     for (const name of [
@@ -94,7 +102,6 @@ test.describe("Sidebar Navigation Restructuring & Foldable Controls", () => {
       /^Boards/,
       /^Sessions/,
       /^Processes/,
-      /^CI/,
       /^Repos/,
     ]) {
       const btn = aside.getByRole("button", { name }).first();
