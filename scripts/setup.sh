@@ -3626,7 +3626,10 @@ install_release_assets() {
     holder="$(manifest_field "$dir/images.json" "$key" release 2>/dev/null || true)"
     holder_base="$base"
     if [ -n "$holder" ]; then
-      case "$holder" in sha-* | v[0-9]*) ;; *) echo "setup.sh: $release names '$holder' as the release holding $asset" >&2; exit 1 ;; esac
+      # The contract's own pattern, exactly: a looser glob would let a
+      # holder like sha-x/../../<owner>/<repo>/... point the download
+      # outside GRAIN_RELEASE_REPO.
+      [[ "$holder" =~ ^(sha-[0-9a-f]{12}|v[0-9]+\.[0-9]+\.[0-9]+)$ ]] || { echo "setup.sh: $release names '$holder' as the release holding $asset" >&2; exit 1; }
       holder_base="https://github.com/$GRAIN_RELEASE_REPO/releases/download/$holder"
     fi
     log "  downloading $asset${holder:+ from $holder}"
