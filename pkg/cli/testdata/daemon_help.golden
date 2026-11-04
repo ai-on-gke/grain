@@ -71,6 +71,8 @@ Usage of grain daemon:
     	host address grain services are reachable at from local sandbox containers
   -container-sandbox-cap-add string
     	comma-separated Linux capabilities handed back to local sandbox containers, which otherwise run with every capability dropped and no-new-privileges set; the stock sandbox image needs none
+  -container-sandbox-fence string
+    	auto, require or off: whether local sandbox containers are fenced off from this host, its networks and link-local (the metadata server) by a per-container nftables chain. auto fences when nft can be run and otherwise runs containers unfenced and refuses external capability grants; require refuses a container that cannot be fenced; off never fences and refuses external capability grants (default "auto")
   -container-sandbox-image string
     	image used by local container sandboxes (default "ghcr.io/bwsalmon/grain/k8s-sandbox:latest")
   -container-sandbox-network string
