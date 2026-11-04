@@ -1903,8 +1903,12 @@ func releaseTrainWorkflow(t *testing.T) ci.Workflow {
 	return ci.Workflow{}
 }
 
-// The train runs daily at 04:15 UTC from grain's own cron, and on an
-// operator's dispatch, with what scripts/release-from-trunk.sh needs and
+// Neither workflow train cuts on a schedule any more: the release train
+// is the grain task filed from .grain/templates/release-train.yml
+// (releases playbook §0.4), and .github/workflows/release-train.yml is
+// retired to an always-dry dispatch so the two can never both cut (task
+// 2382). This one still answers an operator's dispatch, with what
+// scripts/release-from-trunk.sh needs and
 // nothing else: repo-write for the rc, -discarded and -pending tags and
 // refs/heads/candidate, release-gate-read for main's runs, staging and the
 // release-notes task, and package-publish for the rc and pending images.
@@ -1912,11 +1916,16 @@ func releaseTrainWorkflow(t *testing.T) ci.Workflow {
 func TestTheReleaseTrainRunsDailyWithTheCapabilitiesItUses(t *testing.T) {
 	w := releaseTrainWorkflow(t)
 	if len(w.On.Schedule) != 0 {
-		t.Errorf("%s still declares `on: schedule` (%v); automatic scheduling moved to .github/workflows/release-train.yml", releaseTrainPath, w.On.Schedule)
+		t.Errorf("%s still declares `on: schedule` (%v); the release train is .grain/templates/release-train.yml", releaseTrainPath, w.On.Schedule)
 	}
-	ghTrain := upTo(t, stripComments(read(t, ".github", "workflows", "release-train.yml")), "jobs:")
-	contains(t, ghTrain, "schedule:")
-	contains(t, ghTrain, `cron: "15 4 * * *"`)
+	ghTrainFile := stripComments(read(t, ".github", "workflows", "release-train.yml"))
+	if ghTrain := upTo(t, ghTrainFile, "jobs:"); strings.Contains(ghTrain, "schedule:") || strings.Contains(ghTrain, "cron:") {
+		t.Errorf(".github/workflows/release-train.yml still runs on a schedule; the release train is .grain/templates/release-train.yml, and two trains would both cut")
+	}
+	contains(t, ghTrainFile, `dry_run="true"`)
+	if strings.Contains(ghTrainFile, `dry_run="false"`) {
+		t.Errorf(".github/workflows/release-train.yml can still resolve a live run; it is retired to dry runs")
+	}
 	if !w.On.Matches(ci.EventManual, "main") {
 		t.Errorf("%s does not answer workflow_dispatch on main (%s)", releaseTrainPath, w.On.Describe())
 	}

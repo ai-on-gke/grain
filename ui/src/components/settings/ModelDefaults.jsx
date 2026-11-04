@@ -39,11 +39,10 @@ import { pausedUntil } from "../../alerts.js";
 import ModelSelect from "../ModelSelect.jsx";
 
 // effortChoices is the reasoning-effort vocabulary a model's framework
-// takes, or null for one that takes free text (a custom command), or []
-// for one that takes no effort at all (Claude: the CLI has no flag).
+// takes, or [] for one that takes no effort at all (Claude: the CLI has
+// no flag).
 function effortChoices(framework, efforts) {
   if (framework === "claude") return [];
-  if (framework === "custom") return null;
   if (framework === "codex") return efforts.codex || [];
   return efforts.gemini || [];
 }
@@ -459,25 +458,7 @@ export default function ModelDefaults({
               )}
 
               <Box sx={{ mt: 1.5, maxWidth: 320 }}>
-                {choices === null ? (
-                  <TextField
-                    key={`${m.id}-${effort}`}
-                    size="small"
-                    label="Reasoning effort"
-                    defaultValue={effort}
-                    disabled={loading}
-                    onBlur={(event) => saveEffort(m.id, event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        event.target.blur();
-                      }
-                    }}
-                    helperText="Passed to the custom command as it is typed."
-                    inputProps={identifierField}
-                    fullWidth
-                  />
-                ) : choices.length === 0 && !effort ? (
+                {choices.length === 0 && !effort ? (
                   <Typography variant="caption" color="text.secondary">
                     {m.framework === "claude"
                       ? "Claude takes no reasoning effort."

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { describe, expect, it } from "vitest";
-import { fuzzyFilter, fuzzyScore } from "./fuzzy.js";
+import { fuzzyFilter, fuzzyScore, searchFilter, searchMatch } from "./fuzzy.js";
 
 const models = [
   "gemini-3.1-pro",
@@ -51,5 +51,95 @@ describe("fuzzyFilter", () => {
     expect(fuzzyFilter(options, "sonnet", (o) => o.id)).toEqual([
       { id: "claude-sonnet-5" },
     ]);
+  });
+});
+
+// Made-up names shaped like the ones the operator searches: a host-style
+// three-segment repo among plain owner/name ones.
+const repos = [
+  "acme/widgets",
+  "ai-on-gke/grain",
+  "bwsalmon/silo",
+  "depot.example.dev/experimental/grain",
+  "gke-labs/granule",
+  "grain-tools/docs",
+];
+const found = (query) => searchFilter(repos, query).map((m) => m.item);
+
+describe("searchMatch", () => {
+  it("matches a substring anywhere, case ignored", () => {
+    expect(searchMatch("GRANULE", "gke-labs/granule")).not.toBeNull();
+    expect(searchMatch("labs", "gke-labs/granule")).not.toBeNull();
+    expect(searchMatch("nope", "gke-labs/granule")).toBeNull();
+  });
+
+  it("needs every space-separated token, in any order", () => {
+    const text = "depot.example.dev/experimental/grain";
+    expect(searchMatch("exp grain", text)).not.toBeNull();
+    expect(searchMatch("grain exp", text)).not.toBeNull();
+    expect(searchMatch("grain silo", text)).toBeNull();
+  });
+
+  it("ranks a token that starts a segment above one in the middle", () => {
+    expect(searchMatch("grain", "ai-on-gke/grain").tier).toBe(0);
+    expect(searchMatch("rain", "ai-on-gke/grain").tier).toBe(1);
+  });
+
+  it("reports the matched runs, merged and in order", () => {
+    expect(searchMatch("grain", "ai-on-gke/grain").ranges).toEqual([[10, 15]]);
+    // The segment-start occurrence wins over the first one.
+    expect(searchMatch("grain", "x-grain/grain").ranges).toEqual([[8, 13]]);
+    expect(searchMatch("gke ai", "ai-on-gke/grain").ranges).toEqual([
+      [0, 2],
+      [6, 9],
+    ]);
+  });
+});
+
+describe("searchFilter", () => {
+  it("finds every repo named grain, wherever the name sits", () => {
+    expect(found("grain")).toEqual([
+      "ai-on-gke/grain",
+      "grain-tools/docs",
+      "depot.example.dev/experimental/grain",
+    ]);
+    expect(found("granule")).toEqual(["gke-labs/granule"]);
+    expect(found("exp grain")).toEqual([
+      "depot.example.dev/experimental/grain",
+    ]);
+  });
+
+  it("ranks segment starts before other substrings", () => {
+    expect(found("ra")).toEqual([
+      "ai-on-gke/grain",
+      "gke-labs/granule",
+      "grain-tools/docs",
+      "depot.example.dev/experimental/grain",
+    ]);
+    expect(found("silo")).toEqual(["bwsalmon/silo"]);
+    expect(found("salmon")).toEqual(["bwsalmon/silo"]);
+  });
+
+  it("falls back to a subsequence only when no substring matches", () => {
+    // "gnl" is in no name as written, but is in gke-labs/granule in order.
+    expect(found("gnl")).toContain("gke-labs/granule");
+    expect(searchFilter(repos, "gnl")[0].ranges.length).toBeGreaterThan(0);
+    // "grain" matches by substring, so the scattered g..r..a..i..n in
+    // gke-labs/granule is not offered beside the real matches.
+    expect(found("grain")).not.toContain("gke-labs/granule");
+    expect(found("zzz")).toEqual([]);
+  });
+
+  it("keeps every item, unhighlighted, for an empty query", () => {
+    expect(searchFilter(repos, "  ")).toEqual(
+      repos.map((item) => ({ item, ranges: [] })),
+    );
+  });
+
+  it("filters objects by the text it is given", () => {
+    const options = repos.map((r) => ({ r }));
+    expect(
+      searchFilter(options, "silo", (o) => o.r).map((m) => m.item),
+    ).toEqual([{ r: "bwsalmon/silo" }]);
   });
 });

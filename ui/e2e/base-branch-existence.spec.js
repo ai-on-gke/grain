@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // A well-formed base branch the repo does not have (grain/task-1620).
 // The forms warn about it as soon as GitHub's listing says it is not
@@ -38,7 +39,7 @@ test("the New task form warns about a missing base and the server refuses it", a
   await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
   const title = `Missing base, refused ${Date.now()}`;
   await page.getByLabel("Title").fill(title);
-  await page.getByLabel(/^Repos/).selectOption("acme/widgets");
+  await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
 
   const base = page.getByLabel("Base branch");
   await base.fill("no-such-branch");
@@ -99,7 +100,10 @@ test("the schedule form warns about a missing base but saves it", async ({
   await page
     .getByLabel("Description", { exact: true })
     .fill("Runs against a release branch that is not cut yet.");
-  await page.locator("select[name='repo']").selectOption("acme/widgets");
+  await chooseOption(
+    page.locator(".repo-field:has(input[name='repo']) [role='combobox']"),
+    "acme/widgets",
+  );
   await page.getByLabel("Base branch").fill("no-such-branch");
   await expect(
     page.getByText(missingWarning("each firing fails until it is cut")),
@@ -133,10 +137,12 @@ test("the template form warns about a missing base but saves it", async ({
   await page
     .locator('textarea[name="description"]')
     .fill("Filed against a release branch that is not cut yet.");
-  await page
-    .locator('select[name="repo"]')
-    .first()
-    .selectOption("acme/widgets");
+  await chooseOption(
+    page
+      .locator('.repo-field:has(input[name="repo"]) [role="combobox"]')
+      .first(),
+    "acme/widgets",
+  );
   const base = page.locator('input[name="base"]').first();
   await base.fill("no-such-branch");
   await expect(

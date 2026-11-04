@@ -419,6 +419,7 @@ func (s *Server) routes() {
 	s.route("POST /api/repos/{owner}/{name}/releases/{release}/candidates/promote", s.handlePromoteCandidate)
 	s.route("POST /api/repos/{owner}/{name}/pending-releases/{version}/approve", s.handleApproveRelease)
 	s.route("POST /api/repos/{owner}/{name}/pending-releases/{version}/reject", s.handleRejectRelease)
+	s.route("GET /api/release-approval-key", s.handleReleaseApprovalKey)
 
 	s.route("GET /api/repos/{owner}/{name}/branches", s.handleListBranches)
 	s.route("POST /api/repos/{owner}/{name}/branches", s.handleCreateBranch)

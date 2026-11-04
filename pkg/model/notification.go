@@ -207,6 +207,25 @@ const (
 	// trunk has moved and no release has been started for it, "<repo>"
 	// (orchestrator's releasestall.go).
 	FamilyReleaseNotStarting = "pipeline.release-not-starting"
+	// FamilyRCFailed is a release candidate whose Stage 2 qualification
+	// is confirmed red, "<rc_tag>" (orchestrator's releaseredrc.go,
+	// design/playbook/releases.playbook.md §12). It wakes the pipeline
+	// steward to triage `<floor>..<rc_sha>`, and is cleared once a newer
+	// candidate is cut or the version is promoted.
+	FamilyRCFailed = "pipeline.rc-failed"
+	// FamilyFlakeBudget is a qualification target that spent
+	// FlakeBudgetRetries flake retries inside FlakeBudgetWindow,
+	// "<repo>:<target>" (playbook §3).
+	FamilyFlakeBudget = "pipeline.flake-budget"
+	// FamilyReleaseInfraStalled is a release candidate left qualifying
+	// because one item keeps failing on infrastructure, "<rc_tag>"
+	// (playbook §4's bounded patience).
+	FamilyReleaseInfraStalled = "pipeline.release-infra-stalled"
+	// FamilyReleaseEscalated is a version that used
+	// ReleaseMaxRCAttempts candidates and is still red, "<vX.Y.Z>"
+	// (playbook §5): the train cuts no more of it until a person resets
+	// or advances it.
+	FamilyReleaseEscalated = "pipeline.release-escalated"
 	// FamilyMergeStalled is a merge-queue entry handed to a person past
 	// its patience, "<task>".
 	FamilyMergeStalled = "pipeline.merge-stalled"
@@ -238,6 +257,12 @@ const (
 	// cleared by orchestrator's automatic upgrades: the next one that
 	// succeeds clears every open instance.
 	FamilyUpgradeFailed = "upgrade.failed"
+	// FamilyCapabilityServerDown is a capability server that fell out of
+	// use -- attached, then failed or needs-config, or refusing the config
+	// it was saved with -- "<capability_id>". Raised and cleared by the
+	// daemon's capability-server registry: the server attaching again
+	// clears it.
+	FamilyCapabilityServerDown = "capability.server-down"
 )
 
 // ReleasePendingActions are the actions a FamilyReleasePending

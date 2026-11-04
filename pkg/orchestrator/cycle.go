@@ -571,6 +571,10 @@ func Reconcilers() []Reconciler {
 		// second run at the same tip, on a row of its own that the queue
 		// does not read (reconcileBaseBranchRelease).
 		{Name: "base-branch-release", Reconcile: reconcileBaseBranchRelease},
+		// And the release that waits for a person on a repository that
+		// releases from GitHub Actions: its -pending tag, read outbound,
+		// raises release.pending in the Inbox (releasepending.go).
+		{Name: "release-pending", Reconcile: reconcileReleasePending},
 		// And beside those, a repository's own `on: merge` path triggers:
 		// one diff of whatever landed since the branch was last diffed
 		// (pathtrigger.go).

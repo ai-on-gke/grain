@@ -198,10 +198,27 @@ func cliRetryPolicy(connect time.Duration) *ui.RetryPolicy {
 	return &ui.RetryPolicy{Budget: connect, Initial: 200 * time.Millisecond, Max: time.Second}
 }
 
+// tokenSource names the explicit bearer credential HTTPClient will send
+// before falling back to the local API token or a Google ID token:
+// "-token", "$GRAIN_TOKEN" (or one of its aliases), or "".
+func tokenSource(flagToken string) string {
+	if flagToken != "" {
+		return "-token"
+	}
+	for _, env := range ui.TokenEnvVars {
+		if strings.TrimSpace(os.Getenv(env)) != "" {
+			return "$" + env
+		}
+	}
+	return ""
+}
+
 // cliTarget is what explainDaemonError needs to know about where the CLI
-// went: the URL, where it came from, and the flags that bound the call.
+// went: the URL, where it came from, what supplied its token, and the
+// flags that bound the call.
 type cliTarget struct {
 	server, source string
+	tokenSource    string
 	connect, call  time.Duration
 }
 
@@ -212,6 +229,10 @@ type cliTarget struct {
 func explainDaemonError(err error, t cliTarget) error {
 	if err == nil {
 		return nil
+	}
+	var classified *cliError
+	if errors.As(err, &classified) {
+		return err // a command's own verdict, already said
 	}
 	where := t.server
 	switch t.source {
@@ -226,16 +247,20 @@ func explainDaemonError(err error, t cliTarget) error {
 
 	switch {
 	case daemonRefused(err):
-		return fmt.Errorf("no grain daemon answered at %s%s. %s (%v)", where, hint, fix, rootCause(err))
+		return &cliError{exit: exitUnreachable, code: "daemon_unreachable",
+			err: fmt.Errorf("no grain daemon answered at %s%s. %s (%v)", where, hint, fix, rootCause(err))}
 	case daemonTimedOut(err):
 		// The hint follows the sentence it qualifies: put between the
 		// address and "did not answer", it read as this host's daemon
 		// being the one that timed out.
-		return fmt.Errorf("the grain daemon at %s did not answer in time (-connect-timeout %s, -timeout %s)%s. "+
-			"%s, or pass a longer -timeout for a slow call (%v)", where, t.connect, t.call, hint, fix, rootCause(err))
+		return &cliError{exit: exitUnreachable, code: "daemon_unreachable",
+			err: fmt.Errorf("the grain daemon at %s did not answer in time (-connect-timeout %s, -timeout %s)%s. "+
+				"%s, or pass a longer -timeout for a slow call (%v)", where, t.connect, t.call, hint, fix, rootCause(err))}
 	}
 	if unauthorized(err) {
-		return fmt.Errorf("the grain daemon at %s refused this CLI's credentials (%s): %s", where, serverMessage(err), credentialHint())
+		return &cliError{exit: exitAuth, code: "unauthenticated",
+			err: fmt.Errorf("the grain daemon at %s refused this CLI's credentials (%s): %s",
+				where, serverMessage(err), credentialHint(t.server, t.tokenSource))}
 	}
 	return err
 }
@@ -250,11 +275,20 @@ func hostDaemonHint(server string) string {
 	return fmt.Sprintf("; this host's daemon listens on %s per %s", env.server, env.path)
 }
 
-// credentialHint says why a loopback CLI had no credential the daemon
-// accepts, and how to get one: the local API token is the credential,
-// and the usual reason is that it is there but not readable by whoever
-// is running this.
-func credentialHint() string {
+// credentialHint says why the CLI's call was refused on credentials, and
+// what to do about it: an explicit -token or environment token that was
+// rejected is named as such; a non-loopback server never receives the
+// local API token; and on loopback with no explicit token, the local API
+// token file is inspected.
+func credentialHint(server, tokenSource string) string {
+	switch {
+	case tokenSource == "-token":
+		return "the token passed with -token was refused"
+	case strings.HasPrefix(tokenSource, "$"):
+		return "the token from " + tokenSource + " was refused"
+	case !ui.IsLoopbackURL(server):
+		return "no -token was given; pass a token with -token or set GRAIN_TOKEN"
+	}
 	path := ui.LocalAPITokenFile()
 	if path == "" {
 		return "no local API token was found (set " + dataDirEnvVar + " to the daemon's data directory), " +

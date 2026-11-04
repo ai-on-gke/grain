@@ -14,6 +14,7 @@
 
 import { test, expect } from "./fixtures.js";
 import { spawnSync } from "node:child_process";
+import { chooseOption } from "./searchSelect.js";
 
 // The browser half of docs/test-plans/2026-10-12.md §5
 // (docs/test-runs/2026-10-12-suite-release-batch-fixes.md): a suite run
@@ -55,10 +56,12 @@ test.describe("suite run, default-branch release and merge batch walkthrough", (
     await page.getByRole("button", { name: "+ New template" }).click();
     await page.locator('input[name="name"]').fill(tmplName);
     await page.locator('input[name="title"]').fill(`Walk gone ${stamp}`);
-    await page
-      .locator('select[name="repo"]')
-      .first()
-      .selectOption("acme/widgets");
+    await chooseOption(
+      page
+        .locator('.repo-field:has(input[name="repo"]) [role="combobox"]')
+        .first(),
+      "acme/widgets",
+    );
     await page.locator('input[name="base"]').first().fill("main");
     await page.getByRole("button", { name: "Add template" }).click();
     await expect(
@@ -81,10 +84,12 @@ test.describe("suite run, default-branch release and merge batch walkthrough", (
     await expect(suiteRow).toContainText("run 2×");
 
     await suiteRow.getByRole("button", { name: "Run…" }).click();
-    await page
-      .locator('select[name="repo"]')
-      .first()
-      .selectOption("acme/widgets");
+    await chooseOption(
+      page
+        .locator('.repo-field:has(input[name="repo"]) [role="combobox"]')
+        .first(),
+      "acme/widgets",
+    );
     await page.locator('input[name="base"]').first().fill("main");
     await page.getByRole("button", { name: "Run", exact: true }).click();
     await expect(

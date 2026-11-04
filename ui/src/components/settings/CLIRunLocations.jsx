@@ -31,7 +31,6 @@ export const CLI_RUN_CLIS = [
   { framework: "claude", label: "claude" },
   { framework: "codex", label: "codex" },
   { framework: "antigravity", label: "agy (Antigravity)" },
-  { framework: "custom", label: "custom commands" },
 ];
 
 const LOCATIONS = [
@@ -60,7 +59,6 @@ export function resolvedLine(r) {
       ? `host (${r.hostPath}, through grain hostd)`
       : "host (through grain hostd)";
   }
-  if (r.framework === "custom") return "host (each connection's own command)";
   return `host (${r.hostPath || "not found on PATH"})`;
 }
 

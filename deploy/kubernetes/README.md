@@ -245,7 +245,7 @@ this deployment owns, and under Kubernetes there is no such machine:
 
 For the same reason, **Settings → Models** does not offer **Host** as a
 run location for any agent CLI. Kubernetes has no host executor and no
-`grain hostd`. Every CLI (claude, codex, agy and custom commands) runs as
+`grain hostd`. Every CLI (claude, codex and agy) runs as
 a subprocess in the daemon pod's own container, which is what **Auto**
 and **Container** both mean here. `PUT /api/settings/cli-run` refuses
 `host` with a 400. The daemon refuses to start with `-claude-run=host`,

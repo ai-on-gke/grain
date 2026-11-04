@@ -2094,7 +2094,9 @@ export function branchesInUse(tasks, repo) {
 const FRAMEWORK_LABELS = {
   claude: "Claude",
   codex: "Codex",
-  custom: "Custom command",
+  // Removed: a task or session from before the custom command connection
+  // type was retired can still name it.
+  custom: "Custom command (removed)",
 };
 
 export function frameworkLabel(framework) {
@@ -2331,13 +2333,11 @@ export function taskPause(t, config) {
 export const PROVIDER_DEFAULT_LABEL = "provider default (unset)";
 
 // NO_MODELS_LABEL is what a connection that advertises no model at all
-// says: its provider has never answered, or it is a custom command with
-// an empty list. Tasks that would run on it wait until somebody sets one.
+// says: its provider has never answered. Tasks that would run on it wait until somebody sets one.
 export const NO_MODELS_LABEL = "no models — set one";
 
 // DISCOVERING_FRAMEWORKS are the frameworks whose provider grain can ask
-// what it serves (model.AgentBackend.DiscoversModels). A custom command
-// cannot be asked.
+// what it serves (model.AgentBackend.DiscoversModels).
 export const DISCOVERING_FRAMEWORKS = [
   "antigravity",
   "gemini",

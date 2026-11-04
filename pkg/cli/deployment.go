@@ -102,14 +102,18 @@ func gitConnectionOn(team ui.Team, host string) (string, bool) {
 // check" apart from "this deployment has no git at all".
 func cmdGitConnections(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain git-connections", flag.ContinueOnError)
-	if _, err := parseArgs(fs, args); err != nil {
+	rest, err := parseArgs(fs, args)
+	if err != nil {
+		return err
+	}
+	if err := noArgs(fs, rest); err != nil {
 		return err
 	}
 	existing, err := c.GetDeployment(ctx)
 	if err != nil {
 		return err
 	}
-	conns := append([]model.TeamGitConnection(nil), existing.GitConnections...)
+	conns := append([]model.TeamGitConnection{}, existing.GitConnections...)
 	if _, ok := gitConnectionOn(ui.Team{GitConnections: conns}, model.DefaultGitHost); !ok && existing.HasGitCredential {
 		conns = append(conns, model.TeamGitConnection{Credential: strings.TrimSpace(existing.GitCredential), Host: model.DefaultGitHost})
 	}

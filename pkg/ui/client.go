@@ -3023,6 +3023,10 @@ func validateAgentFramework(framework string) error {
 	if framework == "" || model.ValidAgentFramework(framework) {
 		return nil
 	}
+	if strings.TrimSpace(framework) == model.RemovedAgentFrameworkCustom {
+		return validationErrorf("agentFramework: %s; use one of %s, or empty for this deployment's default",
+			removedCustomConnectionError, model.AgentFrameworkNames())
+	}
 	return validationErrorf("agentFramework must be %s, or empty for this deployment's default",
 		model.AgentFrameworkNames())
 }

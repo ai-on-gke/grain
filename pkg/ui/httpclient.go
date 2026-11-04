@@ -138,6 +138,10 @@ func (c *HTTPClient) prepareRequest(ctx context.Context, req *http.Request) erro
 	return nil
 }
 
+// TokenEnvVars are the environment variables HTTPClient reads for a bearer
+// token, in precedence order.
+var TokenEnvVars = []string{"GRAIN_TOKEN", "GRAIN_AUTH_TOKEN", "GRAIN_ID_TOKEN", "GRAIN_TUNNEL_TOKEN"}
+
 func (c *HTTPClient) resolveToken(ctx context.Context) (string, error) {
 	if c.Token != "" {
 		return c.Token, nil
@@ -145,7 +149,7 @@ func (c *HTTPClient) resolveToken(ctx context.Context) (string, error) {
 	if c.TokenProvider != nil {
 		return c.TokenProvider(ctx)
 	}
-	for _, env := range []string{"GRAIN_TOKEN", "GRAIN_AUTH_TOKEN", "GRAIN_ID_TOKEN", "GRAIN_TUNNEL_TOKEN"} {
+	for _, env := range TokenEnvVars {
 		if val := strings.TrimSpace(os.Getenv(env)); val != "" {
 			return val, nil
 		}
@@ -155,7 +159,7 @@ func (c *HTTPClient) resolveToken(ctx context.Context) (string, error) {
 	// token, when this process can read it: what keeps the CLI working
 	// against a daemon that wants the access code from every caller
 	// (localtoken.go, grain/task-2078). A server elsewhere never is.
-	if isLoopbackURL(c.BaseURL) {
+	if IsLoopbackURL(c.BaseURL) {
 		if tok := localAPIToken(); tok != "" {
 			return tok, nil
 		}
@@ -623,7 +627,7 @@ func (c *HTTPClient) httpError(resp *http.Response) error {
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err == nil && payload.Error != "" {
 		message = payload.Error
 	}
-	if resp.StatusCode == http.StatusUnauthorized && isLoopbackURL(c.BaseURL) {
+	if resp.StatusCode == http.StatusUnauthorized && IsLoopbackURL(c.BaseURL) {
 		message += loopbackUnauthorizedHint()
 	}
 	switch resp.StatusCode {
@@ -636,8 +640,22 @@ func (c *HTTPClient) httpError(resp *http.Response) error {
 	case http.StatusServiceUnavailable:
 		return &UnavailableError{message: message}
 	default:
-		return fmt.Errorf("grain server: %s (%s)", message, resp.Status)
+		return &StatusError{StatusCode: resp.StatusCode, Status: resp.Status, Message: message}
 	}
+}
+
+// StatusError is any other non-2xx answer from the daemon: 401, 409,
+// 422, a 5xx. It keeps the status code so a caller can say what kind of
+// failure it was (the CLI's exit codes, pkg/cli/errors.go) without
+// reading it back out of the sentence.
+type StatusError struct {
+	StatusCode int
+	Status     string
+	Message    string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("grain server: %s (%s)", e.Message, e.Status)
 }
 
 // loopbackUnauthorizedHint returns an actionable hint for a 401 received
@@ -1767,6 +1785,16 @@ func (c *HTTPClient) DecideRelease(ctx context.Context, repo, version string, ap
 	err = c.do(ctx, http.MethodPost, "/api/repos/"+url.PathEscape(ref.StoredOwner())+"/"+url.PathEscape(ref.Name)+
 		"/pending-releases/"+url.PathEscape(version)+"/"+verb, body, &resp)
 	return resp, err
+}
+
+// ReleaseApprovalKey is the deployment's release-approval public key,
+// PEM -- GET /api/release-approval-key.
+func (c *HTTPClient) ReleaseApprovalKey(ctx context.Context) (string, error) {
+	var resp struct {
+		PublicKey string `json:"publicKey"`
+	}
+	err := c.do(ctx, http.MethodGet, "/api/release-approval-key", nil, &resp)
+	return resp.PublicKey, err
 }
 
 // MergeBatches queries the merge batches currently in flight -- GET /api/merge-batches.

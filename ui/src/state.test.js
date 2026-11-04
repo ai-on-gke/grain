@@ -2630,7 +2630,7 @@ describe("advertisedModels", () => {
       expect(advertisedModels({ framework })).toEqual([]);
     }
   });
-  it("never reads a discovered list for a custom command", () => {
+  it("never reads a discovered list for a removed custom command connection", () => {
     expect(
       advertisedModels({ framework: "custom", models: [], discovered }),
     ).toEqual([]);
