@@ -25,12 +25,12 @@ import {
   ListItemButton,
   ListItemText,
   ListSubheader,
-  MenuItem,
   TextField,
   Typography,
   useMediaQuery,
 } from "@mui/material";
 import AppIcon from "./AppIcon.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import { DISCARD_PROMPT } from "./Overlay.jsx";
 import { keepInView } from "../keepInView.js";
 import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
@@ -505,24 +505,25 @@ export default function SettingsPage({
         Settings
       </Typography>
       <Box sx={{ display: "flex", gap: 1, mb: 2, alignItems: "flex-start" }}>
-        <TextField
-          select
-          size="small"
+        <SearchSelect
           label="Section"
+          fullWidth={false}
           value={current}
-          onChange={(evt) => go(evt.target.value)}
+          onChange={(next) => {
+            if (next) go(next);
+          }}
           sx={{ minWidth: 200 }}
-          SelectProps={{ "data-testid": "settings-section-select" }}
-        >
-          {SETTINGS_GROUPS.flatMap((group) => [
-            <ListSubheader key={`g-${group.id}`}>{group.label}</ListSubheader>,
-            ...group.sections.map((sec) => (
-              <MenuItem key={sec.id} value={sec.id}>
-                {sec.label}
-              </MenuItem>
-            )),
-          ])}
-        </TextField>
+          data-testid="settings-section-select"
+          groupBy={(o) => o.group}
+          options={SETTINGS_GROUPS.flatMap((group) =>
+            group.sections.map((sec) => ({
+              value: sec.id,
+              label: sec.label,
+              group: group.label,
+              match: `${sec.label} ${group.label}`,
+            })),
+          )}
+        />
         <Box sx={{ flex: 1, position: "relative" }}>
           {filterBox}
           {results && (

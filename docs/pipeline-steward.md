@@ -241,11 +241,12 @@ What takes judgement is the steward's. Woken by
    `[rc-blocker vX.Y.Z-rc.N]` (`model.RCBlockerMarker`). That title links
    it to the hold. While any task with it is open, the reconciler keeps
    check run `grain/rc-hold` in progress on the red candidate's commit,
-   which is the floor the train cuts `rc.(N+1)` after. It completes the
-   check once they have all landed, so the steward has no hold to lift. If
-   `main` is red too, the base-branch repair is the fix and the steward
-   files no other: the train cuts only known-good commits, so a red
-   `main` already holds it.
+   which is the floor the train cuts `rc.(N+1)` after; Phase 2 reads that
+   check run and cuts nothing (`rc_held=vX.Y.Z-rc.(N+1)`) until it
+   completes. The reconciler completes the check once every blocker has
+   landed, so the steward has no hold to lift. If `main` is red too, the
+   base-branch repair is the fix and the steward files no other: the train
+   cuts only known-good commits, so a red `main` already holds it.
 3. **Converges `rc.3` on `release/vX.Y.Z` when trunk churn broke `rc.2`.**
    The train makes `release/vX.Y.Z` from `rc.2`'s commit and cuts `rc.3`
    from it (playbook §5). When `rc.2` failed on a regression `rc.1` did not
@@ -267,9 +268,6 @@ On `pipeline.flake-budget` it proposes one de-flake task for the item. On
 `pipeline.release-infra-stalled` it names the failing runner, quota or
 credential in a notification a person can act on. The candidate stays
 qualifying, and an infrastructure verdict never counts against it.
-
-The train itself does not read `grain/rc-hold` yet: until it does, the
-hold is visible on the commit but does not stop a cut.
 
 ## What it is told
 
