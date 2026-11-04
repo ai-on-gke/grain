@@ -513,7 +513,14 @@ import "strconv"
 // 108 adds `reason` to `allowed_principal` (model.AllowedPrincipal.Reason):
 // why an entry was added, required for the `serviceAccount:<email>` entries
 // the allowlist accepts again.
-const SchemaVersion = 108
+//
+// 109 removes the deprecated account and activate arguments from
+// https://grain.dev/capabilities/gcp#gcp-key: stored grants carrying
+// account: X become permission_set: X ("default" resolves to the first
+// configured permission set) and activate is dropped; grants naming a
+// permission set that does not exist are kept, logged, and noted on their
+// task, template or schedule (gcp_key_args_migration.go).
+const SchemaVersion = 109
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted

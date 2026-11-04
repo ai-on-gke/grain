@@ -116,6 +116,13 @@ Schema migration 97 retires the in-process `gcp-key` and `gcp-key:<name>` provid
 - **Stored grants rewritten:** bare `gcp-key` becomes `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true}` and `gcp-key:<name>` becomes `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"<name>","primary":true}` across tasks, templates, schedules, suites, repository `default_capabilities` and `ci_capabilities`, console sessions, the capability catalogue, and local policy. Older state-repository exports carrying `gcp-key` are rewritten on import.
 - **One-release alias:** `gcp-key` and `gcp-key:<name>` remain readable as aliases for one release (with a deprecation notice in Settings → Capabilities) and normalize to the corresponding `gcp#gcp-key` grants; the in-process provider itself is no longer registered.
 
+## Removal of deprecated `account` and `activate` grant arguments (migration 109)
+
+Schema migration 109 removes the deprecated `account` and `activate` arguments from `https://grain.dev/capabilities/gcp#gcp-key`, leaving only `permission_set` and `primary`:
+
+- **Stored grants rewritten:** `account: <set>` becomes `permission_set: <set>` (`account: default` resolves to the first configured permission set at migration time), and `activate` is dropped across tasks, templates, schedules, repository `default_capabilities` and `ci_capabilities`, console sessions, persistent sandboxes, deployment `default_capabilities`, and the capability catalogue. If the named permission set does not exist on the configured `gcp` server (or `account: default` is encountered with no sets configured), the grant is kept as-is, logged in the migration log, and noted on its task, template, or schedule.
+- **New grants and state-repo import:** after migration 109, new grants carrying `account` or `activate` are refused with a message directing callers to `permission_set`. State-repository (`grain/config`) imports accept the old forms for one release and rewrite them to `permission_set` on export.
+
 ## Running the live test
 
 `go test ./pkg/capability/gcpsets -run TestLiveMintUseRelease -v` with `GRAIN_GCP_LIVE_PROJECT=grain-sandbox-dev`, `GRAIN_GCP_LIVE_BUCKET=<a test bucket>` and either `GRAIN_GCP_LIVE_ADMIN_KEY=<admin key file>` or ambient ADC. It runs as deployment `livetest` (account `grain-livetest-live-test-1`), mints a key for a set holding `roles/storage.objectViewer` on the bucket, lists the bucket with gcloud as that key, releases it and checks the key is gone. Without the variables it is skipped.

@@ -745,6 +745,11 @@ var Migrations = []Migration{
 			"ALTER TABLE `allowed_principal` ADD COLUMN `reason` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     109,
+		Description: "rewrite stored gcp#gcp-key grants from deprecated account and activate arguments to permission_set",
+		Up:          MigrateGCPKeyGrantArgs,
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as

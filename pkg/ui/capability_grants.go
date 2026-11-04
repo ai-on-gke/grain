@@ -202,7 +202,7 @@ func (c *Client) CheckCapabilityGrants(ctx context.Context, grants []GrantReques
 			check.Unchecked = true
 		}
 		if check.Unchecked {
-			if err := model.CheckCapabilityGrantSyntax(s); err != nil {
+			if err := model.CheckCapabilityGrantArgsOffline(s); err != nil {
 				check.Error, check.Fields = err.Error(), grantFieldErrors(err)
 			} else {
 				check.Recorded = s
