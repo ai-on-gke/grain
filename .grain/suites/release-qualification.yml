@@ -20,6 +20,8 @@ mode: until_clean
 max-passes: 1
 require-approval: false
 auto-merge: false
-# The fixture tasks a template files against its own scratch branch have to
-# run unattended for the item to finish.
-auto-approve-proposals: true
+# No auto-approve-proposals: anything a qualification task proposes on any
+# other branch is a defect report, and waits for a person. The fixture tasks
+# it files against its own qualification/<task-id> scratch branch are queued,
+# and merge there, on its template's own `push:` of that branch instead
+# (model.ScratchFixture), so they run unattended without it.
