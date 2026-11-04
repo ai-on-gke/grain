@@ -433,7 +433,7 @@ func TestCLICapabilityAttachAndDetachControlWhatARealDispatchMaterializes(t *tes
 	sandboxes := credentialed(t, remote)
 
 	storeDir := t.TempDir()
-	cap := &countingCapability{name: "gemini-key"}
+	cap := &countingCapability{name: "read-issues"}
 	cfg := orchestrator.Config{Capabilities: model.NewCapabilityRegistry(cap)}
 
 	// Task A: attached through the real CLI verb, left attached, and
@@ -445,13 +445,13 @@ func TestCLICapabilityAttachAndDetachControlWhatARealDispatchMaterializes(t *tes
 	if err := json.Unmarshal([]byte(createdA), &taskA); err != nil {
 		t.Fatalf("parsing grain create -json output: %v\n%s", err, createdA)
 	}
-	attached := runCLIStore(t, bin, storeDir, "-json", "capability", taskA.ID, "gemini-key", "attach")
+	attached := runCLIStore(t, bin, storeDir, "-json", "capability", taskA.ID, "read-issues", "attach")
 	var attachedTask ui.Task
 	if err := json.Unmarshal([]byte(attached), &attachedTask); err != nil {
 		t.Fatalf("parsing grain capability attach -json output: %v\n%s", err, attached)
 	}
-	if len(attachedTask.Capabilities) != 1 || attachedTask.Capabilities[0] != "gemini-key" {
-		t.Fatalf("capabilities after attach = %+v, want [gemini-key]", attachedTask.Capabilities)
+	if len(attachedTask.Capabilities) != 1 || attachedTask.Capabilities[0] != "read-issues" {
+		t.Fatalf("capabilities after attach = %+v, want [read-issues]", attachedTask.Capabilities)
 	}
 
 	deps := orchestrator.Deps{
@@ -486,8 +486,8 @@ func TestCLICapabilityAttachAndDetachControlWhatARealDispatchMaterializes(t *tes
 	if err := json.Unmarshal([]byte(createdB), &taskB); err != nil {
 		t.Fatalf("parsing grain create -json output: %v\n%s", err, createdB)
 	}
-	runCLIStore(t, bin, storeDir, "-json", "capability", taskB.ID, "gemini-key", "attach")
-	detached := runCLIStore(t, bin, storeDir, "-json", "capability", taskB.ID, "gemini-key", "detach")
+	runCLIStore(t, bin, storeDir, "-json", "capability", taskB.ID, "read-issues", "attach")
+	detached := runCLIStore(t, bin, storeDir, "-json", "capability", taskB.ID, "read-issues", "detach")
 	var detachedTask ui.Task
 	if err := json.Unmarshal([]byte(detached), &detachedTask); err != nil {
 		t.Fatalf("parsing grain capability detach -json output: %v\n%s", err, detached)
