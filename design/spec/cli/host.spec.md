@@ -21,7 +21,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 | Kind | Commands |
 |---|---|
 | Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume` |
-| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|deny`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `declarations check` |
+| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|role|deny`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `declarations check` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
 | Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db upgrade-postgres`), `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
 | Modes: build information | `version`, `schema-version`, `release-notes`, `sandbox-image`, `container-sandbox-image`, `k8s-sandbox-image`, `image` |
@@ -1728,14 +1728,15 @@ Reconciles a live deployment's settings (`GET /api/settings`, then `PUT /api/set
 
 ---
 
-### 6.11 `grain access <list|allow|deny> [args]` {#CLI-63}
+### 6.11 `grain access <list|allow|role|deny> [args]` {#CLI-63}
 
-<a id="CLI-107"></a>This manages the allowed users and groups list (Settings -> Access): who may sign in when authenticated by Cloud IAP or another registered IdentityVerifier. Unlike the rest of this section it calls the daemon's API. The agent API scopes are `access:read` for `list`, `access:write` for `allow` and `deny` (`pkg/ui/route_scopes.go`).
+<a id="CLI-107"></a>This manages the allowed users and groups list (Settings -> Access): who may sign in when authenticated by Cloud IAP or another registered IdentityVerifier. Unlike the rest of this section it calls the daemon's API. The routes' scopes are `access:read` for `list` and `access:write` for `allow`, `role` and `deny` (`pkg/ui/route_scopes.go`). Every entry has a role, an API scope set (`docs/design/access-rbac.md`), and agents never change the list.
 
 | Subcommand | Request |
 |---|---|
-| `list` (the default; also `ls`) | `GET /api/access/principals`. Prints each entry with who added it and when, or `No allowed users or groups.`, and warns about `-ui-allowed-principals` entries that were dropped on import |
-| `allow <user:<email>\|group:<email>>` (also `add`) | `POST /api/access/principals {"entry"}`. Adding an existing entry is a no-op |
+| `list` (the default; also `ls`) | `GET /api/access/principals`. Prints each entry with its role, who added it and when, or `No allowed users or groups.`, and warns about `-ui-allowed-principals` entries that were dropped on import |
+| `allow [--role <set>] [--reason <why>] <user:<email>\|group:<email>\|serviceAccount:<email>>` (also `add`) | `POST /api/access/principals {"entry","role","reason"}`. `--role` defaults to `grain/operator`, whose dangerous scopes need the access code and a `--reason`. Adding an existing entry is a no-op that keeps its role |
+| `role [--reason <why>] <entry> <set>` | `PATCH /api/access/principals/{entry} {"role","reason"}`. Prints `<entry>: role <old> -> <new>` |
 | `deny <user:<email>\|group:<email>>` (also `remove`, `rm`) | `DELETE /api/access/principals/{entry}` |
 
 Errors: an unknown subcommand gives `unknown access subcommand "<s>"` followed by the usage, and a wrong argument count gives that subcommand's own usage line (`usage: grain access allow <user:<email>|group:<email>>`). This replaces the deprecated `-ui-allowed-principals` flag on `grain daemon` and `grain demo`, which is now only imported once into an empty database allowlist.
