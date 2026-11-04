@@ -240,7 +240,7 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, g := range task.Grants {
-		if !slices.Contains([]string{"api:tasks:read", "api:tasks:read@acme/widgets", "gcp-key"}, g.Capability) {
+		if !slices.Contains([]string{"api:tasks:read", "api:tasks:read@acme/widgets", model.GCPKeySandboxAgentGrant}, g.Capability) {
 			t.Errorf("task 2 was granted %s by an agent", g.Capability)
 		}
 	}
@@ -254,14 +254,16 @@ func TestAgentAPICapabilitiesAdminMayDetachUnheldCapability(t *testing.T) {
 	srv, client := testServer(t)
 	seedAPITask(t, client, "1", "acme/widgets", "api:capabilities:admin")
 	capRef := `https://github.com/acme/caps/gcp#key={"project":"p"}`
-	seedAPITask(t, client, "2", "acme/widgets", "grain-ci", "self-debug", capRef)
+	seedAPITask(t, client, "2", "acme/widgets", model.GrainCIGrant, "self-debug", capRef)
 
 	for _, body := range []string{
 		`{"id":"grain-ci","attach":true}`,
+		`{"capability":"https://grain.dev/capabilities/grain#ci","attach":true}`,
 		`{"grant":"self-debug","attach":true}`,
 		`{"capability":"https://github.com/acme/caps/gcp#key","with":{"project":"p"},"attach":true}`,
 		`{"id":"grain-ci","attach":false,"replace":"self-debug"}`,
 		`{"grant":"grain-ci","attach":false,"replace":"self-debug"}`,
+		`{"capability":"https://grain.dev/capabilities/grain#ci","attach":false,"replace":"self-debug"}`,
 	} {
 		if code, resp := asAgent(t, srv, "1", http.MethodPost, "/api/tasks/2/capabilities", body, "testing"); code != http.StatusForbidden {
 			t.Errorf("POST /api/tasks/2/capabilities with %s answered an agent %d, want 403: %s", body, code, resp)
@@ -269,7 +271,7 @@ func TestAgentAPICapabilitiesAdminMayDetachUnheldCapability(t *testing.T) {
 	}
 
 	for _, body := range []string{
-		`{"id":"grain-ci","attach":false}`,
+		`{"grant":"https://grain.dev/capabilities/grain#ci={}","attach":false}`,
 		`{"grant":"self-debug","attach":false}`,
 		`{"capability":"https://github.com/acme/caps/gcp#key","with":{"project":"p"},"attach":false}`,
 	} {
@@ -908,8 +910,8 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 		t.Fatalf("PUT /api/repos/acme/widgets/settings narrowing ciCapabilities: %d %s", code, resp)
 	}
 	rc, err := client.Store.GetRepoConfig(ctx, widgets)
-	if err != nil || rc == nil || !slices.Equal(rc.CICapabilities, []string{"gemini-key", "package-publish"}) {
-		t.Fatalf("stored ciCapabilities = %+v, %v, want [gemini-key package-publish]", rc, err)
+	if err != nil || rc == nil || !slices.Equal(rc.CICapabilities, []string{"gemini-key", model.PackagePublishRef + "={}"}) {
+		t.Fatalf("stored ciCapabilities = %+v, %v, want [gemini-key %s={}]", rc, err, model.PackagePublishRef)
 	}
 
 	// 2. Adding back gcp-key (which is no longer stored and not held by task 1) is refused.
@@ -948,8 +950,8 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 		t.Fatalf("PUT host-qualified /ci-capabilities narrowing: %d %s", code, resp)
 	}
 	rcGgrain, err := client.Store.GetRepoConfig(ctx, ggrain)
-	if err != nil || rcGgrain == nil || !slices.Equal(rcGgrain.CICapabilities, []string{"package-publish", "gemini-key"}) {
-		t.Fatalf("ggrain ciCapabilities = %+v, %v, want [package-publish gemini-key]", rcGgrain, err)
+	if err != nil || rcGgrain == nil || !slices.Equal(rcGgrain.CICapabilities, []string{model.PackagePublishRef + "={}", "gemini-key"}) {
+		t.Fatalf("ggrain ciCapabilities = %+v, %v, want [%s={} gemini-key]", rcGgrain, err, model.PackagePublishRef)
 	}
 
 	// 6. Deployment-wide defaultCapabilities via PUT /api/settings.

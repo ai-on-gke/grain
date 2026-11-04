@@ -32,6 +32,8 @@ func TestCapabilityNeedsSandbox(t *testing.T) {
 		{[]string{"memory"}, []string{"memory"}, false},
 		{[]string{"memory"}, []string{"api:tasks-read", "memory"}, false},
 		{[]string{"api:tasks-read", "memory"}, []string{"memory"}, false},
+		{nil, []string{"api:tasks:admin"}, true},
+		{[]string{"api:tasks:read"}, []string{"api:tasks:read", "api:tasks:admin"}, false},
 		{[]string{"memory"}, []string{"gcp-key", "memory"}, true},
 		{[]string{"gcp-key", "memory"}, []string{"memory"}, true},
 		{nil, []string{"api:tasks-read", "self-debug"}, true},

@@ -500,7 +500,7 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 		t.Fatalf("composing draft schedule: %v", err)
 	}
 	caps := field(t, draft.Tasks[0], "capabilities")
-	if !slices.Equal(caps.Values, []string{"self-debug", "grain-ci"}) {
+	if !slices.Equal(caps.Values, []string{"self-debug", model.GrainCIGrant}) {
 		t.Errorf("values = %v, want [self-debug grain-ci]", caps.Values)
 	}
 	if !slices.Equal(caps.Sources, []string{"schedule", "repo"}) {
@@ -516,7 +516,7 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("composing plain draft schedule: %v", err)
 	}
-	wantField(t, plainDraft.Tasks[0], "capabilities", "repo", "grain-ci")
+	wantField(t, plainDraft.Tasks[0], "capabilities", "repo", model.GrainCIGrant)
 
 	// Template with its own capability, previewed directly, through a
 	// schedule, and through a suite.
@@ -530,8 +530,8 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 		t.Fatalf("composing template: %v", err)
 	}
 	tmplCaps := field(t, tmplComp.Tasks[0], "capabilities")
-	if !slices.Equal(tmplCaps.Values, []string{"gcp-key", "grain-ci"}) {
-		t.Errorf("template values = %v, want [gcp-key grain-ci]", tmplCaps.Values)
+	if !slices.Equal(tmplCaps.Values, []string{model.GCPKeySandboxAgentGrant, model.GrainCIGrant}) {
+		t.Errorf("template values = %v, want [%s grain-ci]", tmplCaps.Values, model.GCPKeySandboxAgentGrant)
 	}
 	if !slices.Equal(tmplCaps.Sources, []string{"template", "repo"}) {
 		t.Errorf("template sources = %v, want [template repo]", tmplCaps.Sources)
@@ -548,8 +548,8 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 		t.Fatalf("composing schedule: %v", err)
 	}
 	schedCaps := field(t, schedComp.Tasks[0], "capabilities")
-	if !slices.Equal(schedCaps.Values, []string{"gcp-key", "grain-ci"}) {
-		t.Errorf("schedule values = %v, want [gcp-key grain-ci]", schedCaps.Values)
+	if !slices.Equal(schedCaps.Values, []string{model.GCPKeySandboxAgentGrant, model.GrainCIGrant}) {
+		t.Errorf("schedule values = %v, want [%s grain-ci]", schedCaps.Values, model.GCPKeySandboxAgentGrant)
 	}
 	if !slices.Equal(schedCaps.Sources, []string{"template", "repo"}) {
 		t.Errorf("schedule sources = %v, want [template repo]", schedCaps.Sources)
@@ -566,8 +566,8 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 		t.Fatalf("composing suite: %v", err)
 	}
 	suiteCaps := field(t, suiteComp.Tasks[0], "capabilities")
-	if !slices.Equal(suiteCaps.Values, []string{"gcp-key", "grain-ci"}) {
-		t.Errorf("suite values = %v, want [gcp-key grain-ci]", suiteCaps.Values)
+	if !slices.Equal(suiteCaps.Values, []string{model.GCPKeySandboxAgentGrant, model.GrainCIGrant}) {
+		t.Errorf("suite values = %v, want [%s grain-ci]", suiteCaps.Values, model.GCPKeySandboxAgentGrant)
 	}
 	if !slices.Equal(suiteCaps.Sources, []string{"template", "repo"}) {
 		t.Errorf("suite sources = %v, want [template repo]", suiteCaps.Sources)

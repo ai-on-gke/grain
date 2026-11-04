@@ -61,13 +61,21 @@ func TestEveryInTreeServerIsRegisteredUnderItsCanonicalID(t *testing.T) {
 	if len(ensured) != registered {
 		t.Errorf("registered %d entries for %d built-ins", len(ensured), registered)
 	}
-	for _, name := range []string{"gcp", "git", "model-proxy", "config-map", "host-script"} {
+	for _, name := range []string{"gcp", "git", "config-map", "host-script"} {
 		if _, ok := BuiltinNamed(name); !ok {
 			t.Errorf("%s is not a built-in", name)
 		}
 	}
 	if _, ok := BuiltinNamed("self-debug"); ok {
 		t.Error("self-debug is still registered as a built-in capability server")
+	}
+	// model-proxy's canonical id is grain's in-process server now; the
+	// external server is still `grain capability model-proxy`.
+	if _, ok := BuiltinNamed("model-proxy"); ok {
+		t.Error("model-proxy is still registered as a built-in capability server")
+	}
+	if _, ok := Lookup("model-proxy"); !ok {
+		t.Error("the model-proxy CLI builder is not registered")
 	}
 	if b, _ := BuiltinNamed("config-map"); !b.NeedsConfig {
 		t.Errorf("config-map = %+v, want needs-config", b)

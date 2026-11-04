@@ -233,10 +233,10 @@ func EffectiveK8sGitProxyHost(cfg Config) string {
 // pods, falling back to DefaultK8sSandboxImage (or the version-pinned default)
 // when unset.
 func EffectiveK8sSandboxImage(cfg Config) string {
-	if cfg.K8sSandboxImage != "" {
+	if cfg.K8sSandboxImage != "" && (cfg.K8sSandboxImage != model.DefaultK8sSandboxImage || DefaultK8sSandboxImage == model.DefaultK8sSandboxImage) {
 		return cfg.K8sSandboxImage
 	}
-	if cfg.K8sImage != "" {
+	if cfg.K8sImage != "" && (cfg.K8sImage != model.DefaultK8sSandboxImage || DefaultK8sSandboxImage == model.DefaultK8sSandboxImage) {
 		return cfg.K8sImage
 	}
 	if DefaultK8sSandboxImage != model.DefaultK8sSandboxImage {
@@ -297,7 +297,7 @@ func effectiveK8sGranuleImage(cfg Config, mirror func(base, mirrorRepo string) s
 		}
 		return mirror(base, mirrorRepo)
 	}
-	if cfg.K8sGranuleImage != "" {
+	if cfg.K8sGranuleImage != "" && (cfg.K8sGranuleImage != model.DefaultSandboxImage || DefaultSandboxImage == model.DefaultSandboxImage) {
 		return cfg.K8sGranuleImage
 	}
 	return base
@@ -625,6 +625,11 @@ func (c Config) sandboxBackendAvailability(backend model.SandboxBackend) (bool, 
 		// this daemon is a workstation's own.
 		if !c.HostSandboxes && !c.startupHostSandboxes {
 			return false, "needs -host-sandboxes at daemon startup"
+		}
+		// Nor with run hosts, which are not given a host sandbox
+		// (CheckRunHostBackend).
+		if c.RunHostImage != "" {
+			return false, "not available when run hosts (-run-host-image) are enabled"
 		}
 		if c.SandboxDir == "" {
 			return false, "needs a sandbox directory (-sandbox-dir)"

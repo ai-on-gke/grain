@@ -212,6 +212,103 @@ describe("UpgradePanel", () => {
     );
   });
 
+  // grain/task-2656: a release rolled back with release-from-trunk.sh
+  // rollback carries <running>-retracted in the registry. The deployment
+  // stays put -- going back is only safe when the schema has not moved --
+  // and the pane offers both ways off it.
+  it("warns when the running release was retracted and offers the fix-forward release or latest", async () => {
+    api.mockImplementation((path) => {
+      if (String(path).startsWith("/api/upgrade/release-notes")) {
+        return Promise.resolve({ branch: "v3.6.0", notes: [] });
+      }
+      return Promise.resolve({
+        enabled: true,
+        mode: "image",
+        channel: "latest",
+        running: { image: "ghcr.io/bwsalmon/grain/grain:v3.5.0" },
+        retractedRelease: {
+          running: "v3.5.0",
+          latest: "v3.4.0",
+          newer: "v3.6.0",
+        },
+        phase: "",
+      });
+    });
+    const user = userEvent.setup();
+    render(<UpgradePanel showError={() => {}} />);
+
+    expect(
+      await screen.findByText(/Release v3\.5\.0 was retracted\./),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/it will never downgrade on its own/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/only safe if the database schema has not changed/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Move back to latest (v3.4.0)" }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Upgrade to v3.6.0" }));
+    expect(screen.getByLabelText(/Branch/)).toHaveValue("v3.6.0");
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith(
+        "/api/upgrade/release-notes?branch=v3.6.0",
+      ),
+    );
+  });
+
+  it("offers only latest for a retracted release when no fix-forward has been published, reading it from the targets", async () => {
+    fetchUpgradeTargets.mockResolvedValue({
+      targets: [],
+      allowedBranches: ["main"],
+      retractedRelease: { running: "v3.5.0", latest: "v3.4.0" },
+    });
+    api.mockImplementation((path) => {
+      if (String(path).startsWith("/api/upgrade/release-notes")) {
+        return Promise.resolve({ branch: "latest", notes: [] });
+      }
+      return Promise.resolve({
+        enabled: true,
+        mode: "image",
+        channel: "latest",
+        running: { image: "ghcr.io/bwsalmon/grain/grain:v3.5.0" },
+        phase: "",
+      });
+    });
+    const user = userEvent.setup();
+    try {
+      render(<UpgradePanel showError={() => {}} />);
+
+      // The targets are read when the list is first opened.
+      expect(
+        screen.queryByText(/Release v3\.5\.0 was retracted\./),
+      ).not.toBeInTheDocument();
+      await user.click(await screen.findByLabelText(/Branch/));
+      expect(
+        await screen.findByText(/Release v3\.5\.0 was retracted\./),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/No release after it has been published yet\./),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /^Upgrade to v/ }),
+      ).not.toBeInTheDocument();
+
+      await user.click(
+        screen.getByRole("button", { name: "Move back to latest (v3.4.0)" }),
+      );
+      expect(screen.getByLabelText(/Branch/)).toHaveValue("latest");
+    } finally {
+      fetchUpgradeTargets.mockReset();
+      fetchUpgradeTargets.mockImplementation(async () => ({
+        targets: [],
+        allowedBranches: ["main"],
+      }));
+    }
+  });
+
   // grain/task-1914: the standard places to upgrade to are a pick from a
   // list, and the box still takes any other branch typed into it.
 
@@ -1943,29 +2040,87 @@ describe("PostgresDatabaseUpgrade", () => {
   });
 });
 
-// The daily automatic upgrade: a channel, or Off, and a time of day on
-// the deployment's own clock, each saved through PUT /api/settings.
+// The automatic upgrade: Off, when a release is published, or once a day
+// onto a channel at a time of day on the deployment's own clock, each
+// saved through PUT /api/settings.
 describe("AutoUpgradeSettings", () => {
   const settings = {
+    autoUpgradeOn: "off",
     autoUpgradeChannel: "",
     autoUpgradeTime: "03:00",
     timeZone: "America/New_York",
   };
+  const modePicker = () =>
+    screen.getByRole("combobox", { name: /upgrade automatically/i });
 
-  it("is off, with the time disabled, until a channel is chosen", () => {
+  it("is off by default, recommending release mode", async () => {
+    const user = userEvent.setup();
     render(<AutoUpgradeSettings settings={settings} onSave={vi.fn()} />);
 
+    expect(modePicker()).toHaveTextContent(/off \(manual only\)/i);
+    expect(screen.queryByLabelText(/time of day/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/recommended/i)).toBeInTheDocument();
+    await user.click(modePicker());
     expect(
-      screen.getByRole("combobox", { name: /channel/i }),
-    ).toHaveTextContent(/off \(manual only\)/i);
-    expect(screen.getByLabelText(/time of day/i)).toBeDisabled();
+      screen.getByRole("option", {
+        name: "On each release (recommended)",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("reads a server without autoUpgradeOn as daily when a channel is set", () => {
+    render(
+      <AutoUpgradeSettings
+        settings={{
+          autoUpgradeChannel: "candidate",
+          autoUpgradeTime: "03:00",
+          timeZone: "America/New_York",
+        }}
+        onSave={vi.fn()}
+      />,
+    );
+    expect(modePicker()).toHaveTextContent(/once a day/i);
     expect(screen.getByText(/America\/New_York/)).toBeInTheDocument();
   });
 
-  it("saves a channel with its time, and turning it off saves only that", async () => {
+  it("turns on release mode following latest, and can pin the exact tag", async () => {
     const onSave = vi.fn();
     const user = userEvent.setup();
     render(<AutoUpgradeSettings settings={settings} onSave={onSave} />);
+
+    await user.click(modePicker());
+    await user.click(screen.getByRole("option", { name: /on each release/i }));
+    expect(onSave).toHaveBeenLastCalledWith({
+      autoUpgradeOn: "release",
+      autoUpgradeChannel: "latest",
+    });
+    expect(
+      screen.getByText(/release candidates are never followed/i),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("combobox", { name: /upgrade to/i }));
+    await user.click(
+      screen.getByRole("option", { name: /exact release tag/i }),
+    );
+    expect(onSave).toHaveBeenLastCalledWith({ autoUpgradeChannel: "" });
+
+    await user.click(modePicker());
+    await user.click(screen.getByRole("option", { name: /off/i }));
+    expect(onSave).toHaveBeenLastCalledWith({ autoUpgradeOn: "off" });
+  });
+
+  it("saves a daily channel with its time", async () => {
+    const onSave = vi.fn();
+    const user = userEvent.setup();
+    render(<AutoUpgradeSettings settings={settings} onSave={onSave} />);
+
+    await user.click(modePicker());
+    await user.click(screen.getByRole("option", { name: /once a day/i }));
+    expect(onSave).toHaveBeenLastCalledWith({
+      autoUpgradeOn: "daily",
+      autoUpgradeChannel: "latest",
+      autoUpgradeTime: "03:00",
+    });
 
     await user.click(screen.getByRole("combobox", { name: /channel/i }));
     for (const name of ["latest", "candidate", "main"]) {
@@ -1976,11 +2131,6 @@ describe("AutoUpgradeSettings", () => {
       autoUpgradeChannel: "candidate",
       autoUpgradeTime: "03:00",
     });
-    expect(screen.getByLabelText(/time of day/i)).toBeEnabled();
-
-    await user.click(screen.getByRole("combobox", { name: /channel/i }));
-    await user.click(screen.getByRole("option", { name: /off/i }));
-    expect(onSave).toHaveBeenLastCalledWith({ autoUpgradeChannel: "" });
   });
 
   it("saves a new time of day once the field is left", async () => {
@@ -1988,7 +2138,11 @@ describe("AutoUpgradeSettings", () => {
     const user = userEvent.setup();
     render(
       <AutoUpgradeSettings
-        settings={{ ...settings, autoUpgradeChannel: "latest" }}
+        settings={{
+          ...settings,
+          autoUpgradeOn: "daily",
+          autoUpgradeChannel: "latest",
+        }}
         onSave={onSave}
       />,
     );
@@ -2005,7 +2159,11 @@ describe("AutoUpgradeSettings", () => {
     const user = userEvent.setup();
     render(
       <AutoUpgradeSettings
-        settings={{ ...settings, autoUpgradeChannel: "release-2026" }}
+        settings={{
+          ...settings,
+          autoUpgradeOn: "daily",
+          autoUpgradeChannel: "release-2026",
+        }}
         onSave={vi.fn()}
       />,
     );

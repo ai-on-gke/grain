@@ -31,39 +31,42 @@ vi.mock("./api.js", async (importOriginal) => {
   return { ...actual, default: vi.fn() };
 });
 
-// Every page the main pane can show, by address, and the title its rail
-// names it by.
+// Every page the main pane can show, by address, the title its rail
+// names it by, and whether its heading figure is an item Chladni glyph
+// (data-glyph) or a standard chrome icon (data-icon).
 const PAGES = [
-  ["/", "tasks", "tasks"],
-  ["/inbox", "inbox", "inbox"],
-  ["/boards", "boards", "boards"],
-  ["/sessions", "sessions", "sessions"],
-  ["/processes", "processes", "processes"],
-  ["/ci", "ci", "ci"],
-  ["/repos", "repositories", "repos"],
-  ["/repos/acme/widgets", "repositories/acme/widgets", "repos"],
+  ["/", "tasks", "tasks", "glyph"],
+  ["/inbox", "inbox", "inbox", "icon"],
+  ["/boards", "boards", "boards", "glyph"],
+  ["/sessions", "sessions", "sessions", "glyph"],
+  ["/processes", "processes", "processes", "glyph"],
+  ["/ci", "ci", "ci", "icon"],
+  ["/repos", "repositories", "repos", "glyph"],
+  ["/repos/acme/widgets", "repositories/acme/widgets", "repos", "glyph"],
   // A tab other than Overview is a crumb of its own (2026-11-01).
   [
     "/repos/acme/widgets/settings/merge-queue",
     "repositories/acme/widgets/merge queue",
     "repos",
+    "glyph",
   ],
   [
     "/repos/acme/widgets/releases",
     "repositories/acme/widgets/releases",
     "repos",
+    "glyph",
   ],
-  ["/settings", "settings/models", "settings"],
-  ["/system", "system/health", "system"],
-  ["/system/logs", "system/logs", "system"],
+  ["/settings", "settings/models", "settings", "icon"],
+  ["/system", "system/health", "system", "icon"],
+  ["/system/logs", "system/logs", "system", "icon"],
 ];
 
 describe("App page header", () => {
   afterEach(resetAppTestState);
 
   it.each(PAGES)(
-    "%s has one header rail, titled %s with the %s glyph, ending in the global buttons",
-    async (path, title, glyph) => {
+    "%s has one header rail, titled %s with the %s %s, ending in the global buttons",
+    async (path, title, glyph, attr) => {
       window.history.replaceState(null, "", path);
       setupApi();
       const { container } = render(<App />);
@@ -74,7 +77,7 @@ describe("App page header", () => {
         ).toHaveTextContent(title),
       );
       expect(
-        header.querySelector(`.header-icon svg[data-glyph="${glyph}"]`),
+        header.querySelector(`.header-icon svg[data-${attr}="${glyph}"]`),
       ).not.toBeNull();
       expect(screen.getAllByTestId("page-header")).toHaveLength(1);
       expect(screen.queryByTestId("top-bar")).toBeNull();

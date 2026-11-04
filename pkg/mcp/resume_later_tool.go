@@ -52,12 +52,14 @@ func resumeLaterTool(waiter TaskWaiter, unpushed UnpushedWorkReader) Tool {
 		Name: "resume_later",
 		Description: "Stop this run without completing the task, and have the task queued again later: " +
 			"this is how to stop when the work is not done (comment_on_issue or nothing_needed is how " +
-			"to finish). The task is queued again when any condition in `when` is met -- a grain CI " +
-			"verdict (ci: a run id, or \"my-branch\" for the next run on this task's branch to " +
-			"conclude), other tasks closing (task, with until \"closed\" or \"merged\"; takes no other " +
+			"to finish). The task is queued again when any condition in `when` is met -- a CI " +
+			"verdict on the repository's gating CI, GitHub Actions on ci_mode: github or grain CI on " +
+			"ci_mode: grain (ci: \"my-branch\" for the next verdict on this task's branch, or a grain CI / " +
+			"gha:<owner>:<name>:<run-id> run id), other tasks closing (task, with until \"closed\" or \"merged\"; takes no other " +
 			"condition), a time (at: a duration like \"1h\" or an RFC 3339 time, at most a week away), " +
-			"or anybody posting to this task (message: true). With no `when` it is queued again on " +
-			"grain's next cycle, which suits splitting long work into steps. The next run's prompt " +
+			"or anybody posting to this task (message: true). A CI wait that can never be satisfied " +
+			"(no CI configured for the branch, or a run id that does not exist) is refused at once. " +
+			"With no `when` it is queued again on grain's next cycle, which suits splitting long work into steps. The next run's prompt " +
 			"says this run was suspended and why. THE SANDBOX DOES NOT SURVIVE: commit and push your " +
 			"branch first; a call with unpushed commits or uncommitted changes is refused unless you " +
 			"set force: true. After calling this, take no further actions.",
@@ -76,7 +78,7 @@ func resumeLaterTool(waiter TaskWaiter, unpushed UnpushedWorkReader) Tool {
 					"properties": map[string]any{
 						"ci": map[string]any{
 							"type":        "string",
-							"description": "A grain CI run id, or \"my-branch\": resume once it has a verdict.",
+							"description": "A CI run id (grain CI or gha:<owner>:<name>:<run-id> for GitHub Actions), or \"my-branch\": resume once the repository's gating CI (GitHub Actions on ci_mode: github, grain CI on ci_mode: grain) has a verdict.",
 						},
 						"task": map[string]any{
 							"anyOf": []any{

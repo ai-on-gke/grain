@@ -35,7 +35,7 @@ CI & PULL REQUEST (scoped to this task's repository and branch):
   grain ci artifact <job> <name> [-o <dest>] [--run <run-id> | --task <id>] [--repo <r>]
                                          Download a CI artifact
   grain ci wait [--jobs j1,j2] [--timeout 9m] [--resume <run-id>]
-                                         Start or attach to grain CI for this branch and wait for its verdict
+                                         Wait for this branch's CI verdict (GitHub Actions on ci_mode: github, grain CI on ci_mode: grain)
                                          (time blocked is credited back to this run's deadline)
   grain ci run-job <job> [--timeout 9m] [--resume <run-id>]
                                          Run a single named CI job against the current branch commit and wait
@@ -213,14 +213,16 @@ var sandboxCommandHelp = map[string]string{
 	"pr status":       "grain pr status [--task <id> | --ref <branch> [--repo owner/name]]\n\nThe latest grain CI run on this task's branch and each job's verdict -- or on another task's\nbranch (--task), or any branch (--ref, in --repo or this task's repository), where this task may read CI.\n",
 	"pr base-status":  "grain pr base-status\n\nThe latest grain CI run on this task's base branch and each job's verdict.\n",
 	"ci wait": "grain ci wait [--jobs j1,j2] [--timeout 9m] [--resume <run-id>]\n\n" +
-		"Start grain CI on this task's branch (or attach to the identical run in flight) and wait for\n" +
-		"its verdict: exit 0 green, 1 red. One call waits at most 9m (and less when\n" +
+		"Wait for this task's branch CI verdict: GitHub Actions / check runs on a ci_mode: github\n" +
+		"repository, or grain CI on a ci_mode: grain repository (starting or attaching to the run in\n" +
+		"flight): exit 0 green, 1 red. One call waits at most 9m (and less when\n" +
 		"$GRAIN_COMMAND_TIMEOUT_MS says the command has less), so give run_command timeout 600000.\n" +
-		"If CI is still running when the slice ends it says so, exits 0, and names the run to resume:\n\n" +
-		"  grain ci wait --resume <run-id>\n\n" +
-		"or, to free the sandbox while CI finishes, call resume_later with when: {\"ci\": \"<run-id>\"}.\n" +
+		"If CI is still running when the slice ends it says so, exits 0, and names the target to resume:\n\n" +
+		"  grain ci wait --resume <run-id|my-branch>\n\n" +
+		"or, to free the sandbox while CI finishes, call resume_later with when: {\"ci\": \"my-branch\"}\n" +
+		"(or a grain CI / gha:<owner>:<name>:<run-id> run id).\n" +
 		"Time blocked here is credited back to this run's deadline (up to 45m over the run).\n" +
-		"--jobs runs only those jobs (and their dependencies): fast, but never the full-suite gate.\n\n" +
+		"--jobs (grain CI only) runs only those jobs (and their dependencies): fast, but never the full-suite gate.\n\n" +
 		"  git push origin HEAD && grain ci wait\n  grain ci wait --jobs go,lint\n",
 	"ci run-job": "grain ci run-job <job> [--timeout 9m] [--resume <run-id>]\n\n" +
 		"Run one named CI job (and its dependencies) against this branch's commit and wait for it,\n" +

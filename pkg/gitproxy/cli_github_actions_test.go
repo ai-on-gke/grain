@@ -17,6 +17,7 @@ package gitproxy_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -37,6 +38,8 @@ import (
 type fakeExternalCI struct {
 	run   ci.Run
 	asked *[]string
+	// err, when set, is what ExternalRun fails with.
+	err error
 }
 
 func (f fakeExternalCI) FindExternalRuns(_ context.Context, filter ci.RunFilter, _ int) ([]ci.Run, string) {
@@ -49,6 +52,9 @@ func (f fakeExternalCI) FindExternalRuns(_ context.Context, filter ci.RunFilter,
 func (f fakeExternalCI) ExternalRun(_ context.Context, id string) (ci.Run, bool, error) {
 	if f.asked != nil {
 		*f.asked = append(*f.asked, id)
+	}
+	if f.err != nil {
+		return ci.Run{}, false, f.err
 	}
 	return f.run, id == f.run.ID, nil
 }
@@ -182,5 +188,43 @@ func TestCLIRefusesAnOutOfScopeActionsRunBeforeReadingIt(t *testing.T) {
 	}
 	if rec := get("tok-ci", "/cli/ci/show?id=gha:acme:widgets:42"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "job publish") {
 		t.Errorf("an in-scope show = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// TestCLISaysWhyAnActionsRunOffTheDefaultHostIsNotFound: a run of a
+// repository on another git host that the daemon could not read is still
+// not found, but the answer carries why -- it used to be a bare "no CI
+// run", which said nothing about which of the forge, grain's record or
+// the scope had come up empty.
+func TestCLISaysWhyAnActionsRunOffTheDefaultHostIsNotFound(t *testing.T) {
+	const repo = "ghe.example.com/acme/widgets"
+	const id = "gha:ghe.example.com:acme:widgets:77"
+	tokenFile := filepath.Join(t.TempDir(), "sandbox-tokens.json")
+	raw, _ := json.Marshal(map[string]string{"sb-ci": "tok-ci"})
+	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	external := fakeExternalCI{run: ci.Run{ID: id, Repo: repo}, err: errors.New("no GitHub Actions run 77 in " + repo)}
+	proxy := &gitproxy.GitProxy{
+		Tokens:    tokens,
+		Namespace: &namespace.Server{CIStore: ci.NewRunStore(10), ExternalCI: external, Redactor: redact.New(nil)},
+		NamespaceScopes: fakeNamespaceScopes{scopes: map[string]model.NamespaceScope{
+			"sb-ci": {TaskID: "7", RunID: "run-a", TaskRepo: repo, MayReadCI: true, AllowedRepos: map[string]bool{repo: true}},
+		}},
+		Activity: &fakeActivity{},
+	}
+	h := gitproxy.NewHandler(proxy)
+	for _, path := range []string{"/cli/ci/run?id=" + id, "/cli/ci/show?id=" + id} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", basicAuthHeader("tok-ci"))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "no GitHub Actions run 77 in "+repo) {
+			t.Errorf("%s = %d %s, want a 404 saying why", path, rec.Code, rec.Body)
+		}
 	}
 }

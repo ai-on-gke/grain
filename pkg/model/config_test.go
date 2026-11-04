@@ -96,3 +96,28 @@ func TestAgentBackendEffectiveConcurrency(t *testing.T) {
 		}
 	}
 }
+
+func TestAutoUpgradeMode(t *testing.T) {
+	for _, tc := range []struct {
+		on, channel, want string
+	}{
+		{"", "", model.AutoUpgradeOff},
+		{"", "latest", model.AutoUpgradeDaily},
+		{"off", "latest", model.AutoUpgradeOff},
+		{"daily", "candidate", model.AutoUpgradeDaily},
+		{"release", "", model.AutoUpgradeOnRelease},
+		{" Release ", "latest", model.AutoUpgradeOnRelease},
+		{"hourly", "latest", model.AutoUpgradeOff},
+	} {
+		c := model.Config{AutoUpgradeOn: tc.on, AutoUpgradeChannel: tc.channel}
+		if got := c.AutoUpgradeMode(); got != tc.want {
+			t.Errorf("AutoUpgradeOn %q, channel %q: mode %q, want %q", tc.on, tc.channel, got, tc.want)
+		}
+	}
+	if on, err := model.ParseAutoUpgradeOn(""); err != nil || on != model.AutoUpgradeOff {
+		t.Errorf(`ParseAutoUpgradeOn("") = %q, %v; want off`, on, err)
+	}
+	if _, err := model.ParseAutoUpgradeOn("hourly"); err == nil {
+		t.Error(`ParseAutoUpgradeOn("hourly") was accepted`)
+	}
+}

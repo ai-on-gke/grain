@@ -141,31 +141,11 @@ func PublishedToolNames() []string {
 	add(dbaccess.Tools(dbaccess.Config{AllowWrite: true}))
 	add(selfrepair.ConfirmedHostCommandTools(nil))
 
-	// The agent API's generated tools, one per scoped route, which the
-	// package that owns the route table registers (pkg/ui imports this
-	// one, so it cannot be called from here).
-	publishedMu.RLock()
-	for _, more := range publishedToolNames {
-		names = append(names, more()...)
-	}
-	publishedMu.RUnlock()
-
+	// The agent API's routes are not here: a run holding api:* grants
+	// reaches them through the grain-controller MCP server (pkg/ui's
+	// POST /api/mcp), which is attached beside grain-sandbox as a
+	// capability server and carries its own fixed tool names.
 	return dedupeToolNames(names)
-}
-
-var (
-	publishedMu        sync.RWMutex
-	publishedToolNames []func() []string
-)
-
-// RegisterPublishedToolNames adds names to PublishedToolNames: for tools
-// a package this one cannot import registers -- the agent API's, which
-// are generated from pkg/ui's route table (ui.AgentAPIToolNames). It is
-// meant to be called from init().
-func RegisterPublishedToolNames(names func() []string) {
-	publishedMu.Lock()
-	defer publishedMu.Unlock()
-	publishedToolNames = append(publishedToolNames, names)
 }
 
 // dedupeToolNames keeps the first appearance of each name and drops the
@@ -238,32 +218,19 @@ func IsControlTool(name string) bool { return controlTools[name] }
 // ModelOnlyGrantToolNames is the tools of the grants a sandbox process
 // must never reach -- db-write and host-exec -- which stay on the MCP
 // roster of a run holding them. (self-upgrade's, dispatch-control's,
-// pipeline-control's and team-broadcast's are api tools now, kept off the
-// sandbox by their scopes, deployment:upgrade, dispatch:write and
-// teams:broadcast: model.IsSandboxDeniedAPIScope.) db-read's query_grain_db
-// is `grain db query`, so only execute_grain_db is here; run_host_command
-// runs on grain's own host, which a sandbox process must never reach.
+// pipeline-control's and team-broadcast's are agent API routes now,
+// served by grain-controller and kept off the sandbox by their scopes,
+// deployment:upgrade, dispatch:write and teams:broadcast:
+// model.IsSandboxDeniedAPIScope.) db-read's query_grain_db is `grain db
+// query`, so only execute_grain_db is here; run_host_command runs on
+// grain's own host, which a sandbox process must never reach.
 func ModelOnlyGrantToolNames() []string {
 	return []string{"execute_grain_db", "run_host_command"}
 }
 
-var (
-	publishedControlMu    sync.RWMutex
-	publishedControlNames []func() []string
-)
-
-// RegisterPublishedControlToolNames adds names to PublishedControlToolNames,
-// for the model-only tools a package this one cannot import generates --
-// the agent API routes the sandbox channel refuses (pkg/ui).
-func RegisterPublishedControlToolNames(names func() []string) {
-	publishedControlMu.Lock()
-	defer publishedControlMu.Unlock()
-	publishedControlNames = append(publishedControlNames, names)
-}
-
 // PublishedControlToolNames is every name `grain mcpserver` may serve on
-// its control roster: the sandbox tools, the control tools, the
-// model-only grants' tools and the model-only agent API routes.
+// its control roster: the sandbox tools, the control tools and the
+// model-only grants' tools.
 func PublishedControlToolNames() []string {
 	names := SandboxToolNames()
 	for _, name := range PublishedToolNames() {
@@ -272,11 +239,6 @@ func PublishedControlToolNames() []string {
 		}
 	}
 	names = append(names, ModelOnlyGrantToolNames()...)
-	publishedControlMu.RLock()
-	for _, more := range publishedControlNames {
-		names = append(names, more()...)
-	}
-	publishedControlMu.RUnlock()
 	return dedupeToolNames(names)
 }
 

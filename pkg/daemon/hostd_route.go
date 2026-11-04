@@ -165,6 +165,18 @@ func (req poolRequest) pauseOwner(live Config, b model.AgentBackend) string {
 	return b.CredentialOwnerID()
 }
 
+// pausedConnection names b as a usage-limit pause on req's hostd reads:
+// `connection "agy"`, or `connection "agy" on hostd ws-a` when the pause
+// is that hostd's alone (pauseOwner), so an operator reading why a task
+// waits can tell the same connection is free on every other hostd.
+func (req poolRequest) pausedConnection(live Config, b model.AgentBackend) string {
+	name := fmt.Sprintf("connection %q", b.ID)
+	if req.pauseOwner(live, b) != b.CredentialOwnerID() {
+		name += " on hostd " + req.pauseHostd
+	}
+	return name
+}
+
 // hostdCapacityTTL is how long a hostd's reported capacity is believed.
 const hostdCapacityTTL = 30 * time.Second
 

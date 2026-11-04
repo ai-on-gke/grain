@@ -563,7 +563,7 @@ func writeActionResult(w http.ResponseWriter, res CLIActionResult, err error) {
 // that decides whether its branch goes through grain CI at all.
 func requireOwnCI(scope namespace.Scope) error {
 	if !scope.MayReadCI && !scope.MayReadAllCI {
-		return namespace.RefuseCapability("grain ci", "grain-ci")
+		return namespace.RefuseCapability("grain ci", model.GrainCIRef)
 	}
 	if scope.TaskRepo == "" || scope.TaskBranch == "" {
 		return errNoTaskRepo
@@ -648,7 +648,7 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 		}
 	}
 
-	if !single && len(jobs) == 0 && strings.TrimSpace(req.ResumeRunID) == "" {
+	if !single && len(jobs) == 0 {
 		if ghActions, ok := p.CLIActions.(CLIGitHubCheckActions); ok {
 			usesGitHub, err := ghActions.UsesGitHubChecks(ctx, scope.TaskIDStr)
 			if err != nil {
@@ -659,6 +659,14 @@ func (p *GitProxy) serveCIWait(w http.ResponseWriter, r *http.Request, scope nam
 				if scope.TaskRepo == "" || scope.TaskBranch == "" {
 					cliError(w, fmt.Errorf("%w: this task has no repository and branch of its own for CI to run on", namespace.ErrBadRequest))
 					return
+				}
+				if resumeID := strings.TrimSpace(req.ResumeRunID); resumeID != "" && resumeID != model.ResumeOnMyBranch && resumeID != "github" {
+					runRepo, _, valid := ci.ParseActionsRunID(resumeID)
+					if !valid || !strings.EqualFold(runRepo, scope.TaskRepo) {
+						cliError(w, fmt.Errorf("%w: %s uses GitHub Actions (ci_mode: github): pass --resume %s or omit --resume",
+							namespace.ErrBadRequest, scope.TaskRepo, model.ResumeOnMyBranch))
+						return
+					}
 				}
 				p.serveGitHubCIWait(w, ctx, scope, start, end, ghActions)
 				return
@@ -845,6 +853,9 @@ func (p *GitProxy) serveGitHubCIWait(w http.ResponseWriter, ctx context.Context,
 		CreditMS:    credit.Credited.Milliseconds(),
 		CreditCapMS: credit.Cap.Milliseconds(),
 		CreditLive:  credit.Live,
+	}
+	if res.Status == "running" {
+		resp.ResumeRunID = model.ResumeOnMyBranch
 	}
 	for _, c := range res.Checks {
 		verdict := ""

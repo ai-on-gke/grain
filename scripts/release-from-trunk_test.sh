@@ -134,15 +134,17 @@ runs() {
   } > "$work/runs.json"
 }
 
-# qualification <none|pass|flake|infra|fail> [<commit>]: what
+# qualification <none|pass|flake|infra|fail> [<commit>] [<app>]: what
 # check-qualification reads for the rc on commit -- nightly.yml's jobs
 # (grain CI runs, one per attempt: the first runs every Stage 1 job, a
 # retry only upgrade-test, which is the one that fails) and the
-# grain/release-qualification check run.
+# grain/release-qualification check run, posted by app (grain's own,
+# grain-test, unless it names another).
 stage1_ids=(go-long staterepo-soak loadtest scalability merge-stress long-term-test long-sim postgres-stress
   tunnel-stress ui-e2e-long installer-variants vulns cmd-grain-stress upgrade-test)
 qualification() {
-  local sha="${2:-}" check=success attempts=() a id t jobs runs=() ids
+  local sha="${2:-}" app="${3:-grain-test}" app_id=42 check=success attempts=() a id t jobs runs=() ids
+  [ "$app" = grain-test ] || app_id=15368
   case "$1" in
     none) check="" ;;
     pass) attempts=(success) ;;
@@ -164,8 +166,8 @@ qualification() {
   done
   printf '{"enabled":true,"runs":[%s]}' "$(IFS=,; echo "${runs[*]}")" > "$work/qual-runs.json"
   if [ -n "$check" ]; then
-    printf '{"check_runs":[{"id":1,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"%s","started_at":"%s"}]}' \
-      "$sha" "$check" "$(iso "$now")" > "$work/qual-checks.json"
+    printf '{"check_runs":[{"id":1,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"%s","started_at":"%s","app":{"id":%s,"slug":"%s"}}]}' \
+      "$sha" "$check" "$(iso "$now")" "$app_id" "$app" > "$work/qual-checks.json"
   else
     echo '{"check_runs":[]}' > "$work/qual-checks.json"
   fi
@@ -175,7 +177,8 @@ train() { # train [VAR=value...]: run the train in the clone
   status=0
   out="$(cd "$work/clone" && env RELEASE_RUNS_JSON="$work/runs.json" \
     RELEASE_QUALIFICATION_RUNS_JSON="$work/qual-runs.json" RELEASE_QUALIFICATION_CHECKS_JSON="$work/qual-checks.json" \
-    RELEASE_IMAGES="$work/images.sh" RELEASE_NOTES_TASK=off RELEASE_NOW="$now" "$@" bash "$train" 2>&1)" || status=$?
+    RELEASE_IMAGES="$work/images.sh" RELEASE_NOTES_TASK=off RELEASE_NOW="$now" RELEASE_QUALIFICATION_APP=grain-test \
+    "$@" bash "$train" 2>&1)" || status=$?
 }
 
 remote_tag() { git -C "$work/remote.git" rev-parse -q --verify "refs/tags/$1^{commit}" 2>/dev/null || true; }
@@ -331,7 +334,7 @@ runs "$c3"
 train
 expect "placeholder" "exits 0" eq "$status" 0
 expect "placeholder" "targets v2.6.0, notes from v2.4.0" has "next minor v2.6.0; notes from v2.4.0"
-expect "placeholder" "never patches the placeholder" eval '! has "next patch"'
+expect "placeholder" "never patches the placeholder" eq "$(remote_tag v2.5.1-rc.1)" ""
 expect "placeholder" "cuts v2.6.0-rc.1 after the placeholder" eq "$(remote_tag v2.6.0-rc.1)" "$c3"
 expect "placeholder" "cuts no v2.5.0 rc" eq "$(remote_tag v2.5.0-rc.1)" ""
 expect "placeholder" "leaves latest alone" eq "$(remote_tag latest)" "$c0"
@@ -346,7 +349,7 @@ runs "$c3"
 train
 expect "stale major" "exits 0" eq "$status" 0
 expect "stale major" "says RELEASE_MAJOR is behind" has "RELEASE_MAJOR 2 is behind the released v3"
-expect "stale major" "targets v3.1.0, notes from v3.0.0" has "next minor v3.1.0, next patch v3.0.1; notes from v3.0.0"
+expect "stale major" "targets v3.1.0, notes from v3.0.0" has "next minor v3.1.0; notes from v3.0.0"
 expect "stale major" "cuts v3.1.0-rc.1" eq "$(remote_tag v3.1.0-rc.1)" "$c3"
 expect "stale major" "cuts no v2 rc" eq "$(remote_tag v2.3.0-rc.1)" ""
 expect "stale major" "publishes only the rc" images_were "rc v3.1.0-rc.1"
@@ -360,6 +363,25 @@ expect "nothing newer" "exits 0" eq "$status" 0
 expect "nothing newer" "says there is nothing to cut" has "no new LKG commit on main since ${c3:0:12}; nothing to cut"
 expect "nothing newer" "cuts no rc.2 on an older green commit" eq "$(remote_tag v2.3.0-rc.2)" ""
 expect "nothing newer" "only marks the dropped rc" images_were "discard-rc v2.3.0-rc.1"
+
+# --- a same-named check run from another app qualifies nothing ---
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+git -C "$work/seed" push -q --force origin "$c2:refs/heads/candidate"
+qualification pass "$c2" github-actions
+runs "$c2" "$c4"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "foreign check run" "exits 0" eq "$status" 0
+expect "foreign check run" "says it ignored it" has "IGNORED grain/release-qualification: 1 from github-actions, not grain-test"
+expect "foreign check run" "still waits for grain's own" has "Qualification: PENDING"
+expect "foreign check run" "stages no release" eq "$(remote_tag v2.3.0-pending)" ""
+expect "foreign check run" "publishes nothing" images_were ""
+qualification pass "$c2"
+train RELEASE_QUALIFICATION_APP=
+expect "no app configured" "exits 1" eq "$status" 1
+expect "no app configured" "says why" has "CHECK_QUALIFICATION_APP is unset"
+expect "no app configured" "stages no release" eq "$(remote_tag v2.3.0-pending)" ""
 
 # --- qualification passes: staged as a pending release ---
 setup ""
@@ -551,16 +573,46 @@ runs "$c3"
 train FORCE=true
 expect "interval, forced" "FORCE=true cuts inside the interval" eq "$(remote_tag v2.3.0-rc.1)" "$c3"
 
-# --- minor or patch, by what the commits since the release are ---
-setup "" "fix(ui): a crash" "docs: a typo"
+# --- every trunk release increments minor; docs/chores/tests alone wait ---
+guard="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/patch-tag-guard.sh"
+setup "" "fix(ui): keep the drawer open" "refactor(store): split the run queries" "docs: say how to approve"
+runs "$c3"
+train RELEASE_FLOOR_MINOR=0
+expect "fixes make a minor" "exits 0" eq "$status" 0
+expect "fixes make a minor" "cuts the next minor, not a patch" eq "$(remote_tag v2.2.0-rc.1)" "$c3"
+expect "fixes make a minor" "never cuts v2.1.1-rc.1 from main" eq "$(remote_tag v2.1.1-rc.1)" ""
+qualification pass "$c3"
+train RELEASE_FLOOR_MINOR=0
+expect "fixes make a minor" "the minor rc qualifies and is staged" eq "$(remote_tag v2.2.0-pending)" "$c3"
+approve approve v2.2.0 GRAIN_CI_REQUESTED_BY_KIND=human GRAIN_CI_REQUESTED_BY=alice@example.com RELEASE_FLOOR_MINOR=0
+expect "fixes make a minor" "approve tags v2.2.0" eq "$(remote_tag v2.2.0)" "$c3"
+status=0
+out="$(cd "$work/clone" && bash "$guard" --latest v2.2.0 2>&1)" || status=$?
+expect "fixes make a minor" "patch-tag-guard passes the promoted minor and --latest" eq "$status" 0
+
+setup "" "fix(ui): a crash"
+runs "$c1"
+train RELEASE_FLOOR_MINOR=0
+expect "fix alone" "a single fix: on main still cuts the next minor" eq "$(remote_tag v2.2.0-rc.1)" "$c1"
+expect "fix alone" "no patch rc" eq "$(remote_tag v2.1.1-rc.1)" ""
+
+# After a cherry-picked hotfix patch v2.1.1 on release/v2.1.1, main still
+# cuts v2.2.0-rc.1 (never v2.1.2-rc.1).
+setup "" "fix(api): hotfix" "fix(ui): another fix"
+(
+  cd "$work/seed"
+  git checkout -q -b release/v2.1.1 v2.1.0
+  git cherry-pick --allow-empty -x "$c1" >/dev/null
+  GIT_COMMITTER_DATE="@$((now - 36 * 3600)) +0000" git tag -a v2.1.1 -m "Release v2.1.1"
+  git push -q origin release/v2.1.1 refs/tags/v2.1.1
+  git checkout -q main
+)
 runs "$c2"
 train RELEASE_FLOOR_MINOR=0
-expect "patch" "exits 0" eq "$status" 0
-expect "patch" "fixes alone cut the next patch" eq "$(remote_tag v2.1.1-rc.1)" "$c2"
-expect "patch" "not a minor" eq "$(remote_tag v2.2.0-rc.1)" ""
-qualification pass "$c2"
-train RELEASE_FLOOR_MINOR=0
-expect "patch" "the patch rc qualifies and is staged" eq "$(remote_tag v2.1.1-pending)" "$c2"
+expect "after patch branch" "exits 0" eq "$status" 0
+expect "after patch branch" "cuts v2.2.0-rc.1 on main after the patch branch" eq "$(remote_tag v2.2.0-rc.1)" "$c2"
+expect "after patch branch" "never cuts v2.1.2-rc.1" eq "$(remote_tag v2.1.2-rc.1)" ""
+expect "after patch branch" "writes notes from v2.1.1" has "notes from v2.1.1"
 
 setup "" "fix: a crash" "feat(api): a new endpoint" "chore: tidy"
 runs "$c3"
@@ -584,7 +636,7 @@ expect "docs only" "outputs it" grep -qxF "release_waits=$c3" "$work/train.out"
 setup "" "fix: a crash"
 runs "$c1"
 train
-expect "patch under the floor" "a patch of v2.1 under RELEASE_FLOOR_MINOR (3) is a minor" eq "$(remote_tag v2.3.0-rc.1)" "$c1"
+expect "minor under the floor" "a release past v2.1 under RELEASE_FLOOR_MINOR (3) steps up to v2.3.0" eq "$(remote_tag v2.3.0-rc.1)" "$c1"
 
 # --- rollback: retract a bad release, latest goes back ---
 setup "" "feat: one" "fix: two" "fix: three"
@@ -676,7 +728,7 @@ if [ -n "$api" ]; then
     printf ',{"run_id":7,"run_attempt":2,"workflow_name":"nightly","head_sha":"%s","name":"govulncheck","status":"completed","conclusion":"success","created_at":"%s"}' "$c2" "$(iso $((now - 1800)))"
     printf ']}'
   } > "$work/www/gh/repos/o/r/actions/runs/7/jobs"
-  printf '{"check_runs":[{"id":9,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"success","started_at":"%s"}]}' \
+  printf '{"check_runs":[{"id":9,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"success","started_at":"%s","app":{"id":42,"slug":"grain-test"}}]}' \
     "$c2" "$(iso $((now - 600)))" > "$work/www/gh/repos/o/r/commits/$c2/check-runs"
   : > "$work/images.log"
   train RELEASE_RUNS_JSON= RELEASE_QUALIFICATION_RUNS_JSON= RELEASE_QUALIFICATION_CHECKS_JSON= GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$api/gh"

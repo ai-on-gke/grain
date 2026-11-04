@@ -209,6 +209,10 @@ func handlerName(h http.HandlerFunc) string {
 func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.HandlerFunc {
 	scope := routeScopes[pattern]
 	return func(w http.ResponseWriter, r *http.Request) {
+		if pattern == "POST /api/mcp" {
+			next(w, r)
+			return
+		}
 		if pattern != "POST /mcp" {
 			if tok := externalTokenFromContext(r.Context()); tok != nil {
 				call, err := s.authorizeExternalAgentCall(r, pattern, scope, tok)
@@ -446,11 +450,11 @@ var grainCIReadRoutes = map[string]bool{
 	"GET /api/ci/workflows":                        true,
 }
 
-// grainCIReadsRoute reports whether held includes grain-ci and pattern is
+// grainCIReadsRoute reports whether held includes grain#ci (model.HasGrainCI) and pattern is
 // one of the CI reads it opens. Which repository is the caller's to
 // check once it is known (authorizeAgentCall).
 func grainCIReadsRoute(held []string, pattern string) bool {
-	return grainCIReadRoutes[pattern] && slices.Contains(held, "grain-ci")
+	return grainCIReadRoutes[pattern] && model.HasGrainCI(held)
 }
 
 // agentRepoDefaultRoutes are the read-only collection routes that filter
@@ -920,6 +924,12 @@ func grantAlreadyStored(existing []string, name string, normalize func(string) (
 	if slices.Contains(existing, name) {
 		return true
 	}
+	// A retired name is held by a row storing what it became (the
+	// release server's methods, schema migration 101), and the reverse.
+	if _, ok := model.CIGrantRuleFor(name); ok {
+		canonical := model.CanonicalLegacyGrant(name)
+		return slices.ContainsFunc(existing, func(e string) bool { return model.CanonicalLegacyGrant(e) == canonical })
+	}
 	if model.IsCapabilityRef(name) && normalize != nil {
 		if recorded, err := normalize(name); err == nil && slices.Contains(existing, recorded) {
 			return true
@@ -1046,11 +1056,19 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 			if json.Unmarshal(raw, &access) == nil && s.networkAccessWidens(ctx, acting.NetworkAccess, access) {
 				return errors.New("an agent with networkAccess \"none\" cannot widen networkAccess")
 			}
-		case "hostd":
+		case "hostd", "defaulthostd":
 			// Which grain hostd a task's agent CLI runs on (a filing's
-			// hostd, PUT /api/tasks/{id}/hostd): another machine, and
-			// whatever CLI login lives on it. An agent may hand out only
-			// the default hostd or the selector its own task runs under.
+			// hostd, PUT /api/tasks/{id}/hostd, or a repository's
+			// default for every task filed against it, PUT
+			// /api/repos/{owner}/{name}/settings' defaultHostd): another
+			// machine, and whatever CLI login lives on it. An agent may
+			// hand out only the default hostd or the selector its own
+			// task runs under.
+			//
+			// A filing that names none is not asked about the default
+			// its repository resolves it to (ui.Client.CreateTask):
+			// that one was set by whoever may set repository settings,
+			// which this case holds an agent to, and not by the filer.
 			var sel string
 			if json.Unmarshal(raw, &sel) != nil {
 				continue // the handler refuses a body it cannot read

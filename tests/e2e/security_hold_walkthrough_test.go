@@ -552,13 +552,13 @@ func TestCapabilityEscalatedProposalsWalkthrough(t *testing.T) {
 			t.Fatalf("%s filed %d proposals, want 2", parent, len(proposals))
 		}
 		for _, p := range proposals {
-			escalated := strings.Contains(p.Title, "gcp-key")
+			escalated := strings.Contains(p.Title, "gemini-key")
 			st := w.state(p.ID)
-			noted := strings.Contains(p.Body, model.CapabilityEscalationNote(parent, []string{"gcp-key"}))
+			noted := strings.Contains(p.Body, model.CapabilityEscalationNote(parent, []string{"gemini-key"}))
 			switch {
 			case escalated && (st != model.StateProposed || !noted):
 				t.Errorf("escalated proposal %q: state=%s noted=%v body=%q", p.Title, st, noted, p.Body)
-			case escalated && !holds(p, "gcp-key"):
+			case escalated && !holds(p, "gemini-key"):
 				t.Errorf("escalated proposal %q was filed without the capability it asked for: %+v", p.Title, p.Grants)
 			case !escalated && (st != model.StateQueued || strings.Contains(p.Body, "grain: this proposal asked for")):
 				t.Errorf("plain proposal %q: state=%s body=%q", p.Title, st, p.Body)
@@ -570,15 +570,15 @@ func TestCapabilityEscalatedProposalsWalkthrough(t *testing.T) {
 		t.Parallel()
 		w := newHoldWorld(t, false)
 		parent := w.create("auto-merging parent", true, []string{})
-		if holds(parent, "gcp-key") {
-			t.Fatalf("the parent holds gcp-key already: %+v", parent.Grants)
+		if holds(parent, "gemini-key") {
+			t.Fatalf("the parent holds gemini-key already: %+v", parent.Grants)
 		}
 		w.setScript(func(task model.Task) []antigravity.Step {
 			if task.ID != parent.ID {
 				return []antigravity.Step{finalText("nothing to do")}
 			}
 			steps := w.changeScript(task, "echo 'typo' >> docs/guide.md")
-			return append([]antigravity.Step{propose("gcp-key"), propose()}, steps...)
+			return append([]antigravity.Step{propose("gemini-key"), propose()}, steps...)
 		})
 		w.cycle()
 		check(t, w, parent.ID)
@@ -601,7 +601,7 @@ func TestCapabilityEscalatedProposalsWalkthrough(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		for _, caps := range [][]string{{"gcp-key"}, {}} {
+		for _, caps := range [][]string{{"gemini-key"}, {}} {
 			if _, err := w.ui.CreateTask(w.ctx, ui.CreateTaskRequest{
 				Title: fmt.Sprintf("follow-up needing %v", caps), Description: "split out", Repo: "acme/widgets",
 				ProposedBy: session.ID, Capabilities: &caps,
@@ -633,7 +633,7 @@ func TestCapabilityEscalatedProposalsWalkthrough(t *testing.T) {
 			if task.ID != session.ID {
 				return []antigravity.Step{finalText("nothing to do")}
 			}
-			return []antigravity.Step{propose("gcp-key"), propose(), finalText("filed two follow-ups")}
+			return []antigravity.Step{propose("gemini-key"), propose(), finalText("filed two follow-ups")}
 		})
 		// The session reconciler adopts the tagged task and parks it
 		// awaiting a message, as a standing chat is; a person's message is

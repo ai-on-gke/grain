@@ -23,9 +23,13 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/sandboximage"
 	"github.com/ai-on-gke/grain/pkg/ui"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
@@ -34,7 +38,7 @@ import (
 // an operator actually sees at startup.
 func captureLog(t *testing.T, f func()) string {
 	t.Helper()
-	var logs strings.Builder
+	var logs lockedBuffer
 	prevLog := log.Writer()
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(prevLog) })
@@ -623,6 +627,219 @@ func TestApplySandboxImageClearingTheMirrorReturnsToTheStamp(t *testing.T) {
 	}
 }
 
+// Setting a custom sandbox image (at startup or runtime, including a
+// cross-project sha- guest image or k8s_granule_image / k8s_sandbox_image) and
+// then clearing it back to "" must cleanly revert task sandboxes, CI sandboxes,
+// and the UI sandbox image reading to the build-stamped default across all four
+// image-backed backends.
+func TestClearingCustomSandboxImageRevertsToStampedDefaultAcrossBackends(t *testing.T) {
+	stampedGuest := "ghcr.io/bwsalmon/grain/guest:sha-stamped1@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	stampedPod := "ghcr.io/bwsalmon/grain/k8s-sandbox:sha-stamped1@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	savedGuest, savedPod := DefaultSandboxImage, DefaultK8sSandboxImage
+	DefaultSandboxImage = stampedGuest
+	DefaultK8sSandboxImage = stampedPod
+	t.Cleanup(func() {
+		DefaultSandboxImage = savedGuest
+		DefaultK8sSandboxImage = savedPod
+	})
+
+	for _, tc := range []struct {
+		name         string
+		baseCfg      Config
+		customImage  string
+		k8sImageKind string // "granule" or "sandbox"
+		wantStock    string
+		buildBackend func(stock, active string, src *sandboximage.Source) orchestrator.Sandboxes
+	}{
+		{
+			name:        "kubernetes-granule with cross-project sha- custom image",
+			baseCfg:     Config{K8sGranuleSandboxes: true, PollInterval: 30 * time.Second, MaxWorkers: 1},
+			customImage: "us-docker.pkg.dev/other-proj/grain/guest:sha-custom99",
+			wantStock:   stampedGuest,
+			buildBackend: func(_, active string, _ *sandboximage.Source) orchestrator.Sandboxes {
+				return orchestrator.NewK8sGranuleSandboxes(orchestrator.K8sGranuleConfig{Image: active})
+			},
+		},
+		{
+			name:         "kubernetes-granule with k8sGranuleImage set and cleared",
+			baseCfg:      Config{K8sGranuleSandboxes: true, PollInterval: 30 * time.Second, MaxWorkers: 1},
+			customImage:  "us-docker.pkg.dev/other-proj/grain/guest:v2",
+			k8sImageKind: "granule",
+			wantStock:    stampedGuest,
+			buildBackend: func(_, active string, _ *sandboximage.Source) orchestrator.Sandboxes {
+				return orchestrator.NewK8sGranuleSandboxes(orchestrator.K8sGranuleConfig{Image: active})
+			},
+		},
+		{
+			name:        "kubernetes pod backend",
+			baseCfg:     Config{K8sSandboxes: true, PollInterval: 30 * time.Second, MaxWorkers: 1},
+			customImage: "us-docker.pkg.dev/other-proj/grain/k8s-sandbox:sha-custom99",
+			wantStock:   stampedPod,
+			buildBackend: func(_, active string, _ *sandboximage.Source) orchestrator.Sandboxes {
+				return orchestrator.NewK8sSandboxes(orchestrator.K8sConfig{Image: active})
+			},
+		},
+		{
+			name:         "kubernetes pod backend with k8sSandboxImage set and cleared",
+			baseCfg:      Config{K8sSandboxes: true, PollInterval: 30 * time.Second, MaxWorkers: 1},
+			customImage:  "registry.example/team/k8s-sandbox:v2",
+			k8sImageKind: "sandbox",
+			wantStock:    stampedPod,
+			buildBackend: func(_, active string, _ *sandboximage.Source) orchestrator.Sandboxes {
+				return orchestrator.NewK8sSandboxes(orchestrator.K8sConfig{Image: active})
+			},
+		},
+		{
+			name:        "granule VM backend",
+			baseCfg:     Config{GranuleSandboxes: true, PollInterval: 30 * time.Second, MaxWorkers: 1},
+			customImage: "us-docker.pkg.dev/other-proj/grain/guest:sha-custom99",
+			wantStock:   stampedGuest,
+			buildBackend: func(stock, _ string, src *sandboximage.Source) orchestrator.Sandboxes {
+				return orchestrator.NewGranuleSandboxes(orchestrator.GranuleConfig{
+					CreateArgs:   []string{"-kontur-image", stock},
+					SandboxImage: src.Image,
+				})
+			},
+		},
+		{
+			name:        "container backend",
+			baseCfg:     Config{ContainerSandboxes: true, ContainerImage: stampedPod, PollInterval: 30 * time.Second, MaxWorkers: 1},
+			customImage: "registry.example/team/container-sandbox:v2",
+			wantStock:   stampedPod,
+			buildBackend: func(_, active string, _ *sandboximage.Source) orchestrator.Sandboxes {
+				return orchestrator.NewContainerSandboxes(orchestrator.ContainerConfig{Image: active})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, startWithCustom := range []bool{false, true} {
+				mode := "set-at-runtime"
+				if startWithCustom {
+					mode = "set-at-startup"
+				}
+				t.Run(mode, func(t *testing.T) {
+					ctx := context.Background()
+					store, db, err := OpenStore("sqlite", "", t.TempDir())
+					if err != nil {
+						t.Fatalf("OpenStore: %v", err)
+					}
+					t.Cleanup(func() { _ = db.Close() })
+
+					cfg := tc.baseCfg
+					if startWithCustom {
+						switch tc.k8sImageKind {
+						case "granule":
+							cfg.K8sGranuleImage = tc.customImage
+						case "sandbox":
+							cfg.K8sSandboxImage = tc.customImage
+							cfg.K8sImage = tc.customImage
+						default:
+							cfg.CustomSandboxImage = tc.customImage
+						}
+					}
+					if err := store.PutConfig(ctx, cfg.ToModelConfig()); err != nil {
+						t.Fatalf("store.PutConfig initial: %v", err)
+					}
+
+					stock := stockSandboxImageFor(cfg)
+					custom := customSandboxImageFor(cfg)
+					active := activeSandboxImageFor(cfg)
+					var src *sandboximage.Source
+					if cfg.GranuleSandboxes {
+						src = &sandboximage.Source{}
+						src.Set(stock, custom)
+					}
+					sandboxes := tc.buildBackend(stock, active, src)
+					ciSvc := &ci.Service{
+						SandboxImage: func() string {
+							if current, ok := sandboxes.(interface{ CurrentImage() string }); ok {
+								if img := current.CurrentImage(); img != "" {
+									return img
+								}
+							}
+							return activeSandboxImageFor(cfg)
+						},
+					}
+					LiveCI.Store(ciSvc)
+					defer LiveCI.Store(nil)
+
+					live := NewLiveConfig(store, sandboxes, cfg, nil).WithSandboxImages(src, stock, nil)
+					deps := orchestrator.Deps{Config: orchestrator.Config{SandboxGuestImage: sandboxGuestImage(cfg)}}
+
+					// If we did not start with the custom image, apply it at runtime via grain_config.
+					if !startWithCustom {
+						mc := live.ModelConfig()
+						switch tc.k8sImageKind {
+						case "granule":
+							mc.K8sGranuleImage = tc.customImage
+						case "sandbox":
+							mc.K8sSandboxImage = tc.customImage
+						default:
+							mc.SandboxImage = tc.customImage
+						}
+						if err := store.PutConfig(ctx, mc); err != nil {
+							t.Fatalf("store.PutConfig custom: %v", err)
+						}
+						live.Refresh(ctx, &deps)
+					} else {
+						live.Refresh(ctx, &deps)
+					}
+
+					// Verify the custom image is active everywhere.
+					if got := live.CurrentSandboxImage(); got != tc.customImage {
+						t.Fatalf("live.CurrentSandboxImage() with custom set = %q, want %q", got, tc.customImage)
+					}
+					if current, ok := sandboxes.(interface{ CurrentImage() string }); ok {
+						if got := current.CurrentImage(); got != tc.customImage {
+							t.Fatalf("sandboxes.CurrentImage() with custom set = %q, want %q", got, tc.customImage)
+						}
+					}
+					if got := ciSvc.SandboxImage(); got != tc.customImage {
+						t.Fatalf("ciSvc.SandboxImage() with custom set = %q, want %q", got, tc.customImage)
+					}
+					if uiImg := uiSandboxImage(live.Current()); uiImg == nil || uiImg.Image != tc.customImage {
+						t.Fatalf("uiSandboxImage with custom set = %+v, want Image=%q", uiImg, tc.customImage)
+					}
+
+					// Clear the custom image back to "" in grain_config and refresh.
+					mc := live.ModelConfig()
+					mc.SandboxImage = ""
+					mc.K8sGranuleImage = ""
+					mc.K8sSandboxImage = ""
+					if err := store.PutConfig(ctx, mc); err != nil {
+						t.Fatalf("store.PutConfig clear: %v", err)
+					}
+					live.Refresh(ctx, &deps)
+
+					if got := live.CurrentSandboxImage(); got != tc.wantStock {
+						t.Fatalf("live.CurrentSandboxImage() after clear = %q, want %q", got, tc.wantStock)
+					}
+					if current, ok := sandboxes.(interface{ CurrentImage() string }); ok {
+						if got := current.CurrentImage(); got != tc.wantStock {
+							t.Fatalf("sandboxes.CurrentImage() after clear = %q, want %q", got, tc.wantStock)
+						}
+					}
+					if got := ciSvc.SandboxImage(); got != tc.wantStock {
+						t.Fatalf("ciSvc.SandboxImage() after clear = %q, want %q", got, tc.wantStock)
+					}
+					uiImg := uiSandboxImage(live.Current())
+					if uiImg == nil || uiImg.Image != tc.wantStock || uiImg.Expected != tc.wantStock || uiImg.Pinned {
+						t.Fatalf("uiSandboxImage after clear = %+v, want Image=Expected=%q, Pinned=false", uiImg, tc.wantStock)
+					}
+					if (cfg.GranuleSandboxes || cfg.K8sGranuleSandboxes) && deps.Config.SandboxGuestImage != tc.wantStock {
+						t.Fatalf("deps.Config.SandboxGuestImage after clear = %q, want %q", deps.Config.SandboxGuestImage, tc.wantStock)
+					}
+					runningMC := live.ModelConfig()
+					if runningMC.SandboxImage != "" || runningMC.K8sGranuleImage != "" || runningMC.K8sSandboxImage != "" {
+						t.Fatalf("RunningConfig after clear still carries custom image fields: SandboxImage=%q K8sGranuleImage=%q K8sSandboxImage=%q",
+							runningMC.SandboxImage, runningMC.K8sGranuleImage, runningMC.K8sSandboxImage)
+					}
+				})
+			}
+		})
+	}
+}
+
 // The Settings pane's Granule VM image warning probes the image the daemon
 // really creates kubernetes-granule pods from: this build's stamp,
 // mirrored, and not the UI's version-derived default mirrored instead --
@@ -673,5 +890,74 @@ func TestSettingsProbesTheDaemonsMirroredK8sGranuleImage(t *testing.T) {
 	}
 	if settings.K8sGranuleImageWarning != "" {
 		t.Errorf("K8sGranuleImageWarning = %q, want none for the image the daemon runs", settings.K8sGranuleImageWarning)
+	}
+}
+
+// The daemon's own answer for the 2026-10-30 trap: a kubernetes-granule
+// deployment whose only mirror is derived from a cross-project "sha-"
+// pin in k8s_granule_image. Settings says the pin is read as the mirror
+// and names what pods boot (the stamp, mirrored), and a save clearing the
+// pin writes the derived repository into sandbox_image_mirror, so the
+// restart that adopts the cleared pin mirrors exactly as before.
+func TestADerivedMirrorSurvivesClearingTheK8sGranuleImagePin(t *testing.T) {
+	ResetMirroredSandboxImageCacheForTest()
+	t.Cleanup(ResetMirroredSandboxImageCacheForTest)
+	stamped := "ghcr.io/example/grain/guest:sha-aaaa111"
+	savedStamp := DefaultSandboxImage
+	DefaultSandboxImage = stamped
+	t.Cleanup(func() { DefaultSandboxImage = savedStamp })
+
+	repo := "us-docker.pkg.dev/cluster-project/grain/guest"
+	pin := repo + ":sha-0000000@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	want := repo + ":sha-aaaa111"
+	running := Config{K8sGranuleSandboxes: true, K8sGranuleImage: pin}
+	if got := effectiveK8sGranuleImage(running, mirroredSandboxImageIfKnown); got != want {
+		t.Fatalf("effectiveK8sGranuleImage(pinned) = %q, want the stamp mirrored, %q", got, want)
+	}
+
+	store, closeStore := openTestStore(t, t.TempDir())
+	t.Cleanup(closeStore)
+	ctx := context.Background()
+	if err := store.PutConfig(ctx, model.Config{
+		PollInterval:    30 * time.Second,
+		MaxWorkers:      1,
+		GitHubHost:      "github.com",
+		SandboxBackend:  model.SandboxBackendKubernetesGranule,
+		K8sGranuleImage: pin,
+	}); err != nil {
+		t.Fatalf("PutConfig: %v", err)
+	}
+	client := ui.NewClient(ui.Config{
+		SandboxBackends:       model.SandboxBackends(),
+		K8sGranuleImage:       func(mc model.Config) string { return k8sGranuleImageForSettings(running, mc) },
+		SandboxImageMirrorFor: func(mc model.Config) ui.SandboxImageMirrorInfo { return sandboxImageMirrorForSettings(running, mc) },
+	}, store)
+	settings, err := client.GetSettings(ctx)
+	if err != nil {
+		t.Fatalf("GetSettings: %v", err)
+	}
+	if settings.K8sGranuleImageMirror != repo || settings.K8sGranuleImageEffective != want || settings.SandboxImageMirrorDerivedFrom != "k8s_granule_image" {
+		t.Errorf("Settings: pin read as %q, effective %q, derived from %q; want %q, %q, k8s_granule_image",
+			settings.K8sGranuleImageMirror, settings.K8sGranuleImageEffective, settings.SandboxImageMirrorDerivedFrom, repo, want)
+	}
+
+	cleared := ""
+	if _, err := client.UpdateSettings(ctx, ui.UpdateSettingsRequest{K8sGranuleImage: &cleared}); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	stored, err := store.GetConfig(ctx)
+	if err != nil || stored == nil {
+		t.Fatalf("GetConfig: %v, %v", stored, err)
+	}
+	if stored.K8sGranuleImage != "" || stored.SandboxImageMirror != repo {
+		t.Fatalf("stored k8s_granule_image, sandbox_image_mirror = %q, %q; want \"\", %q", stored.K8sGranuleImage, stored.SandboxImageMirror, repo)
+	}
+	// The restart that adopts the cleared pin.
+	restarted := Config{K8sGranuleSandboxes: true, K8sGranuleImage: stamped}.WithModelConfig(*stored)
+	if got := sandboxImageMirrorRepo(restarted); got != repo {
+		t.Errorf("sandboxImageMirrorRepo after the restart = %q, want %q", got, repo)
+	}
+	if got := effectiveK8sGranuleImage(restarted, mirroredSandboxImageIfKnown); got != want {
+		t.Errorf("effectiveK8sGranuleImage after the restart = %q, want %q", got, want)
 	}
 }

@@ -562,7 +562,16 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 // whole of what a suite is, so a template that auto-merges on its own
 // does not auto-merge inside a suite that says not to.
 func ComposeSuiteTask(tmpl Template, target RepoRef, base string, requireApproval, autoMerge, autoApproveProposals bool) Composition {
-	return composeTemplate(tmpl, nil, target, base, LayerSuite,
+	return composeSuiteTask(tmpl, nil, target, base, requireApproval, autoMerge, autoApproveProposals)
+}
+
+// composeSuiteTask is ComposeSuiteTask with the template's input fields
+// filled in as values says -- what a run started with
+// SuiteRunOptions.Fields files (the release-qualification reconciler's
+// rc_tag and rc_sha). Every other run passes nil, and so files exactly
+// what an unattended firing always has: each field at its Default.
+func composeSuiteTask(tmpl Template, values map[string]string, target RepoRef, base string, requireApproval, autoMerge, autoApproveProposals bool) Composition {
+	return composeTemplate(tmpl, values, target, base, LayerSuite,
 		&autoMerge, LayerSuite, &autoApproveProposals, LayerSuite, !requireApproval, LayerSuite)
 }
 
@@ -611,7 +620,7 @@ func ComposeQualificationTask(tmpl Template, repo RepoRef, branch string, requir
 	return comp
 }
 
-// adjustGrainCIGrant adds the grain-ci grant to grants for a target repo
+// adjustGrainCIGrant adds the grain#ci grant (GrainCIGrant) to grants for a target repo
 // that uses grain CI, and strips it from one that does not.
 //
 // grants is usually a template's or a schedule's own slice, shared with
@@ -621,15 +630,15 @@ func ComposeQualificationTask(tmpl Template, repo RepoRef, branch string, requir
 func adjustGrainCIGrant(grants []Grant, usesGrainCI bool) []Grant {
 	if usesGrainCI {
 		for _, g := range grants {
-			if g.Capability == "grain-ci" {
+			if IsGrainCIGrant(g.Capability) {
 				return grants
 			}
 		}
-		return append(slices.Clip(grants), Grant{Capability: "grain-ci", Via: GrantByDefault})
+		return append(slices.Clip(grants), Grant{Capability: GrainCIGrant, Via: GrantByDefault})
 	}
 	filtered := make([]Grant, 0, len(grants))
 	for _, g := range grants {
-		if g.Capability != "grain-ci" {
+		if !IsGrainCIGrant(g.Capability) {
 			filtered = append(filtered, g)
 		}
 	}
@@ -637,7 +646,7 @@ func adjustGrainCIGrant(grants []Grant, usesGrainCI bool) []Grant {
 }
 
 // applyGrainCIGrant adjusts comp.Grants with adjustGrainCIGrant and records
-// LayerRepo as the source of an added grain-ci grant (and as Sources.Grants
+// LayerRepo as the source of an added grain#ci grant (and as Sources.Grants
 // when the declaration itself carried no grants of its own).
 func applyGrainCIGrant(comp *Composition, usesGrainCI bool) {
 	sources := make([]CompositionLayer, len(comp.Grants))
@@ -652,7 +661,7 @@ func applyGrainCIGrant(comp *Composition, usesGrainCI bool) {
 	}
 	if usesGrainCI {
 		for _, g := range comp.Grants {
-			if g.Capability == "grain-ci" {
+			if IsGrainCIGrant(g.Capability) {
 				comp.GrantSources = sources
 				return
 			}
@@ -668,7 +677,7 @@ func applyGrainCIGrant(comp *Composition, usesGrainCI bool) {
 	filteredGrants := make([]Grant, 0, len(comp.Grants))
 	filteredSources := make([]CompositionLayer, 0, len(comp.Grants))
 	for i, g := range comp.Grants {
-		if g.Capability != "grain-ci" {
+		if !IsGrainCIGrant(g.Capability) {
 			filteredGrants = append(filteredGrants, g)
 			filteredSources = append(filteredSources, sources[i])
 		}
@@ -700,7 +709,7 @@ func scheduleReviewsWorkflowRun(sched Schedule, tmpl *Template) (CompositionLaye
 // applyWorkflowReviewCIReadGrant attaches a repo-scoped api:ci-read@<repo>
 // grant (Via GrantByGrain) to a workflow-run review composition whose target
 // repository is not gated by grain CI (applyGrainCIGrant has just stripped
-// workflowReviewTemplate's grain-ci grant). Keeping grain-ci itself would
+// workflowReviewTemplate's grain#ci grant). Keeping grain#ci itself would
 // make grainci.GrantedExplicitly true and change merge gating on a
 // repository with no explicit CI mode; api:ci-read@<repo> opens only
 // read-only CI access (grain ci log / list_ci_runs / get_ci_log) for that
@@ -775,6 +784,9 @@ func (s *Store) composeScheduleTask(ctx context.Context, sched Schedule, stateRe
 			return Composition{}, nil, err
 		}
 		applyGrainCIGrant(&comp, usesGrainCI)
+		if err := applyRepoDefaultHostd(ctx, s.db, &comp); err != nil {
+			return Composition{}, nil, err
+		}
 		if !usesGrainCI {
 			if from, ok := scheduleReviewsWorkflowRun(sched, tmpl); ok {
 				applyWorkflowReviewCIReadGrant(&comp, from)
@@ -789,14 +801,17 @@ func (s *Store) composeScheduleTask(ctx context.Context, sched Schedule, stateRe
 // ui.Client.SuiteComposition shows exactly these. Every pass of a run
 // composes the same way, so one pass is the whole answer for the run.
 func composeSuitePass(ctx context.Context, q querier, items []SuiteItem, templates map[string]Template,
-	target RepoRef, base string, requireApproval, autoMerge, autoApproveProposals bool) ([]Composition, error) {
+	target RepoRef, base string, requireApproval, autoMerge, autoApproveProposals bool, opts SuiteRunOptions) ([]Composition, error) {
 
 	// Read at most once for the whole pass, and not at all for a suite
 	// whose templates say nothing about any declared field.
 	declarations := customFieldDeclarations{q: q}
 	out := make([]Composition, 0, len(items))
 	for _, it := range items {
-		comp := ComposeSuiteTask(templates[it.TemplateID], target, base, requireApproval, autoMerge, autoApproveProposals)
+		comp := composeSuiteTask(templates[it.TemplateID], opts.Fields, target, base, requireApproval, autoMerge, autoApproveProposals)
+		if opts.Priority != 0 {
+			comp.Priority = opts.Priority
+		}
 		fields, err := declarations.apply(ctx, comp.CustomFields)
 		if err != nil {
 			return nil, err
@@ -808,6 +823,9 @@ func composeSuitePass(ctx context.Context, q querier, items []SuiteItem, templat
 				return nil, err
 			}
 			applyGrainCIGrant(&comp, usesGrainCI)
+			if err := applyRepoDefaultHostd(ctx, q, &comp); err != nil {
+				return nil, err
+			}
 		}
 		out = append(out, comp)
 	}
@@ -856,7 +874,7 @@ func (s *Store) SuiteComposition(ctx context.Context, suite Suite, target RepoRe
 		return nil, err
 	}
 	return composeSuitePass(ctx, s.db, suite.Items, templates, target, base,
-		suite.RequireApproval, suite.AutoMerge, suite.AutoApproveProposals)
+		suite.RequireApproval, suite.AutoMerge, suite.AutoApproveProposals, SuiteRunOptions{})
 }
 
 // TemplateComposition is the task filing tmpl with values against
@@ -879,6 +897,9 @@ func (s *Store) TemplateComposition(ctx context.Context, tmpl Template, values m
 			return Composition{}, err
 		}
 		applyGrainCIGrant(&comp, usesGrainCI)
+		if err := applyRepoDefaultHostd(ctx, s.db, &comp); err != nil {
+			return Composition{}, err
+		}
 	}
 	return comp, nil
 }

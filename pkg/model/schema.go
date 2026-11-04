@@ -444,7 +444,66 @@ import "strconv"
 // to 5 (model.DefaultMaxMergesPerRepo). Stored values are left alone: the
 // row is always written whole, so a 1 written because it was the default
 // cannot be told from a 1 somebody chose, and both keep it.
-const SchemaVersion = 95
+//
+// 96 rewrites stored `grain-ci` grants, `repo_config`.`ci_capabilities`
+// included, to `https://grain.dev/capabilities/grain#ci={}`: the
+// in-process `grain-ci` provider is retired for the `grain#ci` method.
+//
+// 97 retires the in-process `gcp-key` and `gcp-key:<name>` providers onto
+// `https://grain.dev/capabilities/gcp#gcp-key`: seeds `sandbox-agent` and
+// `<name>` permission sets in `grain_config`.`mcp_servers` from the
+// deployment's pool and `gcp_key` rows, and rewrites stored grants across
+// tasks, templates, schedules, default_capabilities, ci_capabilities,
+// console_sessions and capability_policy.
+//
+// 98 adds `allowed_principal` and `allowed_principal_migration`: the
+// database-backed list of `user:<email>` and `group:<email>` entries
+// admitted when authenticated by IAP or another IdentityVerifier, plus the
+// one-time startup migration record off `-ui-allowed-principals`. Kept off
+// SettingsTables so a config-repo pull request cannot lock operators out
+// or grant sign-in access (design/design/settings.design.md §1).
+//
+// 99 adds `grain_config`.`auto_upgrade_on` (model.Config.AutoUpgradeOn:
+// off, daily, or release) and the `auto_upgrade_release` table, what the
+// release-triggered automatic upgrade has seen and scheduled
+// (model.AutoUpgradeRelease).
+//
+// 100 retires the in-process claude-proxy, openai-proxy and gemini-proxy
+// providers onto the in-process model-proxy server: stored grants across
+// tasks, templates, schedules, default_capabilities, ci_capabilities,
+// console_sessions and capability_policy become
+// https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"<vendor>"}.
+//
+// 101 retires the in-process image-signing, registry-push and
+// package-publish providers onto the in-process release server: stored
+// grants, repo_config.ci_capabilities among them, become
+// https://grain.dev/capabilities/release#<method>={}.
+//
+// 102 adds `default_hostd` to `repo_config` (model.RepoConfig.DefaultHostd):
+// the hostd pin or label selector a task filed against the repository
+// starts with when neither the filing nor its template names one.
+const SchemaVersion = 102
+
+// allowedPrincipalTable is the `allowed_principal` table: one row per
+// `user:<email>` or `group:<email>` entry admitted through a verified
+// identity (model.AllowedPrincipal).
+const allowedPrincipalTable = `CREATE TABLE IF NOT EXISTS ` + "`allowed_principal`" + ` (
+  ` + "`entry`" + `    TEXT     NOT NULL PRIMARY KEY,
+  ` + "`added_by`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`added_at`" + ` DATETIME NOT NULL
+)`
+
+// allowedPrincipalMigrationTable records the one-time startup migration off
+// `-ui-allowed-principals` / `$GRAIN_ALLOWED_PRINCIPALS` so the deprecated
+// flag is imported at most once even if every entry is later removed, and
+// preserves any unsupported entries (`serviceAccount:`, `domain:`) dropped
+// during import so Settings -> Access can surface them.
+const allowedPrincipalMigrationTable = `CREATE TABLE IF NOT EXISTS ` + "`allowed_principal_migration`" + ` (
+  ` + "`id`" + `          INTEGER  NOT NULL PRIMARY KEY,
+  ` + "`imported_at`" + ` DATETIME NOT NULL,
+  ` + "`source`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`dropped`" + `     TEXT     NOT NULL DEFAULT ''
+)`
 
 // configAuditTable is the `config_audit` table: one row per change to the
 // deployment's configuration somebody made (model.ConfigAuditEntry,
@@ -2317,6 +2376,7 @@ var Tables = []string{
   ` + "`session_sandbox_idle_ttl_ms`" + `  INTEGER NOT NULL DEFAULT 0,
   ` + "`settings_locked`" + `              INTEGER NOT NULL DEFAULT 0,
   ` + "`new_task_form`" + `                TEXT    NOT NULL DEFAULT '',
+  ` + "`auto_upgrade_on`" + `              TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2758,6 +2818,23 @@ var Tables = []string{
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
+	// What the release-triggered automatic upgrade has seen and done
+	// (model.AutoUpgradeRelease): at most one row, written by
+	// orchestrator's reconcileReleaseUpgrade -- the newest release tag
+	// and since when, the release it last scheduled an upgrade for, and
+	// how that upgrade ended. Off SettingsTables for auto_upgrade_run's
+	// reason.
+	`CREATE TABLE IF NOT EXISTS ` + "`auto_upgrade_release`" + ` (
+  ` + "`id`" + `           INTEGER  NOT NULL,
+  ` + "`newest`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`seen_at`" + `      DATETIME NOT NULL,
+  ` + "`release_tag`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`target`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`scheduled_at`" + ` DATETIME NULL,
+  ` + "`outcome`" + `      TEXT     NOT NULL DEFAULT '',
+  PRIMARY KEY (` + "`id`" + `)
+)`,
+
 	// The usage-limit pauses in force (model.StoredUsageLimitPause): one
 	// row per window orchestrator.Pause holds, written as it opens and
 	// deleted as it expires or is lifted, so a restarted daemon keeps
@@ -3016,6 +3093,10 @@ var Tables = []string{
 	// issue importer (schema 65). DEFAULT 0 / '' imports nothing, and
 	// issue_import_approved DEFAULT 0 files what it does import
 	// unapproved.
+	//
+	// default_hostd is RepoConfig.DefaultHostd: the hostd pin or label
+	// selector a task filed here starts with when neither the filing nor
+	// its template names one (schema 102). DEFAULT '' is the default hostd.
 	`CREATE TABLE IF NOT EXISTS ` + "`repo_config`" + ` (
   ` + "`owner`" + `                TEXT NOT NULL,
   ` + "`name`" + `                 TEXT NOT NULL,
@@ -3052,6 +3133,7 @@ var Tables = []string{
   ` + "`issue_import_label`" + `       TEXT NOT NULL DEFAULT '',
   ` + "`issue_import_approved`" + `    INTEGER NOT NULL DEFAULT 0,
   ` + "`issue_import_interval_seconds`" + ` INTEGER NOT NULL DEFAULT 0,
+  ` + "`default_hostd`" + `            TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 
@@ -3958,6 +4040,11 @@ var Tables = []string{
 	configAuditTable,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_event_task`" + ` ON ` + "`task_event`" + ` (` + "`task_id`" + `)`,
 	`CREATE INDEX IF NOT EXISTS ` + "`task_event_at`" + ` ON ` + "`task_event`" + ` (` + "`at`" + `)`,
+
+	// Verified-identity sign-in allowlist (`user:<email>` and `group:<email>`)
+	// and its one-time startup migration off `-ui-allowed-principals`.
+	allowedPrincipalTable,
+	allowedPrincipalMigrationTable,
 }
 
 // Views is the derivations, each a (name, DDL) pair so Init can drop and

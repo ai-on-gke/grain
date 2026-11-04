@@ -307,7 +307,7 @@ describe("InboxPage", () => {
   it("heads the pane with the inbox figure", () => {
     const { container } = renderInbox({ tasks });
     expect(
-      container.querySelector('.header-icon svg[data-glyph="inbox"]'),
+      container.querySelector('.header-icon svg[data-icon="inbox"]'),
     ).toBeInTheDocument();
   });
 

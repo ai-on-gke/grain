@@ -75,6 +75,17 @@ func upgradeUnchanged(upgrader *upgrade.Upgrader) func(context.Context, string) 
 	return upgrader.AlreadyRunning
 }
 
+// latestRelease is orchestrator.Config.LatestRelease: the newest
+// release tag on this deployment's image channel, which the
+// release-triggered automatic upgrade follows, or nil for a deployment
+// that cannot upgrade itself.
+func latestRelease(upgrader *upgrade.Upgrader) func(context.Context) (string, error) {
+	if upgrader == nil {
+		return nil
+	}
+	return upgrader.LatestRelease
+}
+
 // SplitBranchPatterns reads -upgrade-allowed-branches: comma-separated,
 // with blanks around and between the commas ignored.
 func SplitBranchPatterns(s string) []string {

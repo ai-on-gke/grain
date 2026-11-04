@@ -28,6 +28,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/trustboundary"
 )
 
@@ -44,6 +45,7 @@ var (
 	_ github.DiffReader         = (*StateRepoPullRequestClient)(nil)
 	_ github.FileReader         = (*StateRepoPullRequestClient)(nil)
 	_ github.ReviewSubmitter    = (*StateRepoPullRequestClient)(nil)
+	_ github.TagLister          = (*StateRepoPullRequestClient)(nil)
 	_ github.CollaboratorReader = (*StateRepoPullRequestClient)(nil)
 	_ github.ReactionPoster     = (*StateRepoPullRequestClient)(nil)
 	_ github.CheckRunWriter     = (*StateRepoPullRequestClient)(nil)
@@ -51,6 +53,8 @@ var (
 	_ github.JobLogTailer       = (*StateRepoPullRequestClient)(nil)
 	_ github.WorkflowRunsReader = (*StateRepoPullRequestClient)(nil)
 	_ github.ActionsReader      = (*StateRepoPullRequestClient)(nil)
+
+	_ orchestrator.ReleaseQualificationForge = (*StateRepoPullRequestClient)(nil)
 )
 
 // WithCaller is this client with its forge requests charged to caller
@@ -1423,6 +1427,36 @@ func (c *StateRepoPullRequestClient) UpdateCheckRun(owner, name string, checkRun
 		return fmt.Errorf("%s/%s has no GitHub check run writer", owner, name)
 	}
 	return writer.UpdateCheckRun(owner, name, checkRunID, run)
+}
+
+// CheckRunApp is the wrapped client's own (github.RESTClient.CheckRunApp):
+// the GitHub App grain's check runs on owner/name are posted as, or ""
+// for the native config repository and a client that cannot tell.
+func (c *StateRepoPullRequestClient) CheckRunApp(owner, name string) (string, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return "", nil
+	}
+	src, ok := c.Client.(interface {
+		CheckRunApp(owner, repo string) (string, error)
+	})
+	if !ok {
+		return "", nil
+	}
+	return src.CheckRunApp(owner, name)
+}
+
+// ListTags is the wrapped client's own, for the repositories that have
+// one: the native config repository is not a forge and has no tags here,
+// which is the same answer a repository with none gives.
+func (c *StateRepoPullRequestClient) ListTags(owner, name string) ([]github.Tag, error) {
+	if c.isDisabledConfigRepo(owner, name) || c.isLocal(owner, name) {
+		return nil, nil
+	}
+	lister, ok := c.Client.(github.TagLister)
+	if !ok {
+		return nil, nil
+	}
+	return lister.ListTags(owner, name)
 }
 
 // actionsReader is the wrapped client's GitHub Actions reads, or nil for

@@ -126,7 +126,10 @@ function Cell({ stage, percentile, seconds }) {
       align="right"
       sx={{
         fontVariantNumeric: "tabular-nums",
-        color: thin ? "text.disabled" : undefined,
+        // Tertiary, not text.disabled: the number is still read, and
+        // disabled drew it at 2.64:1 on the report's ground in light
+        // (docs/test-runs/2026-11-03-ui-fixes.md F2).
+        color: thin ? "var(--text-tertiary)" : undefined,
       }}
     >
       {thin ? (

@@ -305,6 +305,13 @@ func init() {
 	register(Builder{
 		Name:    "model-proxy",
 		Summary: "per-attempt tokens on a model vendor's inference proxy (mint_model-proxy)",
+		// No longer a built-in every deployment registers: its canonical
+		// id is grain's in-process model-proxy server
+		// (pkg/capability/modelproxy.Method), which forwards with each
+		// run's own team connection rather than this server's one key
+		// per vendor. `grain capability model-proxy` still serves it for
+		// an operator who registers it under an id of their own.
+		Internal: true,
 		Build: func(ctx context.Context, args []string, env Env, logger *log.Logger) (*Server, error) {
 			fs := newFlags("model-proxy", logOutput(logger))
 			var vendors listFlag

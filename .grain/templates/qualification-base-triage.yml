@@ -1,9 +1,21 @@
 name: Release qualification - Base branch triage & team inheritance
-title: Validate base branch triage, team ownership inheritance, and repair unblocking
+title: "Qualify {{rc_tag}}: base branch triage, team inheritance and repair unblocking"
 base: main
-auto-merge: true
+auto-merge: false
+# Stage 2 of release-candidate qualification
+# (design/playbook/releases.playbook.md §2). Filed by grain's
+# release-qualification reconciler (pkg/orchestrator/releasequalification.go)
+# with rc_tag and rc_sha filled in, and judged by it objectively: the run
+# passes only if it opens no pull request, proposes nothing outside its own
+# scratch branch, leaves no scratch branch or fixture task behind, and ends
+# its closing note with the footer the body asks for.
+fields:
+  - name: rc_tag
+    label: Release candidate tag (vX.Y.Z-rc.N)
+  - name: rc_sha
+    label: Release candidate commit (full sha)
 # The scratch branch this template's body tells its runs to create from
-# main and delete when done (qualification/<this task id>). Create and
+# rc_sha and delete when done (qualification/<this task id>). Create and
 # delete only: no force, so an existing qualification branch can be
 # fast-forwarded but never rewritten, and main itself stays out of reach.
 push:
@@ -13,30 +25,35 @@ body: |
   Validate the end-to-end base branch failure triage, team ownership inheritance,
   and unblocking verification.
 
-  Grain releases from trunk (`docs/release-candidate-management.md`): `candidate`
-  is a pointer the release train force-moves, and pull requests targeting it are
-  refused. Stage the deliberate failure on a scratch branch, never on `main` or
-  `candidate`:
+  You are qualifying release candidate `{{rc_tag}}` at commit `{{rc_sha}}`.
+  Check it out (`git fetch origin tag {{rc_tag}} && git checkout --detach {{rc_sha}}`)
+  and judge that commit, not `main`'s tip.
 
-  - Create the scratch branch from `main`'s tip and push it:
-    `git push origin origin/main:refs/heads/qualification/<this task id>`.
-  - Land the failure, and later its repair, through tasks filed with
-    `propose_task` and `branch: qualification/<this task id>`, so each merges
-    through the scratch branch's own merge queue and base-branch CI.
-  - Never push the deliberate failure to this task's own branch: this task's own
-    pull request merges into `main`. Push to it only a real fix for something
-    this run found.
-  - If grain does not run base-branch CI or triage on the scratch branch, report
-    that as the finding. Do not move the experiment onto `main` to get it.
-  - Delete the scratch branch when you are done
-    (`git push origin :refs/heads/qualification/<this task id>`).
+  ## Scratch branch
+
+  Every experiment runs on a scratch branch cut from the candidate, never on
+  `main`, `candidate` or this task's own branch:
+
+  - Create it: `git push origin {{rc_sha}}:refs/heads/qualification/<this task id>`.
+  - File any fixture task (a change for the merge queue to merge, a staged
+    failure, its repair) with `propose_task` and
+    `branch: qualification/<this task id>`. Fixtures on that branch are the
+    experiment. Anything you propose on any other branch is a defect report,
+    and fails qualification.
+  - Before you finish, close or finish every fixture task you filed, then
+    delete the branch: `git push origin :refs/heads/qualification/<this task id>`.
+    A scratch branch or a live fixture task left behind fails qualification.
+
+  If grain does not run base-branch CI or triage on the scratch branch, report
+  that as the finding (`Qualification-Verdict: FAIL`). Do not move the
+  experiment onto `main` to get it.
 
   ## 1. Simulate Base Branch Failure
 
-  - Stage a deliberate build/test failure on the scratch branch.
+  - Land a fixture with a deliberate build/test failure on the scratch branch.
   - Observe failure detection by base-branch CI and the triage reconcilers, and
-    confirm with `query_merge_queue` that merges to the scratch branch are held
-    while `main`'s queue carries on unaffected.
+    confirm that the red scratch branch changes nothing about which pull
+    requests merge into `main`.
 
   ## 2. Team Ownership Inheritance Verification
 
@@ -48,14 +65,37 @@ body: |
 
   ## 3. Fix Verification & Unblocking
 
-  - Land a targeted repair commit fixing the staged failure on the scratch branch.
+  - Land a repair fixture fixing the staged failure on the scratch branch.
   - Run `wait_for_checks` or `run_ci_job` to confirm that the scratch branch's base CI
     turns green.
-  - Verify that the merge hold on the scratch branch clears automatically and the
-    triage task closes.
+  - Verify that the steward or repair is unblocked and the triage task closes.
 
   ## 4. Reporting
 
-  - Confirm the scratch branch is deleted and nothing from it reached `main`.
-  - Document all triage events, team attribution mappings, merge hold transitions,
-    and unblocking in the final task comment.
+  - Confirm the scratch branch is deleted, every fixture and triage task it
+    caused is closed, and nothing from it reached `main`.
+  - Document all triage events, team attribution mappings and unblocking in
+    the closing note.
+
+  ## What makes this a pass
+
+  The verdict is read mechanically, not from your prose:
+
+  - Do not push to this task's own branch and do not open a pull request.
+    Any pull request fails qualification, including a real fix. Report a bug
+    you find in the closing note with `Qualification-Verdict: FAIL`. The
+    pipeline steward files the fix.
+  - Finish with `comment_on_issue`, never `nothing_needed` or
+    `ask_question`: `nothing_needed` closes the task, and a closed
+    qualification task fails whatever its note says.
+  - End the closing note with exactly these three lines, the commit in full:
+
+    ```text
+    Qualification-Verdict: PASS
+    Qualified-Tag: {{rc_tag}}
+    Qualified-Commit: {{rc_sha}}
+    ```
+
+    Use `FAIL` when anything above did not behave as described. Use `INFRA`
+    only when the environment stopped you (sandbox, git proxy, model quota,
+    a daemon restart), and name the error. INFRA is re-run, not judged.

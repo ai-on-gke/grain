@@ -82,7 +82,7 @@ Getting v3.1.0 out on 2026-11-01/02 took a long series of manual steps: re-submi
 | # | Step | Owner | Enforced by |
 | --- | --- | --- | --- |
 | 1 | A fix or feature merges to core `main`; an `auto_merge: true` task merges on green CI and a clean review without a Submit | grain | `pkg/model` auto-merge stickiness (task 2442 for `false`; gap 1 for `true`), `.grain/merge-rules.yml` |
-| 2 | Release-path changes clear on grain's security review alone, except the approval path (§0.3) | grain | `pkg/trustboundary/trustboundary.go`, `.grain/triggers/release-promotion.yml` |
+| 2 | Release-path changes clear on grain's security review alone, except the approval path (§0.3) | grain | `pkg/trustboundary/trustboundary.go`, `.grain/triggers/release-promotion.yml`, `.grain/triggers/release-machinery.yml` |
 | 3 | `release images` publishes `:sha-<short>` for the merge, re-running on its own after an infrastructure failure (checkout 5xx, VM death) | grain | `.github/workflows/release.yml`, `scripts/release-images.sh`, `pkg/orchestrator/basebranchrelease.go` (`retryInfraBaseBranchRelease`), `pkg/orchestrator/infraverdict.go` |
 | 4 | The release train selects LKG, cuts `vX.Y.Z-rc.N`, and pushes the RC, `-pending` and `-discarded` tags with its own narrow grant (§0.4) | grain | `.grain/templates/release-train.yml` `push:` list (`pkg/model/ref_push.go`), `scripts/release-from-trunk.sh`, `scripts/candidate-gate.sh` |
 | 5 | Qualification: Stage 1 `nightly.yml`, Stage 2 `release-qualification` (§2) | grain | `.github/workflows/nightly.yml`, `.grain/suites/release-qualification.yml` |
@@ -108,7 +108,7 @@ A release-path change that **can't reach the approval** clears on grain's securi
 
 | Needs a person's Submit | Clears on security review alone (no findings) |
 | --- | --- |
-| `.grain/workflows/promote-release.yml`, `.github/workflows/promote-release.yml` | `scripts/release-images.sh`, `scripts/release-from-trunk.sh`, `scripts/release-notes.sh`, `scripts/candidate-gate.sh` |
+| `.grain/workflows/promote-release.yml`, `.github/workflows/promote-release.yml` | `scripts/release-images.sh`, `scripts/release-from-trunk.sh`, `scripts/release-notes.sh`, `scripts/candidate-gate.sh`, and the helpers the release jobs run (`scripts/patch-tag-guard.sh`, `scripts/build-version.sh`, `scripts/grain-ci-host.sh`) |
 | `pkg/ui/release_approval.go` | `.grain/workflows/release.yml`, `.github/workflows/release.yml` |
 | `pkg/trustboundary/trustboundary.go`, `.grain/triggers/**`, `.grain/merge-rules.yml` | `.grain/workflows/promote.yml`, `.github/workflows/promote.yml` (they follow the git `latest` tag the approval moved) |
 | Any template's `push:` list (the release train's tag grant, §0.4) | `.github/workflows/release-train.yml`, `.grain/workflows/release-train.yml` |
@@ -145,13 +145,13 @@ Upgrading the deployment that runs grain is part of the release, not a separate 
 | Gap | Closed by |
 | --- | --- |
 | 1. Auto-merge doesn't stick | Task 2442 (explicit `false` sticks; merged) and the gap 1 follow-up (explicit `true` survives holds) |
-| 2. Release-path changes always wait for a Submit | Gap 2 task: narrow the release-promotion rule per §0.3 |
+| 2. Release-path changes always wait for a Submit | Task 2664: `release-promotion` narrowed to the approval path, the rest moved to `release-machinery` (`trust-boundary/v12`) |
 | 3. The RC cut and pending tags need a person | Gap 3 task: release-train template with the §0.4 grant |
 | 4. The approval needs GitHub | Gap 4 task: the deployment raises `release.pending`, and the Inbox Approve dispatches the publishing workflow |
 | 5. The Google edition doesn't follow releases | Tasks 2533 (sync template) and 2315, and the gap 5 task in the edition's repository |
 | 6. Edition merges don't start `release` | Gap 6 task |
 | 7. Release-job flakes need a re-run | Tasks 2558, 2590, 2621 (fixes), and the gap 7 task (automatic infra retry) |
-| 8. Upgrading the deployment is manual | Gap 8 task |
+| 8. Upgrading the deployment is manual | Task 2670 (`autoUpgradeOn: release`, `reconcileReleaseUpgrade`, `upgrade.failed` notifications); each deployment turns it on in its own config |
 | 9. Edition review threads need a person | Task 2634 |
 
 ### 1. Promotion gate
@@ -237,6 +237,7 @@ Environmental failures must never discard a healthy RC, burn a version retry att
 - **How `infra` is handled:**
   - `infra` verdicts **never** mark the RC red and **never** consume the single flake-retry allowance (§3) or the 3-attempt RC cap (§5).
   - The controller re-queues the affected job or task automatically (with exponential backoff, and waiting out model quota reset windows before re-dispatching agent tasks).
+  - **`release images` itself (gap 7):** a trunk release run that failed only on infrastructure is re-run by the deployment, up to 2 times, before it counts as a failed release or files triage. On grain CI that is the existing `infraVerdict` re-run, which now also reads git's checkout/fetch 5xx (`The requested URL returned error: 502/503/504`, `RPC failed; HTTP 5xx`, from the first or checkout step only) and a sandbox VM lost mid-step (the job concludes errored with `infra: sandbox lost`). On `ci_mode: github` the deployment asks GitHub to `rerun-failed-jobs` when every failed job of the attempt matches the same signatures or a lost runner. The triage filed after the last re-run says `infra, retried N times`.
   - **Bounded patience:** If the same job or item hits **3 consecutive `infra` failures** or remains blocked on `infra` for **more than 2 hours**, the reconciler leaves the RC in `qualifying` (not `-discarded`) and raises `pipeline.release-infra-stalled:vX.Y.Z-rc.N` so the steward or operator repairs the underlying runner, quota, or credential issue.
 
 ---
@@ -328,6 +329,9 @@ Continuous releases mean `latest` moves several times a day while individual dep
 - **Auto-upgrade follows `latest` on the deployment's own daily clock:**
   - Deployments configured with `autoUpgradeChannel: "latest"` continue using `reconcileAutoUpgrade` (`pkg/orchestrator/autoupgrade.go`), which schedules at most **one non-disruptive drain-and-upgrade per calendar day at `autoUpgradeTime`** (skipping the drain altogether via `UpgradeUnchanged` when `latest` has not moved since yesterday).
   - Thus rapid upstream promotions never bounce a deployment multiple times an hour; operators still get a fresh, fully qualified `latest` target immediately whenever they click **Upgrade now** in Settings.
+- **Or upgrade on each release (recommended, gap 8):**
+  - `autoUpgradeOn: release` (Settings → General → Updates, "On each release") runs `reconcileReleaseUpgrade` (`pkg/orchestrator/releaseupgrade.go`) instead of the daily clock. It watches the newest release tag on the deployment's image channel (`Upgrader.LatestRelease`: own edition, never `-rc.N`, `-discarded` or `-retracted`), waits until a tag has stood for an hour, and schedules one drain-and-upgrade onto `latest` or the exact tag. An automatic drain that is still waiting is re-pointed at a newer release instead of being followed by a second one, so releases close together give one drain.
+  - A failed automatic upgrade (either mode) raises one `upgrade.failed:<release>` notification naming the stage and quoting its output. The release isn't retried until a newer one appears, and the next successful automatic upgrade clears it.
 
 ---
 
@@ -388,6 +392,7 @@ The train separates GitHub runner duties from private deployment duties so neith
 | --- | --- | --- | --- |
 | **Push tags & pointers (`vX.Y.Z-rc.N`, `-discarded`, `-retracted`, `vX.Y.Z`, `latest`, `refs/heads/candidate`, `release/vX.Y.Z`)** | GitHub Actions (`release-train.yml`, `promote.yml`) | Scoped **GitHub App installation token** (preferred) or fine-grained **`REPO_WRITE_TOKEN`** (`contents: write` on this repo only; `refs/heads/main` remains protected against force-push and unreviewed commits) | Default `GITHUB_TOKEN` (`github-actions[bot]`) is blocked by tag rulesets and **does not fire downstream `on: push: tags` / `on: release` workflows** when pushing tags. An App token or `REPO_WRITE_TOKEN` authorizes protected tag pushes and triggers downstream release events cleanly. |
 | **Dispatch, retry & cancel qualification workflows (`nightly.yml`, `gcp-smoke.yml`)** | GitHub Actions (`release-train.yml`) | Job permission **`actions: write`** on `GITHUB_TOKEN` (or App token) | A `release-train.yml` with `actions: read` cannot dispatch `nightly.yml` on `vX.Y.Z-rc.N`, invoke `rerun-failed-jobs` on flakes, or cancel superseded RC runs; `actions: write` grants all three within the repository. |
+| **Re-run an infra-failed `release images` (gap 7)** | **Grain deployment reconciler** (outbound) | The repository's forge connection with **`actions: write`** (`POST /actions/runs/{id}/rerun-failed-jobs`) | Without it GitHub answers 403; the release is recorded and triaged at once, its triage saying the re-run was refused. |
 | **Publish & retag container images (`:vX.Y.Z-rc.N`, `:rc`, `:candidate`, `:vX.Y.Z`, `:latest`, `:-discarded`, `:-retracted`)** | GitHub Actions (`release.yml`, `release-train.yml`, `promote.yml`) | **`GHCR_TOKEN`** (`write:packages`, `read:packages`), or native `GITHUB_TOKEN` `packages: write` once `RELEASE_IMAGE_REPO` lives under the same GitHub organization as the repository | `GITHUB_TOKEN` fails whenever `RELEASE_IMAGE_REPO` points to a package namespace outside the repository's own org, and cron-triggered runs fail when registry credentials are event-gated. Setting `GHCR_TOKEN` (or aligning `RELEASE_IMAGE_REPO` with the repo org) gives scheduled and dispatched runs identical registry access. |
 | **Sign release & RC images** | GitHub Actions (`release.yml`, `release-train.yml`, `promote.yml`) | **`IMAGE_SIGNING_KEY`** (+ optional `IMAGE_SIGNING_PASSWORD`), or keyless Cosign Sigstore OIDC via **`id-token: write`** | Without `IMAGE_SIGNING_KEY` or keyless OIDC, workflows fall back to publishing unsigned images. Requiring keyless OIDC (`id-token: write`) or `IMAGE_SIGNING_KEY` ensures every `:vX.Y.Z-rc.N` and `:vX.Y.Z` image carries a verifiable signature. |
 | **Run Stage 2 agent qualification & report verdict (`grain/release-qualification`)** | **Grain deployment reconciler** (outbound to GitHub via its existing forge GitHub App / token) | Existing repository forge connection (`checks: write`, `contents: read` on GitHub); **no inbound `GRAIN_API_URL`, `GRAIN_API_TOKEN`, or `RELEASE_STAGING_URL` required on GitHub-hosted runners** | A GitHub-hosted runner cannot reach a firewalled deployment on `localhost` (`GRAIN_API_URL` / `RELEASE_STAGING_URL`), causing live train runs to fail preflight whenever `GRAIN_API_TOKEN` or external URLs are unset. Dropping staging removes `RELEASE_STAGING_URL`, and having the Grain daemon watch GitHub outbound for `vX.Y.Z-rc.N` + green `nightly.yml`, run `release-qualification` locally, and post check run `grain/release-qualification` back to GitHub removes inbound runner-to-daemon network and token requirements altogether. (Deployments that expose `GRAIN_API_URL` may still optionally set `GRAIN_API_TOKEN` with `api:release-gate-read`.) |

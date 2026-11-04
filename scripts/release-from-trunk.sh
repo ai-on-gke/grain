@@ -69,12 +69,13 @@
 # Each train run is two idempotent phases.
 #
 # Phase 1 -- the release candidate in qualification, if there is one. The
-# target is the version whose rcs exist past the newest release (promoted
-# or pending) of RELEASE_MAJOR; with none, it is chosen at the cut
-# (Phase 2). Its newest rc, vM.Y.Z-rc.N, qualifies unless it carries a
-# vM.Y.Z-rc.N-discarded tag: scripts/candidate-gate.sh check-qualification
-# reads nightly.yml's jobs on it (Stage 1) and the
-# grain/release-qualification check run on its commit (Stage 2):
+# target is the next minor past the newest release (promoted or pending) of
+# RELEASE_MAJOR; patch versions stay reserved for cherry-picked hotfixes on
+# release/vX.Y.Z (scripts/release-patch.sh). Its newest rc, vM.Y.0-rc.N,
+# qualifies unless it carries a vM.Y.0-rc.N-discarded tag:
+# scripts/candidate-gate.sh check-qualification reads nightly.yml's jobs on
+# it (Stage 1) and the grain/release-qualification check run on its commit
+# (Stage 2):
 #   PENDING  still running, or a job's first failure waits on its one
 #            retry; INFRA  a job was cancelled, timed out or starved of
 #            capacity and is to be re-run, never counted as red. Either way
@@ -108,13 +109,12 @@
 # nothing and `latest` stands. Before an rc.1:
 #   - at least RELEASE_MIN_INTERVAL_MINUTES must have passed since the
 #     newest release (promoted or pending) was tagged; FORCE=true skips it;
-#   - the commits since the newest release choose the version (playbook
-#     section 7): a feat:, a breaking change (type!: or BREAKING CHANGE:)
-#     or a subject that is not a Conventional Commit makes the next minor,
-#     vM.(P+1).0; fix:, perf:, refactor: and revert: alone make a patch,
-#     vM.P.(Z+1) (never of a retracted release or of a major's first);
-#     docs:, chore:, test:, ci:, style: and build: alone release nothing
-#     and wait for something that does.
+#   - the commits since the newest release decide whether there is anything
+#     to release (playbook section 7): every trunk release is the next
+#     minor, vM.(P+1).0, whether it carries features or fixes alone --
+#     patches (vM.P.Z, Z >= 1) stay scripts/release-patch.sh's cherry-picked
+#     hotfixes on release/vM.P.Z -- while docs:, chore:, test:, ci:, style:
+#     and build: alone release nothing and wait for a fix or a feature.
 # rc.3 converges (playbook section 5): after rc.2 is dropped, the train
 # makes release/vM.Y.Z from rc.2's commit and cuts rc.3 from that branch
 # (on release.yml alone, which runs on release/v*) once fixes cherry-picked
@@ -130,7 +130,8 @@
 # /repos/{RELEASE_GITHUB_REPO}/actions/workflows/<suite>.yml/runs (and, for
 # an rc, the jobs of each nightly.yml run on it), read with GITHUB_TOKEN
 # (actions: read). The grain/release-qualification check run is read from
-# GitHub (checks: read) whenever there is a token. The default is "github"
+# GitHub (checks: read) whenever there is a token, and counts only when
+# RELEASE_QUALIFICATION_APP, grain's own GitHub App, created it. The default is "github"
 # inside GitHub Actions and "grain" anywhere else.
 #
 # Settings (environment):
@@ -153,6 +154,13 @@
 #   RELEASE_QUALIFICATION_RUNS_JSON, RELEASE_QUALIFICATION_CHECKS_JSON
 #                            files to read the rc's nightly.yml jobs and
 #                            check runs from instead
+#   RELEASE_QUALIFICATION_APP
+#                            the GitHub App (slug or numeric id) grain posts
+#                            grain/release-qualification as: only its check
+#                            run qualifies an rc, never a same-named one
+#                            from an Actions workflow or another app; unset,
+#                            Stage 2 trusts no check run and the train stops
+#                            (candidate-gate.sh's CHECK_QUALIFICATION_APP)
 #   RELEASE_IMAGES           the image publisher (bash scripts/release-images.sh);
 #                            "off" publishes nothing
 #   RELEASE_NOTES_TASK       "off" files no release-notes task
@@ -318,18 +326,16 @@ rc_tags() { # rc_tags <version>: its rc tags, highest N last
 # newest of either in RELEASE_MAJOR, which the next version follows),
 # notes_from (the newest promoted release RELEASE_NEVER_PROMOTE does not
 # name and that is not retracted, which release notes are written from),
-# minor_target (vM.(P+1).0, raised to RELEASE_FLOOR_MINOR and stepping
-# over a minor RELEASE_NEVER_PROMOTE names), patch_target (vM.P.(Z+1) of
-# base; empty when base is not a release of this major a patch can
-# follow: none, retracted, a placeholder RELEASE_NEVER_PROMOTE names, or
-# under the floor), and target: the version whose rcs are in flight past
-# base, if any, else minor_target until the cut chooses. A vX.Y.0 tag the
-# list names is a placeholder -- v2.5.0, tagged on main only so that the
-# minors the legacy cut used up are never reused -- so it still counts
-# for the next version and for the floor, but it was never released and
-# there is nothing in it to write notes from.
+# minor_target and target (vM.(P+1).0, raised to RELEASE_FLOOR_MINOR and
+# stepping over a minor RELEASE_NEVER_PROMOTE names). Every trunk release
+# increments minor (playbook section 7); patch versions (vM.P.Z, Z >= 1)
+# are cherry-picked hotfixes cut by scripts/release-patch.sh on
+# release/vM.P.Z. A vX.Y.0 tag the list names is a placeholder -- v2.5.0,
+# tagged on main only so that the minors the legacy cut used up are never
+# reused -- so it still counts for the next version and for the floor, but
+# it was never released and there is nothing in it to write notes from.
 target_release() {
-  local p z b_minor b_patch
+  local p
   released="$(promoted | tail -n 1)"
   pending="$(pending_releases | tail -n 1)"
   notes_from="$(promoted | while read -r t; do never_promotes "$t" || retracted "$t" || printf '%s\n' "$t"; done | tail -n 1)"
@@ -347,30 +353,15 @@ target_release() {
     target_minor=$((target_minor + 1))
   done
   minor_target="v$major.$target_minor.0"
-  patch_target=""
-  if [ -n "$base" ] && ! retracted "$base" && ! never_promotes "$base"; then
-    b_minor="$(printf '%s' "$base" | cut -d. -f2)"
-    b_patch="$(printf '%s' "$base" | cut -d. -f3)"
-    if [ "$b_minor" -ge "$floor_minor" ]; then
-      z=$((b_patch + 1))
-      while never_promotes "v$major.$b_minor.$z"; do
-        z=$((z + 1))
-      done
-      patch_target="v$major.$b_minor.$z"
-    fi
-  fi
   target="$minor_target"
-  if [ -n "$patch_target" ] && [ -n "$(rc_tags "$patch_target")" ] && [ -z "$(rc_tags "$minor_target")" ]; then
-    target="$patch_target"
-  fi
 }
 
-# bump_kind <from> <to>: what the commits in from..to release (playbook
-# section 7) -- "minor" for a feature, a breaking change or a commit that
-# does not say what it is, "patch" for fixes alone, "none" for nothing
-# but docs, chores, tests and the like.
+# bump_kind <from> <to>: whether the commits in from..to warrant a trunk
+# release (playbook section 7) -- "minor" when any commit ships a feature,
+# fix, perf, refactor, revert, breaking change or non-conventional subject,
+# "none" when every commit is docs, chores, tests, ci, style or build alone.
 bump_kind() {
-  local kind=none record subject type
+  local record subject type
   local breaking=$'(^|\n)BREAKING[ -]CHANGE:' conventional='^([A-Za-z]+)(\([^)]*\))?(!)?: '
   [ -n "$1" ] || { echo minor; return; }
   while IFS= read -r -d $'\x1e' record; do
@@ -388,8 +379,6 @@ bump_kind() {
         return
       fi
       case "$type" in
-        feat) echo minor; return ;;
-        fix | perf | refactor | revert) kind="patch" ;;
         docs | chore | test | tests | ci | style | build) ;;
         *) echo minor; return ;;
       esac
@@ -398,7 +387,7 @@ bump_kind() {
       return
     fi
   done < <(git log --no-merges --format='%s%x1f%b%x1e' "$1..$2")
-  echo "$kind"
+  echo none
 }
 
 soak_duration() { printf '%dh%02dm' "$(($1 / 3600))" "$(($1 % 3600 / 60))"; } # soak_duration <seconds>
@@ -528,7 +517,8 @@ github_runs() { # github_runs <out> <branch>
 # read them; qual_checks names it then).
 qual_checks=""
 qualification_json() {
-  local id
+  local id app_id=""
+  [[ ! "${RELEASE_QUALIFICATION_APP:-}" =~ ^[0-9]+$ ]] || app_id="&app_id=$RELEASE_QUALIFICATION_APP"
   if [ -n "${RELEASE_QUALIFICATION_RUNS_JSON:-}" ]; then
     gate_json RELEASE_QUALIFICATION_RUNS_JSON "" "$work/qual-runs.json"
   elif [ "$ci_source" = github ]; then
@@ -549,7 +539,9 @@ qualification_json() {
     gate_json RELEASE_QUALIFICATION_CHECKS_JSON "" "$work/qual-checks.json"
     qual_checks="$work/qual-checks.json"
   elif [ -n "$github_token" ]; then
-    github_get "commits/$2/check-runs?check_name=grain%2Frelease-qualification&filter=all&per_page=100" "$work/qual-checks.json" ||
+    # GitHub filters by app only by id; candidate-gate.sh checks the app
+    # of every check run it judges either way.
+    github_get "commits/$2/check-runs?check_name=grain%2Frelease-qualification&filter=all&per_page=100$app_id" "$work/qual-checks.json" ||
       die "could not read the check runs on $1 from $github_api"
     qual_checks="$work/qual-checks.json"
   else
@@ -728,7 +720,9 @@ if [ "$mode" != train ]; then
     push --delete "refs/tags/$version-pending" || die "promoted $version, but could not delete $version-pending"
     git tag -d "$version-pending" >/dev/null
     # The convergence branch has done its job: main carries every fix.
-    if remote_branch "release/$version"; then
+    # Patch branches (release/vX.Y.Z, Z >= 1) stay on the remote for
+    # patch-tag-guard.sh (docs/release-candidate-management.md, section 9).
+    if [[ "$version" == *.0 ]] && remote_branch "release/$version"; then
       push --delete "refs/heads/release/$version" || die "promoted $version, but could not delete release/$version"
       say "approve: deleted the convergence branch release/$version"
     fi
@@ -762,7 +756,7 @@ if [ "$mode" != train ]; then
 fi
 
 target_release
-say "major $major (floor minor $floor_minor); newest promoted release ${released:-none}${pending:+; $pending pending approval}; next minor $minor_target${patch_target:+, next patch $patch_target}; notes from ${notes_from:-the start}"
+say "major $major (floor minor $floor_minor); newest promoted release ${released:-none}${pending:+; $pending pending approval}; next minor $minor_target; notes from ${notes_from:-the start}"
 if [ -n "$pending" ]; then
   pending_sha="$(commit_of "$pending-pending")"
   pending_rc="$(git tag --points-at "$pending_sha" -l "$pending-rc.*" | sort -t. -k4,4n | tail -n 1 || true)"
@@ -794,7 +788,7 @@ if [ -n "$rc" ]; then
     say "phase 1: $rc (${rc_sha:0:12}) is in qualification; asking the qualification gate"
     qualification_json "$rc" "$rc_sha"
     q_status=0
-    q_out="$(bash "$scripts_dir/candidate-gate.sh" check-qualification --rc-tag "$rc" --rc-sha "$rc_sha" \
+    q_out="$(CHECK_QUALIFICATION_APP="${RELEASE_QUALIFICATION_APP:-}" bash "$scripts_dir/candidate-gate.sh" check-qualification --rc-tag "$rc" --rc-sha "$rc_sha" \
       --runs-json "$work/qual-runs.json" ${qual_checks:+--checks-json "$qual_checks"} 2>&1)" || q_status=$?
     printf '%s\n' "$q_out" | sed 's/^/  /'
     case "$q_status" in
@@ -922,25 +916,17 @@ if [ -z "$lkg" ]; then
   exit 0
 fi
 
-# A new version's first rc: what the commits since the newest release
-# are chooses minor or patch -- or nothing at all.
+# A new version's first rc: every trunk release increments minor (playbook
+# section 7; patches stay release-patch.sh's cherry-picked hotfixes), while
+# docs, chores and tests alone wait.
 if [ "$next_n" = 1 ]; then
   kind="$(bump_kind "$floor" "$lkg")"
-  case "$kind" in
-    none)
-      say "phase 2: ${floor:0:12}..${lkg:0:12} holds only docs, chores, tests and the like; nothing to release until a fix or a feature lands"
-      emit release_waits "$lkg"
-      exit 0
-      ;;
-    patch)
-      if [ -n "$patch_target" ]; then
-        target="$patch_target"
-      else
-        say "phase 2: fixes alone, but ${base:-nothing} is no release a patch can follow; releasing the next minor"
-      fi
-      ;;
-  esac
-  say "phase 2: the commits since ${base:-the start} make a $kind release: $target"
+  if [ "$kind" = none ]; then
+    say "phase 2: ${floor:0:12}..${lkg:0:12} holds only docs, chores, tests and the like; nothing to release until a fix or a feature lands"
+    emit release_waits "$lkg"
+    exit 0
+  fi
+  say "phase 2: the commits since ${base:-the start} make a minor release: $target"
 fi
 
 new_rc="$target-rc.$next_n"

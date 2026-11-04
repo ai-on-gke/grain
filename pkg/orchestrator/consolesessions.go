@@ -253,7 +253,9 @@ func reconcileConsoleSession(ctx context.Context, deps Deps, session model.Conso
 //   - Reads: the state repository, when this deployment has one -- the
 //     same evidence base the memory agent and the upgrade check are
 //     given, and what "what is this deployment actually doing" is
-//     answered out of.
+//     answered out of -- and, unless the session opts out, every
+//     repository the deployment works in (model.ConsoleSessionAutoReads),
+//     resolved again on every sync.
 //   - The capabilities the session configures, granted GrantByGrain: it
 //     is grain applying them to a task of its own, on the strength of a
 //     settings row, rather than a human labelling a task.
@@ -734,7 +736,11 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 	body := model.DirectorSessionBody(stateRepo, effectiveSession)
 
 	grants := mergeConsoleSessionGrants(task.Grants, session, prev, hasPrev)
-	reads := mergeConsoleSessionReads(task.Reads, stateRepo, session.Reads, prev.Reads, hasPrev)
+	autoReads, err := model.ConsoleSessionAutoReads(ctx, deps.Store, session, stateRepo)
+	if err != nil {
+		return err
+	}
+	reads := mergeConsoleSessionReads(task.Reads, stateRepo, session.Reads, prev.Reads, hasPrev, autoReads, prev.AutoReads)
 	writes := mergeConsoleSessionWrites(task.Writes, session.Writes, prev.Writes, hasPrev)
 
 	network := task.NetworkAccess
@@ -786,6 +792,8 @@ func syncConsoleSessionTask(ctx context.Context, deps Deps, session model.Consol
 			TasksApproved:   session.TasksApproved,
 			KeepRunning:     session.KeepRunning,
 			GoogleChatSpace: session.GoogleChatSpace,
+			OfferedDefaults: model.ConsoleSessionDefaultGrants(),
+			AutoReads:       autoReads,
 		})
 	}
 
@@ -857,11 +865,28 @@ func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSessi
 				continue
 			}
 		}
-		if g.Via == model.GrantByDefault && !slices.Contains(session.Capabilities, g.Capability) {
+		if g.Via == model.GrantByDefault && !slices.Contains(session.Capabilities, g.Capability) &&
+			(!model.IsConsoleSessionDefaultGrant(g.Capability) || session.DeclinesDefault(g.Capability)) {
 			continue
 		}
 		seen[g.Capability] = true
 		out = append(out, g)
+	}
+
+	// The defaults every session holds without naming them
+	// (model.ConsoleSessionDefaultGrants) reach a task that has never been
+	// given them -- one filed before they were defaults, on its first sync
+	// since -- and never one that was given them and no longer holds them,
+	// which is an operator having removed one from the task.
+	for _, name := range model.ConsoleSessionDefaultGrants() {
+		if seen[name] || session.DeclinesDefault(name) {
+			continue
+		}
+		if hasPrev && slices.Contains(prev.OfferedDefaults, name) {
+			continue
+		}
+		seen[name] = true
+		out = append(out, model.Grant{Capability: name, Via: model.GrantByDefault})
 	}
 
 	for _, name := range session.Capabilities {
@@ -886,8 +911,15 @@ func mergeConsoleSessionGrants(current []model.Grant, session model.ConsoleSessi
 // declaration is authoritative, the way it is for GrantByGrain grants: an
 // entry it does not name is dropped, rather than a repository the
 // deployment no longer lets the session write being kept for good.
+//
+// autoReads is the working repositories the session reads by default
+// (model.ConsoleSessionAutoReads), resolved this cycle, and prevAutoReads
+// the ones the last sync gave the task. An entry the last sync added that
+// way is the reconciler's own rather than an operator's, so it is kept
+// only while it is still in autoReads: a repository retired, or a session
+// opting out, drops it on the next cycle.
 func mergeConsoleSessionReads(current []model.RepoRef, stateRepo model.RepoRef,
-	sessionReads, prevReads []model.RepoRef, hasPrev bool) []model.RepoRef {
+	sessionReads, prevReads []model.RepoRef, hasPrev bool, autoReads, prevAutoReads []model.RepoRef) []model.RepoRef {
 
 	var out []model.RepoRef
 	has := func(r model.RepoRef) bool {
@@ -902,7 +934,8 @@ func mergeConsoleSessionReads(current []model.RepoRef, stateRepo model.RepoRef,
 		}
 		wasInPrev := hasPrev && slices.ContainsFunc(prevReads, func(p model.RepoRef) bool { return p.Same(r) })
 		inSession := slices.ContainsFunc(sessionReads, func(s model.RepoRef) bool { return s.Same(r) })
-		if (wasInPrev || !hasPrev) && !inSession {
+		wasAuto := hasPrev && slices.ContainsFunc(prevAutoReads, func(p model.RepoRef) bool { return p.Same(r) })
+		if (wasInPrev || wasAuto || !hasPrev) && !inSession {
 			continue
 		}
 		out = append(out, r)
@@ -915,6 +948,12 @@ func mergeConsoleSessionReads(current []model.RepoRef, stateRepo model.RepoRef,
 		if !wasInPrev {
 			out = append(out, r)
 		}
+	}
+	for _, r := range autoReads {
+		if r.Owner == "" || r.Name == "" || has(r) {
+			continue
+		}
+		out = append(out, r)
 	}
 	if out == nil {
 		out = []model.RepoRef{}

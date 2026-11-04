@@ -44,7 +44,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/durable"
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/ci"
@@ -53,7 +52,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/metrics"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/postgres"
-	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 	"github.com/ai-on-gke/grain/pkg/version"
@@ -183,8 +181,6 @@ type Capability struct {
 // whoever is looking at the failure.
 func OfferedCapabilities() []Capability {
 	offered := []Capability{
-		{ID: "gcp-key", Name: "GCP key",
-			Description: "Mint a short-lived GCP service-account key for this task and place it in its sandbox"},
 		{ID: "gemini-key", Name: "Gemini key",
 			Description: "Mint a short-lived Gemini API key for this task"},
 		{ID: "self-debug", Name: "Self debug",
@@ -207,28 +203,18 @@ func OfferedCapabilities() []Capability {
 			Description: "Create a private, single-use GitHub sandbox repo for this task to work in instead of /repo"},
 		{ID: "console", Name: "Interactive console",
 			Description: "Run this task's agent CLI on a terminal in the UI, and keep it running until somebody closes it -- everything else about the task is unchanged, including the pull request its branch becomes"},
-		// Not grain-ci: nobody attaches it by hand. A repository's CI
-		// Mode is the switch, and grain grants grain-ci to that
+		// Not grain#ci: nobody attaches it by hand. A repository's CI
+		// Mode is the switch, and grain grants grain#ci to that
 		// repository's tasks itself (pkg/capability/grainci's package
 		// doc). Every place a capability is chosen refuses it with
 		// grainci.Refusal, by way of capabilityRefusal.
 		{ID: readissues.CapabilityName, Name: "Read issues",
 			Description: "Let this task read issues and comments from GitHub"},
 	}...)
-	// One row per vendor grain proxies to -- claude-proxy, openai-proxy
-	// and gemini-proxy -- written from the vendor itself rather than
-	// three times over, since the sentence differs only in whose API and
-	// whose credential it names.
-	for _, vendor := range modelproxy.Vendors() {
-		offered = append(offered, Capability{
-			ID:   modelproxycap.CapabilityName(vendor),
-			Name: vendor.Display + " proxy",
-			Description: "Let this task call the " + vendor.Display + " API from inside its sandbox, " +
-				"through grain's own proxy -- it is handed a token that works only against this " +
-				"deployment's proxy and only while the task runs, and this deployment's " +
-				vendor.Company + " credential never leaves the controller",
-		})
-	}
+	// No row for the model proxies: claude-proxy, openai-proxy and
+	// gemini-proxy were retired onto the in-process model-proxy server's
+	// model-proxy {vendor} (schema migration 100), which is offered with the
+	// other capability-server methods.
 	return offered
 }
 
@@ -607,6 +593,11 @@ type Config struct {
 	// with a sandbox pool -- and the pane shows one line fewer, the same
 	// nil-means-unavailable contract Sandboxes above gives.
 	SandboxImage *SandboxImage
+	// SandboxImageFunc, when set, returns the current SandboxImage dynamically
+	// so live changes to model.Config.SandboxImage, k8s_granule_image,
+	// k8s_sandbox_image, or sandbox_image_mirror are reflected immediately in
+	// GET /api/sandboxes and sandbox guest publishing readings.
+	SandboxImageFunc func() *SandboxImage
 	// SandboxShapeIgnored says that the sandbox backend this deployment
 	// actually runs has no shape to apply, so the three deployment-wide
 	// sandbox-shape settings (Settings.SandboxCPUs and friends) are
@@ -1235,6 +1226,13 @@ type Config struct {
 	// warning. nil probes cfg's own k8s-granule image, or this UI's
 	// version-derived default, mirrored the same way.
 	K8sGranuleImage func(cfg model.Config) string
+	// SandboxImageMirrorFor, when set, says which repository the daemon
+	// would mirror its stamped guest into under cfg, whether that
+	// repository is derived from one of cfg's image settings rather than
+	// named by sandbox_image_mirror, and which of them it then reads as
+	// the mirror rather than as an image. nil answers from cfg alone
+	// (sandboxImageMirrorFromConfig).
+	SandboxImageMirrorFor func(cfg model.Config) SandboxImageMirrorInfo
 	// InspectImageLabels, when set, reads an image's OCI labels -- how
 	// the Settings pane checks a custom sandbox image's contract
 	// (sandboximage.CheckCustomImage). nil reports every custom image's

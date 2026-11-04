@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -104,9 +105,14 @@ func humanDuration(d time.Duration) string {
 }
 
 // ResumedNote is the paragraph a resumed task's next prompt carries.
-func ResumedNote(p TaskPause, resumedAt time.Time) string {
-	s := fmt.Sprintf("This task was paused by the operator at %s and has now been resumed (%s).",
-		p.PausedAt.UTC().Format(time.RFC3339), resumedAt.UTC().Format(time.RFC3339))
+// pausedBy is how whoever paused it reads to a person (ui.PrincipalLabel
+// of p.PausedBy); "" says the operator.
+func ResumedNote(p TaskPause, pausedBy string, resumedAt time.Time) string {
+	if strings.TrimSpace(pausedBy) == "" {
+		pausedBy = "the operator"
+	}
+	s := fmt.Sprintf("This task was paused by %s at %s and has now been resumed (%s).",
+		pausedBy, p.PausedAt.UTC().Format(time.RFC3339), resumedAt.UTC().Format(time.RFC3339))
 	if p.RunID != "" {
 		s += " The run that was in progress when it was paused was stopped and its sandbox released: " +
 			"whatever was in that sandbox but not pushed is gone. Pick up from what was pushed and from " +

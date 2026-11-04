@@ -203,6 +203,10 @@ const (
 	// FamilyNotPublishing is a base branch nothing has published from
 	// (BaseBranchPublishing), "<repo>@<branch>".
 	FamilyNotPublishing = "pipeline.not-publishing"
+	// FamilyReleaseNotStarting is a repository grain releases whose
+	// trunk has moved and no release has been started for it, "<repo>"
+	// (orchestrator's releasestall.go).
+	FamilyReleaseNotStarting = "pipeline.release-not-starting"
 	// FamilyMergeStalled is a merge-queue entry handed to a person past
 	// its patience, "<task>".
 	FamilyMergeStalled = "pipeline.merge-stalled"
@@ -212,6 +216,13 @@ const (
 	// FamilyRepairFailing is a base-branch repair that is not getting
 	// the branch green, "<task>".
 	FamilyRepairFailing = "pipeline.repair-failing"
+	// FamilyCIWakeStalled is a task deferred on a resume_later CI wake past
+	// its stall bound with no CI activity on its branch, "<task>".
+	FamilyCIWakeStalled = "pipeline.ci-wake-stalled"
+	// FamilyStateRepoUnapplied is a configuration-repository commit the
+	// daemon could not apply across a schema migration and had to rewrite
+	// over, "<prior-head>".
+	FamilyStateRepoUnapplied = "pipeline.staterepo-unapplied"
 	// FamilyForceMergeRequest asks a person to force-merge "<task>".
 	FamilyForceMergeRequest = "request.force-merge"
 	// FamilyRevertRequest asks a person to revert "<task or sha>".
@@ -221,6 +232,12 @@ const (
 	// (design/design/release-from-trunk.design.md, §4). Raised by the release
 	// train through the release gate, with ReleasePendingActions.
 	FamilyReleasePending = "release.pending"
+	// FamilyUpgradeFailed is an automatic upgrade that failed, "<target>"
+	// -- the release tag it was for, or the branch a daily upgrade
+	// follows -- with the step that failed and its output. Raised and
+	// cleared by orchestrator's automatic upgrades: the next one that
+	// succeeds clears every open instance.
+	FamilyUpgradeFailed = "upgrade.failed"
 )
 
 // ReleasePendingActions are the actions a FamilyReleasePending

@@ -55,6 +55,8 @@ the chat is in:
 | setting | shipped as | what it decides |
 |---|---|---|
 | `Capabilities` | self-debug, grain-log, deployment-health, bootstrap-playbooks (plus any capability a wrapper distribution registers as on by default) | what the agent may reach |
+| `ReadsAll` | true (every session) | whether it reads every repository this deployment works in |
+| `DeclinedDefaults` | none | which of the defaults every session holds (`api:ci-read`) it opts out of |
 | `NetworkAccess` | none | whether its sandbox reaches the internet |
 | `TasksApproved` | false | whether the tasks it files are queued or wait for a person |
 | `Title` | "Director" | what the rail calls it |
@@ -99,6 +101,39 @@ given.
 A wrapper distribution can register further capabilities as on by default
 for the director (`pkg/capability.Registration.DefaultOn`); each shows in
 the director's pane like any other, and can be unticked there.
+
+## What every session reads by default
+
+A session exists to answer "what is going on in this deployment", so every
+session — the director and any session an operator creates, including ones
+stored before this default existed — reads all of it without anybody adding
+repositories one at a time (`pkg/model/console_session_reach.go`):
+
+- **Every repository this deployment works in.** Each `repo_config` row,
+  plus each repository `target_repos` names outright (not by pattern), less
+  any whose work ownership is `off` (retired) or that `target_repos` does
+  not allow (`model.ConsoleSessionWorkingRepos`). This is resolved again
+  on every cycle, so a repository added to `repo_config` later is readable
+  on the next one and a retired one stops being readable. These are
+  reads: the session may clone and fetch, never push. The state
+  repository and the session's own `Reads` still apply on top. The pane
+  lists them apart from the reads a session names itself (`autoReads` on
+  `GET /api/console-sessions`). Set `readsAll: false` (or `reads_all:
+  false`) on the session in `console_sessions` to opt it out. The opt-out
+  is a setting, read every cycle, so it holds until the setting changes.
+- **CI for every repository.** `api:ci-read`, unscoped, granted
+  `GrantByDefault`, so `grain ci list/show/log` and `grain pr status
+  --task/--ref` read grain CI and GitHub Actions runs on every repository.
+  This is not `grain-ci`, which is a repository's CI Mode and cannot be
+  attached by hand. A session's task is given the grant once
+  (`ConsoleSessionConfigSnapshot.OfferedDefaults`), so an operator who
+  removes it from the task keeps it removed across cycles and restarts of
+  the daemon. Unticking it in the session's pane also records it in the
+  session's `declinedDefaults`, so it stays off when the session's task is
+  filed again. Ticking it brings it back.
+
+Writes are never a default. A session files tasks rather than pushing, and
+what it may push to is `Writes`, named one repository at a time.
 
 `TasksApproved` is false because a chat is a fast way to ask for a lot of
 work: a director that could queue its own tasks would be one
@@ -212,8 +247,10 @@ not the same one**.
 
 The director can do anything a person can do in the UI if its session
 holds the scope. It asks for scopes as `api:<scope>` or `api:<preset>`
-capabilities, granted in the session's capability pane, and each grant
-serves it one `api_*` tool per route under that scope. For example:
+capabilities, granted in the session's capability pane, and any such
+grant attaches the `grain-controller` MCP server, whose
+`grain_explore_scope` and `grain_invoke` reach every route under the
+scopes it holds. For example:
 
 - `api:task-admin` to reorder, edit, retry and close tasks and re-run
   their CI;

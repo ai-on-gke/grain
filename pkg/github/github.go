@@ -2872,6 +2872,27 @@ func (c *RESTClient) ListPullRequestCommits(owner, repo string, number int) ([]C
 	return commits, nil
 }
 
+// AppSlugSource is a TokenSource that can say which GitHub App the token
+// it hands out for owner/repo belongs to: the slug check runs posted with
+// it carry (CheckRun.App), or "" when that token is not an App's.
+type AppSlugSource interface {
+	AppSlugFor(owner, repo string) (string, error)
+}
+
+// CheckRunApp is the slug of the GitHub App this client's check runs on
+// owner/repo are posted as, or "" when it cannot tell (its TokenSource is
+// no AppSlugSource, or the token is not an App's). A check run's name is
+// not an identity -- anything that can write check runs on a repository
+// can post one by any name -- so a caller that trusts its own check run
+// matches it on this.
+func (c *RESTClient) CheckRunApp(owner, repo string) (string, error) {
+	src, ok := c.Tokens.(AppSlugSource)
+	if !ok {
+		return "", nil
+	}
+	return src.AppSlugFor(owner, repo)
+}
+
 // ListCheckRuns returns the check runs against ref -- a branch name works
 // fine here, GitHub resolves it to that branch's current tip itself, so a
 // caller never needs a commit sha in hand. Paginates the same Link-header
@@ -3815,6 +3836,35 @@ type WorkflowRunsReader interface {
 
 var _ WorkflowRunsReader = (*RESTClient)(nil)
 
+// WorkflowRunRerunner is the optional Client capability for asking GitHub
+// Actions to run a concluded run's failed jobs again, as a new attempt of
+// the same run: POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs.
+// The credential needs `actions: write` on the repository; one without it
+// is answered 403, which the caller reads as "not re-run" rather than a
+// fault.
+type WorkflowRunRerunner interface {
+	RerunFailedJobs(owner, repo string, runID int64) error
+}
+
+var _ WorkflowRunRerunner = (*RESTClient)(nil)
+
+// RerunFailedJobs asks GitHub to re-run the failed jobs of runID (and the
+// jobs that depend on them) as the run's next attempt.
+func (c *RESTClient) RerunFailedJobs(owner, repo string, runID int64) error {
+	if runID <= 0 {
+		return fmt.Errorf("re-running the failed jobs of %s/%s: no run id", owner, repo)
+	}
+	resp, err := c.request("POST", fmt.Sprintf("/repos/%s/%s/actions/runs/%d/rerun-failed-jobs", owner, repo, runID),
+		c.headers(owner, repo, true), []byte("{}"))
+	if err != nil {
+		return err
+	}
+	if resp.Status != http.StatusCreated && resp.Status != http.StatusOK && resp.Status != http.StatusNoContent {
+		return &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	return nil
+}
+
 // completedRunsETags caches the last ETag seen per (Transport, owner, repo) for
 // CompletedWorkflowRuns so unchanged polls cost 304 Not Modified. Keyed in a
 // package-level sync.Map because RESTClient.As makes a shallow copy of RESTClient.
@@ -4463,4 +4513,52 @@ func headerMap(h http.Header) map[string]string {
 		out[k] = h.Get(k)
 	}
 	return out
+}
+
+// Tag is one repository tag, peeled to the commit it names.
+type Tag struct {
+	Name string
+	SHA  string
+}
+
+// TagLister is the optional half of Client that lists a repository's
+// tags -- what the release-qualification reconciler reads to find a
+// `vX.Y.Z-rc.N` candidate (orchestrator/releasequalification.go).
+type TagLister interface {
+	ListTags(owner, repo string) ([]Tag, error)
+}
+
+var _ TagLister = (*RESTClient)(nil)
+
+// ListTags returns owner/repo's most recent tags, one page of them.
+//
+// GET /repos/{owner}/{repo}/tags answers each tag with the commit it
+// points at already peeled, which is the sha a check run is posted on,
+// so an annotated tag costs no second read. One page, deliberately: the
+// caller only ever wants the newest candidate, and this runs on a timer.
+func (c *RESTClient) ListTags(owner, repo string) ([]Tag, error) {
+	resp, err := c.get(owner, repo, fmt.Sprintf("/repos/%s/%s/tags?per_page=100", owner, repo))
+	if err != nil {
+		return nil, err
+	}
+	if resp.Status == 404 {
+		return nil, nil
+	}
+	if resp.Status != 200 {
+		return nil, &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	var data []struct {
+		Name   string `json:"name"`
+		Commit struct {
+			SHA string `json:"sha"`
+		} `json:"commit"`
+	}
+	if err := json.Unmarshal(resp.Body, &data); err != nil {
+		return nil, err
+	}
+	tags := make([]Tag, 0, len(data))
+	for _, t := range data {
+		tags = append(tags, Tag{Name: t.Name, SHA: t.Commit.SHA})
+	}
+	return tags, nil
 }

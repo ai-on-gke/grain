@@ -296,29 +296,43 @@ type Settings struct {
 	SandboxContract *sandboximage.ContractInfo `json:"sandboxContract,omitempty"`
 	// Kubernetes sandbox settings (model.Config.K8s*). All are restart-only:
 	// the sandbox backend is constructed once when grain daemon starts.
-	K8sNamespace           string   `json:"k8sNamespace"`
-	K8sNamespaceDefault    string   `json:"k8sNamespaceDefault"`
-	K8sKubectl             string   `json:"k8sKubectl"`
-	K8sKubectlDefault      string   `json:"k8sKubectlDefault"`
-	K8sSandboxImage        string   `json:"k8sSandboxImage"`
-	K8sSandboxImageDefault string   `json:"k8sSandboxImageDefault"`
-	K8sGranuleImage        string   `json:"k8sGranuleImage"`
-	K8sGranuleImageDefault string   `json:"k8sGranuleImageDefault"`
-	DaemonBuildVersion     string   `json:"daemonBuildVersion,omitempty"`
-	K8sSandboxImageWarning string   `json:"k8sSandboxImageWarning,omitempty"`
-	K8sGranuleImageWarning string   `json:"k8sGranuleImageWarning,omitempty"`
-	K8sWorkspace           string   `json:"k8sWorkspace"`
-	K8sWorkspaceDefault    string   `json:"k8sWorkspaceDefault"`
-	K8sGitProxyHost        string   `json:"k8sGitProxyHost"`
-	K8sSandboxService      string   `json:"k8sSandboxService"`
-	K8sServiceAccount      string   `json:"k8sServiceAccount"`
-	K8sNodeSelector        []string `json:"k8sNodeSelector"`
-	K8sPrivileged          bool     `json:"k8sPrivileged"`
-	K8sNetworkPolicy       bool     `json:"k8sNetworkPolicy"`
-	K8sDeployment          string   `json:"k8sDeployment"`
-	K8sDeploymentDefault   string   `json:"k8sDeploymentDefault"`
-	K8sContainer           string   `json:"k8sContainer"`
-	K8sContainerDefault    string   `json:"k8sContainerDefault"`
+	K8sNamespace           string `json:"k8sNamespace"`
+	K8sNamespaceDefault    string `json:"k8sNamespaceDefault"`
+	K8sKubectl             string `json:"k8sKubectl"`
+	K8sKubectlDefault      string `json:"k8sKubectlDefault"`
+	K8sSandboxImage        string `json:"k8sSandboxImage"`
+	K8sSandboxImageDefault string `json:"k8sSandboxImageDefault"`
+	K8sGranuleImage        string `json:"k8sGranuleImage"`
+	K8sGranuleImageDefault string `json:"k8sGranuleImageDefault"`
+	DaemonBuildVersion     string `json:"daemonBuildVersion,omitempty"`
+	K8sSandboxImageWarning string `json:"k8sSandboxImageWarning"`
+	K8sGranuleImageWarning string `json:"k8sGranuleImageWarning"`
+	// K8sGranuleImageEffective is the guest image kubernetes-granule pods
+	// are created from under these settings -- K8sGranuleImage, or the
+	// stamped guest mirrored into SandboxImageMirrorEffective -- which is
+	// not the stored value whenever that value is read as the mirror.
+	K8sGranuleImageEffective string `json:"k8sGranuleImageEffective"`
+	// K8sGranuleImageMirror is the mirror repository K8sGranuleImage is
+	// treated as rather than booted, "" when it is an image of its own
+	// (SandboxImageMirrorInfo.K8sGranuleImageIsMirror).
+	K8sGranuleImageMirror string `json:"k8sGranuleImageMirror"`
+	// SandboxImageMirrorEffective is the repository the stamped guest is
+	// mirrored into: SandboxImageMirror, or one derived from
+	// SandboxImageMirrorDerivedFrom when that is empty.
+	SandboxImageMirrorEffective   string   `json:"sandboxImageMirrorEffective"`
+	SandboxImageMirrorDerivedFrom string   `json:"sandboxImageMirrorDerivedFrom"`
+	K8sWorkspace                  string   `json:"k8sWorkspace"`
+	K8sWorkspaceDefault           string   `json:"k8sWorkspaceDefault"`
+	K8sGitProxyHost               string   `json:"k8sGitProxyHost"`
+	K8sSandboxService             string   `json:"k8sSandboxService"`
+	K8sServiceAccount             string   `json:"k8sServiceAccount"`
+	K8sNodeSelector               []string `json:"k8sNodeSelector"`
+	K8sPrivileged                 bool     `json:"k8sPrivileged"`
+	K8sNetworkPolicy              bool     `json:"k8sNetworkPolicy"`
+	K8sDeployment                 string   `json:"k8sDeployment"`
+	K8sDeploymentDefault          string   `json:"k8sDeploymentDefault"`
+	K8sContainer                  string   `json:"k8sContainer"`
+	K8sContainerDefault           string   `json:"k8sContainerDefault"`
 	// K8sPriorityClassInteractive, K8sPriorityClassAgent and
 	// K8sPriorityClassCI are model.Config's own fields: the PriorityClass
 	// each kind of Kubernetes sandbox pod runs at, "" for none. Their
@@ -622,6 +636,15 @@ type Settings struct {
 	// without a time would save.
 	AutoUpgradeChannel string `json:"autoUpgradeChannel"`
 	AutoUpgradeTime    string `json:"autoUpgradeTime"`
+	// AutoUpgradeOn is what makes this deployment upgrade itself
+	// (model.Config.AutoUpgradeMode): "off", "daily" (AutoUpgradeChannel
+	// at AutoUpgradeTime) or "release" (once its image channel publishes
+	// a new release, orchestrator's reconcileReleaseUpgrade, onto
+	// "latest" when AutoUpgradeChannel is "latest" and the exact tag
+	// otherwise). Never empty coming out of here. AutoUpgradeModes is the
+	// vocabulary, in a picker's order.
+	AutoUpgradeOn    string   `json:"autoUpgradeOn"`
+	AutoUpgradeModes []string `json:"autoUpgradeModes"`
 	// TimeZone is model.Config.TimeZone: the IANA zone every timestamp the
 	// frontend prints is shown in. Never empty coming out of here -- an
 	// unset stored value reads back as model.DefaultTimeZone.
@@ -1002,13 +1025,21 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 	cfg, unrunnable := c.runnableSettings(cfg)
 	geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSet()
 	sandboxImgDefault, granuleImgDefault, buildVersion := c.resolveK8sImageDefaults(ctx, &cfg, repoConfigs)
+	mirror := c.sandboxImageMirrorFor(cfg, granuleImgDefault)
+	effectiveGranule := c.k8sGranuleImageForWarn(cfg, granuleImgDefault, mirror)
 	sandboxWarn, granuleWarn := c.resolveK8sImageWarnings(
 		ctx,
 		firstNonEmptyString(cfg.K8sSandboxImage, sandboxImgDefault),
-		c.k8sGranuleImageForWarn(cfg, granuleImgDefault),
+		effectiveGranule,
 	)
 	sandboxWarn = joinWarnings(sandboximage.StaleStockPin(cfg.K8sSandboxImage, sandboxImgDefault, nil), sandboxWarn)
-	granuleWarn = joinWarnings(sandboximage.StaleStockPin(cfg.K8sGranuleImage, granuleImgDefault, nil), granuleWarn)
+	// A k8s_granule_image read as the mirror repository is not booted,
+	// so calling it a stale pin of the stamp is what sends somebody to
+	// clear it -- and clearing it was the one thing that would change
+	// what sandboxes run (K8sGranuleImageMirror says what it is instead).
+	if !mirror.K8sGranuleImageIsMirror {
+		granuleWarn = joinWarnings(sandboximage.StaleStockPin(cfg.K8sGranuleImage, granuleImgDefault, nil), granuleWarn)
+	}
 	out := Settings{
 		Configured:             true,
 		PollInterval:           cfg.PollInterval.String(),
@@ -1141,6 +1172,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		UpgradeCheckPausesPipeline:         cfg.UpgradeCheckPausesPipeline,
 		AutoUpgradeChannel:                 cfg.AutoUpgradeChannel,
 		AutoUpgradeTime:                    autoUpgradeTimeOrDefault(cfg.AutoUpgradeTime),
+		AutoUpgradeOn:                      cfg.AutoUpgradeMode(),
+		AutoUpgradeModes:                   model.AutoUpgradeModes(),
 		TimeZone:                           model.TimeZoneOrDefault(cfg.TimeZone),
 		AgentBackends:                      cfg.AgentBackends,
 		AgentCLIDefaults:                   c.Config.AgentCLIDefaults,
@@ -1156,6 +1189,12 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		Unrunnable:                         unrunnable,
 	}
 	c.resolveSandboxImageFields(ctx, cfg, sandboxImgDefault, granuleImgDefault).apply(&out)
+	out.K8sGranuleImageEffective = effectiveGranule
+	out.SandboxImageMirrorEffective = mirror.Repository
+	out.SandboxImageMirrorDerivedFrom = mirror.DerivedFrom
+	if mirror.K8sGranuleImageIsMirror {
+		out.K8sGranuleImageMirror = mirror.Repository
+	}
 	sources := computeSettingSources(cfg, out)
 	out.Sources = sources
 	out.SettingSources = sources
@@ -1411,6 +1450,8 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			UpgradeCheckPausesPipeline:         def.UpgradeCheckPausesPipeline,
 			AutoUpgradeChannel:                 def.AutoUpgradeChannel,
 			AutoUpgradeTime:                    autoUpgradeTimeOrDefault(def.AutoUpgradeTime),
+			AutoUpgradeOn:                      def.AutoUpgradeMode(),
+			AutoUpgradeModes:                   model.AutoUpgradeModes(),
 			TimeZone:                           model.TimeZoneOrDefault(def.TimeZone),
 			NetworkAccess:                      string(model.NormalizeNetworkAccess(def.NetworkAccess)),
 			NetworkAccesses:                    networkAccessNames(),
@@ -1513,8 +1554,10 @@ type UpdateSettingsRequest struct {
 	UpgradeCheckPausesPipeline *bool   `json:"upgradeCheckPausesPipeline"`
 	// AutoUpgradeChannel is the branch to upgrade onto daily, "" to turn
 	// automatic upgrades off; AutoUpgradeTime is when, as "HH:MM".
-	AutoUpgradeChannel  *string               `json:"autoUpgradeChannel"`
-	AutoUpgradeTime     *string               `json:"autoUpgradeTime"`
+	AutoUpgradeChannel *string `json:"autoUpgradeChannel"`
+	AutoUpgradeTime    *string `json:"autoUpgradeTime"`
+	// AutoUpgradeOn is "off", "daily" or "release" (Settings.AutoUpgradeOn).
+	AutoUpgradeOn       *string               `json:"autoUpgradeOn"`
 	AgentBackends       *[]model.AgentBackend `json:"agentBackends"`
 	DefaultModel        *string               `json:"defaultModel"`
 	PromptExtension     *string               `json:"promptExtension"`
@@ -1613,6 +1656,7 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			cfg = capability.NewDeploymentConfig().WithConnectionsOf(*current)
 		}
 	}
+	before := cfg
 
 	if req.PollInterval != nil {
 		// A cleared box is grain's default, shown beside it as the
@@ -2225,6 +2269,13 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		}
 		cfg.AutoUpgradeTime = at
 	}
+	if req.AutoUpgradeOn != nil {
+		on, err := model.ParseAutoUpgradeOn(*req.AutoUpgradeOn)
+		if err != nil {
+			return model.Config{}, validationErrorf("autoUpgradeOn: %v", err)
+		}
+		cfg.AutoUpgradeOn = on
+	}
 	// A channel is a daily upgrade at some time; one saved without a
 	// time gets the default rather than a schedule that never fires.
 	if cfg.AutoUpgradeChannel != "" && strings.TrimSpace(cfg.AutoUpgradeTime) == "" {
@@ -2334,6 +2385,10 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 		stored := cfg.AgentBackends
 		cfg.AgentBackends = append([]model.AgentBackend(nil), (*req.AgentBackends)...)
 		carryDiscovered(stored, cfg.AgentBackends)
+	}
+
+	if req.K8sGranuleImage != nil || req.SandboxImage != nil {
+		cfg = c.keepDerivedSandboxImageMirror(before, cfg)
 	}
 
 	if firstTime {

@@ -15,7 +15,6 @@
 package daemon
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -335,7 +334,7 @@ func TestGrainLogArgsCarryTheQuery(t *testing.T) {
 // "task (no task)" (docs/test-runs/2026-10-31-sandbox-grain-cli.md, F2):
 // the namespace path built read_grain_log without its TaskID.
 func TestSandboxGrainLogReadIsAuditedAsItsTask(t *testing.T) {
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	prevOut, prevFlags := log.Writer(), log.Flags()
 	log.SetOutput(&buf)
 	log.SetFlags(0)

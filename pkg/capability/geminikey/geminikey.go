@@ -286,10 +286,8 @@ func (c *Capability) Materialize(ctx context.Context, cc model.CapabilityContext
 	if err != nil {
 		return model.Materialization{}, err
 	}
-	displayName := displayNamePrefix + cc.Run.ID
-	name, keyString, err := m.CreateKey(ctx, displayName, c.apiTargetService())
+	name, keyString, err := mintRunKey(ctx, m, cc.Run.ID, c.apiTargetService())
 	if err != nil {
-		err = waitableKeyLimit(err)
 		return model.Materialization{}, fmt.Errorf("geminikey: minting a key for run %s: %w",
 			cc.Run.ID, explainRefusedCredential(err, c.Credential.Name))
 	}
@@ -331,8 +329,83 @@ func waitableKeyLimit(err error) error {
 }
 
 func (c *Capability) PromptSection(ctx context.Context, cc model.CapabilityContext, placements []model.Placement) (string, error) {
+	return Prompt(), nil
+}
+
+// Prompt is what a run holding a key at KeyPath is told: the same text
+// whether the in-process gemini-key placed it or the gcp server's
+// gemini-key method did.
+func Prompt() string {
 	return fmt.Sprintf("A Gemini API key is at %s, readable only by you:\n\n"+
-		"    export GEMINI_API_KEY=\"$(cat %s)\"\n", KeyPath, KeyPath), nil
+		"    export GEMINI_API_KEY=\"$(cat %s)\"\n", KeyPath, KeyPath)
+}
+
+// mintRunKey creates runID's key, restricted to apiTargetService and
+// marked grain's own (displayNamePrefix), with the API Keys service's
+// finite-capacity answers marked temporary (waitableKeyLimit).
+func mintRunKey(ctx context.Context, m KeyMinter, runID, apiTargetService string) (name, keyString string, err error) {
+	name, keyString, err = m.CreateKey(ctx, displayNamePrefix+runID, apiTargetService)
+	if err != nil {
+		return "", "", waitableKeyLimit(err)
+	}
+	return name, keyString, nil
+}
+
+// KeyMinter is the API Keys surface a Gemini key is minted, deleted and
+// reaped through, for a caller outside this package minting the same
+// keys -- the gcp capability server's gemini-key method.
+type KeyMinter = minter
+
+// MintedKey is one key KeyMinter.ListKeys returns.
+type MintedKey = mintedKey
+
+// NewKeyMinter is the API Keys minter authenticated as credentialJSON
+// (a service account key) in projectID: what Materialize mints with. An
+// empty credentialJSON is the caller's ambient identity (Application
+// Default Credentials), for a gcp server admin whose source is ambient.
+func NewKeyMinter(ctx context.Context, credentialJSON, projectID string) (KeyMinter, error) {
+	if strings.TrimSpace(credentialJSON) == "" {
+		creds, err := google.FindDefaultCredentials(ctx, apikeys.CloudPlatformScope)
+		if err != nil {
+			return nil, fmt.Errorf("geminikey: finding ambient credentials: %w", err)
+		}
+		svc, err := apikeys.NewService(ctx, option.WithCredentials(creds))
+		if err != nil {
+			return nil, fmt.Errorf("geminikey: building an API Keys client: %w", err)
+		}
+		return &apiKeysMinter{svc: svc, projectID: projectID}, nil
+	}
+	return newAPIKeysMinter(ctx, credentialJSON, projectID)
+}
+
+// MintRunKey mints the key Materialize mints for runID -- the same
+// display name and the same restriction to DefaultAPITargetService --
+// with m: its resource name, to delete it by, and the key itself, which
+// a caller places at KeyPath. A refused credential is explained as
+// credential's (explainRefusedCredential).
+func MintRunKey(ctx context.Context, m KeyMinter, runID, credential string) (name, keyString string, err error) {
+	name, keyString, err = mintRunKey(ctx, m, runID, DefaultAPITargetService)
+	if err != nil {
+		return "", "", fmt.Errorf("geminikey: minting a key for run %s: %w", runID, explainRefusedCredential(err, credential))
+	}
+	return name, keyString, nil
+}
+
+// ReapBefore deletes grain's task keys m's project holds that were
+// created before before, as Reap does, never the daemon's operating key.
+func ReapBefore(ctx context.Context, m KeyMinter, before time.Time, credential string) ([]string, error) {
+	return deleteBefore(ctx, m, before, credential)
+}
+
+// MaxLease is the longest a minted key is kept even when nothing
+// released it.
+const MaxLease = maxLease
+
+// SetKeyMinter makes c mint, delete and reap through newMinter rather
+// than the API Keys API: for a test, or one holding c to another minter
+// of the same keys.
+func (c *Capability) SetKeyMinter(newMinter func(ctx context.Context, credentialJSON, projectID string) (KeyMinter, error)) {
+	c.factory = newMinter
 }
 
 // Revoke deletes the key Materialize minted, by the resource name the

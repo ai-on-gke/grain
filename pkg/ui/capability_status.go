@@ -33,6 +33,9 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
 	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
+	// The release server's methods and the CI rules they declare
+	// (model.CIGrantRule), which the pickers' CI-only refusals read.
+	_ "github.com/ai-on-gke/grain/pkg/capability/release"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -279,19 +282,20 @@ const defaultSecretKey = secrets.AgentCredentialKey
 // "Gemini proxy") are the vendor's own -- see modelProxyDisplayNames
 // below, which folds them in.
 var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
-	"gcp-key":             "GCP key",
-	"gemini-key":          "Gemini key",
-	"github-sandbox":      "GitHub sandbox",
-	"self-debug":          "Self debug",
-	"bootstrap-playbooks": "Bootstrap playbooks",
-	"grain-ci":            "grain CI",
-	"registry-push":       "Registry push",
-	"package-publish":     "Package publish",
-	"image-signing":       "Image signing",
-	"console":             "Interactive console",
-	"priority-dispatch":   "Priority dispatch",
-	"durable":             "Durable",
-	"read-issues":         "Read issues",
+	"gcp-key":               "GCP key",
+	"gemini-key":            "Gemini key",
+	"github-sandbox":        "GitHub sandbox",
+	"self-debug":            "Self debug",
+	"bootstrap-playbooks":   "Bootstrap playbooks",
+	model.GrainCIGrant:      "grain CI",
+	model.GrainCICapability: "grain CI",
+	"registry-push":         "Registry push",
+	"package-publish":       "Package publish",
+	"image-signing":         "Image signing",
+	"console":               "Interactive console",
+	"priority-dispatch":     "Priority dispatch",
+	"durable":               "Durable",
+	"read-issues":           "Read issues",
 })
 
 // withModelProxyDisplayNames adds one row per vendor's proxy capability
@@ -300,6 +304,7 @@ var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 func withModelProxyDisplayNames(names map[string]string) map[string]string {
 	for _, vendor := range modelproxy.Vendors() {
 		names[modelproxycap.CapabilityName(vendor)] = vendor.Display + " proxy"
+		names[model.ModelProxyGrant(vendor.Name)] = vendor.Display + " proxy"
 	}
 	return names
 }
@@ -357,7 +362,6 @@ func capabilityDisplayName(id string) string {
 // dispatch, so their specs can be read back out.
 func capabilityProviderCatalog() []model.CapabilityProvider {
 	providers := []model.CapabilityProvider{
-		gcpkey.NewProvider(gcpkey.Config{}),
 		geminikey.New("", model.CredentialRef{Name: gcpkey.DefaultMinterCredential}),
 		githubsandbox.NewProvider(githubsandbox.Config{}),
 	}
@@ -372,12 +376,6 @@ func capabilityProviderCatalog() []model.CapabilityProvider {
 		prioritydispatch.New(),
 		durable.New(),
 	)
-	// One per vendor grain proxies to, built with no endpoint at all --
-	// this catalog exists to read Spec() back out, and a spec is the
-	// same whether or not this process is serving that proxy.
-	for _, p := range modelproxycap.Providers(nil) {
-		providers = append(providers, p)
-	}
 	return providers
 }
 
@@ -414,6 +412,9 @@ func ciOnlyCapability(name string) bool {
 	if _, ok := model.RepoWriteTarget(name); ok {
 		return true
 	}
+	if _, ok := model.CIGrantRuleFor(name); ok {
+		return true
+	}
 	for _, spec := range capabilityCatalog() {
 		if spec.Name == name {
 			return spec.CIOnly
@@ -437,7 +438,7 @@ func ciOnlyCapability(name string) bool {
 // build ships, registers a provider for, and publishes releases with --
 // true of the picker and useless to the person reading it.
 func capabilityRefusal(id string) string {
-	if id == grainci.CapabilityName {
+	if grainci.IsGrant(id) {
 		return grainci.Refusal()
 	}
 	if ciOnlyCapability(id) {
@@ -505,15 +506,6 @@ func (c *Client) checkable(id string) bool {
 // mints under it.
 func missingConfigFor(name string, cfg model.Config) []string {
 	switch name {
-	case "gcp-key":
-		var missing []string
-		if cfg.GCPProject == "" {
-			missing = append(missing, "GCP project")
-		}
-		if cfg.GCPServiceAccountEmail == "" {
-			missing = append(missing, "GCP service account email")
-		}
-		return missing
 	case "gemini-key":
 		if cfg.GCPProject == "" {
 			return []string{"GCP project"}
@@ -672,6 +664,11 @@ func (c *Client) ciCapabilitiesWithReadiness(cfg *model.Config, repoConfigs []mo
 	byID := make(map[string]CapabilityStatus, len(statuses))
 	for _, s := range statuses {
 		byID[s.ID] = s
+		// A retired provider's status answers for the release server's
+		// method it became, which is what the CI picker offers.
+		if _, ok := model.CIGrantRuleFor(s.ID); ok {
+			byID[model.CanonicalLegacyGrant(s.ID)] = s
+		}
 	}
 
 	ciIDs := c.ciCapabilityIDs()
@@ -680,7 +677,7 @@ func (c *Client) ciCapabilitiesWithReadiness(cfg *model.Config, repoConfigs []mo
 		if status, ok := byID[id]; ok {
 			ready := status.Ready
 			row := Capability{
-				ID:          status.ID,
+				ID:          id,
 				Name:        status.Name,
 				Description: status.Description,
 				Ready:       &ready,

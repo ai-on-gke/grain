@@ -17,6 +17,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -273,8 +274,11 @@ func TestCIAdmissionRefusesAReferenceWithNoServersAttached(t *testing.T) {
 func TestResolveCICapabilitiesLeavesReferencesToTheirServers(t *testing.T) {
 	cc, resolved, err := ResolveCICapabilities(context.Background(), model.NewCapabilityRegistry(), nil,
 		model.RepoRef{Owner: "acme", Name: "widgets"}, "run", ci.EventPush, false, []string{ciPassTestCap})
-	if err != nil || len(cc.Task.Grants) != 0 || len(resolved) != 0 {
-		t.Fatalf("resolution = %+v, %+v, %v; want the reference left alone", cc.Task.Grants, resolved, err)
+	// The job's own grain#ci is the one grant its context holds: the
+	// reference is its server's to mint, not this resolution's.
+	want := []model.Grant{{Capability: model.GrainCIGrant, Via: model.GrantByDefault}}
+	if err != nil || !slices.Equal(cc.Task.Grants, want) || len(resolved) != 0 {
+		t.Fatalf("resolution = %+v, %+v, %v; want the reference left alone and only %v", cc.Task.Grants, resolved, err, want)
 	}
 }
 

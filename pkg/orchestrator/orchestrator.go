@@ -58,6 +58,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/console"
 	"github.com/ai-on-gke/grain/pkg/forge"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -444,6 +445,12 @@ type Config struct {
 	// sandboxPod.
 	capabilityMCPServers     []agent.CapabilityMCPServer
 	capabilityPromptSections string
+	// ControllerMCP builds a host-side proxy targeting POST /api/mcp for a
+	// run holding api:* grants, injecting daemon authentication and
+	// X-Grain-Acting-Task: <taskID> so built-in sessions and tasks reach
+	// grain-controller through the same CapabilityMCPServer loopback relay
+	// external capability servers use. Nil attaches none.
+	ControllerMCP func(taskID string) (*protocol.Proxy, error)
 	// Credentials resolves the named credentials a capability provider
 	// asks for by name, e.g. gcpkey's minter service account.
 	Credentials model.CredentialResolver
@@ -960,6 +967,12 @@ type Config struct {
 	// error, or an answer slower than autoUpgradeProbeTimeout schedules
 	// the upgrade as if it had not been asked.
 	UpgradeUnchanged func(ctx context.Context, branch string) (bool, error)
+	// LatestRelease, when set, is the newest release tag on this
+	// deployment's image channel -- (*upgrade.Upgrader).LatestRelease,
+	// which never answers a release candidate or a retracted release.
+	// The release-triggered automatic upgrade (reconcileReleaseUpgrade)
+	// follows it; nil leaves that mode with nothing to follow.
+	LatestRelease func(ctx context.Context) (string, error)
 	// UpgradeDrainWindow, when non-zero, bounds how long a scheduled upgrade
 	// will wait for in-flight tasks and CI jobs to complete before proceeding
 	// with the upgrade. If the draining window elapses and runs are still active,

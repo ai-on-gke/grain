@@ -1547,9 +1547,10 @@ func grainCLIGrantBullets(grants []model.Grant) string {
 		}
 	}
 	if api {
-		b.WriteString("- **api grants:** `grain api routes` lists the agent API routes they reach; " +
-			"`grain api <METHOD> <path> [--body '<json>']` calls one. Routes a sandbox process may " +
-			"not call stay `api_*` tool calls.\n")
+		b.WriteString("- **api grants:** `grain api routes` lists the agent API routes they reach from the sandbox, " +
+			"and `grain api <METHOD> <path> [--body '<json>']` calls one; the `grain-controller` MCP server " +
+			"(`grain_explore_scope`, `grain_invoke`, `grain_list_tasks`, `grain_get_task`, `grain_filing_context`, `grain_submit_task`) " +
+			"calls any authorized route, including model-only scopes.\n")
 	}
 	return b.String()
 }
@@ -2344,7 +2345,9 @@ func parkedResumeSection(h History) string {
 	var b strings.Builder
 	b.WriteString("This run resumes from a park: the previous attempt called wait_for_task, " +
 		"parked this task on the task(s) below, and ended. They have all closed (or been removed " +
-		"from this task's dependencies), so grain queued it again. The sandbox did not survive " +
+		"from this task's dependencies) -- and for a wait until \"merged\", any pull request " +
+		"still open at the close has since merged or closed, or grain has stopped reading it " +
+		"-- so grain queued it again. The sandbox did not survive " +
 		"the park -- what that attempt pushed is on your branch, and nothing else of it is. " +
 		"Check how each one ended before carrying on: a task closed without merging is not " +
 		"the change you were waiting for.\n")
@@ -3290,6 +3293,13 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		if localScriptsEnvFile != "" {
 			defer os.Remove(localScriptsEnvFile)
 		}
+		capabilityMCPServers, controllerEP, err := wireControllerMCP(ctx, cfg, store, task)
+		if err != nil {
+			return unprepared(fmt.Errorf("serving grain-controller MCP: %w", err))
+		}
+		if controllerEP != nil {
+			defer controllerEP.Close()
+		}
 
 		// The repositories a propose_task call from this run may name,
 		// which the forked mcpserver folds into that tool's own `repo`
@@ -3419,7 +3429,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			SandboxHide:    cfg.sandboxHide,
 			// The MCP servers this run's capability grants expose, each
 			// registered beside grain-sandbox (§5.2.4).
-			CapabilityMCPServers: cfg.capabilityMCPServers,
+			CapabilityMCPServers: capabilityMCPServers,
 			Repo:                 repo, Branch: task.BranchName(),
 			// The branch that branch merges into, which is what
 			// base_branch_status reads CI for. Passed as the task wrote
@@ -4213,7 +4223,7 @@ func prepareCapabilityPrompt(ctx context.Context, cc model.CapabilityContext,
 // instead (agent/antigravity's host-tool grants).
 var toolGrants = []string{
 	selfdebug.CapabilityName, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant, bootstrap.CapabilityName,
-	grainci.CapabilityName, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
+	grainserver.LegacyGrainCI, grainserver.CIRef, grainserver.CIGrant, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
 	readissues.CapabilityName,
 	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
 	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
@@ -4841,6 +4851,22 @@ func classifyRunEndArms(ctx context.Context, store *model.Store, cfg Config, tas
 		// sentence (stopOnExpiredHostCredentials).
 		outcome = model.EnvironmentOutcome
 		detail = expired.Error() + partialWorkSuffix(result)
+		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
+	case runErr != nil && agent.HostSetupFailure(runErr):
+		// grain's own wiring to the CLI's host failed -- no grain hostd
+		// connected to carry the run's endpoints to, one too old to
+		// carry them, a file it could not stage there -- before the CLI
+		// said anything. Ahead of the arm below for the same reason as
+		// credsExpired: three of these in five minutes are fast,
+		// toolless and worded alike, and would read there as a provider
+		// refusing the framework and pause a connection the provider
+		// never refused (docs/test-runs/2026-11-03-hostd-routing.md,
+		// F4). Nor are its words a refusal grain lost a marker for, so
+		// they are kept out of the unmatched log too. A setup failure,
+		// as one before the agent started is; a task pinned to its
+		// hostd waits for it to reconnect at its next dispatch.
+		outcome = model.SetupFailedOutcome
+		detail = runErr.Error() + partialWorkSuffix(result)
 		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
 	case runErr != nil:
 		// runErr's own text, not the wrapped form below: that form

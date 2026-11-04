@@ -35,16 +35,13 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/geminikey"
 	"github.com/ai-on-gke/grain/pkg/capability/githubsandbox"
 	"github.com/ai-on-gke/grain/pkg/capability/githubtoken"
-	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
-	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
-	modelproxycap "github.com/ai-on-gke/grain/pkg/capability/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
 	"github.com/ai-on-gke/grain/pkg/capability/prioritydispatch"
 	"github.com/ai-on-gke/grain/pkg/capability/readissues"
-	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
+	"github.com/ai-on-gke/grain/pkg/capability/release"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -52,9 +49,9 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-func newCapabilityRegistryWithStore(store *model.Store, local localscripts.Config, providers ...model.CapabilityProvider) *model.CapabilityRegistry {
+func newCapabilityRegistryWithStore(_ *model.Store, local localscripts.Config, providers ...model.CapabilityProvider) *model.CapabilityRegistry {
 	reg := model.NewCapabilityRegistry(providers...)
-	reg.RegisterDynamic(gcpkey.DynamicProvider(store),
+	reg.RegisterDynamic(
 		localscripts.DynamicProvider(local), ui.AgentAPIDynamicProvider)
 	// A CI job's api grants are a token for CIAPI rather than routes an
 	// agent may call (pkg/capability/ciapi).
@@ -86,16 +83,11 @@ func newCapabilityRegistryWithStore(store *model.Store, local localscripts.Confi
 // at all (they mint nothing and place nothing), so only the check misses
 // it, and it says so rather than failing the token.
 //
-// proxies is the model proxy endpoints the claude-, openai- and
-// gemini-proxy providers resolve against (modelproxycap.Providers).
-func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*modelproxy.Endpoint, githubTokens []string, githubCredentials githubCredentialLadder) []model.CapabilityProvider {
+// proxies is unused since the claude-, openai- and gemini-proxy
+// providers were retired onto the in-process model-proxy server
+// (modelProxyMethod); the parameter stays for the callers that pass it.
+func CapabilityProviders(cfg Config, store *model.Store, _ map[string]*modelproxy.Endpoint, githubTokens []string, githubCredentials githubCredentialLadder) []model.CapabilityProvider {
 	var providers []model.CapabilityProvider
-	if len(missingCapabilityProviderConfig(cfg, "gcp-key")) == 0 {
-		providers = append(providers, gcpkey.NewProvider(gcpkey.Config{
-			ProjectID: cfg.GcpProject, ServiceAccountEmail: cfg.GcpServiceAccountEmail,
-			ServiceAccountCount: cfg.GcpServiceAccountCount,
-		}))
-	}
 	if len(missingCapabilityProviderConfig(cfg, "gemini-key")) == 0 {
 		providers = append(providers, geminikey.New(cfg.GcpProject, model.CredentialRef{Name: gcpkey.DefaultMinterCredential}))
 	}
@@ -105,41 +97,30 @@ func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*mod
 	providers = append(providers, admincaps.Providers()...)
 	providers = append(providers,
 		bootstrap.New(),
-		grainci.New(),
-		registrypush.NewWithConfig(registrypush.Config{}),
 		consolecap.New(),
 		readissues.New(),
 		prioritydispatch.New(),
 		durable.New(),
 	)
-	// package-publish registers unconditionally, on the same terms
-	// registry-push does: there is no deployment setting to gate it on,
-	// and what it needs -- a credential in this deployment's own ladder
-	// covering the repository the job is for -- is something it can see
-	// for itself at resolve time and refuse with a sentence naming the
-	// repository that has none.
+	// image-signing, registry-push and package-publish are no longer
+	// providers here: they were retired onto the in-process release
+	// server (pkg/capability/release, schema migration 101), whose
+	// methods place what they placed, on the events they answered. What
+	// package-publish resolves is this deployment's live credential
+	// ladder, so the server is handed it here, as the registry is built.
 	//
 	// The registry is left at packagepublish's default, ghcr.io, which
-	// is what a GitHub credential publishes to on github.com. A GHES
-	// deployment publishes somewhere else and has no setting to say so
-	// yet; it gets a login that fails at the registry, which is the
-	// honest outcome until there is a configuration field for it.
-	//
-	// Its refresh route is mounted on the CI API listener (CIAPI), so a
-	// job whose release outlasts the ladder's hour-long token re-mints
-	// it there rather than failing at its last push; with no listener
-	// the job gets the static login alone, as it always did.
-	providers = append(providers, packagepublish.New(packagepublish.Config{
-		Credentials: githubCredentials,
-		Refresh:     PackagePublishRefresh,
-		RefreshURL:  CIAPI.URL,
-	}))
-	// image-signing registers unconditionally too, and for the same
-	// reason: what it needs is two secrets, which its own Resolve looks
-	// for and refuses by name when they are missing. It answers the
-	// release event alone, never workflow_dispatch, so it stays strictly
-	// narrower than package-publish beside it (docs/image-signing.md).
-	providers = append(providers, imagesigning.New(imagesigning.Config{}))
+	// is what a GitHub credential publishes to on github.com. Its
+	// refresh route is mounted on the CI API listener (CIAPI), so a job
+	// whose release outlasts the ladder's hour-long token re-mints it
+	// there rather than failing at its last push.
+	if githubCredentials != nil {
+		release.Configure(packagepublish.Config{
+			Credentials: githubCredentials,
+			Refresh:     PackagePublishRefresh,
+			RefreshURL:  CIAPI.URL,
+		})
+	}
 	// release-gate-read registers unconditionally too: it is the CI alias
 	// for the api:release-gate-read preset (pkg/capability/ciapi), and
 	// what it needs is this process's CI API listener (CIAPI), which its
@@ -147,19 +128,10 @@ func CapabilityProviders(cfg Config, store *model.Store, proxies map[string]*mod
 	// which it refuses every other one for (design/design/release-from-trunk.design.md §6).
 	providers = append(providers, ciapi.NewAlias(CIAPI, ciapi.Config{}, model.ReleaseGateReadCapability,
 		ciapi.Aliases[model.ReleaseGateReadCapability]))
-	// claude-proxy, openai-proxy and gemini-proxy register
-	// unconditionally, like github-sandbox above: there is no deployment
-	// setting to gate them on. What each needs is a running proxy and
-	// that vendor's credential, and both are things it can see for
-	// itself at resolve time (its own Resolve refuses with a sentence
-	// naming whichever is missing) rather than facts about this config
-	// value. The endpoints are whichever set this registry is being built
-	// over -- this process's own modelProxies for every caller in this
-	// file -- see pkg/cli/modelproxy.go for why those are a
-	// package-level value that is nonetheless passed in.
-	for _, p := range modelproxycap.Providers(proxies) {
-		providers = append(providers, p)
-	}
+	// claude-proxy, openai-proxy and gemini-proxy are no longer
+	// providers here: they were retired onto the in-process model-proxy
+	// server (modelProxyMethod below, schema migration 100), which mints
+	// the same token on the same endpoints with the run's connection.
 	// One per named GitHub token beyond this deployment's default one
 	// (grain/task-117). Registered last, and unconditionally on the names
 	// being there: a token is a capability because an operator's own file
@@ -217,13 +189,8 @@ func teamRepos(store *model.Store) func(context.Context) ([]string, error) {
 // prerequisite, a credential check must name the same prerequisite.
 func missingCapabilityProviderConfig(cfg Config, id string) []string {
 	var missing []string
-	if id == "gcp-key" || id == "gemini-key" {
-		if cfg.GcpProject == "" {
-			missing = append(missing, "GCP project ID")
-		}
-	}
-	if id == "gcp-key" && cfg.GcpServiceAccountEmail == "" {
-		missing = append(missing, "agent service-account email")
+	if id == "gemini-key" && cfg.GcpProject == "" {
+		missing = append(missing, "GCP project ID")
 	}
 	return missing
 }
@@ -471,6 +438,24 @@ func (c credentialTokenSource) TokenRefused(token string) {
 	if c.credentials != nil {
 		c.credentials.RefusedToken(token)
 	}
+}
+
+// AppSlugFor is github.AppSlugSource: the slug of the GitHub App behind
+// owner/repo's credential (gitproxy.CredentialSet.AppBotLogin), or ""
+// when that credential is not an App's.
+func (c credentialTokenSource) AppSlugFor(owner, repo string) (string, error) {
+	if c.credentials == nil {
+		return "", nil
+	}
+	cred, ok := c.selectCredential(owner, repo)
+	if !ok {
+		return "", nil
+	}
+	login, isApp, err := c.credentials.AppBotLogin(cred.Name)
+	if err != nil || !isApp {
+		return "", err
+	}
+	return strings.TrimSuffix(login, "[bot]"), nil
 }
 
 func (c credentialTokenSource) TokenFor(owner, repo string) *string {

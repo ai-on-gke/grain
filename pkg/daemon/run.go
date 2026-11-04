@@ -976,6 +976,12 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	ReclaimWith(disks, ctx, NewDiskReclaim(sandboxes, &DockerPruner{
 		ActiveSandboxImage: chooseSandboxImage(cfg).image,
 		ActiveGrainImage:   DefaultGrainImage,
+		KeepImages: func() []string {
+			if img := live.CurrentSandboxImage(); img != "" {
+				return []string{img}
+			}
+			return nil
+		},
 	}))
 
 	proxyURL, proxyHandler, stopProxy, err := startGitProxy(cfg.DataDir, store, cfg.GithubHost, cfg.GithubInsecureHTTP, fabric, forbidden, cfg.shutdownStarted)
@@ -1210,9 +1216,9 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			LiveCI.Store(ciService)
 			defer ciService.Detach()
 			log.Printf("grain daemon: grain CI is on for repos whose CI mode is \"Use Grain CI\" (Settings -> Repos); "+
-				"attaching the %q capability alone does not turn it on. How many jobs run at once is "+
+				"attaching the %q grant alone does not turn it on. How many jobs run at once is "+
 				"bounded by %s",
-				grainci.CapabilityName, BudgetSentence(cfg.Limits(), KubernetesSandboxes(cfg)))
+				grainci.Grant, BudgetSentence(cfg.Limits(), KubernetesSandboxes(cfg)))
 		}
 	}
 	// The tokens those runs held came back with the registry's file
@@ -1367,6 +1373,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// Where a run's sandbox-callable capability tools are
 			// registered for the proxy's /cap/ (grain cap).
 			CapabilitySandboxServers: SandboxCapabilities,
+			ControllerMCP:            controllerMCPProxy(cfg),
 			GrantTools:               grantTools(grainSrcDir, SecretsDir(cfg.DataDir)),
 			// Where a sandbox reaches this deployment's package
 			// cache -- asked per dispatch, and answering "" while the
@@ -1510,7 +1517,10 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// And whether the daily automatic upgrade's channel has
 			// anything new on it, asked of the registry or origin before
 			// the queue is held for it.
-			UpgradeUnchanged:   upgradeUnchanged(upgrader),
+			UpgradeUnchanged: upgradeUnchanged(upgrader),
+			// And the newest release on its image channel, which the
+			// release-triggered automatic upgrade follows.
+			LatestRelease:      latestRelease(upgrader),
 			UpgradeDrainWindow: cfg.UpgradeDrainWindow,
 		},
 		MintSandboxGrant:   tokens.EnsureGrant,

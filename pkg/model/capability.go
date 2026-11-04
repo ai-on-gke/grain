@@ -192,6 +192,43 @@ type CapabilityContext struct {
 	Connection string
 }
 
+type runConnectionKey struct{}
+
+// WithRunConnection is ctx carrying connection, the run's own
+// CapabilityContext.Connection, to a method of an in-process capability
+// server minting for it: the orchestrator mints a capability pass with it
+// once the run's framework is chosen, so the model-proxy server spends
+// the same connection its retired in-process providers did.
+func WithRunConnection(ctx context.Context, connection string) context.Context {
+	return context.WithValue(ctx, runConnectionKey{}, connection)
+}
+
+// RunConnection is the connection WithRunConnection put in ctx, or "".
+func RunConnection(ctx context.Context) string {
+	c, _ := ctx.Value(runConnectionKey{}).(string)
+	return c
+}
+
+type mintRunIDKey struct{}
+
+// WithMintRunID is ctx carrying runID, the run a capability pass is
+// minted for, to a method of an in-process capability server minting for
+// it: the model-proxy server records it as its token's owner, as its
+// retired in-process providers did (CapabilityContext.Run.ID), so the
+// proxy's per-run limits and audit name the run, and a restarted daemon
+// revokes the tokens of runs that ended with the previous process
+// (daemon.revokeFinishedRunTokens) -- a pass, and the leases its release
+// would have revoked, are not persisted.
+func WithMintRunID(ctx context.Context, runID string) context.Context {
+	return context.WithValue(ctx, mintRunIDKey{}, runID)
+}
+
+// MintRunID is the run WithMintRunID put in ctx, or "".
+func MintRunID(ctx context.Context) string {
+	id, _ := ctx.Value(mintRunIDKey{}).(string)
+	return id
+}
+
 // CapabilitySpec is a capability's fixed identity: what a grant of it
 // means, before any particular task holds one.
 type CapabilitySpec struct {
@@ -247,7 +284,7 @@ type CapabilitySpec struct {
 // shell. Agent tool grants and agent Git credential selectors require an agent
 // run and are not offered for CI.
 func (s CapabilitySpec) SupportsCI() bool {
-	return s.Provision == ProvisionMint || s.Provision == ProvisionPlace || s.Name == "grain-ci"
+	return s.Provision == ProvisionMint || s.Provision == ProvisionPlace
 }
 
 // SupportsTask is SupportsCI's converse: whether a task may hold this
@@ -560,9 +597,19 @@ func ResolveGrants(ctx context.Context, reg *CapabilityRegistry, cc CapabilityCo
 			}
 			continue
 		}
+		// So is a reference whose server declared a CI rule
+		// (CIGrantRule), and a retired name rewritten to one that no
+		// provider in reg still answers: its CI job's event gate is the
+		// pass's.
+		if rule, ok := CIGrantRuleFor(g.Capability); ok && (IsCapabilityRef(g.Capability) || !registered(reg, g.Capability)) {
+			if !cc.CI {
+				out = append(out, GrantResolution{Grant: g, Resolution: RefusedBecause(CIGrantRuleCIOnlyRefusal(g.Capability, rule))})
+			}
+			continue
+		}
 		// A capability reference is a capability server's to mint, at
 		// admission (protocol.MintPass), not an in-process provider's.
-		if IsCapabilityRef(g.Capability) || IsCapabilityRef(CanonicalLegacyGrant(g.Capability)) {
+		if IsCapabilityRef(g.Capability) {
 			continue
 		}
 		granted[g.Capability] = g

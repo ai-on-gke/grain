@@ -526,7 +526,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	ciEnabled := fs.Bool("ci", true,
 		"run grain's own CI: the .grain/workflows a repository declares, in this deployment's own sandboxes, "+
 			"for the repos whose CI mode is \"Use Grain CI\" (Settings -> Repos), which also grants their tasks the "+
-			grainci.CapabilityName+" capability. -ci=false turns the engine off entirely, so no repository's "+
+			grainci.Grant+" grant. -ci=false turns the engine off entirely, so no repository's "+
 			"workflows run however its CI mode is set, and the CI API reports that this deployment has none. "+
 			"A job's sandbox is built the way a run's is and given no credential beyond a read-only checkout of "+
 			"the one repository under test (pkg/ci, \"What a workflow file is trusted with\").")
@@ -768,7 +768,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	runHostImage := fs.String("run-host-image", "",
 		"drive each claude run in a run host of this image: a container that is a sibling of the daemon, "+
 			"not a child of it, writing to a spool the daemon tails (pkg/runhost, design/design/non-disruptive-upgrade.design.md). "+
-			"Normally the deployment image itself (\"self\" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes: a run host cannot reach a container sandbox")
+			"Normally the deployment image itself (\"self\" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes or -host-sandboxes: a run host cannot reach either sandbox")
 	runHostCredentialDir := fs.String("run-host-credential-dir", "",
 		"the shared credential directory every run host mounts read-write, as a directory and at the same path "+
 			"(only used with -run-host-image)")

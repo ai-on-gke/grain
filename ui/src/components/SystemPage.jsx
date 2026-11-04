@@ -25,6 +25,7 @@ import {
   Typography,
 } from "@mui/material";
 import api from "../api.js";
+import AppIcon from "./AppIcon.jsx";
 import LogsPage from "./LogsPage.jsx";
 import SandboxHealthPage from "./SandboxHealthPage.jsx";
 import CachesPage from "./CachesPage.jsx";
@@ -203,7 +204,7 @@ export default function SystemPage({
                 onClick={() => onTab(t.id === "health" ? "health" : t.id)}
               >
                 <ListItemText primary={t.label} />
-                <span aria-hidden="true">›</span>
+                <AppIcon name="chevronRight" size={18} />
               </ListItemButton>
             ))}
           </List>
@@ -300,7 +301,7 @@ export default function SystemPage({
               onClick={() => onTab("")}
               sx={{ minWidth: 40 }}
             >
-              ←
+              <AppIcon name="back" size={18} />
             </Button>
           )}
           <Typography variant="h5" component="h1" sx={{ mb: 1 }}>
