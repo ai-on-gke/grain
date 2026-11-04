@@ -145,19 +145,27 @@ func TestHostScriptGrants(t *testing.T) {
 
 // TestHostScriptBodyRechecksTheFile: the per-run snapshot refused a
 // script anyone but grain's own user could write, and host-script makes
-// no snapshot, so the body makes the same refusal on every call, and
+// no snapshot, so the body makes the same refusal on every call --
+// the directories between it and the declaration's folder included -- and
 // withholds the ambient identity local-scripts never passed a script.
 func TestHostScriptBodyRechecksTheFile(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("no bash")
 	}
 	dir := t.TempDir()
-	script := filepath.Join(dir, "show")
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(dir, "scripts")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(sub, "show")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$1 ${SSH_AUTH_SOCK-unset} ${KUBECONFIG-unset}\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	body := filepath.Join(dir, "body")
-	if err := os.WriteFile(body, []byte(hostScriptBody(script, map[string]string{"KUBECONFIG": "$env:X"})), 0o644); err != nil {
+	if err := os.WriteFile(body, []byte(hostScriptBody(script, []string{sub, dir}, map[string]string{"KUBECONFIG": "$env:X"})), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	run := func() (string, int) {
@@ -183,6 +191,20 @@ func TestHostScriptBodyRechecksTheFile(t *testing.T) {
 	}
 	if err := os.Chmod(script, 0o755); err != nil {
 		t.Fatal(err)
+	}
+	for _, d := range []string{sub, dir} {
+		if err := os.Chmod(d, 0o775); err != nil {
+			t.Fatal(err)
+		}
+		if out, code := run(); code != 126 || !strings.Contains(out, "not running it") {
+			t.Fatalf("(%q, %d): want a script under a group-writable %s refused", out, code, d)
+		}
+		if err := os.Chmod(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, code := run(); code != 0 {
+		t.Fatalf("exit %d: want the script run again once its directories are grain's alone", code)
 	}
 	target := script + ".real"
 	if err := os.Rename(script, target); err != nil {

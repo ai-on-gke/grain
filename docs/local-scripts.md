@@ -113,7 +113,9 @@ At every start, before the capability servers start, the daemon
   `GOOGLE_APPLICATION_CREDENTIALS`, `DOCKER_HOST` and the rest), unless
   the declaration's `env` sets it. On every call it also refuses (exit
   126) a file that is now a symlink, not a regular executable, not
-  owned by grain's user, or writable by group or others. Its `cwd` is the
+  owned by grain's user, or writable by group or others, or that sits
+  under a directory (up to the declaration's folder) writable by group
+  or others, as the per-run snapshot did. Its `cwd` is the
   declaration's `workdir`, its `timeout` the script's timeout rounded
   up to whole seconds, and its `max_output` the declaration's
   `output_cap`. `max_calls` is unlimited. Each `env` secret becomes

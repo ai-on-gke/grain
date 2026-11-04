@@ -128,6 +128,10 @@ func ConvertToHostScripts(cfg Config, name string) (HostScripts, error) {
 		if err != nil {
 			return HostScripts{}, err
 		}
+		dirs, err := scriptDirs(decl.Folder, s.Path)
+		if err != nil {
+			return HostScripts{}, fmt.Errorf("local-scripts %s: script %s: %w", name, s.Name, err)
+		}
 		desc := strings.TrimSpace(s.Description)
 		if desc == "" {
 			desc = fmt.Sprintf("The %s script of the %s local-scripts declaration.", s.Name, name)
@@ -138,7 +142,7 @@ func ConvertToHostScripts(cfg Config, name string) (HostScripts, error) {
 		entry := map[string]any{
 			"name":        scriptName,
 			"description": desc,
-			"script":      hostScriptBody(s.Path, s.Env),
+			"script":      hostScriptBody(s.Path, dirs, s.Env),
 			"cwd":         decl.WorkdirPath(),
 			"timeout":     timeoutSeconds(s.Timeout),
 			"max_output":  decl.Cap(),
@@ -180,15 +184,35 @@ var withheldAmbientEnv = []string{
 	"AWS_PROFILE", "AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE", "DOCKER_HOST",
 }
 
+// scriptDirs is every directory from the one holding the script at
+// path (its real path) up to the declaration's folder, inclusive: the
+// directories the per-run snapshot (localexec checkFile) refuses a
+// script under when group or others may write one of them.
+func scriptDirs(folder, path string) ([]string, error) {
+	root, err := filepath.EvalSymlinks(folder)
+	if err != nil {
+		return nil, err
+	}
+	var dirs []string
+	for p := filepath.Dir(path); ; p = filepath.Dir(p) {
+		dirs = append(dirs, p)
+		if p == root || p == filepath.Dir(p) {
+			return dirs, nil
+		}
+	}
+}
+
 // hostScriptBody is the host-script body that runs the declaration's
-// script at path, env being the variables its declaration sets. It
-// withholds the ambient identity local-scripts withheld, refuses the
-// file once it is no longer one grain's own user alone could have
-// written -- the per-run snapshot's checks, which host-script does not
+// script at path, dirs being the directories between it and its
+// declaration's folder (scriptDirs) and env the variables its
+// declaration sets. It withholds the ambient identity local-scripts
+// withheld, refuses the file once it is no longer one grain's own user
+// alone could have written, or once group or others may write one of
+// dirs -- the per-run snapshot's checks, which host-script does not
 // make, applied to every call -- and execs it, keeping its own
 // interpreter (its #! line) and argv exactly; host-script runs the body
 // as bash <file> "$@".
-func hostScriptBody(path string, env map[string]string) string {
+func hostScriptBody(path string, dirs []string, env map[string]string) string {
 	var unset []string
 	for _, v := range withheldAmbientEnv {
 		if _, ok := env[v]; !ok {
@@ -196,13 +220,20 @@ func hostScriptBody(path string, env map[string]string) string {
 		}
 	}
 	q := shellQuote(path)
+	checked := q
+	var dirTests strings.Builder
+	for _, d := range dirs {
+		qd := shellQuote(d)
+		checked += " " + qd
+		dirTests.WriteString(" [ -L " + qd + " ] || [ ! -d " + qd + " ] ||")
+	}
 	var b strings.Builder
 	if len(unset) > 0 {
 		b.WriteString("unset " + strings.Join(unset, " ") + "\n")
 	}
-	b.WriteString("if [ -L " + q + " ] || [ ! -f " + q + " ] || [ ! -x " + q + " ] || [ ! -O " + q + " ] ||\n" +
-		"  [ -n \"$(find " + q + " -prune \\( -perm -020 -o -perm -002 \\) -print)\" ]; then\n" +
-		"  echo \"grain: \"" + q + "\" is no longer a regular executable file only grain's own user can write; not running it\" >&2\n" +
+	b.WriteString("if [ -L " + q + " ] || [ ! -f " + q + " ] || [ ! -x " + q + " ] || [ ! -O " + q + " ] ||" + dirTests.String() + "\n" +
+		"  [ -n \"$(find " + checked + " -prune \\( -perm -020 -o -perm -002 \\) -print 2>&1)\" ]; then\n" +
+		"  echo \"grain: \"" + q + "\" (or a directory above it) is no longer a regular executable file only grain's own user can write; not running it\" >&2\n" +
 		"  exit 126\n" +
 		"fi\n")
 	b.WriteString("exec " + q + " \"$@\"\n")
