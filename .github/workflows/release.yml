@@ -18,13 +18,16 @@
 # `k8s-sandbox`, `grain`) via scripts/release-images.sh, runs both end-to-end
 # verification suites (`tests/container` and `tests/installer` across host,
 # trixie, and hostmode) against the built image before publishing, and then
-# pushes the `sha-<short>`, branch (`main`, `candidate`), and release tags to
-# GHCR (`ghcr.io/bwsalmon/grain/*`).
+# publishes the grain, guest and k8s-sandbox images as assets on this
+# repository's own GitHub releases (scripts/release-assets.sh, release-asset
+# contract v1, docs/release-assets.md): the immutable `sha-<short>` release,
+# and the branch's moving `channel-<branch>` release. No registry is
+# written to, so nothing but the repository's own GITHUB_TOKEN is needed.
 #
-# On non-main / PR refs, `dry_run` defaults to and is enforced as `true`: a
-# `docker` wrapper intercepts `login`, `push`, and `buildx imagetools create`
-# so all images and stamped `sandbox-image` labels are built and tested
-# byte-for-byte identically without pushing any tags to the registry.
+# On non-main / PR refs, `dry_run` defaults to and is enforced as `true`:
+# every image, every asset and images.json are built, packaged and
+# validated byte-for-byte identically, and every release write is printed
+# instead of made. A `docker` wrapper still refuses `login` and `push`.
 
 name: release
 
@@ -41,13 +44,13 @@ on:
         type: boolean
 
 permissions:
-  contents: read
-  packages: write
+  contents: write
   id-token: write
 
 env:
   GOFLAGS: -mod=readonly
-  RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO || 'bwsalmon/grain' }}
+  RELEASE_IMAGES_TARGET: assets
+  RELEASE_ASSETS_DIR: /tmp/release-assets
 
 jobs:
   images:
@@ -197,71 +200,6 @@ jobs:
         if: vars.GCP_WIF_PROVIDER != '' && vars.GCP_SA_EMAIL != ''
         run: gcloud auth configure-docker us-docker.pkg.dev --quiet
 
-      - name: Configure package-publish credentials
-        env:
-          GHCR_PAT: ${{ secrets.GHCR_TOKEN }}
-          FALLBACK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY || 'ghcr.io' }}
-          PUBLISH_USERNAME: ${{ vars.GHCR_USERNAME || 'bwsalmon' }}
-        run: |
-          set -euo pipefail
-          if [ "${DRY_RUN}" = "true" ]; then
-            {
-              echo "PACKAGE_PUBLISH_REGISTRY=${PUBLISH_REGISTRY}"
-              echo "PACKAGE_PUBLISH_USERNAME=${PUBLISH_USERNAME}"
-              echo "PACKAGE_PUBLISH_TOKEN=dry-run-token"
-            } >> "$GITHUB_ENV"
-            exit 0
-          fi
-          token="${GHCR_PAT:-}"
-          username="${PUBLISH_USERNAME}"
-          if [ -z "$token" ]; then
-            case "${RELEASE_IMAGE_REPO}" in
-              bwsalmon/*)
-                echo "::error::GHCR_TOKEN secret is required to publish packages under ghcr.io/${RELEASE_IMAGE_REPO} from ${GITHUB_REPOSITORY}" >&2
-                exit 1
-                ;;
-              *)
-                token="${FALLBACK_TOKEN}"
-                username="${GITHUB_ACTOR}"
-                ;;
-            esac
-          fi
-          echo "::add-mask::${token}"
-          {
-            echo "PACKAGE_PUBLISH_REGISTRY=${PUBLISH_REGISTRY}"
-            echo "PACKAGE_PUBLISH_USERNAME=${username}"
-            echo "PACKAGE_PUBLISH_TOKEN=${token}"
-          } >> "$GITHUB_ENV"
-
-      - name: Configure optional image-signing key
-        if: env.DRY_RUN != 'true'
-        env:
-          SIGNING_KEY_PEM: ${{ secrets.IMAGE_SIGNING_KEY }}
-          SIGNING_KEY_PASS: ${{ secrets.IMAGE_SIGNING_PASSWORD }}
-        run: |
-          set -euo pipefail
-          if [ -z "${SIGNING_KEY_PEM:-}" ]; then
-            echo "WARNING: IMAGE_SIGNING_KEY secret is not set; release images will be published unsigned." >&2
-            exit 0
-          fi
-          if ! command -v cosign >/dev/null 2>&1; then
-            cosign_version="v2.4.1"
-            curl -fsSL "https://github.com/sigstore/cosign/releases/download/${cosign_version}/cosign-linux-amd64" \
-              -o /usr/local/bin/cosign
-            chmod +x /usr/local/bin/cosign
-          fi
-          key_file="${RUNNER_TEMP}/image-signing.key"
-          printf '%s\n' "${SIGNING_KEY_PEM}" > "$key_file"
-          chmod 600 "$key_file"
-          pass_file="${RUNNER_TEMP}/image-signing.pass"
-          printf '%s' "${SIGNING_KEY_PASS:-}" > "$pass_file"
-          chmod 600 "$pass_file"
-          {
-            echo "IMAGE_SIGNING_KEY=${key_file}"
-            echo "IMAGE_SIGNING_PASSWORD_FILE=${pass_file}"
-          } >> "$GITHUB_ENV"
-
       - name: Build the images
         run: bash ./scripts/release-images.sh build
 
@@ -275,8 +213,9 @@ jobs:
           export GRAIN_TEST_IMAGE="$image"
           # The published releases TestUpgradeFromReleasedVersions upgrades
           # from (latest and floor); without it that test skips, and a skip
-          # fails this step.
-          export GRAIN_UPGRADE_RELEASE_IMAGE="ghcr.io/${RELEASE_IMAGE_REPO,,}/grain"
+          # fails this step. Those releases predate release assets and are
+          # still the GHCR images they were published as, read anonymously.
+          export GRAIN_UPGRADE_RELEASE_IMAGE="ghcr.io/bwsalmon/grain/grain"
           go test ./tests/container/... -count=1 -v -timeout 30m 2>&1 | tee /tmp/container.log
           if grep -q -- "--- SKIP" /tmp/container.log; then
             grep -- "--- SKIP" /tmp/container.log >&2
@@ -345,25 +284,30 @@ jobs:
             exit 1
           fi
 
-      - name: Publish the images
+      - name: Package the images as release assets
+        run: bash ./scripts/release-assets.sh package
+
+      - name: Publish the release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          short="${GRAIN_CI_COMMIT:0:12}"
+          releases=("sha-${short}")
+          # A branch's moving release is channel-<branch>, '/' as '-'; never
+          # the bare branch name. A release event publishes its commit only.
+          case "${GITHUB_REF:-}" in
+            refs/heads/*) releases+=("channel-${GRAIN_CI_REF//\//-}") ;;
+          esac
+          args=()
           if [ "${DRY_RUN}" = "true" ]; then
-            echo "Dry-run mode enabled: verifying push plan without writing to registry"
-            cat "$RELEASE_IMAGES_STATE"
-            bash ./scripts/release-images.sh --dry-run push
-          else
-            bash ./scripts/release-images.sh push
+            echo "Dry-run mode enabled: planning the release writes without making them"
+            args+=(--dry-run)
           fi
-
-      - name: Prune old package versions
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
-        run: |
-          if [ "${DRY_RUN}" = "true" ]; then
-            echo "Dry-run mode enabled: running ghcr-prune with -apply=false"
-            go run ./cmd/ghcr-prune -apply=false || true
-          else
-            go run ./cmd/ghcr-prune -apply=true
-          fi
+          bash ./scripts/release-assets.sh "${args[@]}" publish "${releases[@]}"
+          {
+            echo "### Release assets"
+            for r in "${releases[@]}"; do
+              echo "- ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${r}"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

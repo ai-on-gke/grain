@@ -431,6 +431,33 @@ commit="$GRAIN_CI_COMMIT"
 branch="${GRAIN_CI_REF//\//..}"
 short="${commit:0:7}"
 root="$registry/${RELEASE_IMAGE_REPO,,}"
+# RELEASE_IMAGES_TARGET=assets builds for GitHub release assets rather
+# than for a registry (scripts/release-assets.sh, docs/release-assets.md):
+# every image is named by a local ref -- grain/<image>:sha-<12 hex> --
+# that nothing resolves against a registry, the build pushes and pulls
+# nothing (the guest is built, not fetched from a cache), and the grain
+# image is stamped with those local refs rather than registry digests.
+# `build` is the only phase it supports: release-assets.sh packages and
+# publishes what it leaves behind.
+release_target="${RELEASE_IMAGES_TARGET:-registry}"
+case "$release_target" in
+  registry) ;;
+  assets)
+    case "$phase" in
+      build) ;;
+      *)
+        echo "release-images.sh: RELEASE_IMAGES_TARGET=assets builds only; publish with scripts/release-assets.sh, not phase '$phase'" >&2
+        exit 2
+        ;;
+    esac
+    short="${commit:0:12}"
+    root="grain"
+    ;;
+  *)
+    echo "release-images.sh: RELEASE_IMAGES_TARGET=$release_target is neither registry nor assets" >&2
+    exit 2
+    ;;
+esac
 guest_base="$root/guest-base:sha-$short"
 guest="$root/guest:sha-$short"
 # The granule image the guest builds below are packed onto, built out of
@@ -909,6 +936,12 @@ repository_of() {
 push_pinned() {
   local image="$1" attempt log digest
   pinned=""
+  # Release assets carry the image itself, so its pin is its local ref:
+  # what `docker load` of the asset leaves behind (docs/release-assets.md).
+  if [ "$release_target" = assets ]; then
+    pinned="$image"
+    return 0
+  fi
   log="$(mktemp)"
   for attempt in 1 2 3; do
     if docker push "$image" 2>&1 | tee "$log"; then
@@ -956,6 +989,15 @@ resolve_guest() {
   guest_key="$(git rev-parse "${guest_inputs[@]/#/HEAD:}" | sha256sum | cut -c1-32)"
   guest_cache="$root/guest:inputs-$guest_key"
   local guest_hit=false
+  if [ "$release_target" = assets ]; then
+    # No registry to cache in: build both halves here, and push nothing.
+    IMAGE="$granule_image" GUEST_SOURCE_REPO="https://github.com/${GRAIN_CI_REPO,,}" \
+      ./scripts/granule/build-granule-image.sh
+    granulefile_build -f Granulefile.guest-base -t granule-guest-base:vendored
+    docker tag granule-guest-base:vendored "$guest_base"
+    granulefile_build -f Granulefile -t "$guest"
+    return 0
+  fi
   if docker pull "$guest_cache"; then
     docker tag "$guest_cache" "$guest"
     echo "release-images.sh: sandbox guest cache hit $guest_cache; nothing to build"
@@ -1157,6 +1199,8 @@ build_images() {
 # build read this: the suite that drives the image, and the push phase
 # that publishes it.
 RELEASE_IMAGE_COMMIT='$commit'
+RELEASE_IMAGE_TARGET='$release_target'
+RELEASE_IMAGE_VERSION='${RELEASE:-}'
 RELEASE_IMAGE_GUEST_BASE='$guest_base'
 RELEASE_IMAGE_GUEST='$guest'
 RELEASE_IMAGE_K8S_SANDBOX_BASE='$k8s_sandbox_base'
