@@ -969,3 +969,356 @@ func TestCIFaultsCommandListsAndFiltersBySourceAndRepo(t *testing.T) {
 		t.Fatalf("gotJSON = %+v, want 1 github fault", gotJSON)
 	}
 }
+
+// fastCIWait makes `grain ci wait` poll at test speed.
+func fastCIWait(t *testing.T) {
+	t.Helper()
+	prev := ciWaitPoll
+	ciWaitPoll = 5 * time.Millisecond
+	t.Cleanup(func() { ciWaitPoll = prev })
+}
+
+// ciWaitCLI runs `grain ci wait args...` against handler, under ctx, and
+// says what it printed and how it exits.
+func ciWaitCLI(t *testing.T, ctx context.Context, handler http.HandlerFunc, asJSON bool, args ...string) (string, int) {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	var err error
+	out := captureStdout(t, func() {
+		err = cmdCI(ctx, ui.NewHTTPClient(srv.URL), &printer{json: asJSON}, append([]string{"wait"}, args...))
+	})
+	exit, _, _ := classifyError(err)
+	return out, exit
+}
+
+// The external `grain ci wait` (#XC-26): it waits out a run in flight,
+// answers with the sandbox proxy's own wait shape, names each failing job
+// with its step, tests and shared fault, credits no wait time to anybody
+// (it asks the daemon only to read), and exits 0 green, 1 red -- failed,
+// cancelled or timed out -- and 5 when -timeout runs out first.
+func TestExternalCIWaitVerdictsSharedFaultsZeroWaitCreditAndExitCodes(t *testing.T) {
+	fastCIWait(t)
+	red := failedRun()
+	red.Jobs[1].FailureSummary = &ci.FailureSummary{Tests: []ci.TestFailure{{Name: "TestThing"}}}
+	fault := ui.CIFault{SharedFault: ci.SharedFault{
+		Source: ci.FaultSourceGrain, Repo: "acme/widgets", JobID: "test", JobName: "go test",
+		Kind: ci.ConclusionFailure, Digest: "d1",
+		Refs:        []string{"grain/task-1", "grain/task-2"},
+		Runs:        []ci.FaultRun{{RunID: "9f2c1a", Ref: "grain/task-1"}, {RunID: "77aa", Ref: "grain/task-2"}},
+		OwnerTaskID: "2", OwnerRef: "grain/task-2",
+	}}
+	running := red
+	running.Conclusion, running.FinishedAt = ci.ConclusionPending, nil
+	running.Jobs = slices.Clone(red.Jobs)
+	running.Jobs[1].Conclusion = ci.ConclusionPending
+
+	var mu sync.Mutex
+	var seen []string
+	polls := 0
+	handler := func(final ci.Run) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			seen = append(seen, r.Method+" "+r.URL.Path)
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/api/ci/runs/9f2c1a":
+				mu.Lock()
+				polls++
+				n := polls
+				mu.Unlock()
+				if n < 3 {
+					json.NewEncoder(w).Encode(running)
+					return
+				}
+				json.NewEncoder(w).Encode(final)
+			case "/api/ci/faults":
+				json.NewEncoder(w).Encode(ui.CIFaultsResponse{Enabled: true, Faults: []ui.CIFault{fault}})
+			default:
+				http.NotFound(w, r)
+			}
+		}
+	}
+
+	out, exit := ciWaitCLI(t, context.Background(), handler(red), true, "9f2c1a")
+	if exit != exitFailed {
+		t.Fatalf("a red run exits %d, want %d:\n%s", exit, exitFailed, out)
+	}
+	var res cicli.WaitResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("decoding %q: %v", out, err)
+	}
+	if res.Status != "failed" || res.RunID != "9f2c1a" || res.Repo != "acme/widgets" || res.Ref != "grain/task-1" {
+		t.Errorf("verdict = %+v", res.CLIWaitResponse)
+	}
+	if res.CreditMS != 0 || res.CreditCapMS != 0 || res.CreditLive {
+		t.Errorf("an external wait must accrue no wait credit, got %+v", res.CLIWaitResponse)
+	}
+	if polls < 3 {
+		t.Errorf("the wait answered after %d polls, before the run was over", polls)
+	}
+	if len(res.Failing) != 1 {
+		t.Fatalf("failing = %+v", res.Failing)
+	}
+	f := res.Failing[0]
+	if f.Name != "go test" || f.Step != "go test ./..." || !slices.Equal(f.Tests, []string{"TestThing"}) {
+		t.Errorf("failing job = %+v", f)
+	}
+	if f.SharedFault == nil || f.SharedFault.Digest != "d1" {
+		t.Errorf("the failure is a shared fault and should say so: %+v", f.SharedFault)
+	}
+	for _, req := range seen {
+		if !strings.HasPrefix(req, "GET ") {
+			t.Errorf("a wait only reads, but it sent %s", req)
+		}
+	}
+
+	polls = 0
+	text, exit := ciWaitCLI(t, context.Background(), handler(red), false, "9f2c1a")
+	if exit != exitFailed {
+		t.Errorf("text mode exits %d, want 1", exit)
+	}
+	for _, want := range []string{
+		"grain CI failed: run 9f2c1a on acme/widgets grain/task-1 at 0123456789ab, failure",
+		"✗ go test (failure, step go test ./...)", "failing tests: TestThing",
+		"shared fault:", "also failing on: grain/task-2", "being fixed by: task #2",
+		"passed: lint", "grain ci show 9f2c1a",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the verdict does not say %q:\n%s", want, text)
+		}
+	}
+
+	for _, conclusion := range []ci.Conclusion{ci.ConclusionCancelled, "timed_out"} {
+		stopped := red
+		stopped.Conclusion = conclusion
+		polls = 0
+		if out, exit := ciWaitCLI(t, context.Background(), handler(stopped), false, "9f2c1a"); exit != exitFailed {
+			t.Errorf("a %s run exits %d, want 1:\n%s", conclusion, exit, out)
+		}
+	}
+
+	green := red
+	green.Conclusion = ci.ConclusionSuccess
+	green.Jobs = slices.Clone(red.Jobs)
+	green.Jobs[1].Conclusion = ci.ConclusionSuccess
+	polls = 0
+	mu.Lock()
+	seen = nil
+	mu.Unlock()
+	out, exit = ciWaitCLI(t, context.Background(), handler(green), false, "9f2c1a")
+	if exit != exitOK || !strings.Contains(out, "grain CI passed: run 9f2c1a") {
+		t.Errorf("a green run exits %d, want 0:\n%s", exit, out)
+	}
+	if slices.Contains(seen, "GET /api/ci/faults") {
+		t.Errorf("a green run has no fault to ask about: %v", seen)
+	}
+
+	// -jobs: the named job's verdict alone, while the rest still runs.
+	polls = 0
+	out, exit = ciWaitCLI(t, context.Background(), func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(running)
+	}, true, "9f2c1a", "-jobs", "lint")
+	if exit != exitOK {
+		t.Errorf("-jobs lint, which passed, exits %d:\n%s", exit, out)
+	}
+
+	// -timeout running out while the run is still going: exit 5.
+	ctx := withWaitLimit(context.Background(), 40*time.Millisecond)
+	out, exit = ciWaitCLI(t, ctx, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(running)
+	}, false, "9f2c1a")
+	if exit != exitWaitTimedOut || !strings.Contains(out, "still running") ||
+		!strings.Contains(out, "grain ci wait 9f2c1a") {
+		t.Errorf("a wait that times out exits %d, want 5:\n%s", exit, out)
+	}
+
+	// -ref/-repo and -pr attach to the newest run in flight on the branch.
+	older := green
+	older.ID = "0ld"
+	lookup := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/ci/runs":
+			if got := r.URL.Query().Get("repo"); got != "acme/widgets" {
+				t.Errorf("run lookup repo = %q", got)
+			}
+			inFlight := running
+			inFlight.Conclusion = ci.ConclusionPending
+			other := running
+			other.ID, other.Ref = "x1", "grain/task-10"
+			json.NewEncoder(w).Encode(ui.CIRunsResponse{Enabled: true, Runs: []ci.Run{other, inFlight, older}})
+		case "/api/ci/runs/9f2c1a":
+			json.NewEncoder(w).Encode(green)
+		case "/api/tasks":
+			json.NewEncoder(w).Encode([]ui.Task{
+				{ID: "5", Repo: "acme/widgets", Branch: "grain/task-5", PullRequest: "acme/widgets#5"},
+				{ID: "1", Repo: "acme/widgets", Branch: "grain/task-1", PullRequest: "acme/widgets#7"},
+			})
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL)
+			http.NotFound(w, r)
+		}
+	}
+	for _, args := range [][]string{
+		{"-ref", "grain/task-1", "-repo", "acme/widgets"},
+		{"-pr", "acme/widgets#7"},
+		{"-pr", "https://github.com/acme/widgets/pull/7"},
+	} {
+		out, exit := ciWaitCLI(t, context.Background(), lookup, false, args...)
+		if exit != exitOK || !strings.Contains(out, "run 9f2c1a") {
+			t.Errorf("wait %v exits %d:\n%s", args, exit, out)
+		}
+	}
+	for _, args := range [][]string{{}, {"9f2c1a", "-ref", "b"}, {"-ref", "b"}} {
+		if _, exit := ciWaitCLI(t, context.Background(), lookup, false, args...); exit != exitUsage {
+			t.Errorf("wait %v exits %d, want a usage error", args, exit)
+		}
+	}
+}
+
+// `grain ci retrigger <run>` reruns that run's failed jobs, once, on the
+// same repository, branch and commit, with the job cache bypassed.
+func TestExternalCIRetriggerRunsUncachedFailedJobs(t *testing.T) {
+	var got []ui.CIRunRequest
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/ci/runs/9f2c1a":
+			json.NewEncoder(w).Encode(failedRun())
+		case r.Method == http.MethodGet && r.URL.Path == "/api/ci/runs/gh":
+			run := failedRun()
+			run.ID, run.Provider = "gh", "github"
+			run.Actions = &ci.ActionsRun{RunID: 1}
+			json.NewEncoder(w).Encode(run)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/ci/runs":
+			var req ui.CIRunRequest
+			json.NewDecoder(r.Body).Decode(&req)
+			got = append(got, req)
+			w.WriteHeader(http.StatusAccepted)
+			json.NewEncoder(w).Encode(ci.Run{ID: "next1", Repo: req.Repo, Ref: req.Ref, Commit: req.Commit,
+				Recheck: true, Jobs: []ci.JobRun{{JobID: "test", Name: "go test"}}})
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL)
+			http.NotFound(w, r)
+		}
+	}
+	out, err := ciCLI(t, handler, "retrigger", "9f2c1a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want one run started, got %+v", got)
+	}
+	want := ui.CIRunRequest{Repo: "acme/widgets", Ref: "grain/task-1", Commit: "0123456789abcdef0123",
+		Event: "push", Jobs: []string{"test"}, Recheck: true}
+	if g := got[0]; g.Repo != want.Repo || g.Ref != want.Ref || g.Commit != want.Commit || g.Event != want.Event ||
+		!slices.Equal(g.Jobs, want.Jobs) || !g.Recheck {
+		t.Errorf("retrigger asked for %+v, want %+v", g, want)
+	}
+	for _, s := range []string{"retriggered 1 job of run 9f2c1a, uncached: run next1", "grain ci wait next1"} {
+		if !strings.Contains(out, s) {
+			t.Errorf("retrigger does not say %q:\n%s", s, out)
+		}
+	}
+
+	got = nil
+	if _, err := ciCLI(t, handler, "retrigger", "9f2c1a", "-jobs", "lint,test"); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !slices.Equal(got[0].Jobs, []string{"lint", "test"}) || !got[0].Recheck {
+		t.Errorf("-jobs should name the jobs rerun: %+v", got)
+	}
+
+	got = nil
+	if _, err := ciCLI(t, handler, "retrigger", "gh"); err == nil || len(got) != 0 {
+		t.Errorf("a GitHub Actions run is not grain CI's to rerun: err=%v, started %+v", err, got)
+	}
+	if _, err := ciCLI(t, handler, "retrigger"); err == nil || !strings.Contains(err.Error(), "grain ci retrigger <run-id>") {
+		t.Errorf("a retrigger with no run should say so: %v", err)
+	}
+}
+
+// `grain ci test-history <test>` reads the repository's recent runs in
+// full and reports through the same ci.TestHistoryReport the in-sandbox
+// command renders, or as that report's JSON.
+func TestExternalCITestHistoryFormattingAndJSON(t *testing.T) {
+	pass := failedRun()
+	pass.ID = "p1"
+	pass.Conclusion = ci.ConclusionSuccess
+	pass.Jobs = slices.Clone(pass.Jobs)
+	pass.Jobs[1].Conclusion = ci.ConclusionSuccess
+	pass.Jobs[1].Steps = []ci.StepRun{{Name: "go test ./...", Conclusion: ci.ConclusionSuccess,
+		Output: "--- PASS: TestThing (0.01s)\n"}}
+	fail := failedRun()
+	fail.Jobs[1].FailureSummary = &ci.FailureSummary{Tests: []ci.TestFailure{{Name: "TestThing", Message: "boom"}}}
+
+	var listQuery url.Values
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/ci/runs":
+			listQuery = r.URL.Query()
+			// A listing carries no step output: the pass is only found
+			// once the run is read in full.
+			listed := []ci.Run{pass, fail}
+			for i := range listed {
+				listed[i].Jobs = slices.Clone(listed[i].Jobs)
+				for j := range listed[i].Jobs {
+					listed[i].Jobs[j].Steps = nil
+				}
+			}
+			json.NewEncoder(w).Encode(ui.CIRunsResponse{Enabled: true, Runs: listed})
+		case "/api/ci/runs/p1":
+			json.NewEncoder(w).Encode(pass)
+		case "/api/ci/runs/9f2c1a":
+			json.NewEncoder(w).Encode(fail)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL)
+			http.NotFound(w, r)
+		}
+	}
+	out, err := ciCLI(t, handler, "test-history", "TestThing", "-repo", "acme/widgets", "-limit", "5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if listQuery.Get("repo") != "acme/widgets" || listQuery.Get("limit") != "5" {
+		t.Errorf("the listing should be narrowed at the daemon: %v", listQuery)
+	}
+	for _, want := range []string{
+		"Test History: TestThing (repo: acme/widgets)", "Runs examined: 2 | Executions found: 2",
+		"Passed:  1 (50.0%)", "Failed:  1 (50.0%)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the report does not say %q:\n%s", want, out)
+		}
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(handler))
+	t.Cleanup(srv.Close)
+	out = captureStdout(t, func() {
+		err = cmdCI(context.Background(), ui.NewHTTPClient(srv.URL), &printer{json: true},
+			[]string{"test-history", "TestThing", "-repo", "acme/widgets"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report ci.TestHistoryReport
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("decoding %q: %v", out, err)
+	}
+	if report.TestName != "TestThing" || report.Repo != "acme/widgets" || report.RunsExamined != 2 ||
+		report.Passed != 1 || report.Failed != 1 || len(report.RecentRuns) != 2 {
+		t.Errorf("report = %+v", report)
+	}
+
+	if _, err := ciCLI(t, handler, "test-history"); err == nil {
+		t.Error("a test-history with no test should be refused")
+	}
+	if _, err := ciCLI(t, handler, "test-history", "TestThing", "-limit", "0"); err == nil {
+		t.Error("-limit 0 should be refused")
+	}
+}
