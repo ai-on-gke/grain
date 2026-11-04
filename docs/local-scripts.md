@@ -35,8 +35,7 @@ and every one of Silo's guarantees is kept:
   are delivered to that script alone as environment variables. Every
   script otherwise gets only a minimal environment (`PATH`, `HOME`,
   `USER`, locale, `TZ`, `TMPDIR`, `TERM`, CA bundle paths): the daemon's
-  provider keys, proxy settings and other variables are withheld, as they
-  are from a [custom agent backend](custom-agent-backends.md#environment).
+  provider keys, proxy settings and other variables are withheld.
 - **Approve before run.** A script marked `approve: true` waits for a
   person to approve each call, showing the script, its arguments, how
   many bytes of stdin it gets, the SHA-256 of that stdin, and its first
@@ -123,7 +122,7 @@ file of the secrets the scripts' `env` entries name, resolved from the
 secret store as the task's team and removed when the run ends. That is
 the same pattern as `RunConfig.SandboxEnvFile`: only the path is in
 argv. Both travel with the run's grants (`agent.GrantArgs`), so claude,
-codex, antigravity and custom backends all pass them. The server checks
+codex and antigravity all pass them. The server checks
 again that the task holds each capability, snapshots the scripts when it
 starts, and registers each executor's `Tools()` beside its other tools.
 When the run ends it closes them, killing anything still running. A

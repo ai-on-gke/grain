@@ -488,7 +488,11 @@ import "strconv"
 // set, seeds the gcp entry in `grain_config`.`mcp_servers` with
 // gemini_key: {project}, minting with the gcp-key-minter secret, and
 // rewrites stored gemini-key grants as 100 did the model proxies.
-const SchemaVersion = 103
+//
+// 104 retires the custom command connection type: every stored
+// connection whose framework is "custom" is disabled and kept, with
+// model.RemovedCustomConnectionReason (custom_connection_migration.go).
+const SchemaVersion = 104
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified
