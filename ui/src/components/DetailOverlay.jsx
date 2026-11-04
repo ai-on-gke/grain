@@ -814,7 +814,7 @@ export default function DetailOverlay({
           <Actions t={t} config={config} act={act} onOpenTask={onOpenTask} />
           {/* What grain checks to close this task, rather than its agent's
               word (design/design/durable-tasks.design.md#DT-4). */}
-          <GoalSection t={t} act={act} />
+          <GoalSection t={t} act={act} config={config} tasks={tasks} />
           {/* Which grain hostd its host work goes to, and the control
               that changes it (PUT /api/tasks/{id}/hostd). */}
           <HostdSection t={t} act={act} />

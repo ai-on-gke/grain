@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // The fields a deployment declares for itself (model.CustomField), from
 // the form that files one through to the toolbar that narrows a list by
@@ -51,7 +52,7 @@ test("files a task with its fields set through the New task form", async ({
   await page.getByRole("button", { name: "+ New task" }).click();
   await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
   await page.getByLabel("Title").fill(title);
-  await page.getByLabel(/^Repos/).selectOption("none");
+  await chooseOption(page.getByLabel(/^Repos/), "none");
 
   // The block only a deployment with declarations has, and the declared
   // default already in the picker before anybody has chosen anything

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // docs/test-plans/2026-10-06.md §9 (grain/task-2387,
 // docs/test-runs/2026-10-07-main-tasks-sessions-proposers.md): the
@@ -53,7 +54,7 @@ test("New task -> Create a new branch records the request, and refuses what cann
     await page.getByRole("button", { name: "+ New task" }).click();
     await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
     await page.getByLabel("Title").fill(title);
-    await page.getByLabel(/^Repos/).selectOption("acme/widgets");
+    await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
     await page.getByRole("checkbox", { name: "Create a new branch" }).check();
     await expect(page.getByLabel("Base branch")).toHaveCount(0);
   };

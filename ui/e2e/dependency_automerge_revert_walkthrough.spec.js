@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { expect, test } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 test.describe("Multi-Task Dependency Chains, Auto-Merge Lifecycle and Revert Workflows Walkthrough", () => {
   test.setTimeout(120_000);
@@ -68,7 +69,7 @@ test.describe("Multi-Task Dependency Chains, Auto-Merge Lifecycle and Revert Wor
       .fill(
         "Feature module that requires foundational schema before execution.",
       );
-    await page.getByLabel(/^Repos/).selectOption("acme/widgets");
+    await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
 
     // Pick Root Task in Depends On section
     const depSearchInput = page.getByPlaceholder("Search tasks to depend on…");
