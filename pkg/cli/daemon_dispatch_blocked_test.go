@@ -28,6 +28,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net"
@@ -153,6 +154,9 @@ func TestAGitProxyBindFailureIsADispatchConditionOnHealthAndQueuedTasks(t *testi
 			t.Errorf("the task list's row reason = %+v, want queued/dispatch_blocked too", row.Reason)
 		}
 	}
+	if summary := callMCPToolText(t, "http://"+uiAddr+"/api/mcp", ui.ToolGrainGetTask, map[string]any{"id": created.ID}); !strings.Contains(summary, "Reason: queued/dispatch_blocked") || !strings.Contains(summary, "git proxy") {
+		t.Errorf("grain_get_task summary did not report dispatch_blocked:\n%s", summary)
+	}
 
 	// The pipeline feed has the moment it was set.
 	var feed struct {
@@ -177,6 +181,9 @@ func TestAGitProxyBindFailureIsADispatchConditionOnHealthAndQueuedTasks(t *testi
 	}
 	if detail.Reason == nil || detail.Reason.Reason != "queued/ready" {
 		t.Errorf("queued task's reason after the clear = %+v, want queued/ready", detail.Reason)
+	}
+	if summary := callMCPToolText(t, "http://"+uiAddr+"/api/mcp", ui.ToolGrainGetTask, map[string]any{"id": created.ID}); !strings.Contains(summary, "Reason: queued/ready") {
+		t.Errorf("grain_get_task summary after the clear did not report queued/ready:\n%s", summary)
 	}
 	getJSON(t, "http://"+uiAddr+"/api/pipeline/changes", &feed)
 	if !hasDispatchChange(feed.Changes, "dispatching") {
@@ -217,4 +224,40 @@ func getJSON(t *testing.T, url string, out any) {
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 		t.Fatalf("decoding GET %s: %v", url, err)
 	}
+}
+
+func callMCPToolText(t *testing.T, url, name string, args map[string]any) string {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params":  map[string]any{"name": name, "arguments": args},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := accessPost(url, "application/json", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("POST %s = %s", url, resp.Status)
+	}
+	var rpc struct {
+		Result struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rpc); err != nil {
+		t.Fatalf("decoding POST %s: %v", url, err)
+	}
+	if rpc.Result.IsError || len(rpc.Result.Content) == 0 {
+		t.Fatalf("MCP tool %s failed: %+v", name, rpc.Result)
+	}
+	return rpc.Result.Content[0].Text
 }

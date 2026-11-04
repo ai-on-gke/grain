@@ -59,6 +59,13 @@ func renderTaskSummary(t TaskRecord, now time.Time) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Task %s: %s\n", t.ID, singleLine(t.Title))
 	fmt.Fprintf(&b, "State: %s\n", t.State)
+	if r := t.Reason; r != nil && r.Reason != "" {
+		if r.Resource != "" {
+			fmt.Fprintf(&b, "Reason: %s (%s)\n", r.Reason, clipWords(singleLine(r.Resource), maxSummaryEventBytes*2))
+		} else {
+			fmt.Fprintf(&b, "Reason: %s\n", r.Reason)
+		}
+	}
 	if t.Stall != "" {
 		fmt.Fprintf(&b, "  Stalled: %s\n", clipWords(singleLine(t.Stall), maxSummaryEventBytes*2))
 	}
