@@ -46,6 +46,8 @@ type fakeActions struct {
 	// notFound makes it a forge that answers every Actions read with a
 	// 404, as one with Actions off or unreadable to the credential does.
 	notFound bool
+	// logErr, when set, is every job log's answer.
+	logErr error
 }
 
 func (f *fakeActions) note(call, owner string) {
@@ -119,6 +121,9 @@ func (f *fakeActions) ListActionsJobs(owner, repo string, runID int64) ([]github
 
 func (f *fakeActions) ActionsJobLog(owner, repo string, jobID int64) (string, error) {
 	f.note("log", owner)
+	if f.logErr != nil {
+		return "", f.logErr
+	}
 	text, ok := f.logs[jobID]
 	if !ok {
 		return "", &github.Error{Status: http.StatusGone}
@@ -656,3 +661,29 @@ func decodeString[T any](t *testing.T, body string) T {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// A job log the forge will not serve -- refused at the blob store an
+// Enterprise Server redirected to, or served empty -- is an error naming
+// the status and the hosts it came from, never an empty log.
+func TestCIRunLogSaysWhyTheForgeServedNoLog(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	forge := newFakeActions(now)
+	forge.logErr = &github.Error{Status: http.StatusForbidden,
+		URL: "GET https://ghe.example.test/api/v3/repos/acme/widgets/actions/jobs/701/logs -> https://blobs.example.test"}
+	srv, _, _ := actionsServer(t, forge, now)
+	code, body := asAgent(t, srv, "reader", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/log?job=publish", "", "")
+	if code != http.StatusForbidden || !strings.Contains(body, "HTTP 403 from ghe.example.test, redirected to blobs.example.test") {
+		t.Errorf("refused log = %d %s; want 403 naming the status and both hosts", code, body)
+	}
+
+	forge2 := newFakeActions(now)
+	for id := range forge2.logs {
+		forge2.logs[id] = ""
+	}
+	srv2, _, _ := actionsServer(t, forge2, now)
+	code, body = asAgent(t, srv2, "reader", http.MethodGet, "/api/ci/runs/gha:acme:widgets:42/log?job=publish", "", "")
+	if code != http.StatusBadGateway || !strings.Contains(body, "no bytes") {
+		t.Errorf("empty log = %d %s; want 502 saying it came back empty", code, body)
+	}
+}

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -136,5 +137,117 @@ func TestSandboxCLIReadsGitHubActionsRuns(t *testing.T) {
 	}
 	if out, errOut, code := run("ci", "log", "gha:acme:widgets:42"); code != 0 || !strings.Contains(out, "publish") || !strings.Contains(out, "build") {
 		t.Errorf("ci log with no job should list the jobs: %d %q %s", code, out, errOut)
+	}
+}
+
+// actionsLogCI is a GitHub Actions run whose one job's log is log, or
+// fails with err: the forge as `grain ci log` reaches it on a GitHub
+// Enterprise host.
+type actionsLogCI struct {
+	actionsCI
+	log string
+	err error
+}
+
+func (a actionsLogCI) ExternalJobLog(context.Context, string, string) (string, error) {
+	return a.log, a.err
+}
+
+// A bare GitHub run id -- what base-branch repair tasks are told -- names
+// grain's polled record of the run, which keeps no log. `grain ci log`
+// reads the forge's job log, and a step's slice of it, all the same, and
+// a log the forge will not serve is an error saying why.
+func TestSandboxCLIReadsAnActionsJobLogByBareRunID(t *testing.T) {
+	at := func(sec int) *time.Time {
+		v := time.Date(2026, 11, 4, 3, 10, sec, 0, time.UTC)
+		return &v
+	}
+	store := ci.NewRunStore(10)
+	store.Put(ci.Run{ID: "42", Source: ci.FaultSourceGitHub, Repo: "acme/widgets", Ref: "main", Conclusion: ci.ConclusionFailure,
+		Jobs: []ci.JobRun{{JobID: "release images", Name: "release images", Conclusion: ci.ConclusionFailure,
+			Steps: []ci.StepRun{{Name: "release images", Conclusion: ci.ConclusionFailure,
+				Output: "job \"release images\" concluded failure (https://forge.example/acme/widgets/actions/runs/42/job/701)\n"}}}}})
+	gha := ci.Run{ID: "gha:acme:widgets:42", Provider: ci.ProviderGitHubActions, Repo: "acme/widgets", Ref: "main",
+		Conclusion: ci.ConclusionFailure,
+		Jobs: []ci.JobRun{{JobID: "701", Name: "release images", Conclusion: ci.ConclusionFailure, Steps: []ci.StepRun{
+			{Name: "Set up job", Conclusion: ci.ConclusionSuccess, StartedAt: at(0), FinishedAt: at(1)},
+			{Name: "Build images", Conclusion: ci.ConclusionSuccess, StartedAt: at(2), FinishedAt: at(5)},
+			{Name: "Verify the linked daemon image", Conclusion: ci.ConclusionFailure, StartedAt: at(6), FinishedAt: at(8)},
+			{Name: "Push images", Conclusion: ci.ConclusionSkipped},
+			{Name: "Complete job", Conclusion: ci.ConclusionSuccess, StartedAt: at(9), FinishedAt: at(9)},
+		}}}}
+	const log = "2026-11-04T03:10:00.1000000Z Current runner version: '2.330.0'\n" +
+		"2026-11-04T03:10:02.2000000Z ##[group]Run make images\n" +
+		"2026-11-04T03:10:05.3000000Z built 2 images\n" +
+		"2026-11-04T03:10:06.4000000Z ##[group]Run ./scripts/verify-daemon-image.sh\n" +
+		"2026-11-04T03:10:07.5000000Z ERROR: daemon image has no linked layer\n" +
+		"  (continued without a timestamp)\n" +
+		"2026-11-04T03:10:08.6000000Z ##[error]Process completed with exit code 1.\n" +
+		"2026-11-04T03:10:09.7000000Z Cleaning up orphan processes\n"
+	ext := &actionsLogCI{actionsCI: actionsCI{run: gha}, log: log}
+
+	tokenFile := filepath.Join(t.TempDir(), "tokens.json")
+	raw, _ := json.Marshal(map[string]string{"sb": "tok"})
+	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns := &namespace.Server{CIStore: store, ExternalCI: ext, Redactor: redact.New(nil)}
+	proxy := &gitproxy.GitProxy{
+		Tokens:    tokens,
+		Namespace: ns,
+		NamespaceScopes: cliTestScopes{"sb": {TaskID: "7", RunID: "r", TaskRepo: "other/repo", TaskBranch: "grain/task-7",
+			MayReadCI: true, AllowedRepos: map[string]bool{"acme/widgets": true}}},
+	}
+	srv := httptest.NewServer(gitproxy.NewHandler(proxy))
+	defer srv.Close()
+	env := fakeSandboxEnv(map[string]string{"GRAIN_SANDBOX_PROXY": srv.URL, "GRAIN_SANDBOX_TOKEN": "tok"}, "")
+	run := func(args ...string) (string, string, int) {
+		var out, errOut bytes.Buffer
+		code, handled := maybeRunSandboxCLI(args, env, &out, &errOut)
+		if !handled {
+			t.Fatalf("%q not handled in sandbox mode", args)
+		}
+		return out.String(), errOut.String(), code
+	}
+
+	const verify = "2026-11-04T03:10:06.4000000Z ##[group]Run ./scripts/verify-daemon-image.sh\n" +
+		"2026-11-04T03:10:07.5000000Z ERROR: daemon image has no linked layer\n" +
+		"  (continued without a timestamp)\n" +
+		"2026-11-04T03:10:08.6000000Z ##[error]Process completed with exit code 1.\n"
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"ci", "log", "42", "--repo", "acme/widgets", "--job", "release images"}, log},
+		{[]string{"ci", "log", "42", "--job", "release images"}, log},
+		{[]string{"ci", "log", "42", "--repo", "acme/widgets", "--job", "release images", "--step", "Verify the linked daemon image"}, verify},
+		{[]string{"ci", "log", "42", "--repo", "acme/widgets", "--job", "release images", "--step", "Verify the linked daemon image", "--lines", "1"},
+			"2026-11-04T03:10:08.6000000Z ##[error]Process completed with exit code 1.\n"},
+		{[]string{"ci", "log", "gha:acme:widgets:42", "--job", "release images", "--step", "build images"},
+			"2026-11-04T03:10:02.2000000Z ##[group]Run make images\n2026-11-04T03:10:05.3000000Z built 2 images\n"},
+		{[]string{"read", "ci://acme/widgets/42/release images/Verify the linked daemon image.log"}, verify},
+	} {
+		out, errOut, code := run(c.args...)
+		if code != 0 || out != c.want {
+			t.Errorf("grain %q = %d\n%s\nwant\n%s\n(stderr %s)", c.args, code, out, c.want, errOut)
+		}
+	}
+	if out, errOut, code := run("ls", "ci://acme/widgets/42/release images"); code != 0 ||
+		!strings.Contains(out, "job.log") || !strings.Contains(out, "Verify the linked daemon image.log") {
+		t.Errorf("a bare-id Actions job should list job.log and its steps: %d %q %s", code, out, errOut)
+	}
+	if out, errOut, code := run("ci", "log", "42", "--repo", "acme/widgets", "--job", "release images", "--step", "Push images"); code == 0 ||
+		out != "" || !strings.Contains(errOut, "never started") {
+		t.Errorf("a step that never ran should say so: %d %q %q", code, out, errOut)
+	}
+
+	ext.err = errors.New("reading job \"release images\"'s log from the forge, HTTP 403 from ghe.example.test, redirected to blobs.example.test: GitHub API error 403")
+	out, errOut, code := run("ci", "log", "42", "--repo", "acme/widgets", "--job", "release images")
+	if code == 0 || out != "" || !strings.Contains(errOut, "HTTP 403 from ghe.example.test") || !strings.Contains(errOut, "blobs.example.test") {
+		t.Errorf("a log the forge refused should be an error naming why: %d %q %q", code, out, errOut)
 	}
 }

@@ -46,6 +46,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
@@ -732,6 +733,11 @@ func (s *Server) handleGetCIRunLog(w http.ResponseWriter, r *http.Request) {
 			writeClientError(w, err)
 			return
 		}
+		if status == http.StatusBadGateway {
+			// Why the forge served no log is what the agent asking needs
+			// to act on, and it is already trusted with the log itself.
+			err = apierror.Expose(err)
+		}
 		writeError(w, status, err)
 		return
 	}
@@ -778,7 +784,9 @@ func (c *Client) actionsJobLog(ctx context.Context, repo model.RepoRef, runID in
 		case errors.As(err, &gh) && gh.Status == http.StatusForbidden:
 			return job, "", http.StatusForbidden, fmt.Errorf("the forge refused job %q's log to this deployment's credential (it needs actions:read), %s", job.Name, forgeAnswer(gh))
 		case errors.As(err, &gh):
-			return job, "", http.StatusBadGateway, fmt.Errorf("reading job %q's log from the forge, %s: %w", job.Name, forgeAnswer(gh), err)
+			// The status and hosts, not the body: that is whatever page
+			// the forge or its blob store answered with.
+			return job, "", http.StatusBadGateway, fmt.Errorf("reading job %q's log from the forge: %s", job.Name, forgeAnswer(gh))
 		default:
 			return job, "", http.StatusBadGateway, fmt.Errorf("reading job %q's log from the forge: %w", job.Name, err)
 		}
