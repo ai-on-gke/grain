@@ -209,6 +209,32 @@ type ImageConfig struct {
 	// installtrack.TrackOSS; when Repository is empty, DefaultRepository(Track)
 	// supplies the default image repository.
 	Track installtrack.Track
+	// Source chooses where candidate container images are fetched from:
+	// ImageSourceRegistry (`docker pull`, the default) or
+	// ImageSourceReleaseAssets (tarballs on GitHub / GitHub Enterprise
+	// releases loaded with `docker load`). When empty, TrackDefaultsFor(Track)
+	// supplies any edition default before falling back to ImageSourceRegistry.
+	Source ImageSource
+	// SourceLocked marks Source as fixed by a daemon command-line flag or
+	// environment variable rather than editable configuration, so the UI
+	// displays it read-only.
+	SourceLocked bool
+	// Fallback optionally names a secondary image source (ImageSourceRegistry
+	// or ImageSourceReleaseAssets) tried when Source fails to fetch the
+	// candidate daemon image.
+	Fallback ImageSource
+	// FallbackExplicit records that Fallback was explicitly set (including to
+	// empty/"none" to override a track default).
+	FallbackExplicit bool
+	// ReleaseAssets configures ImageSourceReleaseAssets (and fallback to it).
+	ReleaseAssets ReleaseAssetsConfig
+	// LoadCmd loads an image tarball appended as its last argument;
+	// {"docker", "load", "-i"} when left nil. Overridable for tests.
+	LoadCmd []string
+	// InspectIDCmd prints the local Docker image ID (`sha256:...`) of an image
+	// reference appended as its last argument;
+	// {"docker", "image", "inspect", "--format", "{{.Id}}"} when left nil.
+	InspectIDCmd []string
 }
 
 // imageRefEnvKey is the variable name written into ImageConfig.RefFile,
@@ -952,9 +978,10 @@ func imageNames(ref string) []string {
 //
 // Best effort: a refusal (e.g. from an image still used by a running container)
 // is logged to the journal rather than failing an upgrade that has already succeeded.
-func (u *Upgrader) cleanOldImages(ctx context.Context, p *progress, ref, prevRef, sandbox, prevSandbox string) {
+func (u *Upgrader) cleanOldImages(ctx context.Context, p *progress, ref, prevRef, sandbox, prevSandbox string, extraKeep ...string) {
 	keep := make(map[string]bool)
-	for _, r := range []string{ref, prevRef, sandbox, prevSandbox, u.cfg.Image.SandboxImagePin} {
+	allKept := append([]string{ref, prevRef, sandbox, prevSandbox, u.cfg.Image.SandboxImagePin}, extraKeep...)
+	for _, r := range allKept {
 		if r == "" {
 			continue
 		}
@@ -981,6 +1008,11 @@ func (u *Upgrader) cleanOldImages(ctx context.Context, p *progress, ref, prevRef
 	}
 	if u.cfg.Image.SandboxImagePin != "" {
 		repos[repositoryOf(u.cfg.Image.SandboxImagePin)] = true
+	}
+	for _, r := range extraKeep {
+		if r != "" {
+			repos[repositoryOf(r)] = true
+		}
 	}
 	if mirror := repositoryOf(strings.TrimSpace(u.cfg.Image.SandboxImageMirror)); mirror != "" {
 		repos[mirror] = true

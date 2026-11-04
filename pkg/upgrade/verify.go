@@ -109,6 +109,38 @@ func verifyPinned(ctx context.Context, p *progress, step string, verifyCmd []str
 		target, strings.Join(digests, ", "))
 }
 
+// verifyLoaded runs verifyCmd against an image loaded from release assets,
+// which has a verified local Docker image ID (`sha256:...`) and tarball
+// checksum rather than a registry RepoDigest.
+func verifyLoaded(ctx context.Context, p *progress, step string, verifyCmd []string, ref, imageID string) error {
+	if target, ok := digestRef(ref); ok {
+		return verifyPinned(ctx, p, step, verifyCmd, target)
+	}
+	target := strings.TrimSpace(ref)
+	if target == "" {
+		target = strings.TrimSpace(imageID)
+	}
+	if target == "" {
+		return fmt.Errorf("loaded image has no reference or ID to verify")
+	}
+	argv := append(append([]string{}, verifyCmd...), target)
+	out, err := runAsked(ctx, p, step, verifyTimeout, argv)
+	if err != nil {
+		return fmt.Errorf("verifying the signature on loaded image %s: %w", target, err)
+	}
+	digests := verifiedDigests(out)
+	if len(digests) == 0 || imageID == "" {
+		return nil
+	}
+	for _, d := range digests {
+		if sameImageID(d, imageID) {
+			return nil
+		}
+	}
+	return fmt.Errorf("verifying the signature on loaded image %s: the verifier reported signatures for %s and not for %s",
+		target, strings.Join(digests, ", "), imageID)
+}
+
 // verifyTag runs verifyCmd against tag, an image that has not been
 // pulled, and returns `tag@sha256:...` for the one digest the verifier
 // says it verified. The Kubernetes path's form: there, the first thing to

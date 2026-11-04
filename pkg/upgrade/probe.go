@@ -86,15 +86,34 @@ func (u *Upgrader) AlreadyRunning(ctx context.Context, branch string) (bool, err
 		if err != nil {
 			return false, err
 		}
-		running, ok := digestRef(current)
-		if !ok || repositoryOf(current) != repositoryOf(tag) {
-			return false, nil
+		checkRegistry := func() (bool, error) {
+			running, ok := digestRef(current)
+			if !ok || repositoryOf(current) != repositoryOf(tag) {
+				return false, nil
+			}
+			digest, err := u.manifestDigest(ctx, tag)
+			if err != nil {
+				return false, err
+			}
+			return running == repositoryOf(tag)+"@"+digest, nil
 		}
-		digest, err := u.manifestDigest(ctx, tag)
-		if err != nil {
-			return false, err
+		if u.EffectiveImageSource() == ImageSourceReleaseAssets && !u.shouldBypassDefaultReleaseAssets() {
+			same, relErr := u.alreadyRunningReleaseAssets(ctx, branch, current, tag)
+			if relErr == nil {
+				return same, nil
+			}
+			if ok, _ := u.shouldFallbackToRegistry(relErr); ok {
+				return checkRegistry()
+			}
+			return false, relErr
 		}
-		return running == repositoryOf(tag)+"@"+digest, nil
+		same, regErr := checkRegistry()
+		if regErr != nil && u.EffectiveImageFallback() == ImageSourceReleaseAssets {
+			if relSame, relErr := u.alreadyRunningReleaseAssets(ctx, branch, current, tag); relErr == nil {
+				return relSame, nil
+			}
+		}
+		return same, regErr
 	}
 	running, err := u.Running()
 	if err != nil {
