@@ -530,3 +530,55 @@ func TestThreeSegmentHostQualifiedRepoConfigAndMemory(t *testing.T) {
 		t.Errorf("other 3-segment memory status = %d, want 403", rec.Code)
 	}
 }
+
+// queryMergeQueueDeploy answers deploy://merge-queue reads that carry a
+// query, recording what each was asked.
+type queryMergeQueueDeploy struct {
+	stubDeployProvider
+	got *MergeQueueQuery
+}
+
+func (d queryMergeQueueDeploy) ReadMergeQueueQuery(_ context.Context, q MergeQueueQuery) (string, error) {
+	*d.got = q
+	if q.JSON {
+		return `{"repo":"` + q.Repo + `"}` + "\n", nil
+	}
+	return "queue of " + q.Repo + "\n", nil
+}
+
+// deploy://merge-queue?repo=&format=json reaches a provider that answers
+// queries with the repository, the format and -- for a caller reaching
+// the queue under ci:read alone -- the scope's own repository limit; a
+// provider that cannot answer one refuses it rather than ignoring it.
+func TestMergeQueueQueryCarriesRepoFormatAndCIRepoLimit(t *testing.T) {
+	t.Parallel()
+	var got MergeQueueQuery
+	srv := &Server{Deploy: queryMergeQueueDeploy{stubDeployProvider: stubDeployProvider{mergeQueue: "whole queue\n"}, got: &got}}
+	byCI := Scope{MayReadCI: true, AllowedRepos: map[string]bool{"acme/widgets": true}, MergeQueueByCI: true}
+
+	rec := serveRequest(srv, byCI, http.MethodGet, "/fs/deploy/merge-queue?repo=acme/widgets&format=json", nil)
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"repo":"acme/widgets"}` {
+		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if got.Repo != "acme/widgets" || !got.JSON || got.Permits == nil {
+		t.Fatalf("query = %+v", got)
+	}
+	if got.Permits("acme/secret") || !got.Permits("acme/widgets") {
+		t.Error("a ci:read caller's query should carry its repository limit")
+	}
+
+	got = MergeQueueQuery{}
+	rec = serveRequest(srv, Scope{MayReadAllCI: true}, http.MethodGet, "/fs/deploy/merge-queue?repo=acme/widgets", nil)
+	if rec.Code != http.StatusOK || rec.Body.String() != "queue of acme/widgets\n" || got.JSON || got.Permits != nil {
+		t.Fatalf("status=%d body=%q query=%+v", rec.Code, rec.Body.String(), got)
+	}
+
+	plain := &Server{Deploy: stubDeployProvider{mergeQueue: "whole queue\n"}}
+	if rec := serveRequest(plain, Scope{MayReadAllCI: true}, http.MethodGet, "/fs/deploy/merge-queue", nil); rec.Code != http.StatusOK ||
+		rec.Body.String() != "whole queue\n" {
+		t.Fatalf("an unqueried read: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if rec := serveRequest(plain, Scope{MayReadAllCI: true}, http.MethodGet, "/fs/deploy/merge-queue?repo=acme/widgets", nil); rec.Code != http.StatusBadRequest {
+		t.Fatalf("a provider that cannot narrow the queue should refuse ?repo=: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+}

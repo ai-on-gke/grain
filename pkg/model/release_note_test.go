@@ -217,3 +217,46 @@ func TestReleaseNoteRefusesAWeekItCannotBeReadBackUnder(t *testing.T) {
 		t.Error("a note was filed under a period nothing else spells that way")
 	}
 }
+
+func TestStatsPeriodRangeCoversDaysWeeksAndMonths(t *testing.T) {
+	when := time.Date(2026, 11, 4, 15, 30, 0, 0, time.UTC)
+	if got := model.DayPeriod(when, time.UTC); got != "2026-11-04" {
+		t.Errorf("DayPeriod = %q, want 2026-11-04", got)
+	}
+	if got := model.MonthPeriod(when, time.UTC); got != "2026-11" {
+		t.Errorf("MonthPeriod = %q, want 2026-11", got)
+	}
+
+	daySince, dayUntil, err := model.StatsPeriodRange("2026-11-04", time.UTC)
+	if err != nil {
+		t.Fatalf("StatsPeriodRange(day): %v", err)
+	}
+	if !daySince.Equal(time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)) ||
+		!dayUntil.Equal(time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("day range = [%s, %s), want [2026-11-04, 2026-11-05)", daySince, dayUntil)
+	}
+
+	monthSince, monthUntil, err := model.StatsPeriodRange("2026-11", time.UTC)
+	if err != nil {
+		t.Fatalf("StatsPeriodRange(month): %v", err)
+	}
+	if !monthSince.Equal(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)) ||
+		!monthUntil.Equal(time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("month range = [%s, %s), want [2026-11-01, 2026-12-01)", monthSince, monthUntil)
+	}
+
+	weekSince, weekUntil, err := model.StatsPeriodRange("2026-W38", time.UTC)
+	if err != nil {
+		t.Fatalf("StatsPeriodRange(week): %v", err)
+	}
+	if !weekSince.Equal(time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)) ||
+		!weekUntil.Equal(time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("week range = [%s, %s), want [2026-09-14, 2026-09-21)", weekSince, weekUntil)
+	}
+
+	for _, bad := range []string{"", "2026-13", "2026-00", "2026-02-30", "2026-11-4", "2026-W54", "last week"} {
+		if _, _, err := model.StatsPeriodRange(bad, time.UTC); err == nil {
+			t.Errorf("StatsPeriodRange(%q) succeeded, want error", bad)
+		}
+	}
+}

@@ -224,6 +224,8 @@ Usage: `grain ci log [<run-id> | --task <id>] [--repo owner/name] [--job <j>] [-
 
 ### 3.4 `grain ci test-history` {#CLI-89}
 
+The external `grain ci test-history` is [host #CLI-62](host.spec.md#CLI-62), rendering the same report.
+
 `grain ci test-history <test-name>` sends `GET /cli/ci/test-history?test=<name>[&limit][&repo]`.
 
 <!-- BEGIN GENERATED FLAGS: grain ci test-history -->
@@ -255,6 +257,8 @@ Usage: `grain ci artifact <job> <name> [-o <dest>] [--run <run-id> | --task <id>
 **Pinned by:** `pkg/sandboxcli/actions_test.go`: `TestSandboxAPIInputModesAndCIArtifactDownload`.
 
 ### 3.6 `grain ci wait` and `grain ci run-job` {#CLI-91}
+
+The external `grain ci wait` is [host #CLI-62](host.spec.md#CLI-62): it names its run, waits up to 30m with no wait credit, and answers the same JSON shape.
 
 `grain ci wait` sends `POST /cli/ci/wait` with `{"timeout_seconds", "jobs"?, "resume_run_id"?}`. `grain ci run-job <job>` sends `POST /cli/ci/run-job` with `{"job", "timeout_seconds", "resume_run_id"?}`.
 
@@ -290,6 +294,8 @@ Usage: `grain ci run-job <job> [--timeout 9m] [--resume <run-id>]`
 **Pinned by:** `pkg/sandboxcli/actions_test.go`: `TestSandboxCIWaitReportsEachVerdict`, `TestParseWaitTimeout`.
 
 ### 3.7 `grain ci retrigger` {#CLI-92}
+
+The external `grain ci retrigger <run-id>` is [host #CLI-62](host.spec.md#CLI-62).
 
 `POST /cli/ci/retrigger` with `{"jobs"?, "all"?, "commit"?, "workflow"?}`. Reruns failed or named jobs fresh and uncached.
 
@@ -372,6 +378,8 @@ Usage: `grain pr review-comment <body|--file f> [--path <file> --line <N>]`
 **Pinned by:** `pkg/sandboxcli/actions_test.go`: `TestStage3SandboxCLICommands`; `pkg/sandboxcli/sandboxcli_test.go`: `TestSandboxCLIReadsOtherTasksCI`.
 
 ### 3.9 `grain merge-queue` {#CLI-95}
+
+The external `grain merge-queue` is [host #CLI-107](host.spec.md#CLI-107), reading the same file.
 
 Reads `deploy://merge-queue`.
 
