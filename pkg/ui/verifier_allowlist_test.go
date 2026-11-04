@@ -393,7 +393,7 @@ func TestIAPPrincipalsNormalizationClockSkewAndServiceAccounts(t *testing.T) {
 
 	srv, client := testServer(t)
 	client.Config.ProvisionedServiceAccounts = []string{"hostd-runner@my-proj.iam.gserviceaccount.com"}
-	if _, err := client.AllowPrincipal(context.Background(), ui.AllowPrincipalRequest{Entry: "user:alice.smith@example.com"}); err != nil {
+	if _, err := client.AllowPrincipal(context.Background(), ui.AllowPrincipalRequest{Entry: "user:alice.smith@example.com", Reason: "test"}); err != nil {
 		t.Fatal(err)
 	}
 	ui.SetAccessCodeForTest(srv, testAccessCode)
@@ -535,7 +535,7 @@ func TestAllowedPrincipalsDefaultsAndCloudIdentityGroups(t *testing.T) {
 		}
 
 		// Seed owner@example.com into the DB allowlist; takes effect without restart.
-		if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: "user:owner@example.com"}); err != nil {
+		if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: "user:owner@example.com", Reason: "test"}); err != nil {
 			t.Fatal(err)
 		}
 
@@ -899,7 +899,7 @@ func TestGCPKeyPoolAccountsAreNotAdmittedByDefault(t *testing.T) {
 				client.Config.Actor = ui.DefaultActor("owner@example.com")
 				storeSettingsRow(t, client)
 				ctx := context.Background()
-				if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: "user:owner@example.com"}); err != nil {
+				if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: "user:owner@example.com", Reason: "test"}); err != nil {
 					t.Fatal(err)
 				}
 				mc, err := client.Store.GetConfig(ctx)
@@ -1051,7 +1051,7 @@ func TestRefusedPrincipalsAreLoggedOnce(t *testing.T) {
 	if err := client.Store.PutConfig(ctx, *mc); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: "user:owner@example.com"}); err != nil {
+	if _, err := client.AllowPrincipal(ctx, ui.AllowPrincipalRequest{Entry: "user:owner@example.com", Reason: "test"}); err != nil {
 		t.Fatal(err)
 	}
 

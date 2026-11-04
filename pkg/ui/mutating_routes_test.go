@@ -564,22 +564,34 @@ var attributedRoutes = map[string]attributedRoute{
 		agentGrants: []string{"api:capabilities:admin"},
 		recorded:    lastConfigAudit,
 	},
+	// Agents never change who signs in (docs/design/access-rbac.md §3),
+	// and a verified operator assigns only roles with no dangerous scope.
 	"POST /api/access/principals": {
-		body:        `{"entry":"user:newbie@example.com"}`,
-		agentGrants: []string{"api:access:write"},
-		recorded:    lastConfigAudit,
+		body:     `{"entry":"user:newbie@example.com","role":"grain/viewer"}`,
+		recorded: lastConfigAudit,
 	},
-	"DELETE /api/access/principals/{entry}": {
+	"PATCH /api/access/principals/{entry}": {
 		setup: func(t *testing.T, client *ui.Client, _ sender) string {
 			t.Helper()
-			if _, err := client.AllowPrincipal(context.Background(), ui.AllowPrincipalRequest{Entry: "user:temp@example.com"}); err != nil {
+			if _, err := client.AllowPrincipal(context.Background(), ui.AllowPrincipalRequest{Entry: "user:temp@example.com", Role: "grain/viewer"}); err != nil {
 				t.Fatalf("seeding allowed principal: %v", err)
 			}
 			return "user:temp@example.com"
 		},
-		path:        "/api/access/principals/{id}",
-		agentGrants: []string{"api:access:write"},
-		recorded:    lastConfigAudit,
+		path:     "/api/access/principals/{id}",
+		body:     `{"role":"grain/contributor"}`,
+		recorded: lastConfigAudit,
+	},
+	"DELETE /api/access/principals/{entry}": {
+		setup: func(t *testing.T, client *ui.Client, _ sender) string {
+			t.Helper()
+			if _, err := client.AllowPrincipal(context.Background(), ui.AllowPrincipalRequest{Entry: "user:temp@example.com", Role: "grain/viewer"}); err != nil {
+				t.Fatalf("seeding allowed principal: %v", err)
+			}
+			return "user:temp@example.com"
+		},
+		path:     "/api/access/principals/{id}",
+		recorded: lastConfigAudit,
 	},
 	"POST /api/pipeline-pause": {
 		body: `{"reason":"maintenance"}`,

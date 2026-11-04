@@ -1564,7 +1564,10 @@ func (s *Server) queryCallRepo(r *http.Request, pattern string, allowed func(str
 // narrowed to when it names none: the one repository granted, or the
 // task's own where that is among those granted (or grain-ci reaches it).
 func agentDefaultRepo(acting *model.Task, granted []string, ciCap bool) string {
-	own := taskRepo(acting)
+	var own string
+	if acting != nil {
+		own = taskRepo(acting)
+	}
 	if own != "" && (ciCap || slices.ContainsFunc(granted, func(g string) bool { return model.SameRepoText(g, own) })) {
 		return own
 	}
