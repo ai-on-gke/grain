@@ -1,0 +1,104 @@
+name: Release train
+title: Run the release train (cut, check, stage)
+base: main
+# Reads main's tests.yml / release.yml / nightly.yml verdicts (GitHub
+# Actions runs, through grain's own forge connection: `grain -json ci list`).
+# The api:release-gate-read preset and package-publish are CI-only
+# (model.CapabilitySpec.CIOnly), so a task holds neither: this train pushes
+# git refs and nothing else, and its images are a CI job's to publish.
+capabilities: [grain-ci]
+# The release train's tag grant (design/playbook/releases.playbook.md §0.4):
+# the refs the train owns, and no more. Read from main by the declaration
+# sync, scoped to ai-on-gke/grain and to tasks filed from this template,
+# and pushed with the filing team's own credential (pkg/model/ref_push.go,
+# gitproxy.ModelAuthorizer.AuthorizeRefUpdates).
+#
+# vX.Y.Z and `latest` are deliberately absent: they are the promotion's
+# refs, pushed by the person's approval run (promote-release.yml) with its
+# own credential. A train that could push them could release without the
+# approval. Changing this list waits for a person's Submit
+# (pkg/trustboundary's template-push category); so does this file.
+#
+# Each push also has to land on a commit main (or candidate, or a
+# release/v* branch) already has: the proxy refuses a commit the push
+# carries or one only on this task's branch (pushCheck.onHistory), since
+# the workflows these refs start run the pushed commit's code.
+push:
+  - refs/tags/v*-rc.*
+  - refs/tags/v*-pending
+  - refs/tags/v*-discarded
+  - ref: refs/heads/candidate
+    force: true
+  # The rc.3 convergence branch (playbook §5), made once from rc.2's
+  # commit: created only -- no force, no delete (the approval deletes it).
+  - refs/heads/release/v*
+body: |
+  Run grain's release train once: `scripts/release-from-trunk.sh` in its
+  train mode (no subcommand). It does everything up to the release and
+  stops there:
+
+  - **check**: judge the rc in qualification, if there is one
+    (`scripts/candidate-gate.sh check-qualification`);
+  - **stage**: an rc that qualified is tagged `vX.Y.Z-pending` for a
+    person to approve; one that failed is tagged `vX.Y.Z-rc.N-discarded`;
+  - **cut**: with nothing qualifying, tag the newest known-good `main`
+    commit `vX.Y.Z-rc.N` and force-move `refs/heads/candidate` onto it.
+
+  This task's `push:` grant covers exactly those refs (`v*-rc.*`,
+  `v*-pending`, `v*-discarded`, `candidate`, `release/v*`). It does **not**
+  cover `vX.Y.Z` or `latest`, and the proxy refuses them: those move only
+  when a person presses Approve (`promote-release.yml`). Never run the
+  script's `approve`, `reject` or `rollback` modes, never call
+  `release-images.sh promote`, and never try another way to move `vX.Y.Z`
+  or `latest`. A refusal from the proxy is the grant doing its job, not
+  something to work around.
+
+  ## Steps
+
+  1. Work in a scratch clone, never in your task checkout: running the
+     script there leaves tags behind in it.
+     ```
+     git clone -q "$(git -C ~/work remote get-url origin)" ~/train
+     cd ~/train && git fetch -q --tags --force origin
+     ```
+  2. Hand the train main's CI verdicts as files. It cannot read them
+     itself from a task (no GitHub token, no CI-only release-gate-read).
+     `grain -json ci list` lists this repository's GitHub Actions runs;
+     write what it gives, unedited:
+     ```
+     grain -json ci list --repo ai-on-gke/grain --ref main --provider github-actions --limit 500 > ~/runs.json
+     ```
+     and, when a `vX.Y.Z-rc.N` is in qualification (the newest rc tag past
+     the newest release with no `-discarded` beside it), its nightly.yml
+     runs: `grain -json ci list --repo ai-on-gke/grain --ref <rc tag>
+     --workflow nightly.yml > ~/qual-runs.json`. Never write, edit or
+     filter a verdict by hand: the train trusts these files, and a
+     verdict you made up is a release nobody qualified. If a listing is
+     not in a shape `candidate-gate.sh` reads (it says so and exits),
+     stop and report it rather than reshaping it.
+  3. Run the train:
+     ```
+     RELEASE_PUSH_GRANT=train RELEASE_CI_SOURCE=grain \
+       RELEASE_RUNS_JSON=~/runs.json \
+       RELEASE_QUALIFICATION_RUNS_JSON=~/qual-runs.json \
+       RELEASE_IMAGES=off RELEASE_NOTES_TASK=off RELEASE_NOTIFY=off \
+       bash scripts/release-from-trunk.sh
+     ```
+     Leave out `RELEASE_QUALIFICATION_RUNS_JSON` when no rc is in
+     qualification. With no GitHub token the train cannot read the
+     `grain/release-qualification` check run (Stage 2), so an rc whose
+     Stage 1 passed reads as still pending: report that rather than
+     supplying a check run yourself. `RELEASE_PUSH_GRANT=train` makes the script refuse,
+     before it pushes, any ref outside this template's grant, and any
+     `vX.Y.Z` or `latest` at all.
+  4. Report what it did in your closing note: the rc it cut (and the
+     commit), the rc it staged or dropped and why, or why it cut nothing.
+     If it staged `vX.Y.Z-pending`, say so plainly: the deployment raises
+     `release.pending` for it, and a person's Approve is the one action
+     left.
+
+  An exit of 1 with `escalated_version=` means `RELEASE_MAX_RC_ATTEMPTS`
+  rcs of that version were dropped: report it, because a person decides
+  that one. Any other failure: report the script's output and stop; do
+  not retry with different settings. This task changes no file, so it
+  ends with your closing note, not a pull request.

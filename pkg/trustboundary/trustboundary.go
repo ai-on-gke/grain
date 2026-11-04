@@ -450,6 +450,24 @@ var StatePrivilege = Category{
 	RequiresHuman: true,
 }
 
+// TemplatePush is the category orchestrator's security hold reports for
+// a change to any repository-declared template's `push:` list
+// (design/playbook/releases.playbook.md §0.3, §0.4). A push set is a
+// grant: it lets every task filed from that template update refs beyond
+// its own branch -- the release train's is how it tags release
+// candidates -- so it is made by a person, once, when it merges, and
+// widened only by a person. Which files carry one is the repository's to
+// say, so it cannot be a path on Categories: the hold compares each
+// changed template's push set at the base with the head's
+// (repodecl.TemplatePush), and holds every changed template as if its
+// set changed when it cannot read both.
+var TemplatePush = Category{
+	ID: "template-push",
+	Description: "a template's `push:` list: the refs beyond their own branch that the tasks filed from it " +
+		"may push, which only a person grants or widens",
+	RequiresHuman: true,
+}
+
 // ConfigPolicyPath is the repository-relative path of the config repository's
 // auto-merge exception policy. It is evaluated from the config repository's
 // base branch (main), never from an unmerged pull request head, and is itself
