@@ -389,6 +389,20 @@ func (c *CredentialSet) ForgeHTTPClient(name string, timeout time.Duration) *htt
 	return c.HostOf(name).HTTPClient(timeout)
 }
 
+// AmbientHostHTTPClient returns an http.Client running `<tool> api` for h when
+// source (or the registered source claiming h.Host when source is empty) sends
+// forge traffic through its CLI tool.
+func AmbientHostHTTPClient(h CredentialHost, source string, timeout time.Duration) (*http.Client, bool) {
+	if source == "" {
+		source = AmbientAutoSource(h.Host)
+	}
+	src, ok := resolvedSource(hostName(h.Host), source)
+	if !ok || src.ForgeViaCommand == nil {
+		return nil, false
+	}
+	return commandForgeClient(src, h, timeout), true
+}
+
 // ForgeTransport is the github.Transport for credential name's own
 // host's REST API: what a check of that credential, or a listing of what
 // it reaches, sends with.

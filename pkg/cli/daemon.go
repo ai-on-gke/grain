@@ -453,10 +453,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 	// since nothing here builds or installs a binary: an image deployment
 	// passes neither, and the self-debug capability reads the source the
 	// image carries rather than a checkout a flag names (see sourceDir).
-	upgradeImage := fs.String("upgrade-image", "",
-		"image repository, with no tag, that CI publishes a tag per branch to (e.g. "+
-			"ghcr.io/bwsalmon/grain/grain); set, the UI's Upgrade button pulls a branch's image instead of "+
-			"building one, and -upgrade-image-ref-file is required")
+	upgradeSource := registerUpgradeSourceFlags(fs)
 	// Which branches an upgrade may install (bwsalmon/grain#2385). An
 	// upgrade replaces this daemon with whatever the branch builds, and a
 	// branch name says nothing about whether anybody reviewed it, so the
@@ -1229,7 +1226,7 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		IapBackendService: *iapBackendService,
 		IapResource:       *iapResource,
 		UpgradeSrcDir:     *upgradeSrcDir, UpgradeInstallPath: *upgradeInstallPath, UpgradeRestartCmd: upgradeRestartCmd, UpgradeVerifyCmd: upgradeVerifyCmd,
-		UpgradeImage: *upgradeImage, UpgradeImageRefFile: *upgradeImageRefFile,
+		UpgradeImageRefFile:    *upgradeImageRefFile,
 		UpgradeAllowedBranches: daemon.SplitBranchPatterns(*upgradeAllowedBranches),
 		UpgradeDrainWindow:     *upgradeDrainWindow,
 		RebootCmd:              rebootCmd,
@@ -1310,6 +1307,9 @@ func parseDaemonArgs(args []string) (daemon.Config, *flag.FlagSet, []string, err
 		K8sGranuleAccess:      *k8sGranuleAccess, K8sGranuleReattachTimeout: *k8sGranuleReattachTimeout, SandboxCPUs: *sandboxCPUs, SandboxMemoryMB: *sandboxMemoryMB, SandboxDiskGB: *sandboxDiskGB,
 	}
 	grit.Apply(&cfg)
+	if err = upgradeSource.apply(&cfg, passed); err != nil {
+		return cfg, fs, unknownFlags, err
+	}
 	if cfg.HostdRemote, err = hostdRemote(*hostdTokenFile, *hostdTokenName, *hostdTokenOwner); err != nil {
 		return cfg, fs, unknownFlags, err
 	}
