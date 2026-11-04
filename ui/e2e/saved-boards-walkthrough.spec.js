@@ -1575,4 +1575,90 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     expect(layout.titleWidth).toBeGreaterThanOrEqual(90);
     await page.unroute("**/api/tasks**");
   });
+
+  test("5e. A list board ordered by state keeps both asked states together, ahead of failed", async ({
+    page,
+  }) => {
+    // 2026-11-04 walkthrough: sorting by state followed model.StateOf's
+    // precedence, which puts failed between the two asked states, so a
+    // failed task split the Asked group the sidebar and the Kanban board
+    // show as one. The demo seeds no failed task (failed is what a run
+    // ends in, and the demo runs none), so one of the queued tasks is
+    // reported as failed here.
+    const board = await seedOne(page, "/api/boards", {
+      name: `WT State Order ${Date.now()}`,
+      kind: "list",
+      query: "sort=state:asc&f=state:any:awaiting_reply|awaiting_submit|failed",
+    });
+    seededBoards.push(board.id);
+    await page.route(/\/api\/tasks(\?.*)?$/, async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      const res = await route.fetch();
+      const body = await res.json();
+      const list = Array.isArray(body) ? body : body.tasks;
+      const victim = list.find((t) => t.state === "queued");
+      if (victim) victim.state = "failed";
+      await route.fulfill({ response: res, json: body });
+    });
+    try {
+      await page.goto(`/boards/${board.id}`);
+      await expect(page.locator(".task-row .badge-failed")).toHaveCount(1);
+      const states = await page
+        .locator(".task-row")
+        .evaluateAll((rows) =>
+          rows.map(
+            (r) =>
+              (r
+                .querySelector(".badge")
+                ?.className.match(
+                  /badge-(awaiting_reply|awaiting_submit|failed)/,
+                ) || [])[1],
+          ),
+        );
+      const firstFailed = states.indexOf("failed");
+      expect(states.lastIndexOf("awaiting_reply")).toBeLessThan(firstFailed);
+      expect(states.lastIndexOf("awaiting_submit")).toBeLessThan(firstFailed);
+      expect(states.at(-1)).toBe("failed");
+    } finally {
+      await page.unroute(/\/api\/tasks(\?.*)?$/);
+    }
+  });
+
+  test("6e. A dashboard's running count is named once, not by its mark as well", async ({
+    page,
+  }) => {
+    // 2026-11-04 walkthrough: the grain mark the running tile draws was
+    // labelled "Running" beside the column's own title, so a screen
+    // reader heard "2 Running Running".
+    const board = await seedOne(page, "/api/boards", {
+      name: `WT Counts ${Date.now()}`,
+      kind: "panels",
+      query: "f=repo:any:acme/widgets",
+      panels: [{ kind: "states" }],
+    });
+    seededBoards.push(board.id);
+    await page.goto(`/boards/${board.id}`);
+    const running = page.locator("a.panel-state", { hasText: "Running" });
+    await expect(running.locator(".grain-mark-sheet, canvas")).toHaveCount(1);
+    await expect(running).toHaveAccessibleName(/^\d+ Running$/);
+    // The mark costs the tiles without one no extra gap: every count's
+    // words start the same distance from its tile's left edge.
+    const offsets = await page.locator("a.panel-state").evaluateAll((tiles) =>
+      tiles
+        .filter((a) => !a.querySelector(".panel-state-mark"))
+        .map((a) => {
+          const title = a.querySelector(".panel-state-title");
+          const words = [...title.childNodes].find(
+            (n) => n.nodeType === Node.TEXT_NODE && n.textContent.trim(),
+          );
+          const range = document.createRange();
+          range.selectNodeContents(words);
+          return Math.round(
+            range.getBoundingClientRect().left - a.getBoundingClientRect().left,
+          );
+        }),
+    );
+    expect(offsets.length).toBeGreaterThan(3);
+    expect(new Set(offsets).size).toBe(1);
+  });
 });
