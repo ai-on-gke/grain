@@ -482,7 +482,17 @@ import "strconv"
 // 102 adds `default_hostd` to `repo_config` (model.RepoConfig.DefaultHostd):
 // the hostd pin or label selector a task filed against the repository
 // starts with when neither the filing nor its template names one.
-const SchemaVersion = 102
+//
+// 103 retires the in-process gemini-key onto the gcp server's
+// https://grain.dev/capabilities/gcp#gemini-key: where `gcp_project` is
+// set, seeds the gcp entry in `grain_config`.`mcp_servers` with
+// gemini_key: {project}, minting with the gcp-key-minter secret, and
+// rewrites stored gemini-key grants as 100 did the model proxies.
+//
+// 104 retires the custom command connection type: every stored
+// connection whose framework is "custom" is disabled and kept, with
+// model.RemovedCustomConnectionReason (custom_connection_migration.go).
+const SchemaVersion = 104
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified
@@ -3286,6 +3296,20 @@ var Tables = []string{
   ` + "`commit`" + `     TEXT NOT NULL DEFAULT '',
   ` + "`updated_at`" + ` DATETIME NOT NULL,
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `, ` + "`branch`" + `)
+)`,
+
+	// Where each git_ref schedule last saw the ref it watches
+	// (model.ScheduleRefCursor): the commit it peeled to, so a restart
+	// neither re-fires on a ref that has not moved nor misses one that
+	// moved while the daemon was down. Grain's own record, like
+	// path_trigger_cursor.
+	`CREATE TABLE IF NOT EXISTS ` + "`git_ref_cursor`" + ` (
+  ` + "`schedule_id`" + ` TEXT NOT NULL,
+  ` + "`repo`" + `        TEXT NOT NULL DEFAULT '',
+  ` + "`ref`" + `         TEXT NOT NULL DEFAULT '',
+  ` + "`commit`" + `      TEXT NOT NULL DEFAULT '',
+  ` + "`updated_at`" + `  DATETIME NOT NULL,
+  PRIMARY KEY (` + "`schedule_id`" + `)
 )`,
 
 	// What grain has learned about working here (model.Memory,

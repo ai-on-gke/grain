@@ -37,8 +37,6 @@ import { DISCOVERING_FRAMEWORKS, NO_MODELS_LABEL } from "../state.js";
 // lists by default, with nothing to save: grain keeps that list live
 // (`discovered`). The operator may exclude models from it
 // (`excludedModels`), or pin the connection to a fixed list (`models`).
-// A provider that cannot be asked (a custom command) is only ever the
-// list typed in.
 export default function ConnectionModelsField({
   backend,
   onChange,
@@ -229,7 +227,7 @@ export default function ConnectionModelsField({
               helperText={
                 discoverable
                   ? "Pinned: this connection advertises exactly these, and nothing its provider adds later. Type a name the provider does not list, such as an alias, to add it by hand."
-                  : "The models this connection serves. A task's model is matched against this list. A custom command cannot be asked, so list them here."
+                  : "The models this connection serves. A task's model is matched against this list."
               }
               inputProps={{ ...params.inputProps, ...identifierField }}
             />

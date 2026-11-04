@@ -17,8 +17,14 @@ package ui
 import (
 	"bytes"
 	"context"
+	"crypto"
+	cryptorand "crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -191,6 +197,15 @@ func (c *HTTPClient) getGoogleIDToken(ctx context.Context) (string, error) {
 		audience = c.BaseURL
 	}
 
+	// 0. Cloud Run Direct IAP (Google-managed OAuth, no custom OAuth client)
+	// accepts RS256 service-account self-signed JWTs with audience
+	// "https://<service-host>/*" rather than accounts.google.com OIDC ID tokens.
+	if strings.HasSuffix(audience, "/*") {
+		if tok, exp, err := serviceAccountIAPToken(audience); err == nil && tok != "" {
+			return c.cacheIDToken(tok, exp), nil
+		}
+	}
+
 	// 1. Google Application Default Credentials, minting a token for
 	// this audience.
 	adc := c.adcIDToken
@@ -273,6 +288,78 @@ func adcIDToken(ctx context.Context, audience string) (*oauth2.Token, error) {
 		return nil, err
 	}
 	return ts.Token()
+}
+
+// serviceAccountIAPToken signs an RS256 service-account JWT for Google-managed
+// IAP on Cloud Run ("https://<host>/*") when GOOGLE_APPLICATION_CREDENTIALS
+// points to a service-account JSON key file.
+func serviceAccountIAPToken(audience string) (string, time.Time, error) {
+	credPath := strings.TrimSpace(os.Getenv("GOOGLE_APPLICATION_CREDENTIALS"))
+	if credPath == "" {
+		return "", time.Time{}, nil
+	}
+	raw, err := os.ReadFile(credPath)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	var sa struct {
+		Type         string `json:"type"`
+		ClientEmail  string `json:"client_email"`
+		PrivateKey   string `json:"private_key"`
+		PrivateKeyID string `json:"private_key_id"`
+	}
+	if err := json.Unmarshal(raw, &sa); err != nil {
+		return "", time.Time{}, err
+	}
+	if sa.Type != "service_account" || sa.ClientEmail == "" || sa.PrivateKey == "" {
+		return "", time.Time{}, nil
+	}
+	block, _ := pem.Decode([]byte(sa.PrivateKey))
+	if block == nil {
+		return "", time.Time{}, errors.New("invalid PEM block in service account private_key")
+	}
+	var rsaKey *rsa.PrivateKey
+	if parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
+		var ok bool
+		rsaKey, ok = parsed.(*rsa.PrivateKey)
+		if !ok {
+			return "", time.Time{}, errors.New("service account private_key is not RSA")
+		}
+	} else if parsed1, err1 := x509.ParsePKCS1PrivateKey(block.Bytes); err1 == nil {
+		rsaKey = parsed1
+	} else {
+		return "", time.Time{}, err
+	}
+
+	now := time.Now().UTC()
+	exp := now.Add(time.Hour)
+	hdr := map[string]string{"alg": "RS256", "typ": "JWT"}
+	if sa.PrivateKeyID != "" {
+		hdr["kid"] = sa.PrivateKeyID
+	}
+	claims := map[string]any{
+		"iss": sa.ClientEmail,
+		"sub": sa.ClientEmail,
+		"aud": audience,
+		"iat": now.Unix(),
+		"exp": exp.Unix(),
+	}
+	hdrJSON, err := json.Marshal(hdr)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	claimsJSON, err := json.Marshal(claims)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	enc := base64.RawURLEncoding.EncodeToString
+	signingInput := enc(hdrJSON) + "." + enc(claimsJSON)
+	sum := sha256.Sum256([]byte(signingInput))
+	sig, err := rsa.SignPKCS1v15(cryptorand.Reader, rsaKey, crypto.SHA256, sum[:])
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	return signingInput + "." + enc(sig), exp, nil
 }
 
 func runGcloud(ctx context.Context, args ...string) (string, error) {
@@ -549,8 +636,22 @@ func (c *HTTPClient) httpError(resp *http.Response) error {
 	case http.StatusServiceUnavailable:
 		return &UnavailableError{message: message}
 	default:
-		return fmt.Errorf("grain server: %s (%s)", message, resp.Status)
+		return &StatusError{StatusCode: resp.StatusCode, Status: resp.Status, Message: message}
 	}
+}
+
+// StatusError is any other non-2xx answer from the daemon: 401, 409,
+// 422, a 5xx. It keeps the status code so a caller can say what kind of
+// failure it was (the CLI's exit codes, pkg/cli/errors.go) without
+// reading it back out of the sentence.
+type StatusError struct {
+	StatusCode int
+	Status     string
+	Message    string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("grain server: %s (%s)", e.Message, e.Status)
 }
 
 // loopbackUnauthorizedHint returns an actionable hint for a 401 received

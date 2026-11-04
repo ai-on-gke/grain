@@ -24,6 +24,8 @@ import {
   Typography,
 } from "@mui/material";
 import { GlyphLabel } from "./ItemGlyph.jsx";
+import { HighlightedText } from "./SearchSelect.jsx";
+import { searchFilter } from "../fuzzy.js";
 import { identifierField } from "../identifierField.js";
 
 // looksLikeRepo mirrors model.ParseRepo, which is what the server runs a
@@ -31,7 +33,7 @@ import { identifierField } from "../identifierField.js";
 // split on "/", no segment empty. Checked here so a typo is caught while
 // it is still being typed rather than as a rejected submit that takes
 // the rest of the form down with it.
-function looksLikeRepo(text) {
+export function looksLikeRepo(text) {
   const parts = text.split("/");
   if (parts.length === 2) {
     return parts[0].length > 0 && parts[1].length > 0;
@@ -110,10 +112,14 @@ export default function RepoPicker({
 
   const already = new Set(picked);
   const q = query.trim().toLowerCase();
-  const matches = options
-    .filter((r) => !already.has(r))
-    .filter((r) => r.toLowerCase().includes(q))
-    .slice(0, 8);
+  // Matched the way RepoField's list is (searchFilter, fuzzy.js): every
+  // word typed, anywhere in owner/name, best first, and the letters in
+  // order when nothing matches outright.
+  const found = searchFilter(
+    options.filter((r) => !already.has(r)),
+    q,
+  ).slice(0, 8);
+  const matches = found.map((m) => m.item);
 
   // The typed text itself, offered only when it is a repo nothing in the
   // list already covers -- an exact match on an option would otherwise
@@ -128,7 +134,12 @@ export default function RepoPicker({
   // options, then the "add what I typed" row, as one list so both are
   // reachable the same way.
   const rows = [
-    ...matches.map((r) => ({ key: r, label: r, repos: [r] })),
+    ...found.map(({ item: r, ranges }) => ({
+      key: r,
+      label: r,
+      ranges,
+      repos: [r],
+    })),
     ...(custom
       ? [
           {
@@ -275,7 +286,9 @@ export default function RepoPicker({
                 >
                   <GlyphLabel kind="repos">
                     <ListItemText
-                      primary={row.label}
+                      primary={
+                        <HighlightedText text={row.label} ranges={row.ranges} />
+                      }
                       primaryTypographyProps={{ noWrap: true }}
                     />
                   </GlyphLabel>

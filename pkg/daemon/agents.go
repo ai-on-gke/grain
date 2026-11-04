@@ -34,10 +34,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
 	"github.com/ai-on-gke/grain/pkg/agent/claude"
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
-	"github.com/ai-on-gke/grain/pkg/agent/custom"
 	"github.com/ai-on-gke/grain/pkg/agent/sessionstore"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 )
@@ -311,6 +309,13 @@ func (p *AgentPool) resolve(ctx context.Context, live Config, choice orchestrato
 		req.team = model.DefaultTeamID
 	}
 	backendID := strings.TrimSpace(choice.BackendID)
+	// A task pinned to the retired custom command framework, to one of
+	// its connections (which migration 104 disabled and kept), or to a
+	// model only such a connection served, falls back to the default
+	// model selection: there is nothing left that can run the pin.
+	// Not logged here, which every dispatch tick reaches: the daemon
+	// names each such connection when it starts.
+	dropRemovedCustomPin(live.AgentBackends, &req.framework, &backendID, &req.model)
 	// A pin that names no connection is a model choice from before
 	// model.Task.Model existed, which a task filed by an older proposer
 	// can still carry.
@@ -438,6 +443,28 @@ func (p *AgentPool) resolve(ctx context.Context, live Config, choice orchestrato
 		req.model = req.models[0]
 	}
 	return req, nil
+}
+
+// dropRemovedCustomPin clears whichever of framework, backendID and
+// modelName pin a run to the retired custom command framework. A model
+// is only cleared when no other connection serves it.
+func dropRemovedCustomPin(backends []model.AgentBackend, framework, backendID, modelName *string) {
+	if strings.TrimSpace(*framework) == model.RemovedAgentFrameworkCustom {
+		*framework = ""
+	}
+	if b := findBackendByID(backends, *backendID); b != nil && b.IsRemovedCustomConnection() {
+		*backendID = ""
+	}
+	if *modelName != "" && !servedOutsideCustom(backends, *modelName) &&
+		slices.ContainsFunc(backends, func(b model.AgentBackend) bool { return b.IsRemovedCustomConnection() && b.SupportsModel(*modelName) }) {
+		*modelName = ""
+	}
+}
+
+// servedOutsideCustom reports whether a connection other than a retired
+// custom command one advertises m.
+func servedOutsideCustom(backends []model.AgentBackend, m string) bool {
+	return slices.ContainsFunc(backends, func(b model.AgentBackend) bool { return !b.IsRemovedCustomConnection() && b.SupportsModel(m) })
 }
 
 // avoidLast is models with every one of avoid moved, in order, behind
@@ -983,13 +1010,6 @@ func (p *AgentPool) buildOn(ctx context.Context, live Config, framework string, 
 	// "gemini" spelling dispatches onto the framework that name now
 	// means, rather than falling into the error below.
 	switch model.NormalizeAgentFrameworkName(framework) {
-	case model.AgentFrameworkCustom:
-		if selected == nil {
-			return nil, errors.New("custom agent framework requires a configured backend and command (Settings -> Models)")
-		}
-		// A custom command is handed the model and effort chosen for
-		// this run (docs/custom-agent-backends.md).
-		return buildCustomFramework(live, *selected, chosenModel, effort, secretStore)
 	case model.AgentFrameworkClaude, model.AgentFrameworkCodex, model.AgentFrameworkAntigravity:
 		var built agent.Framework
 		var err error
@@ -1806,160 +1826,6 @@ func buildCodexFramework(ctx context.Context, cfg Config, secretStore *secrets.S
 		opts = append(opts, codex.WithGrainServer(url))
 	}
 	return codex.New(codexPath, grainBinaryPath, opts...), nil
-}
-
-func buildCustomFramework(cfg Config, backend model.AgentBackend, runModel, effort string, secretStore *secrets.Store) (agent.Framework, error) {
-	grainBinaryPath, err := os.Executable()
-	if err != nil {
-		return nil, fmt.Errorf("custom agent backend: locate grain binary: %w", err)
-	}
-	return custom.New(custom.Config{
-		Command: backend.Command, StateRepoDir: StateRepoDir(cfg.DataDir),
-		Model: runModel, Effort: effort,
-		ModelProxy: func(ctx context.Context, run agent.RunConfig) (string, string, func(), error) {
-			return CustomBackendModelProxy(ctx, backend, runModel, run)
-		},
-		MCPServer: func(ctx context.Context, run agent.RunConfig) (custom.Command, error) {
-			args, err := CustomMCPServerArgs(ctx, cfg, run)
-			if err != nil {
-				return custom.Command{}, err
-			}
-			return custom.Command{Command: grainBinaryPath, Args: args}, nil
-		},
-	})
-}
-
-// customBackendModelProxy resolves the model proxy URL and mints a short-lived
-// token for one custom backend run, matching the built-in frameworks' model proxy
-// integration.
-//
-// release revokes that token, and the framework calls it as the run ends:
-// the proxy's registry would otherwise keep honouring it until its lease
-// ran out -- the run's deadline, or DefaultLease for a run that has none
-// -- long after the backend that held it had exited.
-//
-// A backend whose vendor customBackendVendor cannot name gets empty
-// fields rather than a token for whichever proxy happens to be running:
-// that would hand it a vendor it never asked for.
-//
-// The token forwards with the deployment's connection of that vendor
-// (modelproxy.Endpoint.ConnectionFor), as every model proxy token does; a
-// deployment with none gets a token every request on which is refused
-// saying so.
-func CustomBackendModelProxy(ctx context.Context, backend model.AgentBackend, runModel string, run agent.RunConfig) (url, token string, release func(), err error) {
-	vendor, ok := customBackendVendor(backend, runModel)
-	if !ok {
-		return "", "", nil, nil
-	}
-	endpoint := ModelProxies[vendor.Name]
-	if endpoint == nil || endpoint.URL() == "" {
-		return "", "", nil, nil
-	}
-	owner := run.TaskID
-	if owner == "" {
-		owner = "custom"
-	}
-	// Held to the run's own deadline, credit included, as a backstop for
-	// a run whose release never comes (the daemon dying mid-run).
-	var until time.Time
-	if !run.Deadline.IsZero() {
-		until = run.Deadline.Add(orchestrator.RunWaitCreditCap)
-	}
-	connection, err := endpoint.ConnectionFor(ctx, "")
-	if err != nil {
-		return "", "", nil, fmt.Errorf("choosing the proxy's connection: %w", err)
-	}
-	id, token, err := endpoint.MintUntil(owner, connection, until)
-	if err != nil {
-		return "", "", nil, fmt.Errorf("minting proxy token: %w", err)
-	}
-	return endpoint.URL() + vendor.BaseURLSuffix, token, func() { endpoint.Revoke(id) }, nil
-}
-
-func customBackendVendor(backend model.AgentBackend, runModel string) (modelproxy.Vendor, bool) {
-	name := strings.ToLower(runModel)
-	if name == "" {
-		name = strings.ToLower(backend.Name)
-	}
-	if name == "" {
-		name = strings.ToLower(backend.ID)
-	}
-	for _, vendor := range modelproxy.Vendors() {
-		if strings.Contains(name, vendor.Name) {
-			return vendor, true
-		}
-	}
-	if strings.Contains(name, "gpt") || strings.Contains(name, "codex") || strings.Contains(name, "openai") || strings.HasPrefix(name, "o1") || strings.HasPrefix(name, "o3") || strings.HasPrefix(name, "o4") {
-		return modelproxy.OpenAI, true
-	}
-	if strings.Contains(name, "sonnet") || strings.Contains(name, "opus") || strings.Contains(name, "haiku") || strings.Contains(name, "anthropic") {
-		return modelproxy.Claude, true
-	}
-	if strings.Contains(name, "flash") || strings.Contains(name, "google") {
-		return modelproxy.Gemini, true
-	}
-	return modelproxy.Vendor{}, false
-}
-
-// customMCPServerArgs gives an external backend the same Grain tool server
-// the built-in agent CLIs receive. The command owns the transport-specific
-// translation into its agent SDK or CLI.
-func CustomMCPServerArgs(ctx context.Context, cfg Config, run agent.RunConfig) ([]string, error) {
-	var args []string
-	switch {
-	case run.SandboxRoot != "":
-		args = []string{"mcpserver", "-sandbox-root", run.SandboxRoot}
-	case run.GranuleVM != "":
-		if cfg.GranuleSSHUser == "" || cfg.GranuleWorkspace == "" {
-			return nil, errors.New("custom agent backend: granule run requires SSH user and workspace")
-		}
-		args = []string{"mcpserver", "-granule-vm", run.GranuleVM,
-			"-ssh-user", cfg.GranuleSSHUser, "-workspace", cfg.GranuleWorkspace}
-		if cfg.GranuleExecKey != "" {
-			args = append(args, "-exec-key", cfg.GranuleExecKey)
-		}
-	case run.Container != "":
-		args = []string{"mcpserver", "-container", run.Container}
-	default:
-		return nil, errors.New("custom agent backend: sandbox root, granule VM, or container is required")
-	}
-	if run.Repo != "" && run.Branch != "" {
-		args = append(args, "-data-dir", cfg.DataDir, "-pr-repo", run.Repo, "-pr-branch", run.Branch)
-		if run.Base != "" {
-			args = append(args, "-pr-base", run.Base)
-		}
-		if run.Repair {
-			args = append(args, "-pr-repair")
-		}
-		if run.GitHubCIIgnored {
-			args = append(args, "-pr-ignore-github-ci")
-		}
-		if run.BaseIncident != "" {
-			args = append(args, "-pr-base-incident", run.BaseIncident)
-		}
-		if run.PullRequestNumber > 0 {
-			args = append(args, "-pr-number", fmt.Sprintf("%d", run.PullRequestNumber))
-		}
-		if run.GitCredential != "" {
-			args = append(args, "-pr-credential", run.GitCredential)
-		}
-		if cfg.GithubHost != "" {
-			args = append(args, "-github-host", cfg.GithubHost)
-		}
-		if cfg.GithubInsecureHTTP {
-			args = append(args, "-github-insecure-http")
-		}
-	}
-	if server := daemonServerURL(cfg.UiAddr); server != "" && run.TaskID != "" {
-		args = append(args, "-server", server, "-task", run.TaskID)
-	}
-	args = append(args, agent.GrantArgs(run)...)
-	args = append(args, agent.ProposeRepoArgs(run)...)
-	args = append(args, agent.SandboxEnvArgs(run)...)
-	args = append(args, agent.InteractiveArgs(run)...)
-	args = append(args, agent.AddendaArgs(run)...)
-	args = append(args, agent.RunDeadlineArgs(ctx, run)...)
-	return args, nil
 }
 
 // daemonServerURL is the base URL this same process's own UI/API server

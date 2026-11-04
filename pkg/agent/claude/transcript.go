@@ -96,11 +96,6 @@ func parseTranscript(stdout string) (*agent.Result, error) {
 	return &p.result, nil
 }
 
-// ParseStreamJSON reads a finished --output-format stream-json capture
-// into a Result, as this package does for its own runs. agent/custom uses
-// it for a declared mapping whose CLI emits the same events.
-func ParseStreamJSON(stdout string) (*agent.Result, error) { return parseTranscript(stdout) }
-
 // PartialTranscript renders whatever of a still-in-progress
 // --output-format stream-json capture is on disk so far into the same
 // human-readable narrative parseTranscript builds once a run finishes --

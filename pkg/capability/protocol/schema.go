@@ -139,6 +139,9 @@ var annotationKeywords = map[string]bool{
 	"$schema": true, "$id": true, "$comment": true, "$anchor": true,
 	"title": true, "description": true, "default": true, "examples": true,
 	"format": true, "deprecated": true, "readOnly": true, "writeOnly": true,
+	// Grain's own: who may grant a value, which GrantKindOf enforces, not
+	// the validator.
+	PersonGrantedArgKey: true,
 }
 
 var schemaTypes = map[string]bool{

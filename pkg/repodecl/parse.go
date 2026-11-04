@@ -596,6 +596,8 @@ type rawSchedule struct {
 type rawScheduleTrigger struct {
 	GitHubWorkflowRun     *model.GitHubWorkflowRunTrigger `yaml:"github_workflow_run"`
 	GitHubWorkflowRunDash *model.GitHubWorkflowRunTrigger `yaml:"github-workflow-run"`
+	GitRef                *model.GitRefTrigger            `yaml:"git_ref"`
+	GitRefDash            *model.GitRefTrigger            `yaml:"git-ref"`
 }
 
 type rawEvery struct {
@@ -866,7 +868,8 @@ func parseRecurrence(f file, raw rawSchedule) (model.Recurrence, error) {
 	if len(found) != 1 {
 		return model.Recurrence{}, fmt.Errorf("%s: a schedule needs exactly one cadence -- "+
 			"`every: {hours: N}`, `every: {minutes: N}`, `daily: {at: \"09:00\"}`, `weekly: {day: monday, at: \"09:00\"}`, "+
-			"`monthly: {day: 1, at: \"09:00\"}` or `trigger: {github_workflow_run: ...}` -- and this one has %d", f.path, len(found))
+			"`monthly: {day: 1, at: \"09:00\"}`, `trigger: {github_workflow_run: ...}` or `trigger: {git_ref: ...}` -- "+
+			"and this one has %d", f.path, len(found))
 	}
 	tz := strings.TrimSpace(raw.TimeZone)
 	var r model.Recurrence
@@ -876,11 +879,30 @@ func parseRecurrence(f file, raw rawSchedule) (model.Recurrence, error) {
 		if gh == nil {
 			gh = raw.Trigger.GitHubWorkflowRunDash
 		}
-		if gh == nil {
-			return model.Recurrence{}, fmt.Errorf("%s: `trigger` needs `github_workflow_run`", f.path)
+		ref := raw.Trigger.GitRef
+		if ref == nil {
+			ref = raw.Trigger.GitRefDash
 		}
-		cp := *gh
-		r = model.Recurrence{Kind: model.RecurrenceGitHubWorkflowRun, GitHubWorkflowRun: &cp, TimeZone: tz}
+		switch {
+		case gh != nil && ref != nil:
+			return model.Recurrence{}, fmt.Errorf("%s: `trigger` takes `github_workflow_run` or `git_ref`, not both", f.path)
+		case ref != nil:
+			cp := model.GitRefTrigger{Repo: strings.TrimSpace(ref.Repo), Ref: strings.TrimSpace(ref.Ref)}
+			// grain/config is read off grain's own disk with no credential
+			// in front of it, and no repository's file may reach it
+			// (parseCapabilities): not even to learn where its refs are.
+			if watched, err := model.ParseRepo(cp.Repo); err == nil && model.IsConfigRepo(watched) {
+				return model.Recurrence{}, fmt.Errorf("%s: `git_ref` watches %s, which is grain's own "+
+					"configuration; no repository's file may reach it -- a schedule that watches it is "+
+					"declared in grain's own settings", f.path, watched)
+			}
+			r = model.Recurrence{Kind: model.RecurrenceGitRef, GitRef: &cp, TimeZone: tz}
+		case gh != nil:
+			cp := *gh
+			r = model.Recurrence{Kind: model.RecurrenceGitHubWorkflowRun, GitHubWorkflowRun: &cp, TimeZone: tz}
+		default:
+			return model.Recurrence{}, fmt.Errorf("%s: `trigger` needs `github_workflow_run` or `git_ref`", f.path)
+		}
 	case "every":
 		switch {
 		case raw.Every.Hours != 0 && raw.Every.Minutes != 0:

@@ -208,7 +208,17 @@ func openStore(driver, dsn, dataDir string) (*model.Store, *sql.DB, int, error) 
 	}
 	sweepOrphanedSettingsRows(ctx, store)
 	liftMisdirectedQuestions(ctx, store)
+	logRemovedCustomConnections(ctx, store)
 	return store, db, migratedFrom, nil
+}
+
+// logRemovedCustomConnections names, once per store open, every custom
+// command connection the store still holds: migration 104 disabled them,
+// and the operator is owed a line saying so until each is deleted.
+func logRemovedCustomConnections(ctx context.Context, store *model.Store) {
+	if cfg, err := store.GetConfig(ctx); err == nil && cfg != nil {
+		model.LogRemovedCustomConnections(cfg.AgentBackends)
+	}
 }
 
 // liftMisdirectedQuestions un-parks the tasks another task's run parked
