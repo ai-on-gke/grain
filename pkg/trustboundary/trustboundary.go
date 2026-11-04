@@ -92,6 +92,9 @@ type Category struct {
 // hostd install script served unauthenticated and run as root, with the
 // route that renders it (setup-scripts).
 //
+// v14 added the rc qualification housekeeping workflow and its Actions
+// helper to release-machinery (grain/task-2584).
+//
 // v13 added the GitHub Actions Inbox approval (grain/task-2666,
 // design/playbook/releases.playbook.md §0.2) to release-promotion: the
 // route that signs a person's answer and dispatches promote-release.yml,
