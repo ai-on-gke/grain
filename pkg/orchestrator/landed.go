@@ -444,8 +444,14 @@ func mergedPullRequestOf(client github.Client, task model.Task, skip *model.Pull
 // whose head is still the branch's tip is the same work, whatever the
 // content check could or could not read.
 func landedForTask(client github.Client, task model.Task, base string, skip *model.PullRequestRef) landedWork {
+	return landedForTaskWithStore(context.Background(), nil, client, task, base, skip)
+}
+
+func landedForTaskWithStore(ctx context.Context, store *model.Store, client github.Client, task model.Task, base string, skip *model.PullRequestRef) landedWork {
 	branch := task.BranchName()
-	w := workOnBase(client, *task.Target, base, branch)
+	prRepo, headRef, _ := taskPullRequestTarget(ctx, store, task)
+	w := workOnBase(client, prRepo, base, headRef)
+	w.Branch = branch
 	if ref, detail, ok := mergedPullRequestOf(client, task, skip); ok {
 		w.MergedPR, w.MergedSHA = ref, detail.MergeCommitSHA
 		if detail.HeadSHA != "" {
@@ -618,14 +624,15 @@ func ReattachPullRequest(ctx context.Context, store *model.Store, client github.
 		// around the very hold the review is there to settle.
 		return nil, nil
 	}
-	pr, err := client.FindOpenPullRequestForBranch(task.Target.Owner, task.Target.Name, task.BranchName())
+	prRepo, headRef, _ := taskPullRequestTarget(ctx, store, task)
+	pr, err := client.FindOpenPullRequestForBranch(prRepo.Owner, prRepo.Name, headRef)
 	if err != nil {
 		return nil, fmt.Errorf("orchestrator: looking for %s's open pull request: %w", task.ID, err)
 	}
 	if pr == nil {
 		return nil, nil
 	}
-	ref := model.PullRequestRef{Repo: *task.Target, Number: pr.Number}
+	ref := model.PullRequestRef{Repo: prRepo, Number: pr.Number}
 	linked := false
 	for _, l := range task.Links {
 		if l.Kind == model.LinkFixes && l.Target == ref.String() {

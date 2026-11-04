@@ -1851,6 +1851,9 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 		"daemon-pinned external pull request number within -pr-repo (from model.LinkExternalPR) "+
 			"that pull_request_status, reply_to_pull_request_comment and resolve_review_thread "+
 			"scope to when -pr-branch has no open pull request of its own")
+	prUpstreamRepo := fs.String("pr-upstream-repo", "",
+		"owner/name of the upstream repository that pull requests for -pr-repo are opened and "+
+			"tracked against (model.RepoConfig.UpstreamRepo)")
 	prCredential := fs.String("pr-credential", "",
 		"name of the credential in -data-dir's secrets/github that this run's branch is pushed "+
 			"with (its team's git connection for -pr-repo, or its own github-credential grant), "+
@@ -2118,8 +2121,8 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 	// Unlike the escape hatches, this one acts within the run rather than
 	// after it: it really does read GitHub, from this process, on the
 	// controller. See the file's doc comment.
-	registry.Register(pullRequestToolsWithNumber(*dataDir, *githubHost, *githubInsecureHTTP,
-		*prRepo, *prBranch, *prBase, *prCredential, *prRepair, *prIgnoreGitHubCI, *prBaseIncident,
+	registry.Register(pullRequestToolsWithUpstream(*dataDir, *githubHost, *githubInsecureHTTP,
+		*prRepo, *prBranch, *prBase, *prUpstreamRepo, *prCredential, *prRepair, *prIgnoreGitHubCI, *prBaseIncident,
 		*prNumber, grainCIReader(client, *taskID, grants))...)
 
 	var queueReader mcp.MergeQueueReader
@@ -2608,7 +2611,14 @@ func PullRequestTools(dataDir, githubHost string, insecureHTTP bool, repo, branc
 func pullRequestToolsWithNumber(dataDir, githubHost string, insecureHTTP bool, repo, branch, base, credential string,
 	repair, ignoreGitHubCI bool, baseIncident string, prNumber int, grainCI mcp.GrainCIReader) []mcp.Tool {
 
-	client, scope, err := pullRequestReaderWithNumber(dataDir, githubHost, insecureHTTP, repo, branch, base, credential,
+	return pullRequestToolsWithUpstream(dataDir, githubHost, insecureHTTP, repo, branch, base, "", credential,
+		repair, ignoreGitHubCI, baseIncident, prNumber, grainCI)
+}
+
+func pullRequestToolsWithUpstream(dataDir, githubHost string, insecureHTTP bool, repo, branch, base, upstreamRepo, credential string,
+	repair, ignoreGitHubCI bool, baseIncident string, prNumber int, grainCI mcp.GrainCIReader) []mcp.Tool {
+
+	client, scope, err := pullRequestReaderWithUpstream(dataDir, githubHost, insecureHTTP, repo, branch, base, upstreamRepo, credential,
 		repair, ignoreGitHubCI, baseIncident, prNumber)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
@@ -2659,6 +2669,12 @@ func PullRequestReader(dataDir, githubHost string, insecureHTTP bool, repo, bran
 
 func pullRequestReaderWithNumber(dataDir, githubHost string, insecureHTTP bool, repo, branch, base, credential string,
 	repair, ignoreGitHubCI bool, baseIncident string, prNumber int) (mcp.PullRequestReader, mcp.PullRequestScope, error) {
+	return pullRequestReaderWithUpstream(dataDir, githubHost, insecureHTTP, repo, branch, base, "", credential,
+		repair, ignoreGitHubCI, baseIncident, prNumber)
+}
+
+func pullRequestReaderWithUpstream(dataDir, githubHost string, insecureHTTP bool, repo, branch, base, upstreamRepo, credential string,
+	repair, ignoreGitHubCI bool, baseIncident string, prNumber int) (mcp.PullRequestReader, mcp.PullRequestScope, error) {
 	if repo == "" {
 		return nil, mcp.PullRequestScope{}, nil
 	}
@@ -2671,6 +2687,16 @@ func pullRequestReaderWithNumber(dataDir, githubHost string, insecureHTTP bool, 
 	ref, err := model.ParseRepo(repo)
 	if err != nil {
 		return nil, mcp.PullRequestScope{}, fmt.Errorf("-pr-repo %q: %w", repo, err)
+	}
+	var upRef model.RepoRef
+	if strings.TrimSpace(upstreamRepo) != "" {
+		parsedUp, err := model.ParseRepo(upstreamRepo)
+		if err != nil {
+			return nil, mcp.PullRequestScope{}, fmt.Errorf("-pr-upstream-repo %q: %w", upstreamRepo, err)
+		}
+		if !parsedUp.Same(ref) {
+			upRef = parsedUp
+		}
 	}
 	credentials, err := gitproxy.LoadCredentialSet(filepath.Join(dataDir, "secrets", "github"))
 	if err != nil {
@@ -2697,6 +2723,7 @@ func pullRequestReaderWithNumber(dataDir, githubHost string, insecureHTTP bool, 
 	// pull_request_status and wait_for_checks as well.
 	return client, mcp.PullRequestScope{
 		Owner: ref.Owner, Repo: ref.Name, Branch: branch, Base: base,
+		UpstreamOwner: upRef.Owner, UpstreamRepo: upRef.Name,
 		// Carried through as it was given, and never derived from
 		// anything here: whether a run is a repair is grain's own reading
 		// of the task it dispatched (orchestrator.mergeRepairRun), the

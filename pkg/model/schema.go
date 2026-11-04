@@ -497,7 +497,11 @@ import "strconv"
 // `task_observation`: the request_access call a task is parked on
 // (model.PendingAccessRequest) and the answers people gave its earlier
 // ones (model.AccessDecision), both JSON.
-const SchemaVersion = 105
+//
+// 106 adds `upstream_repo` to `repo_config` (model.RepoConfig.UpstreamRepo):
+// the upstream repository (`<owner>/<name>`) pull requests are opened
+// against when tasks target this fork repository.
+const SchemaVersion = 106
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified
@@ -3151,6 +3155,7 @@ var Tables = []string{
   ` + "`issue_import_approved`" + `    INTEGER NOT NULL DEFAULT 0,
   ` + "`issue_import_interval_seconds`" + ` INTEGER NOT NULL DEFAULT 0,
   ` + "`default_hostd`" + `            TEXT NOT NULL DEFAULT '',
+  ` + "`upstream_repo`" + `            TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 
