@@ -440,12 +440,14 @@ func cmdCIShow(ctx context.Context, c *ui.HTTPClient, out *printer, name string,
 		out.ciRun(run, mode)
 		return nil
 	}
-	run, err := followCIRun(ctx, c, out, id, mode)
+	waitCtx, cancel := waitContext(ctx)
+	defer cancel()
+	run, err := followCIRun(waitCtx, c, out, id, mode)
 	if err != nil {
-		return err
+		return waitResult(waitCtx, err)
 	}
 	out.ciFollowSummary(run, mode)
-	return cicli.RunFailure(run)
+	return targetFailed(cicli.RunFailure(run))
 }
 
 func cmdCIRun(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
@@ -503,12 +505,14 @@ func cmdCIRun(ctx context.Context, c *ui.HTTPClient, out *printer, args []string
 		out.ciStarted(run)
 		return nil
 	}
-	run, err = cicli.Watch(ctx, c, run.ID)
+	waitCtx, cancel := waitContext(ctx)
+	defer cancel()
+	run, err = cicli.Watch(waitCtx, c, run.ID)
 	if err != nil {
-		return err
+		return waitResult(waitCtx, err)
 	}
 	out.ciRun(run, mode)
-	return cicli.RunFailure(run)
+	return targetFailed(cicli.RunFailure(run))
 }
 
 func cmdCICancel(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {

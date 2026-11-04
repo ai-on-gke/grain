@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption, optionValues } from "./searchSelect.js";
 
 // The phone shell (src/phone.js, src/components/PhoneNav.jsx), in the one
 // suite that can actually see a layout: jsdom has no layout engine and no
@@ -679,11 +680,9 @@ test.describe("on a phone", () => {
       .tap();
 
     const repo = page.getByLabel(/^Repos/);
-    const repoOption = repo.locator("option[value*='/']").first();
-    await expect(repoOption).toBeAttached();
-    const option = await repoOption.getAttribute("value");
+    const option = (await optionValues(repo)).find((v) => v.includes("/"));
     expect(option).toBeTruthy();
-    await repo.selectOption(option);
+    await chooseOption(repo, option);
     await recordWideBranch(page, option);
 
     const branch = page.getByLabel("Base branch");
@@ -898,11 +897,9 @@ test.describe("on a tablet", () => {
       .tap();
 
     const repo = page.getByLabel(/^Repos/);
-    const repoOption = repo.locator("option[value*='/']").first();
-    await expect(repoOption).toBeAttached();
-    const option = await repoOption.getAttribute("value");
+    const option = (await optionValues(repo)).find((v) => v.includes("/"));
     expect(option).toBeTruthy();
-    await repo.selectOption(option);
+    await chooseOption(repo, option);
     await recordWideBranch(page, option);
     const branch = page.getByLabel("Base branch");
     await branch.fill("");
