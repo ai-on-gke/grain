@@ -65,6 +65,7 @@ func TestCommandsRefuseArgumentsTheyHaveNoUseFor(t *testing.T) {
 		{"settings", "junk"},
 		{"metrics", "junk"},
 		{"failures", "junk"},
+		{"health", "junk"},
 		{"pause", "junk"},
 		{"ci", "list", "junk"},
 		{"ci", "run", "-repo", "acme/widgets", "-branch", "main", "junk"},

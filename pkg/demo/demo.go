@@ -641,6 +641,7 @@ func Run(opts Options) error {
 		go runDemoReviewQuestions(context.Background(), store, interval)
 	}
 	var srv http.Handler = ui.NewServerWithClient(client)
+	defer ui.RegisterHealthCounters("sign-in verification (demo)", demoHealthCounters(time.Now()))()
 	if fakeCI, ok := cfg.CI.(*demoFakeCI); ok {
 		srv = scheduledWorkflowsDemoHandler(srv, fakeCI, githubSimRepo)
 	}

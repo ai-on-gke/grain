@@ -20,6 +20,7 @@ import { InstallNoticeAlert } from "../InstallNotice.jsx";
 import { SandboxOvercommitStatus } from "../SandboxHealthPage.jsx";
 import UnbackedStateDot, { stateDot } from "../UnbackedStateDot.jsx";
 import GitHubBudgetPanel from "./GitHubBudgetPanel.jsx";
+import HealthCountersPanel from "./HealthCountersPanel.jsx";
 import { HostdHealthNote } from "../HostdMissingNote.jsx";
 import { settingLabel, settingLocation } from "../../settingsPlan.js";
 
@@ -157,6 +158,7 @@ export default function HealthTab({
         sx={{ mb: 1.5 }}
       />
       <GitHubBudgetPanel sx={{ mb: 1.5 }} />
+      <HealthCountersPanel sx={{ mb: 1.5 }} />
       <AlertsPanel
         alerts={alerts}
         onChanged={onChanged}
