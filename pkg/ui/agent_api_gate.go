@@ -222,6 +222,10 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 			next(w, r)
 			return
 		}
+		if tok := externalTokenFromContext(r.Context()); tok != nil && ownCredentialRoute(pattern, r, tok) {
+			next(w, r)
+			return
+		}
 		if pattern != "POST /mcp" {
 			if tok := externalTokenFromContext(r.Context()); tok != nil {
 				call, err := s.authorizeExternalAgentCall(r, pattern, scope, tok)
@@ -251,6 +255,20 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 		r = r.WithContext(withAgentCall(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call))
 		s.serveAgentCall(w, r, next, call)
 	}
+}
+
+// ownCredentialRoute is a call an external agent credential may always
+// make about itself, whatever its scopes: ask what it is (GET
+// /api/auth/whoami) and revoke itself (`grain logout`), both
+// external-cli.spec.md#XC-8 and #XC-9.
+func ownCredentialRoute(pattern string, r *http.Request, tok *model.ExternalAgentToken) bool {
+	switch pattern {
+	case "GET /api/auth/whoami":
+		return true
+	case "POST /api/external-agents/tokens/{id}/revoke":
+		return strings.TrimSpace(r.PathValue("id")) == tok.ID
+	}
+	return false
 }
 
 // agentRefusalStatus is the status a refused agent call answers with: 400
@@ -1272,6 +1290,12 @@ func agentMayRead(acting *model.Task, repo string) bool {
 // grant for every repository reaches it.
 func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, target string, body []byte,
 	acting *model.Task, set APIGrantSet, scope APIScope, ciCap bool) (string, error) {
+	if repo, ok, err := pullRequestCallRepo(r, pattern, body); ok {
+		if err == nil {
+			repo, err = s.agentCanonicalRepo(repo)
+		}
+		return repo, err
+	}
 	if repo, ok, err := s.fsCallRepo(ctx, r, pattern); ok {
 		return repo, err
 	}
@@ -1732,6 +1756,12 @@ func (s *Server) checkExternalTokenRotationEscalation(ctx context.Context, held 
 }
 
 func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pattern string, scope APIScope, set APIGrantSet, target string, body []byte, tok *model.ExternalAgentToken) (string, []string, error) {
+	if repo, ok, err := pullRequestCallRepo(r, pattern, body); ok {
+		if err == nil {
+			repo, err = s.agentCanonicalRepo(repo)
+		}
+		return repo, nil, err
+	}
 	if repo, ok, err := s.fsCallRepo(ctx, r, pattern); ok {
 		return repo, nil, err
 	}
@@ -2192,6 +2222,7 @@ var taskMutationResponseKinds = map[string]taskMutationRespKind{
 	"POST /api/tasks/{id}/approve":                 taskRespSingle,
 	"POST /api/tasks/{id}/withdraw-approval":       taskRespSingle,
 	"POST /api/tasks/{id}/park-until":              taskRespNone,
+	"POST /api/pull-requests/review":               taskRespNone,
 	"POST /api/tasks/{id}/resume-later":            taskRespNone,
 	"POST /api/tasks/{id}/defer":                   taskRespSingle,
 	"POST /api/tasks/{id}/undefer":                 taskRespSingle,

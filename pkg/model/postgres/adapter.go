@@ -261,11 +261,60 @@ func (c *adaptedConn) Begin() (driver.Tx, error) {
 	return c.inner.Begin()
 }
 
+// writerLockKey is the transaction-scoped advisory lock every read-write
+// transaction takes (takeWriterLock): one per store, because what it
+// stands in for is SQLite's one write lock. The store is the schema the
+// connection's search_path names, so its second key is that schema's.
+const writerLockKey = 0x67726169 // "grai"
+
+// writerLockTimeout is how long a writer waits its turn for that lock
+// before failing with lock_timeout (55P03), which Store.write retries:
+// the same five seconds pkg/model/sqlite gives busy_timeout.
+const writerLockTimeout = "5s"
+
 func (c *adaptedConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	var (
+		tx  driver.Tx
+		err error
+	)
 	if btx, ok := c.inner.(driver.ConnBeginTx); ok {
-		return btx.BeginTx(ctx, opts)
+		tx, err = btx.BeginTx(ctx, opts)
+	} else {
+		tx, err = c.inner.Begin()
 	}
-	return c.inner.Begin()
+	if err != nil || opts.ReadOnly {
+		return tx, err
+	}
+	if err := c.takeWriterLock(ctx); err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	return tx, nil
+}
+
+// takeWriterLock serialises read-write transactions the way
+// pkg/model/sqlite's _txlock=immediate does, at BEGIN: Store.write's
+// callers read a row and write it back whole (ObserveField and
+// everything built on it), which is only correct while no other writer
+// can commit in between. Postgres' default READ COMMITTED does not
+// promise that -- two such transactions both read the old row and the
+// later commit silently drops the earlier one's change (a task's close
+// lost to the orchestrator's next observation, in the installer e2e) --
+// so every read-write transaction first takes the same advisory lock,
+// held until it commits or rolls back. Read-only transactions take
+// nothing.
+func (c *adaptedConn) takeWriterLock(ctx context.Context) error {
+	execer, ok := c.inner.(driver.ExecerContext)
+	if !ok {
+		return fmt.Errorf("postgres: %T cannot execute statements, so it cannot take the writer lock", c.inner)
+	}
+	if _, err := execer.ExecContext(ctx, "SET LOCAL lock_timeout = '"+writerLockTimeout+"'", nil); err != nil {
+		return fmt.Errorf("postgres: setting the writer lock's timeout: %w", err)
+	}
+	if _, err := execer.ExecContext(ctx, fmt.Sprintf("SELECT pg_advisory_xact_lock(%d, hashtext(current_schema()))", writerLockKey), nil); err != nil {
+		return fmt.Errorf("postgres: taking the writer lock: %w", err)
+	}
+	return nil
 }
 
 func (c *adaptedConn) Ping(ctx context.Context) error {
@@ -561,7 +610,15 @@ ORDER BY c.ordinal_position`, tableName)
 	if strings.HasPrefix(strings.ToUpper(trimmed), "PRAGMA ") {
 		upper := strings.ToUpper(trimmed)
 		if strings.Contains(upper, "DATA_VERSION") {
-			return "SELECT (pg_stat_get_db_xact_commit(d.oid))::bigint AS data_version FROM pg_database d WHERE datname = current_database()"
+			// Store.ChangeToken's "nothing committed since": the current
+			// snapshot (xmin:xmax:in-progress ids) moves the moment any
+			// transaction is given an id or commits, so it is never behind
+			// a commit the way the statistics counter this used to read
+			// (pg_stat_get_db_xact_commit) is -- backends flush those at
+			// most once a second, which let the UI's response caches serve
+			// a task's detail from before a write that had already
+			// committed. Hashed to the bigint data_version is scanned as.
+			return "SELECT hashtextextended(txid_current_snapshot()::text, 0) AS data_version"
 		}
 		// Harmless no-op query for other PRAGMAs
 		return "SELECT 1"

@@ -16,12 +16,17 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -36,19 +41,24 @@ func setupTestServerAndClient(t *testing.T) (*ui.HTTPClient, *modelStoreDB) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	_ = store.PutConfig(context.Background(), model.Config{PollInterval: model.DefaultPollInterval})
-	uiClient := ui.NewClient(ui.Config{SourceDB: db, Actor: ui.DefaultActor("alice")}, store)
+	creds, err := gitproxy.LoadCredentialSet(filepath.Join(dataDir, "secrets", "github"))
+	if err != nil {
+		t.Fatalf("LoadCredentialSet: %v", err)
+	}
+	uiClient := ui.NewClient(ui.Config{SourceDB: db, Actor: ui.DefaultActor("alice"), Credentials: creds}, store)
 	server := accessCodeServer(uiClient)
 	ts := httptest.NewServer(server)
 	t.Cleanup(ts.Close)
 
 	httpClient := accessCodeClient(ts.URL)
 
-	return httpClient, &modelStoreDB{store: store, db: db}
+	return httpClient, &modelStoreDB{store: store, db: db, creds: creds}
 }
 
 type modelStoreDB struct {
 	store any
 	db    any
+	creds *gitproxy.CredentialSet
 }
 
 func TestCLIGCPKey(t *testing.T) {
@@ -307,5 +317,122 @@ func TestCLIBroadcast(t *testing.T) {
 	}
 	if len(qComments) != 1 || qComments[0].Body != "All hands notice" {
 		t.Fatalf("queued task comments after -all = %+v, want 'All hands notice'", qComments)
+	}
+}
+
+func TestCLIGitLoginModesAndReplacement(t *testing.T) {
+	client, dbWrap := setupTestServerAndClient(t)
+	creds := dbWrap.creds
+	ctx := context.Background()
+	out := &printer{json: false}
+
+	// Conflicting mode flags should be refused.
+	if err := cmdGitLogin(ctx, client, out, []string{"-web", "-from-gh"}); err == nil {
+		t.Fatal("expected error when both -web and -from-gh are specified")
+	}
+
+	// 1. -with-token delegates token from stdin and records explicit -author.
+	origStdin := gitLoginStdin
+	t.Cleanup(func() { gitLoginStdin = origStdin })
+	gitLoginStdin = strings.NewReader("ghp_stdin_secret_1\n")
+
+	if err := cmdGitLogin(ctx, client, out, []string{"-with-token", "-author", "Ada Lovelace"}); err != nil {
+		t.Fatalf("cmdGitLogin -with-token: %v", err)
+	}
+
+	conns, err := client.ListDeploymentGitConnections(ctx)
+	if err != nil {
+		t.Fatalf("ListDeploymentGitConnections: %v", err)
+	}
+	if len(conns) != 1 {
+		t.Fatalf("expected 1 git connection, got %d (%+v)", len(conns), conns)
+	}
+	firstCred := conns[0].Credential
+	if got := creds.AuthorOf(firstCred); got != "Ada Lovelace" {
+		t.Fatalf("AuthorOf(%q) = %q, want Ada Lovelace", firstCred, got)
+	}
+
+	// 2. -from-gh delegates token from local `gh auth token` and replaces the existing connection on github.com.
+	origGH := gitLoginGHToken
+	t.Cleanup(func() { gitLoginGHToken = origGH })
+	gitLoginGHToken = func(ctx context.Context, host string) (string, error) {
+		return "gho_from_gh_cli_2", nil
+	}
+
+	if err := cmdGitLogin(ctx, client, out, []string{"-from-gh", "-author", "Grace Hopper"}); err != nil {
+		t.Fatalf("cmdGitLogin -from-gh: %v", err)
+	}
+
+	conns, err = client.ListDeploymentGitConnections(ctx)
+	if err != nil {
+		t.Fatalf("ListDeploymentGitConnections after replace: %v", err)
+	}
+	if len(conns) != 1 {
+		t.Fatalf("expected 1 git connection after replacement, got %d (%+v)", len(conns), conns)
+	}
+	secondCred := conns[0].Credential
+	if secondCred == firstCred {
+		t.Fatalf("expected replaced connection to allocate a fresh credential name, still %q", secondCred)
+	}
+	if _, ok := creds.Get(firstCred); ok {
+		t.Fatalf("expected old credential %q to be removed after replacement", firstCred)
+	}
+	if got := creds.AuthorOf(secondCred); got != "Grace Hopper" {
+		t.Fatalf("AuthorOf(%q) = %q, want Grace Hopper", secondCred, got)
+	}
+
+	// 3. -web runs GitHub OAuth Device Flow against the host's OAuth endpoints.
+	oauthSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/login/device/code":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"device_code":      "dev-1",
+				"user_code":        "WXYZ-9999",
+				"verification_uri": "https://github.com/login/device",
+				"expires_in":       600,
+				"interval":         1,
+			})
+		case "/login/oauth/access_token":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token": "gho_web_device_token_3",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer oauthSrv.Close()
+
+	origHTTP := gitLoginHTTPClient
+	origBrowser := gitLoginOpenBrowser
+	t.Cleanup(func() {
+		gitLoginHTTPClient = origHTTP
+		gitLoginOpenBrowser = origBrowser
+	})
+	gitLoginHTTPClient = oauthSrv.Client()
+	var openedURL string
+	gitLoginOpenBrowser = func(u string) error {
+		openedURL = u
+		return nil
+	}
+
+	host := strings.TrimPrefix(oauthSrv.URL, "https://")
+	if err := cmdGitLogin(ctx, client, out, []string{
+		"-web",
+		"-host", host,
+		"-base-url", oauthSrv.URL,
+		"-author", "Alan Turing",
+	}); err != nil {
+		t.Fatalf("cmdGitLogin -web: %v", err)
+	}
+	if openedURL != "https://github.com/login/device" {
+		t.Fatalf("opened browser URL = %q, want https://github.com/login/device", openedURL)
+	}
+	conns, err = client.ListDeploymentGitConnections(ctx)
+	if err != nil {
+		t.Fatalf("ListDeploymentGitConnections after -web: %v", err)
+	}
+	if len(conns) != 2 {
+		t.Fatalf("expected 2 connections (github.com + %s), got %d", host, len(conns))
 	}
 }

@@ -3443,6 +3443,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       settingsSection={settingsSection}
       onSetView={navigateFromRail}
       tasks={tasks}
+      unseenClosed={closedTasks.unseen}
       notificationCount={notifications.length}
       schedules={schedules}
       templates={templates}
@@ -3714,6 +3715,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                             onRefreshConfig={refreshConfig}
                             onRefreshGates={refreshBaseBranchGates}
                             showError={showError}
+                            dismissError={dismissError}
                           />
                         ) : view === "repos" ? (
                           <RepoList

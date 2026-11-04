@@ -17,7 +17,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/bwsalmon/granule/pkg/dockercli"
+	"github.com/gke-labs/granule/pkg/dockercli"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )

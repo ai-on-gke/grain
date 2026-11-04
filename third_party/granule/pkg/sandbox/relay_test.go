@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/guestexec"
-	"github.com/bwsalmon/granule/pkg/relay"
-	"github.com/bwsalmon/granule/pkg/sandbox"
+	"github.com/gke-labs/granule/pkg/guestexec"
+	"github.com/gke-labs/granule/pkg/relay"
+	"github.com/gke-labs/granule/pkg/sandbox"
 )
 
 const (

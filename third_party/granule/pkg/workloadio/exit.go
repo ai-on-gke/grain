@@ -61,7 +61,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/execwire"
+	"github.com/gke-labs/granule/pkg/execwire"
 )
 
 // ExitPort is the vsock port on the host that granule-container reports

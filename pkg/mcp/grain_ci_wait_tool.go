@@ -1344,6 +1344,16 @@ func grainCILog(run ci.Run, selected ci.JobRun, stepName string) (string, bool, 
 	return b.String(), running, nil
 }
 
+// ciRunNoun names what kind of run run is: a stored GitHub Actions run
+// (one a workflow_run webhook brought in, say) is not grain CI's, and a
+// log heading calling it that sends a reader looking in the wrong place.
+func ciRunNoun(run ci.Run) string {
+	if run.Provider == ci.ProviderGitHubActions || run.Actions != nil || run.Event == "workflow_run" {
+		return "GitHub Actions run"
+	}
+	return "grain CI run"
+}
+
 // ciLogHeading says which log the bytes below it came from, since a read
 // that named no job picked one for itself, and what state it is in.
 func ciLogHeading(run ci.Run, job ci.JobRun, stepName string, running bool, attemptNum, totalAttempts int) string {
@@ -1362,7 +1372,7 @@ func ciLogHeading(run ci.Run, job ci.JobRun, stepName string, running bool, atte
 	default:
 		state = string(job.Conclusion)
 	}
-	heading := fmt.Sprintf("grain CI run %s, %s (%s)\n", run.ID, what, state)
+	heading := fmt.Sprintf("%s %s, %s (%s)\n", ciRunNoun(run), run.ID, what, state)
 	if totalAttempts > 1 && attemptNum > 0 && run.Repo != "" && run.ID != "" {
 		jk := job.JobID
 		if jk == "" {

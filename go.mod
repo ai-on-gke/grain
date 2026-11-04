@@ -6,7 +6,7 @@ toolchain go1.26.10
 
 require (
 	cloud.google.com/go/compute/metadata v0.9.0
-	github.com/bwsalmon/granule v0.0.0-20260921040231-1d6b7e1fad96
+	github.com/gke-labs/granule v0.0.0-20260921040231-1d6b7e1fad96
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
@@ -59,6 +59,6 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-replace github.com/bwsalmon/granule => ./third_party/granule
+replace github.com/gke-labs/granule => ./third_party/granule
 
-tool github.com/bwsalmon/granule/cmd/granule
+tool github.com/gke-labs/granule/cmd/granule

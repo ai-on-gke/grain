@@ -197,6 +197,47 @@ func TestTaskListPagesClosedTasksNewestClosedFirst(t *testing.T) {
 	}
 }
 
+// TestTaskListPagesCountEveryClosedTask: every page says how many closed
+// tasks match across all pages, not how many it holds, so the UI's rail
+// can count closed work it has not paged in (2026-11-04 walkthrough: 205
+// closed tasks read "Closed 200").
+func TestTaskListPagesCountEveryClosedTask(t *testing.T) {
+	t.Parallel()
+	srv, _ := testServer(t)
+	fileListedTask(t, srv, "still open", "")
+	for i := 0; i < 7; i++ {
+		closeListedTask(t, srv, fileListedTask(t, srv, fmt.Sprintf("history %d", i), fmt.Sprintf("needle-%d", i)))
+	}
+	type page struct {
+		Tasks      []ui.Task `json:"tasks"`
+		NextCursor string    `json:"nextCursor"`
+		Total      *int      `json:"total"`
+		Merged     *int      `json:"merged"`
+		Sessions   *int      `json:"sessions"`
+	}
+	cursor := ""
+	for pages := 0; ; pages++ {
+		if pages > 5 {
+			t.Fatal("paging never ended")
+		}
+		p := decode[page](t, do(t, srv, http.MethodGet, "/api/tasks?state=closed&limit=3&cursor="+url.QueryEscape(cursor), ""))
+		if p.Total == nil || *p.Total != 7 {
+			t.Errorf("page %d says total %v, want 7 (every closed task, on every page)", pages, p.Total)
+		}
+		if p.Merged == nil || *p.Merged != 0 || p.Sessions == nil || *p.Sessions != 0 {
+			t.Errorf("page %d says merged %v, sessions %v, want 0 and 0", pages, p.Merged, p.Sessions)
+		}
+		if p.NextCursor == "" {
+			break
+		}
+		cursor = p.NextCursor
+	}
+	found := decode[page](t, do(t, srv, http.MethodGet, "/api/tasks?state=closed&cursor=&search=needle-4", ""))
+	if found.Total == nil || *found.Total != 1 {
+		t.Errorf("a search's page says total %v, want the 1 task it matches", found.Total)
+	}
+}
+
 // TestTaskListIsGzippedForACallerThatAsks: the same list, a fraction of
 // the bytes, a weak ETag a poller's If-None-Match still matches, and a
 // Vary that keeps a cache from handing it to anybody who did not ask.

@@ -318,6 +318,38 @@ func TestAdmissionRefusesGrantsOnHostDirectorySandboxes(t *testing.T) {
 	}
 }
 
+// A container sandbox that is not fenced off from grain's own host
+// (ContainerConfig.Fence) is refused external grants as a host
+// directory is, saying why; a fenced one is minted for.
+func TestAdmissionRefusesGrantsOnUnfencedContainerSandboxes(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mode  ContainerFenceMode
+		admit bool
+	}{
+		"unfenced": {ContainerFenceOff, false},
+		"fenced":   {ContainerFenceRequire, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			caller := &mintCaller{}
+			deps, store, ctx, _ := passHarness(t, caller)
+			deps.Sandboxes = NewContainerSandboxes(ContainerConfig{Image: "img", Workspace: "/w", Fence: tc.mode})
+			adm, _ := capabilityAdmitter(deps, admitAll)(ctx, dispatch.Candidate{TaskID: "7", RunID: "7-1", Attempt: 1})
+			if adm.Admitted != tc.admit {
+				t.Fatalf("admitted = %v, want %v", adm.Admitted, tc.admit)
+			}
+			if tc.admit {
+				return
+			}
+			if got := caller.called(); len(got) != 0 {
+				t.Errorf("calls = %q, want nothing minted", got)
+			}
+			if comments, _ := store.Comments(ctx, "7"); len(comments) != 1 || !strings.Contains(comments[0].Body, "unfenced") {
+				t.Errorf("comments = %+v, want the unfenced-container refusal", comments)
+			}
+		})
+	}
+}
+
 // What a run's grants did for it reaches the run record when the run's
 // pass is released: each record under the grant and attempt_id it is
 // about, then grain's note on any the server left out.
@@ -796,4 +828,49 @@ func TestPlacedServerDropAndRetriedReleaseFollowGrantHostd(t *testing.T) {
 	if len(records) != 1 || records[0].Hostd != "ws-a" {
 		t.Fatalf("retried audit records = %+v, want Hostd=ws-a", records)
 	}
+}
+
+// local-scripts serves a scheduled run none of its declarations
+// (localscripts.Untrusted); what a declaration became on host-script
+// (model.SetRuntimeGrantExpansions) is not minted for one either, while
+// the task's other grants still are and a task a person filed holding
+// the same grant is minted it.
+func TestAdmissionWithholdsWhatALocalScriptsDeclarationBecameFromAScheduledRun(t *testing.T) {
+	caller := &mintCaller{}
+	deps, store, ctx, _ := passHarness(t, caller)
+	t.Cleanup(model.SetRuntimeGrantExpansions(map[string][]string{
+		"local-scripts:ops": {passTestCap + `#gcp-key={"account":"staging"}`},
+	}))
+	if err := store.UpdateTask(ctx, "7", func(task *model.Task) error {
+		task.Origin.Reason = model.ReasonSchedule
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	admit := capabilityAdmitter(deps, admitAll)
+	cand := dispatch.Candidate{TaskID: "7", RunID: dispatch.RunID("7", 1), Attempt: 1}
+	adm, err := admit(ctx, cand)
+	if err != nil || !adm.Admitted {
+		t.Fatalf("admit = %+v, %v; want admitted", adm, err)
+	}
+	if got := caller.called(); len(got) != 0 {
+		t.Fatalf("calls = %q, want nothing minted for a scheduled run", got)
+	}
+	adm.Release()
+
+	if err := store.UpdateTask(ctx, "7", func(task *model.Task) error {
+		task.Origin.Reason = model.ReasonDirect
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cand = dispatch.Candidate{TaskID: "7", RunID: dispatch.RunID("7", 2), Attempt: 2}
+	adm, err = admit(ctx, cand)
+	if err != nil || !adm.Admitted {
+		t.Fatalf("admit = %+v, %v; want admitted", adm, err)
+	}
+	if got := caller.called(); len(got) != 1 || got[0] != "mint_gcp-key grain-7-2-0" {
+		t.Fatalf("calls = %q, want one mint for a task a person filed", got)
+	}
+	adm.Release()
 }

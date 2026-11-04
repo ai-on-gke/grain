@@ -585,7 +585,7 @@ From the repository root:
 
 ```sh
 ./scripts/granule/build-granule-image.sh    # -> granule:vendored
-go run github.com/bwsalmon/granule/cmd/granule granulefile build \
+go run github.com/gke-labs/granule/cmd/granule granulefile build \
   -kontur-image granule:vendored -f Granulefile -t grain-guest:dev
 ```
 
