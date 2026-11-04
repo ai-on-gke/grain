@@ -107,6 +107,10 @@
 # release.yml green) strictly after the floor (the dropped rc's commit, or
 # the newest release's) is tagged vM.Y.Z-rc.K, refs/heads/candidate is
 # force-moved onto it and its images are published (release-images.sh rc).
+# Before an rc.(N+1) (next_n > 1), the grain/rc-hold check run on the
+# dropped rc's commit (the floor) must be completed or absent: while open
+# `[rc-blocker vM.Y.Z-rc.N]` tasks keep it in progress, the train cuts
+# nothing (rc_held= in RELEASE_TRAIN_OUTPUT).
 # No new known-good commit cuts nothing: main red for a week ships
 # nothing and `latest` stands. Before an rc.1:
 #   - at least RELEASE_MIN_INTERVAL_MINUTES must have passed since the
@@ -131,10 +135,10 @@
 # unset). With "github" they are GitHub's workflow runs, GET
 # /repos/{RELEASE_GITHUB_REPO}/actions/workflows/<suite>.yml/runs (and, for
 # an rc, the jobs of each nightly.yml run on it), read with GITHUB_TOKEN
-# (actions: read). The grain/release-qualification check run is read from
-# GitHub (checks: read) whenever there is a token, and counts only when
-# RELEASE_QUALIFICATION_APP, grain's own GitHub App, created it. The default is "github"
-# inside GitHub Actions and "grain" anywhere else.
+# (actions: read). The grain/release-qualification and grain/rc-hold check
+# runs are read from GitHub (checks: read) whenever there is a token, and
+# count only when RELEASE_QUALIFICATION_APP, grain's own GitHub App, created
+# them. The default is "github" inside GitHub Actions and "grain" anywhere else.
 #
 # Settings (environment):
 #   RELEASE_REMOTE           the remote (origin)
@@ -156,13 +160,16 @@
 #   RELEASE_QUALIFICATION_RUNS_JSON, RELEASE_QUALIFICATION_CHECKS_JSON
 #                            files to read the rc's nightly.yml jobs and
 #                            check runs from instead
+#   RELEASE_HOLD_CHECKS_JSON a file to read a dropped rc's grain/rc-hold
+#                            check runs from instead
 #   RELEASE_QUALIFICATION_APP
 #                            the GitHub App (slug or numeric id) grain posts
-#                            grain/release-qualification as: only its check
-#                            run qualifies an rc, never a same-named one
-#                            from an Actions workflow or another app; unset,
-#                            Stage 2 trusts no check run and the train stops
-#                            (candidate-gate.sh's CHECK_QUALIFICATION_APP)
+#                            grain/release-qualification and grain/rc-hold as:
+#                            only its check runs qualify an rc or lift a hold,
+#                            never same-named ones from an Actions workflow or
+#                            another app; unset, neither check run is trusted
+#                            and the train stops (candidate-gate.sh's
+#                            CHECK_QUALIFICATION_APP)
 #   RELEASE_IMAGES           the image publisher (bash scripts/release-images.sh);
 #                            "off" publishes nothing
 #   RELEASE_NOTES_TASK       "off" files no release-notes task
@@ -600,8 +607,73 @@ qualification_json() {
       die "could not read the check runs on $1 from $github_api"
     qual_checks="$work/qual-checks.json"
   else
-    say "no GitHub token, so no grain/release-qualification check run to read for $1"
+    say "no GitHub token and no RELEASE_QUALIFICATION_CHECKS_JSON (a task writes it with \`grain ci checks $2 --name grain/release-qualification --format github\`), so no grain/release-qualification check run to read for $1"
   fi
+}
+
+# rc_hold_summary <floor_sha>: if the newest grain/rc-hold check run on
+# floor_sha from RELEASE_QUALIFICATION_APP is not completed, prints its
+# summary; otherwise prints nothing. No check at all means no hold; an unset
+# RELEASE_QUALIFICATION_APP refuses rather than trust another app's check run.
+rc_hold_summary() {
+  local app_id="" hold_checks="" pages page n flooded=false
+  [[ ! "${RELEASE_QUALIFICATION_APP:-}" =~ ^[0-9]+$ ]] || app_id="&app_id=$RELEASE_QUALIFICATION_APP"
+  if [ -n "${RELEASE_HOLD_CHECKS_JSON:-}" ]; then
+    [ -n "${RELEASE_QUALIFICATION_APP:-}" ] ||
+      die "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted: set it to the slug or id of the GitHub App grain posts it as"
+    gate_json RELEASE_HOLD_CHECKS_JSON "" "$work/hold-checks.json"
+    hold_checks="$work/hold-checks.json"
+  elif [ -n "$github_token" ]; then
+    [ -n "${RELEASE_QUALIFICATION_APP:-}" ] ||
+      die "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted: set it to the slug or id of the GitHub App grain posts it as"
+    pages="${RELEASE_GITHUB_PAGES:-3}"
+    : > "$work/hold-checks.jsonl"
+    flooded=true
+    for ((page = 1; page <= pages; page++)); do
+      github_get "commits/$1/check-runs?check_name=grain%2Frc-hold&filter=all&per_page=100&page=$page$app_id" "$work/hold-page.json" ||
+        die "could not read the grain/rc-hold check runs on ${1:0:12} from $github_api"
+      n="$(jq 'if type == "object" and (.check_runs | type == "array") then .check_runs | length else error("not a check run listing") end' "$work/hold-page.json" 2>/dev/null)" ||
+        die "$github_api's answer for grain/rc-hold on ${1:0:12} is not a listing of check runs"
+      cat "$work/hold-page.json" >> "$work/hold-checks.jsonl"
+      if [ "$n" -lt 100 ]; then
+        flooded=false
+        break
+      fi
+    done
+    jq -s '{check_runs: (map(.check_runs) | add // [])}' "$work/hold-checks.jsonl" > "$work/hold-checks.json"
+    hold_checks="$work/hold-checks.json"
+  else
+    say "no GitHub token, so no grain/rc-hold check run to read on ${1:0:12}; not waiting on one" >&2
+    return 0
+  fi
+  # shellcheck disable=SC2016 # jq, not shell
+  jq -r --arg sha "${1,,}" --arg app "${RELEASE_QUALIFICATION_APP:-}" --argjson flooded "$flooded" '
+    def epoch:
+      if . == null or . == "" then 0
+      else sub("\\.[0-9]+"; "")
+        | if test("Z$") then fromdateiso8601
+          else (capture("^(?<d>.*)(?<s>[+-])(?<h>[0-9]{2}):?(?<m>[0-9]{2})$") as $c
+            | ($c.d + "Z" | fromdateiso8601) - (($c.s + "1" | tonumber) * (($c.h | tonumber) * 3600 + ($c.m | tonumber) * 60)))
+          end
+      end;
+    def from_app: $app != "" and (.app | type == "object")
+      and ((.app.slug // "") == $app or ((.app.id // "") | tostring) == $app);
+    def sha_ok: (. // "" | ascii_downcase) as $h | $h == "" or ($sha | startswith($h)) or ($h | startswith($sha));
+    (if type == "array" then .
+     elif type == "object" and (.check_runs | type == "array") then .check_runs
+     else error("not a check run listing") end) as $runs
+    | [ $runs[]
+        | select(.name == "grain/rc-hold")
+        | select(.head_sha | sha_ok)
+        | select(from_app) ]
+    | if length == 0 and $flooded then error("all fetched grain/rc-hold pages were from other apps") else . end
+    | sort_by([(.id // 0), ((.started_at // .startedAt) | epoch)])
+    | last // empty
+    | select((.status // "") != "completed")
+    | ([.output.summary, .output.title, .status]
+        | map(select(type == "string") | gsub("[\\r\\n]+"; " ") | sub("^\\s+"; "") | sub("\\s+$"; "") | select(length > 0))
+        | first // "in_progress")
+  ' "$hold_checks" || die "could not parse grain/rc-hold check runs on ${1:0:12}"
 }
 
 # File the release-notes task for a promotion, through the gate's one
@@ -955,6 +1027,23 @@ elif [ -n "$floor" ] && [ "$next_n" = 1 ] && ! git merge-base --is-ancestor "$fl
   # its fixes, so the next rc is after where the branch left main.
   floor="$(git merge-base "$floor" "$main_ref" || true)"
   say "phase 2: the newest release is off main's history; the next rc must be after where it left main (${floor:0:12})"
+fi
+
+# Gate next RC (playbook section 12): while any `[rc-blocker vX.Y.Z-rc.N]`
+# task is open, grain/rc-hold on the dropped rc's commit stays in progress.
+# It reads next_n before the re-tag skip below: a hand-cut rc.1 must not
+# make the next rc.1 (whose floor is a release, not a dropped rc) look like
+# an rc.2, here or at the rc.1 gates after it.
+if [ -n "$floor" ] && [ "$next_n" -gt 1 ]; then
+  hold_summary="$(rc_hold_summary "$floor")"
+  if [ -n "$hold_summary" ]; then
+    held_n="$next_n"
+    while commit_of "$target-rc.$held_n" >/dev/null; do held_n=$((held_n + 1)); done
+    new_rc="$target-rc.$held_n"
+    say "phase 2: $new_rc is held by grain/rc-hold on ${floor:0:12}: $hold_summary"
+    emit rc_held "$new_rc"
+    exit 0
+  fi
 fi
 
 # A minimum interval between releases (playbook section 7).

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
-import { chooseOption } from "./searchSelect.js";
+import { chooseOption, chosenValues } from "./searchSelect.js";
 
 // The first test triages the inbox rows `grain demo` seeds -- one in
 // each of its four groups -- and approves and answers two of them, so it
@@ -835,20 +835,21 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     const capabilities = form.getByRole("combobox", {
       name: "Legacy capabilities",
     });
-    await expect(capabilities).toContainText("Self debug");
+    await expect.poll(() => chosenValues(capabilities)).toContain("self-debug");
     await capabilities.click();
     const row = page.getByRole("option", { name: /Self debug/ });
     await expect(row).toContainText(/Not ready/);
     await row.click();
     await expect(row).toBeVisible();
     await expect(row).toHaveAttribute("aria-selected", "false");
-    await expect(row).toBeFocused();
+    // The list stays open, and the keys stay with the box.
+    await expect(capabilities).toBeFocused();
     await row.click();
     await expect(row).toHaveAttribute("aria-selected", "true");
     await page.keyboard.press("Escape");
     await expect(page.getByRole("listbox")).toBeHidden();
     await expect(form).toBeVisible();
-    await expect(capabilities).toContainText("Self debug");
+    await expect.poll(() => chosenValues(capabilities)).toContain("self-debug");
 
     await form.getByRole("button", { name: "Create task" }).click();
     await expect(form).toBeHidden();

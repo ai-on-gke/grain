@@ -24,6 +24,8 @@ import {
 } from "@mui/material";
 import api from "../api.js";
 import { identifierField } from "../identifierField.js";
+import { searchFilter } from "../fuzzy.js";
+import { HighlightedText } from "./SearchSelect.jsx";
 import { DISCOVERING_FRAMEWORKS, NO_MODELS_LABEL } from "../state.js";
 
 // ConnectionModelsField is what one connection says about models: what
@@ -199,6 +201,20 @@ export default function ConnectionModelsField({
           size="small"
           options={discovered}
           value={listed}
+          filterOptions={(opts, state) =>
+            searchFilter(opts, state.inputValue).map(({ item }) => item)
+          }
+          renderOption={(props, option, { inputValue }) => {
+            const { key, ...rest } = props;
+            const ranges = inputValue.trim()
+              ? searchFilter([option], inputValue)[0]?.ranges
+              : undefined;
+            return (
+              <li key={key} {...rest} data-value={option}>
+                <HighlightedText text={option} ranges={ranges} />
+              </li>
+            );
+          }}
           onChange={(_event, values) =>
             onChange({
               models: Array.from(

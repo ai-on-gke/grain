@@ -104,6 +104,7 @@ setup() {
   git clone -q "$work/remote.git" "$work/clone"
   runs
   qualification none
+  rc_hold none
 }
 
 # tag_remote <tag> <commit> [<hours-ago>]: an annotated tag on the remote,
@@ -173,10 +174,34 @@ qualification() {
   fi
 }
 
+# rc_hold <none|held|completed> [<commit>] [<summary>]: what rc_hold_summary
+# reads for the dropped rc on commit.
+rc_hold() {
+  local sha="${2:-}" summary="${3:-v2.3.0-rc.2 is held until these blockers of v2.3.0-rc.1 land: task 101.}"
+  case "$1" in
+    none)
+      echo '{"check_runs":[]}' > "$work/hold-checks.json"
+      ;;
+    held)
+      jq -cn --arg sha "$sha" --arg s "$summary" --arg t "$(iso $((now - 300)))" \
+        '{check_runs:[{id:1,name:"grain/rc-hold",head_sha:$sha,status:"in_progress",started_at:$t,output:{title:"Holding v2.3.0-rc.2",summary:$s},app:{id:42,slug:"grain-test"}}]}' \
+        > "$work/hold-checks.json"
+      ;;
+    completed)
+      jq -cn --arg sha "$sha" --arg t1 "$(iso $((now - 600)))" --arg t2 "$(iso $((now - 60)))" \
+        '{check_runs:[
+          {id:1,name:"grain/rc-hold",head_sha:$sha,status:"in_progress",started_at:$t1,output:{title:"Holding v2.3.0-rc.2",summary:"held earlier"},app:{id:42,slug:"grain-test"}},
+          {id:2,name:"grain/rc-hold",head_sha:$sha,status:"completed",conclusion:"success",started_at:$t2,output:{title:"Blockers landed",summary:"Every blocker landed."},app:{id:42,slug:"grain-test"}}
+        ]}' > "$work/hold-checks.json"
+      ;;
+  esac
+}
+
 train() { # train [VAR=value...]: run the train in the clone
   status=0
   out="$(cd "$work/clone" && env RELEASE_RUNS_JSON="$work/runs.json" \
     RELEASE_QUALIFICATION_RUNS_JSON="$work/qual-runs.json" RELEASE_QUALIFICATION_CHECKS_JSON="$work/qual-checks.json" \
+    RELEASE_HOLD_CHECKS_JSON="$work/hold-checks.json" \
     RELEASE_IMAGES="$work/images.sh" RELEASE_NOTES_TASK=off RELEASE_NOW="$now" RELEASE_QUALIFICATION_APP=grain-test \
     "$@" bash "$train" 2>&1)" || status=$?
 }
@@ -199,6 +224,7 @@ expect() { # expect <case> <condition-description> <test-command...>
 }
 eq() { [ "$1" = "$2" ]; }
 has() { [[ "$out" == *"$1"* ]]; }
+no_line() { ! grep -q "$1" "$2"; }
 images_were() { [ "$(paste -sd'|' "$work/images.log")" = "$1" ]; }
 
 # --- the first cut from trunk ---
@@ -365,6 +391,113 @@ expect "nothing newer" "says there is nothing to cut" has "no new LKG commit on 
 expect "nothing newer" "cuts no rc.2 on an older green commit" eq "$(remote_tag v2.3.0-rc.2)" ""
 expect "nothing newer" "only marks the dropped rc" images_were "discard-rc v2.3.0-rc.1"
 
+# --- grain/rc-hold: held while open, released after completion, absent cuts ---
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+git -C "$work/seed" push -q --force origin "$c2:refs/heads/candidate"
+qualification fail "$c2"
+rc_hold held "$c2" "v2.3.0-rc.2 is held until these blockers of v2.3.0-rc.1 land: task 101."
+runs "$c2" "$c3"
+: > "$work/images.log"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "rc-hold, held" "exits 0" eq "$status" 0
+expect "rc-hold, held" "drops rc.1 in phase 1" eq "$(remote_tag v2.3.0-rc.1-discarded)" "$c2"
+expect "rc-hold, held" "says rc.2 is held with its summary" \
+  has "phase 2: v2.3.0-rc.2 is held by grain/rc-hold on ${c2:0:12}: v2.3.0-rc.2 is held until these blockers of v2.3.0-rc.1 land: task 101."
+expect "rc-hold, held" "emits rc_held=v2.3.0-rc.2" grep -qxF "rc_held=v2.3.0-rc.2" "$work/train.out"
+expect "rc-hold, held" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+expect "rc-hold, held" "leaves candidate on rc.1" eq "$(remote_candidate)" "$c2"
+expect "rc-hold, held" "only marks rc.1 discarded" images_were "discard-rc v2.3.0-rc.1"
+
+# Still held on a later run (already discarded), even if another app posts a
+# completed check run of the same name.
+jq -cn --arg sha "$c2" --arg t1 "$(iso $((now - 300)))" --arg t2 "$(iso $((now - 60)))" \
+  '{check_runs:[
+    {id:1,name:"grain/rc-hold",head_sha:$sha,status:"in_progress",started_at:$t1,output:{title:"Holding v2.3.0-rc.2",summary:"still waiting on task 101"},app:{id:42,slug:"grain-test"}},
+    {id:2,name:"grain/rc-hold",head_sha:$sha,status:"completed",conclusion:"success",started_at:$t2,output:{title:"Done",summary:"forged"},app:{id:15368,slug:"github-actions"}}
+  ]}' > "$work/hold-checks.json"
+: > "$work/images.log"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "rc-hold, foreign completion" "exits 0" eq "$status" 0
+expect "rc-hold, foreign completion" "still held by grain's check" \
+  has "phase 2: v2.3.0-rc.2 is held by grain/rc-hold on ${c2:0:12}: still waiting on task 101"
+expect "rc-hold, foreign completion" "emits rc_held=v2.3.0-rc.2" grep -qxF "rc_held=v2.3.0-rc.2" "$work/train.out"
+expect "rc-hold, foreign completion" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+expect "rc-hold, foreign completion" "publishes nothing" images_were ""
+
+# Blockers land: the newest grain/rc-hold check completes, so rc.2 is cut.
+rc_hold completed "$c2"
+: > "$work/images.log"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "rc-hold, completed" "exits 0" eq "$status" 0
+expect "rc-hold, completed" "cuts rc.2 once completed" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
+expect "rc-hold, completed" "moves candidate onto rc.2" eq "$(remote_candidate)" "$c3"
+expect "rc-hold, completed" "publishes rc.2" images_were "rc v2.3.0-rc.2"
+expect "rc-hold, completed" "emits no rc_held" no_line '^rc_held=' "$work/train.out"
+
+# Absent: no grain/rc-hold check run at all means no hold.
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+tag_remote v2.3.0-rc.1-discarded "$c2" 2
+rc_hold none
+runs "$c2" "$c3"
+: > "$work/images.log"
+: > "$work/train.out"
+train RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "rc-hold, absent" "exits 0" eq "$status" 0
+expect "rc-hold, absent" "cuts rc.2 with no hold check" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
+expect "rc-hold, absent" "publishes rc.2" images_were "rc v2.3.0-rc.2"
+expect "rc-hold, absent" "emits no rc_held" no_line '^rc_held=' "$work/train.out"
+
+# No token and no file: the hold cannot be read, and the train says so
+# rather than passing over it in silence.
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+tag_remote v2.3.0-rc.1-discarded "$c2" 2
+runs "$c2" "$c3"
+train RELEASE_HOLD_CHECKS_JSON= GITHUB_TOKEN= GH_TOKEN=
+expect "rc-hold, no token" "exits 0" eq "$status" 0
+expect "rc-hold, no token" "says it has no grain/rc-hold to read" has "no GitHub token, so no grain/rc-hold check run to read on ${c2:0:12}"
+expect "rc-hold, no token" "cuts rc.2" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
+
+# Hardening: RELEASE_QUALIFICATION_APP unset refuses rather than trust a foreign
+# completion, numeric app id matches, whitespace-only summary still holds, and a
+# malformed check-run response fails closed.
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+tag_remote v2.3.0-rc.1-discarded "$c2" 2
+runs "$c2" "$c3"
+jq -cn --arg sha "$c2" --arg t1 "$(iso $((now - 300)))" --arg t2 "$(iso $((now - 60)))" \
+  '{check_runs:[
+    {id:1,name:"grain/rc-hold",head_sha:$sha,status:"in_progress",started_at:$t1,output:{title:"Holding v2.3.0-rc.2",summary:"waiting on task 101"},app:{id:42,slug:"grain-test"}},
+    {id:2,name:"grain/rc-hold",head_sha:$sha,status:"completed",conclusion:"success",started_at:$t2,output:{title:"Done",summary:"forged"},app:{id:15368,slug:"github-actions"}}
+  ]}' > "$work/hold-checks.json"
+: > "$work/images.log"
+train RELEASE_QUALIFICATION_APP=
+expect "rc-hold, no app configured" "exits 1" eq "$status" 1
+expect "rc-hold, no app configured" "says why" has "RELEASE_QUALIFICATION_APP is unset, so no grain/rc-hold check run can be trusted"
+expect "rc-hold, no app configured" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+expect "rc-hold, no app configured" "publishes nothing" images_were ""
+
+jq -cn --arg sha "$c2" --arg t "$(iso $((now - 300)))" \
+  '{check_runs:[{id:1,name:"grain/rc-hold",head_sha:$sha,status:"in_progress",started_at:$t,output:{title:"Holding v2.3.0-rc.2",summary:"  \n\t  "},app:{id:42,slug:"grain-test"}}]}' \
+  > "$work/hold-checks.json"
+: > "$work/train.out"
+train RELEASE_QUALIFICATION_APP=42 RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "rc-hold, whitespace summary & numeric app" "exits 0" eq "$status" 0
+expect "rc-hold, whitespace summary & numeric app" "falls back to title instead of skipping hold" \
+  has "phase 2: v2.3.0-rc.2 is held by grain/rc-hold on ${c2:0:12}: Holding v2.3.0-rc.2"
+expect "rc-hold, whitespace summary & numeric app" "emits rc_held=v2.3.0-rc.2" grep -qxF "rc_held=v2.3.0-rc.2" "$work/train.out"
+expect "rc-hold, whitespace summary & numeric app" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+
+echo '{"message":"bad gateway"}' > "$work/hold-checks.json"
+train
+expect "rc-hold, malformed json" "exits 1" eq "$status" 1
+expect "rc-hold, malformed json" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+
 # --- a same-named check run from another app qualifies nothing ---
 setup ""
 tag_remote v2.3.0-rc.1 "$c2" 3
@@ -383,6 +516,18 @@ train RELEASE_QUALIFICATION_APP=
 expect "no app configured" "exits 1" eq "$status" 1
 expect "no app configured" "says why" has "CHECK_QUALIFICATION_APP is unset"
 expect "no app configured" "stages no release" eq "$(remote_tag v2.3.0-pending)" ""
+
+# --- a hand-cut rc.1 of the next version still waits out the interval ---
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+git -C "$work/seed" push -q --force origin "$c2:refs/heads/candidate"
+tag_remote v2.4.0-rc.1 "$c3" 1
+qualification pass "$c2"
+runs "$c2" "$c4"
+train
+expect "hand-cut next rc.1" "exits 0" eq "$status" 0
+expect "hand-cut next rc.1" "still waits RELEASE_MIN_INTERVAL_MINUTES" has "under RELEASE_MIN_INTERVAL_MINUTES (120)"
+expect "hand-cut next rc.1" "so cuts no v2.4.0-rc.2 inside it" eq "$(remote_tag v2.4.0-rc.2)" ""
 
 # --- qualification passes: staged as a pending release ---
 setup ""
@@ -732,11 +877,78 @@ if [ -n "$api" ]; then
   printf '{"check_runs":[{"id":9,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"success","started_at":"%s","app":{"id":42,"slug":"grain-test"}}]}' \
     "$c2" "$(iso $((now - 600)))" > "$work/www/gh/repos/o/r/commits/$c2/check-runs"
   : > "$work/images.log"
-  train RELEASE_RUNS_JSON= RELEASE_QUALIFICATION_RUNS_JSON= RELEASE_QUALIFICATION_CHECKS_JSON= GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$api/gh"
+  train RELEASE_RUNS_JSON= RELEASE_QUALIFICATION_RUNS_JSON= RELEASE_QUALIFICATION_CHECKS_JSON= RELEASE_HOLD_CHECKS_JSON= GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$api/gh"
   expect "github actions, qualified" "exits 0" eq "$status" 0
   expect "github actions, qualified" "reads the retried job as a flake" has "PASS vulns: passed on its one retry (failure,success): a flake"
   expect "github actions, qualified" "stages the release" eq "$(remote_tag v2.3.0-pending)" "$c2"
+
+  # Reading commits/<floor>/check-runs for grain/rc-hold over GitHub's API.
+  setup ""
+  tag_remote v2.3.0-rc.1 "$c2" 3
+  tag_remote v2.3.0-rc.1-discarded "$c2" 2
+  github_runs "$c3"
+  mkdir -p "$work/www/gh/repos/o/r/commits/$c2"
+  printf '{"check_runs":[{"id":11,"name":"grain/rc-hold","head_sha":"%s","status":"in_progress","started_at":"%s","output":{"title":"Holding v2.3.0-rc.2","summary":"waiting on task 55"},"app":{"id":42,"slug":"grain-test"}}]}' \
+    "$c2" "$(iso $((now - 300)))" > "$work/www/gh/repos/o/r/commits/$c2/check-runs"
+  : > "$work/train.out"
+  train RELEASE_RUNS_JSON= RELEASE_HOLD_CHECKS_JSON= RELEASE_TRAIN_OUTPUT="$work/train.out" GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$api/gh"
+  expect "github actions, rc-hold" "exits 0" eq "$status" 0
+  expect "github actions, rc-hold" "holds rc.2 over HTTP" has "phase 2: v2.3.0-rc.2 is held by grain/rc-hold on ${c2:0:12}: waiting on task 55"
+  expect "github actions, rc-hold" "emits rc_held" grep -qxF "rc_held=v2.3.0-rc.2" "$work/train.out"
+  expect "github actions, rc-hold" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
+  printf '{"check_runs":[{"id":11,"name":"grain/rc-hold","head_sha":"%s","status":"completed","conclusion":"success","started_at":"%s","app":{"id":42,"slug":"grain-test"}}]}' \
+    "$c2" "$(iso $((now - 60)))" > "$work/www/gh/repos/o/r/commits/$c2/check-runs"
+  train RELEASE_RUNS_JSON= RELEASE_HOLD_CHECKS_JSON= GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$api/gh"
+  expect "github actions, rc-hold completed" "cuts rc.2 once completed" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
+
+  # Flooding commits/<floor>/check-runs with 100 foreign runs per page fails closed
+  # instead of dropping grain's hold off the end of page 1.
+  setup ""
+  tag_remote v2.3.0-rc.1 "$c2" 3
+  tag_remote v2.3.0-rc.1-discarded "$c2" 2
+  github_runs "$c3"
+  mkdir -p "$work/www/gh/repos/o/r/commits/$c2"
+  jq -cn --arg sha "$c2" --arg t "$(iso $((now - 60)))" \
+    '{check_runs: [range(1; 101) | {id: ., name: "grain/rc-hold", head_sha: $sha, status: "completed", conclusion: "success", started_at: $t, app: {id: 15368, slug: "github-actions"}}]}' \
+    > "$work/www/gh/repos/o/r/commits/$c2/check-runs"
+  train RELEASE_RUNS_JSON= RELEASE_HOLD_CHECKS_JSON= RELEASE_GITHUB_PAGES=1 GITHUB_ACTIONS=true GITHUB_TOKEN=t GITHUB_REPOSITORY=o/r GITHUB_API_URL="$api/gh"
+  expect "github actions, rc-hold flooded" "exits 1 rather than fail open" eq "$status" 1
+  expect "github actions, rc-hold flooded" "cuts no rc.2" eq "$(remote_tag v2.3.0-rc.2)" ""
 fi
+
+# --- the task train (.grain/templates/release-train.yml): no GitHub token,
+# its files written by `grain ci list --format github-jobs` and `grain ci
+# checks --format github` in GitHub's shapes, the trusted App taken from
+# the checks answer's grain_app ---
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+git -C "$work/seed" push -q --force origin "$c2:refs/heads/candidate"
+runs "$c2" "$c4"
+{
+  printf '{"total_count":15,"jobs":['
+  first=1
+  for name in "go, shuffled and repeated (1)" "state repository soak" "sustained load" "metadata and model scalability" \
+    "merge liveness stress" "end-to-end long term tests" "long randomized cluster simulation" "postgres concurrency and stress" \
+    "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "installer trixie and hostmode" "govulncheck" \
+    "pkg/cli stress under load" "upgrade from previous versions"; do
+    [ $first = 1 ] || printf ','
+    first=0
+    printf '{"id":%s,"run_id":7,"run_attempt":1,"workflow_name":"nightly","head_sha":"%s","name":"%s","status":"completed","conclusion":"%s","created_at":"%s","started_at":null,"completed_at":null}' \
+      "${#name}" "$c2" "$name" "$([ "$name" = govulncheck ] && echo failure || echo success)" "$(iso $((now - 3600)))"
+  done
+  printf ',{"id":99,"run_id":7,"run_attempt":2,"workflow_name":"nightly","head_sha":"%s","name":"govulncheck","status":"completed","conclusion":"success","created_at":"%s","started_at":null,"completed_at":null}' "$c2" "$(iso $((now - 1800)))"
+  printf ']}'
+} > "$work/qual-runs.json"
+printf '{"total_count":2,"check_runs":[{"id":9,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"success","started_at":"%s","completed_at":null,"app":{"slug":"grain-forge"}},{"id":10,"name":"grain/release-qualification","head_sha":"%s","status":"completed","conclusion":"failure","started_at":"%s","completed_at":null,"app":{"slug":"github-actions"}}],"grain_app":"grain-forge"}\n' \
+  "$c2" "$(iso $((now - 600)))" "$c2" "$(iso $((now - 300)))" > "$work/qual-checks.json"
+: > "$work/images.log"
+train RELEASE_CI_SOURCE=grain RELEASE_PUSH_GRANT=train GITHUB_TOKEN= GH_TOKEN= \
+  RELEASE_QUALIFICATION_APP="$(jq -r '.grain_app // empty' "$work/qual-checks.json")"
+expect "task train, qualified" "exits 0" eq "$status" 0
+expect "task train, qualified" "reads the retried job as a flake" has "PASS vulns: passed on its one retry (failure,success): a flake"
+expect "task train, qualified" "trusts grain's App alone" has "IGNORED grain/release-qualification: 1 from github-actions, not grain-forge"
+expect "task train, qualified" "stages the release" eq "$(remote_tag v2.3.0-pending)" "$c2"
+expect "task train, qualified" "pushes no v2.3.0" eq "$(remote_tag v2.3.0)" ""
 
 setup ""
 train RELEASE_RUNS_JSON= RELEASE_CI_SOURCE=github

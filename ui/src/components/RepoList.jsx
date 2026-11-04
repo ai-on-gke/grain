@@ -44,6 +44,8 @@ import {
   RowLink,
 } from "./ListPrimitives.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
+import { HighlightedText } from "./SearchSelect.jsx";
+import { searchFilter } from "../fuzzy.js";
 import { identifierField } from "../identifierField.js";
 import NoGitConnectionNotice from "./NoGitConnectionNotice.jsx";
 import { useInPageHeader } from "./PageHeader.jsx";
@@ -440,9 +442,25 @@ export default function RepoList({
                 loading={reach.loading}
                 loadingText="Discovering repositories…"
                 filterOptions={(opts, { inputValue }) => {
-                  const q = inputValue.trim().toLowerCase();
-                  return opts.filter(
-                    (o) => o === OTHER || o.toLowerCase().includes(q),
+                  const searchable = opts.filter((o) => o !== OTHER);
+                  const pinned = opts.includes(OTHER) ? [OTHER] : [];
+                  const hits = inputValue.trim()
+                    ? searchFilter(searchable, inputValue).map(
+                        ({ item }) => item,
+                      )
+                    : searchable;
+                  return [...hits, ...pinned];
+                }}
+                renderOption={(props, option, { inputValue }) => {
+                  const { key, ...rest } = props;
+                  const ranges =
+                    option !== OTHER && inputValue.trim()
+                      ? searchFilter([option], inputValue)[0]?.ranges
+                      : undefined;
+                  return (
+                    <li key={key} {...rest} data-value={option}>
+                      <HighlightedText text={option} ranges={ranges} />
+                    </li>
                   );
                 }}
                 value={newRepo}

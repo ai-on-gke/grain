@@ -64,7 +64,7 @@ func isBaseBranchRepairTask(ctx context.Context, store *model.Store, task model.
 	if !hasTag(task, BaseCIRepairBranchTag(repo, branch)) && !hasTag(task, BaseReleaseTriageBranchTag(repo, branch)) {
 		return false
 	}
-	if hasTag(task, model.MarkedBaseRepairTag) && model.SelfApproved(task) {
+	if hasTag(task, model.MarkedBaseRepairTag) && (model.SelfApproved(task) || (task.Approval != nil && task.Approval.Actor == model.OwnerTrustPrincipal)) {
 		return false
 	}
 	return true

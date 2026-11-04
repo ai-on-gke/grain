@@ -141,7 +141,10 @@ function AuditTable({ testId, what, state, columns, rowKey, rowTestId }) {
                   sx={
                     c.nowrap
                       ? { whiteSpace: "nowrap" }
-                      : { overflowWrap: "break-word" }
+                      : // "anywhere", unlike "break-word", lets a long
+                        // address (a serviceAccount: entry) narrow its
+                        // column, so the table still fits its card.
+                        { overflowWrap: "anywhere" }
                   }
                 >
                   {c.value(e)}

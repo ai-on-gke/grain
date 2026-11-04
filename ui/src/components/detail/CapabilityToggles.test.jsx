@@ -17,6 +17,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import DetailOverlay from "../DetailOverlay.jsx";
 import api from "../../api.js";
+import { chooseOption, removeOption } from "../../searchSelectTesting.js";
 import { resetDetailMocks, baseTask, config } from "./testFixtures.js";
 
 vi.mock("../../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
@@ -44,8 +45,11 @@ describe("DetailOverlay capabilities", () => {
       />,
     );
 
-    await user.click(screen.getByLabelText("Legacy capabilities"));
-    await user.click(await screen.findByRole("option", { name: "Web search" }));
+    await chooseOption(
+      user,
+      screen.getByLabelText("Legacy capabilities"),
+      "Web search",
+    );
 
     expect(api).toHaveBeenCalledWith("/api/tasks/12/capabilities", {
       method: "POST",
@@ -73,9 +77,38 @@ describe("DetailOverlay capabilities", () => {
       />,
     );
 
-    await user.click(screen.getByLabelText("Legacy capabilities"));
-    await user.click(
-      await screen.findByRole("option", { name: "scratch-repo" }),
+    await chooseOption(
+      user,
+      screen.getByLabelText("Legacy capabilities"),
+      "scratch-repo",
+    );
+
+    expect(api).toHaveBeenCalledWith("/api/tasks/12/capabilities", {
+      method: "POST",
+      body: JSON.stringify({ id: "scratch-repo", attach: false }),
+    });
+  });
+
+  // Its chip takes a grant off as well as its row does.
+  it("detaches a capability from its chip", async () => {
+    const act = vi.fn((mutate) => mutate());
+    const user = userEvent.setup();
+    const task = { ...baseTask, capabilities: ["scratch-repo"] };
+    render(
+      <DetailOverlay
+        task={task}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    await removeOption(
+      user,
+      screen.getByLabelText("Legacy capabilities"),
+      "scratch-repo",
     );
 
     expect(api).toHaveBeenCalledWith("/api/tasks/12/capabilities", {

@@ -41,7 +41,9 @@ import {
   upgradeProgress,
 } from "../upgradeProgress.js";
 import { identifierField } from "../identifierField.js";
+import { searchFilter } from "../fuzzy.js";
 import { fetchUpgradeTargets } from "../upgradeTargets.js";
+import { HighlightedText } from "./SearchSelect.jsx";
 
 // STATUS_POLL_MS is how often this panel re-fetches /api/upgrade while
 // an upgrade is running -- fast enough that a restart landing (the
@@ -766,7 +768,18 @@ function BranchPicker({
         if (q === "" || opts.some((o) => o.name.toLowerCase() === q)) {
           return opts;
         }
-        return opts.filter((o) => o.name.toLowerCase().includes(q));
+        const groupOrder = [];
+        for (const o of opts) {
+          const g = TARGET_GROUPS[o.kind] || "";
+          if (!groupOrder.includes(g)) groupOrder.push(g);
+        }
+        return searchFilter(opts, inputValue, (o) => o.name)
+          .map(({ item, ranges }) => ({ ...item, ranges }))
+          .sort(
+            (a, b) =>
+              groupOrder.indexOf(TARGET_GROUPS[a.kind] || "") -
+              groupOrder.indexOf(TARGET_GROUPS[b.kind] || ""),
+          );
       }}
       renderOption={(props, option) => {
         const { key, ...rest } = props;
@@ -774,9 +787,9 @@ function BranchPicker({
           ? "not allowed on this deployment"
           : CHANNEL_NOTES[option.name];
         return (
-          <li key={key} {...rest}>
+          <li key={key} {...rest} data-value={option.name}>
             <Box component="span" sx={{ fontFamily: "monospace" }}>
-              {option.name}
+              <HighlightedText text={option.name} ranges={option.ranges} />
             </Box>
             {note && (
               <Typography

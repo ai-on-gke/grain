@@ -13,22 +13,12 @@
 // limitations under the License.
 
 import { useState } from "react";
-import {
-  Alert,
-  Box,
-  Button,
-  Checkbox,
-  Chip,
-  FormControl,
-  FormHelperText,
-  ListItemText,
-  MenuItem,
-  Select,
-} from "@mui/material";
+import { Alert, Box, Button, FormControl, FormHelperText } from "@mui/material";
 import api from "../../api.js";
 import { isCapabilityRef } from "../../capabilityArgs.js";
 import { isApiGrant, withoutApiRows } from "../../apiGrants.js";
 import GrantsPicker from "../GrantsPicker.jsx";
+import SearchSelect from "../SearchSelect.jsx";
 import {
   LEGACY_CAPABILITIES_HINT,
   NO_CAPABILITIES_HINT,
@@ -120,50 +110,31 @@ export default function CapabilityToggles({ t, config, act }) {
     <fieldset>
       <legend>Legacy capabilities</legend>
       <FormControl fullWidth size="small">
-        <Select
+        <SearchSelect
           multiple
-          displayEmpty
+          placeholder="None"
           inputProps={{ "aria-label": "Legacy capabilities" }}
           value={selected}
-          onChange={handleChange}
-          renderValue={(sel) =>
-            sel.length === 0 ? (
-              <span className="hint">None</span>
-            ) : (
-              <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-                {sel.map((id) => {
-                  const c = rows.find((cap) => cap.id === id);
-                  return <Chip key={id} size="small" label={c ? c.name : id} />;
-                })}
-              </Box>
-            )
+          onChange={(next) => applyChange(selected, next)}
+          noOptionsText={
+            rows.length === 0 ? NO_CAPABILITIES_HINT : "No matches"
           }
-        >
-          {rows.length === 0 && (
-            <MenuItem disabled>{NO_CAPABILITIES_HINT}</MenuItem>
-          )}
-          {rows.map((c) => {
+          options={rows.map((c) => {
             const unavailable = capabilityUnavailableHint(c);
-            return (
-              <MenuItem
-                key={c.id}
-                value={c.id}
-                title={
-                  unavailable
-                    ? `${c.description}\n\n${unavailable}`
-                    : c.description
-                }
-              >
-                <Checkbox checked={selected.includes(c.id)} size="small" />
-                <ListItemText
-                  primary={c.name}
-                  secondary={unavailable || null}
-                  secondaryTypographyProps={{ color: "warning.main" }}
-                />
-              </MenuItem>
-            );
+            return {
+              value: c.id,
+              label: c.name,
+              title: unavailable
+                ? `${c.description}\n\n${unavailable}`
+                : c.description,
+              secondary: unavailable ? (
+                <Box component="span" sx={{ color: "warning.main" }}>
+                  {unavailable}
+                </Box>
+              ) : null,
+            };
           })}
-        </Select>
+        />
         <FormHelperText>{LEGACY_CAPABILITIES_HINT}</FormHelperText>
       </FormControl>
       <GrantsPicker

@@ -17,6 +17,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import RepoList from "./RepoList.jsx";
 import api from "../api.js";
+import { chooseOption, optionValues } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 
@@ -673,9 +674,7 @@ describe("RepoList", () => {
     renderList({ tasks: [], onRefreshConfig });
 
     const input = await screen.findByPlaceholderText("owner/name");
-    await user.click(input);
-    const otherOption = await screen.findByRole("option", { name: "Other…" });
-    await user.click(otherOption);
+    await chooseOption(user, input, "Other…");
     await user.type(input, "custom/private-repo");
     await user.click(screen.getByRole("button", { name: "Add repo" }));
 
@@ -685,6 +684,27 @@ describe("RepoList", () => {
     });
     expect(onRefreshConfig).toHaveBeenCalledTimes(1);
     vi.unstubAllGlobals();
+  });
+
+  it("matches discovered repos by words in any order and keeps Other… pinned", async () => {
+    api.mockImplementation((path) =>
+      path === "/api/deployment/reachable-repos"
+        ? Promise.resolve({
+            available: true,
+            repos: [
+              { repo: "ai-on-gke/grain", push: true },
+              { repo: "acme/widgets", push: true },
+            ],
+          })
+        : Promise.resolve({}),
+    );
+    const user = userEvent.setup();
+    renderList({ tasks: [] });
+
+    const input = await screen.findByPlaceholderText("owner/name");
+    await user.click(input);
+    await user.type(input, "grain gke");
+    expect(optionValues(input)).toEqual(["ai-on-gke/grain", "Other…"]);
   });
 
   // grain/task-45: an empty targetRepos means unrestricted, so the first
