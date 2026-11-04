@@ -15,7 +15,7 @@ When an engineer runs Grain to execute tasks on their behalf using a delegated p
 
 ## Overview
 
-`grain git-login` (aliased as `grain login`) provides a `gh auth login`-style experience for delegating a GitHub HTTPS credential to a Grain deployment and enabling explicit signature attribution:
+`grain git-login` provides a `gh auth login`-style experience for delegating a GitHub HTTPS credential to a Grain deployment and enabling explicit signature attribution:
 
 ```
 Engineer workstation                              Grain daemon
@@ -43,7 +43,7 @@ Engineer workstation                              Grain daemon
 
 ### Interactive and non-interactive token delegation (`grain git-login`) {#GL-1}
 
-The CLI provides `grain git-login` (with `grain login` as a shorthand alias) supporting three mutually exclusive token-capture modes:
+The CLI provides `grain git-login` (not `grain login`, which signs the CLI in to a deployment -- see `host.spec.md` CLI-108) supporting three mutually exclusive token-capture modes:
 
 - **Interactive browser OAuth Device Flow (`--web`, default when stdin is a terminal):**
   - Initiates an RFC 8628 OAuth 2.0 Device Authorization Grant against the target GitHub host (`POST https://<host>/login/device/code`) with scopes `repo`, `read:org`, and `workflow` (`github.DefaultOAuthScopes`).

@@ -51,7 +51,9 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
@@ -168,6 +170,39 @@ func (s PullRequestScope) prHead() string {
 		return s.Owner + ":" + s.Branch
 	}
 	return s.Branch
+}
+
+// confirmRepoReadable is what a missing branch is checked against before
+// a tool tells the agent to push it: a read of the repository itself.
+// GitHub answers 404 for a branch that is not there, but also for every
+// path on a host that is not serving this API at all -- a GitHub
+// Enterprise Server named as -github-host gets REST at its root rather
+// than under /api/v3 -- and for a repository the token cannot see. Read
+// as "not pushed yet", any of those tells a run to push a branch it has
+// already pushed (orchestrator.branchExistsSettled guards its own
+// negative the same way). nil means the repository answered, so the
+// branch really is absent.
+func confirmRepoReadable(client PullRequestReader, owner, repo, branch string) error {
+	_, err := client.DefaultBranch(owner, repo)
+	if err == nil {
+		return nil
+	}
+	var apiErr *github.Error
+	if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+		where := "The forge API"
+		if apiErr.URL != "" {
+			where = apiErr.URL
+		}
+		return fmt.Errorf("%s answered 404 for the repository %s/%s itself, not only for branch %s, "+
+			"so whether %s is pushed cannot be told from here. Either the credential cannot see %s/%s, "+
+			"or that is not where this host serves its REST API: a GitHub Enterprise Server serves it "+
+			"under /api/v3, which grain uses only for a credential with a host record "+
+			"(the git connection's secrets/github/<name>.host.json), not for a host named only as "+
+			"-github-host. This is a deployment fault, not your branch's -- say so in what you report",
+			where, owner, repo, branch, branch, owner, repo)
+	}
+	return fmt.Errorf("branch %s was not found on %s/%s, and reading the repository itself failed too, "+
+		"so whether it is pushed cannot be told from here: %w", branch, owner, repo, err)
 }
 
 // PullRequestReader is the read-only slice of github.Client this tool
@@ -415,6 +450,9 @@ func pullRequestStatus(ctx context.Context, client PullRequestReader, grainCI Gr
 	if head == nil {
 		if scope.PullRequestNumber > 0 {
 			return externalPullRequestStatus(ctx, client, grainCI, scope)
+		}
+		if err := confirmRepoReadable(client, scope.Owner, scope.Repo, scope.Branch); err != nil {
+			return "", err
 		}
 		return fmt.Sprintf(
 			"Branch %s does not exist on %s/%s yet, so there is no pull request and no CI "+
