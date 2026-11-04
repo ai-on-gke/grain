@@ -109,8 +109,10 @@ stays red for a week ships nothing, and `latest` stays where it is.
 
 With `RELEASE_CI_SOURCE=github` (the default in GitHub Actions), the train
 reads workflow runs and jobs from GitHub Actions with `GITHUB_TOKEN`, and
-reads the `grain/release-qualification` and `grain/rc-hold` check runs on the
-rc's commit. With `RELEASE_CI_SOURCE=grain`, it reads CI runs through the
+reads the `grain/release-qualification` check run on the rc's commit and the
+`grain/rc-hold` check run on a dropped rc's commit (checks: read). Without a
+GitHub token neither can be read: no rc qualifies, and Phase 2 says it has no
+`grain/rc-hold` to wait on rather than holding. With `RELEASE_CI_SOURCE=grain`, it reads CI runs through the
 `release-gate-read` capability (`api:release-gate-read`,
 `docs/ci-capabilities.md`).
 
