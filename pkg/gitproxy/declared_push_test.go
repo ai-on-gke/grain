@@ -20,6 +20,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +38,28 @@ type stubDeclaredPush struct {
 
 func (s stubDeclaredPush) GitDeclaredPush(context.Context, string) (*model.DeclaredPush, error) {
 	return s.declared, nil
+}
+
+// onMain is a repository whose default branch is main, at tip.
+func onMain(tip string) func() (map[string]string, string, error) {
+	return func() (map[string]string, string, error) {
+		return map[string]string{"HEAD": tip, "refs/heads/main": tip}, "refs/heads/main", nil
+	}
+}
+
+// historyOnMain is a push in hand with no pack, to a repository whose
+// main is oidC with history the commits listed: what a declared push's new
+// tip is checked against (pushCheck.onHistory).
+func historyOnMain(history ...string) *pushCheck {
+	return &pushCheck{
+		refs: onMain(oidC),
+		upstream: func(wants []string, have string, _ int) (packCommits, error) {
+			if slices.Contains(history, have) {
+				return packCommits{oidC: {have}}, nil
+			}
+			return packCommits{oidC: nil}, nil
+		},
+	}
 }
 
 func releaseDeclaration(push ...model.RefPush) *model.DeclaredPush {
@@ -58,7 +81,7 @@ func TestADeclaredPushSetIsWhatARunMayPushBeyondItsBranch(t *testing.T) {
 	authorize := func(d *model.DeclaredPush, owner, repo string, updates ...RefUpdate) string {
 		t.Helper()
 		a := &ModelAuthorizer{Store: stubScopeLookup{}, Branches: stubDeclaredPush{stubBranchLookup: own, declared: d}}
-		reason, err := a.AuthorizeRefUpdates(ctx, "sandbox-0", owner, repo, updates)
+		reason, err := a.AuthorizeRefUpdates(withPushCheck(ctx, historyOnMain(oidB)), "sandbox-0", owner, repo, updates)
 		if err != nil {
 			t.Fatal(err)
 		}

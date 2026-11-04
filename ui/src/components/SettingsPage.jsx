@@ -37,6 +37,7 @@ import UnbackedStateDot, { stateDot } from "./UnbackedStateDot.jsx";
 import GeneralSection from "./settings/GeneralSection.jsx";
 import AccessSection from "./settings/AccessSection.jsx";
 import HostdsSection from "./settings/HostdsSection.jsx";
+import AuditSection from "./settings/AuditSection.jsx";
 import ConfigRepoSection from "./settings/ConfigRepoSection.jsx";
 import ModelsSection from "./settings/ModelsSection.jsx";
 import AgentsSection from "./settings/AgentsSection.jsx";
@@ -78,17 +79,19 @@ export { SETTINGS_SECTIONS, SETTINGS_GROUPS };
 // Sections that hold no saved settings of their own -- this browser's
 // preferences, Access's sign-in (design/design/config-repo-settings.design.md
 // §1 invariant 7: it stays outside the config repo so a bad config PR can
-// never lock the operator out), and Upgrade, which is an action -- so they
-// are never read-only under an external config repo. Upgrade has no save
-// state either, so its header leaves the "All changes saved" line off.
+// never lock the operator out), Upgrade, which is an action, and Audit,
+// which only reads logs -- so they are never read-only under an external
+// config repo. Upgrade and Audit have no save state either, so their
+// headers leave the "All changes saved" line off.
 const NOT_CONFIG = new Set([
   "config-repo",
   "preferences",
   "upgrade",
   "access",
   "hostds",
+  "audit",
 ]);
-const NO_SAVE_STATE = new Set(["upgrade"]);
+const NO_SAVE_STATE = new Set(["upgrade", "audit"]);
 
 // Sections that read GET /api/settings, and so wait for it.
 const READS_SETTINGS = new Set([
@@ -575,6 +578,9 @@ export default function SettingsPage({
         break;
       case "hostds":
         body = <HostdsSection {...common} />;
+        break;
+      case "audit":
+        body = <AuditSection />;
         break;
       case "config-repo":
         body = (

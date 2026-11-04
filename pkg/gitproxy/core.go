@@ -614,6 +614,9 @@ func (p *GitProxy) refuseRefUpdates(ctx context.Context, sandbox string, req Git
 				upstream: func(wants []string, have string, hashLen int) (packCommits, error) {
 					return p.upstreamCommits(ctx, sandbox, req, wants, have, hashLen)
 				},
+				refs: func() (map[string]string, string, error) {
+					return p.upstreamRefs(ctx, sandbox, req)
+				},
 			}
 			reason, err := refs.AuthorizeRefUpdates(withPushCheck(ctx, check), sandbox, req.ScopeOwner(), req.Repo, updates)
 			if err != nil {

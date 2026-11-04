@@ -103,6 +103,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -251,21 +252,61 @@ func Main() {
 			os.Exit(code)
 		}
 	}
-	if err := runCLI(args); err != nil {
-		var unknown unknownCommandError
-		if errors.As(err, &unknown) {
-			// Inside a sandbox, a command neither CLI has is answered with
-			// the sandbox CLI's help, not this CLI's daemon-facing usage;
-			// the task-CLI commands above (grain declarations check) still
-			// run there.
-			if code, handled := sandboxcli.Unknown(args, os.Stderr); handled {
-				os.Exit(code)
-			}
-			fmt.Fprint(os.Stderr, usage)
-		}
-		fmt.Fprintln(os.Stderr, "grain: "+err.Error())
-		os.Exit(1)
+	if code := runTaskCLI(args, os.Stderr); code != exitOK {
+		os.Exit(code)
 	}
+}
+
+// runTaskCLI runs the task CLI and says how it ended (errors.go): the
+// exit code, and on stderr either a sentence or, under -json, the one
+// {"error": ...} object -- with whatever the flag package or a command
+// would have said there held back, so the object is all a script reads.
+func runTaskCLI(args []string, stderr io.Writer) int {
+	asJSON := jsonRequested(args)
+	var err error
+	if asJSON {
+		var said string
+		said, err = holdStderr(func() error { return runCLI(args) })
+		if err == nil || errors.Is(err, flag.ErrHelp) {
+			_, _ = io.WriteString(stderr, said)
+		}
+	} else {
+		err = runCLI(args)
+	}
+	var unknown unknownCommandError
+	if !asJSON && errors.As(err, &unknown) {
+		// Inside a sandbox, a command neither CLI has is answered with
+		// the sandbox CLI's help, not this CLI's daemon-facing usage;
+		// the task-CLI commands above (grain declarations check) still
+		// run there.
+		if code, handled := sandboxcli.Unknown(args, stderr); handled {
+			return code
+		}
+		fmt.Fprint(stderr, usage)
+	}
+	return reportError(stderr, err, asJSON)
+}
+
+// holdStderr runs fn with os.Stderr captured, and returns what it wrote
+// there instead of letting it through.
+func holdStderr(fn func() error) (string, error) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return "", fn()
+	}
+	old := os.Stderr
+	os.Stderr = w
+	done := make(chan string, 1)
+	go func() {
+		said, _ := io.ReadAll(r)
+		done <- string(said)
+	}()
+	err = fn()
+	os.Stderr = old
+	_ = w.Close()
+	said := <-done
+	_ = r.Close()
+	return said, err
 }
 
 const usage = `usage: grain [global flags] <command> [args]
@@ -296,7 +337,7 @@ const usage = `usage: grain [global flags] <command> [args]
        grain agy-tool-hook     answer one of agy's PreToolUse hooks on stdin/stdout (see agyhook.go)
        grain claude-stop-hook  answer one of Claude Code's Stop hooks on stdin/stdout (see pkg/agent/claude/stophook.go)
 
-Global flags (must come before the command):
+Global flags (before or after the command; -flag and --flag are the same):
   -server string  base URL of a running "grain daemon"'s UI/API. Defaults to
                   $GRAIN_SERVER when that is set, else GRAIN_SERVER in
                   /etc/grain/cli.env ($GRAIN_CLI_ENV names another file), else
@@ -403,6 +444,8 @@ Commands:
   broadcast [-all] <message...>        send a notice to all running task agents (or with -all, all active tasks)
   release approve|reject vX.Y.0        make a pending trunk release official, or drop it -- a person's act;
                                        an agent is refused
+  release approval-key                 the public key GitHub's promote-release.yml verifies an Inbox approval
+                                       with (repository variable GRAIN_RELEASE_APPROVAL_KEY)
 `
 
 // defaultServerURL is loopback on the port every installer binds the
@@ -479,13 +522,17 @@ func audienceDefault() string {
 	return ""
 }
 
+func asUserDefault() string {
+	return strings.TrimSpace(os.Getenv("GRAIN_USER"))
+}
+
 func runCLI(args []string) error {
 	fs := flag.NewFlagSet("grain", flag.ContinueOnError)
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	server := fs.String("server", serverDefault(), "base URL of a running \"grain daemon\"'s UI/API ($"+serverEnvVar+" overrides the default)")
 	token := fs.String("token", "", "auth token for a proxy in front of the daemon ($GRAIN_TOKEN, $GRAIN_AUTH_TOKEN, $GRAIN_ID_TOKEN, $GRAIN_TUNNEL_TOKEN)")
 	audience := fs.String("audience", audienceDefault(), "Google ID token audience for Cloud Run ($GRAIN_AUDIENCE, $GRAIN_TUNNEL_AUDIENCE)")
-	asUser := fs.String("as", "", "identity for request attribution / proxy headers ($GRAIN_USER)")
+	asUser := fs.String("as", asUserDefault(), "identity for request attribution / proxy headers ($GRAIN_USER)")
 	jsonOutput := fs.Bool("json", false, "print machine-readable JSON instead of a human-readable table")
 	connectTimeout := fs.Duration("connect-timeout", defaultConnectTimeout,
 		"how long to wait to connect to the daemon, and to wait out one that refuses connections (a restart)")
@@ -493,6 +540,16 @@ func runCLI(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	rest := fs.Args()
+	if len(rest) == 0 {
+		fs.Usage()
+		return usageErrorf("a command is required")
+	}
+	cmdArgs, err := liftGlobalFlags(fs, rest[0], rest[1:])
+	if err != nil {
+		return err
+	}
+	rest = append(rest[:1:1], cmdArgs...)
 	_, source := serverSource()
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "server" {
@@ -500,12 +557,6 @@ func runCLI(args []string) error {
 		}
 	})
 	useCLIEnvDataDir()
-
-	rest := fs.Args()
-	if len(rest) == 0 {
-		fs.Usage()
-		return errors.New("a command is required")
-	}
 
 	c := ui.NewHTTPClient(*server)
 	c.HTTP = cliHTTPClient(*connectTimeout, *callTimeout)
@@ -521,8 +572,19 @@ func runCLI(args []string) error {
 	}
 	out := &printer{json: *jsonOutput}
 	ctx := context.Background()
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "timeout" {
+			ctx = withWaitLimit(ctx, *callTimeout)
+		}
+	})
 
-	target := cliTarget{server: *server, source: source, connect: *connectTimeout, call: *callTimeout}
+	target := cliTarget{
+		server:      *server,
+		source:      source,
+		tokenSource: tokenSource(*token),
+		connect:     *connectTimeout,
+		call:        *callTimeout,
+	}
 	return explainDaemonError(dispatchCLI(ctx, c, out, fs, rest), target)
 }
 
@@ -621,7 +683,7 @@ func (e unknownCommandError) Error() string { return fmt.Sprintf("unknown comman
 // to assume otherwise.
 func taskID(s string) (string, error) {
 	if s == "" {
-		return "", errors.New("a task id is required")
+		return "", usageErrorf("a task id is required")
 	}
 	return s, nil
 }

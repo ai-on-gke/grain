@@ -51,18 +51,36 @@ type fakeProber struct {
 	noHostd     bool
 	// hostd, when set, is asked for hostEntries as the registry asks it.
 	hostd *hostd.Client
+	// refuse makes the server's configure refuse every config with it;
+	// unreachable makes the probe fail before configure is reached.
+	refuse, unreachable string
+	// schema, when set, is the server's config schema in place of
+	// cloudConfigSchema.
+	schema map[string]any
 }
 
 func (f *fakeProber) Statuses() []servers.Status {
-	return []servers.Status{{ID: configCap, State: servers.Attached, Transport: "stdio", ConfigSchema: cloudConfigSchema}}
+	schema := cloudConfigSchema
+	if f.schema != nil {
+		schema = f.schema
+	}
+	return []servers.Status{{ID: configCap, State: servers.Attached, Transport: "stdio", ConfigSchema: schema}}
 }
 
 func (f *fakeProber) Probe(_ context.Context, id string, cfg protocol.ServerConfig, extra protocol.SecretLookup) servers.ProbeResult {
 	f.probed = append(f.probed, cfg)
-	if ref, ok := cfg.Config["token"].(string); ok {
-		if v, ok := extra(strings.TrimPrefix(ref, "$secret:")); ok {
-			f.resolved = append(f.resolved, v)
+	for _, field := range []string{"token", "secret_values"} {
+		if ref, ok := cfg.Config[field].(string); ok {
+			if v, ok := extra(strings.TrimPrefix(ref, "$secret:")); ok {
+				f.resolved = append(f.resolved, v)
+			}
 		}
+	}
+	if f.refuse != "" {
+		return servers.ProbeResult{ID: id, ConfigRefused: true, ConfigSchema: cloudConfigSchema, Error: "capability server " + id + ": configure: " + f.refuse}
+	}
+	if f.unreachable != "" {
+		return servers.ProbeResult{ID: id, Error: f.unreachable}
 	}
 	return servers.ProbeResult{ID: id, OK: true, ConfigSchema: cloudConfigSchema, Methods: []servers.MethodDetail{{Name: "key", Releasable: true}}}
 }
@@ -381,5 +399,114 @@ func TestTestingAHostServerWithNoHostdConnectedAnswersAtOnce(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), hostd.ErrRemoteNotConnected.Error()) {
 		t.Fatalf("err = %v, want it to say no hostd is connected", err)
+	}
+}
+
+// A config the server's own configure refuses is refused at save, with
+// the server's reason on the form and on the field it names, and nothing
+// is stored; a server that cannot be reached at all is still saved.
+func TestCapabilityServerSaveIsRefusedWhenTheServerRefusesItsConfig(t *testing.T) {
+	setsSchema := map[string]any{
+		"type": "object", "required": []any{"project", "token"},
+		"properties": map[string]any{
+			"project": map[string]any{"type": "string"},
+			"token":   map[string]any{"type": "string", "writeOnly": true},
+			"permission_sets": map[string]any{"type": "array", "items": map[string]any{
+				"type": "object", "properties": map[string]any{
+					"name":  map[string]any{"type": "string"},
+					"roles": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				},
+			}},
+		},
+	}
+	p := &fakeProber{schema: setsSchema, refuse: `gcp: permission set "iap-test": roles/run.admin exceeds admin ambient-host's role ceiling: add it to the admin's role_ceiling too`}
+	ts, _, client, store := configTestServer(t, p)
+	ctx := context.Background()
+	body := map[string]any{"id": configCap, "config": map[string]any{"command": "grain", "config": map[string]any{
+		"project": "p1", "token": "$secret:capability-server-x/token",
+		"permission_sets": []any{map[string]any{"name": "other"}, map[string]any{"name": "iap-test", "roles": []any{"roles/run.admin"}}},
+	}}, "configSecrets": map[string]string{"token": "typed-secret"}}
+	var out map[string]any
+	code := postJSON(t, ts, "PUT", "/api/capability-servers", body, &out)
+	msg, _ := out["error"].(string)
+	fields, _ := out["fields"].(map[string]any)
+	if code != 400 || !strings.Contains(msg, "add it to the admin's role_ceiling too") || !strings.Contains(msg, "not saved") {
+		t.Fatalf("%d %v, want a 400 with the server's reason", code, out)
+	}
+	if fields[""] == nil || fields["permission_sets[1].roles"] == nil {
+		t.Errorf("fields = %v, want the form and permission_sets[1].roles", fields)
+	}
+	if strings.Contains(msg, "configure:") {
+		t.Errorf("error %q keeps the probe's prefix", msg)
+	}
+	// The probe was handed the typed secret, and nothing was kept.
+	if len(p.resolved) != 1 || p.resolved[0] != "typed-secret" {
+		t.Errorf("probe resolved %v, want the typed secret", p.resolved)
+	}
+	cfg, _ := client.Store.GetConfig(ctx)
+	if _, ok := cfg.MCPServers[configCap]; ok {
+		t.Errorf("a refused config was stored: %+v", cfg.MCPServers[configCap])
+	}
+	if list, _ := store.List(); len(list) != 0 {
+		t.Errorf("a refused save stored secrets %v", list)
+	}
+
+	// Unreachable: saved, since the config was never judged.
+	p.refuse, p.unreachable = "", "dial tcp: connection refused"
+	var saved []any
+	if code := postJSON(t, ts, "PUT", "/api/capability-servers", body, &saved); code != 200 {
+		t.Fatalf("an unreachable server's save = %d %v, want it saved", code, saved)
+	}
+}
+
+// External-config mode refuses a save carrying typed secrets before Probe
+// runs, and a non-builtin server claiming Builtin: "config-map" cannot
+// merge or read config-map's stored secret_values.
+func TestCapabilityServerSaveGuardsProbeAndBuiltinSpoofing(t *testing.T) {
+	mapSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"secret_values": map[string]any{"type": "string", "writeOnly": true},
+			"secrets":       map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
+		},
+	}
+	p := &fakeProber{schema: mapSchema}
+	ts, _, client, store := configTestServer(t, p)
+	if err := store.Set("existing", "secret_values", []byte(`{"creds/a":"keep-secret"}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Spoofed Builtin: "config-map" on a non-builtin id does not merge
+	// existing/secret_values into what Probe receives.
+	spoof := map[string]any{
+		"id": configCap,
+		"config": map[string]any{
+			"command": "grain",
+			"builtin": "config-map",
+			"config": map[string]any{
+				"secret_values": "$secret:existing/secret_values",
+				"secrets":       []any{map[string]any{"name": "creds", "keys": map[string]any{"a": "A", "b": "B"}}},
+			},
+		},
+		"configSecrets": map[string]string{"secret_values": `{"creds/b":"typed-only"}`},
+	}
+	p.refuse = "no"
+	var refused map[string]any
+	if code := postJSON(t, ts, "PUT", "/api/capability-servers", spoof, &refused); code != 400 {
+		t.Fatalf("spoof status = %d %v, want 400", code, refused)
+	}
+	if len(p.resolved) != 1 || strings.Contains(p.resolved[0], "keep-secret") {
+		t.Fatalf("spoofed Builtin merged stored secret into Probe: %v", p.resolved)
+	}
+
+	// External-config mode refuses before calling Probe at all.
+	p.probed, p.resolved = nil, nil
+	client.Config.StateRepo = &fakeStateRepo{status: ui.StateRepoStatus{Remote: "https://github.com/acme/grain-config.git", Branch: "main"}}
+	var conflict map[string]any
+	if code := postJSON(t, ts, "PUT", "/api/capability-servers", spoof, &conflict); code != 409 {
+		t.Fatalf("external mode status = %d %v, want 409", code, conflict)
+	}
+	if len(p.probed) != 0 || len(p.resolved) != 0 {
+		t.Errorf("external mode still ran Probe: probed=%v resolved=%v", p.probed, p.resolved)
 	}
 }

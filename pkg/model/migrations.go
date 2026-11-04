@@ -710,6 +710,11 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     104,
+		Description: "disable (and keep) every stored custom command connection: the connection type is removed",
+		Up:          disableCustomConnections,
+	},
+	{
+		Version:     105,
 		Description: "add repo_config.upstream_repo for fork-to-upstream pull request workflows",
 		Statements: []string{
 			"ALTER TABLE `repo_config` ADD COLUMN `upstream_repo` TEXT NOT NULL DEFAULT ''",

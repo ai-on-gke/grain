@@ -36,6 +36,7 @@ func cmdRelease(ctx context.Context, c *ui.HTTPClient, out *printer, args []stri
 	allowBreaking := fs.Bool("allow-breaking", false, "approve only: accept a release that carries breaking changes without being the major release RELEASE_MAJOR asks for")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "usage: grain release approve|reject [-repo owner/name] [-short-soak-ok] [-allow-breaking] vX.Y.Z")
+		fmt.Fprintln(fs.Output(), "       grain release approval-key   (the value for GitHub's GRAIN_RELEASE_APPROVAL_KEY variable)")
 		fs.PrintDefaults()
 	}
 	if len(args) == 0 {
@@ -43,6 +44,14 @@ func cmdRelease(ctx context.Context, c *ui.HTTPClient, out *printer, args []stri
 		return flag.ErrHelp
 	}
 	verb := args[0]
+	if verb == "approval-key" {
+		key, err := c.ReleaseApprovalKey(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Print(key)
+		return nil
+	}
 	if verb != "approve" && verb != "reject" {
 		fs.Usage()
 		return fmt.Errorf("unknown release command %q: approve or reject", verb)
@@ -80,6 +89,11 @@ func cmdRelease(ctx context.Context, c *ui.HTTPClient, out *printer, args []stri
 		fmt.Printf("approved %s%s: promote-release is tagging it and moving latest onto it\n", decision.Version, accepted)
 	} else {
 		fmt.Printf("rejected %s: promote-release is dropping it; the next train run cuts its next rc\n", decision.Version)
+	}
+	if d := decision.Dispatched; d != nil {
+		fmt.Printf("dispatched %s's %s on %s for %s (%s-pending at %.12s), signed for %s\n",
+			d.Repo, d.Workflow, d.Ref, decision.Version, decision.Version, d.Commit, d.By)
+		return nil
 	}
 	out.ciStarted(decision.Run)
 	return nil

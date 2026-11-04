@@ -111,6 +111,24 @@ func (h *hostdCapabilityServers) registry(ctx context.Context, name string, clie
 				logf("on grain hostd "+name+": "+format, args...)
 			}
 		}
+		if h.store != nil {
+			raiseDrop, clearDrop := capabilityServerAlertsOnHostd(h.ctx, h.store, name)
+			opts.OnDrop = func(st servers.Status) {
+				raiseDrop(st)
+				reason := st.Reason
+				if reason == "" {
+					reason = st.Error
+				}
+				orchestrator.NoteCapabilityServerDroppedOnHostd(h.ctx, h.store, st.ID, name, string(st.State), reason, st.ConfigRefused)
+			}
+			opts.OnAttach = func(id string) {
+				clearDrop(id)
+				go orchestrator.RetryCapabilityReleases(h.ctx, h.store)
+			}
+			opts.OnClear = clearDrop
+		} else {
+			opts.OnDrop, opts.OnAttach, opts.OnClear = nil, nil, nil
+		}
 		r = &hostdRegistry{reg: servers.New(opts), ready: make(chan struct{})}
 		h.regs[name] = r
 	}

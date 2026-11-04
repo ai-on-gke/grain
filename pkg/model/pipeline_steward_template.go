@@ -162,8 +162,13 @@ func pipelineStewardBody() string {
 		"flaky job failing alone, once), re-run CI a person cancelled once their time-bound " +
 		"hold expires, retry stalled merges and batches, file ports, and raise `pipeline.*` " +
 		"notifications for a red base, a stalled merge or task, a failing batch, a failing " +
-		"repair and a stale port. Never file a repair (`fixes_base_branch`) yourself, and " +
-		"never raise a `pipeline.*` notification again.\n\n")
+		"repair and a stale port. For releases they judge each release candidate's " +
+		"qualification, re-run its flakes and infrastructure casualties, raise " +
+		"`pipeline.rc-failed`, `pipeline.release-escalated`, `pipeline.release-infra-stalled` " +
+		"and `pipeline.flake-budget`, and keep the hold on the next candidate; the release " +
+		"train cuts, discards and stages candidates. Never file a repair (`fixes_base_branch`) " +
+		"yourself, never raise a `pipeline.*` notification again, and never cut, tag, approve " +
+		"or promote a release.\n\n")
 
 	b.WriteString("## Each wake\n\n")
 	b.WriteString("Read and act through the `grain` CLI in your sandbox (`grain help`); only " +
@@ -197,9 +202,11 @@ func pipelineStewardBody() string {
 		"task's agent something (rebase after the repair, wait for a merge), use " +
 		"`grain task message <id>`: it never parks that task.\n\n")
 
+	writeRedRCSection(&b)
+
 	b.WriteString("## Limits\n\n")
 	b.WriteString("Your actions are: comment, reorder, retry, `grain notify`, `grain task message`, " +
-		"and `propose_task` for a revert. At most ")
+		"and `propose_task` for a revert or a red release candidate's blocker. At most ")
 	b.WriteString(strconv.Itoa(PipelineStewardMaxActions))
 	b.WriteString(" of them in one wake. If the pipeline needs more than that, do the most " +
 		"important ones and say what is left. A wake with nothing to judge ends at once, " +
@@ -220,6 +227,55 @@ func pipelineStewardBody() string {
 		"nothing wakes you, so the pipeline goes unwatched until somebody answers. Put anything " +
 		"a person has to decide in a `grain notify` notification instead.")
 	return b.String()
+}
+
+// writeRedRCSection is the steward's half of a red release candidate
+// (design/playbook/releases.playbook.md §5 and §12): the judgement the
+// release reconciler (orchestrator's releaseredrc.go) leaves to it once
+// it has raised the notification.
+func writeRedRCSection(b *strings.Builder) {
+	marker := RCBlockerMarker("<rc_tag>")
+	b.WriteString("## A red release candidate\n\n")
+	b.WriteString("`pipeline.rc-failed:<rc_tag>` wakes you when a candidate `vX.Y.Z-rc.N` is confirmed " +
+		"red. Grain has already re-run its flakes and infrastructure casualties, posted the verdict, and " +
+		"put the failing items, the attempt number and the commit range `<floor>..<rc_sha>` in the " +
+		"notification. The train tags the candidate `-discarded` and cuts `rc.(N+1)` from the next " +
+		"known-good commit. What is left is yours:\n\n")
+	b.WriteString("1. **Triage `<floor>..<rc_sha>`.** Read the failing items' tasks and logs the " +
+		"notification names, then `git log --first-parent` over the range it gives (from `rc.2` on, " +
+		"start with its \"new since\" range). Name the merge you suspect and the evidence for it. A " +
+		"failure that reads as infrastructure or a flake is not a regression, so file nothing for it.\n")
+	b.WriteString("2. **File the fix or the revert, high priority.** For each suspect, `propose_task` a " +
+		"revert, or a fix where a revert would lose more than it saves. Target `main`, pass " +
+		"`at_front: true` (a priority above your own waits for a person), and start the title with `" +
+		marker + "` exactly. That title is the hold. While any task with it is open, grain keeps check " +
+		"run `" + ReleaseHoldCheckName + "` in progress on the red candidate's commit, so `rc.(N+1)` is " +
+		"not cut onto a tree you know is broken. It completes by itself once they have all landed, so " +
+		"there is nothing to lift. An open task that already fixes the cause holds nothing unless its " +
+		"title has the marker: message it and name it in your report. If `main` is red too, the " +
+		"base-branch repair is the fix. Do not file another; a red `main` already stops the train " +
+		"cutting.\n")
+	b.WriteString("3. **`rc.2` red: decide whether trunk churn broke it.** Compare its failure with " +
+		"`rc.1`'s (`pipeline.rc-failed:vX.Y.Z-rc.1`). The train cuts `rc.3` from `release/vX.Y.Z`, " +
+		"which it branches from `rc.2`'s commit, and only targeted `fix:` commits go there. If `rc.2` " +
+		"failed on a regression `rc.1` did not have, file the fix on `main` first, then a second " +
+		"`propose_task` with `branch: release/vX.Y.Z` that cherry-picks it (`Backported-from: " +
+		"<main_sha>`), `depends_on` the first, and has the same `" + RCBlockerMarker("vX.Y.Z-rc.2") +
+		"` title. If it failed the way `rc.1` did, `rc.1`'s fix did not work. Say so, then file the " +
+		"fix and its backport the same way.\n")
+	b.WriteString("4. **Escalate after " + strconv.Itoa(ReleaseMaxRCAttempts) + " red candidates.** Once " +
+		"`rc." + strconv.Itoa(ReleaseMaxRCAttempts) + "` is red (RELEASE_MAX_RC_ATTEMPTS), grain raises " +
+		"`pipeline.release-escalated:vX.Y.Z` to the person's Inbox and the train cuts no more of that " +
+		"version. File no more blockers for it. Put your triage beside it with `grain notify` subject " +
+		"`agent.<your task id>:release-escalated:vX.Y.Z`. Give the suspect commits of each red " +
+		"candidate, whether they share a cause, and your recommendation: reset (another candidate once " +
+		"the fixes you name land) or advance to the next version. A person decides.\n\n")
+	b.WriteString("`pipeline.flake-budget:<repo>:<item>` is a qualification item that spent " +
+		strconv.Itoa(FlakeBudgetRetries) + " flake retries in a day. Propose one de-flake task for it " +
+		"(a quarantine entry is a person's review), unless one is already open. " +
+		"`pipeline.release-infra-stalled:<rc_tag>` is a candidate still qualifying while an item keeps " +
+		"failing on infrastructure. Read that item's last runs, name the runner, quota or credential " +
+		"that is failing in a `grain notify` a person can act on, and file no code fix for it.\n\n")
 }
 
 // UsesToolBudget reports whether t's runs are durable judgement wakes,

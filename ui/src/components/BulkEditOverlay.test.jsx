@@ -17,6 +17,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import BulkEditOverlay from "./BulkEditOverlay.jsx";
 import api from "../api.js";
+import { chooseOption } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 
@@ -825,12 +826,12 @@ describe("BulkEditOverlay", () => {
     open({ onRun });
 
     await tickField(user, "Repo");
-    await user.selectOptions(screen.getByRole("combobox"), "Other…");
+    await chooseOption(user, screen.getByRole("combobox"), "Other…");
     await user.type(screen.getByPlaceholderText("owner/name"), "custom/bulk");
     await user.click(screen.getByRole("button", { name: "Choose from list" }));
     expect(screen.getByRole("combobox")).toHaveValue("acme/widgets");
 
-    await user.selectOptions(screen.getByRole("combobox"), "Other…");
+    await chooseOption(user, screen.getByRole("combobox"), "Other…");
     await user.type(screen.getByPlaceholderText("owner/name"), "custom/bulk");
     await tickField(user, "Repo");
     await tickField(user, "Repo");
