@@ -48,6 +48,12 @@ func TestStoreToolsRefuseWhileADaemonHoldsTheStore(t *testing.T) {
 		"backup": func() error {
 			return runBackup(context.Background(), []string{"-data-dir", dataDir, "-gcs-bucket", "b"}, io.Discard)
 		},
+		"export": func() error {
+			return runExport(context.Background(), []string{"-data-dir", dataDir, "-out", filepath.Join(t.TempDir(), "b.tar.gz")}, io.Discard)
+		},
+		"import": func() error {
+			return runImport(context.Background(), []string{"-data-dir", dataDir, "-in", filepath.Join(t.TempDir(), "b.tar.gz"), "-force"}, io.Discard)
+		},
 	} {
 		err := run()
 		if !errors.Is(err, daemon.ErrDaemonAttached) || !strings.Contains(err.Error(), daemon.StopDaemonCommand) {

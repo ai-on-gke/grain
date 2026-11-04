@@ -143,6 +143,9 @@ func runExport(ctx context.Context, args []string, out io.Writer) error {
 		fs.Usage()
 		return errors.New("-data-dir is required")
 	}
+	if err := daemon.RefuseWhileDaemonAttached(ctx, "grain export", *dataDir, nil, false); err != nil {
+		return err
+	}
 
 	pass, key, err := secretFlags.resolve(os.Stderr)
 	if err != nil {

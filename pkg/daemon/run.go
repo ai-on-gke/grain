@@ -261,21 +261,31 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	{
-		desc := StoreDescription(cfg.DbDriver, cfg.DbDSN, cfg.DataDir)
+		// A copy: Run goes on to reassign cfg.
+		dataDir := cfg.DataDir
+		desc := StoreDescription(cfg.DbDriver, cfg.DbDSN, dataDir)
+		storeSwitched.Store(nil)
 		watchCtx, stopWatching := context.WithCancel(ctx)
 		markDone := make(chan struct{})
 		go func() {
 			defer close(markDone)
-			watchStoreHighWater(watchCtx, db, desc, cfg.DataDir)
+			watchStoreHighWater(watchCtx, db, desc, dataDir)
 		}()
+		selDone := make(chan struct{})
 		if selErr == nil {
-			go watchStoreSelection(watchCtx, cfg.DataDir, openedSelection)
+			go func() {
+				defer close(selDone)
+				watchStoreSelection(watchCtx, dataDir, openedSelection)
+			}()
+		} else {
+			close(selDone)
 		}
 		// Ahead of db.Close, deferred above: the mark's last move reads
 		// the store.
 		defer func() {
 			stopWatching()
 			<-markDone
+			<-selDone
 		}()
 	}
 	// Both halves of the schema change are done -- the store rebuilt at
