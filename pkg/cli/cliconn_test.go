@@ -15,6 +15,7 @@
 package cli
 
 import (
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -23,6 +24,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // writeCLIEnv points the CLI at a cli.env of the test's own, holding
@@ -186,6 +189,9 @@ func TestAnUnauthorisedCallNamesTheUnreadableToken(t *testing.T) {
 	}
 	writeCLIEnv(t, "GRAIN_DATA_DIR="+dir+"\n")
 	t.Setenv("GRAIN_LOCAL_API_TOKEN_FILE", "")
+	for _, env := range ui.TokenEnvVars {
+		t.Setenv(env, "")
+	}
 
 	err := runCLI([]string{"-server", srv.URL, "list"})
 	if err == nil {
@@ -208,6 +214,142 @@ func TestAnUnauthorisedCallNamesTheUnreadableToken(t *testing.T) {
 			t.Errorf("error %q suggests %q, which cannot work on a 0600 token", msg, wrong)
 		}
 	}
+}
+
+// A 401 names the credential that was actually offered -- -token, an
+// environment variable, or the loopback local API token -- and never gives
+// local-token advice for a non-loopback server.
+func TestAnUnauthorisedCallNamesTheCredentialSource(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"nope"}`))
+	}))
+	defer srv.Close()
+
+	clearTokenEnv := func(t *testing.T) {
+		t.Helper()
+		t.Setenv("GRAIN_LOCAL_API_TOKEN_FILE", "")
+		for _, env := range ui.TokenEnvVars {
+			t.Setenv(env, "")
+		}
+	}
+
+	t.Run("flag token", func(t *testing.T) {
+		writeCLIEnv(t, "")
+		clearTokenEnv(t)
+		t.Setenv("GRAIN_TOKEN", "from-env")
+
+		err := runCLI([]string{"-server", srv.URL, "-token", "wrong", "list"})
+		if err == nil {
+			t.Fatal("runCLI succeeded against a 401")
+		}
+		msg := err.Error()
+		want := ": the token passed with -token was refused"
+		if !strings.HasSuffix(msg, want) {
+			t.Errorf("error = %q, want suffix %q", msg, want)
+		}
+		for _, wrong := range []string{"no -token was given", "local API token"} {
+			if strings.Contains(msg, wrong) {
+				t.Errorf("error %q should not say %q", msg, wrong)
+			}
+		}
+	})
+
+	for _, env := range ui.TokenEnvVars {
+		t.Run("env "+env, func(t *testing.T) {
+			writeCLIEnv(t, "")
+			clearTokenEnv(t)
+			t.Setenv(env, "wrong")
+
+			err := runCLI([]string{"-server", srv.URL, "list"})
+			if err == nil {
+				t.Fatal("runCLI succeeded against a 401")
+			}
+			msg := err.Error()
+			want := ": the token from $" + env + " was refused"
+			if !strings.HasSuffix(msg, want) {
+				t.Errorf("error = %q, want suffix %q", msg, want)
+			}
+			for _, wrong := range []string{"no -token was given", "local API token"} {
+				if strings.Contains(msg, wrong) {
+					t.Errorf("error %q should not say %q", msg, wrong)
+				}
+			}
+		})
+	}
+
+	t.Run("loopback local token absent or stale", func(t *testing.T) {
+		writeCLIEnv(t, "")
+		clearTokenEnv(t)
+		err := runCLI([]string{"-server", srv.URL, "list"})
+		if err == nil || !strings.Contains(err.Error(), "no local API token was found") {
+			t.Errorf("absent data dir error = %v, want missing local API token hint", err)
+		}
+
+		dir := t.TempDir()
+		writeCLIEnv(t, "GRAIN_DATA_DIR="+dir+"\n")
+		clearTokenEnv(t)
+		err = runCLI([]string{"-server", srv.URL, "list"})
+		if err == nil || !strings.Contains(err.Error(), "there is no local API token at "+filepath.Join(dir, "local-api-token")) {
+			t.Errorf("missing token file error = %v, want missing file hint", err)
+		}
+
+		tokenPath := filepath.Join(dir, "local-api-token")
+		if err := os.WriteFile(tokenPath, []byte("grain-local-stale\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		writeCLIEnv(t, "GRAIN_DATA_DIR="+dir+"\n")
+		clearTokenEnv(t)
+		err = runCLI([]string{"-server", srv.URL, "list"})
+		if err == nil || !strings.Contains(err.Error(), "the local API token at "+tokenPath+" was sent and refused") {
+			t.Errorf("stale token file error = %v, want stale token hint", err)
+		}
+	})
+
+	t.Run("non-loopback server", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "local-api-token"), []byte("grain-local-x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		writeCLIEnv(t, "GRAIN_DATA_DIR="+dir+"\n")
+		clearTokenEnv(t)
+		t.Setenv(dataDirEnvVar, dir)
+
+		unauth := errors.New("grain server: nope (401 Unauthorized)")
+		err := explainDaemonError(unauth, cliTarget{
+			server: "https://grain.example.com",
+			source: "-server",
+		})
+		msg := err.Error()
+		want := ": no -token was given; pass a token with -token or set GRAIN_TOKEN"
+		if !strings.HasSuffix(msg, want) {
+			t.Errorf("error = %q, want suffix %q", msg, want)
+		}
+		for _, localAdvice := range []string{"local API token", "local-api-token", "GRAIN_DATA_DIR", "grain access-code", "sudo -u", "grain-daemon.service"} {
+			if strings.Contains(msg, localAdvice) {
+				t.Errorf("non-loopback error %q contains local-token advice %q", msg, localAdvice)
+			}
+		}
+
+		err = explainDaemonError(unauth, cliTarget{
+			server:      "https://grain.example.com",
+			source:      "-server",
+			tokenSource: "-token",
+		})
+		if !strings.HasSuffix(err.Error(), ": the token passed with -token was refused") {
+			t.Errorf("non-loopback -token error = %q", err)
+		}
+
+		err = explainDaemonError(unauth, cliTarget{
+			server:      "https://grain.example.com",
+			source:      "-server",
+			tokenSource: "$GRAIN_TOKEN",
+		})
+		if !strings.HasSuffix(err.Error(), ": the token from $GRAIN_TOKEN was refused") {
+			t.Errorf("non-loopback $GRAIN_TOKEN error = %q", err)
+		}
+	})
 }
 
 // An answer from the daemon that is not about reaching it is left as

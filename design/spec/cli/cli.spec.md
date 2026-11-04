@@ -108,12 +108,12 @@ A scoped external agent token (`gma_…`) is not special-cased by the CLI. Passe
 3. `explainDaemonError` **MUST** rewrite:
    - a refused connection or DNS failure into `no grain daemon answered at <url>[ (the default)| (from <source>)]<hint>. Set GRAIN_SERVER or pass -server (<root cause>)`;
    - a timeout into `the grain daemon at <where> did not answer in time (-connect-timeout <d>, -timeout <d>)<hint>. Set GRAIN_SERVER or pass -server, or pass a longer -timeout for a slow call (<root cause>)`;
-   - a 401, or a 403 saying `does not have access to this server`, into `the grain daemon at <where> refused this CLI's credentials (<daemon's message>): <credential hint>`. The credential hint says whether the local API token is absent, unreadable (naming the account to `sudo -u` as), or stale.
+   - a 401, or a 403 saying `does not have access to this server`, into `the grain daemon at <where> refused this CLI's credentials (<daemon's message>): <credential hint>`. The credential hint follows the credential source: `the token passed with -token was refused` when `-token` was given; `the token from $<VAR> was refused` when `$GRAIN_TOKEN` (or `$GRAIN_AUTH_TOKEN`, `$GRAIN_ID_TOKEN`, `$GRAIN_TUNNEL_TOKEN`) supplied it; for a loopback server with no explicit token, whether the local API token is absent, unreadable (naming the account to `sudo -u` as), or stale; and for a non-loopback server with no explicit token, `no -token was given; pass a token with -token or set GRAIN_TOKEN` (no local-token advice).
 
    `<hint>` is `; this host's daemon listens on <url> per <cli.env path>` when the CLI env file names a different server.
 4. Any other error, including every structured error the daemon returns, **MUST** pass through unchanged.
 
-**Pinned by:** `pkg/cli/cliconn_test.go`: `TestARefusedConnectionFailsFastAndSaysWhereTheDaemonIs`, `TestAnUnansweredCallTimesOut`, `TestATimeoutNamesTheHostDaemonAfterTheServerThatTimedOut`, `TestAnUnauthorisedCallNamesTheUnreadableToken`, `TestADaemonErrorIsNotRewritten`; `pkg/cli/list_unavailable_test.go`: `TestListStopsAtTheFirstCallTheDaemonDidNotAnswer`.
+**Pinned by:** `pkg/cli/cliconn_test.go`: `TestARefusedConnectionFailsFastAndSaysWhereTheDaemonIs`, `TestAnUnansweredCallTimesOut`, `TestATimeoutNamesTheHostDaemonAfterTheServerThatTimedOut`, `TestAnUnauthorisedCallNamesTheUnreadableToken`, `TestAnUnauthorisedCallNamesTheCredentialSource`, `TestADaemonErrorIsNotRewritten`; `pkg/cli/list_unavailable_test.go`: `TestListStopsAtTheFirstCallTheDaemonDidNotAnswer`.
 
 ---
 

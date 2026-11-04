@@ -578,7 +578,13 @@ func runCLI(args []string) error {
 		}
 	})
 
-	target := cliTarget{server: *server, source: source, connect: *connectTimeout, call: *callTimeout}
+	target := cliTarget{
+		server:      *server,
+		source:      source,
+		tokenSource: tokenSource(*token),
+		connect:     *connectTimeout,
+		call:        *callTimeout,
+	}
 	return explainDaemonError(dispatchCLI(ctx, c, out, fs, rest), target)
 }
 

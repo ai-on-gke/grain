@@ -120,9 +120,9 @@ func LocalAPITokenFile() string {
 	return ""
 }
 
-// isLoopbackURL reports whether baseURL names this host: the only
+// IsLoopbackURL reports whether baseURL names this host: the only
 // server HTTPClient offers the local API token to.
-func isLoopbackURL(baseURL string) bool {
+func IsLoopbackURL(baseURL string) bool {
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return false
