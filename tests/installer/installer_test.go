@@ -955,6 +955,9 @@ func TestAFreshDeployKeepsItsStoreOnTheLocalPostgres(t *testing.T) {
 	if r := sudo("docker", "exec", "grain-postgres", "psql", "-w", "-h", "127.0.0.1", "-U", "grain", "-d", "grain", "-c", "SELECT 1"); r.exitCode == 0 {
 		t.Errorf("grain-postgres accepted a loopback connection without a password:\n%s", r)
 	}
+	if r := sudo("docker", "exec", "grain-postgres", "psql", "-w", "-U", "grain", "-d", "grain", "-c", "SELECT 1"); r.exitCode == 0 {
+		t.Errorf("grain-postgres accepted a local-socket connection without a password:\n%s", r)
+	}
 }
 
 // A running unit is not the same as a working deployment.
