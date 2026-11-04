@@ -155,7 +155,8 @@ func TaskPullRequest(task Task) *PullRequestRef {
 // taskPullRequestBefore reports whether TaskPullRequest prefers b to a.
 func taskPullRequestBefore(task Task, a, b PullRequestRef) bool {
 	if task.Target != nil {
-		aOwn, bOwn := a.Repo.Same(*task.Target), b.Repo.Same(*task.Target)
+		aOwn := a.Repo.Same(*task.Target) || IsUpstreamRepoFor(*task.Target, a.Repo)
+		bOwn := b.Repo.Same(*task.Target) || IsUpstreamRepoFor(*task.Target, b.Repo)
 		if aOwn != bOwn {
 			return bOwn
 		}

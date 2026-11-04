@@ -78,9 +78,18 @@ expires="$(field expires)"
 [ "$issued" -le $((now + 60)) ] || refuse "the record was issued in the future"
 [ "$now" -lt "$expires" ] || refuse "the record expired at $expires (now $now): press Approve again"
 
-pending="$(git rev-parse -q --verify "refs/tags/${EXPECT_VERSION}-pending^{commit}" 2>/dev/null || true)"
-[ -n "$pending" ] || refuse "${EXPECT_VERSION}-pending is not tagged here"
-want commit "$pending"
+if [ "${EXPECT_DECISION:-}" = rollback ]; then
+  want rollback_to "${EXPECT_ROLLBACK_TO:--}"
+  expect_reason_sha="$(printf '%s' "${EXPECT_REASON:-}" | openssl dgst -sha256 | sed -E 's/^.*= ?//')"
+  want reason_sha256 "$expect_reason_sha"
+  released="$(git rev-parse -q --verify "refs/tags/${EXPECT_VERSION}^{commit}" 2>/dev/null || true)"
+  [ -n "$released" ] || refuse "${EXPECT_VERSION} is not tagged here"
+  want commit "$released"
+else
+  pending="$(git rev-parse -q --verify "refs/tags/${EXPECT_VERSION}-pending^{commit}" 2>/dev/null || true)"
+  [ -n "$pending" ] || refuse "${EXPECT_VERSION}-pending is not tagged here"
+  want commit "$pending"
+fi
 
 approver="$(field approver)"
 [ -n "$approver" ] || refuse "the record names no approver"

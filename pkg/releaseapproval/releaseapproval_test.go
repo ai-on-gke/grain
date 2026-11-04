@@ -142,6 +142,63 @@ func TestTheWorkflowsVerifierAcceptsWhatTheDeploymentSignsAndNothingElse(t *test
 	}
 }
 
+func TestTheWorkflowsVerifierAcceptsASignedRollbackAndBindsTargetAndReason(t *testing.T) {
+	if _, err := exec.LookPath("openssl"); err != nil {
+		t.Skip("openssl is not installed")
+	}
+	dir, commit := fixtureRepo(t)
+	tagCmd := exec.Command("git", "tag", "-a", "v1.2.0", "-m", "Release v1.2.0")
+	tagCmd.Dir = dir
+	tagCmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com", "GIT_CONFIG_GLOBAL=/dev/null")
+	if out, err := tagCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git tag v1.2.0: %v\n%s", err, out)
+	}
+
+	signer, err := LoadSigner(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := signer.PublicKeyPEM()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	rec := Record{Repo: "example/widgets", Version: "v1.2.0", Decision: "rollback", Commit: commit,
+		Approver: "alice@example.com", RollbackTo: "v1.1.0", Reason: "schema migration panicked: see issue #42",
+		Issued: now, Expires: now.Add(Lifetime)}
+	signed, err := signer.Sign(context.Background(), rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := func(over map[string]string) map[string]string {
+		e := map[string]string{
+			"APPROVAL": signed.Record, "APPROVAL_SIGNATURE": signed.Signature, "APPROVAL_PUBLIC_KEY": pub,
+			"EXPECT_REPO": "example/widgets", "EXPECT_VERSION": "v1.2.0", "EXPECT_DECISION": "rollback",
+			"EXPECT_SHORT_SOAK_OK": "false", "EXPECT_ALLOW_BREAKING": "false",
+			"EXPECT_ROLLBACK_TO": "v1.1.0", "EXPECT_REASON": "schema migration panicked: see issue #42",
+			"NOW": strconv.FormatInt(now.Add(time.Minute).Unix(), 10),
+		}
+		for k, v := range over {
+			e[k] = v
+		}
+		return e
+	}
+	if by, stderr, ok := verify(t, dir, env(nil)); !ok || by != "alice@example.com" {
+		t.Fatalf("a signed rollback = %q, ok=%v (%s); want alice@example.com", by, ok, stderr)
+	}
+	for name, over := range map[string]map[string]string{
+		"another rollback_to": {"EXPECT_ROLLBACK_TO": "v1.0.0"},
+		"empty rollback_to":   {"EXPECT_ROLLBACK_TO": ""},
+		"altered reason":      {"EXPECT_REASON": "different reason"},
+		"untagged release":    {"EXPECT_VERSION": "v1.1.0"},
+	} {
+		if by, _, ok := verify(t, dir, env(over)); ok {
+			t.Errorf("%s: verified (approver %q); want refused", name, by)
+		}
+	}
+}
+
 func TestRecordRefusesValuesThatAreNotOneSafeToken(t *testing.T) {
 	r := Record{Repo: "example/widgets", Version: "v1.2.0", Decision: "approve", Commit: "abc",
 		Approver: "alice\ncommit: evil", Issued: time.Unix(1, 0), Expires: time.Unix(2, 0)}

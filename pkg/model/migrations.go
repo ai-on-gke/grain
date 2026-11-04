@@ -721,6 +721,13 @@ var Migrations = []Migration{
 			"ALTER TABLE `task_observation` ADD COLUMN `access_decisions` TEXT NULL",
 		},
 	},
+	{
+		Version:     106,
+		Description: "add repo_config.upstream_repo for fork-to-upstream pull request workflows",
+		Statements: []string{
+			"ALTER TABLE `repo_config` ADD COLUMN `upstream_repo` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // maxMergesPerRepoDefault1 is max_merges_per_repo's column definition as
