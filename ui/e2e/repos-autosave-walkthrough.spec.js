@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 test.describe("Walkthrough: Auto-Saving Repo Pane & Sidebar Release Stamp (docs/test-plans/2026-09-30.md §3)", () => {
   // A repository of the deployment's own that no other spec knows, so
@@ -83,17 +84,11 @@ test.describe("Walkthrough: Auto-Saving Repo Pane & Sidebar Release Stamp (docs/
         name: "Default capabilities",
       });
       await expect(capsSelect).toBeVisible();
-      await capsSelect.click();
       // Select "Bootstrap playbooks" from capabilities menu list. Not GCP
       // key or Self debug: the demo makes those deployment defaults, which
       // every repo has on whatever it says, so choosing one here would
       // prove nothing saved.
-      const playbooksOption = page.getByRole("option", {
-        name: "Bootstrap playbooks",
-        exact: true,
-      });
-      await expect(playbooksOption).toBeVisible();
-      await playbooksOption.click();
+      await chooseOption(capsSelect, "bootstrap-playbooks");
       await page.keyboard.press("Escape"); // Close select dropdown
 
       // 3. Modify Prompt Extension

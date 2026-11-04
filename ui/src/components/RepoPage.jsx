@@ -30,13 +30,9 @@ import {
   FormControl,
   FormControlLabel,
   FormHelperText,
-  InputLabel,
   Link,
-  ListItemText,
-  MenuItem,
   Radio,
   RadioGroup,
-  Select,
   Stack,
   Tab,
   Table,
@@ -51,6 +47,7 @@ import {
 import api from "../api.js";
 import GrantChip from "./GrantChip.jsx";
 import GrantsPicker from "./GrantsPicker.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import ReadOnlyGrants from "./ReadOnlyGrants.jsx";
 import { ConfigManagedNotice } from "./ConfigRepoLink.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
@@ -250,6 +247,17 @@ export const CI_MODE_LABELS = {
 // repoCIMode is the CI mode a repository's RepoDefaults says it is on,
 // reading the older ignoreGitHubCI switch for a row written before
 // ciMode was.
+// warningText is a capability row's second line when the row warns:
+// SearchSelect draws secondary as given, so the colour a <Select>'s
+// ListItemText took from secondaryTypographyProps rides on the text.
+function warningText(text) {
+  return (
+    <Box component="span" sx={{ color: "warning.main" }}>
+      {text}
+    </Box>
+  );
+}
+
 export function repoCIMode(defaults) {
   if (!defaults) return null;
   return defaults.ciMode || (defaults.ignoreGitHubCI ? "grain" : "github");
@@ -1920,71 +1928,46 @@ export default function RepoPage({
             ) : (
               <Stack spacing={1}>
                 <FormControl fullWidth size="small">
-                  <InputLabel id="repo-ci-capabilities-label">
-                    CI capabilities
-                  </InputLabel>
-                  <Select
-                    labelId="repo-ci-capabilities-label"
+                  <SearchSelect
+                    multiple
+                    label="CI capabilities"
                     disabled={readOnly}
                     inputProps={{ "aria-describedby": refusedBy(readOnly) }}
-                    label="CI capabilities"
-                    multiple
                     value={ciCapsLegacy}
-                    onChange={(e) => {
-                      const picked =
-                        typeof e.target.value === "string"
-                          ? e.target.value.split(",")
-                          : e.target.value;
+                    onChange={(picked) => {
                       const next = [...picked, ...ciCapsRefs];
                       setCICapsSelection(next);
                       saveCICapabilities(next);
                     }}
-                    renderValue={(chosen) => (
-                      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-                        {chosen.map((id) => {
-                          const row = isCapabilityRef(id)
-                            ? ciCapsRows.find((r) => r.id === id)
-                            : null;
-                          return row ? (
-                            <Chip
-                              key={id}
-                              label={row.name}
-                              size="small"
-                              title={id}
-                              tabIndex={-1}
-                            />
-                          ) : (
-                            <GrantChip
-                              key={id}
-                              grant={id}
-                              config={config}
-                              tabIndex={-1}
-                            />
-                          );
-                        })}
-                      </Box>
-                    )}
-                  >
-                    {ciCapsRows.length === 0 && (
-                      <MenuItem disabled>{NO_CAPABILITIES_HINT}</MenuItem>
-                    )}
-                    {ciCapsRows.map((c) => (
-                      <MenuItem key={c.id} value={c.id} title={c.description}>
-                        <Checkbox
-                          checked={ciCapsSelection.includes(c.id)}
+                    noOptionsText={
+                      ciCapsRows.length === 0
+                        ? NO_CAPABILITIES_HINT
+                        : "No matches"
+                    }
+                    renderChip={(o, props) => {
+                      const row = isCapabilityRef(o.value)
+                        ? ciCapsRows.find((r) => r.id === o.value)
+                        : null;
+                      return row ? (
+                        <Chip
+                          label={row.name}
                           size="small"
+                          title={o.value}
+                          {...props}
                         />
-                        <ListItemText
-                          primary={c.name}
-                          secondary={
-                            c.retired
-                              ? c.description
-                              : capabilityUnavailableHint(c)
-                          }
-                        />
-                      </MenuItem>
-                    ))}
-                  </Select>
+                      ) : (
+                        <GrantChip grant={o.value} config={config} {...props} />
+                      );
+                    }}
+                    options={ciCapsRows.map((c) => ({
+                      value: c.id,
+                      label: c.name,
+                      title: c.description,
+                      secondary: c.retired
+                        ? c.description
+                        : capabilityUnavailableHint(c),
+                    }))}
+                  />
                   <FormHelperText>
                     Granted to every CI job in this repo, starting with the next
                     run. Each job gets its own credentials, which are revoked
@@ -2244,97 +2227,69 @@ export default function RepoPage({
             ) : (
               <Stack spacing={1}>
                 <FormControl fullWidth size="small">
-                  <InputLabel id="repo-capabilities-label">
-                    Default capabilities
-                  </InputLabel>
-                  <Select
-                    labelId="repo-capabilities-label"
+                  {/* The same grantable-only listing Settings' own default-
+                      capabilities picker offers, and for the same reason: a
+                      default no task can be granted by hand would fail at
+                      every filing, and PUT rejects one anyway. It needs no
+                      filter of its own to say that, unlike Settings'
+                      settings.capabilities: config.capabilities *is*
+                      ui.OfferedCapabilities, which is what "grantable" means,
+                      where that one reports every provider grain ships and
+                      flags the ungrantable ones. A capability the deployment
+                      already defaults is still offered rather than hidden --
+                      ticking it here is how a repo keeps it if the
+                      deployment- wide entry is later dropped -- and says so
+                      in its own row, so nobody reads a blank box as "not on
+                      here". What is left out is a capability this deployment
+                      has not configured at all, which is a default that would
+                      fail every task filed against this repo
+                      (configuredCapabilities, state.js); one this repo
+                      already names stays, warning and all. An id this repo
+                      stored before the build retired it gets a row too,
+                      purely so it can be unticked (capabilityRows, state.js). */}
+                  <SearchSelect
+                    multiple
+                    label="Default capabilities"
                     disabled={readOnly}
                     inputProps={{
                       "aria-describedby": refusedBy(readOnly),
                     }}
-                    label="Default capabilities"
-                    multiple
                     value={capsLegacy}
-                    onChange={(e) => {
-                      const picked =
-                        typeof e.target.value === "string"
-                          ? e.target.value.split(",")
-                          : e.target.value;
+                    onChange={(picked) => {
                       const next = [...picked, ...capsApi, ...capsRefs];
                       setCapsSelection(next);
                       saveCapabilities(next);
                     }}
-                    renderValue={(chosen) => (
-                      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-                        {chosen.map((id) => (
-                          <GrantChip
-                            key={id}
-                            grant={id}
-                            config={config}
-                            tabIndex={-1}
-                          />
-                        ))}
-                      </Box>
+                    noOptionsText={
+                      capsRows.length === 0
+                        ? NO_CAPABILITIES_HINT
+                        : "No matches"
+                    }
+                    renderChip={(o, props) => (
+                      <GrantChip grant={o.value} config={config} {...props} />
                     )}
-                  >
-                    {/* The same grantable-only listing Settings' own
-                        default-capabilities picker offers, and for the same
-                        reason: a default no task can be granted by hand
-                        would fail at every filing, and PUT rejects one
-                        anyway. It needs no filter of its own to say that,
-                        unlike Settings' settings.capabilities:
-                        config.capabilities *is* ui.OfferedCapabilities,
-                        which is what "grantable" means, where that one
-                        reports every provider grain ships and flags the
-                        ungrantable ones. A capability the deployment
-                        already defaults is still offered rather than
-                        hidden -- ticking it here is how a repo keeps it if
-                        the deployment-wide entry is later dropped -- and
-                        says so in its own row, so nobody reads a blank box
-                        as "not on here". What is left out is a capability
-                        this deployment has not configured at all, which is
-                        a default that would fail every task filed against
-                        this repo (configuredCapabilities, state.js); one
-                        this repo already names stays, warning and all. An
-                        id this repo stored before the build retired it
-                        gets a row too, purely so it can be unticked
-                        (capabilityRows, state.js). */}
-                    {capsRows.length === 0 && (
-                      <MenuItem disabled>{NO_CAPABILITIES_HINT}</MenuItem>
-                    )}
-                    {capsRows.map((c) => (
-                      <MenuItem key={c.id} value={c.id} title={c.description}>
-                        <Checkbox
-                          checked={capsSelection.includes(c.id)}
-                          size="small"
-                        />
-                        <ListItemText
-                          primary={c.name}
-                          secondary={
-                            c.retired
-                              ? c.description
-                              : /* A default this deployment cannot honour is worth
-                               more warning here than on one task, not less: it
-                               fails every task filed against this repo, and the
-                               person who set it is not the one who sees them
-                               fail. */
-                                capabilityUnavailableHint(c) ||
-                                ((
-                                  caps.deploymentDefaultCapabilities || []
-                                ).includes(c.id)
-                                  ? "already a deployment default -- on here either way"
-                                  : null)
-                          }
-                          secondaryTypographyProps={
-                            capabilityUnavailableHint(c)
-                              ? { color: "warning.main" }
-                              : undefined
-                          }
-                        />
-                      </MenuItem>
-                    ))}
-                  </Select>
+                    options={capsRows.map((c) => {
+                      const deploymentDefaults =
+                        caps.deploymentDefaultCapabilities || [];
+                      // A default this deployment cannot honour is worth
+                      // more warning here than on one task, not less: it
+                      // fails every task filed against this repo, and the
+                      // person who set it is not the one who sees them fail.
+                      const unavailable = capabilityUnavailableHint(c);
+                      return {
+                        value: c.id,
+                        label: c.name,
+                        title: c.description,
+                        secondary: c.retired
+                          ? c.description
+                          : unavailable
+                            ? warningText(unavailable)
+                            : deploymentDefaults.includes(c.id)
+                              ? "already a deployment default -- on here either way"
+                              : null,
+                      };
+                    })}
+                  />
                   <FormHelperText>
                     Added to this deployment&apos;s own defaults, never
                     subtracted from them -- a repo can only widen what a task

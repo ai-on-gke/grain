@@ -20,6 +20,12 @@ import RepoPage, { workflowEditsUnsaved } from "./RepoPage.jsx";
 import { leavingLosesEdits } from "../unsavedEdits.js";
 import api from "../api.js";
 import { resetCapabilityMethodsForTest } from "./capabilityMethods.js";
+import {
+  chooseOption,
+  chosenValues,
+  optionValues,
+  removeOption,
+} from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 
@@ -339,12 +345,9 @@ describe("RepoPage", () => {
       },
     });
     const legacy = await screen.findByLabelText("Default capabilities");
-    expect(legacy).toHaveTextContent("GCP key");
-    expect(legacy).not.toHaveTextContent("cloud-key");
-    expect(legacy).not.toHaveTextContent("api:tasks:read");
+    expect(chosenValues(legacy)).toEqual(["gcp-key"]);
     const ciLegacy = screen.getByLabelText("CI capabilities");
-    expect(ciLegacy).toHaveTextContent("OpenAI proxy");
-    expect(ciLegacy).not.toHaveTextContent("cloud-key");
+    expect(chosenValues(ciLegacy)).toEqual(["openai-proxy"]);
 
     const defaults = screen.getByTestId("repo-default-grants");
     await waitFor(() =>
@@ -423,10 +426,9 @@ describe("RepoPage", () => {
         ],
       },
     });
-    await user.click(await screen.findByLabelText("CI capabilities"));
-    expect(
-      screen.queryByRole("option", { name: /Self debug/ }),
-    ).not.toBeInTheDocument();
+    const ciBox = await screen.findByLabelText("CI capabilities");
+    await user.click(ciBox);
+    expect(optionValues(ciBox)).not.toContain("self-debug");
     answerOnce(savingCICapabilities, () =>
       Promise.resolve({
         ...noCaps,
@@ -434,7 +436,7 @@ describe("RepoPage", () => {
         availableCICapabilities: ["openai-proxy"],
       }),
     );
-    await user.click(screen.getByRole("option", { name: /OpenAI proxy/ }));
+    await chooseOption(user, ciBox, "openai-proxy");
     await user.keyboard("{Escape}");
     expect(api).toHaveBeenCalledWith(
       "/api/repos/acme/widgets/ci-capabilities",
@@ -444,12 +446,10 @@ describe("RepoPage", () => {
       },
     );
     expect(props.onRefreshConfig).toHaveBeenCalled();
-    await user.click(screen.getByLabelText("CI capabilities"));
     answerOnce(savingCICapabilities, () =>
       Promise.resolve({ ...noCaps, ciCapabilities: [] }),
     );
-    await user.click(screen.getByRole("option", { name: /OpenAI proxy/ }));
-    await user.keyboard("{Escape}");
+    await removeOption(user, ciBox, "openai-proxy");
     expect(api).toHaveBeenCalledWith(
       "/api/repos/acme/widgets/ci-capabilities",
       {
@@ -457,8 +457,8 @@ describe("RepoPage", () => {
         body: JSON.stringify({ ciCapabilities: [] }),
       },
     );
-    expect(screen.getByLabelText("Default capabilities")).toHaveTextContent(
-      "GCP key",
+    expect(chosenValues(screen.getByLabelText("Default capabilities"))).toEqual(
+      ["gcp-key"],
     );
   });
 
@@ -2584,15 +2584,9 @@ describe("RepoPage", () => {
         }),
       ).toBeDisabled();
       await openTab("CI");
-      expect(await screen.findByLabelText("CI capabilities")).toHaveAttribute(
-        "aria-disabled",
-        "true",
-      );
+      expect(await screen.findByLabelText("CI capabilities")).toBeDisabled();
       await openTab("Agents");
-      expect(screen.getByLabelText("Default capabilities")).toHaveAttribute(
-        "aria-disabled",
-        "true",
-      );
+      expect(screen.getByLabelText("Default capabilities")).toBeDisabled();
       expect(
         screen.getByLabelText("Prompt extension for acme/widgets"),
       ).toBeDisabled();

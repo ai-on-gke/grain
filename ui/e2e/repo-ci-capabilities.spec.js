@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { expect, test } from "./fixtures.js";
+import { chips, chooseOption } from "./searchSelect.js";
 
 // package-publish is recorded as the release server's method it was
 // retired onto (schema migration 101).
@@ -56,17 +57,14 @@ test("walkthrough: RepoPage CI-only capability selection, persistence, and workf
   await expect(registryPushOption).toContainText("Registry push");
 
   // Step 5: Select a CI-only capability (Package publish) and auto-save repository settings
-  await packagePublishOption.click();
+  await chooseOption(ciCapsSelect, { label: "Package publish" });
 
   // Close the select dropdown by pressing Escape or clicking backdrop
   await page.keyboard.press("Escape");
 
   // Verify the Chip for Package publish is displayed in the input value area
   await expect(
-    page
-      .locator(".MuiSelect-select")
-      .filter({ hasText: /Package publish/i })
-      .first(),
+    chips(ciCapsSelect).filter({ hasText: /Package publish/i }),
   ).toBeVisible();
 
   // Verify no error alert appears
@@ -104,8 +102,7 @@ test("walkthrough: RepoPage CI-only capability selection, persistence, and workf
   expect(capsData.ciCapabilities).toContain(PACKAGE_PUBLISH);
 
   // Also select Registry push alongside Package publish to verify multiple selection
-  await page.getByRole("combobox", { name: "CI capabilities" }).click();
-  await page.getByRole("option", { name: /Registry push/i }).click();
+  await chooseOption(ciCapsSelect, { label: "Registry push" });
   await page.keyboard.press("Escape");
 
   // Verify both chips are visible

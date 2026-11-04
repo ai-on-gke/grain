@@ -106,9 +106,13 @@ for (const [name, viewport] of [
   });
 }
 
-for (const [section, label] of [
-  ["tasks", "Default legacy capabilities"],
-  ["general", "Upgrade automatically"],
+// Default legacy capabilities is a SearchSelect, whose box is a native
+// input the card's disabled fieldset disables outright; Upgrade
+// automatically is a MUI Select, a focusable element of MUI's own that
+// ReadOnlyFieldset has to mark and take out of the tab order by hand.
+for (const [section, label, native] of [
+  ["tasks", "Default legacy capabilities", true],
+  ["general", "Upgrade automatically", false],
 ]) {
   test(`a locked ${section} card's ${label} select is out of reach of the keyboard`, async ({
     page,
@@ -121,8 +125,8 @@ for (const [section, label] of [
       .getByTestId("settings-section")
       .getByRole("combobox", { name: label });
     await expect(select).toBeVisible();
-    await expect(select).toHaveAttribute("aria-disabled", "true");
-    await expect(select).toHaveAttribute("tabindex", "-1");
+    await expect(select).toBeDisabled();
+    if (!native) await expect(select).toHaveAttribute("tabindex", "-1");
 
     await select.focus();
     for (const key of ["ArrowDown", "Enter", " "]) {

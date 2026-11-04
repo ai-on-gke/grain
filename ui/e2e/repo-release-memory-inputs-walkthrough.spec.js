@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chips, chooseOption, chosenValues } from "./searchSelect.js";
 
 test.describe("Repository Settings, Releases, and Memory Views Inputs Walkthrough", () => {
   const repo = "acme/widgets";
@@ -97,19 +98,16 @@ test.describe("Repository Settings, Releases, and Memory Views Inputs Walkthroug
     // Toggle Self debug and toggle it back: every spec file a worker runs
     // shares one demo store, and repository_release_memory_walkthrough.spec.js
     // turns this same capability on and expects its chip afterwards.
-    const selfDebugChip = defaultCapsSelect
-      .locator(".MuiChip-root")
-      .filter({ hasText: /Self debug/i });
-    const option = page.getByRole("option", { name: /Self debug/i });
+    const selfDebugChip = chips(defaultCapsSelect).filter({
+      hasText: /Self debug/i,
+    });
     const toggleSelfDebug = async () => {
-      await defaultCapsSelect.click();
-      await option.click();
+      await chooseOption(defaultCapsSelect, "self-debug");
       await page.keyboard.press("Escape");
     };
-    await defaultCapsSelect.click();
-    const selfDebugWasOn =
-      (await option.getAttribute("aria-selected")) === "true";
-    await page.keyboard.press("Escape");
+    const selfDebugWasOn = (await chosenValues(defaultCapsSelect)).includes(
+      "self-debug",
+    );
     await toggleSelfDebug();
     await expect(selfDebugChip).toHaveCount(selfDebugWasOn ? 0 : 1);
     await toggleSelfDebug();

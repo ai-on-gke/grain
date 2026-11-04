@@ -17,15 +17,10 @@ import {
   Box,
   Button,
   Checkbox,
-  Chip,
   FormControl,
   FormControlLabel,
   FormHelperText,
-  InputLabel,
   Link,
-  ListItemText,
-  MenuItem,
-  Select,
   Stack,
   TextField,
   Typography,
@@ -34,6 +29,7 @@ import { isApiGrant, withoutApiRows } from "../../apiGrants.js";
 import { isCapabilityRef } from "../../capabilityArgs.js";
 import GrantsPicker from "../GrantsPicker.jsx";
 import ReadOnlyGrants from "../ReadOnlyGrants.jsx";
+import SearchSelect from "../SearchSelect.jsx";
 import { localGrantHandlers } from "../capabilityMethods.js";
 import { LEGACY_CAPABILITIES_HINT, capabilityRows } from "../../state.js";
 import { legacyValues } from "../../taskAttributes.js";
@@ -223,60 +219,36 @@ export default function TasksSection({
           size="small"
           data-setting-id="defaultCapabilities"
         >
-          <InputLabel id="settings-default-capabilities-label">
-            Default legacy capabilities
-          </InputLabel>
-          <Select
-            labelId="settings-default-capabilities-label"
-            label="Default legacy capabilities"
+          <SearchSelect
             multiple
+            label="Default legacy capabilities"
             value={legacyDefaults}
-            onChange={(e) => {
-              const next = e.target.value;
+            onChange={(next) =>
               saveChoice({
                 defaultCapabilities: [...next, ...apiDefaults, ...refDefaults],
-              });
-            }}
-            renderValue={(selected) => (
-              <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-                {selected.map((id) => {
-                  const cap = capabilityChoices.find((c) => c.id === id);
-                  return (
-                    <Chip
-                      key={id}
-                      size="small"
-                      label={cap ? cap.name || cap.id : id}
-                    />
-                  );
-                })}
-              </Box>
-            )}
-          >
-            {capabilityChoices.length === 0 && (
-              <MenuItem disabled>
-                None configured &mdash; the rows under Settings → Legacy
-                capabilities are where a capability is set up
-              </MenuItem>
-            )}
-            {capabilityChoices.map((c) => (
-              <MenuItem key={c.id} value={c.id} title={c.description}>
-                <Checkbox
-                  checked={defaultCapabilities.includes(c.id)}
-                  size="small"
-                />
-                <ListItemText
-                  primary={c.name || c.id}
-                  secondary={
-                    c.retired
-                      ? c.description
-                      : c.buildDefault
-                        ? "on by default for this build"
-                        : null
-                  }
-                />
-              </MenuItem>
-            ))}
-          </Select>
+              })
+            }
+            noOptionsText={
+              capabilityChoices.length === 0 ? (
+                <>
+                  None configured &mdash; the rows under Settings → Legacy
+                  capabilities are where a capability is set up
+                </>
+              ) : (
+                "No matches"
+              )
+            }
+            options={capabilityChoices.map((c) => ({
+              value: c.id,
+              label: c.name || c.id,
+              title: c.description,
+              secondary: c.retired
+                ? c.description
+                : c.buildDefault
+                  ? "on by default for this build"
+                  : null,
+            }))}
+          />
           <FormHelperText>
             attached to every new task as it is filed, whichever repo it targets
             -- whoever files one can untick any of these on the new-task form,

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
-import { chooseOption } from "./searchSelect.js";
+import { chooseOption, chosenValues } from "./searchSelect.js";
 
 // Found by the 2026-10-07 repository walkthrough
 // (docs/test-runs/2026-10-07-repository-release-memory-ui.md).
@@ -146,14 +146,13 @@ test.describe("Repository walkthrough regressions (2026-10-07)", () => {
       await page.getByRole("button", { name: "Add item" }).click();
       await chooseOption(template.nth(0), { label: "security-audit" });
       await chooseOption(template.nth(1), { label: "release-qualification" });
-      await dependsOn.nth(1).click();
-      await page.getByRole("option", { name: "security-audit" }).click();
+      await chooseOption(dependsOn.nth(1), { label: "security-audit" });
       await page.keyboard.press("Escape");
-      await expect(dependsOn.nth(1)).toHaveText("security-audit");
+      expect(await chosenValues(dependsOn.nth(1))).toHaveLength(1);
 
       await page.getByRole("button", { name: "Remove" }).first().click();
       await expect(dependsOn).toHaveCount(1);
-      await expect(dependsOn.first()).not.toHaveText("security-audit");
+      expect(await chosenValues(dependsOn.first())).toEqual([]);
       await page
         .getByRole("button", { name: "Save qualification plan" })
         .click();
