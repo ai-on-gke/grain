@@ -82,6 +82,7 @@ describe("SettingsPage", () => {
       "Legacy capabilities",
       "Access",
       "Hostds",
+      "Audit",
       "Preferences",
       "Upgrade",
       "Caches",
