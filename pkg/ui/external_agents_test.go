@@ -1455,4 +1455,3 @@ func TestExternalAgentEscalationRailsAndTokenRotationOwnerGuard(t *testing.T) {
 		t.Errorf("bob's agent rotated Jane's token: %d %s, want 403", code, resp)
 	}
 }
-
