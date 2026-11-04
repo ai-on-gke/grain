@@ -1,14 +1,14 @@
 # Image signing
 
-grain/task-1773, following #2386 and grain/task-1706.
+grain/task-1773, following #2386 and grain/task-1706. See also [release-asset-upgrades.md](release-asset-upgrades.md) for how `release-assets` upgrades verify `images.json` SHA-256 digests, `.sha256` sidecars, Docker image IDs, and `-upgrade-verify-cmd` on tarballs loaded without registry `RepoDigests`.
 
 ## The gap this closes
 
 An upgrade is pinned to the digest it pulled: `pinImage` on the image
 path, the check pod's `imageID` on the Kubernetes path (`kubePin`). And
 `TagForBranch` gives every branch its own tag. Together those answer
-*which bytes* an upgrade runs, and they make sure the checks and the
-restart all run the same bytes. They do not answer *whose bytes* they
+_which bytes_ an upgrade runs, and they make sure the checks and the
+restart all run the same bytes. They do not answer _whose bytes_ they
 are. Anyone who can push to the GHCR package, or who controls the
 registry or a proxy in front of it, can still have their image
 health-checked, and a health check runs the image. Then it gets booted.
@@ -36,7 +36,7 @@ They are not signed keylessly through Fulcio, for these reasons:
   package is public. The images are signed with `--tlog-upload=false`,
   and verifiers pass `--insecure-ignore-tlog=true`. A key-based
   signature does not need the log to be meaningful; the log only adds
-  evidence of *when* something was signed.
+  evidence of _when_ something was signed.
 - **One scheme for every publisher keeps verification to one key.** A
   deployment needs a single public key, not a choice of identities per
   publisher.
@@ -132,7 +132,7 @@ The upgrade plan gains a `signature` step:
   pulled by its digest, and `pinImage` only confirms the host now holds
   exactly that digest; it never appends a second one.
 - **Kubernetes path** (`stageKube`): nothing pulls the image before the
-  check pod runs it, so the verifier is handed the *tag*. The digest
+  check pod runs it, so the verifier is handed the _tag_. The digest
   comes from what it printed: cosign's JSON payloads, each carrying
   `critical.image.docker-manifest-digest`. The check pod and every pod
   after it are created from `tag@<that digest>`. A pod whose `imageID`

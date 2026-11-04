@@ -23,6 +23,7 @@ package gitproxy
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"net/http"
 	"os"
@@ -246,5 +247,76 @@ func TestHostGitIdentityAndSignThroughHostd(t *testing.T) {
 	}
 	if !strings.Contains(string(sig), "-----BEGIN SSH SIGNATURE-----") {
 		t.Fatalf("signature = %q, want SSH signature block", sig)
+	}
+}
+
+// forge_download fills in only an empty placeholder the daemon made: it
+// never creates a file, so the host-git server, running as the
+// installing user, writes nowhere the containerised daemon could not.
+func TestHostGitForgeDownloadFillsOnlyAnExistingPlaceholder(t *testing.T) {
+	state := fakeGGHAPI(t)
+	startHostGitHostd(t, hostGitAllowlist)
+	writeRaw(t, state, "api-response", gghResponse("200 OK",
+		map[string]string{"Content-Type": "application/octet-stream"}, "tarball bytes"))
+	client := &http.Client{Transport: newCommandForgeTransport(mustSource(t, testForgeSource),
+		CredentialHost{Host: "depot.code.forge.test"}, 10*time.Second)}
+	download := func(dest string) (string, error) {
+		req, _ := http.NewRequest("GET", "https://depot.code.forge.test/api/v3/repos/o/r/releases/assets/1", nil)
+		sum, _, status, body, err := DownloadToFile(client, req, dest, 10*time.Second)
+		if err == nil && status != http.StatusOK {
+			err = fmt.Errorf("HTTP %d: %s", status, body)
+		}
+		return sum, err
+	}
+	dir := t.TempDir()
+
+	missing := filepath.Join(dir, "grain-release-asset-new.tar.gz")
+	if _, err := download(missing); err == nil {
+		t.Fatal("a download to a file nobody created succeeded")
+	}
+	if _, err := os.Lstat(missing); !os.IsNotExist(err) {
+		t.Fatalf("the refused download left %s behind: %v", missing, err)
+	}
+
+	target := filepath.Join(dir, "elsewhere")
+	if err := os.WriteFile(target, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "grain-release-asset-link.tar.gz")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := download(link); err == nil {
+		t.Fatal("a download through a symlinked placeholder succeeded")
+	}
+	if got, _ := os.ReadFile(target); len(got) != 0 {
+		t.Fatalf("the symlink's target was written: %q", got)
+	}
+
+	full := filepath.Join(dir, "grain-release-asset-full.tar.gz")
+	if err := os.WriteFile(full, []byte("already here"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := download(full); err == nil {
+		t.Fatal("a download over a non-empty file succeeded")
+	}
+
+	if _, err := download(filepath.Join(dir, "not-a-release-asset")); err == nil {
+		t.Fatal("a download to a file not named grain-release-asset-* succeeded")
+	}
+
+	placeholder := filepath.Join(dir, "grain-release-asset-ok.tar.gz")
+	if err := os.WriteFile(placeholder, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum, err := download(placeholder)
+	if err != nil {
+		t.Fatalf("a download into the daemon's placeholder: %v", err)
+	}
+	if got, _ := os.ReadFile(placeholder); string(got) != "tarball bytes" {
+		t.Fatalf("the placeholder holds %q", got)
+	}
+	if want := fmt.Sprintf("%x", sha256.Sum256([]byte("tarball bytes"))); sum != want {
+		t.Fatalf("sha256 = %s, want %s", sum, want)
 	}
 }

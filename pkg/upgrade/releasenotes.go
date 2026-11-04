@@ -214,26 +214,62 @@ func parseReport(out string) (releasenotes.Report, error) {
 	return report, nil
 }
 
-// imageReleaseNotes pulls, pins and verifies the target exactly as
-// stageImage does, then asks it.
+// imageReleaseNotes pulls (or loads from release assets), pins and verifies
+// the target exactly as stageImage does, then asks it.
 func (u *Upgrader) imageReleaseNotes(ctx context.Context, p *progress, branch string, args []string) (ref string, report releasenotes.Report, refused, err error) {
 	tag, err := u.imageRef(branch)
 	if err != nil {
 		return "", report, nil, err
 	}
-	if err := u.pullImage(ctx, p, stepPull, tag); err != nil {
-		if registryHasNoSuchTag(err) {
-			return "", report, nil, fmt.Errorf("the registry has no image %s", tag)
+	pullFromRegistry := func() (string, error) {
+		if err := u.pullImage(ctx, p, stepPull, tag); err != nil {
+			if registryHasNoSuchTag(err) {
+				return "", fmt.Errorf("the registry has no image %s", tag)
+			}
+			return "", fmt.Errorf("pulling %s: %w", tag, err)
 		}
-		return "", report, nil, fmt.Errorf("pulling %s: %w", tag, err)
-	}
-	if ref, err = u.pinImage(ctx, p, stepPull, tag); err != nil {
-		return "", report, nil, fmt.Errorf("pulling %s: %w", tag, err)
-	}
-	if len(u.cfg.Image.VerifyCmd) > 0 {
-		if err := verifyPinned(ctx, p, stepVerify, u.cfg.Image.VerifyCmd, ref); err != nil {
-			return ref, report, nil, fmt.Errorf("%w; not running it to read its release notes", err)
+		pinned, err := u.pinImage(ctx, p, stepPull, tag)
+		if err != nil {
+			return "", fmt.Errorf("pulling %s: %w", tag, err)
 		}
+		if len(u.cfg.Image.VerifyCmd) > 0 {
+			if err := verifyPinned(ctx, p, stepVerify, u.cfg.Image.VerifyCmd, pinned); err != nil {
+				return pinned, fmt.Errorf("%w; not running it to read its release notes", err)
+			}
+		}
+		return pinned, nil
+	}
+	loadFromReleases := func() (string, error) {
+		prevRef, _ := u.readImageRef()
+		staged, unchanged, err := u.stageReleaseDaemon(ctx, p, branch, prevRef, tag)
+		if err != nil {
+			return "", err
+		}
+		candidate := staged.stagedRef
+		if unchanged && prevRef != "" {
+			candidate = prevRef
+		}
+		if len(u.cfg.Image.VerifyCmd) > 0 && !unchanged {
+			if err := verifyLoaded(ctx, p, stepVerify, u.cfg.Image.VerifyCmd, candidate, staged.imageID); err != nil {
+				return candidate, fmt.Errorf("%w; not running it to read its release notes", err)
+			}
+		}
+		return candidate, nil
+	}
+
+	if u.EffectiveImageSource() == ImageSourceReleaseAssets && !u.shouldBypassDefaultReleaseAssets() {
+		ref, err = loadFromReleases()
+		if ok, _ := u.shouldFallbackToRegistry(err); ok {
+			ref, err = pullFromRegistry()
+		}
+	} else {
+		ref, err = pullFromRegistry()
+		if err != nil && u.EffectiveImageFallback() == ImageSourceReleaseAssets {
+			ref, err = loadFromReleases()
+		}
+	}
+	if err != nil {
+		return ref, report, nil, err
 	}
 	out, err := runAsked(ctx, p, releaseNotesStep, imageRunTimeout, imageRunner{u: u, ref: ref}.run(nil, args))
 	if err != nil {
