@@ -643,6 +643,7 @@ rc_hold_summary() {
     jq -s '{check_runs: (map(.check_runs) | add // [])}' "$work/hold-checks.jsonl" > "$work/hold-checks.json"
     hold_checks="$work/hold-checks.json"
   else
+    say "no GitHub token, so no grain/rc-hold check run to read on ${1:0:12}; not waiting on one" >&2
     return 0
   fi
   # shellcheck disable=SC2016 # jq, not shell
