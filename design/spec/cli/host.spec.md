@@ -36,7 +36,8 @@ The binary **MUST** register exactly the commands below. The guard compares this
 `grain [global flags] <command> [args]`. Global flags **MUST** come before the command. Their behaviour is [#CLI-4](cli.spec.md#CLI-4), [#CLI-6](cli.spec.md#CLI-6) and [#CLI-7](cli.spec.md#CLI-7).
 - `-server` defaults to `$GRAIN_SERVER`, else cli.env, else `http://127.0.0.1:4242`.
 - `-token` falls back to `$GRAIN_TOKEN`, `$GRAIN_AUTH_TOKEN`, `$GRAIN_ID_TOKEN`, `$GRAIN_TUNNEL_TOKEN`.
-- `-audience` and `-as` name environment variables that are not read ([`cli.spec.md` §8](cli.spec.md#8-divergences)).
+- `-audience` defaults to `$GRAIN_AUDIENCE`, else `$GRAIN_TUNNEL_AUDIENCE`.
+- `-as` defaults to `$GRAIN_USER`.
 - `-json` switches every task command to JSON ([#CLI-8](cli.spec.md#CLI-8)).
 
 <!-- BEGIN GENERATED FLAGS: grain -->
@@ -51,7 +52,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 | `-json` | bool |  |  |  |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/cli_flags_test.go`: `TestRunCLI_GlobalFlags`, `TestRunCLI_UsageIncludesNewFlags`.
+**Pinned by:** `pkg/cli/cli_flags_test.go`: `TestRunCLI_GlobalFlags`, `TestRunCLI_EnvVarDefaults`, `TestRunCLI_UsageIncludesNewFlags`.
 
 ---
 
