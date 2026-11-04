@@ -1058,6 +1058,16 @@ func (s *Server) agentFilingEscalation(ctx context.Context, acting *model.Task, 
 					return fmt.Errorf("an agent cannot grant read access to %s, which its own task cannot read", r)
 				}
 			}
+		case "readsall", "reads_all":
+			// A console session's opt-in to reading every repository
+			// this deployment works in (model.ConsoleSessionAutoReads):
+			// the same grant as naming each of them in reads, so held to
+			// the same rule -- an agent may turn it on only when its own
+			// task already reads every one of them.
+			var on bool
+			if json.Unmarshal(raw, &on) == nil && on && !s.agentMayReadAllRepos(ctx, acting) {
+				return errors.New("an agent cannot turn on readsAll, which its own task does not have")
+			}
 		case "automerge":
 			var on bool
 			if json.Unmarshal(raw, &on) == nil && on {
@@ -1277,6 +1287,30 @@ func agentMayWrite(acting *model.Task, repo string) bool {
 		return true
 	}
 	return slices.ContainsFunc(acting.Writes, func(w model.WriteTarget) bool { return model.SameRepoText(w.Repo.String(), repo) })
+}
+
+// agentMayReadAllRepos reports whether acting can already read every
+// repository a session that reads all of them is given
+// (model.ConsoleSessionWorkingRepos, less the state repository, which a
+// session reads either way). Anything it cannot work out is a no.
+func (s *Server) agentMayReadAllRepos(ctx context.Context, acting *model.Task) bool {
+	if s.tasks == nil || s.tasks.Store == nil {
+		return false
+	}
+	working, err := model.ConsoleSessionWorkingRepos(ctx, s.tasks.Store)
+	if err != nil {
+		return false
+	}
+	stateRepo := s.tasks.stateRepoRef()
+	for _, r := range working {
+		if stateRepo.Owner != "" && r.Same(stateRepo) {
+			continue
+		}
+		if !agentMayRead(acting, r.String()) {
+			return false
+		}
+	}
+	return true
 }
 
 // agentMayRead reports whether the acting task's own runs may read repo.
