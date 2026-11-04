@@ -483,14 +483,20 @@ import "strconv"
 // the hostd pin or label selector a task filed against the repository
 // starts with when neither the filing nor its template names one.
 //
-// 103 adds `external_agent_token`.`owner` (model.ExternalAgentToken.Owner,
+// 103 retires the in-process gemini-key onto the gcp server's
+// https://grain.dev/capabilities/gcp#gemini-key: where `gcp_project` is
+// set, seeds the gcp entry in `grain_config`.`mcp_servers` with
+// gemini_key: {project}, minting with the gcp-key-minter secret, and
+// rewrites stored gemini-key grants as 100 did the model proxies.
+//
+// 104 adds `external_agent_token`.`owner` (model.ExternalAgentToken.Owner,
 // the person a credential acts on behalf of), `filed_via` to `task` and
 // `task_comment` (the X-Grain-Client label of the tool that filed them,
 // model.Task.FiledVia and model.Comment.FiledVia) and
 // `grain_config`.`owner_trust` (model.Config.OwnerTrust, the owners whose
 // external agents' filings queue without a person's approval;
 // design/spec/external-cli/external-cli.spec.md#XC-14..#XC-17).
-const SchemaVersion = 103
+const SchemaVersion = 104
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified

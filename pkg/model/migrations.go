@@ -705,6 +705,11 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     103,
+		Description: "seed gcp#gemini-key on the gcp server where grain_config.gcp_project is set, minting with the gcp-key-minter secret, and rewrite stored gemini-key grants, repo_config.ci_capabilities and the capability policy included, to https://grain.dev/capabilities/gcp#gemini-key={} (the in-process gemini-key is retired)",
+		Up:          migrateGeminiKeyToCapabilityServer,
+	},
+	{
+		Version:     104,
 		Description: "add external_agent_token.owner, task.filed_via, task_comment.filed_via and grain_config.owner_trust (external agent owner attribution and owner-trust approval)",
 		Statements: []string{
 			"ALTER TABLE `external_agent_token` ADD COLUMN `owner` TEXT NOT NULL DEFAULT ''",
