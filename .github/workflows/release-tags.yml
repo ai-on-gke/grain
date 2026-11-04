@@ -1,0 +1,242 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Publishes the images for the release train's own tags
+# (design/playbook/releases.playbook.md §0.4). The train's grain task
+# (.grain/templates/release-train.yml) holds a grant to push git refs and
+# nothing else -- package-publish and image-signing are CI-only -- so it
+# runs scripts/release-from-trunk.sh with RELEASE_IMAGES=off, and this
+# workflow publishes what each tag it pushed asks for:
+#
+#   vX.Y.Z-rc.N            release-images.sh rc vX.Y.Z-rc.N: the rc's
+#                          sha- images as :vX.Y.Z-rc.N, and :candidate and
+#                          :rc when it is the newest rc tag;
+#   vX.Y.Z-pending         release-images.sh pending vX.Y.Z: the staged
+#                          release as :vX.Y.Z-pending, which
+#                          promote-release.yml's approve retags;
+#   vX.Y.Z-rc.N-discarded  release-images.sh discard-rc vX.Y.Z-rc.N: the
+#                          rc's images marked :vX.Y.Z-rc.N-discarded.
+#
+# Those three modes are all it runs. It never runs `promote` or
+# `retract`, and none of the three moves :vX.Y.Z or :latest: that is
+# publish-release.yml's, on the vX.Y.0 tag the train or a person's approval
+# pushes. An rc or pending tag publishes only for a commit on main or on
+# its version's release/vX.Y.Z branch -- the commits the train cuts from,
+# and the ones release.yml built the sha- images of -- and any other tag
+# these patterns match publishes nothing.
+#
+# The train pushes with the filing team's own credential through grain's
+# git proxy, not with GITHUB_TOKEN, so its tag pushes start this workflow
+# (a GITHUB_TOKEN push would not; playbook §14). Tags pushed by
+# release-train.yml or promote-release.yml with REPO_WRITE_TOKEN start it
+# too, after those jobs published the same images themselves; each mode
+# finds its work already done and only re-tags what is already there.
+#
+# It runs on nothing but those tag pushes: no dispatch, no schedule.
+
+name: release-tags
+
+on:
+  push:
+    tags:
+      - "v*-rc.*"
+      - "v*-pending"
+      - "v*-discarded"
+
+permissions:
+  contents: read
+
+env:
+  GOFLAGS: -mod=readonly
+  RELEASE_IMAGE_REPO: ${{ vars.RELEASE_IMAGE_REPO || 'bwsalmon/grain' }}
+
+jobs:
+  images:
+    name: publish the train's rc, pending and discarded images
+    # A tag deletion (approve and reject delete vX.Y.Z-pending) has
+    # nothing to publish.
+    if: ${{ !github.event.deleted }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Decide what the tag publishes
+        id: mode
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          num='[0-9]+'
+          release="v$num\.$num\.$num"
+          mode=none
+          arg=""
+          branch=""
+          # -discarded first: v*-rc.* matches vX.Y.Z-rc.N-discarded as well.
+          if [[ "$TAG" =~ ^($release-rc\.$num)-discarded$ ]]; then
+            mode=discard-rc
+            arg="${BASH_REMATCH[1]}"
+          elif [[ "$TAG" =~ ^($release)-rc\.$num$ ]]; then
+            mode=rc
+            arg="$TAG"
+            branch="release/${BASH_REMATCH[1]}"
+          elif [[ "$TAG" =~ ^($release)-pending$ ]]; then
+            mode=pending
+            arg="${BASH_REMATCH[1]}"
+            branch="release/${BASH_REMATCH[1]}"
+          else
+            echo "release-tags: ${TAG@Q} is none of the train's rc, pending or discarded tags; nothing to publish"
+          fi
+
+          commit="$(git rev-parse --verify -q "refs/tags/$TAG^{commit}" || true)"
+          if [ -z "$commit" ]; then
+            echo "release-tags: the checkout has no tag $TAG" >&2
+            exit 1
+          fi
+          if [ -n "$branch" ]; then
+            on=""
+            for ref in refs/remotes/origin/main "refs/remotes/origin/$branch"; do
+              if git rev-parse --verify -q "$ref" >/dev/null && git merge-base --is-ancestor "$commit" "$ref"; then
+                on="${ref#refs/remotes/origin/}"
+                break
+              fi
+            done
+            if [ -z "$on" ]; then
+              echo "release-tags: $TAG is on ${commit:0:12}, which is on neither main nor $branch: it is no commit the train cuts from, so nothing is published" >&2
+              exit 1
+            fi
+            echo "release-tags: $TAG is ${commit:0:12}, on $on"
+          fi
+
+          echo "release-tags: publishing ${mode} ${arg}"
+          {
+            echo "mode=${mode}"
+            echo "arg=${arg}"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "GRAIN_CI_REPO=${GITHUB_REPOSITORY}"
+            echo "GRAIN_CI_COMMIT=${commit}"
+            echo "GRAIN_CI_REF=${TAG}"
+            echo "DRY_RUN=false"
+          } >> "$GITHUB_ENV"
+
+      - name: Setup Node.js
+        if: steps.mode.outputs.mode != 'none'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+
+      - name: Setup Go
+        if: steps.mode.outputs.mode != 'none'
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Authenticate to Google Cloud (WIF)
+        if: steps.mode.outputs.mode != 'none' && vars.GCP_WIF_PROVIDER != '' && vars.GCP_SA_EMAIL != ''
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SA_EMAIL }}
+
+      - name: Configure Artifact Registry Docker authentication
+        if: steps.mode.outputs.mode != 'none' && vars.GCP_WIF_PROVIDER != '' && vars.GCP_SA_EMAIL != ''
+        run: gcloud auth configure-docker us-docker.pkg.dev --quiet
+
+      - name: Configure package-publish credentials
+        if: steps.mode.outputs.mode != 'none'
+        env:
+          GHCR_PAT: ${{ secrets.GHCR_TOKEN }}
+          FALLBACK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY || 'ghcr.io' }}
+          PUBLISH_USERNAME: ${{ vars.GHCR_USERNAME || 'bwsalmon' }}
+        run: |
+          set -euo pipefail
+          token="${GHCR_PAT:-}"
+          username="${PUBLISH_USERNAME}"
+          if [ -z "$token" ]; then
+            case "${RELEASE_IMAGE_REPO}" in
+              bwsalmon/*)
+                echo "::error::GHCR_TOKEN secret is required to publish packages under ghcr.io/${RELEASE_IMAGE_REPO} from ${GITHUB_REPOSITORY}" >&2
+                exit 1
+                ;;
+              *)
+                token="${FALLBACK_TOKEN}"
+                username="${GITHUB_ACTOR}"
+                ;;
+            esac
+          fi
+          echo "::add-mask::${token}"
+          {
+            echo "PACKAGE_PUBLISH_REGISTRY=${PUBLISH_REGISTRY}"
+            echo "PACKAGE_PUBLISH_USERNAME=${username}"
+            echo "PACKAGE_PUBLISH_TOKEN=${token}"
+          } >> "$GITHUB_ENV"
+
+      - name: Configure optional image-signing key
+        if: steps.mode.outputs.mode != 'none'
+        env:
+          SIGNING_KEY_PEM: ${{ secrets.IMAGE_SIGNING_KEY }}
+          SIGNING_KEY_PASS: ${{ secrets.IMAGE_SIGNING_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SIGNING_KEY_PEM:-}" ]; then
+            echo "WARNING: IMAGE_SIGNING_KEY secret is not set; release candidate images will be published unsigned." >&2
+            exit 0
+          fi
+          if ! command -v cosign >/dev/null 2>&1; then
+            cosign_version="v2.4.1"
+            curl -fsSL "https://github.com/sigstore/cosign/releases/download/${cosign_version}/cosign-linux-amd64" \
+              -o /usr/local/bin/cosign
+            chmod +x /usr/local/bin/cosign
+          fi
+          key_file="${RUNNER_TEMP}/image-signing.key"
+          printf '%s\n' "${SIGNING_KEY_PEM}" > "$key_file"
+          chmod 600 "$key_file"
+          pass_file="${RUNNER_TEMP}/image-signing.pass"
+          printf '%s' "${SIGNING_KEY_PASS:-}" > "$pass_file"
+          chmod 600 "$pass_file"
+          {
+            echo "IMAGE_SIGNING_KEY=${key_file}"
+            echo "IMAGE_SIGNING_PASSWORD_FILE=${pass_file}"
+          } >> "$GITHUB_ENV"
+
+      - name: Publish the tag's images
+        if: steps.mode.outputs.mode != 'none'
+        env:
+          MODE: ${{ steps.mode.outputs.mode }}
+          ARG: ${{ steps.mode.outputs.arg }}
+        run: |
+          set -euo pipefail
+          case "$MODE" in
+            rc) bash ./scripts/release-images.sh rc "$ARG" ;;
+            pending) bash ./scripts/release-images.sh pending "$ARG" ;;
+            discard-rc) bash ./scripts/release-images.sh discard-rc "$ARG" ;;
+            *)
+              echo "release-tags: unknown mode ${MODE@Q}" >&2
+              exit 1
+              ;;
+          esac
