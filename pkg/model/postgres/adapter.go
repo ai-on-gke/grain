@@ -611,7 +611,15 @@ ORDER BY c.ordinal_position`, tableName)
 	if strings.HasPrefix(strings.ToUpper(trimmed), "PRAGMA ") {
 		upper := strings.ToUpper(trimmed)
 		if strings.Contains(upper, "DATA_VERSION") {
-			return "SELECT (pg_stat_get_db_xact_commit(d.oid))::bigint AS data_version FROM pg_database d WHERE datname = current_database()"
+			// Store.ChangeToken's "nothing committed since": the current
+			// snapshot (xmin:xmax:in-progress ids) moves the moment any
+			// transaction is given an id or commits, so it is never behind
+			// a commit the way the statistics counter this used to read
+			// (pg_stat_get_db_xact_commit) is -- backends flush those at
+			// most once a second, which let the UI's response caches serve
+			// a task's detail from before a write that had already
+			// committed. Hashed to the bigint data_version is scanned as.
+			return "SELECT hashtextextended(txid_current_snapshot()::text, 0) AS data_version"
 		}
 		// Harmless no-op query for other PRAGMAs
 		return "SELECT 1"
