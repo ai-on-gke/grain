@@ -457,6 +457,49 @@ describe("ModelBackendPage leaving with unsaved changes", () => {
     expect(onBack).toHaveBeenCalledTimes(1);
   });
 
+  // 2026-11-04 connections walkthrough: a key typed into the credential
+  // box and followed by Save connection was never stored, though the
+  // pane then read "No unsaved changes" and only leaving asked about it.
+  it("sets a typed credential on Save connection and leaves without asking", async () => {
+    const user = userEvent.setup();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const onBack = vi.fn();
+    const onSave = vi.fn().mockResolvedValue(true);
+    api.mockResolvedValue({});
+    render(
+      <ModelBackendPage
+        backend={{ ...stored, authMode: "api_key" }}
+        backends={[]}
+        isNew={false}
+        onSave={onSave}
+        onBack={onBack}
+        showError={vi.fn()}
+      />,
+    );
+    expect(await screen.findByText("No unsaved changes")).toBeInTheDocument();
+
+    await user.type(
+      screen.getByLabelText("Gemini API key", { selector: "input" }),
+      "walk-key",
+    );
+    expect(screen.queryByText("No unsaved changes")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save connection" }));
+
+    expect(await screen.findByText("No unsaved changes")).toBeInTheDocument();
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(api).toHaveBeenCalledWith(
+      "/api/agent-backends/backend-stored/credential",
+      { method: "PUT", body: JSON.stringify({ value: "walk-key" }) },
+    );
+    expect(
+      screen.getByLabelText("Gemini API key", { selector: "input" }),
+    ).toHaveValue("");
+
+    await user.click(screen.getByRole("button", { name: /^← Models$/ }));
+    expect(confirm).not.toHaveBeenCalled();
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
   // The credential box is a password box, and a browser's password
   // manager fills grain's own sign-in password into one marked "off";
   // that filled-in value is what the leave prompt then counted.

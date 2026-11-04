@@ -150,9 +150,13 @@ export default function ModelBackendPage({
   );
   const authValue = authenticationValue(draft);
   const typeDirty = persisted && draft.framework !== persisted.framework;
+  // A credential typed but not yet set counts: Save connection sets it
+  // too, and "No unsaved changes" beside it said a key still only in
+  // the box was stored.
   const dirty =
     unfinished ||
     !persisted ||
+    credential.trim() !== "" ||
     JSON.stringify(draft) !== JSON.stringify(persisted);
   // What leaving the page would throw away, asked by Overlay on Escape,
   // "← Models & connections" and browser Back: this form saves only on Save, so
@@ -186,12 +190,39 @@ export default function ModelBackendPage({
 
   // Save connection: what finishes a connection Continue started, so it
   // is the save that enables it.
+  //
+  // It also sets a credential typed into the box and not yet set. Save
+  // connection used to store everything but that key: the pane then read
+  // "No unsaved changes", the key was never stored, and only leaving
+  // asked about it (2026-11-04 connections walkthrough).
   const submitDraft = async () => {
-    if (!unfinished) return saveDraft();
+    if (!unfinished) {
+      if (await saveDraft()) await setTypedCredential();
+      return;
+    }
     const { disabled: _disabled, ...enabled } = latest.current;
     if (await saveDraft(enabled)) {
       unfinishedRef.current = false;
       setUnfinished(false);
+      await setTypedCredential();
+    }
+  };
+
+  // setTypedCredential stores the credential box's value against this
+  // connection and empties the box; with nothing typed it does nothing.
+  const setTypedCredential = async () => {
+    if (!usesOwnCredential || !credential.trim()) return true;
+    try {
+      await api(
+        `/api/agent-backends/${encodeURIComponent(latest.current.id)}/credential`,
+        { method: "PUT", body: JSON.stringify({ value: credential }) },
+      );
+      setCredential("");
+      setCatalogRevision((revision) => revision + 1);
+      return true;
+    } catch (error) {
+      showError(error);
+      return false;
     }
   };
 
@@ -519,21 +550,7 @@ export default function ModelBackendPage({
                         type="button"
                         variant="outlined"
                         disabled={!credential.trim()}
-                        onClick={async () => {
-                          try {
-                            await api(
-                              `/api/agent-backends/${encodeURIComponent(draft.id)}/credential`,
-                              {
-                                method: "PUT",
-                                body: JSON.stringify({ value: credential }),
-                              },
-                            );
-                            setCredential("");
-                            setCatalogRevision((revision) => revision + 1);
-                          } catch (error) {
-                            showError(error);
-                          }
-                        }}
+                        onClick={setTypedCredential}
                       >
                         Set credential
                       </Button>
