@@ -38,9 +38,7 @@ const ReleaseMaxRCAttempts = 3
 // candidate's commit while blockers linked to it are open: in progress
 // while rc.(N+1) is held, completed once every blocker has landed. The
 // failed candidate's commit is the floor the train cuts rc.(N+1) after,
-// so it is where the train is to read the hold. The train
-// (scripts/release-from-trunk.sh) does not read it yet: until it does,
-// the hold is visible on the commit but stops no cut.
+// so it is where the train (scripts/release-from-trunk.sh) reads the hold.
 const ReleaseHoldCheckName = "grain/rc-hold"
 
 // RCBlockerMarker is what a task's title carries to hold the candidate
