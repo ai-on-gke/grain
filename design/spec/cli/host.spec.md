@@ -23,7 +23,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 | Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume` |
 | Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|deny`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `declarations check` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
-| Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db [upgrade-postgres]`), `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
+| Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db upgrade-postgres`), `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
 | Modes: build information | `version`, `schema-version`, `release-notes`, `sandbox-image`, `container-sandbox-image`, `k8s-sandbox-image`, `image` |
 | Modes: hooks forked by a run | `agy-tool-hook`, `claude-stop-hook`, `codex-detached` |
 
@@ -36,7 +36,8 @@ The binary **MUST** register exactly the commands below. The guard compares this
 `grain [global flags] <command> [args]`. Global flags **MUST** come before the command. Their behaviour is [#CLI-4](cli.spec.md#CLI-4), [#CLI-6](cli.spec.md#CLI-6) and [#CLI-7](cli.spec.md#CLI-7).
 - `-server` defaults to `$GRAIN_SERVER`, else cli.env, else `http://127.0.0.1:4242`.
 - `-token` falls back to `$GRAIN_TOKEN`, `$GRAIN_AUTH_TOKEN`, `$GRAIN_ID_TOKEN`, `$GRAIN_TUNNEL_TOKEN`.
-- `-audience` and `-as` name environment variables that are not read ([`cli.spec.md` §8](cli.spec.md#8-divergences)).
+- `-audience` defaults to `$GRAIN_AUDIENCE`, else `$GRAIN_TUNNEL_AUDIENCE`.
+- `-as` defaults to `$GRAIN_USER`.
 - `-json` switches every task command to JSON ([#CLI-8](cli.spec.md#CLI-8)).
 
 <!-- BEGIN GENERATED FLAGS: grain -->
@@ -51,7 +52,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 | `-json` | bool |  |  |  |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/cli_flags_test.go`: `TestRunCLI_GlobalFlags`, `TestRunCLI_UsageIncludesNewFlags`.
+**Pinned by:** `pkg/cli/cli_flags_test.go`: `TestRunCLI_GlobalFlags`, `TestRunCLI_EnvVarDefaults`, `TestRunCLI_UsageIncludesNewFlags`.
 
 ---
 
@@ -667,7 +668,9 @@ _No flags._
 
 ### 4.10 `grain release approve|reject vX.Y.Z` {#CLI-39}
 
-Calls `POST /api/repos/{owner}/{name}/pending-releases/{version}/approve` or `…/reject` (`DecideRelease`). `-repo` defaults to grain's own source repository (`ai-on-gke/grain`).
+Calls `POST /api/repos/{owner}/{name}/pending-releases/{version}/approve` or `…/reject` (`DecideRelease`). `-repo` defaults to grain's own source repository (`ai-on-gke/grain`). On a repository that publishes from GitHub Actions (`ci_mode: github`) the answer is a signed dispatch of `.github/workflows/promote-release.yml`, and the command prints the dispatch instead of a grain CI run.
+
+`grain release approval-key` prints the deployment's release-approval public key (`GET /api/release-approval-key`): the value for the GitHub repository variable `GRAIN_RELEASE_APPROVAL_KEY`, which that workflow verifies an Inbox approval against.
 
 Errors, each printed after the usage:
 - an unknown verb: `unknown release command "<v>": approve or reject`;
@@ -1469,9 +1472,9 @@ _No flags._
 
 **Pinned by:** `pkg/cli/repocase_test.go`, `pkg/cli/repocase_state_repo_test.go`.
 
-### 6.7 `grain upgrade-postgres` (`upgrade-sqlite-to-postgres`, `db`) {#CLI-56}
+### 6.7 `grain upgrade-postgres` (`upgrade-sqlite-to-postgres`, `db upgrade-postgres`) {#CLI-56}
 
-Copies an existing SQLite store into PostgreSQL and optionally writes `db-config.json`, so later daemon starts use PostgreSQL. `grain db`, `grain db upgrade-postgres` and `grain db upgrade-sqlite-to-postgres` are the same command. Any other word after `db` (for example the sandbox CLI's `query`) is passed on to it as a positional argument, which it ignores. Every spelling reports errors as `grain upgrade-postgres: …`. The usage is hand-written. Flags:
+Copies an existing SQLite store into PostgreSQL and optionally writes `db-config.json`, so later daemon starts use PostgreSQL. `grain db upgrade-postgres` and `grain db upgrade-sqlite-to-postgres` are the same command, and report errors as `grain upgrade-postgres: …`. Positional arguments are refused (`unexpected argument "<x>"`). A bare `grain db` prints `usage: grain db upgrade-postgres [flags]` and `grain db: a command is required …`; `grain db -h` prints that usage and `grain db: flag: help requested`; any other first word after `db` (for example the sandbox CLI's `query`) is refused with `grain db: unknown command "<x>" (grain db upgrade-postgres [flags]; db query is the in-sandbox CLI's)`. All exit 1. The usage is hand-written. Flags:
 - `-data-dir` (default `$GRAIN_DATA_DIR`);
 - `-sqlite-path` (string): the source SQLite file;
 - `-dsn` (string): the target PostgreSQL DSN;
@@ -1490,7 +1493,7 @@ _No flags._
 _No flags._
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/upgrade_postgres_test.go`: `TestUpgradePostgresCLIValidation`, `TestUpgradePostgresCLIHelp`.
+**Pinned by:** `pkg/cli/upgrade_postgres_test.go`: `TestDBCmdRefusesUnknownSubcommand`, `TestUpgradePostgresRefusesStrayArguments`, `TestUpgradePostgresCLIValidation`, `TestUpgradePostgresCLIHelp`.
 
 ### 6.8 `grain controller bootstrap-github-app` and `grain setup gcp` {#CLI-57}
 

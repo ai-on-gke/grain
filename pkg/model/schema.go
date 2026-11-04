@@ -493,10 +493,15 @@ import "strconv"
 // connection whose framework is "custom" is disabled and kept, with
 // model.RemovedCustomConnectionReason (custom_connection_migration.go).
 //
-// 105 adds `reason` to `allowed_principal` (model.AllowedPrincipal.Reason):
+// 105 adds `pending_access_request` and `access_decisions` to
+// `task_observation`: the request_access call a task is parked on
+// (model.PendingAccessRequest) and the answers people gave its earlier
+// ones (model.AccessDecision), both JSON.
+//
+// 106 adds `reason` to `allowed_principal` (model.AllowedPrincipal.Reason):
 // why an entry was added, required for the `serviceAccount:<email>` entries
 // the allowlist accepts again.
-const SchemaVersion = 105
+const SchemaVersion = 106
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
@@ -995,6 +1000,8 @@ var Tables = []string{
   ` + "`baseline_comment_id`" + `         INTEGER  NULL,
   ` + "`pending_secret`" + `              TEXT     NULL,
   ` + "`pending_config_change`" + `       TEXT     NULL,
+  ` + "`pending_access_request`" + `      TEXT     NULL,
+  ` + "`access_decisions`" + `            TEXT     NULL,
   ` + "`merge_queue_blocked_at`" + `      DATETIME NULL,
   ` + "`merge_queue_refreshed_at`" + `    DATETIME NULL,
   ` + "`merge_queue_repair_at`" + `       DATETIME NULL,

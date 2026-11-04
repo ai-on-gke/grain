@@ -17,16 +17,13 @@ import { PageHeaderActions, PageHeaderPageActions } from "./PageHeader.jsx";
 import {
   Alert,
   Button,
-  FormControl,
   InputAdornment,
-  InputLabel,
-  MenuItem,
-  Select,
   TextField,
   Typography,
 } from "@mui/material";
 import api from "../api.js";
 import AppIcon from "./AppIcon.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 
 // REFRESH_MS is how often this panel re-fetches the selected source's log
 // lines while the System overlay is open -- the same order of magnitude
@@ -199,24 +196,16 @@ export default function LogsPage({ showError }) {
                   narrow rail (an 820px tablet) a 220px floor ran the
                   select past the slot's clipped edge, its arrow cut
                   off, rather than leaving it whole beside "more". */}
-              <FormControl
-                size="small"
+              <SearchSelect
+                label="Source"
+                fullWidth={false}
                 sx={{ width: 220, maxWidth: "100%", flex: "0 1 auto" }}
-              >
-                <InputLabel id="logs-source-label">Source</InputLabel>
-                <Select
-                  labelId="logs-source-label"
-                  label="Source"
-                  value={source || ""}
-                  onChange={(e) => setSource(e.target.value)}
-                >
-                  {sources.sources.map((s) => (
-                    <MenuItem key={s} value={s}>
-                      {s}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
+                value={source || ""}
+                options={sources.sources.map((s) => ({ value: s, label: s }))}
+                onChange={(next) => {
+                  if (next) setSource(next);
+                }}
+              />
               <TextField
                 label="Search logs"
                 size="small"

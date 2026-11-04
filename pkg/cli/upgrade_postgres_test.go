@@ -17,8 +17,15 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"net"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
@@ -27,6 +34,117 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model/postgres"
 	grainsqlite "github.com/ai-on-gke/grain/pkg/model/sqlite"
 )
+
+func runHostGrain(t *testing.T, argv ...string) (string, int) {
+	t.Helper()
+	dir := t.TempDir()
+	rawArgv, err := json.Marshal(argv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(testBinary(t), "-test.run=^TestHostCLISpecHelper$")
+	cmd.Dir = dir
+	cmd.Env = []string{
+		"GRAIN_CLISPEC_ARGV=" + string(rawArgv),
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + dir,
+		"GRAIN_SANDBOX_CLI=0",
+		"GRAIN_CLI_ENV=",
+		"GRAIN_DATA_DIR=" + dir,
+	}
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return string(out), 0
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return string(out), exitErr.ExitCode()
+	}
+	t.Fatalf("running host grain %q: %v", argv, err)
+	return "", 0
+}
+
+func TestDBCmdRefusesUnknownSubcommand(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		argv []string
+		want string
+	}{
+		{
+			name: "sandbox db query on host",
+			argv: []string{"db", "query", "select", "1"},
+			want: `grain db: unknown command "query" (grain db upgrade-postgres [flags]; db query is the in-sandbox CLI's)`,
+		},
+		{
+			name: "unknown subcommand",
+			argv: []string{"db", "migrate"},
+			want: `grain db: unknown command "migrate"`,
+		},
+		{
+			name: "bare db",
+			argv: []string{"db"},
+			want: "grain db: a command is required",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, code := runHostGrain(t, tc.argv...)
+			if code != 1 {
+				t.Fatalf("grain %v exited %d, want 1; output:\n%s", tc.argv, code, out)
+			}
+			if !strings.Contains(out, tc.want) {
+				t.Errorf("grain %v output = %q, want substring %q", tc.argv, out, tc.want)
+			}
+			if strings.Contains(out, "grain upgrade-postgres:") {
+				t.Errorf("grain %v reported as upgrade-postgres: %q", tc.argv, out)
+			}
+		})
+	}
+
+	var errBuf bytes.Buffer
+	if err := runDB([]string{"-h"}, &errBuf); !errors.Is(err, flag.ErrHelp) {
+		t.Errorf("runDB(-h) = %v, want flag.ErrHelp", err)
+	}
+}
+
+func TestUpgradePostgresRefusesStrayArguments(t *testing.T) {
+	t.Parallel()
+	// Bind a local TCP listener so we can prove runUpgradePostgres refuses the
+	// stray argument before dialing -dsn or touching -data-dir.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	var dialed atomic.Bool
+	go func() {
+		conn, err := ln.Accept()
+		if err == nil {
+			dialed.Store(true)
+			conn.Close()
+		}
+	}()
+
+	dataDir := t.TempDir()
+	dsn := "postgres://" + ln.Addr().String() + "/grain?sslmode=disable"
+	for _, prefix := range [][]string{
+		{"upgrade-postgres"},
+		{"db", "upgrade-postgres"},
+		{"db", "upgrade-sqlite-to-postgres"},
+	} {
+		argv := append(append([]string{}, prefix...), "-dsn", dsn, "-data-dir", dataDir, "stray")
+		out, code := runHostGrain(t, argv...)
+		if code != 1 {
+			t.Fatalf("grain %v exited %d, want 1; output:\n%s", argv, code, out)
+		}
+		if !strings.Contains(out, `grain upgrade-postgres: unexpected argument "stray"`) {
+			t.Errorf("grain %v output = %q, want unexpected argument \"stray\"", argv, out)
+		}
+	}
+	if dialed.Load() {
+		t.Fatal("upgrade-postgres dialed -dsn despite a stray positional argument")
+	}
+}
 
 func TestUpgradePostgresCLIValidation(t *testing.T) {
 	var buf bytes.Buffer

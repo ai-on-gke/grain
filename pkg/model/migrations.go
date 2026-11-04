@@ -715,6 +715,14 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     105,
+		Description: "add pending_access_request and access_decisions to task_observation for request_access",
+		Statements: []string{
+			"ALTER TABLE `task_observation` ADD COLUMN `pending_access_request` TEXT NULL",
+			"ALTER TABLE `task_observation` ADD COLUMN `access_decisions` TEXT NULL",
+		},
+	},
+	{
+		Version:     106,
 		Description: "add allowed_principal.reason, why an allowlist entry was added (required for serviceAccount: entries)",
 		Statements: []string{
 			"ALTER TABLE `allowed_principal` ADD COLUMN `reason` TEXT NOT NULL DEFAULT ''",

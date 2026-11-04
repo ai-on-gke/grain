@@ -187,6 +187,7 @@ func dedupeToolNames(names []string) []string {
 var controlTools = map[string]bool{
 	"ask_question":          true,
 	"request_secret":        true,
+	"request_access":        true,
 	"propose_config_change": true,
 	"comment_on_issue":      true,
 	"nothing_needed":        true,

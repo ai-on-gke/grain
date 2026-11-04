@@ -313,6 +313,23 @@ func parseTemplateRaw(f file, repo model.RepoRef) (model.Template, rawTemplate, 
 	return tmpl, raw, nil
 }
 
+// TemplatePush is the push set the template file at filePath declares, as
+// the declaration sync would read it: nil for a template with no `push:`
+// (or an empty file), and an error for one whose `push:` does not parse.
+// Nothing else in the file is checked. It is what the security hold
+// compares a pull request's base and head with, so a change to any
+// template's push set waits for a person (orchestrator's
+// guardTemplatePush, trustboundary.TemplatePush).
+func TemplatePush(filePath string, text []byte) (model.RefPushSet, error) {
+	var raw struct {
+		Push []rawPush `yaml:"push"`
+	}
+	if err := yaml.NewDecoder(bytes.NewReader(text)).Decode(&raw); err != nil && !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("%s: %w", filePath, err)
+	}
+	return parsePush(file{path: filePath, text: text}, raw.Push)
+}
+
 // parsePush is a declared template's `push:` (grain/task-2536): the
 // refs, in this repository only, that the runs of tasks filed from it may
 // update beyond their own task branch.

@@ -14,6 +14,7 @@ wait in the same run), and each takes a `summary`:
 | --- | --- |
 | `ask_question` | the decision or input the question needs |
 | `request_secret` | what has to be set and why ("Set stripe-api-key so the deploy script can authenticate") |
+| `request_access` | what access is needed and why ("Grant write to acme/lib so the fix lands in both repos") |
 | `chat` (live sessions) | what this message needs from the person |
 | `api_post_task_message` / `POST /api/tasks/{id}/messages` | the same, as the `summary` field of the body |
 
