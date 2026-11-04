@@ -240,7 +240,7 @@ var knownBoundaryFiles = []string{
 	"pkg/daemon/run.go", "pkg/daemon/sandboxnet.go",
 	"pkg/ui/server.go", "pkg/ui/auth.go", "pkg/orchestrator/securityhold.go",
 	"pkg/gitproxy/", "pkg/secrets/", "pkg/ci/", "pkg/workflows/", "deploy/kubernetes/",
-	"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/taskhostd.go",
+	"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/connection_hostd.go",
 	"pkg/daemon/hostd_registry.go", "pkg/daemon/hostd_route.go", "pkg/daemon/hostexec.go",
 	"pkg/model/hostd.go", "pkg/ui/messages.go", "pkg/daemon/mcpserver_hostexec.go",
 	"pkg/model/repo_access.go", "pkg/daemon/ci.go", "pkg/daemon/ci_policy.go",
@@ -294,7 +294,7 @@ func TestHostdAndCIRepoAccessGatesAreClassified(t *testing.T) {
 	cases := map[string]string{
 		"pkg/ui/hostd_connect.go":          "auth-routes",
 		"pkg/ui/hostds.go":                 "auth-routes",
-		"pkg/ui/taskhostd.go":              "auth-routes",
+		"pkg/ui/connection_hostd.go":       "auth-routes",
 		"pkg/daemon/hostd_registry.go":     "auth-routes",
 		"pkg/daemon/hostd_route.go":        "auth-routes",
 		"pkg/daemon/hostexec.go":           "auth-routes",

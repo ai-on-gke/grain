@@ -176,7 +176,7 @@ var Categories = []Category{
 			// The hostd registry: whether a dialing hostd is local or must
 			// present its owner's identity, token -> hostd/owner, revocation,
 			// and which hostd a run is routed to.
-			"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/taskhostd.go",
+			"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/connection_hostd.go",
 			"pkg/daemon/hostd_registry.go", "pkg/daemon/hostd_route.go",
 			"pkg/daemon/hostexec.go", "pkg/model/hostd.go",
 			// messagesSince's human-only filter is what makes the answer a
