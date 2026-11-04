@@ -692,10 +692,14 @@ describe("App", () => {
     window.dispatchEvent(new PopStateEvent("popstate"));
 
     expect(confirm).toHaveBeenCalledWith(DISCARD_PROMPT);
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("heading", { name: "New schedule" }),
-      ).not.toBeInTheDocument(),
+    // Closing re-renders the whole App, which on a loaded CI runner can
+    // take longer than waitFor's default second.
+    await waitFor(
+      () =>
+        expect(
+          screen.queryByRole("heading", { name: "New schedule" }),
+        ).not.toBeInTheDocument(),
+      { timeout: 5000 },
     );
     confirm.mockRestore();
   });
@@ -732,10 +736,14 @@ describe("App", () => {
     confirm.mockReturnValue(true);
     await user.click(screen.getByRole("link", { name: "task 1" }));
     expect(confirm).toHaveBeenCalledTimes(2);
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("heading", { name: "Edit schedule" }),
-      ).not.toBeInTheDocument(),
+    // Closing re-renders the whole App, which on a loaded CI runner can
+    // take longer than waitFor's default second.
+    await waitFor(
+      () =>
+        expect(
+          screen.queryByRole("heading", { name: "Edit schedule" }),
+        ).not.toBeInTheDocument(),
+      { timeout: 5000 },
     );
     confirm.mockRestore();
   });
