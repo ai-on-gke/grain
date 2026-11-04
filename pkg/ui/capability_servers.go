@@ -398,6 +398,10 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 		return validationErrorf("capability server %s runs inside grain itself and has nothing to configure", id)
 	}
 	cfg := req.Config
+	// Builtin, Aliases and Notice belong to grain, not the request: resolve
+	// them from what is stored now so neither secretMapField,
+	// CheckBuiltinConfig nor Probe acts on a caller-supplied Builtin.
+	c.applyStoredBuiltin(ctx, id, &cfg)
 	if err := c.checkRunLocation(ctx, cfg); err != nil {
 		return err
 	}
@@ -454,6 +458,9 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 			}
 		}
 	}
+	if err := cfg.Validate(id); err != nil {
+		return validationErrorf("%s", err)
+	}
 	// An entry saved without any config -- a transport edit, or a
 	// server still configured by env -- is left to the attach to judge,
 	// whose status says what is missing.
@@ -470,6 +477,18 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 			return validationErrorf("%s", err)
 		}
 	}
+	if len(writes) > 0 {
+		// Unrehearsed: a save carrying secret values cannot be rehearsed, so
+		// external-config mode refuses it before Probe starts the server or
+		// hands it typed-in secrets, while the store writes themselves wait
+		// until Probe accepts the config.
+		if err := c.checkSettingsWritableUnrehearsed(ctx, "grain_config"); err != nil {
+			return err
+		}
+		if c.Config.Secrets == nil {
+			return errSecretsUnavailable
+		}
+	}
 	// The server's own configure is run against what would be saved, the
 	// way Test runs it, so a config it refuses -- a gcp permission set over
 	// its admin's role ceiling, 2026-11-03 -- is refused here rather than
@@ -478,7 +497,7 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 	// save goes ahead, with a warning, so an entry for a host that is down
 	// can still be edited.
 	if p := c.prober(); p != nil && len(cfg.Config) > 0 && !cfg.Disabled {
-		res := p.Probe(ctx, id, cfg, func(name string) (string, bool) {
+		res := p.Probe(hostd.ForDisplay(ctx), id, cfg, func(name string) (string, bool) {
 			v, ok := writes[name]
 			return v, ok
 		})
@@ -490,14 +509,6 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 		}
 	}
 	if len(writes) > 0 {
-		// Unrehearsed: the secrets below are set before the store write
-		// a rehearsal would stop at, and would outlive its refusal.
-		if err := c.checkSettingsWritableUnrehearsed(ctx, "grain_config"); err != nil {
-			return err
-		}
-		if c.Config.Secrets == nil {
-			return errSecretsUnavailable
-		}
 		for name, value := range writes {
 			secret, key, explicit := strings.Cut(name, "/")
 			if !explicit {
@@ -813,6 +824,22 @@ func (c *Client) storedConfigEqual(ctx context.Context, id string, config map[st
 func (c *Client) prober() CapabilityServerProber {
 	p, _ := c.Config.CapabilityServers.(CapabilityServerProber)
 	return p
+}
+
+// applyStoredBuiltin clears caller-supplied Builtin, Aliases and Notice on
+// cfg and restores them only when id is a stored (or ensured) built-in.
+func (c *Client) applyStoredBuiltin(ctx context.Context, id string, cfg *protocol.ServerConfig) {
+	cfg.Builtin, cfg.Aliases, cfg.Notice = "", nil, ""
+	var configured map[string]protocol.ServerConfig
+	if c.Store != nil {
+		if stored, err := c.Store.GetConfig(ctx); err == nil && stored != nil {
+			configured = stored.MCPServers
+		}
+	}
+	configured, _ = intree.EnsureBuiltins(configured)
+	if stored, ok := configured[id]; ok && stored.Builtin != "" {
+		cfg.Builtin, cfg.Aliases, cfg.Notice = stored.Builtin, stored.Aliases, stored.Notice
+	}
 }
 
 // checkRunLocation refuses run: host unless grain hostd is beside this

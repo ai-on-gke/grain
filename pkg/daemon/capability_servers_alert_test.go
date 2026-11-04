@@ -49,4 +49,18 @@ func TestCapabilityServerDropRaisesAndClearsAnAlert(t *testing.T) {
 	}
 	// Attaching with nothing raised is a no-op.
 	onAttach("https://grain.dev/capabilities/other")
+
+	// A secondary hostd's alert is scoped to that hostd, so its attaching
+	// cannot clear an alert open on the deployment's own registry.
+	onDrop(servers.Status{ID: id, State: servers.Failed, Error: "local hostd down"})
+	wsDrop, wsAttach := capabilityServerAlertsOnHostd(ctx, store, "ws-a")
+	wsSubject := model.NotificationSubject(model.FamilyCapabilityServerDown, id+"@ws-a")
+	wsDrop(servers.Status{ID: id, State: servers.Failed, Error: "ws-a disconnected"})
+	wsAttach(id)
+	if n, err := store.OpenNotification(ctx, subject); err != nil || n == nil {
+		t.Errorf("ws-a attaching cleared the deployment's own alert: %+v (%v)", n, err)
+	}
+	if n, err := store.OpenNotification(ctx, wsSubject); err != nil || n != nil {
+		t.Errorf("ws-a's own alert remained open after ws-a attached: %+v (%v)", n, err)
+	}
 }

@@ -207,6 +207,10 @@ type Options struct {
 	// OnAttach, when set, is told each time a server attaches, outside
 	// the registry's lock: what clears what OnDrop raised.
 	OnAttach func(id string)
+	// OnClear, when set, is told when an entry is removed or disabled,
+	// outside the registry's lock, so an alert OnDrop raised does not
+	// outlive the entry.
+	OnClear func(id string)
 }
 
 type entry struct {
@@ -462,6 +466,7 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 	// a configuration that no longer says it should.
 	r.mu.Lock()
 	var closing []*protocol.Server
+	var cleared []string
 	wasAttached := map[string]bool{}
 	for id, e := range r.entries {
 		cfg, ok := servers[id]
@@ -477,6 +482,7 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 		delete(r.entries, id)
 		if !ok {
 			r.opts.Logf("capability server %s: removed from mcpServers, detached", id)
+			cleared = append(cleared, id)
 		} else if reflect.DeepEqual(cfg, e.cfg) {
 			r.opts.Logf("capability server %s: this deployment's identity changed, attaching it again", id)
 		}
@@ -512,6 +518,12 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 	for _, s := range closing {
 		_ = s.Close()
 	}
+	if r.opts.OnClear != nil {
+		sort.Strings(cleared)
+		for _, id := range cleared {
+			r.opts.OnClear(id)
+		}
+	}
 	sort.Strings(ids)
 
 	for _, id := range ids {
@@ -525,7 +537,10 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 		switch {
 		case cfg.Disabled:
 			if state != Disabled {
-				r.set(id, func(e *entry) { e.state, e.err = Disabled, "" })
+				r.set(id, func(e *entry) { e.state, e.err, e.configRefused = Disabled, "", false })
+				if r.opts.OnClear != nil {
+					r.opts.OnClear(id)
+				}
 			}
 		case state == Attached && server.Ended():
 			// Its process is gone -- a run: host server that hostd's
@@ -665,7 +680,13 @@ func (r *Registry) refresh(ctx context.Context, id string, server *protocol.Serv
 		})
 		return
 	}
-	msg := err.Error()
+	var cfg protocol.ServerConfig
+	r.mu.RLock()
+	if e := r.entries[id]; e != nil {
+		cfg = e.cfg
+	}
+	r.mu.RUnlock()
+	msg := Scrub(err.Error(), r.secretValues(id, cfg, server))
 	r.opts.Logf("capability server %s: refresh failed, detaching: %s", id, msg)
 	var st Status
 	r.set(id, func(e *entry) {
@@ -676,6 +697,33 @@ func (r *Registry) refresh(ctx context.Context, id string, server *protocol.Serv
 	if r.opts.OnDrop != nil {
 		r.opts.OnDrop(st)
 	}
+}
+
+// secretValues resolves the secret values id's entry may hold -- its
+// configured $secret: references, any managed fields, and server's
+// data-plane token -- so a refresh error that echoes one is scrubbed the
+// way an attach error is.
+func (r *Registry) secretValues(id string, cfg protocol.ServerConfig, server *protocol.Server) []string {
+	var resolved []string
+	if server != nil {
+		if tok := server.DataPlaneToken(); tok != "" {
+			resolved = append(resolved, tok)
+		}
+	}
+	if r.opts.Secrets == nil {
+		return resolved
+	}
+	for _, name := range cfg.SecretRefs() {
+		if v, ok := r.opts.Secrets(name); ok && v != "" {
+			resolved = append(resolved, v)
+		}
+	}
+	for _, f := range protocol.ManagedFields {
+		if v, ok := r.opts.Secrets(protocol.ManagedSecretName(id, f)); ok && v != "" {
+			resolved = append(resolved, v)
+		}
+	}
+	return resolved
 }
 
 // set applies f to id's entry under the lock, reporting false when the
@@ -830,11 +878,18 @@ type ProbeResult struct {
 // into the form and not saved yet.
 func (r *Registry) Probe(ctx context.Context, id string, cfg protocol.ServerConfig, extra protocol.SecretLookup) ProbeResult {
 	var resolved []string
+	var ephemeral *probeManaged
+	if r.opts.Managed != nil {
+		ephemeral = &probeManaged{existing: r.opts.Secrets, values: map[string]string{}}
+	}
 	lookup := func(name string) (string, bool) {
 		var v string
 		ok := false
 		if extra != nil {
 			v, ok = extra(name)
+		}
+		if !ok && ephemeral != nil {
+			v, ok = ephemeral.lookup(name)
 		}
 		if !ok && r.opts.Secrets != nil {
 			v, ok = r.opts.Secrets(name)
@@ -845,9 +900,15 @@ func (r *Registry) Probe(ctx context.Context, id string, cfg protocol.ServerConf
 		return v, ok
 	}
 	// The probe's stderr is kept, so a server that exits before it
-	// answers says why rather than just "closed its output".
+	// answers says why rather than just "closed its output". Managed
+	// values generated here live only for this probe, so an unsaved Test
+	// or a refused save leaves nothing in the secrets store.
 	stderr := &tailBuffer{max: probeStderrMax}
-	opts := protocol.DialOptions{ConfigRoot: r.opts.ConfigRoot, Hostd: r.opts.Hostd, Identity: r.opts.Identity(), Stderr: stderr, Managed: r.opts.Managed}
+	var managed protocol.ManagedSecrets
+	if ephemeral != nil {
+		managed = ephemeral
+	}
+	opts := protocol.DialOptions{ConfigRoot: r.opts.ConfigRoot, Hostd: r.opts.Hostd, Identity: r.opts.Identity(), Stderr: stderr, Managed: managed}
 	if r.opts.Stderr != nil {
 		if w := r.opts.Stderr(id); w != nil {
 			opts.Stderr = io.MultiWriter(stderr, w)
@@ -938,4 +999,50 @@ func (t *tailBuffer) String() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return string(t.b)
+}
+
+// probeManaged generates managed configure values only in memory for one
+// Probe call, reusing a value existing already resolves and never writing
+// to the persistent secrets store.
+type probeManaged struct {
+	existing protocol.SecretLookup
+	mu       sync.Mutex
+	values   map[string]string
+}
+
+func (m *probeManaged) Ensure(name string, generate func() (string, error)) error {
+	if m.existing != nil {
+		if _, ok := m.existing(name); ok {
+			return nil
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.values[name]; ok {
+		return nil
+	}
+	v, err := generate()
+	if err != nil {
+		return err
+	}
+	m.values[name] = v
+	return nil
+}
+
+func (m *probeManaged) Rotate(name string, generate func() (string, error)) error {
+	v, err := generate()
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.values[name] = v
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *probeManaged) lookup(name string) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.values[name]
+	return v, ok
 }

@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
@@ -266,4 +267,90 @@ func TestRefusedConfigOnFirstAttachIsReported(t *testing.T) {
 	if len(drops) != 1 || drops[0].ID != gcp {
 		t.Fatalf("drops = %+v, want only %s", drops, gcp)
 	}
+}
+
+// A refresh failure that echoes a configured secret or managed token is
+// scrubbed before reaching Statuses, logs or OnDrop, and disabling or
+// removing the entry reports OnClear.
+func TestRefreshDropScrubsSecretsAndDisableOrRemoveClears(t *testing.T) {
+	h := &configHarness{}
+	var drops []Status
+	var cleared []string
+	var logs strings.Builder
+	now := DefaultRefreshInterval
+	r := New(Options{
+		Attach:  h.attach,
+		Secrets: func(name string) (string, bool) { return secretValue, name == "tok" },
+		Now:     func() time.Time { return time.Unix(0, 0).Add(now) },
+		Logf:    func(f string, a ...any) { fmt.Fprintf(&logs, f+"\n", a...) },
+		OnDrop:  func(st Status) { drops = append(drops, st) },
+		OnClear: func(id string) { cleared = append(cleared, id) },
+	})
+	ctx := context.Background()
+	cfg := protocol.ServerConfig{Command: "grain", Config: map[string]any{"project": "p1", "token": "$secret:tok"}}
+	r.Sync(ctx, map[string]protocol.ServerConfig{gcp: cfg})
+	h.mu.Lock()
+	h.callers[0].fakeCaller.mu.Lock()
+	h.callers[0].listErr = errors.New("upstream rejected bearer " + secretValue)
+	h.callers[0].fakeCaller.mu.Unlock()
+	h.mu.Unlock()
+	now += DefaultRefreshInterval
+	r.Sync(ctx, map[string]protocol.ServerConfig{gcp: cfg})
+	if len(drops) != 1 {
+		t.Fatalf("drops = %+v, want 1", drops)
+	}
+	for what, s := range map[string]string{"drop": drops[0].Error, "status": r.Statuses()[0].Error, "log": logs.String()} {
+		if strings.Contains(s, secretValue) || !strings.Contains(s, "[redacted]") {
+			t.Errorf("%s = %q, want secret scrubbed", what, s)
+		}
+	}
+
+	disabled := cfg
+	disabled.Disabled = true
+	r.Sync(ctx, map[string]protocol.ServerConfig{gcp: disabled})
+	if len(cleared) != 1 || cleared[0] != gcp {
+		t.Errorf("cleared on disable = %v, want [%s]", cleared, gcp)
+	}
+	r.Sync(ctx, map[string]protocol.ServerConfig{})
+	if len(cleared) != 2 || cleared[1] != gcp {
+		t.Errorf("cleared on remove = %v, want [%s %s]", cleared, gcp, gcp)
+	}
+}
+
+// Probe generates managed values only in memory for that probe, leaving
+// the persistent ManagedSecrets store untouched when an unsaved or refused
+// configuration is probed.
+func TestProbeDoesNotPersistGeneratedManagedSecrets(t *testing.T) {
+	persisted := 0
+	managed := &countingManaged{onEnsure: func() { persisted++ }}
+	attach := func(ctx context.Context, id string, cfg protocol.ServerConfig, secrets protocol.SecretLookup, opts protocol.DialOptions) (*protocol.Server, error) {
+		c := &refusingTokenCaller{}
+		return protocol.AttachCallerManaged(ctx, id, cfg, secrets, c, opts.Identity, opts.Managed)
+	}
+	r := New(Options{Attach: attach, Managed: managed})
+	res := r.Probe(context.Background(), gcp, protocol.ServerConfig{Command: "grain", Config: map[string]any{}}, nil)
+	if !res.ConfigRefused {
+		t.Fatalf("Probe = %+v, want ConfigRefused", res)
+	}
+	if persisted != 0 {
+		t.Errorf("Probe persisted %d managed secret(s) to the store, want 0", persisted)
+	}
+}
+
+type refusingTokenCaller struct{ tokenCaller }
+
+func (c *refusingTokenCaller) CallTool(context.Context, string, map[string]any) ([]byte, error) {
+	return nil, errors.New("role ceiling exceeded")
+}
+
+type countingManaged struct{ onEnsure func() }
+
+func (m *countingManaged) Ensure(string, func() (string, error)) error {
+	m.onEnsure()
+	return nil
+}
+
+func (m *countingManaged) Rotate(string, func() (string, error)) error {
+	m.onEnsure()
+	return nil
 }
