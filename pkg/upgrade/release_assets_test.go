@@ -631,7 +631,10 @@ func TestDefaultImageSourceLoadsWhenManifestPresentAndFallsBackWhenAbsent(t *tes
 			forge.releases["channel-main"] = &fakeReleaseSpec{
 				tag:             "channel-main",
 				targetCommitish: testCommit1,
-				assets:          map[string][]byte{"grain-image.tar.gz": []byte("half-replaced")},
+				// Mid-move: the publisher has uploaded images.json.next and
+				// deleted images.json but not yet renamed .next into place.
+				// .next is never read as the manifest.
+				assets: map[string][]byte{"images.json.next": []byte(`{"schema":2}`)},
 			}
 			dir := t.TempDir()
 			pulledFile := filepath.Join(dir, "pulled")
