@@ -608,6 +608,53 @@ func TestDefaultImageSourceLoadsWhenManifestPresentAndFallsBackWhenAbsent(t *tes
 		}
 	})
 
+	// The publisher deletes a moving release's images.json first and
+	// uploads it last, so a channel release without one is being replaced:
+	// the upgrade waits for the next check rather than pulling, with or
+	// without an explicit registry fallback.
+	for _, explicitFallback := range []bool{false, true} {
+		t.Run(fmt.Sprintf("moving release mid-update does not fall back (explicit fallback %v)", explicitFallback), func(t *testing.T) {
+			forge := newFakeForgeServer(t, "ai-on-gke", "grain")
+			forge.releases["channel-main"] = &fakeReleaseSpec{
+				tag:             "channel-main",
+				targetCommitish: testCommit1,
+				assets:          map[string][]byte{"grain-image.tar.gz": []byte("half-replaced")},
+			}
+			dir := t.TempDir()
+			pulledFile := filepath.Join(dir, "pulled")
+			img := &ImageConfig{
+				Repository: "ghcr.io/bwsalmon/grain/grain",
+				RefFile:    filepath.Join(dir, "image.env"),
+				PullCmd:    []string{"sh", "-c", `printf '%s\n' "$1" >> ` + pulledFile, "sh"},
+				DigestCmd:  []string{"echo", "ghcr.io/bwsalmon/grain/grain@" + testDigest},
+				RunCmd:     []string{"echo", "7"},
+				RemoveCmd:  []string{"true"},
+				ListCmd:    []string{"true"},
+				ReleaseAssets: ReleaseAssetsConfig{
+					ClientForHost: forge.clientFunc("", "", ""),
+				},
+			}
+			if explicitFallback {
+				img.Fallback, img.FallbackExplicit = ImageSourceRegistry, true
+			}
+			u := newUpgrader(t, Config{
+				Image:           img,
+				HealthCheckArgs: []string{"schema-version"},
+				StatusFile:      filepath.Join(dir, "status.json"),
+			})
+			status := runUpgradeToCompletion(t, u, "main")
+			if status.Phase != PhaseFailed {
+				t.Fatalf("status = %+v, want a failure that waits for the release", status)
+			}
+			if !strings.Contains(status.Detail, "try again later") {
+				t.Errorf("status.Detail = %q, want it to say try again later", status.Detail)
+			}
+			if _, err := os.Stat(pulledFile); !os.IsNotExist(err) {
+				t.Errorf("registry PullCmd ran for a moving release caught mid-update")
+			}
+		})
+	}
+
 	t.Run("explicit release-assets disables missing-manifest fallback", func(t *testing.T) {
 		forge := newFakeForgeServer(t, "ai-on-gke", "grain")
 		dir := t.TempDir()
@@ -1050,6 +1097,51 @@ func TestReleaseAssetsSandboxImageLoadVerifyAndUnreachableRegistryError(t *testi
 		// Atomic pre-cutover guarantee: edition-local/grain:main still points at testDaemonID2.
 		if got := dk.getTag("edition-local/grain:main"); got != testDaemonID2 {
 			t.Errorf("edition-local/grain:main moved to %q despite sandbox failure; want %q", got, testDaemonID2)
+		}
+	})
+
+	// A manifest-style local ref the release does not carry is never handed
+	// to docker pull: with no registry host, docker would fetch whatever
+	// Docker Hub serves under that name.
+	t.Run("local sandbox ref missing from the release is refused, not pulled", func(t *testing.T) {
+		forge := newFakeForgeServer(t, "team", "edition")
+		const daemonRef = "edition-local/grain:sha-111111111111"
+		const localSandbox = "edition-local/guest:sha-111111111111"
+		addV1Release(forge, "channel-main", "depot.code.forge.test/team/edition", testCommit1, "sha-111111111111", daemonRef, testDaemonID1, false)
+
+		dk := newFakeDockerEnv(t)
+		dk.sandboxOut = localSandbox
+		dir := t.TempDir()
+		pulledFile := filepath.Join(dir, "pulled")
+		u := newUpgrader(t, Config{
+			Image: &ImageConfig{
+				Repository:       "edition-local/grain",
+				Source:           ImageSourceReleaseAssets,
+				RefFile:          filepath.Join(dir, "image.env"),
+				SandboxImageArgs: []string{"sandbox-image"},
+				PullCmd:          []string{"sh", "-c", `printf '%s\n' "$1" >> ` + pulledFile, "sh"},
+				LoadCmd:          dk.loadCmd(map[string][2]string{testCommit1: {daemonRef, testDaemonID1}}),
+				InspectIDCmd:     dk.inspectIDCmd(),
+				TagCmd:           dk.tagCmd(),
+				RunCmd:           dk.runCmd(),
+				ReleaseAssets: ReleaseAssetsConfig{
+					Repository:    "depot.code.forge.test/team/edition",
+					ClientForHost: forge.clientFunc("", "", ""),
+				},
+			},
+			HealthCheckArgs: []string{"schema-version"},
+			StatusFile:      filepath.Join(dir, "status.json"),
+		})
+
+		status := runUpgradeToCompletion(t, u, "main")
+		if status.Phase != PhaseFailed {
+			t.Fatalf("status = %+v, want a failure naming %s", status, localSandbox)
+		}
+		if !strings.Contains(status.Detail, localSandbox) || !strings.Contains(status.Detail, "no registry host") {
+			t.Errorf("status.Detail = %q, want it to name %s and say it has no registry host", status.Detail, localSandbox)
+		}
+		if _, err := os.Stat(pulledFile); !os.IsNotExist(err) {
+			t.Errorf("PullCmd ran for %s: %q", localSandbox, readFile(t, pulledFile))
 		}
 	})
 }

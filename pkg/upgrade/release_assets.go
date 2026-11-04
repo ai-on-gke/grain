@@ -89,6 +89,13 @@ var (
 	// fall back to another source.
 	errReleaseIntegrity = errors.New("release asset integrity check failed")
 
+	// errReleaseMidUpdate marks a moving release (channel-<branch>, latest)
+	// that exists but has no images.json: the publisher deletes the
+	// manifest first and uploads it last when it re-points one, so this is
+	// a release being replaced, not one without image assets. It never
+	// falls back to a registry; the next check tries again.
+	errReleaseMidUpdate = errors.New("moving release is mid-update")
+
 	// ErrImageSourceLocked is returned when SetImageSource is called on an
 	// Upgrader whose image source was locked by a daemon flag or environment variable.
 	ErrImageSourceLocked = errors.New("upgrade image source is set by a daemon flag or environment variable and cannot be modified")
@@ -641,8 +648,9 @@ func (u *Upgrader) shouldFallbackToRegistry(err error) (bool, string) {
 	if !u.IsImageSourceExplicit() && !u.cfg.Image.FallbackExplicit && strings.TrimSpace(string(u.cfg.Image.Fallback)) == "" {
 		return false, ""
 	}
-	// Never mask an integrity mismatch even when explicit fallback is enabled.
-	if errors.Is(err, errReleaseIntegrity) {
+	// Never mask an integrity mismatch, or a moving release caught between
+	// its publisher's uploads, even when explicit fallback is enabled.
+	if errors.Is(err, errReleaseIntegrity) || errors.Is(err, errReleaseMidUpdate) {
 		return false, ""
 	}
 	return true, fmt.Sprintf("release-assets unavailable (%v); pulled from %s", err, repo)
@@ -998,11 +1006,25 @@ func (u *Upgrader) resolveRelease(ctx context.Context, branch string) (*resolved
 		}
 		res.manifest = manifest
 	} else if strings.TrimSpace(cfg.Asset) == "" {
+		if isMovingReleaseTag(res.tag) {
+			return nil, fmt.Errorf("%w: release %s on %s/%s/%s has no %s yet (its publisher uploads it last); try again later",
+				errReleaseMidUpdate, res.tag, host, owner, repo, cfg.ManifestAsset)
+		}
 		return nil, fmt.Errorf("%w: release %s on %s/%s/%s has no %s manifest asset (and no -upgrade-release-asset configured)",
 			errNoReleaseImageAssets, res.tag, host, owner, repo, cfg.ManifestAsset)
 	}
 
 	return res, nil
+}
+
+// isMovingReleaseTag reports whether tag names a release that is re-pointed
+// in place (channel-<branch>, latest, or a pre-channel bare branch tag)
+// rather than one published once (sha-<short>, vX.Y.Z, release candidates).
+func isMovingReleaseTag(tag string) bool {
+	if tag == "latest" || strings.HasPrefix(tag, "channel-") {
+		return true
+	}
+	return !strings.HasPrefix(tag, "sha-") && !versionTag.MatchString(tag) && !candidateTag.MatchString(tag)
 }
 
 func usesCommandForge(c *http.Client) bool {
