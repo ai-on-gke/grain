@@ -48,12 +48,12 @@ test.describe("IAP signed-in header badge and logout", () => {
 
     let clearedIAPCookie = false;
     await page.route("**/_gcp_iap/clear_login_cookie", async (route) => {
-      clearedIAPCookie = true;
       await route.fulfill({
         status: 200,
         contentType: "text/plain",
         body: "logged out of IAP",
       });
+      clearedIAPCookie = true;
     });
 
     await page.goto("/");
@@ -94,7 +94,7 @@ test.describe("IAP signed-in header badge and logout", () => {
     // Clicking "Log out" posts /api/auth/logout and navigates to /_gcp_iap/clear_login_cookie.
     await logoutBtn.click();
     await expect.poll(() => clearedIAPCookie).toBe(true);
-    expect(page.url()).toContain("/_gcp_iap/clear_login_cookie");
+    await expect(page).toHaveURL(/\/_gcp_iap\/clear_login_cookie/);
   });
 
   test("truncates long service-account emails without wrapping the header rail", async ({

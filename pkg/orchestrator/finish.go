@@ -1606,6 +1606,14 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 	if err != nil {
 		return err
 	}
+	// Whether this task's template lets its runs push its own
+	// qualification scratch branch, which is what lets the fixtures it
+	// files there be queued and merge there (model.ScratchFixture). Read
+	// once for the batch: it is the task's declaration, not the call's.
+	pushesScratch, err := store.PushesOwnScratchBranch(ctx, task)
+	if err != nil {
+		return err
+	}
 
 	// Local `id` of a propose_task call -> the task id it was filed
 	// under, filled in as each proposal lands so only earlier calls are
@@ -2144,12 +2152,19 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// (AutoSubmits knows nothing of keep_running or priority).
 		heldByRun, _ := p["hold_for_approval"].(bool)
 		hold := heldByRun || needsPersonWhy != ""
+		// A fixture on this task's own qualification scratch branch is
+		// within a permission of its own (model.ScratchFixture): this
+		// task may push that branch itself, so the fixture is queued, and
+		// merges there, on that -- bounded like any other self-approved
+		// proposal.
+		scratch := model.ScratchFixture(proposal, task, pushesScratch)
+		selfApproves := scratch || model.AutoSubmits(proposal, task)
 		switch {
 		case len(escalated) > 0:
 			proposal.Body += model.ProposalEscalationNote(task.ID, proposal, escalated)
 		case len(ungranted) > 0, len(ungrantedReads) > 0:
 			// Filed for a person; the notes above say why.
-		case heldByRun && needsPersonWhy == "" && (approved || model.AutoSubmits(proposal, task)):
+		case heldByRun && needsPersonWhy == "" && (approved || selfApproves):
 			proposal.Body += model.HeldForApprovalNote(task.ID)
 			proposal.Tags = append(proposal.Tags, model.HeldForApprovalTag)
 		case hold:
@@ -2157,7 +2172,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		case approved:
 			proposal.Approval = &model.Attribution{Actor: consoleSessionPrincipal}
 			proposal.ApprovedAt = &now
-		case model.AutoSubmits(proposal, task):
+		case selfApproves:
 			limit, err := store.ExceededAutoSubmitLimit(ctx, task.ID, limits)
 			if err != nil {
 				return fmt.Errorf("orchestrator: bounding the self-approval of proposed task %q: %w", title, err)
@@ -2176,6 +2191,14 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		asked := proposedAutoMerge(p, task) &&
 			model.GrantsSubsetOf(proposal.Grants, task.Grants)
 		proposal.AutoMerge = asked && model.LandsWhereGranted(proposal, task)
+		if scratch {
+			// Merging into the scratch branch is what the fixture is for,
+			// whatever this task's own auto-merge says about its default
+			// branch -- unless the run said auto_merge: false, a fixture
+			// meant to sit unmerged (a gate under test).
+			said, ok := p["auto_merge"].(bool)
+			proposal.AutoMerge = !ok || said
+		}
 		if proposal.ChangeTarget != nil {
 			// A change target's change is a CL, not a pull request, so
 			// there is nothing for auto-merge to merge and
