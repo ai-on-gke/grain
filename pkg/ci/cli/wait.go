@@ -202,6 +202,18 @@ func WaitVerdict(run ci.Run, jobs []string, waited time.Duration) WaitResult {
 				res.Status, res.Conclusion = "failed", string(ci.ConclusionFailure)
 			}
 		}
+		// A job asked about that the run never had is no verdict at
+		// all: a mistyped -jobs must not read as green.
+		var missing []string
+		for _, name := range jobs {
+			if !slices.ContainsFunc(run.Jobs, func(job ci.JobRun) bool { return JobNamed(job, name) }) {
+				missing = append(missing, name)
+			}
+		}
+		if len(missing) > 0 {
+			res.Status, res.Conclusion = "failed", string(ci.ConclusionFailure)
+			res.Error = "run " + run.ID + " has no job named " + strings.Join(missing, ", ")
+		}
 	case run.Conclusion == ci.ConclusionSuccess:
 		res.Status = "passed"
 	default:
