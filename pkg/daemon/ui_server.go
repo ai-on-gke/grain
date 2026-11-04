@@ -416,6 +416,8 @@ func startUIServer(cfg Config, store *model.Store, db *sql.DB, transcriptDir str
 		// reconcilerDown (daemon.go), the same way AutoMergeDegraded above
 		// mirrors orchestrator.ChecksUnavailable -- bwsalmon/agents#576.
 		ReconcilerDown: func() bool { return ReconcilerDown.Load() },
+		// And the store switched underneath it (storeswitch.go).
+		StoreSwitch: CurrentStoreSwitch,
 		// Restarting: this process has been told to stop, or the
 		// upgrader is running an upgrade that ends in a restart.
 		Restarting: daemonRestarting(cfg, upgrader),

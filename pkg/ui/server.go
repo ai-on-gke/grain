@@ -65,7 +65,6 @@ type Server struct {
 	// mentions them.
 	taskList    taskListCache
 	taskDetails taskDetailCache
-	dbConfirm   databaseConfirmations
 	// hostdImage is the image /api/hostd/install.sh suggests
 	// (hostdInstallImage), hostd_install.go's.
 	hostdImage hostdImageCache
@@ -581,10 +580,6 @@ func (s *Server) routes() {
 	s.route("GET /api/upgrade/targets", s.handleGetUpgradeTargets)
 	s.route("GET /api/upgrade/release-notes", s.handleUpgradeReleaseNotes)
 	s.route("GET /api/database", s.handleGetDatabase)
-	s.route("POST /api/database/test", s.handleTestDatabaseConnection)
-	s.route("POST /api/database/upgrade", s.handleUpgradeDatabase)
-	s.route("POST /api/upgrade/postgres", s.handleUpgradeDatabase)
-	s.route("POST /api/settings/db/migrate-to-postgres", s.handleUpgradeDatabase)
 
 	s.route("GET /api/logs", s.handleListLogSources)
 	s.route("GET /api/logs/{source}", s.handleGetLogLines)
