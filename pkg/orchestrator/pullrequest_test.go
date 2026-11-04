@@ -908,3 +908,253 @@ func TestRunCycleSalvagesARepairBranchWhenTheFailedRunPushedANewCommit(t *testin
 		t.Fatalf("state = %q, want completed so the merge queue re-evaluates the repaired branch", st)
 	}
 }
+
+func TestForkToUpstreamPullRequestWorkflow(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+
+	forkRepo := model.RepoRef{Owner: "sackheads", Name: "kube-agents"}
+	upstreamRepo := model.RepoRef{Owner: "gke-labs", Name: "kube-agents"}
+
+	upstreamSim, client := newSim(t, upstreamRepo.Owner, upstreamRepo.Name, "main")
+	forkSim, _ := newSim(t, forkRepo.Owner, forkRepo.Name, "main")
+	upstreamSim.Forks = map[string]*githubsim.Sim{
+		"sackheads/kube-agents": forkSim,
+	}
+
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:         forkRepo,
+		UpstreamRepo: upstreamRepo.String(),
+	}); err != nil {
+		t.Fatalf("PutRepoConfig: %v", err)
+	}
+
+	task := filedTask(t, ctx, store, "fork1", forkRepo)
+	if err := store.StartRun(ctx, model.Run{
+		ID: "fork1-1", TaskID: task.ID, Sandbox: "grain-fork1-1", Attempt: 1, StartedAt: baseTime,
+	}, model.Limits{}); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	// Verify GitScope grants read access to upstream while keeping target on the fork.
+	target, reads, _, err := store.GitScope(ctx, "grain-fork1-1")
+	if err != nil || target == nil || !target.Same(forkRepo) {
+		t.Fatalf("GitScope: target=%v, err=%v", target, err)
+	}
+	hasUpstreamRead := false
+	for _, r := range reads {
+		if r.Same(upstreamRepo) {
+			hasUpstreamRead = true
+			break
+		}
+	}
+	if !hasUpstreamRead {
+		t.Fatalf("GitScope.Reads = %v, want %s included", reads, upstreamRepo)
+	}
+
+	// Verify BuildPrompt explains the fork-to-upstream workflow.
+	prompt := orchestrator.BuildPrompt(task, "work", "/home/agent", false, 0, orchestrator.History{
+		UpstreamRepo: upstreamRepo,
+	}, nil)
+	for _, want := range []string{
+		"sackheads/kube-agents is a fork push repository for upstream gke-labs/kube-agents",
+		"sackheads:" + task.BranchName(),
+		"do not try to run `gh pr create` across repositories yourself",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("BuildPrompt missing %q:\n%s", want, prompt)
+		}
+	}
+
+	// Push the task branch to the fork repository.
+	branch := task.BranchName()
+	pushBranch(t, forkSim.BareRepo, branch)
+
+	// 1. OpenPullRequestForTask opens the cross-repository PR on upstream with head "sackheads:<branch>".
+	status, err := orchestrator.OpenPullRequestForTask(ctx, store, client, task)
+	if err != nil {
+		t.Fatalf("OpenPullRequestForTask: %v", err)
+	}
+	prNum := status.PullRequest.Number
+	if prNum <= 0 {
+		t.Fatalf("status.PullRequest = %+v, want positive number", status.PullRequest)
+	}
+	if !strings.Contains(status.PullRequest.HTMLURL, fmt.Sprintf("gke-labs/kube-agents/pull/%d", prNum)) {
+		t.Fatalf("PR URL = %q, want gke-labs/kube-agents/pull/%d", status.PullRequest.HTMLURL, prNum)
+	}
+	if len(upstreamSim.PullRequests) != 1 {
+		t.Fatalf("expected 1 PR on upstreamSim, got %+v", upstreamSim.PullRequests)
+	}
+	upstreamPR := upstreamSim.PullRequests[0]
+	if upstreamPR.Head != branch || upstreamPR.HeadRepo != "sackheads/kube-agents" {
+		t.Fatalf("upstream PR head = (%q, repo=%q), want (%q, repo=sackheads/kube-agents)",
+			upstreamPR.Head, upstreamPR.HeadRepo, branch)
+	}
+
+	// Verify LinkFixes was recorded as gke-labs/kube-agents#<prNum> and TaskPullRequest recognizes it as on-target.
+	updatedTask, err := store.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	prRef := model.TaskPullRequest(*updatedTask)
+	if prRef == nil || !prRef.Repo.Same(upstreamRepo) || prRef.Number != prNum {
+		t.Fatalf("TaskPullRequest = %+v, want gke-labs/kube-agents#%d", prRef, prNum)
+	}
+	if model.PullRequestOffTarget(*updatedTask, *prRef) {
+		t.Fatalf("PullRequestOffTarget = true, want false for configured upstream PR")
+	}
+
+	// 2. Calling OpenPullRequestForTask a second time finds the existing cross-fork PR on upstream via
+	// FindOpenPullRequestForBranch("gke-labs", "kube-agents", "sackheads:<branch>") rather than opening a second PR.
+	status2, err := orchestrator.OpenPullRequestForTask(ctx, store, client, *updatedTask)
+	if err != nil {
+		t.Fatalf("second OpenPullRequestForTask: %v", err)
+	}
+	if status2.PullRequest.Number != prNum {
+		t.Fatalf("second OpenPullRequestForTask = %+v, want existing PR #%d", status2, prNum)
+	}
+	if len(upstreamSim.PullRequests) != 1 {
+		t.Fatalf("upstreamSim.PullRequests = %+v, want 1 PR", upstreamSim.PullRequests)
+	}
+}
+
+func TestRunCycleForkToUpstreamCheckoutFinishAndLanded(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+
+	forkRepo := model.RepoRef{Owner: "sackheads", Name: "kube-agents"}
+	upstreamRepo := model.RepoRef{Owner: "gke-labs", Name: "kube-agents"}
+
+	upstreamSim, client := newSim(t, upstreamRepo.Owner, upstreamRepo.Name, "main")
+	forkSim, _ := newSim(t, forkRepo.Owner, forkRepo.Name, "main")
+	upstreamSim.Forks = map[string]*githubsim.Sim{
+		"sackheads/kube-agents": forkSim,
+	}
+
+	// Advance upstream's main branch with a commit that the fork's main does not have yet,
+	// so we can verify prepareCheckout fetches fresh base refs from upstream before branching.
+	upstreamClone := t.TempDir()
+	for _, args := range [][]string{
+		{"clone", "-q", "-b", "main", upstreamSim.BareRepo, upstreamClone},
+		{"-C", upstreamClone, "config", "user.email", "upstream@example.com"},
+		{"-C", upstreamClone, "config", "user.name", "upstream"},
+		{"-C", upstreamClone, "commit", "-q", "--allow-empty", "-m", "upstream advance ahead of fork"},
+		{"-C", upstreamClone, "push", "-q", "origin", "main"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	upstreamMainHead, err := client.GetBranchHead(upstreamRepo.Owner, upstreamRepo.Name, "main")
+	if err != nil || upstreamMainHead == nil {
+		t.Fatalf("GetBranchHead upstream main: %v", err)
+	}
+
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:         forkRepo,
+		UpstreamRepo: upstreamRepo.String(),
+	}); err != nil {
+		t.Fatalf("PutRepoConfig fork: %v", err)
+	}
+
+	remoteBase := t.TempDir()
+	for _, pair := range []struct {
+		repo model.RepoRef
+		bare string
+	}{
+		{forkRepo, forkSim.BareRepo},
+		{upstreamRepo, upstreamSim.BareRepo},
+	} {
+		dst := filepath.Join(remoteBase, pair.repo.Owner, pair.repo.Name+".git")
+		if err := exec.Command("mkdir", "-p", filepath.Dir(dst)).Run(); err != nil {
+			t.Fatal(err)
+		}
+		if err := exec.Command("ln", "-s", pair.bare, dst).Run(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	task := filedTask(t, ctx, store, "fork2", forkRepo)
+	branch := task.BranchName()
+
+	var sawUpstreamRemote string
+	var sawUpstreamRepoInRunCfg string
+	fw := openingFramework{agentFunc(func(ctx context.Context, cfg agent.RunConfig) (*agent.Result, error) {
+		sawUpstreamRepoInRunCfg = cfg.UpstreamRepo
+		wd := filepath.Join(cfg.SandboxRoot, "work")
+		out, err := exec.Command("git", "-C", wd, "remote", "get-url", "upstream").CombinedOutput()
+		if err == nil {
+			sawUpstreamRemote = strings.TrimSpace(string(out))
+		}
+		for _, args := range [][]string{
+			{"-C", wd, "config", "user.email", "agent@example.com"},
+			{"-C", wd, "config", "user.name", "agent"},
+			{"-C", wd, "commit", "-q", "--allow-empty", "-m", "Fix controller bug\n\nDetailed explanation."},
+			{"-C", wd, "push", "-q", "origin", branch},
+		} {
+			if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+				return nil, fmt.Errorf("git %v: %v: %s", args, err, out)
+			}
+		}
+		return &agent.Result{ToolCalls: []agent.ToolCall{
+			{Name: "run_command", Text: "git push origin " + branch},
+		}}, nil
+	})}
+
+	deps := orchestrator.Deps{
+		Store:      store,
+		Client:     client,
+		Sandboxes:  orchestrator.NewHostSandboxes(t.TempDir()),
+		Config:     orchestrator.Config{GitRemoteBase: remoteBase},
+		Framework:  orchestrator.StaticFramework(fw),
+		MaxWorkers: 1,
+	}
+	if err := orchestrator.RunCycle(ctx, deps, baseTime); err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+
+	if sawUpstreamRepoInRunCfg != "gke-labs/kube-agents" {
+		t.Fatalf("RunConfig.UpstreamRepo = %q, want gke-labs/kube-agents", sawUpstreamRepoInRunCfg)
+	}
+	wantUpstreamURL := filepath.Join(remoteBase, "gke-labs/kube-agents.git")
+	if sawUpstreamRemote != wantUpstreamURL {
+		t.Fatalf("sandbox git remote upstream = %q, want %q", sawUpstreamRemote, wantUpstreamURL)
+	}
+
+	// Verify the branch pushed to the fork descends from upstream's fresh main commit.
+	if out, err := exec.Command("git", "-C", forkSim.BareRepo, "merge-base", "--is-ancestor", upstreamMainHead.SHA, branch).CombinedOutput(); err != nil {
+		t.Fatalf("fork branch %s does not descend from upstream main %s: %v (%s)", branch, upstreamMainHead.SHA, err, out)
+	}
+
+	// Verify ensurePullRequest opened the PR on upstream gke-labs/kube-agents with head sackheads:<branch>.
+	if len(upstreamSim.PullRequests) != 1 {
+		t.Fatalf("upstreamSim.PullRequests = %+v, want 1 PR", upstreamSim.PullRequests)
+	}
+	prNum := upstreamSim.PullRequests[0].Number
+	if got := linksTo(t, ctx, store, task.ID, fmt.Sprintf("gke-labs/kube-agents#%d", prNum)); got != 1 {
+		t.Fatalf("LinkFixes to gke-labs/kube-agents#%d = %d, want 1", prNum, got)
+	}
+
+	// Merge the PR on upstream and run another cycle: reconcileLandedBranches should close the task
+	// and delete the branch from the fork repository.
+	if err := client.MergePullRequest(upstreamRepo.Owner, upstreamRepo.Name, prNum, ""); err != nil {
+		t.Fatalf("MergePullRequest on upstream: %v", err)
+	}
+	if err := orchestrator.RunCycle(ctx, deps, baseTime.Add(time.Minute)); err != nil {
+		t.Fatalf("second RunCycle: %v", err)
+	}
+	st, err := store.State(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("State: %v", err)
+	}
+	if st != model.StateClosed {
+		t.Fatalf("task state after upstream PR merge = %q, want %q", st, model.StateClosed)
+	}
+	obs, err := store.GetObservation(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetObservation: %v", err)
+	}
+	if obs == nil || obs.PrMergedAt == nil {
+		t.Fatalf("PrMergedAt = %v, want non-nil after upstream PR merge", obs)
+	}
+}

@@ -360,3 +360,50 @@ func TestRemoveTargetRepoCleansUpRepoAndDropsFromList(t *testing.T) {
 		t.Errorf("repo defaults after removal = %+v, want empty", defs)
 	}
 }
+
+func TestSetRepoSettingsUpstreamRepo(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
+		t.Fatal(err)
+	}
+
+	upstream := "gke-labs/kube-agents"
+	defs, err := c.SetRepoSettings(ctx, "sackheads/kube-agents", ui.SetRepoSettingsRequest{
+		UpstreamRepo: &upstream,
+	})
+	if err != nil {
+		t.Fatalf("SetRepoSettings upstreamRepo: %v", err)
+	}
+	if defs.UpstreamRepo != "gke-labs/kube-agents" {
+		t.Fatalf("defs.UpstreamRepo = %q, want gke-labs/kube-agents", defs.UpstreamRepo)
+	}
+
+	readBack, err := c.RepoDefaults(ctx, "sackheads/kube-agents")
+	if err != nil {
+		t.Fatalf("RepoDefaults: %v", err)
+	}
+	if readBack.UpstreamRepo != "gke-labs/kube-agents" {
+		t.Fatalf("readBack.UpstreamRepo = %q, want gke-labs/kube-agents", readBack.UpstreamRepo)
+	}
+
+	// Setting upstreamRepo to the repository itself normalizes to empty.
+	self := "sackheads/kube-agents"
+	defs, err = c.SetRepoSettings(ctx, "sackheads/kube-agents", ui.SetRepoSettingsRequest{
+		UpstreamRepo: &self,
+	})
+	if err != nil {
+		t.Fatalf("SetRepoSettings self upstreamRepo: %v", err)
+	}
+	if defs.UpstreamRepo != "" {
+		t.Fatalf("defs.UpstreamRepo = %q, want empty when set to self", defs.UpstreamRepo)
+	}
+
+	// Invalid owner/name is rejected as a validation error.
+	bad := "not-a-repo"
+	if _, err := c.SetRepoSettings(ctx, "sackheads/kube-agents", ui.SetRepoSettingsRequest{
+		UpstreamRepo: &bad,
+	}); err == nil {
+		t.Fatal("expected validation error for malformed upstreamRepo")
+	}
+}

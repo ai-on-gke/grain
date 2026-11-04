@@ -666,17 +666,17 @@ _No flags._
 
 **Pinned by:** *untested*.
 
-### 4.10 `grain release approve|reject vX.Y.Z` {#CLI-39}
+### 4.10 `grain release approve|reject|rollback vX.Y.Z` {#CLI-39}
 
-Calls `POST /api/repos/{owner}/{name}/pending-releases/{version}/approve` or `…/reject` (`DecideRelease`). `-repo` defaults to grain's own source repository (`ai-on-gke/grain`). On a repository that publishes from GitHub Actions (`ci_mode: github`) the answer is a signed dispatch of `.github/workflows/promote-release.yml`, and the command prints the dispatch instead of a grain CI run.
+`approve` and `reject` call `POST /api/repos/{owner}/{name}/pending-releases/{version}/approve` or `…/reject` (`DecideRelease`). `rollback` calls `POST /api/releases/{version}/rollback` (`RollbackRelease`), passing `-to` (`vA.B.C`) and `-reason` when given; `-bad` is an alias for the positional `vX.Y.Z`. `-repo` defaults to grain's own source repository (`ai-on-gke/grain`). On a repository that publishes from GitHub Actions (`ci_mode: github`) the answer is a signed dispatch of `.github/workflows/promote-release.yml`, and the command prints the dispatch instead of a grain CI run.
 
 `grain release approval-key` prints the deployment's release-approval public key (`GET /api/release-approval-key`): the value for the GitHub repository variable `GRAIN_RELEASE_APPROVAL_KEY`, which that workflow verifies an Inbox approval against.
 
 Errors, each printed after the usage:
-- an unknown verb: `unknown release command "<v>": approve or reject`;
-- the wrong number of arguments: `grain release <verb> takes the pending release, vX.Y.Z`;
-- `-short-soak-ok` on reject: `-short-soak-ok is for grain release approve`;
-- `-allow-breaking` on reject: `-allow-breaking is for grain release approve`.
+- an unknown verb: `unknown release command "<v>": approve, reject or rollback`;
+- the wrong number of arguments: `grain release <verb> takes the pending release, vX.Y.Z` (or `grain release rollback takes the release to retract, vX.Y.Z`, or passing both `-bad` and a positional version);
+- `-short-soak-ok` or `-allow-breaking` outside approve: `-short-soak-ok is for grain release approve` / `-allow-breaking is for grain release approve`;
+- `-bad`, `-to` or `-reason` outside rollback: `-bad is for grain release rollback` / `-to is for grain release rollback` / `-reason is for grain release rollback`.
 
 `-allow-breaking` approves a release that carries breaking changes without being the major release `RELEASE_MAJOR` asks for; it reaches the approval as `allow_breaking: true`.
 
@@ -686,27 +686,47 @@ With no arguments it prints the usage and returns `flag: help requested`. **Scop
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-allow-breaking` | bool |  |  | approve only: accept a release that carries breaking changes without being the major release RELEASE_MAJOR asks for |
-| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose pending release this is |
+| `-bad` | string |  |  | rollback only: the promoted release to retract (vX.Y.Z), when not passed positionally |
+| `-reason` | string |  |  | rollback only: why the release is retracted, recorded on its vX.Y.Z-retracted tag |
+| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose release this is |
 | `-short-soak-ok` | bool |  |  | approve only: accept a release whose staging soak was under the minimum (its notification says SHORT SOAK) |
+| `-to` | string |  |  | rollback only: the earlier release (vA.B.C) latest goes back to |
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain release approve -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-allow-breaking` | bool |  |  | approve only: accept a release that carries breaking changes without being the major release RELEASE_MAJOR asks for |
-| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose pending release this is |
+| `-bad` | string |  |  | rollback only: the promoted release to retract (vX.Y.Z), when not passed positionally |
+| `-reason` | string |  |  | rollback only: why the release is retracted, recorded on its vX.Y.Z-retracted tag |
+| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose release this is |
 | `-short-soak-ok` | bool |  |  | approve only: accept a release whose staging soak was under the minimum (its notification says SHORT SOAK) |
+| `-to` | string |  |  | rollback only: the earlier release (vA.B.C) latest goes back to |
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain release reject -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-allow-breaking` | bool |  |  | approve only: accept a release that carries breaking changes without being the major release RELEASE_MAJOR asks for |
-| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose pending release this is |
+| `-bad` | string |  |  | rollback only: the promoted release to retract (vX.Y.Z), when not passed positionally |
+| `-reason` | string |  |  | rollback only: why the release is retracted, recorded on its vX.Y.Z-retracted tag |
+| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose release this is |
 | `-short-soak-ok` | bool |  |  | approve only: accept a release whose staging soak was under the minimum (its notification says SHORT SOAK) |
+| `-to` | string |  |  | rollback only: the earlier release (vA.B.C) latest goes back to |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** *untested* in `pkg/cli`.
+<!-- BEGIN GENERATED FLAGS: grain release rollback -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-allow-breaking` | bool |  |  | approve only: accept a release that carries breaking changes without being the major release RELEASE_MAJOR asks for |
+| `-bad` | string |  |  | rollback only: the promoted release to retract (vX.Y.Z), when not passed positionally |
+| `-reason` | string |  |  | rollback only: why the release is retracted, recorded on its vX.Y.Z-retracted tag |
+| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose release this is |
+| `-short-soak-ok` | bool |  |  | approve only: accept a release whose staging soak was under the minimum (its notification says SHORT SOAK) |
+| `-to` | string |  |  | rollback only: the earlier release (vA.B.C) latest goes back to |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `TestGrainReleaseRollbackCLI` in `pkg/cli/release_test.go`.
 
 ### 4.11 `grain metrics`, `grain failures` and `grain health` {#CLI-40}
 
@@ -1205,6 +1225,7 @@ Speaks MCP over stdin/stdout against the sandbox tools. A running daemon forks i
 | `-pr-number` | int |  |  | daemon-pinned external pull request number within -pr-repo (from model.LinkExternalPR) that pull_request_status, reply_to_pull_request_comment and resolve_review_thread scope to when -pr-branch has no open pull request of its own |
 | `-pr-repair` | bool |  |  | mark this run as the merge queue's repair of -pr-branch, which changes what base_branch_status tells it about breakage it inherited: a repair has to fix a failing check whether or not its own commits caused it, where every other run is told to leave the base's own breakage alone (orchestrator.mergeRepairRun). |
 | `-pr-repo` | string |  |  | owner/name of the repository pull_request_status and wait_for_checks report on. Unset leaves both tools registered but answering that this run has no repo, which is what a task with no target really does have. |
+| `-pr-upstream-repo` | string |  |  | owner/name of the upstream repository that pull requests for -pr-repo are opened and tracked against (model.RepoConfig.UpstreamRepo) |
 | `-propose-repo` | value |  |  | owner/name of a repository this deployment works in, which a propose_task call may name in its repo argument; repeat the flag for each, most recently worked in first. They are listed in that argument's own description, so a run can see which repositories are on offer while it is deciding what to write there. Passed by the Framework that forked this process from the list the daemon read out of its store (model.Store.WorkRepos, agent.RunConfig.ProposeRepos). Unset, the description names the rule without the list, exactly as it read before this flag existed. |
 | `-recorded-tools` | string |  |  | path to append full tool call records (JSON lines) as tools run |
 | `-run-deadline` | string |  |  | RFC3339 time at which grain cancels the run this server serves -- the deadline on the context orchestrator.RunDispatch gives framework.Run, passed on by the Framework that forked this process (agent.RunDeadlineArgs). Set, every tool result carries how much of it is left once the run is inside mcp.RunDeadlineNoticeWindow of it; unset, results read exactly as they otherwise would. |

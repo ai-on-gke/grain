@@ -310,13 +310,28 @@ func labelOrigin(client github.Client, task model.Task, number int) {
 	if task.Target == nil {
 		return
 	}
-	label := task.WorkOrigin.Label(*task.Target)
+	labelOriginRepo(client, *task.Target, task, number)
+}
+
+func labelOriginOn(ctx context.Context, store *model.Store, client github.Client, task model.Task, number int) {
+	if task.Target == nil {
+		return
+	}
+	prRepo, _, _ := taskPullRequestTarget(ctx, store, task)
+	labelOriginRepo(client, prRepo, task, number)
+}
+
+func labelOriginRepo(client github.Client, prRepo model.RepoRef, task model.Task, number int) {
+	if task.Target == nil {
+		return
+	}
+	label := task.WorkOrigin.Label(prRepo)
 	if label == "" {
 		return
 	}
-	if err := client.AddLabel(task.Target.Owner, task.Target.Name, number, label); err != nil {
+	if err := client.AddLabel(prRepo.Owner, prRepo.Name, number, label); err != nil {
 		log.Printf("orchestrator: labelling %s#%d %q: %v -- the pull request goes unlabelled",
-			task.Target, number, label, err)
+			prRepo, number, label, err)
 	}
 }
 

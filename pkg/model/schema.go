@@ -498,10 +498,14 @@ import "strconv"
 // (model.PendingAccessRequest) and the answers people gave its earlier
 // ones (model.AccessDecision), both JSON.
 //
-// 106 adds `reason` to `allowed_principal` (model.AllowedPrincipal.Reason):
+// 106 adds `upstream_repo` to `repo_config` (model.RepoConfig.UpstreamRepo):
+// the upstream repository (`<owner>/<name>`) pull requests are opened
+// against when tasks target this fork repository.
+//
+// 107 adds `reason` to `allowed_principal` (model.AllowedPrincipal.Reason):
 // why an entry was added, required for the `serviceAccount:<email>` entries
 // the allowlist accepts again.
-const SchemaVersion = 106
+const SchemaVersion = 107
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
@@ -3156,6 +3160,7 @@ var Tables = []string{
   ` + "`issue_import_approved`" + `    INTEGER NOT NULL DEFAULT 0,
   ` + "`issue_import_interval_seconds`" + ` INTEGER NOT NULL DEFAULT 0,
   ` + "`default_hostd`" + `            TEXT NOT NULL DEFAULT '',
+  ` + "`upstream_repo`" + `            TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 

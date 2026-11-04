@@ -200,7 +200,12 @@ func failingJobLogs(ctx context.Context, client PullRequestReader, scope PullReq
 func readJobLogs(ctx context.Context, client PullRequestReader, scope PullRequestScope, sha string) ([]github.JobLog, time.Duration, error) {
 	var waited time.Duration
 	for attempt := 0; ; attempt++ {
-		logs, err := client.FailedJobLogs(scope.Owner, scope.Repo, sha)
+		logs, err := client.FailedJobLogs(scope.prOwner(), scope.prRepo(), sha)
+		if err == nil && len(logs) == 0 && scope.hasUpstream() {
+			if forkLogs, forkErr := client.FailedJobLogs(scope.Owner, scope.Repo, sha); forkErr == nil && len(forkLogs) > 0 {
+				logs = forkLogs
+			}
+		}
 		if err != nil {
 			return nil, waited, err
 		}
@@ -259,7 +264,12 @@ func logsMayStillArrive(logs []github.JobLog) bool {
 // every time it was printed, and a reader who cannot tell which of three
 // stories they are in cannot act on any of them.
 func noJobLogNote(client PullRequestReader, scope PullRequestScope, sha string, checks []github.CheckRun, waited time.Duration) string {
-	state, err := client.ActionsState(scope.Owner, scope.Repo, sha)
+	state, err := client.ActionsState(scope.prOwner(), scope.prRepo(), sha)
+	if err == nil && state.Runs == 0 && scope.hasUpstream() {
+		if forkState, forkErr := client.ActionsState(scope.Owner, scope.Repo, sha); forkErr == nil && forkState.Runs > 0 {
+			state = forkState
+		}
+	}
 	if err != nil {
 		return fmt.Sprintf("No failing GitHub Actions job could be read for this commit, and the "+
 			"read that would have said why failed too: the check names above are all there "+
@@ -313,7 +323,12 @@ func noJobLogNote(client PullRequestReader, scope PullRequestScope, sha string, 
 // logs were not served). Silent when there is nothing to add: this hangs
 // off an answer that already stands on its own.
 func failedStepsNote(client PullRequestReader, scope PullRequestScope, sha string) string {
-	state, err := client.ActionsState(scope.Owner, scope.Repo, sha)
+	state, err := client.ActionsState(scope.prOwner(), scope.prRepo(), sha)
+	if err == nil && len(state.Jobs) == 0 && scope.hasUpstream() {
+		if forkState, forkErr := client.ActionsState(scope.Owner, scope.Repo, sha); forkErr == nil && len(forkState.Jobs) > 0 {
+			state = forkState
+		}
+	}
 	if err != nil || len(state.Jobs) == 0 {
 		return ""
 	}

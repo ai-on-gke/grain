@@ -723,6 +723,13 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     106,
+		Description: "add repo_config.upstream_repo for fork-to-upstream pull request workflows",
+		Statements: []string{
+			"ALTER TABLE `repo_config` ADD COLUMN `upstream_repo` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     107,
 		Description: "add allowed_principal.reason, why an allowlist entry was added (required for serviceAccount: entries)",
 		Statements: []string{
 			"ALTER TABLE `allowed_principal` ADD COLUMN `reason` TEXT NOT NULL DEFAULT ''",
