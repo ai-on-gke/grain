@@ -53,8 +53,10 @@
 name: release-train
 
 on:
-  # Retired from automatic schedule triggering: ai-on-gke/grain runs the
-  # daily release train on GitHub Actions (.github/workflows/release-train.yml).
+  # Retired from automatic schedule triggering: ai-on-gke/grain's release
+  # train is the grain task filed from .grain/templates/release-train.yml
+  # (releases playbook §0.4); .github/workflows/release-train.yml is an
+  # always-dry dispatch.
   workflow_dispatch:
 
 jobs:
