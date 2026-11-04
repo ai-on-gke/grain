@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/namespace"
 )
 
 //go:embed static
@@ -77,6 +78,8 @@ type Server struct {
 	// once on first use.
 	controllerMCPOnce    sync.Once
 	controllerMCPHandler http.Handler
+	// fsNamespace is the namespace GET /api/fs/ serves (api_fs.go).
+	fsNamespace func() *namespace.Server
 }
 
 // NewServer builds a Server over a store.
@@ -225,6 +228,12 @@ func (s *Server) routes() {
 	s.route("GET /api/config", s.handleConfig)
 	s.mux.HandleFunc("PUT /api/config", s.agentAPIGate("PUT /api/settings", s.handleUpdateSettings))
 	s.route("GET /api/restart-watch", s.handleRestartWatch)
+	s.route("GET /api/fs/ci/{path...}", s.handleReadCINamespace)
+	s.route("GET /api/fs/task/{path...}", s.handleReadTaskNamespace)
+	s.route("GET /api/fs/deploy/{path...}", s.handleReadDeployNamespace)
+	s.route("GET /api/fs/config/{path...}", s.handleReadConfigNamespace)
+	s.route("GET /api/fs/memory/{path...}", s.handleReadMemoryNamespace)
+	s.route("GET /api/fs/src/{path...}", s.handleReadSrcNamespace)
 	s.route("GET /api/auth/access-code", s.handleAccessCodeStatus)
 	s.route("POST /api/auth/access-code", s.handleAccessCodeLogin)
 	s.route("GET /api/auth/access-code/login.js", s.handleAccessCodeScript)
