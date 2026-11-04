@@ -814,6 +814,9 @@ This is grain's own CI, from the operator's side.
 - `cache [clear]` calls `GET`/`DELETE /api/ci/cache`.
 - `faults [-repo r] [-source s]` calls `GET /api/ci/faults`.
 - `artifact` (`artifacts`) downloads from `/api/ci/runs/{id}/artifacts/{job}/{name}`.
+- `wait (<run-id> | -pr <url|owner/name#n> | -ref <branch> -repo <owner/name>) [-jobs j1,j2]` ([external-cli #XC-26](../external-cli/external-cli.spec.md#XC-26)) polls `GET /api/ci/runs/{id}` until the run, or every job `-jobs` names, has a verdict. `-pr` and `-ref` attach to the newest run on that branch still in flight, else the newest; `-pr` finds the branch from the grain task tracking the pull request (`GET /api/tasks`). It waits the global `-timeout` (default `30m`) as a whole and accrues no wait credit. It prints the sandbox's wait answer (`gitproxy.CLIWaitResponse`, as [`grain ci wait` in a sandbox](sandbox.spec.md#CLI-91) reads it) plus `repo`, `ref` and `failing` (each failing job's step, failing tests and any shared fault from `GET /api/ci/faults`). It exits `0` green, `1` on `failure`/`cancelled`/`timed_out`, and `5` when `-timeout` runs out while the run is still going.
+- `retrigger <run-id> [-jobs j1,j2]` (`ci:write`) reruns the run's failed jobs (or the named ones) once, uncached: `POST /api/ci/runs` with the run's repository, branch, commit and push/pull_request event, and `recheck`. GitHub Actions runs are refused. The sandbox's form is [#CLI-92](sandbox.spec.md#CLI-92).
+- `test-history <test-name> [-repo r] [-limit N]` reads up to `-limit` (at most 100) of the newest runs, each in full, and prints `ci.QueryTestHistory`'s report, the [sandbox's `grain ci test-history`](sandbox.spec.md#CLI-89) rendering (`-json`: the report).
 
 <!-- BEGIN GENERATED FLAGS: grain ci -->
 | Flag | Type | Default | Env | Description |
@@ -892,13 +895,51 @@ _No flags._
 | `-source` | string |  |  | only faults from this CI source: grain, github, or all |
 <!-- END GENERATED FLAGS -->
 
+<!-- BEGIN GENERATED FLAGS: grain ci wait -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-jobs` | string |  |  | only these jobs, by name or id, comma-separated: the verdict is theirs alone |
+| `-pr` | string |  |  | wait on the newest run of this pull request's branch: a GitHub URL or owner/name#n |
+| `-ref` | string |  |  | wait on the newest run of this branch (needs -repo) |
+| `-repo` | string |  |  | the repository -ref is a branch of, as owner/name |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain ci retrigger -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-jobs` | string |  |  | rerun these jobs, by id, comma-separated, rather than the ones that failed |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain ci test-history -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-limit` | int | `20` |  | how many of the newest runs to look through (at most 100) |
+| `-repo` | string |  |  | only this repository's runs, as owner/name (default: every repository's) |
+<!-- END GENERATED FLAGS -->
+
 <!-- BEGIN GENERATED FLAGS: grain ci artifact -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-o` | string |  |  | where to write it: a path, or - for standard output (default: the artifact's own file name, in the working directory) |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/cicmd_test.go`: `TestCICommandDispatch`, `TestCIRunRecheckFlags`, `TestCIListSendsTheWholeFilterVocabularyToTheDaemon`, `TestCIListResolvesASpanBeforeSendingIt`, `TestCIListRefusesAWordItDoesNotKnow`, `TestPrintCIRunLeadsWithTheFailure`, `TestPrintCIRunsJSON`.
+**Pinned by:** `pkg/cli/cicmd_test.go`: `TestCICommandDispatch`, `TestCIRunRecheckFlags`, `TestCIListSendsTheWholeFilterVocabularyToTheDaemon`, `TestCIListResolvesASpanBeforeSendingIt`, `TestCIListRefusesAWordItDoesNotKnow`, `TestPrintCIRunLeadsWithTheFailure`, `TestPrintCIRunsJSON`, `TestExternalCIWaitVerdictsSharedFaultsZeroWaitCreditAndExitCodes`, `TestExternalCIRetriggerRunsUncachedFailedJobs`, `TestExternalCITestHistoryFormattingAndJSON`.
+
+### 4.12a `grain merge-queue [-repo owner/name]` {#CLI-107}
+
+The merge queue from a terminal ([external-cli #XC-27](../external-cli/external-cli.spec.md#XC-27)): queued pull requests, the batches and CI runs testing them, and held merge gates. It reads `deploy://merge-queue` over `GET /api/fs/deploy/merge-queue`, the file a [sandbox's `grain merge-queue`](sandbox.spec.md#CLI-95) reads over its proxy.
+- It needs `ci:read` or `deployment:read`. Under `ci:read` alone the daemon leaves out every repository the caller may not read.
+- `-repo` is sent as `?repo=` and narrows that further; it cannot widen it.
+- `-json` is sent as `?format=json` and prints the report the text is rendered from (`mcp.MergeQueueReport`).
+- It only reads. `grain force-merge` stays behind `merge:force`.
+
+<!-- BEGIN GENERATED FLAGS: grain merge-queue -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-repo` | string |  |  | only this repository's queue, as owner/name |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/mergequeue_test.go`: `TestExternalMergeQueueFiltersByRepoAndJSON`.
 
 ### 4.13 `grain declarations check [dir]` {#CLI-42}
 
@@ -1023,6 +1064,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-codex-run` | string |  |  | where the codex CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through grain hostd, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release. codex also takes "detached": the image's codex, through grain hostd's codex-detached entry, so a daemon upgrade does not interrupt it |
 | `-container-git-proxy-host` | string |  |  | host address grain services are reachable at from local sandbox containers |
 | `-container-sandbox-cap-add` | string |  |  | comma-separated Linux capabilities handed back to local sandbox containers, which otherwise run with every capability dropped and no-new-privileges set; the stock sandbox image needs none |
+| `-container-sandbox-fence` | string | `"auto"` |  | auto, require or off: whether local sandbox containers are fenced off from this host, its networks and link-local (the metadata server) by a per-container nftables chain. auto fences when nft can be run and otherwise runs containers unfenced and refuses external capability grants; require refuses a container that cannot be fenced; off never fences and refuses external capability grants |
 | `-container-sandbox-image` | string | `"ghcr.io/bwsalmon/grain/k8s-sandbox:latest"` |  | image used by local container sandboxes |
 | `-container-sandbox-network` | string |  |  | Docker network local sandbox containers join. Empty uses grain-sandboxes, a bridge grain creates with inter-container traffic disabled; any other name must already exist ("bridge" is Docker's shared default network) |
 | `-container-sandboxes` | bool |  |  | dispatch each run into its own local Docker container |

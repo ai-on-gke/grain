@@ -142,6 +142,76 @@ func LastCompleteReleaseNotePeriod(t time.Time, loc *time.Location) string {
 	return ReleaseNotePeriod(t.In(loc).AddDate(0, 0, -7), loc)
 }
 
+// DayPeriod is the calendar day t falls on, on loc's calendar:
+// "2026-11-04".
+func DayPeriod(t time.Time, loc *time.Location) string {
+	if loc == nil {
+		loc = time.UTC
+	}
+	return t.In(loc).Format("2006-01-02")
+}
+
+// MonthPeriod is the calendar month t falls in, on loc's calendar:
+// "2026-11".
+func MonthPeriod(t time.Time, loc *time.Location) string {
+	if loc == nil {
+		loc = time.UTC
+	}
+	return t.In(loc).Format("2006-01")
+}
+
+// StatsPeriodRange is the half-open instant range a rollup period covers
+// on loc's calendar: a calendar day ("2026-11-04", midnight to midnight),
+// an ISO week ("2026-W38", Monday 00:00 to next Monday 00:00), or a
+// calendar month ("2026-11", first of the month 00:00 to first of the
+// next month 00:00).
+//
+// Release notes themselves are still filed only by ISO week
+// (ValidateReleaseNotePeriod), because a week is what Monday's standing
+// job writes and exports to release-notes/<week>.md; the statistics and
+// direction rollup behind GET /api/release-notes/stats can be read over a
+// day, a week or a month from the same store rows.
+func StatsPeriodRange(period string, loc *time.Location) (time.Time, time.Time, error) {
+	if loc == nil {
+		loc = time.UTC
+	}
+	if strings.Contains(period, "-W") {
+		return ReleaseNotePeriodRange(period, loc)
+	}
+	parts := strings.Split(period, "-")
+	switch len(parts) {
+	case 2:
+		if len(parts[0]) != 4 || len(parts[1]) != 2 {
+			break
+		}
+		y, errY := atoiExact(parts[0])
+		m, errM := atoiExact(parts[1])
+		if errY != nil || errM != nil || m < 1 || m > 12 {
+			break
+		}
+		start := time.Date(y, time.Month(m), 1, 0, 0, 0, 0, loc)
+		return start, start.AddDate(0, 1, 0), nil
+	case 3:
+		if len(parts[0]) != 4 || len(parts[1]) != 2 || len(parts[2]) != 2 {
+			break
+		}
+		y, errY := atoiExact(parts[0])
+		m, errM := atoiExact(parts[1])
+		d, errD := atoiExact(parts[2])
+		if errY != nil || errM != nil || errD != nil || m < 1 || m > 12 || d < 1 || d > 31 {
+			break
+		}
+		start := time.Date(y, time.Month(m), d, 0, 0, 0, 0, loc)
+		if start.Year() != y || int(start.Month()) != m || start.Day() != d {
+			break
+		}
+		return start, start.AddDate(0, 0, 1), nil
+	}
+	return time.Time{}, time.Time{}, fmt.Errorf(
+		"%q is not a rollup period grain counts: write a day (%q), an ISO week (%q) or a month (%q)",
+		period, "2026-11-04", "2026-W38", "2026-11")
+}
+
 // ReleaseNotePeriodRange is the half-open instant range a period covers
 // -- Monday 00:00 up to the next Monday 00:00, on loc's calendar.
 //

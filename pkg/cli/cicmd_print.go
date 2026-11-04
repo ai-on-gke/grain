@@ -719,3 +719,37 @@ func (p *printer) ciFaults(faults []ui.CIFault) {
 		}
 	}
 }
+
+// ciWait is `grain ci wait`'s verdict (cicli.WaitResult.Report).
+func (p *printer) ciWait(res cicli.WaitResult) {
+	if p.json {
+		p.encode(res)
+		return
+	}
+	fmt.Print(res.Report())
+}
+
+// ciRetriggered is `grain ci retrigger`: the run that was started, and
+// which of from's jobs it reruns.
+func (p *printer) ciRetriggered(from, run ci.Run, jobs []string) {
+	if p.json {
+		p.encode(run)
+		return
+	}
+	fmt.Printf("retriggered %d %s of run %s, uncached: run %s on %s at %s\n",
+		len(jobs), plural(len(jobs), "job", "jobs"), from.ID, run.ID, run.Repo, ciRefDescriptionOf(run))
+	for _, job := range jobs {
+		fmt.Printf("  %s\n", job)
+	}
+	fmt.Printf("\nwait for it with \"grain ci wait %s\"\n", run.ID)
+}
+
+// ciTestHistory is `grain ci test-history`: the report as the in-sandbox
+// command renders it (ci.TestHistoryReport.Render), or it as JSON.
+func (p *printer) ciTestHistory(report ci.TestHistoryReport) {
+	if p.json {
+		p.encode(report)
+		return
+	}
+	fmt.Println(strings.TrimRight(report.Render(), "\n"))
+}

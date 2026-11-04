@@ -19,7 +19,12 @@ import Markdown from "./Markdown.jsx";
 import SearchSelect from "./SearchSelect.jsx";
 import { useTimeZone } from "../TimeZoneContext.jsx";
 import { formatDateTime } from "../time.js";
-import { releaseNoteAuthor, weekLabel } from "../releaseNotes.js";
+import {
+  ROLLUP_WINDOWS,
+  isWeekPeriod,
+  periodLabel,
+  releaseNoteAuthor,
+} from "../releaseNotes.js";
 import ReleaseVersions from "./ReleaseVersions.jsx";
 
 // Release notes, of two kinds that share a heading and nothing else:
@@ -114,14 +119,14 @@ function WeeklyReleaseNotes({ showError }) {
         const loadedStats = await api(`/api/release-notes/stats${query}`);
         if (!live) return;
         setStats(loadedStats);
-        // The stats answer names the week they are for, which is how a
+        // The stats answer names the period they are for, which is how a
         // panel that asked for no week in particular finds out which
-        // one it is looking at. The notes are then asked for by name,
-        // so the two halves on screen are demonstrably the same week.
-        const week = period || loadedStats?.period;
-        if (!week) return;
+        // one it is looking at. Weekly prose notes exist only for ISO
+        // weeks, so daily and monthly rollups stop after reading stats.
+        const resolved = loadedStats?.period || period;
+        if (!isWeekPeriod(resolved)) return;
         const loadedNote = await api(
-          `/api/release-notes/${encodeURIComponent(week)}`,
+          `/api/release-notes/${encodeURIComponent(resolved)}`,
         );
         if (live) setNote(loadedNote);
       } catch (err) {
@@ -176,10 +181,28 @@ function WeeklyReleaseNotes({ showError }) {
           sx={{ minWidth: 260, maxWidth: "100%" }}
           options={options.map((week) => ({
             value: week,
-            label: weekLabel(week),
-            match: `${week} ${weekLabel(week)}`,
+            label: periodLabel(week),
+            match: `${week} ${periodLabel(week)}`,
           }))}
         />
+      </Stack>
+      <Stack
+        direction="row"
+        spacing={1}
+        role="group"
+        aria-label="Rollup window"
+        sx={{ mt: 1, flexWrap: "wrap", gap: 1 }}
+      >
+        {ROLLUP_WINDOWS.map((win) => (
+          <Chip
+            key={win.label}
+            size="small"
+            label={win.label}
+            color={period === win.value ? "primary" : "default"}
+            variant={period === win.value ? "filled" : "outlined"}
+            onClick={() => setPeriod(win.value)}
+          />
+        ))}
       </Stack>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 1, mb: 2 }}>
         What this deployment shipped that week, across every repository it works
@@ -205,8 +228,44 @@ function WeeklyReleaseNotes({ showError }) {
           ))}
         </Stack>
       )}
+      {stats.directions?.length > 0 && (
+        <Box sx={{ mt: 2 }} data-testid="direction-rollup">
+          <Typography
+            variant="subtitle2"
+            component="h5"
+            sx={{ mt: 0, mb: 0.5 }}
+          >
+            By direction
+          </Typography>
+          <Stack spacing={0.5}>
+            {stats.directions.map((dir) => (
+              <Typography key={dir.taskId} variant="body2">
+                <a href={`/tasks/${encodeURIComponent(dir.taskId)}`}>
+                  <strong>#{dir.taskId}</strong>
+                </a>
+                {dir.title ? ` ${dir.title}` : ""}
+                {dir.author ? ` (${dir.author})` : ""}: {dir.pullRequestsMerged}{" "}
+                merged
+                {repoLines(dir)}, {dir.tasksCompleted} tasks completed
+                {dir.tasksSpawned > 0
+                  ? `, ${dir.tasksSpawned} follow-up ${
+                      dir.tasksSpawned === 1 ? "task" : "tasks"
+                    } spawned`
+                  : ""}
+                , {dir.runs} runs
+              </Typography>
+            ))}
+          </Stack>
+        </Box>
+      )}
       <Divider sx={{ my: 2 }} />
-      {note?.text ? (
+      {!isWeekPeriod(stats.period) ? (
+        <Typography variant="body2" color="text.secondary">
+          Weekly release notes are written once a week for completed ISO weeks;
+          the numbers and direction rollup above cover{" "}
+          {periodLabel(stats.period)}.
+        </Typography>
+      ) : note?.text ? (
         <>
           {note.title && (
             <Typography variant="subtitle1" component="h4" sx={{ mt: 0 }}>
