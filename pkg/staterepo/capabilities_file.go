@@ -313,7 +313,7 @@ func (d *capabilitiesDoc) validateWithGCPSets(configuredSets []string, gcpServer
 		}
 	}
 	cat := d.catalogue(nil)
-	// One-release compatibility (schema 106): accept old-form gcp#gcp-key
+	// One-release compatibility (schema 107): accept old-form gcp#gcp-key
 	// arguments in settings/capabilities.yml during state-repo import/check.
 	model.RewriteGCPKeyCatalogue(cat, configuredSets, gcpServerIDs, nil)
 	if err := cat.Validate(); err != nil {

@@ -290,6 +290,11 @@ func prepareCheckoutFrom(ctx context.Context, tools []mcp.Tool, remoteBase, clon
 
 func prepareCheckoutWithReuse(ctx context.Context, tools []mcp.Tool, remoteBase, cloneURL string, task model.Task,
 	setup string, reused bool, notes setupNotes, settingsRepos ...model.RepoRef) (checkout, error) {
+	return prepareCheckoutWithUpstream(ctx, tools, remoteBase, cloneURL, model.RepoRef{}, task, setup, reused, notes, settingsRepos...)
+}
+
+func prepareCheckoutWithUpstream(ctx context.Context, tools []mcp.Tool, remoteBase, cloneURL string, upstream model.RepoRef, task model.Task,
+	setup string, reused bool, notes setupNotes, settingsRepos ...model.RepoRef) (checkout, error) {
 
 	var settings model.RepoRef
 	if len(settingsRepos) != 0 {
@@ -332,6 +337,14 @@ func prepareCheckoutWithReuse(ctx context.Context, tools []mcp.Tool, remoteBase,
 	if task.Base != "" && !gitSafe.MatchString(task.Base) {
 		return checkout{}, fmt.Errorf("orchestrator: %q is not a usable base branch", task.Base)
 	}
+	hasUpstream := upstream != (model.RepoRef{}) && !upstream.Same(*task.Target) && remoteBase != ""
+	if hasUpstream {
+		for _, v := range []string{upstream.Owner, upstream.Name} {
+			if !gitSafe.MatchString(v) {
+				return checkout{}, fmt.Errorf("orchestrator: %q is not a usable git name", v)
+			}
+		}
+	}
 
 	// The base is checked out only in the branch-does-not-exist-yet case:
 	// with the branch already on the remote, its own history is what the
@@ -341,7 +354,32 @@ func prepareCheckoutWithReuse(ctx context.Context, tools []mcp.Tool, remoteBase,
 	// Its existence, though, is checked either way -- see baseCheck.
 	rootOnBase := ""
 	if task.Base != "" {
-		rootOnBase = fmt.Sprintf("git checkout --quiet '%s'\n  ", task.Base)
+		if hasUpstream {
+			rootOnBase = fmt.Sprintf("git checkout --quiet --detach 'refs/remotes/origin/%s'\n  ", task.Base)
+		} else {
+			rootOnBase = fmt.Sprintf("git checkout --quiet '%s'\n  ", task.Base)
+		}
+	} else if hasUpstream {
+		rootOnBase = "if git rev-parse --verify --quiet 'refs/remotes/origin/HEAD' >/dev/null 2>&1; then git checkout --quiet --detach 'refs/remotes/origin/HEAD'; fi\n  "
+	}
+	upstreamSync := ""
+	if hasUpstream {
+		uURL := shellQuote(CloneURL(remoteBase, upstream))
+		upstreamSync = fmt.Sprintf(`git remote add upstream '%[1]s'
+git remote set-url --push upstream grain-read-only
+git fetch --quiet upstream
+for uref in $(git for-each-ref --format='%%(refname:lstrip=3)' refs/remotes/upstream); do
+  if [ "$uref" = "HEAD" ] || [ "$uref" = '%[2]s' ]; then
+    continue
+  fi
+  git update-ref "refs/remotes/origin/$uref" "refs/remotes/upstream/$uref"
+done
+uhead=$(git ls-remote --symref upstream HEAD 2>/dev/null | awk '/^ref: refs\/heads\// {sub("ref: refs/heads/", "", $2); print $2; exit}')
+if [ -n "$uhead" ] && git rev-parse --verify --quiet "refs/remotes/upstream/$uhead" >/dev/null; then
+  git symbolic-ref refs/remotes/upstream/HEAD "refs/remotes/upstream/$uhead"
+  git symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$uhead"
+fi
+`, uURL, branch)
 	}
 	//
 	// An empty repository -- no commits, so no branches and no default
@@ -354,7 +392,7 @@ func prepareCheckoutWithReuse(ctx context.Context, tools []mcp.Tool, remoteBase,
 rm -rf '%[1]s'
 %[10]s
 cd '%[1]s'
-if [ -z "$(git for-each-ref --count=1 refs/remotes/origin)" ]; then
+%[11]sif [ -z "$(git for-each-ref --count=1 refs/remotes/origin)" ]; then
   echo "%[9]s %[8]s is an empty repository (no commits and no default branch): starting '%[3]s' unborn, so this run's first commit is the repository's first" >&2
   git symbolic-ref HEAD 'refs/heads/%[3]s'
 else
@@ -366,7 +404,8 @@ fi
 fi
 %[6]s`, CheckoutDir, shellQuote(checkoutURL(remoteBase, cloneURL, *task.Target)), branch, baseCheck(task, branch), rootOnBase,
 		stateRepoCheck(), sandboxRootEcho(), task.Target, baseGoneMarker,
-		RetryingCloneScript(shellQuote(checkoutURL(remoteBase, cloneURL, *task.Target)), shellQuote(CheckoutDir)))
+		RetryingCloneScript(shellQuote(checkoutURL(remoteBase, cloneURL, *task.Target)), shellQuote(CheckoutDir)),
+		upstreamSync)
 
 	run, ok := runCommandTool(tools)
 	if !ok {

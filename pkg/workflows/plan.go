@@ -170,6 +170,18 @@ type Request struct {
 	// passes it on as RELEASE_ALLOW_BREAKING=<the release>). Set only by
 	// grain's own callers, never from JSON, for RequestedByKind's reason.
 	ReleaseAllowBreaking bool `json:"-"`
+	// ReleaseRollbackTo is the earlier release (vA.B.C) a person's
+	// rollback re-points `latest` to, handed to every step as
+	// GRAIN_CI_RELEASE_ROLLBACK_TO when set (promote-release.yml passes it
+	// on as RELEASE_ROLLBACK_TO). Set only by grain's own callers, never
+	// from JSON, for RequestedByKind's reason.
+	ReleaseRollbackTo string `json:"-"`
+	// ReleaseRollbackReason is why a person rolled a release back, handed
+	// to every step as GRAIN_CI_RELEASE_ROLLBACK_REASON when set
+	// (promote-release.yml passes it on as RELEASE_ROLLBACK_REASON). Set
+	// only by grain's own callers, never from JSON, for RequestedByKind's
+	// reason.
+	ReleaseRollbackReason string `json:"-"`
 	// GateOnBase asks for this run to be refused when its head would run
 	// fewer jobs than BaseRef's workflows require for the same branch and
 	// event (basegate.go). BaseRef is the branch the change is going

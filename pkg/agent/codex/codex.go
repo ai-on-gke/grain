@@ -575,6 +575,9 @@ func (f *Framework) pullRequestArgs(cfg agent.RunConfig) []string {
 	if cfg.PullRequestNumber > 0 {
 		args = append(args, "-pr-number", fmt.Sprintf("%d", cfg.PullRequestNumber))
 	}
+	if cfg.UpstreamRepo != "" {
+		args = append(args, "-pr-upstream-repo", cfg.UpstreamRepo)
+	}
 	// And the credential the branch is pushed with, by name, so the
 	// subprocess's own GitHub reads are made as the same account rather
 	// than off the deployment's ladder (agent.RunConfig.GitCredential).

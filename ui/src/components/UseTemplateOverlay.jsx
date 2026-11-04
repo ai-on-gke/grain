@@ -17,11 +17,7 @@ import {
   Box,
   Button,
   Checkbox,
-  FormControl,
   FormControlLabel,
-  InputLabel,
-  MenuItem,
-  Select,
   Stack,
   Typography,
 } from "@mui/material";
@@ -31,6 +27,7 @@ import CompositionPanel from "./CompositionPanel.jsx";
 import ItemGlyph, { GlyphLabel } from "./ItemGlyph.jsx";
 import Overlay from "./Overlay.jsx";
 import RepoField from "./RepoField.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import { targetableRepos } from "../state.js";
 import {
   initialTemplateFieldValues,
@@ -173,22 +170,21 @@ export default function UseTemplateOverlay({
         </Typography>
       </Stack>
       <form onSubmit={submit}>
-        <FormControl fullWidth margin="normal" size="small">
-          <InputLabel id="use-template-label">Template</InputLabel>
-          <Select
-            labelId="use-template-label"
-            label="Template"
-            value={selectedId}
-            onChange={(e) => pickTemplate(e.target.value)}
-            required
-          >
-            {templates.map((t) => (
-              <MenuItem key={t.id} value={t.id}>
-                <GlyphLabel kind="templates">{templateLabel(t)}</GlyphLabel>
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+        <SearchSelect
+          label="Template"
+          value={selectedId}
+          onChange={pickTemplate}
+          required
+          // No asterisk, as the select it replaces had none: there is
+          // always one picked.
+          InputLabelProps={{ required: false }}
+          margin="normal"
+          options={templates.map((t) => ({
+            value: t.id,
+            label: templateLabel(t),
+            row: <GlyphLabel kind="templates">{templateLabel(t)}</GlyphLabel>,
+          }))}
+        />
         {/* The holes this template leaves. A template that asks for
             nothing renders nothing here, and this form is then just
             "file that template against this repo". */}

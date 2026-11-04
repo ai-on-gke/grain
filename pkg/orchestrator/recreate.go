@@ -557,7 +557,8 @@ func (s *sandboxRecreation) restoreCheckout(ctx context.Context, out *SandboxRec
 	// mis-attributed if it did -- agent_started_at is long since stamped,
 	// which is precisely what makes a note read as the run's own
 	// (model.RunActivity.BySetup).
-	prepared, err := prepareCheckoutFrom(ctx, s.tools, s.cfg.GitRemoteBase, cloneURL, s.task, setup, setupNotes{}, s.cfg.settingsRepo())
+	upstreamRepo, _, _ := resolveUpstreamRepo(ctx, s.store, s.task)
+	prepared, err := prepareCheckoutWithUpstream(ctx, s.tools, s.cfg.GitRemoteBase, cloneURL, upstreamRepo, s.task, setup, false, setupNotes{}, s.cfg.settingsRepo())
 	if err != nil {
 		out.Warnings = append(out.Warnings,
 			fmt.Sprintf("this task's repo could not be cloned again: %v", err))

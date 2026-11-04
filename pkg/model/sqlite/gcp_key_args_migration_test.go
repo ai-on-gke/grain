@@ -50,13 +50,13 @@ func gcpServerWithSets(names ...string) map[string]protocol.ServerConfig {
 	}
 }
 
-func migrateFrom105(t *testing.T, ctx context.Context, db *sql.DB) {
+func migrateFrom106(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
-	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 105 WHERE `id` = 1"); err != nil {
+	if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 106 WHERE `id` = 1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.New(db).Init(ctx); err != nil {
-		t.Fatalf("migrating a version-105 store: %v", err)
+		t.Fatalf("migrating a version-106 store: %v", err)
 	}
 }
 
@@ -78,7 +78,7 @@ func taskCommentBodies(t *testing.T, ctx context.Context, db *sql.DB, taskID str
 	return out
 }
 
-func TestMigration106RewritesGCPKeyAccountAndActivateEverywhere(t *testing.T) {
+func TestMigration107RewritesGCPKeyAccountAndActivateEverywhere(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 	now := time.Date(2026, 11, 4, 3, 0, 0, 0, time.UTC)
@@ -196,7 +196,7 @@ func TestMigration106RewritesGCPKeyAccountAndActivateEverywhere(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	migrateFrom105(t, ctx, db)
+	migrateFrom106(t, ctx, db)
 
 	wantSandboxDefault := `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true}`
 	wantSandboxSecondary := `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":false}`
@@ -278,7 +278,7 @@ func TestMigration106RewritesGCPKeyAccountAndActivateEverywhere(t *testing.T) {
 	}
 }
 
-func TestMigration106KeepsAndNotesMissingPermissionSets(t *testing.T) {
+func TestMigration107KeepsAndNotesMissingPermissionSets(t *testing.T) {
 	// Not parallel: captures package-global log output.
 	store, db, ctx := openStore(t)
 
@@ -322,7 +322,7 @@ func TestMigration106KeepsAndNotesMissingPermissionSets(t *testing.T) {
 	log.SetOutput(&logBuf)
 	t.Cleanup(func() { log.SetOutput(origOut) })
 
-	migrateFrom105(t, ctx, db)
+	migrateFrom106(t, ctx, db)
 
 	// Missing permission set keeps the grant intact everywhere.
 	if got := grantRows(t, ctx, db, "task_grant", "task_id")["t-missing"]; !slices.Equal(got, []string{missingGrant}) {
@@ -355,10 +355,10 @@ func TestMigration106KeepsAndNotesMissingPermissionSets(t *testing.T) {
 		}
 	}
 
-	// Re-running migration 105 is idempotent: notes are not duplicated.
+	// Re-running migration 107 is idempotent: notes are not duplicated.
 	tplBodyBefore := tpl.Body
 	schedBodyBefore := sched.Body
-	migrateFrom105(t, ctx, db)
+	migrateFrom106(t, ctx, db)
 	if got := taskCommentBodies(t, ctx, db, "t-missing"); len(got) != 1 {
 		t.Errorf("second migration duplicated task comments: %v", got)
 	}

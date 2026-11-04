@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // Comprehensive E2E test verifying form inputs in:
 // 1. Deployment & Engine Settings (Settings, numeric limits, ModelBackendPage, SecretField)
@@ -312,10 +313,10 @@ test.describe("Deployment Settings, System Operations, and Console Sessions Inpu
       page.getByRole("heading", { name: "Settings", exact: true }),
     ).toBeVisible();
 
-    // Timezone selector input (native select inside TextField)
-    const tzSelect = page.locator('select[name="userTimeZone"]');
+    // Timezone selector (SearchSelect)
+    const tzSelect = page.getByRole("combobox", { name: "Time zone" });
     await expect(tzSelect).toBeVisible();
-    await tzSelect.selectOption("America/New_York");
+    await chooseOption(tzSelect, "America/New_York");
     expect(
       await page.evaluate(() => localStorage.getItem("grain.timeZone")),
     ).toBe("America/New_York");

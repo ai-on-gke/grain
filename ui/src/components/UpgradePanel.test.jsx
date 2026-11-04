@@ -20,6 +20,7 @@ import UpgradePanel, {
   resolvedImage,
 } from "./UpgradePanel.jsx";
 import api from "../api.js";
+import { optionValues } from "../searchSelectTesting.js";
 import { fetchUpgradeTargets } from "../upgradeTargets.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
@@ -486,6 +487,27 @@ describe("UpgradePanel", () => {
     await user.click(input);
     const list = await screen.findByRole("listbox");
     expect(within(list).getByText("latest")).toBeInTheDocument();
+  });
+
+  it("filters upgrade targets with searchFilter while keeping groups contiguous", async () => {
+    fetchUpgradeTargets.mockResolvedValueOnce({
+      targets: [
+        { name: "latest", kind: "channel", allowed: true },
+        { name: "candidate", kind: "channel", allowed: true },
+        { name: "release/v1.8", kind: "branch", allowed: true },
+        { name: "v1.8.0", kind: "version", allowed: true },
+        { name: "v1.7.0", kind: "version", allowed: true },
+      ],
+      allowedBranches: ["**"],
+    });
+    api.mockResolvedValue({ enabled: true, phase: "ok", branch: "" });
+    const user = userEvent.setup();
+    render(<UpgradePanel showError={() => {}} />);
+
+    const input = await screen.findByLabelText(/Branch/);
+    await user.click(input);
+    await user.type(input, "1.8");
+    expect(optionValues(input)).toEqual(["release/v1.8", "v1.8.0"]);
   });
 
   it("claims neither pipeline when the API names no mode", async () => {

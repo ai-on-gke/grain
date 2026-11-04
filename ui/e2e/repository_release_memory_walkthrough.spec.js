@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 import { execFileSync } from "node:child_process";
 
 test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
@@ -651,9 +652,9 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
     const create = async (name) => {
       await nameBox.fill(name);
       await page.getByRole("button", { name: "Create release" }).click();
-      await expect(
-        page.getByRole("combobox", { name: "Release" }),
-      ).toContainText(name);
+      await expect(page.getByRole("combobox", { name: "Release" })).toHaveValue(
+        new RegExp(`^${name} -- `),
+      );
     };
 
     const existing = await (
@@ -679,10 +680,7 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
     const currentCandidate = page.locator(".candidate-current");
     await expect(currentCandidate).toContainText(`${newer}.rc.1`);
 
-    await page.getByRole("combobox", { name: "Release" }).click();
-    await page
-      .getByRole("option", { name: new RegExp(`^${older} -- `) })
-      .click();
+    await chooseOption(page.getByRole("combobox", { name: "Release" }), older);
     expect(
       await page.locator(".candidate-current", { hasText: newer }).count(),
     ).toBe(0);
@@ -720,13 +718,13 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
       new RegExp(`/repos/acme/widgets/releases/${older}$`),
     );
     await page.reload();
-    await expect(picker).toContainText(older);
+    await expect(picker).toHaveValue(new RegExp(`^${older} -- `));
     await expect(currentCandidate).toContainText(`${older}.rc.`);
     await page.goBack();
     await expect(page).toHaveURL(
       new RegExp(`/repos/acme/widgets/releases/${newer}$`),
     );
-    await expect(picker).toContainText(newer);
+    await expect(picker).toHaveValue(new RegExp(`^${newer} -- `));
 
     // A link naming a release the repo does not have opens the newest,
     // says so, and stops naming it.
@@ -735,6 +733,6 @@ test.describe("Repository, Release, and Memory UI Operator Walkthrough", () => {
       page.getByText("acme/widgets has no release named “no-such-release”"),
     ).toBeVisible();
     await expect(page).toHaveURL(/\/repos\/acme\/widgets\/releases$/);
-    await expect(picker).toContainText(newer);
+    await expect(picker).toHaveValue(new RegExp(`^${newer} -- `));
   });
 });

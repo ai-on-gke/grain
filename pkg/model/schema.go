@@ -498,13 +498,17 @@ import "strconv"
 // (model.PendingAccessRequest) and the answers people gave its earlier
 // ones (model.AccessDecision), both JSON.
 //
-// 106 removes the deprecated account and activate arguments from
+// 106 adds `upstream_repo` to `repo_config` (model.RepoConfig.UpstreamRepo):
+// the upstream repository (`<owner>/<name>`) pull requests are opened
+// against when tasks target this fork repository.
+//
+// 107 removes the deprecated account and activate arguments from
 // https://grain.dev/capabilities/gcp#gcp-key: stored grants carrying
 // account: X become permission_set: X ("default" resolves to the first
 // configured permission set) and activate is dropped; grants naming a
 // permission set that does not exist are kept, logged, and noted on their
 // task, template or schedule (gcp_key_args_migration.go).
-const SchemaVersion = 106
+const SchemaVersion = 107
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified
@@ -3158,6 +3162,7 @@ var Tables = []string{
   ` + "`issue_import_approved`" + `    INTEGER NOT NULL DEFAULT 0,
   ` + "`issue_import_interval_seconds`" + ` INTEGER NOT NULL DEFAULT 0,
   ` + "`default_hostd`" + `            TEXT NOT NULL DEFAULT '',
+  ` + "`upstream_repo`" + `            TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 

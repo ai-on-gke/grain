@@ -49,9 +49,19 @@ import { identifierField } from "../identifierField.js";
 // closed one it bubbles as before.
 //
 // renderInput draws the box; the default is a small MUI TextField with
-// label and helperText. A caller with its own look (RepoField's plain
-// input) passes one, and must spread params.inputProps onto its input
-// and attach params.InputProps.ref to the element the list hangs under.
+// label, helperText (styled by FormHelperTextProps) and margin, plus any
+// inputProps (a data-testid, say) and InputLabelProps (shrink, or shrinkLabel for short, over a ""
+// option with a label of its own). A caller with its own look
+// (RepoField's plain input) passes one, and must spread
+// params.inputProps onto its input and attach params.InputProps.ref to
+// the element the list hangs under.
+//
+// SHORT_LIST is the most options a fixed or declared list may have and
+// still be drawn as a plain select rather than a SearchSelect: up to
+// about seven (yes/no, a mode, a weekday) a select is quicker, above all
+// on a phone, and there is nothing to search for (grain/task-2578).
+export const SHORT_LIST = 7;
+
 export default function SearchSelect({
   name,
   options,
@@ -60,6 +70,8 @@ export default function SearchSelect({
   onChange,
   typedOption,
   label,
+  shrinkLabel = false,
+  inputAriaLabel,
   helperText,
   placeholder,
   disabled,
@@ -71,8 +83,12 @@ export default function SearchSelect({
   fullWidth = true,
   inputProps: callerInputProps,
   renderInput,
+  renderRow,
   className,
   noOptionsText = "No matches",
+  InputLabelProps,
+  FormHelperTextProps,
+  error,
   ...rest
 }) {
   const [inner, setInner] = useState(
@@ -97,7 +113,13 @@ export default function SearchSelect({
       byValue.set(v, own);
     }
   }
-  const optionOf = (v) => byValue.get(v) ?? null;
+  const optionOf = (v) => {
+    const found = byValue.get(v) ?? null;
+    // A disabled "" row is an unpicked placeholder ("Choose a template"),
+    // not a chosen value: leaving the box empty lets the user type at once.
+    if (found?.disabled && v === "") return null;
+    return found;
+  };
   const matchText = (o) => o.match ?? o.label;
 
   const choose = (next) => {
@@ -124,6 +146,7 @@ export default function SearchSelect({
       size={size}
       noOptionsText={noOptionsText}
       isOptionEqualToValue={(o, v) => o.value === v.value}
+      getOptionDisabled={(o) => Boolean(o.disabled)}
       getOptionLabel={(o) => o?.label ?? ""}
       renderTags={
         multiple
@@ -152,9 +175,26 @@ export default function SearchSelect({
         const hits = searching
           ? searchFilter(searchable, query, matchText).map(
               ({ item, ranges }) =>
-                matchText(item) === item.label ? { ...item, ranges } : item,
+                matchText(item) === item.label
+                  ? { ...item, ranges }
+                  : {
+                      ...item,
+                      ranges: searchFilter([item.label], query)[0]?.ranges,
+                    },
             )
           : searchable;
+        if (rest.groupBy && searching) {
+          const groupOrder = [];
+          for (const o of searchable) {
+            const g = rest.groupBy(o);
+            if (!groupOrder.includes(g)) groupOrder.push(g);
+          }
+          hits.sort(
+            (a, b) =>
+              groupOrder.indexOf(rest.groupBy(a)) -
+              groupOrder.indexOf(rest.groupBy(b)),
+          );
+        }
         const extra =
           typed && !hits.some((o) => o.value === typed.value) ? [typed] : [];
         return [...hits, ...extra, ...pinned];
@@ -182,9 +222,11 @@ export default function SearchSelect({
             data-value={option.value}
             data-label={option.label}
           >
-            {option.renderRow
-              ? option.renderRow(text, state)
-              : (option.row ?? text)}
+            {renderRow
+              ? renderRow(option)
+              : option.renderRow
+                ? option.renderRow(text, state)
+                : (option.row ?? text)}
           </li>
         );
       }}
@@ -196,6 +238,7 @@ export default function SearchSelect({
           ...base,
           inputProps: {
             ...base.inputProps,
+            ...(inputAriaLabel ? { "aria-label": inputAriaLabel } : {}),
             onBlur: (e) => {
               const typed = typedOption?.(e.target.value.trim());
               if (typed) {
@@ -211,15 +254,19 @@ export default function SearchSelect({
             },
           },
         };
-        const hidden = name ? (
-          multiple ? (
-            current.map((v, i) => (
-              <input key={i} type="hidden" name={name} value={v ?? ""} />
-            ))
-          ) : (
-            <input type="hidden" name={name} value={current ?? ""} />
-          )
-        ) : null;
+        // name "" still draws one, carrying the value for anything that
+        // reads the box's value off the page; a form skips an unnamed
+        // input, so it adds nothing to a FormData.
+        const hidden =
+          name != null ? (
+            multiple ? (
+              current.map((v, i) => (
+                <input key={i} type="hidden" name={name} value={v ?? ""} />
+              ))
+            ) : (
+              <input type="hidden" name={name} value={current ?? ""} />
+            )
+          ) : null;
         if (renderInput) {
           return (
             <>
@@ -238,6 +285,12 @@ export default function SearchSelect({
               ...identifierField,
               ...callerInputProps,
             }}
+            InputLabelProps={{
+              ...params.InputLabelProps,
+              ...(shrinkLabel ? { shrink: true } : {}),
+              ...InputLabelProps,
+            }}
+            FormHelperTextProps={FormHelperTextProps}
             label={label}
             helperText={helperText}
             placeholder={
@@ -245,6 +298,7 @@ export default function SearchSelect({
             }
             margin={margin}
             required={required}
+            error={error}
             InputProps={{
               ...params.InputProps,
               endAdornment: (

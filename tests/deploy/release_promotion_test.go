@@ -61,9 +61,10 @@ func TestPromoteReleaseIsDispatchOnly(t *testing.T) {
 }
 
 // Every job refuses to run unless grain says a person asked: the train
-// script's approve and reject modes check GRAIN_CI_REQUESTED_BY_KIND
-// themselves, and any other job checks it in its own first step. A dispatch
-// by any route but the person-only one therefore pushes nothing.
+// script's approve, reject and rollback modes check
+// GRAIN_CI_REQUESTED_BY_KIND themselves, and any other job checks it in
+// its own first step. A dispatch by any route but the person-only ones
+// therefore pushes nothing.
 func TestEveryPromoteReleaseJobRefusesAnybodyButAPerson(t *testing.T) {
 	w := promoteReleaseWorkflow(t)
 	jobs := map[string]bool{}
@@ -76,7 +77,8 @@ func TestEveryPromoteReleaseJobRefusesAnybodyButAPerson(t *testing.T) {
 		first := job.Steps[0].Run
 		guarded := strings.Contains(first, `GRAIN_CI_REQUESTED_BY_KIND:-}" != human`) ||
 			strings.Contains(first, "scripts/release-from-trunk.sh approve") ||
-			strings.Contains(first, "scripts/release-from-trunk.sh reject")
+			strings.Contains(first, "scripts/release-from-trunk.sh reject") ||
+			strings.Contains(first, "scripts/release-from-trunk.sh rollback")
 		if !guarded {
 			t.Errorf("%s job %s's first step does not refuse a caller that is not a person:\n%s",
 				promoteReleasePath, job.ID, first)
@@ -85,14 +87,14 @@ func TestEveryPromoteReleaseJobRefusesAnybodyButAPerson(t *testing.T) {
 			t.Errorf("%s job %s may be replayed from the cache; every run is a decision", promoteReleasePath, job.ID)
 		}
 	}
-	for _, want := range []string{"approve", "promote", "reject"} {
+	for _, want := range []string{"approve", "promote", "reject", "rollback"} {
 		if !jobs[want] {
-			t.Errorf("%s declares no %s job (the approval route starts promote and reject)", promoteReleasePath, want)
+			t.Errorf("%s declares no %s job (the approval routes start promote, reject and rollback)", promoteReleasePath, want)
 		}
 	}
 	script := read(t, "scripts", "release-from-trunk.sh")
 	if !strings.Contains(script, `if [ "${GRAIN_CI_REQUESTED_BY_KIND:-}" != human ]; then`) {
-		t.Error("scripts/release-from-trunk.sh's approve and reject modes no longer refuse a caller that is not a person")
+		t.Error("scripts/release-from-trunk.sh's approve, reject and rollback modes no longer refuse a caller that is not a person")
 	}
 }
 
