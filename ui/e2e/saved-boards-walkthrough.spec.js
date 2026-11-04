@@ -1583,8 +1583,10 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     // precedence, which puts failed between the two asked states, so a
     // failed task split the Asked group the sidebar and the Kanban board
     // show as one. The demo seeds no failed task (failed is what a run
-    // ends in, and the demo runs none), so one of the queued tasks is
-    // reported as failed here.
+    // ends in, and the demo runs none), so the task list here carries
+    // one more: a copy of an asked task, reported as failed. A copy
+    // rather than one of the demo's own tasks turned failed, since the
+    // specs before this one in the same worker move and close those.
     const board = await seedOne(page, "/api/boards", {
       name: `WT State Order ${Date.now()}`,
       kind: "list",
@@ -1596,8 +1598,14 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
       const res = await route.fetch();
       const body = await res.json();
       const list = Array.isArray(body) ? body : body.tasks;
-      const victim = list.find((t) => t.state === "queued");
-      if (victim) victim.state = "failed";
+      const asked = list.find((t) => t.state === "awaiting_submit");
+      if (asked)
+        list.push({
+          ...asked,
+          id: "99601",
+          title: "WT stub failed task",
+          state: "failed",
+        });
       await route.fulfill({ response: res, json: body });
     });
     try {
