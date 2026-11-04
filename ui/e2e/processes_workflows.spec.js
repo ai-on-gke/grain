@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // The schedule, template and suite workflows, which were three files when
 // each kind had a page of its own. They are one Processes page now
@@ -61,10 +62,12 @@ test.describe("Schedule Management and Execution Workflows", () => {
       .fill("Automated maintenance task for periodic sanity checks.");
 
     // 7. Select target repo
-    const repoSelect = page.locator("select[name='repo']");
+    const repoSelect = page.locator(
+      ".repo-field:has(input[name='repo']) [role='combobox']",
+    );
     await expect(repoSelect).toBeVisible();
     // By name: other files on this worker's demo add repos of their own.
-    await repoSelect.selectOption("acme/widgets");
+    await chooseOption(repoSelect, "acme/widgets");
 
     // 8. Click "Add schedule" button to submit
     await page.getByRole("button", { name: "Add schedule" }).click();
@@ -340,7 +343,7 @@ test.describe("Suite Management and Suite Execution Workflows", () => {
     // By name, not position: the list is every repo grain knows of, and
     // specs running beside this one file tasks on repos (acme/innovate-app)
     // that are not on the demo's target list, which a suite run refuses.
-    await page.getByLabel(/Repo/).selectOption("acme/widgets");
+    await chooseOption(page.getByLabel(/Repo/), "acme/widgets");
     await page.getByLabel("Branch").fill("main");
 
     // Settle the branch before reaching for Run. The field commits on
