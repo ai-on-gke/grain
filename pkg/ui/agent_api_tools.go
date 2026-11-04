@@ -437,7 +437,7 @@ var routeQueries = map[string]map[string]string{
 		"search":       "The same as q.",
 		"limit":        "At most this many tasks: the newest by filing time, listed oldest first; with cursor, a page's size (default 100).",
 		"fields":       "summary for id, title, state, repo, createdAt, blockedBy and stall only -- no description; list for every field but the description; full, alone, for every task in every state with every field. Without any parameter the list is every task that is not closed, without descriptions.",
-		"cursor":       "Page through the matching tasks newest-closed first, starting after this cursor (empty for the first page); the answer is {tasks, nextCursor}, without descriptions.",
+		"cursor":       "Page through the matching tasks newest-closed first, starting after this cursor (empty for the first page); the answer is {tasks, nextCursor, total, merged, sessions}, without descriptions, the three counts taken across every page (merged: pull request merged; sessions: console or interactive sessions).",
 		"closedSince":  "Only tasks closed at or after this RFC 3339 time.",
 		"closedBefore": "Only tasks closed before this RFC 3339 time.",
 		"derived_from": "Only tasks whose provenance records being derived from this pull request (owner/name#number or its URL).",

@@ -222,6 +222,10 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 			next(w, r)
 			return
 		}
+		if tok := externalTokenFromContext(r.Context()); tok != nil && ownCredentialRoute(pattern, r, tok) {
+			next(w, r)
+			return
+		}
 		if pattern != "POST /mcp" {
 			if tok := externalTokenFromContext(r.Context()); tok != nil {
 				call, err := s.authorizeExternalAgentCall(r, pattern, scope, tok)
@@ -251,6 +255,20 @@ func (s *Server) agentAPIGate(pattern string, next http.HandlerFunc) http.Handle
 		r = r.WithContext(withAgentCall(withAuthMethod(WithPrincipal(r.Context(), agent), AuthMethodTrusted), call))
 		s.serveAgentCall(w, r, next, call)
 	}
+}
+
+// ownCredentialRoute is a call an external agent credential may always
+// make about itself, whatever its scopes: ask what it is (GET
+// /api/auth/whoami) and revoke itself (`grain logout`), both
+// external-cli.spec.md#XC-8 and #XC-9.
+func ownCredentialRoute(pattern string, r *http.Request, tok *model.ExternalAgentToken) bool {
+	switch pattern {
+	case "GET /api/auth/whoami":
+		return true
+	case "POST /api/external-agents/tokens/{id}/revoke":
+		return strings.TrimSpace(r.PathValue("id")) == tok.ID
+	}
+	return false
 }
 
 // agentRefusalStatus is the status a refused agent call answers with: 400

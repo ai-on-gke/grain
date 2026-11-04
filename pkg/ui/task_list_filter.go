@@ -73,11 +73,20 @@ type taskListQuery struct {
 // taskListPageDefault is a page's size when the caller names no limit.
 const taskListPageDefault = 100
 
-// taskListPage is a paged GET /api/tasks' answer: one page of tasks and
-// the cursor that asks for the next, empty on the last.
+// taskListPage is a paged GET /api/tasks' answer: one page of tasks, the
+// cursor that asks for the next (empty on the last), and how many tasks
+// match across every page. The totals are what let a reader holding only
+// the first pages -- the UI's rail, counting closed work -- say how much
+// there is without reading it all: Total every matching task, Sessions
+// the console and interactive sessions' own (which the rail counts under
+// Sessions), and Merged the rest whose pull request merged (PrMergedAt;
+// the rail's Merged entry rather than Closed).
 type taskListPage struct {
 	Tasks      []Task `json:"tasks"`
 	NextCursor string `json:"nextCursor,omitempty"`
+	Total      int    `json:"total"`
+	Merged     int    `json:"merged"`
+	Sessions   int    `json:"sessions"`
 }
 
 // parseTaskListQuery reads q, and reports whether it asks for anything the
@@ -307,7 +316,15 @@ func pageTasks(matched []Task, q taskListQuery) taskListPage {
 		limit = taskListPageDefault
 	}
 	end := min(start+limit, len(matched))
-	page := taskListPage{Tasks: make([]Task, 0, end-start)}
+	page := taskListPage{Tasks: make([]Task, 0, end-start), Total: len(matched)}
+	for _, t := range matched {
+		switch {
+		case t.ConsoleSession != "" || t.Interactive:
+			page.Sessions++
+		case t.PrMergedAt != nil:
+			page.Merged++
+		}
+	}
 	for _, t := range matched[start:end] {
 		if !q.summary {
 			t = listRow(t)

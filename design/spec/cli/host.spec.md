@@ -22,6 +22,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 |---|---|
 | Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `reply`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume`, `inbox`, `wait`, `logs` |
 | Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|deny`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status`, `declarations check` |
+| Task CLI: sign-in | `login`, `logout`, `whoami`, `context list\|use\|show\|delete` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
 | Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db upgrade-postgres`), `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
 | Modes: build information | `version`, `schema-version`, `release-notes`, `sandbox-image`, `container-sandbox-image`, `k8s-sandbox-image`, `image` |
@@ -34,8 +35,9 @@ The binary **MUST** register exactly the commands below. The guard compares this
 ## 2. Task CLI global flags and connection {#CLI-21}
 
 `grain [global flags] <command> [args]`. Global flags **MUST** come before the command. Their behaviour is [#CLI-4](cli.spec.md#CLI-4), [#CLI-6](cli.spec.md#CLI-6) and [#CLI-7](cli.spec.md#CLI-7).
-- `-server` defaults to `$GRAIN_SERVER`, else cli.env, else `http://127.0.0.1:4242`.
-- `-token` falls back to `$GRAIN_TOKEN`, `$GRAIN_AUTH_TOKEN`, `$GRAIN_ID_TOKEN`, `$GRAIN_TUNNEL_TOKEN`.
+- `-server` defaults to `$GRAIN_SERVER`, else the active context's server, else cli.env, else `http://127.0.0.1:4242` ([#XC-3](../external-cli/external-cli.spec.md#XC-3)).
+- `-context` names the context to use; it defaults to `$GRAIN_CONTEXT`, else config.json's `current` ([#XC-2](../external-cli/external-cli.spec.md#XC-2)).
+- `-token` falls back to `$GRAIN_TOKEN`, `$GRAIN_AUTH_TOKEN`, `$GRAIN_ID_TOKEN`, `$GRAIN_TUNNEL_TOKEN`, then the active context's credential ([#XC-4](../external-cli/external-cli.spec.md#XC-4)).
 - `-audience` defaults to `$GRAIN_AUDIENCE`, else `$GRAIN_TUNNEL_AUDIENCE`.
 - `-as` defaults to `$GRAIN_USER`.
 - `-json` switches every task command to JSON ([#CLI-8](cli.spec.md#CLI-8)).
@@ -50,6 +52,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 | `-audience` | string |  |  |  |
 | `-as` | string |  |  |  |
 | `-json` | bool |  |  |  |
+| `-context` | string |  |  |  |
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/cli_flags_test.go`: `TestRunCLI_GlobalFlags`, `TestRunCLI_EnvVarDefaults`, `TestRunCLI_UsageIncludesNewFlags`.
@@ -1064,6 +1067,52 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/prcmd_test.go`, `pkg/ui/pull_requests_api_test.go`: `TestGrainPRReviewDesignAndPRStatusThreadsJSON`; `pkg/orchestrator/takeover_adopt_test.go`: `TestAdoptPullRequestReviewOnlyVsFinishUpgradeInPlace`, `TestAdoptPullRequestLinksSpecAndDesignIntoConformanceReviewAndProposalGate`, `TestPullRequestReviewDesignAndStatusThreads`.
+
+---
+
+### 4.16 `grain login`, `logout`, `whoami` and `grain context` {#CLI-108}
+
+These sign a workstation in to a deployment as a named context, and say who it is signed in as. Their behaviour is [#XC-1](../external-cli/external-cli.spec.md#XC-1), [#XC-2](../external-cli/external-cli.spec.md#XC-2), [#XC-7](../external-cli/external-cli.spec.md#XC-7), [#XC-8](../external-cli/external-cli.spec.md#XC-8) and [#XC-9](../external-cli/external-cli.spec.md#XC-9).
+- `grain context` needs no daemon. It reads and writes `$XDG_CONFIG_HOME/grain/config.json` and the credentials kept beside it.
+- `grain login` defaults `--scope-set` to `grain/external-dev` and `--expires` to `30d`. `--auth` names `access-code` or a source a wrapper registered with `cli.RegisterCredentialSource`.
+- `grain logout --local` forgets the credential without revoking its token on the server.
+
+#### `grain context list|use|show|delete`
+
+<!-- BEGIN GENERATED FLAGS: grain context -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+#### `grain login <url>`
+
+<!-- BEGIN GENERATED FLAGS: grain login -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-auth` | string |  |  | how to sign in: access-code, or a credential source this build registers |
+| `-expires` | string | `"30d"` |  | how long --issue-token's token lasts (30d, 12h, ...) |
+| `-issue-token` | bool |  |  | mint a scoped gma_ token for this workstation and keep it |
+| `-name` | string |  |  | the context's name (default: from the server's host name) |
+| `-refresh` | bool |  |  | re-mint the context's expired or expiring token |
+| `-repos` | string |  |  | comma-separated repositories --issue-token limits the token to |
+| `-scope-set` | string | `"grain/external-dev"` |  | the scope set --issue-token mints |
+| `-token-stdin` | bool |  |  | read a gma_ token (or, with --auth access-code, the access code) from stdin |
+<!-- END GENERATED FLAGS -->
+
+#### `grain logout [<ctx>]`
+
+<!-- BEGIN GENERATED FLAGS: grain logout -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-local` | bool |  |  | only forget the credential here; do not revoke the token on the server |
+<!-- END GENERATED FLAGS -->
+
+#### `grain whoami`
+
+<!-- BEGIN GENERATED FLAGS: grain whoami -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/context_test.go`: `TestContextConfigXDGMode0600AndNoRawSecrets`; `pkg/cli/cliconn_test.go`: `TestContextCommandsAndServerPrecedence`; `pkg/cli/credentials_test.go`: `TestCredentialStoreKeyringFallbackAndRefusesWorldReadableFile`; `pkg/cli/login_test.go`: `TestGrainLoginIssueTokenSelfServiceNonAdminAndLogoutRevokes`; `pkg/cli/credsource_test.go`: `TestRegisterCredentialSourceAndHTTPClientRefusesLoginRedirectAndHTML`.
 
 ---
 

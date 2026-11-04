@@ -18,6 +18,7 @@ import {
   mergeClosedPage,
   mergeTaskLists,
   readPage,
+  unseenClosed,
 } from "./closedTasks.js";
 
 describe("closedTasks", () => {
@@ -32,14 +33,50 @@ describe("closedTasks", () => {
     expect(readPage({ tasks: [{ id: "1" }], nextCursor: "c" })).toEqual({
       tasks: [{ id: "1" }],
       nextCursor: "c",
+      totals: null,
     });
-    expect(readPage({ error: "nope" })).toEqual({ tasks: [], nextCursor: "" });
+    expect(
+      readPage({ tasks: [], total: 9, merged: 2, sessions: 1 }).totals,
+    ).toEqual({ total: 9, merged: 2, sessions: 1 });
+    expect(readPage({ error: "nope" })).toEqual({
+      tasks: [],
+      nextCursor: "",
+      totals: null,
+    });
     expect(
       readPage([
         { id: "1", state: "closed" },
         { id: "2", state: "queued" },
       ]),
-    ).toEqual({ tasks: [{ id: "1", state: "closed" }], nextCursor: "" });
+    ).toEqual({
+      tasks: [{ id: "1", state: "closed" }],
+      nextCursor: "",
+      totals: null,
+    });
+  });
+
+  // 2026-11-04 walkthrough: 205 closed tasks read "Closed 200" on the
+  // rail, and "205" only once Load older closed tasks had been pressed.
+  it("counts the closed work no page read so far holds", () => {
+    const held = [
+      { id: "1" },
+      { id: "2", prMergedAt: "2026-11-01T00:00:00Z" },
+      { id: "3", consoleSession: "director" },
+    ];
+    expect(unseenClosed(null, held)).toEqual({ closed: 0, merged: 0 });
+    expect(unseenClosed({ total: 3, merged: 1, sessions: 1 }, held)).toEqual({
+      closed: 0,
+      merged: 0,
+    });
+    expect(unseenClosed({ total: 210, merged: 4, sessions: 2 }, held)).toEqual({
+      closed: 203,
+      merged: 3,
+    });
+    // A refresh racing a close never counts below what is held.
+    expect(unseenClosed({ total: 2, merged: 0, sessions: 0 }, held)).toEqual({
+      closed: 0,
+      merged: 0,
+    });
   });
 
   it("keeps the held array when a refresh changes nothing", () => {
