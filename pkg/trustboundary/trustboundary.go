@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v14"
+const Version = "trust-boundary/v15"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +81,12 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v15 added remote hostd installation (grain/task-2989): the route
+// requiresAccess and singleTenantOpenRoute exempt from authentication and
+// the check deciding who learns the daemon's release and image go to
+// auth-routes, and the bootstrap script that route serves, run as root on
+// the registering host, goes to setup-scripts.
 //
 // v13 added the GitHub Actions Inbox approval (grain/task-2666,
 // design/playbook/releases.playbook.md §0.2) to release-promotion: the
@@ -182,6 +188,9 @@ var Categories = []Category{
 			// present its owner's identity, token -> hostd/owner, revocation,
 			// and which hostd a run is routed to.
 			"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/taskhostd.go",
+			// The unauthenticated hostd install route and who it tells the
+			// daemon's release and running image.
+			"pkg/ui/hostd_install.go",
 			"pkg/daemon/hostd_registry.go", "pkg/daemon/hostd_route.go",
 			"pkg/daemon/hostexec.go", "pkg/model/hostd.go",
 			// messagesSince's human-only filter is what makes the answer a
@@ -347,7 +356,9 @@ var Categories = []Category{
 	{
 		ID:          "setup-scripts",
 		Description: "setup scripts run with the deployment's own privileges",
-		files:       []string{"scripts/setup.sh"},
+		// hostd_install.sh is served by GET /api/hostd/install.sh and run
+		// as root on a host registering as a remote hostd.
+		files: []string{"scripts/setup.sh", "pkg/ui/hostd_install.sh"},
 	},
 }
 

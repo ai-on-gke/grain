@@ -241,6 +241,7 @@ var knownBoundaryFiles = []string{
 	"pkg/ui/server.go", "pkg/ui/auth.go", "pkg/orchestrator/securityhold.go",
 	"pkg/gitproxy/", "pkg/secrets/", "pkg/ci/", "pkg/workflows/", "deploy/kubernetes/",
 	"pkg/ui/hostd_connect.go", "pkg/ui/hostds.go", "pkg/ui/taskhostd.go",
+	"pkg/ui/hostd_install.go", "pkg/ui/hostd_install.sh",
 	"pkg/daemon/hostd_registry.go", "pkg/daemon/hostd_route.go", "pkg/daemon/hostexec.go",
 	"pkg/model/hostd.go", "pkg/ui/messages.go", "pkg/daemon/mcpserver_hostexec.go",
 	"pkg/model/repo_access.go", "pkg/daemon/ci.go", "pkg/daemon/ci_policy.go",
@@ -295,6 +296,8 @@ func TestHostdAndCIRepoAccessGatesAreClassified(t *testing.T) {
 		"pkg/ui/hostd_connect.go":          "auth-routes",
 		"pkg/ui/hostds.go":                 "auth-routes",
 		"pkg/ui/taskhostd.go":              "auth-routes",
+		"pkg/ui/hostd_install.go":          "auth-routes",
+		"pkg/ui/hostd_install.sh":          "setup-scripts",
 		"pkg/daemon/hostd_registry.go":     "auth-routes",
 		"pkg/daemon/hostd_route.go":        "auth-routes",
 		"pkg/daemon/hostexec.go":           "auth-routes",
@@ -322,7 +325,7 @@ func TestHostdAndCIRepoAccessGatesAreClassified(t *testing.T) {
 			"RepoAccessAdmitsCIEvent", "RepoReadTarget", "RepoWriteTarget", "IsGitPushAnyRefGrant",
 			"HostdForToken", "CreateHostd", "RotateHostdToken", "NormalizeHostdOwner",
 		},
-		"pkg/ui":     {"hostdConnectIdentity", "messagesSince"},
+		"pkg/ui":     {"hostdConnectIdentity", "messagesSince", "hostdInstallRoute", "hostdInstallCallerHasAccess"},
 		"pkg/daemon": {"registryResolver", "SelectHostd", "grantRepoAccess", "ciRepoAccessAdmitted", "CheckCIJobRepoAccessPolicy"},
 	}
 	for dir, names := range gates {
