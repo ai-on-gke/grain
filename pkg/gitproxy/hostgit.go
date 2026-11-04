@@ -401,7 +401,7 @@ func ServeHostGit(s *protocol.CapabilityServer) error {
 		}), hostGitServeForge); err != nil {
 		return err
 	}
-	return s.HandleTool(hostGitToolForgeDownload, "Stream one GET response through a ForgeViaCommand source's `<tool> api` to a new staging file on disk.",
+	return s.HandleTool(hostGitToolForgeDownload, "Stream one GET response through a ForgeViaCommand source's `<tool> api` into an empty grain-release-asset-* placeholder the daemon created on the filesystem it shares with the host.",
 		sourceHost(map[string]any{
 			"api_base":   map[string]any{"type": "string", "maxLength": 2048},
 			"proxy":      map[string]any{"type": "string", "maxLength": 2048},
@@ -531,6 +531,9 @@ type hostGitDownloadResult struct {
 	Body          string `json:"body,omitempty"`
 }
 
+// validateStagingDest refuses a staging path that is not clean and
+// absolute, whose file name is not grain-release-asset-*, or that sits
+// under a symlinked directory.
 func validateStagingDest(dest string) error {
 	if dest == "" || !filepath.IsAbs(dest) || filepath.Clean(dest) != dest {
 		return fmt.Errorf("staging path %q must be a clean absolute path", dest)
@@ -552,12 +555,46 @@ func validateStagingDest(dest string) error {
 	return nil
 }
 
-// DownloadToFile streams a GET request's 200 response body to a new file at
-// dest (which must not already exist and must have basename prefix
-// "grain-release-asset-"), computing its SHA-256 on the fly without holding
-// the body in memory. When client uses CommandForgeTransport beside grain
-// hostd, the host's host-git server streams directly to dest on the shared
-// filesystem, bypassing hostGitMaxBody.
+// openStagingPlaceholder opens dest -- the empty placeholder a download's
+// caller created for it -- for writing, and refuses anything else: a path
+// validateStagingDest refuses, one that does not exist yet, a symlink, a
+// file that is not regular and empty, one another account owns, or one
+// with a second hard link.
+//
+// Requiring the file to exist is what keeps forge_download inside what
+// the daemon could already write. The daemon in the release container
+// can create a placeholder only on a filesystem it shares with the host,
+// so the host-git server, which runs as the installing user and creates
+// nothing, can fill in no file outside it -- not a new one in a directory
+// the user's shell or session reads from (hostd's paths_under argument,
+// hostd/allowlist.go, is the same line drawn for argv).
+func openStagingPlaceholder(dest string) (*os.File, error) {
+	if err := validateStagingDest(dest); err != nil {
+		return nil, err
+	}
+	f, err := openNoFollow(dest)
+	if err != nil {
+		return nil, fmt.Errorf("staging placeholder %s: %w", dest, err)
+	}
+	fi, err := f.Stat()
+	if err == nil && (!fi.Mode().IsRegular() || fi.Size() != 0 || !ownedByUs(fi) || !singleLink(fi)) {
+		err = errors.New("not an empty regular file of this account's with one link")
+	}
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("staging placeholder %s: %w", dest, err)
+	}
+	return f, nil
+}
+
+// DownloadToFile streams a GET request's 200 response body into dest, an
+// empty placeholder the caller has already created (openStagingPlaceholder:
+// basename prefix "grain-release-asset-", regular, empty, its own),
+// computing its SHA-256 on the fly without holding the body in memory.
+// When client uses CommandForgeTransport beside grain hostd, the host's
+// host-git server streams directly into dest on the shared filesystem,
+// bypassing hostGitMaxBody. dest is left in place, possibly partly
+// written, when it fails: removing it is the caller's.
 func DownloadToFile(client *http.Client, req *http.Request, dest string, timeout time.Duration) (sha256Hex string, written int64, status int, errBody string, err error) {
 	if err := validateStagingDest(dest); err != nil {
 		return "", 0, 0, "", err
@@ -587,7 +624,7 @@ func DownloadToFile(client *http.Client, req *http.Request, dest string, timeout
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 		return "", 0, resp.StatusCode, strings.TrimSpace(string(raw)), nil
 	}
-	f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := openStagingPlaceholder(dest)
 	if err != nil {
 		return "", 0, 0, "", err
 	}
@@ -595,11 +632,9 @@ func DownloadToFile(client *http.Client, req *http.Request, dest string, timeout
 	n, copyErr := io.Copy(io.MultiWriter(f, h), resp.Body)
 	closeErr := f.Close()
 	if copyErr != nil {
-		_ = os.Remove(dest)
 		return "", 0, 0, "", copyErr
 	}
 	if closeErr != nil {
-		_ = os.Remove(dest)
 		return "", 0, 0, "", closeErr
 	}
 	return hex.EncodeToString(h.Sum(nil)), n, http.StatusOK, "", nil
@@ -656,7 +691,7 @@ func hostGitServeForgeDownload(ctx context.Context, args map[string]any) ([]byte
 	if src.ForgeViaCommand == nil {
 		return nil, fmt.Errorf("source %q does not send forge requests through %s", src.Name, src.Command)
 	}
-	dest := fmt.Sprint(args["dest"])
+	dest, _ := args["dest"].(string)
 	if err := validateStagingDest(dest); err != nil {
 		return nil, fmt.Errorf("forge download: %w", err)
 	}
@@ -702,19 +737,17 @@ func hostGitServeForgeDownload(ctx context.Context, args map[string]any) ([]byte
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 		return json.Marshal(hostGitDownloadResult{Status: resp.StatusCode, Body: strings.TrimSpace(string(raw))})
 	}
-	f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := openStagingPlaceholder(dest)
 	if err != nil {
-		return json.Marshal(hostGitDownloadResult{Error: fmt.Sprintf("creating staging file: %v", err)})
+		return json.Marshal(hostGitDownloadResult{Error: err.Error()})
 	}
 	h := sha256.New()
 	n, copyErr := io.Copy(io.MultiWriter(f, h), resp.Body)
 	closeErr := f.Close()
 	if copyErr != nil {
-		_ = os.Remove(dest)
 		return json.Marshal(hostGitDownloadResult{Error: fmt.Sprintf("streaming %s's answer: %v", src.Command, copyErr)})
 	}
 	if closeErr != nil {
-		_ = os.Remove(dest)
 		return json.Marshal(hostGitDownloadResult{Error: fmt.Sprintf("closing staging file: %v", closeErr)})
 	}
 	return json.Marshal(hostGitDownloadResult{

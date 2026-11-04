@@ -1141,15 +1141,15 @@ func (u *Upgrader) streamAndVerifyAsset(ctx context.Context, p *progress, step s
 	if err != nil {
 		return "", err
 	}
-	// Reserve a unique filename and remove the empty placeholder immediately so
-	// DownloadToFile creates it exclusively with O_CREATE|O_EXCL.
+	// The empty placeholder DownloadToFile streams into: it fills only a
+	// file that already exists, so the host's host-git server, beside a
+	// containerised daemon, writes nowhere the daemon could not.
 	f, err := os.CreateTemp(dir, "grain-release-asset-*.tar.gz")
 	if err != nil {
 		return "", fmt.Errorf("creating staging file in %s: %w", dir, err)
 	}
 	tmpPath := f.Name()
 	_ = f.Close()
-	_ = os.Remove(tmpPath)
 
 	targetURL := r.assetDownloadURL(asset)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
