@@ -398,22 +398,45 @@ func (c *RESTClient) listActionsJobs(owner, repo string, runID int64, query stri
 
 // ActionsJobLog is GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs.
 //
-// GitHub answers it with a redirect to a short-lived blob URL on another
-// host. RealTransport's http.Client follows it, dropping the
-// Authorization header on the way as net/http does for a different host,
-// and so does a ForgeViaCommand host's tool (`<tool> api` follows
-// redirects itself; a redirect it did hand back would be re-sent through
-// the tool as a whole URL, CommandForgeTransport's rule for a URL outside
-// the API base). Either way what comes back here is the log.
+// GitHub -- github.com and an Enterprise Server alike -- answers it with
+// a redirect to a short-lived blob URL, usually on another host.
+// RealTransport's http.Client follows it, dropping the Authorization
+// header on the way as net/http does for a different host, and so does a
+// ForgeViaCommand host's tool (`<tool> api` follows redirects itself; a
+// redirect it did hand back would be re-sent through the tool as a whole
+// URL, CommandForgeTransport's rule for a URL outside the API base).
+// A transport that hands the redirect back instead (a Client whose
+// CheckRedirect stops it, a fake) has it followed here, once, without
+// the credential: the blob URL is signed and wants none.
 func (c *RESTClient) ActionsJobLog(owner, repo string, jobID int64) (string, error) {
 	resp, err := c.get(owner, repo, fmt.Sprintf("/repos/%s/%s/actions/jobs/%d/logs", owner, repo, jobID))
 	if err != nil {
 		return "", err
 	}
+	if loc := headerValue(resp.Headers, "Location"); resp.Status >= 300 && resp.Status < 400 && loc != "" {
+		blob, err := c.Transport.Request(http.MethodGet, loc, map[string]string{"User-Agent": "grain-automation"}, nil)
+		if err != nil {
+			return "", fmt.Errorf("following the job log's redirect to %s: %w", hostOf(loc), err)
+		}
+		if blob.URL == "" {
+			blob.URL = "GET " + hostOf(loc)
+		}
+		resp = blob
+	}
 	if resp.Status != http.StatusOK {
 		return "", &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
 	}
 	return strings.ToValidUTF8(string(resp.Body), ""), nil
+}
+
+// hostOf is the scheme and host of a URL, leaving out a signed URL's
+// path and query.
+func hostOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "the URL it named"
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 // ListActionsArtifacts is GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts.

@@ -62,6 +62,12 @@ func FindExternalRunsCounted(ctx context.Context, ext ExternalRuns, f RunFilter,
 // ActionsRunIDPrefix starts every GitHub Actions run id ci:read serves.
 const ActionsRunIDPrefix = "gha:"
 
+// ActionsRunID is the id ParseActionsRunID reads: run runID of repo,
+// "gha:<owner>:<name>:<run id>".
+func ActionsRunID(repo string, runID int64) string {
+	return ActionsRunIDPrefix + strings.ReplaceAll(repo, "/", ":") + ":" + strconv.FormatInt(runID, 10)
+}
+
 // ParseActionsRunID reads a GitHub Actions run id
 // ("gha:<owner>:<name>:<run id>") back into its repository and GitHub
 // run id. The repository may be written with its slashes
