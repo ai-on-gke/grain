@@ -17,7 +17,6 @@ package daemon
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -87,8 +86,22 @@ func (h *hostdCapabilityServers) update(configured map[string]protocol.ServerCon
 	}
 	h.mu.Unlock()
 	for name, reg := range regs {
-		reg.Update(placedOn(placed, name))
+		reg.Update(placedOn(placed, name, h.hostdLabels(h.ctx, name)))
 	}
+}
+
+// hostdLabels is the registry labels of hostd name, nil when it has none
+// or is not in the registry: what a label-selected placement is matched
+// against, as SelectHostd matches it.
+func (h *hostdCapabilityServers) hostdLabels(ctx context.Context, name string) map[string]string {
+	if h.store == nil {
+		return nil
+	}
+	row, err := h.store.GetHostd(ctx, name)
+	if err != nil || row == nil || row.Revoked() {
+		return nil
+	}
+	return row.Labels
 }
 
 // placedCapabilityServers is configured's run: hostd entries that name a
@@ -104,11 +117,17 @@ func placedCapabilityServers(configured map[string]protocol.ServerConfig) map[st
 }
 
 // placedOn is the placed entries hostd name's registry holds: those
-// naming it, and those selecting by labels, which may resolve to it.
-func placedOn(placed map[string]protocol.ServerConfig, name string) map[string]protocol.ServerConfig {
+// naming it, and those selecting by labels that labels, its registry
+// labels, carry -- the ones SelectHostd may resolve to it. A server
+// selecting labels the hostd does not carry is never started there.
+func placedOn(placed map[string]protocol.ServerConfig, name string, labels map[string]string) map[string]protocol.ServerConfig {
 	out := map[string]protocol.ServerConfig{}
 	for id, cfg := range placed {
-		if sel := string(cfg.Hostd); sel == name || strings.Contains(sel, "=") {
+		selName, selLabels, err := model.ParseHostdSelector(string(cfg.Hostd))
+		if err != nil {
+			continue
+		}
+		if (selName != "" && selName == name) || (selName == "" && len(selLabels) > 0 && labelsMatch(labels, selLabels)) {
 			out[id] = cfg
 		}
 	}
@@ -147,8 +166,9 @@ func (h *hostdCapabilityServers) registry(ctx context.Context, name string, clie
 		r = &hostdRegistry{reg: servers.New(opts), ready: make(chan struct{})}
 		h.regs[name] = r
 	}
-	configured := placedOn(h.configured, name)
+	placed := h.configured
 	h.mu.Unlock()
+	configured := placedOn(placed, name, h.hostdLabels(ctx, name))
 	if creating {
 		// Attached now rather than on the registry's first tick, so the
 		// run that is waiting to mint finds them.

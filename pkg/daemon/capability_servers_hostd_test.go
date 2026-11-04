@@ -19,6 +19,7 @@ package daemon
 import (
 	"context"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -188,4 +189,40 @@ func TestAPlacedCapabilityServerRunsOnItsOwnHostd(t *testing.T) {
 		_, err := regA.Lookup(hostScriptsA)
 		return err != nil
 	})
+}
+
+// A hostd's registry attaches the placed servers that name it and the
+// ones whose label selector its registry labels satisfy -- never a
+// server selecting labels it does not carry, which would start that
+// server's process on a machine it was not placed on.
+func TestPlacedOnHoldsOnlyTheServersThatMayResolveThere(t *testing.T) {
+	placed := map[string]protocol.ServerConfig{
+		"named-a":  {Command: "grain-host-scripts", Run: protocol.RunHostd, Hostd: "ws-a"},
+		"named-b":  {Command: "grain-host-scripts", Run: protocol.RunHostd, Hostd: "ws-b"},
+		"gpu":      {Command: "grain-host-scripts", Run: protocol.RunHostd, Hostd: "pool=gpu"},
+		"gpu-zone": {Command: "grain-host-scripts", Run: protocol.RunHostd, Hostd: "zone=b,pool=gpu"},
+	}
+	ids := func(m map[string]protocol.ServerConfig) string {
+		var out []string
+		for id := range m {
+			out = append(out, id)
+		}
+		slices.Sort(out)
+		return strings.Join(out, ",")
+	}
+	for _, tc := range []struct {
+		name   string
+		labels map[string]string
+		want   string
+	}{
+		{"ws-a", nil, "named-a"},
+		{"ws-a", map[string]string{"pool": "cpu"}, "named-a"},
+		{"gpu-1", map[string]string{"pool": "gpu"}, "gpu"},
+		{"gpu-2", map[string]string{"pool": "gpu", "zone": "b"}, "gpu,gpu-zone"},
+		{"ws-b", map[string]string{"pool": "gpu", "zone": "b"}, "gpu,gpu-zone,named-b"},
+	} {
+		if got := ids(placedOn(placed, tc.name, tc.labels)); got != tc.want {
+			t.Errorf("placedOn(%s, %v) = %s, want %s", tc.name, tc.labels, got, tc.want)
+		}
+	}
 }
