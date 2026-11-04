@@ -175,11 +175,11 @@ func (rt *recordingTransport) appendExchange(ex recordedExchange) {
 }
 
 type stepSummary struct {
-	Step        string `json:"step"`
-	IsError     bool   `json:"isError,omitempty"`
-	PayloadBytes int   `json:"payloadBytes,omitempty"`
-	Detail      any    `json:"detail,omitempty"`
-	Error       string `json:"error,omitempty"`
+	Step         string `json:"step"`
+	IsError      bool   `json:"isError,omitempty"`
+	PayloadBytes int    `json:"payloadBytes,omitempty"`
+	Detail       any    `json:"detail,omitempty"`
+	Error        string `json:"error,omitempty"`
 }
 
 func firstText(res *mcp.CallToolResult) string {
