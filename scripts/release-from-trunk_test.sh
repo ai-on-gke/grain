@@ -505,6 +505,18 @@ expect "no app configured" "exits 1" eq "$status" 1
 expect "no app configured" "says why" has "CHECK_QUALIFICATION_APP is unset"
 expect "no app configured" "stages no release" eq "$(remote_tag v2.3.0-pending)" ""
 
+# --- a hand-cut rc.1 of the next version still waits out the interval ---
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+git -C "$work/seed" push -q --force origin "$c2:refs/heads/candidate"
+tag_remote v2.4.0-rc.1 "$c3" 1
+qualification pass "$c2"
+runs "$c2" "$c4"
+train
+expect "hand-cut next rc.1" "exits 0" eq "$status" 0
+expect "hand-cut next rc.1" "still waits RELEASE_MIN_INTERVAL_MINUTES" has "under RELEASE_MIN_INTERVAL_MINUTES (120)"
+expect "hand-cut next rc.1" "so cuts no v2.4.0-rc.2 inside it" eq "$(remote_tag v2.4.0-rc.2)" ""
+
 # --- qualification passes: staged as a pending release ---
 setup ""
 tag_remote v2.3.0-rc.1 "$c2" 3

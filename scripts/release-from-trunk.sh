@@ -957,18 +957,17 @@ elif [ -n "$floor" ] && [ "$next_n" = 1 ] && ! git merge-base --is-ancestor "$fl
   say "phase 2: the newest release is off main's history; the next rc must be after where it left main (${floor:0:12})"
 fi
 
-new_rc="$target-rc.$next_n"
-while commit_of "$new_rc" >/dev/null; do
-  # Never re-tag: an rc of this number already exists (one cut by hand).
-  next_n=$((next_n + 1))
-  new_rc="$target-rc.$next_n"
-done
-
 # Gate next RC (playbook section 12): while any `[rc-blocker vX.Y.Z-rc.N]`
 # task is open, grain/rc-hold on the dropped rc's commit stays in progress.
+# It reads next_n before the re-tag skip below: a hand-cut rc.1 must not
+# make the next rc.1 (whose floor is a release, not a dropped rc) look like
+# an rc.2, here or at the rc.1 gates after it.
 if [ -n "$floor" ] && [ "$next_n" -gt 1 ]; then
   hold_summary="$(rc_hold_summary "$floor")"
   if [ -n "$hold_summary" ]; then
+    held_n="$next_n"
+    while commit_of "$target-rc.$held_n" >/dev/null; do held_n=$((held_n + 1)); done
+    new_rc="$target-rc.$held_n"
     say "phase 2: $new_rc is held by grain/rc-hold on ${floor:0:12}: $hold_summary"
     emit rc_held "$new_rc"
     exit 0
@@ -1018,6 +1017,12 @@ if [ "$next_n" = 1 ]; then
   say "phase 2: the commits since ${base:-the start} make a minor release: $target"
 fi
 
+new_rc="$target-rc.$next_n"
+while commit_of "$new_rc" >/dev/null; do
+  # Never re-tag: an rc of this number already exists (one cut by hand).
+  next_n=$((next_n + 1))
+  new_rc="$target-rc.$next_n"
+done
 say "phase 2: cutting $new_rc on ${lkg:0:12}"
 git tag -a "$new_rc" "$lkg" -m "Release candidate $new_rc" ${cut_branch:+-m "Cut from $cut_branch."}
 push "refs/tags/$new_rc" || die "could not push $new_rc; candidate was not moved"
