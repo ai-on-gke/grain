@@ -17,6 +17,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -27,6 +28,28 @@ import (
 // queue, in-flight batches, and held gates.
 type MergeQueueReader interface {
 	QueryMergeQueue(ctx context.Context, repo, branch string) (MergeQueueReport, error)
+}
+
+// RepoFilteredMergeQueue is Reader's merge queue with every held gate,
+// batch and queued change of a repository Permits refuses left out: what
+// a caller that may read only some repositories' CI is shown.
+type RepoFilteredMergeQueue struct {
+	Reader  MergeQueueReader
+	Permits func(repo string) bool
+}
+
+func (f RepoFilteredMergeQueue) QueryMergeQueue(ctx context.Context, repo, branch string) (MergeQueueReport, error) {
+	if repo != "" && !f.Permits(repo) {
+		return MergeQueueReport{Repo: repo, Branch: branch}, nil
+	}
+	r, err := f.Reader.QueryMergeQueue(ctx, repo, branch)
+	if err != nil {
+		return r, err
+	}
+	r.HeldGates = slices.DeleteFunc(r.HeldGates, func(g HeldGateReport) bool { return !f.Permits(g.Repo) })
+	r.Batches = slices.DeleteFunc(r.Batches, func(b MergeBatchReport) bool { return !f.Permits(b.Repo) })
+	r.QueuedPRs = slices.DeleteFunc(r.QueuedPRs, func(p QueuedPRReport) bool { return !f.Permits(p.Repo) })
+	return r, nil
 }
 
 const noMergeQueueReader = "This run cannot inspect the merge queue: it was dispatched with no route back " +

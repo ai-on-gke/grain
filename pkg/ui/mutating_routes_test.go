@@ -326,6 +326,12 @@ var attributedRoutes = map[string]attributedRoute{
 		idOnly:   true,
 		recorded: releaseRequester,
 	},
+	"POST /api/releases/{version}/rollback": {
+		client:   releaseClient,
+		path:     "/api/releases/v2.4.0/rollback",
+		idOnly:   true,
+		recorded: releaseRequester,
+	},
 	"POST /api/tasks/{id}/withdraw-approval": {
 		setup:       fileTask(true),
 		agentGrants: []string{"api:tasks:write"},
@@ -671,6 +677,9 @@ var notYetAttributedRoutes = map[string]bool{
 	"POST /api/tasks/{id}/config-change":                                   true,
 	"POST /api/tasks/{id}/config-change/approve":                           true,
 	"POST /api/tasks/{id}/config-change/reject":                            true,
+	"POST /api/tasks/{id}/access-request/check":                            true,
+	"POST /api/tasks/{id}/access-request/grant":                            true,
+	"POST /api/tasks/{id}/access-request/deny":                             true,
 	"POST /api/tasks/{id}/db/execute":                                      true,
 	"POST /api/tasks/{id}/db/query":                                        true,
 	"POST /api/tasks/{id}/delivered":                                       true,

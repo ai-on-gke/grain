@@ -13,17 +13,10 @@
 // limitations under the License.
 
 import { useCallback, useEffect, useState } from "react";
-import {
-  Box,
-  Chip,
-  Divider,
-  MenuItem,
-  Select,
-  Stack,
-  Typography,
-} from "@mui/material";
+import { Box, Chip, Divider, Stack, Typography } from "@mui/material";
 import api from "../api.js";
 import Markdown from "./Markdown.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import { useTimeZone } from "../TimeZoneContext.jsx";
 import { formatDateTime } from "../time.js";
 import { releaseNoteAuthor, weekLabel } from "../releaseNotes.js";
@@ -169,24 +162,24 @@ function WeeklyReleaseNotes({ showError }) {
       <Stack
         direction="row"
         spacing={2}
-        alignItems="baseline"
+        alignItems="center"
         sx={{ flexWrap: "wrap" }}
       >
         <Typography variant="subtitle1" component="h4" sx={{ mt: 0 }}>
           Weekly
         </Typography>
-        <Select
-          size="small"
+        <SearchSelect
+          inputAriaLabel="week"
+          fullWidth={false}
           value={stats.period || ""}
-          onChange={(e) => setPeriod(e.target.value)}
-          inputProps={{ "aria-label": "week" }}
-        >
-          {options.map((week) => (
-            <MenuItem key={week} value={week}>
-              {weekLabel(week)}
-            </MenuItem>
-          ))}
-        </Select>
+          onChange={(next) => setPeriod(next)}
+          sx={{ minWidth: 260, maxWidth: "100%" }}
+          options={options.map((week) => ({
+            value: week,
+            label: weekLabel(week),
+            match: `${week} ${weekLabel(week)}`,
+          }))}
+        />
       </Stack>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 1, mb: 2 }}>
         What this deployment shipped that week, across every repository it works

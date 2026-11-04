@@ -360,8 +360,12 @@ func TestHostdRunFailsAsLostPastTheReattachTimeout(t *testing.T) {
 	for !strings.Contains(tee.String(), "up\n") {
 		time.Sleep(10 * time.Millisecond)
 	}
-	link.cut()
+	// Before the cut, not after: cut closes the connection before it
+	// returns, and the stream can see the drop and start its 300ms clock
+	// before this goroutine reads the time again -- which measured a wait
+	// a hair under the timeout it was waiting out.
 	start := time.Now()
+	link.cut()
 	err := <-done
 	if !errors.Is(err, agent.ErrHostdLost) {
 		t.Fatalf("Run with hostd gone past the timeout = %v, want ErrHostdLost", err)

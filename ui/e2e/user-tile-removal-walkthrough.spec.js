@@ -14,6 +14,7 @@
 
 import path from "node:path";
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // Stage (c) of design/design/settings-panel.design.md (§6), walked through on a
 // real `grain demo` in a real browser. Nothing is stubbed: the board is
@@ -156,7 +157,7 @@ test("a task and a comment filed from the UI are the server's actor's", async ({
   await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
   const title = `No username ${Date.now()}`;
   await page.getByLabel("Title", { exact: true }).fill(title);
-  await page.getByLabel(/^Repos/).selectOption("acme/widgets");
+  await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
   const created = page.waitForResponse(
     (r) => r.url().endsWith("/api/tasks") && r.request().method() === "POST",
   );

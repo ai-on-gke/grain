@@ -17,6 +17,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ReleaseNotesPanel from "./ReleaseNotesPanel.jsx";
 import api from "../api.js";
+import { chooseOption, optionValues } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 
@@ -225,13 +226,16 @@ describe("ReleaseNotesPanel", () => {
       },
     });
 
+    const user = userEvent.setup();
     render(<ReleaseNotesPanel showError={() => {}} />);
     expect(await screen.findByText("Now.")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByLabelText("week"));
-    await userEvent.click(
-      await screen.findByRole("option", { name: /Week 37/ }),
-    );
+    const weekPicker = screen.getByLabelText("week");
+    await user.click(weekPicker);
+    await user.clear(weekPicker);
+    await user.type(weekPicker, "w37");
+    expect(optionValues(weekPicker)).toEqual(["2026-W37"]);
+    await chooseOption(user, weekPicker, "2026-W37");
 
     expect(await screen.findByText("Then.")).toBeInTheDocument();
     expect(

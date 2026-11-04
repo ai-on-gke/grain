@@ -21,9 +21,9 @@ The binary **MUST** register exactly the commands below. The guard compares this
 | Kind | Commands |
 |---|---|
 | Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume` |
-| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|deny`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `declarations check` |
+| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|deny`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `declarations check` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
-| Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db [upgrade-postgres]`), `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
+| Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db upgrade-postgres`), `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
 | Modes: build information | `version`, `schema-version`, `release-notes`, `sandbox-image`, `container-sandbox-image`, `k8s-sandbox-image`, `image` |
 | Modes: hooks forked by a run | `agy-tool-hook`, `claude-stop-hook`, `codex-detached` |
 
@@ -36,7 +36,8 @@ The binary **MUST** register exactly the commands below. The guard compares this
 `grain [global flags] <command> [args]`. Global flags **MUST** come before the command. Their behaviour is [#CLI-4](cli.spec.md#CLI-4), [#CLI-6](cli.spec.md#CLI-6) and [#CLI-7](cli.spec.md#CLI-7).
 - `-server` defaults to `$GRAIN_SERVER`, else cli.env, else `http://127.0.0.1:4242`.
 - `-token` falls back to `$GRAIN_TOKEN`, `$GRAIN_AUTH_TOKEN`, `$GRAIN_ID_TOKEN`, `$GRAIN_TUNNEL_TOKEN`.
-- `-audience` and `-as` name environment variables that are not read ([`cli.spec.md` §8](cli.spec.md#8-divergences)).
+- `-audience` defaults to `$GRAIN_AUDIENCE`, else `$GRAIN_TUNNEL_AUDIENCE`.
+- `-as` defaults to `$GRAIN_USER`.
 - `-json` switches every task command to JSON ([#CLI-8](cli.spec.md#CLI-8)).
 
 <!-- BEGIN GENERATED FLAGS: grain -->
@@ -51,7 +52,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 | `-json` | bool |  |  |  |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/cli_flags_test.go`: `TestRunCLI_GlobalFlags`, `TestRunCLI_UsageIncludesNewFlags`.
+**Pinned by:** `pkg/cli/cli_flags_test.go`: `TestRunCLI_GlobalFlags`, `TestRunCLI_EnvVarDefaults`, `TestRunCLI_UsageIncludesNewFlags`.
 
 ---
 
@@ -665,15 +666,17 @@ _No flags._
 
 **Pinned by:** *untested*.
 
-### 4.10 `grain release approve|reject vX.Y.Z` {#CLI-39}
+### 4.10 `grain release approve|reject|rollback vX.Y.Z` {#CLI-39}
 
-Calls `POST /api/repos/{owner}/{name}/pending-releases/{version}/approve` or `…/reject` (`DecideRelease`). `-repo` defaults to grain's own source repository (`ai-on-gke/grain`).
+`approve` and `reject` call `POST /api/repos/{owner}/{name}/pending-releases/{version}/approve` or `…/reject` (`DecideRelease`). `rollback` calls `POST /api/releases/{version}/rollback` (`RollbackRelease`), passing `-to` (`vA.B.C`) and `-reason` when given; `-bad` is an alias for the positional `vX.Y.Z`. `-repo` defaults to grain's own source repository (`ai-on-gke/grain`). On a repository that publishes from GitHub Actions (`ci_mode: github`) the answer is a signed dispatch of `.github/workflows/promote-release.yml`, and the command prints the dispatch instead of a grain CI run.
+
+`grain release approval-key` prints the deployment's release-approval public key (`GET /api/release-approval-key`): the value for the GitHub repository variable `GRAIN_RELEASE_APPROVAL_KEY`, which that workflow verifies an Inbox approval against.
 
 Errors, each printed after the usage:
-- an unknown verb: `unknown release command "<v>": approve or reject`;
-- the wrong number of arguments: `grain release <verb> takes the pending release, vX.Y.Z`;
-- `-short-soak-ok` on reject: `-short-soak-ok is for grain release approve`;
-- `-allow-breaking` on reject: `-allow-breaking is for grain release approve`.
+- an unknown verb: `unknown release command "<v>": approve, reject or rollback`;
+- the wrong number of arguments: `grain release <verb> takes the pending release, vX.Y.Z` (or `grain release rollback takes the release to retract, vX.Y.Z`, or passing both `-bad` and a positional version);
+- `-short-soak-ok` or `-allow-breaking` outside approve: `-short-soak-ok is for grain release approve` / `-allow-breaking is for grain release approve`;
+- `-bad`, `-to` or `-reason` outside rollback: `-bad is for grain release rollback` / `-to is for grain release rollback` / `-reason is for grain release rollback`.
 
 `-allow-breaking` approves a release that carries breaking changes without being the major release `RELEASE_MAJOR` asks for; it reaches the approval as `allow_breaking: true`.
 
@@ -683,27 +686,47 @@ With no arguments it prints the usage and returns `flag: help requested`. **Scop
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-allow-breaking` | bool |  |  | approve only: accept a release that carries breaking changes without being the major release RELEASE_MAJOR asks for |
-| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose pending release this is |
+| `-bad` | string |  |  | rollback only: the promoted release to retract (vX.Y.Z), when not passed positionally |
+| `-reason` | string |  |  | rollback only: why the release is retracted, recorded on its vX.Y.Z-retracted tag |
+| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose release this is |
 | `-short-soak-ok` | bool |  |  | approve only: accept a release whose staging soak was under the minimum (its notification says SHORT SOAK) |
+| `-to` | string |  |  | rollback only: the earlier release (vA.B.C) latest goes back to |
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain release approve -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-allow-breaking` | bool |  |  | approve only: accept a release that carries breaking changes without being the major release RELEASE_MAJOR asks for |
-| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose pending release this is |
+| `-bad` | string |  |  | rollback only: the promoted release to retract (vX.Y.Z), when not passed positionally |
+| `-reason` | string |  |  | rollback only: why the release is retracted, recorded on its vX.Y.Z-retracted tag |
+| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose release this is |
 | `-short-soak-ok` | bool |  |  | approve only: accept a release whose staging soak was under the minimum (its notification says SHORT SOAK) |
+| `-to` | string |  |  | rollback only: the earlier release (vA.B.C) latest goes back to |
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain release reject -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
 | `-allow-breaking` | bool |  |  | approve only: accept a release that carries breaking changes without being the major release RELEASE_MAJOR asks for |
-| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose pending release this is |
+| `-bad` | string |  |  | rollback only: the promoted release to retract (vX.Y.Z), when not passed positionally |
+| `-reason` | string |  |  | rollback only: why the release is retracted, recorded on its vX.Y.Z-retracted tag |
+| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose release this is |
 | `-short-soak-ok` | bool |  |  | approve only: accept a release whose staging soak was under the minimum (its notification says SHORT SOAK) |
+| `-to` | string |  |  | rollback only: the earlier release (vA.B.C) latest goes back to |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** *untested* in `pkg/cli`.
+<!-- BEGIN GENERATED FLAGS: grain release rollback -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-allow-breaking` | bool |  |  | approve only: accept a release that carries breaking changes without being the major release RELEASE_MAJOR asks for |
+| `-bad` | string |  |  | rollback only: the promoted release to retract (vX.Y.Z), when not passed positionally |
+| `-reason` | string |  |  | rollback only: why the release is retracted, recorded on its vX.Y.Z-retracted tag |
+| `-repo` | string | `"ai-on-gke/grain"` |  | the repository whose release this is |
+| `-short-soak-ok` | bool |  |  | approve only: accept a release whose staging soak was under the minimum (its notification says SHORT SOAK) |
+| `-to` | string |  |  | rollback only: the earlier release (vA.B.C) latest goes back to |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `TestGrainReleaseRollbackCLI` in `pkg/cli/release_test.go`.
 
 ### 4.11 `grain metrics`, `grain failures` and `grain health` {#CLI-40}
 
@@ -854,6 +877,60 @@ Reads a checkout's `.grain/templates`, `.grain/suites` and `.grain/schedules` an
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/declcmd_test.go`: `TestDeclarationsCheckPrintsWhatATreeDeclares`, `TestDeclarationsCheckReportsEveryProblemAtOnce`, `TestDeclarationsCheckJSONCarriesTheVerdict`, `TestDeclarationsCheckDefaultsToTheWorkingDirectory`.
+
+### 4.14 `grain fs ls|cat|read|grep <uri>` {#CLI-64}
+
+Reads grain's namespace (`ci://`, `task://`, `deploy://`, `config://`, `memory://`, `src://`) over the daemon's `GET /api/fs/<scheme>/<path>`, the way a sandbox's `grain ls`, `grain read` and `grain grep` read it over the sandbox proxy's `/fs/` ([external-cli #XC-24/#XC-25](../external-cli/external-cli.spec.md#XC-25)). Both share `pkg/nsclient`: the URI parsing (an inline query such as `ci://o/r/<run>?grep=FAIL` included), the query each verb sends, and how the answer is printed.
+- `ls <uri>` lists a directory (`?list`); `-glob` narrows it and `-json` asks for the listing as JSON.
+- `cat <uri>` prints a file; `read` is the same command. `-tail`, `-offset` and `-limit` count bytes, `-lines N` keeps the last N lines, and `-follow` keeps reading a file that is still growing.
+- `grep <regex> <uri>` searches a file or subtree with line numbers; `-i`, `-C`, `-glob` and `-max` are the sandbox's own. A walk the namespace cut short before it found anything exits 1. `-json` prints the answer as one object.
+- A refusal is the daemon's own (a missing scope, a repository the credential does not reach, `src://` to a `gma_` token without `deployment:src`), with the task CLI's exit codes.
+
+<!-- BEGIN GENERATED FLAGS: grain fs -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain fs ls -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-glob` | string |  |  | list only the entries matching this pattern |
+| `-json` | bool |  |  | print JSON |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain fs cat -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-follow` | bool |  |  | keep reading a file that is still growing |
+| `-json` | bool |  |  | print JSON |
+| `-limit` | string |  |  | at most N bytes |
+| `-lines` | int |  |  | only the last N lines |
+| `-offset` | string |  |  | start N bytes in |
+| `-tail` | string |  |  | only the last N bytes |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain fs read -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-follow` | bool |  |  | keep reading a file that is still growing |
+| `-json` | bool |  |  | print JSON |
+| `-limit` | string |  |  | at most N bytes |
+| `-lines` | int |  |  | only the last N lines |
+| `-offset` | string |  |  | start N bytes in |
+| `-tail` | string |  |  | only the last N bytes |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain fs grep -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-C` | string |  |  | lines of context around each match |
+| `-glob` | string |  |  | search only the files matching this pattern |
+| `-i` | bool |  |  | match case-insensitively |
+| `-json` | bool |  |  | print JSON |
+| `-max` | string |  |  | stop after N matches |
+| `-n` | bool | `true` |  | print line numbers (always on) |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/fscmd_test.go`: `TestGrainFsLsCatReadGrepSharesClientWithSandboxCLI`; `pkg/ui/api_fs_test.go`: `TestAPIFsPerSchemeScopesRepoLimitsAndExternalSrcRefusal`, `TestAPIFsSecretRedactionRangeAndQueryParityWithSandboxProxy`.
 
 ---
 
@@ -1148,6 +1225,7 @@ Speaks MCP over stdin/stdout against the sandbox tools. A running daemon forks i
 | `-pr-number` | int |  |  | daemon-pinned external pull request number within -pr-repo (from model.LinkExternalPR) that pull_request_status, reply_to_pull_request_comment and resolve_review_thread scope to when -pr-branch has no open pull request of its own |
 | `-pr-repair` | bool |  |  | mark this run as the merge queue's repair of -pr-branch, which changes what base_branch_status tells it about breakage it inherited: a repair has to fix a failing check whether or not its own commits caused it, where every other run is told to leave the base's own breakage alone (orchestrator.mergeRepairRun). |
 | `-pr-repo` | string |  |  | owner/name of the repository pull_request_status and wait_for_checks report on. Unset leaves both tools registered but answering that this run has no repo, which is what a task with no target really does have. |
+| `-pr-upstream-repo` | string |  |  | owner/name of the upstream repository that pull requests for -pr-repo are opened and tracked against (model.RepoConfig.UpstreamRepo) |
 | `-propose-repo` | value |  |  | owner/name of a repository this deployment works in, which a propose_task call may name in its repo argument; repeat the flag for each, most recently worked in first. They are listed in that argument's own description, so a run can see which repositories are on offer while it is deciding what to write there. Passed by the Framework that forked this process from the list the daemon read out of its store (model.Store.WorkRepos, agent.RunConfig.ProposeRepos). Unset, the description names the rule without the list, exactly as it read before this flag existed. |
 | `-recorded-tools` | string |  |  | path to append full tool call records (JSON lines) as tools run |
 | `-run-deadline` | string |  |  | RFC3339 time at which grain cancels the run this server serves -- the deadline on the context orchestrator.RunDispatch gives framework.Run, passed on by the Framework that forked this process (agent.RunDeadlineArgs). Set, every tool result carries how much of it is left once the run is inside mcp.RunDeadlineNoticeWindow of it; unset, results read exactly as they otherwise would. |
@@ -1469,9 +1547,9 @@ _No flags._
 
 **Pinned by:** `pkg/cli/repocase_test.go`, `pkg/cli/repocase_state_repo_test.go`.
 
-### 6.7 `grain upgrade-postgres` (`upgrade-sqlite-to-postgres`, `db`) {#CLI-56}
+### 6.7 `grain upgrade-postgres` (`upgrade-sqlite-to-postgres`, `db upgrade-postgres`) {#CLI-56}
 
-Copies an existing SQLite store into PostgreSQL and optionally writes `db-config.json`, so later daemon starts use PostgreSQL. `grain db`, `grain db upgrade-postgres` and `grain db upgrade-sqlite-to-postgres` are the same command. Any other word after `db` (for example the sandbox CLI's `query`) is passed on to it as a positional argument, which it ignores. Every spelling reports errors as `grain upgrade-postgres: …`. The usage is hand-written. Flags:
+Copies an existing SQLite store into PostgreSQL and optionally writes `db-config.json`, so later daemon starts use PostgreSQL. `grain db upgrade-postgres` and `grain db upgrade-sqlite-to-postgres` are the same command, and report errors as `grain upgrade-postgres: …`. Positional arguments are refused (`unexpected argument "<x>"`). A bare `grain db` prints `usage: grain db upgrade-postgres [flags]` and `grain db: a command is required …`; `grain db -h` prints that usage and `grain db: flag: help requested`; any other first word after `db` (for example the sandbox CLI's `query`) is refused with `grain db: unknown command "<x>" (grain db upgrade-postgres [flags]; db query is the in-sandbox CLI's)`. All exit 1. The usage is hand-written. Flags:
 - `-data-dir` (default `$GRAIN_DATA_DIR`);
 - `-sqlite-path` (string): the source SQLite file;
 - `-dsn` (string): the target PostgreSQL DSN;
@@ -1490,7 +1568,7 @@ _No flags._
 _No flags._
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/upgrade_postgres_test.go`: `TestUpgradePostgresCLIValidation`, `TestUpgradePostgresCLIHelp`.
+**Pinned by:** `pkg/cli/upgrade_postgres_test.go`: `TestDBCmdRefusesUnknownSubcommand`, `TestUpgradePostgresRefusesStrayArguments`, `TestUpgradePostgresCLIValidation`, `TestUpgradePostgresCLIHelp`.
 
 ### 6.8 `grain controller bootstrap-github-app` and `grain setup gcp` {#CLI-57}
 

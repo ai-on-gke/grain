@@ -40,9 +40,11 @@ import {
   isTaskRepairing,
 } from "../state.js";
 import ItemGlyph, { GlyphLabel } from "./ItemGlyph.jsx";
+import SearchSelect, { HighlightedText } from "./SearchSelect.jsx";
 import StateDot from "./StateDot.jsx";
 import { identifierField } from "../identifierField.js";
 import { repoApiRoot } from "../repoApi.js";
+import { templateLabeler } from "../templateLabels.js";
 
 // POLL_INTERVAL_MS mirrors App.jsx's own poll: a candidate can move
 // through "cutting"/"promoting", a release through
@@ -599,32 +601,24 @@ export default function RepoReleases({
 
         {releases.length > 0 && (
           // maxWidth: release names have no length cap, and a long one
-          // would otherwise widen the picker past a phone's screen; the
-          // Select ellipsizes what no longer fits.
-          <FormControl
-            size="small"
+          // would otherwise widen the picker past a phone's screen.
+          <SearchSelect
+            label="Release"
+            fullWidth={false}
+            value={selected || ""}
             sx={{ mt: 2, minWidth: 240, maxWidth: "100%" }}
-          >
-            <InputLabel id="release-picker-label">Release</InputLabel>
-            <Select
-              labelId="release-picker-label"
-              label="Release"
-              value={selected || ""}
-              onChange={(e) => {
-                selectedRef.current = e.target.value;
-                setSelected(e.target.value);
-                setMissingRelease(null);
-                onSelectRelease(e.target.value);
-                refresh();
-              }}
-            >
-              {releases.map((r) => (
-                <MenuItem key={r.name} value={r.name}>
-                  {r.name} -- {RELEASE_STATUS_LABELS[r.status] || r.status}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
+            options={releases.map((r) => ({
+              value: r.name,
+              label: `${r.name} -- ${RELEASE_STATUS_LABELS[r.status] || r.status}`,
+            }))}
+            onChange={(next) => {
+              selectedRef.current = next;
+              setSelected(next);
+              setMissingRelease(null);
+              onSelectRelease(next);
+              refresh();
+            }}
+          />
         )}
 
         {current && (
@@ -1000,8 +994,11 @@ function QualificationPlanEditor({ plan, templates, onSave }) {
     await onSave(payload);
   };
 
-  const templateName = (id) =>
-    (templates.find((tmpl) => tmpl.id === id) || {}).name || id;
+  const templateLabel = templateLabeler(templates);
+  const templateName = (id) => {
+    const found = templates.find((tmpl) => tmpl.id === id);
+    return found ? templateLabel(found) : id;
+  };
 
   return (
     <form onSubmit={submit}>
@@ -1050,33 +1047,33 @@ function QualificationPlanEditor({ plan, templates, onSave }) {
             }}
           >
             <Stack direction="row" spacing={1} alignItems="flex-start">
-              <FormControl size="small" sx={{ flex: 2 }}>
-                <InputLabel id={`qualification-template-label-${i}`}>
-                  Template
-                </InputLabel>
-                <Select
-                  labelId={`qualification-template-label-${i}`}
-                  label="Template"
-                  value={it.templateId}
-                  onChange={(e) =>
-                    updateItem(i, { templateId: e.target.value })
-                  }
-                >
-                  {/* A qualification plan is a list of templates, so
-                      this picker carries their figure the way every
-                      other template picker does (ItemGlyph.jsx). The
-                      placeholder names no template and holds the slot
-                      open instead. */}
-                  <MenuItem value="" disabled>
-                    <GlyphLabel kind={null}>Choose a template</GlyphLabel>
-                  </MenuItem>
-                  {templates.map((tmpl) => (
-                    <MenuItem key={tmpl.id} value={tmpl.id}>
-                      <GlyphLabel kind="templates">{tmpl.name}</GlyphLabel>
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
+              {/* A qualification plan is a list of templates, so this
+                  picker carries their figure the way every other template
+                  picker does (ItemGlyph.jsx). The placeholder names no
+                  template and holds the slot open instead. */}
+              <SearchSelect
+                label="Template"
+                shrinkLabel
+                placeholder="Choose a template"
+                value={it.templateId}
+                sx={{ flex: 2 }}
+                onChange={(next) => updateItem(i, { templateId: next })}
+                options={[
+                  { value: "", label: "Choose a template", disabled: true },
+                  ...templates.map((tmpl) => ({
+                    value: tmpl.id,
+                    label: templateLabel(tmpl),
+                  })),
+                ]}
+                renderRow={(option) => (
+                  <GlyphLabel kind={option.value === "" ? null : "templates"}>
+                    <HighlightedText
+                      text={option.label}
+                      ranges={option.ranges}
+                    />
+                  </GlyphLabel>
+                )}
+              />
               <TextField
                 label="Repeat"
                 type="number"

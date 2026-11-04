@@ -658,8 +658,9 @@ var singleTenantStateRefusals = map[string]string{
 
 // singleTenantOpenRoutes are the public routes a single-tenant daemon
 // serves without its access code, and why: the "Enter access code"
-// page's own, logging out, and a grain hostd dialing in, which
-// authenticates in its own protocol (pkg/ui singleTenantOpenRoute). Every other
+// page's own, logging out, a grain hostd dialing in, which
+// authenticates in its own protocol, and the script that installs one
+// (pkg/ui singleTenantOpenRoute). Every other
 // public route is in singleTenantGatedPublicRoutes.
 // TestRouteAuthorizationSingleTenant holds every public route to one of
 // the two, so a gate change cannot
@@ -671,6 +672,7 @@ var singleTenantOpenRoutes = map[string]string{
 	"POST /api/auth/logout":              "signing out",
 	"GET /api/auth/logout":               "signing out",
 	"GET /api/hostd/connect":             "a grain hostd dialing in, with the hostd token",
+	"GET /api/hostd/install.sh":          "the script that installs a grain hostd, which holds no secret",
 }
 
 // singleTenantGatedPublicRoutes are the public routes a single-tenant

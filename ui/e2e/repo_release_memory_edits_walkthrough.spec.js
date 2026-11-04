@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // Found by the 2026-10-07 repository walkthrough
 // (docs/test-runs/2026-10-07-repository-release-memory-ui.md).
@@ -143,10 +144,8 @@ test.describe("Repository walkthrough regressions (2026-10-07)", () => {
       const dependsOn = page.getByRole("combobox", { name: "Depends on" });
       await page.getByRole("button", { name: "Add item" }).click();
       await page.getByRole("button", { name: "Add item" }).click();
-      await template.nth(0).click();
-      await page.getByRole("option", { name: "security-audit" }).click();
-      await template.nth(1).click();
-      await page.getByRole("option", { name: "release-qualification" }).click();
+      await chooseOption(template.nth(0), { label: "security-audit" });
+      await chooseOption(template.nth(1), { label: "release-qualification" });
       await dependsOn.nth(1).click();
       await page.getByRole("option", { name: "security-audit" }).click();
       await page.keyboard.press("Escape");

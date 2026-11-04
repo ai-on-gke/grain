@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 test.describe("Inputs in Templates, Schedules, and Suites Automation Walkthrough", () => {
   async function seedOne(page, path, data) {
@@ -90,9 +91,11 @@ test.describe("Inputs in Templates, Schedules, and Suites Automation Walkthrough
     await expect(page.locator(".template-field-row")).toHaveCount(4);
 
     // Target Repo & Base Branch
-    const repoSelect = page.locator('select[name="repo"]').first();
+    const repoSelect = page
+      .locator('.repo-field:has(input[name="repo"]) [role="combobox"]')
+      .first();
     await expect(repoSelect).toBeVisible();
-    await repoSelect.selectOption("acme/widgets");
+    await chooseOption(repoSelect, "acme/widgets");
 
     // Test malformed branch validation
     await page.locator('input[name="base"]').first().fill("broken..branch");
@@ -255,8 +258,10 @@ test.describe("Inputs in Templates, Schedules, and Suites Automation Walkthrough
     await page.getByRole("option", { name: "Start it anyway" }).click();
 
     // Target repo & Base branch
-    const repoSelect = page.locator('select[name="repo"]').first();
-    await repoSelect.selectOption("acme/widgets");
+    const repoSelect = page
+      .locator('.repo-field:has(input[name="repo"]) [role="combobox"]')
+      .first();
+    await chooseOption(repoSelect, "acme/widgets");
 
     // 2.3 Verify unfillable template rejection validation:
     // Switch to template-backed task
@@ -409,13 +414,15 @@ test.describe("Inputs in Templates, Schedules, and Suites Automation Walkthrough
     ).toBeVisible();
 
     // Verify Suite selector shows our suite
-    await expect(page.getByRole("combobox", { name: "Suite" })).toContainText(
+    await expect(page.getByRole("combobox", { name: "Suite" })).toHaveValue(
       suiteName,
     );
 
     // Target repo
-    const repoSelect = page.locator('select[name="repo"]').first();
-    await repoSelect.selectOption("acme/widgets");
+    const repoSelect = page
+      .locator('.repo-field:has(input[name="repo"]) [role="combobox"]')
+      .first();
+    await chooseOption(repoSelect, "acme/widgets");
 
     // Test malformed base branch validation in suite run
     const branchInput = page.locator('input[name="base"]');
@@ -492,8 +499,10 @@ test.describe("Inputs in Templates, Schedules, and Suites Automation Walkthrough
     await expect(page.getByText("{{operator_note}}")).toBeVisible();
 
     // Unbound template: target repo and base branch inputs
-    const repoSelect = page.locator('select[name="repo"]').first();
-    await repoSelect.selectOption("acme/widgets");
+    const repoSelect = page
+      .locator('.repo-field:has(input[name="repo"]) [role="combobox"]')
+      .first();
+    await chooseOption(repoSelect, "acme/widgets");
     await page.locator('input[name="base"]').fill("main");
 
     // 4.4 Verify required validation when operator note is left empty

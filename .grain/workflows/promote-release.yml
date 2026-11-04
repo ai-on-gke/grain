@@ -62,8 +62,11 @@
 # input.
 #
 # The route selects one job: `promote` for an approval (which brings
-# `approve` in front of it) or `reject`. Dispatched whole, all three
-# refuse.
+# `approve` in front of it), `reject`, or `rollback` (started by
+# POST /api/releases/{version}/rollback or `grain release rollback`,
+# which set GRAIN_CI_RELEASE_ROLLBACK_TO and
+# GRAIN_CI_RELEASE_ROLLBACK_REASON -- variables no API caller and no
+# env: block can set). Dispatched whole, all four refuse.
 name: promote-release
 
 on:
@@ -120,3 +123,20 @@ jobs:
     steps:
       - name: Drop the pending release a person rejected
         run: bash ./scripts/release-from-trunk.sh reject "$GRAIN_CI_RELEASE_VERSION"
+
+  rollback:
+    name: roll a promoted release back
+    cache: false
+    capabilities: ["repo-write:ai-on-gke/grain", package-publish]
+    optional-capabilities: [image-signing]
+    timeout-minutes: 30
+    steps:
+      - name: Retract the release a person rolled back and re-point latest
+        run: |
+          if [ "${GRAIN_CI_REQUESTED_BY_KIND:-}" != human ]; then
+            echo "promote-release: only a person rolls a release back" >&2
+            exit 1
+          fi
+          RELEASE_ROLLBACK_TO="${GRAIN_CI_RELEASE_ROLLBACK_TO:-}" \
+          RELEASE_ROLLBACK_REASON="${GRAIN_CI_RELEASE_ROLLBACK_REASON:-}" \
+            bash ./scripts/release-from-trunk.sh rollback --bad "$GRAIN_CI_RELEASE_VERSION"

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { expect, test } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // A deployment default the capability catalogue restricts to one repo,
 // on a task filed with No repo (2026-10-29 test run, Bug 3). The demo
@@ -41,7 +42,7 @@ async function openStandalone(page, title) {
   await page.getByRole("button", { name: /^\+? ?New task$/ }).click();
   await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
   await page.getByLabel("Title").fill(title);
-  await page.getByLabel(/^Repos/).selectOption("none");
+  await chooseOption(page.getByLabel(/^Repos/), "none");
   const picker = page.getByLabel("Legacy capabilities");
   const note = page.getByTestId("new-task-catalogue-refused");
   await expect(note).toHaveText(
@@ -169,7 +170,7 @@ test("an edited picker is asked to untick a refused grant", async ({
     await expect(note).toHaveText(
       "settings/capabilities.yml refuses read-issues on a task with no repo: untick it, or the task will not be filed.",
     );
-    await page.getByLabel(/^Repos/).selectOption("acme/widgets");
+    await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
     await expect(note).toHaveCount(0);
     await expect(picker.locator("[data-catalogue-refused]")).toHaveCount(0);
     await page.getByRole("button", { name: "Discard draft" }).click();

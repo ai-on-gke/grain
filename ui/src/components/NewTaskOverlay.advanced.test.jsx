@@ -25,6 +25,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import NewTaskOverlay from "./NewTaskOverlay.jsx";
 import api from "../api.js";
 import { TASK_DRAFT_STORAGE_KEY } from "../taskDraft.js";
+import { chooseOption, optionValues } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
 
@@ -56,7 +57,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Talk");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Advanced options" }));
     expect(screen.queryByLabelText(/Interactive session/)).toBeNull();
     expect(screen.getByLabelText(/Queue immediately/)).toBeInTheDocument();
@@ -83,7 +84,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Fix");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Advanced options" }));
     await user.type(screen.getByLabelText(/vCPUs/), "4");
     await user.type(screen.getByLabelText(/Memory \(MiB\)/), "8192");
@@ -216,7 +217,7 @@ describe("NewTaskOverlay", () => {
     renderWith(connections);
 
     await user.type(screen.getByLabelText(/Title/), "Port");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     expect(screen.queryByLabelText("Agent framework")).not.toBeInTheDocument();
     await user.click(screen.getByLabelText("Model"));
     await user.click(screen.getByRole("option", { name: "claude-sonnet-5" }));
@@ -236,7 +237,7 @@ describe("NewTaskOverlay", () => {
     renderWith(connections);
 
     await user.type(screen.getByLabelText(/Title/), "Port");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     const picker = screen.getByLabelText("Model");
     await user.click(picker);
     await user.clear(picker);
@@ -262,7 +263,7 @@ describe("NewTaskOverlay", () => {
     renderWith(connections);
 
     await user.type(screen.getByLabelText(/Title/), "Fix");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     expect(screen.getByLabelText("Model")).toHaveValue(
       "Deployment default (gpt-5.6-sol)",
     );
@@ -283,7 +284,7 @@ describe("NewTaskOverlay", () => {
     renderWith(connections);
 
     await user.type(screen.getByLabelText(/Title/), "One expensive job");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByLabelText("Model"));
     await user.click(screen.getByRole("option", { name: "claude-opus-5" }));
     await user.click(screen.getByRole("button", { name: "Advanced options" }));
@@ -315,7 +316,7 @@ describe("NewTaskOverlay", () => {
     renderWith(connections);
 
     await user.type(screen.getByLabelText(/Title/), "Switch");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Advanced options" }));
     await user.click(screen.getByLabelText("Specific connection"));
     expect(
@@ -363,7 +364,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Write memory");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Advanced options" }));
     expect(screen.getByText("Deployment default (egress)")).toBeInTheDocument();
     await user.click(screen.getByLabelText("Network access"));
@@ -394,7 +395,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Check the flag");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Advanced options" }));
     const select = screen.getByLabelText("When the agent finds nothing to do");
     expect(select).toHaveTextContent("Close");
@@ -420,7 +421,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Keep worker warm");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Advanced options" }));
     await user.click(screen.getByRole("checkbox", { name: /Keep running/ }));
     await user.click(screen.getByRole("button", { name: "Create task" }));
@@ -444,7 +445,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Fix");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     expect(JSON.parse(createCall()[1].body).networkAccess).toBe("");
@@ -518,7 +519,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Regen");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Advanced options" }));
     expect(
       screen.getByText(/Deployment-wide, used when the box above is empty/),
@@ -550,7 +551,7 @@ describe("NewTaskOverlay", () => {
         />,
       );
       await user.type(screen.getByLabelText(/Title/), "Train");
-      await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+      await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
       await user.click(
         screen.getByRole("button", { name: "Advanced options" }),
       );
@@ -586,13 +587,49 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Add");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Advanced options" }));
     await user.click(screen.getByLabelText("Review"));
     await user.click(screen.getByRole("option", { name: "Security pass" }));
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     expect(JSON.parse(createCall()[1].body).reviewTemplateId).toBe("7");
+  });
+
+  // grain/task-2910: the review picker is a SearchSelect, so a word from
+  // the middle of a template's name finds it, which a native select's
+  // typeahead (first letters only) never did.
+  it("finds a review template by any word of its name", async () => {
+    api.mockResolvedValueOnce({ id: "42" });
+    const templates = [
+      { id: "3", name: "Bug hunt" },
+      { id: "7", name: "Security pass" },
+      { id: "9", name: "Release notes pass" },
+    ];
+    const user = userEvent.setup();
+    render(
+      <NewTaskOverlay
+        config={null}
+        templates={templates}
+        onClose={() => {}}
+        onCreated={() => Promise.resolve()}
+        showError={() => {}}
+      />,
+    );
+
+    await user.type(screen.getByLabelText(/Title/), "Add");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
+    await user.click(screen.getByRole("button", { name: "Advanced options" }));
+    const review = screen.getByRole("combobox", { name: /^Review/ });
+    await user.click(review);
+    await user.clear(review);
+    await user.type(review, "pass notes");
+    expect(optionValues(review)).toEqual(["9"]);
+    await user.keyboard("{Enter}");
+    expect(review).toHaveValue("Release notes pass");
+    await user.click(screen.getByRole("button", { name: "Create task" }));
+
+    expect(JSON.parse(createCall()[1].body).reviewTemplateId).toBe("9");
   });
 
   // grain/task-47: the same figure the Templates page, the schedule
@@ -645,9 +682,11 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Fix");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Advanced options" }));
-    expect(screen.getByText("No review")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /^Review/ })).toHaveValue(
+      "No review",
+    );
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     expect(JSON.parse(createCall()[1].body).reviewTemplateId).toBe("");
@@ -669,7 +708,7 @@ describe("NewTaskOverlay", () => {
     );
 
     await user.type(screen.getByLabelText(/Title/), "Default task");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "none");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "none");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     expect(JSON.parse(createCall()[1].body)).not.toHaveProperty("team");

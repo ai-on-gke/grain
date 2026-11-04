@@ -14,7 +14,12 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import GoalSection, { bodyOf, goalSummary } from "./GoalSection.jsx";
+import api from "../../api.js";
+import { chooseOption } from "../../searchSelectTesting.js";
+
+vi.mock("../../api.js", () => ({ default: vi.fn(() => Promise.resolve({})) }));
 
 const goal = {
   kind: "base-green",
@@ -66,6 +71,39 @@ describe("GoalSection", () => {
     fireEvent.click(screen.getByText("Add goal"));
     fireEvent.click(screen.getByText("Save goal"));
     expect(act).toHaveBeenCalledTimes(1);
+  });
+
+  // grain/task-2879: the goal's Repo box is searched like RepoField's,
+  // anywhere in owner/name, and still takes a repo typed in full.
+  it("searches the known repos for a base-green goal's repo", async () => {
+    const user = userEvent.setup();
+    const act = vi.fn((fn) => fn().then(() => true));
+    render(
+      <GoalSection
+        t={{ id: "7", state: "queued", repo: "acme/widgets" }}
+        act={act}
+        config={{ targetRepos: ["acme/widgets", "ai-on-gke/grain"] }}
+        tasks={[]}
+      />,
+    );
+    fireEvent.click(screen.getByText("Add goal"));
+    const box = screen.getByRole("combobox", { name: "Repo" });
+    expect(box).toHaveValue("acme/widgets");
+    await user.click(box);
+    await user.clear(box);
+    await user.type(box, "grain");
+    await chooseOption(user, box, "ai-on-gke/grain");
+    expect(box).toHaveValue("ai-on-gke/grain");
+
+    await user.clear(box);
+    await user.type(box, "acme/brand-new");
+    await user.tab();
+    expect(box).toHaveValue("acme/brand-new");
+
+    fireEvent.click(screen.getByText("Save goal"));
+    expect(JSON.parse(api.mock.calls.at(-1)[1].body).spec.repo).toBe(
+      "acme/brand-new",
+    );
   });
 
   it("draws no controls on a closed task", () => {

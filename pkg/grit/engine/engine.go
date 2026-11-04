@@ -1952,7 +1952,8 @@ func StepEnv(plan workflows.Plan, pj workflows.PlannedJob, step workflows.Step) 
 		for k, v := range layer {
 			switch k {
 			case workflows.RequestedByKindEnv, workflows.RequestedByEnv, workflows.ReleaseVersionEnv,
-				workflows.ReleaseShortSoakOKEnv, workflows.ReleaseAllowBreakingEnv:
+				workflows.ReleaseShortSoakOKEnv, workflows.ReleaseAllowBreakingEnv,
+				workflows.ReleaseRollbackToEnv, workflows.ReleaseRollbackReasonEnv:
 				continue
 			}
 			env[k] = v

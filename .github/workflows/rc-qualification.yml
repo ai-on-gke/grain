@@ -1,0 +1,117 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Stage 1 housekeeping for the release candidate in qualification
+# (design/playbook/releases.playbook.md §3, §4, §6 and §14).
+#
+# The release train is the grain task filed from
+# .grain/templates/release-train.yml: it cuts, stages and drops rcs with its
+# narrow tag grant, but holds no GitHub token, so it cannot ask GitHub
+# Actions for anything. This workflow does that part and nothing else:
+#   - it reads the rc's verdict the way the train does, by running
+#     scripts/release-from-trunk.sh as a dry run (DRY_RUN=true, every
+#     publisher off): candidate-gate.sh check-qualification on nightly.yml's
+#     jobs on the rc (Stage 1) and the grain/release-qualification check run
+#     (Stage 2);
+#   - scripts/release-train-actions.sh then dispatches the one flake retry
+#     and the infra re-runs of nightly.yml jobs on the rc, as one run with
+#     inputs.jobs, and cancels the nightly.yml runs still going on an rc
+#     that is confirmed red or RELEASE_NEVER_PROMOTE names (superseded, §6).
+#
+# It never cuts, tags, pushes, publishes or promotes: the train script only
+# ever runs dry here, the job holds `contents: read`, and the helper calls
+# nothing but the Actions API (TestTheReleaseTrainNeverPromotesARelease,
+# tests/deploy). Stage 1 on a new rc starts from nightly.yml's own
+# `push: tags`, since the train's tags are pushed with the filing team's
+# credential, not GITHUB_TOKEN.
+#
+# A finished nightly.yml run on an rc tag wakes it; an hourly cron is a
+# safety wake. On a non-main ref, or with dry_run, the helper only says
+# what it would do.
+
+name: rc-qualification
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  # A workflow_run run is a run of the default branch: it checks out main,
+  # never the triggering run's head, and reads nothing from its artifacts.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: [nightly]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Say which nightly.yml jobs would be re-run or cancelled without calling the Actions API (always true on non-main refs)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  actions: write
+  checks: read
+  contents: read
+
+jobs:
+  housekeeping:
+    name: re-run and cancel rc qualification jobs
+    if: >-
+      github.event_name != 'workflow_run' ||
+      contains(github.event.workflow_run.head_branch, '-rc.')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: ${{ github.workflow }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Read the rc's qualification verdict (a dry run of the train)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The GitHub App (slug or id) grain posts grain/release-qualification
+          # as; a same-named check run from anything else never qualifies an rc.
+          RELEASE_QUALIFICATION_APP: ${{ vars.RELEASE_QUALIFICATION_APP }}
+          RELEASE_TRAIN_OUTPUT: ${{ runner.temp }}/release-train.out
+        run: |
+          set -euo pipefail
+          : > "$RELEASE_TRAIN_OUTPUT"
+          DRY_RUN=true RELEASE_CI_SOURCE=github \
+            RELEASE_IMAGES=off RELEASE_NOTES_TASK=off RELEASE_NOTIFY=off \
+            bash ./scripts/release-from-trunk.sh
+
+      - name: Re-run qualification jobs and cancel superseded runs
+        # Also after a train that stopped with an error: an rc it would drop
+        # still has runs to cancel.
+        if: ${{ !cancelled() }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_GITHUB_REPO: ${{ github.repository }}
+          RELEASE_TRAIN_OUTPUT: ${{ runner.temp }}/release-train.out
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          # The train's tags start nightly.yml themselves; a dry run's
+          # would-be rc is never dispatched.
+          RELEASE_TAGS_FIRE: "true"
+        run: |
+          set -euo pipefail
+          DRY_RUN=false
+          if [ "${GITHUB_REF:-}" != refs/heads/main ] || [ "${INPUT_DRY_RUN:-}" = true ]; then
+            DRY_RUN=true
+          fi
+          export DRY_RUN
+          bash ./scripts/release-train-actions.sh "$RELEASE_TRAIN_OUTPUT"

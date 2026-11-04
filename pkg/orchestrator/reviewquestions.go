@@ -173,6 +173,7 @@ func settleReviewQuestions(ctx context.Context, store *model.Store, task model.T
 		o.RetryRequestedAt = &now
 		o.PendingQuestionCommentID = nil
 		o.PendingSecret = ""
+		o.PendingAccess = nil
 	}); err != nil {
 		return fmt.Errorf("orchestrator: queueing %s to carry out its owner's decision: %w", task.ID, err)
 	}

@@ -3182,3 +3182,58 @@ func TestCheckRunAppAsksTheTokenSource(t *testing.T) {
 		}
 	}
 }
+
+func TestFindOpenPullRequestForBranchAcceptsForkQualifiedHead(t *testing.T) {
+	t.Parallel()
+	transport := NewFakeTransport(
+		ApiResponse{
+			Status: 200,
+			Body:   []byte(`[{"number": 77, "html_url": "https://github.com/gke-labs/kube-agents/pull/77"}]`),
+		},
+		ApiResponse{
+			Status: 200,
+			Body:   []byte(`[{"number": 78, "html_url": "https://github.com/sackheads/kube-agents/pull/78"}]`),
+		},
+	)
+	client := NewClient(transport, nil)
+
+	pr, err := client.FindOpenPullRequestForBranch("gke-labs", "kube-agents", "sackheads:grain/task-8")
+	if err != nil {
+		t.Fatalf("FindOpenPullRequestForBranch cross-fork: %v", err)
+	}
+	if pr == nil || pr.Number != 77 {
+		t.Fatalf("pr = %+v, want #77", pr)
+	}
+	if got := transport.Calls[0].Path; got != "/repos/gke-labs/kube-agents/pulls?state=open&head=sackheads%3Agrain%2Ftask-8" {
+		t.Fatalf("cross-fork query path = %q", got)
+	}
+
+	pr2, err := client.FindOpenPullRequestForBranch("sackheads", "kube-agents", "grain/task-8")
+	if err != nil {
+		t.Fatalf("FindOpenPullRequestForBranch same-repo: %v", err)
+	}
+	if pr2 == nil || pr2.Number != 78 {
+		t.Fatalf("pr2 = %+v, want #78", pr2)
+	}
+	if got := transport.Calls[1].Path; got != "/repos/sackheads/kube-agents/pulls?state=open&head=sackheads%3Agrain%2Ftask-8" {
+		t.Fatalf("same-repo query path = %q", got)
+	}
+}
+
+func TestListCheckRunsDecodesAppAndExternalID(t *testing.T) {
+	t.Parallel()
+	transport := NewFakeTransport(ApiResponse{
+		Status: 200,
+		Body: []byte(`{"total_count":1,"check_runs":[{` +
+			`"id":42,"head_sha":"abc123","external_id":"release-qualification:acme/widgets:v1.4.0-rc.2",` +
+			`"name":"grain/release-qualification","status":"completed","conclusion":"success",` +
+			`"app":{"slug":"grain-bot"}}]}`),
+	})
+	runs, err := NewClient(transport, nil).ListCheckRuns("acme", "widgets", "abc123")
+	if err != nil {
+		t.Fatalf("ListCheckRuns: %v", err)
+	}
+	if len(runs) != 1 || runs[0].App != "grain-bot" || runs[0].ExternalID != "release-qualification:acme/widgets:v1.4.0-rc.2" {
+		t.Fatalf("ListCheckRuns = %+v, want App=grain-bot and ExternalID decoded", runs)
+	}
+}

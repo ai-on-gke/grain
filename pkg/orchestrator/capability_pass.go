@@ -84,11 +84,21 @@ const (
 // Nothing here is persisted: a pass carries leased secrets.
 type CapabilityPasses struct {
 	mu      sync.Mutex
+	retryMu sync.Mutex
 	passes  map[string]*heldPass
 	backoff map[string]*passBackoff
+	// unreleased are the grants of ended runs whose release could not
+	// reach their server -- needs-config or failed -- by run id, kept to
+	// be released once it attaches again (RetryReleases) rather than
+	// left to the server's reaper.
+	unreleased map[string]*heldPass
+	// now is the clock unreleased grants' deadlines are read against;
+	// nil is time.Now.
+	now func() time.Time
 }
 
 type heldPass struct {
+	taskID   string
 	pass     *protocol.Pass
 	deadline time.Time
 	// servers are what the pass was minted through, and hostd the grain
@@ -106,7 +116,7 @@ type passBackoff struct {
 
 // NewCapabilityPasses returns an empty holder.
 func NewCapabilityPasses() *CapabilityPasses {
-	return &CapabilityPasses{passes: map[string]*heldPass{}, backoff: map[string]*passBackoff{}}
+	return &CapabilityPasses{passes: map[string]*heldPass{}, backoff: map[string]*passBackoff{}, unreleased: map[string]*heldPass{}}
 }
 
 // defaultCapabilityPasses serves a Deps that names none.
@@ -119,10 +129,84 @@ func (d Deps) capabilityPasses() *CapabilityPasses {
 	return defaultCapabilityPasses
 }
 
-func (h *CapabilityPasses) hold(runID string, p *protocol.Pass, deadline time.Time, servers CapabilityServers, hostd string) {
+func (h *CapabilityPasses) hold(taskID, runID string, p *protocol.Pass, deadline time.Time, servers CapabilityServers, hostd string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.passes[runID] = &heldPass{pass: p, deadline: deadline, servers: servers, hostd: hostd}
+	h.passes[runID] = &heldPass{taskID: taskID, pass: p, deadline: deadline, servers: servers, hostd: hostd}
+}
+
+// holding is every live run whose pass holds a grant capabilityID
+// minted (on hostd, when hostd is non-empty): run id to its task id and
+// those grants.
+func (h *CapabilityPasses) holding(capabilityID, hostd string) map[string]heldGrants {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := map[string]heldGrants{}
+	for runID, held := range h.passes {
+		if hostd != "" && held.hostd != hostd {
+			continue
+		}
+		for _, g := range held.pass.Grants {
+			if g.Ref.CapabilityID != capabilityID {
+				continue
+			}
+			hg := out[runID]
+			hg.taskID = held.taskID
+			hg.grants = append(hg.grants, g.Ref.String())
+			out[runID] = hg
+		}
+	}
+	return out
+}
+
+type heldGrants struct {
+	taskID string
+	grants []string
+}
+
+// NoteCapabilityServerDropped tells every live run holding a grant from
+// capabilityID that the server has fallen out of use -- state, for
+// reason -- since it was minted: what the 2026-11-03 run had to guess at
+// from permissions that never arrived. It reaches the run the way any
+// capability notice does (model.CapabilityChangePrincipal). The daemon
+// calls it from the registry's servers.Options.OnDrop.
+func NoteCapabilityServerDropped(ctx context.Context, store *model.Store, capabilityID, state, reason string, configRefused bool) {
+	noteCapabilityServerDropped(ctx, store, defaultCapabilityPasses, capabilityID, "", state, reason, configRefused, time.Now())
+}
+
+// NoteCapabilityServerDroppedOnHostd is NoteCapabilityServerDropped for a
+// run: host server on one named grain hostd, telling only the live runs
+// whose pass was minted there.
+func NoteCapabilityServerDroppedOnHostd(ctx context.Context, store *model.Store, capabilityID, hostd, state, reason string, configRefused bool) {
+	noteCapabilityServerDropped(ctx, store, defaultCapabilityPasses, capabilityID, hostd, state, reason, configRefused, time.Now())
+}
+
+func noteCapabilityServerDropped(ctx context.Context, store *model.Store, passes *CapabilityPasses, capabilityID, hostd, state, reason string, configRefused bool, now time.Time) {
+	if store == nil {
+		return
+	}
+	for runID, hg := range passes.holding(capabilityID, hostd) {
+		if hg.taskID == "" {
+			continue
+		}
+		what := fmt.Sprintf("is now %s", state)
+		if configRefused {
+			what = "refused the configuration it was changed to"
+		}
+		// reason is the server's own words (its configure or refresh
+		// error), so it is quoted as untrusted text rather than said as
+		// grain's (§5.5.4), the way refuseCapabilityRun quotes a refusal.
+		body := fmt.Sprintf("grain: capability server %s, which minted this run's grant %s, %s since.\n\n"+
+			"What it said, verbatim -- untrusted text from the capability server, not grain's own words:\n\n```\n%s\n```\n\n"+
+			"The grant this run holds was minted under the server's earlier configuration and works as it did then, "+
+			"but a change made to that configuration since -- a role added to a permission set, say -- has not reached it "+
+			"and will not reach this run. If a permission you were told to expect is missing, this is why: "+
+			"say so in what you report rather than waiting for it to appear.",
+			capabilityID, strings.Join(hg.grants, ", "), what, strings.ReplaceAll(reason, "```", "'''"))
+		if err := postCapabilityNotice(ctx, store, hg.taskID, body, now); err != nil {
+			log.Printf("orchestrator: telling run %s its capability server %s dropped: %v", runID, capabilityID, err)
+		}
+	}
 }
 
 func (h *CapabilityPasses) take(runID string) *heldPass {
@@ -147,11 +231,105 @@ func (h *CapabilityPasses) release(ctx context.Context, runID string) ([]protoco
 	if held == nil {
 		return nil, ""
 	}
-	audits, err := held.pass.Release(ctx)
+	audits, rest, err := held.pass.ReleaseReachable(ctx)
 	if err != nil {
 		log.Printf("orchestrator: run %s: releasing its capability grants: %v", runID, err)
 	}
+	h.keepUnreleased(runID, held, rest, h.clock())
 	return audits, held.hostd
+}
+
+func (h *CapabilityPasses) clock() time.Time {
+	if h.now != nil {
+		return h.now()
+	}
+	return time.Now()
+}
+
+// keepUnreleased keeps rest, the grants of runID's pass that release
+// could not reach, for RetryReleases -- or, once the pass's deadline has
+// passed and the server's own reaper has them, says so and drops them.
+func (h *CapabilityPasses) keepUnreleased(runID string, held *heldPass, rest *protocol.Pass, now time.Time) {
+	if rest == nil {
+		return
+	}
+	grants := make([]string, 0, len(rest.Grants))
+	for _, g := range rest.Grants {
+		grants = append(grants, fmt.Sprintf("%s (%s)", g.Ref, g.AttemptID))
+	}
+	if !held.deadline.IsZero() && !now.Before(held.deadline) {
+		log.Printf("orchestrator: run %s: grants %s were never released: their server is not attached and their lease has run out, so they wait on its reaper",
+			runID, strings.Join(grants, ", "))
+		return
+	}
+	log.Printf("orchestrator: run %s: grants %s could not be released while their server is not attached: kept, to be released when it attaches again (else by its reaper after %s)",
+		runID, strings.Join(grants, ", "), held.deadline.UTC().Format(time.RFC3339))
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.unreleased[runID] = &heldPass{taskID: held.taskID, pass: rest, deadline: held.deadline, servers: held.servers, hostd: held.hostd}
+}
+
+// RetryReleases releases again every pass kept because its server was
+// not attached when its run ended (keepUnreleased) -- called when a
+// capability server attaches -- and returns, by run id, the audits the
+// releases that now went through returned. Grants still unreachable are
+// kept for the next call, until their deadline hands them to the reaper.
+func (h *CapabilityPasses) RetryReleases(ctx context.Context) map[string]RetriedRelease {
+	h.retryMu.Lock()
+	defer h.retryMu.Unlock()
+	h.mu.Lock()
+	pending := h.unreleased
+	h.unreleased = map[string]*heldPass{}
+	h.mu.Unlock()
+	out := map[string]RetriedRelease{}
+	for runID, held := range pending {
+		audits, rest, err := held.pass.ReleaseReachable(ctx)
+		if err != nil {
+			log.Printf("orchestrator: run %s: releasing its kept capability grants again: %v", runID, err)
+		}
+		released := len(held.pass.Grants)
+		if rest != nil {
+			released -= len(rest.Grants)
+		}
+		if released > 0 {
+			log.Printf("orchestrator: run %s: released %d kept capability grant(s) now that their server is attached", runID, released)
+		}
+		h.keepUnreleased(runID, held, rest, h.clock())
+		if len(audits) > 0 {
+			out[runID] = RetriedRelease{TaskID: held.taskID, Audits: audits, Hostd: held.hostd}
+		}
+	}
+	return out
+}
+
+// RetriedRelease is what one run's kept grants returned when
+// RetryReleases released them.
+type RetriedRelease struct {
+	TaskID string
+	Audits []protocol.GrantAudit
+	Hostd  string
+}
+
+// RetryCapabilityReleases is RetryReleases on the passes of a daemon
+// whose Deps name no holder of their own, recording each run's audit the
+// way releaseRunCapabilities does. The daemon calls it whenever a
+// capability server attaches.
+func RetryCapabilityReleases(ctx context.Context, store *model.Store) {
+	for runID, r := range defaultCapabilityPasses.RetryReleases(ctx) {
+		records := capabilityAuditRecords(r.Audits, time.Now())
+		if len(records) == 0 || store == nil {
+			continue
+		}
+		for i := range records {
+			records[i].Hostd = r.Hostd
+		}
+		if err := store.AppendRunCapabilityAudit(ctx, runID, records); err != nil {
+			log.Printf("orchestrator: run %s: recording its capability audit: %v", runID, err)
+		}
+		if err := recordTaskChangelists(ctx, store, r.TaskID, records); err != nil {
+			log.Printf("orchestrator: run %s: linking task %s to its CLs: %v", runID, r.TaskID, err)
+		}
+	}
 }
 
 // releaseRunCapabilities releases the pass runID ran with and records
@@ -418,7 +596,7 @@ func capabilityAdmitterFor(deps Deps, admit dispatch.Admitter, connectionOf func
 			return decline("capability pass", err.Error())
 		}
 		passes.clearBackoff(task.ID)
-		passes.hold(candidate.RunID, p, deadline, servers, hostd)
+		passes.hold(candidate.TaskID, candidate.RunID, p, deadline, servers, hostd)
 		release := adm.Release
 		adm.Release = func() {
 			passes.Release(context.Background(), candidate.RunID)

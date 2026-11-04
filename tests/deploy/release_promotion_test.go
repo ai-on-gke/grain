@@ -61,9 +61,10 @@ func TestPromoteReleaseIsDispatchOnly(t *testing.T) {
 }
 
 // Every job refuses to run unless grain says a person asked: the train
-// script's approve and reject modes check GRAIN_CI_REQUESTED_BY_KIND
-// themselves, and any other job checks it in its own first step. A dispatch
-// by any route but the person-only one therefore pushes nothing.
+// script's approve, reject and rollback modes check
+// GRAIN_CI_REQUESTED_BY_KIND themselves, and any other job checks it in
+// its own first step. A dispatch by any route but the person-only ones
+// therefore pushes nothing.
 func TestEveryPromoteReleaseJobRefusesAnybodyButAPerson(t *testing.T) {
 	w := promoteReleaseWorkflow(t)
 	jobs := map[string]bool{}
@@ -76,7 +77,8 @@ func TestEveryPromoteReleaseJobRefusesAnybodyButAPerson(t *testing.T) {
 		first := job.Steps[0].Run
 		guarded := strings.Contains(first, `GRAIN_CI_REQUESTED_BY_KIND:-}" != human`) ||
 			strings.Contains(first, "scripts/release-from-trunk.sh approve") ||
-			strings.Contains(first, "scripts/release-from-trunk.sh reject")
+			strings.Contains(first, "scripts/release-from-trunk.sh reject") ||
+			strings.Contains(first, "scripts/release-from-trunk.sh rollback")
 		if !guarded {
 			t.Errorf("%s job %s's first step does not refuse a caller that is not a person:\n%s",
 				promoteReleasePath, job.ID, first)
@@ -85,15 +87,41 @@ func TestEveryPromoteReleaseJobRefusesAnybodyButAPerson(t *testing.T) {
 			t.Errorf("%s job %s may be replayed from the cache; every run is a decision", promoteReleasePath, job.ID)
 		}
 	}
-	for _, want := range []string{"approve", "promote", "reject"} {
+	for _, want := range []string{"approve", "promote", "reject", "rollback"} {
 		if !jobs[want] {
-			t.Errorf("%s declares no %s job (the approval route starts promote and reject)", promoteReleasePath, want)
+			t.Errorf("%s declares no %s job (the approval routes start promote, reject and rollback)", promoteReleasePath, want)
 		}
 	}
 	script := read(t, "scripts", "release-from-trunk.sh")
 	if !strings.Contains(script, `if [ "${GRAIN_CI_REQUESTED_BY_KIND:-}" != human ]; then`) {
-		t.Error("scripts/release-from-trunk.sh's approve and reject modes no longer refuse a caller that is not a person")
+		t.Error("scripts/release-from-trunk.sh's approve, reject and rollback modes no longer refuse a caller that is not a person")
 	}
+}
+
+// A bad release is rolled back by the same person-only dispatch that
+// approves one (design/playbook/releases.playbook.md §11): the GitHub
+// Actions copy's rollback job refuses anything but a person's
+// workflow_dispatch before it runs release-from-trunk.sh rollback, which
+// tags vX.Y.Z-retracted and re-points `latest` and checks
+// GRAIN_CI_REQUESTED_BY_KIND itself; its free-text reason never reaches
+// $GITHUB_ENV.
+func TestPromoteReleaseRollsABadReleaseBackForAPersonOnly(t *testing.T) {
+	text := stripComments(read(t, ".github", "workflows", "promote-release.yml"))
+	contains(t, upTo(t, text, "jobs:"), "- rollback")
+	job := namedJob(t, text, "rollback")
+	contains(t, job, "if: inputs.decision == 'rollback'")
+	refuse := strings.Index(job, `"${GITHUB_EVENT_NAME:-}" != "workflow_dispatch"`)
+	person := strings.Index(job, `""|*"[bot]"|grain-ci*)`)
+	run := strings.Index(job, `bash ./scripts/release-from-trunk.sh rollback --bad "$GRAIN_CI_RELEASE_VERSION"`)
+	if refuse < 0 || person < 0 || run < 0 || refuse > run || person > run {
+		t.Errorf("promote-release.yml's rollback job does not refuse anybody but a person's dispatch before it runs the rollback:\n%s", job)
+	}
+	contains(t, job, "GRAIN_CI_REQUESTED_BY_KIND=human")
+	if strings.Contains(job, "RELEASE_ROLLBACK_REASON=") {
+		t.Error("promote-release.yml's rollback job writes the free-text reason to $GITHUB_ENV, where a newline in it could set any variable")
+	}
+	script := read(t, "scripts", "release-from-trunk.sh")
+	contains(t, script, "vX.Y.Z-retracted")
 }
 
 // human: required on the approval path, in both of the trust-boundary
@@ -107,7 +135,11 @@ func TestPromoteReleaseIsDeclaredHumanRequired(t *testing.T) {
 		t.Errorf("release-promotion trigger = gate %v, human %q, sensitive %v; want gate: true, human: required, sensitive: true",
 			trigger.Gate, trigger.Human, trigger.Sensitive)
 	}
-	for _, p := range []string{promoteReleasePath, ".github/workflows/promote-release.yml", "pkg/ui/release_approval.go"} {
+	for _, p := range []string{promoteReleasePath, ".github/workflows/promote-release.yml", "pkg/ui/release_approval.go",
+		// The Inbox approval on GitHub Actions repos (gap 4): the route that
+		// signs and dispatches it, the record it signs, and the script the
+		// workflow verifies it with.
+		"pkg/ui/release_approval_github.go", "pkg/releaseapproval/releaseapproval.go", "scripts/verify-release-approval.sh"} {
 		if !containsString(trigger.Paths, p) {
 			t.Errorf("the release-promotion trigger does not hold %s (paths %v)", p, trigger.Paths)
 		}
@@ -134,6 +166,7 @@ func TestReleaseMachineryClearsOnSecurityReview(t *testing.T) {
 		"scripts/release-images.sh", "scripts/release-from-trunk.sh", "scripts/release-notes.sh",
 		"scripts/candidate-gate.sh", "scripts/release.conf",
 		"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
+		"scripts/release-train-actions.sh", ".github/workflows/rc-qualification.yml",
 		".grain/workflows/release.yml", ".github/workflows/release.yml",
 		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 		".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",

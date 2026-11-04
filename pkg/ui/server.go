@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/namespace"
 )
 
 //go:embed static
@@ -65,6 +66,9 @@ type Server struct {
 	taskList    taskListCache
 	taskDetails taskDetailCache
 	dbConfirm   databaseConfirmations
+	// hostdImage is the image /api/hostd/install.sh suggests
+	// (hostdInstallImage), hostd_install.go's.
+	hostdImage hostdImageCache
 	// access is the single-tenant access gate's rate limiter, and
 	// accessCode the token file it checks codes against
 	// (localAPITokenNow) -- both accesscode.go's.
@@ -77,6 +81,8 @@ type Server struct {
 	// once on first use.
 	controllerMCPOnce    sync.Once
 	controllerMCPHandler http.Handler
+	// fsNamespace is the namespace GET /api/fs/ serves (api_fs.go).
+	fsNamespace func() *namespace.Server
 }
 
 // NewServer builds a Server over a store.
@@ -206,7 +212,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 // sign-in page reads) and /api/auth/* (signing in itself) are the only
 // things served to a caller nobody has vouched for. A grain hostd dialing
 // in to /api/hostd/connect authenticates in its own protocol
-// (hostdConnectRoute).
+// (hostdConnectRoute), and the script that installs one
+// (hostdInstallRoute) is grain's own, with nothing in it to keep.
 //
 // A persistent sandbox's staging environment under /staging/ is held to
 // the same gate as the API: it is somebody's running service, not a page
@@ -218,13 +225,19 @@ func requiresAccess(r *http.Request) bool {
 	return strings.HasPrefix(r.URL.Path, "/api/") &&
 		!(r.URL.Path == "/api/config" && (r.Method == http.MethodGet || r.Method == http.MethodHead)) &&
 		!strings.HasPrefix(r.URL.Path, "/api/auth/") &&
-		!hostdConnectRoute(r)
+		!hostdConnectRoute(r) && !hostdInstallRoute(r)
 }
 
 func (s *Server) routes() {
 	s.route("GET /api/config", s.handleConfig)
 	s.mux.HandleFunc("PUT /api/config", s.agentAPIGate("PUT /api/settings", s.handleUpdateSettings))
 	s.route("GET /api/restart-watch", s.handleRestartWatch)
+	s.route("GET /api/fs/ci/{path...}", s.handleReadCINamespace)
+	s.route("GET /api/fs/task/{path...}", s.handleReadTaskNamespace)
+	s.route("GET /api/fs/deploy/{path...}", s.handleReadDeployNamespace)
+	s.route("GET /api/fs/config/{path...}", s.handleReadConfigNamespace)
+	s.route("GET /api/fs/memory/{path...}", s.handleReadMemoryNamespace)
+	s.route("GET /api/fs/src/{path...}", s.handleReadSrcNamespace)
 	s.route("GET /api/auth/access-code", s.handleAccessCodeStatus)
 	s.route("POST /api/auth/access-code", s.handleAccessCodeLogin)
 	s.route("GET /api/auth/access-code/login.js", s.handleAccessCodeScript)
@@ -264,6 +277,9 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/config-change", s.handleProposeConfigChange)
 	s.route("POST /api/tasks/{id}/config-change/approve", s.handleApproveConfigChange)
 	s.route("POST /api/tasks/{id}/config-change/reject", s.handleRejectConfigChange)
+	s.route("POST /api/tasks/{id}/access-request/check", s.handleCheckAccessRequest)
+	s.route("POST /api/tasks/{id}/access-request/grant", s.handleGrantAccessRequest)
+	s.route("POST /api/tasks/{id}/access-request/deny", s.handleDenyAccessRequest)
 	s.route("GET /api/tasks/{id}/attachments/{attachmentId}", s.handleGetAttachment)
 	s.route("POST /api/tasks/{id}/close", s.handleClose)
 	s.route("POST /api/tasks/{id}/stop", s.handleStop)
@@ -419,6 +435,8 @@ func (s *Server) routes() {
 	s.route("POST /api/repos/{owner}/{name}/releases/{release}/candidates/promote", s.handlePromoteCandidate)
 	s.route("POST /api/repos/{owner}/{name}/pending-releases/{version}/approve", s.handleApproveRelease)
 	s.route("POST /api/repos/{owner}/{name}/pending-releases/{version}/reject", s.handleRejectRelease)
+	s.route("POST /api/releases/{version}/rollback", s.handleRollbackRelease)
+	s.route("GET /api/release-approval-key", s.handleReleaseApprovalKey)
 
 	s.route("GET /api/repos/{owner}/{name}/branches", s.handleListBranches)
 	s.route("POST /api/repos/{owner}/{name}/branches", s.handleCreateBranch)
@@ -643,6 +661,8 @@ func (s *Server) routes() {
 
 	// A grain hostd on another machine dialing in (hostd -server).
 	s.route("GET /api/hostd/connect", s.handleHostdConnect)
+	// The script that installs one there (Settings -> Hostds).
+	s.route("GET "+hostdInstallPath, s.handleHostdInstallScript)
 	// The hostd registry (Settings -> Hostds).
 	s.route("GET /api/hostds", s.handleListHostds)
 	s.route("POST /api/hostds", s.handleCreateHostd)
