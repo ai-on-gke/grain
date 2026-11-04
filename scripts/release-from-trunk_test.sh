@@ -981,6 +981,11 @@ expect "dry run" "publishes nothing" images_were ""
 expect "dry run" "leaves no local rc tag behind" eq "$(git -C "$work/clone" tag -l 'v2.3.0-rc.*')" ""
 expect "dry run" "writes no user.name into .git/config" eq "$(git -C "$work/clone" config --local --get user.name || true)" ""
 expect "dry run" "writes no user.email into .git/config" eq "$(git -C "$work/clone" config --local --get user.email || true)" ""
+expect "dry run" "cuts v2.3.0-rc.1" has "phase 2: cutting v2.3.0-rc.1 on ${c3:0:12}"
+train DRY_RUN=true
+expect "dry run, again" "exits 0" eq "$status" 0
+expect "dry run, again" "cuts the same rc, not reading the first one's as soaking" has "phase 2: cutting v2.3.0-rc.1 on ${c3:0:12}"
+expect "dry run, again" "leaves no local rc tag behind" eq "$(git -C "$work/clone" tag -l 'v2.3.0-rc.*')" ""
 train
 expect "a real run" "writes no identity into .git/config either" eq "$(git -C "$work/clone" config --local --get user.name || true)" ""
 
