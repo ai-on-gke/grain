@@ -140,6 +140,7 @@ var toolActivityNotes = map[string]string{
 	// The escape hatches: written now, relayed when the run ends.
 	"ask_question":          "writing a question for a human",
 	"request_secret":        "asking for a credential",
+	"request_access":        "asking for more access",
 	"propose_config_change": "proposing a config change",
 	"comment_on_issue":      "writing its closing note",
 	"nothing_needed":        "closing the task as needing no work",

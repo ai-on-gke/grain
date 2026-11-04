@@ -77,6 +77,7 @@ func parkUnreached(ctx context.Context, store *model.Store, reach *gitproxy.Reac
 		if err := observeField(ctx, store, id, now, func(o *model.Observation) {
 			o.PendingQuestionCommentID = &commentID
 			o.PendingSecret = ""
+			o.PendingAccess = nil
 		}); err != nil {
 			return err
 		}

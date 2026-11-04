@@ -64,7 +64,7 @@ const SessionContinueReason = "You said you would continue. Do it now, or use `c
 const BackgroundContinueReason = "A reply without a tool call ends your run, and this run has not finished: " +
 	"nothing has been pushed and nothing has been reported. Before you stop, do one of these: push your " +
 	"branch, leave your findings with `comment_on_issue`, ask with `ask_question`, request a credential with " +
-	"`request_secret`, park on another task with `wait_for_task`, or say no change is needed with " +
+	"`request_secret`, ask for more access with `request_access`, park on another task with `wait_for_task`, or say no change is needed with " +
 	"`nothing_needed`. If you meant to keep working, keep working now."
 
 // StopRuleFramework is the optional half of Framework that says its CLI
@@ -143,6 +143,7 @@ var closingTools = map[string]bool{
 	"ask_question":          true,
 	"nothing_needed":        true,
 	"request_secret":        true,
+	"request_access":        true,
 	"propose_config_change": true,
 	"open_pull_request":     true,
 	"add_review_comment":    true,

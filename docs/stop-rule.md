@@ -20,7 +20,8 @@ whether a stop is allowed:
   is: "You said you would continue. Do it now, or use `chat` to tell the
   person and wait for them."
 - **Background tasks** may stop once they have made a closing move:
-  `comment_on_issue`, `ask_question`, `nothing_needed`, `request_secret`, a
+  `comment_on_issue`, `ask_question`, `nothing_needed`, `request_secret`,
+  `request_access`, a
   `wait_for_task` that parks (`park` or `resume_at`), a pushed branch (a
   `run_command` whose `git push` did not fail), `open_pull_request`, or
   `add_review_comment`. Otherwise the nudge names those options.
