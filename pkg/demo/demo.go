@@ -1538,6 +1538,9 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	if err := seedDemoAllowedPrincipals(ctx, store, cfg, ago); err != nil {
 		return err
 	}
+	if err := seedDemoAudit(ctx, store, ago); err != nil {
+		return err
+	}
 	if err := seedDemoMemory(ctx, store, cfg, ago); err != nil {
 		return err
 	}
@@ -2042,6 +2045,41 @@ func seedDemoHostds(ctx context.Context, store *model.Store) error {
 	}
 	if _, err := store.RevokeHostd(ctx, "old-laptop"); err != nil {
 		return fmt.Errorf("seeding a revoked hostd: %w", err)
+	}
+	return nil
+}
+
+// seedDemoAudit fills Settings -> Audit: config changes by a verified
+// person, by the operator on the access code and by grain itself, and a
+// few credential accesses and secret resolutions to go beside them.
+func seedDemoAudit(ctx context.Context, store *model.Store, ago func(time.Duration) time.Time) error {
+	alice := model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com", Source: model.SourceIAP}
+	operator := model.Principal{Kind: model.PrincipalHuman, ID: "operator", Source: model.SourceAccessCode}
+	for _, e := range []model.ConfigAuditEntry{
+		{At: ago(26 * time.Hour), By: operator, Surface: "settings", Summary: "default model set to claude-opus-5-5"},
+		{At: ago(5 * time.Hour), By: model.Principal{Kind: model.PrincipalAutomation, ID: "grain", Source: model.SourceInternal}, Surface: "schedule:nightly-triage", Summary: "next run moved to 02:00 after a missed window"},
+		{At: ago(3 * time.Hour), By: alice, Surface: "repo:demo/widgets", Summary: "work ownership set to on"},
+		{At: ago(40 * time.Minute), By: alice, Surface: "settings", Summary: "max concurrent runs 4 → 6"},
+	} {
+		if _, err := store.RecordConfigAudit(ctx, e); err != nil {
+			return fmt.Errorf("seeding config audit: %w", err)
+		}
+	}
+	for _, e := range []model.CredentialAccessEntry{
+		{Timestamp: ago(2 * time.Hour), TaskID: "1", Kind: model.CredentialAccessGit, Resource: "demo/widgets", Action: "fetch", Credential: "github-app", Outcome: "allowed"},
+		{Timestamp: ago(90 * time.Minute), TaskID: "1", Kind: model.CredentialAccessGit, Resource: "demo/gadgets", Action: "push", Credential: "github-app", Outcome: "denied: outside the task's writes"},
+	} {
+		if err := store.RecordCredentialAccess(ctx, e); err != nil {
+			return fmt.Errorf("seeding credential access audit: %w", err)
+		}
+	}
+	for _, e := range []model.SecretAuditEntry{
+		{Timestamp: ago(4 * time.Hour), TaskID: "1", SecretName: "stripe-api-key", Key: "value", Principal: "operator"},
+		{Timestamp: ago(time.Hour), TaskID: "1", SecretName: "github-app", Key: "private-key", Principal: "alice@example.com"},
+	} {
+		if err := store.RecordSecretAuditEntry(ctx, e); err != nil {
+			return fmt.Errorf("seeding secret audit: %w", err)
+		}
 	}
 	return nil
 }

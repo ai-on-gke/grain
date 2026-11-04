@@ -292,6 +292,7 @@ type (
 	RecurrenceKind           = workflows.RecurrenceKind
 	Recurrence               = workflows.Recurrence
 	GitHubWorkflowRunTrigger = workflows.GitHubWorkflowRunTrigger
+	GitRefTrigger            = workflows.GitRefTrigger
 	WorkflowReviewPolicy     = workflows.ReviewPolicy
 )
 
@@ -302,6 +303,7 @@ const (
 	RecurrenceWeekly            = workflows.RecurrenceWeekly
 	RecurrenceMonthly           = workflows.RecurrenceMonthly
 	RecurrenceGitHubWorkflowRun = workflows.RecurrenceGitHubWorkflowRun
+	RecurrenceGitRef            = workflows.RecurrenceGitRef
 	MaxEveryNHours              = workflows.MaxEveryNHours
 	MinEveryNMinutes            = workflows.MinEveryNMinutes
 	MaxEveryNMinutes            = workflows.MaxEveryNMinutes
@@ -315,3 +317,6 @@ var RecurrenceKinds = workflows.RecurrenceKinds
 
 // ParseStoredRecurrenceKind re-exports workflows.ParseStoredRecurrenceKind.
 var ParseStoredRecurrenceKind = workflows.ParseStoredRecurrenceKind
+
+// ParseStoredGitRefTrigger re-exports workflows.ParseStoredGitRefTrigger.
+var ParseStoredGitRefTrigger = workflows.ParseStoredGitRefTrigger

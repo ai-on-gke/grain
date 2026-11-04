@@ -392,6 +392,9 @@ var notSettings = []string{
 	// along a branch it has fired them, base_branch_release's reason.
 	"repo_path_trigger",
 	"path_trigger_cursor",
+	// Where each git_ref schedule last saw its ref
+	// (model.ScheduleRefCursor), for path_trigger_cursor's reason.
+	"git_ref_cursor",
 	// And its merge rules (grain/task-1659), the same kind of row again.
 	"repo_merge_rules",
 	// The schema's own bookkeeping. Nothing proposes a change to the
