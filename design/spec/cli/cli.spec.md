@@ -63,12 +63,15 @@ It carries none of the host CLI's commands.
 The task CLI's target daemon **MUST** be:
 1. `-server`, when given;
 2. else `$GRAIN_SERVER`;
-3. else `GRAIN_SERVER` in the CLI env file;
-4. else `http://127.0.0.1:4242`.
+3. else the `server` of the selected context, when it has one;
+4. else `GRAIN_SERVER` in the CLI env file;
+5. else `http://127.0.0.1:4242`.
+
+The context is `-context`, else `$GRAIN_CONTEXT`, else `current` in `$XDG_CONFIG_HOME/grain/config.json` (else `~/.config/grain/config.json`). A missing `config.json` means no context. This is [`external-cli.spec.md` #XC-2 and #XC-3](../external-cli/external-cli.spec.md#XC-3), and the commands that manage contexts are [`host.spec.md` #CLI-108](host.spec.md#CLI-108).
 
 The source that won is remembered and reported in connection errors ([#CLI-7](#CLI-7)). `-server` is only a global flag of the task CLI; mode commands that talk to a daemon (`sync`, `demo`'s clients, `mcpserver -server`) take their own flags listed in `host.spec.md`.
 
-**Pinned by:** `pkg/cli/cliconn_test.go`: `TestTheCLIFindsItsDaemonInCLIEnv`, `TestARefusedConnectionFailsFastAndSaysWhereTheDaemonIs`.
+**Pinned by:** `pkg/cli/cliconn_test.go`: `TestTheCLIFindsItsDaemonInCLIEnv`, `TestContextCommandsAndServerPrecedence`, `TestARefusedConnectionFailsFastAndSaysWhereTheDaemonIs`.
 
 ### 2.3 Data directory {#CLI-5}
 
@@ -216,9 +219,7 @@ The guard does **not** check:
 Places where a design says something the code does not do. The designs were not changed here.
 
 1. **`external-cli.design.md` and `external-cli.spec.md`** (task #2767):
-   - The binary registers **no** `grain context`, `grain login`, `grain logout`, `grain whoami`, `grain skill` or `grain mcp` command, and does not read `~/.config/grain/config.json`. Server resolution is `-server` → `$GRAIN_SERVER` → cli.env → default ([#CLI-4](#CLI-4)), with no context step (XC-1–XC-3).
-   - `sandboxcli` yields to the host CLI only for `GRAIN_SANDBOX_CLI=0|false` or a non-empty `$GRAIN_SERVER`. It does **not** yield for `$GRAIN_CONTEXT` or for a `-server`/`-context` flag (XC-3.4).
-   - Credential sources registered through `cli.RegisterCredentialSource` (XC-4, XC-10) do not exist. `TokenProvider` is never set by `cmd/grain`.
+   - The binary registers **no** `grain skill` or `grain mcp` command. Contexts, `grain login`, `logout`, `whoami`, `cli.RegisterCredentialSource` and the sandbox CLI's yielding for `-server`, `-context` and `$GRAIN_CONTEXT` (XC-1–XC-4, XC-7–XC-10) are implemented ([#CLI-4](#CLI-4), [`host.spec.md` #CLI-108](host.spec.md#CLI-108)).
 2. **`sandbox-first-agent-surface.design.md`:**
    - §4 says every subcommand has a `--json` mode "where applicable". In the code only `notify`, `task list`, `task wait`, `task propose`, `api` and `cap` take `--json`; every other command prints the proxy's text.
    - §7 writes `grain log [--since ...] [--grep ...]`. The code's substring filter is `--contains`, and `--grep` is refused as an unknown flag.
