@@ -451,6 +451,17 @@ expect "rc-hold, absent" "cuts rc.2 with no hold check" eq "$(remote_tag v2.3.0-
 expect "rc-hold, absent" "publishes rc.2" images_were "rc v2.3.0-rc.2"
 expect "rc-hold, absent" "emits no rc_held" no_line '^rc_held=' "$work/train.out"
 
+# No token and no file: the hold cannot be read, and the train says so
+# rather than passing over it in silence.
+setup ""
+tag_remote v2.3.0-rc.1 "$c2" 3
+tag_remote v2.3.0-rc.1-discarded "$c2" 2
+runs "$c2" "$c3"
+train RELEASE_HOLD_CHECKS_JSON= GITHUB_TOKEN= GH_TOKEN=
+expect "rc-hold, no token" "exits 0" eq "$status" 0
+expect "rc-hold, no token" "says it has no grain/rc-hold to read" has "no GitHub token, so no grain/rc-hold check run to read on ${c2:0:12}"
+expect "rc-hold, no token" "cuts rc.2" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
+
 # Hardening: RELEASE_QUALIFICATION_APP unset refuses rather than trust a foreign
 # completion, numeric app id matches, whitespace-only summary still holds, and a
 # malformed check-run response fails closed.
