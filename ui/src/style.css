@@ -5132,3 +5132,10 @@ fieldset legend {
   gap: 4px;
   margin-top: 4px;
 }
+
+/* The closed-tasks pager at the end of a task view (ClosedTasksMore.jsx). */
+.closed-tasks-more {
+  display: flex;
+  justify-content: center;
+  padding: 12px 0 16px;
+}
