@@ -543,6 +543,9 @@ func (w checkWaiter) waitStructured(ctx context.Context, timeout time.Duration) 
 		return GitHubCheckWaitResult{}, fmt.Errorf("reading %s/%s's %s branch: %w", w.scope.Owner, w.scope.Repo, w.scope.Branch, err)
 	}
 	if head == nil {
+		if err := confirmRepoReadable(w.client, w.scope.Owner, w.scope.Repo, w.scope.Branch); err != nil {
+			return GitHubCheckWaitResult{}, err
+		}
 		return GitHubCheckWaitResult{
 			Status:     "failed",
 			Conclusion: "failure",
