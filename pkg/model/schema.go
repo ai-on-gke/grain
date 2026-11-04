@@ -509,15 +509,20 @@ import "strconv"
 // `grain_config`.`owner_trust` (model.Config.OwnerTrust, the owners whose
 // external agents' filings queue without a person's approval;
 // design/spec/external-cli/external-cli.spec.md#XC-14..#XC-17).
-const SchemaVersion = 107
+//
+// 108 adds `reason` to `allowed_principal` (model.AllowedPrincipal.Reason):
+// why an entry was added, required for the `serviceAccount:<email>` entries
+// the allowlist accepts again.
+const SchemaVersion = 108
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
-// `user:<email>` or `group:<email>` entry admitted through a verified
-// identity (model.AllowedPrincipal).
+// `user:<email>`, `group:<email>` or `serviceAccount:<email>` entry admitted
+// through a verified identity (model.AllowedPrincipal).
 const allowedPrincipalTable = `CREATE TABLE IF NOT EXISTS ` + "`allowed_principal`" + ` (
   ` + "`entry`" + `    TEXT     NOT NULL PRIMARY KEY,
   ` + "`added_by`" + ` TEXT     NOT NULL DEFAULT '',
-  ` + "`added_at`" + ` DATETIME NOT NULL
+  ` + "`added_at`" + ` DATETIME NOT NULL,
+  ` + "`reason`" + `   TEXT     NOT NULL DEFAULT ''
 )`
 
 // allowedPrincipalMigrationTable records the one-time startup migration off
