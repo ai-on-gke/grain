@@ -125,6 +125,7 @@ export default function TaskList({
   onRefresh,
   showError,
   landmark = true,
+  footer = null,
 }) {
   const [notifyOpen, setNotifyOpen] = useState(false);
   // A row's own sub-case control (state.js's reasonControl), pressed from
@@ -540,6 +541,10 @@ export default function TaskList({
               : "No tasks in this state."}
         </ListEmpty>
       )}
+      {/* The closed-tasks pager only where closed work is showing. */}
+      {(stateFilter === "closed" ||
+        topLevel.some((t) => t.state === "closed")) &&
+        footer}
     </Root>
   );
 }
