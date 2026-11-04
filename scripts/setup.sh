@@ -3650,7 +3650,11 @@ install_release_assets() {
     [ "$key" = grain ] && GRAIN_IMAGE_REF="$ref"
   done
   rm -rf "$dir"
-  GRAIN_IMAGE="${GRAIN_IMAGE_REF%:*}"
+  # GRAIN_IMAGE stays the registry repository: it is the unit's
+  # -upgrade-image, and a manifest ref (grain/grain) given to an upgrader
+  # that pulls would resolve on Docker Hub. Until the daemon's own
+  # release-assets source replaces it, the UI's upgrade pulls from that
+  # registry repository, as every install before release assets does.
   step_done "ready"
 }
 

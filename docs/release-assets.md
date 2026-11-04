@@ -146,7 +146,11 @@ sha-<short> <version> <release>...` (an rc as `vX.Y.0-rc.N` and
   instead, as before. A name with no release at all falls back to
   `ghcr.io/bwsalmon/grain/grain`, where releases published before release
   assets still are. `GRAIN_IMAGE_VERIFY_KEY` (cosign) applies to registry
-  images only.
+  images only. The unit's `-upgrade-image` stays the registry repository
+  (`ghcr.io/bwsalmon/grain/grain`), never a manifest ref, so until the
+  daemon's `release-assets` source (task 2951) ships, the UI's Upgrade on
+  such a host pulls from GHCR exactly as on every existing install, and
+  never resolves `grain/grain` on Docker Hub.
 - `scripts/install-grain.sh -version vX.Y.Z` installs the CLI the same
   way; `-image REPO [-key cosign.pub]` pulls a registry image instead.
 
