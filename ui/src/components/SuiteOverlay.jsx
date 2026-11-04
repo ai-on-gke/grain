@@ -30,6 +30,7 @@ import {
 import api from "../api.js";
 import CompositionPanel from "./CompositionPanel.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import { DeclaredFields, DeclaredNotice } from "./Declared.jsx";
 import Overlay from "./Overlay.jsx";
 import { StaleEditNotice, isStaleEdit, withReload } from "./StaleEdit.jsx";
@@ -206,48 +207,46 @@ function SuiteOverlay({
           />
 
           <FormControl fullWidth margin="normal" size="small">
-            <InputLabel id="suite-templates-label">Templates</InputLabel>
-            <Select
-              labelId="suite-templates-label"
-              label="Templates"
+            <SearchSelect
               multiple
+              label="Templates"
               value={templateIds}
-              onChange={(e) => {
-                templateIdsRef.current = e.target.value;
-                setTemplateIds(e.target.value);
+              onChange={(next) => {
+                templateIdsRef.current = next;
+                setTemplateIds(next);
               }}
-              renderValue={(selected) =>
-                selected
-                  .map((id) => {
-                    const t = templates.find((x) => x.id === id);
-                    return t ? templateLabel(t) : id;
-                  })
-                  .join(", ")
+              noOptionsText={
+                offered.length === 0 ? "No templates yet" : "No matches"
               }
-            >
-              {offered.map((t) => (
-                <MenuItem key={t.id} value={t.id}>
-                  <Checkbox checked={templateIds.includes(t.id)} size="small" />
-                  {/* The templates figure between the checkbox and the
-                    name (ItemGlyph.jsx), as in every other menu that
-                    picks a template -- a schedule's, a task's review.
-                    After the checkbox rather than before it: the box is
-                    a control, and the glyph belongs in front of the word
-                    it marks. */}
-                  <ItemGlyph kind="templates" />
-                  {/* A bound template runs against its own repo wherever
-                    this suite is run (grain/task-285), so the picker
-                    says which rather than leaving that to a click. */}
-                  <ListItemText
-                    primary={templateLabel(t)}
-                    secondary={[t.title, t.repo || null]
-                      .filter(Boolean)
-                      .join(" -- ")}
-                    sx={{ ml: 0.9 }}
-                  />
-                </MenuItem>
-              ))}
-            </Select>
+              options={offered.map((t) => {
+                // A bound template runs against its own repo wherever
+                // this suite is run (grain/task-285), so the picker says
+                // which rather than leaving that to a click.
+                const secondary = [t.title, t.repo || null]
+                  .filter(Boolean)
+                  .join(" -- ");
+                return {
+                  value: t.id,
+                  label: templateLabel(t),
+                  // The templates figure between the checkbox and the
+                  // name (ItemGlyph.jsx), as in every other menu that
+                  // picks a template -- a schedule's, a task's review.
+                  // After the checkbox rather than before it: the box is
+                  // a control, and the glyph belongs in front of the word
+                  // it marks.
+                  renderRow: (text) => (
+                    <>
+                      <ItemGlyph kind="templates" />
+                      <ListItemText
+                        primary={text}
+                        secondary={secondary || null}
+                        sx={{ ml: 0.9, my: 0 }}
+                      />
+                    </>
+                  ),
+                };
+              })}
+            />
           </FormControl>
           <Button
             size="small"

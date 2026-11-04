@@ -22,14 +22,10 @@ import {
   Box,
   Button,
   Checkbox,
-  Chip,
   FormControl,
   FormControlLabel,
   FormHelperText,
-  InputLabel,
-  ListItemText,
   MenuItem,
-  Select,
   Stack,
   TextField,
   Typography,
@@ -38,6 +34,7 @@ import api from "../api.js";
 import { useHeldIds } from "../useHeldIds.js";
 import { CustomFieldInputs, initialFieldValues } from "./CustomFields.jsx";
 import ItemGlyph from "./ItemGlyph.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import ModelPicker from "./ModelPicker.jsx";
 import { DeclaredFields, DeclaredNotice } from "./Declared.jsx";
 import Overlay from "./Overlay.jsx";
@@ -499,47 +496,24 @@ function TemplateOverlay({
             helperText="the model every task this template files asks for. A task filed from it can still choose its own."
           />
           <FormControl fullWidth margin="normal" size="small">
-            <InputLabel id="template-capabilities-label">
-              Legacy capabilities
-            </InputLabel>
-            <Select
-              labelId="template-capabilities-label"
-              label="Legacy capabilities"
+            <SearchSelect
               multiple
+              label="Legacy capabilities"
               value={capabilityIds}
-              onChange={(e) =>
-                setCapabilities([
-                  ...e.target.value,
-                  ...apiIds,
-                  ...capabilityRefs,
-                ])
+              onChange={(next) =>
+                setCapabilities([...next, ...apiIds, ...capabilityRefs])
               }
-              renderValue={(selected) => (
-                <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-                  {selected.map((id) => {
-                    const c = (config?.capabilities || []).find(
-                      (cap) => cap.id === id,
-                    );
-                    return (
-                      <Chip key={id} size="small" label={c ? c.name : id} />
-                    );
-                  })}
-                </Box>
-              )}
-            >
-              {capabilityOptions.length === 0 && (
-                <MenuItem disabled>{NO_CAPABILITIES_HINT}</MenuItem>
-              )}
-              {capabilityOptions.map((c) => (
-                <MenuItem key={c.id} value={c.id} title={c.description}>
-                  <Checkbox
-                    checked={capabilityIds.includes(c.id)}
-                    size="small"
-                  />
-                  <ListItemText primary={c.name} />
-                </MenuItem>
-              ))}
-            </Select>
+              noOptionsText={
+                capabilityOptions.length === 0
+                  ? NO_CAPABILITIES_HINT
+                  : "No matches"
+              }
+              options={capabilityOptions.map((c) => ({
+                value: c.id,
+                label: c.name,
+                title: c.description,
+              }))}
+            />
             <FormHelperText>{LEGACY_CAPABILITIES_HINT}</FormHelperText>
           </FormControl>
           <GrantsPicker

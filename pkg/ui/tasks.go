@@ -63,7 +63,7 @@ type Task struct {
 	Goal        *model.TaskGoal `json:"goal,omitempty"`
 	ID          string          `json:"id"`
 	Title       string          `json:"title"`
-	Description string          `json:"description"`
+	Description string          `json:"description,omitempty"`
 	Author      string          `json:"author"`
 	// AuthorKind is that author's model.PrincipalKind -- "human",
 	// "agent" or "automation", Comment.AuthorKind's own vocabulary for
@@ -2194,18 +2194,24 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// handleListTasks answers the whole task list -- and answers a poller
-// that already has it with a 304 and no body at all. taskListCache is
-// where the reasoning for both lives, including why it cannot serve a
-// stale list. A caller who is not a system admin is answered only the
+// handleListTasks answers the live task list -- every task not closed,
+// without descriptions (taskListLive), or the whole list under
+// ?fields=full -- and answers a poller that already has it with a 304
+// and no body at all. taskListCache is where the reasoning for both
+// lives, including why it cannot serve a stale list. A caller who is not a system admin is answered only the
 // tasks of the teams they belong to (bwsalmon/grain#2415). ?repo=owner/name
 // answers only that repository's tasks.
 func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
-	if q, ok := parseTaskListQuery(r.URL.Query()); ok {
+	q, narrowed := parseTaskListQuery(r.URL.Query())
+	if narrowed {
 		s.handleFilteredTaskList(w, r, q)
 		return
 	}
-	body, etag, err := s.taskList.response(r.Context(), s.tasks, strings.TrimSpace(r.URL.Query().Get("repo")))
+	view := taskListLive
+	if q.full {
+		view = taskListFull
+	}
+	body, etag, err := s.taskList.response(r.Context(), s.tasks, q.repo, view)
 	if err != nil {
 		writeClientError(w, err)
 		return
