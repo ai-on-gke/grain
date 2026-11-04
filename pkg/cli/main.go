@@ -380,12 +380,8 @@ Commands:
                                        the pull request, and refused if the branch does not merge cleanly;
                                        -head <sha> names the commit you reviewed, and the override is
                                        withdrawn if anything else is pushed before the merge
-  pr adopt <pr> [-mode review-only|finish] [-spec <path>] [-design <path>]
-                                       adopt a pull request grain did not open: review-only (the default)
-                                       reviews and gates it without pushing; finish also pushes fixes
-  pr review <pr> [-design] [-spec <path>]
-                                       file a grain review of a pull request (-design checks design conventions)
-  pr status <pr> [-threads]            a pull request's head, shepherd, grain CI, reviews and merge-queue gate
+  pr adopt|review|status <pr>          adopt (-mode review-only|finish), review (-design) or report on
+                                       (-threads) a pull request grain did not open (see prcmd.go)
   run-now <id>                         start a run of this task next, ahead of the queue and whatever
                                        its state says -- including sending a finished or merging task
                                        back to an agent for more work on its own branch
@@ -422,6 +418,14 @@ Commands:
                                        "clear" to empty it (safe: a cached job simply runs again)
   ci faults [-repo r] [-source s]      shared CI faults across branches right now (grain CI and GitHub CI,
                                        labelled by source)
+  ci wait (<run-id> | -pr <url|owner/name#n> | -ref <branch> -repo <owner/name>) [-jobs j1,j2]
+                                       block until a run has a verdict (-timeout, default 30m), with each
+                                       failing job and any shared fault: exit 0 green, 1 red, 5 timed out
+  ci retrigger <run-id> [-jobs j1,j2]  rerun a run's failed jobs (or -jobs) once, bypassing the job cache
+  ci test-history <test> [-repo r] [-limit N]
+                                       pass, fail and flake history of one test across recent runs
+  merge-queue [-repo owner/name]       queued pull requests, the batches and CI testing them, and held
+                                       merge gates (deploy://merge-queue; see mergequeue.go)
   fs ls|cat|read|grep <uri>            read grain's namespace (ci://, task://, deploy://, config://,
                                        memory://, src://) over GET /api/fs/, as a sandbox's grain ls,
                                        read and grep do; read is cat (see fscmd.go)
@@ -648,6 +652,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdPR(ctx, c, out, cmdArgs)
 	case "fs":
 		return cmdFS(ctx, c, out, cmdArgs)
+	case "merge-queue":
+		return cmdMergeQueue(ctx, c, out, cmdArgs)
 	case "declarations":
 		return cmdDeclarations(ctx, c, out, cmdArgs)
 	case "settings":

@@ -122,7 +122,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !checkCrossOrigin(w, r) {
 		return
 	}
-	serveRecovered(w, r, http.HandlerFunc(s.serveHTTP))
+	withCompression(w, r, func(w http.ResponseWriter, r *http.Request) {
+		serveRecovered(w, r, http.HandlerFunc(s.serveHTTP))
+	})
 }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
