@@ -107,7 +107,11 @@ type Scope struct {
 	TaskReadRepos     map[string]bool
 	MayReadFullConfig bool
 	MayReadAllMemory  bool
-	MayReadMetrics    bool
+	// MemoryReadRepos are the repositories whose memory layers this scope
+	// may read under memory://repos/ without MayReadAllMemory: the ones an
+	// api:memory:read@owner/repo grant names.
+	MemoryReadRepos  map[string]bool
+	MayReadMetrics   bool
 	MayReadPipeline   bool
 	MayReadHealth     bool
 	MayReadGrainLog   bool

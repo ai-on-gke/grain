@@ -1198,6 +1198,13 @@ func TestAddWorkflowRunSerialisesWithRequestsAndReplacesReRunAttempts(t *testing
 	if err != nil || len(jobs) != 1 || jobs[0].Conclusion != "success" {
 		t.Fatalf("ListWorkflowRunJobs(%d) = %+v, %v", first.ID, jobs, err)
 	}
+	single, err := client.GetActionsRun("acme", "widgets", first.ID)
+	if err != nil || single.ID != first.ID || single.RunAttempt != 2 || single.Conclusion != "success" {
+		t.Fatalf("GetActionsRun(%d) = %+v, %v", first.ID, single, err)
+	}
+	if missingResp, err := sim.Request("GET", "/repos/acme/widgets/actions/runs/999999999", nil, nil); err != nil || missingResp.Status != 404 {
+		t.Fatalf("GET unknown actions run = %+v, %v, want 404", missingResp, err)
+	}
 
 	// Sim.Request itself still refuses POST .../actions/runs as an unhandled GitHub endpoint.
 	defer func() {

@@ -124,6 +124,7 @@ var (
 	// job's log. actionsRunsRe is also what ListWorkflowRuns reads when a
 	// credential cannot reach the Checks API.
 	actionsRunsRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs$`)
+	actionsRunRe  = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs/(\d+)$`)
 	// workflowRunsRe is GET .../actions/workflows/{workflow_id}/runs, the
 	// per-workflow listing (github.RESTClient.ListActionsRunsPage with a
 	// Workflow): seeded WorkflowRuns whose Path is that file.
@@ -1578,6 +1579,17 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			}
 			jobs := s.workflowJobsFor(key)
 			return jsonResponse(200, workflowRunsJSON(m[1], m[2], s.runIDFor(key), jobs)), nil
+		}
+		if m := actionsRunRe.FindStringSubmatch(p); m != nil {
+			s.mustOwn(m[1], m[2])
+			runID := int64(mustAtoi(m[3]))
+			runs, _ := s.repoRunsJSON(m[1], m[2])["workflow_runs"].([]map[string]any)
+			for _, run := range runs {
+				if id, _ := run["id"].(int64); id == runID {
+					return jsonResponse(200, run), nil
+				}
+			}
+			return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
 		}
 		if m := workflowRunsRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])

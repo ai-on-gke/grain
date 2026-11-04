@@ -266,13 +266,22 @@ func (s Scope) PermitsMemory(relPath string) bool {
 	if relPath == "" || relPath == "global" || relPath == "global.md" || strings.HasPrefix(relPath, "global/") || relPath == "repos" {
 		return true
 	}
-	if s.TaskRepo != "" {
-		repoPrefix := "repos/" + strings.ToLower(s.TaskRepo)
-		lower := strings.ToLower(relPath)
-		if strings.HasPrefix(repoPrefix, lower+"/") ||
+	lower := strings.ToLower(relPath)
+	permitsRepo := func(repo string) bool {
+		if repo == "" {
+			return false
+		}
+		repoPrefix := "repos/" + strings.ToLower(repo)
+		return strings.HasPrefix(repoPrefix, lower+"/") ||
 			lower == repoPrefix ||
 			lower == repoPrefix+".md" ||
-			strings.HasPrefix(lower, repoPrefix+"/") {
+			strings.HasPrefix(lower, repoPrefix+"/")
+	}
+	if permitsRepo(s.TaskRepo) {
+		return true
+	}
+	for repo, ok := range s.MemoryReadRepos {
+		if ok && permitsRepo(repo) {
 			return true
 		}
 	}

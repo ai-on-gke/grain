@@ -79,6 +79,15 @@ type inProcessAPI struct {
 	handler atomic.Pointer[http.Handler]
 }
 
+// cancelOnlyContext propagates cancellation and deadlines from parent while
+// hiding outer request context values (such as externalToken or agentCall) so
+// in-process subrequests authenticate independently as the deployment actor.
+type cancelOnlyContext struct {
+	context.Context
+}
+
+func (cancelOnlyContext) Value(any) any { return nil }
+
 // Set publishes h as the handler requests are answered by.
 func (a *inProcessAPI) Set(h http.Handler) { a.handler.Store(&h) }
 
@@ -90,7 +99,7 @@ func (a *inProcessAPI) RoundTrip(req *http.Request) (*http.Response, error) {
 	if h == nil {
 		return nil, errors.New("grain's API is not serving yet")
 	}
-	in := req.Clone(req.Context())
+	in := req.Clone(cancelOnlyContext{req.Context()})
 	in.RequestURI = in.URL.RequestURI()
 	in.RemoteAddr = ""
 	in.Host = "localhost"
@@ -134,7 +143,7 @@ func (a *inProcessAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "grain's API is not serving yet", http.StatusServiceUnavailable)
 		return
 	}
-	in := r.Clone(r.Context())
+	in := r.Clone(cancelOnlyContext{r.Context()})
 	in.RequestURI = in.URL.RequestURI()
 	in.RemoteAddr = ""
 	in.Host = "localhost"
