@@ -253,3 +253,25 @@ func (PullRequestGate) Close(ctx context.Context, ref string) error {
 	}
 	return opener.Close(ctx, ref)
 }
+
+// AdoptPullRequest, ReviewPullRequest and PullRequestStatus make this a
+// ui.PullRequestAdopter: POST /api/pull-requests/adopt and /review and
+// GET /api/pull-requests/status (#XC-28, #XC-29), over orchestrator's
+// takeover_adopt.go with this daemon's store and GitHub client.
+func (o *PullRequestOpener) AdoptPullRequest(ctx context.Context, in model.AdoptPullRequestInput) (model.PullRequestAdoption, error) {
+	return orchestrator.AdoptPullRequest(ctx, o.deps(), in, time.Now().UTC())
+}
+
+func (o *PullRequestOpener) ReviewPullRequest(ctx context.Context, in model.ReviewPullRequestInput) (model.PullRequestReviewFiling, error) {
+	return orchestrator.ReviewPullRequest(ctx, o.deps(), in, time.Now().UTC())
+}
+
+func (o *PullRequestOpener) PullRequestStatus(ctx context.Context, ref model.PullRequestRef, threads bool) (model.PullRequestReport, error) {
+	return orchestrator.PullRequestStatusOf(ctx, o.deps(), ref, threads)
+}
+
+func (o *PullRequestOpener) deps() orchestrator.Deps {
+	return orchestrator.Deps{Store: o.Store, Client: o.Client}
+}
+
+var _ ui.PullRequestAdopter = (*PullRequestOpener)(nil)

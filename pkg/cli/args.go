@@ -165,3 +165,20 @@ func liftGlobalFlags(fs *flag.FlagSet, cmd string, args []string) ([]string, err
 	}
 	return kept, nil
 }
+
+// misplacedFlag reports the first word in args that names a flag defined
+// on fs -- a flag written after the positional arguments, where
+// flag.Parse has already stopped looking at them.
+func misplacedFlag(fs *flag.FlagSet, args []string) (string, bool) {
+	for _, arg := range args {
+		name := strings.TrimLeft(arg, "-")
+		if name == arg || name == "" {
+			continue // not a flag-shaped word, or a bare "--"
+		}
+		name, _, _ = strings.Cut(name, "=")
+		if fs.Lookup(name) != nil {
+			return name, true
+		}
+	}
+	return "", false
+}

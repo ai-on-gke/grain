@@ -381,6 +381,8 @@ Commands:
                                        the pull request, and refused if the branch does not merge cleanly;
                                        -head <sha> names the commit you reviewed, and the override is
                                        withdrawn if anything else is pushed before the merge
+  pr adopt|review|status <pr>          adopt (-mode review-only|finish), review (-design) or report on
+                                       (-threads) a pull request grain did not open (see prcmd.go)
   run-now <id>                         start a run of this task next, ahead of the queue and whatever
                                        its state says -- including sending a finished or merging task
                                        back to an agent for more work on its own branch
@@ -649,6 +651,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdResume(ctx, c, out, cmdArgs)
 	case "ci":
 		return cmdCI(ctx, c, out, cmdArgs)
+	case "pr":
+		return cmdPR(ctx, c, out, cmdArgs)
 	case "fs":
 		return cmdFS(ctx, c, out, cmdArgs)
 	case "merge-queue":
@@ -770,23 +774,6 @@ func first(args []string) string {
 		return ""
 	}
 	return args[0]
-}
-
-// misplacedFlag reports the first word in args that names a flag defined
-// on fs -- a flag written after the positional arguments, where
-// flag.Parse has already stopped looking at them.
-func misplacedFlag(fs *flag.FlagSet, args []string) (string, bool) {
-	for _, arg := range args {
-		name := strings.TrimLeft(arg, "-")
-		if name == arg || name == "" {
-			continue // not a flag-shaped word, or a bare "--"
-		}
-		name, _, _ = strings.Cut(name, "=")
-		if fs.Lookup(name) != nil {
-			return name, true
-		}
-	}
-	return "", false
 }
 
 // printer renders CLI output either as a human-readable table (the
