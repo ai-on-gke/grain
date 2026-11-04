@@ -136,3 +136,21 @@ func TestGlobalFlagsAcceptedBeforeAndAfterVerb(t *testing.T) {
 		t.Errorf("liftGlobalFlags(comment ...) = %v, %v; want the body left alone", kept, err)
 	}
 }
+
+func TestAudienceDefault_EnvVars(t *testing.T) {
+	t.Setenv("GRAIN_AUDIENCE", "")
+	t.Setenv("GRAIN_TUNNEL_AUDIENCE", "")
+	if got := audienceDefault(); got != "" {
+		t.Fatalf("audienceDefault() with unset env = %q, want empty", got)
+	}
+
+	t.Setenv("GRAIN_TUNNEL_AUDIENCE", "https://tunnel.example.com/*")
+	if got := audienceDefault(); got != "https://tunnel.example.com/*" {
+		t.Fatalf("audienceDefault() with GRAIN_TUNNEL_AUDIENCE = %q, want https://tunnel.example.com/*", got)
+	}
+
+	t.Setenv("GRAIN_AUDIENCE", "https://iap.example.com/*")
+	if got := audienceDefault(); got != "https://iap.example.com/*" {
+		t.Fatalf("audienceDefault() with GRAIN_AUDIENCE = %q, want https://iap.example.com/*", got)
+	}
+}
