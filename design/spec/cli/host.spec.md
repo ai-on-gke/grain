@@ -21,7 +21,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 | Kind | Commands |
 |---|---|
 | Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume` |
-| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|deny`, `git-ambient`, `git-connections`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status`, `declarations check` |
+| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|deny`, `git-ambient`, `git-connections`, `git-login`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status`, `declarations check` |
 | Task CLI: sign-in | `login`, `logout`, `whoami`, `context list\|use\|show\|delete` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
 | Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db upgrade-postgres`), `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
@@ -619,10 +619,11 @@ _No flags._
 
 **Pinned by:** `pkg/cli/hostds_test.go`: `TestHostdsRegisterAndSetOwner`.
 
-### 4.8 `grain git-connections`, `grain git-ambient`, `grain default-model` {#CLI-37}
+### 4.8 `grain git-connections`, `grain git-ambient`, `grain git-login`, `grain default-model` {#CLI-37}
 
 - `git-connections` reads `GET /api/deployment` and prints one `host credential` line per git connection.
 - `git-ambient [-host h] [-kind github|git] [-base-url u] [-proxy u] [-source gh|git|auto] [-if-none]` calls `POST /api/deployment/git-connections`. It adds an ambient connection that asks this host's own `gh`/`git` login for a token on demand. It is for a daemon on the bare machine only.
+- `git-login [-web|-from-gh|-with-token] [-host h] [-base-url u] [-proxy u] [-scope s] [-author name]` delegates the caller's own GitHub HTTPS token to the deployment ([git-login design](../../design/git-login.design.md)). It takes the token from a GitHub OAuth device flow (`-web`, with `-client-id` and `-scopes`), from `gh auth token` (`-from-gh`), or from standard input (`-with-token`), and registers it with `POST /api/deployment/git-connections`, replacing the connection on the same host and scope. Pull requests and comments made with it are signed with `-author` or the GitHub profile's name. It has no `login` alias: `grain login` is the sign-in command ([#CLI-108](#CLI-108)).
 - `default-model [-if-none|-if-unserved] <model>` sends `PUT /api/deployment {"defaultModel"}`. Without either flag that is its only call. With `-if-none` or `-if-unserved` it first reads `GET /api/deployment` and leaves a set default alone (`This deployment already runs on <m> by default: leaving it as it is.`). `-if-unserved` also reads `GET /api/settings` when a default is set, and replaces it when no enabled connection serves it.
 
 **Scope:** admin.
@@ -1830,7 +1831,7 @@ _No flags._
 <!-- BEGIN GENERATED FLAGS: grain init workstation -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-capability` | value |  |  | a capability pattern tasks may be granted (capabilities.allow); repeatable. None denies every capability |
+| `-capability` | value |  |  | a capability pattern tasks may be granted (capabilities.allow); repeatable. The Director's own and grain CI's are allowed without being named |
 | `-container-git-proxy-host` | string |  |  | with container sandboxes, the address a sandbox container reaches this host at (default: the gateway of docker network grain-sandboxes, which this creates if it is missing) |
 | `-data-dir` | string | `"$GRAIN_DATA_DIR"` | $GRAIN_DATA_DIR | the daemon's data directory ($GRAIN_DATA_DIR, else ~/.grain) |
 | `-force` | bool |  |  | rewrite grain_policy.yml even if one exists |
@@ -1961,3 +1962,22 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/sandboximage_test.go`: `TestSandboxImageCommandPrintsDefaultAndBase`, `TestSandboxImageContractSubcommand`, `TestSandboxImageCheckSubcommand`.
+
+## Unplaced commands
+
+### `grain git-login`
+
+<!-- BEGIN GENERATED FLAGS: grain git-login -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-author` | string |  |  | explicit name to sign pull requests and comments with (defaults to your GitHub profile name or login) |
+| `-base-url` | string |  |  | the host's scheme://host[:port], when that is not https on the default port |
+| `-client-id` | string | `"178c6fc778ccc68e1d6a"` | $GRAIN_GITHUB_CLIENT_ID | GitHub OAuth Client ID for -web device flow ($GRAIN_GITHUB_CLIENT_ID) |
+| `-from-gh` | value |  |  | delegate the token from this machine's gh auth token login |
+| `-host` | string | `"github.com"` |  | git host to authenticate against |
+| `-proxy` | string |  |  | the http(s)://host:port proxy the host is reached through, if any |
+| `-scope` | string |  |  | optional owner or owner/repo scope (empty sets the deployment-wide default on -host) |
+| `-scopes` | string | `"repo,read:org,workflow"` |  | comma-separated OAuth scopes requested by -web |
+| `-web` | bool |  |  | authenticate in a web browser using GitHub OAuth Device Flow |
+| `-with-token` | bool |  |  | read the HTTPS token from standard input |
+<!-- END GENERATED FLAGS -->
