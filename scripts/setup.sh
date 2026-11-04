@@ -2786,7 +2786,12 @@ fi
 #             on GRAIN_POSTGRES_PORT (default 5432).
 #   password  generated once into $GRAIN_DATA_DIR/secrets/postgres-password,
 #             never replaced; the server reads it at initdb only
-#             (POSTGRES_PASSWORD_FILE).
+#             (POSTGRES_PASSWORD_FILE). POSTGRES_INITDB_ARGS=--auth=scram-sha-256
+#             replaces initdb's default `trust` lines for local, 127.0.0.1/32
+#             and ::1/128 in pg_hba.conf, which on --network host would let
+#             any process on the machine connect as `grain` with no password;
+#             a cluster initialised before that was set has its `trust` lines
+#             rewritten to scram-sha-256 on the next run.
 #   DSN       $POSTGRES_ENV_FILE, root's and 0600. grain-daemon.service reads
 #             it as an EnvironmentFile and passes GRAIN_DB_DRIVER and
 #             GRAIN_DB_DSN into the container by name, so the password is
@@ -3014,7 +3019,7 @@ Type=simple
 Environment=GRAIN_POSTGRES_IMAGE=${GRAIN_POSTGRES_IMAGE}
 Environment=GRAIN_POSTGRES_PORT=${GRAIN_POSTGRES_PORT}
 ExecStartPre=-${DOCKER_BIN:-docker} rm -f ${POSTGRES_CONTAINER}
-ExecStart=${DOCKER_BIN:-docker} run --name ${POSTGRES_CONTAINER} --rm --network host --user ${uid}:${gid} --shm-size 256m --env PGDATA=/var/lib/postgresql/data --env POSTGRES_USER=grain --env POSTGRES_DB=grain --env POSTGRES_PASSWORD_FILE=/run/grain/postgres-password --volume ${data}:/var/lib/postgresql/data --volume ${GRAIN_DATA_DIR}/secrets/postgres-password:/run/grain/postgres-password:ro ${GRAIN_POSTGRES_IMAGE} postgres -c listen_addresses=127.0.0.1 -c port=${GRAIN_POSTGRES_PORT}
+ExecStart=${DOCKER_BIN:-docker} run --name ${POSTGRES_CONTAINER} --rm --network host --user ${uid}:${gid} --shm-size 256m --env PGDATA=/var/lib/postgresql/data --env POSTGRES_USER=grain --env POSTGRES_DB=grain --env POSTGRES_PASSWORD_FILE=/run/grain/postgres-password --env POSTGRES_INITDB_ARGS=--auth=scram-sha-256 --volume ${data}:/var/lib/postgresql/data --volume ${GRAIN_DATA_DIR}/secrets/postgres-password:/run/grain/postgres-password:ro ${GRAIN_POSTGRES_IMAGE} postgres -c listen_addresses=127.0.0.1 -c port=${GRAIN_POSTGRES_PORT}
 ExecStartPost=/bin/sh -c 'for i in \$\$(seq 1 120); do ${DOCKER_BIN:-docker} exec ${POSTGRES_CONTAINER} pg_isready -q -h 127.0.0.1 -p ${GRAIN_POSTGRES_PORT} -U grain -d grain && exit 0; sleep 1; done; echo "${POSTGRES_CONTAINER} did not accept connections within 120s" >&2; exit 1'
 ExecStop=-${DOCKER_BIN:-docker} stop --time 120 ${POSTGRES_CONTAINER}
 Restart=on-failure
@@ -3034,13 +3039,30 @@ UNIT
   return 0
 }
 
+# postgres_hba_require_password rewrites initdb's default `trust` lines in
+# an existing cluster's pg_hba.conf to scram-sha-256, as $GRAIN_USER, and
+# says (status 0) whether that changed the file. Clusters initialised before
+# POSTGRES_INITDB_ARGS=--auth=scram-sha-256 was set already gave the `grain`
+# role its SCRAM password from POSTGRES_PASSWORD_FILE, so rewriting
+# pg_hba.conf and reloading is all they need.
+postgres_hba_require_password() {
+  local hba="$GRAIN_DATA_DIR/postgres/pg_hba.conf" before after
+  as_grain test -f "$hba" && ! as_grain test -L "$hba" || return 1
+  before="$(as_grain cat "$hba")"
+  after="$(printf '%s\n' "$before" | sed -E 's/^([[:space:]]*(local|host(ssl|nossl|gssenc|nogssenc)?)[[:space:]][^#]*[[:space:]])trust([[:space:]]*(#.*)?)$/\1scram-sha-256\4/')"
+  [ "$after" != "$before" ] || return 1
+  printf '%s\n' "$after" | grain_write 0600 "$hba"
+  log "  PostgreSQL: replaced trust with scram-sha-256 in $hba"
+  return 0
+}
+
 # ensure_local_postgres provisions the server resolve_database chose, if
 # it chose one, and leaves it running and taking connections.
 ensure_local_postgres() {
   [ "$GRAIN_POSTGRES_PROVISION" = 1 ] || return 0
   step_start "Provisioning PostgreSQL (grain-postgres.service, $GRAIN_POSTGRES_IMAGE)"
   grain_dir 0700 "$GRAIN_DATA_DIR/postgres"
-  local password changed=0
+  local password changed=0 hba_changed=0 was_active=0
   password="$(postgres_password)"
   if ! docker image inspect "$GRAIN_POSTGRES_IMAGE" >/dev/null 2>&1 &&
      ! docker pull "$GRAIN_POSTGRES_IMAGE" >/dev/null; then
@@ -3052,15 +3074,24 @@ ensure_local_postgres() {
   if write_postgres_unit; then
     changed=1
   fi
+  if postgres_hba_require_password; then
+    hba_changed=1
+  fi
   systemctl daemon-reload
   systemctl enable "$(basename "$POSTGRES_UNIT")" >/dev/null 2>&1
-  if [ "$changed" = 1 ] && systemctl is-active --quiet "$(basename "$POSTGRES_UNIT")"; then
-    # Its unit changed (a new image, a new port): the one time a re-run
-    # restarts it. grain-daemon.service, which Requires= it, goes with
-    # it, and enable_services starts that again.
+  if systemctl is-active --quiet "$(basename "$POSTGRES_UNIT")"; then
+    was_active=1
+  fi
+  if [ "$changed" = 1 ] && [ "$was_active" = 1 ]; then
+    # Its unit changed (a new image, a new port, new initdb args): the
+    # one time a re-run restarts it. grain-daemon.service, which
+    # Requires= it, goes with it, and enable_services starts that again.
     systemctl restart "$(basename "$POSTGRES_UNIT")"
   else
     systemctl start "$(basename "$POSTGRES_UNIT")"
+    if [ "$hba_changed" = 1 ] && [ "$was_active" = 1 ]; then
+      docker exec "$POSTGRES_CONTAINER" pg_ctl reload -D /var/lib/postgresql/data >/dev/null
+    fi
   fi
   step_done "listening on 127.0.0.1:$GRAIN_POSTGRES_PORT"
   if [ "$GRAIN_POSTGRES_MIGRATE" = 1 ]; then
