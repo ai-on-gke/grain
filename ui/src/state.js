@@ -184,11 +184,13 @@ export function displayCounts(counts) {
 
 // askedCase says which of the several things "Asked" covers one task is
 // in, or null for a task in neither of ASKED_STATES: kind is "question"
-// (an agent's ask_question), "message" (an interactive task or console
-// session waiting for its next message), "access" (an agent's
-// request_access -- ui.Task.AwaitingAccess), "stopped" (a turn the reader
-// stopped -- ui.Task.TurnStopped) or "submit" (awaiting_submit); title
-// is the chip's tooltip; action is what ends it, "reply" or "submit".
+// (an agent's ask_question or request_secret), "answer" (a run that
+// answered in a comment and opened no pull request), "message" (an
+// interactive task or console session waiting for its next message),
+// "access" (an agent's request_access -- ui.Task.AwaitingAccess),
+// "stopped" (a turn the reader stopped -- ui.Task.TurnStopped) or
+// "submit" (awaiting_submit); title is the chip's tooltip; action is what
+// ends it, "reply", "grant" or "submit".
 export function askedCase(t) {
   if (!t || !ASKED_STATES.includes(t.state)) return null;
   if (t.state === "awaiting_submit") {
@@ -214,7 +216,9 @@ export function askedCase(t) {
     };
   if (t.awaitingAccess)
     return { kind: "access", title: "Asked for access", action: "grant" };
-  return { kind: "question", title: "Asked a question", action: "reply" };
+  if (t.questionSummary || t.pendingSecret)
+    return { kind: "question", title: "Asked a question", action: "reply" };
+  return { kind: "answer", title: "Answered in a comment", action: "reply" };
 }
 
 // SET_ASIDE_STATES is the states a task list leaves out unless it is
@@ -424,6 +428,21 @@ export function stateTitle(t, byId) {
   return label;
 }
 
+// blockerState returns the short state label shown in parentheses for an
+// open blocking task (e.g. "running", "asked", "cancelled", "merged").
+export function blockerState(dep) {
+  if (!dep) return "";
+  let state = dep.state;
+  if (isTaskMerged(dep)) {
+    state = "merged";
+  } else if (state === "closed" && !dep.endedAt) {
+    state = "cancelled";
+  } else if (STATE_LABELS[state]) {
+    state = STATE_LABELS[state].toLowerCase();
+  }
+  return state || "";
+}
+
 // blockedDescription describes the open blocking dependencies for a task,
 // including each blocker's current state (e.g. "Blocked on: #105 (cancelled)").
 export function blockedDescription(t, byId) {
@@ -438,15 +457,7 @@ export function blockedDescription(t, byId) {
           ? byId.find((x) => x.id === id)
           : byId?.[id];
     if (!dep) return `#${id}`;
-    let state = dep.state;
-    if (isTaskMerged(dep)) {
-      state = "merged";
-    } else if (state === "closed" && !dep.endedAt) {
-      state = "cancelled";
-    } else if (STATE_LABELS[state]) {
-      state = STATE_LABELS[state].toLowerCase();
-    }
-    return `#${id} (${state})`;
+    return `#${id} (${blockerState(dep)})`;
   });
   // A task its own run parked (wait_for_task) is waiting by choice.
   return `${t.parked ? "Waiting on" : "Blocked on"}: ${parts.join(", ")}`;
@@ -1114,7 +1125,9 @@ export function baseRepairWaitReason(t) {
       return `waiting on review questions from #${t.reviewQuestions}`;
     }
     if (t.state === "awaiting_reply") {
-      return "waiting for a reply to its question";
+      return t.questionSummary || t.pendingSecret
+        ? "waiting for a reply to its question"
+        : "answered in a comment";
     }
     if (t.state === "failed") {
       return "failed and waiting for retry";
@@ -1143,7 +1156,9 @@ export function baseRepairWaitReason(t) {
     return `stalled (${t.stall})`;
   }
   if (t.state === "awaiting_reply") {
-    return "waiting for a reply to its question";
+    return t.questionSummary || t.pendingSecret
+      ? "waiting for a reply to its question"
+      : "answered in a comment";
   }
   if (t.state === "failed") {
     return "failed and waiting for retry";

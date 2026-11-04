@@ -12,8 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { useState } from "react";
-import { Autocomplete, Chip, TextField } from "@mui/material";
+import { Fragment, useState } from "react";
+import {
+  Autocomplete,
+  Checkbox,
+  Chip,
+  ListItemText,
+  TextField,
+} from "@mui/material";
 import { searchFilter } from "../fuzzy.js";
 import { identifierField } from "../identifierField.js";
 
@@ -47,6 +53,22 @@ import { identifierField } from "../identifierField.js";
 // closed list it still submits the form around it -- and Escape closes
 // an open list without reaching the drawer the field sits in; on a
 // closed one it bubbles as before.
+//
+// With multiple it holds a list of values instead: value and
+// defaultValue are arrays, onChange is given the whole new array, and
+// name carries one hidden input per value, as a <select multiple> does.
+// The list stays open while rows are ticked, each row has a checkbox,
+// and the chosen values sit in the box as chips -- renderChip(option,
+// props) draws one where a plain Chip will not do (GrantChip, a warning
+// outline), and must spread props, which carry the delete button that
+// takes the value back off. Typing searches as it does for one value;
+// what was typed is cleared as a row is ticked, so the next search
+// starts afresh.
+//
+// Rows of either kind may say more: secondary is a second line under
+// the label, title the row's tooltip (a description too long for the
+// row), and disabled leaves the row in the list but not pickable
+// (getOptionDisabled, given, decides instead).
 //
 // renderInput draws the box; the default is a small MUI TextField with
 // label, helperText (styled by FormHelperTextProps) and margin, plus any
@@ -89,6 +111,8 @@ export default function SearchSelect({
   InputLabelProps,
   FormHelperTextProps,
   error,
+  renderChip,
+  getOptionDisabled = (o) => Boolean(o.disabled),
   ...rest
 }) {
   const [inner, setInner] = useState(
@@ -139,6 +163,7 @@ export default function SearchSelect({
           : optionOf(current)
       }
       disabled={disabled}
+      getOptionDisabled={getOptionDisabled}
       disableClearable={!clearable}
       selectOnFocus={!multiple}
       autoHighlight
@@ -146,15 +171,17 @@ export default function SearchSelect({
       size={size}
       noOptionsText={noOptionsText}
       isOptionEqualToValue={(o, v) => o.value === v.value}
-      getOptionDisabled={(o) => Boolean(o.disabled)}
       getOptionLabel={(o) => o?.label ?? ""}
       renderTags={
         multiple
           ? (picked, getTagProps) =>
               picked.map((o, index) => {
                 const { key, ...tagProps } = getTagProps({ index });
-                return (
-                  <Chip key={key} size="small" label={o.label} {...tagProps} />
+                const props = { ...tagProps, "data-value": o.value };
+                return renderChip ? (
+                  <Fragment key={key}>{renderChip(o, props)}</Fragment>
+                ) : (
+                  <Chip key={key} size="small" label={o.label} {...props} />
                 );
               })
           : undefined
@@ -215,18 +242,38 @@ export default function SearchSelect({
         const text = (
           <HighlightedText text={option.label} ranges={option.ranges} />
         );
+        const plain = option.secondary ? (
+          <ListItemText
+            primary={text}
+            secondary={option.secondary}
+            sx={{ my: 0 }}
+          />
+        ) : multiple ? (
+          <ListItemText primary={text} sx={{ my: 0 }} />
+        ) : (
+          text
+        );
         return (
           <li
             key={key}
             {...other}
+            title={option.title}
             data-value={option.value}
             data-label={option.label}
           >
+            {multiple && (
+              <Checkbox
+                size="small"
+                checked={state.selected}
+                tabIndex={-1}
+                sx={{ p: 0.5, mr: 0.5 }}
+              />
+            )}
             {renderRow
               ? renderRow(option)
               : option.renderRow
                 ? option.renderRow(text, state)
-                : (option.row ?? text)}
+                : (option.row ?? plain)}
           </li>
         );
       }}

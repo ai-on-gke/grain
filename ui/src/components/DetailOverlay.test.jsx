@@ -1344,6 +1344,79 @@ describe("DetailOverlay", () => {
     expect(screen.getByText(/build error/)).toBeInTheDocument();
   });
 
+  it("shows blocking task links and states beneath the Blocked badge and navigates on click", async () => {
+    const user = userEvent.setup();
+    const onOpenTask = vi.fn();
+    const { rerender } = render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          state: "queued",
+          blocked: true,
+          blockedBy: ["11", "10"],
+        }}
+        tasks={[
+          {
+            id: "11",
+            title: "Suggest what to tune for throughput and reliability",
+            state: "awaiting_reply",
+          },
+          {
+            id: "10",
+            title: "Prepare benchmark dataset",
+            state: "running",
+          },
+        ]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={onOpenTask}
+        act={vi.fn()}
+      />,
+    );
+
+    expect(document.querySelector(".detail-state .badge")).toHaveTextContent(
+      "Blocked",
+    );
+    const blockedBlock = document.querySelector(".detail-blocked");
+    expect(blockedBlock).toHaveTextContent(
+      "Blocked on #11 Suggest what to tune for throughput and reliability (asked), #10 Prepare benchmark dataset (running)",
+    );
+
+    const link = within(blockedBlock).getByRole("link", {
+      name: "#11 Suggest what to tune for throughput and reliability",
+    });
+    expect(link).toHaveAttribute("href", "/tasks/11");
+    await user.click(link);
+    expect(onOpenTask).toHaveBeenCalledWith("11");
+
+    rerender(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          state: "queued",
+          blocked: true,
+          parked: true,
+          blockedBy: ["11"],
+        }}
+        tasks={[
+          {
+            id: "11",
+            title: "Suggest what to tune for throughput and reliability",
+            state: "running",
+          },
+        ]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={onOpenTask}
+        act={vi.fn()}
+      />,
+    );
+
+    expect(document.querySelector(".detail-blocked")).toHaveTextContent(
+      "Waiting on #11 Suggest what to tune for throughput and reliability (running)",
+    );
+  });
+
   // A description is markdown for the same reason a comment body is: a
   // proposed task's own body is written by the run that proposed it
   // (propose_task), in the same syntax.

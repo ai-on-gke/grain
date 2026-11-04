@@ -30,6 +30,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -1304,5 +1305,56 @@ func TestAgentAPIFilingTakesNoHiddenFormDefaults(t *testing.T) {
 	if task.AutoMerge || task.Approval != nil || len(task.Writes) != 0 || len(task.Reads) != 0 {
 		t.Errorf("agent-filed task took the form's hidden defaults: autoMerge=%v approval=%v writes=%v reads=%v",
 			task.AutoMerge, task.Approval, task.Writes, task.Reads)
+	}
+}
+
+// TestSessionRunCannotTurnOnReadsAll: a standing session's run that may
+// edit its own session cannot turn readsAll back on after a person opted
+// the session out of reading every working repository. That reaches the
+// same repositories naming them in reads does, and is held to the same
+// rule; edits that grant nothing still go through.
+func TestSessionRunCannotTurnOnReadsAll(t *testing.T) {
+	_, store, _ := testClient(t)
+	ctx := context.Background()
+	off := false
+	session := model.DefaultConsoleSessions()[0]
+	session.Capabilities = []string{"self-debug", "api:sessions:write"}
+	session.ReadsAll = &off
+	cfg := model.DefaultConfig()
+	cfg.TargetRepos = []string{"acme/widgets", "acme/docs", "acme/secret-repo"}
+	cfg.ConsoleSessions = []model.ConsoleSession{session}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	taskID, err := model.FileConsoleSessionTask(ctx, store, session, model.FileConsoleSessionOptions{Now: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := ui.NewServer(ui.Config{
+		Actor:        ui.DefaultActor("alice"),
+		Capabilities: ui.OfferedCapabilities(),
+		Secrets:      secrets.New(t.TempDir()),
+	}, store)
+	path := "/api/console-sessions/" + session.ID
+
+	for _, body := range []string{`{"readsAll":true}`, `{"reads_all":true}`, `{"ReadsAll":true}`} {
+		if code, resp := asAgent(t, srv, taskID, http.MethodPut, path, body, "testing"); code != http.StatusForbidden ||
+			!strings.Contains(resp, "cannot turn on readsAll") {
+			t.Errorf("%s from the session's own run answered %d: %s", body, code, resp)
+		}
+	}
+	if code, resp := asAgent(t, srv, taskID, http.MethodPut, path, `{"reads":["acme/secret-repo"]}`, "testing"); code != http.StatusForbidden ||
+		!strings.Contains(resp, "cannot grant read access to acme/secret-repo") {
+		t.Errorf("reads of acme/secret-repo from the session's own run answered %d: %s", code, resp)
+	}
+	if code, resp := asAgent(t, srv, taskID, http.MethodPut, path, `{"title":"renamed","readsAll":false}`, "testing"); code != http.StatusOK {
+		t.Fatalf("an own-session edit granting nothing answered %d: %s", code, resp)
+	}
+	got, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, ok := model.ConsoleSessionByID(model.ConsoleSessionsOr(got.ConsoleSessions), session.ID); !ok || s.ReadsAllRepos() {
+		t.Errorf("session after the edits = %+v, want readsAll still off", s)
 	}
 }

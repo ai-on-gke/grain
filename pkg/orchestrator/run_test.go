@@ -718,16 +718,51 @@ func TestBuildPromptDoesNotAskAStandingSessionToDependOnItself(t *testing.T) {
 		}
 	}
 
-	// An ordinary task still gets the whole of the advice: it is the one
-	// this was always right for.
-	ordinary := model.Task{ID: "t1", Title: "Do the thing", Body: "details"}
+	// A repo-targeted task still gets the whole of the advice: it has a
+	// change to land, so it is the one "once this task's own change has
+	// landed" is right for.
+	ordinary := model.Task{
+		ID: "t1", Title: "Do the thing", Body: "details",
+		Target: &model.RepoRef{Owner: "acme", Name: "widgets"},
+	}
 	prompt = orchestrator.BuildPrompt(ordinary, "", "", false,
 		orchestrator.DefaultMaxRunRuntime, orchestrator.History{}, nil)
 	if !strings.Contains(prompt, "task t1 itself, when") {
-		t.Errorf("prompt no longer tells an ordinary task it may depend on itself: %q", prompt)
+		t.Errorf("prompt no longer tells a repo-targeted task it may depend on itself: %q", prompt)
 	}
-	if strings.Contains(prompt, "Never name task") {
-		t.Errorf("prompt warns an ordinary task off a link it may perfectly well make: %q", prompt)
+	if strings.Contains(prompt, "Never name task") || strings.Contains(prompt, "Do not put task") {
+		t.Errorf("prompt warns a repo-targeted task off a link it may perfectly well make: %q", prompt)
+	}
+
+	// A task whose repository targets live in Writes (with Target == nil)
+	// also lands repository changes and may depend on itself.
+	withWrites := model.Task{
+		ID: "t2", Title: "Update config", Body: "details",
+		Writes: []model.WriteTarget{{Repo: model.RepoRef{Owner: "grain", Name: "config"}}},
+	}
+	prompt = orchestrator.BuildPrompt(withWrites, "", "", false,
+		orchestrator.DefaultMaxRunRuntime, orchestrator.History{}, nil)
+	if !strings.Contains(prompt, "task t2 itself, when") {
+		t.Errorf("prompt no longer tells a task with Writes it may depend on itself: %q", prompt)
+	}
+
+	// A repo-less report task (Target == nil && len(Writes) == 0) has no
+	// repository change to land and rests in awaiting_reply until a human
+	// closes the report, so it must not be told to put itself in depends_on.
+	repoless := model.Task{ID: "t3", Title: "Suggest what to tune", Body: "details"}
+	prompt = orchestrator.BuildPrompt(repoless, "", "", false,
+		orchestrator.DefaultMaxRunRuntime, orchestrator.History{}, nil)
+	if strings.Contains(prompt, "task t3 itself, when") {
+		t.Errorf("prompt asks a repo-less task to depend on itself: %q", prompt)
+	}
+	for _, want := range []string{
+		"an earlier proposal in this same run",
+		"another existing task whose change must land first",
+		"Do not put task t3 itself in depends_on",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt for repo-less task does not mention %q: %q", want, prompt)
+		}
 	}
 }
 

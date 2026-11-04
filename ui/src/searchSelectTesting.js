@@ -56,3 +56,40 @@ export function optionValues(input) {
     (r) => r.dataset.value,
   );
 }
+
+// chooseOptions ticks several rows of a multiple SearchSelect box in
+// turn, as selectOptions does with an array: the list stays open
+// between them, so each is a click on the next row.
+export async function chooseOptions(user, input, wanted) {
+  for (const w of wanted) await chooseOption(user, input, w);
+}
+
+// chips is the chips a multiple SearchSelect box holds: one per chosen
+// value, in order, each carrying its value as data-value.
+export function chips(input) {
+  const root = input.closest(".MuiAutocomplete-root");
+  return root ? [...root.querySelectorAll(".MuiChip-root[data-value]")] : [];
+}
+
+// chosenValues is the values a multiple SearchSelect box holds, read
+// off its chips -- what a <select multiple>'s selected options were.
+export function chosenValues(input) {
+  return chips(input).map((c) => c.dataset.value);
+}
+
+// removeOption takes one value back off a multiple SearchSelect box
+// with its chip's delete button, the way somebody who sees the chip
+// would; wanted is the value or the chip's text.
+export async function removeOption(user, input, wanted) {
+  const chip = chips(input).find(
+    (c) => c.dataset.value === wanted || c.textContent === wanted,
+  );
+  if (!chip) {
+    throw new Error(
+      `no chip ${JSON.stringify(wanted)} among ${chosenValues(input)
+        .map((v) => JSON.stringify(v))
+        .join(", ")}`,
+    );
+  }
+  await user.click(chip.querySelector(".MuiChip-deleteIcon"));
+}
