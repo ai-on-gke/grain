@@ -19,6 +19,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
@@ -57,7 +59,7 @@ timeout: 2m
 `, 0o644)
 	body := "#!/bin/sh\n# grain: Show what it was called with.\n" +
 		"for a in \"$@\"; do printf '<%s>\\n' \"$a\"; done\n" +
-		"printf 'cwd=%s token=%s\\n' \"$(basename \"$PWD\")\" \"${TOKEN-unset}\"\n" +
+		"printf 'cwd=%s token=%s agent=%s\\n' \"$(basename \"$PWD\")\" \"${TOKEN-unset}\" \"${SSH_AUTH_SOCK-unset}\"\n" +
 		"echo to-stderr >&2\nexit 3\n"
 	write("scripts/show", body, 0o755)
 	write("tools/deploy.sh", body, 0o755)
@@ -66,6 +68,17 @@ timeout: 2m
 	conv, err := localscripts.ConvertToHostScripts(cfg, "ops")
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Every ambient variable host-script passes a script and
+	// local-scripts did not is withheld by the converted body.
+	for _, script := range conv.Scripts {
+		body := script["script"].(string)
+		unset, _, _ := strings.Cut(body, "\n")
+		for _, v := range AmbientIdentityEnv {
+			if len(localexec.BaseEnviron([]string{v + "=x"})) == 0 && !slices.Contains(strings.Fields(unset), v) {
+				t.Errorf("%s: body %q passes %s on, which local-scripts withheld", script["name"], body, v)
+			}
+		}
 	}
 	servers := map[string]protocol.ServerConfig{}
 	id, err := localscripts.AddToHostScriptServer(servers, []localscripts.HostScripts{conv})
@@ -102,7 +115,9 @@ timeout: 2m
 	})
 	// host-script, with the server's own environment binding the secret
 	// as its mcpServers env would.
-	environ := append([]string{"GRAIN_LOCAL_SCRIPTS_OPS_TOKEN=s3cret"}, hostScriptEnviron...)
+	// SSH_AUTH_SOCK is ambient identity host-script would pass on, and
+	// local-scripts never did.
+	environ := append([]string{"GRAIN_LOCAL_SCRIPTS_OPS_TOKEN=s3cret", "SSH_AUTH_SOCK=/run/agent.sock"}, hostScriptEnviron...)
 	s, err := NewHostScript(HostScriptConfig{Listen: "127.0.0.1:0", DataDir: t.TempDir(), Environ: func() []string { return environ }})
 	if err != nil {
 		t.Fatal(err)

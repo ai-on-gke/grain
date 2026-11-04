@@ -15,6 +15,9 @@
 package localscripts
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -56,8 +59,8 @@ output_cap: 4096
 	if s["timeout"] != 2 || s["max_output"] != 4096 || s["description"] != "Show it." {
 		t.Errorf("entry %v: want timeout rounded up to 2s, the output cap, and the # grain: description", s)
 	}
-	if !strings.HasPrefix(s["script"].(string), "exec '"+root) {
-		t.Errorf("script %q: want it to exec the declaration's own file", s["script"])
+	if body := s["script"].(string); !strings.Contains(body, "\nexec '"+root) || !strings.Contains(body, "SSH_AUTH_SOCK") {
+		t.Errorf("script %q: want it to withhold the ambient identity and exec the declaration's own file", body)
 	}
 	if got := s["env"].(map[string]any)["TOKEN"]; got != "$env:GRAIN_LOCAL_SCRIPTS_OPS_TOKEN" {
 		t.Errorf("env TOKEN = %v", got)
@@ -137,5 +140,90 @@ func TestHostScriptGrants(t *testing.T) {
 	}
 	if spec.Capability != HostScriptServerID+"#host-script" || spec.With["script"] != "ops-show" {
 		t.Fatalf("grant %q decodes to %+v", got[0], spec)
+	}
+}
+
+// TestHostScriptBodyRechecksTheFile: the per-run snapshot refused a
+// script anyone but grain's own user could write, and host-script makes
+// no snapshot, so the body makes the same refusal on every call, and
+// withholds the ambient identity local-scripts never passed a script.
+func TestHostScriptBodyRechecksTheFile(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("no bash")
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "show")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$1 ${SSH_AUTH_SOCK-unset} ${KUBECONFIG-unset}\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := filepath.Join(dir, "body")
+	if err := os.WriteFile(body, []byte(hostScriptBody(script, map[string]string{"KUBECONFIG": "$env:X"})), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := func() (string, int) {
+		cmd := exec.Command("bash", body, "arg")
+		cmd.Env = []string{"PATH=/usr/local/bin:/usr/bin:/bin", "SSH_AUTH_SOCK=/run/agent", "KUBECONFIG=/declared"}
+		out, err := cmd.CombinedOutput()
+		code := 0
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		return string(out), code
+	}
+	if out, code := run(); code != 0 || out != "arg unset /declared\n" {
+		t.Fatalf("(%q, %d): want the script run, the ssh agent withheld and the declared variable kept", out, code)
+	}
+	if err := os.Chmod(script, 0o757); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := run(); code != 126 || !strings.Contains(out, "not running it") {
+		t.Fatalf("(%q, %d): want a world-writable script refused", out, code)
+	}
+	if err := os.Chmod(script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := script + ".real"
+	if err := os.Rename(script, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, script); err != nil {
+		t.Fatal(err)
+	}
+	if _, code := run(); code != 126 {
+		t.Fatalf("exit %d: want a script replaced by a symlink refused", code)
+	}
+}
+
+// TestMigrateToHostScriptLeavesAClashOnLocalScripts: a script the
+// operator configured under the name a declaration's script would take,
+// running something else, is not what local-scripts:<name> becomes.
+func TestMigrateToHostScriptLeavesAClashOnLocalScripts(t *testing.T) {
+	root := stateRepo(t, "ops", "scripts:\n  dir: scripts\n", map[string]string{"show": showScript})
+	cfg := Config{StateDir: root}
+	servers := map[string]protocol.ServerConfig{
+		HostScriptServerID: {Command: "grain", Args: []string{"capability", "host-script"},
+			Config: map[string]any{"scripts": []any{map[string]any{"name": "ops-show", "script": "rm -rf \"$1\""}}}},
+	}
+	renames, skipped, err := MigrateToHostScript(cfg, servers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(renames) != 0 || len(skipped) != 1 || !strings.Contains(skipped[0].Error(), "ops-show") {
+		t.Fatalf("renames %v, skipped %v: want ops left on local-scripts", renames, skipped)
+	}
+
+	// Its own body, from an earlier start, is ops's.
+	renames, skipped, err = MigrateToHostScript(cfg, map[string]protocol.ServerConfig{})
+	if err != nil || len(skipped) != 0 || len(renames) != 1 {
+		t.Fatalf("renames %v, skipped %v, err %v", renames, skipped, err)
+	}
+	servers = map[string]protocol.ServerConfig{}
+	if _, _, err := MigrateToHostScript(cfg, servers); err != nil {
+		t.Fatal(err)
+	}
+	if renames, skipped, err = MigrateToHostScript(cfg, servers); err != nil || len(skipped) != 0 || len(renames) != 1 {
+		t.Fatalf("second start: renames %v, skipped %v, err %v", renames, skipped, err)
 	}
 }

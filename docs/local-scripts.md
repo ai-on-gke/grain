@@ -105,9 +105,15 @@ At every start, before the capability servers start, the daemon
   If there is no such server, it is created as
   `https://grain.dev/capabilities/host-script`. Each script is named
   `<declaration>-<tool name without local_>`, so `ops`'s
-  `tools/deploy.sh` becomes `ops-deploy_sh`. Its body is
+  `tools/deploy.sh` becomes `ops-deploy_sh`. Its body ends
   `exec '<the script's real path>' "$@"`, so the file in the state
-  repository is still what runs, under its own `#!`. Its `cwd` is the
+  repository is still what runs, under its own `#!`. Before that, the
+  body unsets the ambient identity host-script would pass on and
+  local-scripts never did (`SSH_AUTH_SOCK`, `KUBECONFIG`,
+  `GOOGLE_APPLICATION_CREDENTIALS`, `DOCKER_HOST` and the rest), unless
+  the declaration's `env` sets it. On every call it also refuses (exit
+  126) a file that is now a symlink, not a regular executable, not
+  owned by grain's user, or writable by group or others. Its `cwd` is the
   declaration's `workdir`, its `timeout` the script's timeout rounded
   up to whole seconds, and its `max_output` the declaration's
   `output_cap`. `max_calls` is unlimited. Each `env` secret becomes
@@ -115,7 +121,11 @@ At every start, before the capability servers start, the daemon
   that variable to `$secret:<name>`.
 - **Leaves existing configuration alone.** A script name the server
   already configures is kept as it is, so a later start changes
-  nothing. A declaration's new scripts are added at the next start.
+  nothing. That only holds if the existing script still has the body
+  the conversion writes. If it runs anything else, the declaration stays
+  on local-scripts and the daemon logs why, so a `local-scripts:<name>`
+  grant never becomes a grant of a script the declaration did not
+  declare. A declaration's new scripts are added at the next start.
   Granting them is a separate step: a grant names one script.
 - **Rewrites stored grants.** Every stored `local-scripts:<name>` is
   rewritten to its declaration's host-script grants (`Store.RewriteRetiredGrants`).

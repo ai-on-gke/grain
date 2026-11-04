@@ -138,12 +138,10 @@ func ConvertToHostScripts(cfg Config, name string) (HostScripts, error) {
 		entry := map[string]any{
 			"name":        scriptName,
 			"description": desc,
-			// exec keeps the script's own interpreter (its #! line) and its
-			// argv exactly; host-script runs this as bash <file> "$@".
-			"script":     "exec " + shellQuote(s.Path) + " \"$@\"\n",
-			"cwd":        decl.WorkdirPath(),
-			"timeout":    timeoutSeconds(s.Timeout),
-			"max_output": decl.Cap(),
+			"script":      hostScriptBody(s.Path, s.Env),
+			"cwd":         decl.WorkdirPath(),
+			"timeout":     timeoutSeconds(s.Timeout),
+			"max_output":  decl.Cap(),
 			// local-scripts never limited a run's calls; host-script's
 			// default would.
 			"max_calls": math.MaxInt32,
@@ -168,6 +166,47 @@ func ConvertToHostScripts(cfg Config, name string) (HostScripts, error) {
 		return HostScripts{}, fmt.Errorf("local-scripts %s: the declaration serves no script", name)
 	}
 	return out, nil
+}
+
+// withheldAmbientEnv is the part of host-script's ambient identity
+// (pkg/capability/intree AmbientIdentityEnv, restated because that
+// package sits above this one) that local-scripts never passed a script
+// (localexec.BaseEnviron): a script gets the credentials its declaration
+// names and nothing more, so a migrated script must not start reaching
+// the daemon's ssh agent, docker socket or cloud identities.
+var withheldAmbientEnv = []string{
+	"XDG_RUNTIME_DIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "DBUS_SESSION_BUS_ADDRESS",
+	"SSH_AUTH_SOCK", "KUBECONFIG", "CLOUDSDK_CONFIG", "GOOGLE_APPLICATION_CREDENTIALS",
+	"AWS_PROFILE", "AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE", "DOCKER_HOST",
+}
+
+// hostScriptBody is the host-script body that runs the declaration's
+// script at path, env being the variables its declaration sets. It
+// withholds the ambient identity local-scripts withheld, refuses the
+// file once it is no longer one grain's own user alone could have
+// written -- the per-run snapshot's checks, which host-script does not
+// make, applied to every call -- and execs it, keeping its own
+// interpreter (its #! line) and argv exactly; host-script runs the body
+// as bash <file> "$@".
+func hostScriptBody(path string, env map[string]string) string {
+	var unset []string
+	for _, v := range withheldAmbientEnv {
+		if _, ok := env[v]; !ok {
+			unset = append(unset, v)
+		}
+	}
+	q := shellQuote(path)
+	var b strings.Builder
+	if len(unset) > 0 {
+		b.WriteString("unset " + strings.Join(unset, " ") + "\n")
+	}
+	b.WriteString("if [ -L " + q + " ] || [ ! -f " + q + " ] || [ ! -x " + q + " ] || [ ! -O " + q + " ] ||\n" +
+		"  [ -n \"$(find " + q + " -prune \\( -perm -020 -o -perm -002 \\) -print)\" ]; then\n" +
+		"  echo \"grain: \"" + q + "\" is no longer a regular executable file only grain's own user can write; not running it\" >&2\n" +
+		"  exit 126\n" +
+		"fi\n")
+	b.WriteString("exec " + q + " \"$@\"\n")
+	return b.String()
 }
 
 // secretBinding is the host-script server variable secret is bound to.
@@ -349,6 +388,25 @@ func MigrateToHostScript(cfg Config, servers map[string]protocol.ServerConfig) (
 		}
 		converted = append(converted, h)
 	}
+	// A script the server already configures under a name a declaration
+	// would use is kept as the operator has it (AddToHostScriptServer),
+	// so a local-scripts:<name> grant would become a grant of whatever
+	// it runs. Only one that still runs the declaration's own file
+	// (same body) is taken as that declaration's; any other leaves the
+	// declaration on local-scripts rather than widen its grant to a
+	// script it never declared.
+	target, _ := HostScriptTarget(servers)
+	existing := configuredScripts(servers[target])
+	kept := converted[:0]
+	for _, h := range converted {
+		if clash := clashingScript(h, existing); clash != "" {
+			skipped = append(skipped, fmt.Errorf("local-scripts %s: host-script server %s already configures a script %s that does not run the declaration's own file; "+
+				"it stays a local-scripts declaration", h.Declaration, target, clash))
+			continue
+		}
+		kept = append(kept, h)
+	}
+	converted = kept
 	if len(converted) == 0 {
 		return nil, skipped, nil
 	}
@@ -365,4 +423,32 @@ func MigrateToHostScript(cfg Config, servers map[string]protocol.ServerConfig) (
 		renames[CapabilityName(h.Declaration)] = grants
 	}
 	return renames, skipped, nil
+}
+
+// configuredScripts is the body of each script c configures, by name.
+func configuredScripts(c protocol.ServerConfig) map[string]string {
+	out := map[string]string{}
+	list, _ := c.Config["scripts"].([]any)
+	for _, item := range list {
+		if m, ok := item.(map[string]any); ok {
+			if n, ok := m["name"].(string); ok {
+				body, _ := m["script"].(string)
+				out[n] = body
+			}
+		}
+	}
+	return out
+}
+
+// clashingScript is the first of h's scripts existing configures with
+// another body, or "".
+func clashingScript(h HostScripts, existing map[string]string) string {
+	for _, s := range h.Scripts {
+		name, _ := s["name"].(string)
+		body, ok := existing[name]
+		if ok && body != s["script"] {
+			return name
+		}
+	}
+	return ""
 }
