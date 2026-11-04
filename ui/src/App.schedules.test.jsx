@@ -664,7 +664,13 @@ describe("App", () => {
     };
     window.history.replaceState(null, "", "/processes/schedules/sched-1");
     setupApi(initialTasks, [schedule]);
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    // Where each question came from, so a third one names its caller.
+    const askedFrom = [];
+    let answer = false;
+    const confirm = vi.spyOn(window, "confirm").mockImplementation(() => {
+      askedFrom.push(new Error().stack.split("\n").slice(2, 9).join(" <- "));
+      return answer;
+    });
     const user = userEvent.setup();
     render(<App />);
 
@@ -678,9 +684,9 @@ describe("App", () => {
       screen.getByRole("heading", { name: "Edit schedule" }),
     ).toBeInTheDocument();
 
-    confirm.mockReturnValue(true);
+    answer = true;
     await user.click(screen.getByRole("link", { name: "task 1" }));
-    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(confirm, askedFrom.join("\n---\n")).toHaveBeenCalledTimes(2);
     await waitFor(() =>
       expect(
         screen.queryByRole("heading", { name: "Edit schedule" }),
