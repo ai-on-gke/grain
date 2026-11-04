@@ -732,7 +732,7 @@ func (c *HTTPClient) SandboxHealth(ctx context.Context) (SandboxHealthResponse, 
 
 func (c *HTTPClient) ListTasks(ctx context.Context) ([]Task, error) {
 	var tasks []Task
-	if err := c.do(ctx, http.MethodGet, "/api/tasks", nil, &tasks); err != nil {
+	if err := c.do(ctx, http.MethodGet, "/api/tasks?fields=full", nil, &tasks); err != nil {
 		return nil, err
 	}
 	return tasks, nil
