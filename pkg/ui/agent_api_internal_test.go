@@ -764,7 +764,7 @@ var capabilitiesAdminBodies = map[string]struct {
 	"PutAPIScopeSetRequest":    {reflect.TypeFor[PutAPIScopeSetRequest](), nil, []string{"set"}},
 	"DeleteAPIScopeSetRequest": {reflect.TypeFor[DeleteAPIScopeSetRequest](), nil, []string{"name"}},
 	"CreateExternalAgentTokenRequest": {reflect.TypeFor[CreateExternalAgentTokenRequest](),
-		nil, []string{"name", "scopeSet", "scopes", "repos", "expiresAt", "rateLimit", "maxConcurrent"}},
+		nil, []string{"name", "scopeSet", "scopes", "repos", "expiresAt", "rateLimit", "maxConcurrent", "owner", "selfService"}},
 	// A hostd's registry row grants a task nothing: which hostd a run
 	// goes to is the task's own pin or selector, not this.
 	"CreateHostdRequest": {reflect.TypeFor[CreateHostdRequest](), nil, []string{"name", "owner", "labels"}},

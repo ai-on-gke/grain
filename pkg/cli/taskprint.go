@@ -55,6 +55,11 @@ func (p *printer) detail(d ui.TaskDetail) {
 	if d.AuthorLabel != "" {
 		fmt.Printf("filed by:        %s\n", d.AuthorLabel)
 	}
+	// The tool an external agent filed this from (X-Grain-Client), a
+	// label only.
+	if d.Provenance != "" {
+		fmt.Printf("provenance:      %s\n", d.Provenance)
+	}
 	if d.FailedAttempts > 0 {
 		fmt.Printf("failed attempts: %d in a row", d.FailedAttempts)
 		if d.LastFailureAt != nil {
@@ -133,7 +138,11 @@ func (p *printer) detail(d ui.TaskDetail) {
 	for _, cm := range d.Comments {
 		// Who names grain relaying somebody else's words too -- the
 		// distinction model.Attribution exists to carry.
-		fmt.Printf("\n--- comment #%d by %s ---\n%s\n", cm.ID, cm.Who(), cm.Body)
+		who := cm.Who()
+		if cm.FiledVia != "" {
+			who += " (from " + cm.FiledVia + ")"
+		}
+		fmt.Printf("\n--- comment #%d by %s ---\n%s\n", cm.ID, who, cm.Body)
 	}
 }
 
