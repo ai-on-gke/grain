@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -865,6 +866,10 @@ func (s *Server) handleUpdateUpgradeSource(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	// The override lives in a file of the upgrader's, not the store, so
+	// no settings write records who made it: this row does (operator
+	// attribution spec §4.4).
+	s.tasks.auditUpgradeSource(r.Context(), req)
 	status, err := s.tasks.Config.Upgrader.Status()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -873,4 +878,21 @@ func (s *Server) handleUpdateUpgradeSource(w http.ResponseWriter, r *http.Reques
 	resp := s.upgradeStatusResponse(r, status)
 	resp.Database = s.databaseStatus()
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// auditUpgradeSource records a change to where image upgrades come from
+// in config_audit, with the person or agent who made it
+// (ui.RequestActor).
+func (c *Client) auditUpgradeSource(ctx context.Context, req updateUpgradeSourceRequest) {
+	if c == nil || c.Store == nil {
+		return
+	}
+	by := RequestActor(ctx)
+	summary := fmt.Sprintf("image source %q, fallback %q, release repository %q, asset %q, checksum %q",
+		req.Mode, req.Fallback, req.ReleaseRepository, req.ReleaseAsset, req.Checksum)
+	if _, err := c.Store.RecordConfigAudit(ctx, model.ConfigAuditEntry{
+		By: by.Actor, OnBehalfOf: by.OnBehalfOf, Surface: "upgrade:source", Summary: summary,
+	}); err != nil {
+		log.Printf("grain upgrade: recording the image source change in the config audit: %v", err)
+	}
 }
