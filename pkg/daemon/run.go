@@ -640,6 +640,12 @@ func Run(ctx context.Context, cfg Config) error {
 	if localHostSandboxes(sandboxes) {
 		cfg.Overcommit = model.NewOvercommitController(cfg.SandboxOvercommit, cfg.CpuOvercommit, cfg.MemoryOvercommit)
 	}
+	// Before the capability servers start, so the host-script server
+	// starts with the scripts of every local-scripts declaration that
+	// moved onto it.
+	if _, err := migrateLocalScripts(ctx, store, cfg.LocalScriptsConfig()); err != nil {
+		log.Printf("daemon: local-scripts: moving declarations to host-script: %v", err)
+	}
 	capabilityServers, hostdCapabilityServers := startCapabilityServers(ctx, store, secretStore, cfg.DataDir, cfg.capabilityHostd(), gcpKeyPool(cfg))
 	live := NewLiveConfig(store, sandboxes, cfg, githubCredentials).
 		WithSandboxImages(sandboxImages, stockSandboxImage, sandboxImageLabels()).
@@ -818,7 +824,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// nil on a deployment configured for neither pipeline, which both
 	// halves already have to handle: the UI hides the pane and the
 	// reconciler applies nothing.
-	upgrader := newUpgrader(cfg, db, store)
+	upgrader := newUpgrader(cfg, db, store, githubCredentials)
 
 	// Which filesystems this deployment's own state sits on, resolved once
 	// for the two halves that read them: the host status pane's disk rows

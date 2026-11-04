@@ -47,13 +47,17 @@ package gitproxy
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -70,11 +74,12 @@ const HostGitEntry = "host-git"
 
 // Tools the host-git server serves.
 const (
-	hostGitToolToken        = "ambient_token"
-	hostGitToolPackageToken = "package_token"
-	hostGitToolForge        = "forge_request"
-	hostGitToolIdentity     = "git_identity"
-	hostGitToolSign         = "git_sign"
+	hostGitToolToken         = "ambient_token"
+	hostGitToolPackageToken  = "package_token"
+	hostGitToolForge         = "forge_request"
+	hostGitToolForgeDownload = "forge_download"
+	hostGitToolIdentity      = "git_identity"
+	hostGitToolSign          = "git_sign"
 )
 
 // hostGitMaxBody bounds one forge response the server carries back over
@@ -383,7 +388,7 @@ func ServeHostGit(s *protocol.CapabilityServer) error {
 		}); err != nil {
 		return err
 	}
-	return s.HandleTool(hostGitToolForge, "Send one forge request through a ForgeViaCommand source's `<tool> api`, as the host account.",
+	if err := s.HandleTool(hostGitToolForge, "Send one forge request through a ForgeViaCommand source's `<tool> api`, as the host account.",
 		sourceHost(map[string]any{
 			"api_base":   map[string]any{"type": "string", "maxLength": 2048},
 			"proxy":      map[string]any{"type": "string", "maxLength": 2048},
@@ -393,7 +398,19 @@ func ServeHostGit(s *protocol.CapabilityServer) error {
 			"header": map[string]any{"type": "object",
 				"additionalProperties": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}},
 			"body": map[string]any{"type": "string"},
-		}), hostGitServeForge)
+		}), hostGitServeForge); err != nil {
+		return err
+	}
+	return s.HandleTool(hostGitToolForgeDownload, "Stream one GET response through a ForgeViaCommand source's `<tool> api` into an empty grain-release-asset-* placeholder the daemon created on the filesystem it shares with the host.",
+		sourceHost(map[string]any{
+			"api_base":   map[string]any{"type": "string", "maxLength": 2048},
+			"proxy":      map[string]any{"type": "string", "maxLength": 2048},
+			"timeout_ms": map[string]any{"type": "number", "minimum": 0, "maximum": 3600000},
+			"url":        map[string]any{"type": "string", "maxLength": 8192},
+			"dest":       map[string]any{"type": "string", "maxLength": 4096},
+			"header": map[string]any{"type": "object",
+				"additionalProperties": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}},
+		}), hostGitServeForgeDownload)
 }
 
 // hostGitSource is a request's source and host: a registered
@@ -502,4 +519,240 @@ func hostGitAnswer(out map[string]any, err error) ([]byte, error) {
 		return json.Marshal(map[string]any{"error": err.Error()})
 	}
 	return json.Marshal(out)
+}
+
+type hostGitDownloadResult struct {
+	Error         string `json:"error,omitempty"`
+	LoginHost     string `json:"login_host,omitempty"`
+	LoginLocation string `json:"login_location,omitempty"`
+	Status        int    `json:"status,omitempty"`
+	SHA256        string `json:"sha256,omitempty"`
+	Size          int64  `json:"size,omitempty"`
+	Body          string `json:"body,omitempty"`
+}
+
+// validateStagingDest refuses a staging path that is not clean and
+// absolute, whose file name is not grain-release-asset-*, or that sits
+// under a symlinked directory.
+func validateStagingDest(dest string) error {
+	if dest == "" || !filepath.IsAbs(dest) || filepath.Clean(dest) != dest {
+		return fmt.Errorf("staging path %q must be a clean absolute path", dest)
+	}
+	base := filepath.Base(dest)
+	if !strings.HasPrefix(base, "grain-release-asset-") {
+		return fmt.Errorf("staging file %q must begin with grain-release-asset-", base)
+	}
+	dir := filepath.Dir(dest)
+	for cur := dir; cur != "/" && cur != "."; cur = filepath.Dir(cur) {
+		fi, err := os.Lstat(cur)
+		if err != nil {
+			return fmt.Errorf("staging directory %s: %w", cur, err)
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("staging directory %s is a symlink", cur)
+		}
+	}
+	return nil
+}
+
+// openStagingPlaceholder opens dest -- the empty placeholder a download's
+// caller created for it -- for writing, and refuses anything else: a path
+// validateStagingDest refuses, one that does not exist yet, a symlink, a
+// file that is not regular and empty, one another account owns, or one
+// with a second hard link.
+//
+// Requiring the file to exist is what keeps forge_download inside what
+// the daemon could already write. The daemon in the release container
+// can create a placeholder only on a filesystem it shares with the host,
+// so the host-git server, which runs as the installing user and creates
+// nothing, can fill in no file outside it -- not a new one in a directory
+// the user's shell or session reads from (hostd's paths_under argument,
+// hostd/allowlist.go, is the same line drawn for argv).
+func openStagingPlaceholder(dest string) (*os.File, error) {
+	if err := validateStagingDest(dest); err != nil {
+		return nil, err
+	}
+	f, err := openNoFollow(dest)
+	if err != nil {
+		return nil, fmt.Errorf("staging placeholder %s: %w", dest, err)
+	}
+	fi, err := f.Stat()
+	if err == nil && (!fi.Mode().IsRegular() || fi.Size() != 0 || !ownedByUs(fi) || !singleLink(fi)) {
+		err = errors.New("not an empty regular file of this account's with one link")
+	}
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("staging placeholder %s: %w", dest, err)
+	}
+	return f, nil
+}
+
+// DownloadToFile streams a GET request's 200 response body into dest, an
+// empty placeholder the caller has already created (openStagingPlaceholder:
+// basename prefix "grain-release-asset-", regular, empty, its own),
+// computing its SHA-256 on the fly without holding the body in memory.
+// When client uses CommandForgeTransport beside grain hostd, the host's
+// host-git server streams directly into dest on the shared filesystem,
+// bypassing hostGitMaxBody. dest is left in place, possibly partly
+// written, when it fails: removing it is the caller's.
+func DownloadToFile(client *http.Client, req *http.Request, dest string, timeout time.Duration) (sha256Hex string, written int64, status int, errBody string, err error) {
+	if err := validateStagingDest(dest); err != nil {
+		return "", 0, 0, "", err
+	}
+	if client == nil {
+		return "", 0, 0, "", errors.New("download needs an HTTP client")
+	}
+	if t, ok := client.Transport.(*CommandForgeTransport); ok {
+		if c := activeHostGit(); c != nil {
+			sum, n, st, body, herr := c.forgeDownload(t, req, dest, timeout)
+			if herr == nil || !strings.Contains(herr.Error(), "unknown tool") {
+				return sum, n, st, body, herr
+			}
+		}
+		cloned := *t
+		if timeout > 0 {
+			cloned.Timeout = timeout
+		}
+		client = &http.Client{Timeout: timeout, Transport: &cloned}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", 0, 0, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+		return "", 0, resp.StatusCode, strings.TrimSpace(string(raw)), nil
+	}
+	f, err := openStagingPlaceholder(dest)
+	if err != nil {
+		return "", 0, 0, "", err
+	}
+	h := sha256.New()
+	n, copyErr := io.Copy(io.MultiWriter(f, h), resp.Body)
+	closeErr := f.Close()
+	if copyErr != nil {
+		return "", 0, 0, "", copyErr
+	}
+	if closeErr != nil {
+		return "", 0, 0, "", closeErr
+	}
+	return hex.EncodeToString(h.Sum(nil)), n, http.StatusOK, "", nil
+}
+
+func (c *HostGitClient) forgeDownload(t *CommandForgeTransport, req *http.Request, dest string, timeout time.Duration) (string, int64, int, string, error) {
+	if err := t.checkHost(req.URL); err != nil {
+		return "", 0, 0, "", err
+	}
+	if timeout <= 0 {
+		timeout = t.Timeout
+	}
+	if timeout <= 0 {
+		timeout = 30 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), timeout+hostGitStartSlack)
+	defer cancel()
+	header := map[string]any{}
+	for k, vs := range req.Header {
+		list := make([]any, len(vs))
+		for i, v := range vs {
+			list[i] = v
+		}
+		header[k] = list
+	}
+	args := map[string]any{
+		"source":     t.Source,
+		"host":       t.Host,
+		"api_base":   t.APIBase,
+		"proxy":      t.Proxy,
+		"timeout_ms": float64(timeout / time.Millisecond),
+		"url":        req.URL.String(),
+		"dest":       dest,
+		"header":     header,
+	}
+	var res hostGitDownloadResult
+	if err := c.call(ctx, hostGitToolForgeDownload, args, &res); err != nil {
+		return "", 0, 0, "", err
+	}
+	if res.LoginLocation != "" {
+		if login, ok := NewLoginRedirect(res.LoginHost, res.LoginLocation); ok {
+			return "", 0, 0, "", login
+		}
+		return "", 0, 0, "", fmt.Errorf("%s answered with a login page at %s", res.LoginHost, res.LoginLocation)
+	}
+	return res.SHA256, res.Size, res.Status, res.Body, nil
+}
+
+func hostGitServeForgeDownload(ctx context.Context, args map[string]any) ([]byte, error) {
+	src, host, err := hostGitSource(args)
+	if err != nil {
+		return nil, err
+	}
+	if src.ForgeViaCommand == nil {
+		return nil, fmt.Errorf("source %q does not send forge requests through %s", src.Name, src.Command)
+	}
+	dest, _ := args["dest"].(string)
+	if err := validateStagingDest(dest); err != nil {
+		return nil, fmt.Errorf("forge download: %w", err)
+	}
+	u, err := url.Parse(fmt.Sprint(args["url"]))
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || hostName(u.Host) != host {
+		return nil, fmt.Errorf("forge download: %q is not a URL on %s", fmt.Sprint(args["url"]), host)
+	}
+	apiBase, _ := args["api_base"].(string)
+	if apiBase != "" {
+		b, err := url.Parse(apiBase)
+		if err != nil || hostName(b.Host) != host {
+			return nil, fmt.Errorf("forge download: API base %q is not on %s", apiBase, host)
+		}
+	}
+	proxy, _ := args["proxy"].(string)
+	timeout := 30 * time.Minute
+	if ms, ok := args["timeout_ms"].(float64); ok && ms > 0 {
+		timeout = time.Duration(ms) * time.Millisecond
+	}
+	t := newCommandForgeTransport(src, CredentialHost{Host: host, Proxy: proxy}, timeout)
+	t.APIBase = apiBase
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	if h, ok := args["header"].(map[string]any); ok {
+		for k, vs := range h {
+			list, _ := vs.([]any)
+			for _, v := range list {
+				req.Header.Add(k, fmt.Sprint(v))
+			}
+		}
+	}
+	resp, err := t.RoundTrip(req)
+	if err != nil {
+		if login, ok := AsLoginRedirect(err); ok {
+			return json.Marshal(hostGitDownloadResult{LoginHost: login.Host, LoginLocation: login.Location})
+		}
+		return json.Marshal(hostGitDownloadResult{Error: err.Error()})
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+		return json.Marshal(hostGitDownloadResult{Status: resp.StatusCode, Body: strings.TrimSpace(string(raw))})
+	}
+	f, err := openStagingPlaceholder(dest)
+	if err != nil {
+		return json.Marshal(hostGitDownloadResult{Error: err.Error()})
+	}
+	h := sha256.New()
+	n, copyErr := io.Copy(io.MultiWriter(f, h), resp.Body)
+	closeErr := f.Close()
+	if copyErr != nil {
+		return json.Marshal(hostGitDownloadResult{Error: fmt.Sprintf("streaming %s's answer: %v", src.Command, copyErr)})
+	}
+	if closeErr != nil {
+		return json.Marshal(hostGitDownloadResult{Error: fmt.Sprintf("closing staging file: %v", closeErr)})
+	}
+	return json.Marshal(hostGitDownloadResult{
+		Status: http.StatusOK,
+		SHA256: hex.EncodeToString(h.Sum(nil)),
+		Size:   n,
+	})
 }

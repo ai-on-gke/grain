@@ -243,7 +243,7 @@ RUN make build BUILDVCS=${BUILDVCS} SANDBOX_IMAGE=${SANDBOX_IMAGE} K8S_SANDBOX_I
 # over it. Without this, a checkout the stage's git cannot read simply
 # moves the failed build four lines down.
 RUN vcs="$(./scripts/buildvcs.sh ${BUILDVCS})" && mkdir -p /out \
-	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -o /out/granule github.com/bwsalmon/granule/cmd/granule \
+	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -o /out/granule github.com/gke-labs/granule/cmd/granule \
 	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -o /out/github-webhook ./cmd/github-webhook \
 	&& CGO_ENABLED=0 go build -buildvcs="$vcs" -trimpath -ldflags='-s -w' -o /out/grain-sandbox ./cmd/grain-sandbox
 

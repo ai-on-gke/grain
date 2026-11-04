@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/sandbox"
+	"github.com/gke-labs/granule/pkg/sandbox"
 )
 
 // TestVM_GuestCannotReachAcceptor is the acceptor end of

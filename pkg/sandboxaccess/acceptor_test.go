@@ -27,9 +27,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/agent"
-	"github.com/bwsalmon/granule/pkg/guestexec"
-	"github.com/bwsalmon/granule/pkg/sandbox"
+	"github.com/gke-labs/granule/pkg/agent"
+	"github.com/gke-labs/granule/pkg/guestexec"
+	"github.com/gke-labs/granule/pkg/sandbox"
 )
 
 const testDeployment = "dep-1"

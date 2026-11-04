@@ -28,10 +28,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/agent"
-	"github.com/bwsalmon/granule/pkg/guestexec"
-	"github.com/bwsalmon/granule/pkg/guestforward"
-	"github.com/bwsalmon/granule/pkg/sandbox"
+	"github.com/gke-labs/granule/pkg/agent"
+	"github.com/gke-labs/granule/pkg/guestexec"
+	"github.com/gke-labs/granule/pkg/guestforward"
+	"github.com/gke-labs/granule/pkg/sandbox"
 )
 
 func TestRunnerReattachesMidStepWithoutGapOrDuplicate(t *testing.T) {

@@ -33,9 +33,9 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/sandboxaccess"
-	granuleagent "github.com/bwsalmon/granule/pkg/agent"
-	"github.com/bwsalmon/granule/pkg/guestexec"
-	granulesandbox "github.com/bwsalmon/granule/pkg/sandbox"
+	granuleagent "github.com/gke-labs/granule/pkg/agent"
+	"github.com/gke-labs/granule/pkg/guestexec"
+	granulesandbox "github.com/gke-labs/granule/pkg/sandbox"
 )
 
 type fakeMinter struct {

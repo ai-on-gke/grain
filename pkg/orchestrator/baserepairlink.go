@@ -195,7 +195,9 @@ func closeSupersededTasks(ctx context.Context, store *model.Store, ids []string,
 			errs = append(errs, fmt.Errorf("orchestrator: closing %s: %w", id, err))
 			continue
 		}
-		log.Printf("orchestrator: closing %s as superseded: %s", id, note)
+		// note already opens "Closed as superseded: ...", so the log
+		// line does not say it again.
+		log.Printf("orchestrator: closing %s: %s", id, note)
 		if _, err := store.AddComment(ctx, model.Comment{
 			TaskID: id, Author: model.Attribution{Actor: by}, Body: note, CreatedAt: now,
 		}); err != nil {

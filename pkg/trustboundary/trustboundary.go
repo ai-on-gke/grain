@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v14"
+const Version = "trust-boundary/v15"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +81,19 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v15 added the authorization-bearing files the 2026-11-04 nightly
+// security review found unclassified (finding 2, task 2977): the
+// controller MCP endpoint that authorizes every grain_invoke, the
+// database-held sign-in allowlist's entry refusal and its API, and the
+// person-only check on applying a run's requested grants (auth-routes);
+// the code-declared CI grant rule (capabilities-secrets); the store-level
+// auto-merge guard and its restore after a hold (hold-policy); and the
+// hostd install script served unauthenticated and run as root, with the
+// route that renders it (setup-scripts).
+//
+// v14 added the rc qualification housekeeping workflow and its Actions
+// helper to release-machinery (grain/task-2584).
 //
 // v13 added the GitHub Actions Inbox approval (grain/task-2666,
 // design/playbook/releases.playbook.md §0.2) to release-promotion: the
@@ -160,6 +173,9 @@ var Categories = []Category{
 			// The repository-declared half of the list, and who may
 			// release what it holds (grain/task-1714).
 			"pkg/orchestrator/repoguard.go", "pkg/model/sensitive_path.go", "pkg/ui/approvals.go",
+			// The store-level guard that keeps auto-merge off a held task,
+			// and the one place it is handed back once the hold clears.
+			"pkg/model/task_auto_merge.go",
 		},
 	},
 	{
@@ -187,6 +203,16 @@ var Categories = []Category{
 			// messagesSince's human-only filter is what makes the answer a
 			// host-exec confirmation reads a person's.
 			"pkg/ui/messages.go",
+			// The controller MCP endpoint, which agentAPIGate exempts by
+			// name: whose access a call runs with (token scopes, the acting
+			// task's grants, or full access) and the re-issue of each
+			// grain_invoke through the route table and its gate.
+			"pkg/ui/mcp_endpoint.go",
+			// The sign-in allowlist held in the database: which entries it
+			// refuses (service accounts, domains) and its API.
+			"pkg/model/allowed_principals.go", "pkg/ui/access_principals.go",
+			// That only a person applies a run's requested grants.
+			"pkg/ui/task_access_request.go",
 		},
 	},
 	{
@@ -200,6 +226,9 @@ var Categories = []Category{
 			// events, and the refusal of untrusted pull-request runs.
 			"pkg/model/repo_access.go", "pkg/daemon/ci.go", "pkg/daemon/ci_policy.go",
 			"pkg/daemon/ci_capability_pass.go", "pkg/daemon/capabilities.go",
+			// Which CI events may be handed signing and publishing
+			// capabilities, read by all three of their enforcers.
+			"pkg/model/ci_grant_rule.go",
 		},
 	},
 	{
@@ -240,9 +269,11 @@ var Categories = []Category{
 	},
 	{
 		ID: "release-promotion",
-		Description: "the person-only approval that makes a pending release official: the workflow that " +
-			"pushes vX.Y.0 and latest, the route that starts it, and the release train's template, whose " +
-			"push: list decides which tags the train may move without it",
+		Description: "what makes a release official: the person-only approval workflow that pushes " +
+			"vX.Y.0 and latest and the route that starts it; the release train that promotes a qualified " +
+			"rc on its own -- its script, its operator settings (release.conf), its template, whose push: " +
+			"list decides which tags it may move, and its schedule; and the workflow that publishes what it " +
+			"promotes",
 		RequiresHuman: true,
 		// Before github-workflows and grain-config, which would otherwise
 		// take the workflow's two copies and the template.
@@ -254,6 +285,14 @@ var Categories = []Category{
 			// and the check the workflow verifies it with.
 			"pkg/ui/release_approval_github.go", "pkg/releaseapproval/releaseapproval.go",
 			"scripts/verify-release-approval.sh",
+			// The continuous train's own promotion (playbook section 1):
+			// the script that tags vX.Y.0 and latest on a qualified rc,
+			// the settings that turn it on and off, its schedule, and the
+			// workflow that publishes the release from the tag. The tick
+			// wrapper too: it writes the CI verdicts and the trusted
+			// qualification app the train promotes on.
+			"scripts/release-from-trunk.sh", "scripts/release.conf", "scripts/release-train-task.sh",
+			".grain/schedules/release-train.yml", ".github/workflows/publish-release.yml",
 		},
 	},
 	{
@@ -264,14 +303,15 @@ var Categories = []Category{
 		// reach the approval (design/playbook/releases.playbook.md §0.3).
 		Review: []string{
 			"the change cannot move a `vX.Y.Z` or `latest` git tag or image except as a result of a person's " +
-				"approval in promote-release.yml",
+				"approval in promote-release.yml or the release train's promotion of a qualified rc " +
+				"(scripts/release-from-trunk.sh, publish-release.yml: release-promotion)",
 			"it does not widen any workflow's `permissions:`, the secrets it reads, or who may dispatch it",
 			"it does not weaken a check that refuses anybody but a person (`GRAIN_CI_REQUESTED_BY_KIND`)",
 			"in scripts/release.conf, it does not raise `RELEASE_MAJOR`, which only a person may do",
 		},
 		files: []string{
-			"scripts/release-images.sh", "scripts/release-from-trunk.sh",
-			"scripts/release-notes.sh", "scripts/candidate-gate.sh", "scripts/release.conf",
+			"scripts/release-images.sh",
+			"scripts/release-notes.sh", "scripts/candidate-gate.sh",
 			// What the release jobs run besides: the patch-tag guard
 			// that refuses a vX.Y.Z not cut from its release branch, the
 			// version every published image is tagged with, and the host
@@ -347,7 +387,12 @@ var Categories = []Category{
 	{
 		ID:          "setup-scripts",
 		Description: "setup scripts run with the deployment's own privileges",
-		files:       []string{"scripts/setup.sh"},
+		files: []string{
+			"scripts/setup.sh",
+			// Served unauthenticated and run as root on every hostd machine,
+			// and the route that renders it and decides who sees what.
+			"pkg/ui/hostd_install.sh", "pkg/ui/hostd_install.go",
+		},
 	},
 }
 

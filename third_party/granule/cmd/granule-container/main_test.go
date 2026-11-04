@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/containerspec"
-	"github.com/bwsalmon/granule/pkg/execwire"
-	"github.com/bwsalmon/granule/pkg/workloadio"
+	"github.com/gke-labs/granule/pkg/containerspec"
+	"github.com/gke-labs/granule/pkg/execwire"
+	"github.com/gke-labs/granule/pkg/workloadio"
 )
 
 // wrappedRootfs is a wrapped image's filesystem as granule-container finds

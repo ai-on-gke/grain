@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/agent"
-	"github.com/bwsalmon/granule/pkg/execwire"
-	"github.com/bwsalmon/granule/pkg/hypervisor"
-	"github.com/bwsalmon/granule/pkg/memagent"
-	"github.com/bwsalmon/granule/pkg/qcow2"
+	"github.com/gke-labs/granule/pkg/agent"
+	"github.com/gke-labs/granule/pkg/execwire"
+	"github.com/gke-labs/granule/pkg/hypervisor"
+	"github.com/gke-labs/granule/pkg/memagent"
+	"github.com/gke-labs/granule/pkg/qcow2"
 )
 
 // fakeVM implements memagent.Resizer for stress tests.
