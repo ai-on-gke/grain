@@ -51,6 +51,7 @@ var cliRouteTools = map[string]string{
 	"ci/runs":         "list_ci_runs",
 	"ci/run":          "list_ci_runs",
 	"ci/show":         "get_ci_log",
+	"ci/checks":       "list_ci_runs",
 	"ci/test-history": "query_test_history",
 	"pr/status":       "pull_request_status",
 	"pr/base-status":  "base_branch_status",
@@ -161,6 +162,8 @@ func (p *GitProxy) serveCLIRoute(w http.ResponseWriter, r *http.Request, scope n
 		p.serveCIRunRepo(w, q, scope)
 	case route == "ci/show":
 		p.serveCIShow(w, r, scope)
+	case route == "ci/checks":
+		p.serveCIChecks(w, r, scope)
 	case route == "ci/test-history":
 		p.serveTestHistory(w, q, scope)
 	case route == "pr/status":
@@ -431,15 +434,38 @@ func (p *GitProxy) serveCIRuns(w http.ResponseWriter, r *http.Request, scope nam
 			ci.ProviderGrain, ci.ProviderGitHubActions))
 		return
 	}
+	format := strings.ToLower(strings.TrimSpace(q.Get("format")))
+	switch format {
+	case "", "text":
+		format = ""
+	case formatGitHub, formatGitHubJobs:
+		if f.Provider == ci.ProviderGrain {
+			cliError(w, fmt.Errorf("%w: --format %s is GitHub's shape, which only GitHub Actions runs have: leave out --provider grain", namespace.ErrBadRequest, format))
+			return
+		}
+		f.Provider = ci.ProviderGitHubActions
+		most := ci.MaxListedRuns
+		if format == formatGitHubJobs {
+			most = maxGitHubJobsRuns
+		}
+		limit = cliLimit(q, "limit", 20, most)
+	default:
+		cliError(w, fmt.Errorf("%w: %q is not a format: use text, %s or %s", namespace.ErrBadRequest, q.Get("format"), formatGitHub, formatGitHubJobs))
+		return
+	}
 	if exact != "" {
 		// Ref matches as a substring, so task-19's branch would find
 		// task-190's runs too: read a wider page and keep the branch's own.
-		page := p.findCIRuns(r.Context(), store, f, 200)
+		page := p.findCIRuns(r.Context(), store, f, max(200, limit))
 		var runs []ci.Run
 		for _, run := range page.Runs {
 			if strings.EqualFold(run.Ref, exact) && len(runs) < limit {
 				runs = append(runs, run)
 			}
+		}
+		if format != "" {
+			p.writeGitHubRuns(r.Context(), w, format, runs, page.note)
+			return
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprintf(w, "%d run(s) of task %s on %s in %s, newest first:\n", len(runs), strings.TrimPrefix(strings.TrimSpace(q.Get("task")), "#"), exact, repo)
@@ -449,6 +475,10 @@ func (p *GitProxy) serveCIRuns(w http.ResponseWriter, r *http.Request, scope nam
 		return
 	}
 	page := p.findCIRuns(r.Context(), store, f, limit)
+	if format != "" {
+		p.writeGitHubRuns(r.Context(), w, format, page.Runs, page.note)
+		return
+	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	if repo == "" {
 		// No repository filter: the runs are every readable repository's,
@@ -466,6 +496,184 @@ func (p *GitProxy) serveCIRuns(w http.ResponseWriter, r *http.Request, scope nam
 	if page.note != "" {
 		fmt.Fprintf(w, "(GitHub Actions: %s)\n", page.note)
 	}
+}
+
+// The --format values `grain ci list` writes GitHub's own REST shapes in,
+// for scripts that read GitHub's answers (scripts/candidate-gate.sh):
+// formatGitHub is GET .../actions/runs ({workflow_runs}), and
+// formatGitHubJobs GET .../actions/runs/{id}/jobs?filter=all ({jobs}),
+// every attempt of every job of each run listed, concatenated.
+const (
+	formatGitHub     = "github"
+	formatGitHubJobs = "github-jobs"
+	// maxGitHubJobsRuns bounds the runs formatGitHubJobs reads the jobs
+	// of, one forge request (or more) each.
+	maxGitHubJobsRuns = 50
+)
+
+// githubRunsAnswer is formatGitHub's answer: GitHub's, and grain's note on
+// what it is short of (runs it left out, a forge it could not read), which
+// GitHub's has no field for and a reader of GitHub's shape ignores.
+type githubRunsAnswer struct {
+	TotalCount   int                    `json:"total_count"`
+	WorkflowRuns []ci.GitHubWorkflowRun `json:"workflow_runs"`
+	Note         string                 `json:"grain_note,omitempty"`
+}
+
+// githubJobsAnswer is formatGitHubJobs' answer.
+type githubJobsAnswer struct {
+	TotalCount int            `json:"total_count"`
+	Jobs       []ci.GitHubJob `json:"jobs"`
+	Note       string         `json:"grain_note,omitempty"`
+}
+
+// writeGitHubRuns writes runs in format's GitHub shape. A run not in
+// GitHub's own words (ci.GitHubWorkflowRunOf) is left out and counted in
+// the note, never made up: the reader judges releases on these verdicts.
+// A run whose jobs the forge would not give fails the whole answer, since
+// a listing missing a run's failed attempt reads as a pass.
+func (p *GitProxy) writeGitHubRuns(ctx context.Context, w http.ResponseWriter, format string, runs []ci.Run, note string) {
+	var notes []string
+	if note != "" {
+		notes = append(notes, "GitHub Actions: "+note)
+	}
+	var shaped []ci.GitHubWorkflowRun
+	var ids []string
+	skipped := 0
+	for _, run := range runs {
+		gh, ok := ci.GitHubWorkflowRunOf(run)
+		if !ok {
+			skipped++
+			continue
+		}
+		shaped = append(shaped, gh)
+		ids = append(ids, run.ID)
+	}
+	if skipped > 0 {
+		notes = append(notes, fmt.Sprintf("%d run(s) left out: grain has them only from its record of their jobs, not as the forge's workflow runs", skipped))
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if format == formatGitHub {
+		if shaped == nil {
+			shaped = []ci.GitHubWorkflowRun{}
+		}
+		_ = json.NewEncoder(w).Encode(githubRunsAnswer{TotalCount: len(shaped), WorkflowRuns: shaped, Note: strings.Join(notes, "; ")})
+		return
+	}
+	attempts, ok := p.externalAttempts()
+	if !ok && len(ids) > 0 {
+		cliError(w, fmt.Errorf("%w: this proxy cannot read GitHub Actions jobs", namespace.ErrNotFound))
+		return
+	}
+	jobs := []ci.GitHubJob{}
+	for _, id := range ids {
+		got, err := attempts.ExternalJobAttempts(ctx, id)
+		if err != nil {
+			cliError(w, fmt.Errorf("%w: the jobs of %s: %v", namespace.ErrNotFound, id, err))
+			return
+		}
+		jobs = append(jobs, got...)
+	}
+	_ = json.NewEncoder(w).Encode(githubJobsAnswer{TotalCount: len(jobs), Jobs: jobs, Note: strings.Join(notes, "; ")})
+}
+
+// externalAttempts is the namespace's ExternalCI as ci.ExternalAttempts.
+func (p *GitProxy) externalAttempts() (ci.ExternalAttempts, bool) {
+	if p.Namespace == nil || p.Namespace.ExternalCI == nil {
+		return nil, false
+	}
+	attempts, ok := p.Namespace.ExternalCI.(ci.ExternalAttempts)
+	return attempts, ok
+}
+
+// githubChecksAnswer is `grain ci checks --format github`'s answer:
+// GitHub's GET .../commits/{sha}/check-runs, and the App grain's own forge
+// connection posts its check runs as, which a reader that trusts only
+// grain's (candidate-gate.sh's CHECK_QUALIFICATION_APP) matches each
+// check run's app against.
+type githubChecksAnswer struct {
+	TotalCount int                 `json:"total_count"`
+	CheckRuns  []ci.GitHubCheckRun `json:"check_runs"`
+	GrainApp   string              `json:"grain_app"`
+}
+
+// serveCIChecks answers /cli/ci/checks?sha=<commit>[&repo=][&name=][&format=github]:
+// every check run (every attempt of each, GitHub's filter=all) on a commit
+// of a repository this sandbox may read CI for, read through grain's own
+// forge connection.
+func (p *GitProxy) serveCIChecks(w http.ResponseWriter, r *http.Request, scope namespace.Scope) {
+	q := r.URL.Query()
+	repo, _, err := p.ciReadRepo(scope, q.Get("repo"))
+	if err != nil {
+		cliError(w, err)
+		return
+	}
+	if repo == "" {
+		cliError(w, fmt.Errorf("%w: name the repository with --repo", namespace.ErrBadRequest))
+		return
+	}
+	sha := strings.TrimSpace(q.Get("sha"))
+	if !isCommitSHA(sha) {
+		cliError(w, fmt.Errorf("%w: %q is not a commit sha", namespace.ErrBadRequest, sha))
+		return
+	}
+	format := strings.ToLower(strings.TrimSpace(q.Get("format")))
+	if format != "" && format != "text" && format != formatGitHub {
+		cliError(w, fmt.Errorf("%w: %q is not a format: use text or %s", namespace.ErrBadRequest, q.Get("format"), formatGitHub))
+		return
+	}
+	attempts, ok := p.externalAttempts()
+	if !ok {
+		cliError(w, fmt.Errorf("%w: this proxy cannot read check runs from the forge", namespace.ErrNotFound))
+		return
+	}
+	name := strings.TrimSpace(q.Get("name"))
+	runs, app, err := attempts.ExternalCheckRuns(r.Context(), repo, sha, name)
+	if err != nil {
+		cliError(w, fmt.Errorf("%w: %v", namespace.ErrNotFound, err))
+		return
+	}
+	if runs == nil {
+		runs = []ci.GitHubCheckRun{}
+	}
+	if format == formatGitHub {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(githubChecksAnswer{TotalCount: len(runs), CheckRuns: runs, GrainApp: app})
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	what := "check run(s)"
+	if name != "" {
+		what = fmt.Sprintf("attempt(s) of check run %q", name)
+	}
+	fmt.Fprintf(w, "%d %s on %s in %s:\n", len(runs), what, shortSHA(sha), repo)
+	for _, run := range runs {
+		verdict := run.Status
+		if run.Conclusion != nil {
+			verdict = *run.Conclusion
+		}
+		from := "no app"
+		if run.App != nil {
+			from = run.App.Slug
+			if app != "" && run.App.Slug == app {
+				from += " (grain)"
+			}
+		}
+		fmt.Fprintf(w, "%-12s %-40s %s  %s\n", verdict, run.Name, from, run.HTMLURL)
+	}
+}
+
+// isCommitSHA reports whether s is a full or abbreviated hex commit sha.
+func isCommitSHA(s string) bool {
+	if len(s) < 7 || len(s) > 64 {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 // ciRunsPage is a page of runs from grain CI and the namespace's

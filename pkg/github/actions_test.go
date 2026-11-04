@@ -202,3 +202,45 @@ func intString(n int) string {
 	}
 	return string(digits[i:])
 }
+
+// TestAttemptReadersAskForEveryAttempt: the release train's gate counts a
+// job's or a check run's failed attempt before its retry, so both readers
+// ask GitHub for filter=all rather than its default of the latest alone,
+// and carry what GitHub repeats of the run on each job.
+func TestAttemptReadersAskForEveryAttempt(t *testing.T) {
+	t.Parallel()
+	forge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		switch r.URL.Path {
+		case "/repos/acme/widgets/actions/runs/42/jobs":
+			if q.Get("filter") != "all" {
+				t.Errorf("jobs asked with filter %q, want all", q.Get("filter"))
+			}
+			w.Write([]byte(`{"jobs":[{"id":7,"run_id":42,"run_attempt":1,"workflow_name":"nightly","head_sha":"abc",
+				"name":"go-long","status":"completed","conclusion":"failure","created_at":"2026-11-01T10:00:00Z"},
+				{"id":8,"run_id":42,"run_attempt":2,"workflow_name":"nightly","head_sha":"abc",
+				"name":"go-long","status":"completed","conclusion":"success","created_at":"2026-11-01T11:00:00Z"}]}`))
+		case "/repos/acme/widgets/commits/abc/check-runs":
+			if q.Get("filter") != "all" || q.Get("check_name") != "grain/release-qualification" {
+				t.Errorf("check runs asked with %v, want filter=all and check_name", q)
+			}
+			w.Write([]byte(`{"total_count":1,"check_runs":[{"id":5,"head_sha":"abc","name":"grain/release-qualification",
+				"status":"completed","conclusion":"success","app":{"slug":"grain-forge"}}]}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	t.Cleanup(forge.Close)
+	transport := &RealTransport{Host: strings.TrimPrefix(forge.URL, "http://"), ledger: &callerLedger{logf: func(string, ...any) {}}}
+	client := NewClient(transport, StaticToken{strPtr("t")})
+
+	jobs, err := client.ListActionsJobAttempts("acme", "widgets", 42)
+	if err != nil || len(jobs) != 2 || jobs[0].RunAttempt != 1 || jobs[0].WorkflowName != "nightly" ||
+		jobs[0].HeadSHA != "abc" || jobs[0].CreatedAt == nil {
+		t.Fatalf("ListActionsJobAttempts = %+v, %v", jobs, err)
+	}
+	checks, err := client.ListCheckRunAttempts("acme", "widgets", "abc", "grain/release-qualification")
+	if err != nil || len(checks) != 1 || checks[0].App != "grain-forge" || checks[0].HeadSHA != "abc" {
+		t.Fatalf("ListCheckRunAttempts = %+v, %v", checks, err)
+	}
+}

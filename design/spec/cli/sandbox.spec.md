@@ -142,8 +142,10 @@ These are scoped by the proxy to the run's task repository and branch. **Needs**
 
 `GET /cli/ci/runs` with every given flag copied into the query. Output is the proxy's text table: a header line, then one run per line, run id first. `--provider` is `grain` or `github-actions`. `--since` takes a span or an RFC 3339 time.
 
+`--format github` answers JSON instead, in GitHub's own shape for `GET /repos/{owner}/{repo}/actions/runs` (`{"total_count", "workflow_runs": [...]}`, `--limit` up to 500), and `--format github-jobs` every attempt of every job of each listed run (`GET .../actions/runs/{id}/jobs?filter=all`, `{"total_count", "jobs": [...]}`, at most 50 runs). Both imply `--provider github-actions` and refuse `--provider grain`. A run grain holds only from its record of the run's jobs (no workflow-run status and conclusion of the forge's) is left out, never made up, and a `grain_note` field says how many; a run whose jobs the forge will not give fails the whole answer. This is what `scripts/candidate-gate.sh` reads as `--runs-json` from a task with no GitHub token (`.grain/templates/release-train.yml`).
+
 <!-- BEGIN GENERATED FLAGS: grain ci list -->
-Usage: `grain ci list [--task <id> | --ref <branch>] [--conclusion failure,errored] [--job <j>] [--workflow <file>] [--since 24h] [--limit N] [--repo owner/name] [--provider grain|github-actions]`
+Usage: `grain ci list [--task <id> | --ref <branch>] [--conclusion failure,errored] [--job <j>] [--workflow <file>] [--since 24h] [--limit N] [--repo owner/name] [--provider grain|github-actions] [--format github|github-jobs]`
 
 | Flag | Type |
 |---|---|
@@ -156,6 +158,7 @@ Usage: `grain ci list [--task <id> | --ref <branch>] [--conclusion failure,error
 | `--repo` | string |
 | `--task` | string |
 | `--provider` | string |
+| `--format` | string |
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/sandboxcli/actions_ci_test.go`: `TestSandboxCLIReadsGitHubActionsRuns`; `pkg/sandboxcli/sandboxcli_test.go`: `TestSandboxCLIReadsOtherTasksCI`.
@@ -171,6 +174,22 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/sandboxcli/actions_ci_test.go`: `TestSandboxCLIReadsGitHubActionsRuns`.
+
+### 3.2a `grain ci checks`
+
+`grain ci checks <sha>` sends `GET /cli/ci/checks?sha=<sha>` with `--repo`, `--name` and `--format` copied into the query: every check run on the commit (every attempt of each, GitHub's `filter=all`), or every attempt of the check run `--name` names, read through grain's own forge connection. Text is one check run per line: its conclusion (or status), name, the App that posted it (`(grain)` beside grain's own) and its page. `--format github` answers GitHub's `GET /repos/{owner}/{repo}/commits/{sha}/check-runs` shape (`{"total_count", "check_runs": [...]}`), plus `grain_app`, the slug of the App grain's forge connection posts check runs as ("" when it cannot tell): `scripts/candidate-gate.sh check-qualification` reads the first as `--checks-json` and trusts only check runs whose `app.slug` is the second (its `CHECK_QUALIFICATION_APP`). Needs the same CI read scope as `grain ci list`.
+
+<!-- BEGIN GENERATED FLAGS: grain ci checks -->
+Usage: `grain ci checks <sha> [--repo owner/name] [--name <check>] [--format github]`
+
+| Flag | Type |
+|---|---|
+| `--repo` | string |
+| `--name` | string |
+| `--format` | string |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/gitproxy/cli_github_shape_test.go`: `TestCLICIChecksAnswersGitHubsShape`, `TestCLICIListFormatGitHub`.
 
 ### 3.3 `grain ci log` {#CLI-88}
 
