@@ -26,9 +26,13 @@
 #
 #   scripts/release-from-trunk.sh
 #
-# It does everything up to the release itself and stops there: an rc that
-# qualifies is staged as vX.Y.Z-pending, and a person makes it official.
-# The person's answers are the other modes, which
+# It runs continuously (.grain/schedules/release-train.yml) and releases
+# on its own: an rc that qualifies is tagged vX.Y.Z, and `latest` moved
+# onto it, with no person's approval. Only a release the train may not
+# make itself -- the first of a new RELEASE_MAJOR, one carrying breaking
+# changes, any while RELEASE_AUTO_PROMOTE is false -- is staged as
+# vX.Y.Z-pending for a person to make official. The person's answers to
+# a staged release, and a rollback, are the other modes, which
 # .grain/workflows/promote-release.yml (and promote.yml) run and nothing
 # else should:
 #
@@ -84,13 +88,24 @@
 #            qualification_rerun=<stage>:<job>:<flake|infra>,... in
 #            RELEASE_TRAIN_OUTPUT) -- re-running them is the workflow's
 #            (scripts/release-train-actions.sh);
-#   PASS     it is staged for a person to approve: vM.Y.Z-pending is
-#            tagged on its commit and pushed ("Qualification: PASS"), its
-#            images published as :vM.Y.Z-pending (release-images.sh
-#            pending), the release-notes task filed (from the newest release
-#            neither RELEASE_NEVER_PROMOTE names nor is retracted), and an
-#            operator notification raised; vM.Y.Z and `latest` are not
-#            touched;
+#   PASS     it is released (playbook section 1, "promotion gate"):
+#            vM.Y.Z is tagged on the rc's own commit ("Qualification:
+#            PASS", "Promoted-From: <rc>") and `latest` force-moved onto it,
+#            its images promoted (release-images.sh promote; from a task,
+#            RELEASE_IMAGES=off and .github/workflows/publish-release.yml
+#            does it on the tag push, with the GitHub Release) and the
+#            release-notes task filed (from the newest release neither
+#            RELEASE_NEVER_PROMOTE names nor is retracted). Not while
+#            RELEASE_MIN_INTERVAL_MINUTES has not passed since the newest
+#            release (the run waits, and a later one promotes). It is
+#            staged for a person instead -- vM.Y.Z-pending tagged and
+#            pushed, its images published as :vM.Y.Z-pending
+#            (release-images.sh pending), the notes task filed and an
+#            operator notification raised, vM.Y.Z and `latest` untouched
+#            -- when RELEASE_AUTO_PROMOTE is false, when it is the first
+#            release of RELEASE_MAJOR (a major bump), when it carries
+#            breaking changes (release-notes.sh check-breaking), or when
+#            its commit is on neither main nor release/vM.Y.Z;
 #   FAIL     it is dropped: vM.Y.Z-rc.N-discarded is tagged on its commit
 #            and pushed, its images marked (release-images.sh discard-rc),
 #            and Phase 2 cuts rc.N+1 of the same version -- an rc that
@@ -182,12 +197,15 @@
 #                            own tag grant (.grain/templates/release-train.yml
 #                            `push:`, playbook section 0.4), so the script
 #                            pushes nothing outside it -- the v*-rc.*,
-#                            v*-pending and v*-discarded tags, candidate and
-#                            release/v* -- deletes nothing, and refuses the
-#                            approve, reject and rollback modes outright.
-#                            In train mode, set or not, it never pushes
-#                            vX.Y.Z or `latest`: those are the approval's
-#                            own refs
+#                            v*-pending and v*-discarded tags, candidate,
+#                            release/v*, and vM.Y.0 and `latest` -- deletes
+#                            nothing, and refuses the approve, reject and
+#                            rollback modes outright. In train mode, set or
+#                            not, it pushes vX.Y.Z and `latest` only for the
+#                            version it is promoting, each tagged on the
+#                            exact commit of the rc that qualified this run
+#   RELEASE_AUTO_PROMOTE     false stages every qualified rc as -pending for
+#                            a person instead of releasing it (true)
 #   DRY_RUN                  true pushes, publishes and files nothing, and
 #                            leaves no tag it made behind in the checkout
 #   GIT_USER_NAME, GIT_USER_EMAIL
@@ -195,7 +213,7 @@
 #                            GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL are
 #                            unset; never written to the checkout's config
 #   RELEASE_MAJOR, RELEASE_FLOOR_MINOR, RELEASE_NEVER_PROMOTE,
-#   RELEASE_MIN_INTERVAL_MINUTES, RELEASE_MAX_RC_ATTEMPTS
+#   RELEASE_MIN_INTERVAL_MINUTES, RELEASE_MAX_RC_ATTEMPTS, RELEASE_AUTO_PROMOTE
 #                            override scripts/release.conf as main has it
 set -euo pipefail
 
@@ -302,6 +320,8 @@ min_interval="${RELEASE_MIN_INTERVAL_MINUTES-$(conf_value RELEASE_MIN_INTERVAL_M
 min_interval="${min_interval:-120}"
 max_attempts="${RELEASE_MAX_RC_ATTEMPTS-$(conf_value RELEASE_MAX_RC_ATTEMPTS)}"
 max_attempts="${max_attempts:-3}"
+auto_promote="${RELEASE_AUTO_PROMOTE-$(conf_value RELEASE_AUTO_PROMOTE)}"
+auto_promote="${auto_promote:-true}"
 highest_major="$(git tag -l 'v[0-9]*' | sed -nE 's/^v([0-9]+)\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$/\1/p' | sort -n | tail -n 1)"
 major="${RELEASE_MAJOR:-$(conf_value RELEASE_MAJOR)}"
 major="${major:-${highest_major:-0}}"
@@ -309,6 +329,10 @@ major="${major:-${highest_major:-0}}"
 [[ "$floor_minor" =~ ^[0-9]+$ ]] || die "RELEASE_FLOOR_MINOR is \"$floor_minor\", which is not a number; nothing was done"
 [[ "$min_interval" =~ ^[0-9]+$ ]] || die "RELEASE_MIN_INTERVAL_MINUTES is \"$min_interval\", which is not a number; nothing was done"
 [[ "$max_attempts" =~ ^[1-9][0-9]*$ ]] || die "RELEASE_MAX_RC_ATTEMPTS is \"$max_attempts\", which is not a positive number; nothing was done"
+case "$auto_promote" in
+  true | false) ;;
+  *) die "RELEASE_AUTO_PROMOTE is \"$auto_promote\", not true or false; nothing was done" ;;
+esac
 # Version numbers never go backwards: a RELEASE_MAJOR behind the newest
 # released (or pending) major is stale, so the train releases that major
 # instead, as scripts/build-version.sh does. The floor is RELEASE_MAJOR's,
@@ -448,15 +472,39 @@ train_ref() {
   [[ "$1" != refs/tags/*/* ]] || return 1
   case "$1" in
     refs/tags/v*-rc.* | refs/tags/v*-pending | refs/tags/v*-discarded | refs/heads/candidate) return 0 ;;
+    refs/tags/latest) return 0 ;;
+    refs/tags/v*) [[ "$1" =~ ^refs/tags/v[0-9]{1,2}\.[0-9]{1,3}\.0$ ]] ;;
     refs/heads/release/v*) [[ "$1" != refs/heads/release/*/* ]] ;;
     *) return 1 ;;
   esac
 }
+
+# What this run is promoting, set only once its rc has qualified and every
+# guard has passed (promote_rc): the release, the rc, and the rc's commit.
+promoting=""
+promoting_rc=""
+promoting_sha=""
+
+# promotion_allowed <ref>: whether a train-mode push of vX.Y.Z or latest is
+# the promotion this run is making -- the release it is promoting (or
+# latest), tagged locally on the very commit of the rc that qualified, an
+# rc that is still not dropped. Anything else -- another version, another
+# commit, a run that qualified nothing -- is refused before it is pushed.
+promotion_allowed() {
+  [ -n "$promoting" ] && [ -n "$promoting_sha" ] && [ -n "$promoting_rc" ] || return 1
+  [ "$1" = "refs/tags/$promoting" ] || [ "$1" = refs/tags/latest ] || return 1
+  [ "$(commit_of "${1#refs/tags/}" || true)" = "$promoting_sha" ] || return 1
+  [ "$(commit_of "$promoting_rc" || true)" = "$promoting_sha" ] || return 1
+  [ "${promoting_rc%-rc.*}" = "$promoting" ] || return 1
+  ! commit_of "$promoting_rc-discarded" >/dev/null
+}
+
 # check_push <git push args...>: refuse, in train mode, a push of vX.Y.Z or
-# latest, and under RELEASE_PUSH_GRANT=train anything outside the grant.
+# latest that is not this run's promotion of a qualified rc, and under
+# RELEASE_PUSH_GRANT=train anything outside the grant.
 check_push() {
   [ "$mode" = train ] || return 0
-  local arg dst del=false
+  local arg dst src del=false
   for arg; do
     case "$arg" in --delete | -d) del=true ;; esac
   done
@@ -464,7 +512,13 @@ check_push() {
     case "$arg" in -*) continue ;; esac
     dst="${arg#+}"
     dst="${dst##*:}"
-    promotion_ref "$dst" && die "the train never pushes $dst: vX.Y.Z and latest move only on a person's approval (promote-release.yml)"
+    if promotion_ref "$dst"; then
+      [ "$del" = false ] || die "the train never deletes $dst"
+      src="${arg#+}"
+      src="${src%:*}"
+      promotion_allowed "$dst" && [ "$(git rev-parse -q --verify "$src^{commit}" || true)" = "$promoting_sha" ] ||
+        die "the train never pushes $dst except to release an rc that qualified, on that rc's own commit; not pushing it"
+    fi
     [ "$push_grant" = train ] || continue
     train_ref "$dst" || die "$dst is outside the release train's tag grant (.grain/templates/release-train.yml push:); not pushing it"
     [ "$del" = false ] || die "the release train's tag grant deletes nothing; not deleting $dst"
@@ -742,6 +796,60 @@ pending_body() {
   printf 'Meanwhile the train may cut and qualify the next version'"'"'s rc, but it never promotes or supersedes %s: it waits for your answer.\n' "$1"
 }
 
+# auto_promote_blocker <release> <rc> <sha>: why the train may not release
+# <rc> as <release> itself, so a person has to (it is staged as -pending);
+# prints nothing when it may.
+auto_promote_blocker() {
+  local status=0 out
+  if [ "$auto_promote" != true ]; then
+    echo "RELEASE_AUTO_PROMOTE is false"
+    return 0
+  fi
+  if never_promotes "$1" || never_promotes "$2"; then
+    echo "RELEASE_NEVER_PROMOTE names it"
+    return 0
+  fi
+  if [ -z "$base" ]; then
+    echo "it is the first release of major $major, and a major bump is a person's to release"
+    return 0
+  fi
+  if ! git merge-base --is-ancestor "$3" "$main_ref" &&
+    ! { remote_branch "release/$1" &&
+      git fetch -q --force "$remote" "+refs/heads/release/$1:refs/remotes/$remote/release/$1" &&
+      git merge-base --is-ancestor "$3" "refs/remotes/$remote/release/$1"; }; then
+    echo "${3:0:12} is on neither main nor release/$1"
+    return 0
+  fi
+  [ -n "$notes_from" ] || return 0
+  out="$(bash "$scripts_dir/release-notes.sh" check-breaking "$1" "$notes_from" "$3" 2>&1)" || status=$?
+  printf '%s\n' "$out" | sed 's/^/  /' >&2
+  case "$status" in
+    0) ;;
+    3) echo "it carries breaking changes since $notes_from and is not the major release RELEASE_MAJOR asks for" ;;
+    *) echo "its breaking changes since $notes_from could not be checked (release-notes.sh check-breaking exited $status)" ;;
+  esac
+}
+
+# promote_rc <release> <rc> <sha>: release a qualified rc -- vX.Y.Z on its
+# commit, latest moved onto it, its images promoted and its notes filed.
+promote_rc() {
+  promoting="$1" promoting_rc="$2" promoting_sha="$3"
+  say "phase 1: $2 qualified; releasing it as $1 and moving latest onto it (${3:0:12})"
+  git tag -a "$1" "$3" -m "Release $1" \
+    -m "Promoted from $2, which passed Stage 1 (nightly.yml) and Stage 2 (grain/release-qualification), by the release train with no person's approval (design/playbook/releases.playbook.md, section 1)." \
+    -m "Qualification: PASS" -m "Promoted-From: $2"
+  git tag -fa latest "$3" -m "Latest release $1"
+  # Both are checked before either is pushed: never a release without latest.
+  check_push "refs/tags/$1" "+refs/tags/latest"
+  push "refs/tags/$1" || die "could not push $1; latest was not moved"
+  push --force "refs/tags/latest" || die "pushed $1, but could not move latest onto it"
+  emit promoted_version "$1"
+  images promote "$1" || die "tagged $1 and latest, but could not publish their images: re-run .github/workflows/publish-release.yml"
+  notes_task=""
+  file_release_notes "$1" "$notes_from"
+  say "phase 1: $1 is released (after ${released:-nothing}); publish-release.yml publishes its images and GitHub Release from the tag"
+}
+
 # --- approve / reject / rollback: a person's answer ---
 
 if [ "$mode" != train ]; then
@@ -939,17 +1047,34 @@ if [ -n "$rc" ]; then
           say "phase 1: $rc qualified, but $pending is still pending approval; $rc waits behind it and is never staged over it"
           exit 0
         fi
-        say "phase 1: $rc qualified; staging $target-pending for a person to approve ($target and latest are not touched)"
-        git tag -a "$target-pending" "$rc_sha" -m "Release $target pending approval" \
-          -m "From $rc, which passed Stage 1 (nightly.yml) and Stage 2 (grain/release-qualification)." \
-          -m "A person approves it (grain release approve $target) or rejects it (grain release reject $target)." \
-          -m "Qualification: PASS"
-        push "refs/tags/$target-pending" || die "could not push $target-pending"
-        emit pending_version "$target"
-        images pending "$target" || die "tagged $target-pending, but could not stage its images: run \`release-images.sh pending $target\`"
-        notes_task=""
-        file_release_notes "$target" "$notes_from"
-        raise_pending "$target" "$rc" "$(pending_body "$target" "$rc" PASS "$notes_task")"
+        blocker="$(auto_promote_blocker "$target" "$rc" "$rc_sha")"
+        if [ -z "$blocker" ]; then
+          # A minimum interval between releases (playbook section 7): the
+          # rc stays qualified, and a later run releases it.
+          if [ -n "$released" ] && [ "$min_interval" -gt 0 ]; then
+            last_ts="$(git for-each-ref --format='%(taggerdate:unix)' "refs/tags/$released")"
+            [ -n "$last_ts" ] || last_ts="$(git log -1 --format=%ct "$(commit_of "$released")")"
+            if [ $((now - last_ts)) -lt $((min_interval * 60)) ]; then
+              say "phase 1: $rc qualified, but $released was released $(((now - last_ts) / 60))m ago, under RELEASE_MIN_INTERVAL_MINUTES ($min_interval); a later run releases it"
+              emit promotion_waits "$target"
+              exit 0
+            fi
+          fi
+          promote_rc "$target" "$rc" "$rc_sha"
+        else
+          say "phase 1: $rc qualified, but the train does not release it itself: $blocker; staging $target-pending for a person to approve ($target and latest are not touched)"
+          emit promotion_blocked "$blocker"
+          git tag -a "$target-pending" "$rc_sha" -m "Release $target pending approval" \
+            -m "From $rc, which passed Stage 1 (nightly.yml) and Stage 2 (grain/release-qualification)." \
+            -m "A person approves it (grain release approve $target) or rejects it (grain release reject $target)." \
+            -m "Qualification: PASS"
+          push "refs/tags/$target-pending" || die "could not push $target-pending"
+          emit pending_version "$target"
+          images pending "$target" || die "tagged $target-pending, but could not stage its images: run \`release-images.sh pending $target\`"
+          notes_task=""
+          file_release_notes "$target" "$notes_from"
+          raise_pending "$target" "$rc" "$(pending_body "$target" "$rc" PASS "$notes_task")"
+        fi
         floor="$rc_sha"
         next_n=1
         target_release

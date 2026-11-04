@@ -73,6 +73,13 @@ else
   echo "skip the GitHub API cases: python3 or curl is not installed"
 fi
 
+# Whether setup's release.conf lets the train release a qualified rc
+# itself (RELEASE_AUTO_PROMOTE). The cases up to "auto-promote" are of the
+# person's path -- a qualified rc staged as -pending and approved -- which
+# RELEASE_AUTO_PROMOTE=false keeps for every release; the ones after it
+# turn it on, as scripts/release.conf has it.
+auto_promote=false
+
 # setup <never-promote> [<subject>...]: a fresh remote whose main is
 # c0..c4 (or c0 and a commit per subject given), v2.1.0 promoted (and
 # latest) on c0 two days ago, and a clone of it to run the train in.
@@ -85,7 +92,7 @@ setup() {
   (
     cd "$work/seed"
     mkdir scripts
-    printf 'RELEASE_MAJOR=2\nRELEASE_FLOOR_MINOR=3\nRELEASE_NEVER_PROMOTE="%s"\n' "$1" > scripts/release.conf
+    printf 'RELEASE_MAJOR=2\nRELEASE_FLOOR_MINOR=3\nRELEASE_NEVER_PROMOTE="%s"\nRELEASE_AUTO_PROMOTE=%s\n' "$1" "$auto_promote" > scripts/release.conf
     git add scripts/release.conf
     git commit -q -m c0
     GIT_COMMITTER_DATE="@$((now - 48 * 3600)) +0000" git tag -a v2.1.0 -m "Release v2.1.0"
@@ -1058,6 +1065,165 @@ mutant refs/heads/main RELEASE_PUSH_GRANT=train
 expect "grant pushing main" "exits 1" eq "$status" 1
 expect "grant pushing main" "says it is outside the grant" has "refs/heads/main is outside the release train's tag grant"
 expect "grant pushing main" "leaves main where it was" eq "$(git -C "$work/remote.git" rev-parse refs/heads/main)" "$c4"
+
+# --- auto-promote: the continuous train releases a qualified rc itself ---
+# (design/playbook/releases.playbook.md section 1): from here on,
+# release.conf has RELEASE_AUTO_PROMOTE=true, as scripts/release.conf does.
+auto_promote=true
+
+# qualified_rc <rc> <commit>: the rc cut 3h ago, candidate on it, and
+# both stages passed.
+qualified_rc() {
+  tag_remote "$1" "$2" 3
+  git -C "$work/seed" push -q --force origin "$2:refs/heads/candidate"
+  qualification pass "$2"
+}
+
+# pass -> vX.Y.Z and latest, under the train's own tag grant.
+setup ""
+qualified_rc v2.3.0-rc.1 "$c2"
+runs "$c2" "$c4"
+: > "$work/train.out"
+train RELEASE_PUSH_GRANT=train RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "auto-promote" "exits 0" eq "$status" 0
+expect "auto-promote" "tags v2.3.0 on the rc's own commit" eq "$(remote_tag v2.3.0)" "$c2"
+expect "auto-promote" "moves latest onto it" eq "$(remote_tag latest)" "$c2"
+expect "auto-promote" "stages no -pending" eq "$(remote_tag v2.3.0-pending)" ""
+expect "auto-promote" "promotes its images" images_were "promote v2.3.0"
+expect "auto-promote" "outputs the release" grep -qxF "promoted_version=v2.3.0" "$work/train.out"
+expect "auto-promote" "then waits the interval before v2.4.0-rc.1" eq "$(remote_tag v2.4.0-rc.1)" ""
+out="$(git -C "$work/remote.git" for-each-ref --format='%(contents)' refs/tags/v2.3.0)"
+expect "auto-promote" "the release tag names its rc" has "Promoted-From: v2.3.0-rc.1"
+expect "auto-promote" "and records the qualification" has "Qualification: PASS"
+
+# The next run, the interval over: the next minor's rc.1 after the release.
+: > "$work/images.log"
+train RELEASE_PUSH_GRANT=train RELEASE_MIN_INTERVAL_MINUTES=0
+expect "auto-promote, next" "exits 0" eq "$status" 0
+expect "auto-promote, next" "targets v2.4.0 after v2.3.0" has "newest promoted release v2.3.0"
+expect "auto-promote, next" "cuts v2.4.0-rc.1 past the release" eq "$(remote_tag v2.4.0-rc.1)" "$c4"
+expect "auto-promote, next" "moves no release" eq "$(remote_tag latest)" "$c2"
+
+# fail -> -discarded -> rc.2 -> pass -> released: the continuous cycle.
+setup ""
+qualified_rc v2.3.0-rc.1 "$c2"
+qualification fail "$c2"
+runs "$c2" "$c3"
+: > "$work/images.log"
+train RELEASE_PUSH_GRANT=train
+expect "auto cycle, red" "exits 0" eq "$status" 0
+expect "auto cycle, red" "drops rc.1" eq "$(remote_tag v2.3.0-rc.1-discarded)" "$c2"
+expect "auto cycle, red" "cuts rc.2 on the next green commit" eq "$(remote_tag v2.3.0-rc.2)" "$c3"
+expect "auto cycle, red" "releases nothing" eq "$(remote_tag v2.3.0)" ""
+expect "auto cycle, red" "leaves latest on v2.1.0" eq "$(remote_tag latest)" "$c0"
+qualification pass "$c3"
+: > "$work/images.log"
+train RELEASE_PUSH_GRANT=train
+expect "auto cycle, green" "exits 0" eq "$status" 0
+expect "auto cycle, green" "releases rc.2 as v2.3.0" eq "$(remote_tag v2.3.0)" "$c3"
+expect "auto cycle, green" "moves latest onto rc.2" eq "$(remote_tag latest)" "$c3"
+expect "auto cycle, green" "promotes its images" images_were "promote v2.3.0"
+
+# RELEASE_NEVER_PROMOTE naming the rc drops it; naming the version skips it.
+setup "v2.3.0-rc.1"
+qualified_rc v2.3.0-rc.1 "$c2"
+runs "$c2" "$c3"
+train
+expect "auto, never-promote rc" "exits 0" eq "$status" 0
+expect "auto, never-promote rc" "releases nothing" eq "$(remote_tag v2.3.0)" ""
+expect "auto, never-promote rc" "drops the rc" eq "$(remote_tag v2.3.0-rc.1-discarded)" "$c2"
+expect "auto, never-promote rc" "leaves latest on v2.1.0" eq "$(remote_tag latest)" "$c0"
+setup "v2.3.0"
+qualified_rc v2.3.0-rc.1 "$c2"
+runs "$c2" "$c3"
+train
+expect "auto, never-promote version" "exits 0" eq "$status" 0
+expect "auto, never-promote version" "releases no v2.3.0" eq "$(remote_tag v2.3.0)" ""
+expect "auto, never-promote version" "leaves latest on v2.1.0" eq "$(remote_tag latest)" "$c0"
+expect "auto, never-promote version" "targets v2.4.0 instead" has "next minor v2.4.0"
+
+# RELEASE_AUTO_PROMOTE=false (the environment over release.conf): staged.
+setup ""
+qualified_rc v2.3.0-rc.1 "$c2"
+train RELEASE_AUTO_PROMOTE=false
+expect "auto off" "exits 0" eq "$status" 0
+expect "auto off" "releases nothing" eq "$(remote_tag v2.3.0)" ""
+expect "auto off" "stages v2.3.0-pending for a person" eq "$(remote_tag v2.3.0-pending)" "$c2"
+expect "auto off" "says why" has "the train does not release it itself: RELEASE_AUTO_PROMOTE is false"
+train RELEASE_AUTO_PROMOTE=maybe
+expect "auto, unknown" "is refused" has "RELEASE_AUTO_PROMOTE is \"maybe\", not true or false"
+
+# A major bump never releases itself: v3.0.0 is staged for a person.
+setup ""
+qualified_rc v3.0.0-rc.1 "$c2"
+: > "$work/train.out"
+train RELEASE_MAJOR=3 RELEASE_FLOOR_MINOR=0 RELEASE_PUSH_GRANT=train RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "auto, major bump" "exits 0" eq "$status" 0
+expect "auto, major bump" "releases no v3.0.0" eq "$(remote_tag v3.0.0)" ""
+expect "auto, major bump" "leaves latest on v2.1.0" eq "$(remote_tag latest)" "$c0"
+expect "auto, major bump" "stages v3.0.0-pending" eq "$(remote_tag v3.0.0-pending)" "$c2"
+expect "auto, major bump" "says a person releases it" has "first release of major 3, and a major bump is a person's to release"
+expect "auto, major bump" "outputs the block" grep -q "^promotion_blocked=" "$work/train.out"
+
+# Breaking changes (release-notes.sh check-breaking) never release themselves.
+setup "" "fix: one" "feat!: drop the v1 API" "fix: two"
+qualified_rc v2.3.0-rc.1 "$c3"
+train
+expect "auto, breaking" "exits 0" eq "$status" 0
+expect "auto, breaking" "releases no v2.3.0" eq "$(remote_tag v2.3.0)" ""
+expect "auto, breaking" "stages it for a person" eq "$(remote_tag v2.3.0-pending)" "$c3"
+expect "auto, breaking" "says why" has "carries breaking changes since v2.1.0"
+
+# RELEASE_MIN_INTERVAL_MINUTES: v2.1.0 was released 48h ago.
+setup ""
+qualified_rc v2.3.0-rc.1 "$c2"
+: > "$work/images.log"
+: > "$work/train.out"
+train RELEASE_MIN_INTERVAL_MINUTES=$((49 * 60)) RELEASE_TRAIN_OUTPUT="$work/train.out"
+expect "auto, interval" "exits 0" eq "$status" 0
+expect "auto, interval" "releases nothing yet" eq "$(remote_tag v2.3.0)" ""
+expect "auto, interval" "stages nothing either" eq "$(remote_tag v2.3.0-pending)" ""
+expect "auto, interval" "says it waits" has "under RELEASE_MIN_INTERVAL_MINUTES (2940); a later run releases it"
+expect "auto, interval" "outputs it" grep -qxF "promotion_waits=v2.3.0" "$work/train.out"
+expect "auto, interval" "publishes nothing" images_were ""
+train
+expect "auto, interval over" "then releases it" eq "$(remote_tag v2.3.0)" "$c2"
+
+# Wrong commit: a train that tagged the release anywhere but on the
+# qualified rc's own commit, or pushed another commit to it, is refused
+# before the push.
+wrong() { # wrong <sed expression> [VAR=value...]: run a train with its promotion edited
+  local expr="$1"
+  shift
+  mkdir -p "$work/wrong"
+  cp "$(dirname "$train")/candidate-gate.sh" "$(dirname "$train")/release-notes.sh" "$work/wrong/"
+  sed "$expr" "$train" > "$work/wrong/release-from-trunk.sh"
+  cmp -s "$train" "$work/wrong/release-from-trunk.sh" && { echo "wrong: $expr changed nothing"; exit 1; }
+  status=0
+  out="$(cd "$work/clone" && env RELEASE_RUNS_JSON="$work/runs.json" \
+    RELEASE_QUALIFICATION_RUNS_JSON="$work/qual-runs.json" RELEASE_QUALIFICATION_CHECKS_JSON="$work/qual-checks.json" \
+    RELEASE_HOLD_CHECKS_JSON="$work/hold-checks.json" RELEASE_QUALIFICATION_APP=grain-test \
+    RELEASE_IMAGES="$work/images.sh" RELEASE_NOTES_TASK=off RELEASE_NOW="$now" "$@" bash "$work/wrong/release-from-trunk.sh" 2>&1)" || status=$?
+}
+for grant in "" train; do
+  for expr in \
+    's|git tag -a "$1" "$3" -m "Release $1"|git tag -a "$1" "$main_ref" -m "Release $1"|' \
+    's|git tag -fa latest "$3"|git tag -fa latest "$main_ref"|' \
+    's|push "refs/tags/$1" \|\||push "$main_ref:refs/tags/$1" \|\||' \
+    's|push "refs/tags/$1" \|\||push "$3:refs/tags/v2.4.0" \|\||'; do
+    setup ""
+    qualified_rc v2.3.0-rc.1 "$c2"
+    : > "$work/images.log"
+    wrong "$expr" RELEASE_PUSH_GRANT="$grant"
+    name="wrong commit (${expr:0:40}...)${grant:+ (grant)}"
+    expect "$name" "exits 1" eq "$status" 1
+    expect "$name" "says why" has "except to release an rc that qualified, on that rc's own commit"
+    expect "$name" "leaves latest on v2.1.0" eq "$(remote_tag latest)" "$c0"
+    expect "$name" "pushes no v2.3.0" eq "$(remote_tag v2.3.0)" ""
+    expect "$name" "pushes no other release" eq "$(remote_tag v2.4.0)" ""
+    expect "$name" "publishes nothing" images_were ""
+  done
+done
 
 echo
 echo "$((cases - failures))/$cases passed"
