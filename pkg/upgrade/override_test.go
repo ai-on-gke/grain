@@ -99,6 +99,7 @@ func TestStartImageSwitchesRepositoryAndRemembersIt(t *testing.T) {
 		t.Fatalf("StartImage: %v", err)
 	}
 	waitForPhase(t, u, PhaseOK)
+	waitForIdle(t, u)
 	if got := readFile(t, pulled); got != ar+":main\n" {
 		t.Errorf("pulled %q, want %s:main", got, ar)
 	}
