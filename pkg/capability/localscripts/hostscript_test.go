@@ -165,7 +165,7 @@ func TestHostScriptBodyRechecksTheFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := filepath.Join(dir, "body")
-	if err := os.WriteFile(body, []byte(hostScriptBody(script, []string{sub, dir}, map[string]string{"KUBECONFIG": "$env:X"})), 0o644); err != nil {
+	if err := os.WriteFile(body, []byte(hostScriptBody("ops", script, []string{sub, dir}, map[string]string{"KUBECONFIG": "$env:X"})), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	run := func() (string, int) {
@@ -247,5 +247,80 @@ func TestMigrateToHostScriptLeavesAClashOnLocalScripts(t *testing.T) {
 	}
 	if renames, skipped, err = MigrateToHostScript(cfg, servers); err != nil || len(skipped) != 0 || len(renames) != 1 {
 		t.Fatalf("second start: renames %v, skipped %v, err %v", renames, skipped, err)
+	}
+}
+
+// TestMigrateToHostScriptFollowsTheDeclaration: what an earlier start
+// converted is not kept once the declaration changes. A script given
+// approve: true no longer runs unapproved through host-script, a removed
+// script is gone, the operator's own script and binding
+// stay, and a secret no script binds any more is unbound.
+func TestMigrateToHostScriptFollowsTheDeclaration(t *testing.T) {
+	root := stateRepo(t, "ops", `scripts:
+  list:
+    - path: scripts/show
+      env: {TOKEN: ops.token}
+    - path: scripts/wipe
+`, map[string]string{"show": showScript, "wipe": showScript})
+	cfg := Config{StateDir: root}
+	servers := map[string]protocol.ServerConfig{
+		HostScriptServerID: {Command: "grain", Args: []string{"capability", "host-script"},
+			Env: map[string]string{"MINE": "$secret:mine"},
+			Config: map[string]any{"scripts": []any{map[string]any{"name": "mine", "script": "echo mine",
+				"env": map[string]any{"M": "$env:MINE"}}}}},
+	}
+	names := func() []string {
+		var out []string
+		for _, item := range servers[HostScriptServerID].Config["scripts"].([]any) {
+			out = append(out, item.(map[string]any)["name"].(string))
+		}
+		return out
+	}
+	if _, _, err := MigrateToHostScript(cfg, servers); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(); !reflect.DeepEqual(got, []string{"mine", "ops-show", "ops-wipe"}) {
+		t.Fatalf("scripts %v", got)
+	}
+	before, _ := model.EncodeMCPServers(servers)
+	if _, _, err := MigrateToHostScript(cfg, servers); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := model.EncodeMCPServers(servers); after != before {
+		t.Fatalf("a second start changed the server:\n%s\n%s", before, after)
+	}
+
+	// wipe is removed, and show no longer names a secret.
+	decl := filepath.Join(root, StateRepoDir, "ops", DeclarationFile)
+	if err := os.Remove(filepath.Join(root, StateRepoDir, "ops", "scripts", "wipe")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(decl, []byte("scripts:\n  list:\n    - path: scripts/show\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	renames, _, err := MigrateToHostScript(cfg, servers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := names(); !reflect.DeepEqual(got, []string{"mine", "ops-show"}) {
+		t.Fatalf("scripts %v: want ops-wipe gone", got)
+	}
+	if len(renames["local-scripts:ops"]) != 1 {
+		t.Fatalf("renames %v", renames)
+	}
+	if env := servers[HostScriptServerID].Env; !reflect.DeepEqual(env, map[string]string{"MINE": "$secret:mine"}) {
+		t.Fatalf("env %v: want ops.token unbound and the operator's own binding kept", env)
+	}
+
+	// show now waits for approval: none of ops runs through host-script.
+	if err := os.WriteFile(decl, []byte("scripts:\n  list:\n    - path: scripts/show\n      approve: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	renames, skipped, err := MigrateToHostScript(cfg, servers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := names(); !reflect.DeepEqual(got, []string{"mine"}) || len(renames) != 0 || len(skipped) != 1 {
+		t.Fatalf("scripts %v, renames %v, skipped %v: want ops off host-script", got, renames, skipped)
 	}
 }

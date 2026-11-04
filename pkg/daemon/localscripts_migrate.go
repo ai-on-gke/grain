@@ -32,13 +32,15 @@ import (
 // runtime expansions, so local-scripts:<name> keeps granting them
 // wherever it is still written. It runs at every start, and what it has
 // already done it leaves alone, so a declaration the state repository
-// gains later is picked up by the next start. A declaration that cannot
+// gains later is picked up by the next start, and the scripts an earlier
+// start converted are converted again from the declarations as they are
+// now, so one removed or given approve: true stops running through
+// host-script. A declaration that cannot
 // move -- one with an approve: true script -- stays a local-scripts
 // declaration, served as before, and the reason is logged.
 func migrateLocalScripts(ctx context.Context, store *model.Store, local localscripts.Config) (restore func(), err error) {
-	if len(localscripts.Declarations(local)) == 0 {
-		return func() {}, nil
-	}
+	// No early return when local finds no declaration: scripts an
+	// earlier start converted are still pruned (MigrateToHostScript).
 	var renames map[string][]string
 	err = store.UpdateConfig(ctx, func(c *model.Config) error {
 		before, err := model.EncodeMCPServers(c.MCPServers)

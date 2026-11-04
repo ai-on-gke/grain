@@ -121,14 +121,23 @@ At every start, before the capability servers start, the daemon
   `output_cap`. `max_calls` is unlimited. Each `env` secret becomes
   `$env:GRAIN_LOCAL_SCRIPTS_<SECRET>`, and the server's own `env` binds
   that variable to `$secret:<name>`.
-- **Leaves existing configuration alone.** A script name the server
-  already configures is kept as it is, so a later start changes
-  nothing. That only holds if the existing script still has the body
-  the conversion writes. If it runs anything else, the declaration stays
-  on local-scripts and the daemon logs why, so a `local-scripts:<name>`
+- **Converts again at every start.** Each body it writes starts
+  `# grain: converted from local-scripts:<declaration>`. At every start
+  the daemon first removes every script with that first line, and every
+  `GRAIN_LOCAL_SCRIPTS_*` binding no remaining script uses, then
+  converts the declarations as they are now. A script since removed, a
+  declaration since deleted or given an `approve: true` script, and a
+  changed `workdir`, timeout, output cap or `env` therefore stop running
+  as they were. A host-script grant of a script that is gone is refused.
+  A declaration's new scripts are added at the next start. Granting
+  them is a separate step: a grant names one script. When nothing
+  changed, the config row is not written.
+- **Leaves the operator's own scripts alone.** A script without that
+  first line is the operator's, and is kept as it is. If it has the
+  name a declaration's script would take, the declaration stays on
+  local-scripts and the daemon logs why, so a `local-scripts:<name>`
   grant never becomes a grant of a script the declaration did not
-  declare. A declaration's new scripts are added at the next start.
-  Granting them is a separate step: a grant names one script.
+  declare.
 - **Rewrites stored grants.** Every stored `local-scripts:<name>` is
   rewritten to its declaration's host-script grants (`Store.RewriteRetiredGrants`).
   This covers task, template and schedule grants, default and CI

@@ -73,7 +73,13 @@ timeout: 2m
 	// local-scripts did not is withheld by the converted body.
 	for _, script := range conv.Scripts {
 		body := script["script"].(string)
-		unset, _, _ := strings.Cut(body, "\n")
+		var unset string
+		for _, line := range strings.Split(body, "\n") {
+			if strings.HasPrefix(line, "unset ") {
+				unset = line
+				break
+			}
+		}
 		for _, v := range AmbientIdentityEnv {
 			if len(localexec.BaseEnviron([]string{v + "=x"})) == 0 && !slices.Contains(strings.Fields(unset), v) {
 				t.Errorf("%s: body %q passes %s on, which local-scripts withheld", script["name"], body, v)

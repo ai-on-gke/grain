@@ -142,7 +142,7 @@ func ConvertToHostScripts(cfg Config, name string) (HostScripts, error) {
 		entry := map[string]any{
 			"name":        scriptName,
 			"description": desc,
-			"script":      hostScriptBody(s.Path, dirs, s.Env),
+			"script":      hostScriptBody(name, s.Path, dirs, s.Env),
 			"cwd":         decl.WorkdirPath(),
 			"timeout":     timeoutSeconds(s.Timeout),
 			"max_output":  decl.Cap(),
@@ -202,8 +202,13 @@ func scriptDirs(folder, path string) ([]string, error) {
 	}
 }
 
-// hostScriptBody is the host-script body that runs the declaration's
-// script at path, dirs being the directories between it and its
+// convertedMarker starts the first line of every body hostScriptBody
+// writes. It is how a later start tells the scripts a conversion added
+// from the operator's own (pruneConverted).
+const convertedMarker = "# grain: converted from local-scripts:"
+
+// hostScriptBody is the host-script body that runs the declaration
+// decl's script at path, dirs being the directories between it and its
 // declaration's folder (scriptDirs) and env the variables its
 // declaration sets. It withholds the ambient identity local-scripts
 // withheld, refuses the file once it is no longer one grain's own user
@@ -212,7 +217,7 @@ func scriptDirs(folder, path string) ([]string, error) {
 // make, applied to every call -- and execs it, keeping its own
 // interpreter (its #! line) and argv exactly; host-script runs the body
 // as bash <file> "$@".
-func hostScriptBody(path string, dirs []string, env map[string]string) string {
+func hostScriptBody(decl, path string, dirs []string, env map[string]string) string {
 	var unset []string
 	for _, v := range withheldAmbientEnv {
 		if _, ok := env[v]; !ok {
@@ -228,6 +233,7 @@ func hostScriptBody(path string, dirs []string, env map[string]string) string {
 		dirTests.WriteString(" [ -L " + qd + " ] || [ ! -d " + qd + " ] ||")
 	}
 	var b strings.Builder
+	b.WriteString(convertedMarker + decl + "; replaced at every daemon start\n")
 	if len(unset) > 0 {
 		b.WriteString("unset " + strings.Join(unset, " ") + "\n")
 	}
@@ -410,6 +416,11 @@ func Declarations(cfg Config) []string {
 // local-scripts:<name> grant becomes there. A declaration that cannot be
 // converted is left a local-scripts declaration, and why is in skipped.
 func MigrateToHostScript(cfg Config, servers map[string]protocol.ServerConfig) (renames map[string][]string, skipped []error, err error) {
+	// What an earlier start converted is converted again from the
+	// declarations as they are now, so a script since removed, a
+	// declaration since deleted or given an approve: true script, and a
+	// changed workdir, timeout or env do not keep running as they were.
+	pruneConverted(servers)
 	var converted []HostScripts
 	for _, name := range Declarations(cfg) {
 		h, err := ConvertToHostScripts(cfg, name)
@@ -454,6 +465,58 @@ func MigrateToHostScript(cfg Config, servers map[string]protocol.ServerConfig) (
 		renames[CapabilityName(h.Declaration)] = grants
 	}
 	return renames, skipped, nil
+}
+
+// pruneConverted removes from every host-script server in servers each
+// script an earlier conversion added (its body starts convertedMarker),
+// and each GRAIN_LOCAL_SCRIPTS_ binding no script left references. A
+// server with none of them is left exactly as it is.
+func pruneConverted(servers map[string]protocol.ServerConfig) {
+	for id, c := range servers {
+		if !IsHostScriptServer(c) {
+			continue
+		}
+		list, _ := c.Config["scripts"].([]any)
+		kept := []any{}
+		referenced := map[string]bool{}
+		for _, item := range list {
+			m, _ := item.(map[string]any)
+			if body, _ := m["script"].(string); strings.HasPrefix(body, convertedMarker) {
+				continue
+			}
+			kept = append(kept, item)
+			if env, ok := m["env"].(map[string]any); ok {
+				for _, v := range env {
+					if ref, ok := v.(string); ok {
+						referenced[strings.TrimPrefix(ref, "$env:")] = true
+					}
+				}
+			}
+		}
+		changed := len(kept) != len(list)
+		env := map[string]string{}
+		for k, v := range c.Env {
+			if strings.HasPrefix(k, secretBindingPrefix) && !referenced[k] {
+				changed = true
+				continue
+			}
+			env[k] = v
+		}
+		if !changed {
+			continue
+		}
+		config := map[string]any{}
+		for k, v := range c.Config {
+			config[k] = v
+		}
+		config["scripts"] = kept
+		c.Config = config
+		c.Env = nil
+		if len(env) > 0 {
+			c.Env = env
+		}
+		servers[id] = c
+	}
 }
 
 // configuredScripts is the body of each script c configures, by name.
