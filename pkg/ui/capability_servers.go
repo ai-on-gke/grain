@@ -171,6 +171,15 @@ type CapabilityServerProber interface {
 	HostCapabilityEntries(ctx context.Context) ([]string, error)
 }
 
+// CapabilityServerPlacedProber is implemented by a CapabilityServerProber
+// that routes placed run: hostd servers (protocol.ServerConfig.Hostd) to
+// their own hostd rather than the deployment's default hostd. When
+// connected is false and err is non-nil, the selector is valid in the
+// registry and its hostd is currently disconnected.
+type CapabilityServerPlacedProber interface {
+	HostCapabilityEntriesFor(ctx context.Context, selector string) (entries []string, connected bool, err error)
+}
+
 // CapabilityServerToolCaller is the part of the daemon's registry
 // Settings' per-script Test button uses (servers.Registry.CallTool).
 type CapabilityServerToolCaller interface {
@@ -397,10 +406,6 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 	if grainserver.IsInProcessID(id) {
 		return validationErrorf("capability server %s runs inside grain itself and has nothing to configure", id)
 	}
-	cfg := req.Config
-	if err := c.checkRunLocation(ctx, cfg); err != nil {
-		return err
-	}
 	from := strings.TrimSpace(req.RenameFrom)
 	if from == id {
 		from = ""
@@ -408,6 +413,13 @@ func (c *Client) SetCapabilityServer(ctx context.Context, req SetCapabilityServe
 	schemaID := id
 	if from != "" {
 		schemaID = from
+	}
+	cfg := req.Config
+	if err := c.normalizeServerHostd(ctx, schemaID, &cfg); err != nil {
+		return err
+	}
+	if err := c.checkRunLocation(ctx, cfg, false); err != nil {
+		return err
 	}
 	schema := c.capabilityConfigSchema(schemaID)
 	if schema == nil && (len(req.ConfigSecrets) > 0 || !c.storedConfigEqual(ctx, schemaID, cfg.Config)) {
@@ -755,18 +767,72 @@ func (c *Client) prober() CapabilityServerProber {
 	return p
 }
 
-// checkRunLocation refuses run: host unless grain hostd is beside this
-// daemon and its allowlist has the capability entry the command names
-// (#5031: on Kubernetes, or a daemon on the host itself, there is none).
-func (c *Client) checkRunLocation(ctx context.Context, cfg protocol.ServerConfig) error {
+// normalizeServerHostd normalizes cfg's hostd placement and checks it
+// against the registry when it changed from what schemaID already has
+// stored, so a hostd revoked after the server was saved does not block
+// editing its other fields.
+func (c *Client) normalizeServerHostd(ctx context.Context, schemaID string, cfg *protocol.ServerConfig) error {
+	raw := strings.TrimSpace(string(cfg.Hostd))
+	if raw == "" {
+		cfg.Hostd = ""
+		return nil
+	}
+	if !cfg.OnHost() {
+		return validationErrorf("hostd %q places a run: hostd server; set run: hostd beside it", raw)
+	}
+	norm, err := model.NormalizeHostdSelector(raw)
+	if err != nil {
+		return validationErrorf("hostd: %v", err)
+	}
+	var prev string
+	if schemaID != "" && c.Store != nil {
+		if stored, err := c.Store.GetConfig(ctx); err == nil && stored != nil {
+			configured, _ := intree.EnsureBuiltins(stored.MCPServers)
+			prev = string(configured[schemaID].Hostd)
+		}
+	}
+	if norm != prev {
+		if err := c.checkHostdSelector(ctx, norm); err != nil {
+			return validationErrorf("hostd: %v", err)
+		}
+	}
+	cfg.Hostd = protocol.HostdTarget(norm)
+	return nil
+}
+
+// checkRunLocation refuses run: host unless the target grain hostd -- the
+// placed hostd when cfg.Hostd is set, or the default hostd beside this
+// daemon -- can run it and its allowlist has the capability entry the
+// command names (#5031: on Kubernetes, or a daemon on the host itself,
+// there is no default hostd).
+func (c *Client) checkRunLocation(ctx context.Context, cfg protocol.ServerConfig, forTest bool) error {
 	if !cfg.OnHost() {
 		return nil
+	}
+	if cfg.Hostd != "" {
+		if pp, ok := c.Config.CapabilityServers.(CapabilityServerPlacedProber); ok {
+			entries, connected, err := pp.HostCapabilityEntriesFor(ctx, string(cfg.Hostd))
+			if err != nil {
+				if !connected && !forTest {
+					// The hostd is in the registry and unrevoked, just not
+					// connected right now: saving parks the server in
+					// needs-hostd until that hostd dials in.
+					return nil
+				}
+				return validationErrorf("run: host on hostd %s: %s", cfg.Hostd, err)
+			}
+			return checkHostdOffersEntry(entries, cfg, "on hostd "+string(cfg.Hostd))
+		}
 	}
 	hosts := c.HostCapabilityEntries(ctx)
 	if !hosts.Available {
 		return validationErrorf("run: host is not available here: %s", hosts.Reason)
 	}
-	for _, e := range hosts.Entries {
+	return checkHostdOffersEntry(hosts.Entries, cfg, "")
+}
+
+func checkHostdOffersEntry(entries []string, cfg protocol.ServerConfig, where string) error {
+	for _, e := range entries {
 		if e == cfg.Command {
 			return nil
 		}
@@ -778,11 +844,15 @@ func (c *Client) checkRunLocation(ctx context.Context, cfg protocol.ServerConfig
 		return nil
 	}
 	offered := "no capabilities entries"
-	if len(hosts.Entries) > 0 {
-		offered = strings.Join(hosts.Entries, ", ")
+	if len(entries) > 0 {
+		offered = strings.Join(entries, ", ")
 	}
-	return validationErrorf("run: host: grain hostd's allowlist has no capabilities entry %q (it offers %s); %s",
-		cfg.Command, offered, hostd.MissingEntryHelp(cfg.Command))
+	prefix := "run: host"
+	if where != "" {
+		prefix += " " + where
+	}
+	return validationErrorf("%s: grain hostd's allowlist has no capabilities entry %q (it offers %s); %s",
+		prefix, cfg.Command, offered, hostd.MissingEntryHelp(cfg.Command))
 }
 
 // HostCapabilityEntries says whether run: host is possible here and what
@@ -841,9 +911,19 @@ func (c *Client) TestCapabilityServer(ctx context.Context, req TestCapabilitySer
 	if err := cfg.Validate(id); err != nil {
 		return servers.ProbeResult{}, validationErrorf("%s", err)
 	}
+	if cfg.Hostd != "" {
+		norm, err := model.NormalizeHostdSelector(string(cfg.Hostd))
+		if err != nil {
+			return servers.ProbeResult{}, validationErrorf("hostd: %v", err)
+		}
+		if err := c.checkHostdSelector(ctx, norm); err != nil {
+			return servers.ProbeResult{}, validationErrorf("hostd: %v", err)
+		}
+		cfg.Hostd = protocol.HostdTarget(norm)
+	}
 	// A test says at once that no dialing-in hostd is connected, rather
 	// than waiting one out the way a run does (hostd.ForDisplay).
-	if err := c.checkRunLocation(hostd.ForDisplay(ctx), cfg); err != nil {
+	if err := c.checkRunLocation(hostd.ForDisplay(ctx), cfg, true); err != nil {
 		return servers.ProbeResult{}, err
 	}
 	// Typed-in secrets are offered under names of their own, which only

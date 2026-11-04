@@ -1595,7 +1595,7 @@ var Tables = []string{
 
 	// task_run_hostd: which grain hostd each run's agent CLI went to
 	// (model.TaskRunHostd), beside the frozen task_run DDL. Its
-	// task_hostd companion, a task's own selector, is dropped by 103.
+	// task_hostd companion, a task's own selector, is dropped by 105.
 	taskRunHostdTable,
 
 	// task_run_startup records the per-phase startup timestamps of a run
