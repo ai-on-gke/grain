@@ -90,8 +90,11 @@ lines are read too, so a script written for Silo carries over unchanged.
 server ([capabilities.md](capabilities.md#host-scripts-grain-capability-host-script),
 [host-scripts.md](host-scripts.md)). Each script of a declaration becomes
 one host-script script, and a grant of the declaration becomes one
-`…/host-script#host-script` `{script}` grant per script. Scheduled runs
-are not refused it there: host-script has no such rule.
+`…/host-script#host-script` `{script}` grant per script. Those grants
+are still refused to the runs local-scripts refused, though host-script
+itself has no such rule. A scheduled run is minted none of them, and the
+rest of its grants as usual. A CI job asking for one is refused, whatever
+the event (`localscripts.MigratedFrom`).
 
 At every start, before the capability servers start, the daemon
 (`daemon.migrateLocalScripts`) does the following:

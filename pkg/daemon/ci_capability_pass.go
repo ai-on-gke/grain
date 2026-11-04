@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
+	"github.com/ai-on-gke/grain/pkg/capability/localscripts"
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/ci"
@@ -310,6 +311,13 @@ func (g *CiGrantReservations) mintCIPass(ctx context.Context, req ci.SandboxRequ
 	for _, grant := range grants {
 		if err := policy.Permits(model.RecordedCapabilityGrant(grant), subject, configured); err != nil {
 			return nil, time.Time{}, err
+		}
+		// local-scripts was never granted to a CI job, whose steps are
+		// whatever the pushed branch says; what a declaration became on
+		// host-script is not either.
+		if from, ok := localscripts.MigratedFrom(model.RecordedCapabilityGrant(grant)); ok {
+			return nil, time.Time{}, &protocol.RefusedError{Grant: grant.Ref.String(),
+				Reason: fmt.Sprintf("%s is what %s became, and local scripts are never granted to a CI job: they run on the node host", model.RecordedCapabilityGrant(grant), from)}
 		}
 	}
 	at := g.now()

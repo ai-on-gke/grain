@@ -324,3 +324,39 @@ func TestMigrateToHostScriptFollowsTheDeclaration(t *testing.T) {
 		t.Fatalf("scripts %v, renames %v, skipped %v: want ops off host-script", got, renames, skipped)
 	}
 }
+
+// TestMigratedFromFindsWhatADeclarationBecame pins what the pass minters
+// refuse to scheduled runs and CI jobs, as local-scripts did: a recorded
+// grant of a script a declaration became, through any server it is
+// spelled with, and nothing else.
+func TestMigratedFromFindsWhatADeclarationBecame(t *testing.T) {
+	grant, err := HostScriptGrant(HostScriptServerID, "ops-deploy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	restore := model.SetRuntimeGrantExpansions(map[string][]string{CapabilityName("ops"): {grant}})
+	t.Cleanup(restore)
+
+	recorded := func(id, script string) string {
+		return model.RecordedCapabilityGrant(protocol.Grant{
+			Ref:  protocol.Ref{CapabilityID: id, Method: HostScriptMethod},
+			Args: map[string]any{"script": script},
+		})
+	}
+	if from, ok := MigratedFrom(recorded(HostScriptServerID, "ops-deploy")); !ok || from != "local-scripts:ops" {
+		t.Errorf("MigratedFrom(ops-deploy) = %q, %v: want local-scripts:ops", from, ok)
+	}
+	if from, ok := MigratedFrom(recorded("https://example.com/alias-of-host-script", "ops-deploy")); !ok || from != "local-scripts:ops" {
+		t.Errorf("MigratedFrom(ops-deploy through another server id) = %q, %v: want local-scripts:ops", from, ok)
+	}
+	if from, ok := MigratedFrom(recorded(HostScriptServerID, "operators-own")); ok {
+		t.Errorf("MigratedFrom(operators-own) = %q: want an operator's own script not taken for a declaration's", from)
+	}
+	if _, ok := MigratedFrom("local-scripts:ops"); ok {
+		t.Error("MigratedFrom(local-scripts:ops): a bare name is not a capability reference")
+	}
+	restore()
+	if _, ok := MigratedFrom(recorded(HostScriptServerID, "ops-deploy")); ok {
+		t.Error("MigratedFrom after the expansions are restored: want nothing")
+	}
+}

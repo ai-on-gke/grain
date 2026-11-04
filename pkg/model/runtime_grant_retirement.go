@@ -17,10 +17,13 @@ package model
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"maps"
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 // Some retirements cannot be a schema migration: what a retired name
@@ -71,6 +74,51 @@ func runtimeExpansionNames() []string {
 	runtimeExpansionsMu.RLock()
 	defer runtimeExpansionsMu.RUnlock()
 	return slices.Collect(maps.Keys(runtimeExpansions))
+}
+
+// RuntimeExpansionSource is the retired name whose runtime expansion
+// holds a grant of g's method with g's arguments, and true; "" and false
+// when none does or g is not a capability reference. The server is not
+// compared, so a grant naming the same script through an alias of its
+// server, or another server, is still found: a caller refusing what a
+// retired name became errs towards refusing.
+func RuntimeExpansionSource(g string) (string, bool) {
+	key, ok := runtimeExpansionKey(g)
+	if !ok {
+		return "", false
+	}
+	runtimeExpansionsMu.RLock()
+	defer runtimeExpansionsMu.RUnlock()
+	froms := slices.Sorted(maps.Keys(runtimeExpansions))
+	for _, from := range froms {
+		for _, to := range runtimeExpansions[from] {
+			if k, ok := runtimeExpansionKey(to); ok && k == key {
+				return from, true
+			}
+		}
+	}
+	return "", false
+}
+
+// runtimeExpansionKey is g's method and its arguments as JSON.
+func runtimeExpansionKey(g string) (string, bool) {
+	spec, err := CapabilityGrantSpec(g)
+	if err != nil {
+		return "", false
+	}
+	ref, err := protocol.ParseRef(spec.Capability)
+	if err != nil || ref.Method == "" {
+		return "", false
+	}
+	with := spec.With
+	if with == nil {
+		with = map[string]any{}
+	}
+	data, err := json.Marshal(with)
+	if err != nil {
+		return "", false
+	}
+	return ref.Method + "=" + string(data), true
 }
 
 // RewriteRetiredGrants rewrites every stored grant of a name in renames

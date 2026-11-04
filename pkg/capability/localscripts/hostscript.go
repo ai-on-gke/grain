@@ -373,6 +373,20 @@ func HostScriptGrant(id, script string) (string, error) {
 	})
 }
 
+// MigratedFrom is the local-scripts:<name> capability the recorded grant
+// g became at this start (MigrateToHostScript), and true; "" and false
+// when g is not one. local-scripts refused every run grain does not trust
+// -- a scheduled run (Untrusted) and any CI job -- and host-script has no
+// such rule, so the callers minting a pass refuse what a declaration
+// became to those runs themselves.
+func MigratedFrom(g string) (string, bool) {
+	from, ok := model.RuntimeExpansionSource(g)
+	if !ok || !strings.HasPrefix(from, CapabilityPrefix) {
+		return "", false
+	}
+	return from, true
+}
+
 // HostScriptGrants is every grant local-scripts:<h.Declaration> becomes
 // on the server id, one per script.
 func HostScriptGrants(id string, h HostScripts) ([]string, error) {
