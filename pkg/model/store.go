@@ -1485,6 +1485,25 @@ func (s *Store) PendingQuestionSummaries(ctx context.Context) (map[string]string
 	return out, err
 }
 
+// PendingAccessRequests is every open task parked on a request_access
+// call (Observation.PendingAccess) -- one query for a whole list, so a
+// row can say it is waiting on a grant rather than on an answer.
+func (s *Store) PendingAccessRequests(ctx context.Context) (map[string]bool, error) {
+	out := map[string]bool{}
+	err := each(ctx, s.db,
+		"SELECT `task_id` FROM `task_observation` WHERE `pending_access_request` IS NOT NULL "+
+			"AND `pending_access_request` <> '' AND `pending_question_comment_id` IS NOT NULL AND `closed_at` IS NULL", nil,
+		func(rows *sql.Rows) error {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			out[id] = true
+			return nil
+		})
+	return out, err
+}
+
 // RunNowRequested is every open task with an outstanding Run now request
 // (Observation.RunNowAt), with when it was asked for -- one query for a
 // whole list, as MergeQueueBlocked is, so a row can tell a task somebody

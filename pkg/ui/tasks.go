@@ -477,6 +477,10 @@ type Task struct {
 	// sentence for one asked without a summary; "" when the task is not
 	// parked on a question, or is parked on a stopped turn.
 	QuestionSummary string `json:"questionSummary,omitempty"`
+	// AwaitingAccess is an awaiting_reply task parked on an access
+	// request (request_access) rather than a question: what it wants is
+	// a grant, which its card offers, not a reply.
+	AwaitingAccess bool `json:"awaitingAccess,omitempty"`
 	// MergeQueueBlockedAt mirrors model.Observation's own field: non-nil
 	// once the merge queue has stopped driving this task's pull request
 	// -- an automatic fix that did not take, or checks that never

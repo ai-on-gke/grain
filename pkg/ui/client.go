@@ -738,6 +738,10 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	accessRequests, err := c.Store.PendingAccessRequests(ctx)
+	if err != nil {
+		return nil, err
+	}
 	// And once for goals, which name what a resting goal task waits for.
 	goalKinds, err := c.Store.TaskGoalKinds(ctx)
 	if err != nil {
@@ -766,6 +770,7 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 		task.TurnStopped = task.State == model.StateAwaitingReply && turnsStopped[t.ID]
 		if task.State == model.StateAwaitingReply {
 			task.QuestionSummary = questionSummaries[t.ID]
+			task.AwaitingAccess = accessRequests[t.ID]
 		}
 		var wait *model.GrantWait
 		if w, ok := grantWaits[t.ID]; ok {
@@ -1073,6 +1078,7 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 		}
 		task.TurnStopped = turnStopped(state, obs, comments)
 		task.QuestionSummary = questionSummary(state, obs, comments)
+		task.AwaitingAccess = obs != nil && obs.PendingAccess != nil
 	}
 	if err := c.attachPause(ctx, &task); err != nil {
 		return Task{}, err
@@ -1210,6 +1216,7 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskDetail, error) {
 	}
 	detail.Task.TurnStopped = turnStopped(state, obs, comments)
 	detail.Task.QuestionSummary = questionSummary(state, obs, comments)
+	detail.Task.AwaitingAccess = state == model.StateAwaitingReply && obs != nil && obs.PendingAccess != nil
 	detail.Goal = goal
 	if err := c.attachPause(ctx, &detail.Task); err != nil {
 		return TaskDetail{}, err

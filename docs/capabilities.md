@@ -394,6 +394,8 @@ The UI also checks each recorded grant against the server's current schema (spec
 
 `with:` arguments are recorded in plain text on the task and shown in its pane. **They must never carry secrets.** The form says so, and it does not offer a field that looks like one: a property named like a secret (`token`, `password`, `secret`, `api_key`, `credential`, `private_key`, ...), or one marked `writeOnly` or `format: password`. A method that *requires* such a field cannot be granted from the UI. Put the server's credentials in its `env`/`headers` through `$secret:<name>` instead (above).
 
+A run can ask for a grant it lacks with `request_access` ([agent-api.md](agent-api.md#asking-a-person-for-more-access-request_access)): the task parks on a card listing each requested grant as the chip this section renders, with its `dangerous` or person-only mark, and a person grants all or some of it, or denies it with a reason. Granting goes through `POST /api/tasks/{id}/capabilities`'s own path.
+
 Approval rules are unchanged. The owner's own edits in the UI apply directly, as before. A grant an agent proposes for a child task still needs approval unless the parent's grants cover it (spec §2.3.4).
 
 **Settings → Capabilities → Capability servers** lists, for each attached server's methods:
