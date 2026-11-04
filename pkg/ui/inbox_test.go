@@ -166,3 +166,47 @@ func TestGrainInboxMatchesActionableCategoriesWithinRepoGrants(t *testing.T) {
 		t.Errorf("a token held to acme/widgets asking for acme/gadgets got %d, want 403", rec.Code)
 	}
 }
+
+// A notice raised on a task without a repository (grain notify --task)
+// is that task's repository's: a token held to another never reads it.
+func TestGrainInboxHidesTaskNoticeOfAnUnreadRepository(t *testing.T) {
+	srv, client := testServer(t)
+	enableExternalAgentAPI(t, client.Store)
+	seedInbox(t, client)
+	ctx := context.Background()
+	if _, err := client.RaiseNotification(ctx, ui.RaiseNotificationRequest{
+		Subject: "task:402", Title: "gadgets needs a look", Severity: "warning", Task: "402",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	operator := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "ops@example.com", Source: model.SourceIAP})
+	issued, err := client.CreateExternalAgentToken(operator, ui.CreateExternalAgentTokenRequest{
+		Name: "widgets-reader", ScopeSet: "grain/external-read", Repos: []string{"acme/widgets"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	get := func(token string) string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/inbox?kind=notification", nil)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /api/inbox: %d %s", rec.Code, rec.Body.String())
+		}
+		var resp ui.InboxResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		return inboxKinds(resp.Items)
+	}
+	if got, want := get(""), "notification: notification:402"; got != want {
+		t.Errorf("operator saw %q, want %q", got, want)
+	}
+	if got, want := get(issued.Token), "notification:"; got != want {
+		t.Errorf("a token held to acme/widgets saw %q, want %q", got, want)
+	}
+}

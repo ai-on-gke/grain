@@ -249,10 +249,23 @@ func (c *Client) inbox(ctx context.Context, cache *taskListCache, readable func(
 		if n.Severity != model.NotificationWarning && n.Severity != model.NotificationCritical {
 			continue
 		}
-		if n.Repo != "" && !readable(n.Repo) {
+		repo := n.Repo
+		if repo == "" && n.TaskID != "" && !readable("") {
+			// A task's notice raised without a repository (grain notify)
+			// is that task's repository's, and a token held to others
+			// must not read it.
+			t, err := c.Store.GetTask(ctx, n.TaskID)
+			if err != nil {
+				return nil, err
+			}
+			if t == nil || !readable(taskRepo(t)) {
+				continue
+			}
+		}
+		if repo != "" && !readable(repo) {
 			continue
 		}
-		if n.Repo == "" && !readable("") && n.TaskID == "" {
+		if repo == "" && !readable("") && n.TaskID == "" {
 			// A deployment-wide notice is for whoever reads the whole
 			// deployment, not a token held to some repositories.
 			continue
