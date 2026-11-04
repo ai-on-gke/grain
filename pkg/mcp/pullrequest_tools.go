@@ -129,10 +129,45 @@ type PullRequestScope struct {
 	// open pull request yet. Daemon-pinned like Owner, Repo and Branch;
 	// no tool argument can set or move it.
 	PullRequestNumber int
+	// UpstreamOwner and UpstreamRepo, when non-empty and distinct from
+	// Owner/Repo, name the upstream repository that pull requests for
+	// Owner/Repo are opened and tracked against (model.RepoConfig.UpstreamRepo).
+	// Branch heads are still read from Owner/Repo (the fork where the
+	// branch is pushed), while pull request lookups, base branch reads and
+	// review comments target UpstreamOwner/UpstreamRepo with head
+	// "<Owner>:<Branch>".
+	UpstreamOwner string
+	UpstreamRepo  string
 }
 
 func (s PullRequestScope) complete() bool {
 	return s.Owner != "" && s.Repo != "" && (s.Branch != "" || s.PullRequestNumber > 0)
+}
+
+func (s PullRequestScope) hasUpstream() bool {
+	return s.UpstreamOwner != "" && s.UpstreamRepo != "" &&
+		(!strings.EqualFold(s.UpstreamOwner, s.Owner) || !strings.EqualFold(s.UpstreamRepo, s.Repo))
+}
+
+func (s PullRequestScope) prOwner() string {
+	if s.hasUpstream() {
+		return s.UpstreamOwner
+	}
+	return s.Owner
+}
+
+func (s PullRequestScope) prRepo() string {
+	if s.hasUpstream() {
+		return s.UpstreamRepo
+	}
+	return s.Repo
+}
+
+func (s PullRequestScope) prHead() string {
+	if s.hasUpstream() && s.Branch != "" && !strings.Contains(s.Branch, ":") {
+		return s.Owner + ":" + s.Branch
+	}
+	return s.Branch
 }
 
 // PullRequestReader is the read-only slice of github.Client this tool
@@ -390,7 +425,8 @@ func pullRequestStatus(ctx context.Context, client PullRequestReader, grainCI Gr
 	var b strings.Builder
 	fmt.Fprintf(&b, "Branch %s is at %s (%s).\n", scope.Branch, shortSHA(head.SHA), firstLine(head.Message))
 
-	pr, err := client.FindOpenPullRequestForBranch(scope.Owner, scope.Repo, scope.Branch)
+	prOwner, prRepo := scope.prOwner(), scope.prRepo()
+	pr, err := client.FindOpenPullRequestForBranch(prOwner, prRepo, scope.prHead())
 	if err != nil {
 		return "", fmt.Errorf("looking for an open pull request for %s: %w", scope.Branch, err)
 	}
@@ -398,7 +434,7 @@ func pullRequestStatus(ctx context.Context, client PullRequestReader, grainCI Gr
 		b.WriteString("No pull request is open for it yet -- grain opens one when this run " +
 			"finishes. Any checks below came from your push directly.\n")
 		if scope.PullRequestNumber > 0 {
-			detail, err := client.GetPullRequest(scope.Owner, scope.Repo, scope.PullRequestNumber)
+			detail, err := client.GetPullRequest(prOwner, prRepo, scope.PullRequestNumber)
 			if err == nil {
 				fmt.Fprintf(&b, "Associated pull request #%d (%s) is %s%s.\n",
 					detail.Number, detail.HTMLURL, detail.State, mergeableClause(detail))
@@ -406,7 +442,7 @@ func pullRequestStatus(ctx context.Context, client PullRequestReader, grainCI Gr
 			}
 		}
 	} else {
-		detail, err := client.GetPullRequest(scope.Owner, scope.Repo, pr.Number)
+		detail, err := client.GetPullRequest(prOwner, prRepo, pr.Number)
 		if err != nil {
 			return "", fmt.Errorf("reading pull request #%d: %w", pr.Number, err)
 		}
@@ -476,7 +512,7 @@ func pullRequestStatus(ctx context.Context, client PullRequestReader, grainCI Gr
 func externalPullRequestStatus(ctx context.Context, client PullRequestReader, grainCI GrainCIReader,
 	scope PullRequestScope) (string, error) {
 
-	detail, err := client.GetPullRequest(scope.Owner, scope.Repo, scope.PullRequestNumber)
+	detail, err := client.GetPullRequest(scope.prOwner(), scope.prRepo(), scope.PullRequestNumber)
 	if err != nil {
 		return "", fmt.Errorf("reading pull request #%d: %w", scope.PullRequestNumber, err)
 	}
@@ -535,7 +571,20 @@ func externalPullRequestStatus(ctx context.Context, client PullRequestReader, gr
 // truth is "I am not allowed to look" would send it off to merge-ready
 // confidence on a build it never saw.
 func checkRunsForCommit(client PullRequestReader, scope PullRequestScope, sha string) ([]github.CheckRun, error) {
-	checks, err := client.ListCheckRuns(scope.Owner, scope.Repo, sha)
+	checks, err := checkRunsForRepoCommit(client, scope.prOwner(), scope.prRepo(), sha)
+	if err != nil {
+		return nil, err
+	}
+	if len(checks) == 0 && scope.hasUpstream() {
+		if forkChecks, forkErr := checkRunsForRepoCommit(client, scope.Owner, scope.Repo, sha); forkErr == nil && len(forkChecks) > 0 {
+			return forkChecks, nil
+		}
+	}
+	return checks, nil
+}
+
+func checkRunsForRepoCommit(client PullRequestReader, owner, repo, sha string) ([]github.CheckRun, error) {
+	checks, err := client.ListCheckRuns(owner, repo, sha)
 	if err == nil {
 		return checks, nil
 	}
@@ -543,7 +592,7 @@ func checkRunsForCommit(client PullRequestReader, scope PullRequestScope, sha st
 		return nil, fmt.Errorf("reading check runs for %s: %w", shortSHA(sha), err)
 	}
 
-	runs, fallbackErr := client.ListWorkflowRuns(scope.Owner, scope.Repo, sha)
+	runs, fallbackErr := client.ListWorkflowRuns(owner, repo, sha)
 	if fallbackErr == nil {
 		return runs, nil
 	}

@@ -363,6 +363,17 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 			checkoutDir, branch, branch,
 		)
 	}
+	if task.Target != nil && history.UpstreamRepo != (model.RepoRef{}) && !history.UpstreamRepo.Same(*task.Target) {
+		prompt += fmt.Sprintf(
+			"\n\n%s is a fork push repository for upstream %s: push your branch to `origin` (%s) "+
+				"and grain will open and track the cross-repository pull request (%s:%s) against "+
+				"upstream %s automatically (or when you run `grain pr open`). An `upstream` git "+
+				"remote pointing at %s is already configured in your checkout for fetching fresh "+
+				"upstream refs; do not try to run `gh pr create` across repositories yourself.",
+			task.Target, history.UpstreamRepo, task.Target,
+			task.Target.Owner, branch, history.UpstreamRepo, history.UpstreamRepo,
+		)
+	}
 	prompt += sandboxDirsSection(checkoutDir, sandboxRoot)
 	prompt += sandboxToolingSection(task.Target != nil, grainci.Granted(task.Grants))
 	prompt += grainCLISection(task)
@@ -2304,6 +2315,10 @@ type History struct {
 	// (model.RepoConfig.PairedBranches), or nil for a repository that
 	// pairs fewer than two. See pairedBranchesSection.
 	PairedBranches []string
+	// UpstreamRepo is the upstream repository pull requests for task.Target
+	// open against when task.Target is a fork (model.RepoConfig.UpstreamRepo),
+	// or the zero RepoRef when pull requests open on task.Target itself.
+	UpstreamRepo model.RepoRef
 	// Resumed is the tasks the previous attempt parked this one on
 	// through wait_for_task, as they stand now -- set only when that
 	// attempt ended model.ParkedOutcome. See parkedResumeSection.
@@ -2962,6 +2977,13 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	if err != nil {
 		return unprepared(err)
 	}
+	upstreamRepo, hasUpstreamRepo, err := resolveUpstreamRepo(ctx, store, task)
+	if err != nil {
+		return unprepared(err)
+	}
+	if !hasUpstreamRepo {
+		upstreamRepo = model.RepoRef{}
+	}
 	// Whether GitHub's check runs are a source of verdicts in this run's
 	// repository at all, read here for the same reason the two above are:
 	// it is a fact about the repository, settled when the run is
@@ -3017,7 +3039,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 				defer srcWG.Done()
 				placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &srcOut, cfg.sandboxReused)
 			}()
-			prepared, checkoutErr = prepareCheckoutWithReuse(ctx, tools, cfg.GitRemoteBase, cloneURL, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
+			prepared, checkoutErr = prepareCheckoutWithUpstream(ctx, tools, cfg.GitRemoteBase, cloneURL, upstreamRepo, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
 			srcWG.Wait()
 			if checkoutErr == nil {
 				prepared.GrainSource = srcOut.GrainSource
@@ -3026,7 +3048,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 				prepared.GrainSourceCommits = srcOut.GrainSourceCommits
 			}
 		} else {
-			prepared, checkoutErr = prepareCheckoutWithReuse(ctx, tools, cfg.GitRemoteBase, cloneURL, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
+			prepared, checkoutErr = prepareCheckoutWithUpstream(ctx, tools, cfg.GitRemoteBase, cloneURL, upstreamRepo, task, setupCommand, cfg.sandboxReused, notes, cfg.settingsRepo())
 			if checkoutErr == nil {
 				placeGrainSource(ctx, task, cfg.GrainSourceDir, sandboxRoot, placer, tools, &prepared, cfg.sandboxReused)
 			}
@@ -3043,6 +3065,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		Attempts:         previous,
 		Comments:         comments,
 		Repair:           repair,
+		UpstreamRepo:     upstreamRepo,
 		SandboxReused:    cfg.sandboxReused,
 		SandboxReclaimed: cfg.sandboxReclaimed,
 	}
@@ -3439,6 +3462,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 			// registered beside grain-sandbox (§5.2.4).
 			CapabilityMCPServers: capabilityMCPServers,
 			Repo:                 repo, Branch: task.BranchName(),
+			UpstreamRepo: upstreamRepo.String(),
 			// The branch that branch merges into, which is what
 			// base_branch_status reads CI for. Passed as the task wrote
 			// it, empty included: an empty Base is a task that merges

@@ -488,6 +488,11 @@ type RepoDefaults struct {
 	// its template names one (model.RepoConfig.DefaultHostd), "" for
 	// the default hostd. Set through SetRepoSettings.
 	DefaultHostd string `json:"defaultHostd"`
+	// UpstreamRepo is the upstream owner/name repository that pull
+	// requests are opened and tracked against when tasks target this fork
+	// repository (model.RepoConfig.UpstreamRepo), "" when pull requests
+	// open against this repository itself.
+	UpstreamRepo string `json:"upstreamRepo"`
 }
 
 // RepoDeclarationsStatus is what grain has made of one repository's
@@ -619,6 +624,11 @@ type SetRepoSettingsRequest struct {
 	IssueImportLabel           *string `json:"issueImportLabel,omitempty"`
 	IssueImportApproved        *bool   `json:"issueImportApproved,omitempty"`
 	IssueImportIntervalSeconds *int    `json:"issueImportIntervalSeconds,omitempty"`
+	// UpstreamRepo sets model.RepoConfig.UpstreamRepo: the upstream
+	// owner/name repository that pull requests for this fork repository
+	// are opened and tracked against, or "" to open pull requests on this
+	// repository itself.
+	UpstreamRepo *string `json:"upstreamRepo,omitempty"`
 }
 
 // SetRepoWatchDefaultBranchRequest is PUT /api/repos/{owner}/{name}/
@@ -733,6 +743,7 @@ func (c *Client) repoDefaults(ctx context.Context, repo model.RepoRef) (RepoDefa
 		out.BaseRepairBypassesHumanGates = stored.BaseRepairBypassesHumanGates
 		out.UnfixableChecks = stored.UnfixableChecks
 		out.DefaultHostd = stored.DefaultHostd
+		out.UpstreamRepo = stored.UpstreamRepo
 		out.PortBranches = stored.PortBranches
 		out.DeclaredPortBranches = stored.DeclaredPortBranches
 		out.PairedBranches = stored.PairedBranches()
@@ -1105,6 +1116,19 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 			return RepoDefaults{}, err
 		}
 	}
+	var upstreamRepo string
+	if req.UpstreamRepo != nil {
+		raw := strings.TrimSpace(*req.UpstreamRepo)
+		if raw != "" {
+			up, err := model.ParseRepo(raw)
+			if err != nil {
+				return RepoDefaults{}, validationErrorf("upstreamRepo: %v", err)
+			}
+			if !up.Same(parsed) {
+				upstreamRepo = up.String()
+			}
+		}
+	}
 	if req.IssueImportIntervalSeconds != nil {
 		if n := *req.IssueImportIntervalSeconds; n != 0 && (n < 0 || time.Duration(n)*time.Second < model.MinIssueImportInterval) {
 			return RepoDefaults{}, validationErrorf("issueImportIntervalSeconds: must be 0 for the default or at least %d",
@@ -1177,6 +1201,9 @@ func (c *Client) SetRepoSettings(ctx context.Context, repo string, req SetRepoSe
 		}
 		if req.SetupCommand != nil {
 			rc.SetupCommand = strings.TrimSpace(*req.SetupCommand)
+		}
+		if req.UpstreamRepo != nil {
+			rc.UpstreamRepo = upstreamRepo
 		}
 	})
 }

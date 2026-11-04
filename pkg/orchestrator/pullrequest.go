@@ -94,6 +94,44 @@ type PullRequestStatus struct {
 // answered the same way salvagePushedBranch answers it: nobody wants a
 // closed task's work turned into a pull request, and the run this call
 // came from is about to be cancelled for the same reason.
+// taskPullRequestTarget returns the repository where task's pull request
+// lives (the configured upstream repository when set, or task.Target), the
+// head ref to pass to GitHub's pull-request and compare endpoints
+// ("<fork-owner>:<branch>" when cross-repo, or "<branch>"), and whether the
+// pull request crosses repositories.
+func taskPullRequestTarget(ctx context.Context, store *model.Store, task model.Task) (model.RepoRef, string, bool) {
+	if task.Target == nil {
+		return model.RepoRef{}, task.BranchName(), false
+	}
+	branch := task.BranchName()
+	if store == nil {
+		return *task.Target, branch, false
+	}
+	rc, err := store.GetRepoConfig(ctx, *task.Target)
+	if err != nil || rc == nil {
+		return *task.Target, branch, false
+	}
+	prRepo, head, cross, err := rc.PullRequestHead(*task.Target, branch)
+	if err != nil {
+		return *task.Target, branch, false
+	}
+	return prRepo, head, cross
+}
+
+func resolveUpstreamRepo(ctx context.Context, store *model.Store, task model.Task) (model.RepoRef, bool, error) {
+	if store == nil || task.Target == nil || model.IsConfigRepo(*task.Target) {
+		return model.RepoRef{}, false, nil
+	}
+	rc, err := store.GetRepoConfig(ctx, *task.Target)
+	if err != nil {
+		return model.RepoRef{}, false, fmt.Errorf("orchestrator: reading %s's upstream repository: %w", task.Target, err)
+	}
+	if rc == nil {
+		return model.RepoRef{}, false, nil
+	}
+	return rc.PullRequestRepo(*task.Target)
+}
+
 func OpenPullRequestForTask(ctx context.Context, store *model.Store, client github.Client,
 	task model.Task) (PullRequestStatus, error) {
 
@@ -101,9 +139,10 @@ func OpenPullRequestForTask(ctx context.Context, store *model.Store, client gith
 		return PullRequestStatus{}, fmt.Errorf(
 			"orchestrator: task %s has no repo attached, so there is no branch to open a pull request for", task.ID)
 	}
+	prRepo, _, _ := taskPullRequestTarget(ctx, store, task)
 	if rc, ok := client.(*github.RESTClient); ok {
 		if src, ok := rc.Tokens.(github.GitOnlySource); ok {
-			if reason := src.GitOnly(task.Target.StoredOwner(), task.Target.Name); reason != "" {
+			if reason := src.GitOnly(prRepo.StoredOwner(), prRepo.Name); reason != "" {
 				return PullRequestStatus{}, fmt.Errorf("orchestrator: %s", reason)
 			}
 		}
@@ -173,7 +212,7 @@ func OpenPullRequestForTask(ctx context.Context, store *model.Store, client gith
 				landedWork.Base, task.Target, shortSHA(landedWork.MergedSHA), task.ID),
 		}, nil
 	}
-	ref := model.PullRequestRef{Repo: *task.Target, Number: pr.Number}
+	ref := model.PullRequestRef{Repo: prRepo, Number: pr.Number}
 	// Linked now rather than only at the finish: a pull request the store
 	// does not know about is one a human reading the task while the run is
 	// still going cannot see. The link is written the same idempotent way
@@ -194,7 +233,7 @@ func OpenPullRequestForTask(ctx context.Context, store *model.Store, client gith
 			return status, err
 		}
 	}
-	detail, err := client.GetPullRequest(task.Target.Owner, task.Target.Name, pr.Number)
+	detail, err := client.GetPullRequest(prRepo.Owner, prRepo.Name, pr.Number)
 	if err != nil {
 		status.ChecksError = fmt.Sprintf("reading %s: %v", ref, err)
 		return status, nil

@@ -269,6 +269,44 @@ func TestAPendingTagOnAGitHubActionsRepoIsApprovedFromTheInbox(t *testing.T) {
 	if open, _ := store.OpenNotification(ctx, next); open != nil {
 		t.Errorf("%s still open after v1.3.0 was tagged", next)
 	}
+
+	// 5. Rolling back a promoted release on a GitHub Actions repo is
+	// person-only too, and dispatches promote-release.yml with
+	// decision=rollback and a signed record bound to v1.3.0's commit.
+	for _, p := range []model.Principal{
+		{Kind: model.PrincipalAgent, ID: "run-7"},
+		{Kind: model.PrincipalAutomation, ID: "schedule:release-train"},
+		{Kind: model.PrincipalService, ID: "steward"},
+	} {
+		if _, err := uic.RollbackRelease(ui.WithPrincipal(ctx, p), repo.String(), "v1.3.0", ui.ReleaseRollback{To: "v1.2.0"}); err == nil ||
+			!strings.Contains(err.Error(), "only a person may roll back") {
+			t.Errorf("%s rolling back: %v, want refused", model.PrincipalString(p), err)
+		}
+	}
+	rb, err := uic.RollbackRelease(ui.WithPrincipal(ctx, person), repo.String(), "v1.3.0",
+		ui.ReleaseRollback{To: "v1.2.0", Reason: "bad migration"})
+	if err != nil {
+		t.Fatalf("a person's rollback: %v", err)
+	}
+	if rb.Dispatched == nil || rb.Dispatched.Commit != strings.Repeat("d", 40) || rb.Dispatched.By != person.ID {
+		t.Errorf("rollback decision = %+v, want a dispatch for v1.3.0 by %s", rb, person.ID)
+	}
+	d = forge.dispatched()
+	if len(d) != 2 {
+		t.Fatalf("dispatched %d times, want 2 (approve + rollback)", len(d))
+	}
+	rbInputs, _ := d[1]["inputs"].(map[string]any)
+	if d[1]["ref"] != "main" || rbInputs["version"] != "v1.3.0" || rbInputs["decision"] != "rollback" ||
+		rbInputs["rollback_to"] != "v1.2.0" || rbInputs["reason"] != "bad migration" {
+		t.Errorf("rollback dispatch = %v, want v1.3.0 rollback on main", d[1])
+	}
+	rbRecord := verifyDispatchedRecord(t, uic, rbInputs)
+	for _, want := range []string{"repo: example/widgets\n", "version: v1.3.0\n", "decision: rollback\n",
+		"commit: " + strings.Repeat("d", 40) + "\n", "approver: alice@example.com\n", "rollback_to: v1.2.0\n"} {
+		if !strings.Contains(rbRecord, want) {
+			t.Errorf("the signed rollback record does not say %q:\n%s", strings.TrimSpace(want), rbRecord)
+		}
+	}
 }
 
 // verifyDispatchedRecord checks the dispatch's record against the

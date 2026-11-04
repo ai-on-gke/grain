@@ -410,7 +410,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	}
 	staleBranch := false
 	if hasNothingNeeded && !inPlace {
-		staleBranch, err = branchUnmovedSince(client, task, preRunBranchSHA)
+		staleBranch, err = branchUnmovedSinceWithStore(ctx, store, client, task, preRunBranchSHA)
 		if err != nil {
 			return err
 		}
@@ -735,6 +735,10 @@ func finishNothingNeeded(ctx context.Context, store *model.Store, task model.Tas
 // finds that pull request again and leaves the task waiting on it, as it
 // did before nothing_needed could outrank a branch at all.
 func branchUnmovedSince(client github.Client, task model.Task, sha string) (bool, error) {
+	return branchUnmovedSinceWithStore(context.Background(), nil, client, task, sha)
+}
+
+func branchUnmovedSinceWithStore(ctx context.Context, store *model.Store, client github.Client, task model.Task, sha string) (bool, error) {
 	if sha == "" || client == nil || task.Target == nil {
 		return false, nil
 	}
@@ -745,7 +749,8 @@ func branchUnmovedSince(client github.Client, task model.Task, sha string) (bool
 	if head == nil || head.SHA != sha {
 		return false, nil
 	}
-	pr, err := client.FindOpenPullRequestForBranch(task.Target.Owner, task.Target.Name, task.BranchName())
+	prRepo, headRef, _ := taskPullRequestTarget(ctx, store, task)
+	pr, err := client.FindOpenPullRequestForBranch(prRepo.Owner, prRepo.Name, headRef)
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: looking for a pull request open off %s's branch: %w", task.ID, err)
 	}
@@ -2993,9 +2998,10 @@ func finishWithPullRequest(ctx context.Context, store *model.Store, client githu
 	if pr.Number == 0 {
 		return nil
 	}
+	prRepo, _, _ := taskPullRequestTarget(ctx, store, task)
 	if landed.partial() {
 		if err := noteOnTask(ctx, store, task.ID, fmt.Sprintf("Opened %s/%s#%d. %s",
-			task.Target.Owner, task.Target.Name, pr.Number, landed.partialSentence()), now); err != nil {
+			prRepo.Owner, prRepo.Name, pr.Number, landed.partialSentence()), now); err != nil {
 			return err
 		}
 	}
@@ -3005,7 +3011,7 @@ func finishWithPullRequest(ctx context.Context, store *model.Store, client githu
 	// open_pull_request has already recorded this very link, and both
 	// paths writing it the same idempotent way is what keeps the second
 	// one a no-op rather than a duplicate.
-	ref := model.PullRequestRef{Repo: *task.Target, Number: pr.Number}
+	ref := model.PullRequestRef{Repo: prRepo, Number: pr.Number}
 	if err := linkPullRequest(ctx, store, task.ID, ref); err != nil {
 		return err
 	}
@@ -3211,11 +3217,12 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 	task model.Task, now time.Time) (github.PullRequest, landedWork, error) {
 
 	branch := task.BranchName()
-	if existing, err := client.FindOpenPullRequestForBranch(task.Target.Owner, task.Target.Name, branch); err != nil {
+	prRepo, headRef, crossRepo := taskPullRequestTarget(ctx, store, task)
+	if existing, err := client.FindOpenPullRequestForBranch(prRepo.Owner, prRepo.Name, headRef); err != nil {
 		return github.PullRequest{}, landedWork{}, err
 	} else if existing != nil {
 		refreshPullRequest(ctx, store, client, task, existing.Number)
-		labelOrigin(client, task, existing.Number)
+		labelOriginOn(ctx, store, client, task, existing.Number)
 		return *existing, landedWork{}, nil
 	}
 
@@ -3223,7 +3230,7 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 	if err != nil {
 		return github.PullRequest{}, landedWork{}, err
 	}
-	if base == branch {
+	if !crossRepo && base == branch {
 		return seedEmptyRepoBase(ctx, store, client, task, branch, now)
 	}
 	if gone != "" {
@@ -3237,12 +3244,12 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 	// done by hand leaves the branch "ahead" by commit for ever, and that
 	// is how gke-labs/granule task 147 got a second pull request for
 	// work its first had already landed.
-	landed := landedForTask(client, task, base, nil)
+	landed := landedForTaskWithStore(ctx, store, client, task, base, nil)
 	if landed.all() {
 		return github.PullRequest{}, landed, &alreadyLandedError{Work: landed}
 	}
 
-	if task.Target != nil {
+	if !crossRepo && task.Target != nil {
 		if behind, err := branchIsBehind(client, *task.Target, base, branch); err == nil && behind {
 			_, mergeErr := client.MergeBranch(task.Target.Owner, task.Target.Name, branch, base, fmt.Sprintf("Merge %s into %s", base, branch))
 			if mergeErr != nil {
@@ -3270,7 +3277,7 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 	// that could not be read (known false) is not an empty branch: the
 	// pull request is attempted anyway, and the 422 below is the second
 	// line of defence.
-	commits, known := branchCommits(client, *task.Target, base, branch)
+	commits, known := branchCommits(client, prRepo, base, headRef)
 	if known && len(commits) == 0 {
 		if store != nil {
 			if closed, err := taskClosed(ctx, store, task.ID); err == nil && closed {
@@ -3296,7 +3303,7 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 	if landed.partial() {
 		body = landed.partialSentence() + "\n\n" + body
 	}
-	pr, err := client.CreatePullRequest(task.Target.Owner, task.Target.Name, branch, base, title, body)
+	pr, err := client.CreatePullRequest(prRepo.Owner, prRepo.Name, headRef, base, title, body)
 	if err != nil && github.IsNoCommitsBetween(err) {
 		// The same condition, learnt from GitHub instead of from the
 		// compare: the read above failed, or the branch moved between the
@@ -3308,7 +3315,7 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 	if err != nil {
 		return pr, landedWork{}, err
 	}
-	labelOrigin(client, task, pr.Number)
+	labelOriginOn(ctx, store, client, task, pr.Number)
 	return pr, landed, nil
 }
 
@@ -3422,8 +3429,9 @@ func branchIsBehind(client github.Client, repo model.RepoRef, base, head string)
 // branch either, so that read fails and this reports the failure instead
 // of retargeting a base that is perfectly fine.
 func pullRequestBase(ctx context.Context, store *model.Store, client github.Client, task model.Task) (base, retargetedFrom string, err error) {
+	prRepo, _, _ := taskPullRequestTarget(ctx, store, task)
 	if task.Base != "" {
-		exists, err := client.BranchExists(task.Target.Owner, task.Target.Name, task.Base)
+		exists, err := client.BranchExists(prRepo.Owner, prRepo.Name, task.Base)
 		if err != nil {
 			return "", "", fmt.Errorf("orchestrator: checking %s's base branch %q: %w", task.ID, task.Base, err)
 		}
@@ -3432,13 +3440,13 @@ func pullRequestBase(ctx context.Context, store *model.Store, client github.Clie
 		}
 		if store != nil {
 			if targetBase, _, merged, err := store.MergedUpstreamTaskBase(ctx, *task.Target, task.Base); err == nil && merged && targetBase != "" && targetBase != task.Base && targetBase != task.BranchName() {
-				if targetExists, err := client.BranchExists(task.Target.Owner, task.Target.Name, targetBase); err == nil && targetExists {
+				if targetExists, err := client.BranchExists(prRepo.Owner, prRepo.Name, targetBase); err == nil && targetExists {
 					return targetBase, task.Base, nil
 				}
 			}
 		}
 	}
-	def, err := client.DefaultBranch(task.Target.Owner, task.Target.Name)
+	def, err := client.DefaultBranch(prRepo.Owner, prRepo.Name)
 	if err != nil {
 		return "", "", err
 	}
@@ -3587,6 +3595,7 @@ func retargetTaskBase(ctx context.Context, store *model.Store, client github.Cli
 	if task.Target == nil || task.Base == "" {
 		return task, false, nil
 	}
+	prRepo, headRef, _ := taskPullRequestTarget(ctx, store, task)
 	oldBase := task.Base
 	var targetBase string
 	var merged bool
@@ -3594,12 +3603,12 @@ func retargetTaskBase(ctx context.Context, store *model.Store, client github.Cli
 		targetBase, _, merged, _ = store.MergedUpstreamTaskBase(ctx, *task.Target, oldBase)
 	}
 	if prBaseRef == "" && client != nil {
-		if pr := model.TaskPullRequest(task); pr != nil && pr.Repo.Same(*task.Target) {
+		if pr := model.TaskPullRequest(task); pr != nil && (pr.Repo.Same(*task.Target) || pr.Repo.Same(prRepo)) {
 			if detail, err := client.GetPullRequest(pr.Repo.Owner, pr.Repo.Name, pr.Number); err == nil {
 				prBaseRef = detail.BaseRef
 			}
-		} else if existing, err := client.FindOpenPullRequestForBranch(task.Target.Owner, task.Target.Name, task.BranchName()); err == nil && existing != nil {
-			if detail, err := client.GetPullRequest(task.Target.Owner, task.Target.Name, existing.Number); err == nil {
+		} else if existing, err := client.FindOpenPullRequestForBranch(prRepo.Owner, prRepo.Name, headRef); err == nil && existing != nil {
+			if detail, err := client.GetPullRequest(prRepo.Owner, prRepo.Name, existing.Number); err == nil {
 				prBaseRef = detail.BaseRef
 			}
 		}
@@ -3609,12 +3618,12 @@ func retargetTaskBase(ctx context.Context, store *model.Store, client github.Cli
 		if prBaseRef != "" && prBaseRef != oldBase {
 			newBase = prBaseRef
 		} else if newBase == "" && client != nil {
-			if def, err := client.DefaultBranch(task.Target.Owner, task.Target.Name); err == nil && def != "" && def != task.BranchName() {
+			if def, err := client.DefaultBranch(prRepo.Owner, prRepo.Name); err == nil && def != "" && def != task.BranchName() {
 				newBase = def
 			}
 		}
 	} else if prBaseRef != "" && prBaseRef != oldBase && client != nil {
-		if exists, err := client.BranchExists(task.Target.Owner, task.Target.Name, oldBase); err == nil && !exists {
+		if exists, err := client.BranchExists(prRepo.Owner, prRepo.Name, oldBase); err == nil && !exists {
 			merged = true
 			newBase = prBaseRef
 		}
