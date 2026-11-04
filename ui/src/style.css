@@ -590,11 +590,13 @@ samp,
    height (--header-control-size) and one vertical centreline. */
 .sidebar-header {
   height: 77px;
+  padding-bottom: 1px;
   box-sizing: border-box;
   flex: none;
 }
 :root[data-phone="true"] .sidebar-header {
   height: 56px;
+  padding-bottom: 0;
 }
 /* The phone layout is a touch layout whatever the pointer reports, so
    its toolbar controls get the same 40px floor as (pointer: coarse). */

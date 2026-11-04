@@ -200,7 +200,11 @@ test.describe("Responsive Navigation Matrix & Shell Behavior", () => {
     await expect(page).toHaveURL(new RegExp(`/repos/${repoName}/releases$`));
     await assertNoHorizontalOverflow(page);
 
-    // 7. CI
+    // 7. CI (re-enabled in Customize sidebar storage since CI is hidden by default)
+    await page.evaluate(() =>
+      localStorage.setItem("grain.sidebar.hidden", "[]"),
+    );
+    await page.reload();
     await page.getByRole("button", { name: /^CI/ }).click();
     await expect(page).toHaveURL(/\/ci$/);
     await expect(page.locator(".ci-panel")).toBeVisible();
@@ -940,6 +944,9 @@ test("A task pane wraps an unbroken usage-limit pause reason", async ({
 test("A phone's drawer closes when an entry is chosen from the keyboard", async ({
   page,
 }) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("grain.sidebar.hidden", "[]"),
+  );
   await page.setViewportSize(PHONE_PORTRAIT);
   await page.goto("/");
   await expect(page.locator(".task-row").first()).toBeVisible();
@@ -1573,6 +1580,9 @@ test("A grain version's release notes open on screen and say they are open", asy
 test("Every page the rail opens has one main landmark holding its heading", async ({
   page,
 }) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("grain.sidebar.hidden", "[]"),
+  );
   const pages = [
     { entry: /^Boards/, url: /\/boards$/, heading: "Boards" },
     { entry: /^Sessions/, url: /\/sessions$/, heading: "Sessions" },

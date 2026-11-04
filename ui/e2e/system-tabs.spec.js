@@ -42,6 +42,9 @@ test("system sandboxes and caches tabs walkthrough", async ({ page }) => {
   test.setTimeout(90_000);
 
   // 1. Navigate to dashboard and initiate a background CI job to populate active sandbox metrics
+  await page.addInitScript(() =>
+    localStorage.setItem("grain.sidebar.hidden", "[]"),
+  );
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
 
