@@ -2281,6 +2281,7 @@ func (c *RESTClient) CreatePullRequest(owner, repo, head, base, title, body stri
 	if err := c.gitOnly(owner, repo); err != nil {
 		return PullRequest{}, err
 	}
+	body = c.signPullRequestBody(owner, repo, body)
 	payload, _ := json.Marshal(map[string]string{
 		"title": title, "head": head, "base": base, "body": body,
 	})
@@ -2315,6 +2316,7 @@ func (c *RESTClient) CreatePullRequest(owner, repo, head, base, title, body stri
 // then describes the commits that existed then, and the run's later
 // commits are the ones a reviewer needs to read about.
 func (c *RESTClient) UpdatePullRequestBody(owner, repo string, number int, body string) error {
+	body = c.signPullRequestBody(owner, repo, body)
 	payload, _ := json.Marshal(map[string]string{"body": body})
 	resp, err := c.request(
 		"PATCH", fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, number),
@@ -4233,6 +4235,7 @@ func (c *RESTClient) ListComments(owner, repo string, number int) ([]Comment, er
 // trusted reply arrived after this," since a comment's own id is the one
 // thing that can't be spoofed by editing an earlier comment's body.
 func (c *RESTClient) CreateComment(owner, repo string, number int, body string) (int, error) {
+	body = c.signCommentBody(owner, repo, body)
 	payload, _ := json.Marshal(map[string]string{"body": body})
 	resp, err := c.request(
 		"POST", fmt.Sprintf("/repos/%s/%s/issues/%d/comments", owner, repo, number),
@@ -4259,6 +4262,7 @@ func (c *RESTClient) CreateComment(owner, repo string, number int, body string) 
 // files the reply under the thread's root either way. Returns the new
 // comment's id, as CreateComment does.
 func (c *RESTClient) ReplyToReviewComment(owner, repo string, pullNumber, commentID int, body string) (int, error) {
+	body = c.signCommentBody(owner, repo, body)
 	payload, _ := json.Marshal(map[string]string{"body": body})
 	resp, err := c.request(
 		"POST", fmt.Sprintf("/repos/%s/%s/pulls/%d/comments/%d/replies", owner, repo, pullNumber, commentID),
@@ -4450,6 +4454,7 @@ func (c *RESTClient) ResolveReviewThread(owner, repo, threadID string) error {
 // tree's origin (orchestrator.reconcileWorkTrees) rather than posting a
 // new one each time the tree moves.
 func (c *RESTClient) UpdateComment(owner, repo string, commentID int64, body string) error {
+	body = c.signCommentBody(owner, repo, body)
 	payload, _ := json.Marshal(map[string]string{"body": body})
 	resp, err := c.request(
 		"PATCH", fmt.Sprintf("/repos/%s/%s/issues/comments/%d", owner, repo, commentID),
@@ -4524,6 +4529,7 @@ func (c *RESTClient) MergePullRequestWithMessage(owner, repo string, number int,
 // review's id, kept for the same reason CreateComment returns one: cheap,
 // and the pattern every other creation call here already follows.
 func (c *RESTClient) CreateReview(owner, repo string, number int, body string, comments []NewReviewComment) (int, error) {
+	body = c.signCommentBody(owner, repo, body)
 	payloadComments := make([]map[string]any, len(comments))
 	for i, cm := range comments {
 		payloadComments[i] = map[string]any{"path": cm.Path, "line": cm.Line, "body": cm.Body}

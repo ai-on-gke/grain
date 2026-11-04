@@ -440,6 +440,9 @@ Commands:
                                        that breaks a declaration (see declcmd.go, docs/declarations.md)
   git-connections                      list the git connections this deployment clones and pushes
                                        with, one "host credential" per line (see deployment.go)
+  git-login [-web|-from-gh|-with-token] [-host h] [-scope s] [-author name]
+                                       delegate your GitHub HTTPS token to this deployment and sign new
+                                       pull requests and comments in your name ("Signed by <Name> (via Grain)")
   git-ambient [-host h] [-kind github|git] [-base-url u] [-proxy u] [-source gh|git|auto] [-if-none]
                                        give this deployment an ambient git connection: this host's own
                                        gh / git login, asked for a token at the moment one is needed
@@ -681,6 +684,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdAccess(ctx, c, out, cmdArgs)
 	case "git-ambient":
 		return cmdGitAmbient(ctx, c, out, cmdArgs)
+	case "git-login", "login":
+		return cmdGitLogin(ctx, c, out, cmdArgs)
 	case "git-connections":
 		return cmdGitConnections(ctx, c, out, cmdArgs)
 	case "default-model":
