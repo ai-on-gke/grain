@@ -52,6 +52,9 @@ func (s *Server) handleHostdConnect(w http.ResponseWriter, r *http.Request) {
 	id, code, err := s.hostdConnectIdentity(r)
 	if err != nil {
 		log.Printf("grain daemon: refused a grain hostd on %s connecting from %s: %v", hostdHostOf(r), r.RemoteAddr, err)
+		if code == http.StatusServiceUnavailable {
+			w.Header().Set("Retry-After", verifierRetryAfter)
+		}
 		http.Error(w, "grain hostd: "+err.Error(), code)
 		return
 	}
@@ -77,7 +80,11 @@ func (s *Server) hostdConnectIdentity(r *http.Request) (hostd.ConnectIdentity, i
 	if cv.present {
 		if cv.err != nil {
 			// singleTenantGate refuses this first; this is for a daemon
-			// that does not run it.
+			// that does not run it. A verifier not available yet
+			// is a refusal to retry, not a bad identity.
+			if verifierUnavailable(cv.err) {
+				return hostd.ConnectIdentity{}, http.StatusServiceUnavailable, fmt.Errorf("its identity could not be checked yet: %w", cv.err)
+			}
 			return hostd.ConnectIdentity{}, http.StatusUnauthorized, fmt.Errorf("its identity did not verify: %v", cv.err)
 		}
 		if !s.isRegisteredHostdServiceOwner(r.Context(), cv.id) {

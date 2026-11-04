@@ -444,6 +444,8 @@ Commands:
   broadcast [-all] <message...>        send a notice to all running task agents (or with -all, all active tasks)
   release approve|reject vX.Y.0        make a pending trunk release official, or drop it -- a person's act;
                                        an agent is refused
+  release approval-key                 the public key GitHub's promote-release.yml verifies an Inbox approval
+                                       with (repository variable GRAIN_RELEASE_APPROVAL_KEY)
 `
 
 // defaultServerURL is loopback on the port every installer binds the
@@ -520,13 +522,17 @@ func audienceDefault() string {
 	return ""
 }
 
+func asUserDefault() string {
+	return strings.TrimSpace(os.Getenv("GRAIN_USER"))
+}
+
 func runCLI(args []string) error {
 	fs := flag.NewFlagSet("grain", flag.ContinueOnError)
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	server := fs.String("server", serverDefault(), "base URL of a running \"grain daemon\"'s UI/API ($"+serverEnvVar+" overrides the default)")
 	token := fs.String("token", "", "auth token for a proxy in front of the daemon ($GRAIN_TOKEN, $GRAIN_AUTH_TOKEN, $GRAIN_ID_TOKEN, $GRAIN_TUNNEL_TOKEN)")
 	audience := fs.String("audience", audienceDefault(), "Google ID token audience for Cloud Run ($GRAIN_AUDIENCE, $GRAIN_TUNNEL_AUDIENCE)")
-	asUser := fs.String("as", "", "identity for request attribution / proxy headers ($GRAIN_USER)")
+	asUser := fs.String("as", asUserDefault(), "identity for request attribution / proxy headers ($GRAIN_USER)")
 	jsonOutput := fs.Bool("json", false, "print machine-readable JSON instead of a human-readable table")
 	connectTimeout := fs.Duration("connect-timeout", defaultConnectTimeout,
 		"how long to wait to connect to the daemon, and to wait out one that refuses connections (a restart)")
@@ -572,7 +578,13 @@ func runCLI(args []string) error {
 		}
 	})
 
-	target := cliTarget{server: *server, source: source, connect: *connectTimeout, call: *callTimeout}
+	target := cliTarget{
+		server:      *server,
+		source:      source,
+		tokenSource: tokenSource(*token),
+		connect:     *connectTimeout,
+		call:        *callTimeout,
+	}
 	return explainDaemonError(dispatchCLI(ctx, c, out, fs, rest), target)
 }
 

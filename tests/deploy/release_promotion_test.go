@@ -107,7 +107,11 @@ func TestPromoteReleaseIsDeclaredHumanRequired(t *testing.T) {
 		t.Errorf("release-promotion trigger = gate %v, human %q, sensitive %v; want gate: true, human: required, sensitive: true",
 			trigger.Gate, trigger.Human, trigger.Sensitive)
 	}
-	for _, p := range []string{promoteReleasePath, ".github/workflows/promote-release.yml", "pkg/ui/release_approval.go"} {
+	for _, p := range []string{promoteReleasePath, ".github/workflows/promote-release.yml", "pkg/ui/release_approval.go",
+		// The Inbox approval on GitHub Actions repos (gap 4): the route that
+		// signs and dispatches it, the record it signs, and the script the
+		// workflow verifies it with.
+		"pkg/ui/release_approval_github.go", "pkg/releaseapproval/releaseapproval.go", "scripts/verify-release-approval.sh"} {
 		if !containsString(trigger.Paths, p) {
 			t.Errorf("the release-promotion trigger does not hold %s (paths %v)", p, trigger.Paths)
 		}

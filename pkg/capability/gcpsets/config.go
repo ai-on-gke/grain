@@ -314,7 +314,7 @@ func Schema() map[string]any {
 						"credential_source": map[string]any{"type": "string", "enum": []any{SourceConfigured, SourceAmbient}, "description": "configured: a credential in admin_credentials; ambient: the identity the server already runs as."},
 						"credential_env":    map[string]any{"type": "string", "pattern": credentialEnvPattern.String(), "description": "Environment variable holding this admin's configured credential.", "deprecated": true},
 						"projects":          strs("Projects this admin acts in."),
-						"role_ceiling":      strs("Every role this admin may grant; a set cannot exceed it."),
+						"role_ceiling":      strs("Every role this admin may grant. Each permission set's roles must be a subset of it: a role added to a set has to be added here too, or the whole configuration is refused. Left empty, the ceiling is whatever the admin's sets ask for."),
 					},
 				},
 			},
@@ -624,7 +624,11 @@ func (c *Config) Validate() error {
 				}
 			}
 			if len(over) > 0 {
-				return fmt.Errorf("permission set %q: %s exceed(s) admin %q's role ceiling", s.Name, strings.Join(over, ", "), a.Name)
+				verb, it := "exceeds", "it"
+				if len(over) > 1 {
+					verb, it = "exceed", "them"
+				}
+				return fmt.Errorf("permission set %q: %s %s admin %s's role ceiling: add %s to the admin's role_ceiling too", s.Name, strings.Join(over, ", "), verb, a.Name, it)
 			}
 		} else {
 			for _, r := range s.Roles {

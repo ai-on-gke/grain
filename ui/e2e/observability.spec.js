@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // This scenario is intentionally not built from intercepted snapshots. The
 // opt-in demo owns pkg/ci.Service, an on-disk DirCache, HostSandboxes, the
@@ -23,9 +24,11 @@ test.use({ demoArgs: ["-observability"] });
 
 async function startRun(page) {
   await page.getByRole("button", { name: "Start a run" }).click();
-  const repoSelect = page.locator('select[name="repo"]');
+  const repoSelect = page.locator(
+    '.repo-field:has(input[name="repo"]) [role="combobox"]',
+  );
   await expect(repoSelect).toBeVisible();
-  await repoSelect.selectOption("acme/widgets");
+  await chooseOption(repoSelect, "acme/widgets");
   await page.getByLabel("Branch").fill("main");
   // A manual run names the workflow it is asking for, so the form will
   // not submit until one has been discovered at that ref and chosen

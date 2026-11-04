@@ -44,6 +44,9 @@
 //                    loaded, before the shot -- to open a menu or expand
 //                    a collapsed group. Repeat it to click several in
 //                    order; one that matches nothing fails the run.
+//   --type   TYPE    text typed on the keyboard after the clicks -- into
+//                    a search box the last click focused, say, to shoot
+//                    a list as it narrows.
 //   --header HEADER  "Name: value" sent on every request the page makes
 //                    (Playwright's extraHTTPHeaders); repeat it for more.
 //                    For shooting a daemon as an identity-aware proxy's
@@ -97,6 +100,7 @@ function parseArgs(argv) {
     fullPage: false,
     look: process.env.LOOK ? DEFAULT_LOOK : null,
     click: process.env.CLICK ? [process.env.CLICK] : [],
+    type: process.env.TYPE || "",
     headers: process.env.HEADER ? [process.env.HEADER] : [],
   };
   for (let i = 0; i < argv.length; i++) {
@@ -111,6 +115,10 @@ function parseArgs(argv) {
     }
     if (arg === "--click" || arg.startsWith("--click=")) {
       opts.click.push(arg.startsWith("--click=") ? arg.slice(8) : argv[++i]);
+      continue;
+    }
+    if (arg === "--type" || arg.startsWith("--type=")) {
+      opts.type = arg.startsWith("--type=") ? arg.slice(7) : argv[++i];
       continue;
     }
     if (arg === "--header" || arg.startsWith("--header=")) {
@@ -322,6 +330,10 @@ async function main() {
             await tab.evaluate(() => document.fonts.ready);
             for (const selector of opts.click) {
               await tab.locator(selector).first().click({ timeout: 10_000 });
+              await tab.waitForTimeout(300);
+            }
+            if (opts.type) {
+              await tab.keyboard.type(opts.type);
               await tab.waitForTimeout(300);
             }
             // A page given as /path#anchor is shot with that element

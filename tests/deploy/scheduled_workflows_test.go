@@ -27,8 +27,8 @@ import (
 // only the live-agent workflows (live-agent.yml, live-frameworks.yml,
 // live-secrets-repo.yml) carry `on: schedule` in .grain/workflows; all
 // non-agent workflows in .grain/workflows are manual workflow_dispatch only,
-// while the ported nightly, post-reset-e2e, gcp-smoke, and release-train
-// schedules run in .github/workflows/.
+// while the ported nightly, post-reset-e2e and gcp-smoke schedules run in
+// .github/workflows/ (the release train is .grain/templates/release-train.yml).
 func TestTheNightlysVerdictIsBackedByAGrainWorkflowThatIsActuallyScheduled(t *testing.T) {
 	workflows, err := ci.LoadNativeDir(os.DirFS(repoRoot(t)))
 	if err != nil {

@@ -14,6 +14,7 @@
 
 import { test, expect } from "./fixtures.js";
 import { alertsBell } from "./alerts.js";
+import { chooseOption } from "./searchSelect.js";
 
 test.use({ demoArgs: ["-observability"] });
 
@@ -465,9 +466,11 @@ test.describe("Deployment Settings and Operations Walkthrough", () => {
         .first(),
     ).toBeVisible();
     await page.getByRole("button", { name: "Start a run" }).click();
-    const repoSelect = page.locator('select[name="repo"]');
+    const repoSelect = page.locator(
+      '.repo-field:has(input[name="repo"]) [role="combobox"]',
+    );
     await expect(repoSelect).toBeVisible();
-    await repoSelect.selectOption("acme/widgets");
+    await chooseOption(repoSelect, "acme/widgets");
     await page.getByLabel("Branch").fill("ops-walkthrough/cancel");
     await page.getByRole("button", { name: "Load workflows" }).click();
     await expect(page.getByLabel("Workflow")).toBeVisible();

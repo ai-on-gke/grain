@@ -23,6 +23,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import NewTaskOverlay from "./NewTaskOverlay.jsx";
 import api from "../api.js";
+import { chooseOption } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
 
@@ -58,7 +59,7 @@ describe("NewTaskOverlay changeTargets", () => {
     });
 
     await user.type(screen.getByLabelText(/Title/), "Fix the frobnicator");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "monorepo");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "monorepo");
     expect(screen.getByTestId("change-target-note")).toHaveTextContent(
       "monorepo changelist in this task's own workspace",
     );
@@ -86,8 +87,8 @@ describe("NewTaskOverlay changeTargets", () => {
     });
 
     await user.type(screen.getByLabelText(/Title/), "Back to git");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "monorepo");
-    await user.selectOptions(screen.getByLabelText(/^Repos/), "acme/widgets");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "monorepo");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     const post = api.mock.calls.find(([, opts]) => opts?.method === "POST");
