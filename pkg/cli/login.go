@@ -52,12 +52,28 @@ func flagWasSet(fs *flag.FlagSet, name string) bool {
 }
 
 // useContextCredential has c send sel's credential to sel's own server
-// (#XC-4), and a google-id-token context's audience.
-func useContextCredential(c *ui.HTTPClient, sel selectedContext) {
+// (#XC-4), and a google-id-token context's audience, and returns what c's
+// credential comes from: explicit (tokenSource's), else the context.
+func useContextCredential(c *ui.HTTPClient, sel selectedContext, explicit string) string {
 	c.ContextToken = contextToken(sel, c.BaseURL, newCredentialStore())
 	if c.Audience == "" && sel.ctx != nil && sel.ctx.Audience != "" && sameOrigin(sel.ctx.Server, c.BaseURL) {
 		c.Audience = sel.ctx.Audience
 	}
+	return contextTokenSource(explicit, c, sel)
+}
+
+// dispatchSignIn runs the sign-in commands, which need the selected
+// context as well as the client dispatchCLI hands every command.
+func dispatchSignIn(ctx context.Context, c *ui.HTTPClient, out *printer, sel selectedContext, cmd string, args []string) error {
+	switch cmd {
+	case "context":
+		return cmdContext(out, sel, args)
+	case "whoami":
+		return cmdWhoami(ctx, c, out, sel, args)
+	case "login":
+		return cmdLogin(ctx, c, out, sel, args)
+	}
+	return cmdLogout(ctx, c, out, sel, args)
 }
 
 // contextTokenSource is explicit, or the context c's credential comes

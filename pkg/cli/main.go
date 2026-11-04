@@ -349,9 +349,8 @@ Global flags (before or after the command; -flag and --flag are the same):
   -context string the named context to use ($GRAIN_CONTEXT, else config.json's current)
 
 Commands:
-  login <url> [flags] / logout [<ctx>] sign this workstation in to a deployment as a named context
+  login <url> [flags] / logout [<ctx>] / whoami   sign in to a deployment as a named context, and say as whom
   context list|use|show|delete         the named contexts ($XDG_CONFIG_HOME/grain/config.json)
-  whoami                               who the CLI is signed in as, and with what grants
   list [flags]                         list the tasks in play -- closed and deferred ones are left
                                        out unless -closed/-deferred or a filter naming that state
                                        asks for them (-filter attribute:comparison:value narrows the
@@ -581,7 +580,6 @@ func runCLI(args []string) error {
 	if *asUser != "" {
 		c.User = *asUser
 	}
-	useContextCredential(c, sel)
 	out := &printer{json: *jsonOutput}
 	ctx := context.Background()
 	fs.Visit(func(f *flag.Flag) {
@@ -593,7 +591,7 @@ func runCLI(args []string) error {
 	target := cliTarget{
 		server:      *server,
 		source:      source,
-		tokenSource: contextTokenSource(tokenSource(*token), c, sel),
+		tokenSource: useContextCredential(c, sel, tokenSource(*token)),
 		connect:     *connectTimeout,
 		call:        *callTimeout,
 	}
@@ -604,14 +602,8 @@ func runCLI(args []string) error {
 func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.FlagSet, sel selectedContext, rest []string) error {
 	cmd, cmdArgs := rest[0], rest[1:]
 	switch cmd {
-	case "context":
-		return cmdContext(out, sel, cmdArgs)
-	case "whoami":
-		return cmdWhoami(ctx, c, out, sel, cmdArgs)
-	case "login":
-		return cmdLogin(ctx, c, out, sel, cmdArgs)
-	case "logout":
-		return cmdLogout(ctx, c, out, sel, cmdArgs)
+	case "context", "whoami", "login", "logout":
+		return dispatchSignIn(ctx, c, out, sel, cmd, cmdArgs)
 	case "list":
 		return cmdList(ctx, c, out, cmdArgs)
 	case "get":
