@@ -218,11 +218,87 @@ func SetGrantPolicy(capabilityID, method string, policy GrantPolicy) {
 	grantPolicies.Store(capabilityID+"#"+method, policy)
 }
 
+// PersonGrantedArgKey is the keyword a method's argument schema carries
+// to say which of that argument's values only a person may grant: a gcp
+// permission set over an existing service account, say, whose existing
+// permissions may be broad. {"enum": ["ci", "org-admin"],
+// "x-grain-person-granted": ["org-admin"]} makes a grant with "org-admin"
+// GrantByPerson and one with "ci" whatever it would be otherwise.
+const PersonGrantedArgKey = "x-grain-person-granted"
+
+// personGrantedArgs are, by canonical capability_id#method, the values of
+// each argument only a person may grant, as the server last advertised
+// them (NotePersonGrantedArgs).
+var personGrantedArgs sync.Map
+
+// reservedArg is one argument's values only a person may grant, and the
+// schema's default for it, which a grant that leaves the argument out
+// gets.
+type reservedArg struct {
+	vals       []any
+	def        any
+	hasDefault bool
+}
+
+// NotePersonGrantedArgs records, from each discovered method's argument
+// schema, the values its arguments' PersonGrantedArgKey reserve to a
+// person, replacing what capabilityID advertised before. Discovery calls
+// it (Server.Refresh), so a server's reconfiguration takes effect at its
+// next tools/list.
+func NotePersonGrantedArgs(capabilityID string, methods map[string]*MethodInfo) {
+	for name, m := range methods {
+		key := capabilityID + "#" + name
+		reserved := map[string]reservedArg{}
+		props, _ := m.ArgsSchema["properties"].(map[string]any)
+		for arg, raw := range props {
+			ps, _ := raw.(map[string]any)
+			if vals, ok := ps[PersonGrantedArgKey].([]any); ok && len(vals) > 0 {
+				def, hasDefault := ps["default"]
+				reserved[arg] = reservedArg{vals: vals, def: def, hasDefault: hasDefault}
+			}
+		}
+		if len(reserved) == 0 {
+			personGrantedArgs.Delete(key)
+			continue
+		}
+		personGrantedArgs.Store(key, reserved)
+	}
+}
+
+// personGrantedArg reports whether one of g's args has a value its
+// method reserves to a person (NotePersonGrantedArgs). An argument g
+// leaves out counts as its schema default, which is what the grant gets:
+// the args of a grant string as written are not yet normalized, so a
+// bare reference whose default is reserved must not pass for one that
+// is not.
+func personGrantedArg(g Grant) bool {
+	v, ok := personGrantedArgs.Load(g.Ref.CapabilityID + "#" + g.Ref.Method)
+	if !ok {
+		return false
+	}
+	for arg, r := range v.(map[string]reservedArg) {
+		have, ok := g.Args[arg]
+		if !ok {
+			if !r.hasDefault {
+				continue
+			}
+			have = r.def
+		}
+		for _, val := range r.vals {
+			if reflect.DeepEqual(have, val) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // GrantKindOf is who may give g: GrantByPerson for a method only a
-// person may grant (PersonGranted), else what its policy says of its
-// args, else GrantCovered.
+// person may grant (PersonGranted) or args its schema reserves to one
+// (PersonGrantedArgKey), else what its policy says of its args, else
+// GrantCovered.
 func GrantKindOf(g Grant) GrantKind {
-	if PersonGranted(g.Ref) {
+	if PersonGranted(g.Ref) || personGrantedArg(g) {
 		return GrantByPerson
 	}
 	if p, ok := grantPolicies.Load(g.Ref.CapabilityID + "#" + g.Ref.Method); ok {

@@ -92,6 +92,12 @@ func (m *Manager) CheckAdmins(ctx context.Context) []AdminCheck {
 			}
 		}
 		for _, p := range a.Projects {
+			if !m.Config.managesAccountsIn(a.Name, p) {
+				// Only sets over existing accounts act here, and they
+				// create and bind nothing: what they need is checked on
+				// each account (CheckExisting).
+				continue
+			}
 			want := append([]string(nil), AdminPermissions...)
 			for _, s := range m.Config.Sets {
 				if s.Admin == a.Name && s.Project == p && s.ResourceScope != "" {
@@ -156,6 +162,10 @@ func (m *Manager) Report(ctx context.Context, census Census, deleted []string) s
 			fmt.Fprintf(&b, "set %s: %v\n", s.Name, err)
 			continue
 		}
+		if s.Existing() {
+			b.WriteString(m.CheckExisting(ctx, s, held[s.Name]).String() + "\n")
+			continue
+		}
 		where := s.Project
 		if s.ResourceScope != "" {
 			where += " on " + s.ResourceScope
@@ -186,4 +196,141 @@ func sortedKeys(m map[string]int) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// managesAccountsIn reports whether admin needs AdminPermissions in
+// project: some set of its there creates (or was migrated over) accounts,
+// gemini_key creates keys there, or no set of its names the project at
+// all.
+func (c *Config) managesAccountsIn(admin, project string) bool {
+	if g := c.GeminiKey; g != nil && g.Admin == admin && g.Project == project {
+		return true
+	}
+	existing := false
+	for i := range c.Sets {
+		s := &c.Sets[i]
+		if s.Admin != admin {
+			continue
+		}
+		if s.Existing() {
+			if home, _ := AccountProject(s.ServiceAccount); home == project || s.Project == project {
+				existing = true
+			}
+			continue
+		}
+		if s.Project == project {
+			return true
+		}
+	}
+	return !existing
+}
+
+// ExistingCheck is Test's finding for a set over an existing service
+// account.
+type ExistingCheck struct {
+	Set, Account, Admin, Credential string
+	// CanAct is whether the admin holds the permission the set's
+	// credential mode needs on the account; Needs names it.
+	CanAct bool
+	Needs  string
+	// Error is why that could not be told.
+	Error string
+	// Lacks are the set's listed roles the account does not hold on the
+	// set's project; RolesError is why that could not be told.
+	Lacks        []string
+	RolesError   string
+	RolesChecked bool
+	// Held is how many attempts hold a token or a key of the set now.
+	Held int
+}
+
+// TokenPermission and KeyPermission are what an admin needs on an
+// existing service account to impersonate it, or to mint its keys.
+const (
+	TokenPermission = "iam.serviceAccounts.getAccessToken"
+	KeyPermission   = "iam.serviceAccountKeys.create"
+)
+
+// CheckExisting tests what a set over an existing service account relies
+// on: the admin's right to impersonate the account (or mint its keys),
+// and -- when the set lists roles -- whether the account holds each on
+// the set's project. It changes nothing.
+func (m *Manager) CheckExisting(ctx context.Context, s *PermissionSet, held int) ExistingCheck {
+	chk := ExistingCheck{Set: s.Name, Account: s.ServiceAccount, Admin: s.Admin, Credential: s.Credential, Needs: TokenPermission, Held: held}
+	if !s.TokenMode() {
+		chk.Needs = KeyPermission
+	}
+	imp, err := m.impersonator(ctx, s)
+	if err != nil {
+		chk.Error = err.Error()
+		return chk
+	}
+	has, err := imp.TestAccountPermissions(ctx, s.ServiceAccount, []string{chk.Needs})
+	if err != nil {
+		chk.Error = err.Error()
+	} else {
+		chk.CanAct = contains(has, chk.Needs)
+	}
+	if len(s.Roles) == 0 {
+		return chk
+	}
+	c, err := m.cloud(ctx, s.Admin)
+	if err != nil {
+		chk.RolesError = err.Error()
+		return chk
+	}
+	p, err := c.GetPolicy(ctx, "projects/"+s.Project)
+	if err != nil {
+		chk.RolesError = err.Error()
+		return chk
+	}
+	member := "serviceAccount:" + s.ServiceAccount
+	holds := map[string]bool{}
+	for _, b := range p.Bindings {
+		if contains(b.Members, member) {
+			holds[b.Role] = true
+		}
+	}
+	for _, r := range s.Roles {
+		if !holds[r] {
+			chk.Lacks = append(chk.Lacks, r)
+		}
+	}
+	chk.RolesChecked = true
+	return chk
+}
+
+// String is the check as Test's report line.
+func (chk ExistingCheck) String() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "set %s: existing service account %s (credential %s; grain creates, binds and deletes nothing)", chk.Set, chk.Account, chk.Credential)
+	verb := "impersonate it"
+	if chk.Needs == KeyPermission {
+		verb = "mint keys for it"
+	}
+	switch {
+	case chk.Error != "":
+		fmt.Fprintf(&b, "; could not tell whether admin %s can %s: %s", chk.Admin, verb, chk.Error)
+	case chk.CanAct:
+		fmt.Fprintf(&b, "; admin %s can %s", chk.Admin, verb)
+	default:
+		fmt.Fprintf(&b, "; admin %s CANNOT %s: it lacks %s on the account", chk.Admin, verb, chk.Needs)
+		if chk.Needs == TokenPermission {
+			b.WriteString(" (grant it roles/iam.serviceAccountTokenCreator there)")
+		}
+	}
+	if chk.Needs == TokenPermission {
+		fmt.Fprintf(&b, "; short-lived tokens, no key cap, %d attempt(s) holding tokens now", chk.Held)
+	} else {
+		fmt.Fprintf(&b, "; at most %d concurrent attempts (GCP's key limit), %d key(s) held now", KeysPerAccount, chk.Held)
+	}
+	switch {
+	case chk.RolesError != "":
+		fmt.Fprintf(&b, "; could not check its roles: %s", chk.RolesError)
+	case len(chk.Lacks) > 0:
+		fmt.Fprintf(&b, "; it LACKS listed role(s) on its project: %s (grain grants nothing; roles inherited from a folder or the organization are not seen here)", strings.Join(chk.Lacks, ", "))
+	case chk.RolesChecked:
+		b.WriteString("; it holds every listed role on its project")
+	}
+	return b.String()
 }
