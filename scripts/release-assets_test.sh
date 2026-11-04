@@ -69,6 +69,7 @@ case "$1 ${2:-}" in
     ;;
   "save "*) printf 'tarball of %s\n' "$2"; head -c 4096 /dev/zero ;;
   "load -i") cat "$3" > /dev/null ;;
+  tag*) ;;
   push* | login*) echo "docker $1 must never run" >&2; exit 99 ;;
   *) echo "fake docker: unexpected $*" >&2; exit 98 ;;
 esac
@@ -193,6 +194,12 @@ run bash "$assets" --dry-run rc v3.5.0-rc.1
 check "an older rc never moves channel-candidate (and its commit's assets must be fetched)" \
   '[ "$status" != 0 ] || ! grep -q "published channel-candidate" <<< "$out"'
 check "the train phases pushed nothing to a registry" '! grep -qE "docker (push|login|tag)" "$DOCKER_LOG"'
+: > "$DOCKER_LOG"
+
+bash "$assets" package > /dev/null
+run env RELEASE_ASSETS_REUSE=true bash "$assets" --dry-run mirror "sha-$short" registry.example/proj/grain k8s-sandbox
+check "mirror retags a release's image into the deployment's registry" \
+  '[ "$status" = 0 ] && grep -qx "k8s-sandbox=registry.example/proj/grain/k8s-sandbox:sha-$short" <<< "$out"'
 
 bash "$assets" package > /dev/null
 run bash "$assets" load

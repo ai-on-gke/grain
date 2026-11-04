@@ -29,9 +29,15 @@
 #   scripts/iap-e2e/run.sh [IMAGE] [options]
 #
 # Options:
-#   --image IMAGE       Container image to deploy (default: current RC tag or
-#                       ghcr.io/bwsalmon/grain/grain:main)
-#   --rc-tag TAG        Shorthand for ghcr.io/${RELEASE_IMAGE_REPO}/grain:TAG
+#   --release NAME      Deploy the grain image from this GitHub release's
+#                       assets (docs/release-assets.md): it is loaded and
+#                       pushed to a throwaway Artifact Registry repository in
+#                       PROJECT for Cloud Run, which cannot run a tarball,
+#                       and that repository is deleted on exit (default: the
+#                       current unpromoted vX.Y.Z-rc.N release, else
+#                       channel-main)
+#   --rc-tag TAG        Shorthand for --release TAG
+#   --image IMAGE       Deploy a registry image instead of a release
 #   --project PROJECT   GCP project ID (default: $GCP_PROJECT, gcloud default,
 #                       or bsalmon-sandbox)
 #   --region REGION     Cloud Run region (default: us-central1)
@@ -53,28 +59,29 @@ if [[ -f "${REPO_ROOT}/scripts/release.conf" ]]; then
   # shellcheck disable=SC1091
   source "${REPO_ROOT}/scripts/release.conf"
 fi
-IMAGE_REPO="${RELEASE_IMAGE_REPO:-bwsalmon/grain}"
 
 usage() {
   sed -n '16,45s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"
 }
 
-resolve_default_image() {
+resolve_default_release() {
   local latest_rc latest_rel
-  latest_rc="$(git -C "$REPO_ROOT" tag -l 'v*-rc.*' --sort=-v:refname 2>/dev/null | head -n1 || true)"
+  latest_rc="$(git -C "$REPO_ROOT" tag -l 'v*-rc.*' --sort=-v:refname 2>/dev/null | grep -v -- '-discarded$' | head -n1 || true)"
   if [[ -n "$latest_rc" ]]; then
     local base_ver="${latest_rc%%-rc.*}"
     latest_rel="$(git -C "$REPO_ROOT" tag -l "$base_ver" 2>/dev/null || true)"
     if [[ -z "$latest_rel" ]]; then
-      printf 'ghcr.io/%s/grain:%s\n' "$IMAGE_REPO" "$latest_rc"
+      printf '%s\n' "$latest_rc"
       return
     fi
   fi
-  printf 'ghcr.io/%s/grain:main\n' "$IMAGE_REPO"
+  printf 'channel-main\n'
 }
 
 IMAGE=""
 RC_TAG=""
+RELEASE=""
+AR_REPO=""
 PROJECT="${GCP_PROJECT:-}"
 REGION="${GCP_REGION:-us-central1}"
 SERVICE="grain-iap-e2e"
@@ -86,6 +93,11 @@ SIM_INJECT_FAIL_CASE="${GRAIN_IAP_E2E_SIM_FAIL_CASE:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --release)
+      [[ $# -ge 2 ]] || { echo "error: --release requires a value" >&2; exit 2; }
+      RELEASE="$2"; shift 2 ;;
+    --release=*)
+      RELEASE="${1#*=}"; shift ;;
     --image)
       [[ $# -ge 2 ]] || { echo "error: --image requires a value" >&2; exit 2; }
       IMAGE="$2"; shift 2 ;;
@@ -141,11 +153,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -n "$RC_TAG" && -z "$IMAGE" ]]; then
-  IMAGE="ghcr.io/${IMAGE_REPO}/grain:${RC_TAG}"
+if [[ -n "$RC_TAG" && -z "$RELEASE" ]]; then
+  RELEASE="$RC_TAG"
+fi
+if [[ -z "$IMAGE" && -z "$RELEASE" ]]; then
+  RELEASE="$(resolve_default_release)"
 fi
 if [[ -z "$IMAGE" ]]; then
-  IMAGE="$(resolve_default_image)"
+  # Replaced by the pushed Artifact Registry ref once stage_release_image
+  # has run; a local simulation deploys nothing and keeps this name.
+  IMAGE="release:${RELEASE}"
 fi
 
 if [[ "$LOCAL_SIM" -eq 0 && -z "$PROJECT" ]]; then
@@ -235,6 +252,13 @@ teardown() {
   log "Tearing down Cloud Run service and service accounts in ${PROJECT}..."
   local td_ok=1
 
+  if [[ -n "$AR_REPO" ]]; then
+    if ! gcloud artifacts repositories delete "$AR_REPO" --project="$PROJECT" --location="$REGION" --quiet >/dev/null 2>&1; then
+      log "WARNING: failed to delete Artifact Registry repository ${AR_REPO}"
+      td_ok=0
+    fi
+  fi
+
   for sa in "$SA_A_EMAIL" "$SA_B_EMAIL"; do
     gcloud iap web remove-iam-policy-binding \
       --project="$PROJECT" \
@@ -265,7 +289,7 @@ teardown() {
 
   rm -rf "$WORK_TMP"
   if [[ "$td_ok" -eq 1 ]]; then
-    TEARDOWN_STATUS="clean (Cloud Run service, IAP bindings, service accounts, and local keys deleted)"
+    TEARDOWN_STATUS="clean (Cloud Run service, IAP bindings, service accounts, staged image repository, and local keys deleted)"
     log "Teardown complete: nothing left running in ${PROJECT}."
   else
     TEARDOWN_STATUS="partial (see warnings in stderr log)"
@@ -467,6 +491,30 @@ record_case() {
 # ---------------------------------------------------------------------------
 # Cloud Run vs Local Simulation Setup & Redeploy
 # ---------------------------------------------------------------------------
+
+# stage_release_image loads RELEASE's assets (scripts/release-assets.sh)
+# and pushes the grain image to a throwaway Artifact Registry repository in
+# PROJECT, which teardown deletes: Cloud Run deploys from a registry, and
+# release assets are not one.
+stage_release_image() {
+  [[ -n "$RELEASE" && "$IMAGE" == release:* ]] || return 0
+  local dir="${WORK_TMP}/release-assets" ref host target
+  log "Loading release ${RELEASE}'s assets..."
+  bash "${REPO_ROOT}/scripts/release-assets.sh" fetch "$RELEASE" "$dir" >&2
+  bash "${REPO_ROOT}/scripts/release-assets.sh" load "$dir" >&2
+  ref="$(jq -r .images.grain.ref "${dir}/images.json")"
+  AR_REPO="grain-iap-e2e-$(date +%s)-${RANDOM}"
+  host="${REGION}-docker.pkg.dev"
+  log "Creating throwaway Artifact Registry repository ${AR_REPO} in ${PROJECT}..."
+  gcloud artifacts repositories create "$AR_REPO" --project="$PROJECT" --location="$REGION" \
+    --repository-format=docker --description="grain IAP e2e image for ${RELEASE}; deleted on exit" --quiet >&2
+  gcloud auth configure-docker "$host" --quiet >/dev/null 2>&1
+  target="${host}/${PROJECT}/${AR_REPO}/grain:${ref##*:}"
+  docker tag "$ref" "$target"
+  docker push "$target" >&2
+  IMAGE="$target"
+  log "Deploying ${RELEASE} (${ref}) as ${IMAGE}"
+}
 
 enable_gcp_apis() {
   local api err_file="${WORK_TMP}/api_enable.err"
@@ -945,6 +993,7 @@ if [[ "$LOCAL_SIM" -eq 1 ]]; then
   deploy_local_sim_grain 0 "$SEEDED_ACCESS_CODE"
 else
   enable_gcp_apis
+  stage_release_image
   PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
   if [[ -z "$PROJECT_NUMBER" ]]; then
     echo "error: could not resolve projectNumber for project '${PROJECT}'" >&2

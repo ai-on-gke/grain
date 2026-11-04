@@ -30,7 +30,7 @@ Cloud Run's native `--iap` integration uses Google's managed OAuth client rather
 - **APIs enabled idempotently by `run.sh`:**
   - `run.googleapis.com`
   - `iap.googleapis.com`
-  - `artifactregistry.googleapis.com` (`secretmanager.googleapis.com` is not needed; Cloud Run pulls `ghcr.io/bwsalmon/grain/grain:<tag>` directly).
+  - `artifactregistry.googleapis.com`: the release under test is published as GitHub release assets ([docs/release-assets.md](../../docs/release-assets.md)), which Cloud Run cannot run, so `run.sh` loads the release's `grain` image (`scripts/release-assets.sh fetch` + `load`), pushes it to a throwaway Artifact Registry repository (`grain-iap-e2e-<time>-<n>`) in the test project, deploys from there, and deletes that repository in teardown. `roles/editor` covers creating and deleting it. (`secretmanager.googleapis.com` is not needed.)
 - **Required IAM roles on the runner's `gcp-key` permission set (`iap-test`):**
   - `roles/editor` — enables APIs, deploys Cloud Run revisions, and creates/deletes the two ephemeral test service accounts (`<service>-sa-a` and `<service>-sa-b`) and their temporary keys.
   - `roles/run.admin` — grants `roles/run.invoker` (`run.services.setIamPolicy`) on the ephemeral Cloud Run service to the IAP Service Agent (`service-<PROJECT_NUMBER>@gcp-sa-iap.iam.gserviceaccount.com`) so IAP can invoke Cloud Run after authenticating a caller (`roles/editor` omits `run.services.setIamPolicy`).
@@ -53,15 +53,17 @@ Cloud Run's native `--iap` integration uses Google's managed OAuth client rather
 ## Running the Qualification Script
 
 ```bash
-# Default: current unpromoted vX.Y.Z-rc.N image if present, else ghcr.io/bwsalmon/grain/grain:main
+# Default: the current unpromoted vX.Y.Z-rc.N release if there is one, else channel-main
 ./scripts/iap-e2e/run.sh \
   --project bsalmon-sandbox \
   --region us-central1 \
   --out /tmp/grain-iap-e2e
 
-# Explicit release-candidate image:
+# Explicit release candidate (--rc-tag v3.2.0-rc.1 is the same; --image <ref>
+# deploys a registry image instead, e.g. a release published before release
+# assets at ghcr.io/bwsalmon/grain/grain:<tag>):
 ./scripts/iap-e2e/run.sh \
-  --image ghcr.io/bwsalmon/grain/grain:v3.2.0-rc.1 \
+  --release v3.2.0-rc.1 \
   --project bsalmon-sandbox \
   --out /tmp/grain-iap-e2e
 ```

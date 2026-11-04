@@ -52,6 +52,13 @@
 #           sha-<short> release of the commit the train's git tag names.
 #   train-tag <tag>
 #           the phase a pushed train tag asks for (release-train-assets.yml)
+#   mirror <release> <registry/prefix> [image...]
+#           for a cluster, which cannot `docker load`: fetch and load the
+#           release, then tag each image (all three by default) as
+#           <registry/prefix>/<name>:<tag> -- grain/guest:sha-x becomes
+#           <prefix>/guest:sha-x -- push it, and print `<image>=<pushed
+#           ref>` per image. The deployment's own registry or
+#           sandbox_image_mirror is the prefix (docs/release-assets.md).
 #   fetch <release> [DIR]
 #           download a release's images.json and assets into DIR and
 #           validate them. A moving release with no images.json is
@@ -547,6 +554,30 @@ load() {
   done
 }
 
+mirror() {
+  local release="${1:?mirror needs <release> <registry/prefix>}" prefix="${2:?mirror needs a registry/prefix to push to}" key ref target keys
+  shift 2
+  need docker jq
+  prefix="${prefix%/}"
+  if [ $# -gt 0 ]; then keys=("$@"); else keys=("${image_keys[@]}"); fi
+  # RELEASE_ASSETS_REUSE=true mirrors the assets already in $dir.
+  if [ "${RELEASE_ASSETS_REUSE:-false}" != true ] || [ ! -f "$dir/images.json" ]; then
+    fetch "$release" "$dir" >&2
+  fi
+  load "$dir" >&2
+  for key in "${keys[@]}"; do
+    ref="$(jq -er --arg k "$key" '.images[$k].ref' "$dir/images.json")" || die "$release's images.json has no $key image"
+    target="$prefix/${ref#*/}"
+    docker tag "$ref" "$target"
+    if [ "$dry_run" = true ]; then
+      echo "release-assets.sh: [dry-run] would docker push $target" >&2
+    else
+      docker push "$target" >&2
+    fi
+    printf '%s=%s\n' "$key" "$target"
+  done
+}
+
 # source_into RELEASE: the release's assets in $dir, unless $dir already
 # holds that commit's packaged assets (the release job's own, in a dry run).
 source_into() {
@@ -699,6 +730,7 @@ case "$cmd" in
   retag) retag "$@" ;;
   fetch) fetch "$@" ;;
   load) load "$@" ;;
+  mirror) mirror "$@" ;;
   *)
     sed -n '17,51p' "$0" >&2
     exit 2

@@ -58,6 +58,8 @@ PROVISION=false
 NAMESPACE="grain"
 IMAGE=""
 SANDBOX_IMAGE=""
+MIRROR=""
+MIRROR_PUSHES=()
 TARGET_REPO=""
 NODE_SELECTOR=""
 MANIFEST="${REPO_ROOT}/deploy/kubernetes/grain-granule.yaml"
@@ -117,6 +119,11 @@ What runs there:
                             ghcr.io/bwsalmon/grain/grain:main)
   --sandbox-image <ref>     Packed guest image for -k8s-granule-image (default:
                             the local daemon's -sandbox-image)
+  --mirror <registry/path>  A registry the cluster pulls from. A host installed
+                            from release assets (docs/release-assets.md) runs
+                            local grain/* refs only it has; with --mirror they
+                            are tagged <registry/path>/<image>:<tag> and pushed
+                            there first, and the cluster runs those
   --target-repo <owner/name>
                             -default-target-repo (default: the local daemon's)
   --node-selector <k=v>     -k8s-node-selector for the nested-virt pool
@@ -225,6 +232,8 @@ parse_args() {
       --namespace=*) NAMESPACE="${1#*=}" ;;
       --image) IMAGE="$2"; shift ;;
       --image=*) IMAGE="${1#*=}" ;;
+      --mirror) MIRROR="$2"; shift ;;
+      --mirror=*) MIRROR="${1#*=}" ;;
       --sandbox-image) SANDBOX_IMAGE="$2"; shift ;;
       --sandbox-image=*) SANDBOX_IMAGE="${1#*=}" ;;
       --target-repo) TARGET_REPO="$2"; shift ;;
@@ -367,6 +376,36 @@ resolve_local_daemon() {
   [[ -n "${SANDBOX_IMAGE}" ]] || SANDBOX_IMAGE="$(flag_value "${exec}" sandbox-image)"
   [[ -n "${SANDBOX_IMAGE}" ]] || SANDBOX_IMAGE="$(flag_value "${exec}" k8s-granule-image)"
   [[ -n "${TARGET_REPO}" ]] || TARGET_REPO="$(flag_value "${exec}" default-target-repo)"
+  mirror_release_refs
+}
+
+# mirror_release_refs renames each image that is a release asset's local
+# ref (grain/<image>:<tag>, which a cluster would resolve on Docker Hub)
+# into MIRROR, recording the push push_mirrored_images makes; with no
+# MIRROR such a ref stops the migration, naming the flag.
+mirror_release_refs() {
+  local var ref
+  MIRROR_PUSHES=()
+  for var in IMAGE SANDBOX_IMAGE TRANSFER_IMAGE; do
+    ref="${!var}"
+    case "${ref}" in
+      grain/*:*)
+        [[ -n "${MIRROR}" ]] ||
+          die "${var} is ${ref}, a release-asset image only this host has: pass --mirror <registry/path> the cluster can pull from"
+        printf -v "${var}" '%s' "${MIRROR%/}/${ref#grain/}"
+        MIRROR_PUSHES+=("${ref}=${!var}")
+        ;;
+    esac
+  done
+}
+
+# push_mirrored_images pushes what mirror_release_refs renamed.
+push_mirrored_images() {
+  local pair
+  for pair in ${MIRROR_PUSHES[@]+"${MIRROR_PUSHES[@]}"}; do
+    run docker tag "${pair%%=*}" "${pair#*=}"
+    run docker push "${pair#*=}"
+  done
 }
 
 hostd_user() {
@@ -459,6 +498,7 @@ preflight() {
   [[ -n "${SANDBOX_IMAGE}" ]] || die "no packed guest image for -k8s-granule-image: pass --sandbox-image"
   [[ -n "${TARGET_REPO}" ]] || die "no default target repository: pass --target-repo owner/name"
   [[ -f "${MANIFEST}" ]] || die "no manifest at ${MANIFEST}"
+  push_mirrored_images
   log "  controller image: ${IMAGE}"
   log "  sandbox image:    ${SANDBOX_IMAGE}"
   log "  target repo:      ${TARGET_REPO}"

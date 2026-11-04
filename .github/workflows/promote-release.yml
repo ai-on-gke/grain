@@ -122,7 +122,6 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
-      packages: write
       id-token: write
     concurrency:
       group: ${{ github.workflow }}-approve-${{ inputs.version }}
@@ -224,69 +223,14 @@ jobs:
         if: vars.GCP_WIF_PROVIDER != '' && vars.GCP_SA_EMAIL != ''
         run: gcloud auth configure-docker us-docker.pkg.dev --quiet
 
-      - name: Configure package-publish credentials
-        if: env.DRY_RUN != 'true'
-        env:
-          GHCR_PAT: ${{ secrets.GHCR_TOKEN }}
-          FALLBACK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY || 'ghcr.io' }}
-          PUBLISH_USERNAME: ${{ vars.GHCR_USERNAME || 'bwsalmon' }}
-        run: |
-          set -euo pipefail
-          token="${GHCR_PAT:-}"
-          username="${PUBLISH_USERNAME}"
-          if [ -z "$token" ]; then
-            case "${RELEASE_IMAGE_REPO}" in
-              bwsalmon/*)
-                echo "::error::GHCR_TOKEN secret is required to publish packages under ghcr.io/${RELEASE_IMAGE_REPO} from ${GITHUB_REPOSITORY}" >&2
-                exit 1
-                ;;
-              *)
-                token="${FALLBACK_TOKEN}"
-                username="${GITHUB_ACTOR}"
-                ;;
-            esac
-          fi
-          echo "::add-mask::${token}"
-          {
-            echo "PACKAGE_PUBLISH_REGISTRY=${PUBLISH_REGISTRY}"
-            echo "PACKAGE_PUBLISH_USERNAME=${username}"
-            echo "PACKAGE_PUBLISH_TOKEN=${token}"
-          } >> "$GITHUB_ENV"
-
-      - name: Configure optional image-signing key
-        if: env.DRY_RUN != 'true'
-        env:
-          SIGNING_KEY_PEM: ${{ secrets.IMAGE_SIGNING_KEY }}
-          SIGNING_KEY_PASS: ${{ secrets.IMAGE_SIGNING_PASSWORD }}
-        run: |
-          set -euo pipefail
-          if [ -z "${SIGNING_KEY_PEM:-}" ]; then
-            echo "WARNING: IMAGE_SIGNING_KEY secret is not set; promoted release images will be published unsigned." >&2
-            exit 0
-          fi
-          if ! command -v cosign >/dev/null 2>&1; then
-            cosign_version="v2.4.1"
-            curl -fsSL "https://github.com/sigstore/cosign/releases/download/${cosign_version}/cosign-linux-amd64" \
-              -o /usr/local/bin/cosign
-            chmod +x /usr/local/bin/cosign
-          fi
-          key_file="${RUNNER_TEMP}/image-signing.key"
-          printf '%s\n' "${SIGNING_KEY_PEM}" > "$key_file"
-          chmod 600 "$key_file"
-          pass_file="${RUNNER_TEMP}/image-signing.pass"
-          printf '%s' "${SIGNING_KEY_PASS:-}" > "$pass_file"
-          chmod 600 "$pass_file"
-          {
-            echo "IMAGE_SIGNING_KEY=${key_file}"
-            echo "IMAGE_SIGNING_PASSWORD_FILE=${pass_file}"
-          } >> "$GITHUB_ENV"
-
       - name: Promote the pending release a person approved
         env:
           GRAIN_API_URL: ${{ vars.GRAIN_API_URL || 'http://127.0.0.1:4200' }}
           GRAIN_API_TOKEN: ${{ secrets.GRAIN_API_TOKEN }}
-          RELEASE_IMAGES: ${{ vars.RELEASE_IMAGES }}
+          # Release assets (docs/release-assets.md), published with this
+          # job's own GITHUB_TOKEN; vars.RELEASE_IMAGES overrides it.
+          RELEASE_IMAGES: ${{ vars.RELEASE_IMAGES || 'bash ./scripts/release-assets.sh' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_NOTIFY: ${{ vars.RELEASE_NOTIFY }}
           # The person's explicit acceptance of a short soak; without it,
           # approve refuses a -pending release that soaked under the minimum.
@@ -306,7 +250,6 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      packages: write
       id-token: write
     concurrency:
       group: ${{ github.workflow }}-promote-${{ inputs.version }}
@@ -394,71 +337,15 @@ jobs:
         if: vars.GCP_WIF_PROVIDER != '' && vars.GCP_SA_EMAIL != ''
         run: gcloud auth configure-docker us-docker.pkg.dev --quiet
 
-      - name: Configure package-publish credentials
-        if: env.DRY_RUN != 'true'
-        env:
-          GHCR_PAT: ${{ secrets.GHCR_TOKEN }}
-          FALLBACK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY || 'ghcr.io' }}
-          PUBLISH_USERNAME: ${{ vars.GHCR_USERNAME || 'bwsalmon' }}
-        run: |
-          set -euo pipefail
-          token="${GHCR_PAT:-}"
-          username="${PUBLISH_USERNAME}"
-          if [ -z "$token" ]; then
-            case "${RELEASE_IMAGE_REPO}" in
-              bwsalmon/*)
-                echo "::error::GHCR_TOKEN secret is required to publish packages under ghcr.io/${RELEASE_IMAGE_REPO} from ${GITHUB_REPOSITORY}" >&2
-                exit 1
-                ;;
-              *)
-                token="${FALLBACK_TOKEN}"
-                username="${GITHUB_ACTOR}"
-                ;;
-            esac
-          fi
-          echo "::add-mask::${token}"
-          {
-            echo "PACKAGE_PUBLISH_REGISTRY=${PUBLISH_REGISTRY}"
-            echo "PACKAGE_PUBLISH_USERNAME=${username}"
-            echo "PACKAGE_PUBLISH_TOKEN=${token}"
-          } >> "$GITHUB_ENV"
-
-      - name: Configure optional image-signing key
-        if: env.DRY_RUN != 'true'
-        env:
-          SIGNING_KEY_PEM: ${{ secrets.IMAGE_SIGNING_KEY }}
-          SIGNING_KEY_PASS: ${{ secrets.IMAGE_SIGNING_PASSWORD }}
-        run: |
-          set -euo pipefail
-          if [ -z "${SIGNING_KEY_PEM:-}" ]; then
-            echo "WARNING: IMAGE_SIGNING_KEY secret is not set; promoted release images will be published unsigned." >&2
-            exit 0
-          fi
-          if ! command -v cosign >/dev/null 2>&1; then
-            cosign_version="v2.4.1"
-            curl -fsSL "https://github.com/sigstore/cosign/releases/download/${cosign_version}/cosign-linux-amd64" \
-              -o /usr/local/bin/cosign
-            chmod +x /usr/local/bin/cosign
-          fi
-          key_file="${RUNNER_TEMP}/image-signing.key"
-          printf '%s\n' "${SIGNING_KEY_PEM}" > "$key_file"
-          chmod 600 "$key_file"
-          pass_file="${RUNNER_TEMP}/image-signing.pass"
-          printf '%s' "${SIGNING_KEY_PASS:-}" > "$pass_file"
-          chmod 600 "$pass_file"
-          {
-            echo "IMAGE_SIGNING_KEY=${key_file}"
-            echo "IMAGE_SIGNING_PASSWORD_FILE=${pass_file}"
-          } >> "$GITHUB_ENV"
-
       - name: Publish the last promoted release as latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           if [ "${DRY_RUN}" = "true" ]; then
-            bash ./scripts/release-images.sh --dry-run promote
+            bash ./scripts/release-assets.sh --dry-run promote
           else
-            bash ./scripts/release-images.sh promote
+            bash ./scripts/release-assets.sh promote
           fi
 
   reject:
@@ -468,7 +355,6 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
-      packages: write
     concurrency:
       group: ${{ github.workflow }}-reject-${{ inputs.version }}
       cancel-in-progress: false
@@ -543,41 +429,14 @@ jobs:
             echo "DRY_RUN=${dry_run}"
           } >> "$GITHUB_ENV"
 
-      - name: Configure package-publish credentials
-        if: env.DRY_RUN != 'true'
-        env:
-          GHCR_PAT: ${{ secrets.GHCR_TOKEN }}
-          FALLBACK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY || 'ghcr.io' }}
-          PUBLISH_USERNAME: ${{ vars.GHCR_USERNAME || 'bwsalmon' }}
-        run: |
-          set -euo pipefail
-          token="${GHCR_PAT:-}"
-          username="${PUBLISH_USERNAME}"
-          if [ -z "$token" ]; then
-            case "${RELEASE_IMAGE_REPO}" in
-              bwsalmon/*)
-                echo "::error::GHCR_TOKEN secret is required to publish packages under ghcr.io/${RELEASE_IMAGE_REPO} from ${GITHUB_REPOSITORY}" >&2
-                exit 1
-                ;;
-              *)
-                token="${FALLBACK_TOKEN}"
-                username="${GITHUB_ACTOR}"
-                ;;
-            esac
-          fi
-          echo "::add-mask::${token}"
-          {
-            echo "PACKAGE_PUBLISH_REGISTRY=${PUBLISH_REGISTRY}"
-            echo "PACKAGE_PUBLISH_USERNAME=${username}"
-            echo "PACKAGE_PUBLISH_TOKEN=${token}"
-          } >> "$GITHUB_ENV"
-
       - name: Drop the pending release a person rejected
         env:
           GRAIN_API_URL: ${{ vars.GRAIN_API_URL || 'http://127.0.0.1:4200' }}
           GRAIN_API_TOKEN: ${{ secrets.GRAIN_API_TOKEN }}
-          RELEASE_IMAGES: ${{ vars.RELEASE_IMAGES }}
+          # Release assets (docs/release-assets.md), published with this
+          # job's own GITHUB_TOKEN; vars.RELEASE_IMAGES overrides it.
+          RELEASE_IMAGES: ${{ vars.RELEASE_IMAGES || 'bash ./scripts/release-assets.sh' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash ./scripts/release-from-trunk.sh reject "$GRAIN_CI_RELEASE_VERSION"
 
   rollback:
@@ -587,7 +446,6 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
-      packages: write
     concurrency:
       group: ${{ github.workflow }}-rollback-${{ inputs.version }}
       cancel-in-progress: false
@@ -673,39 +531,12 @@ jobs:
             echo "DRY_RUN=${dry_run}"
           } >> "$GITHUB_ENV"
 
-      - name: Configure package-publish credentials
-        if: env.DRY_RUN != 'true'
-        env:
-          GHCR_PAT: ${{ secrets.GHCR_TOKEN }}
-          FALLBACK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PUBLISH_REGISTRY: ${{ vars.PACKAGE_PUBLISH_REGISTRY || 'ghcr.io' }}
-          PUBLISH_USERNAME: ${{ vars.GHCR_USERNAME || 'bwsalmon' }}
-        run: |
-          set -euo pipefail
-          token="${GHCR_PAT:-}"
-          username="${PUBLISH_USERNAME}"
-          if [ -z "$token" ]; then
-            case "${RELEASE_IMAGE_REPO}" in
-              bwsalmon/*)
-                echo "::error::GHCR_TOKEN secret is required to publish packages under ghcr.io/${RELEASE_IMAGE_REPO} from ${GITHUB_REPOSITORY}" >&2
-                exit 1
-                ;;
-              *)
-                token="${FALLBACK_TOKEN}"
-                username="${GITHUB_ACTOR}"
-                ;;
-            esac
-          fi
-          echo "::add-mask::${token}"
-          {
-            echo "PACKAGE_PUBLISH_REGISTRY=${PUBLISH_REGISTRY}"
-            echo "PACKAGE_PUBLISH_USERNAME=${username}"
-            echo "PACKAGE_PUBLISH_TOKEN=${token}"
-          } >> "$GITHUB_ENV"
-
       - name: Retract the release a person rolled back and re-point latest
         env:
-          RELEASE_IMAGES: ${{ vars.RELEASE_IMAGES }}
+          # Release assets (docs/release-assets.md), published with this
+          # job's own GITHUB_TOKEN; vars.RELEASE_IMAGES overrides it.
+          RELEASE_IMAGES: ${{ vars.RELEASE_IMAGES || 'bash ./scripts/release-assets.sh' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Free text: only ever this step's environment, never $GITHUB_ENV,
           # where a newline in it could set a variable for later steps.
           RELEASE_ROLLBACK_REASON: ${{ inputs.reason }}
