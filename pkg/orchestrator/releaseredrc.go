@@ -370,11 +370,12 @@ func syncRCHold(ctx context.Context, store *model.Store, forge ReleaseQualificat
 	if err != nil {
 		return fmt.Errorf("reading checks on %s: %w", rcTag, err)
 	}
-	hold := latestCheckRun(checks, model.ReleaseHoldCheckName, app)
+	extID := "rc-hold:" + rcTag
+	hold := latestCheckRun(checks, model.ReleaseHoldCheckName, app, extID)
 	held := hold != nil && hold.Status != "completed"
 	next := rc
 	next.RC++
-	run := github.CheckRunWrite{Name: model.ReleaseHoldCheckName, HeadSHA: sha, ExternalID: "rc-hold:" + rcTag}
+	run := github.CheckRunWrite{Name: model.ReleaseHoldCheckName, HeadSHA: sha, ExternalID: extID}
 	stamp := now.UTC()
 	switch {
 	case done && held:
