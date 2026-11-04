@@ -16,6 +16,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import LogsPage from "./LogsPage.jsx";
+import { chooseOption, optionValues } from "../searchSelectTesting.js";
 import api from "../api.js";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
@@ -178,10 +179,37 @@ describe("LogsPage", () => {
 
     expect(await screen.findByText(/daemon line/)).toBeInTheDocument();
 
-    await user.click(screen.getByLabelText(/Source/));
-    await user.click(
-      await screen.findByRole("option", { name: "git-proxy-audit" }),
+    await chooseOption(
+      user,
+      screen.getByLabelText(/Source/),
+      "git-proxy-audit",
     );
+
+    expect(await screen.findByText(/audit line/)).toBeInTheDocument();
+    expect(api).toHaveBeenLastCalledWith("/api/logs/git-proxy-audit?lines=500");
+  });
+
+  it("searches log sources anywhere in the name", async () => {
+    api
+      .mockResolvedValueOnce({
+        enabled: true,
+        sources: ["config-sync", "daemon", "dmesg", "git-proxy-audit"],
+      })
+      .mockResolvedValueOnce({ lines: ["daemon line"] })
+      .mockResolvedValueOnce({ lines: ["audit line"] });
+    const user = userEvent.setup();
+    render(<LogsPage showError={() => {}} />);
+
+    expect(await screen.findByText(/daemon line/)).toBeInTheDocument();
+    const sourceBox = screen.getByLabelText(/Source/);
+    await user.click(sourceBox);
+    await user.clear(sourceBox);
+    await user.type(sourceBox, "audit");
+    expect(optionValues(sourceBox)).toEqual(["git-proxy-audit"]);
+    expect(document.querySelector(".search-select-hit")?.textContent).toBe(
+      "audit",
+    );
+    await user.keyboard("{ArrowDown}{Enter}");
 
     expect(await screen.findByText(/audit line/)).toBeInTheDocument();
     expect(api).toHaveBeenLastCalledWith("/api/logs/git-proxy-audit?lines=500");
@@ -232,9 +260,8 @@ describe("LogsPage", () => {
     const user = userEvent.setup();
     render(<LogsPage showError={() => {}} />);
 
-    await screen.findByRole("combobox");
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByRole("option", { name: "dmesg" }));
+    const sourceBox = await screen.findByRole("combobox");
+    await chooseOption(user, sourceBox, "dmesg");
     expect(await screen.findByText("kernel line")).toBeInTheDocument();
 
     await act(async () => {

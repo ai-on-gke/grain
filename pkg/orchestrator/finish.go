@@ -306,6 +306,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 			return observeField(ctx, store, task.ID, now, func(o *model.Observation) {
 				o.PendingQuestionCommentID = nil
 				o.PendingSecret = ""
+				o.PendingAccess = nil
 			})
 		}
 		return nil
@@ -344,6 +345,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 			if err := observeField(ctx, store, task.ID, now, func(o *model.Observation) {
 				o.PendingQuestionCommentID = nil
 				o.PendingSecret = ""
+				o.PendingAccess = nil
 			}); err != nil {
 				return err
 			}
@@ -1096,7 +1098,8 @@ func relayParkingCalls(ctx context.Context, store *model.Store, task model.Task,
 	secret, _ := firstToolCallArg(result, "request_secret", "secret")
 	question, _ := firstToolCallArg(result, "ask_question", "question")
 	_, proposed := firstToolCallArg(result, "propose_config_change", "summary")
-	if secret == "" && question == "" && !proposed {
+	access := accessRequestOf(result, now)
+	if secret == "" && question == "" && !proposed && access == nil {
 		return false, nil
 	}
 
@@ -1139,6 +1142,15 @@ func relayParkingCalls(ctx context.Context, store *model.Store, task model.Task,
 		}
 		pending, parked = commentID, true
 	}
+	if access != nil {
+		body := accessRequestBody(*access)
+		summary := model.QuestionSummary(access.Summary, access.Reason, "request_access on "+task.ID)
+		commentID, err := relayQuestion(ctx, store, task, body, summary, nil, now)
+		if err != nil {
+			return false, fmt.Errorf("orchestrator: posting the access request for %s: %w", task.ID, err)
+		}
+		pending, parked = commentID, true
+	}
 	if question != "" {
 		attachments, dropped := mcp.ResponseAttachmentsTolerant(firstToolCallArgs(result, "ask_question"), staged)
 		summary, _ := firstToolCallArg(result, "ask_question", "summary")
@@ -1157,6 +1169,9 @@ func relayParkingCalls(ctx context.Context, store *model.Store, task model.Task,
 		o.PendingQuestionCommentID = &pending
 		if secret != "" {
 			o.PendingSecret = secret
+		}
+		if access != nil {
+			o.PendingAccess = access
 		}
 	}); err != nil {
 		return false, err
@@ -1183,6 +1198,44 @@ func secretRequestBody(secret, reason string) string {
 		return body
 	}
 	return reason + "\n\n" + body
+}
+
+// accessRequestOf is the run's first relayable request_access call as
+// the request its task parks on, nil for none. The call was checked
+// when it was made (mcp's request_access); one whose arguments no
+// longer parse is not relayed.
+func accessRequestOf(result *agent.Result, now time.Time) *model.PendingAccessRequest {
+	args := firstToolCallArgs(result, "request_access")
+	if args == nil {
+		return nil
+	}
+	items, err := model.ParseAccessRequestItems(args["requests"])
+	if err != nil {
+		return nil
+	}
+	summary, _ := args["summary"].(string)
+	reason, _ := args["reason"].(string)
+	return &model.PendingAccessRequest{
+		Summary: strings.TrimSpace(summary), Reason: strings.TrimSpace(reason),
+		Items: items, CreatedAt: now,
+	}
+}
+
+// accessRequestBody is what a request_access call reads as in the
+// task's conversation: the run's reason, then the items, then grain's
+// sentence about the card.
+func accessRequestBody(req model.PendingAccessRequest) string {
+	var b strings.Builder
+	if req.Reason != "" {
+		b.WriteString(req.Reason + "\n\n")
+	}
+	b.WriteString("**This run asked for more access:**\n")
+	for _, it := range req.Items {
+		fmt.Fprintf(&b, "- %s\n", it.Label())
+	}
+	b.WriteString("\nGrant or deny it in the card on this task. Granting applies the chosen items to " +
+		"this task and puts it back in the queue; denying asks for a reason, which the next run is given.")
+	return b.String()
 }
 
 // configChangeRequestBody is what a propose_config_change call reads as

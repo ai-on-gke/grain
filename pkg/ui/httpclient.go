@@ -972,6 +972,12 @@ func (c *HTTPClient) ProposeConfigChange(ctx context.Context, id string, proposa
 	return &pending, nil
 }
 
+// CheckAccessRequest is Client.CheckAccessRequest over the wire: the
+// mcpserver's request_access, checking its items for its own task.
+func (c *HTTPClient) CheckAccessRequest(ctx context.Context, id string, items []model.AccessRequestItem) error {
+	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/access-request/check", AccessRequestCheck{Items: items}, nil)
+}
+
 // CreditWait is Client.CreditWait over the wire: credit id's live run for
 // the time it has now spent blocked on CI, and read back where its
 // deadline stands as a result.
