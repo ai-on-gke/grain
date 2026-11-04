@@ -259,8 +259,10 @@ var Categories = []Category{
 			// The continuous train's own promotion (playbook section 1):
 			// the script that tags vX.Y.0 and latest on a qualified rc,
 			// the settings that turn it on and off, its schedule, and the
-			// workflow that publishes the release from the tag.
-			"scripts/release-from-trunk.sh", "scripts/release.conf",
+			// workflow that publishes the release from the tag. The tick
+			// wrapper too: it writes the CI verdicts and the trusted
+			// qualification app the train promotes on.
+			"scripts/release-from-trunk.sh", "scripts/release.conf", "scripts/release-train-task.sh",
 			".grain/schedules/release-train.yml", ".github/workflows/publish-release.yml",
 		},
 	},
@@ -279,7 +281,7 @@ var Categories = []Category{
 			"in scripts/release.conf, it does not raise `RELEASE_MAJOR`, which only a person may do",
 		},
 		files: []string{
-			"scripts/release-images.sh", "scripts/release-train-task.sh",
+			"scripts/release-images.sh",
 			"scripts/release-notes.sh", "scripts/candidate-gate.sh",
 			// What the release jobs run besides: the patch-tag guard
 			// that refuses a vX.Y.Z not cut from its release branch, the

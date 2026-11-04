@@ -12,7 +12,6 @@
 on: pull_request
 paths:
   - scripts/release-images.sh
-  - scripts/release-train-task.sh
   - scripts/release-notes.sh
   - scripts/candidate-gate.sh
   - scripts/patch-tag-guard.sh
