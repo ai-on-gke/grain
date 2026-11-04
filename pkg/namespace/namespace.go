@@ -114,6 +114,10 @@ type Scope struct {
 	MayReadPlaybooks  bool
 	MayReadIssues     bool
 	MayReadDB         bool
+	// MergeQueueByCI limits deploy://merge-queue to the repositories
+	// PermitsCI allows: a caller reaching it under ci:read rather than
+	// deployment:read (GET /api/fs/deploy/merge-queue).
+	MergeQueueByCI bool
 }
 
 // PermitsCI reports whether this scope may read ci://<repo>/...
