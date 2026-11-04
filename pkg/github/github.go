@@ -2384,10 +2384,13 @@ func (c *RESTClient) ClosePullRequest(owner, repo string, number int) error {
 // exists" after a CreatePullRequest 422, rather than failing a finish
 // that has in fact already succeeded.
 //
-// head is qualified owner:branch the way GitHub's own filter requires;
-// grain only ever pushes to branches in the target repo itself (never a
-// fork), so the head owner is always owner.
+// head is qualified owner:branch the way GitHub's own filter requires; when
+// branch already carries a "<fork-owner>:" prefix (for a cross-repository
+// pull request opened from a fork), that qualifier is preserved as given.
 func (c *RESTClient) FindOpenPullRequestForBranch(owner, repo, branch string) (*PullRequest, error) {
+	if strings.Contains(branch, ":") {
+		return c.FindOpenPullRequestForHead(owner, repo, branch)
+	}
 	return c.FindOpenPullRequestForHead(owner, repo, owner+":"+branch)
 }
 

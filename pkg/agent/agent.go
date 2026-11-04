@@ -128,6 +128,14 @@ type RunConfig struct {
 	// itself.
 	Repo   string
 	Branch string
+	// UpstreamRepo ("owner/name"), when non-empty and distinct from Repo,
+	// is the upstream repository pull requests for Repo are opened against
+	// (model.RepoConfig.UpstreamRepo). Passed to the forked "mcpserver"
+	// subprocess as "-pr-upstream-repo" so pull_request_status,
+	// wait_for_checks, base_branch_status and review tools read the
+	// upstream pull request (<fork-owner>:<branch>) while still reading
+	// the pushed branch head from Repo.
+	UpstreamRepo string
 	// Base is the branch Branch merges into -- model.Task's own Base --
 	// passed to the same subprocess as its -pr-base, so pkg/mcp's
 	// base_branch_status can read CI for the branch this work is aimed

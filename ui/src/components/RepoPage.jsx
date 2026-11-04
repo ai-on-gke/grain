@@ -427,6 +427,7 @@ export default function RepoPage({
   // hostdText is the default hostd box as typed (ui.RepoDefaults.
   // DefaultHostd, read with caps above), saved on blur.
   const [hostdText, setHostdText] = useState("");
+  const [upstreamRepoText, setUpstreamRepoText] = useState("");
   // prompt/promptText are that same shape again, for this repo's own
   // prompt extension (grain/task-114): what GET /api/repos/{owner}/
   // {name}/prompt-extension last said -- the repo's own text, the
@@ -582,6 +583,7 @@ export default function RepoPage({
       setCapsSelection(loaded.defaultCapabilities || []);
       setCICapsSelection(loaded.ciCapabilities || []);
       setHostdText(loaded.defaultHostd || "");
+      setUpstreamRepoText(loaded.upstreamRepo || "");
     } catch (err) {
       showError(err);
     }
@@ -677,6 +679,7 @@ export default function RepoPage({
   const storedPromptText = prompt?.promptExtension || "";
   const storedSetupText = setup?.setupCommand || "";
   const storedHostd = caps?.defaultHostd || "";
+  const storedUpstreamRepo = caps?.upstreamRepo || "";
 
   // capsEffective is what a task filed against this repo would actually
   // start out holding -- the line the capabilities form ends on. The
@@ -891,6 +894,21 @@ export default function RepoPage({
       setHostdText(updated.defaultHostd || "");
     } catch (err) {
       setHostdText(storedHostd);
+      showError(err);
+    }
+  };
+
+  const saveUpstreamRepo = async (upstream) => {
+    try {
+      const updated = await api(`${root}/settings`, {
+        method: "PUT",
+        body: JSON.stringify({ upstreamRepo: upstream }),
+      });
+      setCaps(updated);
+      setUpstreamRepoText(updated.upstreamRepo || "");
+      await onRefreshConfig();
+    } catch (err) {
+      setUpstreamRepoText(storedUpstreamRepo);
       showError(err);
     }
   };
@@ -2386,6 +2404,62 @@ export default function RepoPage({
                     </>
                   ) : (
                     "the default hostd, unless it or its template names one"
+                  )}
+                  .
+                </Typography>
+              </Stack>
+            )}
+          </Box>
+
+          <Box data-testid="repo-upstream-repo">
+            <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+              Upstream pull-request repository
+            </Typography>
+            {caps === null ? (
+              <Typography variant="body2" color="text.secondary">
+                Loading upstream repository…
+              </Typography>
+            ) : (
+              <Stack spacing={1}>
+                <TextField
+                  id={`${refusalId}-upstream-repo`}
+                  name="repoUpstreamRepo"
+                  label={`Upstream repository for ${repo}`}
+                  placeholder="upstream-owner/repo"
+                  helperText="When set (owner/name), tasks targeting this fork push branches to this repository while grain fetches base refs from and opens cross-repository pull requests against the upstream repository. Leave empty to open pull requests on this repository itself."
+                  value={upstreamRepoText}
+                  onChange={(e) => setUpstreamRepoText(e.target.value)}
+                  onBlur={(e) => {
+                    const trimmed = e.target.value.trim();
+                    if (trimmed !== storedUpstreamRepo) {
+                      saveUpstreamRepo(trimmed);
+                    }
+                  }}
+                  autoComplete="off"
+                  inputProps={{
+                    ...identifierField,
+                    "data-testid": "repo-upstream-repo-input",
+                    "aria-describedby": refusedBy(
+                      readOnly,
+                      `${refusalId}-upstream-repo-helper-text`,
+                    ),
+                  }}
+                  fullWidth
+                  size="small"
+                  disabled={readOnly}
+                />
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  data-testid="repo-upstream-repo-summary"
+                >
+                  Pull requests for tasks targeting {repo} open against{" "}
+                  {storedUpstreamRepo ? (
+                    <code style={{ overflowWrap: "anywhere" }}>
+                      {storedUpstreamRepo}
+                    </code>
+                  ) : (
+                    <code style={{ overflowWrap: "anywhere" }}>{repo}</code>
                   )}
                   .
                 </Typography>

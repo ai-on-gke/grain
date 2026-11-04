@@ -488,7 +488,11 @@ import "strconv"
 // set, seeds the gcp entry in `grain_config`.`mcp_servers` with
 // gemini_key: {project}, minting with the gcp-key-minter secret, and
 // rewrites stored gemini-key grants as 100 did the model proxies.
-const SchemaVersion = 103
+//
+// 104 adds `upstream_repo` to `repo_config` (model.RepoConfig.UpstreamRepo):
+// the upstream repository (`<owner>/<name>`) pull requests are opened
+// against when tasks target this fork repository.
+const SchemaVersion = 104
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified
@@ -3140,6 +3144,7 @@ var Tables = []string{
   ` + "`issue_import_approved`" + `    INTEGER NOT NULL DEFAULT 0,
   ` + "`issue_import_interval_seconds`" + ` INTEGER NOT NULL DEFAULT 0,
   ` + "`default_hostd`" + `            TEXT NOT NULL DEFAULT '',
+  ` + "`upstream_repo`" + `            TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `)
 )`,
 

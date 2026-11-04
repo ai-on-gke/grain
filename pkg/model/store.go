@@ -4665,6 +4665,23 @@ func (s *Store) GitScope(ctx context.Context, sandbox string) (target *RepoRef, 
 		return nil, nil, nil, fmt.Errorf("reading write targets of task %s: %w", taskID, err)
 	}
 
+	if target != nil && target.Owner != "" {
+		if rc, err := s.GetRepoConfig(ctx, *target); err == nil && rc != nil {
+			if up, cross, err := rc.PullRequestRepo(*target); err == nil && cross {
+				hasRead := false
+				for _, r := range reads {
+					if r.Same(up) {
+						hasRead = true
+						break
+					}
+				}
+				if !hasRead {
+					reads = append(reads, up)
+				}
+			}
+		}
+	}
+
 	return target, reads, writes, nil
 }
 
@@ -5420,6 +5437,12 @@ func (s *Store) pullRequestLinksWhere(ctx context.Context, from string, args ...
 			// readers to report as they always have.
 			kept = append(kept, r.link)
 			continue
+		}
+		if rc, err := s.GetRepoConfig(ctx, *r.target); err == nil && rc != nil {
+			if up, cross, err := rc.PullRequestRepo(*r.target); err == nil && cross && ref.Repo.Same(up) {
+				kept = append(kept, r.link)
+				continue
+			}
 		}
 		// Rare -- only a pull request outside the task's own target
 		// gets here -- so its write targets are read one task at a
