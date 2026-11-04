@@ -715,6 +715,14 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     105,
+		Description: "add pending_access_request and access_decisions to task_observation for request_access",
+		Statements: []string{
+			"ALTER TABLE `task_observation` ADD COLUMN `pending_access_request` TEXT NULL",
+			"ALTER TABLE `task_observation` ADD COLUMN `access_decisions` TEXT NULL",
+		},
+	},
+	{
+		Version:     106,
 		Description: "add repo_config.upstream_repo for fork-to-upstream pull request workflows",
 		Statements: []string{
 			"ALTER TABLE `repo_config` ADD COLUMN `upstream_repo` TEXT NOT NULL DEFAULT ''",

@@ -1208,6 +1208,7 @@ func (c *Client) stopAndCloseConsoleSessionTask(ctx context.Context, taskID stri
 			o.ClosedAt = &now
 			o.PendingQuestionCommentID = nil
 			o.PendingSecret = ""
+			o.PendingAccess = nil
 		}); err != nil {
 			return err
 		}

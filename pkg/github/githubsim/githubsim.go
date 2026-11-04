@@ -676,7 +676,7 @@ func (s *Sim) compareRev(ref string) (string, bool) {
 				if fork.branchExists(branch) {
 					remoteRef := "refs/remotes/fork/" + headOwner + "/" + branch
 					cmd := exec.Command("git", "--git-dir", s.BareRepo, "fetch", "--quiet",
-						fork.BareRepo, "+refs/heads/"+branch+":"+remoteRef)
+						"--end-of-options", fork.BareRepo, "+refs/heads/"+branch+":"+remoteRef)
 					cmd.Env = os.Environ()
 					if cmd.Run() == nil {
 						return remoteRef, true
@@ -1003,7 +1003,7 @@ func (s *Sim) filesChangedIn(pr PullRequest) ([]map[string]any, bool) {
 		return nil, false
 	}
 	out, err := exec.Command("git", "--git-dir", s.BareRepo, "diff", "--name-status", "-M", "-z",
-		baseRev+"..."+headRev).Output()
+		"--end-of-options", baseRev+"..."+headRev).Output()
 	if err != nil {
 		return nil, false
 	}
@@ -1068,9 +1068,8 @@ func (s *Sim) branchSHA(branch string) string {
 		if fork == nil || fork == s || fork.BareRepo == "" {
 			continue
 		}
-		if out, err := exec.Command("git", "--git-dir", fork.BareRepo,
-			"rev-parse", "-q", "--verify", "refs/heads/"+branch).Output(); err == nil {
-			return strings.TrimSpace(string(out))
+		if sha := fork.refSHA("refs/heads/" + branch); sha != "" {
+			return sha
 		}
 	}
 	return ""
@@ -1241,7 +1240,7 @@ func (s *Sim) containsBranch(base, head string) bool {
 		return false
 	}
 	return exec.Command("git", "--git-dir", s.BareRepo, "merge-base", "--is-ancestor",
-		headRev, baseRev).Run() == nil
+		"--end-of-options", headRev, baseRev).Run() == nil
 }
 
 // mergeBranches merges head into base for real, against BareRepo, the

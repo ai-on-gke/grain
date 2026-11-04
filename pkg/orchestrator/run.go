@@ -1008,7 +1008,7 @@ func nothingNeededSection(task model.Task) string {
 // the task list and notifications show nothing else of it, so a summary
 // that says only that there is a question tells a person nothing.
 const questionSummarySection = "\n\nWhenever you ask a person something -- ask_question, " +
-	"request_secret, chat -- give a `summary` as well: one line, at most 100 characters, " +
+	"request_secret, request_access, chat -- give a `summary` as well: one line, at most 100 characters, " +
 	"naming the decision or input you need (\"Keep the v1 API alongside v2, or remove " +
 	"it?\"). The inbox, the task list and notifications show only that line, with your " +
 	"full question behind an expander, so never write \"I have a question\" or " +
@@ -1495,7 +1495,7 @@ func grainCLISection(task model.Task) string {
 		"--title <t>`, `grain git revert --task <id> --reason \"<why>\"`, `grain merge-queue`.\n" +
 		grainCLIGrantBullets(task.Grants) +
 		"- **Turn-ending, parking and proposals stay tool calls:** use `comment_on_issue`, " +
-		"`nothing_needed`, `ask_question`, `request_secret`, `wait_for_task` (`park: true`), " +
+		"`nothing_needed`, `ask_question`, `request_secret`, `request_access`, `wait_for_task` (`park: true`), " +
 		"`resume_later` and `propose_task` directly, not as shell commands.\n\n" +
 		"Run `grain help` or `grain <command> --help` for every flag."
 	return s

@@ -185,7 +185,8 @@ export function displayCounts(counts) {
 // askedCase says which of the several things "Asked" covers one task is
 // in, or null for a task in neither of ASKED_STATES: kind is "question"
 // (an agent's ask_question), "message" (an interactive task or console
-// session waiting for its next message), "stopped" (a turn the reader
+// session waiting for its next message), "access" (an agent's
+// request_access -- ui.Task.AwaitingAccess), "stopped" (a turn the reader
 // stopped -- ui.Task.TurnStopped) or "submit" (awaiting_submit); title
 // is the chip's tooltip; action is what ends it, "reply" or "submit".
 export function askedCase(t) {
@@ -211,6 +212,8 @@ export function askedCase(t) {
       title: "Waiting for your message",
       action: "reply",
     };
+  if (t.awaitingAccess)
+    return { kind: "access", title: "Asked for access", action: "grant" };
   return { kind: "question", title: "Asked a question", action: "reply" };
 }
 

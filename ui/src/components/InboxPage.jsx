@@ -54,6 +54,7 @@ import { formatTime } from "../time.js";
 import { useTimeZone } from "../TimeZoneContext.jsx";
 import { ListEmpty, ListHeader } from "./ListPrimitives.jsx";
 import Markdown from "./Markdown.jsx";
+import PendingAccess from "./detail/PendingAccess.jsx";
 import QuestionDisclosure from "./QuestionDisclosure.jsx";
 import { TaskRow } from "./TaskList.jsx";
 import {
@@ -1345,6 +1346,22 @@ function Responder({ t, open, onAct, onOpenTask, onSent, showError }) {
     return (
       <div className="inbox-responder">
         <CircularProgress size={16} />
+      </div>
+    );
+  }
+  // An access request is answered with Grant or Deny on its own card,
+  // not with a reply: a reply grants nothing.
+  if (effectiveDetail.pendingAccess) {
+    return (
+      <div className="inbox-responder" onClick={handleQuestionClick}>
+        <PendingAccess
+          t={effectiveDetail}
+          act={async (fn) => {
+            const done = await onAct(fn);
+            if (done) onSent();
+            return done;
+          }}
+        />
       </div>
     );
   }

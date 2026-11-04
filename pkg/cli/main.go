@@ -153,11 +153,7 @@ func Main() {
 			upgradePostgresCmd(args[1:])
 			return
 		case "db":
-			if len(args) > 1 && (args[1] == "upgrade-postgres" || args[1] == "upgrade-sqlite-to-postgres") {
-				upgradePostgresCmd(args[2:])
-				return
-			}
-			upgradePostgresCmd(args[1:])
+			dbCmd(args[1:])
 			return
 		case "demo":
 			cmdDemo(args[1:])
