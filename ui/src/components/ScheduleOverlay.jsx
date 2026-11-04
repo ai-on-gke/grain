@@ -16,7 +16,7 @@ import { isApiGrant, withoutApiRows } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import { localGrantHandlers } from "./capabilityMethods.js";
 import { isCapabilityRef } from "../capabilityArgs.js";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   Box,
   Button,
@@ -474,7 +474,7 @@ function ScheduleOverlay({
   // Whether leaving now would lose an edit: the form's own fields (the
   // cadence's number and time boxes are read off it, not state) plus
   // everything submit takes from state instead.
-  const { formRef, isDirty } = useUnsavedEdits({
+  const { formRef, isDirty: formIsDirty } = useUnsavedEdits({
     request: scheduleRequest(),
     kind,
     weekday,
@@ -482,6 +482,12 @@ function ScheduleOverlay({
     timeZone,
     fires,
   });
+  // discarded is set once the person has said to throw the edit away,
+  // so whatever they leave by next (App's onOpenTask, which asks the
+  // leave guards again before this pane has unmounted) does not ask a
+  // second time.
+  const discarded = useRef(false);
+  const isDirty = () => !discarded.current && formIsDirty();
 
   const submit = async (evt) => {
     evt.preventDefault();
@@ -705,9 +711,12 @@ function ScheduleOverlay({
                   ) {
                     return;
                   }
-                  if (isDirty() && !window.confirm(DISCARD_PROMPT)) {
-                    e.preventDefault();
-                    return;
+                  if (isDirty()) {
+                    if (!window.confirm(DISCARD_PROMPT)) {
+                      e.preventDefault();
+                      return;
+                    }
+                    discarded.current = true;
                   }
                   if (onOpenTask) {
                     e.preventDefault();
