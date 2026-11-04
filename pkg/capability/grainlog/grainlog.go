@@ -132,8 +132,13 @@ type Source struct {
 // DefaultSources is the allowlist a real deployment serves: the daemon's
 // own unit, and the kernel log underneath it.
 //
-// grain-daemon.service is scripts/setup.sh's own unit name, the same
-// string pkg/cli/daemon.go wires the UI's System pane to. dmesg is
+// The daemon's unit is the one this process runs under
+// (systemlog.DaemonUnit): scripts/setup.sh's grain-daemon.service on a
+// host deployment, `grain init-workstation`'s user unit grain.service
+// on a workstation -- and the same string pkg/daemon wires the UI's
+// System pane to. It used to be grain-daemon.service by name, which on
+// a workstation read a journal nothing was writing to, or worse, a
+// stale system unit's. dmesg is
 // here because the failures the daemon's own journal cannot describe are
 // the ones where the process that would have written them is the one
 // that stopped -- an agent CLI killed by the OOM killer during the very
@@ -145,11 +150,12 @@ type Source struct {
 // host rather than a line of plumbing. It is one entry when somebody
 // decides that.
 func DefaultSources() []Source {
-	daemon := systemlog.Journalctl{Unit: "grain-daemon.service"}
+	unit := systemlog.DaemonUnit()
+	daemon := unit.Journal()
 	return []Source{
 		{
 			Name: "daemon",
-			What: "the grain daemon's own journal (grain-daemon.service) -- what this deployment logged",
+			What: fmt.Sprintf("the grain daemon's own journal (%s) -- what this deployment logged", unit),
 			Read: daemon.Read,
 		},
 		{
