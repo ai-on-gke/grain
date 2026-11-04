@@ -369,14 +369,7 @@ Commands:
                                        queued its approval says
   capability <id> <cap> attach|detach  attach or detach a capability
   comment <id> <body...>               post a comment (and answer a parked question)
-  reply <id> <body...>                 answer the question a task is parked on -- refused, posting
-                                       nothing, when none is or when it waits on a secret request
-  inbox [-repo R] [-kind K]            what needs a person: parked questions and secret requests,
-                                       notifications, merge-held pull requests, proposals
-  wait <id...> [-until C] [-timeout D] block until the tasks are closed, merged, awaiting-reply,
-                                       ci-done or any change (exit 5 when -timeout, 30m, runs out)
-  logs <id> [-attempt N] [-tail N] [-follow]
-                                       an attempt's live activity and transcript
+  reply|inbox|wait|logs <id...>        answer a parked question, list what needs a person, block on tasks, read a run's log
   close [-close-pull-request] <id>     close a task (grain's "delete" -- see the package doc comment),
                                        and with the flag its open pull request too
   delete <id>                          alias for close
