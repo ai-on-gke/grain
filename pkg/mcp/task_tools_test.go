@@ -710,3 +710,38 @@ func TestTaskRecordSaysWhenItsPullRequestSettled(t *testing.T) {
 		t.Fatalf("record:\n%s\nwant an open pull request's line unchanged", got)
 	}
 }
+
+func TestTaskRecordAndConversationShowOwnerAttributionAndFiledVia(t *testing.T) {
+	now := at("2026-11-04T22:00:00Z")
+	record := TaskRecord{
+		TaskSummary: TaskSummary{ID: "31", Title: "External CLI task", State: "proposed"},
+		Author:      "external:alice-cli",
+		AuthorKind:  "agent",
+		AuthorLabel: "external agent alice-cli for alice@example.com",
+		Provenance:  "filed from codex-cli/0.9.2 session=s42 by alice@example.com",
+		Comments: []TaskComment{{
+			ID:          7,
+			Author:      "external:alice-cli",
+			AuthorKind:  "agent",
+			AuthorLabel: "external agent alice-cli for alice@example.com",
+			FiledVia:    "codex-cli/0.9.2 session=s42",
+			Body:        "hello from workstation",
+			CreatedAt:   now,
+		}},
+	}
+	gotRecord := renderTaskRecord(record, now)
+	for _, want := range []string{
+		"Filed by: external agent alice-cli for alice@example.com\n",
+		"Provenance: filed from codex-cli/0.9.2 session=s42 by alice@example.com\n",
+		"[2026-11-04T22:00:00Z] external agent alice-cli for alice@example.com (agent) (from codex-cli/0.9.2 session=s42):\n",
+	} {
+		if !strings.Contains(gotRecord, want) {
+			t.Errorf("renderTaskRecord missing %q in:\n%s", want, gotRecord)
+		}
+	}
+	gotConv := renderTaskConversation(record, 0)
+	wantConv := "#7 [2026-11-04T22:00:00Z] external agent alice-cli for alice@example.com (agent) (from codex-cli/0.9.2 session=s42):\n"
+	if !strings.Contains(gotConv, wantConv) {
+		t.Errorf("renderTaskConversation missing %q in:\n%s", wantConv, gotConv)
+	}
+}

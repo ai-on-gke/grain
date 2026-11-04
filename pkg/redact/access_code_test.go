@@ -34,3 +34,15 @@ func TestTextRedactsAccessCodeHeader(t *testing.T) {
 		t.Errorf("Text counted %d redactions, want 2:\n%s", n, got)
 	}
 }
+
+func TestTextRedactsBareExternalAgentToken(t *testing.T) {
+	tok := "gma_" + strings.Repeat("a1b2c3d4", 8)
+	line := "leaked external agent token " + tok + " in output\n"
+	got, n := (*redact.Redactor)(nil).Text(line)
+	if strings.Contains(got, tok) {
+		t.Fatalf("Text left gma_ token in:\n%s", got)
+	}
+	if !strings.Contains(got, "[redacted: external agent token]") || n != 1 {
+		t.Errorf("Text(%q) = %q, %d; want [redacted: external agent token] with n=1", line, got, n)
+	}
+}
