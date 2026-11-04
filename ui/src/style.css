@@ -1039,9 +1039,16 @@ main,
   flex: 1 1 100%;
 }
 
+.narrowing-attr {
+  width: 11rem;
+  max-width: 100%;
+  flex: 0 1 11rem;
+}
+
 .narrowing-values {
   min-width: 12rem;
-  max-width: 22rem;
+  max-width: min(24rem, 100%);
+  flex: 1 1 12rem;
 }
 
 .narrowing-value {
@@ -4335,6 +4342,14 @@ fieldset legend {
 }
 :root[data-phone="true"] .standalone-page {
   --standalone-page-gutter: 1rem;
+}
+:root[data-phone="true"] .narrowing-attr {
+  flex: 1 1 9.5rem;
+}
+:root[data-phone="true"] .narrowing-values {
+  min-width: 0;
+  max-width: 100%;
+  flex: 1 1 11rem;
 }
 :root[data-phone="true"] .board-hidden-note {
   margin-left: 1rem;
