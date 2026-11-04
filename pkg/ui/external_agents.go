@@ -29,6 +29,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -42,23 +43,26 @@ const maxMCPRequestBytes = 4 << 20
 // returned by GET /api/external-agents/tokens. The raw secret token is never
 // stored and never returned here.
 type ExternalAgentTokenView struct {
-	ID             string     `json:"id"`
-	Name           string     `json:"name"`
-	Principal      string     `json:"principal"`
-	TokenPrefix    string     `json:"tokenPrefix"`
-	ScopeSet       string     `json:"scopeSet,omitempty"`
-	Scopes         []string   `json:"scopes,omitempty"`
-	ResolvedScopes []string   `json:"resolvedScopes"`
-	Repos          []string   `json:"repos,omitempty"`
-	RateLimit      int        `json:"rateLimit"`
-	MaxConcurrent  int        `json:"maxConcurrent"`
-	CreatedBy      string     `json:"createdBy,omitempty"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	RotatedAt      *time.Time `json:"rotatedAt,omitempty"`
-	LastUsedAt     *time.Time `json:"lastUsedAt,omitempty"`
-	ExpiresAt      *time.Time `json:"expiresAt,omitempty"`
-	RevokedAt      *time.Time `json:"revokedAt,omitempty"`
-	Active         bool       `json:"active"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	Principal      string   `json:"principal"`
+	TokenPrefix    string   `json:"tokenPrefix"`
+	ScopeSet       string   `json:"scopeSet,omitempty"`
+	Scopes         []string `json:"scopes,omitempty"`
+	ResolvedScopes []string `json:"resolvedScopes"`
+	Repos          []string `json:"repos,omitempty"`
+	RateLimit      int      `json:"rateLimit"`
+	MaxConcurrent  int      `json:"maxConcurrent"`
+	CreatedBy      string   `json:"createdBy,omitempty"`
+	// Owner is the person the credential acts on behalf of
+	// (model.ExternalAgentToken.Owner), "" for none.
+	Owner      string     `json:"owner,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	RotatedAt  *time.Time `json:"rotatedAt,omitempty"`
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+	ExpiresAt  *time.Time `json:"expiresAt,omitempty"`
+	RevokedAt  *time.Time `json:"revokedAt,omitempty"`
+	Active     bool       `json:"active"`
 }
 
 // CreateExternalAgentTokenRequest is the request body of POST /api/external-agents/tokens.
@@ -70,6 +74,15 @@ type CreateExternalAgentTokenRequest struct {
 	ExpiresAt     *time.Time `json:"expiresAt,omitempty"`
 	RateLimit     int        `json:"rateLimit,omitempty"`
 	MaxConcurrent int        `json:"maxConcurrent,omitempty"`
+	// Owner is the person the credential acts on behalf of
+	// (model.ExternalAgentToken.Owner). Left out, it is whoever issues
+	// it: the signed-in person, or the deployment's own actor when that
+	// is a person (externalAgentTokenOwner says who may name another).
+	Owner string `json:"owner,omitempty"`
+	// SelfService marks a credential a person mints for their own
+	// workstation (`grain login --issue-token`): its Owner is the caller
+	// and nobody else, whatever Owner says.
+	SelfService bool `json:"selfService,omitempty"`
 }
 
 // IssuedExternalAgentToken is returned once when a credential is created or
@@ -116,6 +129,7 @@ func externalAgentTokenViewOf(t model.ExternalAgentToken, now time.Time) Externa
 		RateLimit:      t.EffectiveRateLimit(),
 		MaxConcurrent:  t.EffectiveMaxConcurrent(),
 		CreatedBy:      t.CreatedBy,
+		Owner:          t.Owner,
 		CreatedAt:      t.CreatedAt,
 		LastUsedAt:     t.LastUsedAt,
 		ExpiresAt:      t.ExpiresAt,
@@ -142,6 +156,55 @@ func (c *Client) canIssuePersonExternalAgentToken(_ context.Context, actor model
 	return actor.Kind == model.PrincipalHuman
 }
 
+// externalAgentTokenOwner is the owner a credential req asks to issue is
+// recorded with (design/spec/external-cli/external-cli.spec.md#XC-14).
+// The owner is who the credential's calls are attributed to and whose
+// owner-trust policy its filings are measured against, so naming one is
+// held to who is asking:
+//
+//   - an agent -- an external agent credential, or a task acting through
+//     its grants -- may only pass on the owner it acts for itself, so a
+//     credential cannot be minted on behalf of somebody more trusted;
+//   - a person minting for themselves (SelfService) owns it, and may
+//     name nobody else;
+//   - anybody else -- a signed-in person or the operator issuing one for
+//     somebody -- may name its owner, which defaults to themselves.
+func (c *Client) externalAgentTokenOwner(ctx context.Context, req CreateExternalAgentTokenRequest) (string, error) {
+	asked := strings.TrimSpace(req.Owner)
+	for _, r := range asked {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return "", validationErrorf("owner %q may not contain whitespace or control characters", asked)
+		}
+	}
+	if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
+		if req.SelfService {
+			return "", forbiddenErrorf("a self-service credential is minted by a signed-in person")
+		}
+		own := ""
+		if tok := externalTokenFromContext(ctx); tok != nil {
+			own = strings.TrimSpace(tok.Owner)
+		}
+		if asked != "" && !strings.EqualFold(asked, own) {
+			return "", forbiddenErrorf("an agent cannot issue a credential on behalf of %q", asked)
+		}
+		return own, nil
+	}
+	caller := c.requestPersonOrOperator(ctx)
+	if req.SelfService {
+		if caller == "" {
+			return "", forbiddenErrorf("a self-service credential is minted by a signed-in person")
+		}
+		if asked != "" && !strings.EqualFold(asked, caller) {
+			return "", forbiddenErrorf("a self-service credential belongs to %s, not %q", caller, asked)
+		}
+		return caller, nil
+	}
+	if asked != "" {
+		return asked, nil
+	}
+	return caller, nil
+}
+
 // CreateExternalAgentToken issues a new scoped external agent credential.
 // Issuing a credential that includes any dangerous scope or a requires_person
 // scope set requires a human principal.
@@ -160,6 +223,10 @@ func (c *Client) CreateExternalAgentToken(ctx context.Context, req CreateExterna
 			"external agent credential %q includes a dangerous scope or a requires_person scope set: only a person may issue it",
 			name,
 		)
+	}
+	owner, err := c.externalAgentTokenOwner(ctx, req)
+	if err != nil {
+		return IssuedExternalAgentToken{}, err
 	}
 	if req.RateLimit < 0 {
 		return IssuedExternalAgentToken{}, validationErrorf("rateLimit must be non-negative")
@@ -207,6 +274,7 @@ func (c *Client) CreateExternalAgentToken(ctx context.Context, req CreateExterna
 		RateLimit:     req.RateLimit,
 		MaxConcurrent: req.MaxConcurrent,
 		CreatedBy:     createdBy,
+		Owner:         owner,
 		CreatedAt:     now,
 		ExpiresAt:     expiresAt,
 	})
@@ -246,6 +314,18 @@ func (c *Client) RotateExternalAgentToken(ctx context.Context, id string) (Issue
 			"external agent credential %q includes a dangerous scope or a requires_person scope set: only a person may rotate it",
 			existing.Name,
 		)
+	}
+	if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
+		own := ""
+		if tok := externalTokenFromContext(ctx); tok != nil {
+			own = strings.TrimSpace(tok.Owner)
+		}
+		if existingOwner := strings.TrimSpace(existing.Owner); !strings.EqualFold(existingOwner, own) {
+			return IssuedExternalAgentToken{}, forbiddenErrorf(
+				"an agent cannot rotate a credential owned by %q",
+				existingOwner,
+			)
+		}
 	}
 	rawToken, hash, prefix, err := model.GenerateExternalAgentToken()
 	if err != nil {
@@ -512,8 +592,8 @@ func (s *Server) handleCreateExternalAgentToken(w http.ResponseWriter, r *http.R
 		writeClientError(w, err)
 		return
 	}
-	log.Printf("grain external-agent: %s issued credential id=%s name=%q scopeSet=%q scopes=%v repos=%v",
-		tokenWriter(r), issued.ID, issued.Name, issued.ScopeSet, issued.Scopes, issued.Repos)
+	log.Printf("grain external-agent: %s issued credential id=%s name=%q owner=%q scopeSet=%q scopes=%v repos=%v",
+		tokenWriter(r), issued.ID, issued.Name, issued.Owner, issued.ScopeSet, issued.Scopes, issued.Repos)
 	writeJSON(w, http.StatusCreated, issued)
 }
 

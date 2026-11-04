@@ -14,15 +14,18 @@
 # limitations under the License.
 
 # verify-release-approval.sh: the person check for a promote-release.yml
-# run grain dispatched on a person's Inbox Approve or Reject
-# (design/playbook/releases.playbook.md §0.2, pkg/releaseapproval).
+# run grain dispatched on a person's Inbox Approve or Reject, or on a
+# person's rollback (POST /api/releases/{version}/rollback)
+# (design/playbook/releases.playbook.md §0.2 and §11, pkg/releaseapproval).
 #
 # The run's actor is the deployment's forge credential, so the proof that
 # a person decided is the signed record it carries. This verifies the
 # record's signature against the deployment's public key and that the
 # record is for exactly this run: this repository, this version, this
 # decision and short-soak and allow-breaking answers, the commit this repository's
-# <version>-pending tag stages, and not expired. On success it prints the
+# <version>-pending tag stages (for a rollback: the commit <version> tags,
+# and the rollback_to and SHA-256 of the reason the run was given), and
+# not expired. On success it prints the
 # person who decided, and nothing else, to stdout; on anything else it
 # says why on stderr and exits 1.
 #
@@ -34,6 +37,9 @@
 #   EXPECT_REPO EXPECT_VERSION EXPECT_DECISION EXPECT_SHORT_SOAK_OK
 #   EXPECT_ALLOW_BREAKING
 #                        what this run was dispatched to do
+#   EXPECT_ROLLBACK_TO EXPECT_REASON
+#                        rollback only: the rollback_to and reason inputs
+#                        (an empty rollback_to is signed as "-")
 #   NOW                  seconds since the epoch; tests only (default: now)
 # Run in a checkout that has the repository's tags.
 
