@@ -859,18 +859,6 @@ Reads a checkout's `.grain/templates`, `.grain/suites` and `.grain/schedules` an
 
 ---
 
-### 4.14 `grain access list|allow|deny` {#CLI-107}
-
-Manages the allowed users and groups (Settings -> Access) through `/api/access/principals`: who may sign in when authenticated by Cloud IAP or another registered IdentityVerifier. `list` (the default, also `ls`) prints each entry with who added it and when, and warns about `-ui-allowed-principals` entries that were dropped on import. `allow <user:<email>|group:<email>>` (also `add`) adds one; adding an existing entry is a no-op. `deny` (also `remove`, `rm`) removes one.
-
-<!-- BEGIN GENERATED FLAGS: grain access -->
-_No flags._
-<!-- END GENERATED FLAGS -->
-
-**Pinned by:** `pkg/cli/access_test.go`: `TestGrainAccessCLI`.
-
----
-
 ## 5. Service modes
 
 ### 5.1 `grain daemon [flags]` {#CLI-43}
@@ -1669,7 +1657,7 @@ Reconciles a live deployment's settings (`GET /api/settings`, then `PUT /api/set
 
 This manages the allowed users and groups list (Settings -> Access): who may sign in when authenticated by Cloud IAP or another registered IdentityVerifier. It calls `/api/access/principals`.
 
-- `list` (the default; also `ls`) prints every entry, or `No allowed users or groups.`.
+- `list` (the default; also `ls`) prints every entry with who added it and when, or `No allowed users or groups.`, and warns about `-ui-allowed-principals` entries that were dropped on import.
 - `allow <user:<email>|group:<email>>` (also `add`) adds one. Adding an existing entry is a no-op.
 - `deny <user:<email>|group:<email>>` (also `remove`, `rm`) removes one.
 
