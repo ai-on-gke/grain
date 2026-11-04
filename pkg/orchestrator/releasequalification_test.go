@@ -42,6 +42,8 @@ type fakeQualificationForge struct {
 	app      string // the App grain posts as; "" when it cannot tell
 	tags     []github.Tag
 	nightly  string // "" for no run yet, else its conclusion
+	anySHA   bool   // nightly is on every commit, not only rqSHA
+	heads    map[int64]string
 	checks   []github.CheckRun
 	branches map[string]bool
 	nextID   int64
@@ -52,7 +54,13 @@ func (f *fakeQualificationForge) ListTags(owner, repo string) ([]github.Tag, err
 }
 
 func (f *fakeQualificationForge) ListCheckRuns(owner, repo, ref string) ([]github.CheckRun, error) {
-	return f.checks, nil
+	var out []github.CheckRun
+	for _, c := range f.checks {
+		if head := f.heads[c.ID]; head == "" || head == ref {
+			out = append(out, c)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeQualificationForge) CheckRunApp(owner, repo string) (string, error) {
@@ -60,7 +68,7 @@ func (f *fakeQualificationForge) CheckRunApp(owner, repo string) (string, error)
 }
 
 func (f *fakeQualificationForge) ListWorkflowRuns(owner, repo, sha string) ([]github.CheckRun, error) {
-	if f.nightly == "" || sha != rqSHA {
+	if f.nightly == "" || (sha != rqSHA && !f.anySHA) {
 		return nil, nil
 	}
 	conclusion := f.nightly
@@ -87,6 +95,10 @@ func (f *fakeQualificationForge) CreateCheckRun(owner, repo string, run github.C
 		App:        f.app,
 		ExternalID: run.ExternalID,
 	})
+	if f.heads == nil {
+		f.heads = map[int64]string{}
+	}
+	f.heads[f.nextID] = run.HeadSHA
 	return f.nextID, nil
 }
 

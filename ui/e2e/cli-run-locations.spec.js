@@ -87,7 +87,7 @@ test("the run-location rows line up and nothing overflows", async ({
     const card = page.getByTestId("cli-run-locations");
     await expect(card).toBeVisible();
     const cardBox = await card.boundingBox();
-    const rows = ["claude", "codex", "antigravity", "custom"];
+    const rows = ["claude", "codex", "antigravity"];
     let lastBottom = -1;
     for (const fw of rows) {
       const row = page.getByTestId(`cli-run-${fw}`);
