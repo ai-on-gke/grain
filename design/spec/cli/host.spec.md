@@ -619,10 +619,11 @@ _No flags._
 
 **Pinned by:** `pkg/cli/hostds_test.go`: `TestHostdsRegisterAndSetOwner`.
 
-### 4.8 `grain git-connections`, `grain git-ambient`, `grain default-model` {#CLI-37}
+### 4.8 `grain git-connections`, `grain git-ambient`, `grain git-login`, `grain default-model` {#CLI-37}
 
 - `git-connections` reads `GET /api/deployment` and prints one `host credential` line per git connection.
 - `git-ambient [-host h] [-kind github|git] [-base-url u] [-proxy u] [-source gh|git|auto] [-if-none]` calls `POST /api/deployment/git-connections`. It adds an ambient connection that asks this host's own `gh`/`git` login for a token on demand. It is for a daemon on the bare machine only.
+- `git-login [-web|-from-gh|-with-token] [-host h] [-scope owner[/repo]] [-author name]` captures a delegated GitHub HTTPS token and registers it with `POST /api/deployment/git-connections`, signing new pull requests and comments with the person's name. `-web` runs GitHub's OAuth Device Flow (`-client-id`, `-scopes`), `-from-gh` reads this machine's `gh auth token`, and `-with-token` reads the token from standard input. With none given it prefers an active local `gh` login. More than one is refused. It has no `login` alias: `grain login` is sign-in (§ Task CLI: sign-in).
 - `default-model [-if-none|-if-unserved] <model>` sends `PUT /api/deployment {"defaultModel"}`. Without either flag that is its only call. With `-if-none` or `-if-unserved` it first reads `GET /api/deployment` and leaves a set default alone (`This deployment already runs on <m> by default: leaving it as it is.`). `-if-unserved` also reads `GET /api/settings` when a default is set, and replaces it when no enabled connection serves it.
 
 **Scope:** admin.
@@ -640,6 +641,21 @@ _No flags._
 | `-kind` | string | `"github"` |  | the host's kind: github (a forge API) or git (clone, fetch and push only) |
 | `-proxy` | string |  |  | the http(s)://host:port proxy the host is reached through, if any (read from the source's own tool when empty, for a registered source that has one) |
 | `-source` | string | `"auto"` |  | which of this host's tools to ask: gh, git, auto (auto: a registered source on its own hosts; gh, then git, elsewhere) |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain git-login -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-author` | string |  |  | explicit name to sign pull requests and comments with (defaults to your GitHub profile name or login) |
+| `-base-url` | string |  |  | the host's scheme://host[:port], when that is not https on the default port |
+| `-client-id` | string | `"178c6fc778ccc68e1d6a"` | $GRAIN_GITHUB_CLIENT_ID | GitHub OAuth Client ID for -web device flow ($GRAIN_GITHUB_CLIENT_ID) |
+| `-from-gh` | value |  |  | delegate the token from this machine's gh auth token login |
+| `-host` | string | `"github.com"` |  | git host to authenticate against |
+| `-proxy` | string |  |  | the http(s)://host:port proxy the host is reached through, if any |
+| `-scope` | string |  |  | optional owner or owner/repo scope (empty sets the deployment-wide default on -host) |
+| `-scopes` | string | `"repo,read:org,workflow"` |  | comma-separated OAuth scopes requested by -web |
+| `-web` | bool |  |  | authenticate in a web browser using GitHub OAuth Device Flow |
+| `-with-token` | bool |  |  | read the HTTPS token from standard input |
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain default-model -->
@@ -1830,7 +1846,7 @@ _No flags._
 <!-- BEGIN GENERATED FLAGS: grain init workstation -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-capability` | value |  |  | a capability pattern tasks may be granted (capabilities.allow); repeatable. None denies every capability |
+| `-capability` | value |  |  | a capability pattern tasks may be granted (capabilities.allow); repeatable. The Director's own and grain CI's are allowed without being named |
 | `-container-git-proxy-host` | string |  |  | with container sandboxes, the address a sandbox container reaches this host at (default: the gateway of docker network grain-sandboxes, which this creates if it is missing) |
 | `-data-dir` | string | `"$GRAIN_DATA_DIR"` | $GRAIN_DATA_DIR | the daemon's data directory ($GRAIN_DATA_DIR, else ~/.grain) |
 | `-force` | bool |  |  | rewrite grain_policy.yml even if one exists |
