@@ -96,7 +96,7 @@ func (s *Store) wakeStandingTask(ctx context.Context, open Task, comp Compositio
 	if obs == nil && resting {
 		obs = &Observation{}
 	}
-	if obs == nil || obs.PendingQuestionCommentID != nil || obs.PendingSecret != "" || obs.PendingConfigChange != nil {
+	if obs == nil || obs.PendingQuestionCommentID != nil || obs.PendingSecret != "" || obs.PendingConfigChange != nil || obs.PendingAccess != nil {
 		return false, nil
 	}
 	if obs.CompletedAt == nil && !resting {

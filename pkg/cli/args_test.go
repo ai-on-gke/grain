@@ -156,6 +156,9 @@ func TestHostLocalCommandsRefuseArgumentsTheyHaveNoUseFor(t *testing.T) {
 			_, err := parseDemoFlags([]string{"junk"})
 			return err
 		},
+		"grain upgrade-postgres": func() error {
+			return runUpgradePostgres(t.Context(), []string{"-data-dir", dataDir, "junk"}, &strings.Builder{})
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := run()

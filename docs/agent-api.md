@@ -117,6 +117,56 @@ and `summary` for that group to draw from. The grants are compared by
 name in the proposal trust gate, and can be matched by capability policy
 rules, the same as any other capability.
 
+### Asking a person for more access (`request_access`)
+
+A run that finds it needs something its task does not hold -- another
+repository to read or write, a capability grant (an in-process
+capability, an `api:*` scope, or a server method with `with:` arguments
+such as `gcp#gcp-key {permission_set}` or `repo#write {refs, force}`),
+or open network access -- asks for it with the turn-ending
+`request_access` tool rather than in prose:
+
+```json
+{"summary": "Grant write to acme/lib so the fix lands in both repos",
+ "reason": "The bug is in the shared client library ...",
+ "requests": [
+   {"kind": "read", "repo": "acme/docs"},
+   {"kind": "write", "repo": "acme/lib", "base": "release-2"},
+   {"kind": "grant", "capability": "api:tasks:admin"},
+   {"kind": "grant", "capability": "<server>#gcp-key", "with": {"permission_set": "reader"}},
+   {"kind": "network", "access": "open"}]}
+```
+
+Each item is checked when the call is made, with the checks the task's
+grants editor makes (`CheckCapabilityGrants`, the capability catalogue,
+the repository allowlist, base-branch names); an unknown capability,
+arguments its schema refuses, a repository this deployment does not work
+with, or something the task already holds is returned to the agent as
+an error to fix. Only the first call in a run is relayed.
+
+When the run finishes the task parks on the request (`awaiting_reply`,
+shown as **Asked for access**; the task row carries `awaitingAccess`).
+Its detail carries `pendingAccess`: each item judged against what the
+task holds now, marked `dangerous` or `requiresPerson`, what the task
+already holds, and `earlier` -- any previous answer to exactly the same
+request, so a repeat of a denied request shows the denial. The task pane,
+an interactive task's chat and the inbox show it as a card with
+per-item checkboxes, **Grant all** and **Deny**.
+
+| Route | What it does |
+|---|---|
+| `POST /api/tasks/{id}/access-request/grant` | `{"items": [0, 2]}` grants those items (omit `items` for all), through the same paths the task pane's editors use (`PATCH /api/tasks/{id}` for reads, writes and network access, `POST /api/tasks/{id}/capabilities` for each grant). The rest are declined. Records who granted what (an `access-granted` task event and the task's access decisions), posts the decision into the conversation and re-queues the task; the next run's prompt reads what was granted and what was declined. |
+| `POST /api/tasks/{id}/access-request/deny` | `{"reason": "..."}` (required). Records the denial, posts it with the reason and an instruction not to ask again, and re-queues the task. |
+| `POST /api/tasks/{id}/access-request/check` | grain's own plumbing: the mcpserver checking a call's items for its own task. |
+
+All three routes are `internal`, so no scope reaches them, and the grant
+and deny routes refuse every caller that is not a person. A dangerous
+scope or a `requires_person` grant goes through there because a person
+is the one deciding -- which is what the request is for -- and never for
+an automated approver: an agent holding `api:tasks:admin` cannot grant
+its own request, or anybody's. A reply in words instead un-parks the
+task too, and withdraws the request.
+
 ## The scope vocabulary
 
 Reads take an `<area>:read` scope. A scope marked **dangerous** can only

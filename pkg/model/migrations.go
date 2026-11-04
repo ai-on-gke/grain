@@ -715,6 +715,14 @@ var Migrations = []Migration{
 	},
 	{
 		Version:     105,
+		Description: "add pending_access_request and access_decisions to task_observation for request_access",
+		Statements: []string{
+			"ALTER TABLE `task_observation` ADD COLUMN `pending_access_request` TEXT NULL",
+			"ALTER TABLE `task_observation` ADD COLUMN `access_decisions` TEXT NULL",
+		},
+	},
+	{
+		Version:     106,
 		Description: "add external_agent_token.owner, task.filed_via, task_comment.filed_via and grain_config.owner_trust (external agent owner attribution and owner-trust approval)",
 		Statements: []string{
 			"ALTER TABLE `external_agent_token` ADD COLUMN `owner` TEXT NOT NULL DEFAULT ''",

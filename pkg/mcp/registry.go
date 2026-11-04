@@ -334,7 +334,7 @@ func (r *Registry) handleCall(ctx context.Context, id json.RawMessage, params js
 
 func isTurnEndingTool(name string, result Result) bool {
 	switch name {
-	case "comment_on_issue", "ask_question", "nothing_needed", "request_secret", "resume_later":
+	case "comment_on_issue", "ask_question", "nothing_needed", "request_secret", "request_access", "resume_later":
 		return true
 	case "chat":
 		return !result.HumanTurn

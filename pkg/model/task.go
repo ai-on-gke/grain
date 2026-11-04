@@ -2021,6 +2021,16 @@ type Observation struct {
 	// offered, since the branch it pins is still there to approve.
 	// Cleared by the approval or the rejection.
 	PendingConfigChange *PendingConfigChange
+	// PendingAccess is the access a parked run asked a person for with
+	// request_access (PendingAccessRequest's own doc). Like PendingSecret
+	// it sits beside PendingQuestionCommentID, which is what parks the
+	// task, and like it it is cleared when the task un-parks: by the
+	// person's grant or denial, or by a reply in words instead.
+	PendingAccess *PendingAccessRequest
+	// AccessDecisions are the answers people gave this task's access
+	// requests, latest last, so a request repeating one already denied
+	// shows the denial on its card.
+	AccessDecisions []AccessDecision
 	// MergeQueueBlockedAt is set once the merge queue has stopped driving
 	// this task, for any of the three reasons it ever does: the repair
 	// run it asked for finished and the PR is still conflicted or

@@ -42,7 +42,7 @@ on:
         default: true
         type: boolean
       force:
-        description: "Bypass the 24h soak elapsed-time gate (--force)"
+        description: "Cut an rc.1 inside RELEASE_MIN_INTERVAL_MINUTES of the last release (FORCE=true; a dry run only says what it would cut)"
         required: false
         default: false
         type: boolean
@@ -59,7 +59,7 @@ env:
 
 jobs:
   train:
-    name: cut, soak and stage a release from trunk
+    name: dry-run the release train
     runs-on: ubuntu-latest
     timeout-minutes: 120
     concurrency:
@@ -227,31 +227,10 @@ jobs:
             exit 1
           fi
 
-      - name: Require the grain API and staging endpoints
-        env:
-          GRAIN_API_URL: ${{ vars.GRAIN_API_URL }}
-          GRAIN_API_TOKEN: ${{ secrets.GRAIN_API_TOKEN }}
-          RELEASE_STAGING_URL: ${{ vars.RELEASE_STAGING_URL }}
-        run: |
-          if [ "${DRY_RUN}" = "true" ]; then
-            echo "Dry-run mode enabled: skipping the grain API and staging endpoint requirement"
-            exit 0
-          fi
-          missing=""
-          [ -n "${GRAIN_API_URL:-}" ] || missing="$missing vars.GRAIN_API_URL"
-          [ -n "${GRAIN_API_TOKEN:-}" ] || missing="$missing secrets.GRAIN_API_TOKEN"
-          [ -n "${RELEASE_STAGING_URL:-}" ] || missing="$missing vars.RELEASE_STAGING_URL"
-          if [ -n "$missing" ]; then
-            echo "release-train: a GitHub-hosted runner cannot reach the grain deployment or grain-candidate on localhost; set${missing} to URLs it can reach; nothing was tagged." >&2
-            echo "release-train: see docs/github-actions-ci.md." >&2
-            exit 1
-          fi
-
       - name: Run the release train
         env:
           GRAIN_API_URL: ${{ vars.GRAIN_API_URL }}
           GRAIN_API_TOKEN: ${{ secrets.GRAIN_API_TOKEN }}
-          RELEASE_STAGING_URL: ${{ vars.RELEASE_STAGING_URL }}
           RELEASE_CI_SOURCE: ${{ vars.RELEASE_CI_SOURCE || 'github' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_IMAGES: ${{ vars.RELEASE_IMAGES }}
@@ -268,6 +247,5 @@ jobs:
             if [ "${RELEASE_CI_SOURCE}" != github ]; then
               export RELEASE_RUNS_JSON="${RUNNER_TEMP}/dry-run-empty.json"
             fi
-            export RELEASE_TASKS_JSON="${RUNNER_TEMP}/dry-run-empty.json"
           fi
           bash ./scripts/release-from-trunk.sh

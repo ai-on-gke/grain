@@ -96,6 +96,32 @@ func TestEveryPromoteReleaseJobRefusesAnybodyButAPerson(t *testing.T) {
 	}
 }
 
+// A bad release is rolled back by the same person-only dispatch that
+// approves one (design/playbook/releases.playbook.md §11): the GitHub
+// Actions copy's rollback job refuses anything but a person's
+// workflow_dispatch before it runs release-from-trunk.sh rollback, which
+// tags vX.Y.Z-retracted and re-points `latest` and checks
+// GRAIN_CI_REQUESTED_BY_KIND itself; its free-text reason never reaches
+// $GITHUB_ENV.
+func TestPromoteReleaseRollsABadReleaseBackForAPersonOnly(t *testing.T) {
+	text := stripComments(read(t, ".github", "workflows", "promote-release.yml"))
+	contains(t, upTo(t, text, "jobs:"), "- rollback")
+	job := namedJob(t, text, "rollback")
+	contains(t, job, "if: inputs.decision == 'rollback'")
+	refuse := strings.Index(job, `"${GITHUB_EVENT_NAME:-}" != "workflow_dispatch"`)
+	person := strings.Index(job, `""|*"[bot]"|grain-ci*)`)
+	run := strings.Index(job, `bash ./scripts/release-from-trunk.sh rollback --bad "$GRAIN_CI_RELEASE_VERSION"`)
+	if refuse < 0 || person < 0 || run < 0 || refuse > run || person > run {
+		t.Errorf("promote-release.yml's rollback job does not refuse anybody but a person's dispatch before it runs the rollback:\n%s", job)
+	}
+	contains(t, job, "GRAIN_CI_REQUESTED_BY_KIND=human")
+	if strings.Contains(job, "RELEASE_ROLLBACK_REASON=") {
+		t.Error("promote-release.yml's rollback job writes the free-text reason to $GITHUB_ENV, where a newline in it could set any variable")
+	}
+	script := read(t, "scripts", "release-from-trunk.sh")
+	contains(t, script, "vX.Y.Z-retracted")
+}
+
 // human: required on the approval path, in both of the trust-boundary
 // declarations: the repository's own path trigger holds a change to the
 // approval workflow and the route that starts it for a person's Submit, and
@@ -138,6 +164,7 @@ func TestReleaseMachineryClearsOnSecurityReview(t *testing.T) {
 		"scripts/release-images.sh", "scripts/release-from-trunk.sh", "scripts/release-notes.sh",
 		"scripts/candidate-gate.sh", "scripts/release.conf",
 		"scripts/patch-tag-guard.sh", "scripts/build-version.sh", "scripts/grain-ci-host.sh",
+		"scripts/release-train-actions.sh", ".github/workflows/rc-qualification.yml",
 		".grain/workflows/release.yml", ".github/workflows/release.yml",
 		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 		".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",

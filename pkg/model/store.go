@@ -1485,6 +1485,25 @@ func (s *Store) PendingQuestionSummaries(ctx context.Context) (map[string]string
 	return out, err
 }
 
+// PendingAccessRequests is every open task parked on a request_access
+// call (Observation.PendingAccess) -- one query for a whole list, so a
+// row can say it is waiting on a grant rather than on an answer.
+func (s *Store) PendingAccessRequests(ctx context.Context) (map[string]bool, error) {
+	out := map[string]bool{}
+	err := each(ctx, s.db,
+		"SELECT `task_id` FROM `task_observation` WHERE `pending_access_request` IS NOT NULL "+
+			"AND `pending_access_request` <> '' AND `pending_question_comment_id` IS NOT NULL AND `closed_at` IS NULL", nil,
+		func(rows *sql.Rows) error {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			out[id] = true
+			return nil
+		})
+	return out, err
+}
+
 // RunNowRequested is every open task with an outstanding Run now request
 // (Observation.RunNowAt), with when it was asked for -- one query for a
 // whole list, as MergeQueueBlocked is, so a row can tell a task somebody
@@ -1923,6 +1942,22 @@ func observe(ctx context.Context, tx *sql.Tx, o Observation) error {
 		}
 		pendingConfigChange = string(data)
 	}
+	pendingAccess := any(nil)
+	if o.PendingAccess != nil {
+		data, err := json.Marshal(o.PendingAccess)
+		if err != nil {
+			return fmt.Errorf("writing pending access request of task %s: %w", o.TaskID, err)
+		}
+		pendingAccess = string(data)
+	}
+	accessDecisions := any(nil)
+	if len(o.AccessDecisions) > 0 {
+		data, err := json.Marshal(o.AccessDecisions)
+		if err != nil {
+			return fmt.Errorf("writing access decisions of task %s: %w", o.TaskID, err)
+		}
+		accessDecisions = string(data)
+	}
 	sessionAt := any(nil)
 	if !session.At.IsZero() {
 		sessionAt = session.At.UTC()
@@ -1950,8 +1985,9 @@ func observe(ctx context.Context, tx *sql.Tx, o Observation) error {
 			"`suspended_session_at`,"+
 			"`force_merge_at`,`force_merge_reason`,`force_merge_by`,`force_merge_skipped`,`force_merge_head_sha`,"+
 			"`streak_count`,`last_failed_at`,`last_succeeded_at`,`delivered_comment_id`,"+
-			"`merge_queue_cancel_handoff_at`,`merge_queue_cancel_handoff_run`,`merge_queue_reason`,`pending_config_change`"+
-			") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+			"`merge_queue_cancel_handoff_at`,`merge_queue_cancel_handoff_run`,`merge_queue_reason`,`pending_config_change`,"+
+			"`pending_access_request`,`access_decisions`"+
+			") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		o.TaskID, timeOf(o.ClosedAt), timeOf(o.CompletedAt),
 		int64Of(o.PendingQuestionCommentID), int64Of(o.BaselineCommentID), o.PendingSecret,
 		timeOf(o.MergeQueueBlockedAt), timeOf(o.MergeQueueRefreshedAt),
@@ -1972,7 +2008,7 @@ func observe(ctx context.Context, tx *sql.Tx, o Observation) error {
 		o.StreakCount, timeOf(o.LastFailedAt), timeOf(o.LastSucceededAt),
 		int64Of(o.DeliveredCommentID),
 		timeOf(o.MergeQueueCancelHandoffAt), o.MergeQueueCancelHandoffRun, o.MergeQueueReason,
-		pendingConfigChange)
+		pendingConfigChange, pendingAccess, accessDecisions)
 	return err
 }
 
@@ -2001,7 +2037,8 @@ func getObservation(ctx context.Context, q querier, taskID string) (*Observation
 			"`suspended_session_at`,"+
 			"`force_merge_at`,`force_merge_reason`,`force_merge_by`,`force_merge_skipped`,`force_merge_head_sha`,"+
 			"`streak_count`,`last_failed_at`,`last_succeeded_at`,`delivered_comment_id`,"+
-			"`merge_queue_cancel_handoff_at`,`merge_queue_cancel_handoff_run`,`merge_queue_reason`,`pending_config_change` "+
+			"`merge_queue_cancel_handoff_at`,`merge_queue_cancel_handoff_run`,`merge_queue_reason`,`pending_config_change`,"+
+			"`pending_access_request`,`access_decisions` "+
 			"FROM `task_observation` WHERE `task_id` = ?", taskID)
 	o := Observation{TaskID: taskID}
 	var closed, completed, blocked, refreshed, repaired, mergeQueueStateAt sql.NullTime
@@ -2043,7 +2080,7 @@ func getObservation(ctx context.Context, q querier, taskID string) (*Observation
 	// carries NULL there, which is the same "nothing pending" an empty
 	// string means (ensureTaskObservationPendingSecretColumn).
 	var pendingSecret sql.NullString
-	var pendingConfigChange sql.NullString
+	var pendingConfigChange, pendingAccess, accessDecisions sql.NullString
 	// The CI columns are NullString/NullTime for the same reason, and
 	// with more of it: every row written before
 	// ensureTaskObservationCIColumns ran carries NULL in all of them.
@@ -2078,7 +2115,8 @@ func getObservation(ctx context.Context, q querier, taskID string) (*Observation
 		&sessionToken, &sessionFramework, &sessionRunID, &sessionAt,
 		&forceMergeAt, &forceMergeReason, &forceMergeBy, &forceMergeSkipped, &forceMergeHeadSHA,
 		&streakCount, &lastFailedAt, &lastSucceededAt, &delivered,
-		&cancelHandoffAt, &cancelHandoffRun, &mergeQueueReason, &pendingConfigChange); err != nil {
+		&cancelHandoffAt, &cancelHandoffRun, &mergeQueueReason, &pendingConfigChange,
+		&pendingAccess, &accessDecisions); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -2129,6 +2167,18 @@ func getObservation(ctx context.Context, q querier, taskID string) (*Observation
 			return nil, fmt.Errorf("reading pending config change of task %s: %w", taskID, err)
 		}
 		o.PendingConfigChange = &change
+	}
+	if pendingAccess.Valid && pendingAccess.String != "" {
+		var req PendingAccessRequest
+		if err := json.Unmarshal([]byte(pendingAccess.String), &req); err != nil {
+			return nil, fmt.Errorf("reading pending access request of task %s: %w", taskID, err)
+		}
+		o.PendingAccess = &req
+	}
+	if accessDecisions.Valid && accessDecisions.String != "" {
+		if err := json.Unmarshal([]byte(accessDecisions.String), &o.AccessDecisions); err != nil {
+			return nil, fmt.Errorf("reading access decisions of task %s: %w", taskID, err)
+		}
 	}
 	o.MergeQueueBlockedAt, o.MergeQueueRefreshedAt = timePtr(blocked), timePtr(refreshed)
 	o.MergeQueueRepairAt = timePtr(repaired)

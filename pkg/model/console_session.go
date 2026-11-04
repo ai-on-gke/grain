@@ -1152,6 +1152,7 @@ func ParkConsoleSessionTask(ctx context.Context, store *Store, taskID, note stri
 	if err := store.ObserveField(ctx, taskID, now, func(o *Observation) {
 		o.PendingQuestionCommentID = &commentID
 		o.PendingSecret = ""
+		o.PendingAccess = nil
 	}); err != nil {
 		return err
 	}
