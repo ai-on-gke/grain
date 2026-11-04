@@ -123,6 +123,9 @@ func TestTasksWaitEndpointWakesOnConditionsEarnsNoWaitCreditAndExits5OnTimeout(t
 	if code, _, _ := wait(issued.Token, "ids=501,502&until=closed"); code != http.StatusForbidden {
 		t.Errorf("a token reading acme/widgets waiting on an acme/gadgets task too got %d, want 403", code)
 	}
+	if code, _, _ := wait(issued.Token, "ids=501,999&until=closed"); code != http.StatusForbidden {
+		t.Errorf("a token reading acme/widgets waiting on a task id that names no task got %d, want 403", code)
+	}
 
 	credits, err := client.Store.RunWaitCredits(ctx)
 	if err != nil {

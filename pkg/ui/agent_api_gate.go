@@ -2580,14 +2580,18 @@ const tasksWaitRoute = "GET /api/tasks/wait"
 // judged on, checking every task it names (#XC-22): the first task's
 // repository whose grant allowed refuses, so it is the one the gate
 // names, and otherwise the first task's own. A task id that names no
-// task is left for the handler to answer 404.
+// task (yet) belongs to no repository a grant can be judged on, so the
+// call is judged on "" -- only a grant for every repository reaches it,
+// and the handler answers that caller 404 -- rather than letting a
+// token held to some repositories name an id another's task is filed
+// under between this check and the handler's read.
 func (s *Server) tasksWaitCallRepo(ctx context.Context, r *http.Request, allowed func(string) bool) (string, []string) {
 	ids := TasksWaitIDs(r)
 	first, firstSet := "", false
 	for _, id := range ids {
 		t, err := s.tasks.Store.GetTask(ctx, id)
 		if err != nil || t == nil {
-			continue
+			return "", ids
 		}
 		repo := taskRepo(t)
 		if !allowed(repo) {
