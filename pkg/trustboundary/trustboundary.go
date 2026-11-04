@@ -41,7 +41,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v14"
+const Version = "trust-boundary/v15"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -81,6 +81,16 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v15 added the authorization-bearing files the 2026-11-04 nightly
+// security review found unclassified (finding 2, task 2977): the
+// controller MCP endpoint that authorizes every grain_invoke, the
+// database-held sign-in allowlist's entry refusal and its API, and the
+// person-only check on applying a run's requested grants (auth-routes);
+// the code-declared CI grant rule (capabilities-secrets); the store-level
+// auto-merge guard and its restore after a hold (hold-policy); and the
+// hostd install script served unauthenticated and run as root, with the
+// route that renders it (setup-scripts).
 //
 // v13 added the GitHub Actions Inbox approval (grain/task-2666,
 // design/playbook/releases.playbook.md §0.2) to release-promotion: the
@@ -160,6 +170,9 @@ var Categories = []Category{
 			// The repository-declared half of the list, and who may
 			// release what it holds (grain/task-1714).
 			"pkg/orchestrator/repoguard.go", "pkg/model/sensitive_path.go", "pkg/ui/approvals.go",
+			// The store-level guard that keeps auto-merge off a held task,
+			// and the one place it is handed back once the hold clears.
+			"pkg/model/task_auto_merge.go",
 		},
 	},
 	{
@@ -187,6 +200,16 @@ var Categories = []Category{
 			// messagesSince's human-only filter is what makes the answer a
 			// host-exec confirmation reads a person's.
 			"pkg/ui/messages.go",
+			// The controller MCP endpoint, which agentAPIGate exempts by
+			// name: whose access a call runs with (token scopes, the acting
+			// task's grants, or full access) and the re-issue of each
+			// grain_invoke through the route table and its gate.
+			"pkg/ui/mcp_endpoint.go",
+			// The sign-in allowlist held in the database: which entries it
+			// refuses (service accounts, domains) and its API.
+			"pkg/model/allowed_principals.go", "pkg/ui/access_principals.go",
+			// That only a person applies a run's requested grants.
+			"pkg/ui/task_access_request.go",
 		},
 	},
 	{
@@ -200,6 +223,9 @@ var Categories = []Category{
 			// events, and the refusal of untrusted pull-request runs.
 			"pkg/model/repo_access.go", "pkg/daemon/ci.go", "pkg/daemon/ci_policy.go",
 			"pkg/daemon/ci_capability_pass.go", "pkg/daemon/capabilities.go",
+			// Which CI events may be handed signing and publishing
+			// capabilities, read by all three of their enforcers.
+			"pkg/model/ci_grant_rule.go",
 		},
 	},
 	{
@@ -347,7 +373,12 @@ var Categories = []Category{
 	{
 		ID:          "setup-scripts",
 		Description: "setup scripts run with the deployment's own privileges",
-		files:       []string{"scripts/setup.sh"},
+		files: []string{
+			"scripts/setup.sh",
+			// Served unauthenticated and run as root on every hostd machine,
+			// and the route that renders it and decides who sees what.
+			"pkg/ui/hostd_install.sh", "pkg/ui/hostd_install.go",
+		},
 	},
 }
 
