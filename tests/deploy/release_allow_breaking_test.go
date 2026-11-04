@@ -138,7 +138,8 @@ func TestGitHubPromoteReleaseForwardsAllowBreaking(t *testing.T) {
 
 // Every step that writes inputs.version into $GITHUB_ENV refuses one that
 // is not vX.Y.Z first: a newline in it would otherwise set any variable
-// for the steps after it, RELEASE_ALLOW_BREAKING among them.
+// for the steps after it, RELEASE_ALLOW_BREAKING among them. The rollback
+// job's rollback_to is held to the same rule.
 func TestGitHubPromoteReleaseValidatesTheVersionBeforeGITHUB_ENV(t *testing.T) {
 	w := githubPromoteReleaseWorkflow(t)
 	var checked int
@@ -176,7 +177,42 @@ func TestGitHubPromoteReleaseValidatesTheVersionBeforeGITHUB_ENV(t *testing.T) {
 			}
 		}
 	}
-	if checked != 2 {
-		t.Errorf("%s has %d steps reading inputs.version as INPUT_VERSION, want 2 (approve and reject)", githubPromoteReleasePath, checked)
+	rollback := 0
+	for id, job := range w.Jobs {
+		for _, step := range job.Steps {
+			if step.Env["INPUT_ROLLBACK_TO"] != "${{ inputs.rollback_to }}" {
+				continue
+			}
+			rollback++
+			for _, to := range []string{"v2.3.0\nRELEASE_ALLOW_BREAKING=v2.4.0", "2.3.0", "latest", "v2.3.0-retracted"} {
+				envFile := filepath.Join(t.TempDir(), "github_env")
+				out, err := runStep(t, t.TempDir(), step.Run,
+					"INPUT_VERSION=v2.4.0", "INPUT_ROLLBACK_TO="+to, "INPUT_DRY_RUN=true", "GH_REF_NAME=main",
+					"GITHUB_EVENT_NAME=workflow_dispatch", "GITHUB_ACTOR=alice", "GITHUB_REF=refs/heads/main",
+					"GITHUB_REPOSITORY=a/b", "GITHUB_SHA=0123abc", "GITHUB_ENV="+envFile)
+				if err == nil {
+					t.Errorf("%s job %s step %q accepted rollback_to %q:\n%s", githubPromoteReleasePath, id, step.Name, to, out)
+				}
+				if written, _ := os.ReadFile(envFile); len(written) > 0 {
+					t.Errorf("%s job %s step %q wrote $GITHUB_ENV for rollback_to %q:\n%s", githubPromoteReleasePath, id, step.Name, to, written)
+				}
+			}
+			envFile := filepath.Join(t.TempDir(), "github_env")
+			out, err := runStep(t, t.TempDir(), step.Run,
+				"INPUT_VERSION=v2.4.0", "INPUT_ROLLBACK_TO=v2.3.0", "INPUT_DRY_RUN=true", "GH_REF_NAME=main",
+				"GITHUB_EVENT_NAME=workflow_dispatch", "GITHUB_ACTOR=alice", "GITHUB_REF=refs/heads/main",
+				"GITHUB_REPOSITORY=a/b", "GITHUB_SHA=0123abc", "GITHUB_ENV="+envFile)
+			written, _ := os.ReadFile(envFile)
+			if err != nil || !strings.Contains(string(written), "RELEASE_ROLLBACK_TO=v2.3.0\n") {
+				t.Errorf("%s job %s step %q refused rollback_to v2.3.0 (%v):\n%s\n$GITHUB_ENV:\n%s",
+					githubPromoteReleasePath, id, step.Name, err, out, written)
+			}
+		}
+	}
+	if rollback != 1 {
+		t.Errorf("%s has %d steps reading inputs.rollback_to, want 1 (rollback)", githubPromoteReleasePath, rollback)
+	}
+	if checked != 3 {
+		t.Errorf("%s has %d steps reading inputs.version as INPUT_VERSION, want 3 (approve, reject and rollback)", githubPromoteReleasePath, checked)
 	}
 }

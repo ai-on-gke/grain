@@ -126,9 +126,11 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// capabilities-secrets, grain/task-2723; v12 only splits the release
 	// jobs out of release-promotion into release-machinery, grain/task-2664;
 	// v13 only adds the GitHub Actions Inbox approval's files to
-	// release-promotion, grain/task-2666).
-	if trustboundary.Version != "trust-boundary/v13" {
-		w.t.Fatalf("this walkthrough is about trust-boundary/v13, the build has %s", trustboundary.Version)
+	// release-promotion, grain/task-2666; v14 only adds the rc
+	// qualification housekeeping workflow and its Actions helper to
+	// release-machinery, grain/task-2584).
+	if trustboundary.Version != "trust-boundary/v14" {
+		w.t.Fatalf("this walkthrough is about trust-boundary/v14, the build has %s", trustboundary.Version)
 	}
 	if w.merged(branch) {
 		w.t.Fatal("merged before the pull request read mergeable")
