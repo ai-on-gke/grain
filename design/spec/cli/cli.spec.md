@@ -93,13 +93,13 @@ The exceptions:
 2. a programmatic `TokenProvider` (none is set by `cmd/grain` today);
 3. the first non-empty of `$GRAIN_TOKEN`, `$GRAIN_AUTH_TOKEN`, `$GRAIN_ID_TOKEN`, `$GRAIN_TUNNEL_TOKEN`;
 4. for a loopback server only, the **local API token**, which is the daemon's **access code**. It is read from `$GRAIN_LOCAL_API_TOKEN_FILE`, else `$GRAIN_DATA_DIR/local-api-token`, and silently skipped when it cannot be read;
-5. a Google ID token, when `-audience` is set or the server is `https://` or `*.run.app`. The token comes from Application Default Credentials for the audience (default: the server URL), else `gcloud auth print-identity-token --audiences=<aud>`, else, for `*.run.app` servers only, a plain `gcloud auth print-identity-token`. It is cached until a minute before it expires.
+5. a Google ID token, when `-audience` (`$GRAIN_AUDIENCE`, else `$GRAIN_TUNNEL_AUDIENCE`) is set or the server is `https://` or `*.run.app`. The token comes from Application Default Credentials for the audience (default: the server URL), else `gcloud auth print-identity-token --audiences=<aud>`, else, for `*.run.app` servers only, a plain `gcloud auth print-identity-token`. It is cached until a minute before it expires.
 
-A chosen credential **MUST** be sent with any leading `Bearer ` stripped, as both `Authorization: Bearer <tok>` and `X-Grain-Tunnel-Token: <tok>`. `-as` **MUST** be sent as `X-Forwarded-User`. Every request carries `User-Agent: grain-cli` unless one is already set.
+A chosen credential **MUST** be sent with any leading `Bearer ` stripped, as both `Authorization: Bearer <tok>` and `X-Grain-Tunnel-Token: <tok>`. `-as` (`$GRAIN_USER`) **MUST** be sent as `X-Forwarded-User`. Every request carries `User-Agent: grain-cli` unless one is already set.
 
 A scoped external agent token (`gma_…`) is not special-cased by the CLI. Passed as `-token` or `$GRAIN_TOKEN`, it is sent like any other bearer. The daemon authenticates it as `external:<name>`, held to its own scopes (`pkg/ui/server.go`, `pkg/ui/external_agents.go`). In **IAP mode** (`grain daemon -ui-require-iap`), the CLI reaches the daemon through the IAP proxy with a Google ID token minted for the IAP audience (`-audience`). Loopback break-glass is specified in [`authentication.spec.md` §5](../authentication/authentication.spec.md).
 
-**Pinned by:** `pkg/cli/cli_flags_test.go`: `TestRunCLI_GlobalFlags`; `pkg/ui/httpclient_auth_test.go`.
+**Pinned by:** `pkg/cli/cli_flags_test.go`: `TestRunCLI_GlobalFlags`, `TestRunCLI_EnvVarDefaults`, `TestAudienceDefault_EnvVars`, `TestAsUserDefault_EnvVars`; `pkg/ui/httpclient_auth_test.go`.
 
 ### 3.2 Timeouts, retry and connection errors {#CLI-7}
 
@@ -219,18 +219,14 @@ Places where a design says something the code does not do. The designs were not 
    - The binary registers **no** `grain context`, `grain login`, `grain logout`, `grain whoami`, `grain skill` or `grain mcp` command, and does not read `~/.config/grain/config.json`. Server resolution is `-server` → `$GRAIN_SERVER` → cli.env → default ([#CLI-4](#CLI-4)), with no context step (XC-1–XC-3).
    - `sandboxcli` yields to the host CLI only for `GRAIN_SANDBOX_CLI=0|false` or a non-empty `$GRAIN_SERVER`. It does **not** yield for `$GRAIN_CONTEXT` or for a `-server`/`-context` flag (XC-3.4).
    - Credential sources registered through `cli.RegisterCredentialSource` (XC-4, XC-10) do not exist. `TokenProvider` is never set by `cmd/grain`.
-2. **Help text that claims environment variables the code does not read:**
-   - The global usage and the `-audience` flag name `$GRAIN_AUDIENCE` and `$GRAIN_TUNNEL_AUDIENCE`, but `HTTPClient` reads neither; `$GRAIN_AUDIENCE` is read only by the daemon's IAP verifier.
-   - `-as` names `$GRAIN_USER`, which nothing reads.
-   - The fix belongs in the code or the help, not here.
-3. **`sandbox-first-agent-surface.design.md`:**
+2. **`sandbox-first-agent-surface.design.md`:**
    - §4 says every subcommand has a `--json` mode "where applicable". In the code only `notify`, `task list`, `task wait`, `task propose`, `api` and `cap` take `--json`; every other command prints the proxy's text.
    - §7 writes `grain log [--since ...] [--grep ...]`. The code's substring filter is `--contains`, and `--grep` is refused as an unknown flag.
    - §4's prompt bullet writes `grain metrics [--section <name>]`. The code takes the section as a positional argument (`grain metrics <section>`), and `--section` is refused.
    - The design leaves write commands to MCP tools, but the CLI also has `status`, `handover write`, `task message`, `task propose`, `notify`, `pr reply|resolve|review-comment`, `git revert`, `memory write|doc-write`, `quarantine`, `release-notes publish`, `api` and `cap`.
    - The turn-ending controls stay MCP-only. `task wait --park`/`--resume-at` are refused, and `task propose` refuses `--supersedes`, `--auto-merge` and `--hold-for-approval=false` ([`sandbox.spec.md` #CLI-93](sandbox.spec.md#CLI-93)).
-4. **`cli-run-location.design.md`** is about where agent CLIs (claude, codex, agy) run, not about `grain`'s own CLI. Its command-line surface is the daemon's `-claude-run`, `-codex-run` and `-agy-run` flags and `grain hostd`, and both exist as it describes ([`host.spec.md`](host.spec.md), `grain daemon` and `grain hostd`). No divergence was found in the CLI surface.
-5. **Commands the task brief names that do not exist:**
+3. **`cli-run-location.design.md`** is about where agent CLIs (claude, codex, agy) run, not about `grain`'s own CLI. Its command-line surface is the daemon's `-claude-run`, `-codex-run` and `-agy-run` flags and `grain hostd`, and both exist as it describes ([`host.spec.md`](host.spec.md), `grain daemon` and `grain hostd`). No divergence was found in the CLI surface.
+4. **Commands the task brief names that do not exist:**
    - There is no `grain upgrade` command: schema upgrades are `grain state prepare-upgrade`, and the store move is `grain upgrade-postgres`/`grain db`.
    - There is no `grain executor` command.
    - `grain create` and `grain ci` are task-CLI commands, not modes.
