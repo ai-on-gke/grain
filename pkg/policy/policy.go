@@ -564,6 +564,11 @@ func allowsCapability(patterns []string, capability string) bool {
 
 func (p *Policy) checkCapabilities(task model.Task) error {
 	for _, g := range task.Grants {
+		if model.IsCapabilityRef(g.Capability) {
+			if err := model.CheckCapabilityGrantArgsOffline(g.Capability); err != nil {
+				return err
+			}
+		}
 		if deniesCapability(p.Capabilities.Deny, g.Capability) {
 			return fmt.Errorf("local policy forbids capability %q", g.Capability)
 		}

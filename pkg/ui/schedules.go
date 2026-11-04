@@ -459,7 +459,7 @@ func scheduleFrom(s model.Schedule, templateName, suiteName string) Schedule {
 		out.TemplateName = templateName
 		out.System = model.IsSystemTemplateID(*s.TemplateID)
 	}
-	if s.TemplateID != nil && strings.HasPrefix(*s.TemplateID, model.WorkflowReviewTemplatePrefix) {
+	if s.TemplateID != nil && model.IsWorkflowReviewTemplateID(*s.TemplateID) {
 		out.WorkflowReview = string(model.WorkflowReviewOnFailure)
 		if s.WorkflowReview.Always() {
 			out.WorkflowReview = string(model.WorkflowReviewAlways)
@@ -2033,7 +2033,7 @@ func (c *Client) RunScheduleNow(ctx context.Context, id string) (ScheduleRun, er
 	if firing.Skipped {
 		workflow := false
 		if sched.TemplateID != nil {
-			_, workflow = model.WorkflowReviewStem(*sched.TemplateID)
+			workflow = model.IsWorkflowReviewTemplateID(*sched.TemplateID)
 		}
 		return ScheduleRun{}, &scheduleBusyError{ID: id, Review: firing.OpenReview, Workflow: workflow}
 	}

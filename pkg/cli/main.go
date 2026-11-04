@@ -357,7 +357,7 @@ Commands:
                                        list, repeatably, with -state/-repo/-capability and friends
                                        as shorthands; -sort attribute:asc orders it. "grain list -h"
                                        prints the attributes and comparisons -- see list.go)
-  get <id>                             show one task and its conversation
+  get <id> [-comments-since T]         show one task and its conversation (only what came after T)
   create -title T [flags]              file a new task (-position front|end picks which end of
                                        the backlog it joins, and is remembered for the next one;
                                        -field name=value sets one of the fields this deployment
@@ -372,6 +372,7 @@ Commands:
                                        queued its approval says
   capability <id> <cap> attach|detach  attach or detach a capability
   comment <id> <body...>               post a comment (and answer a parked question)
+  reply|inbox|wait|logs <id...>        answer a parked question, list what needs a person, block on tasks, read a run's log
   close [-close-pull-request] <id>     close a task (grain's "delete" -- see the package doc comment),
                                        and with the flag its open pull request too
   delete <id>                          alias for close
@@ -629,6 +630,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdCapability(ctx, c, out, cmdArgs)
 	case "comment":
 		return cmdComment(ctx, c, out, cmdArgs)
+	case "reply", "inbox", "wait", "logs":
+		return externalCommands[cmd](ctx, c, out, cmdArgs)
 	case "close", "delete":
 		return cmdClose(ctx, c, out, cmdArgs)
 	case "reopen":

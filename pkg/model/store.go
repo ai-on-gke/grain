@@ -90,6 +90,15 @@ type Store struct {
 	commentMu    sync.Mutex
 	commentAdded map[string]chan struct{}
 
+	// changed is the channel Changed handed out, closed (and replaced)
+	// by the next write transaction that commits through this Store:
+	// the in-process broadcast GET /api/tasks/wait holds its callers on,
+	// so a waiter re-reads what it waits on once per change rather than
+	// polling the database on a timer of its own. Process-local, as
+	// commentAdded is.
+	changedMu sync.Mutex
+	changed   chan struct{}
+
 	// SettingsRepo is the deployment's own state repository, whose merged
 	// changes the daemon applies to itself on its next tick
 	// (staterepo.Apply) -- which is why the security hold judges a pull
@@ -441,7 +450,30 @@ func (s *Store) writeOnce(ctx context.Context, fn func(*sql.Tx) error) error {
 		return err
 	}
 	s.commits.Add(1)
+	s.signalChanged()
 	return nil
+}
+
+// Changed returns a channel closed the next time any write transaction
+// commits through this Store -- a task, its observation, a comment, a CI
+// run. Take the channel before reading what is waited on, so a commit
+// landing between the read and the wait is not missed.
+func (s *Store) Changed() <-chan struct{} {
+	s.changedMu.Lock()
+	defer s.changedMu.Unlock()
+	if s.changed == nil {
+		s.changed = make(chan struct{})
+	}
+	return s.changed
+}
+
+func (s *Store) signalChanged() {
+	s.changedMu.Lock()
+	defer s.changedMu.Unlock()
+	if s.changed != nil {
+		close(s.changed)
+		s.changed = nil
+	}
 }
 
 // isSerializationFailure reports whether the database is telling us this
