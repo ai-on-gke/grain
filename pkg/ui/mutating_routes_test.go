@@ -350,6 +350,12 @@ var attributedRoutes = map[string]attributedRoute{
 		idOnly:   true,
 		recorded: releaseRequester,
 	},
+	"POST /api/releases/{version}/rollback": {
+		client:   releaseClient,
+		path:     "/api/releases/v2.4.0/rollback",
+		idOnly:   true,
+		recorded: releaseRequester,
+	},
 	"POST /api/tasks/{id}/withdraw-approval": {
 		setup:       fileTask(true),
 		agentGrants: []string{"api:tasks:write"},

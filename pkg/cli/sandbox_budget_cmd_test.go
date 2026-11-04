@@ -75,3 +75,48 @@ func TestSandboxBudgetWords(t *testing.T) {
 		t.Errorf("output = %q, want a fits line and no fix", got)
 	}
 }
+
+func TestSandboxBudgetReportsAnUnderResourcedHost(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"maxWorkers": 10,
+			"sandboxDiskGbDefault": 30,
+			"sandboxDiskOvercommit": 2,
+			"sandboxDiskFloors": [
+				{"holds": ["store", "docker"], "path": "/var/lib/grain/data", "usedMB": 4096, "totalMB": 30720, "floorMB": 5120}
+			],
+			"sandboxCommitment": {
+				"workers": 10,
+				"cpusPerSandbox": 2, "memoryMbPerSandbox": 8192, "diskGbPerSandbox": 30,
+				"hostCpus": 16, "hostMemoryMb": 65536,
+				"budget": {
+					"cpuOvercommit": 2, "memoryOvercommit": 1, "diskOvercommit": 2,
+					"reserveMemoryMb": 8192, "cpus": 28, "cpusBounded": true, "memoryMb": 57344, "memoryBounded": true
+				}
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	v, err := sandboxBudget(context.Background(), ui.NewHTTPClient(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	printSandboxBudget(&buf, v)
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("output = %q, want a verdict line and a fix line", buf.String())
+	}
+	if !strings.HasPrefix(lines[0], "under-resourced: one 8192 MiB sandbox fits in 57344 MiB of sandbox memory, but this host is configured for 10 workers") {
+		t.Errorf("verdict line = %q", lines[0])
+	}
+	if want := "fix: grain settings -max-workers 1"; lines[1] != want {
+		t.Errorf("fix line = %q, want %q", lines[1], want)
+	}
+	view := sandboxBudgetJSON(v)
+	if view.Verdict != "under-resourced" || view.ConfiguredWorkers != 10 || view.MaxConcurrent != 1 {
+		t.Errorf("json view = %+v, want under-resourced with 10 configured and 1 maxConcurrent", view)
+	}
+}

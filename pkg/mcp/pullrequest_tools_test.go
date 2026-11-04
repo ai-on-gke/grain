@@ -98,6 +98,7 @@ func (f *fakePullRequests) DefaultBranch(owner, repo string) (string, error) {
 
 func (f *fakePullRequests) FindOpenPullRequestForBranch(owner, repo, branch string) (*github.PullRequest, error) {
 	f.note(owner, repo)
+	f.refs = append(f.refs, branch)
 	return f.pr, f.prErr
 }
 
@@ -925,5 +926,65 @@ func TestPullRequestStatusExplainsWhyNoPullRequestIsOpenYet(t *testing.T) {
 	// The checks the push triggered directly are still reported.
 	if !strings.Contains(res.Text, "lint") {
 		t.Errorf("answer drops the checks that ran without a pull request:\n%s", res.Text)
+	}
+}
+
+func TestPullRequestToolsWithUpstreamRepoScope(t *testing.T) {
+	forkScope := PullRequestScope{
+		Owner:         "sackheads",
+		Repo:          "kube-agents",
+		Branch:        "grain/task-8-fork",
+		UpstreamOwner: "gke-labs",
+		UpstreamRepo:  "kube-agents",
+	}
+	fake := &fakePullRequests{
+		heads: map[string]*github.BranchHead{
+			"grain/task-8-fork": {SHA: "1122334455667788", Message: "feat: support fork workflow"},
+			"main":              {SHA: "aabbccddeeff0011", Message: "upstream main"},
+		},
+		defaultBranch: "main",
+		pr:            &github.PullRequest{Number: 108, HTMLURL: "https://github.com/gke-labs/kube-agents/pull/108"},
+		detail:        github.PullRequestDetail{Number: 108, State: "open", HTMLURL: "https://github.com/gke-labs/kube-agents/pull/108"},
+		checks:        []github.CheckRun{{Name: "test", Status: "completed", Conclusion: conclusion("success")}},
+	}
+
+	res := call(t, fake, forkScope)
+	if res.IsError {
+		t.Fatalf("pull_request_status failed: %s", res.Text)
+	}
+	if !strings.Contains(res.Text, "Pull request #108 (https://github.com/gke-labs/kube-agents/pull/108) is open") {
+		t.Fatalf("unexpected pull_request_status output:\n%s", res.Text)
+	}
+	// GetBranchHead must read the pushed branch from the fork (sackheads/kube-agents),
+	// while FindOpenPullRequestForBranch and GetPullRequest must query upstream (gke-labs/kube-agents)
+	// with head "sackheads:grain/task-8-fork".
+	if len(fake.repos) < 3 || fake.repos[0] != "sackheads/kube-agents" || fake.repos[1] != "gke-labs/kube-agents" || fake.repos[2] != "gke-labs/kube-agents" {
+		t.Fatalf("repos queried = %v, want [sackheads/kube-agents gke-labs/kube-agents gke-labs/kube-agents ...]", fake.repos)
+	}
+	if len(fake.refs) < 2 || fake.refs[0] != "grain/task-8-fork" || fake.refs[1] != "sackheads:grain/task-8-fork" {
+		t.Fatalf("refs queried = %v, want [grain/task-8-fork sackheads:grain/task-8-fork ...]", fake.refs)
+	}
+
+	// Verify base_branch_status reads default branch and base head from upstream (gke-labs/kube-agents).
+	fake.repos = nil
+	tools := NewPullRequestTools(fake, nil, forkScope)
+	var baseTool Tool
+	for _, tool := range tools {
+		if tool.Name == "base_branch_status" {
+			baseTool = tool
+			break
+		}
+	}
+	baseRes := baseTool.Handler(context.Background(), nil)
+	if baseRes.IsError {
+		t.Fatalf("base_branch_status failed: %s", baseRes.Text)
+	}
+	if !strings.Contains(baseRes.Text, "gke-labs/kube-agents's default branch") {
+		t.Fatalf("base_branch_status did not report upstream default branch:\n%s", baseRes.Text)
+	}
+	for _, r := range fake.repos {
+		if r != "gke-labs/kube-agents" {
+			t.Fatalf("base_branch_status queried %q, want only gke-labs/kube-agents (repos=%v)", r, fake.repos)
+		}
 	}
 }

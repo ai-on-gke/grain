@@ -49,9 +49,19 @@ import { identifierField } from "../identifierField.js";
 // closed one it bubbles as before.
 //
 // renderInput draws the box; the default is a small MUI TextField with
-// label and helperText. A caller with its own look (RepoField's plain
-// input) passes one, and must spread params.inputProps onto its input
-// and attach params.InputProps.ref to the element the list hangs under.
+// label, helperText (styled by FormHelperTextProps) and margin, plus any
+// inputProps (a data-testid, say) and InputLabelProps (shrink, over a ""
+// option with a label of its own). A caller with its own look
+// (RepoField's plain input) passes one, and must spread
+// params.inputProps onto its input and attach params.InputProps.ref to
+// the element the list hangs under.
+//
+// SHORT_LIST is the most options a fixed or declared list may have and
+// still be drawn as a plain select rather than a SearchSelect: up to
+// about seven (yes/no, a mode, a weekday) a select is quicker, above all
+// on a phone, and there is nothing to search for (grain/task-2578).
+export const SHORT_LIST = 7;
+
 export default function SearchSelect({
   name,
   options,
@@ -73,6 +83,9 @@ export default function SearchSelect({
   renderInput,
   className,
   noOptionsText = "No matches",
+  InputLabelProps,
+  FormHelperTextProps,
+  error,
   ...rest
 }) {
   const [inner, setInner] = useState(
@@ -211,15 +224,19 @@ export default function SearchSelect({
             },
           },
         };
-        const hidden = name ? (
-          multiple ? (
-            current.map((v, i) => (
-              <input key={i} type="hidden" name={name} value={v ?? ""} />
-            ))
-          ) : (
-            <input type="hidden" name={name} value={current ?? ""} />
-          )
-        ) : null;
+        // name "" still draws one, carrying the value for anything that
+        // reads the box's value off the page; a form skips an unnamed
+        // input, so it adds nothing to a FormData.
+        const hidden =
+          name != null ? (
+            multiple ? (
+              current.map((v, i) => (
+                <input key={i} type="hidden" name={name} value={v ?? ""} />
+              ))
+            ) : (
+              <input type="hidden" name={name} value={current ?? ""} />
+            )
+          ) : null;
         if (renderInput) {
           return (
             <>
@@ -238,6 +255,8 @@ export default function SearchSelect({
               ...identifierField,
               ...callerInputProps,
             }}
+            InputLabelProps={{ ...params.InputLabelProps, ...InputLabelProps }}
+            FormHelperTextProps={FormHelperTextProps}
             label={label}
             helperText={helperText}
             placeholder={
@@ -245,6 +264,7 @@ export default function SearchSelect({
             }
             margin={margin}
             required={required}
+            error={error}
             InputProps={{
               ...params.InputProps,
               endAdornment: (

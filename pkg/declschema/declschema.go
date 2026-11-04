@@ -1160,6 +1160,17 @@ func RepoSettingsSchema() Schema {
 				Columns: []string{"default_hostd"},
 			},
 
+			// The upstream repository pull requests are opened against when
+			// tasks push branches to this fork repository
+			// (model.RepoConfig.UpstreamRepo). Authority, because a
+			// repository cannot redirect where this deployment opens pull
+			// requests or which upstream repository its runs fetch from.
+			{
+				Model:   "UpstreamRepo",
+				Keys:    []Key{settingsOnly("upstream-repo", Authority)},
+				Columns: []string{"upstream_repo"},
+			},
+
 			// Which repository these settings are about. Grain read the
 			// file out of a repository it already had in hand, and a file
 			// that could name another one would be a repository writing

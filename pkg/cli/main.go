@@ -416,6 +416,9 @@ Commands:
                                        "clear" to empty it (safe: a cached job simply runs again)
   ci faults [-repo r] [-source s]      shared CI faults across branches right now (grain CI and GitHub CI,
                                        labelled by source)
+  fs ls|cat|read|grep <uri>            read grain's namespace (ci://, task://, deploy://, config://,
+                                       memory://, src://) over GET /api/fs/, as a sandbox's grain ls,
+                                       read and grep do; read is cat (see fscmd.go)
   declarations check [dir]             read a checkout's own .grain/templates, .grain/suites and
                                        .grain/schedules and print what they declare, or refuse them
                                        and exit non-zero -- no daemon involved, so a repository can
@@ -438,8 +441,9 @@ Commands:
   access list|allow|deny               the allowed users and groups list (Settings -> Access): who may
                                        sign in through IAP or another identity verifier
   broadcast [-all] <message...>        send a notice to all running task agents (or with -all, all active tasks)
-  release approve|reject vX.Y.0        make a pending trunk release official, or drop it -- a person's act;
-                                       an agent is refused
+  release approve|reject|rollback vX.Y.0
+                                       make a pending trunk release official, drop it, or roll a promoted
+                                       release back -- a person's act; an agent is refused
   release approval-key                 the public key GitHub's promote-release.yml verifies an Inbox approval
                                        with (repository variable GRAIN_RELEASE_APPROVAL_KEY)
 `
@@ -634,6 +638,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdResume(ctx, c, out, cmdArgs)
 	case "ci":
 		return cmdCI(ctx, c, out, cmdArgs)
+	case "fs":
+		return cmdFS(ctx, c, out, cmdArgs)
 	case "declarations":
 		return cmdDeclarations(ctx, c, out, cmdArgs)
 	case "settings":

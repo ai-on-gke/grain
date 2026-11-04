@@ -95,6 +95,13 @@ var routeAuthorization = map[string]authLevel{
 	// The long poll that tells a signed-in page the daemon is going down
 	// for a restart before it stops answering (grain/task-3543).
 	"GET /api/restart-watch": trusted,
+	// grain's namespace (pkg/ui/api_fs.go): grain fs and external agents.
+	"GET /api/fs/ci/{path...}":     trusted,
+	"GET /api/fs/task/{path...}":   trusted,
+	"GET /api/fs/deploy/{path...}": trusted,
+	"GET /api/fs/config/{path...}": trusted,
+	"GET /api/fs/memory/{path...}": trusted,
+	"GET /api/fs/src/{path...}":    trusted,
 
 	"GET /api/settings":                         trusted,
 	"PUT /api/settings":                         trusted,
@@ -244,6 +251,7 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/repos/{owner}/{name}/releases/{release}/candidates/promote": trusted,
 	"POST /api/repos/{owner}/{name}/pending-releases/{version}/approve":    trusted,
 	"POST /api/repos/{owner}/{name}/pending-releases/{version}/reject":     trusted,
+	"POST /api/releases/{version}/rollback":                                trusted,
 	"GET /api/release-approval-key":                                        trusted,
 	"GET /api/repos/{owner}/{name}/branches":                               trusted,
 	"POST /api/repos/{owner}/{name}/branches":                              trusted,

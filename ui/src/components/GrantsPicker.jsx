@@ -35,6 +35,7 @@ import CloseIcon from "@mui/icons-material/Close";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import CapabilityArgsForm from "./CapabilityArgsForm.jsx";
 import InfoPopover from "./InfoPopover.jsx";
+import SearchSelect from "./SearchSelect.jsx";
 import { capabilityMethods, checkGrants } from "./capabilityMethods.js";
 import {
   DANGEROUS_API_HINT,
@@ -880,28 +881,22 @@ export default function GrantsPicker({
             }}
           />
           {anyApi && repos.length > 0 && (
-            <TextField
-              select
-              size="small"
+            <SearchSelect
               margin="dense"
-              fullWidth
               id={`${regionId}-repo`}
               label="Grain API grants apply to"
               value={apiRepo}
-              onChange={(e) => setApiRepo(e.target.value)}
+              onChange={setApiRepo}
               helperText={
                 apiRepo
                   ? `An API grant picked here is limited to ${apiRepo} (api:<scope>@${apiRepo}).`
                   : undefined
               }
-            >
-              <MenuItem value="">All repositories</MenuItem>
-              {repos.map((r) => (
-                <MenuItem key={r} value={r}>
-                  {r}
-                </MenuItem>
-              ))}
-            </TextField>
+              options={[
+                { value: "", label: "All repositories" },
+                ...repos.map((r) => ({ value: r, label: r })),
+              ]}
+            />
           )}
         </Box>
         <MenuList
