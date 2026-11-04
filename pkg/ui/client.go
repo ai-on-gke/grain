@@ -1466,7 +1466,7 @@ func (c *Client) AttemptCapabilityAudit(ctx context.Context, taskID string, numb
 	}
 	out := make([]CapabilityAuditEntry, 0, len(records))
 	for _, r := range records {
-		e := CapabilityAuditEntry{Grant: r.Grant, AttemptID: r.AttemptID, At: r.At, Note: r.Note}
+		e := CapabilityAuditEntry{Grant: r.Grant, AttemptID: r.AttemptID, At: r.At, Hostd: r.Hostd, Note: r.Note}
 		if r.Record != "" {
 			if json.Valid([]byte(r.Record)) {
 				e.Record = json.RawMessage(r.Record)
