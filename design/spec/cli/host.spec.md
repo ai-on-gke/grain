@@ -1013,7 +1013,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 | `-run-host-credential-dir` | string |  |  | the shared credential directory every run host mounts read-write, as a directory and at the same path (only used with -run-host-image) |
 | `-run-host-daemon-url` | string |  |  | the API address a run host's mcpserver is given, when not this process's own: a run pod needs one that outlives the daemon pod, e.g. http://grain.grain.svc |
 | `-run-host-dir` | string |  |  | where run hosts' spools and staging live, seen at the same path by the daemon and every run host (default <data-dir>/runhosts; under -k8s-run-host-rwx, on that volume) |
-| `-run-host-image` | string |  |  | drive each claude run in a run host of this image: a container that is a sibling of the daemon, not a child of it, writing to a spool the daemon tails (pkg/runhost, design/design/non-disruptive-upgrade.design.md). Normally the deployment image itself ("self" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes: a run host cannot reach a container sandbox |
+| `-run-host-image` | string |  |  | drive each claude run in a run host of this image: a container that is a sibling of the daemon, not a child of it, writing to a spool the daemon tails (pkg/runhost, design/design/non-disruptive-upgrade.design.md). Normally the deployment image itself ("self" under -k8s-sandboxes reads it off this Deployment). Empty runs every agent CLI as a child of the daemon, as before. Not with -container-sandboxes or -host-sandboxes: a run host cannot reach either sandbox |
 | `-sandbox-access-addr` | string |  |  | k8s-granule only: address to run the sandbox-access acceptor on (":4244"), which every sandbox pod's wrapper then dials out to over mTLS with its own certificate and token (pkg/sandboxaccess, design/design/grain-on-gke.design.md "Sandbox access"); empty leaves it off and builds pods as before |
 | `-sandbox-access-ca-secret` | string |  |  | Secret Manager secret (projects/<p>/secrets/<s>) holding the sandbox-access CA, read through Workload Identity and generated into it on first start; empty keeps the CA in <data-dir>/sandbox-access-ca.pem |
 | `-sandbox-access-dial` | string |  |  | the address sandbox wrappers dial the acceptor at; empty is grain-access.<-k8s-namespace>.svc:4244, the Service deploy/kubernetes/grain-granule.yaml creates |
@@ -1652,7 +1652,7 @@ Reconciles a live deployment's settings (`GET /api/settings`, then `PUT /api/set
 
 This manages the allowed users and groups list (Settings -> Access): who may sign in when authenticated by Cloud IAP or another registered IdentityVerifier. It calls `/api/access/principals`.
 
-- `list` (the default; also `ls`) prints every entry, or `No allowed users or groups.`.
+- `list` (the default; also `ls`) prints every entry with who added it and when, or `No allowed users or groups.`, and warns about `-ui-allowed-principals` entries that were dropped on import.
 - `allow <user:<email>|group:<email>>` (also `add`) adds one. Adding an existing entry is a no-op.
 - `deny <user:<email>|group:<email>>` (also `remove`, `rm`) removes one.
 
