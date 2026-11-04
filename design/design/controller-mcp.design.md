@@ -68,12 +68,28 @@ The same server is reached three ways. A run with any `api:*` grant has `grain-c
 ## Open questions
 
 1. **The vocabulary.** Should `grain_invoke` keep addressing routes by `api_<handler>`, or should the controller expose verbs on resources (or per-area tools) with the route table behind them? See *Trade-offs*.
-2. **One external endpoint.** An external token can call both `POST /api/mcp` and the older `POST /mcp`. Which should `grain mcp` and Settings → CLI advertise, and does `/mcp` stay?
-3. **`grain_filing_context`.** Keep the direct store read, or compose it from the templates, boards and config routes through the gate? And should unauthorized parts be absent (as capabilities are today) or `null` (as templates and boards are)?
-4. **`grain#ci` alone.** A task holding only the CI capability may read CI through the controller's pre-check, but has no `grain-controller` attached because it holds no `api:*` grant. Should the CI capability count as one?
-5. **People.** Person calls on `POST /api/mcp` are not logged per call the way agent calls are. Should they be?
-6. **Hints.** The `expect` mismatch message still tells the caller to re-read with `read_grain_task`, a `grain-sandbox` tool; a `grain-controller` caller has `grain_get_task`.
+2. **`grain_filing_context`.** Keep the direct store read, or compose it from the templates, boards and config routes through the gate? And should unauthorized parts be absent (as capabilities are today) or `null` (as templates and boards are)?
+3. **`grain#ci` alone.** A task holding only the CI capability may read CI through the controller's pre-check, but has no `grain-controller` attached because it holds no `api:*` grant. Should the CI capability count as one?
+4. **People.** Person calls on `POST /api/mcp` are not logged per call the way agent calls are. Should they be?
+5. **Hints.** The `expect` mismatch message still tells the caller to re-read with `read_grain_task`, a `grain-sandbox` tool; a `grain-controller` caller has `grain_get_task`.
+
+## Follow-up work
+
+### Retire the per-route MCP roster at `POST /mcp`
+
+The controller server replaced the per-route `api_*` roster for runs and sessions, but the older external endpoint `POST /mcp` still serves that roster to `gma_…` tokens beside it. That leaves two external MCP URLs with different tool lists, which is the "two surfaces" problem this design set out to remove. The decision is to finish it: **one public MCP entry, serving the six-tool server to every caller kind, and the per-route roster gone.**
+
+The public URL is `/mcp`, because it is the path harness documentation assumes and the one people will type into a client config; `/api/mcp` stays as an alias, because the host-side proxy and the sandbox git proxy already reach it under `/api/` and need not change. Concretely:
+
+1. **Serve the controller server at `POST /mcp`.** Point the route at the same handler as `POST /api/mcp`. Admission is unchanged — `requiresAccess` already gates `/mcp`, and the `externalAgentApi` switch keeps gating `gma_` tokens — so the endpoint admits every principal the auth layer produces and resolves it to external, acting task or person exactly as `/api/mcp` does. The handler's current refusal of anything that is not a token goes away with the handler.
+2. **Delete the per-route roster.** `ExternalAgentAPITools` and the per-request registry in `handleMCP` are removed; `APIRoute.externalTool` / `externalCall` go with them, since `grain_invoke` dispatches the same routes through the same gate.
+3. **Keep `/api/mcp` as an alias** of the same handler for the proxied channels and for anything already configured against it. Nothing advertises it.
+4. **Deprecation window: one release.** `externalAgentApi` is off by default and no CLI, page or skill file advertises `/mcp` today, so the window is short. During it, a `gma_` token that sends `X-Grain-MCP-Roster: routes` gets the old per-route roster with a deprecation line in the daemon's log; without the header it gets the six tools. After the release the header is ignored.
+5. **Advertise `/mcp`** as the MCP URL when `grain mcp`, Settings → CLI and the skill files land (`external-cli.design.md`, *Follow-up work* 8–9), and in `docs/agent-api.md`'s *External agents* section, which today describes both endpoints.
+6. **Tests.** The external-agent tests that call `api_*` tools over `/mcp` move to `grain_invoke` (same assertions); the route-authorization table keeps `POST /mcp` at scope `internal`; a test asserts `/mcp` and `/api/mcp` return the same `tools/list` to the same caller.
+
+What this does not touch: `grain-sandbox` (`grain mcpserver`), whose tools execute inside a run's sandbox and stay a per-run stdio server; the in-sandbox `grain` CLI, which is a REST client of the same gate on the sandbox channel; and the REST API itself, of which the controller server is a projection.
 
 ## Where the code is today
 
-Everything in *The model* and *How it is used* is implemented: the endpoint and six tools in `pkg/ui/mcp_endpoint.go`; the gate in `pkg/ui/agent_api_gate.go`; attachment to runs in `pkg/orchestrator/capability_endpoints.go` and the host proxy in `pkg/daemon/ui_server.go`; grant changes in `pkg/orchestrator/capability_restart.go`; the census and activity line in `pkg/orchestrator/census.go` and `pkg/mcp`. `grain mcpserver` no longer serves any `api_*` tool. The open questions above are the whole of the gap between this design and `main`.
+Everything in *The model* and *How it is used* is implemented: the endpoint and six tools in `pkg/ui/mcp_endpoint.go`; the gate in `pkg/ui/agent_api_gate.go`; attachment to runs in `pkg/orchestrator/capability_endpoints.go` and the host proxy in `pkg/daemon/ui_server.go`; grant changes in `pkg/orchestrator/capability_restart.go`; the census and activity line in `pkg/orchestrator/census.go` and `pkg/mcp`. `grain mcpserver` no longer serves any `api_*` tool. `POST /mcp` still serves the per-route roster to external tokens (`pkg/ui/external_agents.go`, `handleMCP`) until the follow-up above lands. The open questions are the rest of the gap between this design and `main`.
