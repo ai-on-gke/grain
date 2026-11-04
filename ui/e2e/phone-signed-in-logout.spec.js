@@ -56,12 +56,12 @@ test.describe("phone drawer signed-in row", () => {
     });
     let clearedIAPCookie = false;
     await page.route("**/_gcp_iap/clear_login_cookie", async (route) => {
-      clearedIAPCookie = true;
       await route.fulfill({
         status: 200,
         contentType: "text/plain",
         body: "logged out of IAP",
       });
+      clearedIAPCookie = true;
     });
 
     await page.goto("/");
@@ -134,7 +134,7 @@ test.describe("phone drawer signed-in row", () => {
 
     await logout.click();
     await expect.poll(() => clearedIAPCookie).toBe(true);
-    expect(page.url()).toContain("/_gcp_iap/clear_login_cookie");
+    await expect(page).toHaveURL(/\/_gcp_iap\/clear_login_cookie/);
   });
 
   // The 2026-11-03 IAP deployment walkthrough: with Log out beside it,
