@@ -544,6 +544,18 @@ export function resetAppTestState() {
   // list's narrowing (grain/task-317) -- so put it back to "/" rather
   // than let one test's URL seed the next test's App.
   window.history.replaceState(null, "", "/");
+  // A spy a test puts on a window global is restored at its own end,
+  // which a failed assertion never reaches -- and vi.spyOn on a method
+  // that is still spied hands back the same spy, calls and all, so the
+  // next test counted the failed one's prompt as its own ("expected 2
+  // calls, got 3" in App.schedules.test.jsx under a loaded CI runner).
+  for (const [owner, method] of [
+    [window, "confirm"],
+    [window.history, "pushState"],
+    [window.history, "replaceState"],
+  ]) {
+    if (vi.isMockFunction(owner[method])) owner[method].mockRestore();
+  }
 }
 
 // A note on what a byRole query costs here, since the obvious fix is

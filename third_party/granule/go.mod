@@ -1,4 +1,4 @@
-module github.com/bwsalmon/granule
+module github.com/gke-labs/granule
 
 go 1.22
 

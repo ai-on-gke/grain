@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/guestverify"
+	"github.com/gke-labs/granule/pkg/guestverify"
 )
 
 // runGuestVerify boots a guest image, runs checks inside it, and prints a

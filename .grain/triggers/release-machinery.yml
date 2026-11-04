@@ -1,7 +1,9 @@
 # Path trigger for the release jobs and the scripts they run
 # (design/playbook/releases.playbook.md §0.3). They cut, build, publish and
 # tag releases, but cannot make one official -- that is the person's
-# approval, release-promotion.yml's -- so grain's security review alone
+# approval, or the release train's promotion of a qualified rc
+# (scripts/release-from-trunk.sh, release.conf), both release-promotion.yml's
+# -- so grain's security review alone
 # releases them. The review checks they still cannot move vX.Y.Z or
 # `latest` without the approval, widen a workflow's permissions, secrets or
 # dispatchers, weaken a person-only check, or raise RELEASE_MAJOR
@@ -10,10 +12,8 @@
 on: pull_request
 paths:
   - scripts/release-images.sh
-  - scripts/release-from-trunk.sh
   - scripts/release-notes.sh
   - scripts/candidate-gate.sh
-  - scripts/release.conf
   - scripts/patch-tag-guard.sh
   - scripts/build-version.sh
   - scripts/grain-ci-host.sh

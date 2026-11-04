@@ -54,8 +54,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/sandboxaccess"
-	"github.com/bwsalmon/granule/pkg/guestforward"
-	"github.com/bwsalmon/granule/pkg/sandbox"
+	"github.com/gke-labs/granule/pkg/guestforward"
+	"github.com/gke-labs/granule/pkg/sandbox"
 )
 
 // DefaultGranuleForwardBackoff is how long K8sGranuleSandboxes first

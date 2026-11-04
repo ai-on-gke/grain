@@ -1,7 +1,7 @@
 package guestdockerfile
 
 import (
-	"github.com/bwsalmon/granule/pkg/granulefile"
+	"github.com/gke-labs/granule/pkg/granulefile"
 )
 
 // Instruction is one instruction as it appeared in a Dockerfile: its

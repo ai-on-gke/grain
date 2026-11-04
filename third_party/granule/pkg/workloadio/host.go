@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/execwire"
+	"github.com/gke-labs/granule/pkg/execwire"
 )
 
 const (
