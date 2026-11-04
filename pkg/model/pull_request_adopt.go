@@ -37,6 +37,10 @@ var (
 	ErrPullRequestConflict = errors.New("pull request conflict")
 	// ErrPullRequestInvalid wraps a request the routes answer 400.
 	ErrPullRequestInvalid = errors.New("invalid pull request request")
+	// ErrPullRequestForbidden wraps a request whose requester may not do
+	// what it asks: an unapproved request to upgrade an approved
+	// review-only shepherd to finish. The routes answer 403.
+	ErrPullRequestForbidden = errors.New("pull request request forbidden")
 )
 
 // TakeoverMode is how far a shepherd task may go with the pull request it

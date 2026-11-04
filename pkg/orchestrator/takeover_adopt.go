@@ -227,12 +227,16 @@ func fileAdoptedShepherd(ctx context.Context, deps Deps, in model.AdoptPullReque
 
 	own, branch := ref, detail.HeadRef
 	replaced := false
-	if !headPushable(deps.Client, repo, detail) {
+	if mode == model.TakeoverReviewOnly {
+		// Nothing is pushed, so nothing needs copying: the shepherd holds
+		// the pull request itself and works on no branch. Never the
+		// author's head, even where grain could push it: the git proxy
+		// lets a sandbox push its task's Branch, and review-only's promise
+		// not to push must not rest on the prompt alone. An upgrade to
+		// finish sets the branch (updateAdoptedShepherd).
+		branch = ""
+	} else if !headPushable(deps.Client, repo, detail) {
 		switch {
-		case mode == model.TakeoverReviewOnly:
-			// Nothing is pushed, so nothing needs copying: the shepherd
-			// holds the pull request itself and works on no branch.
-			branch = ""
 		case !in.Approved:
 			// As for the command: the replacement is made on approval.
 			branch = ""
@@ -328,6 +332,13 @@ func updateAdoptedShepherd(ctx context.Context, deps Deps, task model.Task, in m
 
 	ref := in.PR
 	upgrade := takeoverModeOf(task) == model.TakeoverReviewOnly && mode == model.TakeoverFinish
+	if upgrade && task.Approval != nil && !in.Approved {
+		// Finish lets the shepherd push onto the author's branch, which
+		// whoever approved the review-only shepherd never agreed to: a
+		// request that would itself land proposed may not grant it.
+		return model.PullRequestAdoption{}, fmt.Errorf("%w: upgrading approved shepherd %s of %s to finish "+
+			"needs an approved request (a person, or tasks:admin on %s)", model.ErrPullRequestForbidden, task.ID, ref, ref.Repo)
+	}
 	var detail github.PullRequestDetail
 	pushable := false
 	if upgrade {

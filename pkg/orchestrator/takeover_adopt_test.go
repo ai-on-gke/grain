@@ -74,6 +74,11 @@ func TestAdoptPullRequestReviewOnlyVsFinishUpgradeInPlace(t *testing.T) {
 	if !strings.Contains(sh.Body, "review-only: do not push") || strings.Contains(sh.Body, "Never force-push") {
 		t.Errorf("review-only shepherd body does not forbid pushing:\n%s", sh.Body)
 	}
+	// The git proxy lets a sandbox push its task's Branch: a review-only
+	// shepherd must not hold the author's head even where grain could push it.
+	if sh.Branch == "feat/human-pr" {
+		t.Errorf("review-only shepherd branch = %q, the author's head: it could push it", sh.Branch)
+	}
 	if n := len(f.reviews()); n != 1 {
 		t.Fatalf("reviews filed = %d, want the code review", n)
 	}
@@ -87,6 +92,19 @@ func TestAdoptPullRequestReviewOnlyVsFinishUpgradeInPlace(t *testing.T) {
 	}
 	if comments, _ := f.store.Comments(f.ctx, sh.ID); len(comments) != 0 {
 		t.Errorf("review-only shepherd was woken for findings: %+v", comments)
+	}
+
+	// An unapproved request (an agent without tasks:admin) may not turn
+	// the approved review-only shepherd into one that pushes.
+	agentOwner := model.Principal{Kind: model.PrincipalHuman, ID: "owner@example.com"}
+	if _, err := orchestrator.AdoptPullRequest(f.ctx, f.deps, model.AdoptPullRequestInput{
+		PR: model.PullRequestRef{Repo: f.repo, Number: f.pr}, Mode: model.TakeoverFinish,
+		Requester: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: "external:laptop"}, OnBehalfOf: &agentOwner},
+	}, baseTime.Add(150*time.Second)); !errors.Is(err, model.ErrPullRequestForbidden) {
+		t.Fatalf("unapproved upgrade to finish = %v, want ErrPullRequestForbidden", err)
+	}
+	if sh = f.shepherd(); !hasLink(sh, model.LinkTakeoverMode, string(model.TakeoverReviewOnly)) || sh.Branch == "feat/human-pr" {
+		t.Fatalf("an unapproved upgrade changed the shepherd: links %+v, branch %q", sh.Links, sh.Branch)
 	}
 
 	// --mode finish upgrades the same task in place.

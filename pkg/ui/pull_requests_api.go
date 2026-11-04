@@ -222,6 +222,8 @@ func writePullRequestError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, err)
 	case errors.Is(err, model.ErrPullRequestConflict):
 		writeError(w, http.StatusConflict, err)
+	case errors.Is(err, model.ErrPullRequestForbidden):
+		writeError(w, http.StatusForbidden, err)
 	case errors.Is(err, model.ErrPullRequestInvalid):
 		writeError(w, http.StatusBadRequest, err)
 	default:
