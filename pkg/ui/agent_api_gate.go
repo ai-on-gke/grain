@@ -1297,6 +1297,12 @@ func agentMayRead(acting *model.Task, repo string) bool {
 // grant for every repository reaches it.
 func (s *Server) agentCallRepo(ctx context.Context, r *http.Request, pattern, target string, body []byte,
 	acting *model.Task, set APIGrantSet, scope APIScope, ciCap bool) (string, error) {
+	if repo, ok, err := pullRequestCallRepo(r, pattern, body); ok {
+		if err == nil {
+			repo, err = s.agentCanonicalRepo(repo)
+		}
+		return repo, err
+	}
 	if repo, ok, err := s.fsCallRepo(ctx, r, pattern); ok {
 		return repo, err
 	}
@@ -1757,6 +1763,12 @@ func (s *Server) checkExternalTokenRotationEscalation(ctx context.Context, held 
 }
 
 func (s *Server) externalAgentCallRepo(ctx context.Context, r *http.Request, pattern string, scope APIScope, set APIGrantSet, target string, body []byte, tok *model.ExternalAgentToken) (string, []string, error) {
+	if repo, ok, err := pullRequestCallRepo(r, pattern, body); ok {
+		if err == nil {
+			repo, err = s.agentCanonicalRepo(repo)
+		}
+		return repo, nil, err
+	}
 	if repo, ok, err := s.fsCallRepo(ctx, r, pattern); ok {
 		return repo, nil, err
 	}

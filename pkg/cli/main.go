@@ -380,6 +380,12 @@ Commands:
                                        the pull request, and refused if the branch does not merge cleanly;
                                        -head <sha> names the commit you reviewed, and the override is
                                        withdrawn if anything else is pushed before the merge
+  pr adopt <pr> [-mode review-only|finish] [-spec <path>] [-design <path>]
+                                       adopt a pull request grain did not open: review-only (the default)
+                                       reviews and gates it without pushing; finish also pushes fixes
+  pr review <pr> [-design] [-spec <path>]
+                                       file a grain review of a pull request (-design checks design conventions)
+  pr status <pr> [-threads]            a pull request's head, shepherd, grain CI, reviews and merge-queue gate
   run-now <id>                         start a run of this task next, ahead of the queue and whatever
                                        its state says -- including sending a finished or merging task
                                        back to an agent for more work on its own branch
@@ -638,6 +644,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdResume(ctx, c, out, cmdArgs)
 	case "ci":
 		return cmdCI(ctx, c, out, cmdArgs)
+	case "pr":
+		return cmdPR(ctx, c, out, cmdArgs)
 	case "fs":
 		return cmdFS(ctx, c, out, cmdArgs)
 	case "declarations":
