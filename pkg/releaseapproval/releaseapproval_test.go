@@ -187,11 +187,21 @@ func TestTheWorkflowsVerifierAcceptsASignedRollbackAndBindsTargetAndReason(t *te
 	if by, stderr, ok := verify(t, dir, env(nil)); !ok || by != "alice@example.com" {
 		t.Fatalf("a signed rollback = %q, ok=%v (%s); want alice@example.com", by, ok, stderr)
 	}
+	// A person's Approve of the same release, at the same commit, is no
+	// rollback: the decision line keeps one from standing in for the other.
+	approval, err := signer.Sign(context.Background(), Record{Repo: "example/widgets", Version: "v1.2.0",
+		Decision: "approve", Commit: commit, Approver: "alice@example.com", Issued: now, Expires: now.Add(Lifetime)})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, over := range map[string]map[string]string{
 		"another rollback_to": {"EXPECT_ROLLBACK_TO": "v1.0.0"},
 		"empty rollback_to":   {"EXPECT_ROLLBACK_TO": ""},
 		"altered reason":      {"EXPECT_REASON": "different reason"},
 		"untagged release":    {"EXPECT_VERSION": "v1.1.0"},
+		"rollback as approve": {"EXPECT_DECISION": "approve"},
+		"approve as rollback": {"APPROVAL": approval.Record, "APPROVAL_SIGNATURE": approval.Signature},
+		"expired":             {"NOW": strconv.FormatInt(now.Add(Lifetime+time.Minute).Unix(), 10)},
 	} {
 		if by, _, ok := verify(t, dir, env(over)); ok {
 			t.Errorf("%s: verified (approver %q); want refused", name, by)
@@ -208,6 +218,36 @@ func TestRecordRefusesValuesThatAreNotOneSafeToken(t *testing.T) {
 	r.Approver, r.Decision = "alice", "promote"
 	if _, err := r.Text(); err == nil {
 		t.Error("decision promote encoded; want refused")
+	}
+}
+
+// Only a rollback carries rollback_to and reason, and a rollback carries
+// neither approval answer: the signed record never says more than the
+// decision it is for.
+func TestRecordKeepsRollbackFieldsToARollback(t *testing.T) {
+	base := Record{Repo: "example/widgets", Version: "v1.2.0", Commit: "abc", Approver: "alice",
+		Issued: time.Unix(1, 0), Expires: time.Unix(2, 0)}
+	for name, r := range map[string]Record{
+		"approve with rollback_to":  func() Record { r := base; r.Decision, r.RollbackTo = "approve", "v1.1.0"; return r }(),
+		"reject with reason":        func() Record { r := base; r.Decision, r.Reason = "reject", "bad"; return r }(),
+		"rollback with short soak":  func() Record { r := base; r.Decision, r.ShortSoakOK = "rollback", true; return r }(),
+		"rollback allowing breaks":  func() Record { r := base; r.Decision, r.AllowBreaking = "rollback", true; return r }(),
+		"rollback to a non-release": func() Record { r := base; r.Decision, r.RollbackTo = "rollback", "latest"; return r }(),
+		"rollback to two lines":     func() Record { r := base; r.Decision, r.RollbackTo = "rollback", "v1.1.0\ncommit: x"; return r }(),
+	} {
+		if _, err := r.Text(); err == nil {
+			t.Errorf("%s encoded; want refused", name)
+		}
+	}
+	r := base
+	r.Decision, r.Reason = "rollback", "multi\nline is hashed, never written"
+	text, err := r.Text()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, "\nrollback_to: -\n") || strings.Contains(text, "multi") ||
+		!strings.Contains(text, "\nreason_sha256: ") {
+		t.Errorf("rollback record = %q, want rollback_to - and the reason only as its digest", text)
 	}
 }
 
