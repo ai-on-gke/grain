@@ -1240,6 +1240,16 @@ const (
 	// itself (unlike LinkFixes). Provenance and PR-tool scoping only; never
 	// blocks dispatch and never places a task in awaiting_submit.
 	LinkExternalPR LinkKind = "external-pr"
+	// LinkDerivedFrom records the pull request ("owner/repo#number") a
+	// task's work was derived from -- the provenance an external
+	// orchestrator filters on with `grain list -filter
+	// derived_from:eq:<owner/name#pr>` (external-cli spec #XC-18).
+	// Provenance only: it blocks nothing.
+	LinkDerivedFrom LinkKind = "derived-from"
+	// LinkDesign records a design or spec file (a design/... path) the
+	// task implements, `grain create --design` (#XC-19), so reviews and
+	// commits downstream inherit the design/spec chain. Provenance only.
+	LinkDesign LinkKind = "design"
 	// LinkTakeover marks a shepherd task filed by the GitHub bot's
 	// "@<slug> take over" command (-> the pull request it took over,
 	// "owner/repo#number"). The task's own pull request is its LinkFixes

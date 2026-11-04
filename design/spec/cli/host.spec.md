@@ -20,7 +20,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 
 | Kind | Commands |
 |---|---|
-| Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume` |
+| Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `reply`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume`, `inbox`, `wait`, `logs` |
 | Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|deny`, `git-ambient`, `git-connections`, `git-login`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status`, `declarations check` |
 | Task CLI: sign-in | `login`, `logout`, `whoami`, `context list\|use\|show\|delete` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
@@ -69,6 +69,7 @@ Each command parses its own flags, with flags allowed after the task id ([#CLI-1
 - `-filter attribute:comparison:value` is repeatable, in the UI's link spelling. Shorthands such as `-state`, `-repo` and `-capability` are conditions too.
 - `-sort attribute[:asc|desc]` is repeatable, and the sort is stable.
 - `grain list -h` prints the attribute and comparison vocabulary, including declared custom fields.
+- Two provenance conditions sit outside the vocabulary the UI shares ([external-cli #XC-18](../external-cli/external-cli.spec.md#XC-18)): `derived_from:eq:<owner/name#pr or its URL>` (a `derived-from` link, or a `Derived from:` line in the body) and `filed_via:has:<substring>` (case-insensitive over `filedVia`). `GET /api/tasks` takes the same as `?derived_from=` and `?filed_via=`.
 - A value nobody can act on is refused before the daemon is asked.
 
 With `-json` it prints the `ui.Task` array.
@@ -92,14 +93,16 @@ With `-json` it prints the `ui.Task` array.
 | `-state` | string |  |  | shorthand for -filter state:any:VALUE (proposed, queued, running, awaiting_reply, failed, awaiting_submit, completed, deferred, closed, or asked for awaiting_reply and awaiting_submit both) |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/list_test.go`: `TestConditionsNarrowTheListing`, `TestShorthandFlagsAreConditions`, `TestSortKeysOrderTheListing`, `TestConditionsRejectWhatNobodyCanActOn`; `pkg/cli/list_hidden_test.go`: `TestListHidesClosedAndDeferredTasksUnlessAsked`; `pkg/cli/list_declared_test.go`: `TestListHelpNamesTheDeclaredFields`; `pkg/cli/list_vocabulary_test.go`.
+**Pinned by:** `pkg/cli/list_test.go`: `TestConditionsNarrowTheListing`, `TestShorthandFlagsAreConditions`, `TestSortKeysOrderTheListing`, `TestConditionsRejectWhatNobodyCanActOn`; `pkg/cli/list_hidden_test.go`: `TestListHidesClosedAndDeferredTasksUnlessAsked`; `pkg/cli/list_declared_test.go`: `TestListHelpNamesTheDeclaredFields`; `pkg/cli/list_vocabulary_test.go`; `pkg/cli/list_test.go`: `TestListDerivedFromAndFiledViaFiltersAndGetCommentsSince`.
 
 ### 3.2 `grain get <id>` {#CLI-23}
 
-Calls `GET /api/tasks/{id}` and prints the task block, the failure streak, a pending credential request and the conversation. `-json` prints `ui.TaskDetail`.
+Calls `GET /api/tasks/{id}` and prints the task block, the failure streak, a pending credential request and the conversation. `-json` prints `ui.TaskDetail`. `-comments-since <RFC3339>` (`?comments_since=`) keeps only the conversation items created strictly after that time, for a polling loop ([external-cli #XC-18](../external-cli/external-cli.spec.md#XC-18)).
 
 <!-- BEGIN GENERATED FLAGS: grain get -->
-_No flags._
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-comments-since` | string |  |  | only the conversation items created strictly after this RFC 3339 time -- a polling loop's cursor |
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/args_test.go`: `TestCommandsRefuseArgumentsTheyHaveNoUseFor`.
@@ -112,6 +115,7 @@ Calls `POST /api/tasks` (`HTTPClient.CreateTask`) and prints the new task.
 - `-field name=value` sets a declared custom field and is repeatable; `grain create -h` lists the fields.
 - `-model` must be a model this deployment has (`TestCreateRefusesAModelThisDeploymentDoesNotHave`).
 - A task filed unapproved prints a note saying so.
+- `-body-file <path|->` reads the description from a file, or stdin for `-`; naming `-body` as well exits `2`. `-design <path>` (repeatable) records a design or spec file as a `design` provenance link (`ui.Task.Designs`) ([external-cli #XC-19](../external-cli/external-cli.spec.md#XC-19)).
 
 <!-- BEGIN GENERATED FLAGS: grain create -->
 | Flag | Type | Default | Env | Description |
@@ -122,8 +126,10 @@ Calls `POST /api/tasks` (`HTTPClient.CreateTask`) and prints the new task.
 | `-auto-merge` | bool |  |  | merge this task's pull request automatically once it reads clean |
 | `-base` | string |  |  | base branch, if not the target repo's default |
 | `-body` | string |  |  | task description |
+| `-body-file` | string |  |  | read the task description from this path (- for stdin) instead of -body |
 | `-capability` | value |  |  | capability to attach (repeatable): a capability ID, a capability reference (https://...[#method]), or a reference with its arguments as ref={json} |
 | `-depends-on` | value |  |  | task this one must wait on before it is dispatched -- 12, #12, task-12, grain/task-12 or the task's page URL (repeatable) |
+| `-design` | value |  |  | a design or spec path (design/...) this task implements, recorded on its provenance (repeatable) |
 | `-field` | value |  |  | name=value for one of the fields this deployment declares (repeatable; "name=" clears it, and a field holding a set takes the flag more than once or a comma-separated list) |
 | `-interactive` | bool |  |  | file this as a live chat rather than a change to run unattended (bwsalmon/agents#539); implies -approve and dispatches ahead of the backlog |
 | `-issue` | int |  |  | GitHub issue number associated with this task |
@@ -139,7 +145,7 @@ Calls `POST /api/tasks` (`HTTPClient.CreateTask`) and prints the new task.
 | `-write` | value |  |  | owner/name[@branch] of another repo this task may land work in, by proposing a task against it (repeatable) |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/create_position_test.go`: `TestBacklogPosition`; `pkg/cli/create_model_test.go`; `pkg/cli/create_author_test.go`: `TestCreateAuthorFilesTheTaskAsItsRequester`; `pkg/cli/create_unapproved_test.go`: `TestUnapprovedNote`; `pkg/cli/taskcmd_priority_test.go`: `TestPriorityFlagReadsTheAPIsSpellings`.
+**Pinned by:** `pkg/cli/create_position_test.go`: `TestBacklogPosition`; `pkg/cli/create_model_test.go`; `pkg/cli/create_author_test.go`: `TestCreateAuthorFilesTheTaskAsItsRequester`; `pkg/cli/create_unapproved_test.go`: `TestUnapprovedNote`; `pkg/cli/taskcmd_priority_test.go`: `TestPriorityFlagReadsTheAPIsSpellings`; `pkg/cli/taskcmd_test.go`: `TestCreateBodyFileStdinConflictAndDesignLink`.
 
 ### 3.4 `grain update <id> [flags]` {#CLI-25}
 
@@ -292,6 +298,44 @@ The command has two forms:
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/cli/pause_test.go`: `TestPrintAgentPause`, `TestPrintAgentPauseJSON`, `TestRunCLIPauseReadsAndLifts`, `TestRunCLIPausesAndResumesThePipeline`, `TestRunCLIPauseWithNoGateWired`; `pkg/cli/args_test.go`: `TestPauseRefusesAReasonWrittenWithoutItsFlag`.
+
+### 3.9 `grain reply`, `inbox`, `wait` and `logs` {#CLI-65}
+
+The external-agent workflow's answering and polling verbs ([external-cli #XC-20..#XC-23](../external-cli/external-cli.spec.md#XC-20)).
+- `reply <id> [<body...> | -body-file <path|->]` answers the question task `<id>`'s run parked on (`POST /api/tasks/{id}/reply`). It is refused with exit `2`, posting nothing, when no `ask_question` is parked and when the task waits on a `request_secret`, which names `/tasks/<id>` and its encrypted input instead; `comment` posts a general note either way.
+- `inbox [-repo R] [-kind question|secret|notification|merge-held|proposal]` lists what needs a person (`GET /api/inbox`) on the repositories the caller reads, one item per line with its root-relative UI path.
+- `wait <id...> [-until closed|merged|awaiting-reply|ci-done|any[,…]] [-timeout 30m]` re-issues `GET /api/tasks/wait` slices of at most 60 s. It exits `0` when a condition is met, `1` when `-until merged` (without `closed`) meets a task that closed unmerged or `-until closed` a failed one, and `5` when `-timeout` (the global flag, written after the verb; `30m` when unset) runs out, printing the `grain wait …` line that carries on.
+- `logs <id> [-attempt N] [-tail N] [-follow]` prints the latest (or `N`th) attempt's activity and transcript; `-follow` streams new lines until the attempt finishes, exiting `1` when it errored.
+
+<!-- BEGIN GENERATED FLAGS: grain reply -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-attach` | value |  |  | path to a local file to attach to the reply (repeatable) |
+| `-body-file` | string |  |  | read the reply from this path (- for stdin) instead of the words after the id |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain inbox -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-kind` | string |  |  | only items of this kind: question, secret, notification, merge-held, proposal |
+| `-repo` | string |  |  | only this repository's (owner/name) items |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain wait -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-until` | string | `"closed"` |  | what to wait for, comma-separated for the first of several: closed, merged, awaiting-reply, ci-done, any |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain logs -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-attempt` | int | `the latest` |  | the attempt to read, 1 for the first |
+| `-follow` | bool |  |  | stream new lines until the attempt finishes (exit 0 when it ends normally, 1 when it errored) |
+| `-tail` | int |  |  | only the last N lines of the transcript |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/reply_test.go`: `TestGrainReplyAnswersQuestionRefusesIdleAndRefusesSecretRequest`; `pkg/cli/inbox_test.go`: `TestGrainInboxMatchesActionableCategoriesWithinRepoGrants`; `pkg/cli/wait_test.go`: `TestTasksWaitEndpointWakesOnConditionsEarnsNoWaitCreditAndExits5OnTimeout`; `pkg/cli/logs_test.go`: `TestGrainLogsStreamsAndExitsOnAttemptCompletion`.
 
 ---
 

@@ -116,6 +116,8 @@ var routeAuthorization = map[string]authLevel{
 	// Tasks.
 	"GET /api/tasks":                                                trusted,
 	"GET /api/tasks/states":                                         trusted,
+	"GET /api/tasks/wait":                                           trusted,
+	"GET /api/inbox":                                                trusted,
 	"GET /api/states":                                               trusted,
 	"POST /api/tasks":                                               trusted,
 	"POST /api/tasks/from-template":                                 trusted,
@@ -130,6 +132,7 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/tasks/{id}/undefer":                                  trusted,
 	"POST /api/tasks/{id}/submit":                                   trusted,
 	"POST /api/tasks/{id}/comments":                                 trusted,
+	"POST /api/tasks/{id}/reply":                                    trusted,
 	"PUT /api/tasks/{id}/secret":                                    trusted,
 	"POST /api/tasks/{id}/config-change":                            trusted,
 	"POST /api/tasks/{id}/config-change/approve":                    trusted,
