@@ -56,7 +56,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/bwsalmon/granule/pkg/dockercli"
+	"github.com/gke-labs/granule/pkg/dockercli"
 )
 
 // DefaultBase is the guest rootfs image a build is based on when the

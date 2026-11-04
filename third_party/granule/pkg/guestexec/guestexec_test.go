@@ -21,9 +21,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/bwsalmon/granule/pkg/agent"
-	"github.com/bwsalmon/granule/pkg/cgroupmem"
-	"github.com/bwsalmon/granule/pkg/execwire"
+	"github.com/gke-labs/granule/pkg/agent"
+	"github.com/gke-labs/granule/pkg/cgroupmem"
+	"github.com/gke-labs/granule/pkg/execwire"
 )
 
 // fakeCHV stands in for cloud-hypervisor's hybrid-vsock endpoint: a unix

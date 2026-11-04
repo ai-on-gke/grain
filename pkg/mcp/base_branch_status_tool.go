@@ -189,6 +189,9 @@ func baseBranchStatus(ctx context.Context, client PullRequestReader, grainCI Gra
 		// (orchestrator.pullRequestBase), and prepareCheckout refuses to
 		// start a run whose base is gone. Saying so plainly beats an
 		// empty check list, which would read as "the base is fine".
+		if err := confirmRepoReadable(client, prOwner, prRepo, base); err != nil {
+			return "", err
+		}
 		return fmt.Sprintf(
 			"Branch %s does not exist on %s/%s, so there is nothing to compare your branch's "+
 				"checks against. That is about this task's base, not your change -- say so "+

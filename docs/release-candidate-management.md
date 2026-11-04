@@ -1,8 +1,10 @@
 # Releasing grain from trunk
 
 This document describes how this repository (`ai-on-gke/grain`) is released: from `main`, by the
-release train (`scripts/release-from-trunk.sh`), after two-stage qualification, with a person's approval as the
-last step. The design and the reasons for it are in
+release train (`scripts/release-from-trunk.sh`), continuously -- a grain task every 20 minutes
+(`.grain/schedules/release-train.yml`) -- and, since 2026-11-04, with no person's approval: an rc that
+passes two-stage qualification is tagged `vX.Y.0` and becomes `latest` on its own. A person approves
+only what the train may not release itself (a major bump, breaking changes, `RELEASE_AUTO_PROMOTE=false`). The design and the reasons for it are in
 `design/playbook/releases.playbook.md` (which supersedes the staging soak of
 `design/design/release-from-trunk.design.md`). This document is the operating manual.
 
@@ -34,23 +36,28 @@ Phase 1  qualification verdict:
                        pipeline.rc-failed:vX.Y.0-rc.N and keeps grain/rc-hold on
                        the commit while [rc-blocker vX.Y.0-rc.N] tasks are open;
                        once completed, Phase 2 cuts vX.Y.0-rc.(N+1)
-           PASS    ──▶ tag vX.Y.0-pending, publish :vX.Y.0-pending; the deployment
+           PASS    ──▶ (RELEASE_MIN_INTERVAL_MINUTES since the last release, else wait)
+                       tag vX.Y.0 on the rc's commit, move latest onto it; on that tag
+                       publish-release.yml verifies it, promotes the images and writes
+                       the GitHub Release
+           PASS, but a major bump, breaking changes or RELEASE_AUTO_PROMOTE=false
+                   ──▶ tag vX.Y.0-pending, publish :vX.Y.0-pending; the deployment
                        raises "vX.Y.0 is ready to promote" (Approve / Reject)
   │
-  ▼  a person
+  ▼  a person, for a staged release only
 Approve ──▶ .grain/workflows/promote-release.yml: tag vX.Y.0, move latest, retag images
 Reject  ──▶ the failed-rc path; the next run cuts vX.Y.0-rc.(N+1)
 ```
 
 | Piece | What it does |
 | --- | --- |
-| `.grain/templates/release-train.yml` | The train: a grain task that runs `scripts/release-from-trunk.sh` once, in a scratch clone, with CI verdicts grain reads for it, and pushes the rc, `-pending` and `-discarded` tags and `candidate` with the template's narrow `push:` grant (playbook §0.4). It cannot push `vX.Y.0` or move `latest`. |
+| `.grain/templates/release-train.yml` | The train: a grain task, filed every 20 minutes by `.grain/schedules/release-train.yml`, that runs `scripts/release-train-task.sh` (one tick of `scripts/release-from-trunk.sh`, in a scratch clone, with CI verdicts grain reads for it). It pushes the rc, `-pending` and `-discarded` tags, `candidate`, and -- for a qualified rc the train may release (section 5) -- `vX.Y.0` and `latest`, with the template's narrow `push:` grant (playbook §0.4). |
 | `.github/workflows/release-train.yml` / `.grain/workflows/release-train.yml` | Retired as trains: `workflow_dispatch` only. The GitHub Actions one always runs dry and says what it would cut. |
 | `scripts/release-from-trunk.sh` | The train: Phase 1 (judge the qualifying rc) and Phase 2 (wait on `grain/rc-hold` if held, then cut the next rc). Also has `approve`, `reject` and `rollback` modes, which only `promote-release.yml` / `promote.yml` run, for a person. |
 | `scripts/candidate-gate.sh` | `select-lkg` (which commit is known-good) and `check-qualification` (Stage 1 `nightly.yml` and Stage 2 `grain/release-qualification` on the rc). |
 | `pkg/orchestrator/releasequalification.go`, `releaseredrc.go` | Runs the `release-qualification` suite once Stage 1 passes, posts `grain/release-qualification`, raises `pipeline.rc-failed:<rc_tag>` (or `pipeline.release-escalated:<version>`), and keeps check run `grain/rc-hold` on a red rc's commit while `[rc-blocker <rc_tag>]` tasks are open (`docs/pipeline-steward.md`). |
 | `scripts/release-images.sh` | `rc`, `discard-rc`, `pending`, `discard-pending` and `promote`: what each step publishes to GHCR. |
-| `.grain/templates/release-notes.yml` | Draft `## Highlights`, run `scripts/release-notes.sh`, open a pull request for `docs/releases/vX.Y.0.md`. The train no longer files it per release (section 5); file it by hand until promotion writes the notes itself. |
+| `.grain/templates/release-notes.yml` | Draft `## Highlights`, run `scripts/release-notes.sh`, open a pull request for `docs/releases/vX.Y.0.md`. The train no longer files it per release: a release the train makes gets its notes from `publish-release.yml` (section 5). File it by hand for prose highlights or a staged release. |
 | `.grain/workflows/promote-release.yml` | A person's Approve or Reject. `workflow_dispatch` only, and `human: required` (`.grain/triggers/release-promotion.yml`). |
 | `.grain/workflows/promote.yml` | Publishes whatever release the git `latest` tag names as the `latest` image. Runs on every `release` of `main`, after each release-train run, and as the last job of an approval. |
 
@@ -62,8 +69,10 @@ always safe. The task has no GitHub token: grain reads `main`'s runs, the rc's
 github`), and the task hands them to the script as files. It holds neither
 `package-publish` nor `release-gate-read`, so it runs the script with
 `RELEASE_IMAGES=off RELEASE_NOTES_TASK=off RELEASE_NOTIFY=off`: it pushes git
-refs and nothing else, and the deployment raises `release.pending` itself
-when it sees the `-pending` tag (`pkg/orchestrator/releasepending.go`).
+refs and nothing else. `publish-release.yml` publishes the images and the
+notes of a `vX.Y.0` the train tags, and the deployment raises
+`release.pending` itself when it sees a `-pending` tag
+(`pkg/orchestrator/releasepending.go`).
 
 `scripts/release-from-trunk.sh` with `DRY_RUN=true` prints what it would push,
 publish and file, and does none of it. The script's header lists every
@@ -169,10 +178,10 @@ release when choosing the next target. So the next rc is
 | --- | --- | --- |
 | `vX.Y.0-rc.N` | the train | a release candidate, in qualification or qualified |
 | `vX.Y.0-rc.N-discarded` | the train (failed qualification), or a person's Reject | that rc will never ship |
-| `vX.Y.0-pending` | the train (passed qualification) | staged for a person's approval; deleted on Approve or Reject |
-| `vX.Y.0` | `promote-release.yml`, on a person's Approve | the release |
+| `vX.Y.0-pending` | the train (passed qualification, but not the train's to release: section 5) | staged for a person's approval; deleted on Approve or Reject |
+| `vX.Y.0` | the train, on the qualified rc's commit (`Promoted-From: <rc>`); or `promote-release.yml`, on a person's Approve | the release |
 | `vX.Y.0-retracted` | `promote.yml` / `rollback`, on a person's Rollback | that release was retracted; `latest` moved back |
-| `latest` | `promote-release.yml` / `promote.yml`, on a person's Approve or Rollback | the newest promoted (non-retracted) release |
+| `latest` | the train with `vX.Y.0`; `promote-release.yml` / `promote.yml`, on a person's Approve or Rollback | the newest promoted (non-retracted) release |
 
 ## 4. Two-stage qualification and red release candidates
 
@@ -203,9 +212,34 @@ re-run without counting as failures (`infra`). `check-qualification` returns:
 - **`PASS`**: Stage 1 and Stage 2 both passed; the release is staged for a
   person (section 5).
 
-## 5. The `vX.Y.0-pending` stage and a person's approval
+## 5. Automatic promotion, and the `vX.Y.0-pending` stage for a person
 
-**The pipeline does everything up to the final tag, and a person makes the
+**Since 2026-11-04 the train releases a qualified rc itself**
+(`design/playbook/releases.playbook.md` §1). When `vX.Y.0-rc.N` passes Stage 1
+and Stage 2, the next tick tags `vX.Y.0` on the rc's commit (annotated:
+`Qualification: PASS`, `Promoted-From: vX.Y.0-rc.N`) and force-moves `latest`
+onto it. `.github/workflows/publish-release.yml` runs on that tag: it runs
+`scripts/release-from-trunk.sh verify vX.Y.0` (the tag names its rc, is on that
+rc's commit, the rc is not dropped, the commit is on `main` or
+`release/vX.Y.0`, the rc still passes both stages, and none of the cases below
+that make the train stage it for a person applies), then
+`release-images.sh promote vX.Y.0` and `gh release create` with the notes from
+`scripts/release-notes.sh write`. Nothing waits on a person. The train does
+**not** release it, and stages it as below instead, when:
+
+- `RELEASE_AUTO_PROMOTE=false` in `scripts/release.conf` (every release goes to a person);
+- it is the first release of a new `RELEASE_MAJOR` (a major bump);
+- it carries breaking changes since the last release (`release-notes.sh check-breaking`);
+- its commit is on neither `main` nor `release/vX.Y.0`.
+
+`RELEASE_NEVER_PROMOTE` drops a named rc and skips a named version, so neither
+is ever released or staged. A qualified rc inside `RELEASE_MIN_INTERVAL_MINUTES`
+of the last release waits (`promotion_waits=` in the output), and a later
+tick releases it. To stop all automatic releases at once, set
+`RELEASE_AUTO_PROMOTE=false` (a person's Submit, like every `release.conf`
+change); to undo one, roll it back (section 6 and the playbook's §11).
+
+**For a release staged for a person, the pipeline does everything up to the final tag, and a person makes the
 release official** (task 1236, `design/playbook/releases.playbook.md` §0; `design/design/release-from-trunk.design.md` RFT-8).
 
 1. **Qualification passes, so the release is staged, not promoted.** When
@@ -215,14 +249,13 @@ release official** (task 1236, `design/playbook/releases.playbook.md` §0; `desi
    - builds and publishes the `vX.Y.0`-stamped images of all four packages
      as `:vX.Y.0-pending` (`scripts/release-images.sh pending vX.Y.0`), so
      approving builds and tests nothing;
-   - no longer files a per-release release-notes agent task: the task train
-     runs with `RELEASE_NOTES_TASK=off`. A release's notes are mechanical
+   - files no per-release release-notes agent task: the task train runs
+     with `RELEASE_NOTES_TASK=off`. A release's notes are mechanical
      (`scripts/release-notes.sh`, playbook §8), from the newest `vX.Y.Z` that
      `RELEASE_NEVER_PROMOTE` does not name and that is not retracted, never
-     from a placeholder. Until promotion writes them itself
-     (`release-notes.sh write`, playbook gap 5), `docs/releases/vX.Y.0.md`
-     for a staged release is written by filing the `release-notes` template
-     by hand;
+     from a placeholder. `publish-release.yml` writes them for a release the
+     train makes; for a staged release, file the `release-notes` template by
+     hand if `docs/releases/vX.Y.0.md` should be on `main` before approving;
    - leaves the operator notification **"vX.Y.0 is ready to promote"**
      (`release.pending:vX.Y.0`) to the deployment, which raises it in the
      Inbox and the Alerts bell for every `-pending` tag with no release,
@@ -271,7 +304,7 @@ Image tags, and the channels a deployment follows (`GRAIN_CHANNEL`,
 
 | Channel | Image tag | Follows |
 | --- | --- | --- |
-| `latest` | `:latest` | the newest release a person approved |
+| `latest` | `:latest` | the newest release (the train's, or one a person approved) |
 | `candidate`, or its alias `rc` | `:candidate` / `:rc` | the newest rc the train cut, qualifying or qualified |
 | `main` | `:main` | `main`'s head |
 | a pin | `:vX.Y.Z`, `:vX.Y.0-rc.N`, `:sha-<short>` | that build only |
@@ -369,20 +402,24 @@ deleted. These are the refs the release workflows push:
 | --- | --- |
 | `refs/tags/vX.Y.0-rc.N`, `-rc.N-discarded` | the train |
 | `refs/tags/vX.Y.0-pending` (created, later deleted) | the train creates it; `promote-release.yml` deletes it |
-| `refs/tags/vX.Y.0` | `promote-release.yml` only |
-| `refs/tags/latest` (force-moved) | `promote-release.yml` only |
+| `refs/tags/vX.Y.0` | the train (a task, under its template's `push:` grant), on a qualified rc's commit; or `promote-release.yml` |
+| `refs/tags/latest` (force-moved) | the train, with `vX.Y.0`; or `promote-release.yml` |
 | `refs/heads/candidate` (force-moved) | the train |
 | `refs/heads/release/vX.Y.0` (created for `rc.3`, deleted on Approve) | the train creates it; `promote-release.yml` deletes it |
 | `refs/heads/main` | nothing in the release pipeline |
 
-The proxy does not stop the train from pushing `vX.Y.0` or `latest`. The
-workflow and the review of changes to it do. `release-train.yml` has no step
-that pushes them, the approval workflow and every other `.grain/**` change
-but the release jobs wait for a person (`.grain/triggers/release-promotion.yml`,
-`.grain/triggers/grain-declarations.yml`), and a change to the release jobs
-or the scripts that push those tags is held for grain's security review,
-which reports as a finding -- leaving the change for a person -- any way it
-could push them other than as a result of the approval
+The train's task pushes through its template's `push:` grant
+(`.grain/templates/release-train.yml`; the playbook's §0.4), which reaches
+`vM.Y.0` (created only) and `latest`, and `scripts/release-from-trunk.sh`
+pushes them only for the exact commit of the rc that qualified in that run.
+`.github/workflows/release-train.yml` has no step that pushes them. The
+grant, the train script, `scripts/release.conf`, the train's schedule,
+`publish-release.yml` and the approval workflow all wait for a person's
+Submit (`.grain/triggers/release-promotion.yml`, grain's template-push
+category), and a change to the other release jobs or scripts is held for
+grain's security review, which reports as a finding -- leaving the change
+for a person -- any way it could push them other than as the approval or
+the train's promotion of a qualified rc
 (`.grain/triggers/release-machinery.yml`).
 
 ## 9. Patch releases (`release/vX.Y.Z`)
@@ -582,6 +619,10 @@ schedules are gone.
   `staging-ui-exploration` or `staging-state-cleanup` schedule and no
   24-hour wait: an rc is qualified by Stage 1 and Stage 2 (section 4), and
   the train judges it as soon as both have a verdict.
+- **Release train** (`.grain/schedules/release-train.yml`): every 20
+  minutes, `overlap: skip`, one tick of `.grain/templates/release-train.yml`
+  (`scripts/release-train-task.sh`): judge the rc, release or drop it, or cut
+  the next. A tick with nothing to do closes as `nothing_needed`.
 - **Release watchdog** (`.grain/templates/release-watchdog.yml`, every 6
   hours): see section 12.
 - **Release process review** (`.grain/templates/release-process-review.yml`,
@@ -616,9 +657,10 @@ rcs themselves are the pipeline steward's (`docs/pipeline-steward.md`).
   their follow-up task.
 - **Release process review** (Mondays, 07:00 UTC) measures the week:
   - **qualification lead time**: per rc, cut to Stage 1 to Stage 2 to
-    `-pending` or `-discarded`, and per release, landing on `main` to `rc.1`
-    to Approve to the downstream sync. Time waiting for the Approve is
-    counted separately.
+    `vX.Y.0`, `-pending` or `-discarded`, and per release, landing on `main`
+    to `rc.1` to `vX.Y.0` to the downstream sync. Time a qualified rc waited
+    on `RELEASE_MIN_INTERVAL_MINUTES`, and time a staged release waited for a
+    person's Approve, are counted separately.
   - **rcs per release**, and any `rc.3` convergence branch or escalation.
   - **flake rate**: qualification jobs and items that passed only on their one
     retry, against the playbook's budget (more than 2% over 7 days, or two rc

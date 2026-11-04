@@ -205,6 +205,28 @@ func (c *Client) externalAgentTokenOwner(ctx context.Context, req CreateExternal
 	return caller, nil
 }
 
+// selfServiceLimits is what a person minting a credential for their own
+// workstation (`grain login --issue-token`, external-cli.spec.md#XC-9)
+// may ask for without capabilities:admin: no dangerous scope and no
+// requires_person scope set -- those are an operator's to issue -- and
+// only repositories the deployment already works in.
+func (c *Client) selfServiceLimits(ctx context.Context, name string, repos []string, needsPerson bool) error {
+	if needsPerson && requestPerson(ctx) != "" {
+		return forbiddenErrorf("self-service credential %q asks for a dangerous scope or a requires_person scope set: "+
+			"an operator issues those (Settings -> Agents)", name)
+	}
+	for _, r := range repos {
+		ref, err := model.ParseRepo(r)
+		if err != nil {
+			return validationErrorf("%v", err)
+		}
+		if err := c.refuseOffRepoAllowlist(ctx, ref, "a self-service credential cannot be limited to it"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // CreateExternalAgentToken issues a new scoped external agent credential.
 // Issuing a credential that includes any dangerous scope or a requires_person
 // scope set requires a human principal.
@@ -227,6 +249,11 @@ func (c *Client) CreateExternalAgentToken(ctx context.Context, req CreateExterna
 	owner, err := c.externalAgentTokenOwner(ctx, req)
 	if err != nil {
 		return IssuedExternalAgentToken{}, err
+	}
+	if req.SelfService {
+		if err := c.selfServiceLimits(ctx, name, repos, needsPerson); err != nil {
+			return IssuedExternalAgentToken{}, err
+		}
 	}
 	if req.RateLimit < 0 {
 		return IssuedExternalAgentToken{}, validationErrorf("rateLimit must be non-negative")
@@ -550,7 +577,7 @@ func (s *Server) authenticateExternalAgent(w http.ResponseWriter, r *http.Reques
 		return nil, nil, false
 	}
 	if tok.ExpiresAt != nil && !now.Before(*tok.ExpiresAt) {
-		writeError(w, http.StatusUnauthorized, errors.New("external agent bearer token has expired"))
+		writeTokenExpired(w, *tok.ExpiresAt)
 		return nil, nil, false
 	}
 	release, wait, err := s.externalLimiter.acquire(tok, now)

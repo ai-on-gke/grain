@@ -5,13 +5,14 @@
 **Created:** 2026-10-24  
 **Supersedes:** Stabilization-branch workflow in `docs/release-candidate-management.md`
 
-> **Superseded in part.** [`releases.playbook.md`](../playbook/releases.playbook.md) ("Relationship to `release-from-trunk`") replaces this design's staging soak, its daily cadence and its per-release release-notes agent task. What it keeps from here: releasing from `main` with no stabilization branch (§1), LKG selection (§2, narrowed to `tests.yml` and `release.yml`; `nightly.yml` is now Stage 1 of qualification on the rc), the tag and channel conventions (`vX.Y.0-rc.N`, `-discarded`, `vX.Y.0`, `latest`, `candidate`/`rc`; §4's failed-rc handling and the version numbering section), the operator controls in `scripts/release.conf`, `infra` verdicts and their re-runs, mechanical `scripts/release-notes.sh`, and the `vX.Y.0-pending` stage with a person's Approve (§4, RFT-8), now the release's one person action.
+> **Superseded in part.** [`releases.playbook.md`](../playbook/releases.playbook.md) ("Relationship to `release-from-trunk`") replaces this design's staging soak, its daily cadence and its per-release release-notes agent task. What it keeps from here: releasing from `main` with no stabilization branch (§1), LKG selection (§2, narrowed to `tests.yml` and `release.yml`; `nightly.yml` is now Stage 1 of qualification on the rc), the tag and channel conventions (`vX.Y.0-rc.N`, `-discarded`, `vX.Y.0`, `latest`, `candidate`/`rc`; §4's failed-rc handling and the version numbering section), the operator controls in `scripts/release.conf`, `infra` verdicts and their re-runs, mechanical `scripts/release-notes.sh`, and the `vX.Y.0-pending` stage with a person's Approve (§4, RFT-8), kept only for releases the train may not make itself (a major bump, breaking changes, `RELEASE_AUTO_PROMOTE=false`): since 2026-11-04 the train releases a qualified rc on its own (playbook §1).
 >
 > | Section here | Disposition | Replaced by |
 > | --- | --- | --- |
+> | §4 "When the Soak Passes" (every release staged for a person) | **Superseded in part** | The train tags `vX.Y.0` and moves `latest` for a qualified rc; `-pending` and Approve remain for the cases above (playbook §1) |
 > | Goal 5, §3 (24-hour soak on `grain-candidate`, `check-soak`, `RELEASE_STAGING_URL`, `staging-ui-exploration`) | **Superseded** | Two-stage qualification of the rc: Stage 1 `nightly.yml`, Stage 2 `grain/release-qualification` (playbook §2) |
 > | §4 "When the Soak Fails" step 2 (soak triage) | **Superseded** | `pipeline.rc-failed:<rc_tag>` and the pipeline steward (playbook §12) |
-> | §5 (at most daily, `15 4 * * *` cron) | **Superseded** | An event-driven train, at most one rc qualifying at a time, `RELEASE_MIN_INTERVAL_MINUTES` between releases (playbook §6, §7) |
+> | §5 (at most daily, `15 4 * * *` cron) | **Superseded** | A train ticking every 20 minutes, at most one rc qualifying at a time, `RELEASE_MIN_INTERVAL_MINUTES` between releases (playbook §6, §7) |
 > | §6 "Writing release-note highlights before approval", RFT-6's `.grain/templates/release-notes.yml` | **Superseded** | Notes generated mechanically during promotion (playbook §8) |
 > | RFT-4's `check-soak`, RFT-7's soak documentation | **Superseded** | `check-qualification` (`scripts/candidate-gate.sh`), `docs/release-candidate-management.md` |
 >
@@ -289,7 +290,7 @@ If the soak gate is **RED**:
 
 ### 5. Cadence: At Most Daily
 
-> **Superseded** by [`releases.playbook.md`](../playbook/releases.playbook.md) §6 and §7: the train runs as soon as an rc has a verdict and `main` has a newer known-good commit, with `RELEASE_MIN_INTERVAL_MINUTES` between releases and a periodic run kept only as a safety wake.
+> **Superseded** by [`releases.playbook.md`](../playbook/releases.playbook.md) §6 and §7: the train ticks every 20 minutes (`.grain/schedules/release-train.yml`), judging the rc as soon as it has a verdict and cutting the next once `main` has a newer known-good commit, with `RELEASE_MIN_INTERVAL_MINUTES` between releases.
 
 The release workflow runs on a daily cron (`15 4 * * *` UTC, ~2 hours after `02:11 UTC` `nightly.yml` starts on `main`) and supports manual `workflow_dispatch`.
 

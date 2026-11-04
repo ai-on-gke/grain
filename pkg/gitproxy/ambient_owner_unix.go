@@ -26,3 +26,15 @@ func ownedByUs(fi os.FileInfo) bool {
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	return ok && int(st.Uid) == os.Getuid()
 }
+
+// singleLink reports whether fi has exactly one hard link.
+func singleLink(fi os.FileInfo) bool {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	return ok && st.Nlink == 1
+}
+
+// openNoFollow opens path, which must already exist, for writing, and
+// refuses it when its last component is a symlink.
+func openNoFollow(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_WRONLY|syscall.O_NOFOLLOW, 0)
+}

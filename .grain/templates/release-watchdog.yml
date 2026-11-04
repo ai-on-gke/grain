@@ -18,8 +18,11 @@ body: |
   the release train cuts `vX.Y.0-rc.N` from the newest known-good commit, qualifies
   it in two stages -- Stage 1 `nightly.yml` on the rc, then Stage 2, the
   `release-qualification` suite, whose verdict is check run
-  `grain/release-qualification` on the rc's commit -- and stages `vX.Y.0-pending`
-  for a person's Approve. There is no staging soak and no 24-hour wait: a healthy
+  `grain/release-qualification` on the rc's commit -- and then releases it itself
+  (tags `vX.Y.0` and moves `latest`, in a tick of `.grain/schedules/release-train.yml`
+  every 20 minutes), or stages `vX.Y.0-pending` for a person's Approve when it
+  may not (a major bump, breaking changes, `RELEASE_AUTO_PROMOTE=false`).
+  There is no staging soak and no 24-hour wait: a healthy
   rc is qualified in about 60-90 minutes. `.grain/workflows/release.yml` runs on
   every merge to `main`, so a green, current release run there says nothing about
   whether a release candidate is advancing. Check that from git and the rc's runs:
@@ -29,7 +32,8 @@ body: |
     (`git for-each-ref --sort=-creatordate --count=10 --format='%(refname:short) %(creatordate:iso) %(objectname:short)' 'refs/tags/v*'`)
     and the commit `latest` points at.
   - For the newest `vX.Y.0-rc.N` with no `-discarded` marker, no `vX.Y.0-pending`
-    and no `vX.Y.0`, it is still qualifying. Report how long it has been since
+    and no `vX.Y.0`, it is still qualifying (or, once both stages passed,
+    waiting out `RELEASE_MIN_INTERVAL_MINUTES`: the train says `promotion_waits=`). Report how long it has been since
     it was cut, and where it is:
     - Stage 1: the `nightly.yml` run on the rc tag (`list_ci_runs` with
       `provider: github-actions`, `workflow: nightly.yml` and `ref: <rc tag>`),
@@ -58,8 +62,12 @@ body: |
     attempt, Stage 2 items run twice). Two or more is over the flake budget
     (playbook section 3): name them, and check that `pipeline.flake-budget` has
     been raised for each and that a de-flake or quarantine task is open.
+  - **A new release** (`vX.Y.0` in the last 24 hours): check that
+    `publish-release.yml` ran on its tag and succeeded (images promoted, GitHub
+    Release written). A train-made `vX.Y.0` with no published release is a fault.
   - **A pending release** (`vX.Y.0-pending` with no `vX.Y.0`) waits on a person's
-    Approve, the release's one person action. Report its age; it is not a fault.
+    Approve, because the train may not release it. Report its age and why it was
+    staged; it is not a fault.
   - **A retracted release** (`vX.Y.Z-retracted`) is a rollback a person made.
     Report any from the last 7 days, and check that `latest` does not point at a
     retracted release and that a fix-forward task exists for it.

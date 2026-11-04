@@ -68,6 +68,17 @@ func TestRunCredentialSourceReadsAsTheNamedCredential(t *testing.T) {
 	if tok := missing.TokenFor("bwsalmon", "grain"); tok != nil {
 		t.Errorf("TokenFor with an unknown credential named = %q, want the ladder's answer (none)", *tok)
 	}
+
+	if err := credentials.SetHost("grain-team-default", gitproxy.CredentialHost{
+		Host:   model.DefaultGitHost,
+		Kind:   model.GitHostGitHub,
+		Author: "Ada Lovelace",
+	}); err != nil {
+		t.Fatalf("SetHost: %v", err)
+	}
+	if got := named.AuthorSignature("bwsalmon", "grain"); got != "Ada Lovelace" {
+		t.Errorf("AuthorSignature = %q, want Ada Lovelace", got)
+	}
 }
 
 // The transport follows the named credential's host too: a credential

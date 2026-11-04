@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/granule/pkg/extent"
-	"github.com/bwsalmon/granule/pkg/qcow2"
+	"github.com/gke-labs/granule/pkg/extent"
+	"github.com/gke-labs/granule/pkg/qcow2"
 )
 
 // splitDisk writes a 3 MiB disk with a marker in its second MiB and

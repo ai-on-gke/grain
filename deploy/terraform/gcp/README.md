@@ -474,8 +474,18 @@ Grain pull requests. The repository has no external remote and the deploy
 does not accept a repository URL or branch for one.
 
 The data disk, mounted at `/var/lib/grain/data`, holds both this
-repository and the SQLite database. Preserve that disk during rebuilds,
-and back it up (a disk snapshot schedule is the simple way): back up
+repository and the task store. A new deployment's store is PostgreSQL:
+`setup.sh` provisions a local server on the instance, the same way as on
+any host. This module has no Cloud SQL instance for grain's own store, so
+that is the default ([docs/database.md](../../../docs/database.md)). The
+server's data is in `/var/lib/grain/data/postgres` on that disk, so it
+lives and dies with it. An instance deployed before this keeps its SQLite
+database. To use Cloud SQL instead, pass `GRAIN_DB_DSN`
+([docs/cloudsql-postgres.md](../../../docs/cloudsql-postgres.md)).
+Preserve the data disk during rebuilds, and back it up (a disk snapshot
+schedule is the simple way; for PostgreSQL, take the snapshot with
+`grain-daemon.service` and `grain-postgres.service` stopped, or use the
+`pg_dump` in docs/database.md): back up
 `/var/lib/grain/data`; never back up `/var/lib/grain/scratch`, which is
 the sandbox disk's run space and caches and is rebuilt by the next
 deploy. A future backup facility will back up both stores together;

@@ -19,6 +19,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +28,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
 // attributedRoute is one write path's row in operator-attribution spec
@@ -227,12 +230,47 @@ func releaseSecret(t *testing.T, client *ui.Client, _ sender) string {
 	return ""
 }
 
+// adopterClient is testClient's deployment with a fake pull-request
+// adopter, and adoptedFor who its newest filing was for.
+func adopterClient(t *testing.T) *ui.Client {
+	t.Helper()
+	client, _, _ := testClient(t)
+	client.Config.PullRequests = &fakeAdopter{}
+	return client
+}
+
+func adoptedFor(t *testing.T, _ context.Context, client *ui.Client, _, _ string) model.Principal {
+	t.Helper()
+	return client.Config.PullRequests.(*fakeAdopter).lastRequester()
+}
+
 // ciClient is testClient's deployment with a fake grain CI runner whose
 // every cancel succeeds.
 func ciClient(t *testing.T) *ui.Client {
 	t.Helper()
 	client, _, _ := testClient(t)
 	client.Config.CI = &fakeCIRunner{cancelOK: true}
+	return client
+}
+
+// imageSourceClient is testClient's deployment on the image upgrade
+// pipeline, whose image source an operator may still change.
+func imageSourceClient(t *testing.T) *ui.Client {
+	t.Helper()
+	client, _, _ := testClient(t)
+	dir := t.TempDir()
+	refFile := filepath.Join(dir, "image-ref")
+	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE=ghcr.io/acme/grain:main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	client.Config.Upgrader = upgrade.New(upgrade.Config{
+		StatusFile: filepath.Join(dir, "upgrade-status.json"),
+		Image: &upgrade.ImageConfig{
+			Repository:         "ghcr.io/acme/grain",
+			RefFile:            refFile,
+			SourceOverrideFile: filepath.Join(dir, "upgrade-image-source.json"),
+		},
+	})
 	return client
 }
 
@@ -250,6 +288,18 @@ func cancelledBy(t *testing.T, _ context.Context, client *ui.Client, _, _ string
 // inventory for tasks, the conversation, releases and the merge queue,
 // settings, sessions, and through the agent row the agent API.
 var attributedRoutes = map[string]attributedRoute{
+	"POST /api/pull-requests/adopt": {
+		client:      adopterClient,
+		body:        `{"pr":"acme/widgets#7"}`,
+		agentGrants: []string{"api:merge:write", "api:tasks:write"},
+		recorded:    adoptedFor,
+	},
+	"POST /api/pull-requests/review": {
+		client:      adopterClient,
+		body:        `{"pr":"acme/widgets#7","design":true}`,
+		agentGrants: []string{"api:tasks:write", "api:repos:read"},
+		recorded:    adoptedFor,
+	},
 	"POST /api/tasks": {
 		body:        `{"title":"filed","noRepo":true}`,
 		agentGrants: []string{"api:tasks:write"},
@@ -434,6 +484,14 @@ var attributedRoutes = map[string]attributedRoute{
 		path:     "/api/ci/runs/run-7",
 		bareID:   true,
 		recorded: cancelledBy,
+	},
+	// Where image upgrades come from: an override in a file of the
+	// upgrader's, so the handler writes the config_audit row itself.
+	"PUT /api/upgrade/source": {
+		client:      imageSourceClient,
+		body:        `{"mode":"registry"}`,
+		agentGrants: []string{"api:deployment-ops"},
+		recorded:    lastConfigAudit,
 	},
 	"PUT /api/memory": {
 		body:        `{"text":"remember this"}`,

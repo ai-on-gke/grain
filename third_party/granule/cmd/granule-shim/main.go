@@ -68,15 +68,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/config"
-	"github.com/bwsalmon/granule/pkg/extents"
-	"github.com/bwsalmon/granule/pkg/guestcp"
-	"github.com/bwsalmon/granule/pkg/guestexec"
-	"github.com/bwsalmon/granule/pkg/guestimage"
-	"github.com/bwsalmon/granule/pkg/hypervisor"
-	"github.com/bwsalmon/granule/pkg/memagent"
-	"github.com/bwsalmon/granule/pkg/netshim"
-	"github.com/bwsalmon/granule/pkg/workloadio"
+	"github.com/gke-labs/granule/pkg/config"
+	"github.com/gke-labs/granule/pkg/extents"
+	"github.com/gke-labs/granule/pkg/guestcp"
+	"github.com/gke-labs/granule/pkg/guestexec"
+	"github.com/gke-labs/granule/pkg/guestimage"
+	"github.com/gke-labs/granule/pkg/hypervisor"
+	"github.com/gke-labs/granule/pkg/memagent"
+	"github.com/gke-labs/granule/pkg/netshim"
+	"github.com/gke-labs/granule/pkg/workloadio"
 )
 
 func main() {

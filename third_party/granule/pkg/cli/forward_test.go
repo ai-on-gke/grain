@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/granule/pkg/guestforward"
+	"github.com/gke-labs/granule/pkg/guestforward"
 )
 
 func TestForwardHelp(t *testing.T) {

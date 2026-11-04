@@ -7,7 +7,10 @@ body: |
   continuously from `main` (`design/playbook/releases.playbook.md`,
   `docs/release-candidate-management.md`): each rc is qualified by Stage 1
   `nightly.yml` and Stage 2 `grain/release-qualification`, with no staging
-  soak, and a person's Approve is the only person action in a release.
+  soak. The train releases a qualified rc itself (`vX.Y.0` and `latest`);
+  a person's Approve is needed only for a release it stages as
+  `vX.Y.0-pending` (a major bump, breaking changes,
+  `RELEASE_AUTO_PROMOTE=false`).
   This run changes no code: it reports what happened and files follow-up
   tasks for the fixes.
 
@@ -42,14 +45,16 @@ body: |
 
   - **Qualification lead time**, per rc: cut (`-rc.N` tag) -> Stage 1
     `nightly.yml` started and concluded -> Stage 2
-    `grain/release-qualification` started and concluded -> `-pending`
-    staged or `-discarded`. Then, per release: first commit after the
-    previous release landing on `main` -> `rc.1` cut -> `-pending` ->
-    a person's Approve (`vX.Y.Z` / `latest`) -> downstream sync (the
+    `grain/release-qualification` started and concluded -> `vX.Y.0`
+    tagged, `-pending` staged or `-discarded`. Then, per release: first commit after the
+    previous release landing on `main` -> `rc.1` cut -> `vX.Y.Z` /
+    `latest` (by the train, or by a person's Approve of a staged release)
+    -> `publish-release.yml` done -> downstream sync (the
     repository that imports this module pinning the release). Give the
     median and the slowest, and name the stage where most of the time went.
-    Time spent waiting for a person's Approve is reported separately: it is
-    the one person action, not pipeline latency.
+    Time a qualified rc spent waiting out `RELEASE_MIN_INTERVAL_MINUTES`,
+    and time a staged release spent waiting for a person's Approve, are
+    reported separately: they are policy, not pipeline latency.
   - **Release throughput**: releases promoted, rcs cut, and rcs per release
     (how many `rc.N` attempts each version took; any `rc.3` that needed a
     `release/vX.Y.Z` convergence branch; any `pipeline.release-escalated`).
@@ -77,7 +82,8 @@ body: |
     (false positives in `scripts/candidate-gate.sh check-qualification` or
     a `qualification-*` template);
   - slow image builds in `scripts/release-images.sh`;
-  - any step other than the Approve that a person had to do by hand.
+  - any step a person had to do by hand, other than approving a staged
+    release.
 
   ## 3. Suggest and file actionable improvements
 
@@ -87,7 +93,7 @@ body: |
        qualification lead times.
     2. The flake rate and infra re-runs, and any retracted releases.
     3. Every point where the release train stalled, failed or needed
-       a person beyond the Approve.
+       a person beyond approving a staged release.
     4. Ranked recommendations to improve release reliability, speed or
        automation.
   - Propose focused follow-up tasks (`propose_task` with

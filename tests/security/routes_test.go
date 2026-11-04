@@ -90,6 +90,7 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/auth/logout":               public,
 	"GET /api/auth/user":                 public,
 	"GET /api/auth/status":               public,
+	"GET /api/auth/whoami":               public,
 	"GET /api/whoami":                    trusted,
 
 	// The long poll that tells a signed-in page the daemon is going down
@@ -150,6 +151,9 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/tasks/{id}/force-merge":                              trusted,
 	"POST /api/tasks/{id}/run-now":                                  trusted,
 	"POST /api/tasks/{id}/pull-request":                             trusted,
+	"POST /api/pull-requests/adopt":                                 trusted,
+	"POST /api/pull-requests/review":                                trusted,
+	"GET /api/pull-requests/status":                                 trusted,
 	"POST /api/tasks/{id}/sandbox/recreate":                         trusted,
 	"POST /api/tasks/{id}/activity":                                 trusted,
 	"PUT /api/tasks/{id}/session-title":                             trusted,
@@ -402,6 +406,7 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/upgrade":                   trusted,
 	"POST /api/upgrade":                  trusted,
 	"DELETE /api/upgrade/scheduled":      trusted,
+	"PUT /api/upgrade/source":            trusted,
 	"GET /api/upgrade/targets":           trusted,
 	"GET /api/upgrade/release-notes":     trusted,
 	"GET /api/database":                  trusted,
