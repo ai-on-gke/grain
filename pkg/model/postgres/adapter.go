@@ -262,11 +262,60 @@ func (c *adaptedConn) Begin() (driver.Tx, error) {
 	return c.inner.Begin()
 }
 
+// writerLockKey is the transaction-scoped advisory lock every read-write
+// transaction takes (takeWriterLock): one per store, because what it
+// stands in for is SQLite's one write lock. The store is the schema the
+// connection's search_path names, so its second key is that schema's.
+const writerLockKey = 0x67726169 // "grai"
+
+// writerLockTimeout is how long a writer waits its turn for that lock
+// before failing with lock_timeout (55P03), which Store.write retries:
+// the same five seconds pkg/model/sqlite gives busy_timeout.
+const writerLockTimeout = "5s"
+
 func (c *adaptedConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	var (
+		tx  driver.Tx
+		err error
+	)
 	if btx, ok := c.inner.(driver.ConnBeginTx); ok {
-		return btx.BeginTx(ctx, opts)
+		tx, err = btx.BeginTx(ctx, opts)
+	} else {
+		tx, err = c.inner.Begin()
 	}
-	return c.inner.Begin()
+	if err != nil || opts.ReadOnly {
+		return tx, err
+	}
+	if err := c.takeWriterLock(ctx); err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	return tx, nil
+}
+
+// takeWriterLock serialises read-write transactions the way
+// pkg/model/sqlite's _txlock=immediate does, at BEGIN: Store.write's
+// callers read a row and write it back whole (ObserveField and
+// everything built on it), which is only correct while no other writer
+// can commit in between. Postgres' default READ COMMITTED does not
+// promise that -- two such transactions both read the old row and the
+// later commit silently drops the earlier one's change (a task's close
+// lost to the orchestrator's next observation, in the installer e2e) --
+// so every read-write transaction first takes the same advisory lock,
+// held until it commits or rolls back. Read-only transactions take
+// nothing.
+func (c *adaptedConn) takeWriterLock(ctx context.Context) error {
+	execer, ok := c.inner.(driver.ExecerContext)
+	if !ok {
+		return fmt.Errorf("postgres: %T cannot execute statements, so it cannot take the writer lock", c.inner)
+	}
+	if _, err := execer.ExecContext(ctx, "SET LOCAL lock_timeout = '"+writerLockTimeout+"'", nil); err != nil {
+		return fmt.Errorf("postgres: setting the writer lock's timeout: %w", err)
+	}
+	if _, err := execer.ExecContext(ctx, fmt.Sprintf("SELECT pg_advisory_xact_lock(%d, hashtext(current_schema()))", writerLockKey), nil); err != nil {
+		return fmt.Errorf("postgres: taking the writer lock: %w", err)
+	}
+	return nil
 }
 
 func (c *adaptedConn) Ping(ctx context.Context) error {
