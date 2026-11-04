@@ -455,9 +455,8 @@ func (c Config) HostExecutorStatus(ctx context.Context) HostExecutorStatus {
 	}
 	// A dialing-in hostd that is not connected is said at once, not
 	// after hostdStatusTimeout of waiting for it (hostd.ForDisplay).
-	hctx, cancel := context.WithTimeout(hostd.ForDisplay(ctx), hostdStatusTimeout)
-	defer cancel()
-	offers, err := exec.hostdClient().Offers(hctx)
+	dctx := hostd.ForDisplay(ctx)
+	offers, err := queryHostdOffers(dctx, exec, hostdStatusTimeout)
 	out.Hostd = &HostdStatus{Reachable: err == nil}
 	if exec.Remote != nil {
 		st := exec.Remote.Status()
@@ -467,6 +466,8 @@ func (c Config) HostExecutorStatus(ctx context.Context) HostExecutorStatus {
 		out.Hostd.Error = err.Error()
 		return out
 	}
+	hctx, cancel := context.WithTimeout(dctx, hostdStatusTimeout)
+	defer cancel()
 	for _, o := range offers {
 		out.Hostd.Offers = append(out.Hostd.Offers, string(o.Kind)+" "+o.Name)
 	}
@@ -579,12 +580,140 @@ func remoteHostdHost(h *agent.HostdHost, remote *hostd.HostdCarrier) error {
 // a wedged hostd costs a resolution seconds rather than a dispatch.
 const hostdOffersTimeout = 3 * time.Second
 
+// hostdUnreachableTTL bounds how long a failed Offers dial is remembered
+// across resolutions while the socket or remote session is unchanged, so
+// polling GET /api/upgrade or Settings behind an unreachable grain hostd
+// waits out the dial timeout at most once per interval rather than on
+// every read.
+const hostdUnreachableTTL = 15 * time.Second
+
+var hostdOffersNow = time.Now
+
 type hostdOffersCacheKey struct{}
 
 type hostdCacheTarget struct {
 	socket string
 	remote *hostd.Remote
 	name   string
+}
+
+type hostdTargetState struct {
+	socketPresent   bool
+	socketModUnixNs int64
+	remoteConnected bool
+	remoteSessions  int
+}
+
+func currentHostdTargetState(exec HostExecutor) hostdTargetState {
+	if exec.Remote != nil {
+		var st hostd.RemoteStatus
+		if exec.Hostd != "" {
+			st = exec.Remote.HostdStatus(exec.Hostd)
+		} else {
+			st = exec.Remote.Status()
+		}
+		return hostdTargetState{
+			remoteConnected: st.Connected,
+			remoteSessions:  st.Sessions,
+		}
+	}
+	var out hostdTargetState
+	if info, err := os.Stat(exec.Socket); err == nil {
+		out.socketPresent = true
+		out.socketModUnixNs = info.ModTime().UnixNano()
+	}
+	return out
+}
+
+type hostdOffersProbe struct {
+	state   hostdTargetState
+	done    chan struct{}
+	offers  []hostd.Offer
+	err     error
+	aborted bool
+	at      time.Time
+}
+
+type hostdUnreachableCache struct {
+	mu      sync.Mutex
+	targets map[hostdCacheTarget]*hostdOffersProbe
+}
+
+var sharedHostdUnreachableCache = &hostdUnreachableCache{
+	targets: map[hostdCacheTarget]*hostdOffersProbe{},
+}
+
+func resetHostdUnreachableCache() {
+	sharedHostdUnreachableCache.mu.Lock()
+	sharedHostdUnreachableCache.targets = map[hostdCacheTarget]*hostdOffersProbe{}
+	sharedHostdUnreachableCache.mu.Unlock()
+}
+
+// queryHostdOffers asks exec's hostd what it offers, coalescing concurrent
+// probes and reusing an unreachable answer for hostdUnreachableTTL until
+// the socket file or remote session changes. A reachable hostd is not
+// cached across calls, so edits to /etc/grain/hostd.yaml show up at once.
+func queryHostdOffers(ctx context.Context, exec HostExecutor, timeout time.Duration) ([]hostd.Offer, error) {
+	target := hostdCacheTarget{socket: exec.Socket, remote: exec.Remote, name: exec.Hostd}
+	cache := sharedHostdUnreachableCache
+	for {
+		curState := currentHostdTargetState(exec)
+		now := hostdOffersNow()
+
+		cache.mu.Lock()
+		probe, ok := cache.targets[target]
+		reuse := false
+		if ok && probe.state == curState {
+			select {
+			case <-probe.done:
+				reuse = probe.err != nil && !probe.aborted && now.Sub(probe.at) < hostdUnreachableTTL
+			default:
+				reuse = true
+			}
+		}
+		leader := false
+		if !reuse {
+			probe = &hostdOffersProbe{
+				state: curState,
+				done:  make(chan struct{}),
+			}
+			cache.targets[target] = probe
+			leader = true
+		}
+		cache.mu.Unlock()
+
+		if leader {
+			octx, cancel := context.WithTimeout(ctx, timeout)
+			offers, err := exec.hostdClient().Offers(octx)
+			cancel()
+			aborted := err != nil && ctx.Err() != nil
+			if err == nil || aborted {
+				cache.mu.Lock()
+				if cache.targets[target] == probe {
+					delete(cache.targets, target)
+				}
+				cache.mu.Unlock()
+			}
+			probe.offers, probe.err = offers, err
+			probe.aborted = aborted
+			probe.at = hostdOffersNow()
+			close(probe.done)
+			return offers, err
+		}
+
+		select {
+		case <-probe.done:
+			if probe.aborted {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			return probe.offers, probe.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 }
 
 type hostdSocketEntry struct {
@@ -631,9 +760,7 @@ func hostdOffers(ctx context.Context, exec HostExecutor, kind hostd.Kind, entry 
 		}
 		cache.mu.Unlock()
 		se.once.Do(func() {
-			octx, cancel := context.WithTimeout(ctx, hostdOffersTimeout)
-			defer cancel()
-			se.offers, se.err = exec.hostdClient().Offers(octx)
+			se.offers, se.err = queryHostdOffers(ctx, exec, hostdOffersTimeout)
 		})
 		if se.err != nil {
 			return "", se.err.Error()
@@ -659,9 +786,7 @@ func hostdOffers(ctx context.Context, exec HostExecutor, kind hostd.Kind, entry 
 		}
 		return "", fmt.Sprintf("grain hostd answers, but its allowlist (%s) offers no %s entry %q", hostd.DefaultAllowlistPath, kind, entry)
 	}
-	octx, cancel := context.WithTimeout(ctx, hostdOffersTimeout)
-	defer cancel()
-	offers, err := exec.hostdClient().Offers(octx)
+	offers, err := queryHostdOffers(ctx, exec, hostdOffersTimeout)
 	if err != nil {
 		return "", err.Error()
 	}
@@ -673,6 +798,8 @@ func hostdOffers(ctx context.Context, exec HostExecutor, kind hostd.Kind, entry 
 			// An incompatible hostd starts no new host runs, and says
 			// which protocols differ. A draining one is left to the
 			// start, which re-queues the run rather than failing it.
+			octx, cancel := context.WithTimeout(ctx, hostdOffersTimeout)
+			defer cancel()
 			var st HostdStatus
 			if why := hostdHello(octx, exec, &st); st.Mismatch != "" {
 				return o.Path, why

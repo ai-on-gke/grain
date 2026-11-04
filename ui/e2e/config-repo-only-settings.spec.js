@@ -31,20 +31,27 @@ const DESKTOP = { width: 1440, height: 900 };
 const PHONE = { width: 390, height: 844 };
 
 async function configRepoOnly(page) {
+  // A navigation while an answer is being rewritten (the test goes on to
+  // /settings/models) disposes the response under the handler; the page
+  // that asked is gone, so there is nothing left to answer.
+  const withFlag = async (route) => {
+    try {
+      const response = await route.fetch();
+      const body = await response.json();
+      await route.fulfill({
+        response,
+        json: { ...body, configRepoOnly: true },
+      });
+    } catch (err) {
+      if (!/disposed|closed|Target page|already handled/i.test(String(err)))
+        throw err;
+    }
+  };
   await page.route("**/api/settings", async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
-    const response = await route.fetch();
-    const body = await response.json();
-    await route.fulfill({ response, json: { ...body, configRepoOnly: true } });
+    await withFlag(route);
   });
-  await page.route("**/api/config", async (route) => {
-    const response = await route.fetch();
-    const body = await response.json();
-    await route.fulfill({
-      response,
-      json: { ...body, configRepoOnly: true },
-    });
-  });
+  await page.route("**/api/config", withFlag);
 }
 
 // inside says box b lies within box a, horizontally.

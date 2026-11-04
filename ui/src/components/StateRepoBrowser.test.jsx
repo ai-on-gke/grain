@@ -17,6 +17,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import StateRepoBrowser from "./StateRepoBrowser.jsx";
 import api from "../api.js";
+import { TimeZoneProvider } from "../TimeZoneContext.jsx";
 
 vi.mock("../api.js", () => ({ default: vi.fn() }));
 
@@ -39,7 +40,12 @@ const tree = {
 // tree.
 async function show(props) {
   const user = userEvent.setup();
-  render(<StateRepoBrowser showError={() => {}} {...props} />);
+  // In UTC, so the export time reads the same wherever the test runs.
+  render(
+    <TimeZoneProvider zone="UTC">
+      <StateRepoBrowser showError={() => {}} {...props} />
+    </TimeZoneProvider>,
+  );
   await user.click(screen.getByRole("button", { name: "Show files" }));
   return user;
 }

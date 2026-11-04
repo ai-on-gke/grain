@@ -1424,6 +1424,38 @@ type AgentBackend struct {
 	// that is legitimately slow is what the first is for.
 	ModelTurnTimeout string `json:"modelTurnTimeout,omitempty"`
 	ModelRetryCutoff string `json:"modelRetryCutoff,omitempty"`
+	// Hostd is the grain hostd this connection's agent CLI runs on: a
+	// registered hostd's name, or a label selector "k=v[,k=v]" any
+	// connected hostd carrying every label satisfies
+	// (ParseHostdSelector). Empty leaves it where the framework's run
+	// location says (container, or the deployment's default hostd). A
+	// pinned connection's runs start their CLI on that hostd, count
+	// against its capacity, and key a usage limit on an ambient
+	// credential to it; while it is not connected the connection is
+	// unavailable and its runs wait -- they move to HostdFallback, in
+	// order, only when that is set. It is the connection's placement, not
+	// a task's: no task, template or repository chooses a hostd.
+	Hostd string `json:"hostd,omitempty"`
+	// HostdFallback is the hostd selectors, in order, a run on this
+	// connection tries when Hostd is not connected. Empty by default:
+	// nothing falls back silently.
+	HostdFallback []string `json:"hostdFallback,omitempty"`
+}
+
+// HostdTargets is the connection's hostd selectors in the order a run
+// tries them: Hostd, then HostdFallback. nil for a connection with no
+// hostd placement.
+func (b AgentBackend) HostdTargets() []string {
+	if strings.TrimSpace(b.Hostd) == "" {
+		return nil
+	}
+	out := []string{strings.TrimSpace(b.Hostd)}
+	for _, f := range b.HostdFallback {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // EffectiveConcurrency returns the maximum number of concurrent agent runs

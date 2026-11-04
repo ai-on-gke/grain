@@ -718,9 +718,6 @@ func attachmentFrom(a model.AttachmentMeta) Attachment {
 // attempts, last failure: reason").
 type TaskDetail struct {
 	Task
-	// Hostd is the task's hostd pin or label selector
-	// (model.SetTaskHostd), "" for the default hostd.
-	Hostd    string    `json:"hostd,omitempty"`
 	Comments []Comment `json:"comments"`
 	// LocalScriptApprovals is the local-script calls this task's run is
 	// waiting on a person for, and the ones answered recently
@@ -1380,6 +1377,10 @@ type configResponse struct {
 	// AuthMethod is AuthUserResponse's, so the frontend knows without a
 	// second request how the caller is signed in.
 	AuthMethod AuthMethod `json:"authMethod,omitempty"`
+	// Access is the caller's role and the scopes it resolves to, for a
+	// verified session (docs/design/access-rbac.md §6); absent for an
+	// unlimited caller such as the access code.
+	Access *AccessRoleInfo `json:"access,omitempty"`
 	// Allowed is always true: whoever holds the access code is the
 	// deployment's owner (docs/access-code.md), and nobody else gets
 	// past the gate to be refused. The frontend still reads it.
@@ -2015,6 +2016,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	authMethod, _ := s.authMethod(r)
 	resp := configResponse{
+		Access:              accessRoleInfo(r.Context()),
 		AuthMethod:          authMethod,
 		Actor:               actor.ID,
 		ActorKind:           string(actor.Kind),

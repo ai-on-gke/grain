@@ -104,8 +104,8 @@ var routeDocs = map[string]string{
 	"POST /api/tasks/{id}/stop":                                            "Stop a task's running attempt.",
 	"POST /api/tasks/{id}/pause":                                           "Pause a task in any open state, releasing everything it holds and keeping its place; immediate true skips a running task's grace period.",
 	"POST /api/tasks/{id}/resume":                                          "Resume a paused task, back to exactly the state and dispatch standing it had.",
-	"PUT /api/tasks/{id}/hostd":                                            "Pin a task's host work to one grain hostd by name, or to any hostd carrying label=value[,label=value]; \"\" is the default hostd.",
 	"PUT /api/tasks/{id}/goal":                                             "Set a task's goal -- {kind, spec, on_met, on_limit}, as propose_task's goal -- replacing any it had; grain closes or rests the task when it is met.",
+	"PUT /api/tasks/{id}/hostd":                                            "Refused: a task has no hostd. Which grain hostd host work runs on is set on the model connection or capability server, not the task.",
 	"DELETE /api/tasks/{id}/goal":                                          "Remove a task's goal, making it an ordinary task again.",
 	"POST /api/tasks/{id}/reopen":                                          "Reopen a closed task.",
 	"POST /api/tasks/{id}/retry":                                           "Queue a task for another attempt.",
@@ -278,6 +278,7 @@ var routeDocs = map[string]string{
 	"POST /api/external-agents/tokens/revoke-all":                          "Emergency kill switch: revoke every active external agent credential immediately.",
 	"GET /api/access/principals":                                           "List the allowed users and groups admitted through verified-identity sign-in.",
 	"POST /api/access/principals":                                          "Add a user:<email> or group:<email> entry to the allowed users and groups list (idempotent when already present).",
+	"PATCH /api/access/principals/{entry}":                                 "Give an entry on the allowed users and groups list another role (a scope set).",
 	"DELETE /api/access/principals/{entry}":                                "Remove a user:<email> or group:<email> entry from the allowed users and groups list.",
 }
 
@@ -303,7 +304,6 @@ var routeBodies = map[string]any{
 	"POST /api/sandbox-probe":                                           SandboxProbeRequest{},
 	"POST /api/tasks/{id}/pause":                                        pauseRequest{},
 	"PUT /api/tasks/{id}/goal":                                          setGoalRequest{},
-	"PUT /api/tasks/{id}/hostd":                                         setHostdRequest{},
 	"POST /api/tasks/{id}/run-now":                                      runNowRequest{},
 	"POST /api/tasks/{id}/comments":                                     addCommentRequest{},
 	"POST /api/tasks/{id}/reply":                                        addCommentRequest{},
@@ -412,6 +412,7 @@ var routeBodies = map[string]any{
 	"POST /api/pipeline-pause":                                          pausePipelineRequest{},
 	"POST /api/external-agents/tokens":                                  CreateExternalAgentTokenRequest{},
 	"POST /api/access/principals":                                       AllowPrincipalRequest{},
+	"PATCH /api/access/principals/{entry}":                              SetPrincipalRoleRequest{},
 }
 
 // routeQueries is the query parameters a route's handler reads, each

@@ -36,7 +36,14 @@ type AllowedPrincipal struct {
 	// for serviceAccount: entries, which admit a non-human caller with
 	// full operator access.
 	Reason string `json:"reason,omitempty"`
+	// Role is the API scope set the entry's sessions are held to
+	// (docs/design/access-rbac.md), DefaultAccessRole unless set.
+	Role string `json:"role"`
 }
+
+// DefaultAccessRole is the role an allowlist entry has unless given
+// another: every scope, which is what every entry had before roles.
+const DefaultAccessRole = APIScopeSetBuiltinPrefix + "operator"
 
 // ServiceAccountDomainSuffix is the domain every Google service account
 // address ends in; only such addresses may be serviceAccount: entries.
@@ -95,11 +102,11 @@ func NormalizeAllowedPrincipalEntry(raw string) (prefix, email, canonical string
 func (s *Store) ListAllowedPrincipals(ctx context.Context) ([]AllowedPrincipal, error) {
 	var out []AllowedPrincipal
 	err := each(ctx, s.db,
-		"SELECT `entry`, `added_by`, `added_at`, `reason` FROM `allowed_principal` ORDER BY `added_at` ASC, `entry` ASC",
+		"SELECT `entry`, `added_by`, `added_at`, `reason`, `role` FROM `allowed_principal` ORDER BY `added_at` ASC, `entry` ASC",
 		nil,
 		func(rows *sql.Rows) error {
 			var p AllowedPrincipal
-			if err := rows.Scan(&p.Entry, &p.AddedBy, &p.AddedAt, &p.Reason); err != nil {
+			if err := rows.Scan(&p.Entry, &p.AddedBy, &p.AddedAt, &p.Reason, &p.Role); err != nil {
 				return err
 			}
 			p.AddedAt = p.AddedAt.UTC()
@@ -118,6 +125,12 @@ func (s *Store) ListAllowedPrincipals(ctx context.Context) ([]AllowedPrincipal, 
 // already present is a no-op and returns the existing row with
 // created=false.
 func (s *Store) AddAllowedPrincipal(ctx context.Context, rawEntry, addedBy, reason string, at time.Time) (AllowedPrincipal, bool, error) {
+	return s.AddAllowedPrincipalWithRole(ctx, rawEntry, addedBy, reason, "", at)
+}
+
+// AddAllowedPrincipalWithRole is AddAllowedPrincipal giving the entry role
+// ("" for DefaultAccessRole). An entry already present keeps its own role.
+func (s *Store) AddAllowedPrincipalWithRole(ctx context.Context, rawEntry, addedBy, reason, role string, at time.Time) (AllowedPrincipal, bool, error) {
 	prefix, _, canonical, err := NormalizeAllowedPrincipalEntry(rawEntry)
 	if err != nil {
 		return AllowedPrincipal{}, false, err
@@ -125,6 +138,9 @@ func (s *Store) AddAllowedPrincipal(ctx context.Context, rawEntry, addedBy, reas
 	reason = strings.TrimSpace(reason)
 	if prefix == "serviceAccount" && reason == "" {
 		return AllowedPrincipal{}, false, fmt.Errorf("allowed principal %q: a reason is required to admit a service account", canonical)
+	}
+	if role = strings.TrimSpace(role); role == "" {
+		role = DefaultAccessRole
 	}
 	if at.IsZero() {
 		at = time.Now()
@@ -137,9 +153,9 @@ func (s *Store) AddAllowedPrincipal(ctx context.Context, rawEntry, addedBy, reas
 	err = s.write(ctx, "add allowed principal "+canonical, func(tx *sql.Tx) error {
 		var existing AllowedPrincipal
 		qErr := tx.QueryRowContext(ctx,
-			"SELECT `entry`, `added_by`, `added_at`, `reason` FROM `allowed_principal` WHERE `entry` = ?",
+			"SELECT `entry`, `added_by`, `added_at`, `reason`, `role` FROM `allowed_principal` WHERE `entry` = ?",
 			canonical,
-		).Scan(&existing.Entry, &existing.AddedBy, &existing.AddedAt, &existing.Reason)
+		).Scan(&existing.Entry, &existing.AddedBy, &existing.AddedAt, &existing.Reason, &existing.Role)
 		if qErr == nil {
 			existing.AddedAt = existing.AddedAt.UTC()
 			result = existing
@@ -150,8 +166,8 @@ func (s *Store) AddAllowedPrincipal(ctx context.Context, rawEntry, addedBy, reas
 			return qErr
 		}
 		if _, execErr := tx.ExecContext(ctx,
-			"INSERT INTO `allowed_principal` (`entry`, `added_by`, `added_at`, `reason`) VALUES (?, ?, ?, ?)",
-			canonical, addedBy, at, reason,
+			"INSERT INTO `allowed_principal` (`entry`, `added_by`, `added_at`, `reason`, `role`) VALUES (?, ?, ?, ?, ?)",
+			canonical, addedBy, at, reason, role,
 		); execErr != nil {
 			return execErr
 		}
@@ -160,6 +176,7 @@ func (s *Store) AddAllowedPrincipal(ctx context.Context, rawEntry, addedBy, reas
 			AddedBy: addedBy,
 			AddedAt: at,
 			Reason:  reason,
+			Role:    role,
 		}
 		created = true
 		return nil
@@ -168,6 +185,37 @@ func (s *Store) AddAllowedPrincipal(ctx context.Context, rawEntry, addedBy, reas
 		return AllowedPrincipal{}, false, fmt.Errorf("adding allowed principal %q: %w", canonical, err)
 	}
 	return result, created, nil
+}
+
+// SetAllowedPrincipalRole gives an existing entry role and returns the
+// role it had before. found is false for an entry not on the list.
+func (s *Store) SetAllowedPrincipalRole(ctx context.Context, rawEntry, role string) (canonical, previous string, found bool, err error) {
+	_, _, canonical, err = NormalizeAllowedPrincipalEntry(rawEntry)
+	if err != nil {
+		return "", "", false, err
+	}
+	if role = strings.TrimSpace(role); role == "" {
+		return "", "", false, fmt.Errorf("allowed principal %q: a role is required", canonical)
+	}
+	err = s.write(ctx, "set role of allowed principal "+canonical, func(tx *sql.Tx) error {
+		qErr := tx.QueryRowContext(ctx,
+			"SELECT `role` FROM `allowed_principal` WHERE `entry` = ?", canonical,
+		).Scan(&previous)
+		if errors.Is(qErr, sql.ErrNoRows) {
+			return nil
+		}
+		if qErr != nil {
+			return qErr
+		}
+		found = true
+		_, execErr := tx.ExecContext(ctx,
+			"UPDATE `allowed_principal` SET `role` = ? WHERE `entry` = ?", role, canonical)
+		return execErr
+	})
+	if err != nil {
+		return "", "", false, fmt.Errorf("setting role of allowed principal %q: %w", canonical, err)
+	}
+	return canonical, previous, found, nil
 }
 
 // RemoveAllowedPrincipal removes an entry from the allowlist and reports
