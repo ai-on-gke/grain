@@ -135,8 +135,21 @@ func (c *HTTPClient) prepareRequest(ctx context.Context, req *http.Request) erro
 	if req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", "grain-cli")
 	}
+	// The tool and session this CLI runs in, for the daemon to record as
+	// the filed_via of what it posts (#XC-15). A label, not a credential.
+	if label := model.GrainClientLabel(os.Getenv(GrainClientEnv), os.Getenv(GrainClientSessionEnv)); label != "" {
+		req.Header.Set(model.GrainClientHeader, label)
+	}
 	return nil
 }
+
+// GrainClientEnv and GrainClientSessionEnv name the tool ("<tool>/<ver>")
+// and session id a workstation agent runs the CLI from, which every
+// request carries as its X-Grain-Client header (model.GrainClientLabel).
+const (
+	GrainClientEnv        = "GRAIN_CLIENT"
+	GrainClientSessionEnv = "GRAIN_CLIENT_SESSION"
+)
 
 // TokenEnvVars are the environment variables HTTPClient reads for a bearer
 // token, in precedence order.
