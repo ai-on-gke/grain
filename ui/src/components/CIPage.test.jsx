@@ -41,6 +41,7 @@ import CIRunOverlay from "./CIRunOverlay.jsx";
 import { formatDateTime } from "../time.js";
 import { RUN_POLL_LIMIT, WINDOWED_RUN_POLL_LIMIT } from "../ciFilters.js";
 import api from "../api.js";
+import { chooseOption } from "../searchSelectTesting.js";
 
 vi.mock("../api.js", async (importOriginal) => {
   const actual = await importOriginal();
@@ -1282,7 +1283,8 @@ describe("CIPage", () => {
     await userEvent.click(
       await screen.findByRole("button", { name: "Start a run" }),
     );
-    await userEvent.selectOptions(
+    await chooseOption(
+      userEvent,
       screen.getByLabelText(/^Repo$/),
       "acme/widgets",
     );
@@ -1340,7 +1342,8 @@ describe("CIPage", () => {
     await userEvent.click(
       await screen.findByRole("button", { name: "Start a run" }),
     );
-    await userEvent.selectOptions(
+    await chooseOption(
+      userEvent,
       screen.getByLabelText(/^Repo$/),
       "acme/widgets",
     );
@@ -1389,7 +1392,8 @@ describe("CIPage", () => {
     await userEvent.click(
       await screen.findByRole("button", { name: "Start a run" }),
     );
-    await userEvent.selectOptions(
+    await chooseOption(
+      userEvent,
       screen.getByLabelText(/^Repo$/),
       "acme/widgets",
     );
@@ -1585,7 +1589,8 @@ describe("CIPage", () => {
     await userEvent.click(
       await screen.findByRole("button", { name: "Start a run" }),
     );
-    await userEvent.selectOptions(
+    await chooseOption(
+      userEvent,
       screen.getByLabelText(/^Repo$/),
       "acme/widgets",
     );

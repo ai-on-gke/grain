@@ -14,6 +14,7 @@
 
 import path from "node:path";
 import { expect, test } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // The Processes page (design/design/settings-panel.design.md §5, stage b) against
 // the real `grain demo` server. -sensitive-hold adds a declared trigger
@@ -197,7 +198,10 @@ test.describe("Processes walkthrough", () => {
       page.getByRole("heading", { name: "New schedule" }),
     ).toBeVisible();
     await page.getByLabel("Title", { exact: true }).fill(title);
-    await page.locator("select[name='repo']").selectOption("acme/widgets");
+    await chooseOption(
+      page.locator(".repo-field:has(input[name='repo']) [role='combobox']"),
+      "acme/widgets",
+    );
     await page.getByRole("button", { name: "Add schedule" }).click();
     await expect(
       page.getByRole("heading", { name: "New schedule" }),
@@ -253,7 +257,10 @@ test.describe("Processes walkthrough", () => {
     await page
       .getByLabel("Task title", { exact: true })
       .fill("Interactive incident triage");
-    await page.locator('select[name="repo"]').selectOption("acme/widgets");
+    await chooseOption(
+      page.locator('.repo-field:has(input[name="repo"]) [role="combobox"]'),
+      "acme/widgets",
+    );
     await page.getByLabel("Interactive (agent can chat with you)").check();
     await page.getByRole("button", { name: "Add template" }).click();
 

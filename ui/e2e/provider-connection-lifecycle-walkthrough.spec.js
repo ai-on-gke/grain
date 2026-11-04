@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 test.setTimeout(120_000);
 
@@ -442,7 +443,7 @@ test.describe("Walkthrough: Provider Connection Lifecycle, Key Verification and 
         page.getByRole("heading", { name: "New task" }),
       ).toBeVisible();
       await page.getByLabel("Title").fill(`Model choice ${Date.now()}`);
-      await page.getByLabel(/^Repos/).selectOption("none");
+      await chooseOption(page.getByLabel(/^Repos/), "none");
       await expect(page.getByLabel("Agent framework")).toHaveCount(0);
       await page.getByLabel("Model", { exact: true }).click();
       await page

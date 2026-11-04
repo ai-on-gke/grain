@@ -661,9 +661,11 @@ func TestInstalledContainerBackendRunsAndCleansUpACompleteTask(t *testing.T) {
 	client.Token = d.accessCode(t)
 	backends := []model.AgentBackend{{
 		ID: "installer-container-e2e", Name: "installer container e2e",
-		Framework: model.AgentFrameworkCustom, Command: d.testAgent,
-		// A custom command can't be asked what it serves, and one with an
-		// empty list has no models -- its tasks wait for one to be set.
+		// testagent speaks agy's interface, so an antigravity connection
+		// whose CLI path is that binary runs it.
+		Framework: model.AgentFrameworkAntigravity, AuthMode: model.AntigravityAuthAmbient,
+		CLIPath: d.testAgent,
+		// Pinned, so nothing waits on asking testagent what it serves.
 		Models: []string{"installer-test-model"},
 	}}
 	// Only the connection: it is a Models setting, which a deployment
@@ -673,13 +675,12 @@ func TestInstalledContainerBackendRunsAndCleansUpACompleteTask(t *testing.T) {
 	if _, err := client.UpdateSettings(ctx, ui.UpdateSettingsRequest{
 		AgentBackends: &backends,
 	}); err != nil {
-		t.Fatalf("configuring the deterministic custom backend: %v", err)
+		t.Fatalf("configuring the deterministic agent's connection: %v", err)
 	}
-	// Deliberately no credential for this backend. A custom command may
-	// authenticate some other way or not at all, and this one -- this
-	// suite's own binary -- has nothing to authenticate to, so the
-	// dispatch below is also what proves a backend with no model proxy
-	// token still runs.
+	// Deliberately no credential for this connection: it runs on the
+	// ambient login, and testagent -- this suite's own binary -- has
+	// nothing to authenticate to, so the dispatch below is also what
+	// proves a connection with no model proxy token still runs.
 
 	hostMarker := filepath.Join("/tmp", fmt.Sprintf("grain-host-marker-%d", os.Getpid()))
 	signal := filepath.Join(d.data, "container-e2e.ready")
@@ -694,7 +695,7 @@ func TestInstalledContainerBackendRunsAndCleansUpACompleteTask(t *testing.T) {
 	task, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title:          "installer local Docker lifecycle",
 		Repo:           "acme/widgets",
-		AgentFramework: model.AgentFrameworkCustom,
+		AgentFramework: model.AgentFrameworkAntigravity,
 	})
 	if err != nil {
 		t.Fatalf("filing the task: %v", err)
@@ -731,7 +732,7 @@ func TestInstalledContainerBackendRunsAndCleansUpACompleteTask(t *testing.T) {
 	if err := client.Approve(ctx, task.ID); err != nil {
 		t.Fatalf("approving the task: %v", err)
 	}
-	waitFor(t, "the custom agent to finish checkout and its MCP write", 90*time.Second, func() error {
+	waitFor(t, "the deterministic agent to finish checkout and its MCP write", 90*time.Second, func() error {
 		if !sudoTest("-f", signal) {
 			return errors.New("the agent has not signalled readiness")
 		}

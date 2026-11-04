@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // A base branch no run could ever check out is refused when the task is
 // filed -- a 400 the New task form shows as an alert -- instead of being
@@ -27,7 +28,7 @@ test("an unusable base branch is refused with a visible validation message", asy
   await expect(page.getByRole("heading", { name: "New task" })).toBeVisible();
 
   await page.getByLabel("Title").fill(`Unusable base ${Date.now()}`);
-  await page.getByLabel(/^Repos/).selectOption("acme/widgets");
+  await chooseOption(page.getByLabel(/^Repos/), "acme/widgets");
   await page.getByLabel("Base branch").fill("no such branch ..lock");
 
   const created = page.waitForResponse(

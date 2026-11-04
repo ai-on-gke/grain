@@ -489,14 +489,18 @@ import "strconv"
 // gemini_key: {project}, minting with the gcp-key-minter secret, and
 // rewrites stored gemini-key grants as 100 did the model proxies.
 //
-// 104 adds `external_agent_token`.`owner` (model.ExternalAgentToken.Owner,
+// 104 retires the custom command connection type: every stored
+// connection whose framework is "custom" is disabled and kept, with
+// model.RemovedCustomConnectionReason (custom_connection_migration.go).
+//
+// 105 adds `external_agent_token`.`owner` (model.ExternalAgentToken.Owner,
 // the person a credential acts on behalf of), `filed_via` to `task` and
 // `task_comment` (the X-Grain-Client label of the tool that filed them,
 // model.Task.FiledVia and model.Comment.FiledVia) and
 // `grain_config`.`owner_trust` (model.Config.OwnerTrust, the owners whose
 // external agents' filings queue without a person's approval;
 // design/spec/external-cli/external-cli.spec.md#XC-14..#XC-17).
-const SchemaVersion = 104
+const SchemaVersion = 105
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>` or `group:<email>` entry admitted through a verified
@@ -3304,6 +3308,20 @@ var Tables = []string{
   ` + "`commit`" + `     TEXT NOT NULL DEFAULT '',
   ` + "`updated_at`" + ` DATETIME NOT NULL,
   PRIMARY KEY (` + "`owner`" + `, ` + "`name`" + `, ` + "`branch`" + `)
+)`,
+
+	// Where each git_ref schedule last saw the ref it watches
+	// (model.ScheduleRefCursor): the commit it peeled to, so a restart
+	// neither re-fires on a ref that has not moved nor misses one that
+	// moved while the daemon was down. Grain's own record, like
+	// path_trigger_cursor.
+	`CREATE TABLE IF NOT EXISTS ` + "`git_ref_cursor`" + ` (
+  ` + "`schedule_id`" + ` TEXT NOT NULL,
+  ` + "`repo`" + `        TEXT NOT NULL DEFAULT '',
+  ` + "`ref`" + `         TEXT NOT NULL DEFAULT '',
+  ` + "`commit`" + `      TEXT NOT NULL DEFAULT '',
+  ` + "`updated_at`" + `  DATETIME NOT NULL,
+  PRIMARY KEY (` + "`schedule_id`" + `)
 )`,
 
 	// What grain has learned about working here (model.Memory,

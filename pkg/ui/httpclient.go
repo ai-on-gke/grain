@@ -649,8 +649,22 @@ func (c *HTTPClient) httpError(resp *http.Response) error {
 	case http.StatusServiceUnavailable:
 		return &UnavailableError{message: message}
 	default:
-		return fmt.Errorf("grain server: %s (%s)", message, resp.Status)
+		return &StatusError{StatusCode: resp.StatusCode, Status: resp.Status, Message: message}
 	}
+}
+
+// StatusError is any other non-2xx answer from the daemon: 401, 409,
+// 422, a 5xx. It keeps the status code so a caller can say what kind of
+// failure it was (the CLI's exit codes, pkg/cli/errors.go) without
+// reading it back out of the sentence.
+type StatusError struct {
+	StatusCode int
+	Status     string
+	Message    string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("grain server: %s (%s)", e.Message, e.Status)
 }
 
 // loopbackUnauthorizedHint returns an actionable hint for a 401 received
