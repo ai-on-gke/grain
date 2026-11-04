@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -251,11 +252,24 @@ func TestTaskListSizeReport(t *testing.T) {
 		t.Skip("set GRAIN_TASK_LIST_SIZE_REPORT=1 to measure")
 	}
 	srv, _ := testServer(t)
-	// About 4 KB a description, which is 11.8 MB over 2,981 tasks.
-	desc := strings.Repeat("Measured on the deployment: the list is slow to load because every poll carries every task. ", 44)
+	// About 4 KB a description, which is 11.8 MB over 2,981 tasks, of
+	// words drawn at random so that gzip has prose to work on rather than
+	// one sentence repeated.
+	words := strings.Fields("the a task list poll every closed open branch merge review agent run sandbox deployment " +
+		"description server client request response measure bytes check failing passing commit push repository " +
+		"pkg/ui/tasks.go App.jsx 2026-11-03 ETag gzip status queued running awaiting reply submit operator")
+	rng := rand.New(rand.NewPCG(1, 2))
+	prose := func(n int) string {
+		var b strings.Builder
+		for b.Len() < n {
+			b.WriteString(words[rng.IntN(len(words))])
+			b.WriteByte(' ')
+		}
+		return b.String()
+	}
 	const total, live = 2981, 117
 	for i := 0; i < total; i++ {
-		id := fileListedTask(t, srv, fmt.Sprintf("task %d: shrink the polled list", i), fmt.Sprintf("%d %s", i, desc))
+		id := fileListedTask(t, srv, prose(60), prose(4000))
 		if i >= live {
 			closeListedTask(t, srv, id)
 		}
