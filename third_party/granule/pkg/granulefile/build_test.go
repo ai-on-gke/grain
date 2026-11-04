@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/granule/pkg/containerspec"
-	"github.com/bwsalmon/granule/pkg/guestpack"
+	"github.com/gke-labs/granule/pkg/containerspec"
+	"github.com/gke-labs/granule/pkg/guestpack"
 )
 
 func TestPlanBuild_InStageVMWrap(t *testing.T) {

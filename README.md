@@ -22,7 +22,7 @@ release upgrades a 2.0 deployment in place.
 - **Run a backlog, not a prompt.** Queue tasks and let Grain dispatch them as
   capacity becomes available.
 - **Keep agents contained.** By default, every run gets its own
-  [Granule](https://github.com/bwsalmon/granule)-managed VM and scoped access to
+  [Granule](https://github.com/gke-labs/granule)-managed VM and scoped access to
   source repositories and credentials.
 - **Close the delivery loop.** Agents can push branches, open pull requests,
   wait for CI, fix failures, and hand clean changes to the merge queue.
@@ -173,7 +173,8 @@ session.
   and `-admin-user`, and `grain settings -add-admin`, are accepted and
   ignored -- see [docs/grain-init.md](docs/grain-init.md).
 
-**The CLI on the host.** `grain` finds its daemon through `$GRAIN_SERVER`, then
+**The CLI on the host.** `grain` finds its daemon through `-server`, then
+`$GRAIN_SERVER`, then the selected context's server (below), then
 `/etc/grain/cli.env` (which `setup.sh` writes, with
 `GRAIN_SERVER` and `GRAIN_DATA_DIR`), then `http://127.0.0.1:4242`, so it works
 in the shell that just ran the installer. It gives up after `-connect-timeout`
@@ -182,6 +183,17 @@ It authenticates with `<data-dir>/local-api-token`, the deployment's operator
 credential, which only the daemon's account can read: run the CLI with `sudo`
 (the `docker run` wrapper drops to that account), or as `sudo -u grain grain ...`
 beside grain hostd, where `/usr/local/bin/grain` is the image's own binary.
+
+**The CLI on a workstation.** `grain login <url>` signs the CLI in to a
+deployment and records it as a named context in
+`$XDG_CONFIG_HOME/grain/config.json` (else `~/.config/grain/config.json`). The
+context holds where the credential is, never the credential itself: that goes
+to the OS keyring, or to a `0600` file in `credentials/` beside the config
+when there is no keyring.
+`grain context list|use|show|delete` manages contexts, and `-context` or
+`$GRAIN_CONTEXT` picks one for a single command. `grain whoami` says who the
+deployment takes you for, and `grain logout` revokes the login's token and
+forgets it. `design/spec/cli/host.spec.md` (CLI-108) has every flag.
 
 ### Building from source instead
 
@@ -215,6 +227,12 @@ exit codes, what each step does, and what to do when one is left manual.
 > **Sandboxing:** every run gets a sandbox of its own: a Granule VM on a host
 > with KVM, and a local Docker container (`GRAIN_CONTAINER_SANDBOXES=1`) on one
 > without. Running agents directly in host directories is no longer supported.
+> A container sandbox is fenced off from this host, its networks and the
+> metadata server by its own nftables chain when grain can run `nft`. Where it
+> cannot, containers run unfenced, and every task holding an external
+> capability grant (any capability server's method that grain does not serve
+> in-process, `gcp#…` included) is refused until it can. The daemon's
+> `-container-sandbox-fence` flag picks the mode: `auto`, `require` or `off`.
 
 > **One install shape: the release container, plus grain hostd.** Every
 > machine install runs the daemon as a `docker run` of the deployment image.

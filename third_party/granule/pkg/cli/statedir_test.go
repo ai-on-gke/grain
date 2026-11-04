@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bwsalmon/granule/pkg/vmspec"
+	"github.com/gke-labs/granule/pkg/vmspec"
 )
 
 // asRoot / asUser make defaultStateDir take the branch a test is after,

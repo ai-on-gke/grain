@@ -640,6 +640,12 @@ func Run(ctx context.Context, cfg Config) error {
 	if localHostSandboxes(sandboxes) {
 		cfg.Overcommit = model.NewOvercommitController(cfg.SandboxOvercommit, cfg.CpuOvercommit, cfg.MemoryOvercommit)
 	}
+	// Before the capability servers start, so the host-script server
+	// starts with the scripts of every local-scripts declaration that
+	// moved onto it.
+	if _, err := migrateLocalScripts(ctx, store, cfg.LocalScriptsConfig()); err != nil {
+		log.Printf("daemon: local-scripts: moving declarations to host-script: %v", err)
+	}
 	capabilityServers, hostdCapabilityServers := startCapabilityServers(ctx, store, secretStore, cfg.DataDir, cfg.capabilityHostd(), gcpKeyPool(cfg))
 	live := NewLiveConfig(store, sandboxes, cfg, githubCredentials).
 		WithSandboxImages(sandboxImages, stockSandboxImage, sandboxImageLabels()).

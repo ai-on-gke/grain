@@ -3715,6 +3715,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
                             onRefreshConfig={refreshConfig}
                             onRefreshGates={refreshBaseBranchGates}
                             showError={showError}
+                            dismissError={dismissError}
                           />
                         ) : view === "repos" ? (
                           <RepoList

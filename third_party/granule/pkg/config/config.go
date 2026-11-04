@@ -13,12 +13,12 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/bwsalmon/granule/pkg/containerspec"
-	"github.com/bwsalmon/granule/pkg/extent"
-	"github.com/bwsalmon/granule/pkg/extents"
-	"github.com/bwsalmon/granule/pkg/guestimage"
-	"github.com/bwsalmon/granule/pkg/qcow2"
-	"github.com/bwsalmon/granule/pkg/workloadio"
+	"github.com/gke-labs/granule/pkg/containerspec"
+	"github.com/gke-labs/granule/pkg/extent"
+	"github.com/gke-labs/granule/pkg/extents"
+	"github.com/gke-labs/granule/pkg/guestimage"
+	"github.com/gke-labs/granule/pkg/qcow2"
+	"github.com/gke-labs/granule/pkg/workloadio"
 )
 
 // The values of Config.DiskDirect.

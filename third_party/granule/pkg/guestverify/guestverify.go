@@ -59,9 +59,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwsalmon/granule/pkg/config"
-	"github.com/bwsalmon/granule/pkg/guestboot"
-	"github.com/bwsalmon/granule/pkg/guestrebase"
+	"github.com/gke-labs/granule/pkg/config"
+	"github.com/gke-labs/granule/pkg/guestboot"
+	"github.com/gke-labs/granule/pkg/guestrebase"
 )
 
 // checkPath is where a check's script is staged inside the guest, for

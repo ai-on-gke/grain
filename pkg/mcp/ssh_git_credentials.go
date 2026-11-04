@@ -36,7 +36,7 @@ import (
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/kubectlgate"
-	"github.com/bwsalmon/granule/pkg/sandbox"
+	"github.com/gke-labs/granule/pkg/sandbox"
 )
 
 type remoteBatchFilePlacer interface {
