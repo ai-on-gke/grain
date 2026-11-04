@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "./api.js";
+import api from "./api.js";
 
 // Closed tasks, paged in beside the live list (grain task 2983).
 //
@@ -71,8 +71,10 @@ export function mergeTaskLists(live, closed) {
 
 // useClosedTasks holds the closed tasks paged in so far. refresh asks the
 // newest page again; loadMore asks the page after the oldest held;
-// hasMore says whether there is one.
-export function useClosedTasks() {
+// hasMore says whether there is one. Nothing is asked until enabled --
+// App's first live list having answered -- so the closed page never
+// queues ahead of what the first screen needs.
+export function useClosedTasks(enabled = true) {
   const [closed, setClosed] = useState([]);
   const [nextCursor, setNextCursor] = useState("");
   const [loading, setLoading] = useState(false);
@@ -113,6 +115,7 @@ export function useClosedTasks() {
   }, [nextCursor]);
 
   useEffect(() => {
+    if (!enabled) return undefined;
     refresh();
     const interval = setInterval(() => {
       if (document.visibilityState !== "hidden") refresh();
@@ -130,7 +133,7 @@ export function useClosedTasks() {
       clearInterval(interval);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [refresh]);
+  }, [enabled, refresh]);
 
   return { closed, hasMore: nextCursor !== "", loading, refresh, loadMore };
 }

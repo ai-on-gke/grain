@@ -353,7 +353,11 @@ function AppContent({ onReload = () => window.location.reload() }) {
   // taskListLive). Closed ones are paged in beside it (closedTasks.js),
   // and `tasks` -- what every view draws -- is the two together.
   const [liveTasks, setLiveTasks] = useState([]);
-  const closedTasks = useClosedTasks();
+  // Whether /api/tasks has answered with a list at least once. Until it
+  // has, the empty `tasks` below is not "no tasks" but "not read yet",
+  // and a page that would say nothing is waiting must not say it.
+  const [tasksListed, setTasksListed] = useState(false);
+  const closedTasks = useClosedTasks(tasksListed);
   const tasks = useMemo(
     () => mergeTaskLists(liveTasks, closedTasks.closed),
     [liveTasks, closedTasks.closed],
@@ -364,10 +368,6 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const closedIdsRef = useRef(new Set());
   closedIdsRef.current = new Set(closedTasks.closed.map((t) => String(t.id)));
   const refreshClosed = closedTasks.refresh;
-  // Whether /api/tasks has answered with a list at least once. Until it
-  // has, the empty `tasks` above is not "no tasks" but "not read yet",
-  // and a page that would say nothing is waiting must not say it.
-  const [tasksListed, setTasksListed] = useState(false);
   const [schedules, setSchedules] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [suites, setSuites] = useState([]);
