@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { test, expect } from "./fixtures.js";
+import { chooseOption } from "./searchSelect.js";
 
 // The one suite in this package that boots a real pkg/ui.Server (over a
 // real embedded SQLite store) and drives the real *built* frontend --
@@ -75,7 +76,7 @@ test("files a new task through the New task overlay", async ({ page }) => {
   // No repo is picked from this top-level "+ New task" button, so the
   // target repo list's own "No repo" option has to be chosen before
   // Create task will even enable (bwsalmon/agents#614, grain/task-85).
-  await page.getByLabel(/^Repos/).selectOption("none");
+  await chooseOption(page.getByLabel(/^Repos/), "none");
   // "Queue immediately" starts checked, from the deployment default that
   // is on unless an operator turns it off (bwsalmon/agents#612), so it is
   // unchecked here to file a proposal rather than a queued task -- the
@@ -211,7 +212,7 @@ test("approves a proposed task from its detail view", async ({ page }) => {
 
   await page.getByRole("button", { name: "+ New task" }).click();
   await page.getByLabel("Title").fill(title);
-  await page.getByLabel(/^Repos/).selectOption("none");
+  await chooseOption(page.getByLabel(/^Repos/), "none");
   // Unchecked for the same reason as the test above: there is nothing to
   // approve unless this files as a proposal.
   await page.getByLabel(/Queue immediately/).uncheck();
@@ -245,7 +246,7 @@ test("edits a whole selection through the bulk edit form", async ({ page }) => {
   for (const title of titles) {
     await page.getByRole("button", { name: "+ New task" }).click();
     await page.getByLabel("Title").fill(title);
-    await page.getByLabel(/^Repos/).selectOption("none");
+    await chooseOption(page.getByLabel(/^Repos/), "none");
     await page.getByRole("button", { name: "Create task" }).click();
     await expect(page.locator(".task-row", { hasText: title })).toBeVisible();
   }
@@ -266,7 +267,10 @@ test("edits a whole selection through the bulk edit form", async ({ page }) => {
   page.once("dialog", (d) => d.dismiss());
   await page.keyboard.press("Escape");
   await expect(form.getByRole("heading", { name: "Bulk edit" })).toBeVisible();
-  await form.locator(".repo-field select").selectOption("acme/widgets");
+  await chooseOption(
+    form.locator(".repo-field [role='combobox']"),
+    "acme/widgets",
+  );
   await form.getByRole("checkbox", { name: /^Base branch/ }).check();
   await form.getByRole("textbox").fill("release/2");
   await form.getByRole("button", { name: "Apply to 2 tasks" }).click();
@@ -279,7 +283,7 @@ test("edits a whole selection through the bulk edit form", async ({ page }) => {
   for (const title of titles) {
     await page.locator(".task-row", { hasText: title }).click();
     await expect(page.locator(".detail-header h2")).toBeVisible();
-    await expect(page.locator(".repo-field select")).toHaveValue(
+    await expect(page.locator(".repo-field [role='combobox']")).toHaveValue(
       "acme/widgets",
     );
     await expect(page.getByLabel("Base branch")).toHaveValue("release/2");

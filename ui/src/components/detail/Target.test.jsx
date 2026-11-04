@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import DetailOverlay from "../DetailOverlay.jsx";
 import api from "../../api.js";
 import { resetDetailMocks, baseTask, config, patches } from "./testFixtures.js";
+import { chooseOption } from "../../searchSelectTesting.js";
 
 vi.mock("../../api.js", () => ({ default: vi.fn().mockResolvedValue(null) }));
 vi.mock("../../attachments.js", () => ({ default: vi.fn() }));
@@ -67,7 +68,7 @@ describe("DetailOverlay target", () => {
       />,
     );
 
-    await user.selectOptions(screen.getByLabelText("Repo"), "acme/other");
+    await chooseOption(user, screen.getByLabelText("Repo"), "acme/other");
 
     expect(api).toHaveBeenCalledWith("/api/tasks/12", {
       method: "PATCH",
@@ -95,7 +96,7 @@ describe("DetailOverlay target", () => {
       />,
     );
 
-    await user.selectOptions(screen.getByLabelText("Repo"), "acme/other");
+    await chooseOption(user, screen.getByLabelText("Repo"), "acme/other");
 
     expect(showError).toHaveBeenCalled();
     expect(await screen.findByLabelText("Repo")).toHaveValue("acme/widgets");
@@ -228,7 +229,7 @@ describe("DetailOverlay target", () => {
       />,
     );
 
-    await user.selectOptions(screen.getByLabelText("Repo"), "acme/other");
+    await chooseOption(user, screen.getByLabelText("Repo"), "acme/other");
     await user.click(await screen.findByRole("button", { name: "use it" }));
 
     expect(api).toHaveBeenLastCalledWith("/api/tasks/12", {
@@ -251,7 +252,7 @@ describe("DetailOverlay target", () => {
       />,
     );
 
-    await user.selectOptions(screen.getByLabelText("Repo"), "acme/other");
+    await chooseOption(user, screen.getByLabelText("Repo"), "acme/other");
 
     expect(
       screen.queryByRole("button", { name: "use it" }),
